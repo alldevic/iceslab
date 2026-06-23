@@ -38,6 +38,11 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y "linux-headers-${KERNEL_VER}" 
 
 # ───── 3. Kernel module via DKMS ─────
 AWG_MODULE_REPO=https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
+# Pin a tagged release instead of tracking master: reproducible node builds, and
+# a guard against an upstream master change silently breaking provisioning under
+# us. This tag is v2.0-capable and carries the use-after-free fixes (it is well
+# past v1.0.20260329). Bump deliberately after smoke-testing a newer tag.
+AWG_MODULE_TAG=v1.0.20260611
 AWG_MODULE_DIR=/usr/src/amneziawg-src
 
 if lsmod | grep -q '^amneziawg\b'; then
@@ -45,9 +50,9 @@ if lsmod | grep -q '^amneziawg\b'; then
 else
   log "Installing amneziawg kernel module via DKMS from $AWG_MODULE_REPO"
 
-  # Fresh clone, no branch pin (repo default may be master)
+  # Fresh shallow clone pinned to a tagged release (see AWG_MODULE_TAG above).
   rm -rf "$AWG_MODULE_DIR"
-  git clone --depth 1 "$AWG_MODULE_REPO" "$AWG_MODULE_DIR"
+  git clone --depth 1 --branch "$AWG_MODULE_TAG" "$AWG_MODULE_REPO" "$AWG_MODULE_DIR"
 
   # dkms.conf may be at root or one level deep
   DKMS_CONF=$(find "$AWG_MODULE_DIR" -maxdepth 2 -name 'dkms.conf' | head -1)
@@ -83,6 +88,8 @@ fi
 
 # ───── 4. AWG userspace tools ─────
 AWG_TOOLS_REPO=https://github.com/amnezia-vpn/amneziawg-tools.git
+# Pinned for the same reproducibility reason as the kernel module above.
+AWG_TOOLS_TAG=v1.0.20260618
 AWG_TOOLS_DIR=/usr/src/amneziawg-tools-build
 
 if command -v awg >/dev/null && command -v awg-quick >/dev/null; then
@@ -91,7 +98,7 @@ else
   log "Building amneziawg-tools from $AWG_TOOLS_REPO"
 
   rm -rf "$AWG_TOOLS_DIR"
-  git clone --depth 1 "$AWG_TOOLS_REPO" "$AWG_TOOLS_DIR"
+  git clone --depth 1 --branch "$AWG_TOOLS_TAG" "$AWG_TOOLS_REPO" "$AWG_TOOLS_DIR"
 
   make -C "$AWG_TOOLS_DIR/src" -j"$(nproc)"
   make -C "$AWG_TOOLS_DIR/src" install
