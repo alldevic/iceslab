@@ -30,6 +30,10 @@ export function registerWebhookEventHandlers(): void {
   // back" without keeping state of its own.
   forward('node.status-changed');
   forward('node.deleted');
+  // Liveness the status field cannot show: a node still reporting healthy while
+  // its traffic and its active users both collapse (censored, or silently
+  // broken). See stats.anomaly.ts for why that is read as one signal.
+  forward('node.anomaly');
   forward('profile.created');
   forward('profile.updated');
   forward('profile.deleted');

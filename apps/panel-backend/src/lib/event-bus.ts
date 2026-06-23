@@ -79,6 +79,12 @@ export interface DomainEventMap {
   // DB and never reached the nodes until an unrelated profile/binding edit
   // fired a re-push. Caught live during the first cascade field test 2026-06-17.
   'cascade.changed':      { nodeIds: string[] };
+  // U7 — node traffic-anomaly sensor. A correlated drop in transferred bytes
+  // AND active users on a node, sustained across polls, signals the node went
+  // dark (censor-blocked or down). Generic monitoring signal; webhooks and the
+  // hotswap policy subscribe. Emitted at most once per outage (re-arms after
+  // recovery). severity 'critical' = near-total drop.
+  'node.anomaly':         { nodeId: string; severity: 'warning' | 'critical'; bytesThisPoll: number; expectedBaseline: number; activeUsers: number; droppedUsers: number };
 }
 
 type EventHandler<K extends keyof DomainEventMap> = (

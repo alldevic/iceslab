@@ -8,6 +8,7 @@ import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { NodeTransport } from '../nodes/nodes.transport.js';
 import { pollNodeStats } from './stats.cron.js';
+import { eventBus } from '../../lib/event-bus.js';
 
 // B3 integration: exercises the bulk `unnest` upsert SQL against a real
 // Postgres (the part pure-logic tests can't cover). Needs the test DB stack
@@ -222,5 +223,56 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
     del = await prisma.userTraffic.findUnique({ where: { userId: deltaUser } });
     expect(cum?.usedTrafficBytes).toBe(500n); // 0 + 500
     expect(del?.usedTrafficBytes).toBe(200n); // 100 + 100 (was 100 pre-fix: unbilled)
+  });
+});
+
+describe('pollNodeStats anomaly sensor (U7, integration)', () => {
+  it('fires node.anomaly once after a sustained correlated drop, then re-arms', async () => {
+    const nodeId = await createNode('ru-1', '10.0.0.9:8443');
+    const users: string[] = [];
+    for (let i = 0; i < 10; i++) users.push(await createUser(`anon${i}`));
+
+    // Seed a high 24h baseline directly: 4 GB across a past hour → ~1.39 MB/poll,
+    // comfortably above the sensor's min-baseline floor.
+    const pastHour = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    pastHour.setUTCMinutes(0, 0, 0);
+    await prisma.nodeUsageHistory.create({
+      data: { nodeId, hour: pastHour, downloadBytes: 3_000_000_000n, uploadBytes: 1_000_000_000n },
+    });
+
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+
+    // Healthy poll: 10 users transferring → establishes the expected-user level.
+    // Never fires on the first poll (no shortfall computed yet).
+    const healthy = () =>
+      mockStats(stats(users.map((id) => ({ userId: id, bytesIn: 200_000, bytesOut: 100_000 }))));
+    healthy();
+    await pollNodeStats();
+    expect(anomalies()).toHaveLength(0);
+
+    // Sustained correlated drop: 1 user, a trickle of bytes. Needs `debounce`
+    // (3) consecutive polls before firing.
+    const drop = () => mockStats(stats([{ userId: users[0]!, bytesIn: 100, bytesOut: 50 }]));
+    drop(); await pollNodeStats();
+    expect(anomalies()).toHaveLength(0); // hits=1
+    drop(); await pollNodeStats();
+    expect(anomalies()).toHaveLength(0); // hits=2
+    drop(); await pollNodeStats(); // hits=3 → fire
+    const fired = anomalies();
+    expect(fired).toHaveLength(1);
+    const payload = fired[0]![1] as { nodeId: string; severity: string; droppedUsers: number };
+    expect(payload.nodeId).toBe(nodeId);
+    expect(payload.severity).toBe('critical');
+    expect(payload.droppedUsers).toBeGreaterThanOrEqual(5);
+
+    // A 4th sustained-drop poll must NOT re-fire (single event per outage).
+    drop(); await pollNodeStats();
+    expect(anomalies()).toHaveLength(1);
+
+    // Recovery: users return → sensor re-arms (debounce reset, still one event).
+    healthy();
+    await pollNodeStats();
+    expect(anomalies()).toHaveLength(1);
   });
 });

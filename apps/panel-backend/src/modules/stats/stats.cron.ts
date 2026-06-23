@@ -7,6 +7,13 @@ import {
   computeUserDeltas,
   type StatsUserEntry,
 } from './stats.compute.js';
+import { eventBus } from '../../lib/event-bus.js';
+import {
+  evaluateNodeDrop,
+  anomalySeverity,
+  updateExpectedActiveUsers,
+  ANOMALY_CONFIG,
+} from './stats.anomaly.js';
 
 /**
  * Per-node in-memory snapshot of the last seen cumulative `totalBytesIn/Out`
@@ -16,6 +23,17 @@ import {
  * first tick after restart just records the current snapshot.
  */
 const totalSnapshot = new Map<string, { in: bigint; out: bigint }>();
+
+/**
+ * U7 anomaly-sensor state, module-scoped like totalSnapshot above. Cleared on
+ * restart — the first poll afterwards just re-establishes prev counts and never
+ * fires. Each node only ever touches its own key, so the parallel poll is
+ * race-free without locking.
+ */
+const expectedActiveUsers = new Map<string, number>();
+const anomalyDebounce = new Map<string, number>();
+// node-stats-poll runs every 30s (scheduler.queue.ts) → polls per 24h.
+const POLLS_PER_24H = (24 * 60 * 60) / 30;
 
 /**
  * Per-user per-poll sanity ceiling for ingested traffic deltas. node-stats-poll
@@ -88,6 +106,21 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
   // date = today, so this must match startOfToday()'s UTC-midnight shape.
   const dateStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
 
+  // U7 — 24h per-node baseline (avg bytes per poll) for the anomaly sensor. One
+  // grouped read; nodes with no recent history simply have no baseline and are
+  // never flagged. Cheap: node_usage_history is keyed on (nodeId, hour).
+  const baselineSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const baselineRows = await prisma.nodeUsageHistory.groupBy({
+    by: ['nodeId'],
+    where: { hour: { gte: baselineSince } },
+    _sum: { downloadBytes: true, uploadBytes: true },
+  });
+  const baselinePerPoll = new Map<string, number>();
+  for (const r of baselineRows) {
+    const sum = Number(r._sum.downloadBytes ?? 0n) + Number(r._sum.uploadBytes ?? 0n);
+    baselinePerPoll.set(r.nodeId, sum / POLLS_PER_24H);
+  }
+
   let ok = 0;
   let failed = 0;
 
@@ -158,6 +191,44 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
           prevSnapshot: totalSnapshot.get(node.id),
           maxUserDeltaBytes: NODE_STATS_MAX_USER_DELTA_BYTES,
         });
+
+        // U7 — traffic-anomaly sensor. Pure verdict in stats.anomaly.ts; the
+        // debounce + prev-active-user state lives here like the snapshots above.
+        // `userList` is the post-delta list, so its length is the count of users
+        // moving traffic this poll — a sharp, sustained, correlated drop in that
+        // plus bytes means the node went dark. Fire node.anomaly ONCE when the
+        // debounce is first crossed (re-arms after recovery). Best-effort: the
+        // event bus swallows handler errors, so this never breaks the poll.
+        {
+          const activeUsers = userList.length;
+          const thisPollBytes = Number(w.nodeDownload + w.nodeUpload);
+          const base = baselinePerPoll.get(node.id) ?? 0;
+          const expected = updateExpectedActiveUsers(
+            expectedActiveUsers.get(node.id) ?? 0,
+            activeUsers,
+            ANOMALY_CONFIG.expectedDecay,
+          );
+          expectedActiveUsers.set(node.id, expected);
+          const verdict = evaluateNodeDrop(
+            { thisPollBytes, activeUsers, expectedActiveUsers: expected, baselinePerPoll: base },
+            ANOMALY_CONFIG,
+          );
+          const hits = verdict.belowThreshold ? (anomalyDebounce.get(node.id) ?? 0) + 1 : 0;
+          anomalyDebounce.set(node.id, hits);
+          if (verdict.belowThreshold && hits === ANOMALY_CONFIG.debounce) {
+            eventBus.emit('node.anomaly', {
+              nodeId: node.id,
+              severity: anomalySeverity(verdict.dropRatio, ANOMALY_CONFIG),
+              bytesThisPoll: thisPollBytes,
+              expectedBaseline: Math.round(base),
+              activeUsers,
+              droppedUsers: verdict.usersDropped,
+            });
+            getLogger().warn(
+              `[cron] node-anomaly ${node.id} - sustained drop: ${thisPollBytes}B/poll vs baseline ${Math.round(base)}B, ${verdict.usersDropped} users dropped`,
+            );
+          }
+        }
 
         // A non-empty clamp list is a misbehaving / outdated node-agent re-billing
         // its lifetime cumulative every poll. Discarded above so it can't corrupt
