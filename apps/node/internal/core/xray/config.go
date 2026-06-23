@@ -47,6 +47,20 @@ type InboundConfig struct {
 	RealityXver        int
 	RealityMaxTimeDiff int
 
+	// U5 post-quantum. RealityMldsa65Seed is the server's ML-DSA-65 seed
+	// (`xray mldsa65`) that adds an extra post-quantum signature to the REALITY
+	// certificate; empty (default) omits the field, rendering byte-identically
+	// to pre-U5. NOTE: enabling it requires the `target` cert to be >3500 bytes
+	// (xray-core constraint). Needs an Xray build with ML-DSA-65 REALITY support.
+	RealityMldsa65Seed string
+
+	// U5 VlessDecryption is the server-side VLESS-Encryption string
+	// (`mlkem768x25519plus.native....`, from `xray vlessenc`) — post-quantum
+	// (ML-KEM-768) native VLESS encryption with PFS. Empty (default) renders the
+	// VLESS inbound's decryption as "none", byte-identical to pre-U5. Only the
+	// vless subprotocol carries it (trojan/vmess ignore it).
+	VlessDecryption string
+
 	// G probe resistance. Rate-limit (bytes/sec) for UNVERIFIED REALITY
 	// fallback connections: a scanner that fails REALITY auth is forwarded to
 	// the target throttled, so it sees a slow site, not a full-speed proxy.
@@ -609,10 +623,16 @@ func buildUserInboundSettings(cfg InboundConfig, users []xrayClient) map[string]
 			"clients": clients,
 		}
 	}
-	// VLESS: default
+	// VLESS — default. U5: when a VLESS-Encryption string is configured (ML-KEM-768
+	// native encryption), it replaces the "none" decryption; empty -> "none",
+	// byte-identical to pre-U5.
+	decryption := "none"
+	if cfg.VlessDecryption != "" {
+		decryption = cfg.VlessDecryption
+	}
 	return map[string]any{
 		"clients":    users,
-		"decryption": "none",
+		"decryption": decryption,
 	}
 }
 
@@ -663,6 +683,11 @@ func buildStreamSettings(cfg InboundConfig) map[string]any {
 		// byte-identical to pre-B3 configs.
 		if cfg.RealityMaxTimeDiff > 0 {
 			realitySettings["maxTimeDiff"] = cfg.RealityMaxTimeDiff
+		}
+		// U5: post-quantum ML-DSA-65 signature on the REALITY cert. Emitted only
+		// when set, so the default (empty) render stays byte-identical to pre-U5.
+		if cfg.RealityMldsa65Seed != "" {
+			realitySettings["mldsa65Seed"] = cfg.RealityMldsa65Seed
 		}
 		// G: throttle unverified fallback (probe) connections. Emitted only when
 		// set, so the default (0) render stays byte-identical to pre-G configs.

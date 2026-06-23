@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -602,6 +603,96 @@ func TestRender_RoutingDefaults_BlockRules(t *testing.T) {
 	if !smtpRule {
 		t.Errorf("missing port:25→blocked routing rule")
 	}
+}
+
+// realitySettingsOf returns the realitySettings of the rendered vless inbound.
+func realitySettingsOf(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	for _, raw := range m["inbounds"].([]any) {
+		inb := raw.(map[string]any)
+		if inb["protocol"] != "vless" {
+			continue
+		}
+		ss := inb["streamSettings"].(map[string]any)
+		return ss["realitySettings"].(map[string]any)
+	}
+	t.Fatalf("no vless inbound in render")
+	return nil
+}
+
+// vlessSettingsOf returns the settings (clients/decryption) of the vless inbound.
+func vlessSettingsOf(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	for _, raw := range m["inbounds"].([]any) {
+		inb := raw.(map[string]any)
+		if inb["protocol"] == "vless" {
+			return inb["settings"].(map[string]any)
+		}
+	}
+	t.Fatalf("no vless inbound in render")
+	return nil
+}
+
+func TestRender_PQ_DefaultOmitsPQFields(t *testing.T) {
+	m := renderToMap(t, validInbound())
+	if _, ok := realitySettingsOf(t, m)["mldsa65Seed"]; ok {
+		t.Errorf("default render must NOT emit realitySettings.mldsa65Seed")
+	}
+	if got := vlessSettingsOf(t, m)["decryption"]; got != "none" {
+		t.Errorf("default VLESS decryption: got %v want \"none\"", got)
+	}
+}
+
+func TestRender_PQ_Mldsa65SeedEmittedWhenSet(t *testing.T) {
+	cfg := validInbound()
+	cfg.RealityMldsa65Seed = "seed_AbC-123_xyz"
+	if got := realitySettingsOf(t, renderToMap(t, cfg))["mldsa65Seed"]; got != "seed_AbC-123_xyz" {
+		t.Errorf("mldsa65Seed: got %v want seed_AbC-123_xyz", got)
+	}
+}
+
+func TestRender_PQ_VlessDecryptionEmittedWhenSet(t *testing.T) {
+	cfg := validInbound()
+	cfg.VlessDecryption = "mlkem768x25519plus.native.600s.0-0-0.0-0-0.0-0-0.abcDEF_-"
+	got := vlessSettingsOf(t, renderToMap(t, cfg))["decryption"]
+	if got != "mlkem768x25519plus.native.600s.0-0-0.0-0-0.0-0-0.abcDEF_-" {
+		t.Errorf("VLESS decryption not set from VlessDecryption, got %v", got)
+	}
+}
+
+func TestRender_PQ_EmptyIsByteIdentical(t *testing.T) {
+	users := []xrayClient{{ID: "u1", Email: "u1"}}
+	base, err := renderConfig(validInbound(), users)
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	pq := validInbound()
+	pq.RealityMldsa65Seed = "" // explicitly empty
+	pq.VlessDecryption = ""
+	got, err := renderConfig(pq, users)
+	if err != nil {
+		t.Fatalf("pq: %v", err)
+	}
+	if !bytes.Equal(base, got) {
+		t.Errorf("empty PQ fields must render byte-identically to the default")
+	}
+}
+
+func TestInboundEqual_PQFields(t *testing.T) {
+	t.Run("mldsa65Seed change", func(t *testing.T) {
+		a, b := validInbound(), validInbound()
+		b.RealityMldsa65Seed = "seed"
+		if inboundEqual(a, b) {
+			t.Errorf("mldsa65Seed change must make inbounds unequal")
+		}
+	})
+	t.Run("vlessDecryption change", func(t *testing.T) {
+		a, b := validInbound(), validInbound()
+		b.VlessDecryption = "mlkem768x25519plus.native"
+		if inboundEqual(a, b) {
+			t.Errorf("vlessDecryption change must make inbounds unequal")
+		}
+	})
 }
 
 func TestRender_DirectOutboundUsesBBR(t *testing.T) {

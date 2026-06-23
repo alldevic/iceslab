@@ -776,6 +776,11 @@ type xrayInboundCfgWire struct {
 	// pre-B3 configs, so omitting them keeps existing nodes byte-stable.
 	RealityXver        int `json:"realityXver,omitempty"`
 	RealityMaxTimeDiff int `json:"realityMaxTimeDiff,omitempty"`
+	// U5 post-quantum. realityMldsa65Seed: ML-DSA-65 seed for the extra PQ
+	// signature on the REALITY cert. vlessDecryption: server-side VLESS-Encryption
+	// (ML-KEM-768) string. Empty (default) renders byte-identically to pre-U5.
+	RealityMldsa65Seed string `json:"realityMldsa65Seed,omitempty"`
+	VlessDecryption    string `json:"vlessDecryption,omitempty"`
 	// G: throttle unverified REALITY fallback (probe) connections. 0 = off,
 	// renders byte-identically to pre-G configs (omitempty).
 	RealityLimitFallbackUploadBytesPerSec   int    `json:"realityLimitFallbackUploadBytesPerSec,omitempty"`
@@ -863,6 +868,9 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		// XHTTP mode/padding, gRPC multiMode). Zero-values render as before.
 		RealityXver:        wire.RealityXver,
 		RealityMaxTimeDiff: wire.RealityMaxTimeDiff,
+		// U5: post-quantum REALITY signature + VLESS-Encryption. Empty → off.
+		RealityMldsa65Seed: wire.RealityMldsa65Seed,
+		VlessDecryption:    wire.VlessDecryption,
 		// G: probe-resistance fallback rate-limit (bytes/sec, 0 = off).
 		RealityLimitFallbackUploadBytesPerSec:   wire.RealityLimitFallbackUploadBytesPerSec,
 		RealityLimitFallbackDownloadBytesPerSec: wire.RealityLimitFallbackDownloadBytesPerSec,
@@ -936,7 +944,9 @@ func inboundEqual(a, b InboundConfig) bool {
 		a.TLSCert != b.TLSCert ||
 		a.TLSKey != b.TLSKey ||
 		a.RealityMode != b.RealityMode ||
-		a.RealityFallbackUpstream != b.RealityFallbackUpstream {
+		a.RealityFallbackUpstream != b.RealityFallbackUpstream ||
+		a.RealityMldsa65Seed != b.RealityMldsa65Seed ||
+		a.VlessDecryption != b.VlessDecryption {
 		return false
 	}
 	if !stringSliceEqual(a.RealityServerNames, b.RealityServerNames) {

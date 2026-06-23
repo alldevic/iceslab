@@ -96,6 +96,30 @@ export const XrayConfigSchema = z.object({
   /** Max clock skew (ms) REALITY tolerates between client and node. 0 (default)
    *  leaves it at xray-core's built-in value; raise it for clients with drift. */
   realityMaxTimeDiff: z.number().int().min(0).max(600000).default(0),
+  /**
+   * U5 post-quantum: server ML-DSA-65 seed (`xray mldsa65`) that adds an extra
+   * post-quantum signature to the REALITY certificate. Optional (no default):
+   * absent → omitted from the wire, node renders REALITY without it (byte-
+   * identical to pre-U5). Opaque base64-ish string (keygen needs the xray
+   * binary — generation is a follow-up). Enabling it requires the REALITY
+   * target cert to be >3500 bytes (xray-core constraint).
+   */
+  realityMldsa65Seed: z
+    .string()
+    .max(4096)
+    .regex(/^[A-Za-z0-9+/=_-]*$/, 'must be a base64-ish ML-DSA-65 seed')
+    .optional(),
+  /**
+   * U5 post-quantum: server-side VLESS-Encryption string (ML-KEM-768 native
+   * encryption with PFS), e.g. "mlkem768x25519plus.native.600s.…", from
+   * `xray vlessenc`. Optional (no default): absent → VLESS decryption renders as
+   * "none" (byte-identical to pre-U5). Only the vless subprotocol uses it.
+   */
+  vlessDecryption: z
+    .string()
+    .max(4096)
+    .regex(/^[A-Za-z0-9._-]*$/, 'must be a VLESS-Encryption string (mlkem768x25519plus.…)')
+    .optional(),
   /** G - rate-limit unverified REALITY fallback connections, bytes/sec, 0 = off.
    *  Probe resistance: a scanner that fails REALITY auth is forwarded to the
    *  target throttled, so it sees a slow site instead of a full-speed proxy. */

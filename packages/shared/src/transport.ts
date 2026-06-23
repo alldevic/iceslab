@@ -144,6 +144,16 @@ export interface XrayInboundCfg {
   realityXver?: number;
   /** Max client/node clock skew (ms) REALITY tolerates; 0 = xray default. */
   realityMaxTimeDiff?: number;
+  /** U5 post-quantum: server ML-DSA-65 seed (`xray mldsa65`) adding an extra PQ
+   *  signature to the REALITY cert. Absent → off (byte-identical to pre-U5).
+   *  Enabling it requires the target cert to be >3500 bytes. Mirrors the Go
+   *  json tag exactly (wire-sync). */
+  realityMldsa65Seed?: string;
+  /** U5 post-quantum: server-side VLESS-Encryption string
+   *  (`mlkem768x25519plus.native.…`, from `xray vlessenc`) — ML-KEM-768 native
+   *  VLESS encryption with PFS. Absent → VLESS decryption is "none"
+   *  (byte-identical to pre-U5). Only the vless subprotocol uses it. */
+  vlessDecryption?: string;
   /** G - throttle unverified REALITY fallback (probe) connections, bytes/sec; 0 = off. */
   realityLimitFallbackUploadBytesPerSec?: number;
   realityLimitFallbackDownloadBytesPerSec?: number;
