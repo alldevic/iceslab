@@ -8,6 +8,7 @@ import { registerUserEventHandlers } from './modules/users/users.events.js';
 import { registerNodeEventHandlers } from './modules/nodes/nodes.events.js';
 import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events.js';
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
+import { registerPoolEventHandlers } from './modules/ext_vptech_pool/pool.service.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
 import { startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
@@ -45,6 +46,8 @@ async function start() {
     registerNodeEventHandlers();
     registerInboundEventHandlers();
     registerWebhookEventHandlers();
+    // F2 - cold-pool hotswap (no-op unless EXT_VPTECH_POOL_ENABLED).
+    registerPoolEventHandlers();
     // B6 - invalidate the /sub binding cache on profile/binding/node changes.
     registerBindingsCacheBust();
     nodeUsersWorker = startNodeUsersWorker();

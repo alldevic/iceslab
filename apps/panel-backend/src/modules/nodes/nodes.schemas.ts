@@ -44,6 +44,17 @@ export const HardeningSchema = z
     fail2ban: z.boolean().optional(),
     realisticFallback: z.boolean().optional(),
     sshAllowlist: z.array(SshAllowEntrySchema).max(16).optional(),
+    // F2 — cold-pool / hotswap diversity labels (migration-free). `asn`/`provider`
+    // drive spare selection (avoid burning a neighbouring subnet); `burned` marks
+    // an IP retired after a swap so it's never re-promoted. See ext_vptech_pool.
+    pool: z
+      .object({
+        asn: z.string().max(32).optional(),
+        provider: z.string().max(64).optional(),
+        burned: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .nullish();

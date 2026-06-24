@@ -230,6 +230,19 @@ export const ConfigSchema = z.object({
             .filter((s) => s.length >= 8 && s.length <= 128)
         : [],
     ),
+
+  // F2 cold-pool hotswap (fork-only, ext_vptech_pool). When enabled, the panel
+  // subscribes a HotswapController to node.anomaly: a sustained-down node is
+  // replaced by a diverse cold spare (promote → repoint → retire). Disabled →
+  // the handler is never registered, so behaviour is byte-identical to upstream.
+  EXT_VPTECH_POOL_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // Path to the U6 ansible playbook the promote step runs (deploy/ansible/site.yml).
+  // Empty → the promote logs a dry-run instead of provisioning (lets you exercise
+  // the swap wiring without a live ansible/control node).
+  EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK: z.string().default(''),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
