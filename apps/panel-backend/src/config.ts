@@ -243,6 +243,11 @@ export const ConfigSchema = z.object({
   // Empty → the promote logs a dry-run instead of provisioning (lets you exercise
   // the swap wiring without a live ansible/control node).
   EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK: z.string().default(''),
+  // Ansible inventory the promote playbook runs against. The spare node's `name`
+  // must be a host in it (`--limit <name>`). Empty → ansible's default inventory.
+  EXT_VPTECH_POOL_ANSIBLE_INVENTORY: z.string().default(''),
+  // ansible-playbook binary (override if not on PATH, e.g. ~/.local/bin/ansible-playbook).
+  EXT_VPTECH_POOL_ANSIBLE_BIN: z.string().default('ansible-playbook'),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

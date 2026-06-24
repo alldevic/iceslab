@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { config } from '../../config.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
@@ -90,22 +92,40 @@ export interface AnsibleRunner {
   provision(spare: SpareNode, bootstrapToken: string): Promise<void>;
 }
 
+const execFileAsync = promisify(execFile);
+
 export const defaultAnsibleRunner: AnsibleRunner = {
   async provision(spare, bootstrapToken) {
     const playbook = config.EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK;
     if (!playbook) {
       getLogger().warn(
         `[pool] promote ${spare.name}: EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK unset — dry-run, NOT provisioning ` +
-          `(token ${bootstrapToken.slice(0, 8)}… would run ${'ansible-playbook'} against ${spare.id})`,
+          `(token ${bootstrapToken.slice(0, 8)}… would provision ${spare.id})`,
       );
       return;
     }
-    // Real provisioning is deferred to a live control node; the command shape
-    // is documented here. (Kept out of the default path so CI never shells out.)
-    throw new Error(
-      `[pool] real ansible promote not wired in this build — run: ansible-playbook ${playbook} ` +
-        `--limit ${spare.name} -e iceslab_bootstrap_token=${bootstrapToken}`,
-    );
+    // Run the U6 playbook limited to this spare, passing the bootstrap token +
+    // panel URL the agent task needs. CI never hits this (the flag is unset);
+    // the control node (panel host) must have ansible + SSH/inventory reach.
+    const args = [
+      playbook,
+      '--limit',
+      spare.name,
+      '-e',
+      `iceslab_bootstrap_token=${bootstrapToken}`,
+      '-e',
+      `iceslab_panel_url=${config.PUBLIC_URL}`,
+    ];
+    if (config.EXT_VPTECH_POOL_ANSIBLE_INVENTORY) {
+      args.splice(1, 0, '-i', config.EXT_VPTECH_POOL_ANSIBLE_INVENTORY);
+    }
+    getLogger().info(`[pool] promote ${spare.name}: running ${config.EXT_VPTECH_POOL_ANSIBLE_BIN} ${args.join(' ')}`);
+    const { stdout } = await execFileAsync(config.EXT_VPTECH_POOL_ANSIBLE_BIN, args, {
+      timeout: 10 * 60 * 1000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, ANSIBLE_HOST_KEY_CHECKING: 'False' },
+    });
+    getLogger().info(`[pool] promote ${spare.name}: ansible done — ${stdout.trim().split('\n').slice(-1)[0]}`);
   },
 };
 
