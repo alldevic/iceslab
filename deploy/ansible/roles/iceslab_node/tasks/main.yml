@@ -1,0 +1,19 @@
+---
+# U6 — orchestrate node provisioning. Idempotent; fork features off by default.
+- import_tasks: system.yml
+  tags: [system]
+
+- import_tasks: xray.yml
+  tags: [xray]
+
+- import_tasks: zapret2.yml
+  when: iceslab_zapret2_enabled | bool
+  tags: [zapret2, egress]
+
+# Node-agent install (bootstrap-token flow). Skipped unless panel_url +
+# bootstrap_token are provided (needs a reachable panel; see README).
+- import_tasks: agent.yml
+  when:
+    - iceslab_panel_url | length > 0
+    - iceslab_bootstrap_token | length > 0
+  tags: [agent]

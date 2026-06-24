@@ -1,0 +1,30 @@
+---
+# Base packages + BBR. Uses only ansible-core builtins (no extra collections).
+- name: Ensure python3-apt is present (the apt module needs it; raw avoids the chicken-and-egg)
+  ansible.builtin.raw: >-
+    dpkg -s python3-apt >/dev/null 2>&1 ||
+    { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-apt; }
+  register: iceslab_aptdep
+  changed_when: "'Setting up python3-apt' in iceslab_aptdep.stdout"
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - unzip
+      - ca-certificates
+      - git
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable BBR congestion control (sysctl drop-in)
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-iceslab-bbr.conf
+    content: |
+      # Managed by iceslab_node (U6). BBR needs the fq qdisc.
+      net.core.default_qdisc=fq
+      net.ipv4.tcp_congestion_control=bbr
+    mode: "0644"
+  when: iceslab_enable_bbr | bool
+  notify: reload sysctl

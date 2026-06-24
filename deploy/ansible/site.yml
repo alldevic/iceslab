@@ -1,0 +1,9 @@
+---
+# U6 — provision iceslab nodes. Base run installs pinned xray + BBR; set
+# iceslab_zapret2_enabled / panel vars per host to add the fork features.
+- name: Provision iceslab nodes
+  hosts: iceslab_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - iceslab_node

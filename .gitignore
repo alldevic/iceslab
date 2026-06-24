@@ -357,3 +357,7 @@ tmp/
 .continue/
 .windsurf/
 CLAUDE.local.md
+
+# ansible: real inventories hold node addresses — keep out of git
+deploy/ansible/inventory.ini
+deploy/ansible/*.retry

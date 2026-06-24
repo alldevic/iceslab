@@ -1,0 +1,42 @@
+---
+# B2 — provision ss-zapret2 (the docker stack). The panel's /applyEgress
+# manager drives it afterwards (it overwrites the strategy `config` and runs
+# `docker compose up -d`). Integration is socks-via-container: route blocked
+# traffic into ss-zapret2's SOCKS (127.0.0.1:{{ iceslab_zapret2_socks_port }})
+# via B1 routingFragments. See deploy/ansible/README.md.
+- name: Assert docker is available
+  ansible.builtin.command: docker compose version
+  register: iceslab_docker_check
+  changed_when: false
+
+- name: Clone/update ss-zapret2
+  ansible.builtin.git:
+    repo: "{{ iceslab_zapret2_repo }}"
+    dest: "{{ iceslab_zapret2_dir }}"
+    version: "{{ iceslab_zapret2_version }}"
+    depth: 1
+
+- name: Render ss-zapret2 .env
+  ansible.builtin.template:
+    src: zapret2.env.j2
+    dest: "{{ iceslab_zapret2_dir }}/.env"
+    mode: "0600"
+  notify: restart zapret2
+
+- name: Seed the strategy config from upstream default (panel overwrites via /applyEgress)
+  ansible.builtin.copy:
+    src: "{{ iceslab_zapret2_dir }}/config.default"
+    dest: "{{ iceslab_zapret2_dir }}/config"
+    remote_src: true
+    force: false
+    mode: "0644"
+
+- name: Bring up the ss-zapret2 stack
+  ansible.builtin.command:
+    cmd: docker compose up -d
+    chdir: "{{ iceslab_zapret2_dir }}"
+  register: iceslab_zapret2_up
+  changed_when: >-
+    ('Started' in iceslab_zapret2_up.stderr) or
+    ('Created' in iceslab_zapret2_up.stderr) or
+    ('Recreate' in iceslab_zapret2_up.stderr)

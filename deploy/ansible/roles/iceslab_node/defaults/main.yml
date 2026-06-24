@@ -1,0 +1,32 @@
+---
+# U6 — iceslab node provisioning defaults. Every fork-feature step is
+# off-by-default so a base run is just "node + pinned xray".
+
+# Pinned xray (≥26.x → post-quantum capable; v26.3.27 validated on s1
+# 2026-06-24). Bump deliberately, like the awg tag pins in U1.
+iceslab_xray_version: "26.3.27"
+iceslab_xray_bin: /usr/local/bin/xray
+iceslab_xray_share: /usr/local/share/xray
+
+# BBR congestion control — the node-agent's `direct` outbound sets
+# tcpCongestion=bbr, which needs fq qdisc + bbr enabled on the host.
+iceslab_enable_bbr: true
+
+# B2 — ss-zapret2 egress (socks-via-container; see deploy/ansible/README.md).
+# OFF by default. When true, provisions the docker stack the panel's
+# /applyEgress manager then drives (it overwrites the strategy `config`).
+iceslab_zapret2_enabled: false
+iceslab_zapret2_dir: /opt/ss-zapret2
+iceslab_zapret2_repo: https://github.com/vernette/ss-zapret2
+iceslab_zapret2_version: master
+iceslab_zapret2_ss_port: 8388
+iceslab_zapret2_socks_port: 1080
+# Override in inventory/host_vars (ideally via ansible-vault).
+iceslab_zapret2_ss_password: "change-me-in-inventory"
+iceslab_zapret2_encrypt: chacha20-ietf-poly1305
+
+# Node-agent (bootstrap-token flow). Requires a reachable panel — the agent
+# task is GUARDED on these two being set, so it's skipped on a base run.
+iceslab_panel_url: ""
+iceslab_bootstrap_token: ""
+iceslab_node_protocol: xray

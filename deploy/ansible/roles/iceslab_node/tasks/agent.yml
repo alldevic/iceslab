@@ -1,0 +1,29 @@
+---
+# Node-agent install via the existing bootstrap-token installer. GUARDED by
+# main.yml on panel_url + bootstrap_token, so it only runs when a panel is
+# reachable. The installer builds the agent, drops a systemd unit, writes
+# /etc/iceslab-node/env (NODE_PAYLOAD) and starts the service.
+#
+# NOTE: not yet exercised end-to-end (no panel reachable from the test node);
+# this wraps the validated scripts/install-iceslab-node.sh so the role is
+# structurally complete. The bootstrap token is single-use / 15-min TTL.
+- name: Run the iceslab-node installer (bootstrap flow)
+  ansible.builtin.shell:
+    cmd: >-
+      bash <(curl -fsSL {{ iceslab_panel_url }}/install-iceslab-node.sh)
+      --panel-url {{ iceslab_panel_url | quote }}
+      --bootstrap {{ iceslab_bootstrap_token | quote }}
+      --protocol {{ iceslab_node_protocol | quote }}
+    executable: /bin/bash
+    creates: /etc/iceslab-node/env
+
+- name: Wait for the node-agent health endpoint
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8443/healthz
+    validate_certs: false
+    status_code: [200, 401]
+  register: iceslab_agent_health
+  retries: 10
+  delay: 3
+  until: iceslab_agent_health is succeeded
+  failed_when: false

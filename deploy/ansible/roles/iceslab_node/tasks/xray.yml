@@ -1,0 +1,63 @@
+---
+# Install a pinned xray (binary + geodata). The node-agent shells out to this
+# binary (XRAY_BINARY) for vless/trojan/shadowsocks + REALITY/PQ keygen.
+- name: Check installed xray version
+  ansible.builtin.command: "{{ iceslab_xray_bin }} version"
+  register: iceslab_xray_ver
+  changed_when: false
+  failed_when: false
+
+- name: Install xray {{ iceslab_xray_version }}
+  when: iceslab_xray_version not in (iceslab_xray_ver.stdout | default(''))
+  block:
+    - name: Create temp dir for the xray archive
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: xray
+      register: iceslab_xray_tmp
+
+    - name: Download xray archive (retry — GitHub release CDN is flaky)
+      ansible.builtin.get_url:
+        url: "https://github.com/XTLS/Xray-core/releases/download/v{{ iceslab_xray_version }}/Xray-linux-64.zip"
+        dest: "{{ iceslab_xray_tmp.path }}/xray.zip"
+        mode: "0644"
+      register: iceslab_xray_dl
+      until: iceslab_xray_dl is succeeded
+      retries: 5
+      delay: 5
+
+    - name: Unpack xray archive
+      ansible.builtin.unarchive:
+        src: "{{ iceslab_xray_tmp.path }}/xray.zip"
+        dest: "{{ iceslab_xray_tmp.path }}"
+        remote_src: true
+
+    - name: Install xray binary
+      ansible.builtin.copy:
+        src: "{{ iceslab_xray_tmp.path }}/xray"
+        dest: "{{ iceslab_xray_bin }}"
+        mode: "0755"
+        remote_src: true
+
+    - name: Ensure xray share dir
+      ansible.builtin.file:
+        path: "{{ iceslab_xray_share }}"
+        state: directory
+        mode: "0755"
+
+    - name: Install geodata (geoip/geosite — needed for B1 routing fragments)
+      ansible.builtin.copy:
+        src: "{{ iceslab_xray_tmp.path }}/{{ item }}"
+        dest: "{{ iceslab_xray_share }}/{{ item }}"
+        mode: "0644"
+        remote_src: true
+      loop:
+        - geoip.dat
+        - geosite.dat
+
+  always:
+    - name: Clean up the xray temp dir
+      ansible.builtin.file:
+        path: "{{ iceslab_xray_tmp.path }}"
+        state: absent
+      when: iceslab_xray_tmp.path is defined
