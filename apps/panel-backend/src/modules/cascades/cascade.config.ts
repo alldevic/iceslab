@@ -1,4 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { compileEntryGeoRules, type EgressPolicy } from './cascade.geo.js';
+
+export type { EgressPolicy, EgressRule, EgressTarget } from './cascade.geo.js';
 
 /**
  * C2/C3b - cascade config generation for the native inter-hop link cells the
@@ -56,7 +59,15 @@ export type LinkCred = VlessLinkCred | Ss2022LinkCred;
 
 /** Map a hop's stored linkProtocol (free string, full 7-core enum) to a
  *  realised native cell. Only 'shadowsocks' has a dedicated cell beyond vless;
- *  everything else rides the proven vless link (unchanged from C3). */
+ *  everything else rides the proven vless link (unchanged from C3).
+ *
+ *  Cell trade-off (the link is trusted DC-to-DC, so this is about wire shape,
+ *  not DPI evasion): the vless cell is `raw`/`security:none` = plaintext TCP,
+ *  and carries UDP only via XUDP multiplexed over that one TCP stream -> a lost
+ *  segment head-of-line-blocks every UDP flow (bad for real-time voice). The
+ *  SS2022 cell is AEAD-encrypted and declares `network:'tcp,udp'`, relaying UDP
+ *  as native datagrams (no HoL). So SS2022 is preferred for UDP-carrying and
+ *  cross-border links; the panel defaults new cascades to it. */
 export function normalizeLinkProtocol(p: string | null | undefined): LinkProtocol {
   return p === 'shadowsocks' ? 'shadowsocks' : 'vless';
 }
@@ -134,6 +145,7 @@ export interface HopConfig {
 const LINK_IN_TAG = 'cascade-link-in';
 const LINK_OUT_TAG = 'cascade-link-out';
 const DIRECT_TAG = 'direct';
+const BLOCK_TAG = 'blocked';
 
 // Drop QUIC (HTTP/3 = UDP/443) at the cascade entry so clients fall back to
 // TCP/HTTP-2. QUIC tunneled as UDP-over-TCP through the inter-hop vless link
@@ -205,10 +217,15 @@ function linkOutbound(host: string, cred: LinkCred): Record<string, unknown> {
 }
 
 const freedomOutbound: Record<string, unknown> = { tag: DIRECT_TAG, protocol: 'freedom' };
+// Blackhole for geo rules that target 'block' (e.g. ads/malware). Only added to
+// the entry outbounds when the policy actually blocks something, so a cascade
+// with no block rule stays byte-identical.
+const blackholeOutbound: Record<string, unknown> = { tag: BLOCK_TAG, protocol: 'blackhole' };
 
 export function buildCascadeConfigs(
   hops: CascadeConfigHopInput[],
   linkCreds: LinkCred[],
+  entryPolicy?: EgressPolicy,
 ): HopConfig[] {
   const sorted = [...hops].sort((a, b) => a.position - b.position);
   const n = sorted.length;
@@ -224,9 +241,23 @@ export function buildCascadeConfigs(
 
     const routingRules: Record<string, unknown>[] = [];
     if (role === 'entry') {
-      // User traffic -> link-out. Split-routing presets can prepend
-      // direct/block rules ahead of this later (E).
+      // E - server-side geo split: geosite:/geoip: rules that egress a matched
+      // subset to direct/block, prepended AHEAD of the catch-all so first-match
+      // wins (RU -> direct, ads -> block, the rest falls through to link-out).
+      // Empty/absent policy -> no rules -> byte-identical to a non-geo cascade.
+      const geo = compileEntryGeoRules(entryPolicy, {
+        direct: { outboundTag: DIRECT_TAG },
+        block: { outboundTag: BLOCK_TAG },
+        'link-out': { outboundTag: LINK_OUT_TAG },
+      });
+      routingRules.push(...geo.rules);
+      if (geo.needsBlock) outbounds.push(blackholeOutbound);
+      // Drop QUIC (udp/443) so tunneled video stops HoL-stalling. Placed AFTER
+      // the geo rules (direct-routed traffic, e.g. RU, keeps QUIC - it doesn't
+      // cross the inter-hop link) and BEFORE the catch-all: only traffic falling
+      // through to link-out loses udp/443 and races down to TCP.
       routingRules.push(QUIC_BLOCK_RULE);
+      // User traffic -> link-out (catch-all, stays last so geo + QUIC rules win).
       routingRules.push({ type: 'field', network: 'tcp,udp', outboundTag: LINK_OUT_TAG });
     } else if (role === 'transit') {
       routingRules.push({ type: 'field', inboundTag: [LINK_IN_TAG], outboundTag: LINK_OUT_TAG });
@@ -285,6 +316,7 @@ export function buildBalancerCascadeConfigs(
   entry: CascadeConfigHopInput,
   exits: CascadeConfigHopInput[],
   linkCreds: LinkCred[],
+  entryPolicy?: EgressPolicy,
 ): HopConfig[] {
   const configs: HopConfig[] = [];
 
@@ -295,15 +327,30 @@ export function buildBalancerCascadeConfigs(
   );
   entryOutbounds.push(freedomOutbound);
 
+  // E - server-side geo split. On a balancer entry the catch-all routes via the
+  // balancerTag, so 'link-out' resolves to the balancer; direct/block are fixed
+  // outbounds. Empty/absent policy -> no rules -> byte-identical.
+  const geo = compileEntryGeoRules(entryPolicy, {
+    direct: { outboundTag: DIRECT_TAG },
+    block: { outboundTag: BLOCK_TAG },
+    'link-out': { balancerTag: BALANCER_TAG },
+  });
+  if (geo.needsBlock) entryOutbounds.push(blackholeOutbound);
+
   configs.push({
     nodeId: entry.nodeId,
     position: entry.position,
     role: 'entry',
     inbounds: [],
     outbounds: entryOutbounds,
-    // User traffic -> balancer (leastPing picks the lowest-RTT exit). Split-
-    // routing presets can prepend direct/block rules ahead of this later.
-    routingRules: [QUIC_BLOCK_RULE, { type: 'field', network: 'tcp,udp', balancerTag: BALANCER_TAG }],
+    // Geo rules first (first-match wins), then drop QUIC (udp/443) for traffic
+    // that would ride the balancer link, then the user->balancer catch-all
+    // (leastPing picks the lowest-RTT exit).
+    routingRules: [
+      ...geo.rules,
+      QUIC_BLOCK_RULE,
+      { type: 'field', network: 'tcp,udp', balancerTag: BALANCER_TAG },
+    ],
     observatory: {
       subjectSelector: [LINK_OUT_TAG],
       // xray-core's json tag is `probeURL` (capital URL). A lowercase `probeUrl`

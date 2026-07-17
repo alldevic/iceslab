@@ -1,4 +1,4 @@
-import type { XrayCascadeFragments } from '@iceslab/shared';
+import type { XrayCascadeFragments, GeoAssetSpec } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
@@ -13,8 +13,131 @@ import {
   type CascadeConfigHopInput,
   type LinkCred,
 } from './cascade.config.js';
+import { coerceEgressPolicy, type EgressPolicy } from './cascade.geo.js';
+import { config } from '../../config.js';
+import { getGeoBuildMeta } from '../geo/geo.registry.js';
+import { GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT } from '../geo/geo.orchestrator.js';
+import { geoArtifactBaseUrl } from '../geo/geo.url.js';
 import type { CreateCascadeInput, UpdateCascadeInput } from './cascade.schemas.js';
 import { mapCascade, type CascadeDto } from './cascade.mapper.js';
+
+// The only ext:<file> geo databases the panel ever produces (the composed custom
+// categories). A matcher referencing any other ext file is never satisfiable.
+const CUSTOM_EXT_FILES = new Set([GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT]);
+
+function parseExtMatcher(m: string): { file: string; cat: string } | null {
+  const x = /^ext:([^:]+):(.+)$/.exec(m);
+  return x ? { file: x[1]!, cat: x[2]! } : null;
+}
+
+/**
+ * G4 - reconcile the entry hop's geo split with what the node can actually
+ * resolve, so we NEVER ship an `ext:<file>:<cat>` routing rule whose backing .dat
+ * (or category inside it) the node won't have - that would make xray fail config
+ * load and crash-loop, wedging the entry hop for every user.
+ *
+ * Returns the policy with UNSATISFIABLE ext: matchers stripped, plus the exact
+ * set of custom .dat assets to push (only the files the cleaned policy still
+ * references). An ext:geo-custom.dat:CAT matcher is satisfiable only when
+ * self-hosting is on, a build is cached, and CAT is NON-EMPTY in that build (an
+ * empty category is omitted from the .dat). Standard geosite:/geoip:/literal
+ * matchers are always kept - they resolve from the node's bundled databases, so
+ * we do NOT push the source mirror (overwriting the comprehensive bundle with a
+ * narrow mirror would break standard geosite: rules).
+ */
+function resolveEntryGeo(policy: EgressPolicy | undefined): {
+  policy: EgressPolicy | undefined;
+  assets: GeoAssetSpec[] | undefined;
+} {
+  // meta is null when self-hosting is off (can't deliver files to nodes) OR no
+  // build is cached - either way no custom ext: matcher is satisfiable.
+  const meta = config.GEO_SELF_HOST ? getGeoBuildMeta() : null;
+  return reconcileEntryGeo(policy, meta, geoArtifactBaseUrl());
+}
+
+/** Pure core of resolveEntryGeo (see it): given the policy + the current build
+ *  meta (null = no shippable custom geo) + the public base URL, strip
+ *  unsatisfiable ext: matchers and return the custom .dat assets to push. */
+export function reconcileEntryGeo(
+  policy: EgressPolicy | undefined,
+  meta: {
+    categories: { name: string; domains: number; cidrs: number }[];
+    artifacts: { name: string; sha256: string }[];
+  } | null,
+  baseUrl: string,
+): { policy: EgressPolicy | undefined; assets: GeoAssetSpec[] | undefined } {
+  if (!policy || policy.length === 0) return { policy, assets: undefined };
+
+  const hasDomains = new Map<string, boolean>();
+  const hasCidrs = new Map<string, boolean>();
+  for (const c of meta?.categories ?? []) {
+    hasDomains.set(c.name.toUpperCase(), c.domains > 0);
+    hasCidrs.set(c.name.toUpperCase(), c.cidrs > 0);
+  }
+  const builtArtifacts = new Set((meta?.artifacts ?? []).map((a) => a.name));
+
+  const extSatisfiable = (m: string): boolean => {
+    const e = parseExtMatcher(m);
+    if (!e) return true; // not an ext ref -> standard/literal, always keep
+    if (e.file === GEO_SITE_ARTIFACT) {
+      return builtArtifacts.has(GEO_SITE_ARTIFACT) && hasDomains.get(e.cat.toUpperCase()) === true;
+    }
+    if (e.file === GEO_IP_ARTIFACT) {
+      return builtArtifacts.has(GEO_IP_ARTIFACT) && hasCidrs.get(e.cat.toUpperCase()) === true;
+    }
+    return false; // an ext file the panel never produces
+  };
+  const filterArr = (a?: string[]): string[] | undefined => {
+    if (!a) return a;
+    const kept = a.filter(extSatisfiable);
+    return kept.length ? kept : undefined; // drop an emptied array so the rule can fall away
+  };
+
+  const neededFiles = new Set<string>();
+  const cleaned: EgressPolicy = [];
+  for (const r of policy) {
+    const hadMatchers = Boolean(
+      r.geosite?.length || r.geoip?.length || r.domain?.length || r.ip?.length,
+    );
+    const next = { ...r, geosite: filterArr(r.geosite), geoip: filterArr(r.geoip), domain: filterArr(r.domain), ip: filterArr(r.ip) };
+    const keepsMatchers = Boolean(next.geosite || next.geoip || next.domain || next.ip);
+    // If a rule HAD category/literal matchers and stripping removed them ALL,
+    // DROP it rather than let a surviving `port`/`network` turn it into a
+    // port-scoped catch-all: that would silently broaden the operator's
+    // category-scoped rule to ALL traffic on that port (block => DoS all HTTPS;
+    // direct => egress all HTTPS off the entry, exposing its IP as the exit). A
+    // rule that was port/network-only from the start (no matchers to begin with)
+    // is intentional and kept.
+    if (hadMatchers && !keepsMatchers) continue;
+    for (const m of [...(next.geosite ?? []), ...(next.geoip ?? []), ...(next.domain ?? []), ...(next.ip ?? [])]) {
+      const e = parseExtMatcher(m);
+      if (e && CUSTOM_EXT_FILES.has(e.file)) neededFiles.add(e.file);
+    }
+    cleaned.push(next);
+  }
+
+  let assets: GeoAssetSpec[] | undefined;
+  if (meta && neededFiles.size > 0) {
+    const base = baseUrl.replace(/\/+$/, '');
+    const specs = meta.artifacts
+      .filter((a) => neededFiles.has(a.name))
+      .map((a) => ({ name: a.name, url: `${base}/${a.name}`, sha256: a.sha256 }));
+    assets = specs.length ? specs : undefined;
+  }
+  return { policy: cleaned, assets };
+}
+
+// Tags the node's BASE xray config already provides unconditionally (freedom
+// `direct` + blackhole `blocked`, see node xray/config.go). The cascade builder
+// emits its own copies so it stays self-contained/testable, but the node merge
+// appends fragment outbounds without dedup, and xray refuses to boot on a
+// duplicate tag - so strip these before shipping the fragment. The geo rules
+// still resolve: they reference the node's base `direct`/`blocked` by tag.
+const NODE_BASE_OUTBOUND_TAGS = new Set(['direct', 'blocked']);
+
+function stripBaseOutbounds(outbounds: Record<string, unknown>[]): Record<string, unknown>[] {
+  return outbounds.filter((o) => !NODE_BASE_OUTBOUND_TAGS.has(o.tag as string));
+}
 
 export class CascadeNotFoundError extends Error {
   constructor(id: string) {
@@ -188,6 +311,11 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
         enabled: input.enabled,
         mode,
         hideHopsFromSub: input.hideHopsFromSub,
+        // Cast: the zod-validated EgressPolicy is a fresh JSON-shaped value, but
+        // its inferred type lacks the index signature Prisma's Json input wants.
+        ...(input.egressPolicy !== undefined
+          ? { egressPolicy: input.egressPolicy as unknown as Prisma.InputJsonValue }
+          : {}),
         hops: {
           create: hops.map((h, idx) => ({
             // Nested create uses the checked input -> connect the relation
@@ -256,6 +384,10 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
           ...(input.mode !== undefined ? { mode: input.mode } : {}),
           ...(input.hideHopsFromSub !== undefined
             ? { hideHopsFromSub: input.hideHopsFromSub }
+            : {}),
+          // [] clears the policy; undefined leaves it unchanged.
+          ...(input.egressPolicy !== undefined
+            ? { egressPolicy: input.egressPolicy as unknown as Prisma.InputJsonValue }
             : {}),
         },
       });
@@ -331,6 +463,14 @@ export async function getCascadeFragmentsForNode(
   // A single-hop "cascade" has no links to build - treat as not-a-cascade.
   if (!cascade || cascade.hops.length < 2) return null;
 
+  // E - the entry hop's geo split. Only affects the entry's fragments; the
+  // builders ignore it for transit/exit roles. Malformed/absent -> undefined ->
+  // a plain cascade (defensive against data drift). resolveEntryGeo strips any
+  // ext: matcher the node couldn't resolve and returns the exact custom .dat
+  // assets to push, so the rules and the shipped files always agree.
+  const resolvedGeo = resolveEntryGeo(coerceEgressPolicy(cascade.egressPolicy));
+  const entryPolicy = resolvedGeo.policy;
+
   const hopInputs: CascadeConfigHopInput[] = cascade.hops.map((h) => ({
     nodeId: h.nodeId,
     position: h.position,
@@ -352,17 +492,24 @@ export async function getCascadeFragmentsForNode(
       if (!cred) return null;
       exitCreds.push(cred);
     }
-    const configs = buildBalancerCascadeConfigs(hopInputs[0]!, hopInputs.slice(1), exitCreds);
+    const configs = buildBalancerCascadeConfigs(
+      hopInputs[0]!,
+      hopInputs.slice(1),
+      exitCreds,
+      entryPolicy,
+    );
     const mine = configs.find((c) => c.nodeId === nodeId);
     if (!mine) return null;
+    const geoAssets = mine.role === 'entry' ? resolvedGeo.assets : undefined;
     return {
       inbounds: mine.inbounds,
-      outbounds: mine.outbounds.filter((o) => o.tag !== 'direct'),
+      outbounds: stripBaseOutbounds(mine.outbounds),
       routingRules: mine.routingRules,
       linkIngressPort: mine.linkIngressPort,
       linkAllowFrom: mine.linkAllowFrom,
       observatory: mine.observatory,
       balancers: mine.balancers,
+      ...(geoAssets ? { geoAssets } : {}),
     };
   }
 
@@ -379,18 +526,20 @@ export async function getCascadeFragmentsForNode(
     linkCreds.push(cred);
   }
 
-  const configs = buildCascadeConfigs(hopInputs, linkCreds);
+  const configs = buildCascadeConfigs(hopInputs, linkCreds, entryPolicy);
   const mine = configs.find((c) => c.nodeId === nodeId);
   if (!mine) return null;
+  const geoAssets = mine.role === 'entry' ? resolvedGeo.assets : undefined;
 
   return {
     inbounds: mine.inbounds,
-    outbounds: mine.outbounds.filter((o) => o.tag !== 'direct'),
+    outbounds: stripBaseOutbounds(mine.outbounds),
     routingRules: mine.routingRules,
     // Carry the link port + peer address so the node-agent can open UFW for the
     // inter-hop link itself (was a manual `ufw allow from <entry-ip>` step).
     linkIngressPort: mine.linkIngressPort,
     linkAllowFrom: mine.linkAllowFrom,
+    ...(geoAssets ? { geoAssets } : {}),
   };
 }
 

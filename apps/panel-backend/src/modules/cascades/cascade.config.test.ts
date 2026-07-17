@@ -9,6 +9,7 @@ import {
   LINK_PORT_BASE,
   type CascadeConfigHopInput,
   type LinkCred,
+  type EgressPolicy,
 } from './cascade.config.js';
 
 describe('buildBalancerCascadeConfigs (auto node)', () => {
@@ -64,6 +65,26 @@ describe('buildBalancerCascadeConfigs (auto node)', () => {
     const cfgs = buildBalancerCascadeConfigs(entry, exits, creds);
     expect(cfgs[1]!.observatory).toBeUndefined();
     expect(cfgs[1]!.balancers).toBeUndefined();
+  });
+
+  it('with no entry policy the balancer entry rule is unchanged (byte-identical)', () => {
+    const e = buildBalancerCascadeConfigs(entry, exits, creds)[0]!;
+    expect(e.routingRules).toEqual([{ type: 'field', network: 'tcp,udp', balancerTag: 'auto' }]);
+    expect(e.outbounds.some((o) => o.protocol === 'blackhole')).toBe(false);
+  });
+
+  it('an entry policy prepends geo rules; link-out targets resolve to the balancerTag', () => {
+    const policy: EgressPolicy = [
+      { geosite: ['category-ads-all'], target: 'block' },
+      { geoip: ['ru'], target: 'direct' },
+    ];
+    const e = buildBalancerCascadeConfigs(entry, exits, creds, policy)[0]!;
+    expect(e.routingRules).toEqual([
+      { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'blocked' },
+      { type: 'field', ip: ['geoip:ru'], outboundTag: 'direct' },
+      { type: 'field', network: 'tcp,udp', balancerTag: 'auto' }, // catch-all -> balancer, last
+    ]);
+    expect(e.outbounds).toContainEqual({ tag: 'blocked', protocol: 'blackhole' });
   });
 });
 
@@ -199,6 +220,50 @@ describe('buildCascadeConfigs (vless->vless)', () => {
     expect(exit!.linkIngressPort).toBe(24001);
     expect(exit!.linkAllowFrom).toEqual(['transit.example.com']);
   });
+
+  it('with no entry policy the entry routing is unchanged (byte-identical)', () => {
+    const entry = buildCascadeConfigs(hops, creds)[0]!;
+    // single catch-all rule, no geo prepend, no blackhole outbound
+    expect(entry.routingRules).toEqual([
+      { type: 'field', network: 'tcp,udp', outboundTag: 'cascade-link-out' },
+    ]);
+    expect(entry.outbounds.some((o) => o.protocol === 'blackhole')).toBe(false);
+  });
+
+  it('an entry policy prepends geo rules ahead of the catch-all (first-match wins)', () => {
+    const policy: EgressPolicy = [
+      { geosite: ['category-ads-all'], target: 'block' },
+      { geosite: ['category-ru'], geoip: ['ru'], target: 'direct' },
+    ];
+    const entry = buildCascadeConfigs(hops, creds, policy)[0]!;
+    expect(entry.routingRules).toEqual([
+      { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'blocked' },
+      // the mixed rule splits into domain + ip rules (xray ANDs within a rule)
+      { type: 'field', domain: ['geosite:category-ru'], outboundTag: 'direct' },
+      { type: 'field', ip: ['geoip:ru'], outboundTag: 'direct' },
+      { type: 'field', network: 'tcp,udp', outboundTag: 'cascade-link-out' }, // catch-all stays last
+    ]);
+    // a block rule pulls in the blackhole outbound
+    expect(entry.outbounds).toContainEqual({ tag: 'blocked', protocol: 'blackhole' });
+  });
+
+  it('a policy that only routes direct does not add a blackhole outbound', () => {
+    const policy: EgressPolicy = [{ geoip: ['ru'], target: 'direct' }];
+    const entry = buildCascadeConfigs(hops, creds, policy)[0]!;
+    expect(entry.outbounds.some((o) => o.protocol === 'blackhole')).toBe(false);
+    expect(entry.routingRules).toHaveLength(2); // geo direct + catch-all
+  });
+
+  it('the entry policy does not leak onto transit/exit hops', () => {
+    const policy: EgressPolicy = [{ geoip: ['ru'], target: 'direct' }];
+    const [, transit, exit] = buildCascadeConfigs(hops, creds, policy);
+    expect(transit!.routingRules).toEqual([
+      { type: 'field', inboundTag: ['cascade-link-in'], outboundTag: 'cascade-link-out' },
+    ]);
+    expect(exit!.routingRules).toEqual([
+      { type: 'field', inboundTag: ['cascade-link-in'], outboundTag: 'direct' },
+    ]);
+  });
 });
 
 describe('buildCascadeConfigs (shadowsocks link cell, C3b)', () => {
@@ -232,6 +297,20 @@ describe('buildCascadeConfigs (shadowsocks link cell, C3b)', () => {
     // routing roles are protocol-agnostic ([0] drops QUIC, [1] link-out)
     expect(entry!.routingRules[1]!.outboundTag).toBe('cascade-link-out');
     expect(exit!.routingRules[0]).toMatchObject({ inboundTag: ['cascade-link-in'], outboundTag: 'direct' });
+  });
+
+  it('carries UDP natively over the SS2022 link (tcp,udp), unlike the plaintext vless link', () => {
+    // SS2022 link: the link-in declares network tcp,udp, so UDP is relayed as
+    // native datagrams (no head-of-line blocking) - the HoL fix for voice.
+    const [, ssExit] = buildCascadeConfigs(hops, ssCreds);
+    expect((ssExit!.inbounds[0] as any).settings.network).toBe('tcp,udp');
+    // vless link: raw/security:none, no tcp,udp declaration - UDP rides XUDP
+    // multiplexed over the single TCP stream (HoL-prone).
+    const vlessCreds: LinkCred[] = [{ protocol: 'vless', port: 24000, uuid: 'u-0' }];
+    const [, vlessExit] = buildCascadeConfigs(hops, vlessCreds);
+    const vin = vlessExit!.inbounds[0] as any;
+    expect(vin.streamSettings).toEqual({ network: 'raw', security: 'none' });
+    expect(vin.settings.network).toBeUndefined();
   });
 
   it('mixes cell types per link (vless entry->transit, ss transit->exit)', () => {

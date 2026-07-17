@@ -736,6 +736,11 @@ model Cascade {
   // expose the cascade's exit nodes as directly-connectable endpoints, for
   // operators who want users to pick those regions raw as well as via "Auto".
   hideHopsFromSub Boolean @default(true) @map("hide_hops_from_sub")
+  // E - server-side geo split applied on the ENTRY hop: an EgressPolicy (array
+  // of {match -> direct/block/link-out}) validated by EgressPolicySchema. NULL/
+  // absent = no split, so the entry stays byte-identical to a plain cascade.
+  // Stored as JSON (migration-free evolution, mirrors linkConfig/hardening).
+  egressPolicy Json?   @map("egress_policy")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
