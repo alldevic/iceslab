@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -44,6 +45,9 @@ type Config struct {
 	Binary string
 	// Args are passed verbatim after the binary name.
 	Args []string
+	// Env is appended to the inherited process environment (KEY=VALUE). Empty =
+	// inherit unchanged. Used e.g. to set XRAY_LOCATION_ASSET for the geo dir.
+	Env []string
 	// Logger receives one entry per line of stdout/stderr (Info/Error level).
 	Logger *slog.Logger
 	// N9 - restart-on-crash policy. MaxRestarts == 0 (the default) disables
@@ -112,6 +116,10 @@ func (s *Subprocess) spawnLocked(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, s.cfg.Binary, s.cfg.Args...)
 	cmd.Stdout = newLogWriter(s.cfg.Logger, slog.LevelInfo, s.cfg.Name)
 	cmd.Stderr = newLogWriter(s.cfg.Logger, slog.LevelError, s.cfg.Name)
+	// Extra env (e.g. XRAY_LOCATION_ASSET) on top of the inherited environment.
+	if len(s.cfg.Env) > 0 {
+		cmd.Env = append(os.Environ(), s.cfg.Env...)
+	}
 	// N5 - put the child in its own process group so Stop (and ctx-cancel) can
 	// signal the WHOLE group (-pgid), reaping any grandchildren the core forks
 	// (helper procs, ACME/cert workers). Without this an orphaned grandchild

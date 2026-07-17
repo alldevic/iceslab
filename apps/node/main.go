@@ -144,6 +144,9 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 	// config and starts xray immediately on boot.
 	if os.Getenv("XRAY_BINARY") != "" {
 		cfg, _ := buildXrayConfig()
+		// G4 - dir for panel-pushed geo databases (XRAY_LOCATION_ASSET). Unset =
+		// geo-asset management off; xray uses its bundled databases.
+		cfg.GeoAssetDir = os.Getenv("XRAY_GEO_DIR")
 		// buildXrayConfig returns zero Config when REALITY keys are not in env
 		// (deferred-key flow). Still need BinaryPath so the adapter can spawn
 		// xray after receiving ApplyInbound from the panel.

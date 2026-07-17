@@ -15,6 +15,7 @@ import (
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
+	geopkg "github.com/icecompany-tech/iceslab/apps/node/internal/geo"
 )
 
 const Name = "xray"
@@ -43,6 +44,11 @@ type Config struct {
 	// Defaults to os/exec; tests inject a fake to assert behaviour without
 	// shelling out.
 	RunCmd RunCmdFunc
+
+	// GeoAssetDir is where panel-pushed geo databases are installed and which is
+	// handed to xray as XRAY_LOCATION_ASSET when a cascade carries GeoAssets.
+	// Empty disables geo-asset management (xray uses its bundled databases).
+	GeoAssetDir string
 }
 
 // RunCmdFunc executes an external command synchronously and returns its
@@ -61,6 +67,21 @@ type Adapter struct {
 	mu      sync.Mutex
 	users   map[string]xrayClient // key: userId
 	started bool                  // set true after first successful regenerateAndRestart
+	// regenFailed is set when regenerateAndRestart returns an error (e.g. a geo
+	// asset precondition miss on a transient fetch outage) and cleared on the
+	// next success. The ApplyInbound idempotency gate consults it so a re-push of
+	// the SAME config still retries instead of reporting a stuck config as
+	// applied (the failed geo install would otherwise never run again).
+	regenFailed bool
+
+	// stopGen counts Stop() calls. regenerateAndRestart snapshots it before its
+	// slow IO (geo fetch up to 30s×N, plus the subprocess swap) and re-checks it
+	// right before spawning: if a Stop landed in between (e.g. heartbeat
+	// self-destruct firing mid-restart), it must NOT resurrect xray - the new
+	// process would run under ctx.Background with its own pgroup and outlive the
+	// agent's exit. Stop does not take restartMu, so this counter is the only
+	// coordination between the two paths.
+	stopGen uint64
 
 	// cascade holds the optional C3 chaining fragments (link-in inbound,
 	// link-out outbound, routing rules) for THIS node's hop, pushed by the
@@ -121,6 +142,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	a.started = false
+	a.stopGen++ // signal any in-flight regenerateAndRestart to not respawn
 	proc := a.proc
 	a.proc = nil
 	ss := a.selfSteal
@@ -244,6 +266,7 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 	cascade := a.cascade
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
+	geoDir := a.cfg.GeoAssetDir
 	run := a.cfg.RunCmd
 	proc := a.proc
 	a.mu.Unlock()
@@ -259,6 +282,29 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 	// (and the same cascade fragments).
 	blob, err := renderConfigWithCascade(inbound, clients, cascade)
 	if err != nil {
+		return false
+	}
+	// G4 - same verify-before-write guard as regenerateAndRestart: this is a
+	// second writer to cfgPath, so an ext:<file> reference whose geo database
+	// isn't on disk with the expected sha (a still-pending/failed/stale install)
+	// must NOT be persisted here either, or the crash-watcher would boot-loop it.
+	// Ensure is idempotent (skip-if-sha-matches, no fetch when already correct),
+	// so it just re-confirms the referenced files and yields the installed set;
+	// on any miss, bail to the full restart path.
+	assetDir := ""
+	installedAssets := map[string]bool{}
+	if cascade != nil && len(cascade.GeoAssets) > 0 && geoDir != "" {
+		res, _ := geopkg.Ensure(geoDir, toGeoAssets(cascade.GeoAssets), geopkg.HTTPFetch)
+		for _, n := range res.Installed {
+			installedAssets[n] = true
+		}
+		for _, n := range res.Skipped {
+			installedAssets[n] = true
+		}
+		assetDir = geoDir
+	}
+	if err := verifyExtAssets(blob, assetDir, installedAssets); err != nil {
+		a.logger.Info("live update: geo asset precondition not met, falling back to restart", "err", err)
 		return false
 	}
 	if cfgPath != "" {
@@ -582,8 +628,14 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// Idempotency check, same config → noop. Compare struct fields
 	// instead of byte-marshalling for speed; slice equality via reflect.
 	// C3: a cascade change alone (same inbound) must still trigger a restart,
-	// so factor the cascade fragments into the gate.
-	if inboundEqual(a.cfg.Inbound, newInbound) && cascadeEqual(a.cascade, wire.Cascade) {
+	// so factor the cascade fragments into the gate. Only skip when we are
+	// actually RUNNING this config (a.started): a stopped adapter - including one
+	// whose in-flight restart was aborted by a racing Stop - has the config
+	// committed but xray down, so an identical re-push must still (re)start it.
+	// regenFailed forces a retry after a failed apply even while a prior config
+	// is still up.
+	if a.started && !a.regenFailed &&
+		inboundEqual(a.cfg.Inbound, newInbound) && cascadeEqual(a.cascade, wire.Cascade) {
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyInbound: config unchanged, skipping restart")
 		return nil
@@ -679,7 +731,8 @@ func cascadeEqual(a, b *CascadeFragments) bool {
 		rawSliceEqual(a.Outbounds, b.Outbounds) &&
 		rawSliceEqual(a.RoutingRules, b.RoutingRules) &&
 		bytes.Equal(a.Observatory, b.Observatory) &&
-		rawSliceEqual(a.Balancers, b.Balancers)
+		rawSliceEqual(a.Balancers, b.Balancers) &&
+		geoAssetsEqual(a.GeoAssets, b.GeoAssets)
 }
 
 func rawSliceEqual(a, b []json.RawMessage) bool {
@@ -699,9 +752,17 @@ func rawSliceEqual(a, b []json.RawMessage) bool {
 // held. restartMu serializes restarts; a.mu is taken only for the fast
 // snapshot of state and the final proc swap, so Healthy()/GetStats never
 // block behind the multi-second Stop/Start.
-func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
+func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
+	// Record whether this attempt failed so a later re-push of an identical
+	// config still retries (see the regenFailed field). Config-only mode returns
+	// nil below, so it clears the flag too.
+	defer func() {
+		a.mu.Lock()
+		a.regenFailed = retErr != nil
+		a.mu.Unlock()
+	}()
 
 	// Snapshot the inputs under a.mu (fast), then do all IO with a.mu free.
 	a.mu.Lock()
@@ -710,12 +771,63 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	cascade := a.cascade
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
+	geoDir := a.cfg.GeoAssetDir
+	startGen := a.stopGen // if a Stop bumps this during our IO, don't respawn
 	a.mu.Unlock()
 
 	blob, err := renderConfigWithCascade(inbound, clients, cascade)
 	if err != nil {
 		return fmt.Errorf("render xray config: %w", err)
 	}
+
+	// G4 - fetch+install panel-pushed geo databases before the xray swap and
+	// point xray at that dir via XRAY_LOCATION_ASSET. Fail-soft: install errors
+	// are logged; the node keeps its last-good / bundled databases. assetDir is
+	// the dir xray will ACTUALLY resolve geo files from ("" = its bundled
+	// default) - verifyExtAssets below must check that same dir, or we would
+	// greenlight a restart into a config xray cannot load.
+	var spawnEnv []string
+	assetDir := ""
+	// installedAssets = the geo files that are present on disk with the EXACT
+	// sha the panel pushed this round (freshly written or already-correct). A
+	// referenced ext file that isn't in this set (fetch failed, or a CDN served
+	// stale bytes for the content-mutable URL) must NOT green-light the restart:
+	// the stale/absent file would crash xray even though os.Stat sees a file.
+	installedAssets := map[string]bool{}
+	if cascade != nil && len(cascade.GeoAssets) > 0 && geoDir != "" {
+		res, err := geopkg.Ensure(geoDir, toGeoAssets(cascade.GeoAssets), geopkg.HTTPFetch)
+		if err != nil {
+			a.logger.Warn("geo asset dir unavailable", "err", err)
+		}
+		if len(res.Errors) > 0 {
+			a.logger.Warn("geo asset install had errors", "errors", fmt.Sprint(res.Errors))
+		}
+		for _, n := range res.Installed {
+			installedAssets[n] = true
+		}
+		for _, n := range res.Skipped {
+			installedAssets[n] = true
+		}
+		spawnEnv = []string{"XRAY_LOCATION_ASSET=" + geoDir}
+		assetDir = geoDir
+	}
+
+	// G4 - refuse to restart into a config that references an ext:<file> geo
+	// database xray won't find (in assetDir when we set XRAY_LOCATION_ASSET,
+	// nowhere when we don't): xray would fail to boot and the subprocess would
+	// restart-storm. Verified BEFORE we (a) write the new blob to disk and (b)
+	// stop the running xray, so on a miss the old instance keeps serving AND the
+	// on-disk config the crash-respawn watcher reruns stays the last-good one
+	// (writing first would poison disk: any later unrelated xray crash respawns
+	// `run -c <cfgPath>` against the unbootable config -> the storm we prevent).
+	// Only meaningful when a binary exists to (re)spawn; config-only mode has no
+	// subprocess, so a write there cannot boot-loop.
+	if binPath != "" {
+		if err := verifyExtAssets(blob, assetDir, installedAssets); err != nil {
+			return fmt.Errorf("geo asset precondition: %w", err)
+		}
+	}
+
 	if cfgPath != "" {
 		if err := writeConfig(cfgPath, blob); err != nil {
 			return err
@@ -738,10 +850,17 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 
 	// Stop the existing subprocess (keep the field pointing at it so Healthy
 	// reflects "down" during the swap; xray binds a fixed port so old must
-	// stop before new can bind).
+	// stop before new can bind). Abort the whole restart if a Stop() landed
+	// while we were doing IO above - resurrecting xray here would leave a
+	// process the agent believes is gone (self-destruct zombie).
 	a.mu.Lock()
+	stopped := a.stopGen != startGen
 	old := a.proc
 	a.mu.Unlock()
+	if stopped {
+		a.logger.Info("xray restart aborted: adapter stopped during regeneration")
+		return nil
+	}
 	if old != nil {
 		if err := old.Stop(ctx); err != nil {
 			a.logger.Warn("xray stop failed during restart", "err", err)
@@ -752,6 +871,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		Name:           Name,
 		Binary:         binPath,
 		Args:           []string{"run", "-c", cfgPath},
+		Env:            spawnEnv,
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
@@ -762,9 +882,25 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		a.mu.Unlock()
 		return fmt.Errorf("start xray: %w", err)
 	}
+	// Re-check under the same lock that commits a.proc: a Stop() racing between
+	// the abort check above and here would otherwise stop the OLD proc (or nil)
+	// and never see this new one, leaving a zombie. If a Stop landed, tear the
+	// fresh process down instead of storing it.
 	a.mu.Lock()
+	if a.stopGen != startGen {
+		a.mu.Unlock()
+		_ = proc.Stop(ctx)
+		a.logger.Info("xray restart aborted post-spawn: adapter stopped during regeneration")
+		return nil
+	}
 	a.proc = proc
 	a.started = true
+	// Clear regenFailed in the SAME critical section that commits started=true,
+	// not only in the trailing defer: otherwise a concurrent idempotent
+	// ApplyInbound could observe the inconsistent pair (started=true,
+	// regenFailed=true) in the window before the defer runs and perform a
+	// spurious full restart (dropping every live session) on an unchanged config.
+	a.regenFailed = false
 	a.mu.Unlock()
 	a.logger.Info("xray (re)started", "users", len(clients))
 	return nil
