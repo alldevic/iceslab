@@ -369,12 +369,18 @@ export function buildXrayJson(
   // listing of an overlapping domain. The proxy bucket needs an actual proxy
   // outbound to target; with no xray endpoints it is dropped (no valid tag).
   const cdl = opts.customDomainLists;
+  // xray routing has no `keyword:` prefix - a plain (unprefixed) string already
+  // IS a substring/keyword match. Strip the explicit `keyword:` that domainMatchers
+  // emits (so clash can map it to DOMAIN-KEYWORD) back to bare here; leave
+  // domain:/full:/regexp:/geosite:/ext: untouched (all native xray prefixes).
+  const forXray = (list: string[]): string[] =>
+    list.map((d) => (d.startsWith('keyword:') ? d.slice('keyword:'.length) : d));
   const customDomainRules: Record<string, unknown>[] = cdl
     ? [
-        ...(cdl.block.length ? [{ type: 'field', domain: cdl.block, outboundTag: 'block' }] : []),
-        ...(cdl.direct.length ? [{ type: 'field', domain: cdl.direct, outboundTag: 'direct' }] : []),
+        ...(cdl.block.length ? [{ type: 'field', domain: forXray(cdl.block), outboundTag: 'block' }] : []),
+        ...(cdl.direct.length ? [{ type: 'field', domain: forXray(cdl.direct), outboundTag: 'direct' }] : []),
         ...(cdl.proxy.length && proxyTags.length > 0
-          ? [{ type: 'field', domain: cdl.proxy, outboundTag: proxyTags[0] }]
+          ? [{ type: 'field', domain: forXray(cdl.proxy), outboundTag: proxyTags[0] }]
           : []),
       ]
     : [];

@@ -52,6 +52,14 @@ function yamlString(value: string): string {
 export interface ClashBuildOpts {
   routingPreset?: RoutingPresetId;
   /**
+   * G6 - when set, the split preset's geo databases are fetched from this
+   * self-hosted base (PUBLIC_URL/geo/<token>) instead of the jsdelivr mirror,
+   * which is unstable from RU. Points geosite/geoip at the panel's mirrored
+   * `.dat` with `geodata-mode: true` (GEOIP resolves via geoip.dat, so no mmdb).
+   * Undefined = the external jsdelivr default = byte-identical output.
+   */
+  geoBaseUrl?: string;
+  /**
    * R3 - operator-defined custom domain lists (direct/proxy/block). Each domain
    * becomes a `DOMAIN-SUFFIX` rule emitted at the head of the `rules:` section
    * (before any ru-split lines and the MATCH catch-all). xray geosite-style
@@ -76,6 +84,22 @@ const SPLIT_GEO_LINES: readonly string[] = [
   '  mmdb: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"',
   '',
 ];
+
+// G6 - self-hosted variant of SPLIT_GEO_LINES: geosite/geoip from the panel
+// mirror, geodata-mode so GEOIP uses geoip.dat (no mmdb needed).
+function splitGeoLines(geoBaseUrl?: string): readonly string[] {
+  if (!geoBaseUrl) return SPLIT_GEO_LINES;
+  const base = geoBaseUrl.replace(/\/+$/, '');
+  return [
+    'geodata-mode: true',
+    'geo-auto-update: true',
+    'geo-update-interval: 72',
+    'geox-url:',
+    `  geosite: "${base}/geosite.dat"`,
+    `  geoip: "${base}/geoip.dat"`,
+    '',
+  ];
+}
 
 /**
  * Split DNS (R2). fake-ip keeps app-side resolution instant; RU domains are
@@ -443,7 +467,9 @@ export function buildClashYaml(
   // The geo databases are only fetched by the split presets, which are the only
   // ones with GEOSITE/GEOIP rules to resolve. DNS is emitted for every preset.
   if (splitRuleLines) {
-    lines.push(...SPLIT_GEO_LINES);
+    // G6 - self-hosted geo variant: rewrites geox-url to the panel mirror when
+    // GEO_SELF_HOST is on; falls back to SPLIT_GEO_LINES (jsdelivr) otherwise.
+    lines.push(...splitGeoLines(buildOpts.geoBaseUrl));
   }
   lines.push(...dnsLines);
   lines.push('proxies:');
@@ -475,15 +501,28 @@ export function buildClashYaml(
   // cannot parse. The proxy bucket targets the existing `Auto` proxy-group, so
   // it is only emitted when at least one proxy exists.
   const cdl = buildOpts.customDomainLists;
-  const stripPfx = (d: string): string => d.replace(/^(domain|full|regexp|keyword):/, '');
+  // Map xray matcher prefixes to the equivalent Clash rule type: bare/domain: =
+  // suffix, full: = exact, keyword: = substring. regexp: is skipped - classic
+  // Clash has no regex rule, and a regex payload (or any value with a comma)
+  // would corrupt the comma-separated rule line and fail the whole profile.
+  const clashRule = (d: string, target: string): string | null => {
+    const m = /^(domain|full|regexp|keyword):(.*)$/.exec(d);
+    const kind = m ? m[1]! : 'domain';
+    const value = m ? m[2]! : d;
+    // Drop regexp (no Clash rule type) and any value that could break out of the
+    // `  - RULE,value,target` line: a comma splits the CSV, and whitespace /
+    // control chars (newline especially) would inject an extra YAML rule line.
+    // Domains never legitimately contain these, so rejecting is safe.
+    if (kind === 'regexp' || !value || /[\s,]/.test(value)) return null;
+    const rule = kind === 'full' ? 'DOMAIN' : kind === 'keyword' ? 'DOMAIN-KEYWORD' : 'DOMAIN-SUFFIX';
+    return `  - ${rule},${value},${target}`;
+  };
   const customDomainLines: string[] = cdl
     ? [
-        ...cdl.block.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},REJECT`),
-        ...cdl.direct.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},DIRECT`),
-        ...(proxyNames.length > 0
-          ? cdl.proxy.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},Auto`)
-          : []),
-      ]
+        ...cdl.block.map((d) => clashRule(d, 'REJECT')),
+        ...cdl.direct.map((d) => clashRule(d, 'DIRECT')),
+        ...(proxyNames.length > 0 ? cdl.proxy.map((d) => clashRule(d, 'Auto')) : []),
+      ].filter((line): line is string => line !== null)
     : [];
 
   lines.push('rules:');
