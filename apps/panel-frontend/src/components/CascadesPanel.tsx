@@ -11,6 +11,7 @@ import {
   Select,
   Stack,
   Switch,
+  TagsInput,
   Text,
   TextInput,
   Tooltip,
@@ -37,6 +38,9 @@ import {
   type Cascade,
   type CascadeHopInput,
   type CascadeProtocol,
+  type CascadeLinkProtocol,
+  type EgressRule,
+  type EgressTarget,
 } from '../lib/api';
 import { useOverview } from '../hooks/useOverview';
 import { countryFlag } from '../lib/countries';
@@ -77,6 +81,14 @@ const PROTOCOLS: { value: CascadeProtocol; label: string }[] = [
   { value: 'naive', label: 'naive' },
   { value: 'mtproto', label: 'mtproto' },
   { value: 'mieru', label: 'mieru' },
+];
+
+// Inter-hop LINK protocol = the two realised link cells only (the node maps
+// anything else to vless). shadowsocks/SS2022 is the default (native UDP, no
+// head-of-line blocking for voice); vless is the plaintext raw link.
+const LINK_PROTOCOLS: { value: CascadeLinkProtocol; label: string }[] = [
+  { value: 'shadowsocks', label: 'shadowsocks (SS2022)' },
+  { value: 'vless', label: 'vless (raw)' },
 ];
 
 // Max hops per cascade. Mirrors the backend cap (cascade.schemas MAX_CASCADE_HOPS);
@@ -320,6 +332,22 @@ interface HopRow {
   linkProtocol: string;
 }
 
+// UI row for one entry-hop geo-split rule. The MVP editor only represents
+// geosite/geoip category lists + target ('editable' rows). A policy authored via
+// the API can also carry literal domain/ip/port/network matchers; those rules
+// are kept verbatim as 'raw' rows IN THEIR ORIGINAL POSITION so opening and
+// saving a cascade never silently drops or reorders them (first-match matters).
+type GeoRuleRow =
+  | { kind: 'editable'; geosite: string[]; geoip: string[]; target: EgressTarget }
+  | { kind: 'raw'; rule: EgressRule };
+
+/** A rule the MVP editor can fully represent = only geosite/geoip/target. */
+function isEditableRule(r: EgressRule): boolean {
+  return (
+    !r.domain?.length && !r.ip?.length && r.port === undefined && r.network === undefined
+  );
+}
+
 function CascadeFormModal({
   opened,
   cascade,
@@ -341,6 +369,7 @@ function CascadeFormModal({
   const [mode, setMode] = useState<'chain' | 'balancer'>('chain');
   const [hideHopsFromSub, setHideHopsFromSub] = useState(true);
   const [hops, setHops] = useState<HopRow[]>([]);
+  const [geoRules, setGeoRules] = useState<GeoRuleRow[]>([]);
   const [lastFor, setLastFor] = useState<string | null | undefined>(undefined);
 
   // Seed the form when the modal opens for a (different) cascade.
@@ -358,15 +387,25 @@ function CascadeFormModal({
           linkProtocol: h.linkProtocol ?? '',
         })),
       );
+      setGeoRules(
+        (cascade.egressPolicy ?? []).map((r): GeoRuleRow =>
+          isEditableRule(r)
+            ? { kind: 'editable', geosite: r.geosite ?? [], geoip: r.geoip ?? [], target: r.target }
+            : { kind: 'raw', rule: r },
+        ),
+      );
     } else {
       setName('');
       setEnabled(true);
       setMode('chain');
       setHideHopsFromSub(true);
       setHops([
-        { nodeId: '', entryProtocol: 'xray', linkProtocol: 'xray' },
+        // Link defaults to shadowsocks (SS2022): native UDP (no head-of-line
+        // blocking for voice) + AEAD-encrypted, on the trusted DC-to-DC link.
+        { nodeId: '', entryProtocol: 'xray', linkProtocol: 'shadowsocks' },
         { nodeId: '', entryProtocol: '', linkProtocol: '' },
       ]);
+      setGeoRules([]);
     }
   } else if (!opened && lastFor !== undefined) {
     setLastFor(undefined);
@@ -383,12 +422,29 @@ function CascadeFormModal({
           nodeId: h.nodeId,
           position: i,
           ...(i === 0 && h.entryProtocol ? { entryProtocol: h.entryProtocol as CascadeProtocol } : {}),
-          ...(carriesLink && h.linkProtocol ? { linkProtocol: h.linkProtocol as CascadeProtocol } : {}),
+          ...(carriesLink && h.linkProtocol
+            ? { linkProtocol: h.linkProtocol as CascadeLinkProtocol }
+            : {}),
         };
       });
+      // Compile the entry-hop geo split, preserving order. Editable rows with no
+      // matcher are dropped; 'raw' rows (API-authored literal/port rules the MVP
+      // editor can't represent) pass through verbatim so a UI save can't delete
+      // them. [] on update clears the policy.
+      const egressPolicy: EgressRule[] = geoRules
+        .map((r): EgressRule | null => {
+          if (r.kind === 'raw') return r.rule;
+          if (r.geosite.length === 0 && r.geoip.length === 0) return null;
+          return {
+            ...(r.geosite.length > 0 ? { geosite: r.geosite } : {}),
+            ...(r.geoip.length > 0 ? { geoip: r.geoip } : {}),
+            target: r.target,
+          };
+        })
+        .filter((r): r is EgressRule => r !== null);
       return cascade
-        ? updateCascade(cascade.id, { name, enabled, mode, hideHopsFromSub, hops: hopInputs })
-        : createCascade({ name, enabled, mode, hideHopsFromSub, hops: hopInputs });
+        ? updateCascade(cascade.id, { name, enabled, mode, hideHopsFromSub, hops: hopInputs, egressPolicy })
+        : createCascade({ name, enabled, mode, hideHopsFromSub, hops: hopInputs, egressPolicy });
     },
     onSuccess: (result) => {
       const id = result?.id ?? cascade?.id;
@@ -457,7 +513,9 @@ function CascadeFormModal({
   }
   function addHop() {
     setHops((prev) =>
-      prev.length >= MAX_HOPS ? prev : [...prev, { nodeId: '', entryProtocol: '', linkProtocol: 'xray' }],
+      prev.length >= MAX_HOPS
+        ? prev
+        : [...prev, { nodeId: '', entryProtocol: '', linkProtocol: 'shadowsocks' }],
     );
   }
   function removeHop(idx: number) {
@@ -471,6 +529,22 @@ function CascadeFormModal({
       [next[idx], next[j]] = [next[j]!, next[idx]!];
       return next;
     });
+  }
+
+  function addGeoRule() {
+    setGeoRules((prev) => [...prev, { kind: 'editable', geosite: [], geoip: [], target: 'direct' }]);
+  }
+  // Patches only apply to editable rows (raw rows have no editable fields).
+  function setGeoRule(
+    idx: number,
+    patch: Partial<{ geosite: string[]; geoip: string[]; target: EgressTarget }>,
+  ) {
+    setGeoRules((prev) =>
+      prev.map((r, i) => (i === idx && r.kind === 'editable' ? { ...r, ...patch } : r)),
+    );
+  }
+  function removeGeoRule(idx: number) {
+    setGeoRules((prev) => prev.filter((_, i) => i !== idx));
   }
 
   const valid = name.trim().length > 0 && hops.length >= 2 && hops.every((h) => h.nodeId);
@@ -511,6 +585,100 @@ function CascadeFormModal({
           onChange={(e) => setHideHopsFromSub(e.currentTarget.checked)}
         />
 
+        <Stack gap="xs" mt="xs">
+          <Group justify="space-between" align="center">
+            <Text size="sm" fw={500}>
+              {t('cascades.split')}
+            </Text>
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconPlus size={14} />}
+              onClick={addGeoRule}
+            >
+              {t('cascades.splitAddRule')}
+            </Button>
+          </Group>
+          <Text size="xs" c="dimmed">
+            {t('cascades.splitHint')}
+          </Text>
+          {geoRules.map((r, i) => {
+            const showLabel = i === geoRules.findIndex((x) => x.kind === 'editable');
+            if (r.kind === 'raw') {
+              // API-authored literal/port rule the MVP editor can't represent -
+              // shown read-only so it's visible and preserved, removable if the
+              // operator really wants it gone.
+              return (
+                <Group key={i} align="center" gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed" style={{ flex: 1 }} truncate>
+                    {t('cascades.splitRawRule', {
+                      summary:
+                        [
+                          r.rule.domain?.length && `domain:${r.rule.domain.join(',')}`,
+                          r.rule.ip?.length && `ip:${r.rule.ip.join(',')}`,
+                          r.rule.port && `port:${r.rule.port}`,
+                          r.rule.network && `net:${r.rule.network}`,
+                        ]
+                          .filter(Boolean)
+                          .join(' ') + ` → ${r.rule.target}`,
+                    })}
+                  </Text>
+                  <Tooltip label={t('cascades.removeRule')}>
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      onClick={() => removeGeoRule(i)}
+                      aria-label={t('cascades.removeRule')}
+                    >
+                      <IconTrash size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                </Group>
+              );
+            }
+            return (
+              <Group key={i} align="flex-end" gap="xs" wrap="nowrap">
+                <TagsInput
+                  label={showLabel ? 'geosite' : undefined}
+                  placeholder="category-ru"
+                  value={r.geosite}
+                  onChange={(v) => setGeoRule(i, { geosite: v })}
+                  style={{ flex: 1 }}
+                />
+                <TagsInput
+                  label={showLabel ? 'geoip' : undefined}
+                  placeholder="ru"
+                  value={r.geoip}
+                  onChange={(v) => setGeoRule(i, { geoip: v })}
+                  style={{ flex: 1 }}
+                />
+                <Select
+                  label={showLabel ? t('cascades.splitTarget') : undefined}
+                  data={[
+                    { value: 'direct', label: t('cascades.targetDirect') },
+                    { value: 'link-out', label: t('cascades.targetTunnel') },
+                    { value: 'block', label: t('cascades.targetBlock') },
+                  ]}
+                  value={r.target}
+                  onChange={(v) => v && setGeoRule(i, { target: v as EgressTarget })}
+                  w={130}
+                  allowDeselect={false}
+                />
+                <Tooltip label={t('cascades.removeRule')}>
+                  <ActionIcon
+                    variant="subtle"
+                    color="red"
+                    onClick={() => removeGeoRule(i)}
+                    aria-label={t('cascades.removeRule')}
+                  >
+                    <IconTrash size={16} />
+                  </ActionIcon>
+                </Tooltip>
+              </Group>
+            );
+          })}
+        </Stack>
+
         <Group justify="space-between" align="center" mt="xs">
           <Text size="sm" fw={500}>
             {t('cascades.hops')}
@@ -519,6 +687,9 @@ function CascadeFormModal({
             {hops.length}/{MAX_HOPS}
           </Text>
         </Group>
+        <Text size="xs" c="dimmed">
+          {t('cascades.linkHint')}
+        </Text>
         <Stack gap={6}>
           {hops.map((h, i) => {
             const isEntry = i === 0;
@@ -567,7 +738,7 @@ function CascadeFormModal({
                           ? t('cascades.linkProtocolBalancer')
                           : t('cascades.linkProtocol')
                       }
-                      data={PROTOCOLS}
+                      data={LINK_PROTOCOLS}
                       value={h.linkProtocol || null}
                       onChange={(v) => setHop(i, { linkProtocol: v ?? '' })}
                       w={150}

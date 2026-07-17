@@ -27,6 +27,7 @@ import {
   IconRoute,
   IconServer2,
   IconTrash,
+  IconWorld,
 } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -48,6 +49,7 @@ import { NodeEditModal } from '../components/NodeEditModal';
 import { NodePayloadModal } from '../components/NodePayloadModal';
 import { NodeCard } from '../components/NodeCard';
 import { CascadesPanel } from '../components/CascadesPanel';
+import { GeoPanel } from '../components/GeoPanel';
 import { countryFlag } from '../lib/countries';
 import { parseNodeAgentPort, pickFreeQuickDeployPort } from '../lib/ports';
 import { PageHero } from '../components/PageHero';
@@ -89,7 +91,7 @@ const LAYOUT_KEY = 'iceslab:nodes-layout';
 // Nodes page top-level view: the flat node inventory, or the cascades (chains of
 // those same nodes). A node can be standalone AND a cascade hop, so cascades are
 // a SECOND view of one inventory, not a second list.
-type NodesView = 'nodes' | 'cascades';
+type NodesView = 'nodes' | 'cascades' | 'geo';
 const VIEW_KEY = 'iceslab:nodes-view';
 // In the "nodes" view, slice the inventory by cascade membership.
 type MembershipFilter = 'all' | 'standalone' | 'cascade';
@@ -157,11 +159,15 @@ export function NodesPage() {
     const m = new Map<string, { name: string; role: string }>();
     for (const c of cascadesQuery.data?.cascades ?? []) {
       const last = c.hops.length - 1;
+      // Balancer mode: hop 0 is the entry, every hop >= 1 is a parallel EXIT
+      // (no transit). Chain mode: only the last hop is the exit. Match
+      // CascadesPanel's role logic so both views agree.
+      const isBalancer = c.mode === 'balancer';
       c.hops.forEach((h, i) => {
         const role =
           i === 0
             ? t('cascades.entry')
-            : i === last
+            : isBalancer || i === last
               ? t('cascades.exit')
               : t('cascades.transit');
         m.set(h.nodeId, { name: c.name, role });
@@ -351,10 +357,20 @@ export function NodesPage() {
               </Group>
             ),
           },
+          {
+            value: 'geo',
+            label: (
+              <Group gap={6} wrap="nowrap">
+                <IconWorld size={14} />
+                <Text size="sm">Geo</Text>
+              </Group>
+            ),
+          },
         ]}
       />
 
       {view === 'cascades' && <CascadesPanel />}
+      {view === 'geo' && <GeoPanel />}
 
       {view === 'nodes' && (
         <>

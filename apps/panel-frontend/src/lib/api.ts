@@ -59,7 +59,22 @@ api.interceptors.response.use(
  */
 export function apiErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
-    const data = err.response?.data as { message?: string; error?: string } | undefined;
+    const data = err.response?.data as
+      | {
+          message?: string;
+          error?: string;
+          issues?: { path?: (string | number)[]; message?: string }[];
+        }
+      | undefined;
+    // A zod validation error (backend: {error:'VALIDATION_ERROR', message:'Invalid
+    // input', issues:[...]}) carries the actual field-level reason in `issues`;
+    // surface the first one instead of the useless generic "Invalid input" so the
+    // user sees e.g. "name: name may only contain letters, digits, . _ -".
+    const issue = data?.issues?.find((i) => i?.message);
+    if (issue?.message) {
+      const field = issue.path && issue.path.length ? `${issue.path.join('.')}: ` : '';
+      return `${field}${issue.message}`;
+    }
     if (data?.message) return data.message;
     if (data?.error) return data.error;
     return err.message;
@@ -107,6 +122,147 @@ export async function updateRecipeSource(
 
 export async function deleteRecipeSource(id: string): Promise<void> {
   await api.delete(`/api/recipes/sources/${id}`);
+}
+
+// G1 - geo sources (bring your own geo): operator-managed upstream geosite/geoip
+// .dat sources the builder mirrors + minimises. The runetfreedom default is
+// seeded server-side.
+export interface GeoSource {
+  id: string;
+  name: string;
+  geositeUrl: string | null;
+  geoipUrl: string | null;
+  enabled: boolean;
+  /** How often the scheduled refresh re-checks this source upstream (hours). */
+  refreshIntervalHours: number;
+  trusted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GeoSourceInput {
+  name: string;
+  geositeUrl?: string | null;
+  geoipUrl?: string | null;
+  enabled?: boolean;
+  refreshIntervalHours?: number;
+}
+
+export async function getGeoSources(): Promise<{ sources: GeoSource[] }> {
+  const { data } = await api.get<{ sources: GeoSource[] }>('/api/geo/sources');
+  return data;
+}
+
+export async function addGeoSource(input: GeoSourceInput): Promise<GeoSource> {
+  const { data } = await api.post<GeoSource>('/api/geo/sources', input);
+  return data;
+}
+
+export async function updateGeoSource(
+  id: string,
+  patch: Partial<GeoSourceInput>,
+): Promise<GeoSource> {
+  const { data } = await api.patch<GeoSource>(`/api/geo/sources/${id}`, patch);
+  return data;
+}
+
+export async function deleteGeoSource(id: string): Promise<void> {
+  await api.delete(`/api/geo/sources/${id}`);
+}
+
+/** Reorder = set source priority (first enabled with a database wins the
+ *  client-facing full-db mirror). Sends the full ordered id list. */
+export async function reorderGeoSources(ids: string[]): Promise<{ sources: GeoSource[] }> {
+  const { data } = await api.put<{ sources: GeoSource[] }>('/api/geo/sources/order', { ids });
+  return data;
+}
+
+// Browse what categories a source's geosite/geoip .dat actually contains.
+export interface SourceCategories {
+  geosite: { name: string; count: number }[];
+  geoip: { name: string; count: number }[];
+  errors: string[];
+}
+export interface CategoryPreview {
+  entries: string[];
+  total: number;
+  truncated: boolean;
+}
+export async function getSourceCategories(id: string): Promise<SourceCategories> {
+  const { data } = await api.get<SourceCategories>(`/api/geo/sources/${id}/categories`);
+  return data;
+}
+export async function getSourceCategoryPreview(
+  id: string,
+  kind: 'geosite' | 'geoip',
+  name: string,
+): Promise<CategoryPreview> {
+  const { data } = await api.get<CategoryPreview>(
+    `/api/geo/sources/${id}/categories/${kind}/${encodeURIComponent(name)}`,
+  );
+  return data;
+}
+
+// G3 - custom geo categories (compose your own from sources + manual entries).
+export interface GeoCategoryRef {
+  sourceId: string;
+  category: string;
+}
+export interface GeoCategorySpec {
+  id: string;
+  name: string;
+  domainRefs: GeoCategoryRef[];
+  ipRefs: GeoCategoryRef[];
+  manualDomains: string[];
+  manualIps: string[];
+  excludeDomains: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface GeoCategoryInput {
+  name: string;
+  domainRefs?: GeoCategoryRef[];
+  ipRefs?: GeoCategoryRef[];
+  manualDomains?: string[];
+  manualIps?: string[];
+  excludeDomains?: string[];
+  enabled?: boolean;
+}
+
+export interface GeoBuildMeta {
+  builtAt: string;
+  categories: { name: string; domains: number; cidrs: number; missing: string[] }[];
+  sourceErrors: { sourceId: string; url: string; error: string }[];
+  artifacts: { name: string; sha256: string; size: number }[];
+}
+
+export async function getGeoCategories(): Promise<{ categories: GeoCategorySpec[] }> {
+  const { data } = await api.get<{ categories: GeoCategorySpec[] }>('/api/geo/categories');
+  return data;
+}
+export async function addGeoCategory(input: GeoCategoryInput): Promise<GeoCategorySpec> {
+  const { data } = await api.post<GeoCategorySpec>('/api/geo/categories', input);
+  return data;
+}
+export async function updateGeoCategory(
+  id: string,
+  patch: Partial<GeoCategoryInput>,
+): Promise<GeoCategorySpec> {
+  const { data } = await api.patch<GeoCategorySpec>(`/api/geo/categories/${id}`, patch);
+  return data;
+}
+export async function deleteGeoCategory(id: string): Promise<void> {
+  await api.delete(`/api/geo/categories/${id}`);
+}
+
+export async function buildGeo(): Promise<GeoBuildMeta> {
+  const { data } = await api.post<GeoBuildMeta>('/api/geo/build', {});
+  return data;
+}
+export async function getGeoBuild(): Promise<GeoBuildMeta | null> {
+  const { data } = await api.get<GeoBuildMeta | null>('/api/geo/build');
+  return data;
 }
 
 /** Ad-hoc import: validate recipes from a one-off URL or pasted JSON. */
@@ -849,6 +1005,11 @@ export async function deleteSquad(id: string): Promise<void> {
 export type CascadeProtocol =
   | 'xray' | 'hysteria' | 'amneziawg' | 'naive' | 'shadowsocks' | 'mtproto' | 'mieru';
 
+/** Inter-hop link protocol = the realised link cells (raw vless / SS2022). The
+ *  backend also tolerates the core protocols for legacy data (normalised to
+ *  vless node-side). */
+export type CascadeLinkProtocol = 'vless' | 'shadowsocks';
+
 /** 'chain' (sequential) or 'balancer' (one entry, N latency-balanced exits). */
 export type CascadeMode = 'chain' | 'balancer';
 
@@ -861,6 +1022,20 @@ export interface CascadeHop {
   linkProtocol: string | null;
 }
 
+/** E - where a matched flow egresses from the cascade entry hop. */
+export type EgressTarget = 'direct' | 'block' | 'link-out';
+
+/** One server-side geo-split rule on the entry hop (category/literal -> target). */
+export interface EgressRule {
+  geosite?: string[];
+  geoip?: string[];
+  domain?: string[];
+  ip?: string[];
+  port?: string;
+  network?: 'tcp' | 'udp' | 'tcp,udp';
+  target: EgressTarget;
+}
+
 export interface Cascade {
   id: string;
   name: string;
@@ -868,6 +1043,8 @@ export interface Cascade {
   mode: CascadeMode;
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
+  /** Entry-hop geo split, or null when none. */
+  egressPolicy: EgressRule[] | null;
   hops: CascadeHop[];
   createdAt: string;
   updatedAt: string;
@@ -877,7 +1054,7 @@ export interface CascadeHopInput {
   nodeId: string;
   position: number;
   entryProtocol?: CascadeProtocol;
-  linkProtocol?: CascadeProtocol;
+  linkProtocol?: CascadeLinkProtocol;
 }
 
 export interface CreateCascadeInput {
@@ -886,6 +1063,7 @@ export interface CreateCascadeInput {
   mode?: CascadeMode;
   hideHopsFromSub?: boolean;
   hops: CascadeHopInput[];
+  egressPolicy?: EgressRule[];
 }
 
 export interface UpdateCascadeInput {
@@ -894,6 +1072,8 @@ export interface UpdateCascadeInput {
   mode?: CascadeMode;
   hideHopsFromSub?: boolean;
   hops?: CascadeHopInput[];
+  /** [] clears the policy; omit to leave it unchanged. */
+  egressPolicy?: EgressRule[];
 }
 
 export async function listCascades(): Promise<{ cascades: Cascade[] }> {
