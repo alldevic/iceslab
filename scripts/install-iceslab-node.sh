@@ -1020,7 +1020,15 @@ EOF
       cat >> "$ENV_FILE" <<EOF
 XRAY_BINARY=${PROTO_BINARY}
 XRAY_CONFIG=${PROTO_CONFIG}
+XRAY_GEO_DIR=/var/lib/iceslab-node/geo
 EOF
+      # Managed geo-asset dir (XRAY_LOCATION_ASSET when the panel pushes geo
+      # databases). Seed it with the bundled .dat as a baseline so a self-hosted
+      # mirror overlays rather than replaces - a narrower mirror won't lose
+      # categories the bundle had for files it does not push.
+      mkdir -p /var/lib/iceslab-node/geo
+      cp -n /usr/local/share/xray/geosite.dat /var/lib/iceslab-node/geo/ 2>/dev/null || true
+      cp -n /usr/local/share/xray/geoip.dat /var/lib/iceslab-node/geo/ 2>/dev/null || true
       if [[ -n "$XR_PRIVATE_KEY" && -n "$XR_SHORT_IDS" ]]; then
         cat >> "$ENV_FILE" <<EOF
 XRAY_REALITY_PRIVATE_KEY=${XR_PRIVATE_KEY}
@@ -1357,7 +1365,13 @@ ProtectHome=true
 # dropped, so the entry node can't reach the exit and it shows dead in the
 # observatory/balancer. Invisible on a single-node install (ports already open).
 # Caught live on a production node after fresh install.
-ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/run -/etc/iptables -/etc/ufw
+# /var/lib/iceslab-node is the managed geo-asset dir (XRAY_GEO_DIR): the agent
+# downloads panel-pushed geosite/geoip/ext .dat there and atomically swaps them
+# in. Without it in this list, ProtectSystem=strict makes the dir read-only and
+# geopkg.Ensure fails EROFS on every asset, so self-hosted geo silently never
+# installs (node falls back to bundled DBs and any ext: rule fails its restart
+# precondition). The seed mkdir/cp happens at install time (still writable then).
+ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/var/lib/iceslab-node -/run -/etc/iptables -/etc/ufw
 PrivateTmp=true
 
 # Journald log limits; without these a node running for months can balloon
