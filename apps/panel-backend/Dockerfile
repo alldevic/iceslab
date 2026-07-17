@@ -102,6 +102,24 @@ WORKDIR /app
 # Copy the trimmed workspace from the builder.
 COPY --from=builder /repo /app
 
+# Bundle sing-box so the geo builder can compile per-category .srs rule-sets
+# (SINGBOX_BIN, G6). Optional feature - if the download is ever a problem, drop
+# this block and leave SINGBOX_BIN unset: the sing-box subscription format then
+# keeps its external SagerNet URLs (graceful degrade). TARGETARCH is amd64/arm64
+# under buildx; plain `docker build` leaves it empty -> amd64. busybox wget (no
+# curl in alpine); it follows the GitHub 302 to the release CDN.
+ARG SINGBOX_VERSION=1.11.4
+ARG TARGETARCH
+RUN set -eux; \
+    arch="${TARGETARCH:-amd64}"; \
+    d="sing-box-${SINGBOX_VERSION}-linux-${arch}"; \
+    wget -qO /tmp/sb.tgz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${d}.tar.gz"; \
+    tar -xzf /tmp/sb.tgz -C /tmp; \
+    install -m 0755 "/tmp/${d}/sing-box" /usr/local/bin/sing-box; \
+    rm -rf /tmp/sb.tgz "/tmp/${d}"; \
+    /usr/local/bin/sing-box version
+ENV SINGBOX_BIN=/usr/local/bin/sing-box
+
 WORKDIR /app/apps/panel-backend
 
 # I5: run the long-lived backend as the unprivileged `node` user (uid 1000,
