@@ -11,6 +11,8 @@ import {
 import { pollNodeStatuses, pollNodeMetrics } from '../nodes/nodes.cron.js';
 import { pollNodeStats } from '../stats/stats.cron.js';
 import { pruneHistory } from '../maintenance/retention.cron.js';
+import { refreshGeoAndRepush } from '../geo/geo.cron.js';
+import { config } from '../../config.js';
 import { getLogger } from '../../lib/logger.js';
 
 // ───── Queue ─────
@@ -57,13 +59,18 @@ const CRON_JOBS: CronJobSpec[] = [
   { name: 'node-stats-poll',                pattern: '*/30 * * * * *' }, // каждые 30 секунд - per-user/per-node traffic
   { name: 'reconcile-orphan-users',         pattern: '*/10 * * * *' },   // каждые 10 минут - catch-up for status-flip crashes / dropped jobs
   { name: 'prune-history',                  pattern: '30 3 * * *' },     // 03:30 каждый день - B2 retention для append-only history-таблиц
+  { name: 'geo-rebuild',                    pattern: '40 * * * *' },     // :40 каждый час - re-check sources DUE per their refreshIntervalHours (conditional GET/ETag), rebuild + re-push only on real change
   { name: 'alert-near-expiry',              pattern: '0 9 * * *'  },     // 09:00 каждый день - K3 near-expiry/near-cap дайджест в Telegram
 ];
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────
 
 export async function registerCronJobs(): Promise<void> {
-  const jobs = DEMO_MODE ? CRON_JOBS.filter((j) => !NODE_POLL_JOBS.has(j.name)) : CRON_JOBS;
+  let jobs = DEMO_MODE ? CRON_JOBS.filter((j) => !NODE_POLL_JOBS.has(j.name)) : CRON_JOBS;
+  // The geo refresh only makes sense when self-hosting is on (otherwise there is
+  // no build to refresh and nothing to push). The worker case self-gates too, so
+  // a schedule left in Redis from a prior GEO_SELF_HOST=true run is harmless.
+  if (!config.GEO_SELF_HOST) jobs = jobs.filter((j) => j.name !== 'geo-rebuild');
   for (const job of jobs) {
     await cronTasksQueue.add(
       job.name,
@@ -156,6 +163,15 @@ export function startCronTasksWorker(): Worker {
         case 'alert-near-expiry': {
           const n = await alertNearLimits();
           if (n > 0) getLogger().info(`[cron] alert-near-expiry - digest sent for ${n} user(s)`);
+          break;
+        }
+        case 'geo-rebuild': {
+          const r = await refreshGeoAndRepush();
+          if (r.changed) {
+            getLogger().info(
+              `[cron] geo-rebuild - custom geo databases changed, re-pushed ${r.nodes} cascade node(s)`,
+            );
+          }
           break;
         }
         case 'prune-history': {
