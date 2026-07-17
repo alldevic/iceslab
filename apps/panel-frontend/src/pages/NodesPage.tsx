@@ -53,6 +53,7 @@ import { NodePayloadModal } from '../components/NodePayloadModal';
 import { NodeCard } from '../components/NodeCard';
 import { CascadesPanel } from '../components/CascadesPanel';
 import type { CascadeLayout } from '../components/CascadesView';
+import { GeoPanel } from '../components/GeoPanel';
 import { countryFlag } from '../lib/countries';
 import { parseNodeAgentPort, pickFreeQuickDeployPort } from '../lib/ports';
 
@@ -141,7 +142,7 @@ function Segmented({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string; icon: 'server' | 'chain' }[];
+  options: { value: string; label: string; icon: 'server' | 'chain' | 'globe' }[];
 }) {
   return (
     <Box
@@ -180,6 +181,17 @@ function Segmented({
               <svg width="13" height="13" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
                 <rect x="3" y="4" width="18" height="7" rx="2" fill="none" stroke={stroke} strokeWidth="1.8" />
                 <rect x="3" y="13" width="18" height="7" rx="2" fill="none" stroke={stroke} strokeWidth="1.8" />
+              </svg>
+            ) : o.icon === 'globe' ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="9" fill="none" stroke={stroke} strokeWidth="1.8" />
+                <path d="M3 12h18" fill="none" stroke={stroke} strokeWidth="1.8" />
+                <path
+                  d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0 -18z"
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth="1.8"
+                />
               </svg>
             ) : (
               <svg width="15" height="15" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
@@ -415,7 +427,7 @@ const CASCADE_LAYOUT_KEY = 'iceslab:cascades-layout';
 // Nodes page top-level view: the flat node inventory, or the cascades (chains of
 // those same nodes). A node can be standalone AND a cascade hop, so cascades are
 // a SECOND view of one inventory, not a second list.
-type NodesView = 'nodes' | 'cascades';
+type NodesView = 'nodes' | 'cascades' | 'geo';
 const VIEW_KEY = 'iceslab:nodes-view';
 // In the "nodes" view, slice the inventory by cascade membership.
 type MembershipFilter = 'all' | 'standalone' | 'cascade';
@@ -504,11 +516,15 @@ export function NodesPage() {
     const m = new Map<string, { name: string; role: string }>();
     for (const c of cascadesQuery.data?.cascades ?? []) {
       const last = c.hops.length - 1;
+      // Balancer mode: hop 0 is the entry, every hop >= 1 is a parallel EXIT
+      // (no transit). Chain mode: only the last hop is the exit. Match
+      // CascadesPanel's role logic so both views agree.
+      const isBalancer = c.mode === 'balancer';
       c.hops.forEach((h, i) => {
         const role =
           i === 0
             ? t('cascades.entry')
-            : i === last
+            : isBalancer || i === last
               ? t('cascades.exit')
               : t('cascades.transit');
         m.set(h.nodeId, { name: c.name, role });
@@ -735,7 +751,7 @@ export function NodesPage() {
               color: SNOW,
             }}
           >
-            {view === 'cascades' ? t('cascades.title') : t('nodes.title')}
+            {view === 'cascades' ? t('cascades.title') : view === 'geo' ? 'Geo' : t('nodes.title')}
           </Text>
         </Box>
 
@@ -848,6 +864,7 @@ export function NodesPage() {
             options={[
               { value: 'nodes', label: t('nodes.viewNodes'), icon: 'server' },
               { value: 'cascades', label: t('nodes.viewCascades'), icon: 'chain' },
+              { value: 'geo', label: 'Geo', icon: 'globe' },
             ]}
           />
 
@@ -951,6 +968,8 @@ export function NodesPage() {
       </Box>
 
       {view === 'cascades' && <CascadesPanel layout={cascadeLayout} />}
+
+      {view === 'geo' && <GeoPanel />}
 
       {view === 'nodes' && (
         <>
