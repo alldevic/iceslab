@@ -466,19 +466,40 @@ describe('buildClashYaml', () => {
       expect(rules[rules.length - 1]).toBe('- MATCH,Auto');
     });
 
-    it('strips xray geosite-style prefixes Clash cannot parse', () => {
+    it('maps xray matcher prefixes to Clash rule types (regexp is dropped)', () => {
       const out = buildClashYaml([xrayEp], {
         customDomainLists: {
-          direct: ['domain:gosuslugi.ru', 'full:exact.ru', 'regexp:.*\\.ru'],
+          // `keyword:doubleclick` is what domainMatchers emits for a type-0
+          // (keyword) category domain; it MUST become DOMAIN-KEYWORD, not
+          // DOMAIN-SUFFIX (which would miss doubleclick.net).
+          direct: ['domain:gosuslugi.ru', 'full:exact.ru', 'keyword:doubleclick', 'regexp:.*\\.ru'],
           proxy: [],
           block: [],
         },
       });
       const rules = ruleLines(out);
       expect(rules).toContain('- DOMAIN-SUFFIX,gosuslugi.ru,DIRECT');
-      expect(rules).toContain('- DOMAIN-SUFFIX,exact.ru,DIRECT');
-      expect(rules).toContain('- DOMAIN-SUFFIX,.*\\.ru,DIRECT');
+      expect(rules).toContain('- DOMAIN,exact.ru,DIRECT'); // full: = exact match
+      expect(rules).toContain('- DOMAIN-KEYWORD,doubleclick,DIRECT');
+      expect(rules).not.toContain('- DOMAIN-SUFFIX,doubleclick,DIRECT'); // not narrowed
+      // No Clash regex rule + a comma-carrying regex would corrupt the CSV line.
+      expect(out).not.toContain('.*\\.ru');
       expect(out).not.toContain('domain:gosuslugi.ru');
+    });
+
+    it('drops values with a comma or whitespace/newline (YAML line injection)', () => {
+      const out = buildClashYaml([xrayEp], {
+        customDomainLists: {
+          direct: ['ok.ru', 'evil.ru\n  - DOMAIN,injected.com,DIRECT', 'a,b.com', 'has space.ru'],
+          proxy: [],
+          block: [],
+        },
+      });
+      const rules = ruleLines(out);
+      expect(rules).toContain('- DOMAIN-SUFFIX,ok.ru,DIRECT');
+      expect(out).not.toContain('injected.com'); // the newline payload is dropped whole
+      expect(out).not.toContain('a,b.com');
+      expect(out).not.toContain('has space.ru');
     });
 
     it('drops the proxy bucket when no proxy exists (catch-all stays MATCH,DIRECT)', () => {

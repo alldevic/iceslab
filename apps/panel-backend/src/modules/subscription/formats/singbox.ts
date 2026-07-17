@@ -41,6 +41,37 @@ export interface SingboxBuildOpts {
   urltestIntervalSec?: number;
   urltestProbeUrl?: string;
   routingPreset?: RoutingPresetId;
+  /**
+   * G6 - when set, the split preset's remote .srs rule-sets are fetched from
+   * this self-hosted base (PUBLIC_URL/geo/<token>) instead of SagerNet's GitHub
+   * (unstable from RU). Each rule-set's url becomes `${geoBaseUrl}/${tag}.srs`
+   * (the tag already matches the generated filename). Undefined = the external
+   * SagerNet default = byte-identical output.
+   */
+  geoBaseUrl?: string;
+  /**
+   * Names of the artifacts the panel's current geo build actually produced.
+   * Only rule-sets whose `<tag>.srs` is present are rewritten - a 404 remote
+   * rule-set URL fails sing-box startup, so a missing one keeps its external
+   * default. Undefined = rewrite everything (trust the caller).
+   */
+  geoArtifacts?: ReadonlySet<string>;
+}
+
+// Rewrite each rule-set's url to the self-hosted `${base}/${tag}.srs` when a geo
+// base is configured; otherwise return the external (SagerNet) defaults.
+function withGeoBase(
+  ruleSets: ReadonlyArray<Record<string, unknown>>,
+  geoBaseUrl?: string,
+  available?: ReadonlySet<string>,
+): ReadonlyArray<Record<string, unknown>> {
+  if (!geoBaseUrl) return ruleSets;
+  const base = geoBaseUrl.replace(/\/+$/, '');
+  return ruleSets.map((rs) => {
+    const file = `${String(rs.tag)}.srs`;
+    if (available && !available.has(file)) return rs;
+    return { ...rs, url: `${base}/${file}` };
+  });
 }
 
 /**
@@ -162,9 +193,9 @@ export function buildSingboxJson(
         : null;
   const splitRuleSets =
     preset === 'ru-split'
-      ? RU_SPLIT_RULE_SETS
+      ? withGeoBase(RU_SPLIT_RULE_SETS, opts.geoBaseUrl, opts.geoArtifacts)
       : preset === 'cn-split'
-        ? CN_SPLIT_RULE_SETS
+        ? withGeoBase(CN_SPLIT_RULE_SETS, opts.geoBaseUrl, opts.geoArtifacts)
         : null;
 
   for (const e of endpoints) {

@@ -22,10 +22,47 @@ import {
 import { enforceHwid, resolveSquadHwidLimit } from '../hwid/hwid.service.js';
 import { prisma } from '../../prisma.js';
 import { config, subscriptionOrigin } from '../../config.js';
+import { geoArtifactBaseUrl } from '../geo/geo.url.js';
+import { getCategoryDomains, getGeoBuildMeta } from '../geo/geo.registry.js';
+import { GEO_MIRROR_SITE, GEO_MIRROR_IP } from '../geo/geo.orchestrator.js';
 import { subscriptionRequests } from '../../lib/metrics.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
 import { redis } from '../../lib/redis.js';
 import { isPublicRoutableIp } from '../../lib/ip.js';
+
+/**
+ * Resolve `ext:<file>:<cat>` entries in an operator domain list into the custom
+ * category's inline domains (xray matcher strings). Client subscriptions cannot
+ * fetch a remote .dat, so a custom geo category is inlined here; xray-json uses
+ * the matchers as-is and clash maps the prefixes to its rule types. An ext: ref
+ * with no build / unknown category is dropped (a client cannot use it).
+ */
+function expandGeoRefs(list: string[]): string[] {
+  const out: string[] = [];
+  for (const d of list) {
+    const m = /^ext:[A-Za-z0-9._-]+:(.+)$/.exec(d);
+    if (!m) {
+      out.push(d);
+      continue;
+    }
+    const domains = getCategoryDomains(m[1]!);
+    if (domains) out.push(...domains);
+  }
+  return out;
+}
+
+/**
+ * G6 - self-hosted geo for the client formats. Non-null only when the flag is
+ * on AND a build is cached: a rewritten geo URL the panel cannot serve (404)
+ * bricks the client (sing-box refuses to start on a failed remote rule-set), so
+ * the call sites also check per-artifact availability via `names`.
+ */
+function selfHostedGeo(): { base: string; names: Set<string> } | null {
+  if (!config.GEO_SELF_HOST) return null;
+  const meta = getGeoBuildMeta();
+  if (!meta) return null;
+  return { base: geoArtifactBaseUrl(), names: new Set(meta.artifacts.map((a) => a.name)) };
+}
 
 const TokenParamSchema = z.object({
   token: z.string().min(8).max(128),
@@ -483,11 +520,21 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           settings.routingPreset;
         // R3-b custom rules apply only to xray-routing formats (xray/xkeen).
         customRoutingRules = settings.customRoutingRules ?? undefined;
-        // R3 custom domain lists apply to xray/xkeen + clash.
+        // R3 custom domain lists apply to xray/xkeen + clash. Expand any
+        // ext:<file>:<cat> refs into the custom category's inline domains.
         customDomainLists = settings.customDomainLists ?? undefined;
+        if (customDomainLists) {
+          customDomainLists = {
+            direct: expandGeoRefs(customDomainLists.direct),
+            proxy: expandGeoRefs(customDomainLists.proxy),
+            block: expandGeoRefs(customDomainLists.block),
+          };
+        }
         tlsFragment =
           query.fragment !== undefined ? query.fragment === '1' : settings.tlsFragment;
       }
+
+      const geo = selfHostedGeo();
 
       switch (format) {
         case 'json':
@@ -497,7 +544,18 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         case 'clash':
           return reply
             .type('text/yaml; charset=utf-8')
-            .send(buildClashYaml(filtered, { routingPreset, customDomainLists }));
+            .send(
+              buildClashYaml(filtered, {
+                routingPreset,
+                customDomainLists,
+                // Clash points geox-url at BOTH mirror .dat; only rewrite when
+                // the build produced both, else keep the external default.
+                geoBaseUrl:
+                  geo?.names.has(GEO_MIRROR_SITE) && geo.names.has(GEO_MIRROR_IP)
+                    ? geo.base
+                    : undefined,
+              }),
+            );
         case 'singbox': {
           // TLS-fragment is intentionally NOT emitted for sing-box: the
           // upstream field is unstable across 1.12/1.14 (same rationale as the
@@ -511,7 +569,14 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(filtered, { bundle: sbBundle, routingPreset }));
+            .send(
+              buildSingboxJson(filtered, {
+                bundle: sbBundle,
+                routingPreset,
+                geoBaseUrl: geo?.base,
+                geoArtifacts: geo?.names,
+              }),
+            );
         }
         case 'wgconf': {
           // Filename = `<username>-<node>.conf` so a user with several AWG

@@ -414,6 +414,19 @@ describe('buildXrayJson', () => {
       expect(rules[rules.length - 1].network).toBe('tcp,udp');
     });
 
+    it('strips the explicit keyword: prefix to a bare xray substring matcher', () => {
+      // domainMatchers emits `keyword:` for type-0 domains so clash can render
+      // DOMAIN-KEYWORD; xray has no such prefix (a bare string already matches as
+      // a substring), so xray-json must strip it or xray would match the literal.
+      const cfg = parse(
+        buildXrayJson([xrayEp], {
+          customDomainLists: { block: ['keyword:doubleclick', 'domain:x.com'], direct: [], proxy: [] },
+        }),
+      );
+      const rule = cfg.routing.rules.find((r: { outboundTag?: string }) => r.outboundTag === 'block');
+      expect(rule.domain).toEqual(['doubleclick', 'domain:x.com']);
+    });
+
     it('only emits buckets that have entries (proxy-only)', () => {
       const cfg = parse(
         buildXrayJson([xrayEp], {
