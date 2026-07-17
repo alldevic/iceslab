@@ -304,6 +304,10 @@ type CascadeFragments struct {
 	// exposes; its user routing rule targets one via `balancerTag` (instead of a
 	// fixed `outboundTag`), so xray picks the lowest-ping exit per connection.
 	Balancers []json.RawMessage `json:"balancers,omitempty"`
+	// GeoAssets are panel-managed geo databases (the source mirror + composed
+	// ext: custom .dat) this node must fetch+install so its geosite:/ext: routing
+	// rules resolve. Empty = nothing to fetch (node uses the bundled databases).
+	GeoAssets []GeoAssetSpec `json:"geoAssets,omitempty"`
 }
 
 // renderConfig produces a complete Xray config.json blob for the given users.

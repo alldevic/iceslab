@@ -244,6 +244,21 @@ export interface XrayCascadeFragments {
    *  routing rule targets one via `balancerTag`, so xray picks the lowest-ping
    *  exit per connection. Absent otherwise. */
   balancers?: unknown[];
+  /** G4 - geo databases this node must fetch+install (source mirror + composed
+   *  ext: custom .dat) so its geosite:/ext: routing rules resolve. The node
+   *  verifies each sha256 (computed panel-side), atomically installs it, and
+   *  points xray at the dir via XRAY_LOCATION_ASSET. Absent → the node uses its
+   *  bundled databases (byte-identical to a non-geo cascade). */
+  geoAssets?: GeoAssetSpec[];
+}
+
+/** One panel-managed geo file for a node to install (see XrayCascadeFragments). */
+export interface GeoAssetSpec {
+  /** Bare filename in the asset dir, e.g. "geo-custom.dat". */
+  name: string;
+  url: string;
+  /** Lowercase hex sha256 the panel computed at build time. */
+  sha256: string;
 }
 
 export interface HysteriaInboundCfg {
