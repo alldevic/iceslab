@@ -95,6 +95,40 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
   return nonEntry;
 }
 
+/** A4: map each given node id that is the ENTRY (position 0) of an enabled
+ *  BALANCER cascade to its ordered exit names. Order matches the entry's
+ *  `cascade-link-out-<i>` outbounds (position ascending), so exit index i is
+ *  the one the vlessRoute tag i+1 selects. Nodes that aren't balancer entries,
+ *  and balancers with no exit, are absent from the map. The subscription builder
+ *  uses this to expand one entry endpoint into one config per exit (A4). Chain
+ *  cascades are intentionally excluded: a fixed path offers no exit choice. */
+export async function getBalancerExitsByEntryNode(
+  nodeIds: string[],
+): Promise<Map<string, { name: string }[]>> {
+  const out = new Map<string, { name: string }[]>();
+  if (nodeIds.length === 0) return out;
+  const cascades = await prisma.cascade.findMany({
+    where: {
+      enabled: true,
+      mode: 'balancer',
+      hops: { some: { nodeId: { in: nodeIds }, position: 0 } },
+    },
+    include: {
+      hops: {
+        orderBy: { position: 'asc' },
+        include: { node: { select: { id: true, name: true } } },
+      },
+    },
+  });
+  for (const c of cascades) {
+    const entry = c.hops.find((h) => h.position === 0);
+    if (!entry || !nodeIds.includes(entry.nodeId)) continue;
+    const exits = c.hops.filter((h) => h.position !== 0).map((h) => ({ name: h.node.name }));
+    if (exits.length > 0) out.set(entry.nodeId, exits);
+  }
+  return out;
+}
+
 export async function listCascades(): Promise<CascadeDto[]> {
   const rows = await prisma.cascade.findMany({
     include: hopInclude,

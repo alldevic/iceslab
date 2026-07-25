@@ -42,11 +42,37 @@ describe('buildBalancerCascadeConfigs (auto node)', () => {
     expect(bal.tag).toBe('auto');
     expect(bal.selector).toEqual(['cascade-link-out']);
     expect((bal.strategy as Record<string, unknown>).type).toBe('leastPing');
-    // QUIC (udp/443) is dropped first so clients fall back to TCP; the user
-    // rule then targets the balancer, not a fixed outbound
+    // QUIC (udp/443) is dropped first so clients fall back to TCP; then the A4
+    // explicit-exit vlessRoute rules (one per exit); the untagged catch-all
+    // targets the balancer LAST so a normal UUID auto-balances.
     expect(e.routingRules[0]).toMatchObject({ network: 'udp', port: 443, outboundTag: 'blocked' });
-    expect(e.routingRules[1]).toMatchObject({ balancerTag: 'auto' });
-    expect(e.routingRules[1]).not.toHaveProperty('outboundTag');
+    const last = e.routingRules[e.routingRules.length - 1]!;
+    expect(last).toMatchObject({ balancerTag: 'auto' });
+    expect(last).not.toHaveProperty('outboundTag');
+  });
+
+  it('A4: one vlessRoute rule per exit, tag i+1 -> cascade-link-out-i, above the balancer', () => {
+    const cfgs = buildBalancerCascadeConfigs(entry, exits, creds);
+    const rules = cfgs[0]!.routingRules;
+    // [0]=QUIC block, [1..N]=vlessRoute per exit, [last]=balancer
+    expect(rules[1]).toMatchObject({
+      vlessRoute: '1',
+      network: 'tcp,udp',
+      outboundTag: 'cascade-link-out-0',
+    });
+    expect(rules[2]).toMatchObject({
+      vlessRoute: '2',
+      network: 'tcp,udp',
+      outboundTag: 'cascade-link-out-1',
+    });
+    // tag value is a string (xray port-like syntax); 0 is never emitted so the
+    // untagged/auto config can't collide with an explicit exit.
+    const tags = rules.filter((r) => 'vlessRoute' in r).map((r) => r.vlessRoute);
+    expect(tags).toEqual(['1', '2']);
+    // every vlessRoute rule sits before the balancer catch-all
+    const balIdx = rules.findIndex((r) => 'balancerTag' in r);
+    const lastVlessIdx = rules.map((r) => 'vlessRoute' in r).lastIndexOf(true);
+    expect(lastVlessIdx).toBeLessThan(balIdx);
   });
 
   it('each exit terminates its link and egresses via freedom, firewalled to the entry', () => {

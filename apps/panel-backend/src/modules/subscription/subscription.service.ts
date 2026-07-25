@@ -10,7 +10,7 @@ import {
 // kept on the User row for backwards-compat but never filters subscription
 // output.
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
-import { getHiddenCascadeNodeIds } from '../cascades/cascade.service.js';
+import { getHiddenCascadeNodeIds, getBalancerExitsByEntryNode } from '../cascades/cascade.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/credentials.js';
@@ -294,6 +294,13 @@ export async function generateSubscription(
     bindings.push(...filtered);
   }
 
+  // A4: which of these nodes are balancer-cascade entries + their exits. One
+  // query for the whole binding set; the xray branch attaches the match so
+  // buildXrayJsonArray can expand that endpoint into one config per exit.
+  const balancerExits = await getBalancerExitsByEntryNode([
+    ...new Set(bindings.map((b) => b.node.id)),
+  ]);
+
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
     // Resolve deployable config: profile.config + binding.overrides.
@@ -506,6 +513,9 @@ export async function generateSubscription(
         serviceName: cfg.serviceName,
         subprotocol,
         uri,
+        // A4: set only when this node is a balancer-cascade entry. Undefined
+        // otherwise, so the array format emits a single config as before.
+        cascadeExits: balancerExits.get(b.node.id),
       });
     } else if (ib.protocol === 'amneziawg' && user.amneziawgPrivateKey) {
       const cfg = ib.config as unknown as AmneziawgInboundConfig;
