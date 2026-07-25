@@ -235,6 +235,15 @@ export interface XrayCascadeFragments {
    *  points xray at the dir via XRAY_LOCATION_ASSET. Absent → the node uses its
    *  bundled databases (byte-identical to a non-geo cascade). */
   geoAssets?: GeoAssetSpec[];
+  /** E - override the node's global `routing.domainStrategy` for this entry.
+   *  Set to `IPOnDemand` only on a geo-split entry whose egressPolicy has an
+   *  ip/geoip matcher: under the default `IPIfNonMatch`, xray only resolves a
+   *  sniffed domain to an IP for a second rule pass IF no rule matched the
+   *  first, but the entry's always-true catch-all matches first, so an ip/geoip
+   *  rule never fires. `IPOnDemand` resolves on demand as a rule needs an IP, so
+   *  the ip/geoip rules (which sit before the catch-all) take effect. Absent →
+   *  the node keeps its default (byte-identical to a non-geo cascade). */
+  domainStrategy?: string;
 }
 
 /** One panel-managed geo file for a node to install (see XrayCascadeFragments). */

@@ -14,6 +14,8 @@ import {
   type LinkCred,
 } from './cascade.config.js';
 import { coerceEgressPolicy, type EgressPolicy } from './cascade.geo.js';
+import { assertEgressCategories } from './cascade.geo.stock.js';
+import { getCategories } from '../geo/geo.categories.js';
 import { config } from '../../config.js';
 import { getGeoBuildMeta } from '../geo/geo.registry.js';
 import { GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT } from '../geo/geo.orchestrator.js';
@@ -285,12 +287,22 @@ export async function getCascadeStatus(id: string): Promise<CascadeStatusDto> {
   return { done: hops.length > 0 && hops.every((h) => h.applied), hops };
 }
 
+/** Reject an egress policy that references custom categories as bare geosite:/
+ *  geoip: or an unknown geoip category, up front (see cascade.geo.stock). No-op
+ *  for an absent/empty policy. Throws EgressCategoryError (-> 400). */
+async function assertPolicyCategories(policy: EgressPolicy | undefined): Promise<void> {
+  if (!policy || policy.length === 0) return;
+  const names = (await getCategories()).map((c) => c.name);
+  assertEgressCategories(policy, names);
+}
+
 export async function createCascade(input: CreateCascadeInput): Promise<CascadeDto> {
   const mode = input.mode ?? 'chain';
   const isBalancer = mode === 'balancer';
   // Validate the topology in the effective mode (balancer exits carry no
   // linkProtocol, which the chain rules would wrongly reject).
   const hops = validateCascadeHops(input.hops, mode);
+  await assertPolicyCategories(input.egressPolicy);
   await assertNodesExist(hops.map((h) => h.nodeId));
   // Pre-generate inter-hop link creds.
   //   chain:    one cred per link, stored on each non-exit (originating) hop.
@@ -362,6 +374,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   const mode = (input.mode ?? existing.mode) as 'chain' | 'balancer';
   const isBalancer = mode === 'balancer';
   const hops = input.hops ? validateCascadeHops(input.hops, mode) : null;
+  await assertPolicyCategories(input.egressPolicy);
   if (hops) await assertNodesExist(hops.map((h) => h.nodeId));
   const creds = hops
     ? generateLinkCreds(
@@ -510,6 +523,7 @@ export async function getCascadeFragmentsForNode(
       observatory: mine.observatory,
       balancers: mine.balancers,
       ...(geoAssets ? { geoAssets } : {}),
+      ...(mine.domainStrategy ? { domainStrategy: mine.domainStrategy } : {}),
     };
   }
 
@@ -540,6 +554,7 @@ export async function getCascadeFragmentsForNode(
     linkIngressPort: mine.linkIngressPort,
     linkAllowFrom: mine.linkAllowFrom,
     ...(geoAssets ? { geoAssets } : {}),
+    ...(mine.domainStrategy ? { domainStrategy: mine.domainStrategy } : {}),
   };
 }
 

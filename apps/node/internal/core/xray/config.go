@@ -307,6 +307,24 @@ type CascadeFragments struct {
 	// ext: custom .dat) this node must fetch+install so its geosite:/ext: routing
 	// rules resolve. Empty = nothing to fetch (node uses the bundled databases).
 	GeoAssets []GeoAssetSpec `json:"geoAssets,omitempty"`
+	// DomainStrategy overrides the config's global routing.domainStrategy for a
+	// geo-split entry that needs on-demand IP resolution ("IPOnDemand") so its
+	// geoip/ip rules fire ahead of the always-true catch-all. Empty = keep the
+	// default (byte-identical to a plain cascade). Validated against a fixed
+	// allowlist before use so a bad wire value can't inject an arbitrary strategy.
+	DomainStrategy string `json:"domainStrategy,omitempty"`
+}
+
+// isKnownDomainStrategy allowlists the xray routing.domainStrategy values the
+// panel may override an entry with, so a malformed/hostile wire value cannot
+// inject an arbitrary strategy string (it falls back to the default instead).
+func isKnownDomainStrategy(s string) bool {
+	switch s {
+	case "AsIs", "IPIfNonMatch", "IPOnDemand":
+		return true
+	default:
+		return false
+	}
 }
 
 // renderConfig produces a complete Xray config.json blob for the given users.
@@ -462,8 +480,15 @@ func renderConfigWithCascade(inbound InboundConfig, users []xrayClient, cascade 
 	// targets one via balancerTag) plus a top-level `observatory` probing the
 	// link-out outbounds. Both are raw JSON the panel owns; nil/empty = no
 	// balancer, so the output stays byte-identical to a plain / non-cascade node.
+	// Default global resolution strategy. A geo-split entry may override it to
+	// IPOnDemand (so its geoip/ip rules resolve on demand ahead of the catch-all);
+	// the override is allowlisted so a malformed wire value falls back to default.
+	domainStrategy := "IPIfNonMatch"
+	if cascade != nil && isKnownDomainStrategy(cascade.DomainStrategy) {
+		domainStrategy = cascade.DomainStrategy
+	}
 	routing := map[string]any{
-		"domainStrategy": "IPIfNonMatch",
+		"domainStrategy": domainStrategy,
 		"rules":          rules,
 	}
 	if cascade != nil && len(cascade.Balancers) > 0 {

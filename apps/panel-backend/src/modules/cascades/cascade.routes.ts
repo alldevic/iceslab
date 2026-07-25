@@ -7,9 +7,13 @@ import {
 } from './cascade.schemas.js';
 import * as svc from './cascade.service.js';
 import { CascadeValidationError } from './cascade.validation.js';
+import { EgressCategoryError } from './cascade.geo.stock.js';
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof CascadeValidationError) {
+    return reply.code(400).send({ error: 'INVALID', message: err.message });
+  }
+  if (err instanceof EgressCategoryError) {
     return reply.code(400).send({ error: 'INVALID', message: err.message });
   }
   if (err instanceof svc.CascadeNodeMissingError) {

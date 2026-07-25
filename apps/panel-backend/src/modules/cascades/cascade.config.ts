@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { compileEntryGeoRules, type EgressPolicy } from './cascade.geo.js';
+import { compileEntryGeoRules, entryDomainStrategy, type EgressPolicy } from './cascade.geo.js';
 
 export type { EgressPolicy, EgressRule, EgressTarget } from './cascade.geo.js';
 
@@ -140,6 +140,11 @@ export interface HopConfig {
   /** Balancer entry only: the `routing.balancers` entries. Its user rule targets
    *  one via `balancerTag`. Undefined on chain hops and on balancer exits. */
   balancers?: Record<string, unknown>[];
+  /** Entry only: override the node's global routing.domainStrategy (e.g.
+   *  'IPOnDemand' so an ip/geoip egress rule resolves ahead of the catch-all).
+   *  Undefined on non-entry hops and on entries whose policy needs no IP
+   *  resolution (keeps the node default, byte-identical to a non-geo cascade). */
+  domainStrategy?: string;
 }
 
 const LINK_IN_TAG = 'cascade-link-in';
@@ -279,6 +284,11 @@ export function buildCascadeConfigs(
       routingRules,
       linkIngressPort,
       linkAllowFrom,
+      // IPOnDemand only when the entry policy has an ip/geoip matcher; absent
+      // otherwise so the hop stays byte-identical to a non-geo cascade.
+      ...(role === 'entry' && entryDomainStrategy(entryPolicy)
+        ? { domainStrategy: entryDomainStrategy(entryPolicy) }
+        : {}),
     };
   });
 }
@@ -359,6 +369,8 @@ export function buildBalancerCascadeConfigs(
       probeInterval: OBSERVATORY_PROBE_INTERVAL,
     },
     balancers: [{ tag: BALANCER_TAG, selector: [LINK_OUT_TAG], strategy: { type: 'leastPing' } }],
+    // IPOnDemand only when the entry policy has an ip/geoip matcher.
+    ...(entryDomainStrategy(entryPolicy) ? { domainStrategy: entryDomainStrategy(entryPolicy) } : {}),
   });
 
   // Exits: each terminates its own link-in and egresses via freedom, firewalled

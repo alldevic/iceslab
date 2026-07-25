@@ -56,6 +56,21 @@ export interface SingboxBuildOpts {
    * default. Undefined = rewrite everything (trust the caller).
    */
   geoArtifacts?: ReadonlySet<string>;
+  /**
+   * G6b - operator custom categories to route, each `ext:<file>:<cat>` ref from
+   * the subscription's custom domain lists mapped to a bucket. Unlike the
+   * standard split presets there is NO external default for these (they exist
+   * only on the panel), so each is emitted as a self-hosted remote rule-set
+   * `custom-<cat>.srs` ONLY when geoBaseUrl is set and that artifact is present
+   * (geoArtifacts). Empty/undefined = nothing added (byte-identical output).
+   */
+  customGeoRefs?: ReadonlyArray<CustomGeoRef>;
+}
+
+/** One operator custom category + where matched traffic egresses. */
+export interface CustomGeoRef {
+  cat: string;
+  bucket: 'direct' | 'proxy' | 'block';
 }
 
 // Rewrite each rule-set's url to the self-hosted `${base}/${tag}.srs` when a geo
@@ -433,10 +448,49 @@ export function buildSingboxJson(
   }
   outbounds.push({ type: 'direct', tag: 'direct' });
 
-  // R3 - operator custom domain lists are intentionally NOT emitted for
-  // sing-box: there is no portable inline-domain route-rule vehicle post-1.12
-  // (same rationale as the skipped sing-box DNS split in R2 and the skipped
-  // R3-b custom rules). xray/xkeen + clash carry the lists instead.
+  // G6b - operator custom categories as self-hosted remote rule-sets. A plain
+  // inline domain still has no portable sing-box vehicle post-1.12, but an
+  // `ext:<file>:<cat>` ref does: the panel serves `custom-<cat>.srs`. Emitted
+  // only when self-hosting is on AND the artifact is present (a 404 remote
+  // rule-set bricks sing-box startup). Bucket -> action mirrors the xray/clash
+  // custom lists: direct -> route direct, block -> reject, proxy -> the tunnel.
+  const customRuleSets: Record<string, unknown>[] = [];
+  const customRules: Record<string, unknown>[] = [];
+  if (opts.geoBaseUrl && opts.customGeoRefs && opts.customGeoRefs.length > 0) {
+    const base = opts.geoBaseUrl.replace(/\/+$/, '');
+    const emitted = new Set<string>();
+    for (const ref of opts.customGeoRefs) {
+      // The panel stores/serves a composed category under its UPPERCASED name
+      // (geo.compose composeCategory -> name.toUpperCase()), so the artifact is
+      // `custom-<UPPER>.srs`. Normalise the ref here so file/tag/url match it -
+      // otherwise a lowercase-authored ext:ref (the common case) never matches
+      // geoArtifacts and the category is silently dropped.
+      const cat = ref.cat.toUpperCase();
+      const file = `custom-${cat}.srs`;
+      if (opts.geoArtifacts && !opts.geoArtifacts.has(file)) continue;
+      const tag = `custom-${cat}`;
+      if (!emitted.has(tag)) {
+        customRuleSets.push({ type: 'remote', tag, format: 'binary', url: `${base}/${file}` });
+        emitted.add(tag);
+      }
+      customRules.push(
+        ref.bucket === 'block'
+          ? { rule_set: [tag], action: 'reject' }
+          : ref.bucket === 'direct'
+            ? { rule_set: [tag], action: 'route', outbound: 'direct' }
+            : { rule_set: [tag], action: 'route', outbound: primaryTag },
+      );
+    }
+  }
+
+  // Operator custom rules take precedence over the broad split preset (first
+  // match wins), so they come first. Empty custom lists -> byte-identical output.
+  const routeRules = [...customRules, ...(splitRules ?? [])];
+  const routeRuleSets = [...(splitRuleSets ?? []), ...customRuleSets];
+
+  // R3 - plain inline domains are still NOT emitted for sing-box (no portable
+  // post-1.12 vehicle); only ext: custom-category refs above are. xray/xkeen +
+  // clash carry the plain lists.
   const config = {
     log: { level: 'info', timestamp: true },
     // A single minimal tun inbound. Happ and the sing-box CLI reject a config
@@ -456,9 +510,7 @@ export function buildSingboxJson(
     ],
     outbounds,
     route: {
-      ...(splitRules
-        ? { rules: splitRules, rule_set: splitRuleSets }
-        : {}),
+      ...(routeRules.length > 0 ? { rules: routeRules, rule_set: routeRuleSets } : {}),
       final: primaryTag,
       auto_detect_interface: true,
     },

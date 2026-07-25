@@ -108,12 +108,24 @@ COPY --from=builder /repo /app
 # keeps its external SagerNet URLs (graceful degrade). TARGETARCH is amd64/arm64
 # under buildx; plain `docker build` leaves it empty -> amd64. busybox wget (no
 # curl in alpine); it follows the GitHub 302 to the release CDN.
+# Pinned to a per-arch sha256: a silently re-pointed tag or a tampered CDN
+# response fails the build instead of shipping an unexpected binary. BUMPING
+# SINGBOX_VERSION REQUIRES updating both checksums (get them from the release, or
+# the build's sha256sum -c will fail) - see docs/geo-svc-prod-checklist.md.
 ARG SINGBOX_VERSION=1.11.4
+ARG SINGBOX_SHA256_AMD64=0bb762ef286b36c2016d9107fc1f089be7a75f6d579b33f067d31e696c05927e
+ARG SINGBOX_SHA256_ARM64=4e687359db42b6a28ef93f9cd2cb9549c4b0079cc7e49bc5f6ecbf98257a2507
 ARG TARGETARCH
 RUN set -eux; \
     arch="${TARGETARCH:-amd64}"; \
+    case "$arch" in \
+      amd64) sha="$SINGBOX_SHA256_AMD64" ;; \
+      arm64) sha="$SINGBOX_SHA256_ARM64" ;; \
+      *) echo "unsupported TARGETARCH: $arch" >&2; exit 1 ;; \
+    esac; \
     d="sing-box-${SINGBOX_VERSION}-linux-${arch}"; \
     wget -qO /tmp/sb.tgz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${d}.tar.gz"; \
+    echo "${sha}  /tmp/sb.tgz" | sha256sum -c -; \
     tar -xzf /tmp/sb.tgz -C /tmp; \
     install -m 0755 "/tmp/${d}/sing-box" /usr/local/bin/sing-box; \
     rm -rf /tmp/sb.tgz "/tmp/${d}"; \

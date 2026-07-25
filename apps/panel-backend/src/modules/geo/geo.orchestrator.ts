@@ -7,6 +7,7 @@ import {
   composedToGeoSiteDat,
   composedToGeoIPDat,
   domainMatchers,
+  type ComposedCategory,
 } from './geo.compose.js';
 import { fetchDat as defaultFetchDat, type DatFetcher } from './geo.fetch.js';
 import { loadSourceDat } from './geo.sourcecache.js';
@@ -56,6 +57,30 @@ export const GEO_SITE_ARTIFACT = 'geo-custom.dat';
 export const GEO_IP_ARTIFACT = 'geo-custom-ip.dat';
 export const GEO_MIRROR_SITE = 'geosite.dat';
 export const GEO_MIRROR_IP = 'geoip.dat';
+
+/** The sing-box .srs artifact name for an operator custom category, referenced
+ *  by the sing-box subscription as a self-hosted remote rule-set. Category names
+ *  are already tag-safe ([A-Za-z0-9._-], see geo.schemas), so the tag
+ *  `custom-<name>` and its `.srs` file need no further sanitisation. */
+export function customSrsName(category: string): string {
+  return `custom-${category}.srs`;
+}
+
+/**
+ * The custom categories that get their own sing-box .srs, with the artifact name
+ * each will be served under. DOMAIN-ONLY selection (a category with no domains is
+ * skipped) so sing-box matches the xray/clash inline path (getCategoryDomains is
+ * domains-only) instead of silently blocking/routing IPs the other formats leak.
+ * Pure - the compile loop iterates this, so a test can assert selection + naming
+ * without a sing-box binary.
+ */
+export function plannedCustomSrs(
+  composed: ComposedCategory[],
+): { category: ComposedCategory; artifact: string }[] {
+  return composed
+    .filter((c) => c.domains.length > 0)
+    .map((c) => ({ category: c, artifact: customSrsName(c.name) }));
+}
 
 // Standard preset categories the sing-box subscription format references; their
 // .srs are compiled from the mirror so sing-box fetches them from the panel.
@@ -162,6 +187,26 @@ export async function buildGeoArtifacts(opts?: {
         } catch (err) {
           sourceErrors.push({ sourceId: 'srs', url: `geoip-${cat}.srs`, error: (err as Error).message });
         }
+      }
+    }
+  }
+
+  // Compile each operator custom category to its own .srs so the sing-box
+  // subscription can reference it as a self-hosted remote rule-set - sing-box
+  // 1.12+ dropped inline geosite:, so .srs is its only portable custom-category
+  // vehicle. DOMAINS ONLY (not cidrs), symmetric with the xray/clash path
+  // (getCategoryDomains inlines only domains): a custom domain list is a
+  // domain-matching feature, and matching cidrs here too would silently block/
+  // route IPs on sing-box while xray/clash leak them (the formats must agree).
+  // IP-based egress splits belong to the cascade egressPolicy (geoip/ip) path.
+  // A category with no domains yields no .srs (nothing for any format to match).
+  if (singboxBin) {
+    for (const { category, artifact } of plannedCustomSrs(composed)) {
+      try {
+        const bytes = await compileSrs(singboxBin, category.domains, []);
+        ruleSets.push({ name: artifact, bytes, sha256: sha256(bytes) });
+      } catch (err) {
+        sourceErrors.push({ sourceId: 'srs', url: artifact, error: (err as Error).message });
       }
     }
   }

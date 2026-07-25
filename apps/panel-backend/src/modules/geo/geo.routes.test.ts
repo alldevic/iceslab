@@ -63,6 +63,32 @@ describe('public geo distribution (/geo/:token/:name)', () => {
     expect(Uint8Array.from(res.rawPayload)).toEqual(GS);
   });
 
+  it('serves 304 for a matching If-None-Match (content-addressed ETag)', async () => {
+    await seed();
+    const art = (await getGeoArtifact('geo-custom.dat'))!;
+    const etag = `"${art.sha256}"`;
+    const res = await app.inject({
+      method: 'GET',
+      url: `/geo/${geoArtifactToken()}/geo-custom.dat`,
+      headers: { 'if-none-match': etag },
+    });
+    expect(res.statusCode).toBe(304);
+    expect(res.headers['etag']).toBe(etag);
+    expect(res.headers['cache-control']).toContain('max-age=3600');
+    expect(res.rawPayload.length).toBe(0);
+  });
+
+  it('serves the body (200) for a non-matching If-None-Match', async () => {
+    await seed();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/geo/${geoArtifactToken()}/geo-custom.dat`,
+      headers: { 'if-none-match': '"stale-etag"' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.length).toBeGreaterThan(0);
+  });
+
   it('404s a wrong capability token (no oracle)', async () => {
     await seed();
     const res = await app.inject({ method: 'GET', url: `/geo/wrongtoken/geo-custom.dat` });

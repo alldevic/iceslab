@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ROUTING_PRESET_IDS, type RoutingPresetId } from '@iceslab/shared';
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
-import { buildSingboxJson } from './formats/singbox.js';
+import { buildSingboxJson, type CustomGeoRef } from './formats/singbox.js';
 import { buildWgQuickConf } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson } from './formats/xrayjson.js';
@@ -47,6 +47,22 @@ function expandGeoRefs(list: string[]): string[] {
     }
     const domains = getCategoryDomains(m[1]!);
     if (domains) out.push(...domains);
+  }
+  return out;
+}
+
+/**
+ * The `ext:<file>:<cat>` custom-category refs in an operator domain list, as
+ * {cat, bucket} for the sing-box format. sing-box cannot inline domains
+ * (post-1.12), so instead of expandGeoRefs it references each custom category as
+ * a self-hosted remote `.srs`. Plain (non-ext) entries have no sing-box vehicle
+ * and are skipped (same as before this path existed).
+ */
+function geoRefCats(list: string[], bucket: CustomGeoRef['bucket']): CustomGeoRef[] {
+  const out: CustomGeoRef[] = [];
+  for (const d of list) {
+    const m = /^ext:[A-Za-z0-9._-]+:(.+)$/.exec(d);
+    if (m) out.push({ cat: m[1]!, bucket });
   }
   return out;
 }
@@ -507,6 +523,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // R3 - operator-defined custom domain lists (direct/proxy/block), emitted
       // into xray + clash routing rules. Undefined = none = byte-identical.
       let customDomainLists: { direct: string[]; proxy: string[]; block: string[] } | undefined;
+      // sing-box custom-category refs (ext:) captured BEFORE the xray/clash
+      // inline-expansion below overwrites customDomainLists with plain domains.
+      let singboxGeoRefs: CustomGeoRef[] | undefined;
       // TLS-fragment - `?fragment=` query wins, else the panel-wide setting.
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
@@ -524,6 +543,17 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // ext:<file>:<cat> refs into the custom category's inline domains.
         customDomainLists = settings.customDomainLists ?? undefined;
         if (customDomainLists) {
+          // Capture ext: custom-category refs for sing-box (self-hosted .srs)
+          // BEFORE inlining them into plain domains for xray/clash. Order
+          // block -> direct -> proxy so a category listed in two buckets resolves
+          // the same (block wins, first-match) as the xray/clash formats
+          // (xrayjson/clash emit block, then direct, then proxy) - otherwise
+          // sing-box would silently let a blocked category through direct.
+          singboxGeoRefs = [
+            ...geoRefCats(customDomainLists.block, 'block'),
+            ...geoRefCats(customDomainLists.direct, 'direct'),
+            ...geoRefCats(customDomainLists.proxy, 'proxy'),
+          ];
           customDomainLists = {
             direct: expandGeoRefs(customDomainLists.direct),
             proxy: expandGeoRefs(customDomainLists.proxy),
@@ -575,6 +605,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
                 routingPreset,
                 geoBaseUrl: geo?.base,
                 geoArtifacts: geo?.names,
+                customGeoRefs: singboxGeoRefs,
               }),
             );
         }

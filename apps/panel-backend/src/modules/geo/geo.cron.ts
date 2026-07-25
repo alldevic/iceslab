@@ -2,7 +2,12 @@ import { prisma } from '../../prisma.js';
 import { config } from '../../config.js';
 import { eventBus } from '../../lib/event-bus.js';
 import { getLogger } from '../../lib/logger.js';
-import { rebuildGeo, getGeoBuildMeta, GeoBuildAllSourcesFailed } from './geo.registry.js';
+import {
+  rebuildGeo,
+  getGeoBuildMeta,
+  GeoBuildAllSourcesFailed,
+  type GeoBuildMeta,
+} from './geo.registry.js';
 import { GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT } from './geo.orchestrator.js';
 import { getEnabledSources } from './geo.sources.js';
 import { isSourceDue } from './geo.sourcecache.js';
@@ -72,9 +77,21 @@ export async function refreshGeoAndRepush(): Promise<{
   const changed = CUSTOM_ARTIFACTS.some((n) => before[n] !== after[n]);
   if (!changed) return { rebuilt: true, changed: false, nodes: 0 };
 
-  // A custom category .dat changed -> re-push the cascade entry nodes that carry
-  // an egress policy so they fetch the new file. (Filtered in JS rather than a
-  // Prisma Json-null WHERE to sidestep JsonNull/DbNull filter quirks.)
+  // A custom category .dat changed -> re-push the cascade entry nodes so they
+  // fetch the new file.
+  const nodes = await repushEgressCascades();
+  return { rebuilt: true, changed: true, nodes };
+}
+
+/**
+ * Emit `cascade.changed` for every enabled cascade that carries an egress
+ * policy, so its entry nodes re-render their split and re-fetch the current
+ * custom .dat. Returns the affected node count. (Filtered in JS rather than a
+ * Prisma Json-null WHERE to sidestep JsonNull/DbNull filter quirks.) The node
+ * agent dedupes an identical push, so a re-emit for an unchanged standard-only
+ * policy is a no-op on the node.
+ */
+export async function repushEgressCascades(): Promise<number> {
   const cascades = await prisma.cascade.findMany({
     where: { enabled: true },
     include: { hops: { select: { nodeId: true } } },
@@ -83,5 +100,23 @@ export async function refreshGeoAndRepush(): Promise<{
     ...new Set(cascades.filter((c) => c.egressPolicy != null).flatMap((c) => c.hops.map((h) => h.nodeId))),
   ];
   if (nodeIds.length > 0) eventBus.emit('cascade.changed', { nodeIds });
-  return { rebuilt: true, changed: true, nodes: nodeIds.length };
+  return nodeIds.length;
+}
+
+/**
+ * Rebuild the geo artifacts and propagate the result to cascade entry nodes.
+ * Used by the boot warm-up (forceRepush: a cascade rendered during the
+ * cold-cache window had its ext: matchers stripped and would otherwise stay
+ * stale until the content changes or the cascade is edited) and by the manual
+ * POST /api/geo/build (forceRepush off: re-push only when a custom .dat actually
+ * changed, to avoid thrash on a no-op rebuild). Lets GeoBuildAllSourcesFailed
+ * propagate so the caller (route -> 502, warm-up -> logged) handles it.
+ */
+export async function rebuildGeoAndRepush(opts: { forceRepush: boolean }): Promise<GeoBuildMeta> {
+  const before = customArtifactShas();
+  const meta = await rebuildGeo();
+  const after = customArtifactShas();
+  const changed = CUSTOM_ARTIFACTS.some((n) => before[n] !== after[n]);
+  if (opts.forceRepush || changed) await repushEgressCascades();
+  return meta;
 }

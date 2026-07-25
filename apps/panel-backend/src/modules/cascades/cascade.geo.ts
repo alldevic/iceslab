@@ -96,20 +96,40 @@ function geoipMatchers(cats: string[] | undefined): string[] {
  * compiler serves a chain entry, where 'link-out' is `{outboundTag}`, and a
  * balancer entry, where it is `{balancerTag}`).
  *
- * KNOWN LIMITATION (server-side geoip on the entry, pending real-xray validation
- * on the s1 node): the entry inbound sniffs (destOverride) so a TLS/HTTP/QUIC
- * connection's routing target becomes the sniffed DOMAIN, and the node runs
- * routing.domainStrategy=IPIfNonMatch (xray/config.go). Under IPIfNonMatch xray
- * only resolves the domain to an IP for a second rule pass IF NO rule matched
- * the first pass - but cascade.config.ts appends an always-true network catch-all
- * to link-out/balancer, which matches first, so an `ip`/geoip: rule never gets
- * that second pass and is effectively DEAD for domain-typed traffic (geosite:/
- * domain: rules match on the first pass and work fine). A correct fix
- * (domainStrategy=IPOnDemand for cascade entries, or per-connection IP resolution)
- * touches the node's global routing and MUST be validated against a live xray
- * before shipping - a blind change would risk every cascade entry / the balancer.
- * Until then, prefer geosite:/domain: matchers for entry splits.
+ * IP/geoip ON THE ENTRY (pending live s1 validation of the IPOnDemand path):
+ * the entry inbound sniffs (destOverride) so a TLS/HTTP/QUIC connection's routing
+ * target becomes the sniffed DOMAIN. Under the default routing.domainStrategy=
+ * IPIfNonMatch xray only resolves the domain to an IP for a second rule pass IF
+ * NO rule matched the first - but cascade.config.ts appends an always-true
+ * network catch-all to link-out/balancer, which matches first, so an `ip`/geoip:
+ * rule would never get that second pass. FIX: when a policy has an ip/geoip
+ * matcher, the entry fragments carry DomainStrategy='IPOnDemand'
+ * (entryDomainStrategy below), which resolves on demand as a rule needs an IP, so
+ * the ip/geoip rules (emitted BEFORE the catch-all) fire. A geosite:/domain:-only
+ * policy keeps the default strategy (byte-identical). CAVEAT to validate on s1:
+ * IPOnDemand resolves the sniffed domain through the node's DNS, which may return
+ * a different IP than the client connects to (CDN / geo-DNS), so a geoip match
+ * can be approximate; confirm on a live xray before relying on geoip splits.
  */
+/**
+ * True when the policy has any ip/geoip matcher, i.e. a rule that can only be
+ * evaluated once xray has resolved the connection's destination to an IP. Such a
+ * policy needs the entry's routing.domainStrategy overridden to `IPOnDemand`
+ * (see the "IP/geoip ON THE ENTRY" note on compileEntryGeoRules) - the caller
+ * sets DomainStrategy on the entry fragments accordingly. A geosite:/domain:-only policy returns
+ * false, so its entry keeps the default strategy (no behaviour change).
+ */
+export function policyNeedsIpResolution(policy: EgressPolicy | undefined): boolean {
+  return (policy ?? []).some((r) => Boolean(r.geoip?.length || r.ip?.length));
+}
+
+/** The xray routing.domainStrategy an entry must use for its egress policy, or
+ *  undefined to keep the node default. IPOnDemand only when an ip/geoip matcher
+ *  is present (it resolves on demand so those rules fire before the catch-all). */
+export function entryDomainStrategy(policy: EgressPolicy | undefined): 'IPOnDemand' | undefined {
+  return policyNeedsIpResolution(policy) ? 'IPOnDemand' : undefined;
+}
+
 export function compileEntryGeoRules(
   policy: EgressPolicy | undefined,
   targets: TargetRouting,
