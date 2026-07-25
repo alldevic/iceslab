@@ -33,6 +33,7 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
+import { withVlessRouteTag } from './formats/xrayjson.js';
 
 // ───── Domain errors ─────
 
@@ -142,6 +143,38 @@ interface NaiveInboundConfig {
   hostname: string;
   tlsEmail: string;
   masqueradeRoot: string;
+}
+
+/**
+ * A4: expand one endpoint into the share-link URIs the plain / base64
+ * subscription emits. A balancer-cascade entry (an xray endpoint carrying
+ * `cascadeExits`) yields one re-tagged URI per exit: the userinfo UUID gets
+ * bytes 7-8 set to exit index+1 (xray reads them as vlessRoute, auth ignores
+ * them) and the `#remark` becomes the exit name. Unlike the JSON array this
+ * keeps every server as a plain URI, so Happ / any client can ping it, at the
+ * cost of the per-config split-routing only the JSON form carries.
+ *
+ * vmess is skipped (its UUID lives inside a base64 blob, not the userinfo, so a
+ * plain string swap can't reach it) and returned as its single original URI.
+ * Every non-entry endpoint returns its one original URI unchanged.
+ */
+export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
+  if (
+    e.protocol !== 'xray' ||
+    !e.cascadeExits ||
+    e.cascadeExits.length === 0 ||
+    e.subprotocol === 'vmess'
+  ) {
+    return e.uri ? [e.uri] : [];
+  }
+  // vless:// and trojan:// both put the UUID in the userinfo, so replacing the
+  // first occurrence of it retargets the link. Strip the original #remark first.
+  const hashIdx = e.uri.indexOf('#');
+  const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
+  return e.cascadeExits.map((exit, i) => {
+    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, i + 1));
+    return `${tagged}#${encodeURIComponent(exit.name)}`;
+  });
 }
 
 /**
@@ -761,7 +794,7 @@ export async function generateSubscription(
 
   return {
     endpoints,
-    textPlain: encodePlainList(endpoints.map((e) => e.uri)),
+    textPlain: encodePlainList(endpoints.flatMap((e) => expandEndpointUris(e))),
     json: buildSubscriptionJson(user, endpoints),
     squadRoutingPreset,
     // R3 - per-user override (scalar already loaded on `user`). Garbage / unset
