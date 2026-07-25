@@ -232,10 +232,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(i int, adapter core.CoreAdapter) {
 			defer wg.Done()
-			cores[i] = dto.CoreStatus{
+			cs := dto.CoreStatus{
 				Name:    dto.ProtocolName(adapter.Name()),
 				Running: adapter.Healthy(),
 			}
+			// T7: surface the core version when the adapter can report it, so
+			// the panel can gate min-version features (xray >= 25.9.5 for
+			// cascade exit selection). Cached adapter-side, cheap to call.
+			if v, ok := adapter.(core.Versioner); ok {
+				cs.Version = v.CoreVersion()
+			}
+			cores[i] = cs
 		}(i, adapter)
 	}
 	wg.Wait()

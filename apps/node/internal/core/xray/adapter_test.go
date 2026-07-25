@@ -304,6 +304,58 @@ func TestNameMatchesProtocol(t *testing.T) {
 	}
 }
 
+// T7: parseXrayVersion pulls the semver from `xray version`'s first line.
+func TestParseXrayVersion(t *testing.T) {
+	cases := map[string]string{
+		"Xray 26.3.27 (Xray, Penetrates Everything.) d2758a0 (go1.26.1)\nA unified platform.": "26.3.27",
+		"Xray 25.9.5 (Xray) abc": "25.9.5",
+		"xray 1.8.4 (foo)":       "1.8.4",
+		"":                       "",
+		"garbage output here":    "",
+		"NotXray 26.0.0":         "",
+	}
+	for in, want := range cases {
+		if got := parseXrayVersion([]byte(in)); got != want {
+			t.Errorf("parseXrayVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// T7: CoreVersion queries `xray version` once, caches the result, and reports
+// empty in config-only mode without forking.
+func TestCoreVersionCachesAndParses(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	calls := 0
+	a := New(Config{
+		BinaryPath: "/usr/bin/xray",
+		Inbound:    validInbound(),
+		RunCmd: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			calls++
+			if len(args) != 1 || args[0] != "version" {
+				t.Errorf("expected `xray version`, got args %v", args)
+			}
+			return []byte("Xray 26.3.27 (Xray) hash\n"), nil
+		},
+	}, logger)
+	if got := a.CoreVersion(); got != "26.3.27" {
+		t.Fatalf("CoreVersion = %q, want 26.3.27", got)
+	}
+	if got := a.CoreVersion(); got != "26.3.27" {
+		t.Fatalf("CoreVersion (cached) = %q, want 26.3.27", got)
+	}
+	if calls != 1 {
+		t.Errorf("expected version query to fork once (cached), got %d", calls)
+	}
+}
+
+func TestCoreVersionConfigOnlyEmpty(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	a := New(Config{Inbound: validInbound()}, logger) // no BinaryPath
+	if got := a.CoreVersion(); got != "" {
+		t.Fatalf("CoreVersion (config-only) = %q, want empty", got)
+	}
+}
+
 func TestStartWritesConfigInConfigOnlyMode(t *testing.T) {
 	a, path := newTestAdapter(t)
 	if err := a.Start(context.Background()); err != nil {

@@ -404,6 +404,12 @@ export interface GetStatsResponse {
 export interface CoreStatus {
   name: ProtocolName;
   running: boolean;
+  /** T7: underlying core binary version (e.g. "26.3.27" from `xray version`),
+   *  absent when the adapter can't report one (config-only mode, non-versioned
+   *  core, or a pre-T7 agent). The panel persists it per node to gate features
+   *  needing a minimum core version (cascade exit selection needs xray
+   *  >= 25.9.5). */
+  version?: string;
 }
 
 export interface HealthcheckResponse {

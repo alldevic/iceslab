@@ -81,6 +81,7 @@ export const NODES: PanelNode[] = NODE_SEEDS.map((n) => ({
   status: 'online',
   lastStatusChange: iso(3 * HOUR),
   lastStatusMessage: null,
+  coreVersion: n.protocol === 'xray' ? '26.3.27' : null,
   consumptionMultiplier: '1',
   regionId: n.region,
   maxUsers: 1000,

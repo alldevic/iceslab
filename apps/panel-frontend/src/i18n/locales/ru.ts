@@ -1188,6 +1188,7 @@ export default {
     reBootstrap: 'Re-bootstrap',
     metricsPending: 'Метрики готовятся - первый опрос в течение 15 сек',
     loadLabel: 'Загрузка',
+    coreVersion: 'Версия ядра xray (для выбора выхода нужно >= 25.9.5)',
   },
 
   squadForm: {

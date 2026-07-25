@@ -405,6 +405,9 @@ export interface Node {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
+  // T7 - proxy-core version (e.g. xray "26.3.27"), null until a versioned agent
+  // reports in. Shown on the node card; cascade form warns on an old balancer entry.
+  coreVersion: string | null;
   consumptionMultiplier: string;
   // Slice 27.5
   regionId: string | null;

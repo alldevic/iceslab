@@ -247,6 +247,11 @@ model Node {
   status                String    @default("unknown") @db.VarChar(16)
   lastStatusChange      DateTime? @map("last_status_change") @db.Timestamptz(6)
   lastStatusMessage     String?   @map("last_status_message")
+  // T7: version of this node's proxy core (e.g. xray "26.3.27"), reported by
+  // the agent in /healthz and refreshed by the status poller. NULL until a
+  // versioned agent checks in. The panel gates cascade exit selection
+  // (vlessRoute) on xray >= 25.9.5 using this.
+  coreVersion           String?   @map("core_version") @db.VarChar(32)
   // Stamped when the node ACKNOWLEDGES an inbound push (applyInbounds returned
   // ok), never on a failure and never on a plain liveness tick. That makes it a
   // truthful "this node applied the config we sent" marker: comparing it with a

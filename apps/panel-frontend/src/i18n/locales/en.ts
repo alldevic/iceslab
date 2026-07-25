@@ -1190,6 +1190,7 @@ export default {
     reBootstrap: 'Re-bootstrap',
     metricsPending: 'Metrics pending - first poll within 15s',
     loadLabel: 'Load',
+    coreVersion: 'xray core version (exit selection needs >= 25.9.5)',
   },
 
   squadForm: {

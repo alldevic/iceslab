@@ -19,6 +19,10 @@ export interface PublicNodeDto {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
+  // T7: proxy-core version reported by the agent (e.g. xray "26.3.27"), NULL
+  // until a versioned agent checks in. Shown on the node card; the cascade form
+  // uses it to warn before selecting an old node as a balancer entry.
+  coreVersion: string | null;
   consumptionMultiplier: string;
   // Slice 27.5: region grouping + capacity hint.
   regionId: string | null;
@@ -49,6 +53,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     status: node.status,
     lastStatusChange: node.lastStatusChange?.toISOString() ?? null,
     lastStatusMessage: node.lastStatusMessage,
+    coreVersion: node.coreVersion,
     consumptionMultiplier: node.consumptionMultiplier.toString(),
     regionId: node.regionId,
     maxUsers: node.maxUsers,

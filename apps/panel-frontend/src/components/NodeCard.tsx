@@ -57,6 +57,10 @@ interface CardNode {
   /** When this node is a hop in a cascade: "<cascade name> · <role>" for the
    *  chain badge. Null when the node is standalone. */
   cascadeLabel?: string | null;
+  /** T7 - proxy-core version (xray "26.3.27"), null until a versioned agent
+   *  reports in. Shown as a small chip so operators can spot nodes too old for
+   *  cascade exit selection (needs xray >= 25.9.5). */
+  coreVersion?: string | null;
 }
 
 interface Props {
@@ -327,6 +331,19 @@ export function NodeCard({
               </Text>
             </Group>
           </Tooltip>
+          {node.coreVersion && (
+            <Tooltip label={t('nodeCard.coreVersion')}>
+              <Group gap={4} wrap="nowrap" style={{ marginLeft: 'auto' }}>
+                <IconCpu size={12} style={{ color: MIST }} />
+                <Text
+                  size="xs"
+                  style={{ color: MIST, fontFamily: "'Geist Mono', monospace" }}
+                >
+                  xray {node.coreVersion}
+                </Text>
+              </Group>
+            </Tooltip>
+          )}
         </Group>
       </Stack>
 

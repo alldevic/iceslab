@@ -43,7 +43,7 @@ export async function readCachedNodeMetrics(
 export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> {
   const nodes = await prisma.node.findMany({
     where: { deletedAt: null, status: { not: 'disabled' } },
-    select: { id: true, name: true, address: true, status: true, lastStatusMessage: true },
+    select: { id: true, name: true, address: true, status: true, lastStatusMessage: true, coreVersion: true },
   });
 
   if (nodes.length === 0) return { ok: 0, down: 0 };
@@ -64,13 +64,18 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // the row forever after the underlying subprocess came back.
       const statusChanged = result.status !== node.status;
       const messageChanged = result.message !== node.lastStatusMessage;
-      if (statusChanged || messageChanged) {
+      // T7: only touch coreVersion when this poll actually observed one (a
+      // reachable agent that reported an xray core). Undefined = keep stored.
+      const versionChanged =
+        result.coreVersion !== undefined && result.coreVersion !== node.coreVersion;
+      if (statusChanged || messageChanged || versionChanged) {
         await prisma.node.update({
           where: { id: node.id },
           data: {
             status: result.status,
             lastStatusChange: statusChanged ? new Date() : undefined,
             lastStatusMessage: result.message,
+            ...(versionChanged ? { coreVersion: result.coreVersion } : {}),
           },
         });
       }
@@ -112,6 +117,10 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
 interface PollResult {
   status: 'online' | 'unreachable';
   message: string | null;
+  // T7: xray core version reported by this poll's /healthz, or undefined when
+  // the node was unreachable / reported no xray core / runs a pre-T7 agent.
+  // Undefined means "leave the stored coreVersion untouched".
+  coreVersion?: string;
 }
 
 /**
@@ -163,8 +172,11 @@ async function checkOne(node: {
   try {
     const transport = new NodeTransport(node);
     const res = await transport.healthcheck();
+    // T7: capture the xray core version if the agent reported one (pre-T7
+    // agents and non-xray nodes omit it, leaving coreVersion undefined).
+    const coreVersion = res.cores.find((c) => c.name === 'xray')?.version || undefined;
     if (res.status === 'ok') {
-      return { status: 'online', message: null };
+      return { status: 'online', message: null, coreVersion };
     }
     // node-agent reachable + healthy, but one of the protocol sub-cores
     // isn't running. Normal for a fresh node with no Profile+Binding yet
@@ -174,6 +186,7 @@ async function checkOne(node: {
     return {
       status: 'online',
       message: `degraded: ${JSON.stringify(res).slice(0, 160)}`,
+      coreVersion,
     };
   } catch (err) {
     if (err instanceof NodeRequestError) {
