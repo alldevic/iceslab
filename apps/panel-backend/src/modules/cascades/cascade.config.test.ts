@@ -67,9 +67,12 @@ describe('buildBalancerCascadeConfigs (auto node)', () => {
     expect(cfgs[1]!.balancers).toBeUndefined();
   });
 
-  it('with no entry policy the balancer entry rule is unchanged (byte-identical)', () => {
+  it('with no entry policy the balancer entry has just QUIC-drop + the balancer catch-all', () => {
     const e = buildBalancerCascadeConfigs(entry, exits, creds)[0]!;
-    expect(e.routingRules).toEqual([{ type: 'field', network: 'tcp,udp', balancerTag: 'auto' }]);
+    expect(e.routingRules).toEqual([
+      { type: 'field', network: 'udp', port: 443, outboundTag: 'blocked' }, // QUIC-drop (#15)
+      { type: 'field', network: 'tcp,udp', balancerTag: 'auto' },
+    ]);
     expect(e.outbounds.some((o) => o.protocol === 'blackhole')).toBe(false);
   });
 
@@ -82,6 +85,7 @@ describe('buildBalancerCascadeConfigs (auto node)', () => {
     expect(e.routingRules).toEqual([
       { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'blocked' },
       { type: 'field', ip: ['geoip:ru'], outboundTag: 'direct' },
+      { type: 'field', network: 'udp', port: 443, outboundTag: 'blocked' }, // QUIC-drop, after geo
       { type: 'field', network: 'tcp,udp', balancerTag: 'auto' }, // catch-all -> balancer, last
     ]);
     expect(e.outbounds).toContainEqual({ tag: 'blocked', protocol: 'blackhole' });
@@ -221,10 +225,11 @@ describe('buildCascadeConfigs (vless->vless)', () => {
     expect(exit!.linkAllowFrom).toEqual(['transit.example.com']);
   });
 
-  it('with no entry policy the entry routing is unchanged (byte-identical)', () => {
+  it('with no entry policy the entry has just QUIC-drop + the catch-all (no geo, no blackhole)', () => {
     const entry = buildCascadeConfigs(hops, creds)[0]!;
-    // single catch-all rule, no geo prepend, no blackhole outbound
+    // QUIC-drop (unconditional, #15) + catch-all; no geo prepend, no blackhole outbound
     expect(entry.routingRules).toEqual([
+      { type: 'field', network: 'udp', port: 443, outboundTag: 'blocked' },
       { type: 'field', network: 'tcp,udp', outboundTag: 'cascade-link-out' },
     ]);
     expect(entry.outbounds.some((o) => o.protocol === 'blackhole')).toBe(false);
@@ -241,6 +246,7 @@ describe('buildCascadeConfigs (vless->vless)', () => {
       // the mixed rule splits into domain + ip rules (xray ANDs within a rule)
       { type: 'field', domain: ['geosite:category-ru'], outboundTag: 'direct' },
       { type: 'field', ip: ['geoip:ru'], outboundTag: 'direct' },
+      { type: 'field', network: 'udp', port: 443, outboundTag: 'blocked' }, // QUIC-drop, after geo
       { type: 'field', network: 'tcp,udp', outboundTag: 'cascade-link-out' }, // catch-all stays last
     ]);
     // a block rule pulls in the blackhole outbound
@@ -251,7 +257,7 @@ describe('buildCascadeConfigs (vless->vless)', () => {
     const policy: EgressPolicy = [{ geoip: ['ru'], target: 'direct' }];
     const entry = buildCascadeConfigs(hops, creds, policy)[0]!;
     expect(entry.outbounds.some((o) => o.protocol === 'blackhole')).toBe(false);
-    expect(entry.routingRules).toHaveLength(2); // geo direct + catch-all
+    expect(entry.routingRules).toHaveLength(3); // geo direct + QUIC-drop + catch-all
   });
 
   it('the entry policy does not leak onto transit/exit hops', () => {

@@ -77,7 +77,12 @@ function selfHostedGeo(): { base: string; names: Set<string> } | null {
   if (!config.GEO_SELF_HOST) return null;
   const meta = getGeoBuildMeta();
   if (!meta) return null;
-  return { base: geoArtifactBaseUrl(), names: new Set(meta.artifacts.map((a) => a.name)) };
+  // Client-facing: build geo URLs on the split subscription domain (#17) so a
+  // client behind a blocked CDN can fetch the geo its config references.
+  return {
+    base: geoArtifactBaseUrl(subscriptionOrigin()),
+    names: new Set(meta.artifacts.map((a) => a.name)),
+  };
 }
 
 const TokenParamSchema = z.object({

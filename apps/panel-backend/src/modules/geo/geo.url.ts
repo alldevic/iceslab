@@ -13,7 +13,14 @@ export function geoArtifactToken(): string {
   return createHash('sha256').update(`geo-artifact:${config.JWT_SECRET}`).digest('hex').slice(0, 32);
 }
 
-/** Public base URL clients/nodes fetch geo artifacts from: PUBLIC_URL/geo/<token>. */
-export function geoArtifactBaseUrl(): string {
-  return `${config.PUBLIC_URL.replace(/\/+$/, '')}/geo/${geoArtifactToken()}`;
+/**
+ * Base URL geo artifacts are fetched from: `<origin>/geo/<token>`. `origin`
+ * defaults to PUBLIC_URL - the right choice for the NODE fetch (the agent dials
+ * the panel's own address). CLIENT subscriptions pass `subscriptionOrigin()`
+ * instead, so geo URLs embedded in a clash/sing-box/xray config ride the split
+ * client domain (SUBSCRIPTION_PUBLIC_URL) when one is set - otherwise a client
+ * behind a blocked CDN could reach its subscription but not the geo it references.
+ */
+export function geoArtifactBaseUrl(origin: string = config.PUBLIC_URL): string {
+  return `${origin.replace(/\/+$/, '')}/geo/${geoArtifactToken()}`;
 }

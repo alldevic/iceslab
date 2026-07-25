@@ -78,6 +78,8 @@ describe('cascade egress policy (server-side geo split)', () => {
       // mixed geosite+geoip rule splits into domain + ip rules (OR, not xray AND)
       { type: 'field', domain: ['geosite:category-ru'], outboundTag: 'direct' },
       { type: 'field', ip: ['geoip:ru'], outboundTag: 'direct' },
+      // QUIC-drop (upstream #15): after the geo rules, before the catch-all.
+      { type: 'field', network: 'udp', port: 443, outboundTag: 'blocked' },
       { type: 'field', network: 'tcp,udp', outboundTag: 'cascade-link-out' }, // catch-all last
     ]);
     // Both `direct` and `blocked` are node-base outbounds - the service strips
@@ -112,7 +114,7 @@ describe('cascade egress policy (server-side geo split)', () => {
     ]);
   });
 
-  it('a cascade with no policy stays byte-identical (no geo rules, no blackhole)', async () => {
+  it('a cascade with no policy has just QUIC-drop + catch-all (no geo rules, no blackhole)', async () => {
     const ru = await node('ru');
     const de = await node('de');
     await createCascade({
@@ -127,6 +129,7 @@ describe('cascade egress policy (server-side geo split)', () => {
 
     const frag = await getCascadeFragmentsForNode(ru);
     expect(frag!.routingRules).toEqual([
+      { type: 'field', network: 'udp', port: 443, outboundTag: 'blocked' }, // QUIC-drop is unconditional
       { type: 'field', network: 'tcp,udp', outboundTag: 'cascade-link-out' },
     ]);
     expect((frag!.outbounds as { protocol?: string }[]).some((o) => o.protocol === 'blackhole')).toBe(
@@ -150,8 +153,9 @@ describe('cascade egress policy (server-side geo split)', () => {
 
     await updateCascade(dto.id, { egressPolicy: [] });
     const frag = await getCascadeFragmentsForNode(ru);
-    // empty policy -> back to a single catch-all rule
+    // empty policy -> back to QUIC-drop + the catch-all (no geo rules)
     expect(frag!.routingRules).toEqual([
+      { type: 'field', network: 'udp', port: 443, outboundTag: 'blocked' },
       { type: 'field', network: 'tcp,udp', outboundTag: 'cascade-link-out' },
     ]);
   });
