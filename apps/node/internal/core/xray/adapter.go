@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,11 @@ const Name = "xray"
 // apiCallTimeout caps the live HandlerService calls (`xray api adu`/`rmu`). The
 // API is loopback IPC, so this is generous headroom, not a tight budget.
 const apiCallTimeout = 5 * time.Second
+
+// configTestTimeout caps the `xray -test` preflight. Loading a config (incl.
+// parsing the bundled geo .dat) is fast; this is headroom for a large geosite
+// bundle on a small VPS, not a tight budget.
+const configTestTimeout = 30 * time.Second
 
 // Config is the per-instance settings for an XrayAdapter.
 type Config struct {
@@ -512,6 +518,13 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 	geoDir := a.cfg.GeoAssetDir
 	run := a.cfg.RunCmd
 	proc := a.proc
+	// regenFailed => the last regenerateAndRestart could not bring up this exact
+	// inbound+cascade (e.g. its xray -test rejected an egress policy referencing a
+	// standard geosite:/geoip: category this node's bundle lacks). a.cascade only
+	// changes via ApplyInbound, which immediately regenerates, and this function is
+	// serialized with regenerate on restartMu, so regenFailed reliably tells us
+	// whether the config we're about to render is bootable.
+	regenFailed := a.regenFailed
 	a.mu.Unlock()
 
 	// Live mgmt only works against a running xray (HandlerService up). In
@@ -553,7 +566,15 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 		a.logger.Info("live update: geo asset precondition not met, falling back to restart", "err", err)
 		return false
 	}
-	if cfgPath != "" {
+	// Persist the config only when the current inbound+cascade is known-bootable.
+	// If the last regenerate failed its xray -test, the on-disk config is the
+	// last-good one; this SECOND writer must not overwrite it with the unbootable
+	// render, or a later crash-respawn (`xray run -c cfgPath`) would boot-loop the
+	// poisoned disk and take the whole inbound down - the exact outcome the -test
+	// preflight and the "last-good on disk" invariant exist to prevent. The live
+	// adu/rmu below still updates the healthy running xray; the disk catches up on
+	// the next clean regenerate (once the operator fixes the policy).
+	if cfgPath != "" && !regenFailed {
 		if err := writeConfig(cfgPath, blob); err != nil {
 			return false
 		}
@@ -1050,6 +1071,7 @@ func cascadeEqual(a, b *CascadeFragments) bool {
 		rawSliceEqual(a.RoutingRules, b.RoutingRules) &&
 		bytes.Equal(a.Observatory, b.Observatory) &&
 		rawSliceEqual(a.Balancers, b.Balancers) &&
+		a.DomainStrategy == b.DomainStrategy &&
 		geoAssetsEqual(a.GeoAssets, b.GeoAssets)
 }
 
@@ -1171,28 +1193,24 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 		if err := verifyExtAssets(blob, assetDir, installedAssets); err != nil {
 			return fmt.Errorf("geo asset precondition: %w", err)
 		}
-	}
-
-	// Ask the core before replacing anything (upstream 0.2.0): a config it rejects
-	// is refused WHOLE, so writing one over a working config turns a serving node
-	// dark. Failing here leaves the running core untouched.
-	//
-	// ⚠ Only when we are NOT pointing xray at our own geo dir. `xray -test` resolves
-	// ext:<file> references through XRAY_LOCATION_ASSET, and RunCmdFunc carries no
-	// environment, so a validation run cannot see the dir the real spawn will use -
-	// it would reject a perfectly good geo config. verifyExtAssets above already
-	// covers the failure mode validation would catch here (a referenced geo file
-	// that is missing or stale), so the guard is not lost, only narrowed.
-	// TODO: give RunCmdFunc an env argument and validate unconditionally.
-	if binPath != "" && assetDir == "" {
-		if err := validateConfig(ctx, run, binPath, blob); err != nil {
+		// Preflight the candidate config with `xray -test` BEFORE writing it to the
+		// live path or stopping the running instance. xray loads the config and
+		// resolves geo categories during -test, so a config it cannot boot - an
+		// unknown geosite:/geoip: category (e.g. a source category absent from this
+		// node's bundled .dat), a malformed routing rule, a bad key - fails here and
+		// we keep the old instance serving instead of stopping it and crash-looping
+		// the supervisor into an exhausted-restart outage. Same env as the real
+		// spawn so bundled AND panel-pushed geo resolve identically. The config dir
+		// is a known-writable path (writeConfig targets it) for the scratch file.
+		testDir := cfgPath
+		if testDir != "" {
+			testDir = filepath.Dir(testDir)
+		}
+		if err := preflightConfig(ctx, run, binPath, testDir, blob, spawnEnv); err != nil {
 			a.logger.Error("xray refused the new config, keeping the running one",
 				"err", err, "inbounds", len(pushed), "users", len(clients))
-			return fmt.Errorf("validate xray config: %w", err)
+			return err
 		}
-	} else if assetDir != "" {
-		a.logger.Info("skipping core config validation: self-hosted geo dir in use",
-			"assetDir", assetDir)
 	}
 
 	if cfgPath != "" {
@@ -1274,6 +1292,70 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	a.regenFailed = false
 	a.mu.Unlock()
 	a.logger.Info("xray (re)started", "users", len(clients))
+	return nil
+}
+
+// testXrayConfig runs `xray run -test` on a candidate config in a throwaway
+// scratch file. xray parses the config and builds the instance (resolving geo
+// categories) then exits without serving, so a config it cannot load returns a
+// non-zero exit here - letting the caller refuse the swap instead of stopping a
+// healthy instance. dir is a known-writable directory for the scratch file; env
+// mirrors the real spawn's (XRAY_LOCATION_ASSET) so geo resolves identically.
+// preflightConfig asks the core to accept a config before anything on disk or
+// in the running process is touched.
+//
+// Two ways in, and the difference matters. With no environment to carry we go
+// through the injected RunCmdFunc: that is the seam the adapter's own tests
+// substitute, and bypassing it would make every test spawn the stub binary for
+// real. When there IS an environment - a self-hosted geo dir handed to xray via
+// XRAY_LOCATION_ASSET - RunCmdFunc cannot express it, and a validation run blind
+// to that dir would reject a perfectly good config whose ext: files live there.
+// So that case spawns directly, with the same env as the real launch.
+func preflightConfig(
+	ctx context.Context,
+	run RunCmdFunc,
+	binPath, dir string,
+	blob []byte,
+	env []string,
+) error {
+	if len(env) == 0 {
+		return validateConfig(ctx, run, binPath, blob)
+	}
+	return testXrayConfig(ctx, binPath, dir, blob, env)
+}
+
+func testXrayConfig(ctx context.Context, binPath, dir string, blob []byte, env []string) error {
+	f, err := os.CreateTemp(dir, "xray-test-*.json")
+	if err != nil {
+		return fmt.Errorf("xray -test: create scratch config: %w", err)
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err := f.Write(blob); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("xray -test: write scratch config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("xray -test: write scratch config: %w", err)
+	}
+
+	tctx, cancel := context.WithTimeout(ctx, configTestTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(tctx, binPath, "run", "-test", "-c", tmp)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(out.String())
+		const cap = 600
+		if len(msg) > cap {
+			msg = msg[len(msg)-cap:] // the failure reason is at the tail of the log
+		}
+		return fmt.Errorf("xray rejected the config (run -test): %w: %s", err, msg)
+	}
 	return nil
 }
 

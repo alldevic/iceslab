@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/auth.hook.js';
 import {
@@ -29,14 +29,16 @@ import { assertFetchableUrl } from '../recipes/recipes.ssrf.js';
 import {
   getGeoArtifact,
   getGeoBuildMeta,
-  rebuildGeo,
   GeoBuildAllSourcesFailed,
 } from './geo.registry.js';
+import { rebuildGeoAndRepush } from './geo.cron.js';
 import { geoArtifactToken } from './geo.url.js';
 
 // Servable artifact names (custom .dat / mirror .dat / per-category .srs). The
 // registry only returns names it actually built, so this just bounds the shape.
-const ArtifactName = z.string().regex(/^[A-Za-z0-9._-]+$/).max(64);
+// Fits the longest generated name: `custom-<category>.srs` where a category is
+// up to 80 chars (see geo.schemas category name), so 7 + 80 + 4 = 91.
+const ArtifactName = z.string().regex(/^[A-Za-z0-9._-]+$/).max(96);
 
 /**
  * G1 - geo-source registry endpoints. Operator-managed upstream geosite/geoip
@@ -180,7 +182,10 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
   // last build's metadata (null until first built).
   app.post('/api/geo/build', auth, async (_req, reply) => {
     try {
-      return reply.send(await rebuildGeo());
+      // Rebuild AND propagate: when the rebuild changes a custom .dat, re-push the
+      // egress-policy cascades so the change reaches the entry nodes (the rebuild
+      // alone only refreshes the panel-served artifacts, not the fleet).
+      return reply.send(await rebuildGeoAndRepush({ forceRepush: false }));
     } catch (err) {
       // Every source failed (nothing cached). Surface it as an error the UI
       // shows, but keep the per-source diagnostics (which upstream failed and
@@ -200,18 +205,38 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(getGeoBuildMeta());
   });
 
+  // A geo artifact is content-addressed: its ETag is the sha256 of the bytes, so
+  // any content change necessarily mints a new ETag. That lets a client cache the
+  // body for a good while and revalidate cheaply - it re-requests with
+  // If-None-Match and we answer 304 (no body) when the build hasn't changed,
+  // instead of re-streaming tens of MB. A raised max-age (vs the old 300s) cuts
+  // the request rate itself; ETag revalidation bounds staleness after it lapses.
+  const GEO_CACHE_CONTROL = 'public, max-age=3600';
+
   // Serve a built artifact by name (custom .dat + the full source mirror).
-  async function serveArtifact(reply: FastifyReply, name: string): Promise<FastifyReply> {
+  async function serveArtifact(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    name: string,
+  ): Promise<FastifyReply> {
     const artifact = await getGeoArtifact(name);
     if (!artifact) return reply.code(404).send({ error: 'NOT_FOUND' });
+    const etag = `"${artifact.sha256}"`;
+    // Conditional GET: if the client already holds this exact build, answer 304.
+    // `If-None-Match` may carry a comma-list and/or a weak `W/` prefix; the sha is
+    // unique, so a substring test on the strong tag is enough and prefix-safe.
+    const inm = req.headers['if-none-match'];
+    if (typeof inm === 'string' && inm.includes(artifact.sha256)) {
+      return reply.code(304).header('ETag', etag).header('Cache-Control', GEO_CACHE_CONTROL).send();
+    }
     // Zero-copy view over the cached (immutable) bytes, not Buffer.from(...) which
     // copies the whole artifact per request - a mirror .dat is tens of MB, so N
     // slow-read clients would otherwise pin N full copies in memory.
     const body = Buffer.from(artifact.bytes.buffer, artifact.bytes.byteOffset, artifact.bytes.byteLength);
     return reply
       .type('application/octet-stream')
-      .header('ETag', `"${artifact.sha256}"`)
-      .header('Cache-Control', 'public, max-age=300')
+      .header('ETag', etag)
+      .header('Cache-Control', GEO_CACHE_CONTROL)
       .header('Content-Disposition', `attachment; filename="${name}"`)
       .send(body);
   }
@@ -219,7 +244,7 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
   // Admin download (verify / inspect). ETag = sha256.
   app.get('/api/geo/artifacts/:name', auth, async (req, reply) => {
     const { name } = z.object({ name: ArtifactName }).parse(req.params);
-    return serveArtifact(reply, name);
+    return serveArtifact(req, reply, name);
   });
 
   // G6 - PUBLIC distribution. Nodes fetch the mirror + custom .dat here; clients
@@ -235,6 +260,6 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success || !timingSafeEqual(digest(parsed.data.token), digest(geoArtifactToken()))) {
       return reply.code(404).send({ error: 'NOT_FOUND' });
     }
-    return serveArtifact(reply, parsed.data.name);
+    return serveArtifact(req, reply, parsed.data.name);
   });
 }

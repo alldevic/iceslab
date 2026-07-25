@@ -39,6 +39,8 @@ import type {
   CreateCascadeInput,
   UpdateCascadeInput,
 } from './cascade.schemas.js';
+import { assertEgressCategories } from './cascade.geo.stock.js';
+import { getCategories } from '../geo/geo.categories.js';
 import { mapCascade, type CascadeDto } from './cascade.mapper.js';
 
 // The two custom .dat files the panel itself produces. A matcher pointing at
@@ -896,6 +898,27 @@ async function writeTopologyV4(
   }
 }
 
+/** Reject an egress policy that references custom categories as bare geosite:/
+ *  geoip: or an unknown geoip category, up front (see cascade.geo.stock). No-op
+ *  for an absent/empty policy. Throws EgressCategoryError (-> 400). */
+async function assertPolicyCategories(policy: EgressPolicy | undefined): Promise<void> {
+  if (!policy || policy.length === 0) return;
+  const names = (await getCategories()).map((c) => c.name);
+  assertEgressCategories(policy, names);
+}
+
+/** Same check across every per-node policy in a v4 payload. The category list is
+ *  read ONCE: it is the same for all of them, and a position pool can carry a
+ *  policy per node. */
+async function assertPositionPolicies(
+  positions: { egressPolicies?: Record<string, EgressPolicy> }[] | undefined,
+): Promise<void> {
+  const all = (positions ?? []).flatMap((p) => Object.values(p.egressPolicies ?? {}));
+  if (all.length === 0) return;
+  const names = (await getCategories()).map((c) => c.name);
+  for (const policy of all) assertEgressCategories(policy, names);
+}
+
 export async function createCascade(input: CreateCascadeInput): Promise<CascadeDto> {
   // The redesigned screens send positions + directions; storage still holds
   // single-node hops. Fold when that is what arrived, and let the fold decide
@@ -936,6 +959,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   if (input.enabled && entryNodeId && (isBalancer || !folded)) {
     await assertBalancerEntrySupportsVlessRoute(entryNodeId);
   }
+  await assertPositionPolicies(input.positions);
   // Pre-generate inter-hop link creds.
   //   chain:    one cred per link, stored on each non-exit (originating) hop.
   //   balancer: one cred per exit link (entry->exit), stored on each EXIT hop;
@@ -1082,6 +1106,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   const isBalancer = mode === 'balancer';
   const incomingHops = folded ? folded.hops : input.hops;
   const hops = incomingHops ? validateCascadeHops(incomingHops, mode) : null;
+  await assertPositionPolicies(input.positions);
   if (hops) await assertNodesExist(hops.map((h) => h.nodeId));
   // T7: gate an effectively-enabled balancer on the entry node's xray version
   // (covers both enabling an existing cascade and swapping in a new entry hop).
@@ -1217,6 +1242,9 @@ export function toWireFragments(mine: HopConfig): XrayCascadeFragments {
     // observatory is a config xray rejects outright.
     balancers: mine.balancers,
     observatory: mine.observatory,
+    // E - IPOnDemand for a node whose split matches on ip/geoip; absent keeps
+    // the node's default, so a member without a split is unchanged.
+    domainStrategy: mine.domainStrategy,
   };
 }
 

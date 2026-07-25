@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { compileEntryGeoRules, type EgressPolicy, type TargetRouting } from './cascade.geo.js';
+import {
+  compileEntryGeoRules,
+  policyNeedsIpResolution,
+  entryDomainStrategy,
+  type EgressPolicy,
+  type TargetRouting,
+} from './cascade.geo.js';
 
 // Chain-entry target map (link-out is a fixed outbound).
 const CHAIN: TargetRouting = {
@@ -109,5 +115,37 @@ describe('compileEntryGeoRules', () => {
     const { rules } = compileEntryGeoRules(policy, BALANCER);
     expect(rules[1]).toMatchObject({ domain: ['x.com'], balancerTag: 'auto' });
     expect(rules[1]).not.toHaveProperty('outboundTag');
+  });
+});
+
+describe('policyNeedsIpResolution / entryDomainStrategy (E - §3.1)', () => {
+  it('is false (default strategy) for an absent/empty policy', () => {
+    expect(policyNeedsIpResolution(undefined)).toBe(false);
+    expect(policyNeedsIpResolution([])).toBe(false);
+    expect(entryDomainStrategy(undefined)).toBeUndefined();
+  });
+
+  it('is false for a geosite/domain-only policy (no IP resolution needed)', () => {
+    const policy: EgressPolicy = [
+      { geosite: ['category-ru'], target: 'direct' },
+      { domain: ['example.com'], target: 'block' },
+    ];
+    expect(policyNeedsIpResolution(policy)).toBe(false);
+    expect(entryDomainStrategy(policy)).toBeUndefined();
+  });
+
+  it('is true (IPOnDemand) when any rule has a geoip matcher', () => {
+    const policy: EgressPolicy = [{ geoip: ['ru'], target: 'direct' }];
+    expect(policyNeedsIpResolution(policy)).toBe(true);
+    expect(entryDomainStrategy(policy)).toBe('IPOnDemand');
+  });
+
+  it('is true (IPOnDemand) when any rule has a literal ip matcher', () => {
+    const policy: EgressPolicy = [
+      { geosite: ['youtube'], target: 'link-out' },
+      { ip: ['10.0.0.0/8'], target: 'direct' },
+    ];
+    expect(policyNeedsIpResolution(policy)).toBe(true);
+    expect(entryDomainStrategy(policy)).toBe('IPOnDemand');
   });
 });

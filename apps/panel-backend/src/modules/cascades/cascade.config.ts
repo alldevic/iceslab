@@ -3,6 +3,7 @@ import { generateRealityKeyPair } from '../../lib/credentials.js';
 import {
   compileEntryGeoRules,
   directionTargetKey,
+  entryDomainStrategy,
   type EgressPolicy,
   type TargetRouting,
 } from './cascade.geo.js';
@@ -290,6 +291,11 @@ export interface HopConfig {
   /** Balancer entry only: the `routing.balancers` entries. Its user rule targets
    *  one via `balancerTag`. Undefined on chain hops and on balancer exits. */
   balancers?: Record<string, unknown>[];
+  /** Entry only: override the node's global routing.domainStrategy (e.g.
+   *  'IPOnDemand' so an ip/geoip egress rule resolves ahead of the catch-all).
+   *  Undefined on non-entry hops and on entries whose policy needs no IP
+   *  resolution (keeps the node default, byte-identical to a non-geo cascade). */
+  domainStrategy?: string;
 }
 
 const LINK_IN_TAG = 'cascade-link-in';
@@ -716,10 +722,18 @@ export function buildTopologyFragmentsForNode(
     });
   }
 
+  // IPOnDemand only when THIS node's policy carries an ip/geoip matcher: under
+  // the default IPIfNonMatch xray resolves a sniffed domain to an IP only if no
+  // rule matched the first pass, so a geoip rule would never see that pass and
+  // would be dead. Absent otherwise, so a node without a split renders
+  // byte-identically to a plain cascade member.
+  const domainStrategy = entryDomainStrategy(nodePolicy);
+
   return {
     nodeId,
     position: posIndex >= 0 ? posIndex : input.positions.length,
     role,
+    ...(domainStrategy ? { domainStrategy } : {}),
     inbounds,
     outbounds,
     routingRules,

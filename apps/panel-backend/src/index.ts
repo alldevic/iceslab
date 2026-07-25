@@ -16,7 +16,7 @@ import {
   registerCronJobs,
 } from './modules/scheduler/scheduler.queue.js';
 import { buildApp } from './app.js';
-import { rebuildGeo } from './modules/geo/geo.registry.js';
+import { rebuildGeoAndRepush } from './modules/geo/geo.cron.js';
 import { setBaseLogger } from './lib/logger.js';
 import { startMetricsRefreshLoop } from './lib/metrics-refresh.js';
 import { startTelegramBot } from './lib/telegram-bot.js';
@@ -74,10 +74,12 @@ async function start() {
     // G6 - warm the in-process geo build cache after a restart (it is not
     // persisted). Fire-and-forget: until it lands, subscriptions/fragments
     // just fall back to external geo URLs / bundled databases; once built,
-    // the next poll picks the self-hosted ones up.
+    // the next poll picks the self-hosted ones up. forceRepush: any egress
+    // cascade rendered during the cold-cache window had its ext: matchers
+    // stripped, so re-emit cascade.changed once the build lands to refresh them.
     if (config.GEO_SELF_HOST) {
       const log = app.log;
-      rebuildGeo().then(
+      rebuildGeoAndRepush({ forceRepush: true }).then(
         (meta) => log.info({ artifacts: meta.artifacts.length }, 'geo build cache warmed'),
         (err) => log.warn({ err }, 'geo build warm-up failed'),
       );

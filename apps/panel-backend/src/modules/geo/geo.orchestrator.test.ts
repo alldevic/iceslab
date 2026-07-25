@@ -11,9 +11,52 @@ import {
   type Domain,
   type CIDR,
 } from './geo.dat.js';
-import { buildGeoArtifacts } from './geo.orchestrator.js';
+import { buildGeoArtifacts, plannedCustomSrs } from './geo.orchestrator.js';
+import { composeCategory, type ComposedCategory } from './geo.compose.js';
 import type { DatFetcher } from './geo.fetch.js';
 import { invalidateSourceCache } from './geo.sourcecache.js';
+
+// Deterministic (binary-free) guard for the custom .srs selection + naming - the
+// runIf(SINGBOX_BIN) tests below don't run in the default CI path, so this locks
+// the domain-only selection and the custom-<UPPER>.srs naming the compile loop
+// depends on, without needing a real sing-box binary.
+describe('plannedCustomSrs (custom .srs selection + naming)', () => {
+  it('selects only domain-bearing categories, named custom-<name>.srs', () => {
+    const composed = [
+      { name: 'RUNET', domains: [{ type: 2, value: 'x.ru' }], cidrs: [], missing: [] },
+      { name: 'IPONLY', domains: [], cidrs: [{ ip: Uint8Array.of(10, 0, 0, 0), prefix: 8 }], missing: [] },
+    ] as ComposedCategory[];
+    expect(plannedCustomSrs(composed)).toEqual([
+      { category: composed[0], artifact: 'custom-RUNET.srs' },
+    ]);
+  });
+
+  it('composeCategory UPPERCASES the name, so the .srs is custom-<UPPER>.srs', () => {
+    const c = composeCategory({
+      name: 'my-block',
+      domainSources: [],
+      ipSources: [],
+      manualDomains: ['example.com'],
+      manualIps: [],
+      excludeDomains: [],
+    });
+    expect(plannedCustomSrs([c])).toEqual([{ category: c, artifact: 'custom-MY-BLOCK.srs' }]);
+  });
+
+  it('an IP-only composed category is excluded (parity with the xray/clash domain-only path)', () => {
+    const c = composeCategory({
+      name: 'ipcat',
+      domainSources: [],
+      ipSources: [],
+      manualDomains: [],
+      manualIps: ['10.0.0.0/8'],
+      excludeDomains: [],
+    });
+    expect(c.domains.length).toBe(0);
+    expect(c.cidrs.length).toBeGreaterThan(0);
+    expect(plannedCustomSrs([c])).toEqual([]);
+  });
+});
 
 // Synthetic upstream .dat the injected fetcher serves (no network in tests).
 const GS = encodeGeoSite(
@@ -116,6 +159,27 @@ describe('geo build orchestrator', () => {
       expect(srs).toBeDefined();
       expect(srs!.bytes.length).toBeGreaterThan(0);
       expect(srs!.sha256).toMatch(/^[0-9a-f]{64}$/);
+    },
+  );
+
+  it.runIf(process.env.SINGBOX_BIN)(
+    'compiles a domain-only custom .srs (UPPERCASE) and skips an IP-only category',
+    async () => {
+      const GS = encodeGeoSite(new Map<string, Domain[]>([['SEED', [{ type: 2, value: 'x.com' }]]]));
+      const src = await addSource({ name: 's', geositeUrl: 'https://example.com/s.dat' });
+      // Domain-bearing custom category -> gets a custom-<UPPER>.srs.
+      await addCategory({ name: 'mydom', domainRefs: [{ sourceId: src.id, category: 'seed' }] });
+      // IP-only custom category -> NO custom .srs (symmetric with the xray/clash
+      // domain-only inline path, so no format silently diverges on IP matching).
+      await addCategory({ name: 'myip', manualIps: ['10.0.0.0/8'] });
+      const fetchDat: DatFetcher = async (url) => {
+        if (url === 'https://example.com/s.dat') return { status: 200, bytes: GS };
+        throw new Error('unreachable');
+      };
+      const res = await buildGeoArtifacts({ fetchDat, singboxBin: process.env.SINGBOX_BIN });
+      const names = res.ruleSets.map((r) => r.name);
+      expect(names).toContain('custom-MYDOM.srs');
+      expect(names).not.toContain('custom-MYIP.srs');
     },
   );
 

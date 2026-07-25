@@ -8,7 +8,6 @@ import {
   type Domain,
   type CIDR,
 } from './geo.dat.js';
-import { minimizeGeoSite, minimizeGeoIP } from './geo.build.js';
 
 describe('geosite .dat codec', () => {
   const site = new Map<string, Domain[]>([
@@ -30,23 +29,6 @@ describe('geosite .dat codec', () => {
     const one = new Map<string, Domain[]>([['youtube', [{ type: 2, value: 'youtube.com' }]]]);
     const parsed = parseGeoSite(encodeGeoSite(one));
     expect([...parsed.keys()]).toEqual(['YOUTUBE']);
-  });
-
-  it('minimises to only the requested categories, reporting missing', () => {
-    const full = encodeGeoSite(site);
-    const { dat, built, missing } = minimizeGeoSite(full, ['youtube', 'category-ads-all']);
-    expect(built).toEqual(['youtube']);
-    expect(missing).toEqual(['category-ads-all']);
-    const parsed = parseGeoSite(dat);
-    expect([...parsed.keys()]).toEqual(['YOUTUBE']);
-    expect(parsed.get('YOUTUBE')).toHaveLength(3);
-    // the minimal artifact is strictly smaller than the full source
-    expect(dat.length).toBeLessThan(full.length);
-  });
-
-  it('dedupes repeated requested categories', () => {
-    const { built } = minimizeGeoSite(encodeGeoSite(site), ['youtube', 'youtube', 'google']);
-    expect(built).toEqual(['youtube', 'google']);
   });
 
   it('encodes a large category correctly (exercises the growable writer buffer)', () => {
@@ -75,27 +57,18 @@ describe('geoip .dat codec', () => {
     const parsed = parseGeoIP(encodeGeoIP(ips));
     expect(parsed).toEqual(ips);
   });
-
-  it('minimises geoip to the requested categories', () => {
-    const { dat, built, missing } = minimizeGeoIP(encodeGeoIP(ips), ['ru', 'private']);
-    expect(built).toEqual(['ru']);
-    expect(missing).toEqual(['private']);
-    const parsed = parseGeoIP(dat);
-    expect([...parsed.keys()]).toEqual(['RU']);
-    expect(parsed.get('RU')).toEqual([{ ip: v4, prefix: 16 }, { ip: v6, prefix: 32 }]);
-  });
 });
 
 // Opt-in check against real upstream data: GEO_REAL_GEOSITE=/tmp/geosite.dat ...
 // (download runetfreedom/SagerNet .dat first). Skipped when the env is unset.
 describe('real .dat (opt-in)', () => {
   const gs = process.env.GEO_REAL_GEOSITE;
-  it.runIf(gs)('parses a real geosite.dat and minimises to a tiny artifact', () => {
+  it.runIf(gs)('parses a real geosite.dat with 1000+ categories', () => {
     const full = readFileSync(gs!);
     const parsed = parseGeoSite(full);
     expect(parsed.size).toBeGreaterThan(100); // real .dat has 1000+ categories
-    const { dat, built } = minimizeGeoSite(full, ['youtube', 'google']);
-    expect(built.length).toBeGreaterThan(0);
-    expect(dat.length).toBeLessThan(full.length / 100); // ~orders of magnitude smaller
+    // a known category is present and non-empty (parse actually decoded it)
+    const key = [...parsed.keys()].find((k) => parsed.get(k)!.length > 0);
+    expect(key).toBeDefined();
   });
 });
