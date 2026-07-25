@@ -75,6 +75,28 @@ describe('buildBalancerCascadeConfigs (auto node)', () => {
     expect(lastVlessIdx).toBeLessThan(balIdx);
   });
 
+  it('A4 ad-split: a policy (ordinal 1) emits block/direct rules above the exit-catch-all in its tag band', () => {
+    const policies = [
+      { ordinal: 1, directDomains: ['geosite:google'], blockDomains: ['geosite:category-ads-all'] },
+    ];
+    const rules = buildBalancerCascadeConfigs(entry, exits, creds, policies)[0]!.routingRules;
+    // Plain tags 1,2 still present for both exits.
+    const plainTags = rules.filter((r) => 'network' in r && 'vlessRoute' in r).map((r) => r.vlessRoute);
+    expect(plainTags).toEqual(expect.arrayContaining(['1', '2', '257', '258']));
+    // Policy band = ordinal*256 + i + 1 -> exit 0 = 257, exit 1 = 258.
+    const band = rules.filter((r) => r.vlessRoute === '257');
+    // block (ads) then direct (google) then the exit-catch-all, in that order.
+    expect(band[0]).toMatchObject({ vlessRoute: '257', domain: ['geosite:category-ads-all'], outboundTag: 'blocked' });
+    expect(band[1]).toMatchObject({ vlessRoute: '257', domain: ['geosite:google'], outboundTag: 'direct' });
+    expect(band[2]).toMatchObject({ vlessRoute: '257', network: 'tcp,udp', outboundTag: 'cascade-link-out-0' });
+    // The block/direct rules sit ABOVE the exit-catch-all for that tag.
+    const idxBlock = rules.findIndex((r) => r.vlessRoute === '257' && r.outboundTag === 'blocked');
+    const idxExit = rules.findIndex((r) => r.vlessRoute === '257' && r.outboundTag === 'cascade-link-out-0');
+    expect(idxBlock).toBeLessThan(idxExit);
+    // Still ends on the balancer catch-all.
+    expect(rules[rules.length - 1]).toMatchObject({ balancerTag: 'auto' });
+  });
+
   it('each exit terminates its link and egresses via freedom, firewalled to the entry', () => {
     const cfgs = buildBalancerCascadeConfigs(entry, exits, creds);
     const de = cfgs[1]!;

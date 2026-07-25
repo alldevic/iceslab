@@ -276,15 +276,35 @@ function linkOutboundTagged(host: string, cred: LinkCred, tag: string): Record<s
   return { ...linkOutbound(host, cred), tag };
 }
 
+/** A4 ad-split: an extra route-policy applied at the balancer ENTRY. A client's
+ *  route-profile = (exit) x (plain OR one of these). ordinal >= 1 (0 = implicit
+ *  plain). directDomains/blockDomains are xray geosite/domain strings. */
+export interface CascadePolicy {
+  ordinal: number;
+  directDomains: string[];
+  blockDomains: string[];
+}
+
+/** A4 ad-split: vlessRoute tag (uint16) for a (policyOrdinal, exitIndex) profile.
+ *  Ordinal 0 = implicit plain profile -> tag = exitIndex+1 (back-compat with the
+ *  pre-ad-split exit tags). Shared by the node (this file) and the subscription
+ *  builder so both agree on the tag for a given profile. 256-wide bands. */
+export function routeTag(policyOrdinal: number, exitIndex: number): number {
+  return policyOrdinal * 256 + exitIndex + 1;
+}
+
 /**
  * Build the entry + exit fragments for a BALANCER cascade (one entry, N parallel
  * exits). `linkCreds[i]` is the entry->exits[i] link cred (each exit listens on
  * its own link-in). Returns exactly 1 entry + N exit HopConfigs, no transit.
+ * `policies` are extra ad-split policies (ordinal >= 1); the plain profile is
+ * always emitted regardless.
  */
 export function buildBalancerCascadeConfigs(
   entry: CascadeConfigHopInput,
   exits: CascadeConfigHopInput[],
   linkCreds: LinkCred[],
+  policies: CascadePolicy[] = [],
 ): HopConfig[] {
   const configs: HopConfig[] = [];
 
@@ -301,23 +321,42 @@ export function buildBalancerCascadeConfigs(
     role: 'entry',
     inbounds: [],
     outbounds: entryOutbounds,
-    // A4: explicit exit selection layered ON TOP of the balancer. A client
-    // whose UUID bytes 7-8 (big-endian uint16, which xray reads as vlessRoute)
-    // equal i+1 is pinned to exit i; auth ignores those bytes so it stays the
-    // same user (verified in field 2026-07-25, and documented upstream). A
-    // client that sends any other value - including a normal unmodified UUID -
-    // matches none of these and falls through to the balancer = automatic
-    // leastPing exit. Tag 0 is deliberately unused so the untagged/"auto"
-    // config never collides with an explicit exit. Split-routing presets can
-    // still prepend direct/block rules ahead of all this later.
+    // A4: explicit exit selection + ad-split, layered ON TOP of the balancer. A
+    // client's UUID bytes 7-8 (big-endian uint16, read by xray as vlessRoute)
+    // encode a route-profile = (policy, exit) via routeTag(); auth ignores those
+    // bytes so it stays the same user (verified in field 2026-07-25, documented
+    // upstream). The PLAIN profile (ordinal 0, tags 1..N) just pins the exit. An
+    // ad-split policy (ordinal>=1) prepends its block/direct domain rules ABOVE
+    // that profile's exit-catch-all, so e.g. Google egresses direct from the
+    // ENTRY while everything else rides the chosen exit. A client sending any
+    // other value - including a normal unmodified UUID - matches nothing here and
+    // falls through to the balancer = automatic leastPing exit.
     routingRules: [
       QUIC_BLOCK_RULE,
+      // Plain profile: tag = exitIndex+1 -> that exit's link-out.
       ...exits.map((_, i) => ({
         type: 'field',
-        vlessRoute: String(i + 1),
+        vlessRoute: String(routeTag(0, i)),
         network: 'tcp,udp',
         outboundTag: `${LINK_OUT_TAG}-${i}`,
       })),
+      // Ad-split policies: per (policy, exit), block/direct rules above the exit-
+      // catch-all, all gated by that profile's tag. `blocked` is the agent's base
+      // blackhole (same as QUIC_BLOCK_RULE); `direct` is the entry's freedom.
+      ...policies.flatMap((p) =>
+        exits.flatMap((_, i) => {
+          const tag = String(routeTag(p.ordinal, i));
+          return [
+            ...(p.blockDomains.length
+              ? [{ type: 'field', vlessRoute: tag, domain: p.blockDomains, outboundTag: 'blocked' }]
+              : []),
+            ...(p.directDomains.length
+              ? [{ type: 'field', vlessRoute: tag, domain: p.directDomains, outboundTag: DIRECT_TAG }]
+              : []),
+            { type: 'field', vlessRoute: tag, network: 'tcp,udp', outboundTag: `${LINK_OUT_TAG}-${i}` },
+          ];
+        }),
+      ),
       { type: 'field', network: 'tcp,udp', balancerTag: BALANCER_TAG },
     ],
     observatory: {

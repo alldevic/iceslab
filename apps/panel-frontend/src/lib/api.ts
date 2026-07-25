@@ -802,6 +802,20 @@ export interface SquadExitAclEntry {
   exitNodeIds: string[];
 }
 
+/** A4 ad-split, a named route-policy (extra, ordinal >= 1) grantable to squads. */
+export interface RoutePolicy {
+  id: string;
+  name: string;
+  ordinal: number;
+  directDomains: string[];
+  blockDomains: string[];
+}
+
+export async function listRoutePolicies(): Promise<{ policies: RoutePolicy[] }> {
+  const { data } = await api.get<{ policies: RoutePolicy[] }>('/api/route-policies');
+  return data;
+}
+
 export interface Squad {
   id: string;
   name: string;
@@ -810,6 +824,8 @@ export interface Squad {
   profileIds: string[];
   /** A4 increment 2, per-cascade allowed exits. Empty = no exit restriction. */
   exitAcl: SquadExitAclEntry[];
+  /** A4 ad-split, extra route-policies granted to this squad. Empty = plain only. */
+  policyIds: string[];
   /** R3-a, per-squad routing-preset override; null = inherit panel default. */
   routingPreset: RoutingPresetId | null;
   /** K7, per-squad HWID device-limit default; null = none. */
@@ -826,6 +842,7 @@ export interface CreateSquadInput {
   hwidDeviceLimit?: number | null;
   profileIds?: string[];
   exitAcl?: SquadExitAclEntry[];
+  policyIds?: string[];
 }
 
 export interface UpdateSquadInput {
@@ -837,6 +854,8 @@ export interface UpdateSquadInput {
   profileIds?: string[];
   /** Replaces the full exit allow-list when provided. */
   exitAcl?: SquadExitAclEntry[];
+  /** Replaces the full route-policy grant set when provided. */
+  policyIds?: string[];
 }
 
 export async function listSquads(): Promise<{ squads: Squad[] }> {

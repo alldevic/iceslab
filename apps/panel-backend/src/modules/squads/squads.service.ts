@@ -34,6 +34,7 @@ export class SquadProtectedError extends Error {
 const includeRelations = {
   groupProfiles: { select: { profileId: true } },
   cascadeExits: { select: { cascadeId: true, exitNodeId: true } },
+  routePolicies: { select: { policyId: true } },
   _count: {
     select: {
       members: { where: { user: { deletedAt: null } } },
@@ -90,6 +91,9 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
           })),
         ),
       },
+      routePolicies: {
+        create: input.policyIds.map((policyId) => ({ policy: { connect: { id: policyId } } })),
+      },
     },
     include: includeRelations,
   });
@@ -132,6 +136,15 @@ export async function updateSquad(
       const rows = exitAclRows(id, input.exitAcl);
       if (rows.length > 0) {
         await tx.groupCascadeExit.createMany({ data: rows });
+      }
+    }
+    // A4 ad-split: replace the route-policy grant set (set semantics).
+    if (input.policyIds !== undefined) {
+      await tx.groupRoutePolicy.deleteMany({ where: { groupId: id } });
+      if (input.policyIds.length > 0) {
+        await tx.groupRoutePolicy.createMany({
+          data: input.policyIds.map((policyId) => ({ groupId: id, policyId })),
+        });
       }
     }
     return tx.group.update({

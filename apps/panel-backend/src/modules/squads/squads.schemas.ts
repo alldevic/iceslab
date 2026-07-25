@@ -31,6 +31,9 @@ export const CreateSquadSchema = z.object({
   profileIds: z.array(z.uuid()).default([]),
   /** A4 increment 2: per-cascade exit allow-list. Empty = no exit restriction. */
   exitAcl: z.array(ExitAclEntry).default([]),
+  /** A4 ad-split: extra route-policies this squad grants its members. Empty =
+   *  only the plain profile. */
+  policyIds: z.array(z.uuid()).default([]),
 });
 export type CreateSquadInput = z.infer<typeof CreateSquadSchema>;
 
@@ -43,6 +46,8 @@ export const UpdateSquadSchema = z.object({
   profileIds: z.array(z.uuid()).optional(),
   /** When provided, replaces the full exit allow-list (set semantics). */
   exitAcl: z.array(ExitAclEntry).optional(),
+  /** When provided, replaces the full route-policy grant set (set semantics). */
+  policyIds: z.array(z.uuid()).optional(),
 });
 export type UpdateSquadInput = z.infer<typeof UpdateSquadSchema>;
 

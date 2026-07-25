@@ -618,6 +618,9 @@ export default {
       exitAclHint:
         'Restrict which balancer exits this squad can use. Leave a cascade with none checked to allow all its exits.',
       exitAclAll: 'all',
+      policies: 'Route policies',
+      policiesHint:
+        'Grant ad-split policies to this squad. The plain profile is always available; each granted policy adds a variant per exit (e.g. "CH · No ads").',
       submitCreate: 'Create',
       submitEdit: 'Save',
       systemSquadTooltip: 'System squad',

@@ -9,8 +9,10 @@ import {
   generateLinkCreds,
   normalizeLinkProtocol,
   parseLinkCred,
+  routeTag,
   serializeLinkCred,
   type CascadeConfigHopInput,
+  type CascadePolicy,
   type LinkCred,
 } from './cascade.config.js';
 import type { CreateCascadeInput, UpdateCascadeInput } from './cascade.schemas.js';
@@ -142,17 +144,19 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
 }
 
 /** A4: map each given node id that is the ENTRY (position 0) of an enabled
- *  BALANCER cascade to its ordered exit names. Order matches the entry's
- *  `cascade-link-out-<i>` outbounds (position ascending), so exit index i is
- *  the one the vlessRoute tag i+1 selects. Nodes that aren't balancer entries,
- *  and balancers with no exit, are absent from the map. The subscription builder
- *  uses this to expand one entry endpoint into one config per exit (A4). Chain
- *  cascades are intentionally excluded: a fixed path offers no exit choice. */
+ *  BALANCER cascade to the route-PROFILES a user in `groupIds` can pick there.
+ *  A profile = (allowed exit) x (plain OR a granted ad-split policy), carrying a
+ *  `label` (client-facing name) and the `tag` its UUID must encode (routeTag).
+ *  Two ACL axes: exits are opt-in RESTRICTION (no rows = all exits), policies are
+ *  opt-in GRANT (plain always; extra policy only if a squad granted it). Nodes
+ *  that aren't balancer entries, and balancers with no allowed exit, are absent.
+ *  Chain cascades are excluded (fixed path, no choice). The subscription builder
+ *  expands one entry endpoint into one config per profile. */
 export async function getBalancerExitsByEntryNode(
   nodeIds: string[],
   groupIds: string[] = [],
-): Promise<Map<string, { name: string; index: number }[]>> {
-  const out = new Map<string, { name: string; index: number }[]>();
+): Promise<Map<string, { label: string; tag: number }[]>> {
+  const out = new Map<string, { label: string; tag: number }[]>();
   if (nodeIds.length === 0) return out;
   const cascades = await prisma.cascade.findMany({
     where: {
@@ -170,21 +174,38 @@ export async function getBalancerExitsByEntryNode(
   if (cascades.length === 0) return out;
 
   // A4 increment 2: per-squad exit allow-list. Union the user's allow rows per
-  // cascade. OPT-IN: a cascade absent from this map is unrestricted for the user
+  // cascade. OPT-IN restriction: a cascade absent from this map is unrestricted
   // (no rows => all exits); present => keep only the allowed exit nodes.
   const allowByCascade = new Map<string, Set<string>>();
+  // A4 ad-split: policies GRANTED to the user's squads (opt-in grant). The plain
+  // profile (ordinal 0) is always available and synthesized below; these are the
+  // extra ad-split policies, deduped by ordinal across squads.
+  const grantedPolicies: { ordinal: number; name: string }[] = [];
   if (groupIds.length > 0) {
-    const rows = await prisma.groupCascadeExit.findMany({
-      where: { groupId: { in: groupIds }, cascadeId: { in: cascades.map((c) => c.id) } },
-      select: { cascadeId: true, exitNodeId: true },
-    });
-    for (const r of rows) {
+    const [exitRows, grants] = await Promise.all([
+      prisma.groupCascadeExit.findMany({
+        where: { groupId: { in: groupIds }, cascadeId: { in: cascades.map((c) => c.id) } },
+        select: { cascadeId: true, exitNodeId: true },
+      }),
+      prisma.groupRoutePolicy.findMany({
+        where: { groupId: { in: groupIds } },
+        select: { policy: { select: { ordinal: true, name: true } } },
+      }),
+    ]);
+    for (const r of exitRows) {
       let set = allowByCascade.get(r.cascadeId);
       if (!set) {
         set = new Set();
         allowByCascade.set(r.cascadeId, set);
       }
       set.add(r.exitNodeId);
+    }
+    const seenOrdinal = new Set<number>();
+    for (const g of grants) {
+      if (!seenOrdinal.has(g.policy.ordinal)) {
+        seenOrdinal.add(g.policy.ordinal);
+        grantedPolicies.push(g.policy);
+      }
     }
   }
 
@@ -198,7 +219,17 @@ export async function getBalancerExitsByEntryNode(
       .filter((h) => h.position !== 0)
       .map((h, i) => ({ name: h.node.name, index: i, nodeId: h.node.id }));
     const exits = applyExitAcl(fullExits, allowByCascade.get(c.id));
-    if (exits.length > 0) out.set(entry.nodeId, exits);
+    if (exits.length === 0) continue;
+    // Cartesian: each exit x (plain + granted policies). Plain first per exit so
+    // the client list reads CH, CH-no-ads, TR, TR-no-ads.
+    const profiles: { label: string; tag: number }[] = [];
+    for (const ex of exits) {
+      profiles.push({ label: ex.name, tag: routeTag(0, ex.index) });
+      for (const p of grantedPolicies) {
+        profiles.push({ label: `${ex.name} · ${p.name}`, tag: routeTag(p.ordinal, ex.index) });
+      }
+    }
+    out.set(entry.nodeId, profiles);
   }
   return out;
 }
@@ -493,7 +524,25 @@ export async function getCascadeFragmentsForNode(
       if (!cred) return null;
       exitCreds.push(cred);
     }
-    const configs = buildBalancerCascadeConfigs(hopInputs[0]!, hopInputs.slice(1), exitCreds);
+    // A4 ad-split: emit EVERY defined policy's rules on the entry (policies are
+    // global). The per-squad grant only gates which profiles the subscription
+    // hands out; the node carries all so any granted tag resolves. Plain (ordinal
+    // 0) is implicit in the builder.
+    const policies: CascadePolicy[] = (
+      await prisma.routePolicy.findMany({
+        select: { ordinal: true, directDomains: true, blockDomains: true },
+      })
+    ).map((p) => ({
+      ordinal: p.ordinal,
+      directDomains: p.directDomains,
+      blockDomains: p.blockDomains,
+    }));
+    const configs = buildBalancerCascadeConfigs(
+      hopInputs[0]!,
+      hopInputs.slice(1),
+      exitCreds,
+      policies,
+    );
     const mine = configs.find((c) => c.nodeId === nodeId);
     if (!mine) return null;
     return {

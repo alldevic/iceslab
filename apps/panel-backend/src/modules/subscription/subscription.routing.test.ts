@@ -91,30 +91,31 @@ describe('expandEndpointUris', () => {
     expect(expandEndpointUris(entry)).toEqual([entry.uri]);
   });
 
-  it('expands one re-tagged URI per exit, remark = exit name', () => {
+  it('expands one re-tagged URI per profile, remark = profile label', () => {
     const out = expandEndpointUris({
       ...entry,
       cascadeExits: [
-        { name: 'de exit', index: 0 },
-        { name: 'nl', index: 1 },
+        { label: 'de exit', tag: 1 },
+        { label: 'nl', tag: 2 },
+        { label: 'de exit · Без рекламы', tag: 257 }, // ad-split policy band -> 0101
       ],
     });
     expect(out).toEqual([
       'vless://84a8029e-b874-0001-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#de%20exit',
       'vless://84a8029e-b874-0002-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#nl',
+      `vless://84a8029e-b874-0101-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#${encodeURIComponent('de exit · Без рекламы')}`,
     ]);
   });
 
-  it('suffixes exit remarks with the host remark on a multi-host entry', () => {
+  it('suffixes profile remarks with the host remark on a multi-host entry', () => {
     const out = expandEndpointUris({
       ...entry,
       hostRemark: 'test 2',
       cascadeExits: [
-        { name: 'de exit', index: 0 },
-        { name: 'nl', index: 1 },
+        { label: 'de exit', tag: 1 },
+        { label: 'nl', tag: 2 },
       ],
     });
-    // #remark is URI-encoded: "de exit · test 2" -> "de%20exit%20%C2%B7%20test%202"
     expect(out[0]!.endsWith(`#${encodeURIComponent('de exit · test 2')}`)).toBe(true);
     expect(out[1]!.endsWith(`#${encodeURIComponent('nl · test 2')}`)).toBe(true);
   });
@@ -124,7 +125,7 @@ describe('expandEndpointUris', () => {
       ...entry,
       subprotocol: 'vmess',
       uri: 'vmess://eyJ2IjoiMiJ9',
-      cascadeExits: [{ name: 'de' }],
+      cascadeExits: [{ label: 'de', tag: 1 }],
     };
     expect(expandEndpointUris(vmess)).toEqual(['vmess://eyJ2IjoiMiJ9']);
   });
