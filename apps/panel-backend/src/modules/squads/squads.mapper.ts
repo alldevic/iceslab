@@ -1,4 +1,9 @@
-import type { Group, GroupProfile, GroupCascadeExit } from '../../generated/prisma/client.js';
+import type {
+  Group,
+  GroupProfile,
+  GroupCascadeExit,
+  GroupRoutePolicy,
+} from '../../generated/prisma/client.js';
 
 /** A4 increment 2: per-cascade exit allow-list, grouped by cascade for the UI. */
 export interface SquadExitAclEntry {
@@ -14,6 +19,8 @@ export interface PublicSquadDto {
   profileIds: string[];
   /** A4 increment 2: per-cascade allowed exits. Empty = no exit restriction. */
   exitAcl: SquadExitAclEntry[];
+  /** A4 ad-split: extra route-policies granted to this squad. Empty = plain only. */
+  policyIds: string[];
   /** R3-a: per-squad routing-preset override, or null to inherit the panel default. */
   routingPreset: string | null;
   /** K7: per-squad HWID device-limit default (applies when user has no explicit limit). */
@@ -26,6 +33,7 @@ export interface PublicSquadDto {
 type SquadWithRelations = Group & {
   groupProfiles: Pick<GroupProfile, 'profileId'>[];
   cascadeExits?: Pick<GroupCascadeExit, 'cascadeId' | 'exitNodeId'>[];
+  routePolicies?: Pick<GroupRoutePolicy, 'policyId'>[];
   _count?: { members: number };
 };
 
@@ -49,6 +57,7 @@ export function mapSquadToPublic(squad: SquadWithRelations): PublicSquadDto {
     description: squad.description,
     profileIds: squad.groupProfiles.map((gp) => gp.profileId),
     exitAcl: groupExitAcl(squad.cascadeExits ?? []),
+    policyIds: (squad.routePolicies ?? []).map((rp) => rp.policyId),
     routingPreset: squad.routingPreset,
     hwidDeviceLimit: squad.hwidDeviceLimit,
     memberCount: squad._count?.members ?? 0,

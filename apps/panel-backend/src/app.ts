@@ -23,6 +23,7 @@ import { dashboardRoutes } from './modules/dashboard/dashboard.routes.js';
 import { profilesRoutes } from './modules/profiles/profiles.routes.js';
 import { hostsRoutes } from './modules/hosts/hosts.routes.js';
 import { cascadeRoutes } from './modules/cascades/cascade.routes.js';
+import { routePolicyRoutes } from './modules/route-policies/route-policies.routes.js';
 import { hwidRoutes } from './modules/hwid/hwid.routes.js';
 import { regionsRoutes } from './modules/regions/regions.routes.js';
 import { testConnectRoutes } from './modules/test-connect/test-connect.routes.js';
@@ -226,6 +227,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(profilesRoutes);
   await app.register(hostsRoutes);
   await app.register(cascadeRoutes);
+  await app.register(routePolicyRoutes);
   await app.register(hwidRoutes);
   await app.register(regionsRoutes);
   await app.register(testConnectRoutes);

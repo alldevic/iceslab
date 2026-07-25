@@ -390,6 +390,8 @@ model Group {
   members       GroupMember[]
   // A4 increment 2: per-cascade exit allow-list. See GroupCascadeExit.
   cascadeExits  GroupCascadeExit[]
+  // A4 ad-split: per-squad grant of extra route-policies. See GroupRoutePolicy.
+  routePolicies GroupRoutePolicy[]
 
   @@map("groups")
 }
@@ -797,4 +799,41 @@ model GroupCascadeExit {
   @@index([cascadeId])
   @@index([exitNodeId])
   @@map("group_cascade_exits")
+}
+
+// A4 ad-split: a named route-policy = a set of direct/block domain lists layered
+// onto a chosen cascade exit at the ENTRY node. A route-profile the client sees =
+// (cascade exit) x (plain OR this policy). `ordinal` is the tag band: the vlessRoute
+// tag = ordinal*256 + exitIndex + 1. Ordinal 0 is the IMPLICIT plain profile (no
+// row, no rules) and yields the pre-ad-split exit tags (exitIndex+1) unchanged, so
+// this table holds only EXTRA policies (ordinal >= 1). directDomains/blockDomains
+// hold xray geosite/domain strings ("geosite:google", "geosite:category-ads-all").
+model RoutePolicy {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @unique @db.VarChar(64)
+  // Tag band (1..255). Unique so tags never collide across policies. 0 = implicit plain.
+  ordinal      Int      @unique
+  directDomains String[] @map("direct_domains")
+  blockDomains  String[] @map("block_domains")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  grants GroupRoutePolicy[]
+
+  @@map("route_policies")
+}
+
+// A4 ad-split: per-squad GRANT of an extra route-policy (opt-in, unlike the exit
+// allow-list which is opt-in restriction). The plain policy (ordinal 0) is always
+// available; a member gets an extra policy only if one of their squads grants it.
+model GroupRoutePolicy {
+  groupId  String @map("group_id") @db.Uuid
+  policyId String @map("policy_id") @db.Uuid
+
+  group  Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  policy RoutePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, policyId])
+  @@index([policyId])
+  @@map("group_route_policies")
 }

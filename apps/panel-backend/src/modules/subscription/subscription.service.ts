@@ -171,9 +171,9 @@ export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
   // first occurrence of it retargets the link. Strip the original #remark first.
   const hashIdx = e.uri.indexOf('#');
   const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
-  return e.cascadeExits.map((exit) => {
-    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, exit.index + 1));
-    return `${tagged}#${encodeURIComponent(cascadeExitLabel(exit.name, e.hostRemark))}`;
+  return e.cascadeExits.map((profile) => {
+    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, profile.tag));
+    return `${tagged}#${encodeURIComponent(cascadeExitLabel(profile.label, e.hostRemark))}`;
   });
 }
 

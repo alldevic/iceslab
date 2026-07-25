@@ -565,23 +565,24 @@ describe('withVlessRouteTag', () => {
   });
 });
 
-describe('buildXrayJsonArray A4 exit expansion', () => {
+describe('buildXrayJsonArray A4 profile expansion', () => {
   const entryEp: SubscriptionEndpoint = {
     ...xrayEp,
     nodeName: 'ru-entry',
+    // Plain profiles for two exits: tag = routeTag(0, index) = index+1.
     cascadeExits: [
-      { name: 'de-exit', index: 0 },
-      { name: 'nl-exit', index: 1 },
+      { label: 'de-exit', tag: 1 },
+      { label: 'nl-exit', tag: 2 },
     ],
   };
 
-  it('expands one entry endpoint into one config per exit, labelled by exit', () => {
+  it('expands one entry endpoint into one config per profile, labelled by profile', () => {
     const arr = parse(buildXrayJsonArray([entryEp]));
     expect(arr).toHaveLength(2);
     expect(arr.map((c: any) => c.remarks)).toEqual(['de-exit', 'nl-exit']);
   });
 
-  it('sets UUID bytes 7-8 to exit index+1 so the node vlessRoute rule pins it', () => {
+  it('encodes the profile tag into UUID bytes 7-8 so the node vlessRoute rule pins it', () => {
     const arr = parse(buildXrayJsonArray([entryEp]));
     const uuidOf = (c: any) =>
       c.outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].users[0].id;
@@ -589,7 +590,18 @@ describe('buildXrayJsonArray A4 exit expansion', () => {
     expect(uuidOf(arr[1])).toBe('11111111-2222-0002-4444-555555555555');
   });
 
-  it('all exit configs still dial the same entry host', () => {
+  it('ad-split profile: a policy-band tag (257) encodes as bytes 0101', () => {
+    // routeTag(1, 0) = 1*256 + 0 + 1 = 257 = 0x0101. The "CH · Без рекламы" profile.
+    const arr = parse(
+      buildXrayJsonArray([{ ...entryEp, cascadeExits: [{ label: 'de-exit · Без рекламы', tag: 257 }] }]),
+    );
+    expect(arr).toHaveLength(1);
+    expect(arr[0].remarks).toBe('de-exit · Без рекламы');
+    expect(arr[0].outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].users[0].id)
+      .toBe('11111111-2222-0101-4444-555555555555');
+  });
+
+  it('all profile configs still dial the same entry host', () => {
     const arr = parse(buildXrayJsonArray([entryEp]));
     const hostOf = (c: any) =>
       c.outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].address;
@@ -597,30 +609,16 @@ describe('buildXrayJsonArray A4 exit expansion', () => {
     expect(hostOf(arr[1])).toBe('n1.example.com');
   });
 
-  it('suffixes exit labels with the host remark on a multi-host entry', () => {
-    // Default / unnamed host keeps plain labels.
+  it('suffixes profile labels with the host remark on a multi-host entry', () => {
     expect(
       parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'Default' }])).map((c: any) => c.remarks),
     ).toEqual(['de-exit', 'nl-exit']);
-    // A named host suffixes each exit so the two host fan-outs stay distinct.
     expect(
       parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'test 2' }])).map((c: any) => c.remarks),
     ).toEqual(['de-exit · test 2', 'nl-exit · test 2']);
   });
 
-  it('tags from exit.index, not array position (squad-filtered subset)', () => {
-    // A squad allowed only the 2nd exit (index 1). The single config must still
-    // carry tag 2 (UUID ...0002...) so the node routes it to cascade-link-out-1.
-    const arr = parse(
-      buildXrayJsonArray([{ ...entryEp, cascadeExits: [{ name: 'nl-exit', index: 1 }] }]),
-    );
-    expect(arr).toHaveLength(1);
-    expect(arr[0].remarks).toBe('nl-exit');
-    expect(arr[0].outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].users[0].id)
-      .toBe('11111111-2222-0002-4444-555555555555');
-  });
-
-  it('an xray endpoint with no exits stays a single unmodified config', () => {
+  it('an xray endpoint with no profiles stays a single unmodified config', () => {
     const arr = parse(buildXrayJsonArray([xrayEp]));
     expect(arr).toHaveLength(1);
     expect(arr[0].remarks).toBe('eu-1');

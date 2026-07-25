@@ -38,6 +38,7 @@ import {
   type Cascade,
   type CreateSquadInput,
   type Profile,
+  type RoutePolicy,
   type Squad,
   type UpdateSquadInput,
 } from '../lib/api';
@@ -64,6 +65,9 @@ interface FormValues {
   // A4 increment 2 - cascadeId -> allowed exit nodeIds. Empty/absent = no
   // restriction (member sees all exits of that balancer cascade).
   exitAcl: Record<string, string[]>;
+  // A4 ad-split - extra route-policies granted to this squad (ids). Plain is
+  // always available; empty = plain only.
+  policyIds: string[];
 }
 
 function defaultValues(squad: Squad | null): FormValues {
@@ -74,6 +78,7 @@ function defaultValues(squad: Squad | null): FormValues {
     hwidDeviceLimit: squad?.hwidDeviceLimit ?? '',
     profileIds: squad?.profileIds ?? [],
     exitAcl: Object.fromEntries((squad?.exitAcl ?? []).map((e) => [e.cascadeId, e.exitNodeIds])),
+    policyIds: squad?.policyIds ?? [],
   };
 }
 
@@ -89,6 +94,8 @@ interface Props {
   /** A4 increment 2 - balancer cascades whose exits this squad can restrict.
    *  Parent passes listCascades(); we filter to balancer cascades with exits. */
   cascades?: Cascade[];
+  /** A4 ad-split - extra route-policies (ordinal >= 1) the squad can grant. */
+  routePolicies?: RoutePolicy[];
   onSubmit: (input: CreateSquadInput | UpdateSquadInput) => Promise<void>;
   loading?: boolean;
 }
@@ -100,6 +107,7 @@ export function SquadFormModal({
   profiles,
   bindingsByProfile,
   cascades,
+  routePolicies,
   onSubmit,
   loading,
 }: Props) {
@@ -169,6 +177,7 @@ export function SquadFormModal({
       hwidDeviceLimit: values.hwidDeviceLimit === '' ? null : Number(values.hwidDeviceLimit),
       profileIds: values.profileIds,
       exitAcl,
+      policyIds: values.policyIds,
     };
     if (isEdit) {
       await onSubmit(base satisfies UpdateSquadInput);
@@ -186,6 +195,16 @@ export function SquadFormModal({
     form.setFieldValue(
       'profileIds',
       cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+    );
+  }
+
+  // A4 ad-split - toggle a granted route-policy for this squad.
+  function togglePolicy(policyId: string) {
+    if (isAllSquad) return;
+    const cur = form.values.policyIds;
+    form.setFieldValue(
+      'policyIds',
+      cur.includes(policyId) ? cur.filter((x) => x !== policyId) : [...cur, policyId],
     );
   }
 
@@ -488,6 +507,54 @@ export function SquadFormModal({
                         })}
                       </Stack>
                     </Box>
+                  );
+                })}
+              </Stack>
+            </>
+          )}
+
+          {/* A4 ad-split - route-policy grants. Plain profile is always available;
+              checked = this squad also offers that policy (e.g. "Без рекламы"). */}
+          {!isAllSquad && (routePolicies?.length ?? 0) > 0 && (
+            <>
+              <Divider
+                label={
+                  <Text size="sm" fw={600}>
+                    {t('squads.form.policies')}
+                  </Text>
+                }
+                labelPosition="left"
+              />
+              <Text size="xs" c="dimmed">
+                {t('squads.form.policiesHint')}
+              </Text>
+              <Stack gap={4}>
+                {routePolicies!.map((p) => {
+                  const checked = form.values.policyIds.includes(p.id);
+                  return (
+                    <Group
+                      key={p.id}
+                      justify="space-between"
+                      wrap="nowrap"
+                      onClick={() => togglePolicy(p.id)}
+                      px="sm"
+                      py={8}
+                      style={{
+                        cursor: 'pointer',
+                        borderRadius: 6,
+                        background: checked
+                          ? 'var(--mantine-color-dark-5)'
+                          : 'var(--mantine-color-dark-6)',
+                        minHeight: 38,
+                      }}
+                    >
+                      <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+                        <Checkbox checked={checked} readOnly tabIndex={-1} />
+                        <Text size="sm" fw={500} truncate>
+                          {p.name}
+                        </Text>
+                      </Group>
+                    </Group>
                   );
                 })}
               </Stack>
