@@ -33,7 +33,7 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
-import { withVlessRouteTag } from './formats/xrayjson.js';
+import { withVlessRouteTag, cascadeExitLabel } from './formats/xrayjson.js';
 
 // ───── Domain errors ─────
 
@@ -173,7 +173,7 @@ export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
   const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
   return e.cascadeExits.map((exit, i) => {
     const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, i + 1));
-    return `${tagged}#${encodeURIComponent(exit.name)}`;
+    return `${tagged}#${encodeURIComponent(cascadeExitLabel(exit.name, e.hostRemark))}`;
   });
 }
 

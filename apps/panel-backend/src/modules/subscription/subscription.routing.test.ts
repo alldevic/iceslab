@@ -102,6 +102,17 @@ describe('expandEndpointUris', () => {
     ]);
   });
 
+  it('suffixes exit remarks with the host remark on a multi-host entry', () => {
+    const out = expandEndpointUris({
+      ...entry,
+      hostRemark: 'test 2',
+      cascadeExits: [{ name: 'de exit' }, { name: 'nl' }],
+    });
+    // #remark is URI-encoded: "de exit · test 2" -> "de%20exit%20%C2%B7%20test%202"
+    expect(out[0]!.endsWith(`#${encodeURIComponent('de exit · test 2')}`)).toBe(true);
+    expect(out[1]!.endsWith(`#${encodeURIComponent('nl · test 2')}`)).toBe(true);
+  });
+
   it('does not re-tag vmess (UUID is not in the userinfo)', () => {
     const vmess: SubscriptionEndpoint = {
       ...entry,

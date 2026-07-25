@@ -449,6 +449,15 @@ export function withVlessRouteTag(uuid: string, tag: number): string {
   return parts.join('-');
 }
 
+/** A4: label for an expanded exit config. When the entry endpoint came from a
+ *  NAMED host (a node with several hosts fans out into multiple entry endpoints,
+ *  each producing the same exit set), suffix the exit name with the host remark
+ *  so the configs stay distinct instead of showing duplicate labels ("nl2",
+ *  "nl2"). The default/unnamed host keeps the plain exit name. */
+export function cascadeExitLabel(exitName: string, hostRemark?: string): string {
+  return hostRemark && hostRemark !== 'Default' ? `${exitName} · ${hostRemark}` : exitName;
+}
+
 /**
  * A1 array format (T1 skeleton + T2 routing + hy2). A top-level JSON array of
  * standalone configs, one per xray OR hysteria endpoint, each with its own
@@ -560,7 +569,10 @@ export function buildXrayJsonArray(
   const configs = supported.flatMap((e) => {
     if (e.protocol === 'xray' && e.cascadeExits && e.cascadeExits.length > 0) {
       return e.cascadeExits.map((exit, i) =>
-        makeConfig({ ...e, uuid: withVlessRouteTag(e.uuid, i + 1) }, exit.name),
+        makeConfig(
+          { ...e, uuid: withVlessRouteTag(e.uuid, i + 1) },
+          cascadeExitLabel(exit.name, e.hostRemark),
+        ),
       );
     }
     return [makeConfig(e, e.nodeName)];

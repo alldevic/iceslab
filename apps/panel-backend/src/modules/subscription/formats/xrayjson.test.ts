@@ -594,6 +594,17 @@ describe('buildXrayJsonArray A4 exit expansion', () => {
     expect(hostOf(arr[1])).toBe('n1.example.com');
   });
 
+  it('suffixes exit labels with the host remark on a multi-host entry', () => {
+    // Default / unnamed host keeps plain labels.
+    expect(
+      parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'Default' }])).map((c: any) => c.remarks),
+    ).toEqual(['de-exit', 'nl-exit']);
+    // A named host suffixes each exit so the two host fan-outs stay distinct.
+    expect(
+      parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'test 2' }])).map((c: any) => c.remarks),
+    ).toEqual(['de-exit · test 2', 'nl-exit · test 2']);
+  });
+
   it('an xray endpoint with no exits stays a single unmodified config', () => {
     const arr = parse(buildXrayJsonArray([xrayEp]));
     expect(arr).toHaveLength(1);
