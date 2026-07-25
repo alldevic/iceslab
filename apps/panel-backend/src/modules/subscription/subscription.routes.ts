@@ -474,7 +474,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
       let tlsFragment = false;
-      if (format === 'clash' || format === 'singbox' || format === 'xrayjson' || format === 'xkeen') {
+      if (
+        format === 'clash' ||
+        format === 'singbox' ||
+        format === 'xrayjson' ||
+        format === 'xrayjson-array' ||
+        format === 'xkeen'
+      ) {
         const settings = await getSubscriptionSettings();
         routingPreset =
           query.routing ??
