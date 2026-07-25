@@ -568,9 +568,9 @@ export function buildXrayJsonArray(
   // (hy2, or an xray endpoint with no exits) stays a single config as before.
   const configs = supported.flatMap((e) => {
     if (e.protocol === 'xray' && e.cascadeExits && e.cascadeExits.length > 0) {
-      return e.cascadeExits.map((exit, i) =>
+      return e.cascadeExits.map((exit) =>
         makeConfig(
-          { ...e, uuid: withVlessRouteTag(e.uuid, i + 1) },
+          { ...e, uuid: withVlessRouteTag(e.uuid, exit.index + 1) },
           cascadeExitLabel(exit.name, e.hostRemark),
         ),
       );

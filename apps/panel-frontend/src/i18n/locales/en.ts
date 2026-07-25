@@ -614,6 +614,10 @@ export default {
       profilesSearch: 'Search by name / protocol…',
       profilesEmpty: 'No profiles in the system yet.',
       profilesNothingFound: 'Nothing found.',
+      exitAcl: 'Cascade exits',
+      exitAclHint:
+        'Restrict which balancer exits this squad can use. Leave a cascade with none checked to allow all its exits.',
+      exitAclAll: 'all',
       submitCreate: 'Create',
       submitEdit: 'Save',
       systemSquadTooltip: 'System squad',

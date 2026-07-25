@@ -110,8 +110,14 @@ interface SubscriptionEndpointBase {
    *  7-8 set to exit-index+1 (xray reads them as `vlessRoute`, auth ignores
    *  them), remark = exit name. Empty/undefined = a single plain config, the
    *  pre-A4 behaviour. Only the xrayjson-array format consumes this; every
-   *  other format ignores it and emits the entry endpoint unchanged. */
-  cascadeExits?: { name: string }[];
+   *  other format ignores it and emits the entry endpoint unchanged.
+   *
+   *  `index` is the exit's 0-based position in the FULL balancer exit list, i.e.
+   *  it maps to the node's `cascade-link-out-<index>` outbound and is selected by
+   *  `vlessRoute:<index+1>`. Kept explicit (not the array position) so a squad-
+   *  filtered subset (A4 increment 2) still tags each exit with the right
+   *  link-out. */
+  cascadeExits?: { name: string; index: number }[];
 }
 
 export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {

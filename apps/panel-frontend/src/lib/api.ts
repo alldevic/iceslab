@@ -796,12 +796,20 @@ export async function testSrrRule(userAgent: string): Promise<TestSrrResponse> {
  *  to render the row as read-only (rename/delete is rejected backend-side). */
 export const ALL_SQUAD_ID = '00000000-0000-0000-0000-000000000001';
 
+/** A4 increment 2, per-cascade exit allow-list entry. */
+export interface SquadExitAclEntry {
+  cascadeId: string;
+  exitNodeIds: string[];
+}
+
 export interface Squad {
   id: string;
   name: string;
   description: string | null;
   /** Slice 27, squad ACL is profile-level. Renamed from inboundIds. */
   profileIds: string[];
+  /** A4 increment 2, per-cascade allowed exits. Empty = no exit restriction. */
+  exitAcl: SquadExitAclEntry[];
   /** R3-a, per-squad routing-preset override; null = inherit panel default. */
   routingPreset: RoutingPresetId | null;
   /** K7, per-squad HWID device-limit default; null = none. */
@@ -817,6 +825,7 @@ export interface CreateSquadInput {
   routingPreset?: RoutingPresetId | null;
   hwidDeviceLimit?: number | null;
   profileIds?: string[];
+  exitAcl?: SquadExitAclEntry[];
 }
 
 export interface UpdateSquadInput {
@@ -826,6 +835,8 @@ export interface UpdateSquadInput {
   hwidDeviceLimit?: number | null;
   /** Replaces the full profile set when provided. */
   profileIds?: string[];
+  /** Replaces the full exit allow-list when provided. */
+  exitAcl?: SquadExitAclEntry[];
 }
 
 export async function listSquads(): Promise<{ squads: Squad[] }> {

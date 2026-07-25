@@ -313,6 +313,7 @@ model Node {
   usageHistory     NodeUsageHistory[]
   bootstrapTokens NodeBootstrapToken[]
   cascadeHops     CascadeHop[]
+  groupCascadeExits GroupCascadeExit[]
   region          Region?  @relation(fields: [regionId], references: [id], onDelete: SetNull)
 
   @@index([status])
@@ -387,6 +388,8 @@ model Group {
   groupInbounds GroupInbound[]
   groupProfiles GroupProfile[]
   members       GroupMember[]
+  // A4 increment 2: per-cascade exit allow-list. See GroupCascadeExit.
+  cascadeExits  GroupCascadeExit[]
 
   @@map("groups")
 }
@@ -745,6 +748,7 @@ model Cascade {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   hops CascadeHop[]
+  groupExits GroupCascadeExit[]
 
   @@map("cascades")
 }
@@ -771,4 +775,26 @@ model CascadeHop {
   @@unique([cascadeId, position])
   @@index([nodeId])
   @@map("cascade_hops")
+}
+
+// A4 increment 2: per-squad cascade-exit allow-list. A row means "group X allows
+// its members to use exit node Y of balancer cascade Z". OPT-IN restriction: if a
+// user has NO allow row for a cascade across all their groups, they get ALL exits
+// (back-compat with increment 1); if they have >=1, they get the UNION of allowed
+// exits across their groups. Keyed on (cascade, exit_node) not the hop id: hops are
+// recreated on every cascade edit, node ids are stable. A stale row for a node no
+// longer in the cascade is harmless (filtered out at build time).
+model GroupCascadeExit {
+  groupId    String @map("group_id") @db.Uuid
+  cascadeId  String @map("cascade_id") @db.Uuid
+  exitNodeId String @map("exit_node_id") @db.Uuid
+
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  cascade Cascade @relation(fields: [cascadeId], references: [id], onDelete: Cascade)
+  node    Node    @relation(fields: [exitNodeId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, cascadeId, exitNodeId])
+  @@index([cascadeId])
+  @@index([exitNodeId])
+  @@map("group_cascade_exits")
 }

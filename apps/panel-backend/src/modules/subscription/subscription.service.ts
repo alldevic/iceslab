@@ -171,8 +171,8 @@ export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
   // first occurrence of it retargets the link. Strip the original #remark first.
   const hashIdx = e.uri.indexOf('#');
   const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
-  return e.cascadeExits.map((exit, i) => {
-    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, i + 1));
+  return e.cascadeExits.map((exit) => {
+    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, exit.index + 1));
     return `${tagged}#${encodeURIComponent(cascadeExitLabel(exit.name, e.hostRemark))}`;
   });
 }
@@ -330,9 +330,10 @@ export async function generateSubscription(
   // A4: which of these nodes are balancer-cascade entries + their exits. One
   // query for the whole binding set; the xray branch attaches the match so
   // buildXrayJsonArray can expand that endpoint into one config per exit.
-  const balancerExits = await getBalancerExitsByEntryNode([
-    ...new Set(bindings.map((b) => b.node.id)),
-  ]);
+  const balancerExits = await getBalancerExitsByEntryNode(
+    [...new Set(bindings.map((b) => b.node.id))],
+    groupIds,
+  );
 
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {

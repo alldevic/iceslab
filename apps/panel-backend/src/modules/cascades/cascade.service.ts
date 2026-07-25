@@ -150,8 +150,9 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
  *  cascades are intentionally excluded: a fixed path offers no exit choice. */
 export async function getBalancerExitsByEntryNode(
   nodeIds: string[],
-): Promise<Map<string, { name: string }[]>> {
-  const out = new Map<string, { name: string }[]>();
+  groupIds: string[] = [],
+): Promise<Map<string, { name: string; index: number }[]>> {
+  const out = new Map<string, { name: string; index: number }[]>();
   if (nodeIds.length === 0) return out;
   const cascades = await prisma.cascade.findMany({
     where: {
@@ -166,13 +167,54 @@ export async function getBalancerExitsByEntryNode(
       },
     },
   });
+  if (cascades.length === 0) return out;
+
+  // A4 increment 2: per-squad exit allow-list. Union the user's allow rows per
+  // cascade. OPT-IN: a cascade absent from this map is unrestricted for the user
+  // (no rows => all exits); present => keep only the allowed exit nodes.
+  const allowByCascade = new Map<string, Set<string>>();
+  if (groupIds.length > 0) {
+    const rows = await prisma.groupCascadeExit.findMany({
+      where: { groupId: { in: groupIds }, cascadeId: { in: cascades.map((c) => c.id) } },
+      select: { cascadeId: true, exitNodeId: true },
+    });
+    for (const r of rows) {
+      let set = allowByCascade.get(r.cascadeId);
+      if (!set) {
+        set = new Set();
+        allowByCascade.set(r.cascadeId, set);
+      }
+      set.add(r.exitNodeId);
+    }
+  }
+
   for (const c of cascades) {
     const entry = c.hops.find((h) => h.position === 0);
     if (!entry || !nodeIds.includes(entry.nodeId)) continue;
-    const exits = c.hops.filter((h) => h.position !== 0).map((h) => ({ name: h.node.name }));
+    // index = position in the FULL exit list (position-asc), matching the node's
+    // cascade-link-out-<index>; computed BEFORE the squad filter so a kept subset
+    // still tags each exit with the right link-out.
+    const fullExits = c.hops
+      .filter((h) => h.position !== 0)
+      .map((h, i) => ({ name: h.node.name, index: i, nodeId: h.node.id }));
+    const exits = applyExitAcl(fullExits, allowByCascade.get(c.id));
     if (exits.length > 0) out.set(entry.nodeId, exits);
   }
   return out;
+}
+
+/** A4 increment 2: apply a squad exit allow-set to a cascade's full exit list.
+ *  `allowed` undefined => opt-in default, keep ALL exits. A present set (union of
+ *  the user's squads' grants) => keep only those exit nodes. The `index` (link-out
+ *  position) is preserved so a filtered subset still selects the right link-out.
+ *  Exported for unit testing the semantics without a DB. */
+export function applyExitAcl(
+  fullExits: { name: string; index: number; nodeId: string }[],
+  allowed: Set<string> | undefined,
+): { name: string; index: number }[] {
+  return fullExits
+    .filter((e) => !allowed || allowed.has(e.nodeId))
+    .map((e) => ({ name: e.name, index: e.index }));
 }
 
 export async function listCascades(): Promise<CascadeDto[]> {

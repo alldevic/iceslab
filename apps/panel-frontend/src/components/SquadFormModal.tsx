@@ -28,12 +28,14 @@ import {
   IconBolt,
   IconCheck,
   IconLink,
+  IconRoute,
   IconSearch,
   IconShieldLock,
   IconUsers,
 } from '@tabler/icons-react';
 import {
   ALL_SQUAD_ID,
+  type Cascade,
   type CreateSquadInput,
   type Profile,
   type Squad,
@@ -59,6 +61,9 @@ interface FormValues {
   // K7 - '' = no squad HWID default.
   hwidDeviceLimit: number | '';
   profileIds: string[];
+  // A4 increment 2 - cascadeId -> allowed exit nodeIds. Empty/absent = no
+  // restriction (member sees all exits of that balancer cascade).
+  exitAcl: Record<string, string[]>;
 }
 
 function defaultValues(squad: Squad | null): FormValues {
@@ -68,6 +73,7 @@ function defaultValues(squad: Squad | null): FormValues {
     routingPreset: squad?.routingPreset ?? '',
     hwidDeviceLimit: squad?.hwidDeviceLimit ?? '',
     profileIds: squad?.profileIds ?? [],
+    exitAcl: Object.fromEntries((squad?.exitAcl ?? []).map((e) => [e.cascadeId, e.exitNodeIds])),
   };
 }
 
@@ -80,6 +86,9 @@ interface Props {
   /** Optional: count of bindings per profile, for the "deployed on N nodes"
    *  hint in each row. Computed by parent from listBindings(). */
   bindingsByProfile?: Map<string, number>;
+  /** A4 increment 2 - balancer cascades whose exits this squad can restrict.
+   *  Parent passes listCascades(); we filter to balancer cascades with exits. */
+  cascades?: Cascade[];
   onSubmit: (input: CreateSquadInput | UpdateSquadInput) => Promise<void>;
   loading?: boolean;
 }
@@ -90,6 +99,7 @@ export function SquadFormModal({
   squad,
   profiles,
   bindingsByProfile,
+  cascades,
   onSubmit,
   loading,
 }: Props) {
@@ -138,13 +148,27 @@ export function SquadFormModal({
       .sort((a, b) => a.protocol.localeCompare(b.protocol));
   }, [profiles, search]);
 
+  // A4 increment 2 - balancer cascades that actually have exits to restrict.
+  const balancerCascades = useMemo(
+    () =>
+      (cascades ?? []).filter(
+        (c) => c.mode === 'balancer' && c.hops.some((h) => h.position > 0),
+      ),
+    [cascades],
+  );
+
   async function handleSubmit(values: FormValues) {
+    // Drop cascades with no chosen exits: an empty list = "no restriction".
+    const exitAcl = Object.entries(values.exitAcl)
+      .filter(([, ids]) => ids.length > 0)
+      .map(([cascadeId, exitNodeIds]) => ({ cascadeId, exitNodeIds }));
     const base = {
       name: values.name,
       description: values.description.trim() || null,
       routingPreset: (values.routingPreset as RoutingPresetId) || null,
       hwidDeviceLimit: values.hwidDeviceLimit === '' ? null : Number(values.hwidDeviceLimit),
       profileIds: values.profileIds,
+      exitAcl,
     };
     if (isEdit) {
       await onSubmit(base satisfies UpdateSquadInput);
@@ -163,6 +187,14 @@ export function SquadFormModal({
       'profileIds',
       cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
     );
+  }
+
+  // A4 increment 2 - toggle one exit node in one cascade's allow-list.
+  function toggleExit(cascadeId: string, nodeId: string) {
+    if (isAllSquad) return;
+    const cur = form.values.exitAcl[cascadeId] ?? [];
+    const next = cur.includes(nodeId) ? cur.filter((x) => x !== nodeId) : [...cur, nodeId];
+    form.setFieldValue('exitAcl', { ...form.values.exitAcl, [cascadeId]: next });
   }
 
   function toggleAllInGroup(list: Profile[]) {
@@ -381,6 +413,86 @@ export function SquadFormModal({
               ))
             )}
           </Stack>
+
+          {/* A4 increment 2 - per-cascade exit allow-list. None checked = the
+              member sees ALL exits of that balancer (opt-in restriction). */}
+          {!isAllSquad && balancerCascades.length > 0 && (
+            <>
+              <Divider
+                label={
+                  <Text size="sm" fw={600}>
+                    {t('squads.form.exitAcl')}
+                  </Text>
+                }
+                labelPosition="left"
+              />
+              <Text size="xs" c="dimmed">
+                {t('squads.form.exitAclHint')}
+              </Text>
+              <Stack gap="sm">
+                {balancerCascades.map((c) => {
+                  const exits = c.hops.filter((h) => h.position > 0);
+                  const sel = new Set(form.values.exitAcl[c.id] ?? []);
+                  return (
+                    <Box
+                      key={c.id}
+                      style={{
+                        border: '1px solid var(--mantine-color-dark-4)',
+                        borderLeft: '3px solid var(--mantine-color-violet-6)',
+                        borderRadius: 'var(--mantine-radius-md)',
+                        padding: 'var(--mantine-spacing-sm)',
+                        background: 'var(--mantine-color-dark-7)',
+                      }}
+                    >
+                      <Group gap="sm" wrap="nowrap" mb="sm">
+                        <ThemeIcon variant="light" color="violet" size="md">
+                          <IconRoute size={14} />
+                        </ThemeIcon>
+                        <Text size="sm" fw={700} style={{ flex: 1 }}>
+                          {c.name}
+                        </Text>
+                        <Badge variant="light" color={sel.size === 0 ? 'teal' : 'violet'} size="sm">
+                          {sel.size === 0
+                            ? t('squads.form.exitAclAll')
+                            : `${sel.size}/${exits.length}`}
+                        </Badge>
+                      </Group>
+                      <Stack gap={4}>
+                        {exits.map((h) => {
+                          const checked = sel.has(h.nodeId);
+                          return (
+                            <Group
+                              key={h.nodeId}
+                              justify="space-between"
+                              wrap="nowrap"
+                              onClick={() => toggleExit(c.id, h.nodeId)}
+                              px="sm"
+                              py={8}
+                              style={{
+                                cursor: 'pointer',
+                                borderRadius: 6,
+                                background: checked
+                                  ? 'var(--mantine-color-dark-5)'
+                                  : 'var(--mantine-color-dark-6)',
+                                minHeight: 38,
+                              }}
+                            >
+                              <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+                                <Checkbox checked={checked} readOnly tabIndex={-1} />
+                                <Text size="sm" fw={500} truncate>
+                                  {h.nodeName}
+                                </Text>
+                              </Group>
+                            </Group>
+                          );
+                        })}
+                      </Stack>
+                    </Box>
+                  );
+                })}
+              </Stack>
+            </>
+          )}
 
           <Divider />
 

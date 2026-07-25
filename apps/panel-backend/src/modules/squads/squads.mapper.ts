@@ -1,4 +1,10 @@
-import type { Group, GroupProfile } from '../../generated/prisma/client.js';
+import type { Group, GroupProfile, GroupCascadeExit } from '../../generated/prisma/client.js';
+
+/** A4 increment 2: per-cascade exit allow-list, grouped by cascade for the UI. */
+export interface SquadExitAclEntry {
+  cascadeId: string;
+  exitNodeIds: string[];
+}
 
 export interface PublicSquadDto {
   id: string;
@@ -6,6 +12,8 @@ export interface PublicSquadDto {
   description: string | null;
   /** Slice 27: squad ACL operates on profiles, not per-node inbounds. */
   profileIds: string[];
+  /** A4 increment 2: per-cascade allowed exits. Empty = no exit restriction. */
+  exitAcl: SquadExitAclEntry[];
   /** R3-a: per-squad routing-preset override, or null to inherit the panel default. */
   routingPreset: string | null;
   /** K7: per-squad HWID device-limit default (applies when user has no explicit limit). */
@@ -17,8 +25,22 @@ export interface PublicSquadDto {
 
 type SquadWithRelations = Group & {
   groupProfiles: Pick<GroupProfile, 'profileId'>[];
+  cascadeExits?: Pick<GroupCascadeExit, 'cascadeId' | 'exitNodeId'>[];
   _count?: { members: number };
 };
+
+/** Group flat (cascadeId, exitNodeId) rows into one entry per cascade. */
+function groupExitAcl(
+  rows: Pick<GroupCascadeExit, 'cascadeId' | 'exitNodeId'>[],
+): SquadExitAclEntry[] {
+  const byCascade = new Map<string, string[]>();
+  for (const r of rows) {
+    const list = byCascade.get(r.cascadeId);
+    if (list) list.push(r.exitNodeId);
+    else byCascade.set(r.cascadeId, [r.exitNodeId]);
+  }
+  return [...byCascade.entries()].map(([cascadeId, exitNodeIds]) => ({ cascadeId, exitNodeIds }));
+}
 
 export function mapSquadToPublic(squad: SquadWithRelations): PublicSquadDto {
   return {
@@ -26,6 +48,7 @@ export function mapSquadToPublic(squad: SquadWithRelations): PublicSquadDto {
     name: squad.name,
     description: squad.description,
     profileIds: squad.groupProfiles.map((gp) => gp.profileId),
+    exitAcl: groupExitAcl(squad.cascadeExits ?? []),
     routingPreset: squad.routingPreset,
     hwidDeviceLimit: squad.hwidDeviceLimit,
     memberCount: squad._count?.members ?? 0,

@@ -33,12 +33,24 @@ export class SquadProtectedError extends Error {
 // `_count: { members: true }` over-counts. Filter to live users only.
 const includeRelations = {
   groupProfiles: { select: { profileId: true } },
+  cascadeExits: { select: { cascadeId: true, exitNodeId: true } },
   _count: {
     select: {
       members: { where: { user: { deletedAt: null } } },
     },
   },
 } as const;
+
+// A4 increment 2: flatten the grouped exit ACL into join rows, dropping entries
+// with no chosen exits (an empty list = "no restriction", so it stores nothing).
+function exitAclRows(
+  groupId: string,
+  exitAcl: { cascadeId: string; exitNodeIds: string[] }[],
+): { groupId: string; cascadeId: string; exitNodeId: string }[] {
+  return exitAcl.flatMap((e) =>
+    e.exitNodeIds.map((exitNodeId) => ({ groupId, cascadeId: e.cascadeId, exitNodeId })),
+  );
+}
 
 export async function listSquads(): Promise<PublicSquadDto[]> {
   const rows = await prisma.group.findMany({
@@ -69,6 +81,14 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
       hwidDeviceLimit: input.hwidDeviceLimit ?? null,
       groupProfiles: {
         create: input.profileIds.map((profileId) => ({ profileId })),
+      },
+      cascadeExits: {
+        create: input.exitAcl.flatMap((e) =>
+          e.exitNodeIds.map((exitNodeId) => ({
+            cascade: { connect: { id: e.cascadeId } },
+            node: { connect: { id: exitNodeId } },
+          })),
+        ),
       },
     },
     include: includeRelations,
@@ -104,6 +124,14 @@ export async function updateSquad(
         await tx.groupProfile.createMany({
           data: input.profileIds.map((profileId) => ({ groupId: id, profileId })),
         });
+      }
+    }
+    // A4 increment 2: replace the exit allow-list (set semantics), same as profiles.
+    if (input.exitAcl !== undefined) {
+      await tx.groupCascadeExit.deleteMany({ where: { groupId: id } });
+      const rows = exitAclRows(id, input.exitAcl);
+      if (rows.length > 0) {
+        await tx.groupCascadeExit.createMany({ data: rows });
       }
     }
     return tx.group.update({

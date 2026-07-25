@@ -619,6 +619,10 @@ export default {
       profilesSearch: 'Поиск по имени / протоколу…',
       profilesEmpty: 'Профилей в системе пока нет.',
       profilesNothingFound: 'Ничего не нашлось.',
+      exitAcl: 'Выходы каскадов',
+      exitAclHint:
+        'Ограничьте, какие выходы балансера доступны этому скваду. Если в каскаде не отмечено ничего, разрешены все его выходы.',
+      exitAclAll: 'все',
       submitCreate: 'Создать',
       submitEdit: 'Сохранить',
       systemSquadTooltip: 'Системный сквад',

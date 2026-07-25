@@ -569,7 +569,10 @@ describe('buildXrayJsonArray A4 exit expansion', () => {
   const entryEp: SubscriptionEndpoint = {
     ...xrayEp,
     nodeName: 'ru-entry',
-    cascadeExits: [{ name: 'de-exit' }, { name: 'nl-exit' }],
+    cascadeExits: [
+      { name: 'de-exit', index: 0 },
+      { name: 'nl-exit', index: 1 },
+    ],
   };
 
   it('expands one entry endpoint into one config per exit, labelled by exit', () => {
@@ -603,6 +606,18 @@ describe('buildXrayJsonArray A4 exit expansion', () => {
     expect(
       parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'test 2' }])).map((c: any) => c.remarks),
     ).toEqual(['de-exit · test 2', 'nl-exit · test 2']);
+  });
+
+  it('tags from exit.index, not array position (squad-filtered subset)', () => {
+    // A squad allowed only the 2nd exit (index 1). The single config must still
+    // carry tag 2 (UUID ...0002...) so the node routes it to cascade-link-out-1.
+    const arr = parse(
+      buildXrayJsonArray([{ ...entryEp, cascadeExits: [{ name: 'nl-exit', index: 1 }] }]),
+    );
+    expect(arr).toHaveLength(1);
+    expect(arr[0].remarks).toBe('nl-exit');
+    expect(arr[0].outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].users[0].id)
+      .toBe('11111111-2222-0002-4444-555555555555');
   });
 
   it('an xray endpoint with no exits stays a single unmodified config', () => {
