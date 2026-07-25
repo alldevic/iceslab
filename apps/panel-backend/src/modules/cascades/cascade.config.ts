@@ -301,9 +301,25 @@ export function buildBalancerCascadeConfigs(
     role: 'entry',
     inbounds: [],
     outbounds: entryOutbounds,
-    // User traffic -> balancer (leastPing picks the lowest-RTT exit). Split-
-    // routing presets can prepend direct/block rules ahead of this later.
-    routingRules: [QUIC_BLOCK_RULE, { type: 'field', network: 'tcp,udp', balancerTag: BALANCER_TAG }],
+    // A4: explicit exit selection layered ON TOP of the balancer. A client
+    // whose UUID bytes 7-8 (big-endian uint16, which xray reads as vlessRoute)
+    // equal i+1 is pinned to exit i; auth ignores those bytes so it stays the
+    // same user (verified in field 2026-07-25, and documented upstream). A
+    // client that sends any other value - including a normal unmodified UUID -
+    // matches none of these and falls through to the balancer = automatic
+    // leastPing exit. Tag 0 is deliberately unused so the untagged/"auto"
+    // config never collides with an explicit exit. Split-routing presets can
+    // still prepend direct/block rules ahead of all this later.
+    routingRules: [
+      QUIC_BLOCK_RULE,
+      ...exits.map((_, i) => ({
+        type: 'field',
+        vlessRoute: String(i + 1),
+        network: 'tcp,udp',
+        outboundTag: `${LINK_OUT_TAG}-${i}`,
+      })),
+      { type: 'field', network: 'tcp,udp', balancerTag: BALANCER_TAG },
+    ],
     observatory: {
       subjectSelector: [LINK_OUT_TAG],
       // xray-core's json tag is `probeURL` (capital URL). A lowercase `probeUrl`

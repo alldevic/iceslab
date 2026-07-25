@@ -62,6 +62,13 @@ type Adapter struct {
 	users   map[string]xrayClient // key: userId
 	started bool                  // set true after first successful regenerateAndRestart
 
+	// version caches the parsed `xray version` output (e.g. "26.3.27"). Queried
+	// once lazily on the first CoreVersion() call and cached: the binary can't
+	// change without an agent restart, so a single fork is enough. versionDone
+	// guards against re-forking when the query legitimately yields "".
+	version     string
+	versionDone bool
+
 	// cascade holds the optional C3 chaining fragments (link-in inbound,
 	// link-out outbound, routing rules) for THIS node's hop, pushed by the
 	// panel via ApplyInbound. nil = node is not part of any cascade, in which
@@ -100,6 +107,55 @@ func (a *Adapter) Name() string { return Name }
 
 // Engine reports the native proxy core (xray-core).
 func (a *Adapter) Engine() string { return "xray" }
+
+// CoreVersion returns the xray-core version (e.g. "26.3.27") from `xray version`,
+// queried once and cached. Returns "" in config-only mode (no binary) or if the
+// query fails. Implements the optional core.Versioner interface so /healthz can
+// surface it; the panel gates cascade exit selection (vlessRoute) on >= 25.9.5.
+func (a *Adapter) CoreVersion() string {
+	a.mu.Lock()
+	if a.versionDone {
+		v := a.version
+		a.mu.Unlock()
+		return v
+	}
+	bin := a.cfg.BinaryPath
+	run := a.cfg.RunCmd
+	a.mu.Unlock()
+
+	v := ""
+	if bin != "" && run != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		out, err := run(ctx, bin, "version")
+		cancel()
+		if err == nil {
+			v = parseXrayVersion(out)
+		} else {
+			a.logger.Warn("xray version query failed", "err", err)
+		}
+	}
+
+	a.mu.Lock()
+	a.version = v
+	a.versionDone = true
+	a.mu.Unlock()
+	return v
+}
+
+// parseXrayVersion pulls the semver token out of `xray version` output, whose
+// first line reads "Xray 26.3.27 (Xray, Penetrates Everything.) <hash> ...".
+// Returns "" if the shape is unexpected.
+func parseXrayVersion(out []byte) string {
+	line := string(out)
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	fields := strings.Fields(line)
+	if len(fields) >= 2 && strings.EqualFold(fields[0], "Xray") {
+		return fields[1]
+	}
+	return ""
+}
 
 // Start writes the initial config to disk and spawns xray.
 // If REALITY keys are not yet configured (deferred via ApplyInbound), Start

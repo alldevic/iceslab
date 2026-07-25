@@ -36,6 +36,7 @@ import {
   createSquad,
   deleteSquad,
   listBindings,
+  listCascades,
   listProfiles,
   listSquads,
   updateSquad,
@@ -55,6 +56,8 @@ export function SquadsPage() {
   const squadsQuery = useQuery({ queryKey: ['squads'], queryFn: listSquads });
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
+  // A4 increment 2 - balancer cascades for the per-squad exit allow-list.
+  const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
 
   const createMutation = useMutation({
     mutationFn: createSquad,
@@ -126,6 +129,7 @@ export function SquadsPage() {
 
   const squads = squadsQuery.data?.squads ?? [];
   const profiles = profilesQuery.data?.profiles ?? [];
+  const cascades = cascadesQuery.data?.cascades ?? [];
   const bindingsByProfile = useMemo(() => {
     const m = new Map<string, number>();
     for (const b of bindingsQuery.data?.bindings ?? []) {
@@ -223,7 +227,7 @@ export function SquadsPage() {
         opened={createOpen}
         onClose={closeCreate}
         squad={null}
-        profiles={profiles} bindingsByProfile={bindingsByProfile}
+        profiles={profiles} bindingsByProfile={bindingsByProfile} cascades={cascades}
         onSubmit={handleCreate}
         loading={createMutation.isPending}
       />
@@ -232,7 +236,7 @@ export function SquadsPage() {
         opened={editing !== null}
         onClose={() => setEditing(null)}
         squad={editing}
-        profiles={profiles} bindingsByProfile={bindingsByProfile}
+        profiles={profiles} bindingsByProfile={bindingsByProfile} cascades={cascades}
         onSubmit={handleUpdate}
         loading={updateMutation.isPending}
       />

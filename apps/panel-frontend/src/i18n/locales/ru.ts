@@ -619,6 +619,10 @@ export default {
       profilesSearch: 'Поиск по имени / протоколу…',
       profilesEmpty: 'Профилей в системе пока нет.',
       profilesNothingFound: 'Ничего не нашлось.',
+      exitAcl: 'Выходы каскадов',
+      exitAclHint:
+        'Ограничьте, какие выходы балансера доступны этому скваду. Если в каскаде не отмечено ничего, разрешены все его выходы.',
+      exitAclAll: 'все',
       submitCreate: 'Создать',
       submitEdit: 'Сохранить',
       systemSquadTooltip: 'Системный сквад',
@@ -1188,6 +1192,7 @@ export default {
     reBootstrap: 'Re-bootstrap',
     metricsPending: 'Метрики готовятся - первый опрос в течение 15 сек',
     loadLabel: 'Загрузка',
+    coreVersion: 'Версия ядра xray (для выбора выхода нужно >= 25.9.5)',
   },
 
   squadForm: {

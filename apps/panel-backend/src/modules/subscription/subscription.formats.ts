@@ -101,6 +101,23 @@ interface SubscriptionEndpointBase {
    *  handler filters by this before invoking the format-specific formatter,
    *  so each formatter can stay format-agnostic. */
   disableForFormats?: string[];
+
+  // ───── A4: route-profiles (explicit exit selection) ─────────────────
+  /** When this endpoint's node is the ENTRY of an enabled balancer cascade,
+   *  the ordered exits it fronts (index = position in the balancer, matching
+   *  `cascade-link-out-<i>` on the node). buildXrayJsonArray expands one such
+   *  endpoint into one standalone config per exit: same entry host, UUID bytes
+   *  7-8 set to exit-index+1 (xray reads them as `vlessRoute`, auth ignores
+   *  them), remark = exit name. Empty/undefined = a single plain config, the
+   *  pre-A4 behaviour. Only the xrayjson-array format consumes this; every
+   *  other format ignores it and emits the entry endpoint unchanged.
+   *
+   *  `index` is the exit's 0-based position in the FULL balancer exit list, i.e.
+   *  it maps to the node's `cascade-link-out-<index>` outbound and is selected by
+   *  `vlessRoute:<index+1>`. Kept explicit (not the array position) so a squad-
+   *  filtered subset (A4 increment 2) still tags each exit with the right
+   *  link-out. */
+  cascadeExits?: { name: string; index: number }[];
 }
 
 export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {

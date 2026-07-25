@@ -481,6 +481,7 @@ export function NodesPage() {
                   address: n.address,
                   regionLabel,
                   cascadeLabel: cascade ? `${cascade.name} · ${cascade.role}` : null,
+                  coreVersion: n.coreVersion ?? null,
                   maxUsers: n.maxUsers ?? null,
                   // approxUsers: capacity bar source. Real per-node user
                   // counter lands with slice 28; here we reuse the today's

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildXrayJson, buildXrayJsonArray } from './xrayjson.js';
+import { buildXrayJson, buildXrayJsonArray, withVlessRouteTag } from './xrayjson.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
 
 const xrayEp: SubscriptionEndpoint = {
@@ -544,6 +544,95 @@ describe('buildXrayJsonArray (T1)', () => {
   it('skips protocols the array does not emit (not xray, not hysteria)', () => {
     expect(parse(buildXrayJsonArray([naiveEp]))).toEqual([]);
     expect(parse(buildXrayJsonArray([naiveEp, xrayEp]))).toHaveLength(1);
+  });
+});
+
+// A4: route-profiles (explicit cascade exit selection).
+describe('withVlessRouteTag', () => {
+  it('rewrites only the 3rd group with a big-endian uint16, zero-padded', () => {
+    expect(withVlessRouteTag('11111111-2222-3333-4444-555555555555', 1)).toBe(
+      '11111111-2222-0001-4444-555555555555',
+    );
+    expect(withVlessRouteTag('11111111-2222-3333-4444-555555555555', 14)).toBe(
+      '11111111-2222-000e-4444-555555555555',
+    );
+    expect(withVlessRouteTag('11111111-2222-3333-4444-555555555555', 14514)).toBe(
+      '11111111-2222-38b2-4444-555555555555',
+    );
+  });
+  it('leaves a malformed uuid untouched', () => {
+    expect(withVlessRouteTag('not-a-uuid', 1)).toBe('not-a-uuid');
+  });
+});
+
+describe('buildXrayJsonArray A4 exit expansion', () => {
+  const entryEp: SubscriptionEndpoint = {
+    ...xrayEp,
+    nodeName: 'ru-entry',
+    cascadeExits: [
+      { name: 'de-exit', index: 0 },
+      { name: 'nl-exit', index: 1 },
+    ],
+  };
+
+  it('expands one entry endpoint into one config per exit, labelled by exit', () => {
+    const arr = parse(buildXrayJsonArray([entryEp]));
+    expect(arr).toHaveLength(2);
+    expect(arr.map((c: any) => c.remarks)).toEqual(['de-exit', 'nl-exit']);
+  });
+
+  it('sets UUID bytes 7-8 to exit index+1 so the node vlessRoute rule pins it', () => {
+    const arr = parse(buildXrayJsonArray([entryEp]));
+    const uuidOf = (c: any) =>
+      c.outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].users[0].id;
+    expect(uuidOf(arr[0])).toBe('11111111-2222-0001-4444-555555555555');
+    expect(uuidOf(arr[1])).toBe('11111111-2222-0002-4444-555555555555');
+  });
+
+  it('all exit configs still dial the same entry host', () => {
+    const arr = parse(buildXrayJsonArray([entryEp]));
+    const hostOf = (c: any) =>
+      c.outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].address;
+    expect(hostOf(arr[0])).toBe('n1.example.com');
+    expect(hostOf(arr[1])).toBe('n1.example.com');
+  });
+
+  it('suffixes exit labels with the host remark on a multi-host entry', () => {
+    // Default / unnamed host keeps plain labels.
+    expect(
+      parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'Default' }])).map((c: any) => c.remarks),
+    ).toEqual(['de-exit', 'nl-exit']);
+    // A named host suffixes each exit so the two host fan-outs stay distinct.
+    expect(
+      parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'test 2' }])).map((c: any) => c.remarks),
+    ).toEqual(['de-exit · test 2', 'nl-exit · test 2']);
+  });
+
+  it('tags from exit.index, not array position (squad-filtered subset)', () => {
+    // A squad allowed only the 2nd exit (index 1). The single config must still
+    // carry tag 2 (UUID ...0002...) so the node routes it to cascade-link-out-1.
+    const arr = parse(
+      buildXrayJsonArray([{ ...entryEp, cascadeExits: [{ name: 'nl-exit', index: 1 }] }]),
+    );
+    expect(arr).toHaveLength(1);
+    expect(arr[0].remarks).toBe('nl-exit');
+    expect(arr[0].outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0].users[0].id)
+      .toBe('11111111-2222-0002-4444-555555555555');
+  });
+
+  it('an xray endpoint with no exits stays a single unmodified config', () => {
+    const arr = parse(buildXrayJsonArray([xrayEp]));
+    expect(arr).toHaveLength(1);
+    expect(arr[0].remarks).toBe('eu-1');
+    const uuid = arr[0].outbounds.find((o: any) => o.protocol === 'vless').settings.vnext[0]
+      .users[0].id;
+    expect(uuid).toBe('11111111-2222-3333-4444-555555555555');
+  });
+
+  it('an empty exit list falls back to a single config', () => {
+    const arr = parse(buildXrayJsonArray([{ ...xrayEp, cascadeExits: [] }]));
+    expect(arr).toHaveLength(1);
+    expect(arr[0].remarks).toBe('eu-1');
   });
 });
 

@@ -437,6 +437,27 @@ export function buildXrayJson(
   return JSON.stringify(config, null, 2) + '\n';
 }
 
+/** A4: overwrite UUID bytes 7-8 (the 3rd hyphen-group) with a big-endian uint16
+ *  route tag, e.g. tag 1 -> "...-0001-...". Xray reads those two bytes as
+ *  `vlessRoute` and ignores them for authentication (documented + verified in
+ *  field 2026-07-25), so the result authenticates as the SAME user but is
+ *  pinned to a specific cascade exit. A malformed UUID is returned untouched. */
+export function withVlessRouteTag(uuid: string, tag: number): string {
+  const parts = uuid.split('-');
+  if (parts.length !== 5 || parts[2]!.length !== 4) return uuid;
+  parts[2] = (tag & 0xffff).toString(16).padStart(4, '0');
+  return parts.join('-');
+}
+
+/** A4: label for an expanded exit config. When the entry endpoint came from a
+ *  NAMED host (a node with several hosts fans out into multiple entry endpoints,
+ *  each producing the same exit set), suffix the exit name with the host remark
+ *  so the configs stay distinct instead of showing duplicate labels ("nl2",
+ *  "nl2"). The default/unnamed host keeps the plain exit name. */
+export function cascadeExitLabel(exitName: string, hostRemark?: string): string {
+  return hostRemark && hostRemark !== 'Default' ? `${exitName} · ${hostRemark}` : exitName;
+}
+
 /**
  * A1 array format (T1 skeleton + T2 routing + hy2). A top-level JSON array of
  * standalone configs, one per xray OR hysteria endpoint, each with its own
@@ -445,6 +466,12 @@ export function buildXrayJson(
  * servers;
  * the single-config buildXrayJson (one config, N outbounds) they read as one
  * server, which is the migration blocker this closes.
+ *
+ * A4 (route-profiles, exit selection): an xray endpoint whose node is a balancer-
+ * cascade entry carries `cascadeExits`. Such an endpoint expands into one config
+ * PER exit instead of one: same entry host/transport, UUID bytes 7-8 set to the
+ * exit index+1 (the node's `vlessRoute:<i+1> -> cascade-link-out-<i>` rule pins
+ * it), remark = exit name. The client picks the exit by picking the server.
  *
  * T2: each config carries the SAME routing surface the single-config builder
  * does (custom rules, custom domain lists, split preset + split DNS, TLS-
@@ -468,7 +495,9 @@ export function buildXrayJsonArray(
   const tlsFragment = opts.tlsFragment === true;
   const cdl = opts.customDomainLists;
 
-  const configs = supported.map((e) => {
+  // Builds one standalone config. `remark` is the client-facing server label:
+  // the node name normally, the exit name for an A4 route-profile expansion.
+  const makeConfig = (e: SubscriptionEndpoint, remark: string) => {
     // Per-protocol primary outbound + tag. TLS-fragment is xray-only (it splits
     // the TCP ClientHello; hy2 rides QUIC, nothing to fragment). Tags carry a
     // protocol suffix so `fragment` can never collide.
@@ -514,7 +543,7 @@ export function buildXrayJsonArray(
     ];
 
     return {
-      remarks: e.nodeName,
+      remarks: remark,
       log: { loglevel: 'warning' },
       ...(splitDns ? { dns: splitDns } : {}),
       inbounds: [
@@ -532,6 +561,21 @@ export function buildXrayJsonArray(
         rules,
       },
     };
+  };
+
+  // A4: an xray endpoint fronting a balancer cascade expands into one config per
+  // exit (tag in UUID bytes 7-8), each labelled by its exit. Everything else
+  // (hy2, or an xray endpoint with no exits) stays a single config as before.
+  const configs = supported.flatMap((e) => {
+    if (e.protocol === 'xray' && e.cascadeExits && e.cascadeExits.length > 0) {
+      return e.cascadeExits.map((exit) =>
+        makeConfig(
+          { ...e, uuid: withVlessRouteTag(e.uuid, exit.index + 1) },
+          cascadeExitLabel(exit.name, e.hostRemark),
+        ),
+      );
+    }
+    return [makeConfig(e, e.nodeName)];
   });
   return JSON.stringify(configs, null, 2) + '\n';
 }

@@ -404,7 +404,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       );
       const filteredPlain = result.endpoints
         .filter((e) => !(e.disableForFormats ?? []).includes('plain'))
-        .map((e) => e.uri);
+        // A4: a balancer-cascade entry expands into one re-tagged URI per exit
+        // (pingable in Happ, unlike the JSON array); other endpoints pass through.
+        .flatMap((e) => service.expandEndpointUris(e));
 
       // Slice S1: emit subscription-metadata HTTP headers every client
       // app reads to set its profile name, refresh interval, quota gauge,
@@ -474,7 +476,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
       let tlsFragment = false;
-      if (format === 'clash' || format === 'singbox' || format === 'xrayjson' || format === 'xkeen') {
+      if (
+        format === 'clash' ||
+        format === 'singbox' ||
+        format === 'xrayjson' ||
+        format === 'xrayjson-array' ||
+        format === 'xkeen'
+      ) {
         const settings = await getSubscriptionSettings();
         routingPreset =
           query.routing ??

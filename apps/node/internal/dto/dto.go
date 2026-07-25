@@ -163,6 +163,12 @@ type GetStatsResponse struct {
 type CoreStatus struct {
 	Name    ProtocolName `json:"name"`
 	Running bool         `json:"running"`
+	// Version is the underlying core binary version (e.g. "26.3.27" from
+	// `xray version`), empty when the adapter can't report one. The panel
+	// stores it per node to gate features needing a minimum core version
+	// (exit selection needs xray >= 25.9.5). Optional/omitempty so pre-T7
+	// agents and non-versioned cores stay wire-compatible.
+	Version string `json:"version,omitempty"`
 }
 
 type HealthcheckResponse struct {

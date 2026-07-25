@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSquadRouting } from './subscription.service.js';
+import { resolveSquadRouting, expandEndpointUris } from './subscription.service.js';
+import type { SubscriptionEndpoint } from './subscription.formats.js';
 
 // R3-a - the per-squad routing merge rule (the one design decision in R3-a).
 describe('resolveSquadRouting', () => {
@@ -66,5 +67,69 @@ describe('routing-preset precedence (R1a + R3-a + R3)', () => {
 
   it('defaults to proxy-all all the way down', () => {
     expect(resolve(undefined, null, null, 'proxy-all')).toBe('proxy-all');
+  });
+});
+
+// A4: plain / base64 URI expansion for balancer-cascade exits.
+describe('expandEndpointUris', () => {
+  const uuid = '84a8029e-b874-4418-8cec-a7da9af31157';
+  const entry: SubscriptionEndpoint = {
+    protocol: 'xray',
+    nodeName: 'ru-entry',
+    host: 'ru.example.com',
+    port: 443,
+    uuid,
+    publicKey: 'pk',
+    shortId: 'abc',
+    sni: 'www.cloudflare.com',
+    flow: 'xtls-rprx-vision',
+    fingerprint: 'chrome',
+    uri: `vless://${uuid}@ru.example.com:443?security=reality&pbk=pk&sid=abc#ru-entry`,
+  };
+
+  it('returns the single original URI when there are no cascade exits', () => {
+    expect(expandEndpointUris(entry)).toEqual([entry.uri]);
+  });
+
+  it('expands one re-tagged URI per exit, remark = exit name', () => {
+    const out = expandEndpointUris({
+      ...entry,
+      cascadeExits: [
+        { name: 'de exit', index: 0 },
+        { name: 'nl', index: 1 },
+      ],
+    });
+    expect(out).toEqual([
+      'vless://84a8029e-b874-0001-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#de%20exit',
+      'vless://84a8029e-b874-0002-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#nl',
+    ]);
+  });
+
+  it('suffixes exit remarks with the host remark on a multi-host entry', () => {
+    const out = expandEndpointUris({
+      ...entry,
+      hostRemark: 'test 2',
+      cascadeExits: [
+        { name: 'de exit', index: 0 },
+        { name: 'nl', index: 1 },
+      ],
+    });
+    // #remark is URI-encoded: "de exit · test 2" -> "de%20exit%20%C2%B7%20test%202"
+    expect(out[0]!.endsWith(`#${encodeURIComponent('de exit · test 2')}`)).toBe(true);
+    expect(out[1]!.endsWith(`#${encodeURIComponent('nl · test 2')}`)).toBe(true);
+  });
+
+  it('does not re-tag vmess (UUID is not in the userinfo)', () => {
+    const vmess: SubscriptionEndpoint = {
+      ...entry,
+      subprotocol: 'vmess',
+      uri: 'vmess://eyJ2IjoiMiJ9',
+      cascadeExits: [{ name: 'de' }],
+    };
+    expect(expandEndpointUris(vmess)).toEqual(['vmess://eyJ2IjoiMiJ9']);
+  });
+
+  it('drops an endpoint with an empty URI', () => {
+    expect(expandEndpointUris({ ...entry, uri: '' })).toEqual([]);
   });
 });

@@ -10,7 +10,7 @@ import {
 // kept on the User row for backwards-compat but never filters subscription
 // output.
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
-import { getHiddenCascadeNodeIds } from '../cascades/cascade.service.js';
+import { getHiddenCascadeNodeIds, getBalancerExitsByEntryNode } from '../cascades/cascade.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/credentials.js';
@@ -33,6 +33,7 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
+import { withVlessRouteTag, cascadeExitLabel } from './formats/xrayjson.js';
 
 // ───── Domain errors ─────
 
@@ -142,6 +143,38 @@ interface NaiveInboundConfig {
   hostname: string;
   tlsEmail: string;
   masqueradeRoot: string;
+}
+
+/**
+ * A4: expand one endpoint into the share-link URIs the plain / base64
+ * subscription emits. A balancer-cascade entry (an xray endpoint carrying
+ * `cascadeExits`) yields one re-tagged URI per exit: the userinfo UUID gets
+ * bytes 7-8 set to exit index+1 (xray reads them as vlessRoute, auth ignores
+ * them) and the `#remark` becomes the exit name. Unlike the JSON array this
+ * keeps every server as a plain URI, so Happ / any client can ping it, at the
+ * cost of the per-config split-routing only the JSON form carries.
+ *
+ * vmess is skipped (its UUID lives inside a base64 blob, not the userinfo, so a
+ * plain string swap can't reach it) and returned as its single original URI.
+ * Every non-entry endpoint returns its one original URI unchanged.
+ */
+export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
+  if (
+    e.protocol !== 'xray' ||
+    !e.cascadeExits ||
+    e.cascadeExits.length === 0 ||
+    e.subprotocol === 'vmess'
+  ) {
+    return e.uri ? [e.uri] : [];
+  }
+  // vless:// and trojan:// both put the UUID in the userinfo, so replacing the
+  // first occurrence of it retargets the link. Strip the original #remark first.
+  const hashIdx = e.uri.indexOf('#');
+  const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
+  return e.cascadeExits.map((exit) => {
+    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, exit.index + 1));
+    return `${tagged}#${encodeURIComponent(cascadeExitLabel(exit.name, e.hostRemark))}`;
+  });
 }
 
 /**
@@ -293,6 +326,14 @@ export async function generateSubscription(
     bindings.length = 0;
     bindings.push(...filtered);
   }
+
+  // A4: which of these nodes are balancer-cascade entries + their exits. One
+  // query for the whole binding set; the xray branch attaches the match so
+  // buildXrayJsonArray can expand that endpoint into one config per exit.
+  const balancerExits = await getBalancerExitsByEntryNode(
+    [...new Set(bindings.map((b) => b.node.id))],
+    groupIds,
+  );
 
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
@@ -506,6 +547,9 @@ export async function generateSubscription(
         serviceName: cfg.serviceName,
         subprotocol,
         uri,
+        // A4: set only when this node is a balancer-cascade entry. Undefined
+        // otherwise, so the array format emits a single config as before.
+        cascadeExits: balancerExits.get(b.node.id),
       });
     } else if (ib.protocol === 'amneziawg' && user.amneziawgPrivateKey) {
       const cfg = ib.config as unknown as AmneziawgInboundConfig;
@@ -751,7 +795,7 @@ export async function generateSubscription(
 
   return {
     endpoints,
-    textPlain: encodePlainList(endpoints.map((e) => e.uri)),
+    textPlain: encodePlainList(endpoints.flatMap((e) => expandEndpointUris(e))),
     json: buildSubscriptionJson(user, endpoints),
     squadRoutingPreset,
     // R3 - per-user override (scalar already loaded on `user`). Garbage / unset

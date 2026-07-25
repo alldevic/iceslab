@@ -85,3 +85,17 @@ type CoreAdapter interface {
 	// /applyInbounds, dispatcher fans out to the matching adapter.
 	ApplyInbound(port int, cfg json.RawMessage) error
 }
+
+// Versioner is an OPTIONAL interface an adapter may implement to report the
+// version of its underlying core binary (e.g. the output of `xray version`).
+// The /healthz handler type-asserts each adapter against it and, when present,
+// includes the version in that core's CoreStatus. Adapters that don't implement
+// it simply report an empty version. The panel persists this per node so it can
+// gate features that need a minimum core version (e.g. cascade exit selection
+// via vlessRoute needs xray >= 25.9.5).
+type Versioner interface {
+	// CoreVersion returns the core binary version string, or "" if unknown
+	// (config-only mode, binary missing, or the version query failed). It must
+	// be goroutine-safe and cheap to call repeatedly (implementations cache).
+	CoreVersion() string
+}

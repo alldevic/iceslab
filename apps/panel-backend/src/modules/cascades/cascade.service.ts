@@ -34,6 +34,52 @@ export class CascadeNodeMissingError extends Error {
     this.name = 'CascadeNodeMissingError';
   }
 }
+export class CascadeEntryCoreTooOldError extends Error {
+  constructor(
+    public readonly nodeName: string,
+    public readonly coreVersion: string,
+    public readonly minVersion: string,
+  ) {
+    super(
+      `Entry node "${nodeName}" runs xray ${coreVersion}; enabling a balancer cascade needs xray >= ${minVersion} so exit selection (vlessRoute) works. Upgrade the entry node's xray, or keep the cascade disabled.`,
+    );
+    this.name = 'CascadeEntryCoreTooOldError';
+  }
+}
+
+// T7: minimum xray-core version on a balancer ENTRY. Below this, xray doesn't
+// understand vlessRoute and rejects the exit-selection UUID at auth (silent
+// connect failure), so the panel blocks enabling such a cascade.
+export const MIN_XRAY_VLESSROUTE = '25.9.5';
+
+/** Numeric dotted-version compare: is `v` >= `min`? Non-numeric / missing parts
+ *  count as 0. Exported for tests. */
+export function versionAtLeast(v: string, min: string): boolean {
+  const parts = (s: string): number[] => s.split('.').map((n) => parseInt(n, 10) || 0);
+  const a = parts(v);
+  const b = parts(min);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
+/** T7 gate: an ENABLED balancer entry hands every user vlessRoute-tagged exit
+ *  configs, which a pre-25.9.5 xray rejects at auth. Block if the entry's core
+ *  is known-old. Unknown version (null: pre-T7 agent, or not yet polled) is
+ *  allowed, we can't prove it's old and shouldn't wedge the operator. */
+async function assertBalancerEntrySupportsVlessRoute(entryNodeId: string): Promise<void> {
+  const node = await prisma.node.findUnique({
+    where: { id: entryNodeId },
+    select: { name: true, coreVersion: true },
+  });
+  if (!node?.coreVersion) return; // unknown -> allow
+  if (!versionAtLeast(node.coreVersion, MIN_XRAY_VLESSROUTE)) {
+    throw new CascadeEntryCoreTooOldError(node.name, node.coreVersion, MIN_XRAY_VLESSROUTE);
+  }
+}
 
 const hopInclude = {
   hops: {
@@ -93,6 +139,82 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
   for (const id of entry) nonEntry.delete(id);
   hiddenNodesCache = { value: nonEntry, expiresAt: Date.now() + HIDDEN_NODES_TTL_MS };
   return nonEntry;
+}
+
+/** A4: map each given node id that is the ENTRY (position 0) of an enabled
+ *  BALANCER cascade to its ordered exit names. Order matches the entry's
+ *  `cascade-link-out-<i>` outbounds (position ascending), so exit index i is
+ *  the one the vlessRoute tag i+1 selects. Nodes that aren't balancer entries,
+ *  and balancers with no exit, are absent from the map. The subscription builder
+ *  uses this to expand one entry endpoint into one config per exit (A4). Chain
+ *  cascades are intentionally excluded: a fixed path offers no exit choice. */
+export async function getBalancerExitsByEntryNode(
+  nodeIds: string[],
+  groupIds: string[] = [],
+): Promise<Map<string, { name: string; index: number }[]>> {
+  const out = new Map<string, { name: string; index: number }[]>();
+  if (nodeIds.length === 0) return out;
+  const cascades = await prisma.cascade.findMany({
+    where: {
+      enabled: true,
+      mode: 'balancer',
+      hops: { some: { nodeId: { in: nodeIds }, position: 0 } },
+    },
+    include: {
+      hops: {
+        orderBy: { position: 'asc' },
+        include: { node: { select: { id: true, name: true } } },
+      },
+    },
+  });
+  if (cascades.length === 0) return out;
+
+  // A4 increment 2: per-squad exit allow-list. Union the user's allow rows per
+  // cascade. OPT-IN: a cascade absent from this map is unrestricted for the user
+  // (no rows => all exits); present => keep only the allowed exit nodes.
+  const allowByCascade = new Map<string, Set<string>>();
+  if (groupIds.length > 0) {
+    const rows = await prisma.groupCascadeExit.findMany({
+      where: { groupId: { in: groupIds }, cascadeId: { in: cascades.map((c) => c.id) } },
+      select: { cascadeId: true, exitNodeId: true },
+    });
+    for (const r of rows) {
+      let set = allowByCascade.get(r.cascadeId);
+      if (!set) {
+        set = new Set();
+        allowByCascade.set(r.cascadeId, set);
+      }
+      set.add(r.exitNodeId);
+    }
+  }
+
+  for (const c of cascades) {
+    const entry = c.hops.find((h) => h.position === 0);
+    if (!entry || !nodeIds.includes(entry.nodeId)) continue;
+    // index = position in the FULL exit list (position-asc), matching the node's
+    // cascade-link-out-<index>; computed BEFORE the squad filter so a kept subset
+    // still tags each exit with the right link-out.
+    const fullExits = c.hops
+      .filter((h) => h.position !== 0)
+      .map((h, i) => ({ name: h.node.name, index: i, nodeId: h.node.id }));
+    const exits = applyExitAcl(fullExits, allowByCascade.get(c.id));
+    if (exits.length > 0) out.set(entry.nodeId, exits);
+  }
+  return out;
+}
+
+/** A4 increment 2: apply a squad exit allow-set to a cascade's full exit list.
+ *  `allowed` undefined => opt-in default, keep ALL exits. A present set (union of
+ *  the user's squads' grants) => keep only those exit nodes. The `index` (link-out
+ *  position) is preserved so a filtered subset still selects the right link-out.
+ *  Exported for unit testing the semantics without a DB. */
+export function applyExitAcl(
+  fullExits: { name: string; index: number; nodeId: string }[],
+  allowed: Set<string> | undefined,
+): { name: string; index: number }[] {
+  return fullExits
+    .filter((e) => !allowed || allowed.has(e.nodeId))
+    .map((e) => ({ name: e.name, index: e.index }));
 }
 
 export async function listCascades(): Promise<CascadeDto[]> {
@@ -169,6 +291,11 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // linkProtocol, which the chain rules would wrongly reject).
   const hops = validateCascadeHops(input.hops, mode);
   await assertNodesExist(hops.map((h) => h.nodeId));
+  // T7: an enabled balancer entry serves vlessRoute-tagged exit configs; gate
+  // it on the entry's xray version. Disabled cascades don't expand in subs.
+  if (isBalancer && input.enabled) {
+    await assertBalancerEntrySupportsVlessRoute(hops[0]!.nodeId);
+  }
   // Pre-generate inter-hop link creds.
   //   chain:    one cred per link, stored on each non-exit (originating) hop.
   //   balancer: one cred per exit link (entry->exit), stored on each EXIT hop;
@@ -223,7 +350,12 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
 export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<CascadeDto> {
   const existing = await prisma.cascade.findUnique({
     where: { id },
-    select: { id: true, mode: true, hops: { select: { nodeId: true } } },
+    select: {
+      id: true,
+      mode: true,
+      enabled: true,
+      hops: { select: { nodeId: true, position: true } },
+    },
   });
   if (!existing) throw new CascadeNotFoundError(id);
   // Capture the pre-update hop nodes: a node dropped from the cascade (or a
@@ -235,6 +367,15 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   const isBalancer = mode === 'balancer';
   const hops = input.hops ? validateCascadeHops(input.hops, mode) : null;
   if (hops) await assertNodesExist(hops.map((h) => h.nodeId));
+  // T7: gate an effectively-enabled balancer on the entry node's xray version
+  // (covers both enabling an existing cascade and swapping in a new entry hop).
+  const willBeEnabled = input.enabled ?? existing.enabled;
+  if (isBalancer && willBeEnabled) {
+    const entryNodeId = hops
+      ? hops[0]!.nodeId
+      : existing.hops.find((h) => h.position === 0)?.nodeId;
+    if (entryNodeId) await assertBalancerEntrySupportsVlessRoute(entryNodeId);
+  }
   const creds = hops
     ? generateLinkCreds(
         isBalancer
