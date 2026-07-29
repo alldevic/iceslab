@@ -39,6 +39,15 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof svc.BindingNotFoundError) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
       }
+      // The form shows this next to the SNI field, so it carries the served
+      // names rather than only prose.
+      if (err instanceof svc.SniMismatchError) {
+        return reply.code(400).send({
+          error: 'SNI_MISMATCH',
+          message: err.message,
+          expected: err.expected,
+        });
+      }
       throw err;
     }
   });
@@ -51,6 +60,13 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       if (err instanceof svc.HostNotFoundError) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+      }
+      if (err instanceof svc.SniMismatchError) {
+        return reply.code(400).send({
+          error: 'SNI_MISMATCH',
+          message: err.message,
+          expected: err.expected,
+        });
       }
       throw err;
     }

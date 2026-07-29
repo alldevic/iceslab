@@ -15,6 +15,7 @@ import {
   UpdateBindingSchema,
   UpdateProfileSchema,
 } from './profiles.schemas.js';
+import { resolveHostFields } from './host-fields.js';
 import * as svc from './profiles.service.js';
 
 const KeypairQuery = z.object({
@@ -58,6 +59,24 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
     const { id } = ProfileIdParamSchema.parse(req.params);
     try {
       return reply.send(await svc.getProfileById(id));
+    } catch (err) {
+      if (err instanceof svc.ProfileNotFoundError) {
+        return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // Which Host fields mean anything for this profile, plus what each one
+  // inherits when the host leaves it NULL. The set depends on the profile's
+  // config (transport, security layer), not just its protocol, so it is
+  // resolved per profile rather than served as a static table. See
+  // host-fields.ts for why most fields are dead outside xray.
+  app.get('/api/profiles/:id/host-fields', auth, async (req, reply) => {
+    const { id } = ProfileIdParamSchema.parse(req.params);
+    try {
+      const p = await svc.getProfileById(id);
+      return reply.send({ fields: resolveHostFields(p.protocol, p.config) });
     } catch (err) {
       if (err instanceof svc.ProfileNotFoundError) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });

@@ -1,6 +1,7 @@
 import { Prisma } from '../../generated/prisma/client.js';
 import { eventBus } from '../../lib/event-bus.js';
 import { prisma } from '../../prisma.js';
+import { checkSniConsistency } from '../profiles/host-fields.js';
 import { mapHost, type PublicHostDto } from './hosts.mapper.js';
 import type {
   CreateHostInput,
@@ -23,6 +24,53 @@ export class BindingNotFoundError extends Error {
     super(`Binding ${id} not found`);
     this.name = 'BindingNotFoundError';
   }
+}
+
+/** An SNI override REALITY will never complete a handshake for. Saving it
+ *  yields a host that looks healthy and hands out URLs that cannot connect,
+ *  so we refuse instead of storing it. */
+export class SniMismatchError extends Error {
+  constructor(
+    public sni: string,
+    public expected: string[],
+  ) {
+    super(
+      `SNI "${sni}" is not served by this profile. REALITY answers only for: ${expected.join(', ')}`,
+    );
+    this.name = 'SniMismatchError';
+  }
+}
+
+// ───── Validation ─────
+
+/**
+ * Reject an SNI the node will not answer for.
+ *
+ * The check lives here rather than in the zod schema because it needs the
+ * profile behind the binding: `hosts.schemas.ts` sees a bare string and has no
+ * way to know which server names the inbound was built with. See
+ * `checkSniConsistency` for the cases deliberately left alone (CDN-terminated
+ * TLS, self-steal, non-REALITY profiles).
+ */
+async function assertSniMatchesProfile(opts: {
+  bindingId: string;
+  sniOverride: string | null | undefined;
+  securityLayer: string | null | undefined;
+}): Promise<void> {
+  if (!opts.sniOverride) return;
+  const binding = await prisma.profileNodeBinding.findUnique({
+    where: { id: opts.bindingId },
+    select: { profile: { select: { protocol: true, config: true } } },
+  });
+  if (!binding) return; // caller already raises BindingNotFoundError
+
+  const verdict = checkSniConsistency({
+    protocol: binding.profile.protocol,
+    config: binding.profile.config,
+    sniOverride: opts.sniOverride,
+    securityLayer: opts.securityLayer,
+  });
+  if (verdict) throw new SniMismatchError(opts.sniOverride, verdict.expected);
 }
 
 // ───── CRUD ─────
@@ -57,6 +105,12 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
   });
   if (!binding) throw new BindingNotFoundError(input.bindingId);
 
+  await assertSniMatchesProfile({
+    bindingId: input.bindingId,
+    sniOverride: input.sniOverride,
+    securityLayer: input.securityLayer,
+  });
+
   const created = await prisma.host.create({
     data: {
       bindingId: input.bindingId,
@@ -88,6 +142,17 @@ export async function updateHost(
 ): Promise<PublicHostDto> {
   const existing = await prisma.host.findUnique({ where: { id } });
   if (!existing) throw new HostNotFoundError(id);
+
+  // Check the values the row will END UP with: an update that only flips
+  // securityLayer away from 'tls' can invalidate an SNI saved earlier under
+  // the CDN exemption, so neither field can be validated on its own.
+  await assertSniMatchesProfile({
+    bindingId: existing.bindingId,
+    sniOverride:
+      input.sniOverride !== undefined ? input.sniOverride : existing.sniOverride,
+    securityLayer:
+      input.securityLayer !== undefined ? input.securityLayer : existing.securityLayer,
+  });
 
   const data: Prisma.HostUpdateInput = {};
   if (input.remark !== undefined) data.remark = input.remark;
