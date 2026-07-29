@@ -14,11 +14,13 @@ import type {
   Binding,
   Cascade,
   DashboardOverview,
+  Host,
   Insights,
   Node as PanelNode,
   Profile,
   PublicSettings,
   Region,
+  RoutePolicy,
   Squad,
   SystemVersion,
   User,
@@ -146,6 +148,32 @@ export const BINDINGS: Binding[] = NODE_SEEDS.map((n, i) => ({
   updatedAt: iso(5 * DAY),
 }));
 
+/**
+ * One host per binding: the demo needs them for the Hosts page and for the
+ * squad editor's country tree, both of which read hosts rather than bindings.
+ * The remark is what a member sees in their client, so it reads like a place,
+ * not like an id.
+ */
+export const HOSTS: Host[] = NODE_SEEDS.map((n, i) => ({
+  id: `host-${i}`,
+  bindingId: `bind-${i}`,
+  remark: n.name,
+  priority: i,
+  enabled: true,
+  addressOverride: null,
+  portOverride: null,
+  sniOverride: null,
+  hostHeaderOverride: null,
+  pathOverride: null,
+  fingerprintOverride: null,
+  alpn: [],
+  allowInsecure: false,
+  securityLayer: 'default',
+  disableForFormats: [],
+  createdAt: iso(50 * DAY),
+  updatedAt: iso(5 * DAY),
+}));
+
 // ───── Squads ─────
 
 export const SQUADS: Squad[] = [
@@ -162,10 +190,25 @@ export const SQUADS: Squad[] = [
     createdAt: iso(50 * DAY),
     updatedAt: iso(5 * DAY),
   },
+  // A paid tier: fewer protocols than premium, and its exits are restricted to
+  // one, so the card shows the "1 of N" state.
+  {
+    id: 'squad-basic',
+    name: 'basic',
+    description: 'Paid tier, RU entry plus one EU exit',
+    profileIds: ['prof-vless-reality', 'prof-hy2'],
+    routingPreset: null,
+    exitAcl: [{ cascadeId: 'casc-us-relay', exitNodeIds: ['node-xray-de-01'] }],
+    policyIds: ['policy-no-ads'],
+    hwidDeviceLimit: 3,
+    memberCount: 12,
+    createdAt: iso(40 * DAY),
+    updatedAt: iso(3 * DAY),
+  },
   {
     id: 'squad-premium',
     name: 'premium',
-    description: 'Premium squad (adds AmneziaWG)',
+    description: 'Every protocol, every exit, no policy limits',
     profileIds: ['prof-vless-reality', 'prof-hy2', 'prof-ss2022', 'prof-awg'],
     routingPreset: null,
     exitAcl: [],
@@ -174,6 +217,20 @@ export const SQUADS: Squad[] = [
     memberCount: 5,
     createdAt: iso(50 * DAY),
     updatedAt: iso(5 * DAY),
+  },
+  // Nothing granted yet: the one broken state the list is meant to surface.
+  {
+    id: 'squad-reseller',
+    name: 'reseller',
+    description: 'Partner accounts, no hosts granted yet',
+    profileIds: [],
+    routingPreset: null,
+    exitAcl: [],
+    policyIds: [],
+    hwidDeviceLimit: null,
+    memberCount: 3,
+    createdAt: iso(12 * DAY),
+    updatedAt: iso(1 * DAY),
   },
 ];
 
@@ -264,6 +321,25 @@ export const CASCADES: Cascade[] = [
   },
 ];
 
+// ───── Route policies (A4 ad-split) ─────
+
+export const ROUTE_POLICIES: RoutePolicy[] = [
+  {
+    id: 'policy-no-ads',
+    name: 'Без рекламы',
+    ordinal: 1,
+    directDomains: [],
+    blockDomains: Array.from({ length: 412 }, (_, i) => `ads-${i}.example`),
+  },
+  {
+    id: 'policy-ru-direct',
+    name: 'RU direct',
+    ordinal: 2,
+    directDomains: Array.from({ length: 1800 }, (_, i) => `ru-${i}.example`),
+    blockDomains: [],
+  },
+];
+
 // ───── Settings / auth / version / insights ─────
 
 export const PUBLIC_SETTINGS: PublicSettings = { brandName: 'Iceslab' };
@@ -291,6 +367,7 @@ export const VERSION: SystemVersion = {
   latest: '0.1.9',
   updateAvailable: false,
   releaseUrl: null,
+  stars: 19,
   checkedAt: iso(2 * HOUR),
 };
 
@@ -353,7 +430,9 @@ export function buildOverview(): DashboardOverview {
       }),
     },
     system: { onlineNodeCount: 8, totalNodeCount: 8 },
-    inventory: { profileCount: 4, squadCount: 2 },
+    // Counts feed the sidebar badges, so they have to agree with the lists
+    // above or the demo contradicts itself on screen.
+    inventory: { profileCount: PROFILES.length, squadCount: SQUADS.length, hostCount: HOSTS.length },
     host: {
       cpu: { loadPercent: 4, samplePercent: 4, cores: 6, loadavg: [0.23, 0.34, 0.4] },
       memory: { totalBytes: Math.round(11.6 * GiB), usedBytes: Math.round(1.84 * GiB), usedPercent: 15.8 },
