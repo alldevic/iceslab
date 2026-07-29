@@ -29,10 +29,12 @@ import {
 } from '@tabler/icons-react';
 import {
   createHost,
+  getProfileHostFields,
   listBindings,
   listHosts,
   listNodes,
   listProfiles,
+  sniMismatch,
   updateHost,
   type Fingerprint,
 } from '../lib/api';
@@ -122,6 +124,57 @@ export function HostEditPage() {
   const currentBinding = bindings.find((b) => b.id === (bindingId ?? host?.bindingId));
   const currentNode = currentBinding ? nodes.find((n) => n.id === currentBinding.nodeId) : undefined;
 
+  /**
+   * Which of these fields can actually reach a client, asked per profile rather
+   * than guessed from the protocol: path and Host exist only on an HTTP-ish
+   * transport, a fingerprint only where the client speaks TLS. Outside xray
+   * almost nothing applies.
+   *
+   * `retry: false` and the fallback below matter: an older backend has no such
+   * route, and a form that hides everything on a 404 is worse than one that
+   * shows too much. Missing answer means "show it all", which is how this page
+   * behaved before the endpoint existed.
+   */
+  const fieldsQuery = useQuery({
+    queryKey: ['host-fields', profileId],
+    queryFn: () => getProfileHostFields(profileId!),
+    enabled: Boolean(profileId),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const fields = fieldsQuery.data?.fields ?? null;
+  /** No answer yet, or none coming: every control stays visible. */
+  const can = (f: string) => (fields ? fields[f]?.supported === true : true);
+  const inherited = (f: string): string => {
+    const v = fields?.[f]?.inherited;
+    if (Array.isArray(v)) return v.join(', ');
+    return typeof v === 'string' ? v : '';
+  };
+  /** Why a whole group is missing. Every field in a dead group carries the same
+   *  sentence, so the first one speaks for all of them. */
+  const groupReason = (group: string[]): string | null => {
+    if (!fields) return null;
+    const dead = group.filter((f) => fields[f]?.supported === false);
+    if (dead.length !== group.length) return null;
+    return fields[group[0]!]?.reason ?? null;
+  };
+
+  /** Names the profile's node actually serves, filled in from a 400 the API
+   *  returns instead of saving a host that hands out unusable URLs. */
+  const [sniExpected, setSniExpected] = useState<string[] | null>(null);
+
+  /** Set when the whole TLS and transport group is dead for this profile, which
+   *  is the case for every protocol except xray. */
+  const wireReason = groupReason([
+    'sniOverride',
+    'hostHeaderOverride',
+    'pathOverride',
+    'fingerprintOverride',
+    'alpn',
+    'allowInsecure',
+    'securityLayer',
+  ]);
+
   useEffect(() => {
     if (!host) return;
     const binding = bindings.find((b) => b.id === host.bindingId);
@@ -205,17 +258,22 @@ export function HostEditPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
+      // A field the profile cannot serve is sent as NULL rather than as whatever
+      // an earlier profile left in the form. Otherwise switching a host from an
+      // xray profile to a Hysteria one would keep writing a dead SNI.
       const payload = {
         remark: name.trim(),
         enabled,
         addressOverride: address.trim() || null,
         portOverride: port === '' ? null : Number(port),
-        sniOverride: sni.trim() || null,
-        hostHeaderOverride: hostHeader.trim() || null,
-        pathOverride: path.trim() || null,
-        fingerprintOverride: (fingerprint as Fingerprint | null) ?? null,
-        alpn,
-        securityLayer,
+        sniOverride: can('sniOverride') ? sni.trim() || null : null,
+        hostHeaderOverride: can('hostHeaderOverride') ? hostHeader.trim() || null : null,
+        pathOverride: can('pathOverride') ? path.trim() || null : null,
+        fingerprintOverride: can('fingerprintOverride')
+          ? ((fingerprint as Fingerprint | null) ?? null)
+          : null,
+        alpn: can('alpn') ? alpn : [],
+        securityLayer: can('securityLayer') ? securityLayer : ('default' as const),
         disableForFormats: disabledFormats,
       };
       if (isNew) {
@@ -227,18 +285,30 @@ export function HostEditPage() {
     onSuccess: (saved) => {
       qc.invalidateQueries({ queryKey: ['hosts'] });
       setDirty(false);
+      setSniExpected(null);
       notifications.show({
         color: 'green',
         message: isNew ? t('hostEdit.created') : t('hostEdit.saved'),
       });
       if (isNew && saved) navigate(`/hosts/${saved.id}`, { replace: true });
     },
-    onError: (err) =>
+    onError: (err) => {
+      // The API refuses an SNI the node would not serve, and says which names it
+      // does. Naming them on the field beats a red toast the operator has to
+      // translate into an action.
+      const expected = sniMismatch(err);
+      if (expected) {
+        setSniExpected(expected);
+        setAdvancedOpen(true);
+        notifications.show({ color: 'red', message: t('hostEdit.sniMismatchToast') });
+        return;
+      }
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
         message: err instanceof Error ? err.message : String(err),
-      }),
+      });
+    },
   });
 
   usePageMeta(isNew ? [t('hostEdit.newCrumb')] : [host?.remark ?? '']);
@@ -259,13 +329,16 @@ export function HostEditPage() {
   }
 
   const selectedProfile = profiles.find((p) => p.id === profileId);
+  // Only fields this profile can actually serve are counted. A leftover SNI on
+  // a Hysteria host is not an override, it is a value nobody reads, and saving
+  // clears it anyway.
   const overrideCount =
-    (sni.trim() ? 1 : 0) +
-    (hostHeader.trim() ? 1 : 0) +
-    (path.trim() ? 1 : 0) +
-    (fingerprint ? 1 : 0) +
-    (alpn.length > 0 ? 1 : 0) +
-    (securityLayer !== 'default' ? 1 : 0) +
+    (can('sniOverride') && sni.trim() ? 1 : 0) +
+    (can('hostHeaderOverride') && hostHeader.trim() ? 1 : 0) +
+    (can('pathOverride') && path.trim() ? 1 : 0) +
+    (can('fingerprintOverride') && fingerprint ? 1 : 0) +
+    (can('alpn') && alpn.length > 0 ? 1 : 0) +
+    (can('securityLayer') && securityLayer !== 'default' ? 1 : 0) +
     (disabledFormats.length > 0 ? 1 : 0);
 
   return (
@@ -511,12 +584,15 @@ export function HostEditPage() {
               <Box style={{ color: MIST, display: 'flex' }}>
                 <IconLink size={15} stroke={1.8} />
               </Box>
+              {/* The title names what is inside, so it has to follow the
+                  profile: promising SNI and path on a Hysteria host would be a
+                  lie the operator only discovers after expanding. */}
               <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <Text style={{ fontFamily: DISPLAY, fontSize: 14, fontWeight: 500, color: SNOW }}>
-                  {t('hostEdit.advanced')}
+                  {wireReason ? t('hostEdit.advancedFormatsOnly') : t('hostEdit.advanced')}
                 </Text>
                 <Text style={{ fontFamily: DISPLAY, fontSize: 11, color: FAINT }}>
-                  {t('hostEdit.advancedHint')}
+                  {wireReason ? t('hostEdit.advancedFormatsHint') : t('hostEdit.advancedHint')}
                 </Text>
               </Box>
               {/* How many overrides are actually set. Collapsed, this is the
@@ -531,46 +607,79 @@ export function HostEditPage() {
             {advancedOpen && (
               <Stack gap={0} style={{ padding: '0 20px 20px' }}>
                 <GroupLabel>{t('hostEdit.groupWire')}</GroupLabel>
-                <Box style={{ display: 'flex', gap: 16 }}>
-                  <TextInput
-                    style={{ flex: 1 }}
-                    label={t('hostEdit.sni')}
-                    placeholder="www.microsoft.com"
-                    value={sni}
-                    onChange={(e) => {
-                      setSni(e.currentTarget.value);
-                      setDirty(true);
-                    }}
-                  />
-                  <TextInput
-                    style={{ flex: 1 }}
-                    label={t('hostEdit.hostHeader')}
-                    placeholder={t('hostEdit.followsSni')}
-                    value={hostHeader}
-                    onChange={(e) => {
-                      setHostHeader(e.currentTarget.value);
-                      setDirty(true);
-                    }}
-                  />
-                  <TextInput
-                    style={{ flex: 1 }}
-                    label={t('hostEdit.path')}
-                    placeholder="/api/stream"
-                    value={path}
-                    onChange={(e) => {
-                      setPath(e.currentTarget.value);
-                      setDirty(true);
-                    }}
-                  />
-                </Box>
+                {/* A field the profile cannot serve is absent, not disabled: a
+                    disabled input still invites "what would go here". When the
+                    whole group is dead the API's own sentence explains it, so
+                    the block is not just mysteriously empty. */}
+                {wireReason ? (
+                  <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
+                    {wireReason}
+                  </Text>
+                ) : (
+                  <Box style={{ display: 'flex', gap: 16 }}>
+                    {can('sniOverride') && (
+                      <TextInput
+                        style={{ flex: 1 }}
+                        label={t('hostEdit.sni')}
+                        placeholder={inherited('sniOverride') || 'www.microsoft.com'}
+                        description={
+                          sniExpected
+                            ? t('hostEdit.sniExpected', {
+                                names: sniExpected.length ? sniExpected.join(', ') : '-',
+                              })
+                            : fields?.sniOverride?.reason
+                        }
+                        error={sniExpected ? true : undefined}
+                        inputWrapperOrder={['label', 'input', 'description', 'error']}
+                        value={sni}
+                        onChange={(e) => {
+                          setSni(e.currentTarget.value);
+                          setSniExpected(null);
+                          setDirty(true);
+                        }}
+                      />
+                    )}
+                    {can('hostHeaderOverride') && (
+                      <TextInput
+                        style={{ flex: 1 }}
+                        label={t('hostEdit.hostHeader')}
+                        placeholder={inherited('hostHeaderOverride') || t('hostEdit.followsSni')}
+                        value={hostHeader}
+                        onChange={(e) => {
+                          setHostHeader(e.currentTarget.value);
+                          setDirty(true);
+                        }}
+                      />
+                    )}
+                    {can('pathOverride') && (
+                      <TextInput
+                        style={{ flex: 1 }}
+                        label={t('hostEdit.path')}
+                        placeholder={inherited('pathOverride') || '/api/stream'}
+                        value={path}
+                        onChange={(e) => {
+                          setPath(e.currentTarget.value);
+                          setDirty(true);
+                        }}
+                      />
+                    )}
+                  </Box>
+                )}
 
-                <Box style={{ display: 'flex', gap: 16, marginTop: 14, alignItems: 'flex-start' }}>
-                  <Box style={{ flex: 1 }}>
+                <Box
+                  style={{
+                    display: wireReason ? 'none' : 'flex',
+                    gap: 16,
+                    marginTop: 14,
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  <Box style={{ flex: 1, display: can('fingerprintOverride') ? 'block' : 'none' }}>
                     <Select
                       label={t('hostEdit.fingerprint')}
                       value={fingerprint}
                       clearable
-                      placeholder={t('hostEdit.fromProfile')}
+                      placeholder={inherited('fingerprintOverride') || t('hostEdit.fromProfile')}
                       onChange={(v) => {
                         setFingerprint(v);
                         setDirty(true);
@@ -578,7 +687,7 @@ export function HostEditPage() {
                       data={FINGERPRINTS.map((f) => ({ value: f, label: f }))}
                     />
                   </Box>
-                  <Box style={{ flex: 1 }}>
+                  <Box style={{ flex: 1, display: can('alpn') ? 'block' : 'none' }}>
                     <Text style={{ ...LABEL, marginBottom: 8 }}>{t('hostEdit.alpn')}</Text>
                     <Box style={{ display: 'flex', gap: 8 }}>
                       {ALPNS.map((a) => (
@@ -597,7 +706,7 @@ export function HostEditPage() {
                       ))}
                     </Box>
                   </Box>
-                  <Box style={{ flex: 1 }}>
+                  <Box style={{ flex: 1, display: can('securityLayer') ? 'block' : 'none' }}>
                     <Text style={{ ...LABEL, marginBottom: 8 }}>{t('hostEdit.securityLayer')}</Text>
                     <Box
                       style={{

@@ -1240,6 +1240,39 @@ export async function listProfiles(params?: {
   return data;
 }
 
+/**
+ * Which Host columns mean anything for a given profile, and what each inherits
+ * when the host leaves it NULL.
+ *
+ * The set depends on the profile's CONFIG, not just its protocol: path and Host
+ * exist only on an HTTP-ish transport, a fingerprint only where the client
+ * speaks TLS. Outside xray almost nothing applies, so the form asks rather than
+ * guessing.
+ */
+export interface HostFieldSupport {
+  supported: boolean;
+  /** Profile-level default. Null means there is nothing to inherit, either
+   *  because the adapter decides or because the value is per node. */
+  inherited?: string | string[] | null;
+  /** Written for an operator, so it can be shown verbatim. */
+  reason?: string;
+}
+
+export type HostFieldMap = Record<string, HostFieldSupport>;
+
+export async function getProfileHostFields(id: string): Promise<{ fields: HostFieldMap }> {
+  const { data } = await api.get<{ fields: HostFieldMap }>(`/api/profiles/${id}/host-fields`);
+  return data;
+}
+
+/** A host whose SNI the profile's node would not serve. `expected` carries the
+ *  names it does serve, so the form can name them instead of just refusing. */
+export function sniMismatch(err: unknown): string[] | null {
+  const body = (err as { response?: { data?: { error?: string; expected?: unknown } } }).response?.data;
+  if (body?.error !== 'SNI_MISMATCH') return null;
+  return Array.isArray(body.expected) ? body.expected.filter((x): x is string => typeof x === 'string') : [];
+}
+
 export async function createProfile(input: CreateProfileInput): Promise<Profile> {
   const { data } = await api.post<Profile>('/api/profiles', input);
   return data;
