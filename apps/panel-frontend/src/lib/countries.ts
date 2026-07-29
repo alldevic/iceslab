@@ -89,3 +89,11 @@ export function countryFlag(code: string | null | undefined): string {
   const c = COUNTRIES.find((x) => x.code === code.toUpperCase());
   return c?.flag ?? '';
 }
+
+/** The country's own name, for places that name a direction rather than a node.
+ *  Falls back to the code, which is still readable, rather than to nothing. */
+export function countryName(code: string | null | undefined): string {
+  if (!code) return '';
+  const upper = code.toUpperCase();
+  return COUNTRIES.find((x) => x.code === upper)?.name ?? upper;
+}

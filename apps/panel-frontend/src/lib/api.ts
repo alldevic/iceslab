@@ -299,13 +299,28 @@ export interface UpdateUserInput {
   groupIds?: string[];
 }
 
+export type UserSort = 'username' | 'createdAt' | 'expireAt' | 'traffic';
+
 export async function listUsers(params?: {
   page?: number;
   limit?: number;
   status?: string;
   search?: string;
+  /** Squad membership filter (Filters popover). */
+  groupId?: string;
+  /** Exact tag match (Filters popover), unlike `search` which is a substring. */
+  tag?: string;
+  /** Server-side, because the list is paged: sorting one page would lie. */
+  sort?: UserSort;
+  order?: 'asc' | 'desc';
 }): Promise<UsersListResponse> {
   const { data } = await api.get<UsersListResponse>('/api/users', { params });
+  return data;
+}
+
+/** Distinct tags in use, to populate the Filters popover. */
+export async function listUserTags(): Promise<{ tags: string[] }> {
+  const { data } = await api.get<{ tags: string[] }>('/api/users/tags');
   return data;
 }
 
@@ -510,6 +525,23 @@ export async function listNodes(params?: {
 }): Promise<NodesListResponse> {
   const { data } = await api.get<NodesListResponse>('/api/nodes', { params });
   return data;
+}
+
+/** Largest page the list endpoint accepts; asking for more is a 400. */
+const NODES_PAGE_MAX = 100;
+
+/**
+ * One node by id. There is no single-node GET, so this walks the list a page
+ * at a time and stops at the first match. Cheap for any fleet that fits one
+ * page, and correct for the ones that do not.
+ */
+export async function findNode(id: string): Promise<Node | null> {
+  for (let page = 1; ; page++) {
+    const res = await listNodes({ page, limit: NODES_PAGE_MAX });
+    const hit = res.nodes.find((n) => n.id === id);
+    if (hit) return hit;
+    if (page * NODES_PAGE_MAX >= res.total || res.nodes.length === 0) return null;
+  }
 }
 
 // ───── Regions (slice 27.5) ─────
@@ -802,11 +834,37 @@ export interface SquadExitAclEntry {
   exitNodeIds: string[];
 }
 
+/**
+ * What a route rule does with the traffic it matched.
+ *   block  - dropped on the node, never leaves
+ *   direct - straight out of the node's own IP
+ *   warp   - out through the node's WARP egress (needs warpEnabled on the node)
+ *   proxy  - on through the rest of the chain, the default door
+ */
+export type RouteAction = 'block' | 'direct' | 'warp' | 'proxy';
+
+/** One rule of a policy. Order matters: first match wins. */
+export interface RouteRule {
+  id: string;
+  /** Matcher tokens (`geosite:google`, `geoip:private`, `port:25`, ...). */
+  match: string[];
+  action: RouteAction;
+  /** Operator's own note. Never used for matching. */
+  note: string;
+}
+
 /** A4 ad-split, a named route-policy (extra, ordinal >= 1) grantable to squads. */
 export interface RoutePolicy {
   id: string;
   name: string;
   ordinal: number;
+  /**
+   * The ordered rule list. The API does not ship it yet: today the list
+   * endpoint answers with the two flat domain arrays below, and the panel
+   * derives a rule list from them. Once the backend stores rules this becomes
+   * the source of truth and the two arrays can go.
+   */
+  rules?: RouteRule[];
   directDomains: string[];
   blockDomains: string[];
 }
@@ -814,6 +872,87 @@ export interface RoutePolicy {
 export async function listRoutePolicies(): Promise<{ policies: RoutePolicy[] }> {
   const { data } = await api.get<{ policies: RoutePolicy[] }>('/api/route-policies');
   return data;
+}
+
+export interface RoutePolicyInput {
+  name: string;
+  rules: Omit<RouteRule, 'id'>[];
+}
+
+/**
+ * Whether the two write surfaces below exist yet. Both are false today, and the
+ * UI reads them to disable the controls whose only outcome is a write, rather
+ * than offering a button that answers 404. Flip one line each when the
+ * endpoints ship; nothing else has to change.
+ */
+export const ROUTE_POLICY_WRITES_LIVE = false;
+export const ROUTING_PRESET_WRITES_LIVE = false;
+
+/**
+ * Policy writes. NOT LIVE: `route-policies.routes.ts` registers a single GET,
+ * and its own comment calls a create/edit surface a fast-follow. These three
+ * are the contract the editor is written against, so the page lights up the
+ * moment the backend ships them; until then they answer 404 and the editor
+ * says so rather than losing an edit quietly.
+ */
+export async function createRoutePolicy(input: RoutePolicyInput): Promise<RoutePolicy> {
+  const { data } = await api.post<RoutePolicy>('/api/route-policies', input);
+  return data;
+}
+
+export async function updateRoutePolicy(id: string, input: RoutePolicyInput): Promise<RoutePolicy> {
+  const { data } = await api.put<RoutePolicy>(`/api/route-policies/${id}`, input);
+  return data;
+}
+
+export async function deleteRoutePolicy(id: string): Promise<void> {
+  await api.delete(`/api/route-policies/${id}`);
+}
+
+/**
+ * A routing preset: the rule set written into the client's own config.
+ *
+ * NOT LIVE either. Today a preset is one of three ids in `ROUTING_PRESET_IDS`
+ * whose rules are compiled into the subscription builder, so there is nothing
+ * to list, create or edit. This is the shape the editor is written against:
+ * the three built-ins come back with `builtIn: true` and stay read-only, and
+ * an operator's own presets are ordinary rows.
+ *
+ * A device can only bypass, block or tunnel. WARP is a node egress and has no
+ * meaning here, which is why `RouteAction` is narrowed at the call site.
+ */
+export interface RoutingPreset {
+  id: string;
+  name: string;
+  builtIn: boolean;
+  rules: RouteRule[];
+}
+
+export interface RoutingPresetInput {
+  name: string;
+  rules: Omit<RouteRule, 'id'>[];
+}
+
+export async function listRoutingPresets(): Promise<{ presets: RoutingPreset[] }> {
+  const { data } = await api.get<{ presets: RoutingPreset[] }>('/api/routing-presets');
+  return data;
+}
+
+export async function createRoutingPreset(input: RoutingPresetInput): Promise<RoutingPreset> {
+  const { data } = await api.post<RoutingPreset>('/api/routing-presets', input);
+  return data;
+}
+
+export async function updateRoutingPreset(
+  id: string,
+  input: RoutingPresetInput,
+): Promise<RoutingPreset> {
+  const { data } = await api.put<RoutingPreset>(`/api/routing-presets/${id}`, input);
+  return data;
+}
+
+export async function deleteRoutingPreset(id: string): Promise<void> {
+  await api.delete(`/api/routing-presets/${id}`);
 }
 
 export interface Squad {
@@ -927,6 +1066,59 @@ export interface UpdateCascadeInput {
   mode?: CascadeMode;
   hideHopsFromSub?: boolean;
   hops?: CascadeHopInput[];
+}
+
+/* ───── Cascades, v4 shape ──────────────────────────────────────────────────
+ * The panel describes a cascade as positions and directions rather than hops:
+ * a position is a POOL of nodes that all do the same job, and a direction is a
+ * way out that owns a tag for good, whatever nodes currently sit under it.
+ *
+ * The API still speaks the older `hops` shape, so the write below is held
+ * behind the flag until it lands. Everything above it (types, form, preview)
+ * is already in the new shape, and flipping the flag is the whole migration on
+ * this side.
+ */
+
+/** One step of the path. Every node in the pool does the same job in parallel. */
+export interface CascadePositionInput {
+  nodeIds: string[];
+  position: number;
+  /** Entry only: the core clients dial. */
+  entryProtocol?: CascadeProtocol;
+  /** What this position speaks to the next one. The exit position carries none. */
+  linkProtocol?: CascadeProtocol;
+}
+
+/**
+ * A way out of the cascade. The tag is issued by the backend the first time the
+ * direction is saved and is never reused, so it is absent on create.
+ */
+export interface CascadeDirectionInput {
+  countryCode: string;
+  nodeIds: string[];
+}
+
+export interface CreateCascadeV4Input {
+  name: string;
+  enabled?: boolean;
+  hideHopsFromSub?: boolean;
+  positions: CascadePositionInput[];
+  directions: CascadeDirectionInput[];
+}
+
+/** Flip when POST /api/cascades accepts positions and directions. */
+export const CASCADE_V4_WRITES_LIVE = false;
+
+export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input>;
+
+export async function createCascadeV4(input: CreateCascadeV4Input): Promise<Cascade> {
+  const { data } = await api.post<Cascade>('/api/cascades', input);
+  return data;
+}
+
+export async function updateCascadeV4(id: string, input: UpdateCascadeV4Input): Promise<Cascade> {
+  const { data } = await api.put<Cascade>(`/api/cascades/${id}`, input);
+  return data;
 }
 
 export async function listCascades(): Promise<{ cascades: Cascade[] }> {
@@ -1323,6 +1515,7 @@ export interface DashboardOverview {
   inventory: {
     profileCount: number;
     squadCount: number;
+    hostCount: number;
   };
   host: {
     cpu: {
@@ -1483,6 +1676,8 @@ export interface SystemVersion {
   latest: string | null;
   updateAvailable: boolean;
   releaseUrl: string | null;
+  /** Stargazer count for the topbar chip, null when the check couldn't run. */
+  stars: number | null;
   checkedAt: string | null;
 }
 
