@@ -1,21 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { now } from '../lib/demoFlag';
 import {
   ActionIcon,
-  Badge,
+  Box,
   Card,
   Group,
   Menu,
-  Progress,
+  Popover,
   Select,
   SimpleGrid,
   Stack,
-  Table,
   Text,
-  TextInput,
   ThemeIcon,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
 import { copyToClipboard } from '../lib/clipboard';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
@@ -23,7 +23,10 @@ import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  IconArrowDown,
+  IconArrowUp,
   IconBan,
+  IconFilter,
   IconChevronLeft,
   IconChevronRight,
   IconCircleCheck,
@@ -47,6 +50,7 @@ import {
   deleteUser,
   fetchAuthStatus,
   listSquads,
+  listUserTags,
   listUsers,
   subscriptionUrl,
   updateUser,
@@ -56,11 +60,12 @@ import {
   type CreateUserInput,
   type UpdateUserInput,
   type User,
+  type UserSort,
 } from '../lib/api';
 import { useOverview } from '../hooks/useOverview';
-import { UserFormModal } from '../components/UserFormModal';
-import { PageHero } from '../components/PageHero';
-import { PrimaryButton } from '../components/PrimaryButton';
+import { usePageMeta } from '../hooks/usePageMeta';
+import { UserDrawer } from '../components/UserDrawer';
+import { Toolbar, ToolbarButton, ToolbarIconButton, ToolbarSearch } from '../components/Toolbar';
 
 // ───── Helpers ─────
 
@@ -86,25 +91,28 @@ const MONO_LABEL = {
 };
 
 /**
- * Computed status shown in the row pill. Paper's design surfaces *connection*
- * state ("ONLINE/OFFLINE") instead of lifecycle, with lifecycle states
- * (LIMITED/EXPIRED/DISABLED) overriding the pill when they apply. Order of
- * precedence: lifecycle override → connection inferred from lastOnlineAt.
+ * The pill states the user's LIFECYCLE (active / expired / limited /
+ * disabled), which is what an operator acts on. Connection state is not a
+ * status here: it rides the dot next to the username, which glows when the
+ * user was seen in the last five minutes. Showing "online" in the pill hid
+ * the fact that an account was, say, active but idle for a week.
  */
-type ComputedStatus = 'online' | 'offline' | 'limited' | 'expired' | 'disabled';
+type ComputedStatus = 'active' | 'limited' | 'expired' | 'disabled';
 
 function computedStatus(u: User): ComputedStatus {
   if (u.status === 'expired') return 'expired';
   if (u.status === 'limited') return 'limited';
   if (u.status === 'disabled') return 'disabled';
-  if (!u.lastOnlineAt) return 'offline';
-  const sinceMs = now() - new Date(u.lastOnlineAt).getTime();
-  return sinceMs < 5 * 60 * 1000 ? 'online' : 'offline';
+  return 'active';
+}
+
+function isOnline(u: User): boolean {
+  if (!u.lastOnlineAt) return false;
+  return now() - new Date(u.lastOnlineAt).getTime() < 5 * 60 * 1000;
 }
 
 const COMPUTED_STATUS_ACCENT: Record<ComputedStatus, string> = {
-  online: MOSS,
-  offline: MIST,
+  active: MOSS,
   limited: AMBER,
   expired: RED,
   disabled: MIST,
@@ -155,6 +163,142 @@ function expireRelative(
   return { text: t('userTime.daysLeft', { days }), tone: 'good' };
 }
 
+// ───── Table shape ─────
+
+/**
+ * Column widths, in px. Username is the only elastic one, everything to its
+ * right is fixed so the lanes line up across every row on the page.
+ */
+const COL = {
+  status: 140,
+  subscription: 140,
+  expires: 140,
+  traffic: 260,
+  squads: 200,
+  tag: 100,
+  actions: 56,
+} as const;
+
+function HeadCell({
+  label,
+  width,
+  grow,
+  col,
+  sort,
+  order,
+  onSort,
+}: {
+  label: string;
+  width?: number;
+  grow?: boolean;
+  /** Present = the column is sortable and clicking cycles asc/desc. */
+  col?: UserSort;
+  sort?: UserSort;
+  order?: 'asc' | 'desc';
+  onSort?: (col: UserSort) => void;
+}) {
+  const active = col !== undefined && col === sort;
+  const content = (
+    <>
+      <Text style={{ ...MONO_LABEL, color: active ? SNOW : MIST }}>{label}</Text>
+      {active &&
+        (order === 'asc' ? (
+          <IconArrowUp size={12} stroke={2} color={CYAN} />
+        ) : (
+          <IconArrowDown size={12} stroke={2} color={CYAN} />
+        ))}
+    </>
+  );
+  const style = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    ...(grow ? { flex: 1, minWidth: 0 } : { width, flexShrink: 0 }),
+  } as const;
+
+  if (!col || !onSort) return <Box style={style}>{content}</Box>;
+  return (
+    <UnstyledButton onClick={() => onSort(col)} style={{ ...style, cursor: 'pointer' }}>
+      {content}
+    </UnstyledButton>
+  );
+}
+
+/** Status pill: fully round, tinted fill, hairline of the same accent. */
+function Pill({ accent, children }: { accent: string; children: ReactNode }) {
+  return (
+    <Box
+      style={{
+        display: 'inline-flex',
+        padding: '3px 9px',
+        borderRadius: 999,
+        backgroundColor: `${accent}1A`,
+        border: `1px solid ${accent}33`,
+        color: accent,
+        ...MONO,
+        fontSize: 10,
+        lineHeight: '12px',
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+/**
+ * Squad pill. Borderless and in the display face, because a squad name is
+ * operator-written content, not a status from a fixed set.
+ */
+function SquadPill({ children, muted }: { children: ReactNode; muted?: boolean }) {
+  const accent = muted ? MIST : VIOLET;
+  return (
+    <Box
+      style={{
+        display: 'inline-flex',
+        padding: '3px 9px',
+        borderRadius: 999,
+        backgroundColor: `${accent}1A`,
+        color: accent,
+        ...DISPLAY,
+        fontSize: 11,
+        lineHeight: '14px',
+        whiteSpace: 'nowrap',
+        maxWidth: '100%',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+function TrafficBar({ percent, color }: { percent: number; color: string }) {
+  return (
+    <Box
+      style={{
+        height: 6,
+        width: '100%',
+        borderRadius: 999,
+        backgroundColor: HAIRLINE,
+        overflow: 'hidden',
+      }}
+    >
+      <Box
+        style={{
+          height: 6,
+          borderRadius: 999,
+          backgroundColor: color,
+          width: `${Math.min(100, Math.max(0, percent))}%`,
+        }}
+      />
+    </Box>
+  );
+}
+
 // ───── Stats card ─────
 
 interface StatChipProps {
@@ -170,8 +314,8 @@ function StatChip({ icon, label, value, accent, active, onClick }: StatChipProps
   return (
     <Card
       withBorder
-      padding="sm"
-      radius="md"
+      padding={12}
+      radius={8}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -193,25 +337,16 @@ function StatChip({ icon, label, value, accent, active, onClick }: StatChipProps
         borderWidth: active ? 2 : 1,
       }}
     >
-      <Group justify="space-between" wrap="nowrap">
+      {/* Bare outline icon, no filled badge: the number is the content here,
+          the icon only names the bucket. */}
+      <Group justify="space-between" wrap="nowrap" align="flex-start">
         <Stack gap={2}>
           <Text style={MONO_LABEL}>{label}</Text>
           <Text style={{ ...DISPLAY, fontSize: 28, fontWeight: 500, lineHeight: 1, color: SNOW }}>
             {value}
           </Text>
         </Stack>
-        <ThemeIcon
-          size={36}
-          radius="md"
-          variant="light"
-          style={{
-            backgroundColor: `${accent}1A`,
-            color: accent,
-            border: `1px solid ${accent}33`,
-          }}
-        >
-          {icon}
-        </ThemeIcon>
+        <Box style={{ color: accent, display: 'flex', flexShrink: 0 }}>{icon}</Box>
       </Group>
     </Card>
   );
@@ -230,6 +365,26 @@ export function UsersPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(25);
+  // Sorting is a server concern here: the table shows one page of N, so
+  // reordering the client slice would shuffle 25 rows and call it sorted.
+  const [sort, setSort] = useState<UserSort>('username');
+  const [order, setOrder] = useState<'asc' | 'desc'>('asc');
+  // Filters live next to the search box rather than as more chips: squad and
+  // tag are "narrow the roster" questions, while the status chips above are
+  // the primary split and stay one click away.
+  const [squadFilter, setSquadFilter] = useState<string | null>(null);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const activeFilters = (squadFilter ? 1 : 0) + (tagFilter ? 1 : 0);
+
+  function toggleSort(next: UserSort) {
+    if (next === sort) {
+      setOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSort(next);
+      setOrder(next === 'username' ? 'asc' : 'desc');
+    }
+    setPage(1);
+  }
 
   // Wave-14 #17: server-side pagination + filter + search. Pre-wave we
   // fetched limit:500 once and paged/filtered/searched in JS; this silently
@@ -240,12 +395,39 @@ export function UsersPage() {
   const serverStatus = statusFilter === 'all' ? undefined : statusFilter;
   const serverSearch = debouncedSearch.trim() || undefined;
   const usersQuery = useQuery({
-    queryKey: ['users', { page, limit: rowsPerPage, status: serverStatus, search: serverSearch }],
+    queryKey: [
+      'users',
+      {
+        page,
+        limit: rowsPerPage,
+        status: serverStatus,
+        search: serverSearch,
+        groupId: squadFilter,
+        tag: tagFilter,
+        sort,
+        order,
+      },
+    ],
     queryFn: () =>
-      listUsers({ page, limit: rowsPerPage, status: serverStatus, search: serverSearch }),
+      listUsers({
+        page,
+        limit: rowsPerPage,
+        status: serverStatus,
+        search: serverSearch,
+        groupId: squadFilter ?? undefined,
+        tag: tagFilter ?? undefined,
+        sort,
+        order,
+      }),
     placeholderData: (prev) => prev,
   });
   const squadsQuery = useQuery({ queryKey: ['squads'], queryFn: listSquads });
+  const tagsQuery = useQuery({
+    queryKey: ['user-tags'],
+    queryFn: listUserTags,
+    staleTime: 5 * 60 * 1000,
+  });
+  const knownTags = tagsQuery.data?.tags ?? [];
   // Wave-14 #16: subscriptionUrl(token) without a second arg falls back to
   // API_BASE_URL, which defaults to http://localhost:3000, so a prod SPA
   // built without VITE_API_BASE_URL silently copies a localhost link to the
@@ -279,11 +461,19 @@ export function UsersPage() {
     };
   }, [dashQuery.data, totalUsers]);
 
+  // Topbar line: "/ USERS · 36 ACCOUNTS · 21 ACTIVE". `count` drives i18next
+  // pluralization (one/few/many/other for RU), otherwise a single user reads
+  // as "1 аккаунтов".
+  usePageMeta([
+    t('pageMeta.users', { count: stats.total }),
+    t('pageMeta.usersActive', { count: stats.active }),
+  ]);
+
   // Reset to page 1 whenever any server-filter input changes so a narrowed
   // result set doesn't drop us into an empty page (page 5 of 1 page).
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, debouncedSearch, rowsPerPage]);
+  }, [statusFilter, debouncedSearch, rowsPerPage, squadFilter, tagFilter]);
 
   const totalPages = Math.max(1, Math.ceil(totalUsers / rowsPerPage));
   const safePage = Math.min(page, totalPages);
@@ -425,40 +615,6 @@ export function UsersPage() {
 
   return (
     <Stack gap="lg">
-      <PageHero
-        eyebrow={t('pageHero.usersEyebrow', {
-          // `count` drives i18next pluralization (one/few/many/other for RU,
-          // one/other for EN). Without it the eyebrow rendered "1 аккаунтов"
-          // on a single user, caught during the post-refactor audit.
-          count: stats.total,
-          online: stats.active,
-          limited:
-            stats.limited > 0
-              ? t('pageHero.usersEyebrowLimited', { count: stats.limited })
-              : '',
-        })}
-        title={t('pageHero.usersTitle')}
-        subtitle={t('pageHero.usersSubtitle')}
-        right={
-          <Group gap={8}>
-            <Tooltip label={t('common.refresh')}>
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                onClick={() => qc.invalidateQueries({ queryKey: ['users'] })}
-                loading={usersQuery.isFetching}
-                style={{ color: MIST }}
-              >
-                <IconRefresh size={18} />
-              </ActionIcon>
-            </Tooltip>
-            <PrimaryButton leftSection={<IconPlus size={14} />} onClick={openCreate}>
-              {t('users.create')}
-            </PrimaryButton>
-          </Group>
-        }
-      />
-
       {/* Stats row - clickable as filters */}
       <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }} spacing="sm">
         <StatChip
@@ -503,51 +659,141 @@ export function UsersPage() {
         />
       </SimpleGrid>
 
-      {/* Search (status filtering is driven by the clickable stat chips above) */}
-      <TextInput
-        placeholder={t('users.searchPlaceholder')}
-        leftSection={<IconSearch size={16} color={MIST} />}
-        value={search}
-        onChange={(e) => setSearch(e.currentTarget.value)}
-        styles={{
-          input: { backgroundColor: CARD, borderColor: HAIRLINE, color: SNOW },
-        }}
-      />
-
-      {/* Table */}
-      <Card withBorder padding={0} radius="md" style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
-        <Table.ScrollContainer minWidth={1100}>
-          <Table verticalSpacing="sm" highlightOnHover>
-            <Table.Thead>
-              <Table.Tr style={{ borderBottom: `1px solid ${HAIRLINE}` }}>
-                <Table.Th style={MONO_LABEL}>{t('users.table.username')}</Table.Th>
-                <Table.Th style={MONO_LABEL}>{t('users.table.status')}</Table.Th>
-                <Table.Th style={MONO_LABEL}>{t('users.table.subscription')}</Table.Th>
-                <Table.Th style={MONO_LABEL}>{t('users.table.expires')}</Table.Th>
-                <Table.Th style={MONO_LABEL}>{t('users.table.traffic')}</Table.Th>
-                <Table.Th style={MONO_LABEL}>{t('users.table.squads')}</Table.Th>
-                <Table.Th style={MONO_LABEL}>{t('users.table.tag')}</Table.Th>
-                <Table.Th style={{ width: 1, ...MONO_LABEL }}>{t('common.actions')}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {pagedUsers.length === 0 && (
-                <Table.Tr>
-                  <Table.Td colSpan={9}>
-                    <Stack align="center" py="xl" gap="xs">
-                      <ThemeIcon size={40} radius="md" variant="light" color="gray">
-                        <IconUserOff size={22} />
-                      </ThemeIcon>
-                      <Text c="dimmed" size="sm">
-                        {stats.total === 0
-                          ? t('users.empty')
-                          : t('common.nothingFound')}
-                      </Text>
-                    </Stack>
-                  </Table.Td>
-                </Table.Tr>
+      {/* Search + actions (status filtering is driven by the stat chips above) */}
+      <Toolbar>
+        <ToolbarSearch
+          value={search}
+          onChange={setSearch}
+          placeholder={t('users.searchPlaceholder')}
+          leftSection={<IconSearch size={16} color={MIST} />}
+        />
+        <Popover position="bottom-end" withinPortal shadow="md" width={280}>
+          <Popover.Target>
+            <Box>
+              <ToolbarButton
+                icon={<IconFilter size={15} stroke={1.7} />}
+                label={t('users.filters.button')}
+                badge={activeFilters || undefined}
+              />
+            </Box>
+          </Popover.Target>
+          <Popover.Dropdown style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
+            <Stack gap="sm">
+              <Select
+                label={t('users.filters.squad')}
+                placeholder={t('users.filters.anySquad')}
+                value={squadFilter}
+                onChange={setSquadFilter}
+                clearable
+                data={(squadsQuery.data?.squads ?? []).map((s) => ({ value: s.id, label: s.name }))}
+              />
+              <Select
+                label={t('users.filters.tag')}
+                placeholder={t('users.filters.anyTag')}
+                value={tagFilter}
+                onChange={setTagFilter}
+                clearable
+                searchable
+                data={knownTags}
+              />
+              {activeFilters > 0 && (
+                <UnstyledButton
+                  onClick={() => {
+                    setSquadFilter(null);
+                    setTagFilter(null);
+                  }}
+                  style={{ ...MONO_LABEL, color: CYAN, alignSelf: 'flex-start' }}
+                >
+                  {t('users.filters.clear')}
+                </UnstyledButton>
               )}
-              {pagedUsers.map((u) => {
+            </Stack>
+          </Popover.Dropdown>
+        </Popover>
+        <ToolbarIconButton
+          icon={<IconRefresh size={16} />}
+          title={t('common.refresh')}
+          loading={usersQuery.isFetching}
+          onClick={() => qc.invalidateQueries({ queryKey: ['users'] })}
+        />
+        <ToolbarButton
+          icon={<IconPlus size={14} stroke={2.4} />}
+          label={t('users.create')}
+          onClick={openCreate}
+          primary
+        />
+      </Toolbar>
+
+      {/* Table. Fixed column widths rather than auto-layout: every row must
+          land in the same vertical lanes, otherwise one long username shifts
+          the traffic bars for that row only and the column stops reading as a
+          column. Username takes the slack. */}
+      <Box
+        style={{
+          width: '100%',
+          borderRadius: 8,
+          overflow: 'clip',
+          backgroundColor: CARD,
+          border: `1px solid ${HAIRLINE}`,
+        }}
+      >
+        <Box style={{ overflowX: 'auto' }}>
+          <Box style={{ minWidth: 1100 }}>
+            <Box
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                padding: '12px 16px',
+                borderBottom: `1px solid ${HAIRLINE}`,
+              }}
+            >
+              <HeadCell
+                grow
+                label={t('users.table.username')}
+                col="username"
+                sort={sort}
+                order={order}
+                onSort={toggleSort}
+              />
+              <HeadCell width={COL.status} label={t('users.table.status')} />
+              <HeadCell width={COL.subscription} label={t('users.table.subscription')} />
+              <HeadCell
+                width={COL.expires}
+                label={t('users.table.expires')}
+                col="expireAt"
+                sort={sort}
+                order={order}
+                onSort={toggleSort}
+              />
+              <HeadCell
+                width={COL.traffic}
+                label={t('users.table.traffic')}
+                col="traffic"
+                sort={sort}
+                order={order}
+                onSort={toggleSort}
+              />
+              <HeadCell width={COL.squads} label={t('users.table.squads')} />
+              <HeadCell width={COL.tag} label={t('users.table.tag')} />
+              {/* Three dots, not the word "actions": the header of a column of
+                  icon buttons should not shout louder than the buttons. */}
+              <Box style={{ width: COL.actions, flexShrink: 0, textAlign: 'right' }}>
+                <Text style={{ ...MONO_LABEL }}>···</Text>
+              </Box>
+            </Box>
+
+            {pagedUsers.length === 0 && (
+              <Stack align="center" py={48} gap="xs">
+                <ThemeIcon size={40} radius="md" variant="light" color="gray">
+                  <IconUserOff size={22} />
+                </ThemeIcon>
+                <Text c="dimmed" size="sm">
+                  {stats.total === 0 ? t('users.empty') : t('common.nothingFound')}
+                </Text>
+              </Stack>
+            )}
+
+            {pagedUsers.map((u) => {
                 const last = relativeTime(u.lastOnlineAt, t);
                 const exp = expireRelative(u.expireAt, t);
                 const trafficPct = trafficPercent(u.trafficUsedBytes, u.trafficLimitBytes);
@@ -561,11 +807,13 @@ export function UsersPage() {
                         : MOSS;
                 const compStatus = computedStatus(u);
                 const statusAccent = COMPUTED_STATUS_ACCENT[compStatus];
+                // A tint, not a fill: it should be readable as "this row needs
+                // you" out of the corner of your eye and disappear otherwise.
                 const rowTint =
                   compStatus === 'expired'
-                    ? `${RED}08`
+                    ? `${RED}0A`
                     : compStatus === 'limited'
-                      ? `${AMBER}08`
+                      ? `${AMBER}0A`
                       : undefined;
                 const isPaused = compStatus === 'limited' || compStatus === 'expired';
                 const otherSquads = u.groupIds.filter(
@@ -574,56 +822,53 @@ export function UsersPage() {
                 const subUrl = subscriptionUrl(u.subscriptionToken, authStatusQuery.data?.panel);
 
                 return (
-                  <Table.Tr
+                  <Box
                     key={u.id}
                     style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '14px 16px',
                       backgroundColor: rowTint,
                       borderBottom: `1px solid ${HAIRLINE}`,
                     }}
                   >
-                    <Table.Td>
-                      <Group gap="sm" wrap="nowrap">
-                        <StatusDot accent={statusAccent} />
-                        <Stack gap={2}>
-                          <Text size="sm" fw={500} style={{ color: SNOW }}>
-                            {u.username}
-                          </Text>
-                          <Text size="xs" style={{ ...MONO, color: MIST }}>
-                            {u.shortId}
-                            {u.telegramId ? ` · ${u.telegramId.startsWith('@') ? u.telegramId : '@' + u.telegramId}` : ''}
-                          </Text>
-                        </Stack>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap={4} wrap="nowrap">
-                        <Badge
-                          variant="light"
-                          style={{
-                            backgroundColor: `${statusAccent}1A`,
-                            color: statusAccent,
-                            border: `1px solid ${statusAccent}33`,
-                            textTransform: 'uppercase',
-                            ...MONO,
-                            letterSpacing: '0.08em',
-                          }}
+                    <Box
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                    >
+                      <StatusDot accent={statusAccent} glow={isOnline(u)} />
+                      <Stack gap={2}>
+                        <Text
+                          style={{ ...DISPLAY, fontSize: 14, fontWeight: 500, lineHeight: '18px', color: SNOW }}
                         >
-                          {t(`userStatus.${compStatus}`)}
-                        </Badge>
-                        {u.subRevokedAt && (
-                          <Badge variant="light" color="red" size="sm" style={{ ...MONO }}>
-                            {t('usersTable.revokedBadge')}
-                          </Badge>
-                        )}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
+                          {u.username}
+                        </Text>
+                        <Text style={{ ...MONO, fontSize: 12, lineHeight: '16px', color: MIST }}>
+                          {u.shortId}
+                          {u.telegramId ? ` · ${u.telegramId.startsWith('@') ? u.telegramId : '@' + u.telegramId}` : ''}
+                        </Text>
+                      </Stack>
+                    </Box>
+
+                    <Box style={{ width: COL.status, flexShrink: 0, display: 'flex', gap: 4 }}>
+                      <Pill accent={statusAccent}>{t(`userStatus.${compStatus}`)}</Pill>
+                      {u.subRevokedAt && <Pill accent={RED}>{t('usersTable.revokedBadge')}</Pill>}
+                    </Box>
+
+                    <Box style={{ width: COL.subscription, flexShrink: 0 }}>
                       <Tooltip
                         label={u.lastOnlineAt ? new Date(u.lastOnlineAt).toLocaleString() : '-'}
                       >
                         <Text
-                          size="sm"
                           style={{
+                            ...DISPLAY,
+                            fontSize: 13,
+                            lineHeight: '16px',
                             color:
                               last.tone === 'fresh' ? MOSS : last.tone === 'never' ? MIST : SNOW,
                           }}
@@ -631,12 +876,15 @@ export function UsersPage() {
                           {last.text}
                         </Text>
                       </Tooltip>
-                    </Table.Td>
-                    <Table.Td>
+                    </Box>
+
+                    <Box style={{ width: COL.expires, flexShrink: 0 }}>
                       <Tooltip label={u.expireAt ? new Date(u.expireAt).toLocaleString() : '-'}>
                         <Text
-                          size="sm"
                           style={{
+                            ...DISPLAY,
+                            fontSize: 13,
+                            lineHeight: '16px',
                             color:
                               exp.tone === 'bad'
                                 ? RED
@@ -650,101 +898,105 @@ export function UsersPage() {
                           {exp.text}
                         </Text>
                       </Tooltip>
-                    </Table.Td>
-                    <Table.Td miw={200}>
-                      <Stack gap={4}>
-                        <Group justify="space-between" gap="xs">
-                          {isPaused ? (
-                            <Text size="xs" fw={600} style={{ ...MONO, color: compStatus === 'expired' ? RED : AMBER }}>
-                              {t('usersTable.paused')}
+                    </Box>
+
+                    <Box
+                      style={{
+                        width: COL.traffic,
+                        flexShrink: 0,
+                        paddingRight: 28,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 5,
+                      }}
+                    >
+                      <Box
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                      >
+                        {isPaused ? (
+                          <Text
+                            style={{
+                              ...MONO,
+                              fontSize: 12,
+                              lineHeight: '16px',
+                              fontWeight: 600,
+                              color: compStatus === 'expired' ? RED : AMBER,
+                            }}
+                          >
+                            {t('usersTable.paused')}
+                          </Text>
+                        ) : (
+                          <Box style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Text style={{ ...MONO, fontSize: 12, lineHeight: '16px', color: SNOW }}>
+                              {formatBytes(u.trafficUsedBytes)}
                             </Text>
-                          ) : (
-                            <Text size="xs" style={{ ...MONO, color: SNOW }}>
-                              {formatBytes(u.trafficUsedBytes)}{' '}
-                              <Text span style={{ color: MIST }}>
-                                /{' '}
-                                {u.trafficLimitBytes === null
-                                  ? '∞'
-                                  : formatBytes(u.trafficLimitBytes)}
-                              </Text>
+                            <Text style={{ ...MONO, fontSize: 12, lineHeight: '16px', color: MIST }}>
+                              /{' '}
+                              {u.trafficLimitBytes === null ? '∞' : formatBytes(u.trafficLimitBytes)}
                             </Text>
-                          )}
-                          {isPaused ? (
-                            <Text size="xs" style={{ ...MONO, color: MIST }}>
-                              {compStatus === 'expired'
-                                ? t('usersTable.pausedHintExpired')
-                                : t('usersTable.pausedHintQuota')}
-                            </Text>
-                          ) : trafficPct !== null ? (
-                            <Text size="xs" fw={600} style={{ ...MONO, color: trafficColor }}>
-                              {trafficPct.toFixed(0)}%
-                            </Text>
-                          ) : null}
-                        </Group>
-                        <Progress
-                          value={isPaused ? 100 : trafficPct ?? 0}
-                          size="sm"
-                          radius="xl"
-                          styles={{
-                            root: { backgroundColor: HAIRLINE },
-                            section: {
-                              backgroundColor: isPaused
-                                ? compStatus === 'expired'
-                                  ? RED
-                                  : AMBER
-                                : trafficColor,
-                            },
-                          }}
-                        />
-                      </Stack>
-                    </Table.Td>
-                    <Table.Td>
+                          </Box>
+                        )}
+                        {isPaused ? (
+                          <Text style={{ ...MONO, fontSize: 12, lineHeight: '16px', color: MIST }}>
+                            {compStatus === 'expired'
+                              ? t('usersTable.pausedHintExpired')
+                              : t('usersTable.pausedHintQuota')}
+                          </Text>
+                        ) : trafficPct !== null ? (
+                          <Text
+                            style={{
+                              ...MONO,
+                              fontSize: 12,
+                              lineHeight: '16px',
+                              fontWeight: 600,
+                              color: trafficColor,
+                            }}
+                          >
+                            {trafficPct.toFixed(0)}%
+                          </Text>
+                        ) : null}
+                      </Box>
+                      <TrafficBar
+                        percent={isPaused ? 100 : (trafficPct ?? 0)}
+                        color={isPaused ? (compStatus === 'expired' ? RED : AMBER) : trafficColor}
+                      />
+                    </Box>
+
+                    <Box
+                      style={{ width: COL.squads, flexShrink: 0, display: 'flex', gap: 4, alignItems: 'center' }}
+                    >
                       {otherSquads.length === 0 ? (
-                        <Badge
-                          variant="default"
-                          size="sm"
-                          style={{ backgroundColor: `${MIST}1A`, color: MIST }}
-                        >
-                          All
-                        </Badge>
+                        <SquadPill muted>All</SquadPill>
                       ) : (
-                        <Group gap={4}>
+                        <>
                           {otherSquads.slice(0, 2).map((id) => (
-                            <Badge
-                              key={id}
-                              variant="light"
-                              size="sm"
-                              style={{
-                                backgroundColor: `${VIOLET}1A`,
-                                color: VIOLET,
-                                border: `1px solid ${VIOLET}33`,
-                              }}
-                            >
-                              {squadNameById.get(id) ?? id.slice(0, 6)}
-                            </Badge>
+                            <SquadPill key={id}>{squadNameById.get(id) ?? id.slice(0, 6)}</SquadPill>
                           ))}
                           {otherSquads.length > 2 && (
-                            <Badge
-                              variant="default"
-                              size="sm"
-                              style={{ backgroundColor: `${MIST}1A`, color: MIST }}
-                            >
-                              +{otherSquads.length - 2}
-                            </Badge>
+                            <SquadPill muted>+{otherSquads.length - 2}</SquadPill>
                           )}
-                        </Group>
+                        </>
                       )}
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" style={{ ...MONO, color: u.tag ? MIST : MIST }}>
+                    </Box>
+
+                    <Box style={{ width: COL.tag, flexShrink: 0 }}>
+                      <Text style={{ ...MONO, fontSize: 12, lineHeight: '16px', color: MIST }}>
                         {u.tag ?? '-'}
                       </Text>
-                    </Table.Td>
-                    <Table.Td>
+                    </Box>
+
+                    <Box
+                      style={{
+                        width: COL.actions,
+                        flexShrink: 0,
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                      }}
+                    >
                       <Menu shadow="md" position="bottom-end" withinPortal>
                         <Menu.Target>
                           <ActionIcon variant="subtle" size="sm" style={{ color: MIST }}>
-                            <IconDotsVertical size={14} />
+                            <IconDotsVertical size={16} />
                           </ActionIcon>
                         </Menu.Target>
                         <Menu.Dropdown style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
@@ -795,20 +1047,24 @@ export function UsersPage() {
                           </Menu.Item>
                         </Menu.Dropdown>
                       </Menu>
-                    </Table.Td>
-                  </Table.Tr>
+                    </Box>
+                  </Box>
                 );
               })}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
+          </Box>
+        </Box>
+
         {totalUsers > 0 && (
-          <Group
-            justify="flex-end"
-            gap="lg"
-            px="md"
-            py="sm"
-            style={{ borderTop: `1px solid ${HAIRLINE}` }}
+          <Box
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: 20,
+              padding: '12px 16px',
+              backgroundColor: GROUND,
+              borderTop: `1px solid ${HAIRLINE}`,
+            }}
           >
             <Group gap={8}>
               <Text style={MONO_LABEL}>{t('usersTable.rowsPerPage')}</Text>
@@ -852,11 +1108,11 @@ export function UsersPage() {
                 <IconChevronRight size={16} />
               </ActionIcon>
             </Group>
-          </Group>
+          </Box>
         )}
-      </Card>
+      </Box>
 
-      <UserFormModal
+      <UserDrawer
         opened={createOpen}
         onClose={closeCreate}
         user={null}
@@ -866,7 +1122,7 @@ export function UsersPage() {
         }}
       />
 
-      <UserFormModal
+      <UserDrawer
         opened={editing !== null}
         onClose={() => setEditing(null)}
         user={editing}
@@ -880,7 +1136,11 @@ export function UsersPage() {
   );
 }
 
-function StatusDot({ accent }: { accent: string }) {
+/**
+ * Colour = lifecycle, glow = seen in the last five minutes. Two facts in one
+ * 10px mark, and the glow is the only animatedless cue that a row is live.
+ */
+function StatusDot({ accent, glow }: { accent: string; glow?: boolean }) {
   return (
     <span
       style={{
@@ -888,7 +1148,7 @@ function StatusDot({ accent }: { accent: string }) {
         height: 10,
         borderRadius: '50%',
         backgroundColor: accent,
-        boxShadow: `0 0 8px ${accent}99`,
+        boxShadow: glow ? `0 0 8px ${accent}99` : 'none',
         flexShrink: 0,
         display: 'inline-block',
       }}
