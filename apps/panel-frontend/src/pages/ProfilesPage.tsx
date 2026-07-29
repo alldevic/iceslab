@@ -1,16 +1,17 @@
-import { useMemo, useState } from 'react';
+﻿import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import {
   ActionIcon,
   Badge,
-  Button,
+  Box,
   Card,
   Group,
   Menu,
+  Select,
   SimpleGrid,
   Stack,
   Text,
-  TextInput,
   ThemeIcon,
   Tooltip,
   UnstyledButton,
@@ -21,11 +22,12 @@ import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   IconBolt,
+  IconCheck,
+  IconFilter,
   IconDotsVertical,
   IconEdit,
   IconPlus,
   IconRefresh,
-  IconRocket,
   IconSearch,
   IconServer2,
   IconTrash,
@@ -42,11 +44,10 @@ import {
   type ProtocolName,
   type UpdateProfileInput,
 } from '../lib/api';
+import { usePageMeta } from '../hooks/usePageMeta';
 import { ProfileFormModal } from '../components/ProfileFormModal';
 import { DeployProfileModal } from '../components/DeployProfileModal';
 import { TestConnectModal } from '../components/TestConnectModal';
-import { PageHero } from '../components/PageHero';
-import { PrimaryButton } from '../components/PrimaryButton';
 
 const HAIRLINE = '#1C2A3D';
 const CARD = '#0F1A28';
@@ -83,7 +84,10 @@ const PROTOCOL_LABELS: Record<string, string> = {
 export function ProfilesPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure(false);
+  const navigate = useNavigate();
+  // Create and edit moved to /profiles/:id; the modal stays mounted only for
+  // flows that still open it in place.
+  const [createOpen, { close: closeCreate }] = useDisclosure(false);
   const [editing, setEditing] = useState<Profile | null>(null);
   const [deploying, setDeploying] = useState<Profile | null>(null);
   const [testing, setTesting] = useState<Profile | null>(null);
@@ -100,6 +104,20 @@ export function ProfilesPage() {
     }
     return m;
   }, [bindingsQuery.data]);
+
+  // The crumb carries what this page counts: how many templates exist, and how
+  // many distinct protocols are actually deployed rather than merely defined.
+  const allProfiles = profilesQuery.data?.profiles ?? [];
+  usePageMeta([
+    t('pageMeta.profiles', { count: allProfiles.length }),
+    t('pageMeta.profileProtocols', {
+      count: new Set(
+        allProfiles
+          .filter((p) => (bindingsByProfile.get(p.id) ?? p.bindingCount) > 0)
+          .map((p) => p.protocol),
+      ).size,
+    }),
+  ]);
 
   const createMutation = useMutation({
     mutationFn: createProfile,
@@ -183,61 +201,169 @@ export function ProfilesPage() {
 
   return (
     <Stack gap="lg">
-      <PageHero
-        eyebrow={t('pageHero.profilesEyebrow')}
-        title={t('pageHero.profilesTitle')}
-        subtitle={t('pageHero.profilesSubtitle')}
-        right={
-          <Group gap={8}>
-            <Tooltip label={t('common.refresh')}>
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                loading={profilesQuery.isFetching}
-                onClick={() => qc.invalidateQueries({ queryKey: ['profiles'] })}
-                style={{ color: MIST }}
-              >
-                <IconRefresh size={18} />
-              </ActionIcon>
-            </Tooltip>
-            <PrimaryButton leftSection={<IconPlus size={14} />} onClick={openCreate}>
-              {t('profiles.create')}
-            </PrimaryButton>
-          </Group>
-        }
-      />
-
-      <TextInput
-        placeholder={t('profiles.searchPlaceholder')}
-        leftSection={<IconSearch size={16} color={MIST} />}
-        value={search}
-        onChange={(e) => setSearch(e.currentTarget.value)}
-        styles={{
-          input: {
-            backgroundColor: CARD,
-            borderColor: HAIRLINE,
-            color: SNOW,
-          },
+      {/* Page bar: what the library holds, then search, then the filter and
+          the one action. Same strip as every other list page. */}
+      <Box
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          height: 56,
+          padding: '8px 8px 8px 14px',
+          borderRadius: 10,
+          backgroundColor: CARD,
+          border: `1px solid ${HAIRLINE}`,
         }}
-      />
+      >
+        <Box style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, paddingRight: 16 }}>
+          <Box
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              backgroundColor: `${CYAN}1A`,
+              border: `1px solid ${CYAN}33`,
+              color: CYAN,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <IconBolt size={16} stroke={1.8} />
+          </Box>
+          <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <BarFact value={profiles.length} label={t('profiles.bar.profiles')} />
+            <BarDot />
+            <BarFact
+              value={profiles.filter((p) => (bindingsByProfile.get(p.id) ?? p.bindingCount) > 0).length}
+              label={t('profiles.bar.inUse')}
+              accent={MOSS}
+            />
+            {profiles.some((p) => (bindingsByProfile.get(p.id) ?? p.bindingCount) === 0) && (
+              <>
+                <BarDot />
+                <BarFact
+                  value={
+                    profiles.filter((p) => (bindingsByProfile.get(p.id) ?? p.bindingCount) === 0)
+                      .length
+                  }
+                  label={t('profiles.bar.unused')}
+                  accent={AMBER}
+                />
+              </>
+            )}
+          </Box>
+        </Box>
 
-      <Group gap="xs" wrap="wrap">
-        <ProtocolFilterChip
-          label={t('common.all')}
-          accent={CYAN}
-          active={protocolFilter === 'all'}
-          onClick={() => setProtocolFilter('all')}
-        />
-        {(Object.keys(PROTOCOL_LABELS) as ProtocolName[]).map((p) => (
-          <ProtocolFilterChip
-            key={p}
-            label={PROTOCOL_LABELS[p]}
-            accent={PROTOCOL_ACCENT[p] ?? MIST}
-            active={protocolFilter === p}
-            onClick={() => setProtocolFilter(p)}
+        <Box style={{ width: 1, height: 24, backgroundColor: HAIRLINE, flexShrink: 0 }} />
+
+        <Box style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px' }}>
+          <IconSearch size={15} stroke={1.8} color={MIST} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.currentTarget.value)}
+            placeholder={t('profiles.searchPlaceholder')}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              color: SNOW,
+              fontFamily: "'Space Grotesk', Inter, sans-serif",
+              fontSize: 13,
+            }}
           />
-        ))}
-      </Group>
+        </Box>
+
+        <Box style={{ width: 1, height: 24, backgroundColor: HAIRLINE, flexShrink: 0 }} />
+
+        <Box style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, flexShrink: 0 }}>
+          {/* The filter carries the inventory: each protocol shows its own dot
+              and how many profiles use it, so an empty protocol is visible
+              before you select it and find nothing. */}
+          <Select
+            value={protocolFilter}
+            onChange={(v) => setProtocolFilter((v as ProtocolName | 'all') ?? 'all')}
+            allowDeselect={false}
+            w={190}
+            leftSection={<IconFilter size={14} stroke={1.8} color={CYAN} />}
+            leftSectionWidth={32}
+            comboboxProps={{ withinPortal: true }}
+            data={[
+              { value: 'all', label: t('profiles.allProtocols') },
+              ...(Object.keys(PROTOCOL_LABELS) as ProtocolName[]).map((p) => ({
+                value: p,
+                label: PROTOCOL_LABELS[p],
+              })),
+            ]}
+            renderOption={({ option, checked }) => {
+              const isAll = option.value === 'all';
+              const accent = isAll ? SNOW : (PROTOCOL_ACCENT[option.value] ?? MIST);
+              const count = isAll
+                ? profiles.length
+                : profiles.filter((p) => p.protocol === option.value).length;
+              return (
+                <Group gap={10} wrap="nowrap" style={{ width: '100%', opacity: count === 0 ? 0.45 : 1 }}>
+                  <Box
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      backgroundColor: accent,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <Text style={{ flex: 1, fontSize: 13, color: isAll ? SNOW : accent }}>
+                    {option.label}
+                  </Text>
+                  <Text style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: MIST }}>
+                    {count}
+                  </Text>
+                  {checked && <IconCheck size={13} stroke={2.4} color={CYAN} />}
+                </Group>
+              );
+            }}
+            styles={{
+              input: {
+                height: 38,
+                minHeight: 38,
+                backgroundColor: '#0B1420',
+                borderColor: HAIRLINE,
+                color: SNOW,
+                fontSize: 13,
+              },
+              dropdown: { backgroundColor: CARD, borderColor: HAIRLINE },
+            }}
+          />
+          <ActionIcon
+            variant="subtle"
+            size={38}
+            loading={profilesQuery.isFetching}
+            onClick={() => qc.invalidateQueries({ queryKey: ['profiles'] })}
+            style={{ color: MIST, borderRadius: 8, border: `1px solid ${HAIRLINE}`, backgroundColor: '#0B1420' }}
+          >
+            <IconRefresh size={16} />
+          </ActionIcon>
+          <UnstyledButton
+            onClick={() => navigate('/profiles/new')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              height: 38,
+              padding: '0 16px',
+              borderRadius: 8,
+              backgroundColor: '#0B1420',
+              border: `1px solid ${HAIRLINE}`,
+            }}
+          >
+            <IconPlus size={14} stroke={2.4} color={CYAN} />
+            <Text style={{ fontFamily: "'Space Grotesk', Inter, sans-serif", fontSize: 13, fontWeight: 500, color: SNOW }}>
+              {t('profiles.create')}
+            </Text>
+          </UnstyledButton>
+        </Box>
+      </Box>
 
       {filtered.length === 0 ? (
         <Card withBorder padding="xl" radius="md" style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
@@ -264,10 +390,8 @@ export function ProfilesPage() {
               key={p.id}
               profile={p}
               bindingCount={bindingsByProfile.get(p.id) ?? p.bindingCount}
-              onEdit={() => setEditing(p)}
+              onEdit={() => navigate(`/profiles/${p.id}`)}
               onDelete={() => handleDelete(p)}
-              onDeploy={() => setDeploying(p)}
-              onTest={() => setTesting(p)}
             />
           ))}
         </SimpleGrid>
@@ -309,39 +433,70 @@ export function ProfilesPage() {
   );
 }
 
-function ProtocolFilterChip({
-  label,
-  accent,
-  active,
-  onClick,
-}: {
-  label: string;
-  accent: string;
-  active: boolean;
-  onClick: () => void;
-}) {
+function BarFact({ value, label, accent }: { value: number; label: string; accent?: string }) {
   return (
-    <UnstyledButton
-      onClick={onClick}
-      aria-pressed={active}
-      style={{
-        padding: '6px 12px',
-        borderRadius: 999,
-        fontSize: 12,
-        // Selected = subtle accent tint + accent border + bright label, NOT a
-        // bright accent fill (which "glows" on the dark page and sinks the
-        // text). The per-protocol accent stays in the border/tint; inactive
-        // chips keep their faint color identity.
-        fontWeight: active ? 600 : 500,
-        backgroundColor: active ? `${accent}29` : `${accent}14`,
-        color: active ? SNOW : accent,
-        border: `1px solid ${active ? accent : `${accent}33`}`,
-        transition: 'all 120ms',
-      }}
-    >
-      {label}
-    </UnstyledButton>
+    <>
+      <Text style={{ fontFamily: "'Geist Mono', monospace", fontSize: 13, fontWeight: 500, color: accent ?? SNOW }}>
+        {value}
+      </Text>
+      <Text style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10, letterSpacing: '0.12em', color: MIST }}>
+        {label}
+      </Text>
+    </>
   );
+}
+
+function BarDot() {
+  return (
+    <Text style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10, color: '#3A4A60' }}>
+      {'·'}
+    </Text>
+  );
+}
+
+/**
+ * The three settings that actually distinguish one profile of a protocol from
+ * another: the ones an operator would ask about before deploying it. Anything
+ * else lives in the editor.
+ */
+function protocolFacts(profile: Profile): { label: string; value: string }[] {
+  const cfg = (profile.config ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null =>
+    typeof v === 'string' && v.length > 0 ? v : typeof v === 'number' ? String(v) : null;
+  const pick = (...keys: string[]): string | null => {
+    for (const k of keys) {
+      const v = str(cfg[k]);
+      if (v) return v;
+    }
+    return null;
+  };
+
+  switch (profile.protocol) {
+    case 'xray':
+      return [
+        { label: 'fingerprint', value: pick('fingerprint', 'fp') ?? '-' },
+        { label: 'sni', value: pick('serverName', 'sni', 'dest') ?? '-' },
+        { label: 'flow', value: pick('flow') ?? '-' },
+      ];
+    case 'hysteria':
+      return [
+        { label: 'alpn', value: pick('alpn') ?? '-' },
+        { label: 'obfs', value: pick('obfs', 'obfsType') ?? '-' },
+        { label: 'cc', value: pick('congestion', 'cc') ?? '-' },
+      ];
+    case 'amneziawg':
+      return [
+        { label: 'mtu', value: pick('mtu') ?? '-' },
+        { label: 'subnet', value: pick('subnet', 'address') ?? '-' },
+        { label: 'jc', value: pick('jc') ?? '-' },
+      ];
+    default:
+      return [
+        { label: 'port', value: pick('port') ?? '-' },
+        { label: 'security', value: pick('security', 'securityLayer') ?? '-' },
+        { label: 'transport', value: pick('network', 'transport') ?? '-' },
+      ];
+  }
 }
 
 function ProfileCard({
@@ -349,15 +504,11 @@ function ProfileCard({
   bindingCount,
   onEdit,
   onDelete,
-  onDeploy,
-  onTest,
 }: {
   profile: Profile;
   bindingCount: number;
   onEdit: () => void;
   onDelete: () => void;
-  onDeploy: () => void;
-  onTest: () => void;
 }) {
   const { t } = useTranslation();
   const accent = PROTOCOL_ACCENT[profile.protocol] ?? MIST;
@@ -406,13 +557,10 @@ function ProfileCard({
               <IconDotsVertical size={14} />
             </ActionIcon>
           </Menu.Target>
+          {/* Deploying and test-connect left the profile card: a profile is a
+              template, and where it runs is decided on the host, which is the
+              thing that actually carries a node and a port. */}
           <Menu.Dropdown style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
-            <Menu.Item leftSection={<IconRocket size={14} />} onClick={onDeploy}>
-              {t('profiles.deployToNodes')}
-            </Menu.Item>
-            <Menu.Item leftSection={<IconBolt size={14} />} onClick={onTest}>
-              Test connect
-            </Menu.Item>
             <Menu.Item leftSection={<IconEdit size={14} />} onClick={onEdit}>
               {t('common.edit')}
             </Menu.Item>
@@ -439,11 +587,9 @@ function ProfileCard({
           {profile.protocol}
         </Badge>
         <Tooltip label={bindingCount === 0 ? t('profiles.bindingsTooltipNone') : t('profiles.bindingsTooltipDeployed')}>
-          <UnstyledButton
-            onClick={onDeploy}
+          <Box
             aria-label={bindingCount === 0 ? t('profiles.bindingsTooltipNone') : t('profiles.bindingsTooltipDeployed')}
             style={{
-              cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               gap: 4,
@@ -459,7 +605,7 @@ function ProfileCard({
           >
             <IconServer2 size={11} />
             {bindingCount}
-          </UnstyledButton>
+          </Box>
         </Tooltip>
         <Tooltip label={t('profiles.usersTooltip', { count: profile.userCount })}>
           <Text
@@ -487,22 +633,93 @@ function ProfileCard({
           <Badge variant="default" size="sm" style={{ backgroundColor: `${MIST}1A`, color: MIST }}>
             off
           </Badge>
+
         )}
       </Group>
 
-      <Button
-        variant="light"
-        fullWidth
-        leftSection={<IconRocket size={14} />}
-        onClick={onDeploy}
+      {/* The three settings that make this profile this profile. Reading them
+          off the card is the difference between "another xray profile" and
+          "the one with the firefox fingerprint". */}
+      <Box
         style={{
-          backgroundColor: `${accent}1A`,
-          color: accent,
-          border: `1px solid ${accent}33`,
+          display: 'flex',
+          padding: '10px 12px',
+          marginBottom: 14,
+          borderRadius: 8,
+          backgroundColor: '#0B1420',
         }}
       >
-        {t('profiles.deployToNodes')}
-      </Button>
+        {protocolFacts(profile).map((f, i) => (
+          <Box
+            key={f.label}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              paddingLeft: i === 0 ? 0 : 12,
+              borderLeft: i === 0 ? 'none' : `1px solid ${HAIRLINE}`,
+            }}
+          >
+            <Text
+              style={{
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: 9,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                color: '#5A6B82',
+              }}
+            >
+              {f.label}
+            </Text>
+            <Text
+              style={{
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: 12,
+                color: SNOW,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {f.value}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+
+      {/* One button, no split dropdown: deploy and test already live in the
+          card's own menu above, and the same two items in two places is the
+          kind of duplication that makes an operator hesitate. */}
+      <Group gap={0} wrap="nowrap">
+        <UnstyledButton
+          onClick={onEdit}
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            height: 38,
+            borderRadius: 8,
+            backgroundColor: `${accent}1A`,
+            border: `1px solid ${accent}33`,
+          }}
+        >
+          <IconEdit size={14} stroke={1.8} color={accent} />
+          <Text
+            style={{
+              fontFamily: "'Space Grotesk', Inter, sans-serif",
+              fontSize: 13,
+              fontWeight: 500,
+              color: accent,
+            }}
+          >
+            {t('profiles.configButton', { core: PROTOCOL_LABELS[profile.protocol] ?? profile.protocol })}
+          </Text>
+        </UnstyledButton>
+      </Group>
     </Card>
   );
 }

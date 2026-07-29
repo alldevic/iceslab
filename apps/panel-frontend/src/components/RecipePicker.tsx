@@ -17,12 +17,14 @@ import {
   Textarea,
   TextInput,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
   IconCheck,
   IconDownload,
+  IconSearch,
   IconStar,
   IconStarFilled,
   IconWorld,
@@ -85,10 +87,22 @@ function useRecipeText(recipe: Recipe) {
 }
 
 export function RecipePicker({ protocol, onPick }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // Same lookup as useRecipeText, but callable inside a map: built-ins carry
+  // translated copy per id, registry recipes ship their own text.
+  const copy = (r: Recipe) => {
+    const base = `recipes.cards.${r.id}`;
+    return {
+      title: i18n.exists(`${base}.name`) ? t(`${base}.name`) : r.name,
+      subtitle: i18n.exists(`${base}.description`)
+        ? t(`${base}.description`)
+        : r.description,
+    };
+  };
   const builtins = recipesForProtocol(protocol);
   const [picked, setPicked] = useState<Recipe | null>(null);
   const [importOpen, importCtl] = useDisclosure(false);
+  const [search, setSearch] = useState('');
 
   // Community registry for this protocol. The backend already filters by
   // protocol, validates + version-gates every entry and caches for 6h, so
@@ -121,46 +135,86 @@ export function RecipePicker({ protocol, onPick }: Props) {
     return null;
   }
 
+  const visibleBuiltins = builtins.filter((r) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    const c = copy(r);
+    return `${c.title} ${c.subtitle}`.toLowerCase().includes(q);
+  });
+
   return (
     <Stack gap="xs">
-      <Group justify="space-between" align="flex-end">
-        <Stack gap={0}>
-          <Text fw={600} size="sm">
-            {t('recipes.title')}
-          </Text>
-          <Text size="xs" c="dimmed">
-            {t('recipes.subtitle')}
-          </Text>
-        </Stack>
-        <Group gap="xs">
-          {picked && (
-            <Badge variant="light" color="teal" leftSection={<IconCheck size={11} />}>
-              {t('recipes.appliedBadge')}
-            </Badge>
-          )}
-          <Button
-            size="compact-xs"
-            variant="subtle"
-            leftSection={<IconDownload size={12} />}
-            onClick={importCtl.open}
-          >
-            {t('recipes.import.button')}
-          </Button>
-        </Group>
+      {/* A rail, not a gallery: one line per recipe (name + what it is for),
+          search on top, counts at the bottom. The star ratings moved into the
+          row's own detail view; here they only competed with the titles. */}
+      <Group justify="space-between" align="center">
+        <Text fw={600} size="sm">
+          {t('recipes.title')}
+        </Text>
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          leftSection={<IconDownload size={12} />}
+          onClick={importCtl.open}
+        >
+          {t('recipes.import.button')}
+        </Button>
       </Group>
 
-      {builtins.length > 0 && (
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="xs">
-          {builtins.map((r) => (
-            <RecipeCard
-              key={recipeKey(r)}
-              recipe={r}
-              active={!!picked && recipeKey(picked) === recipeKey(r)}
-              onClick={() => handlePick(r)}
-            />
-          ))}
-        </SimpleGrid>
+      <TextInput
+        size="xs"
+        placeholder={t('recipes.searchPlaceholder')}
+        leftSection={<IconSearch size={13} />}
+        value={search}
+        onChange={(e) => setSearch(e.currentTarget.value)}
+      />
+
+      {visibleBuiltins.length > 0 && (
+        <Stack gap={0} style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid #1C2A3D' }}>
+          {visibleBuiltins.map((r, i) => {
+            const active = !!picked && recipeKey(picked) === recipeKey(r);
+            const c = copy(r);
+            return (
+              <UnstyledButton
+                key={recipeKey(r)}
+                onClick={() => handlePick(r)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '10px 12px',
+                  backgroundColor: active ? '#7DD3FC0F' : '#0B1420',
+                  borderTop: i === 0 ? 'none' : '1px solid #1C2A3D',
+                }}
+              >
+                <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    style={{
+                      fontFamily: "'Space Grotesk', Inter, sans-serif",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: active ? '#7DD3FC' : '#C8D4E3',
+                    }}
+                  >
+                    {c.title}
+                  </Text>
+                  <Text style={{ fontSize: 11, lineHeight: '15px', color: '#7A8BA3' }}>
+                    {c.subtitle}
+                  </Text>
+                </Stack>
+                {active && <IconCheck size={13} stroke={2.4} color="#7DD3FC" />}
+              </UnstyledButton>
+            );
+          })}
+        </Stack>
       )}
+
+      <Text style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10, color: '#5A6B82' }}>
+        {t('recipes.countLine', {
+          shown: visibleBuiltins.length,
+          total: builtins.length + registry.length,
+        })}
+      </Text>
 
       <RegistrySection
         recipes={registry}
