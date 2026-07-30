@@ -88,6 +88,14 @@ describe('resolveHostFields', () => {
     }
   });
 
+  it('naive inherits its dial address from the profile hostname', () => {
+    const f = resolveHostFields('naive', { hostname: 'vpn.example.com' });
+    expect(f.addressOverride).toMatchObject({
+      supported: true,
+      inherited: 'vpn.example.com',
+    });
+  });
+
   it('universal fields survive on every protocol, including unknown ones', () => {
     for (const protocol of ['xray', 'amneziawg', 'something-new']) {
       const f = resolveHostFields(protocol, {});

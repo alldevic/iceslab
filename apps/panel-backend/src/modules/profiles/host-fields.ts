@@ -202,6 +202,13 @@ export function resolveHostFields(protocol: string, config: unknown): HostFieldM
     case 'naive':
       return {
         ...universalMap(),
+        // Unlike every other protocol, naive has a profile-level default for
+        // the dial address: Caddy answers ACME on `hostname`, so that is what
+        // the client is handed unless the host overrides it.
+        addressOverride: {
+          supported: true,
+          inherited: (cfg.hostname as string | undefined) ?? null,
+        },
         ...unsupported(
           TLS_AND_TRANSPORT,
           'NaiveProxy serves a real certificate for the hostname in the profile and imitates Chromium, nothing here is client-tunable',
