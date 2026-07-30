@@ -38,6 +38,8 @@ export function readCurrentVersion(): string {
 interface LatestCache {
   latest: string | null;
   releaseUrl: string | null;
+  /** Stargazer count for the topbar chip, null when GitHub is unreachable. */
+  stars: number | null;
   checkedAt: number; // epoch ms
 }
 let latestCache: LatestCache | null = null;
@@ -62,34 +64,50 @@ export function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
-async function fetchLatest(): Promise<LatestCache> {
-  const checkedAt = Date.now();
+function githubHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'iceslab-panel',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+  return headers;
+}
+
+/** One GitHub GET with the shared timeout. Returns null on any failure. */
+async function githubGet<T>(path: string): Promise<T | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'iceslab-panel',
-      'X-GitHub-Api-Version': '2022-11-28',
-    };
-    if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
-    let res: Response;
-    try {
-      res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-        headers,
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) return { latest: null, releaseUrl: null, checkedAt };
-    const body = (await res.json()) as { tag_name?: string; html_url?: string };
-    const tag = body.tag_name?.trim() || null;
-    return { latest: tag, releaseUrl: body.html_url ?? null, checkedAt };
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}${path}`, {
+      headers: githubHeaders(),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
   } catch {
     // network / abort / parse: degrade silently.
-    return { latest: null, releaseUrl: null, checkedAt };
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function fetchLatest(): Promise<LatestCache> {
+  const checkedAt = Date.now();
+  // Two independent calls behind one 6h cache entry: the release tag drives
+  // the update nag, the repo record drives the star count in the topbar.
+  // Either can fail on its own without taking the other down.
+  const [release, repo] = await Promise.all([
+    githubGet<{ tag_name?: string; html_url?: string }>('/releases/latest'),
+    githubGet<{ stargazers_count?: number }>(''),
+  ]);
+  return {
+    latest: release?.tag_name?.trim() || null,
+    releaseUrl: release?.html_url ?? null,
+    stars: typeof repo?.stargazers_count === 'number' ? repo.stargazers_count : null,
+    checkedAt,
+  };
 }
 
 async function getLatest(): Promise<LatestCache> {
@@ -112,18 +130,20 @@ export interface VersionInfo {
   latest: string | null;
   updateAvailable: boolean;
   releaseUrl: string | null;
+  stars: number | null;
   checkedAt: string | null;
 }
 
 export async function getVersionInfo(): Promise<VersionInfo> {
   const current = readCurrentVersion();
-  const { latest, releaseUrl, checkedAt } = await getLatest();
+  const { latest, releaseUrl, stars, checkedAt } = await getLatest();
   const updateAvailable = latest != null && current !== 'unknown' && isNewer(latest, current);
   return {
     current,
     latest,
     updateAvailable,
     releaseUrl,
+    stars,
     checkedAt: checkedAt ? new Date(checkedAt).toISOString() : null,
   };
 }
