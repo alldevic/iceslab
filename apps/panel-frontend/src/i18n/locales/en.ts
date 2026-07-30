@@ -313,6 +313,11 @@ export default {
   // per-binding editor, and predates this screen.
   hostsPage: {
     searchPlaceholder: 'Search by name, port or profile…',
+    deleteTitle: 'Delete {{name}}?',
+    deleteBody: 'The line disappears from every subscription on the next fetch.',
+    deleteLast:
+      'This is the last host on {{node}}. The inbound keeps running there, but nothing from it reaches a subscription any more.',
+    deleted: 'Host deleted',
     empty: 'No hosts yet. A host is one entry in the user\'s client: a name, a port and the nodes behind it.',
     unbound: 'binding missing',
     create: 'Create host',

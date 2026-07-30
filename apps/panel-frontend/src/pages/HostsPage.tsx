@@ -19,7 +19,10 @@ import {
   IconWorldOff,
 } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { modals } from '@mantine/modals';
+import { notifications } from '@mantine/notifications';
 import {
+  deleteHost,
   listBindings,
   listHosts,
   listNodes,
@@ -88,6 +91,11 @@ export function HostsPage() {
           host: h,
           profile,
           nodes: node ? [node] : [],
+          // Deleting the last host of a binding leaves the inbound running on
+          // the node with nothing to hand out, so the confirmation has to say so.
+          lastOfBinding:
+            (hostsQuery.data?.hosts ?? []).filter((x) => x.bindingId === h.bindingId).length === 1,
+          nodeName: node?.name ?? null,
           port: h.portOverride ?? binding?.publicPort ?? binding?.port ?? null,
           address: h.addressOverride ?? binding?.publicHost ?? null,
           countryCode: node?.countryCode ? node.countryCode.toUpperCase() : null,
@@ -113,6 +121,46 @@ export function HostsPage() {
     search,
     country,
   ]);
+
+  /**
+   * Deleting a host is the one destructive action on this page, so it confirms
+   * first and names the consequence rather than asking "are you sure".
+   *
+   * The last host of a binding is the case worth spelling out: the inbound keeps
+   * running on the node, but nothing from it reaches a subscription any more.
+   * The binding is deliberately left alone, since silently tearing an inbound
+   * off a live node is worse than leaving it idle.
+   */
+  function confirmDelete(row: Row) {
+    modals.openConfirmModal({
+      title: t('hostsPage.deleteTitle', { name: row.host.remark }),
+      children: (
+        <Stack gap={8}>
+          <Text size="sm">{t('hostsPage.deleteBody')}</Text>
+          {row.lastOfBinding && row.nodeName && (
+            <Text size="sm" style={{ color: AMBER }}>
+              {t('hostsPage.deleteLast', { node: row.nodeName })}
+            </Text>
+          )}
+        </Stack>
+      ),
+      labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
+      confirmProps: { color: 'red' },
+      onConfirm: async () => {
+        try {
+          await deleteHost(row.host.id);
+          qc.invalidateQueries({ queryKey: ['hosts'] });
+          notifications.show({ color: 'green', message: t('hostsPage.deleted') });
+        } catch (err) {
+          notifications.show({
+            color: 'red',
+            title: t('common.saveError'),
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      },
+    });
+  }
 
   const total = hostsQuery.data?.hosts.length ?? 0;
   // The bar counts the same three states the cards show, so a degraded host is
@@ -261,6 +309,7 @@ export function HostsPage() {
               key={r.host.id}
               row={r}
               onEdit={() => navigate(`/hosts/${r.host.id}`)}
+              onDelete={() => confirmDelete(r)}
             />
           ))}
         </SimpleGrid>
@@ -273,6 +322,8 @@ type Row = {
   host: { id: string; remark: string; enabled: boolean; priority: number };
   profile?: { name: string; protocol: string };
   nodes: { id: string; name: string; status: string }[];
+  lastOfBinding: boolean;
+  nodeName: string | null;
   port: number | null;
   address: string | null;
   countryCode: string | null;
@@ -280,7 +331,15 @@ type Row = {
   userCount: number;
 };
 
-function HostCard({ row, onEdit }: { row: Row; onEdit: () => void }) {
+function HostCard({
+  row,
+  onEdit,
+  onDelete,
+}: {
+  row: Row;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const { t } = useTranslation();
   const orphaned = row.nodes.length === 0;
   // A host with nodes is not automatically serving: the state used to read
@@ -356,7 +415,7 @@ function HostCard({ row, onEdit }: { row: Row; onEdit: () => void }) {
             <Menu.Item leftSection={<IconEdit size={14} />} onClick={onEdit}>
               {t('common.edit')}
             </Menu.Item>
-            <Menu.Item color="red" leftSection={<IconTrash size={14} />} disabled>
+            <Menu.Item color="red" leftSection={<IconTrash size={14} />} onClick={onDelete}>
               {t('common.delete')}
             </Menu.Item>
           </Menu.Dropdown>
