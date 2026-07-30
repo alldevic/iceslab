@@ -4,6 +4,12 @@ import { _resetBindingsCacheForTest } from '../../src/modules/subscription/subsc
 // Listed in the order they need truncating. CASCADE handles FKs but explicit
 // listing is documentation. Anything that references another table comes first.
 const TABLES = [
+  // A4 ad-split. Missing here until 2026-07-30, which nothing noticed while the
+  // module was read-only: policies are unique on both name and ordinal, so the
+  // first test that CREATED one poisoned every later case in the same run.
+  'group_route_policies',
+  'route_policies',
+  'group_cascade_exits',
   'cascade_hops',
   'cascades',
   'amneziawg_peers',

@@ -395,6 +395,9 @@ export default {
     importBadAction: 'Unknown action in a rule. Allowed: block, direct, warp, proxy.',
     importEmpty: 'The file carries no entries.',
     policyNamePlaceholder: 'Policy name',
+    bandFixed:
+      'The band is assigned once and cannot move: it rides inside every subscriber UUID, so changing it would reroute everyone already holding a link.',
+    saveReachesNodes: 'Saving re-pushes the config to every enabled cascade entry.',
     policySaved: 'Policy saved',
     policyDeleted: 'Policy deleted',
     policyDeleteTitle: 'Delete policy "{{name}}"?',

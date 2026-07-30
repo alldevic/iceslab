@@ -880,26 +880,37 @@ export async function listRoutePolicies(): Promise<{ policies: RoutePolicy[] }> 
   return data;
 }
 
+/**
+ * What the API stores: a name and two flat domain lists. The editor works in an
+ * ordered rule list, which is the shape an operator thinks in, so it folds the
+ * rules down on save. `ordinal` is never sent: the band is the API's to assign
+ * and, once assigned, cannot move at all.
+ */
 export interface RoutePolicyInput {
   name: string;
-  rules: Omit<RouteRule, 'id'>[];
+  directDomains: string[];
+  blockDomains: string[];
+}
+
+/** Rules to the two lists the API keeps. `proxy` and `warp` have nowhere to go
+ *  in a policy: it only ever answers "around the tunnel" or "nowhere". */
+export function toPolicyInput(name: string, rules: Pick<RouteRule, 'match' | 'action'>[]): RoutePolicyInput {
+  const pick = (action: RouteAction) =>
+    rules.filter((r) => r.action === action).flatMap((r) => r.match.filter(Boolean));
+  return { name, directDomains: pick('direct'), blockDomains: pick('block') };
 }
 
 /**
- * Whether the two write surfaces below exist yet. Both are false today, and the
- * UI reads them to disable the controls whose only outcome is a write, rather
- * than offering a button that answers 404. Flip one line each when the
- * endpoints ship; nothing else has to change.
+ * Whether the two write surfaces below exist yet. Policy writes shipped on
+ * 2026-07-30; presets are still list-only, so their controls stay disabled and
+ * say why rather than offering a button that answers 404.
  */
-export const ROUTE_POLICY_WRITES_LIVE = false;
+export const ROUTE_POLICY_WRITES_LIVE = true;
 export const ROUTING_PRESET_WRITES_LIVE = false;
 
 /**
- * Policy writes. NOT LIVE: `route-policies.routes.ts` registers a single GET,
- * and its own comment calls a create/edit surface a fast-follow. These three
- * are the contract the editor is written against, so the page lights up the
- * moment the backend ships them; until then they answer 404 and the editor
- * says so rather than losing an edit quietly.
+ * Policy writes. Saving reaches the fleet on its own: the API re-pushes the
+ * config to every enabled cascade entry, so there is no separate apply step.
  */
 export async function createRoutePolicy(input: RoutePolicyInput): Promise<RoutePolicy> {
   const { data } = await api.post<RoutePolicy>('/api/route-policies', input);
@@ -909,6 +920,14 @@ export async function createRoutePolicy(input: RoutePolicyInput): Promise<RouteP
 export async function updateRoutePolicy(id: string, input: RoutePolicyInput): Promise<RoutePolicy> {
   const { data } = await api.put<RoutePolicy>(`/api/route-policies/${id}`, input);
   return data;
+}
+
+/** A name or a band collided. The text says which, because the fix differs:
+ *  rename, or let the API pick the band. */
+export function policyConflict(err: unknown): string | null {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+  if (res?.status !== 409 && res?.status !== 400) return null;
+  return res.data?.message ?? null;
 }
 
 export async function deleteRoutePolicy(id: string): Promise<void> {

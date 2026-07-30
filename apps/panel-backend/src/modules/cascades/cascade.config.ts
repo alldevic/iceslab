@@ -366,6 +366,11 @@ export function routeTag(policyOrdinal: number, exitIndex: number): number {
   return policyOrdinal * 256 + exitIndex + 1;
 }
 
+/** Highest policy ordinal that still fits the uint16 tag: the ordinal occupies
+ *  the high byte, the exit index the low one. 255 policies is far past any real
+ *  use, but the bound has to exist somewhere, and this is where it comes from. */
+export const MAX_DIRECTION_ORDINAL = 255;
+
 /**
  * Build the entry + exit fragments for a BALANCER cascade (one entry, N parallel
  * exits). `linkCreds[i]` is the entry->exits[i] link cred (each exit listens on

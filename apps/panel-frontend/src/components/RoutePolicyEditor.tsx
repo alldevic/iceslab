@@ -10,6 +10,8 @@ import {
   apiErrorMessage,
   createRoutePolicy,
   deleteRoutePolicy,
+  policyConflict,
+  toPolicyInput,
   updateRoutePolicy,
   type RouteAction,
   type RoutePolicy,
@@ -109,7 +111,10 @@ export function RoutePolicyEditor({
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const input = { name: name.trim() || policy.name, rules: strip(rules) };
+      // The API keeps two flat domain lists, so the ordered rules fold down on
+      // save. The band is never sent: it is the API's to assign, and on an
+      // existing policy it cannot move at all.
+      const input = toPolicyInput(name.trim() || policy.name, strip(rules));
       return policy.id === NEW_POLICY_ID ? createRoutePolicy(input) : updateRoutePolicy(policy.id, input);
     },
     onSuccess: () => {
@@ -117,8 +122,16 @@ export function RoutePolicyEditor({
       notifications.show({ color: 'green', message: t('routes.policySaved') });
       onCreated?.();
     },
-    onError: (err) =>
-      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) }),
+    onError: (err) => {
+      // A name or band collision, or a policy with no domains at all: the API
+      // says which, and the fix differs, so its sentence is the useful one.
+      const named = policyConflict(err);
+      notifications.show({
+        color: 'red',
+        title: t('common.saveError'),
+        message: named ?? apiErrorMessage(err),
+      });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -195,7 +208,14 @@ export function RoutePolicyEditor({
           }}
           style={{ width: 260, flexShrink: 0 }}
         />
-        {policy.id !== NEW_POLICY_ID && <Chip tone={CYAN}>{t('routes.tag', { n: policy.ordinal })}</Chip>}
+        {/* The band, read-only on purpose. It rides inside every subscriber's
+            UUID, so moving it would reroute everyone already holding a link.
+            The API assigns it and refuses to change it. */}
+        {policy.id !== NEW_POLICY_ID && (
+          <Box title={t('routes.bandFixed')}>
+            <Chip tone={CYAN}>{t('routes.tag', { n: policy.ordinal })}</Chip>
+          </Box>
+        )}
         {dirty && <Chip tone={AMBER}>{t('routes.unsaved')}</Chip>}
         <Box style={{ flex: 1, minWidth: 0 }} />
         <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>
@@ -208,7 +228,9 @@ export function RoutePolicyEditor({
         )}
         <Action
           disabled={!ROUTE_POLICY_WRITES_LIVE || !dirty || saveMutation.isPending}
-          title={ROUTE_POLICY_WRITES_LIVE ? undefined : t('routes.writesDisabledPolicies')}
+          // Saving is not a local edit: the API re-pushes the config to every
+          // enabled cascade entry, so it reaches live machines immediately.
+          title={ROUTE_POLICY_WRITES_LIVE ? t('routes.saveReachesNodes') : t('routes.writesDisabledPolicies')}
           onClick={() => saveMutation.mutate()}
         >
           {t('common.save')}
