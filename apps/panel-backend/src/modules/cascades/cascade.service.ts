@@ -2,7 +2,7 @@ import type { XrayCascadeFragments } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
-import { validateCascadeHops } from './cascade.validation.js';
+import { foldPositionsIntoHops, validateCascadeHops } from './cascade.validation.js';
 import {
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
@@ -330,11 +330,19 @@ export async function getCascadeStatus(id: string): Promise<CascadeStatusDto> {
 }
 
 export async function createCascade(input: CreateCascadeInput): Promise<CascadeDto> {
-  const mode = input.mode ?? 'chain';
+  // The redesigned screens send positions + directions; storage still holds
+  // single-node hops. Fold when that is what arrived, and let the fold decide
+  // the mode from the shape rather than trusting a field the new UI no longer
+  // has. See foldPositionsIntoHops for what cannot be folded and why.
+  const folded =
+    input.positions && input.directions
+      ? foldPositionsIntoHops(input.positions, input.directions)
+      : null;
+  const mode = folded ? folded.mode : (input.mode ?? 'chain');
   const isBalancer = mode === 'balancer';
   // Validate the topology in the effective mode (balancer exits carry no
   // linkProtocol, which the chain rules would wrongly reject).
-  const hops = validateCascadeHops(input.hops, mode);
+  const hops = validateCascadeHops(folded ? folded.hops : input.hops!, mode);
   await assertNodesExist(hops.map((h) => h.nodeId));
   // T7: an enabled balancer entry serves vlessRoute-tagged exit configs; gate
   // it on the entry's xray version. Disabled cascades don't expand in subs.
@@ -407,10 +415,16 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   // disable toggle) must also re-push so its now-stale fragments are removed.
   const oldNodeIds = existing.hops.map((h) => h.nodeId);
 
-  // Effective mode: an explicit input.mode wins, else keep the stored one.
-  const mode = (input.mode ?? existing.mode) as 'chain' | 'balancer';
+  // Same fold as create. A v4 payload also decides the mode, since the shape
+  // now says it: one direction is a chain, several are a balancer.
+  const folded =
+    input.positions && input.directions
+      ? foldPositionsIntoHops(input.positions, input.directions)
+      : null;
+  const mode = (folded?.mode ?? input.mode ?? existing.mode) as 'chain' | 'balancer';
   const isBalancer = mode === 'balancer';
-  const hops = input.hops ? validateCascadeHops(input.hops, mode) : null;
+  const incomingHops = folded ? folded.hops : input.hops;
+  const hops = incomingHops ? validateCascadeHops(incomingHops, mode) : null;
   if (hops) await assertNodesExist(hops.map((h) => h.nodeId));
   // T7: gate an effectively-enabled balancer on the entry node's xray version
   // (covers both enabling an existing cascade and swapping in a new entry hop).

@@ -1,11 +1,92 @@
 import { MAX_CASCADE_HOPS } from './cascade.schemas.js';
-import type { CascadeHopInput } from './cascade.schemas.js';
+import type {
+  CascadeDirectionInput,
+  CascadeHopInput,
+  CascadePositionInput,
+} from './cascade.schemas.js';
 
 export class CascadeValidationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'CascadeValidationError';
   }
+}
+
+/**
+ * Fold the redesigned positions/directions payload into the stored hop list.
+ *
+ * The panel now thinks in positions (a step holding a pool) and directions (a
+ * way out with a frozen tag); storage still thinks in single-node hops. Every
+ * shape E1 shipped survives the fold:
+ *
+ *   one entry + one direction   -> chain   (entry, exit)
+ *   one entry + N directions    -> balancer (entry, N parallel exits)
+ *   entry + transits + one direction -> chain of that length
+ *
+ * Two shapes do not survive, and both are refused by name rather than mangled:
+ * a POOL (several nodes on one step) has nowhere to go, and transits combined
+ * with several directions were never representable here at all. Guessing would
+ * be worse than refusing: silently dropping the second node of a pool would
+ * leave an operator convinced of redundancy they do not have.
+ */
+export function foldPositionsIntoHops(
+  positions: CascadePositionInput[],
+  directions: CascadeDirectionInput[],
+): { hops: CascadeHopInput[]; mode: 'chain' | 'balancer' } {
+  const sorted = [...positions].sort((a, b) => a.position - b.position);
+
+  for (const p of sorted) {
+    if (p.nodeIds.length > 1) {
+      throw new CascadeValidationError(
+        `position ${p.position} lists ${p.nodeIds.length} nodes. A pool on a position needs the new cascade storage; today a position holds exactly one node.`,
+      );
+    }
+  }
+  for (const d of directions) {
+    if (d.nodeIds.length > 1) {
+      throw new CascadeValidationError(
+        `a direction lists ${d.nodeIds.length} nodes. A pool behind a direction needs the new cascade storage; today a direction is one node.`,
+      );
+    }
+  }
+  if (directions.length > 1 && sorted.length > 1) {
+    throw new CascadeValidationError(
+      'transits together with several directions cannot be stored yet: pick either one way out with transits, or several ways out straight from the entry.',
+    );
+  }
+
+  const mode: 'chain' | 'balancer' = directions.length > 1 ? 'balancer' : 'chain';
+  const entry = sorted[0]!;
+  const hops: CascadeHopInput[] = [
+    {
+      nodeId: entry.nodeIds[0]!,
+      position: 0,
+      ...(entry.entryProtocol ? { entryProtocol: entry.entryProtocol } : {}),
+      ...(entry.linkProtocol ? { linkProtocol: entry.linkProtocol } : {}),
+    },
+  ];
+
+  if (mode === 'balancer') {
+    // Exits hang straight off the entry; the entry carries the one uniform
+    // link protocol and the exits carry none.
+    directions.forEach((d, i) => {
+      hops.push({ nodeId: d.nodeIds[0]!, position: i + 1 });
+    });
+    return { hops, mode };
+  }
+
+  // Chain: transits keep their own link protocol, the single direction becomes
+  // the terminal hop and carries none.
+  for (let i = 1; i < sorted.length; i++) {
+    const p = sorted[i]!;
+    hops.push({
+      nodeId: p.nodeIds[0]!,
+      position: i,
+      ...(p.linkProtocol ? { linkProtocol: p.linkProtocol } : {}),
+    });
+  }
+  hops.push({ nodeId: directions[0]!.nodeIds[0]!, position: sorted.length });
+  return { hops, mode };
 }
 
 /**
