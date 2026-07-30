@@ -107,10 +107,17 @@ export function SquadEditPage() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [hostSearch, setHostSearch] = useState('');
   const [dirty, setDirty] = useState(false);
-  // Access is stored per profile, so picking hosts in the tree resolves to the
-  // profiles behind them. Every host of the same profile therefore ticks
-  // together, which is exactly what the subscription will do.
   const [profileIds, setProfileIds] = useState<string[]>([]);
+  /**
+   * Which hosts of the granted profiles this squad hands out.
+   *
+   * Opt-in, like the exit allow-list: EMPTY MEANS EVERY HOST, not none. That is
+   * why the tree has two modes below. Reading an empty list as "hands out
+   * nothing" would be the expensive misreading, so the screen never shows bare
+   * unticked boxes for it.
+   */
+  const [hostIds, setHostIds] = useState<string[]>([]);
+  const restricted = hostIds.length > 0;
 
   useEffect(() => {
     if (!squad) return;
@@ -121,6 +128,7 @@ export function SquadEditPage() {
     setExitAcl(squad.exitAcl);
     setPolicyIds(squad.policyIds);
     setProfileIds(squad.profileIds);
+    setHostIds(squad.hostIds ?? []);
     setDirty(false);
   }, [squad?.id, squad?.updatedAt]);
 
@@ -134,6 +142,10 @@ export function SquadEditPage() {
         profileIds,
         exitAcl,
         policyIds,
+        // Always sent, never omitted: `[]` clears the restriction and an absent
+        // field leaves it as it was. Those are different requests, and the
+        // difference is the only way to undo a restriction.
+        hostIds,
       };
       return isNew ? createSquad(payload) : updateSquad(squad!.id, payload);
     },
@@ -182,6 +194,9 @@ export function SquadEditPage() {
     for (const h of hostsQuery.data?.hosts ?? []) {
       const binding = bindingById.get(h.bindingId);
       if (!binding) continue;
+      // Only hosts of the granted profiles. A host of a profile this squad does
+      // not hold could be ticked here and mean nothing.
+      if (!granted.has(binding.profileId)) continue;
       const node = nodeById.get(binding.nodeId);
       const profile = profileById.get(binding.profileId);
       const code = (node?.countryCode ?? 'zz').toUpperCase();
@@ -191,7 +206,9 @@ export function SquadEditPage() {
         port: h.portOverride ?? binding.publicPort ?? binding.port,
         profile: profile?.name ?? '?',
         profileId: binding.profileId,
-        granted: granted.has(binding.profileId),
+        // With no restriction every host of every granted profile goes out, so
+        // the row reads as granted rather than as an empty box.
+        granted: restricted ? hostIds.includes(h.id) : true,
       };
       if (q && !`${row.name} ${row.port} ${row.profile}`.toLowerCase().includes(q)) continue;
       const g = byCountry.get(code) ?? { code, rows: [] };
@@ -200,28 +217,77 @@ export function SquadEditPage() {
     }
 
     return [...byCountry.values()].sort((a, b) => a.code.localeCompare(b.code));
-  }, [hostsQuery.data, bindingsQuery.data, nodesQuery.data, profilesQuery.data, profileIds, hostSearch]);
+  }, [
+    hostsQuery.data,
+    bindingsQuery.data,
+    nodesQuery.data,
+    profilesQuery.data,
+    profileIds,
+    hostIds,
+    restricted,
+    hostSearch,
+  ]);
 
-  function toggleProfile(profileId: string) {
+  /**
+   * Every host of the granted profiles, restriction and search aside. The list a
+   * restriction starts from, and what "all of them" counts. Built from the raw
+   * data rather than from `groups`, because a typed search narrows the tree and
+   * must not narrow the meaning of "all".
+   */
+  const reachableIds = useMemo(() => {
+    const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
+    const granted = new Set(profileIds);
+    return (hostsQuery.data?.hosts ?? [])
+      .filter((h) => {
+        const binding = bindingById.get(h.bindingId);
+        return binding ? granted.has(binding.profileId) : false;
+      })
+      .map((h) => h.id);
+  }, [hostsQuery.data, bindingsQuery.data, profileIds]);
+
+  /**
+   * Start restricting from the current reality: everything is ticked, and the
+   * operator unticks what this squad should not see. Starting from an empty
+   * list would mean the first click silently cuts the squad down to one host.
+   */
+  function beginRestriction() {
     if (isAll) return;
     setDirty(true);
-    setProfileIds((prev) =>
-      prev.includes(profileId) ? prev.filter((x) => x !== profileId) : [...prev, profileId],
+    setHostIds(reachableIds);
+  }
+
+  /** Back to every host. `[]` is the value that says that, so it is what gets
+   *  sent, and the operator has no other way to undo a restriction. */
+  function clearRestriction() {
+    if (isAll) return;
+    setDirty(true);
+    setHostIds([]);
+  }
+
+  function toggleHost(hostId: string) {
+    if (isAll || !restricted) return;
+    setDirty(true);
+    setHostIds((prev) =>
+      prev.includes(hostId) ? prev.filter((x) => x !== hostId) : [...prev, hostId],
     );
   }
 
-  /** Group checkbox: all-or-nothing for every profile inside that country. */
-  function toggleCountryHosts(rows: { profileId: string; granted: boolean }[]) {
-    if (isAll) return;
+  /** Group checkbox: all-or-nothing for the hosts inside that country. */
+  function toggleCountryHosts(rows: { id: string; granted: boolean }[]) {
+    if (isAll || !restricted) return;
     setDirty(true);
-    const ids = [...new Set(rows.map((r) => r.profileId))];
+    const ids = rows.map((r) => r.id);
     const allOn = rows.every((r) => r.granted);
-    setProfileIds((prev) =>
+    setHostIds((prev) =>
       allOn ? prev.filter((x) => !ids.includes(x)) : [...new Set([...prev, ...ids])],
     );
   }
 
-  const selectedHosts = groups.reduce((sum, g) => sum + g.rows.filter((r) => r.granted).length, 0);
+  // Counted off `reachableIds` for the same reason: the header states what the
+  // squad hands out, which a search box does not change.
+  const selectedHosts = restricted
+    ? reachableIds.filter((id) => hostIds.includes(id)).length
+    : reachableIds.length;
 
   const balancers = (cascadesQuery.data?.cascades ?? []).filter((c) => c.mode === 'balancer');
   const policies = policiesQuery.data?.policies ?? [];
@@ -529,22 +595,26 @@ export function SquadEditPage() {
                 <IconRoute size={15} stroke={1.8} />
               </Box>
               <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('squadEdit.hosts')}</Text>
-              <Chip accent={CYAN}>
-                {isAll
+              {/* Unrestricted is not "none selected", so it never reads as a
+                  count out of a total. */}
+              <Chip accent={restricted ? CYAN : MOSS}>
+                {isAll || !restricted
                   ? t('squadEdit.attachedAll', { count: selectedHosts })
-                  : t('squadEdit.selected', { count: selectedHosts })}
+                  : t('squadEdit.selectedOf', { count: selectedHosts, total: reachableIds.length })}
               </Chip>
               <Box style={{ flex: 1 }} />
-              {!isAll && (
-                <SmallButton
-                  onClick={() =>
-                    toggleCountryHosts(groups.flatMap((g) => g.rows))
-                  }
-                >
-                  <IconCheck size={12} stroke={2.2} color={MIST} />
-                  {t('squadEdit.selectAll')}
-                </SmallButton>
-              )}
+              {!isAll &&
+                (restricted ? (
+                  <SmallButton onClick={clearRestriction}>
+                    <IconCheck size={12} stroke={2.2} color={MIST} />
+                    {t('squadEdit.clearRestriction')}
+                  </SmallButton>
+                ) : (
+                  <SmallButton onClick={beginRestriction}>
+                    <IconCheck size={12} stroke={2.2} color={MIST} />
+                    {t('squadEdit.restrict')}
+                  </SmallButton>
+                ))}
               <SmallButton
                 onClick={() =>
                   setCollapsed((prev) =>
@@ -589,6 +659,30 @@ export function SquadEditPage() {
 
             {groups.length === 0 && (
               <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noHosts')}</Text>
+            )}
+
+            {/* No restriction is a state, not an empty selection, and it needs
+                saying out loud: a wall of ticked boxes with no explanation
+                would read as "somebody picked all of these". */}
+            {!isAll && !restricted && groups.length > 0 && (
+              <Box
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '11px 14px',
+                  borderRadius: 10,
+                  backgroundColor: `${MOSS}0F`,
+                  border: `1px solid ${MOSS}2E`,
+                }}
+              >
+                <Box style={{ color: MOSS, display: 'flex', marginTop: 1 }}>
+                  <IconCheck size={13} stroke={2.4} />
+                </Box>
+                <Text style={{ flex: 1, fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: SNOW }}>
+                  {t('squadEdit.noRestriction')}
+                </Text>
+              </Box>
             )}
 
             {groups.map((g) => {
@@ -659,7 +753,7 @@ export function SquadEditPage() {
                     g.rows.map((r) => (
                       <UnstyledButton
                         key={r.id}
-                        onClick={() => toggleProfile(r.profileId)}
+                        onClick={() => toggleHost(r.id)}
                         style={{
                           width: '100%',
                           display: 'flex',
@@ -668,7 +762,10 @@ export function SquadEditPage() {
                           padding: '11px 14px',
                           backgroundColor: ROW,
                           borderTop: `1px solid ${HAIRLINE}`,
-                          cursor: isAll ? 'default' : 'pointer',
+                          // Without a restriction the ticks state a fact rather
+                          // than offering a choice, so the row does not pretend
+                          // to be clickable.
+                          cursor: isAll || !restricted ? 'default' : 'pointer',
                         }}
                       >
                         <Box style={{ width: 14, flexShrink: 0 }} />
@@ -713,7 +810,11 @@ export function SquadEditPage() {
                   color: isNew && selectedHosts === 0 ? AMBER : FAINT,
                 }}
               >
-                {isNew && selectedHosts === 0 ? t('squadEdit.emptyWarning') : t('squadEdit.treeHint')}
+                {isNew && selectedHosts === 0
+                  ? t('squadEdit.emptyWarning')
+                  : restricted
+                    ? t('squadEdit.treeHintRestricted')
+                    : t('squadEdit.treeHintAll')}
               </Text>
             </Box>
           </Card>

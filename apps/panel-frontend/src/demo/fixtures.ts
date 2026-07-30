@@ -185,6 +185,7 @@ export const SQUADS: Squad[] = [
     routingPreset: null,
     exitAcl: [],
     policyIds: [],
+    hostIds: [],
     hwidDeviceLimit: null,
     memberCount: 7,
     createdAt: iso(50 * DAY),
@@ -200,6 +201,9 @@ export const SQUADS: Squad[] = [
     routingPreset: null,
     exitAcl: [{ cascadeId: 'casc-us-relay', exitNodeIds: ['node-xray-de-01'] }],
     policyIds: ['policy-no-ads'],
+    // A tier that sees two of its profiles' hosts, so the restricted mode of the
+    // squad screen has something to show.
+    hostIds: ['host-5', 'host-2'],
     hwidDeviceLimit: 3,
     memberCount: 12,
     createdAt: iso(40 * DAY),
@@ -213,6 +217,7 @@ export const SQUADS: Squad[] = [
     routingPreset: null,
     exitAcl: [],
     policyIds: [],
+    hostIds: [],
     hwidDeviceLimit: 5,
     memberCount: 5,
     createdAt: iso(50 * DAY),
@@ -227,6 +232,7 @@ export const SQUADS: Squad[] = [
     routingPreset: null,
     exitAcl: [],
     policyIds: [],
+    hostIds: [],
     hwidDeviceLimit: null,
     memberCount: 3,
     createdAt: iso(12 * DAY),

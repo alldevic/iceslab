@@ -215,7 +215,12 @@ export default {
     hwidHint: 'Squad default. Across squads the most permissive wins.',
     hosts: 'Hosts',
     selected: '{{count}} selected',
+    selectedOf: '{{count}} of {{total}} handed out',
     attachedAll: '{{count}} attached · all of them',
+    restrict: 'Restrict',
+    clearRestriction: 'Hand out all',
+    noRestriction:
+      'No restriction: this squad hands out every host of its profiles, including ones added later. Use Restrict to narrow it.',
     allDirections: 'ALL DIRECTIONS',
     cascadeDirectionsAll:
       'The system squad never restricts directions. Members reach every direction its cascades carry.',
@@ -225,8 +230,12 @@ export default {
     collapseAll: 'Collapse all',
     hostSearch: 'Search by name / port / profile...',
     noHosts: 'No hosts deployed yet.',
-    treeHint:
-      'Click a country row to fold it away. Ticks show what this squad already reaches through its profiles.',
+    // The ticks used to be an indicator of what the profiles already reached.
+    // They are a choice now, so the hint says which mode is in play.
+    treeHintAll:
+      'Click a country row to fold it away. Every host of the granted profiles goes out, so the ticks state a fact rather than a choice.',
+    treeHintRestricted:
+      'Click a country row to fold it away. Ticked hosts are the ones this squad hands out; hosts added later stay out until you tick them.',
     // A squad is narrowed by direction, and a direction is identified by its
     // tag. The node under it can be swapped without any of this changing.
     cascadeDirections: 'Cascade directions',

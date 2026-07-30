@@ -990,6 +990,13 @@ export interface Squad {
   exitAcl: SquadExitAclEntry[];
   /** A4 ad-split, extra route-policies granted to this squad. Empty = plain only. */
   policyIds: string[];
+  /**
+   * Which hosts of the granted profiles this squad hands out. Opt-in, like
+   * `exitAcl`: EMPTY MEANS EVERY HOST, not none. A tier that should see two
+   * countries while another sees all used to need a duplicated profile, which
+   * meant different REALITY keys and a second inbound on every node.
+   */
+  hostIds: string[];
   /** R3-a, per-squad routing-preset override; null = inherit panel default. */
   routingPreset: RoutingPresetId | null;
   /** K7, per-squad HWID device-limit default; null = none. */
@@ -1007,6 +1014,7 @@ export interface CreateSquadInput {
   profileIds?: string[];
   exitAcl?: SquadExitAclEntry[];
   policyIds?: string[];
+  hostIds?: string[];
 }
 
 export interface UpdateSquadInput {
@@ -1020,6 +1028,13 @@ export interface UpdateSquadInput {
   exitAcl?: SquadExitAclEntry[];
   /** Replaces the full route-policy grant set when provided. */
   policyIds?: string[];
+  /**
+   * Replaces the full host restriction when provided. Sending `[]` CLEARS the
+   * restriction (back to every host); omitting the field leaves it as it was.
+   * Those are different requests and the difference is the only way an operator
+   * can undo a restriction.
+   */
+  hostIds?: string[];
 }
 
 export async function listSquads(): Promise<{ squads: Squad[] }> {
