@@ -78,6 +78,15 @@ jobs:
       # high` lets known-medium issues in third-party deps pass while
       # still failing the build on high/critical, where action is
       # expected within hours, not weeks. Tune as the fleet matures.
+      #
+      # Advisories deliberately silenced live in `pnpm.auditConfig.ignoreGhsas`
+      # in the root package.json, and each one needs a reason recorded in the
+      # commit that added it. Today that list holds exactly one:
+      # GHSA-qwww-vcr4-c8h2 (react-router RSC-mode CSRF), whose fix only exists
+      # in react-router 8.x. The panel is a Vite SPA and does not run React
+      # Server Components at all, so the vulnerable code path is not reachable;
+      # silencing it beats forcing a major frontend upgrade for a mode we do
+      # not use. Revisit when the frontend moves to 8.x for other reasons.
       - name: pnpm audit (high+)
         run: pnpm audit --prod --audit-level high
         continue-on-error: false
