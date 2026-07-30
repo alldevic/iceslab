@@ -3,7 +3,11 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    # `develop` is the integration branch the operator work merges into and the
+    # one their test server deploys from, so it has to be gated exactly like
+    # main. Without it a merge into develop reached that server having passed
+    # nothing but whatever the PR happened to run.
+    branches: [main, develop]
 
 # Cancel in-flight runs when a new commit lands on the same ref. Saves
 # minutes on rapid push-fix-push cycles and removes confusing red marks
@@ -88,9 +92,14 @@ jobs:
         working-directory: apps/panel-backend
         run: pnpm exec tsc --noEmit
 
+      # `tsc -b`, not `tsc --noEmit`. The frontend references @iceslab/shared as
+      # a composite project; --noEmit skips building referenced projects and so
+      # typechecks against whatever .d.ts happens to be on disk, which in CI is
+      # a fresh checkout with none. Errors that only the Docker build caught
+      # were slipping through this step for exactly that reason.
       - name: Typecheck frontend
         working-directory: apps/panel-frontend
-        run: pnpm exec tsc --noEmit
+        run: pnpm exec tsc -b
 
       - name: Test backend
         working-directory: apps/panel-backend
@@ -123,18 +132,26 @@ jobs:
         run: go test ./...
 
   # Slice 36 follow-up: build + publish container images to GHCR on every
-  # push to main and on every tag. Pull requests build but don't publish
-  # (no creds reach forked-PR jobs). Tag naming follows GHCR convention:
+  # push to main or develop and on every tag. Pull requests build but don't
+  # publish (no creds reach forked-PR jobs). Tag naming follows GHCR convention:
   #   ghcr.io/icecompany-tech/iceslab-backend:main         (rolling)
+  #   ghcr.io/icecompany-tech/iceslab-backend:develop      (rolling, test server)
   #   ghcr.io/icecompany-tech/iceslab-backend:sha-<7c>     (every push)
   #   ghcr.io/icecompany-tech/iceslab-backend:v1.2.3       (only on `v*` tags)
+  # develop publishes because the operator's test server pulls from it; the
+  # `develop` tag is what makes "merged into develop" and "deployable to test"
+  # the same event instead of a manual rebuild on the box.
   # The three Dockerfiles already exist (panel-backend / panel-frontend /
   # node-agent), this job just wraps them.
   docker:
     name: docker (build + publish)
     runs-on: ubuntu-latest
     needs: [panel, node-agent]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/develop' ||
+       startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
       packages: write
