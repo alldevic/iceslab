@@ -108,16 +108,34 @@ describe('expandEndpointUris', () => {
   });
 
   it('suffixes profile remarks with the host remark on a multi-host entry', () => {
+    // Only reached when the entry binding has more than one host: several
+    // hosts on one entry produce the same set of ways out, so without the
+    // suffix the client would list the same string twice. The caller decides
+    // (subscription.service passes hostRemark only when hosts.length > 1),
+    // which is why a single-host entry no longer glues its host name onto
+    // every profile.
     const out = expandEndpointUris({
       ...entry,
       hostRemark: 'test 2',
       cascadeExits: [
-        { label: 'de exit', tag: 1 },
-        { label: 'nl', tag: 2 },
+        { label: 'first way out', tag: 1 },
+        { label: 'second way out', tag: 2 },
       ],
     });
-    expect(out[0]!.endsWith(`#${encodeURIComponent('de exit · test 2')}`)).toBe(true);
-    expect(out[1]!.endsWith(`#${encodeURIComponent('nl · test 2')}`)).toBe(true);
+    expect(out[0]!.endsWith(`#${encodeURIComponent('first way out · test 2')}`)).toBe(true);
+    expect(out[1]!.endsWith(`#${encodeURIComponent('second way out · test 2')}`)).toBe(true);
+  });
+
+  it('leaves the profile label alone when the entry has a single host', () => {
+    // The regression: a client read "balancer · SE · ru-01-xhttp-reality",
+    // the way out followed by our internal host name, on an entry that had
+    // exactly one host and therefore nothing to disambiguate.
+    const out = expandEndpointUris({
+      ...entry,
+      hostRemark: undefined,
+      cascadeExits: [{ label: '🇸🇪 balancer · SE', tag: 1 }],
+    });
+    expect(out[0]!.endsWith(`#${encodeURIComponent('🇸🇪 balancer · SE')}`)).toBe(true);
   });
 
   it('does not re-tag vmess (UUID is not in the userinfo)', () => {

@@ -403,7 +403,12 @@ export async function generateSubscription(
         : 'default';
     const hostMeta = {
       hostId: hostOverrides?.id,
-      hostRemark: hostOverrides?.remark,
+      // Only carried when this binding has MORE THAN ONE host. It exists to
+      // tell apart the several cascade profiles a multi-host entry produces,
+      // which are otherwise identical strings. With a single host there is
+      // nothing to disambiguate, and appending it just glued our internal host
+      // name onto every way out ("balancer · SE · ru-01-xhttp-reality").
+      hostRemark: b.hosts.length > 1 ? hostOverrides?.remark : undefined,
       alpn: hostOverrides?.alpn,
       allowInsecure: hostOverrides?.allowInsecure ?? false,
       securityLayer,
