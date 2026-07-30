@@ -1,4 +1,5 @@
 import type { XrayCascadeFragments } from '@iceslab/shared';
+import { cascadeProfileLabel } from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
@@ -171,7 +172,9 @@ export async function getRouteProfilesByEntryNode(
     include: {
       hops: {
         orderBy: { position: 'asc' },
-        include: { node: { select: { id: true, name: true } } },
+        // countryCode drives the flag and the label of a route profile: what a
+        // client picks here is a COUNTRY to leave from, not a machine.
+        include: { node: { select: { id: true, name: true, countryCode: true } } },
       },
     },
   });
@@ -231,7 +234,11 @@ export async function getRouteProfilesByEntryNode(
     // chain entry emits a single unindexed link-out, so every tag routed there
     // must use exitIndex 0.
     const exitHops = isBalancer ? c.hops.filter((h) => h.position !== 0) : c.hops.slice(-1);
-    const fullExits = exitHops.map((h, i) => ({ name: h.node.name, index: i, nodeId: h.node.id }));
+    const fullExits = exitHops.map((h, i) => ({
+      name: cascadeProfileLabel(c.name, h.node.countryCode, h.node.name),
+      index: i,
+      nodeId: h.node.id,
+    }));
     const exits = applyExitAcl(fullExits, allowByCascade.get(c.id));
     if (exits.length === 0) continue;
     // Cartesian: each exit x (plain + granted policies). Plain first per exit so

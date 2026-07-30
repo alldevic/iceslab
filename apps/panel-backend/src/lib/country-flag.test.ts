@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countryFlag, subscriptionServerName } from './country-flag.js';
+import { cascadeProfileLabel, countryFlag, subscriptionServerName } from './country-flag.js';
 
 describe('countryFlag', () => {
   it('builds the emoji from regional indicators', () => {
@@ -45,6 +45,19 @@ describe('subscriptionServerName', () => {
     expect(subscriptionServerName({ hostRemark: 'Direct', nodeName: 'n1', countryCode: null })).toBe(
       'Direct',
     );
+  });
+
+  it('leads with the country for a cascade way out, not with our machine names', () => {
+    // The regression: clients read "<exit node> · <entry host>", two internal
+    // names glued together. Neither is a thing the person choosing a country
+    // has an opinion about. Any code works, these two are arbitrary.
+    expect(cascadeProfileLabel('cascade', 'DE', 'exit-01')).toBe('🇩🇪 cascade · DE');
+    expect(cascadeProfileLabel('cascade', 'fr', 'exit-02')).toBe('🇫🇷 cascade · FR');
+  });
+
+  it('falls back to the exit node name when the node has no country', () => {
+    // Without a country there is nothing else telling two ways out apart.
+    expect(cascadeProfileLabel('cascade', null, 'exit-01')).toBe('cascade · exit-01');
   });
 
   it('puts the flag first so it survives truncation in a client list', () => {
