@@ -62,6 +62,7 @@ export interface DashboardOverview {
   inventory: {
     profileCount: number;
     squadCount: number;
+    hostCount: number;
   };
   host: SystemMetrics;
   nodes: {
@@ -426,24 +427,35 @@ async function recentEvents(): Promise<DashboardOverview['recentEvents']> {
 }
 
 async function computeOverview(): Promise<DashboardOverview> {
-  const [users, traffic, nodesAndSystem, byProtocol, topUsers, events, host, profileCount, squadCount] =
-    await Promise.all([
-      userMetrics(),
-      trafficMetrics(),
-      nodeMetrics(),
-      protocolMetrics(),
-      topUsersToday(),
-      recentEvents(),
-      collectSystemMetrics(),
-      prisma.profile.count(),
-      prisma.group.count(),
-    ]);
+  const [
+    users,
+    traffic,
+    nodesAndSystem,
+    byProtocol,
+    topUsers,
+    events,
+    host,
+    profileCount,
+    squadCount,
+    hostCount,
+  ] = await Promise.all([
+    userMetrics(),
+    trafficMetrics(),
+    nodeMetrics(),
+    protocolMetrics(),
+    topUsersToday(),
+    recentEvents(),
+    collectSystemMetrics(),
+    prisma.profile.count(),
+    prisma.group.count(),
+    prisma.host.count(),
+  ]);
 
   const overview: DashboardOverview = {
     users,
     traffic,
     system: nodesAndSystem.system,
-    inventory: { profileCount, squadCount },
+    inventory: { profileCount, squadCount, hostCount },
     host,
     nodes: nodesAndSystem.nodes,
     byProtocol,
