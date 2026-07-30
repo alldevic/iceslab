@@ -142,6 +142,45 @@ describe('subscription contents follow hosts', () => {
     expect(await serverNames(user.subscriptionToken)).toEqual([]);
   });
 
+  it('takes the binding with the last host, freeing the port', async () => {
+    const { profile, node, host } = await seed();
+    await app.inject({ method: 'DELETE', url: `/api/hosts/${host.id}`, headers: auth() });
+
+    // No invisible leftover: the operator sees a node with nothing on it, and
+    // the panel agrees.
+    const bindings = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/bindings', headers: auth() })).body,
+    ).bindings;
+    expect(bindings.filter((b: { nodeId: string }) => b.nodeId === node.id)).toHaveLength(0);
+
+    // And the port is genuinely free again: the same port on the same node is
+    // accepted, which it was not while the empty binding still held it.
+    const again = await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'Second life' },
+    });
+    expect(again.statusCode).toBe(201);
+  });
+
+  it('keeps the binding while any host remains', async () => {
+    const { profile, node, host } = await seed();
+    await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' },
+    });
+    await app.inject({ method: 'DELETE', url: `/api/hosts/${host.id}`, headers: auth() });
+    const bindings = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/bindings', headers: auth() })).body,
+    ).bindings;
+    // Only the LAST host takes the binding down; removing one of two must not
+    // disturb the node at all.
+    expect(bindings.filter((b: { nodeId: string }) => b.nodeId === node.id)).toHaveLength(1);
+  });
+
   it('keeps the surviving host when one of two is removed', async () => {
     const { profile, node, host, user } = await seed();
     await app.inject({

@@ -291,11 +291,54 @@ export async function updateHost(
   return mapHost(updated);
 }
 
+/**
+ * Delete a host, and with it the binding when that was its last one.
+ *
+ * The binding used to survive, on the reasoning that tearing an inbound off a
+ * live node should not be a side effect of removing one client line. Two things
+ * settled the argument the other way (operator's call, 2026-07-30):
+ *
+ *   - the leftover was INVISIBLE. No screen lists bindings, so an operator who
+ *     deleted their only host saw a node claiming to serve something, could not
+ *     find what, and could not remove it;
+ *   - it still held the port. A second profile asking for the same port on that
+ *     node was refused, naming a profile that appeared to serve nothing.
+ *
+ * So "no hosts" now means "nothing on the node", which is the model the panel
+ * shows everywhere else. The cost is real and belongs in the confirmation the
+ * operator reads: removing the inbound rewrites the node's config, and xray
+ * restarts, dropping live sessions on that node's OTHER inbounds too.
+ */
 export async function deleteHost(id: string): Promise<void> {
   const existing = await prisma.host.findUnique({ where: { id } });
   if (!existing) throw new HostNotFoundError(id);
-  await prisma.host.delete({ where: { id } });
+
+  const orphanedBinding = await prisma.$transaction(async (tx) => {
+    await tx.host.delete({ where: { id } });
+    const left = await tx.host.count({ where: { bindingId: existing.bindingId } });
+    if (left > 0) return null;
+    // Read before deleting: the event needs profile and node, and the row is
+    // about to be gone.
+    const binding = await tx.profileNodeBinding.findUnique({
+      where: { id: existing.bindingId },
+      select: { id: true, profileId: true, nodeId: true },
+    });
+    if (!binding) return null;
+    await tx.profileNodeBinding.delete({ where: { id: binding.id } });
+    return binding;
+  });
+
   eventBus.emit('host.changed', {});
+  // Ordered after host.changed on purpose: this one re-pushes the node's
+  // inbound set, so it should run once the subscription caches already know
+  // the host is gone.
+  if (orphanedBinding) {
+    eventBus.emit('binding.deleted', {
+      bindingId: orphanedBinding.id,
+      profileId: orphanedBinding.profileId,
+      nodeId: orphanedBinding.nodeId,
+    });
+  }
 }
 
 /**
