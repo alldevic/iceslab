@@ -160,6 +160,42 @@ function vlessLinkInbound(cred: VlessLinkCred): Record<string, unknown> {
   };
 }
 
+/**
+ * Socket tuning for the inter-hop link.
+ *
+ * The node's own `direct` outbound has carried BBR + TCP Fast Open since slice
+ * 23.1, but the link between hops never did, so the LONGEST leg of a cascade
+ * (RU to NL is ~80ms RTT) ran on plain CUBIC. That is exactly where BBR earns
+ * its keep: on a long fat pipe with loss the gap is a multiple, not a few
+ * percent. Reported from the field 2026-07-30 as "pages load heavily" while
+ * raw throughput looked fine.
+ *
+ * The node's sysctl already sets `net.core.default_qdisc=fq` and BBR (see
+ * install-iceslab-node.sh), so this asks for something the kernel can give.
+ */
+const LINK_SOCKOPT = {
+  tcpCongestion: 'bbr',
+  tcpFastOpen: true,
+} as const;
+
+/**
+ * Multiplexing for the inter-hop link.
+ *
+ * Without it every stream opens its own TCP connection across the whole chain,
+ * so a page that fires forty requests pays forty full round trips before any
+ * of them carry data. That is felt as slow LOADING even when a single download
+ * runs at full speed, which is precisely the reported symptom.
+ *
+ * concurrency 8 is deliberately modest: Mux funnels streams into one
+ * connection, so a large sustained transfer can hold up the small requests
+ * sharing it. Eight keeps page loads snappy without turning the link into a
+ * single-lane road.
+ */
+const LINK_MUX = {
+  enabled: true,
+  concurrency: 8,
+} as const;
+
 function vlessLinkOutbound(host: string, cred: VlessLinkCred): Record<string, unknown> {
   return {
     tag: LINK_OUT_TAG,
@@ -167,7 +203,8 @@ function vlessLinkOutbound(host: string, cred: VlessLinkCred): Record<string, un
     settings: {
       vnext: [{ address: host, port: cred.port, users: [{ id: cred.uuid, encryption: 'none' }] }],
     },
-    streamSettings: { network: 'raw', security: 'none' },
+    streamSettings: { network: 'raw', security: 'none', sockopt: LINK_SOCKOPT },
+    mux: LINK_MUX,
   };
 }
 
@@ -191,6 +228,11 @@ function ssLinkOutbound(host: string, cred: Ss2022LinkCred): Record<string, unkn
     settings: {
       servers: [{ address: host, port: cred.port, method: cred.method, password: cred.psk }],
     },
+    // SS carries its own transport, so there is no network/security to set,
+    // but the socket underneath is still ours to tune. Same reasoning as the
+    // vless cell: this leg is the long one.
+    streamSettings: { sockopt: LINK_SOCKOPT },
+    mux: LINK_MUX,
   };
 }
 

@@ -16,8 +16,8 @@ import {
 // policy, grant it, see the panel report success, and get no rules on the node.
 describe('buildCascadeConfigs (chain) ad-split', () => {
   const hops: CascadeConfigHopInput[] = [
-    { nodeId: 'n-ru', position: 0, nodeHost: 'ru.example.com' },
-    { nodeId: 'n-de', position: 1, nodeHost: 'de.example.com' },
+    { nodeId: 'n-entry', position: 0, nodeHost: 'entry.example.com' },
+    { nodeId: 'n-exit', position: 1, nodeHost: 'exit.example.com' },
   ];
   const creds: LinkCred[] = [{ protocol: 'vless', port: 24000, uuid: 'u-0' }];
   const noAds = {
@@ -62,13 +62,62 @@ describe('buildCascadeConfigs (chain) ad-split', () => {
 
   it('leaves transit and exit hops alone', () => {
     const cfgs = buildCascadeConfigs(
-      [...hops, { nodeId: 'n-nl', position: 2, nodeHost: 'nl.example.com' }],
+      [...hops, { nodeId: 'n-transit', position: 2, nodeHost: 'transit.example.com' }],
       [...creds, { protocol: 'vless', port: 24001, uuid: 'u-1' }],
       [noAds],
     );
     for (const c of cfgs.slice(1)) {
       expect(c.routingRules.some((r) => 'vlessRoute' in r)).toBe(false);
     }
+  });
+});
+
+// The inter-hop link is the LONGEST leg of a cascade, and until 2026-07-30 it
+// was the only outbound with no socket tuning at all: the node's own `direct`
+// has carried BBR since slice 23.1. Reported from the field as pages loading
+// heavily while raw throughput looked fine.
+describe('inter-hop link tuning', () => {
+  // Deliberately unnamed by geography: this applies to every link between two
+  // hops, whatever the countries. The field report happened to be RU to NL,
+  // but the tuning is not about that pair.
+  const hops: CascadeConfigHopInput[] = [
+    { nodeId: 'n-entry', position: 0, nodeHost: 'entry.example.com' },
+    { nodeId: 'n-exit', position: 1, nodeHost: 'exit.example.com' },
+  ];
+
+  function linkOut(cred: LinkCred) {
+    const entry = buildCascadeConfigs(hops, [cred])[0]!;
+    return entry.outbounds.find((o) => o.tag === 'cascade-link-out')!;
+  }
+
+  it.each([
+    ['vless', { protocol: 'vless', port: 24000, uuid: 'u-0' } as LinkCred],
+    [
+      'shadowsocks',
+      { protocol: 'shadowsocks', port: 24000, psk: 'p', method: '2022-blake3-aes-256-gcm' } as LinkCred,
+    ],
+  ])('%s link runs BBR with fast open', (_name, cred) => {
+    const out = linkOut(cred);
+    const ss = out.streamSettings as Record<string, unknown>;
+    expect(ss.sockopt).toMatchObject({ tcpCongestion: 'bbr', tcpFastOpen: true });
+  });
+
+  it.each([
+    ['vless', { protocol: 'vless', port: 24000, uuid: 'u-0' } as LinkCred],
+    [
+      'shadowsocks',
+      { protocol: 'shadowsocks', port: 24000, psk: 'p', method: '2022-blake3-aes-256-gcm' } as LinkCred,
+    ],
+  ])('%s link multiplexes so a page does not pay a round trip per request', (_name, cred) => {
+    expect(linkOut(cred).mux).toMatchObject({ enabled: true, concurrency: 8 });
+  });
+
+  it('leaves the exit egress alone: only the link between hops is tuned', () => {
+    const cfgs = buildCascadeConfigs(hops, [{ protocol: 'vless', port: 24000, uuid: 'u-0' }]);
+    const exitDirect = cfgs[1]!.outbounds.find((o) => o.tag === 'direct')!;
+    // The node's base config already owns `direct`; duplicating tuning here
+    // would be a second opinion on a tag we do not control.
+    expect(exitDirect).not.toHaveProperty('mux');
   });
 });
 
