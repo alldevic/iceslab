@@ -241,6 +241,20 @@ export default {
     hwidLimit: 'Лимит устройств HWID',
     devices: 'устройств',
     hwidHint: 'Значение по умолчанию для сквада. Между сквадами побеждает самое щедрое.',
+    profiles: 'Профили',
+    profilesHint:
+      'Что сквад выдаёт. Всё, что ниже, сужает уже внутри них: хост профиля, которого у сквада нет, отдать нельзя.',
+    profilesAll:
+      'Системный сквад держит все профили, включая те, что появятся позже, и это не меняется.',
+    allProfiles: 'ВСЕ ПРОФИЛИ',
+    grantedOf: 'выдано {{count}} из {{total}}',
+    noProfiles: 'Профилей пока нет.',
+    noProfilesGranted:
+      'Профили не выданы. Участники сквада получат пустую подписку, пока не отмечен хотя бы один.',
+    profileNodes_one: '{{count}} нода',
+    profileNodes_few: '{{count}} ноды',
+    profileNodes_many: '{{count}} нод',
+    profileNodes_other: '{{count}} нод',
     hosts: 'Хосты',
     selected: 'выбрано {{count}}',
     selectedOf: 'отдаётся {{count}} из {{total}}',

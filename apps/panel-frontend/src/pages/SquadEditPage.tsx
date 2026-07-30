@@ -33,6 +33,7 @@ import {
   listSquads,
   updateSquad,
   type SquadExitAclEntry,
+  type UpdateSquadInput,
 } from '../lib/api';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { COUNTRIES, countryName } from '../lib/countries';
@@ -78,6 +79,22 @@ const LABEL = {
   lineHeight: '12px',
 };
 
+/** Same members, order aside. Order carries no meaning in any of these grants,
+ *  so comparing by it would report changes that are not there. */
+function sameSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const seen = new Set(b);
+  return a.every((x) => seen.has(x));
+}
+
+function sameExitAcl(a: SquadExitAclEntry[], b: SquadExitAclEntry[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((entry) => {
+    const other = b.find((e) => e.cascadeId === entry.cascadeId);
+    return other ? sameSet(entry.exitNodeIds, other.exitNodeIds) : false;
+  });
+}
+
 export function SquadEditPage() {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
@@ -118,6 +135,18 @@ export function SquadEditPage() {
    */
   const [hostIds, setHostIds] = useState<string[]>([]);
   const restricted = hostIds.length > 0;
+  /**
+   * Which squad the form currently holds the values of.
+   *
+   * Every list on this screen is a SET REPLACEMENT server-side: what gets sent
+   * becomes the whole grant, and an empty array revokes it. So a save from a
+   * form that has not been filled yet would not fail, it would silently strip
+   * the squad and cut its members off. Saving stays closed until the values on
+   * screen are this squad's own, which also covers walking from one squad to
+   * another: the id has changed and the fields have not caught up yet.
+   */
+  const [seededId, setSeededId] = useState<string | null>(null);
+  const seeded = squad !== null && seededId === squad.id;
 
   useEffect(() => {
     if (!squad) return;
@@ -125,29 +154,50 @@ export function SquadEditPage() {
     setDescription(squad.description ?? '');
     setRoutingPreset(squad.routingPreset ?? '');
     setHwidLimit(squad.hwidDeviceLimit ?? '');
-    setExitAcl(squad.exitAcl);
-    setPolicyIds(squad.policyIds);
-    setProfileIds(squad.profileIds);
+    // Every list defaults to empty rather than trusting the response to carry
+    // it: a missing field must not become `undefined` in a comparison below.
+    setExitAcl(squad.exitAcl ?? []);
+    setPolicyIds(squad.policyIds ?? []);
+    setProfileIds(squad.profileIds ?? []);
     setHostIds(squad.hostIds ?? []);
     setDirty(false);
+    setSeededId(squad.id);
   }, [squad?.id, squad?.updatedAt]);
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = {
+      const base = {
         name: name.trim(),
         description: description.trim() || null,
         routingPreset: routingPreset ? (routingPreset as never) : null,
         hwidDeviceLimit: hwidLimit === '' ? null : Number(hwidLimit),
-        profileIds,
-        exitAcl,
-        policyIds,
-        // Always sent, never omitted: `[]` clears the restriction and an absent
-        // field leaves it as it was. Those are different requests, and the
-        // difference is the only way to undo a restriction.
-        hostIds,
       };
-      return isNew ? createSquad(payload) : updateSquad(squad!.id, payload);
+      // A new squad states all four sets outright: there is nothing to preserve.
+      if (isNew) {
+        return createSquad({ ...base, profileIds, exitAcl, policyIds, hostIds });
+      }
+      // Second lock on the same door. The button is already closed until the
+      // form is seeded; this is what stops a future caller from routing around
+      // it and turning empty state into a revocation.
+      if (!seeded) throw new Error('squad form has not loaded yet');
+      /*
+       * An edit sends a set only when the operator actually changed it.
+       *
+       * Every one of these fields replaces the whole grant, and `[]` means
+       * "revoke", so the field is destructive by design: that is what makes
+       * detaching a profile possible at all. The danger is not the rule, it is
+       * sending the field when nothing was touched. Then any bug that leaves a
+       * list empty (an unseeded form, a response missing the field) is written
+       * back as a deliberate revocation and the squad quietly stops handing
+       * anything out. Omitting an untouched field takes that whole class off
+       * the table: the server keeps what it has.
+       */
+      const changed: UpdateSquadInput = { ...base };
+      if (!sameSet(profileIds, squad!.profileIds ?? [])) changed.profileIds = profileIds;
+      if (!sameSet(policyIds, squad!.policyIds ?? [])) changed.policyIds = policyIds;
+      if (!sameSet(hostIds, squad!.hostIds ?? [])) changed.hostIds = hostIds;
+      if (!sameExitAcl(exitAcl, squad!.exitAcl ?? [])) changed.exitAcl = exitAcl;
+      return updateSquad(squad!.id, changed);
     },
     onSuccess: (saved) => {
       qc.invalidateQueries({ queryKey: ['squads'] });
@@ -264,6 +314,39 @@ export function SquadEditPage() {
     setHostIds([]);
   }
 
+  /**
+   * The profile grant, which decides what the host tree below is even about.
+   * Revoking one takes its hosts out of the subscription, so this is the
+   * heaviest control on the screen and it lives above the tree, not inside it.
+   */
+  function toggleProfile(profileId: string) {
+    if (isAll) return;
+    setDirty(true);
+    const granting = !profileIds.includes(profileId);
+    setProfileIds((prev) =>
+      granting ? [...prev, profileId] : prev.filter((x) => x !== profileId),
+    );
+    // A restriction names hosts of the granted profiles, so it has to follow the
+    // grant: revoked hosts leave the list, granted ones join it. Otherwise
+    // handing out a profile under a restriction would hand out nothing, and
+    // taking one away would leave dead ids behind.
+    setHostIds((prev) => {
+      if (prev.length === 0) return prev;
+      const bindingIds = new Set(
+        (bindingsQuery.data?.bindings ?? [])
+          .filter((b) => b.profileId === profileId)
+          .map((b) => b.id),
+      );
+      const touched = (hostsQuery.data?.hosts ?? [])
+        .filter((h) => bindingIds.has(h.bindingId))
+        .map((h) => h.id);
+      if (touched.length === 0) return prev;
+      return granting
+        ? [...new Set([...prev, ...touched])]
+        : prev.filter((x) => !touched.includes(x));
+    });
+  }
+
   function toggleHost(hostId: string) {
     if (isAll || !restricted) return;
     setDirty(true);
@@ -291,6 +374,7 @@ export function SquadEditPage() {
 
   const balancers = (cascadesQuery.data?.cascades ?? []).filter((c) => c.mode === 'balancer');
   const policies = policiesQuery.data?.policies ?? [];
+  const allProfiles = profilesQuery.data?.profiles ?? [];
 
   // The crumb reads "/ SQUADS · basic · 12 members": the section comes from the
   // route, the squad's own name has to come from here.
@@ -458,8 +542,13 @@ export function SquadEditPage() {
                 primary
                 onClick={() => saveMutation.mutate()}
                 // A nameless squad cannot be created, and the button says so by
-                // being unavailable rather than by failing on click.
-                disabled={saveMutation.isPending || (isNew && name.trim().length === 0)}
+                // being unavailable rather than by failing on click. An existing
+                // squad stays closed until the form holds its real values: what
+                // this screen sends replaces what the squad has.
+                disabled={
+                  saveMutation.isPending ||
+                  (isNew ? name.trim().length === 0 : !seeded)
+                }
               >
                 {isNew ? t('squads.create') : t('common.save')}
               </PageButton>
@@ -585,6 +674,97 @@ export function SquadEditPage() {
                 />
                 <Hint>{isNew ? t('squadEdit.hwidHintNew') : t('squadEdit.hwidHint')}</Hint>
               </Box>
+            </Box>
+          </Card>
+
+          {/* Profile grant. Above the tree because it decides what the tree
+              contains: hosts of profiles this squad does not hold are not shown
+              there and could not be handed out if they were. */}
+          <Card>
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Box style={{ color: CYAN, display: 'flex' }}>
+                <IconBox size={15} stroke={1.8} />
+              </Box>
+              <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('squadEdit.profiles')}</Text>
+              <Chip accent={isAll ? MOSS : profileIds.length > 0 ? CYAN : AMBER}>
+                {isAll
+                  ? t('squadEdit.allProfiles')
+                  : t('squadEdit.grantedOf', {
+                      count: profileIds.length,
+                      total: allProfiles.length,
+                    })}
+              </Chip>
+            </Box>
+            <Hint>{isAll ? t('squadEdit.profilesAll') : t('squadEdit.profilesHint')}</Hint>
+            {allProfiles.length === 0 && (
+              <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noProfiles')}</Text>
+            )}
+            {!isAll && profileIds.length === 0 && allProfiles.length > 0 && (
+              // A squad with no profiles hands out an empty subscription. That is
+              // a valid state to pass through while editing and a bad one to
+              // leave, so it says so rather than looking like a fresh start.
+              <Box
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '11px 14px',
+                  borderRadius: 10,
+                  backgroundColor: `${AMBER}0F`,
+                  border: `1px solid ${AMBER}2E`,
+                }}
+              >
+                <Box style={{ color: AMBER, display: 'flex', marginTop: 1 }}>
+                  <IconInfoCircle size={13} stroke={2.2} />
+                </Box>
+                <Text style={{ flex: 1, fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: SNOW }}>
+                  {t('squadEdit.noProfilesGranted')}
+                </Text>
+              </Box>
+            )}
+            <Box style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {allProfiles.map((p) => {
+                const checked = isAll || profileIds.includes(p.id);
+                return (
+                  <UnstyledButton
+                    key={p.id}
+                    onClick={() => toggleProfile(p.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      minWidth: 220,
+                      flex: '1 1 220px',
+                      padding: '11px 14px',
+                      borderRadius: 10,
+                      backgroundColor: WELL,
+                      border: `1px solid ${HAIRLINE}`,
+                      borderLeft: `3px solid ${checked ? CYAN : '#2C3A4E'}`,
+                      cursor: isAll ? 'default' : 'pointer',
+                    }}
+                  >
+                    <CheckBox checked={checked} />
+                    <Box style={{ flex: 1, minWidth: 0 }}>
+                      <Text
+                        style={{
+                          fontFamily: DISPLAY,
+                          fontSize: 13,
+                          fontWeight: 500,
+                          color: checked ? SNOW : MIST,
+                        }}
+                      >
+                        {p.name}
+                      </Text>
+                      <Text style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>
+                        {p.protocol}
+                      </Text>
+                    </Box>
+                    <Chip accent={p.bindingCount > 0 ? FAINT : AMBER}>
+                      {t('squadEdit.profileNodes', { count: p.bindingCount })}
+                    </Chip>
+                  </UnstyledButton>
+                );
+              })}
             </Box>
           </Card>
 

@@ -213,6 +213,18 @@ export default {
     hwidLimit: 'HWID device limit',
     devices: 'devices',
     hwidHint: 'Squad default. Across squads the most permissive wins.',
+    profiles: 'Profiles',
+    profilesHint:
+      'What this squad grants. Everything below narrows within these: a host of a profile the squad does not hold cannot be handed out.',
+    profilesAll:
+      'The system squad holds every profile, including ones added later, and that cannot be changed.',
+    allProfiles: 'ALL PROFILES',
+    grantedOf: '{{count}} of {{total}} granted',
+    noProfiles: 'No profiles configured yet.',
+    noProfilesGranted:
+      'No profiles granted. Members of this squad get an empty subscription until you tick at least one.',
+    profileNodes_one: '{{count}} node',
+    profileNodes_other: '{{count}} nodes',
     hosts: 'Hosts',
     selected: '{{count}} selected',
     selectedOf: '{{count}} of {{total}} handed out',
