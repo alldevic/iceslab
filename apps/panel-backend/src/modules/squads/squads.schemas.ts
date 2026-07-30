@@ -29,6 +29,9 @@ export const CreateSquadSchema = z.object({
   /** Slice 27: squad ACL is now profile-level. Initial profile assignment;
    *  admin can attach later via PUT. */
   profileIds: z.array(z.uuid()).default([]),
+  /** Which HOSTS of those profiles the squad hands out. OPT-IN RESTRICTION,
+   *  same rule as `exitAcl`: empty = every host of every granted profile. */
+  hostIds: z.array(z.uuid()).default([]),
   /** A4 increment 2: per-cascade exit allow-list. Empty = no exit restriction. */
   exitAcl: z.array(ExitAclEntry).default([]),
   /** A4 ad-split: extra route-policies this squad grants its members. Empty =
@@ -44,6 +47,10 @@ export const UpdateSquadSchema = z.object({
   hwidDeviceLimit: z.number().int().positive().nullish(),
   /** When provided, replaces the full profile set (set semantics). */
   profileIds: z.array(z.uuid()).optional(),
+  /** When provided, replaces the full host allow-list. An EMPTY array is
+   *  meaningful: it clears the restriction, putting the squad back to every
+   *  host of its profiles. */
+  hostIds: z.array(z.uuid()).optional(),
   /** When provided, replaces the full exit allow-list (set semantics). */
   exitAcl: z.array(ExitAclEntry).optional(),
   /** When provided, replaces the full route-policy grant set (set semantics). */

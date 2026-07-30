@@ -275,6 +275,10 @@ export async function generateSubscription(
               hosts: {
                 where: { enabled: true },
                 orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+                // Which squads narrowed themselves to this specific host.
+                // Read here rather than as a second query so the whole ACL
+                // decision stays inside the cached binding set.
+                include: { groupHosts: { select: { groupId: true } } },
               },
             },
             orderBy: [{ port: 'asc' }],
@@ -283,6 +287,37 @@ export async function generateSubscription(
   // Shallow copy - the cached array is shared across requests/users, and the
   // sort here plus the topN filter below both mutate the array in place.
   const bindings = [...cachedBindings];
+
+  // Per-squad host allow-list. A squad grants PROFILES, and every host of a
+  // granted profile came with it, which made "this tier sees two countries,
+  // that one sees all" impossible without duplicating the profile.
+  //
+  // OPT-IN, the same rule the cascade exit allow-list uses: a squad with NO
+  // rows restricts nothing. Only squads that actually narrowed themselves are
+  // collected here, so a user in a narrowed squad and an unrestricted one
+  // still sees everything, which is the permissive-union behaviour the rest of
+  // the ACL already has.
+  const narrowedSquads = new Set(
+    (
+      await prisma.groupHost.findMany({
+        where: { groupId: { in: groupIds } },
+        select: { groupId: true },
+        distinct: ['groupId'],
+      })
+    ).map((r) => r.groupId),
+  );
+  if (narrowedSquads.size > 0) {
+    // A host is served when at least one of the user's squads reaches it:
+    // either a squad that never narrowed itself, or one that named this host.
+    const unrestricted = groupIds.some((g) => !narrowedSquads.has(g));
+    if (!unrestricted) {
+      for (const b of bindings) {
+        b.hosts = b.hosts.filter((h) =>
+          h.groupHosts.some((gh) => groupIds.includes(gh.groupId)),
+        );
+      }
+    }
+  }
   // Sort by node createdAt then port so the order across formats stays stable.
   bindings.sort((a, b) => {
     const t = a.node.createdAt.getTime() - b.node.createdAt.getTime();

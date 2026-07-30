@@ -40,6 +40,14 @@ export interface DomainEventMap {
   // pushed to a node, so read-cache invalidation is the whole job. No payload:
   // a reorder moves many rows at once and naming one of them would mislead.
   'host.changed':         Record<string, never>;
+  // squad.changed → a squad's ACL moved: which profiles it grants, which of
+  // their hosts it hands out, which policies it grants. Subscription OUTPUT
+  // only, never a node config, so like host.changed this exists purely to bust
+  // read caches. The binding cache is keyed by squad-set, but its CONTENTS
+  // depend on what those squads reach, so a squad edit can make a cached entry
+  // wrong without changing its key. Caught 2026-07-31 by the first test that
+  // narrowed a squad and got a stale, empty result.
+  'squad.changed':        { squadId: string };
   // inbound.* → push the full inbound set of the affected node to its
   // node-agent over mTLS, so the protocol server (xray/hysteria/awg/naive)
   // gets the live config without admin SSH editing /etc/iceslab-node/env.

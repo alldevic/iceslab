@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { registerBindingsCacheBust } from './subscription.bindings-cache.js';
 
 /**
  * What a subscription contains is decided by hosts, and until 2026-07-30 a
@@ -18,6 +19,11 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
  */
 let app: FastifyInstance;
 let token: string;
+
+// Cache-busting is wired in index.ts, not buildApp, so a test that edits config
+// mid-run and re-reads the subscription would otherwise be served the cached
+// answer. Subscribed once: the bus has no unsubscribe.
+beforeAll(() => registerBindingsCacheBust());
 
 beforeEach(async () => {
   app = await buildApp();
@@ -140,6 +146,62 @@ describe('subscription contents follow hosts', () => {
     });
     // The panel says "Off hides it from every subscription" under that toggle.
     expect(await serverNames(user.subscriptionToken)).toEqual([]);
+  });
+
+  it('a squad that names hosts hands out only those', async () => {
+    const { profile, node, host, user } = await seed();
+    const second = JSON.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/hosts',
+          headers: auth(),
+          payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' },
+        })
+      ).body,
+    );
+    expect(await serverNames(user.subscriptionToken)).toHaveLength(2);
+
+    // Narrow the ONLY squad this user is in to the second host.
+    const squad = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/squads', headers: auth() })).body,
+    ).squads.find((s: { name: string }) => s.name === 'sub-squad');
+    await app.inject({
+      method: 'PUT',
+      url: `/api/squads/${squad.id}`,
+      headers: auth(),
+      payload: { hostIds: [second.id] },
+    });
+
+    const names = await serverNames(user.subscriptionToken);
+    expect(names).toHaveLength(1);
+    expect(names[0]).toContain('CDN');
+    // The point of the whole feature: one profile, one inbound on the node,
+    // different squads reaching different hosts of it.
+    expect(host.id).toBeTruthy();
+  });
+
+  it('an empty list is not an empty squad: it restores every host', async () => {
+    const { profile, node, user } = await seed();
+    await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' },
+    });
+    const squad = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/squads', headers: auth() })).body,
+    ).squads.find((s: { name: string }) => s.name === 'sub-squad');
+
+    await app.inject({
+      method: 'PUT',
+      url: `/api/squads/${squad.id}`,
+      headers: auth(),
+      payload: { hostIds: [] },
+    });
+    // Clearing the list is how an operator removes the restriction, so it must
+    // not read as "this squad reaches nothing".
+    expect(await serverNames(user.subscriptionToken)).toHaveLength(2);
   });
 
   it('takes the binding with the last host, freeing the port', async () => {

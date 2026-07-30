@@ -1,6 +1,7 @@
 import type {
   Group,
   GroupProfile,
+  GroupHost,
   GroupCascadeExit,
   GroupRoutePolicy,
 } from '../../generated/prisma/client.js';
@@ -17,6 +18,9 @@ export interface PublicSquadDto {
   description: string | null;
   /** Slice 27: squad ACL operates on profiles, not per-node inbounds. */
   profileIds: string[];
+  /** Which HOSTS of those profiles this squad hands out. EMPTY MEANS ALL, not
+   *  none: the list is an opt-in restriction, like `exitAcl`. */
+  hostIds: string[];
   /** A4 increment 2: per-cascade allowed exits. Empty = no exit restriction. */
   exitAcl: SquadExitAclEntry[];
   /** A4 ad-split: extra route-policies granted to this squad. Empty = plain only. */
@@ -32,6 +36,7 @@ export interface PublicSquadDto {
 
 type SquadWithRelations = Group & {
   groupProfiles: Pick<GroupProfile, 'profileId'>[];
+  groupHosts?: Pick<GroupHost, 'hostId'>[];
   cascadeExits?: Pick<GroupCascadeExit, 'cascadeId' | 'exitNodeId'>[];
   routePolicies?: Pick<GroupRoutePolicy, 'policyId'>[];
   _count?: { members: number };
@@ -56,6 +61,7 @@ export function mapSquadToPublic(squad: SquadWithRelations): PublicSquadDto {
     name: squad.name,
     description: squad.description,
     profileIds: squad.groupProfiles.map((gp) => gp.profileId),
+    hostIds: (squad.groupHosts ?? []).map((gh) => gh.hostId),
     exitAcl: groupExitAcl(squad.cascadeExits ?? []),
     policyIds: (squad.routePolicies ?? []).map((rp) => rp.policyId),
     routingPreset: squad.routingPreset,

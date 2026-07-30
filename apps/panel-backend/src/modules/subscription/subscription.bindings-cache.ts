@@ -110,6 +110,9 @@ export function registerBindingsCacheBust(): void {
   //   node.deleted    → its endpoints must stop being served immediately
   //   host.changed    → per-binding endpoint override added/edited/reordered
   //   cascade.changed → hops came or went, which moves what is exposed
+  //   squad.changed   → which profiles/hosts a squad reaches; the key is the
+  //                     squad SET, so an edit changes contents, not the key
+  eventBus.on('squad.changed', bust);
   eventBus.on('node.changed', bust);
   eventBus.on('node.deleted', bust);
   eventBus.on('host.changed', bust);
