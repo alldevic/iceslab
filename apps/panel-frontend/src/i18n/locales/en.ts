@@ -233,6 +233,13 @@ export default {
     clearRestriction: 'Hand out all',
     noRestriction:
       'No restriction: this squad hands out every host of its profiles, including ones added later. Use Restrict to narrow it.',
+    // Sending an empty list would lift the restriction instead of tightening it,
+    // so this state is shown and refused rather than silently reinterpreted.
+    nothingPicked:
+      'This squad hands out no hosts. Tick the ones it should reach, or press Hand out all.',
+    hostOff: 'OFF',
+    entryNotHandedOut:
+      'The entry is not handed out, so no direction rides out. Directions travel on the entry line itself.',
     allDirections: 'ALL DIRECTIONS',
     cascadeDirectionsAll:
       'The system squad never restricts directions. Members reach every direction its cascades carry.',

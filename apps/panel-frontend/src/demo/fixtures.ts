@@ -159,7 +159,10 @@ export const HOSTS: Host[] = NODE_SEEDS.map((n, i) => ({
   bindingId: `bind-${i}`,
   remark: n.name,
   priority: i,
-  enabled: true,
+  // One host is off, so the states that depend on it have something to show:
+  // it sits in the squad tree at half strength and counts for nothing, because
+  // the subscription builder only reads enabled hosts.
+  enabled: n.id !== 'node-ss-fi-01',
   addressOverride: null,
   portOverride: null,
   sniOverride: null,

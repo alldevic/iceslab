@@ -128,13 +128,29 @@ export function SquadEditPage() {
   /**
    * Which hosts of the granted profiles this squad hands out.
    *
-   * Opt-in, like the exit allow-list: EMPTY MEANS EVERY HOST, not none. That is
-   * why the tree has two modes below. Reading an empty list as "hands out
-   * nothing" would be the expensive misreading, so the screen never shows bare
-   * unticked boxes for it.
+   * Opt-in, like the exit allow-list: on the wire EMPTY MEANS EVERY HOST, not
+   * none. That is why the tree has two modes below. Reading an empty list as
+   * "hands out nothing" would be the expensive misreading, so the screen never
+   * shows bare unticked boxes for it.
    */
   const [hostIds, setHostIds] = useState<string[]>([]);
-  const restricted = hostIds.length > 0;
+  /**
+   * Whether the tree is picking hosts or stating them, held on its own rather
+   * than read off `hostIds.length`.
+   *
+   * The wire contract has no way to say "restricted, nothing ticked yet": an
+   * empty list is how a restriction is lifted, and that rule is right, it is
+   * the only way to lift one. But an operator does pass through that state,
+   * and deriving the mode from the value collapsed it: unticking the last host
+   * flipped the screen back to unrestricted and every box refilled itself,
+   * which reads as the panel undoing the click. So the mode is a decision the
+   * operator makes and it stays until they undo it. Saving is what refuses the
+   * empty case, not the checkbox.
+   */
+  const [restricted, setRestricted] = useState(false);
+  /** The state the wire cannot carry, and the only one this screen refuses to
+   *  send: `[]` would mean the exact opposite of what the tree shows. */
+  const emptyRestriction = restricted && hostIds.length === 0;
   /**
    * Which squad the form currently holds the values of.
    *
@@ -160,6 +176,9 @@ export function SquadEditPage() {
     setPolicyIds(squad.policyIds ?? []);
     setProfileIds(squad.profileIds ?? []);
     setHostIds(squad.hostIds ?? []);
+    // A stored list means the restriction is on. It cannot be stored empty, so
+    // this is the one direction where the value does decide the mode.
+    setRestricted((squad.hostIds ?? []).length > 0);
     setDirty(false);
     setSeededId(squad.id);
   }, [squad?.id, squad?.updatedAt]);
@@ -172,6 +191,11 @@ export function SquadEditPage() {
         routingPreset: routingPreset ? (routingPreset as never) : null,
         hwidDeviceLimit: hwidLimit === '' ? null : Number(hwidLimit),
       };
+      // The one state the screen refuses to send. `[]` on the wire lifts the
+      // restriction and hands out everything, which is the opposite of a tree
+      // with nothing ticked. The button is closed for this, so reaching here
+      // means something routed around it.
+      if (emptyRestriction) throw new Error('restriction with no hosts picked');
       // A new squad states all four sets outright: there is nothing to preserve.
       if (isNew) {
         return createSquad({ ...base, profileIds, exitAcl, policyIds, hostIds });
@@ -237,6 +261,7 @@ export function SquadEditPage() {
           profile: string;
           profileId: string;
           granted: boolean;
+          enabled: boolean;
         }[];
       }
     >();
@@ -259,6 +284,10 @@ export function SquadEditPage() {
         // With no restriction every host of every granted profile goes out, so
         // the row reads as granted rather than as an empty box.
         granted: restricted ? hostIds.includes(h.id) : true,
+        // A disabled host never reaches a subscription: the builder reads hosts
+        // where enabled is true. It stays in the tree so an operator can see
+        // where the one they remember went, but it counts for nothing.
+        enabled: h.enabled,
       };
       if (q && !`${row.name} ${row.port} ${row.profile}`.toLowerCase().includes(q)) continue;
       const g = byCountry.get(code) ?? { code, rows: [] };
@@ -279,16 +308,20 @@ export function SquadEditPage() {
   ]);
 
   /**
-   * Every host of the granted profiles, restriction and search aside. The list a
-   * restriction starts from, and what "all of them" counts. Built from the raw
-   * data rather than from `groups`, because a typed search narrows the tree and
-   * must not narrow the meaning of "all".
+   * Every host this squad can actually hand out, restriction and search aside.
+   * The list a restriction starts from, and what "all of them" counts. Built
+   * from the raw data rather than from `groups`, because a typed search narrows
+   * the tree and must not narrow the meaning of "all".
+   *
+   * Disabled hosts are out: the subscription builder skips them, so counting
+   * them here would make "3 of 4 handed out" mean two.
    */
   const reachableIds = useMemo(() => {
     const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
     const granted = new Set(profileIds);
     return (hostsQuery.data?.hosts ?? [])
       .filter((h) => {
+        if (!h.enabled) return false;
         const binding = bindingById.get(h.bindingId);
         return binding ? granted.has(binding.profileId) : false;
       })
@@ -303,6 +336,7 @@ export function SquadEditPage() {
   function beginRestriction() {
     if (isAll) return;
     setDirty(true);
+    setRestricted(true);
     setHostIds(reachableIds);
   }
 
@@ -311,6 +345,7 @@ export function SquadEditPage() {
   function clearRestriction() {
     if (isAll) return;
     setDirty(true);
+    setRestricted(false);
     setHostIds([]);
   }
 
@@ -331,14 +366,17 @@ export function SquadEditPage() {
     // handing out a profile under a restriction would hand out nothing, and
     // taking one away would leave dead ids behind.
     setHostIds((prev) => {
-      if (prev.length === 0) return prev;
+      // Off the mode, not off the length: with no restriction the list must
+      // stay empty, or granting a profile would quietly build one and send it
+      // as a restriction nobody switched on.
+      if (!restricted) return prev;
       const bindingIds = new Set(
         (bindingsQuery.data?.bindings ?? [])
           .filter((b) => b.profileId === profileId)
           .map((b) => b.id),
       );
       const touched = (hostsQuery.data?.hosts ?? [])
-        .filter((h) => bindingIds.has(h.bindingId))
+        .filter((h) => h.enabled && bindingIds.has(h.bindingId))
         .map((h) => h.id);
       if (touched.length === 0) return prev;
       return granting
@@ -355,12 +393,15 @@ export function SquadEditPage() {
     );
   }
 
-  /** Group checkbox: all-or-nothing for the hosts inside that country. */
-  function toggleCountryHosts(rows: { id: string; granted: boolean }[]) {
+  /** Group checkbox: all-or-nothing for the hosts inside that country. Disabled
+   *  rows sit this out, the same way they sit out the counts. */
+  function toggleCountryHosts(rows: { id: string; granted: boolean; enabled: boolean }[]) {
     if (isAll || !restricted) return;
+    const live = rows.filter((r) => r.enabled);
+    if (live.length === 0) return;
     setDirty(true);
-    const ids = rows.map((r) => r.id);
-    const allOn = rows.every((r) => r.granted);
+    const ids = live.map((r) => r.id);
+    const allOn = live.every((r) => r.granted);
     setHostIds((prev) =>
       allOn ? prev.filter((x) => !ids.includes(x)) : [...new Set([...prev, ...ids])],
     );
@@ -375,6 +416,43 @@ export function SquadEditPage() {
   const balancers = (cascadesQuery.data?.cascades ?? []).filter((c) => c.mode === 'balancer');
   const policies = policiesQuery.data?.policies ?? [];
   const allProfiles = profilesQuery.data?.profiles ?? [];
+
+  /**
+   * Cascades whose entry this squad actually hands out.
+   *
+   * A direction is not a server of its own, it is a route tag riding in the
+   * UUID bytes of an ordinary connection to the ENTRY host. The subscription
+   * builder cuts hosts by the squad first and hangs directions off whatever
+   * survived, so with no entry host there is no line to carry a tag and not one
+   * direction leaves. Granting directions on a cascade whose entry is not
+   * handed out promises something that cannot happen.
+   */
+  const entryOpen = useMemo(() => {
+    const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
+    const granted = new Set(profileIds);
+    const hosts = hostsQuery.data?.hosts ?? [];
+    const open = new Set<string>();
+    for (const c of cascadesQuery.data?.cascades ?? []) {
+      const entryNodeId = c.hops[0]?.nodeId;
+      if (!entryNodeId) continue;
+      const reaches = hosts.some((h) => {
+        if (!h.enabled) return false;
+        const binding = bindingById.get(h.bindingId);
+        if (!binding || binding.nodeId !== entryNodeId) return false;
+        if (!granted.has(binding.profileId)) return false;
+        return restricted ? hostIds.includes(h.id) : true;
+      });
+      if (reaches) open.add(c.id);
+    }
+    return open;
+  }, [
+    cascadesQuery.data,
+    hostsQuery.data,
+    bindingsQuery.data,
+    profileIds,
+    hostIds,
+    restricted,
+  ]);
 
   // The crumb reads "/ SQUADS · basic · 12 members": the section comes from the
   // route, the squad's own name has to come from here.
@@ -537,6 +615,18 @@ export function SquadEditPage() {
             <PageButton onClick={() => navigate('/squads')}>{t('squadEdit.close')}</PageButton>
           ) : (
             <>
+              {/* Why the button is closed, said next to the button. A tree with
+                  nothing ticked cannot be sent: `[]` means the opposite. */}
+              {emptyRestriction && (
+                <Box style={{ display: 'flex', alignItems: 'center', gap: 7, maxWidth: 420 }}>
+                  <Box style={{ color: AMBER, display: 'flex', flexShrink: 0 }}>
+                    <IconInfoCircle size={13} stroke={2.2} />
+                  </Box>
+                  <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER }}>
+                    {t('squadEdit.nothingPicked')}
+                  </Text>
+                </Box>
+              )}
               <PageButton onClick={() => navigate('/squads')}>{t('common.cancel')}</PageButton>
               <PageButton
                 primary
@@ -547,6 +637,7 @@ export function SquadEditPage() {
                 // this screen sends replaces what the squad has.
                 disabled={
                   saveMutation.isPending ||
+                  emptyRestriction ||
                   (isNew ? name.trim().length === 0 : !seeded)
                 }
               >
@@ -777,7 +868,7 @@ export function SquadEditPage() {
               <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('squadEdit.hosts')}</Text>
               {/* Unrestricted is not "none selected", so it never reads as a
                   count out of a total. */}
-              <Chip accent={restricted ? CYAN : MOSS}>
+              <Chip accent={emptyRestriction ? AMBER : restricted ? CYAN : MOSS}>
                 {isAll || !restricted
                   ? t('squadEdit.attachedAll', { count: selectedHosts })
                   : t('squadEdit.selectedOf', { count: selectedHosts, total: reachableIds.length })}
@@ -790,7 +881,10 @@ export function SquadEditPage() {
                     {t('squadEdit.clearRestriction')}
                   </SmallButton>
                 ) : (
-                  <SmallButton onClick={beginRestriction}>
+                  // With nothing to hand out there is nothing to narrow, and
+                  // switching the mode on would only produce a state that
+                  // cannot be saved.
+                  <SmallButton onClick={beginRestriction} disabled={reachableIds.length === 0}>
                     <IconCheck size={12} stroke={2.2} color={MIST} />
                     {t('squadEdit.restrict')}
                   </SmallButton>
@@ -866,7 +960,11 @@ export function SquadEditPage() {
             )}
 
             {groups.map((g) => {
-              const granted = g.rows.filter((r) => r.granted).length;
+              // Counts run over the live rows only: a disabled host never
+              // reaches a subscription, so "2/3" with one of them off would be
+              // a promise the panel cannot keep.
+              const live = g.rows.filter((r) => r.enabled);
+              const granted = live.filter((r) => r.granted).length;
               const folded = collapsed.has(g.code);
               const anyGranted = granted > 0;
               return (
@@ -913,7 +1011,7 @@ export function SquadEditPage() {
                       {COUNTRIES.find((c) => c.code === g.code)?.name ?? g.code}
                     </Text>
                     <Chip accent={anyGranted ? CYAN : FAINT}>
-                      {granted}/{g.rows.length}
+                      {granted}/{live.length}
                     </Chip>
                     <Box
                       component="span"
@@ -925,7 +1023,7 @@ export function SquadEditPage() {
                       }}
                       style={{ display: 'flex' }}
                     >
-                      <CheckBox checked={anyGranted && granted === g.rows.length} />
+                      <CheckBox checked={live.length > 0 && granted === live.length} />
                     </Box>
                   </UnstyledButton>
 
@@ -933,7 +1031,7 @@ export function SquadEditPage() {
                     g.rows.map((r) => (
                       <UnstyledButton
                         key={r.id}
-                        onClick={() => toggleHost(r.id)}
+                        onClick={() => r.enabled && toggleHost(r.id)}
                         style={{
                           width: '100%',
                           display: 'flex',
@@ -942,14 +1040,18 @@ export function SquadEditPage() {
                           padding: '11px 14px',
                           backgroundColor: ROW,
                           borderTop: `1px solid ${HAIRLINE}`,
+                          // A disabled host is shown at half strength: it stays
+                          // visible so nobody hunts for it, and it offers
+                          // nothing, because ticking it would change nothing.
+                          opacity: r.enabled ? 1 : 0.45,
                           // Without a restriction the ticks state a fact rather
                           // than offering a choice, so the row does not pretend
                           // to be clickable.
-                          cursor: isAll || !restricted ? 'default' : 'pointer',
+                          cursor: isAll || !restricted || !r.enabled ? 'default' : 'pointer',
                         }}
                       >
                         <Box style={{ width: 14, flexShrink: 0 }} />
-                        <CheckBox checked={r.granted} />
+                        <CheckBox checked={r.enabled && r.granted} />
                         <Text
                           style={{
                             flex: 1,
@@ -957,16 +1059,23 @@ export function SquadEditPage() {
                             fontFamily: DISPLAY,
                             fontSize: 13,
                             fontWeight: 500,
-                            color: SNOW,
+                            color: r.enabled ? SNOW : MIST,
                           }}
                         >
                           {r.name}
                         </Text>
                         {r.port !== null && (
-                          <Text style={{ fontFamily: MONO, fontSize: 11, color: CYAN_HI }}>
+                          <Text
+                            style={{
+                              fontFamily: MONO,
+                              fontSize: 11,
+                              color: r.enabled ? CYAN_HI : FAINT,
+                            }}
+                          >
                             {r.port}
                           </Text>
                         )}
+                        {!r.enabled && <Chip accent={FAINT}>{t('squadEdit.hostOff')}</Chip>}
                         <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
                           {r.profile}
                         </Text>
@@ -977,24 +1086,28 @@ export function SquadEditPage() {
             })}
 
             <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* Amber whenever the tree describes something that cannot be
+                  saved or handed out, plain otherwise. */}
               <IconInfoCircle
                 size={13}
                 stroke={2}
-                color={isNew && selectedHosts === 0 ? AMBER : DIM}
+                color={emptyRestriction || (isNew && selectedHosts === 0) ? AMBER : DIM}
               />
               <Text
                 style={{
                   fontFamily: DISPLAY,
                   fontSize: 11,
                   lineHeight: '15px',
-                  color: isNew && selectedHosts === 0 ? AMBER : FAINT,
+                  color: emptyRestriction || (isNew && selectedHosts === 0) ? AMBER : FAINT,
                 }}
               >
-                {isNew && selectedHosts === 0
-                  ? t('squadEdit.emptyWarning')
-                  : restricted
-                    ? t('squadEdit.treeHintRestricted')
-                    : t('squadEdit.treeHintAll')}
+                {emptyRestriction
+                  ? t('squadEdit.nothingPicked')
+                  : isNew && selectedHosts === 0
+                    ? t('squadEdit.emptyWarning')
+                    : restricted
+                      ? t('squadEdit.treeHintRestricted')
+                      : t('squadEdit.treeHintAll')}
               </Text>
             </Box>
           </Card>
@@ -1017,6 +1130,10 @@ export function SquadEditPage() {
             {balancers.map((c) => {
               const entry = exitAcl.find((e) => e.cascadeId === c.id);
               const exits = c.hops.slice(1);
+              // The grants stay exactly as they are; only the showing goes
+              // quiet. Put the entry host back and the whole card lights up
+              // again without re-ticking a single direction.
+              const live = isAll || entryOpen.has(c.id);
               return (
                 <Box
                   key={c.id}
@@ -1025,7 +1142,7 @@ export function SquadEditPage() {
                     overflow: 'clip',
                     backgroundColor: WELL,
                     border: `1px solid ${HAIRLINE}`,
-                    borderLeft: `3px solid ${entry ? VIOLET : '#2C3A4E'}`,
+                    borderLeft: `3px solid ${live && entry ? VIOLET : '#2C3A4E'}`,
                   }}
                 >
                   <Box
@@ -1036,18 +1153,39 @@ export function SquadEditPage() {
                       padding: '10px 14px',
                     }}
                   >
-                    <Box style={{ color: VIOLET, display: 'flex' }}>
+                    <Box style={{ color: live ? VIOLET : FAINT, display: 'flex' }}>
                       <IconFilter size={13} stroke={1.8} />
                     </Box>
-                    <Text style={{ flex: 1, fontFamily: DISPLAY, fontSize: 13, fontWeight: 500, color: SNOW }}>
+                    <Text
+                      style={{
+                        flex: 1,
+                        fontFamily: DISPLAY,
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: live ? SNOW : MIST,
+                      }}
+                    >
                       {c.name}
                     </Text>
-                    <Chip accent={isAll ? MOSS : entry ? VIOLET : FAINT}>
+                    <Chip accent={isAll ? MOSS : live && entry ? VIOLET : FAINT}>
                       {isAll
                         ? t('squadEdit.allDirections')
                         : `${entry ? entry.exitNodeIds.length : exits.length}/${exits.length}`}
                     </Chip>
                   </Box>
+                  {!live && (
+                    <Text
+                      style={{
+                        padding: '0 14px 10px',
+                        fontFamily: DISPLAY,
+                        fontSize: 11,
+                        lineHeight: '15px',
+                        color: AMBER,
+                      }}
+                    >
+                      {t('squadEdit.entryNotHandedOut')}
+                    </Text>
+                  )}
                   {exits.map((hop, i) => {
                     // The system squad never restricts anything, so every
                     // direction reads as granted and the row is not clickable.
@@ -1064,7 +1202,7 @@ export function SquadEditPage() {
                     return (
                       <UnstyledButton
                         key={hop.nodeId}
-                        onClick={() => !isAll && toggleExit(c.id, hop.nodeId)}
+                        onClick={() => live && !isAll && toggleExit(c.id, hop.nodeId)}
                         style={{
                           width: '100%',
                           display: 'flex',
@@ -1073,10 +1211,19 @@ export function SquadEditPage() {
                           padding: '10px 14px',
                           backgroundColor: ROW,
                           borderTop: `1px solid ${HAIRLINE}`,
+                          opacity: live ? 1 : 0.45,
+                          cursor: live && !isAll ? 'pointer' : 'default',
                         }}
                       >
                         <CheckBox checked={checked} accent={VIOLET} />
-                        <Text style={{ flex: 1, fontFamily: DISPLAY, fontSize: 13, color: SNOW }}>
+                        <Text
+                          style={{
+                            flex: 1,
+                            fontFamily: DISPLAY,
+                            fontSize: 13,
+                            color: live ? SNOW : MIST,
+                          }}
+                        >
                           {node?.countryCode
                             ? `${node.countryCode.toUpperCase()} · ${countryName(node.countryCode)}`
                             : (node?.name ?? hop.nodeId.slice(0, 8))}
@@ -1339,10 +1486,19 @@ function CheckBox({ checked, accent = CYAN }: { checked: boolean; accent?: strin
   );
 }
 
-function SmallButton({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+function SmallButton({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
   return (
     <UnstyledButton
       onClick={onClick}
+      disabled={disabled}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -1357,6 +1513,8 @@ function SmallButton({ children, onClick }: { children: ReactNode; onClick?: () 
         letterSpacing: '0.1em',
         textTransform: 'uppercase',
         color: MIST,
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
       }}
     >
       {children}
