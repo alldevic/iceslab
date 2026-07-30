@@ -9,6 +9,7 @@ import {
 // the single source of truth for which protocols a user sees. The column is
 // kept on the User row for backwards-compat but never filters subscription
 // output.
+import { subscriptionServerName } from '../../lib/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
 import { getHiddenCascadeNodeIds, getRouteProfilesByEntryNode } from '../cascades/cascade.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
@@ -260,6 +261,8 @@ export async function generateSubscription(
                   // B3/G - node FQDN, used as the REALITY serverName/SNI for
                   // self-steal xray endpoints (per-node, must resolve to node IP).
                   domain: true,
+                  // Drives the flag emoji in the server name a client displays.
+                  countryCode: true,
                   createdAt: true,
                   // Slice 28: region.code drives the "same-region bonus" in the
                   // smart-selection ranker. Null when admin hasn't tagged a region;
@@ -367,9 +370,16 @@ export async function generateSubscription(
       const host = hostRow?.addressOverride ?? baseHost;
       const port = hostRow?.portOverride ?? basePort;
       const hostRemark = hostRow?.remark ?? '';
-      const nodeName = hostRemark && hostRemark !== 'Default'
-        ? `${b.node.name} · ${hostRemark}`
-        : b.node.name;
+      // The line a user reads in their client. A named host wins outright and
+      // the flag leads; see subscriptionServerName. Until 2026-07-30 this was
+      // `${node} · ${host}`, which put an internal node name in front of the
+      // label the operator wrote, and carried no flag at all even though the
+      // panel's own preview showed one.
+      const nodeName = subscriptionServerName({
+        hostRemark,
+        nodeName: b.node.name,
+        countryCode: b.node.countryCode,
+      });
       const hostOverrides = hostRow ?? null;
 
     // Slice 30: common per-host metadata threaded onto each endpoint so
