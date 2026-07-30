@@ -1326,8 +1326,14 @@ export default {
     needEntry: 'Pick at least one entry node to enable Create.',
     needDirection: 'Give every direction a country and a node to enable Create.',
     tooManyLinks: '{{n}} links, the ceiling is {{max}}. Drop an entry or a direction.',
-    writesDisabled:
-      'The API still takes the older hop shape, so Create is off until positions and directions land on the backend.',
+    // Shapes the editor can draw that storage cannot hold yet. Named rather than
+    // silently folded: a pool saved as its first node would leave the operator
+    // sure of a redundancy they do not have.
+    unsupported: {
+      pool: 'Several nodes on one position is not storable yet. Leave one node per position and per direction.',
+      transitsWithFan:
+        'Transits together with several directions is not storable yet. Either drop the transit positions or keep one direction.',
+    },
   },
   // The edit page. Shares most of its wording with `cascadeCreate`; what lives
   // here is what only a LIVE cascade has: a push to report, subscribers already

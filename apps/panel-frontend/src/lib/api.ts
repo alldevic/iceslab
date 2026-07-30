@@ -1112,10 +1112,43 @@ export interface CreateCascadeV4Input {
   directions: CascadeDirectionInput[];
 }
 
-/** Flip when POST /api/cascades accepts positions and directions. */
-export const CASCADE_V4_WRITES_LIVE = false;
+/**
+ * The API takes positions and directions since 2026-07-30 and folds them into
+ * its stored hop list. Two shapes it cannot store yet are refused by name, and
+ * the form catches both before the request: see `unsupportedShape` below.
+ */
+export const CASCADE_V4_WRITES_LIVE = true;
 
 export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input>;
+
+/**
+ * Shapes the form can draw but the current storage cannot hold. Named here so
+ * both cascade screens block them the same way, before the request rather than
+ * after a 400.
+ *
+ * The API refuses them rather than mangling them, which is the right call: a
+ * pool quietly saved as its first node would leave an operator sure of a
+ * redundancy they do not have. Both disappear once positions and directions
+ * land in storage.
+ */
+export function unsupportedShape(
+  positions: { nodeIds: string[] }[],
+  directions: { nodeIds: string[] }[],
+): 'pool' | 'transitsWithFan' | null {
+  const pooled =
+    positions.some((p) => p.nodeIds.filter(Boolean).length > 1) ||
+    directions.some((d) => d.nodeIds.filter(Boolean).length > 1);
+  if (pooled) return 'pool';
+  if (positions.length > 1 && directions.length > 1) return 'transitsWithFan';
+  return null;
+}
+
+/** The API's own sentence when it refuses a shape it cannot store. */
+export function cascadeShapeError(err: unknown): string | null {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+  if (res?.status !== 400) return null;
+  return res.data?.message ?? null;
+}
 
 export async function createCascadeV4(input: CreateCascadeV4Input): Promise<Cascade> {
   const { data } = await api.post<Cascade>('/api/cascades', input);

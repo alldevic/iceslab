@@ -8,11 +8,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   apiErrorMessage,
   deleteCascade,
+  cascadeShapeError,
   getCascadeStatus,
   listCascades,
   listNodes,
+  unsupportedShape,
   updateCascadeV4,
-  CASCADE_V4_WRITES_LIVE,
   type Cascade,
   type CascadeProtocol,
   type Node,
@@ -164,7 +165,14 @@ export function CascadeEditPage() {
       // A cascade write commits fast and provisions asynchronously, so a slow or
       // timed-out response can fire onError even though the change landed.
       qc.invalidateQueries({ queryKey: ['cascades'] });
-      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
+      // The form blocks both unstorable shapes, so a 400 means the API saw
+      // something this page did not. Its sentence is the useful one.
+      const shape = cascadeShapeError(err);
+      notifications.show({
+        color: 'red',
+        title: t('common.saveError'),
+        message: shape ?? apiErrorMessage(err),
+      });
     },
   });
 
@@ -265,12 +273,17 @@ export function CascadeEditPage() {
     })
     .filter((x): x is { node: string; bad: string[] } => x !== null);
 
+  // Two shapes this editor can draw have nowhere to be stored yet, and the API
+  // refuses them by name rather than mangling them.
+  const unsupported = unsupportedShape(pools, directions);
+
   const valid =
     trimmedName.length > 0 &&
     poolsFilled &&
     directionsFilled &&
     !duplicate &&
     links <= MAX_LINKS &&
+    unsupported === null &&
     legacy.length === 0;
   const dirty =
     JSON.stringify(frozen(draft)) !== JSON.stringify(toDraft(cascade, nodeById, () => 0, true));
@@ -299,12 +312,14 @@ export function CascadeEditPage() {
           ? t('cascadeCreate.needDirection')
           : links > MAX_LINKS
             ? t('cascadeCreate.tooManyLinks', { n: links, max: MAX_LINKS })
-            : legacy.length > 0
-              ? t('cascadeEdit.legacyProtocol', {
-                  node: legacy[0]!.node,
-                  value: legacy[0]!.bad.join(', '),
-                })
-              : null;
+            : unsupported
+              ? t(`cascadeCreate.unsupported.${unsupported}`)
+              : legacy.length > 0
+                ? t('cascadeEdit.legacyProtocol', {
+                    node: legacy[0]!.node,
+                    value: legacy[0]!.bad.join(', '),
+                  })
+                : null;
 
   function confirmDelete() {
     modals.openConfirmModal({
@@ -403,7 +418,7 @@ export function CascadeEditPage() {
           <BarButton
             primary
             icon="tick"
-            disabled={!valid || !dirty || !CASCADE_V4_WRITES_LIVE || saveMutation.isPending}
+            disabled={!valid || !dirty || saveMutation.isPending}
             onClick={() => saveMutation.mutate()}
           >
             {saveMutation.isPending ? t('cascadeEdit.saving') : t('cascadeEdit.save')}
@@ -690,13 +705,6 @@ export function CascadeEditPage() {
               </Note>
             )}
 
-            {/* The form is already in the v4 shape; the API is not. Saying so is
-                better than a button that answers 400. */}
-            {!CASCADE_V4_WRITES_LIVE && (
-              <Note tone={RED} icon={<WarnIcon size={13} color={RED} />}>
-                {t('cascadeCreate.writesDisabled')}
-              </Note>
-            )}
           </Stack>
 
           {/* WHAT SUBSCRIBERS SEE */}

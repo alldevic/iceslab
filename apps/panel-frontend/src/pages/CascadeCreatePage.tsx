@@ -7,10 +7,11 @@ import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   apiErrorMessage,
+  cascadeShapeError,
   createCascadeV4,
   listCascades,
   listNodes,
-  CASCADE_V4_WRITES_LIVE,
+  unsupportedShape,
   type CascadeProtocol,
 } from '../lib/api';
 import { watchCascadeProvisioning } from '../lib/cascadeProvision';
@@ -58,7 +59,6 @@ import {
   CARD,
   CYAN,
   FAINT,
-  RED,
   poolRoleAt,
   toDirectionInputs,
   toPositionInputs,
@@ -216,9 +216,18 @@ export function CascadeCreatePage() {
   const duplicate = new Set(allIds).size !== allIds.length;
   const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
   const overLinks = links > MAX_LINKS;
+  // Two shapes this editor can draw have nowhere to be stored yet, and the API
+  // refuses them by name. Catching them here means the operator learns while
+  // building rather than after pressing Create.
+  const unsupported = unsupportedShape(pools, directions);
 
   const valid =
-    trimmedName.length > 0 && poolsFilled && directionsFilled && !duplicate && !overLinks;
+    trimmedName.length > 0 &&
+    poolsFilled &&
+    directionsFilled &&
+    !duplicate &&
+    !overLinks &&
+    unsupported === null;
 
   // T7: below this the entry rejects the per-direction UUID at auth, so a
   // direction the client picks would fail silently. Any entry node can be the
@@ -248,12 +257,16 @@ export function CascadeCreatePage() {
       if (cascade?.id) watchCascadeProvisioning(cascade.id, t);
       else notifications.show({ color: 'green', message: t('cascades.saved') });
     },
-    onError: (err) =>
+    onError: (err) => {
+      // The form blocks both unstorable shapes, so a 400 here means the API saw
+      // something this page did not. Its sentence is the useful one, not ours.
+      const shape = cascadeShapeError(err);
       notifications.show({
         color: 'red',
         title: t('common.createError'),
-        message: apiErrorMessage(err),
-      }),
+        message: shape ?? apiErrorMessage(err),
+      });
+    },
   });
 
   // What still stands between this draft and a cascade. One sentence, the first
@@ -268,7 +281,9 @@ export function CascadeCreatePage() {
           ? t('cascadeCreate.needDirection')
           : overLinks
             ? t('cascadeCreate.tooManyLinks', { n: links, max: MAX_LINKS })
-            : null;
+            : unsupported
+              ? t(`cascadeCreate.unsupported.${unsupported}`)
+              : null;
 
   return (
     <Stack gap={20}>
@@ -339,7 +354,7 @@ export function CascadeCreatePage() {
           <BarButton
             primary
             icon="plus"
-            disabled={!valid || !CASCADE_V4_WRITES_LIVE || createMutation.isPending}
+            disabled={!valid || createMutation.isPending}
             onClick={() => createMutation.mutate()}
           >
             {createMutation.isPending ? t('cascadeCreate.creating') : t('cascadeCreate.create')}
@@ -648,13 +663,6 @@ export function CascadeCreatePage() {
               </Note>
             )}
 
-            {/* The form is already in the v4 shape; the API is not. Saying so is
-                better than a button that answers 400. */}
-            {!CASCADE_V4_WRITES_LIVE && (
-              <Note tone={RED} icon={<WarnIcon size={13} color={RED} />}>
-                {t('cascadeCreate.writesDisabled')}
-              </Note>
-            )}
           </Stack>
 
           <Stack
