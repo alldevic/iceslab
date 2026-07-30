@@ -1,0 +1,158 @@
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { buildApp } from '../../app.js';
+import { prisma } from '../../prisma.js';
+import { closeRedis } from '../../lib/redis.js';
+import { cleanDatabase } from '../../../tests/helpers/db.js';
+import { registerAndLogin } from '../../../tests/helpers/auth.js';
+
+/**
+ * What a subscription contains is decided by hosts, and until 2026-07-30 a
+ * binding with none still emitted one nameless endpoint labelled with the NODE
+ * name. Seen in the field: a host was deleted in the panel and came back in the
+ * client as "nl2".
+ *
+ * The rows below pin the two ways an operator reaches zero hosts, delete and
+ * disable, because the panel promises both remove the line ("Off hides it from
+ * every subscription") and nothing tested that promise.
+ */
+let app: FastifyInstance;
+let token: string;
+
+beforeEach(async () => {
+  app = await buildApp();
+  await cleanDatabase();
+  token = await registerAndLogin(app);
+});
+
+afterEach(async () => {
+  await app.close();
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+  await closeRedis();
+});
+
+const auth = () => ({ authorization: `Bearer ${token}` });
+
+async function seed() {
+  const profile = JSON.parse(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/profiles',
+        headers: auth(),
+        payload: {
+          name: 'sub-profile',
+          protocol: 'xray',
+          config: {
+            security: 'reality',
+            realityDest: 'www.microsoft.com:443',
+            realityServerNames: ['www.microsoft.com'],
+            realityPrivateKey: 'k'.repeat(43),
+            realityPublicKey: 'p'.repeat(43),
+            realityShortIds: ['0123abcd'],
+            network: 'raw',
+          },
+        },
+      })
+    ).body,
+  );
+  const node = JSON.parse(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/nodes',
+        headers: auth(),
+        payload: { name: 'sub-node', address: 'sub.example.com', protocol: 'xray' },
+      })
+    ).body,
+  );
+  const host = JSON.parse(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/hosts',
+        headers: auth(),
+        payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'Direct' },
+      })
+    ).body,
+  );
+  const squad = JSON.parse(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/squads',
+        headers: auth(),
+        payload: { name: 'sub-squad', profileIds: [profile.id] },
+      })
+    ).body,
+  );
+  const user = JSON.parse(
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/users',
+        headers: auth(),
+        payload: { username: 'sub_user', groupIds: [squad.id] },
+      })
+    ).body,
+  );
+  return { profile, node, host, squad, user };
+}
+
+/** Server names the client would show, one per line of the plain format. */
+async function serverNames(subToken: string): Promise<string[]> {
+  const res = await app.inject({ method: 'GET', url: `/sub/${subToken}?format=plain` });
+  expect(res.statusCode).toBe(200);
+  const body = Buffer.from(res.body, 'base64').toString('utf8');
+  return body
+    .split('\n')
+    .filter(Boolean)
+    .map((uri) => decodeURIComponent(uri.split('#')[1] ?? ''));
+}
+
+describe('subscription contents follow hosts', () => {
+  it('serves the host, named after it rather than the node', async () => {
+    const { user } = await seed();
+    const names = await serverNames(user.subscriptionToken);
+    expect(names).toHaveLength(1);
+    expect(names[0]).toContain('Direct');
+    expect(names[0]).not.toContain('sub-node');
+  });
+
+  it('drops the line when the last host is deleted', async () => {
+    const { host, user } = await seed();
+    await app.inject({ method: 'DELETE', url: `/api/hosts/${host.id}`, headers: auth() });
+    // The regression: this used to return one endpoint named "sub-node",
+    // because a binding with no hosts fell back to a single nameless row.
+    expect(await serverNames(user.subscriptionToken)).toEqual([]);
+  });
+
+  it('drops the line when the last host is merely switched off', async () => {
+    const { host, user } = await seed();
+    await app.inject({
+      method: 'PUT',
+      url: `/api/hosts/${host.id}`,
+      headers: auth(),
+      payload: { enabled: false },
+    });
+    // The panel says "Off hides it from every subscription" under that toggle.
+    expect(await serverNames(user.subscriptionToken)).toEqual([]);
+  });
+
+  it('keeps the surviving host when one of two is removed', async () => {
+    const { profile, node, host, user } = await seed();
+    await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' },
+    });
+    await app.inject({ method: 'DELETE', url: `/api/hosts/${host.id}`, headers: auth() });
+    const names = await serverNames(user.subscriptionToken);
+    expect(names).toHaveLength(1);
+    expect(names[0]).toContain('CDN');
+  });
+});

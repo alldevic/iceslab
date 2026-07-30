@@ -356,12 +356,22 @@ export async function generateSubscription(
       config: cfgMerged,
     };
 
-    // Slice 30: fan-out per host. Backfill migration guarantees ≥1 host
-    // per binding; ensureDefaultHost() does the same for new bindings.
-    // The fallback below covers a migration-skipped binding so the
-    // subscription never silently drops to zero URLs.
-    const hostRows = b.hosts.length > 0 ? b.hosts : [null];
-    for (const hostRow of hostRows) {
+    // Slice 30: fan-out per host. A binding with no ENABLED host serves
+    // nothing, full stop.
+    //
+    // This used to fall back to `[null]` so a binding skipped by the backfill
+    // migration would not silently drop out of the subscription. That guard
+    // outlived its data and became a bug the moment hosts got a delete button:
+    // the query filters on `enabled: true`, so removing the last host, or
+    // merely switching it off, left the binding with zero rows and the
+    // fallback handed the client a nameless endpoint labelled with the NODE
+    // name. Seen in the field 2026-07-30: a deleted host reappeared in Happ as
+    // "nl2". The panel meanwhile says, under the toggle, "Off hides it from
+    // every subscription", which the fallback made untrue.
+    //
+    // Zero hosts is now a state an operator can deliberately reach, so it
+    // means what it says.
+    for (const hostRow of b.hosts) {
       const baseHost = b.publicHost ?? hostFromAddress(b.node.address);
       const basePort = b.publicPort ?? b.port;
 
