@@ -17,6 +17,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { useOverview } from '../hooks/useOverview';
+import { usePageMeta } from '../hooks/usePageMeta';
 import {
   IconActivity,
   IconArrowDownRight,
@@ -34,10 +35,10 @@ import {
   IconWifi,
 } from '@tabler/icons-react';
 import { type DashboardOverview } from '../lib/api';
-import { PageHero } from '../components/PageHero';
 
 const HAIRLINE = '#1C2A3D';
 const CARD = '#0F1A28';
+const GROUND = '#08101A';
 const SNOW = '#C8D4E3';
 const MIST = '#7A8BA3';
 const CYAN = '#7DD3FC';
@@ -62,6 +63,82 @@ const cardStyle = {
   backgroundColor: CARD,
   borderColor: HAIRLINE,
 };
+
+// Two surfaces, two radii: a section is a card on the page (8), a tile is a
+// readout inside a section (4). Keeping them different is what stops the
+// dashboard from reading as one undifferentiated pile of boxes.
+const SECTION_RADIUS = 8;
+const TILE_RADIUS = 4;
+
+// A whole number of rows (5 x row height), so a scrolled node list ends on a
+// row boundary instead of slicing one in half.
+const NODE_LIST_MAX_HEIGHT = 5 * 53;
+
+const tileStyle = {
+  backgroundColor: GROUND,
+  borderColor: HAIRLINE,
+};
+
+/** Inline count next to a section title. Mono, muted: a fact, not a status. */
+function CountBadge({ children }: { children: ReactNode }) {
+  return (
+    <Text
+      component="span"
+      style={{
+        fontFamily: "'Geist Mono', monospace",
+        fontSize: 11,
+        fontWeight: 500,
+        color: MIST,
+        backgroundColor: `${MIST}1A`,
+        borderRadius: 999,
+        padding: '2px 8px',
+        marginLeft: 2,
+      }}
+    >
+      {children}
+    </Text>
+  );
+}
+
+/** Section heading: accent-tinted icon square + title. */
+function SectionTitle({
+  icon,
+  accent,
+  children,
+  right,
+}: {
+  icon: ReactNode;
+  accent: string;
+  children: ReactNode;
+  right?: ReactNode;
+}) {
+  return (
+    <Group justify="space-between" align="center" mb={16} wrap="nowrap">
+      <Group gap={10} wrap="nowrap">
+        <Box
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            backgroundColor: `${accent}1A`,
+            border: `1px solid ${accent}33`,
+            color: accent,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          {icon}
+        </Box>
+        <Text style={{ ...DISPLAY, fontSize: 16, fontWeight: 600, lineHeight: '20px', color: SNOW }}>
+          {children}
+        </Text>
+      </Group>
+      {right}
+    </Group>
+  );
+}
 
 const NODE_STATUS_COLOR: Record<string, string> = {
   online: MOSS,
@@ -139,7 +216,7 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value, unit, hint, hintColor = MIST, accent }: StatCardProps) {
   return (
-    <Card withBorder padding="md" radius="md" style={cardStyle}>
+    <Card withBorder padding={16} radius={SECTION_RADIUS} style={cardStyle}>
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb={10}>
         <Text style={MONO_LABEL}>{label}</Text>
         <Box style={{ color: accent, display: 'flex', flexShrink: 0 }}>{icon}</Box>
@@ -210,6 +287,10 @@ export function DashboardPage() {
   const { t } = useTranslation();
   const { data, isLoading, isError } = useOverview();
 
+  // The crumb says the page is live and how often it refreshes. The number
+  // tracks useOverview's refetchInterval; keep the two in step.
+  usePageMeta([t('pageMeta.overviewLive'), t('pageMeta.overviewRefresh', { n: 30 })]);
+
   if (isLoading) {
     return (
       <Stack>
@@ -236,33 +317,14 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
   const todayDelta = formatDelta(traffic.todayBytes, traffic.yesterdayBytes);
   const todaySplit = splitBytes(traffic.todayBytes);
 
-  const nowDate = new Date(now());
-  const timeLabel = nowDate.toLocaleString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).toUpperCase();
-  const heroHeadline =
-    users.onlineNow <= users.total * 0.3
-      ? t('pageHero.dashboardHeadlineQuiet')
-      : users.onlineNow >= users.total * 0.7
-        ? t('pageHero.dashboardHeadlineBusy')
-        : t('pageHero.dashboardHeadlineSteady');
-
+  // The page opens on the numbers. The old 64px "all systems quiet" headline
+  // said less than the KPI row directly under it and pushed the row below the
+  // fold; the verdict it carried now lives in the footer line, where it sits
+  // next to the sampling time that qualifies it.
   return (
     <Stack gap="lg">
-      <PageHero
-        eyebrow={t('pageHero.dashboardEyebrow', { time: timeLabel })}
-        title={heroHeadline}
-        subtitle={t('pageHero.dashboardSubtitle', {
-          nodes: system.onlineNodeCount,
-          users: users.byStatus.active ?? 0,
-        })}
-      />
-
       {/* Hero row */}
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing={16}>
         <StatCard
           icon={<IconWifi size={20} />}
           accent={MOSS}
@@ -309,22 +371,32 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
       </SimpleGrid>
 
       {/* Traffic sparkline */}
-      <Card withBorder padding="lg" radius="md" style={cardStyle}>
+      <Card withBorder padding={20} radius={SECTION_RADIUS} style={cardStyle}>
         <Group justify="space-between" mb="xs" wrap="wrap">
-          <Group gap="xs">
-            <ThemeIcon
-              size={28}
-              radius="md"
-              variant="light"
-              style={{ backgroundColor: `${CYAN}1A`, color: CYAN, border: `1px solid ${CYAN}33` }}
+          <Group gap={10} wrap="nowrap">
+            <Box
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                backgroundColor: `${CYAN}1A`,
+                border: `1px solid ${CYAN}33`,
+                color: CYAN,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
             >
               <IconTrendingUp size={16} />
-            </ThemeIcon>
-            <Stack gap={0}>
-              <Text fw={600} style={{ color: SNOW }}>
+            </Box>
+            <Stack gap={2}>
+              <Text
+                style={{ ...DISPLAY, fontSize: 16, fontWeight: 600, lineHeight: '20px', color: SNOW }}
+              >
                 {t('dashboard.traffic.title')}
               </Text>
-              <Text size="xs" style={{ color: MIST }}>
+              <Text style={{ fontSize: 12, lineHeight: '16px', color: MIST }}>
                 {t('dashboard.traffic.subtitle')}
               </Text>
             </Stack>
@@ -361,21 +433,11 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
       </Card>
 
       {/* User status breakdown */}
-      <Card withBorder padding="lg" radius="md" style={cardStyle}>
-        <Group gap="xs" mb="md">
-          <ThemeIcon
-            size={28}
-            radius="md"
-            variant="light"
-            style={{ backgroundColor: `${VIOLET}1A`, color: VIOLET, border: `1px solid ${VIOLET}33` }}
-          >
-            <IconUsers size={16} />
-          </ThemeIcon>
-          <Text fw={600} style={{ color: SNOW }}>
-            {t('dashboard.userStatus.title')}
-          </Text>
-        </Group>
-        <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }} spacing="sm">
+      <Card withBorder padding={20} radius={SECTION_RADIUS} style={cardStyle}>
+        <SectionTitle icon={<IconUsers size={16} />} accent={VIOLET}>
+          {t('dashboard.userStatus.title')}
+        </SectionTitle>
+        <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }} spacing={12}>
           <StatusChip label={t('dashboard.userStatus.total')} value={users.total} dot={CYAN} />
           <StatusChip label={t('dashboard.userStatus.active')} value={users.byStatus.active ?? 0} dot={MOSS} />
           <StatusChip label={t('dashboard.userStatus.expired')} value={users.byStatus.expired ?? 0} dot={RED} />
@@ -389,29 +451,17 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
 
       {/* Two-column row: nodes + protocols */}
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-        <Card withBorder padding="lg" radius="md" style={cardStyle}>
-          <Group gap="xs" mb="md">
-            <ThemeIcon
-              size={28}
-              radius="md"
-              variant="light"
-              style={{ backgroundColor: `${CYAN}1A`, color: CYAN, border: `1px solid ${CYAN}33` }}
-            >
-              <IconServer2 size={16} />
-            </ThemeIcon>
-            <Text fw={600} style={{ color: SNOW }}>
-              {t('dashboard.nodes.title')}
-            </Text>
-            <Badge variant="light" color="gray" style={{ backgroundColor: `${MIST}1A`, color: MIST }}>
-              {nodes.length}
-            </Badge>
-          </Group>
+        <Card withBorder padding={20} radius={SECTION_RADIUS} style={cardStyle}>
+          <SectionTitle icon={<IconServer2 size={16} />} accent={CYAN}>
+            {t('dashboard.nodes.title')}{' '}
+            <CountBadge>{nodes.length}</CountBadge>
+          </SectionTitle>
           {nodes.length === 0 ? (
             <Text size="sm" style={{ color: MIST }}>
               {t('dashboard.nodes.empty')}
             </Text>
           ) : (
-            <ScrollArea.Autosize mah={320}>
+            <ScrollArea.Autosize mah={NODE_LIST_MAX_HEIGHT}>
               <Table verticalSpacing="xs" highlightOnHover>
                 <Table.Thead>
                   <Table.Tr>
@@ -497,23 +547,10 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
           )}
         </Card>
 
-        <Card withBorder padding="lg" radius="md" style={cardStyle}>
-          <Group gap="xs" mb="md">
-            <ThemeIcon
-              size={28}
-              radius="md"
-              variant="light"
-              style={{ backgroundColor: `${MOSS}1A`, color: MOSS, border: `1px solid ${MOSS}33` }}
-            >
-              <IconNetwork size={16} />
-            </ThemeIcon>
-            <Text fw={600} style={{ color: SNOW }}>
-              {t('dashboard.protocols.title')}
-            </Text>
-            <Badge variant="light" style={{ backgroundColor: `${MIST}1A`, color: MIST }}>
-              {byProtocol.length}
-            </Badge>
-          </Group>
+        <Card withBorder padding={20} radius={SECTION_RADIUS} style={cardStyle}>
+          <SectionTitle icon={<IconNetwork size={16} />} accent={MOSS}>
+            {t('dashboard.protocols.title')} <CountBadge>{byProtocol.length}</CountBadge>
+          </SectionTitle>
           {byProtocol.length === 0 ? (
             <Text size="sm" style={{ color: MIST }}>
               {t('dashboard.protocols.empty')}
@@ -558,20 +595,10 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
 
       {/* Two-column row: top users + recent events */}
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-        <Card withBorder padding="lg" radius="md" style={cardStyle}>
-          <Group gap="xs" mb="md">
-            <ThemeIcon
-              size={28}
-              radius="md"
-              variant="light"
-              style={{ backgroundColor: `${AMBER}1A`, color: AMBER, border: `1px solid ${AMBER}33` }}
-            >
-              <IconActivity size={16} />
-            </ThemeIcon>
-            <Text fw={600} style={{ color: SNOW }}>
-              {t('dashboard.topUsers.title')}
-            </Text>
-          </Group>
+        <Card withBorder padding={20} radius={SECTION_RADIUS} style={cardStyle}>
+          <SectionTitle icon={<IconActivity size={16} />} accent={AMBER}>
+            {t('dashboard.topUsers.title')}
+          </SectionTitle>
           {topUsersToday.length === 0 ? (
             <Text size="sm" style={{ color: MIST }}>
               {t('dashboard.topUsers.empty')}
@@ -606,20 +633,10 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
           )}
         </Card>
 
-        <Card withBorder padding="lg" radius="md" style={cardStyle}>
-          <Group gap="xs" mb="md">
-            <ThemeIcon
-              size={28}
-              radius="md"
-              variant="light"
-              style={{ backgroundColor: `${VIOLET}1A`, color: VIOLET, border: `1px solid ${VIOLET}33` }}
-            >
-              <IconClock size={16} />
-            </ThemeIcon>
-            <Text fw={600} style={{ color: SNOW }}>
-              {t('dashboard.events.title')}
-            </Text>
-          </Group>
+        <Card withBorder padding={20} radius={SECTION_RADIUS} style={cardStyle}>
+          <SectionTitle icon={<IconClock size={16} />} accent={VIOLET}>
+            {t('dashboard.events.title')}
+          </SectionTitle>
           {recentEvents.length === 0 ? (
             <Text size="sm" style={{ color: MIST }}>
               {t('dashboard.events.empty')}
@@ -726,8 +743,8 @@ function SystemHealth({ host }: { host: DashboardOverview['host'] }) {
   const diskColor = host.disk ? thresholdColor(host.disk.usedPercent, 80, 90) : MIST;
 
   return (
-    <Card withBorder padding="lg" radius="md" style={cardStyle}>
-      <Group justify="space-between" align="center" mb="md">
+    <Card withBorder padding={20} radius={SECTION_RADIUS} style={cardStyle}>
+      <Group justify="space-between" align="center" mb={16}>
         <Group gap={10}>
           <Box style={{ color: CYAN, display: 'flex' }}>
             <IconDeviceDesktopAnalytics size={18} />
@@ -735,13 +752,16 @@ function SystemHealth({ host }: { host: DashboardOverview['host'] }) {
           <Text
             style={{
               ...DISPLAY,
-              fontSize: 15,
-              fontWeight: 500,
+              fontSize: 16,
+              fontWeight: 600,
+              lineHeight: '20px',
               color: SNOW,
             }}
           >
             {t('dashboard.health.title')}{' '}
-            <span style={{ color: MIST }}>· {t('pageHero.hostSystemSubtitle')}</span>
+            <span style={{ color: MIST, fontWeight: 400 }}>
+              · {t('pageHero.hostSystemSubtitle')}
+            </span>
           </Text>
         </Group>
         <Text style={{ ...MONO_LABEL, fontSize: 9, letterSpacing: '0.14em' }}>
@@ -752,7 +772,7 @@ function SystemHealth({ host }: { host: DashboardOverview['host'] }) {
         </Text>
       </Group>
 
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing={16}>
         <UsageBar
           icon={<IconCpu size={16} />}
           color={cpuColor}
@@ -823,11 +843,11 @@ function UsageBar({
 }) {
   const clamped = Math.min(100, Math.max(0, percent));
   return (
-    <Card withBorder p="md" radius="sm" style={{ backgroundColor: '#08101A', borderColor: HAIRLINE }}>
+    <Card withBorder p={16} radius={TILE_RADIUS} style={tileStyle}>
       <Group justify="space-between" align="center" mb={10}>
         <Group gap={8}>
           <Box style={{ color, display: 'flex' }}>{icon}</Box>
-          <Text size="sm" fw={500} style={{ color: SNOW }}>
+          <Text style={{ ...DISPLAY, fontSize: 14, fontWeight: 500, lineHeight: '18px', color: SNOW }}>
             {label}
           </Text>
         </Group>
@@ -835,6 +855,7 @@ function UsageBar({
           style={{
             fontFamily: "'Geist Mono', monospace",
             fontSize: 11,
+            lineHeight: '14px',
             color,
             fontWeight: 500,
           }}
@@ -842,29 +863,35 @@ function UsageBar({
           {percent.toFixed(0)}%
         </Text>
       </Group>
-      <Progress
-        value={clamped}
-        size="xs"
-        radius="xs"
-        styles={{
-          root: { backgroundColor: HAIRLINE },
-          section: { backgroundColor: color },
+      {/* 4px rail: a readout, not a control. Anything thicker starts competing
+          with the number it is describing. */}
+      <Box
+        style={{
+          height: 4,
+          width: '100%',
+          borderRadius: 2,
+          backgroundColor: HAIRLINE,
+          overflow: 'hidden',
+          marginBottom: 10,
         }}
-        mb={10}
-      />
+      >
+        <Box style={{ height: 4, borderRadius: 2, backgroundColor: color, width: `${clamped}%` }} />
+      </Box>
       <Text
         style={{
           ...DISPLAY,
           fontSize: 20,
           fontWeight: 500,
           color: SNOW,
-          lineHeight: 1,
+          lineHeight: '20px',
           marginBottom: 4,
         }}
       >
         {primary}
       </Text>
-      <Text size="xs" style={{ color: MIST, fontFamily: "'Geist Mono', monospace" }}>
+      <Text
+        style={{ color: MIST, fontFamily: "'Geist Mono', monospace", fontSize: 12, lineHeight: '16px' }}
+      >
         {secondary}
       </Text>
     </Card>
@@ -960,7 +987,7 @@ function TrafficStat({
 
 function StatusChip({ label, value, dot }: { label: string; value: number; dot: string }) {
   return (
-    <Card withBorder p="md" radius="sm" style={{ backgroundColor: '#08101A', borderColor: HAIRLINE }}>
+    <Card withBorder p={16} radius={TILE_RADIUS} style={tileStyle}>
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb={12}>
         <Text style={{ ...MONO_LABEL, fontSize: 9, letterSpacing: '0.14em' }}>{label}</Text>
         <span

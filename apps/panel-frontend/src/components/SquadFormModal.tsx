@@ -42,6 +42,7 @@ import {
   type Squad,
   type UpdateSquadInput,
 } from '../lib/api';
+import { ROUTING_PRESET_IDS, presetKey } from '../lib/routingPresets';
 import { protocolLabelCompact } from '../lib/protocols';
 
 const PROTOCOL_COLORS: Record<string, string> = {
@@ -362,11 +363,15 @@ export function SquadFormModal({
             label={t('squads.form.routing')}
             description={t('squads.form.routingDesc')}
             disabled={isAllSquad}
+            // Built from the shared list the backend validates against. The
+            // labels come from one place too, so the same preset is not named
+            // two ways on two screens.
             data={[
               { value: '', label: t('squads.form.routingInherit') },
-              { value: 'proxy-all', label: t('squads.form.routingProxyAll') },
-              { value: 'ru-split', label: t('squads.form.routingRuSplit') },
-              { value: 'cn-split', label: t('squads.form.routingCnSplit') },
+              ...ROUTING_PRESET_IDS.map((id) => ({
+                value: id,
+                label: t(`metadata.preset${presetKey(id)}`),
+              })),
             ]}
             allowDeselect={false}
             {...form.getInputProps('routingPreset')}

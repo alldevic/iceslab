@@ -52,3 +52,27 @@ export function protocolLabel(value: string): string {
 export function protocolLabelCompact(value: string): string {
   return COMPACT[value] ?? value;
 }
+
+/**
+ * Oldest xray-core that understands vlessRoute, i.e. the per-exit UUID a
+ * balancer entry authenticates on. Below this the entry rejects the client at
+ * auth and the connection just fails, so the panel warns before the save and
+ * blocks enabling such a cascade server-side (MIN_XRAY_VLESSROUTE there).
+ */
+export const MIN_CASCADE_CORE = '25.9.5';
+
+/** Dotted-version compare. A missing version is not "older": a node that has
+ *  not reported one yet is unknown, and guessing would cry wolf. */
+export function isOlderThan(version: string | null | undefined, min: string): boolean {
+  if (!version) return false;
+  const parse = (v: string) => v.replace(/^v/i, '').split(/[-+]/)[0]!.split('.').map(Number);
+  const a = parse(version);
+  const b = parse(min);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (Number.isNaN(x)) return false;
+    if (x !== y) return x < y;
+  }
+  return false;
+}

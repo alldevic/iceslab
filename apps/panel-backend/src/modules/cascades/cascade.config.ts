@@ -209,6 +209,7 @@ const freedomOutbound: Record<string, unknown> = { tag: DIRECT_TAG, protocol: 'f
 export function buildCascadeConfigs(
   hops: CascadeConfigHopInput[],
   linkCreds: LinkCred[],
+  policies: CascadePolicy[] = [],
 ): HopConfig[] {
   const sorted = [...hops].sort((a, b) => a.position - b.position);
   const n = sorted.length;
@@ -224,9 +225,39 @@ export function buildCascadeConfigs(
 
     const routingRules: Record<string, unknown>[] = [];
     if (role === 'entry') {
-      // User traffic -> link-out. Split-routing presets can prepend
-      // direct/block rules ahead of this later (E).
       routingRules.push(QUIC_BLOCK_RULE);
+      // A4 ad-split on a CHAIN. Until 2026-07-30 policies reached balancer
+      // entries only, so an operator could define a policy, grant it to a
+      // squad, watch the panel report success, and get no rules on the node at
+      // all. The chain had exactly one exit, so nobody noticed a missing exit
+      // selector; what went missing was the ad-split.
+      //
+      // A chain needs no rule for the PLAIN profile: with one exit there is
+      // nothing to select, and an untagged client falls through to the
+      // catch-all below, which is that same exit. Only the policies need rules,
+      // each gated on its own vlessRoute tag and sitting ABOVE the catch-all so
+      // its direct/block domains win before traffic enters the link.
+      for (const p of policies) {
+        const tag = String(routeTag(p.ordinal, 0));
+        if (p.blockDomains.length) {
+          routingRules.push({
+            type: 'field',
+            vlessRoute: tag,
+            domain: p.blockDomains,
+            outboundTag: 'blocked',
+          });
+        }
+        if (p.directDomains.length) {
+          routingRules.push({
+            type: 'field',
+            vlessRoute: tag,
+            domain: p.directDomains,
+            outboundTag: DIRECT_TAG,
+          });
+        }
+      }
+      // User traffic -> link-out. Also the fall-through for the plain profile
+      // and for any client whose UUID carries no tag we recognise.
       routingRules.push({ type: 'field', network: 'tcp,udp', outboundTag: LINK_OUT_TAG });
     } else if (role === 'transit') {
       routingRules.push({ type: 'field', inboundTag: [LINK_IN_TAG], outboundTag: LINK_OUT_TAG });

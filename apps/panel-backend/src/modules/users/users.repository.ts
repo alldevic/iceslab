@@ -6,12 +6,49 @@ export type UserWithTraffic = User & {
   groupMembers: { groupId: string }[];
 };
 
+export type UserSort = 'username' | 'createdAt' | 'expireAt' | 'traffic';
+
 export interface ListParams {
   page: number;
   limit: number;
   status?: string;
   groupId?: string;
   search?: string;
+  tag?: string;
+  /** R3 - filter by the per-user routing override. A preset id keeps only users
+   *  pinned to it; `any` keeps everyone who has one; `none` keeps those who
+   *  inherit. Without this the override is invisible in bulk: it lives in a
+   *  collapsed Advanced block on one user's page, so nobody can answer "who did
+   *  we pin, and why is that one person routed differently". */
+  routingPreset?: string;
+  sort?: UserSort;
+  order?: 'asc' | 'desc';
+}
+
+/** Sentinels accepted by `routingPreset` alongside a concrete preset id. */
+export const ROUTING_FILTER_ANY = 'any';
+export const ROUTING_FILTER_NONE = 'none';
+
+/**
+ * Sortable columns, mapped to Prisma order clauses. Traffic lives on the
+ * related row, hence the nested form. `nulls: 'last'` on expireAt keeps
+ * never-expiring users at the bottom instead of leading the list.
+ */
+function orderClause(
+  sort: UserSort,
+  order: 'asc' | 'desc',
+): Prisma.UserOrderByWithRelationInput {
+  switch (sort) {
+    case 'traffic':
+      return { traffic: { usedTrafficBytes: order } };
+    case 'expireAt':
+      return { expireAt: { sort: order, nulls: 'last' } };
+    case 'createdAt':
+      return { createdAt: order };
+    case 'username':
+    default:
+      return { username: order };
+  }
 }
 
 export async function findActiveByUsername(username: string): Promise<User | null> {
@@ -90,6 +127,14 @@ export async function list(params: ListParams): Promise<{
     ...(params.groupId
       ? { groupMembers: { some: { groupId: params.groupId } } }
       : {}),
+    ...(params.tag ? { tag: params.tag } : {}),
+    ...(params.routingPreset === ROUTING_FILTER_ANY
+      ? { routingPreset: { not: null } }
+      : params.routingPreset === ROUTING_FILTER_NONE
+        ? { routingPreset: null }
+        : params.routingPreset
+          ? { routingPreset: params.routingPreset }
+          : {}),
     ...(params.search
       ? {
           OR: [
@@ -105,7 +150,7 @@ export async function list(params: ListParams): Promise<{
     prisma.user.findMany({
       where,
       include: { traffic: true, groupMembers: { select: { groupId: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: orderClause(params.sort ?? 'username', params.order ?? 'asc'),
       skip: (params.page - 1) * params.limit,
       take: params.limit,
     }),

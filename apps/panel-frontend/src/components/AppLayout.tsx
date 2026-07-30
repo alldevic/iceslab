@@ -1,29 +1,31 @@
 import { Suspense } from 'react';
-import { AppShell, Box, Center, Loader, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { AppShell, Box, Center, Loader, Stack, Text, UnstyledButton } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Outlet, NavLink as RouterNavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { IconUsersGroup } from '@tabler/icons-react';
+import { DiscordIcon, GithubIcon, HeartIcon, StarIcon, TelegramIcon } from './BrandIcons';
 import {
-  IconUsers,
-  IconServer2,
-  IconLogout,
-  IconFilter,
-  IconStack2,
-  IconUsersGroup,
-  IconLayoutDashboard,
-  IconChartHistogram,
-  IconHourglass,
-  IconSettings,
-  IconSearch,
-  IconRss,
-  type Icon,
-} from '@tabler/icons-react';
+  NavDeliveryIcon,
+  NavHomeIcon,
+  NavHostsIcon,
+  NavInsightsIcon,
+  NavLogoutIcon,
+  NavMetadataIcon,
+  NavNodesIcon,
+  NavProfilesIcon,
+  NavQueuesIcon,
+  NavRoutesIcon,
+  NavSettingsIcon,
+  NavUsersIcon,
+} from './NavIcons';
 import { useAuth } from '../stores/auth';
 import { useBrandName } from '../hooks/useBrandName';
-import { LanguageSwitcher } from './LanguageSwitcher';
 import { getSystemVersion } from '../lib/api';
 import { useOverview } from '../hooks/useOverview';
+import { PageMetaProvider, usePageMetaFacts } from '../hooks/usePageMeta';
+import { DISCORD_URL, GITHUB_URL, SUPPORT_URL, TELEGRAM_URL } from '../lib/community';
 
 const HAIRLINE = '#1C2A3D';
 const GROUND = '#08101A';
@@ -33,6 +35,12 @@ const MIST = '#7A8BA3';
 const CYAN = '#7DD3FC';
 const CYAN2 = '#67E8F9';
 const MOSS = '#A7D8B9';
+const AMBER = '#F5B14C';
+// Warm rose, used by nothing else in the panel: the donate chip is the one
+// place we ask for something back, so it gets its own accent.
+const ROSE = '#E08AA8';
+
+const DISPLAY = "'Space Grotesk', Inter, sans-serif";
 
 const MONO_LABEL = {
   fontFamily: "'Geist Mono', monospace",
@@ -49,13 +57,13 @@ type NavItemProps = {
   href?: string;
   end?: boolean;
   label: string;
-  icon: Icon;
+  /** Rendered element, so the sidebar can mix drawn marks with icon-set ones. */
+  icon: React.ReactNode;
   count?: NavCount;
-  shortcut?: string;
   countDot?: boolean;
 };
 
-function NavItem({ to, href, end, label, icon: Icon, count, shortcut, countDot }: NavItemProps) {
+function NavItem({ to, href, end, label, icon, count, countDot }: NavItemProps) {
   const renderInner = (isActive: boolean) => (
     <Box
       style={{
@@ -65,6 +73,7 @@ function NavItem({ to, href, end, label, icon: Icon, count, shortcut, countDot }
         padding: '8px 12px',
         borderRadius: 8,
         color: isActive ? SNOW : MIST,
+        fontFamily: DISPLAY,
         fontSize: 13,
         fontWeight: isActive ? 500 : 400,
         backgroundColor: isActive ? '#0B1420' : 'transparent',
@@ -85,25 +94,8 @@ function NavItem({ to, href, end, label, icon: Icon, count, shortcut, countDot }
         }
       }}
     >
-      <Box style={{ color: isActive ? CYAN : MIST, display: 'flex' }}>
-        <Icon size={16} stroke={1.6} />
-      </Box>
+      <Box style={{ color: isActive ? CYAN : MIST, display: 'flex' }}>{icon}</Box>
       <span style={{ flex: 1 }}>{label}</span>
-      {shortcut && (
-        <Box
-          style={{
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 10,
-            color: MIST,
-            border: `1px solid ${HAIRLINE}`,
-            borderRadius: 4,
-            padding: '1px 5px',
-            letterSpacing: '0.04em',
-          }}
-        >
-          {shortcut}
-        </Box>
-      )}
       {count !== undefined && count !== null && (
         <Box
           style={{
@@ -153,6 +145,90 @@ function NavItem({ to, href, end, label, icon: Icon, count, shortcut, countDot }
   );
 }
 
+/** Chip shell shared by the version / GitHub / support pills in the topbar. */
+function TopChip({
+  href,
+  title,
+  bg = CARD,
+  border = HAIRLINE,
+  padding = '0 11px',
+  children,
+}: {
+  href?: string;
+  title?: string;
+  bg?: string;
+  border?: string;
+  padding?: string;
+  children: React.ReactNode;
+}) {
+  const body = (
+    <Box
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        height: 32,
+        padding,
+        borderRadius: 8,
+        backgroundColor: bg,
+        border: `1px solid ${border}`,
+        textDecoration: 'none',
+      }}
+    >
+      {children}
+    </Box>
+  );
+  if (!href) return body;
+  return (
+    <UnstyledButton
+      component="a"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={title}
+      style={{ textDecoration: 'none' }}
+    >
+      {body}
+    </UnstyledButton>
+  );
+}
+
+/**
+ * Borderless 32x32 icon link in the channel's own brand colour. Renders even
+ * when this install hasn't been given a URL yet: the topbar keeps its shape,
+ * the icon just doesn't navigate until `community.ts` is filled in.
+ */
+function IconLink({ href, title, children }: {
+  href: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <UnstyledButton
+      component="a"
+      href={href || undefined}
+      target={href ? '_blank' : undefined}
+      rel="noreferrer"
+      title={title}
+      aria-label={title}
+      style={{
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      {children}
+    </UnstyledButton>
+  );
+}
+
+function Separator() {
+  return <Box style={{ width: 1, height: 18, backgroundColor: HAIRLINE, flexShrink: 0 }} />;
+}
+
 // Breadcrumb i18n keys per pathname. Resolved via t() at render-time so the
 // strings track the active locale. Anything not in this map falls back to a
 // generic uppercase-from-pathname formatter (see breadcrumb derivation).
@@ -161,14 +237,26 @@ const BREADCRUMB_KEYS: Record<string, string> = {
   '/users': 'breadcrumb.users',
   '/profiles': 'breadcrumb.profiles',
   '/squads': 'breadcrumb.squads',
+  '/hosts': 'breadcrumb.hosts',
   '/nodes': 'breadcrumb.nodes',
   '/subscription/metadata': 'breadcrumb.subscriptionMetadata',
-  '/subscription/routing': 'breadcrumb.subscriptionRouting',
+  '/subscription/routes': 'breadcrumb.subscriptionRoutes',
+  '/subscription/delivery': 'breadcrumb.subscriptionDelivery',
   '/insights': 'breadcrumb.insights',
   '/settings': 'breadcrumb.settings',
 };
 
 export function AppLayout() {
+  // The topbar renders facts published by the page below it, so the provider
+  // has to sit above both.
+  return (
+    <PageMetaProvider>
+      <AppLayoutInner />
+    </PageMetaProvider>
+  );
+}
+
+function AppLayoutInner() {
   const [opened, { toggle: _toggle }] = useDisclosure();
   void _toggle;
   void opened;
@@ -181,6 +269,7 @@ export function AppLayout() {
   const qc = useQueryClient();
   const brandName = useBrandName();
   const { t } = useTranslation();
+  const facts = usePageMetaFacts();
 
   // Wave-14 #18: single dashQuery feeds every sidebar count. Pre-wave we
   // fired 4 separate count queries (users/profiles/squads/nodes) each
@@ -193,6 +282,7 @@ export function AppLayout() {
 
   // ROADMAP D1: update-available check. Cheap: the backend caches the GitHub
   // call for 6h, so a long staleTime + a couple of refetches a day is plenty.
+  // The same response carries the repo's star count for the GitHub chip.
   const versionQuery = useQuery({
     queryKey: ['system', 'version'],
     queryFn: getSystemVersion,
@@ -201,10 +291,12 @@ export function AppLayout() {
     refetchOnWindowFocus: false,
   });
   const update = versionQuery.data?.updateAvailable ? versionQuery.data : null;
+  const stars = versionQuery.data?.stars ?? null;
 
   const userCount = dashQuery.data?.users.total;
   const profileCount = dashQuery.data?.inventory.profileCount;
   const squadCount = dashQuery.data?.inventory.squadCount;
+  const hostCount = dashQuery.data?.inventory.hostCount;
   const nodesTotal = dashQuery.data?.system.totalNodeCount;
   const nodesOnline = dashQuery.data?.system.onlineNodeCount ?? nodesTotal;
 
@@ -216,10 +308,25 @@ export function AppLayout() {
     navigate('/login', { replace: true });
   }
 
-  const breadcrumbKey = BREADCRUMB_KEYS[pathname];
+  // Detail routes fall back to their section's crumb, otherwise the raw path
+  // lands in the topbar and a uuid becomes the page title. Walk from the
+  // longest prefix down, so /subscription/delivery/new finds the two-segment
+  // key the same way /squads/:id finds its one-segment one.
+  const breadcrumbKey = (() => {
+    const parts = pathname.split('/').filter(Boolean);
+    // The root has no segments, so the loop below never runs for it and the
+    // dashboard fell through to the fallback, printing a bare slash.
+    if (parts.length === 0) return BREADCRUMB_KEYS['/'];
+    for (let n = parts.length; n > 0; n--) {
+      const key = BREADCRUMB_KEYS[`/${parts.slice(0, n).join('/')}`];
+      if (key) return key;
+    }
+    return undefined;
+  })();
   const breadcrumb = breadcrumbKey
     ? t(breadcrumbKey)
     : `/ ${pathname.replace('/', '').toUpperCase()}`;
+  const crumbLine = [breadcrumb, ...facts].join(' · ');
 
   return (
     <AppShell
@@ -249,120 +356,153 @@ export function AppLayout() {
             gap: 24,
           }}
         >
-          <Text style={{ ...MONO_LABEL, flex: 1 }}>{breadcrumb}</Text>
-          <TextInput
-            placeholder={t('sidebar.searchPlaceholder')}
-            leftSection={<IconSearch size={14} color={MIST} />}
-            rightSection={
+          {/* Brand + where you are. The brand sits here rather than in the
+              sidebar so the nav starts with the account and the panel reads
+              as one wide header. */}
+          <Box style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1, minWidth: 0 }}>
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <Box
                 style={{
-                  fontFamily: "'Geist Mono', monospace",
-                  fontSize: 10,
-                  color: MIST,
-                  border: `1px solid ${HAIRLINE}`,
+                  width: 17,
+                  height: 17,
+                  background: `linear-gradient(135deg, ${CYAN}, ${CYAN2})`,
+                  transform: 'rotate(45deg)',
                   borderRadius: 4,
-                  padding: '1px 5px',
-                  marginRight: 8,
+                  boxShadow: `0 0 14px ${CYAN}66`,
+                  flexShrink: 0,
+                }}
+              />
+              <Text
+                style={{
+                  fontFamily: DISPLAY,
+                  fontWeight: 500,
+                  fontSize: 16,
+                  lineHeight: '20px',
+                  color: SNOW,
                 }}
               >
-                ⌘K
-              </Box>
-            }
-            styles={{
-              root: { width: 260 },
-              input: {
-                backgroundColor: CARD,
-                borderColor: HAIRLINE,
-                color: SNOW,
-                fontSize: 12,
-                height: 34,
-                minHeight: 34,
-              },
-            }}
-          />
-          <LanguageSwitcher persist />
+                {brandName.toLowerCase()}
+              </Text>
+            </Box>
+            <Separator />
+            <Text style={{ ...MONO_LABEL, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {crumbLine}
+            </Text>
+          </Box>
+
+          <Box style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Version chip. Turns cyan and links to the release notes when a
+                newer tag exists, which is the whole point of the D1 check. */}
+            {update ? (
+              <TopChip
+                href={update.releaseUrl ?? undefined}
+                title={t('sidebar.updateAvailable', { version: update.latest })}
+                border={`${CYAN}55`}
+              >
+                <Box
+                  component="span"
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    backgroundColor: CYAN2,
+                    boxShadow: `0 0 6px ${CYAN2}`,
+                  }}
+                />
+                <Text
+                  style={{
+                    fontFamily: "'Geist Mono', monospace",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    letterSpacing: '0.04em',
+                    color: CYAN2,
+                  }}
+                >
+                  v{__APP_VERSION__}
+                </Text>
+              </TopChip>
+            ) : (
+              <TopChip>
+                <Text
+                  style={{
+                    fontFamily: "'Geist Mono', monospace",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    letterSpacing: '0.04em',
+                    color: MIST,
+                  }}
+                >
+                  v{__APP_VERSION__}
+                </Text>
+              </TopChip>
+            )}
+
+            <Separator />
+
+            {/* Project links. An AGPL panel in public alpha lives or dies by
+                people finding the repo, so the way there is in the product.
+                Always rendered, so the topbar looks the same on every install
+                whether or not a given channel has a URL yet. */}
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <IconLink href={TELEGRAM_URL} title="Telegram">
+                <TelegramIcon />
+              </IconLink>
+              <IconLink href={DISCORD_URL} title="Discord">
+                <DiscordIcon />
+              </IconLink>
+              <TopChip href={GITHUB_URL} title="GitHub">
+                <GithubIcon />
+                {stars !== null && (
+                  <>
+                    <StarIcon />
+                    <Text
+                      style={{
+                        fontFamily: "'Geist Mono', monospace",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: '0.02em',
+                        lineHeight: '16px',
+                        color: AMBER,
+                      }}
+                    >
+                      {stars}
+                    </Text>
+                  </>
+                )}
+              </TopChip>
+            </Box>
+
+            <TopChip
+              href={SUPPORT_URL}
+              title={t('topbar.support')}
+              bg={`${ROSE}17`}
+              border={`${ROSE}47`}
+              padding="0 13px 0 14px"
+            >
+              <HeartIcon />
+              <Text
+                style={{
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 11,
+                  fontWeight: 500,
+                  letterSpacing: '0.12em',
+                  lineHeight: '14px',
+                  textTransform: 'uppercase',
+                  color: ROSE,
+                }}
+              >
+                {t('topbar.support')}
+              </Text>
+            </TopChip>
+          </Box>
         </Box>
       </AppShell.Header>
 
       <AppShell.Navbar>
         <Stack justify="space-between" h="100%" gap={0}>
           <Stack gap={0}>
-            {/* Brand */}
-            <Box
-              style={{
-                padding: '18px 16px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-              }}
-            >
-              <Box
-                style={{
-                  width: 22,
-                  height: 22,
-                  background: `linear-gradient(135deg, ${CYAN}, ${CYAN2})`,
-                  transform: 'rotate(45deg)',
-                  borderRadius: 4,
-                  boxShadow: `0 0 14px ${CYAN}66`,
-                }}
-              />
-              <Text
-                style={{
-                  fontFamily: "'Space Grotesk', Inter, sans-serif",
-                  fontWeight: 500,
-                  fontSize: 18,
-                  letterSpacing: '-0.01em',
-                  color: SNOW,
-                  flex: 1,
-                }}
-              >
-                {brandName.toLowerCase()}
-              </Text>
-              {update ? (
-                <Text
-                  component="a"
-                  href={update.releaseUrl ?? undefined}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={t('sidebar.updateAvailable', { version: update.latest })}
-                  style={{
-                    ...MONO_LABEL,
-                    fontSize: 9,
-                    letterSpacing: '0.1em',
-                    color: CYAN2,
-                    textDecoration: 'none',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}
-                >
-                  <Box
-                    component="span"
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: '50%',
-                      backgroundColor: CYAN2,
-                      boxShadow: `0 0 6px ${CYAN2}`,
-                    }}
-                  />
-                  v{__APP_VERSION__}
-                </Text>
-              ) : (
-                <Text
-                  style={{
-                    ...MONO_LABEL,
-                    fontSize: 9,
-                    letterSpacing: '0.1em',
-                  }}
-                >
-                  v{__APP_VERSION__}
-                </Text>
-              )}
-            </Box>
-
             {/* Signed in as */}
-            <Box style={{ padding: '0 16px 16px' }}>
+            <Box style={{ padding: '20px 16px 16px' }}>
               <Box
                 style={{
                   padding: '10px 12px',
@@ -378,6 +518,7 @@ export function AppLayout() {
                   <Text
                     style={{
                       color: SNOW,
+                      fontFamily: DISPLAY,
                       fontWeight: 500,
                       fontSize: 13,
                     }}
@@ -397,34 +538,41 @@ export function AppLayout() {
               </Box>
             </Box>
 
-            {/* Workspace group: core resources operators manage daily */}
+            {/* Workspace group: core resources operators manage daily. Order
+                follows the model: who gets access (users, squads) before what
+                they get (profiles) before the metal it runs on (nodes). */}
             <Text style={{ ...MONO_LABEL, padding: '0 28px 8px' }}>{t('sidebar.workspace')}</Text>
 
             <Stack gap={2} px={8}>
+              <NavItem to="/" end label={t('sidebar.home')} icon={<NavHomeIcon />} />
               <NavItem
-                to="/"
-                end
-                label={t('sidebar.home')}
-                icon={IconLayoutDashboard}
-                shortcut="⌘1"
-              />
-              <NavItem to="/users" label={t('sidebar.users')} icon={IconUsers} count={userCount} />
-              <NavItem
-                to="/profiles"
-                label={t('sidebar.profiles')}
-                icon={IconStack2}
-                count={profileCount}
+                to="/users"
+                label={t('sidebar.users')}
+                icon={<NavUsersIcon />}
+                count={userCount}
               />
               <NavItem
                 to="/squads"
                 label={t('sidebar.squads')}
-                icon={IconUsersGroup}
+                icon={<IconUsersGroup size={16} stroke={1.6} />}
                 count={squadCount}
+              />
+              <NavItem
+                to="/profiles"
+                label={t('sidebar.profiles')}
+                icon={<NavProfilesIcon />}
+                count={profileCount}
+              />
+              <NavItem
+                to="/hosts"
+                label={t('sidebar.hosts')}
+                icon={<NavHostsIcon />}
+                count={hostCount}
               />
               <NavItem
                 to="/nodes"
                 label={t('sidebar.nodes')}
-                icon={IconServer2}
+                icon={<NavNodesIcon />}
                 count={
                   nodesTotal !== undefined && nodesOnline !== undefined
                     ? `${nodesOnline}/${nodesTotal}`
@@ -437,7 +585,8 @@ export function AppLayout() {
             </Stack>
 
             {/* Subscription group: everything that shapes the client-facing
-                subscription URL: per-instance metadata + UA-routing rules. */}
+                subscription URL: per-instance metadata + the delivery rules
+                that pick a format per client. */}
             <Text style={{ ...MONO_LABEL, padding: '20px 28px 8px' }}>
               {t('sidebar.subscriptionGroup')}
             </Text>
@@ -445,12 +594,17 @@ export function AppLayout() {
               <NavItem
                 to="/subscription/metadata"
                 label={t('sidebar.subscriptionMetadata')}
-                icon={IconRss}
+                icon={<NavMetadataIcon />}
               />
               <NavItem
-                to="/subscription/routing"
-                label={t('sidebar.subscriptionRouting')}
-                icon={IconFilter}
+                to="/subscription/routes"
+                label={t('sidebar.subscriptionRoutes')}
+                icon={<NavRoutesIcon />}
+              />
+              <NavItem
+                to="/subscription/delivery"
+                label={t('sidebar.subscriptionDelivery')}
+                icon={<NavDeliveryIcon />}
               />
             </Stack>
 
@@ -459,22 +613,14 @@ export function AppLayout() {
               {t('sidebar.systemGroup')}
             </Text>
             <Stack gap={2} px={8}>
-              <NavItem
-                to="/insights"
-                label={t('sidebar.insights')}
-                icon={IconChartHistogram}
-              />
-              <NavItem
-                href="/admin/queues"
-                label={t('sidebar.queues')}
-                icon={IconHourglass}
-              />
+              <NavItem to="/insights" label={t('sidebar.insights')} icon={<NavInsightsIcon />} />
+              <NavItem href="/admin/queues" label={t('sidebar.queues')} icon={<NavQueuesIcon />} />
             </Stack>
           </Stack>
 
           {/* Bottom: settings + sign out */}
           <Stack gap={2} px={8} pb={16} pt={8} style={{ borderTop: `1px solid ${HAIRLINE}` }}>
-            <NavItem to="/settings" label={t('sidebar.settings')} icon={IconSettings} />
+            <NavItem to="/settings" label={t('sidebar.settings')} icon={<NavSettingsIcon />} />
             <UnstyledButton
               onClick={handleLogout}
               style={{
@@ -484,6 +630,7 @@ export function AppLayout() {
                 padding: '8px 12px',
                 borderRadius: 8,
                 color: MIST,
+                fontFamily: DISPLAY,
                 fontSize: 13,
                 borderLeft: '2px solid transparent',
                 transition: 'background-color 120ms, color 120ms',
@@ -497,7 +644,7 @@ export function AppLayout() {
                 (e.currentTarget as HTMLElement).style.color = MIST;
               }}
             >
-              <IconLogout size={16} stroke={1.6} />
+              <NavLogoutIcon />
               <span>{t('sidebar.logout')}</span>
             </UnstyledButton>
           </Stack>

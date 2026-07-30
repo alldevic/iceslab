@@ -13,11 +13,13 @@ import {
   AUTH_STATUS,
   BINDINGS,
   CASCADES,
+  HOSTS,
   INSIGHTS,
   NODES_LIST,
   PROFILES,
   PUBLIC_SETTINGS,
   REGIONS,
+  ROUTE_POLICIES,
   SETTINGS,
   SQUADS,
   USERS_LIST,
@@ -35,7 +37,7 @@ function respond(config: InternalAxiosRequestConfig, data: unknown, status = 200
   } as AxiosResponse;
 }
 
-const GET_ROUTES: Array<[RegExp, () => unknown]> = [
+const GET_ROUTES: Array<[RegExp, (path: string) => unknown]> = [
   [/^\/api\/dashboard\/overview$/, () => buildOverview()],
   [/^\/api\/dashboard\/insights/, () => INSIGHTS],
   [/^\/api\/auth\/status$/, () => AUTH_STATUS],
@@ -48,9 +50,12 @@ const GET_ROUTES: Array<[RegExp, () => unknown]> = [
   [/^\/api\/regions$/, () => ({ regions: REGIONS })],
   [/^\/api\/cascades$/, () => ({ cascades: CASCADES })],
   [/^\/api\/profiles$/, () => ({ profiles: PROFILES })],
+  [/^\/api\/profiles\/[^/]+\/host-fields$/, (url) => ({ fields: demoHostFields(url) })],
   [/^\/api\/bindings\/next-free-port$/, () => ({ port: 443 })],
   [/^\/api\/bindings$/, () => ({ bindings: BINDINGS })],
-  [/^\/api\/hosts$/, () => ({ hosts: [] })],
+  [/^\/api\/hosts$/, () => ({ hosts: HOSTS })],
+  [/^\/api\/route-policies$/, () => ({ policies: ROUTE_POLICIES })],
+  [/^\/api\/users\/tags$/, () => ({ tags: ['premium', 'standard'] })],
   [/^\/api\/squads$/, () => ({ squads: SQUADS })],
   [/^\/api\/users$/, () => USERS_LIST],
   [/^\/api\/users\/[^/]+\/endpoints$/, () => ({ endpoints: [] })],
@@ -59,6 +64,57 @@ const GET_ROUTES: Array<[RegExp, () => unknown]> = [
   [/^\/api\/api-tokens$/, () => ({ tokens: [] })],
   [/^\/api\/inbounds$/, () => ({ inbounds: [] })],
 ];
+
+/**
+ * Which Host fields the demo profiles support. Mirrors the shape of
+ * `resolveHostFields` on the backend rather than its full table: the demo only
+ * needs the two silhouettes an operator actually sees, full xray and bare
+ * everything-else, so the host form can be demonstrated in both.
+ */
+const UNIVERSAL_FIELDS = [
+  'remark',
+  'priority',
+  'enabled',
+  'addressOverride',
+  'portOverride',
+  'disableForFormats',
+];
+const WIRE_FIELDS = [
+  'sniOverride',
+  'hostHeaderOverride',
+  'pathOverride',
+  'fingerprintOverride',
+  'alpn',
+  'allowInsecure',
+  'securityLayer',
+];
+
+function demoHostFields(path: string): Record<string, unknown> {
+  const id = path.split('/')[3] ?? '';
+  const protocol = PROFILES.find((p) => p.id === id)?.protocol ?? 'xray';
+  const out: Record<string, unknown> = {};
+  for (const f of UNIVERSAL_FIELDS) out[f] = { supported: true, inherited: null };
+
+  if (protocol !== 'xray') {
+    const reason =
+      protocol === 'hysteria'
+        ? 'Hysteria2 negotiates its own TLS over QUIC and takes the SNI from the address it dials'
+        : `${protocol} carries no client-side TLS or transport layer, so none of these reach the client`;
+    for (const f of WIRE_FIELDS) out[f] = { supported: false, reason };
+    return out;
+  }
+
+  // The demo xray profile is REALITY on a raw transport: no HTTP framing, so no
+  // path and no Host header, but the SNI and the fingerprint are real.
+  out.sniOverride = { supported: true, inherited: 'www.microsoft.com' };
+  out.fingerprintOverride = { supported: true, inherited: 'chrome' };
+  out.pathOverride = { supported: false, reason: 'the raw transport carries no path' };
+  out.hostHeaderOverride = { supported: false, reason: 'the raw transport sends no Host header' };
+  out.alpn = { supported: true, inherited: null };
+  out.allowInsecure = { supported: true, inherited: null };
+  out.securityLayer = { supported: true, inherited: null };
+  return out;
+}
 
 function parseBody(data: unknown): Record<string, unknown> {
   if (typeof data === 'string') {
@@ -79,7 +135,7 @@ export const demoAdapter: AxiosAdapter = (config) => {
 
   if (method === 'get') {
     for (const [re, handler] of GET_ROUTES) {
-      if (re.test(path)) return Promise.resolve(respond(config, handler()));
+      if (re.test(path)) return Promise.resolve(respond(config, handler(path)));
     }
     // Unmapped GET: benign empty payload. Never a real request.
     return Promise.resolve(respond(config, {}));

@@ -66,6 +66,396 @@ html:root {
   border: 1px solid #7DD3FC;
 }
 
+/* Profile editor on its own page: fields left, recipes on a sticky right rail.
+   The form body is one long Stack, so the split is done here rather than by
+   restructuring 1600 lines of form JSX. Below 1400px the rail folds back under
+   the fields. */
+@media (min-width: 1400px) {
+  .profile-form-inline > form > .mantine-Stack-root {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    column-gap: 20px;
+    /* The rail spans far more rows than the form has, so the gap has to be
+       carried by the children: a row-gap here would be charged for every
+       empty row of that span and stretch the page by thousands of pixels. */
+    row-gap: 0;
+    align-items: start;
+  }
+  .profile-form-inline > form > .mantine-Stack-root > * {
+    grid-column: 1;
+    min-width: 0;
+    margin-bottom: 16px;
+  }
+  .profile-form-inline > form > .mantine-Stack-root > .recipes-slot {
+    grid-column: 2;
+    grid-row: 1 / span 200;
+    margin-bottom: 0;
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+  }
+  /* The rail is one column wide, so recipes stack instead of squeezing three
+     across and breaking every title into four lines. */
+  .profile-form-inline .recipes-slot .mantine-SimpleGrid-root {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ───── Page bar ─────────────────────────────────────────────────────────
+   One strip holding identity, facts, filters and the primary action. It has
+   to survive a 1280 laptop without a horizontal scrollbar, so the pieces give
+   way in order of how little they are missed: first the softer numbers, then
+   the words on the switches, and only then does the strip fold onto a second
+   row. Media queries live here because inline styles cannot express them. */
+.page-bar {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 10px;
+  background-color: #0F1A28;
+  border: 1px solid #1C2A3D;
+}
+.page-bar-facts {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  padding-left: 16px;
+}
+.page-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-left: 12px;
+}
+/* Shrinkable rather than fixed: when the controls take more than their share
+   the field narrows toward its icon instead of sliding under them. */
+.page-bar-search {
+  flex: 0 1 280px;
+  min-width: 46px;
+}
+/* A narrowed field cuts its hint mid-word; an ellipsis at least reads as
+   deliberate. */
+.page-bar-search input::placeholder {
+  text-overflow: ellipsis;
+}
+
+/* Least-missed first: today's volume and the host count are context, not the
+   thing an operator scans the bar for. */
+/* !important throughout: these elements carry their layout as inline styles,
+   which would otherwise outrank a class rule and keep them on screen. */
+@media (max-width: 1700px) {
+  .page-bar-fact-soft {
+    display: none !important;
+  }
+  .page-bar-search {
+    flex-basis: 220px;
+  }
+}
+
+/* Below this the fact line itself stops earning its width. */
+@media (max-width: 1520px) {
+  .page-bar-fact-mid {
+    display: none !important;
+  }
+  .page-bar-search {
+    flex-basis: 200px;
+  }
+  /* Filters lose their word first: the funnel plus the count still says which
+     slice is on, and the two of them were the widest thing in the row. */
+  .page-bar-filter-label {
+    display: none !important;
+  }
+  /* The slash hint is a nicety; the field needs those pixels more. */
+  .page-bar-search-key {
+    display: none !important;
+  }
+}
+
+/* Then the view switch, whose glyphs carry the meaning on their own. */
+@media (max-width: 1280px) {
+  .page-bar-switch-label {
+    display: none !important;
+  }
+  .page-bar-sep {
+    display: none !important;
+  }
+}
+
+/* Last resort: fold. The identity block keeps the first row, everything that
+   sets the view moves under it rather than shrinking past readability. */
+@media (max-width: 1120px) {
+  .page-bar {
+    flex-wrap: wrap;
+    row-gap: 10px;
+    padding-bottom: 10px;
+  }
+  .page-bar-facts {
+    padding-left: 12px;
+  }
+  .page-bar-actions {
+    width: 100%;
+    padding-left: 0;
+    flex-wrap: wrap;
+  }
+  .page-bar-search {
+    width: 100%;
+    flex-shrink: 1;
+  }
+}
+
+/* ───── Form page with a rail ────────────────────────────────────────────
+   The form and whatever explains it sit side by side while there is room for
+   both. The rail is a fixed 520 because its cards are a fixed shape, so the
+   form column gets whatever is left: a cascade hop row needs about 860 of it
+   to stay on one line, which stops being true below 1740. Under that the rail
+   folds beneath the form, and its cards go side by side rather than stretching
+   one preview across the whole page. */
+.page-columns {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  width: 100%;
+}
+.page-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 520px;
+  flex-shrink: 0;
+}
+@media (max-width: 1740px) {
+  .page-columns {
+    flex-direction: column;
+  }
+  .page-rail {
+    width: 100%;
+    flex-direction: row;
+    align-items: flex-start;
+  }
+  .page-rail > * {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+@media (max-width: 1000px) {
+  .page-rail {
+    flex-direction: column;
+  }
+}
+
+/* Routes: a list of policies or presets beside the one that is open. The list
+   is narrow because its rows are two short lines; the detail takes the rest.
+   Below 1100 the list becomes a strip above the detail rather than a column
+   too narrow to hold a name. */
+.routes-panes {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 20px;
+  width: 100%;
+  align-items: start;
+}
+.routes-list,
+.routes-detail {
+  border-radius: 10px;
+  background-color: #0f1a28;
+  border: 1px solid #1c2a3d;
+  overflow: hidden;
+  min-width: 0;
+}
+/* The operator's own layer sits under both panes, full width. */
+.routes-full {
+  grid-column: 1 / -1;
+}
+@media (max-width: 1100px) {
+  .routes-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* One rule: what matched, what happens to it, and why. The note gives way
+   first, then the row stacks rather than squeezing the match chips. */
+.routes-rule {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+/* Column widths live here, not in the JSX, so the matcher can give room back
+   to the note before the note wraps into a column of single words. */
+.routes-rule-match {
+  width: var(--routes-match-w, 330px);
+  flex-shrink: 0;
+}
+.routes-rule-action {
+  width: var(--routes-action-w, 230px);
+  flex-shrink: 0;
+}
+@media (max-width: 1600px) {
+  .routes-rule-match {
+    width: 270px;
+  }
+}
+@media (max-width: 1400px) {
+  .routes-rule-match {
+    width: 220px;
+  }
+  .routes-rule-action {
+    width: 190px;
+  }
+}
+@media (max-width: 1000px) {
+  .routes-rule {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .routes-rule-match,
+  .routes-rule-action {
+    width: auto;
+    flex: 1 1 220px;
+  }
+}
+
+/* The three buckets read as one row while a domain still fits on a line. */
+.routes-buckets {
+  display: flex;
+  gap: 14px;
+  width: 100%;
+}
+@media (max-width: 900px) {
+  .routes-buckets {
+    flex-direction: column;
+  }
+}
+
+/* One API-token row. Fixed lanes for the dates and actions, the name gives
+   way; below 900 the row wraps rather than crushing the lanes out of line. */
+.settings-token-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+@media (max-width: 900px) {
+  .settings-token-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
+
+/* Regions are short rows, so two fit across while there is room for both. */
+.settings-regions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+@media (max-width: 1000px) {
+  .settings-regions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Insights is two cards of equal weight, not a form with a rail, so they split
+   the page evenly and stack when neither would keep its bars readable. */
+.insights-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  width: 100%;
+  align-items: start;
+}
+@media (max-width: 1300px) {
+  .insights-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Four numbers in a row while they fit, two by two when they do not. */
+.insights-tiles {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+.insights-tiles > * {
+  flex: 1 1 130px;
+}
+
+/* One delivery rule. The columns are fixed lanes so priority, format and the
+   actions line up down the table; the pattern is the only one that gives way,
+   and below 1100 the row wraps rather than shrinking the lanes out of line. */
+.delivery-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+@media (max-width: 1100px) {
+  .delivery-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
+
+/* One hop: role, node, and the two protocol decisions. The node field is the
+   one that must stay readable, so it keeps a floor and the row wraps rather
+   than letting the fixed columns squeeze it to nothing. */
+.cascade-hop {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+}
+.cascade-hop-node {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+.cascade-hop-field {
+  width: 170px;
+  flex-shrink: 0;
+}
+
+/* A position holds a pool, so its node column grows downwards and the row can
+   no longer share one baseline with the fixed columns. */
+.cascade-position {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+}
+.cascade-position-pool {
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+/* Tag, country, nodes. The tag is issued once and never edited, so it gets the
+   narrowest slot and the nodes column takes what is left. */
+.cascade-direction {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+}
+.cascade-direction-tag {
+  width: 86px;
+  flex-shrink: 0;
+}
+.cascade-direction-country {
+  width: 230px;
+  flex-shrink: 0;
+}
+.cascade-direction-nodes {
+  flex: 1 1 240px;
+  min-width: 200px;
+}
+
 /* Hairline scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

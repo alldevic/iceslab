@@ -67,6 +67,7 @@ const overviewResponseSchema = {
       properties: {
         profileCount: { type: 'number' },
         squadCount: { type: 'number' },
+        hostCount: { type: 'number' },
       },
     },
     // host/metrics shapes live in @iceslab/shared and evolve independently,

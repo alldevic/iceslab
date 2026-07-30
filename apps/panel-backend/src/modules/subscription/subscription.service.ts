@@ -10,7 +10,7 @@ import {
 // kept on the User row for backwards-compat but never filters subscription
 // output.
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
-import { getHiddenCascadeNodeIds, getBalancerExitsByEntryNode } from '../cascades/cascade.service.js';
+import { getHiddenCascadeNodeIds, getRouteProfilesByEntryNode } from '../cascades/cascade.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/credentials.js';
@@ -327,10 +327,12 @@ export async function generateSubscription(
     bindings.push(...filtered);
   }
 
-  // A4: which of these nodes are balancer-cascade entries + their exits. One
-  // query for the whole binding set; the xray branch attaches the match so
-  // buildXrayJsonArray can expand that endpoint into one config per exit.
-  const balancerExits = await getBalancerExitsByEntryNode(
+  // A4: which of these nodes are cascade entries + the route profiles they
+  // offer. One query for the whole binding set; the xray branch attaches the
+  // match so buildXrayJsonArray can expand that endpoint into one config per
+  // profile. Chains take part too, but only once a policy is granted (see
+  // getRouteProfilesByEntryNode).
+  const balancerExits = await getRouteProfilesByEntryNode(
     [...new Set(bindings.map((b) => b.node.id))],
     groupIds,
   );
@@ -659,9 +661,16 @@ export async function generateSubscription(
       });
     } else if (ib.protocol === 'naive' && user.naivePassword) {
       const cfg = ib.config as unknown as NaiveInboundConfig;
-      // Public host for naive is the inbound's TLS hostname, not the panel's
-      // node.address (Caddy answers ACME on `cfg.hostname`).
-      const naiveHost = cfg.hostname || host;
+      // Public host for naive defaults to the inbound's TLS hostname rather
+      // than node.address, because Caddy answers ACME on `cfg.hostname`.
+      //
+      // A host's addressOverride still wins over it. Until 2026-07-29 the
+      // profile value came first, which inverted the whole override model: the
+      // operator set an address on the host, the form reported it as active,
+      // and the subscription quietly emitted the profile's hostname instead.
+      // Every other protocol resolves address overrides before the protocol
+      // switch (`host` above), naive was the one exception.
+      const naiveHost = hostOverrides?.addressOverride ?? (cfg.hostname || host);
       endpoints.push({
         protocol: 'naive',
         nodeName,

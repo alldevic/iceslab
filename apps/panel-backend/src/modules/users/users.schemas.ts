@@ -100,6 +100,21 @@ export const ListUsersQuerySchema = z.object({
   status: UserStatus.optional(),
   search: z.string().min(1).max(64).optional(),                  // matches username/email/telegramId/tag
   groupId: PermissiveUuid.optional(),
+  // Exact tag match, distinct from `search` (which also matches username and
+  // email): the Filters popover offers a tag the operator already uses, so a
+  // substring match there would quietly widen the selection.
+  tag: z.string().min(1).max(64).optional(),
+  // R3 - who is pinned to a routing preset. `any` = has an override of some
+  // kind, `none` = inherits, a preset id = pinned to exactly that one. The
+  // override is otherwise invisible in bulk (it sits in a collapsed Advanced
+  // block on a single user's page), which is how a one-off fix from months ago
+  // turns into an unexplained support ticket.
+  routingPreset: z.union([z.enum(ROUTING_PRESET_IDS), z.literal('any'), z.literal('none')]).optional(),
+  // The list is paged server-side, so sorting has to be too: sorting the
+  // current page only would reorder 25 rows out of N and read as a bug.
+  // Default is username asc, the order an operator scans a roster in.
+  sort: z.enum(['username', 'createdAt', 'expireAt', 'traffic']).default('username'),
+  order: z.enum(['asc', 'desc']).default('asc'),
 });
 export type ListUsersQuery = z.infer<typeof ListUsersQuerySchema>;
 

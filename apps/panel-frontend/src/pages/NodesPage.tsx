@@ -1,17 +1,19 @@
-import { useMemo, useState } from 'react';
+﻿import { useMemo, useState } from 'react';
 import {
   ActionIcon,
   Badge,
+  Box,
   Button,
   Code,
   CopyButton,
   Group,
-  SegmentedControl,
+  Menu,
   SimpleGrid,
   Stack,
   Table,
   Text,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
@@ -20,15 +22,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   IconEdit,
   IconKey,
-  IconLayoutGrid,
-  IconLayoutList,
   IconPlus,
   IconRefresh,
   IconRoute,
+  IconSearch,
   IconServer2,
   IconTrash,
+  IconX,
 } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import {
   createBinding,
   createNode,
@@ -43,16 +46,15 @@ import {
   type UpdateNodeInput,
 } from '../lib/api';
 import { useOverview } from '../hooks/useOverview';
+import { usePageMeta } from '../hooks/usePageMeta';
 import { NodeFormModal } from '../components/NodeFormModal';
 import { NodeEditModal } from '../components/NodeEditModal';
 import { NodePayloadModal } from '../components/NodePayloadModal';
 import { NodeCard } from '../components/NodeCard';
 import { CascadesPanel } from '../components/CascadesPanel';
+import type { CascadeLayout } from '../components/CascadesView';
 import { countryFlag } from '../lib/countries';
 import { parseNodeAgentPort, pickFreeQuickDeployPort } from '../lib/ports';
-import { PageHero } from '../components/PageHero';
-import { PrimaryButton } from '../components/PrimaryButton';
-import { FilterChip } from '../components/FilterChip';
 
 const HAIRLINE = '#1C2A3D';
 const CARD = '#0F1A28';
@@ -62,9 +64,332 @@ const CYAN = '#7DD3FC';
 const MOSS = '#A7D8B9';
 const AMBER = '#F5B14C';
 const RED = '#E07A5F';
-const VIOLET = '#A78BFA';
 
-const MONO = { fontFamily: "'Geist Mono', monospace" };
+const GROUND = '#08101A';
+const WELL = '#0B1420';
+const EDGE = '#2C3A4E';
+const FAINT = '#5A6B82';
+const DIM = '#3A4A60';
+
+const MONO_FAMILY = "'Geist Mono', monospace";
+const MONO = { fontFamily: MONO_FAMILY };
+const DISPLAY_FAMILY = "'Space Grotesk', Inter, sans-serif";
+
+/**
+ * One "12 VPS" pair in the page bar: number in snow, unit in mist. `soft` marks
+ * how early it gives up its width when the bar runs out (see .page-bar in
+ * index.css): "soft" goes first, "mid" second, unmarked facts always stay.
+ */
+function BarFact({
+  value,
+  label,
+  accent,
+  soft,
+}: {
+  value: number | string;
+  label: string;
+  accent?: string;
+  soft?: 'soft' | 'mid';
+}) {
+  return (
+    <Box
+      className={soft ? `page-bar-fact-${soft}` : undefined}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
+    >
+      {accent && (
+        <Box style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accent, flexShrink: 0 }} />
+      )}
+      <Text style={{ ...MONO, fontSize: 13, fontWeight: 500, lineHeight: '16px', color: accent ?? SNOW }}>
+        {value}
+      </Text>
+      <Text
+        style={{
+          ...MONO,
+          fontSize: 10,
+          letterSpacing: '0.12em',
+          lineHeight: '12px',
+          textTransform: 'uppercase',
+          color: MIST,
+        }}
+      >
+        {label}
+      </Text>
+    </Box>
+  );
+}
+
+function BarDot({ soft }: { soft?: 'soft' | 'mid' }) {
+  return (
+    <Text
+      className={soft ? `page-bar-fact-${soft}` : undefined}
+      style={{ ...MONO, fontSize: 10, lineHeight: '12px', color: DIM }}
+    >
+      {'·'}
+    </Text>
+  );
+}
+
+/**
+ * A two-way switch that carries a word: which inventory the page is showing.
+ * Built by hand rather than with a Mantine control so the active pill matches
+ * every other raised surface in the bar.
+ */
+function Segmented({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string; icon: 'server' | 'chain' }[];
+}) {
+  return (
+    <Box
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 2,
+        height: 38,
+        padding: 3,
+        borderRadius: 9,
+        backgroundColor: GROUND,
+        border: `1px solid ${HAIRLINE}`,
+        flexShrink: 0,
+      }}
+    >
+      {options.map((o) => {
+        const on = o.value === value;
+        const stroke = on ? CYAN : MIST;
+        return (
+          <UnstyledButton
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+              height: 30,
+              paddingInline: 12,
+              borderRadius: 7,
+              backgroundColor: on ? CARD : 'transparent',
+              border: `1px solid ${on ? HAIRLINE : 'transparent'}`,
+            }}
+          >
+            {o.icon === 'server' ? (
+              <svg width="13" height="13" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <rect x="3" y="4" width="18" height="7" rx="2" fill="none" stroke={stroke} strokeWidth="1.8" />
+                <rect x="3" y="13" width="18" height="7" rx="2" fill="none" stroke={stroke} strokeWidth="1.8" />
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <circle cx="5.5" cy="18.5" r="2.5" fill="none" stroke={stroke} strokeWidth="2" />
+                <circle cx="18.5" cy="5.5" r="2.5" fill="none" stroke={stroke} strokeWidth="2" />
+                <path
+                  d="M5.5 16v-0.5a3.5 3.5 0 0 1 3.5 -3.5h6a3.5 3.5 0 0 0 3.5 -3.5v-0.5"
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+            <Text
+              className="page-bar-switch-label"
+              style={{
+                fontFamily: DISPLAY_FAMILY,
+                fontSize: 12,
+                fontWeight: 500,
+                lineHeight: '16px',
+                color: on ? SNOW : MIST,
+              }}
+            >
+              {o.label}
+            </Text>
+          </UnstyledButton>
+        );
+      })}
+    </Box>
+  );
+}
+
+/** The same switch reduced to glyphs, for a choice about shape rather than content. */
+function IconSegmented({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; icon: 'grid' | 'list'; title: string }[];
+}) {
+  return (
+    <Box
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 2,
+        height: 38,
+        padding: 3,
+        borderRadius: 9,
+        backgroundColor: GROUND,
+        border: `1px solid ${HAIRLINE}`,
+        flexShrink: 0,
+      }}
+    >
+      {options.map((o) => {
+        const on = o.value === value;
+        const stroke = on ? CYAN : MIST;
+        return (
+          <UnstyledButton
+            key={o.value}
+            type="button"
+            title={o.title}
+            onClick={() => onChange(o.value)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 32,
+              height: 30,
+              borderRadius: 7,
+              flexShrink: 0,
+              backgroundColor: on ? CARD : 'transparent',
+              border: `1px solid ${on ? HAIRLINE : 'transparent'}`,
+            }}
+          >
+            {o.icon === 'grid' ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <rect x="4" y="4" width="6" height="6" rx="1" fill="none" stroke={stroke} strokeWidth="1.9" />
+                <rect x="14" y="4" width="6" height="6" rx="1" fill="none" stroke={stroke} strokeWidth="1.9" />
+                <rect x="4" y="14" width="6" height="6" rx="1" fill="none" stroke={stroke} strokeWidth="1.9" />
+                <rect x="14" y="14" width="6" height="6" rx="1" fill="none" stroke={stroke} strokeWidth="1.9" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke={stroke} strokeWidth="1.9" strokeLinecap="round" />
+              </svg>
+            )}
+          </UnstyledButton>
+        );
+      })}
+    </Box>
+  );
+}
+
+/**
+ * A filter that reads as a button, with the count it currently yields. The menu
+ * is drawn rather than delegated to the browser: a native select opens the
+ * operating system's own list, which lands white and square in the middle of a
+ * dark panel.
+ */
+function BarSelect({
+  value,
+  onChange,
+  data,
+  count,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  data: { value: string; label: string }[];
+  count?: number;
+}) {
+  const current = data.find((d) => d.value === value) ?? data[0];
+  return (
+    <Menu position="bottom-end" withinPortal shadow="md" offset={6}>
+      <Menu.Target>
+        <UnstyledButton
+          type="button"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            height: 38,
+            paddingInline: 12,
+            borderRadius: 8,
+            backgroundColor: WELL,
+            border: `1px solid ${HAIRLINE}`,
+            flexShrink: 0,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+            <path
+              d="M4 4h16l-6 8v6l-4 2v-8z"
+              fill="none"
+              stroke={CYAN}
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <Text
+            className="page-bar-filter-label"
+            style={{
+              fontFamily: DISPLAY_FAMILY,
+              fontSize: 13,
+              fontWeight: 500,
+              lineHeight: '16px',
+              color: SNOW,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {current?.label}
+          </Text>
+          {count !== undefined && (
+            <Text style={{ ...MONO, fontSize: 10, lineHeight: '12px', color: FAINT }}>{count}</Text>
+          )}
+          <svg width="12" height="12" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+            <path
+              d="M6 9l6 6l6 -6"
+              fill="none"
+              stroke={MIST}
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </UnstyledButton>
+      </Menu.Target>
+      <Menu.Dropdown
+        style={{ backgroundColor: CARD, border: `1px solid ${HAIRLINE}`, borderRadius: 8, padding: 4 }}
+      >
+        {data.map((d) => {
+          const on = d.value === value;
+          return (
+            <Menu.Item
+              key={d.value}
+              onClick={() => onChange(d.value)}
+              style={{
+                borderRadius: 6,
+                backgroundColor: on ? WELL : 'transparent',
+                fontFamily: DISPLAY_FAMILY,
+                fontSize: 13,
+                color: on ? SNOW : MIST,
+              }}
+              rightSection={
+                on ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                    <path
+                      d="M5 12l5 5L20 7"
+                      fill="none"
+                      stroke={CYAN}
+                      strokeWidth="2.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : null
+              }
+            >
+              {d.label}
+            </Menu.Item>
+          );
+        })}
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
 
 const STATUS_ACCENT: Record<string, string> = {
   online: MOSS,
@@ -85,6 +410,7 @@ function formatBytes(n: number): string {
 
 type LayoutMode = 'cards' | 'compact';
 const LAYOUT_KEY = 'iceslab:nodes-layout';
+const CASCADE_LAYOUT_KEY = 'iceslab:cascades-layout';
 
 // Nodes page top-level view: the flat node inventory, or the cascades (chains of
 // those same nodes). A node can be standalone AND a cascade hop, so cascades are
@@ -97,7 +423,8 @@ type MembershipFilter = 'all' | 'standalone' | 'cascade';
 export function NodesPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [createOpen, { open: openCreate, close: closeCreate }] = useDisclosure(false);
+  const navigate = useNavigate();
+  const [createOpen, { close: closeCreate }] = useDisclosure(false);
   const [editing, setEditing] = useState<Node | null>(null);
   const [payload, setPayload] = useState<{
     name: string;
@@ -114,6 +441,18 @@ export function NodesPage() {
     if (typeof window !== 'undefined') window.localStorage.setItem(LAYOUT_KEY, m);
   }
 
+  // The cascade list has its own density, remembered separately: the two views
+  // are looked at for different reasons and rarely want the same shape.
+  const [cascadeLayout, setCascadeLayout] = useState<CascadeLayout>(
+    (typeof window !== 'undefined' &&
+      (window.localStorage.getItem(CASCADE_LAYOUT_KEY) as CascadeLayout | null)) ||
+      'cards',
+  );
+  function setCascadeLayoutPersist(m: CascadeLayout) {
+    setCascadeLayout(m);
+    if (typeof window !== 'undefined') window.localStorage.setItem(CASCADE_LAYOUT_KEY, m);
+  }
+
   const [view, setView] = useState<NodesView>(
     (typeof window !== 'undefined' &&
       (window.localStorage.getItem(VIEW_KEY) as NodesView | null)) ||
@@ -124,6 +463,7 @@ export function NodesPage() {
     if (typeof window !== 'undefined') window.localStorage.setItem(VIEW_KEY, v);
   }
   const [membership, setMembership] = useState<MembershipFilter>('all');
+  const [search, setSearch] = useState('');
 
   // Slice 27.5 - region filter (URL chip below header). 'all' = no filter.
   const [regionFilter, setRegionFilter] = useState<string>('all');
@@ -150,6 +490,7 @@ export function NodesPage() {
   const overviewQuery = useOverview();
   // Cascade membership drives the ⛓ badge + the standalone/in-cascade filter.
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
+  const allCascades = cascadesQuery.data?.cascades ?? [];
 
   // nodeId -> the cascade it belongs to + its role (entry/transit/exit). A node
   // can be in at most one cascade (v1 model).
@@ -170,6 +511,17 @@ export function NodesPage() {
     return m;
   }, [cascadesQuery.data, t]);
 
+  // What the cascades carried today: the entry node's traffic, because that is
+  // where a client's bytes enter and everything downstream is the same bytes
+  // counted again.
+  const cascadeToday = useMemo(() => {
+    const byId = new Map((overviewQuery.data?.nodes ?? []).map((n) => [n.id, n.todayBytes] as const));
+    return allCascades.reduce((sum, c) => {
+      const first = [...c.hops].sort((a, b) => a.position - b.position)[0];
+      return sum + (first ? byId.get(first.nodeId) ?? 0 : 0);
+    }, 0);
+  }, [allCascades, overviewQuery.data]);
+
   // Merge raw nodes (canonical source for actions / address) with dashboard
   // metrics (CPU/RAM/disk/today). Indexed by id for O(1) join.
   const enrichedNodes = useMemo(() => {
@@ -182,13 +534,50 @@ export function NodesPage() {
     }));
   }, [nodesQuery.data, overviewQuery.data]);
 
-  // In the "nodes" view, slice the inventory by cascade membership.
+  // In the "nodes" view, slice the inventory by cascade membership, then by
+  // whatever was typed in the bar. Name and address both match, because an
+  // operator looking for a box knows one or the other.
   const visibleNodes = useMemo(() => {
-    if (membership === 'all') return enrichedNodes;
-    return enrichedNodes.filter((n) =>
-      membership === 'cascade' ? nodeCascadeMap.has(n.id) : !nodeCascadeMap.has(n.id),
+    const byMembership =
+      membership === 'all'
+        ? enrichedNodes
+        : enrichedNodes.filter((n) =>
+            membership === 'cascade' ? nodeCascadeMap.has(n.id) : !nodeCascadeMap.has(n.id),
+          );
+    const q = search.trim().toLowerCase();
+    if (!q) return byMembership;
+    return byMembership.filter(
+      (n) => n.name.toLowerCase().includes(q) || n.address.toLowerCase().includes(q),
     );
-  }, [enrichedNodes, membership, nodeCascadeMap]);
+  }, [enrichedNodes, membership, nodeCascadeMap, search]);
+
+  // Bar facts come off the whole fleet, not the filtered slice: they say what
+  // the operator owns, and a search should not make nodes appear to vanish.
+  const fleetFacts = useMemo(() => {
+    const hosts = enrichedNodes.reduce((sum, n) => sum + (n.overview?.inboundCount ?? 0), 0);
+    const today = enrichedNodes.reduce((sum, n) => sum + (n.overview?.todayBytes ?? 0), 0);
+    return {
+      vps: enrichedNodes.length,
+      online: enrichedNodes.filter((n) => n.status === 'online').length,
+      countries: new Set(enrichedNodes.map((n) => n.countryCode).filter(Boolean)).size,
+      hosts,
+      today,
+    };
+  }, [enrichedNodes]);
+
+  // The crumb carries the fleet in two numbers. It follows the sub-view: the
+  // cascades side counts cascades, not boxes.
+  usePageMeta(
+    view === 'cascades'
+      ? [
+          t('pageMeta.cascades', { count: allCascades.length }),
+          t('pageMeta.cascadesEnabled', { count: allCascades.filter((c) => c.enabled).length }),
+        ]
+      : [
+          t('pageMeta.vps', { count: fleetFacts.vps }),
+          t('pageMeta.nodeCountries', { count: fleetFacts.countries }),
+        ],
+  );
 
   const createMutation = useMutation({
     mutationFn: createNode,
@@ -311,142 +700,254 @@ export function NodesPage() {
 
   return (
     <Stack>
-      <PageHero
-        eyebrow={t('pageHero.nodesEyebrow', {
-          vps: enrichedNodes.length,
-          countries: new Set(enrichedNodes.map((n) => n.countryCode).filter(Boolean)).size,
-        })}
-        title={t('pageHero.nodesTitle')}
-        subtitle={t('pageHero.nodesSubtitle')}
-        right={
-          <Group gap={8}>
-            <PrimaryButton leftSection={<IconPlus size={14} />} onClick={openCreate}>
-              {t('nodes.create')}
-            </PrimaryButton>
-          </Group>
-        }
-      />
+      {/* One strip: what the fleet is, then how to slice it, then the single
+          action. Facts count the whole fleet, the controls narrow the list. */}
+      <Box className="page-bar">
+        <Box style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, paddingRight: 16 }}>
+          <Box
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              backgroundColor: `${MOSS}1A`,
+              border: `1px solid ${MOSS}33`,
+              color: MOSS,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <IconServer2 size={18} stroke={1.7} />
+          </Box>
+          <Text
+            style={{
+              fontFamily: "'Space Grotesk', Inter, sans-serif",
+              fontSize: 17,
+              fontWeight: 600,
+              lineHeight: '22px',
+              color: SNOW,
+            }}
+          >
+            {view === 'cascades' ? t('cascades.title') : t('nodes.title')}
+          </Text>
+        </Box>
 
-      <SegmentedControl
-        size="sm"
-        value={view}
-        onChange={(v) => setViewPersist(v as NodesView)}
-        style={{ alignSelf: 'flex-start' }}
-        data={[
-          {
-            value: 'nodes',
-            label: (
-              <Group gap={6} wrap="nowrap">
-                <IconServer2 size={14} />
-                <Text size="sm">{t('nodes.viewNodes')}</Text>
-              </Group>
-            ),
-          },
-          {
-            value: 'cascades',
-            label: (
-              <Group gap={6} wrap="nowrap">
-                <IconRoute size={14} />
-                <Text size="sm">{t('nodes.viewCascades')}</Text>
-              </Group>
-            ),
-          },
-        ]}
-      />
+        <Box style={{ width: 1, height: 26, backgroundColor: HAIRLINE, flexShrink: 0 }} />
 
-      {view === 'cascades' && <CascadesPanel />}
+        {/* The facts follow the view: a fleet is counted in boxes, a set of
+            cascades in chains and hops. */}
+        <Box className="page-bar-facts">
+          {view === 'nodes' ? (
+            <>
+              <BarFact value={fleetFacts.vps} label={t('nodes.bar.vps')} />
+              <BarDot />
+              <BarFact value={fleetFacts.online} label={t('nodes.bar.online')} accent={MOSS} />
+              <BarDot soft="mid" />
+              <BarFact value={fleetFacts.countries} label={t('nodes.bar.countries')} soft="mid" />
+              <BarDot soft="soft" />
+              <BarFact value={fleetFacts.hosts} label={t('nodes.bar.hosts')} soft="soft" />
+              <BarDot soft="soft" />
+              <BarFact value={formatBytes(fleetFacts.today)} label={t('nodes.bar.today')} soft="soft" />
+            </>
+          ) : (
+            <>
+              <BarFact value={allCascades.length} label={t('cascades.bar.chains')} />
+              <BarDot />
+              <BarFact
+                value={allCascades.filter((c) => c.enabled).length}
+                label={t('cascades.bar.enabled')}
+                accent={MOSS}
+              />
+              <BarDot soft="mid" />
+              {/* Traffic that entered the cascades today. Counting positions
+                  instead would report the shape of the config, which the cards
+                  below already draw. */}
+              <BarFact value={formatBytes(cascadeToday)} label={t('nodes.bar.today')} soft="mid" />
+            </>
+          )}
+
+          <Box style={{ flex: 1, minWidth: 0 }} />
+
+          {/* The field needs the brighter edge: at 34px on a card that is
+              already dark, the hairline reads as no border at all. */}
+          {view === 'nodes' && (
+            <Box
+              className="page-bar-search"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                height: 34,
+                paddingInline: 12,
+                marginRight: 4,
+                borderRadius: 8,
+                backgroundColor: GROUND,
+                border: `1px solid ${EDGE}`,
+              }}
+            >
+              <IconSearch size={14} stroke={2} color={FAINT} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.currentTarget.value)}
+                placeholder={t('nodes.searchPlaceholder')}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: SNOW,
+                  fontFamily: "'Space Grotesk', Inter, sans-serif",
+                  fontSize: 12,
+                  lineHeight: '16px',
+                }}
+              />
+              {search ? (
+                <UnstyledButton onClick={() => setSearch('')} style={{ display: 'flex', flexShrink: 0 }}>
+                  <IconX size={13} stroke={2.4} color={FAINT} />
+                </UnstyledButton>
+              ) : (
+                <Box
+                  className="page-bar-search-key"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    height: 18,
+                    paddingInline: 5,
+                    borderRadius: 4,
+                    backgroundColor: CARD,
+                    border: `1px solid ${HAIRLINE}`,
+                    flexShrink: 0,
+                  }}
+                >
+                  <Text style={{ fontFamily: MONO_FAMILY, fontSize: 9, lineHeight: '11px', color: FAINT }}>/</Text>
+                </Box>
+              )}
+            </Box>
+          )}
+        </Box>
+
+        {/* A hairline between what the page is about and what it is set to:
+            without it the search field and the view switch read as one control. */}
+        <Box
+          className="page-bar-sep"
+          style={{ width: 1, height: 26, backgroundColor: HAIRLINE, flexShrink: 0, marginLeft: 12 }}
+        />
+
+        <Box className="page-bar-actions">
+          <Segmented
+            value={view}
+            onChange={(v) => setViewPersist(v as NodesView)}
+            options={[
+              { value: 'nodes', label: t('nodes.viewNodes'), icon: 'server' },
+              { value: 'cascades', label: t('nodes.viewCascades'), icon: 'chain' },
+            ]}
+          />
+
+          {view === 'nodes' && nodeCascadeMap.size > 0 && (
+            <BarSelect
+              value={membership}
+              onChange={(v) => setMembership(v as MembershipFilter)}
+              count={visibleNodes.length}
+              data={[
+                { value: 'all', label: t('nodes.filter.all') },
+                { value: 'standalone', label: t('nodes.filter.standalone') },
+                { value: 'cascade', label: t('nodes.filter.cascade') },
+              ]}
+            />
+          )}
+
+          {view === 'nodes' && (regionsQuery.data?.regions ?? []).length > 0 && (
+            <BarSelect
+              value={regionFilter}
+              onChange={setRegionFilter}
+              data={[
+                { value: 'all', label: t('nodes.regionFilterAll') },
+                ...(regionsQuery.data?.regions ?? []).map((r) => ({
+                  value: r.id,
+                  label: `${r.code} · ${r.name}`,
+                })),
+              ]}
+            />
+          )}
+
+          {/* Density lives as two glyphs, not two words: it is a shape choice,
+              and the words were competing with the view switch beside it. */}
+          <IconSegmented
+            value={view === 'cascades' ? cascadeLayout : layout}
+            onChange={(v) =>
+              view === 'cascades'
+                ? setCascadeLayoutPersist(v as CascadeLayout)
+                : setLayoutPersist(v as LayoutMode)
+            }
+            options={
+              view === 'cascades'
+                ? [
+                    { value: 'cards', icon: 'grid', title: t('nodes.layoutCards') },
+                    { value: 'rows', icon: 'list', title: t('cascades.layoutRows') },
+                  ]
+                : [
+                    { value: 'cards', icon: 'grid', title: t('nodes.layoutCards') },
+                    { value: 'compact', icon: 'list', title: t('nodes.layoutCompact') },
+                  ]
+            }
+          />
+
+          <ActionIcon
+            variant="subtle"
+            size={38}
+            onClick={() => {
+              qc.invalidateQueries({ queryKey: ['nodes'] });
+              qc.invalidateQueries({ queryKey: ['dashboard'] });
+              qc.invalidateQueries({ queryKey: ['cascades'] });
+            }}
+            loading={nodesQuery.isFetching || overviewQuery.isFetching}
+            style={{
+              color: MIST,
+              borderRadius: 8,
+              border: `1px solid ${HAIRLINE}`,
+              backgroundColor: '#0B1420',
+            }}
+          >
+            <IconRefresh size={16} />
+          </ActionIcon>
+
+          {/* One primary action per view, in the same slot. Registration is a
+              three-step sequence now, so it lives on its own page. */}
+          <UnstyledButton
+            onClick={() => navigate(view === 'cascades' ? '/nodes/cascades/new' : '/nodes/new')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              height: 38,
+              padding: '0 16px',
+              borderRadius: 8,
+              backgroundColor: '#0B1420',
+              border: `1px solid ${HAIRLINE}`,
+              flexShrink: 0,
+            }}
+          >
+            <IconPlus size={14} stroke={2.4} color={CYAN} />
+            <Text
+              style={{
+                fontFamily: "'Space Grotesk', Inter, sans-serif",
+                fontSize: 13,
+                fontWeight: 500,
+                color: SNOW,
+              }}
+            >
+              {view === 'cascades' ? t('cascades.add') : t('nodes.create')}
+            </Text>
+          </UnstyledButton>
+        </Box>
+      </Box>
+
+      {view === 'cascades' && <CascadesPanel layout={cascadeLayout} />}
 
       {view === 'nodes' && (
         <>
-      <Group justify="space-between" align="center">
-        <Group gap={8}>
-          <SegmentedControl
-            size="xs"
-            value={layout}
-            onChange={(v) => setLayoutPersist(v as LayoutMode)}
-            data={[
-              {
-                value: 'cards',
-                label: (
-                  <Group gap={4} wrap="nowrap">
-                    <IconLayoutGrid size={12} />
-                    <Text size="xs">{t('nodes.layoutCards')}</Text>
-                  </Group>
-                ),
-              },
-              {
-                value: 'compact',
-                label: (
-                  <Group gap={4} wrap="nowrap">
-                    <IconLayoutList size={12} />
-                    <Text size="xs">{t('nodes.layoutCompact')}</Text>
-                  </Group>
-                ),
-              },
-            ]}
-          />
-          <Tooltip label={t('common.refresh')}>
-            <ActionIcon
-              variant="subtle"
-              size="lg"
-              onClick={() => {
-                qc.invalidateQueries({ queryKey: ['nodes'] });
-                qc.invalidateQueries({ queryKey: ['dashboard'] });
-                qc.invalidateQueries({ queryKey: ['cascades'] });
-              }}
-              loading={nodesQuery.isFetching || overviewQuery.isFetching}
-              style={{ color: MIST }}
-            >
-              <IconRefresh size={18} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
-      </Group>
-
-      {/* Cascade-membership filter. Only shown once at least one node is a
-          cascade hop (no clutter for operators not using cascades). */}
-      {nodeCascadeMap.size > 0 && (
-        <Group gap="xs" wrap="wrap">
-          {[
-            { f: 'all' as const, label: t('nodes.filter.all'), accent: MIST },
-            { f: 'standalone' as const, label: t('nodes.filter.standalone'), accent: MIST },
-            { f: 'cascade' as const, label: t('nodes.filter.cascade'), accent: VIOLET },
-          ].map(({ f, label, accent }) => (
-            <FilterChip
-              key={f}
-              active={membership === f}
-              accent={accent}
-              onClick={() => setMembership(f)}
-            >
-              {label}
-            </FilterChip>
-          ))}
-        </Group>
-      )}
-
-      {/* Slice 27.5 - region filter row. Hidden when admin hasn't created
-          any regions yet (no clutter on a fresh panel). */}
-      {(regionsQuery.data?.regions ?? []).length > 0 && (
-        <Group gap="xs" wrap="wrap">
-          <FilterChip
-            active={regionFilter === 'all'}
-            accent={MIST}
-            onClick={() => setRegionFilter('all')}
-          >
-            {t('nodes.regionFilterAll')}
-          </FilterChip>
-          {(regionsQuery.data?.regions ?? []).map((r) => (
-            <FilterChip
-              key={r.id}
-              active={regionFilter === r.id}
-              accent={CYAN}
-              onClick={() => setRegionFilter(r.id)}
-            >
-              {r.code} · {r.name}
-            </FilterChip>
-          ))}
-        </Group>
-      )}
 
       {visibleNodes.length === 0 ? (
         <Text ta="center" py="xl" style={{ color: MIST }}>
@@ -490,7 +991,7 @@ export function NodesPage() {
                   // approximately right" over "shows nothing".
                   approxUsers: dashNode.inboundCount ?? 0,
                 }}
-                onEdit={() => setEditing(n)}
+                onEdit={() => navigate(`/nodes/${n.id}`)}
                 onDelete={() => handleDelete(n)}
                 onRefreshBootstrap={() => handleRefreshBootstrap(n)}
                 refreshLoading={
@@ -609,7 +1110,12 @@ export function NodesPage() {
                           </ActionIcon>
                         </Tooltip>
                         <Tooltip label={t('common.edit')}>
-                          <ActionIcon variant="subtle" size="sm" onClick={() => setEditing(n)} style={{ color: MIST }}>
+                          <ActionIcon
+                            variant="subtle"
+                            size="sm"
+                            onClick={() => navigate(`/nodes/${n.id}`)}
+                            style={{ color: MIST }}
+                          >
                             <IconEdit size={14} />
                           </ActionIcon>
                         </Tooltip>
