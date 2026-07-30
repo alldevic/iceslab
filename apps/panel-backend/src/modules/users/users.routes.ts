@@ -95,6 +95,20 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // GET /api/users/tags - distinct tags in use, for the Filters popover.
+  // Declared before /api/users/:id so "tags" isn't parsed as an id.
+  // Cheap (one indexed DISTINCT) and small: a tag set is operator-authored, so
+  // it stays in the dozens even on a large install.
+  app.get('/api/users/tags', auth, async (_request, reply) => {
+    const rows = await prisma.user.findMany({
+      where: { deletedAt: null, tag: { not: null } },
+      distinct: ['tag'],
+      select: { tag: true },
+      orderBy: { tag: 'asc' },
+    });
+    return reply.send({ tags: rows.map((r) => r.tag).filter((t): t is string => t !== null) });
+  });
+
   // GET /api/users/:id
   app.get('/api/users/:id', auth, async (request, reply) => {
     const params = UserIdParamSchema.parse(request.params);

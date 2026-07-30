@@ -113,6 +113,56 @@ describe('GET /api/users', () => {
     expect(body.page).toBe(1);
     expect(body.limit).toBe(10);
   });
+
+  // R3 - a per-user routing override lives in a collapsed Advanced block on one
+  // user's page, so without a filter nobody can answer "who did we pin". These
+  // pin the three shapes of the query.
+  describe('routingPreset filter', () => {
+    async function seed() {
+      for (const [username, routingPreset] of [
+        ['pinned_ru', 'ru-split'],
+        ['pinned_all', 'proxy-all'],
+        ['inherits', null],
+      ] as const) {
+        await app.inject({
+          method: 'POST',
+          url: '/api/users',
+          headers: auth(),
+          payload: { username, ...(routingPreset ? { routingPreset } : {}) },
+        });
+      }
+    }
+
+    const list = async (qs: string) => {
+      const res = await app.inject({ method: 'GET', url: `/api/users?${qs}`, headers: auth() });
+      expect(res.statusCode).toBe(200);
+      return JSON.parse(res.body).users.map((u: { username: string }) => u.username).sort();
+    };
+
+    it('keeps only users pinned to one preset', async () => {
+      await seed();
+      expect(await list('routingPreset=ru-split')).toEqual(['pinned_ru']);
+    });
+
+    it('`any` keeps everyone carrying an override', async () => {
+      await seed();
+      expect(await list('routingPreset=any')).toEqual(['pinned_all', 'pinned_ru']);
+    });
+
+    it('`none` keeps the ones that inherit', async () => {
+      await seed();
+      expect(await list('routingPreset=none')).toEqual(['inherits']);
+    });
+
+    it('rejects a preset that does not exist rather than returning everyone', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/users?routingPreset=not-a-preset',
+        headers: auth(),
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
 });
 
 describe('GET /api/users/:id', () => {
