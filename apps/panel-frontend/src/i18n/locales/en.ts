@@ -1162,7 +1162,10 @@ export default {
       traffic: 'Traffic',
       expires: 'Expires',
       squads: 'Squads',
-      subscription: 'Subscription',
+      // The column holds lastOnlineAt, so it is headed by what it holds. Under
+      // "Subscription" a value like "23s ago" claimed a fetch the panel does
+      // not record.
+      lastOnline: 'Last online',
       actions: 'Actions',
       tag: 'Tag',
     },

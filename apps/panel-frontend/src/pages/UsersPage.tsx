@@ -18,6 +18,9 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { copyToClipboard } from '../lib/clipboard';
+// One definition of "online" for the whole panel: the dashboard used to count a
+// 3-minute window while this list glowed for 5.
+import { ONLINE_WINDOW_MS, isOnlineAt } from '@iceslab/shared';
 import { ROUTING_PRESET_IDS, isRoutingPresetId, presetKey } from '../lib/routingPresets';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
@@ -108,11 +111,6 @@ function computedStatus(u: User): ComputedStatus {
   return 'active';
 }
 
-function isOnline(u: User): boolean {
-  if (!u.lastOnlineAt) return false;
-  return now() - new Date(u.lastOnlineAt).getTime() < 5 * 60 * 1000;
-}
-
 const COMPUTED_STATUS_ACCENT: Record<ComputedStatus, string> = {
   active: MOSS,
   limited: AMBER,
@@ -142,7 +140,9 @@ function relativeTime(
   if (!iso) return { text: t('userTime.never'), tone: 'never' };
   const diffMs = now() - new Date(iso).getTime();
   const sec = Math.round(diffMs / 1000);
-  const tone: 'fresh' | 'stale' = sec < 5 * 60 ? 'fresh' : 'stale';
+  // Same window the dot and the dashboard use: "fresh" here and "online" there
+  // must not be able to disagree about the same user.
+  const tone: 'fresh' | 'stale' = diffMs < ONLINE_WINDOW_MS ? 'fresh' : 'stale';
   if (sec < 60) return { text: t('userTime.sAgo', { n: sec }), tone };
   const min = Math.round(sec / 60);
   if (min < 60) return { text: t('userTime.mAgo', { n: min }), tone };
@@ -173,7 +173,10 @@ function expireRelative(
  */
 const COL = {
   status: 140,
-  subscription: 140,
+  // Holds `lastOnlineAt`. It was called subscription and headed Subscription,
+  // which read as "the subscription was fetched 23s ago". The panel does not
+  // record that anywhere, so the name had to go with the heading.
+  lastOnline: 140,
   expires: 140,
   traffic: 260,
   squads: 200,
@@ -784,7 +787,7 @@ export function UsersPage() {
                 onSort={toggleSort}
               />
               <HeadCell width={COL.status} label={t('users.table.status')} />
-              <HeadCell width={COL.subscription} label={t('users.table.subscription')} />
+              <HeadCell width={COL.lastOnline} label={t('users.table.lastOnline')} />
               <HeadCell
                 width={COL.expires}
                 label={t('users.table.expires')}
@@ -869,7 +872,7 @@ export function UsersPage() {
                         minWidth: 0,
                       }}
                     >
-                      <StatusDot accent={statusAccent} glow={isOnline(u)} />
+                      <StatusDot online={isOnlineAt(u.lastOnlineAt, now())} />
                       <Stack gap={2}>
                         <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <Text
@@ -915,7 +918,7 @@ export function UsersPage() {
                       {u.subRevokedAt && <Pill accent={RED}>{t('usersTable.revokedBadge')}</Pill>}
                     </Box>
 
-                    <Box style={{ width: COL.subscription, flexShrink: 0 }}>
+                    <Box style={{ width: COL.lastOnline, flexShrink: 0 }}>
                       <Tooltip
                         label={u.lastOnlineAt ? new Date(u.lastOnlineAt).toLocaleString() : '-'}
                       >
@@ -1192,18 +1195,24 @@ export function UsersPage() {
 }
 
 /**
- * Colour = lifecycle, glow = seen in the last five minutes. Two facts in one
- * 10px mark, and the glow is the only animatedless cue that a row is live.
+ * One mark, one fact: is this user passing traffic right now.
+ *
+ * It used to be coloured by lifecycle and to carry presence in an 8px shadow at
+ * 60% opacity. The colour repeated the pill two lanes over, and the one thing
+ * only the dot knew was the part that could not be seen: an active account is
+ * green whether it was last seen a minute or a month ago, so the row read as
+ * permanently live. Filled against hollow is legible out of the corner of an
+ * eye, a glow is not.
  */
-function StatusDot({ accent, glow }: { accent: string; glow?: boolean }) {
+function StatusDot({ online }: { online: boolean }) {
   return (
     <span
       style={{
         width: 10,
         height: 10,
         borderRadius: '50%',
-        backgroundColor: accent,
-        boxShadow: glow ? `0 0 8px ${accent}99` : 'none',
+        backgroundColor: online ? MOSS : 'transparent',
+        border: online ? 'none' : `1px solid ${HAIRLINE}`,
         flexShrink: 0,
         display: 'inline-block',
       }}
