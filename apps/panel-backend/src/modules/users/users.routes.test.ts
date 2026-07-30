@@ -165,6 +165,135 @@ describe('GET /api/users', () => {
   });
 });
 
+describe('POST /api/hosts without a binding', () => {
+  // Until 2026-07-30 creating a host required a bindingId, and nothing in the
+  // panel created bindings. A fresh install could not produce a single host by
+  // any route: the create screen looked up an existing binding for the chosen
+  // profile+node, found none, and left its button permanently disabled.
+  async function seedProfileAndNode() {
+    const profile = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      headers: auth(),
+      payload: {
+        name: `p-${Math.random().toString(36).slice(2, 8)}`,
+        protocol: 'xray',
+        config: {
+          security: 'reality',
+          realityDest: 'www.microsoft.com:443',
+          realityServerNames: ['www.microsoft.com'],
+          realityPrivateKey: 'k'.repeat(43),
+          realityPublicKey: 'p'.repeat(43),
+          realityShortIds: ['0123abcd'],
+          network: 'raw',
+        },
+      },
+    });
+    expect(profile.statusCode).toBe(201);
+    const node = await app.inject({
+      method: 'POST',
+      url: '/api/nodes',
+      headers: auth(),
+      payload: {
+        name: `n-${Math.random().toString(36).slice(2, 8)}`,
+        address: `${Math.random().toString(36).slice(2, 8)}.example.com`,
+        protocol: 'xray',
+      },
+    });
+    expect(node.statusCode).toBe(201);
+    return { profileId: JSON.parse(profile.body).id, nodeId: JSON.parse(node.body).id };
+  }
+
+  it('creates the binding under the host in one call', async () => {
+    const { profileId, nodeId } = await seedProfileAndNode();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId, nodeId, port: 443, remark: 'Direct' },
+    });
+    expect(res.statusCode).toBe(201);
+    const host = JSON.parse(res.body);
+    expect(host.remark).toBe('Direct');
+    expect(host.bindingId).toBeTruthy();
+
+    // Exactly one host: the binding must NOT also seed a default one, or every
+    // user would be handed the same endpoint twice.
+    const list = await app.inject({
+      method: 'GET',
+      url: `/api/hosts?nodeId=${nodeId}`,
+      headers: auth(),
+    });
+    expect(JSON.parse(list.body).hosts).toHaveLength(1);
+  });
+
+  it('reuses the binding for a second host on the same node', async () => {
+    const { profileId, nodeId } = await seedProfileAndNode();
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId, nodeId, port: 443, remark: 'Direct' },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId, nodeId, port: 443, remark: 'CDN' },
+    });
+    expect(second.statusCode).toBe(201);
+    // A CDN-fronted variant next to the direct one is ordinary; both hang off
+    // the same binding rather than the second call erroring.
+    expect(JSON.parse(second.body).bindingId).toBe(JSON.parse(first.body).bindingId);
+  });
+
+  it('leaves no binding behind when the host is rejected', async () => {
+    const { profileId, nodeId } = await seedProfileAndNode();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId, nodeId, port: 443, sniOverride: 'not-served.example.com' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toBe('SNI_MISMATCH');
+    // The orphan this whole shape exists to prevent: no screen lists bindings,
+    // so one left here would be invisible and unremovable.
+    const bindings = await app.inject({ method: 'GET', url: '/api/bindings', headers: auth() });
+    expect(
+      JSON.parse(bindings.body).bindings.filter((b: { nodeId: string }) => b.nodeId === nodeId),
+    ).toHaveLength(0);
+  });
+
+  it('names the profile already holding the port', async () => {
+    const a = await seedProfileAndNode();
+    const b = await seedProfileAndNode();
+    await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId: a.profileId, nodeId: a.nodeId, port: 443 },
+    });
+    const clash = await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { profileId: b.profileId, nodeId: a.nodeId, port: 443 },
+    });
+    expect(clash.statusCode).toBe(409);
+  });
+
+  it('rejects a body that gives neither a binding nor profile+node+port', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/hosts',
+      headers: auth(),
+      payload: { remark: 'nowhere' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe('GET /api/users/:id', () => {
   it('returns the user by id', async () => {
     const created = await app.inject({

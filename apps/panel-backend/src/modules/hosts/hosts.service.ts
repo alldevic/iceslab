@@ -2,6 +2,13 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { eventBus } from '../../lib/event-bus.js';
 import { prisma } from '../../prisma.js';
 import { checkSniConsistency } from '../profiles/host-fields.js';
+// Reused rather than redefined so the operator gets the same wording whichever
+// route created the binding.
+import {
+  NodeNotFoundError,
+  PortInUseError,
+  ProfileNotFoundError,
+} from '../profiles/profiles.service.js';
 import { mapHost, type PublicHostDto } from './hosts.mapper.js';
 import type {
   CreateHostInput,
@@ -25,6 +32,10 @@ export class BindingNotFoundError extends Error {
     this.name = 'BindingNotFoundError';
   }
 }
+
+// Re-exported so the routes layer can catch them without importing the profiles
+// module, which it otherwise has no business knowing about.
+export { NodeNotFoundError, PortInUseError, ProfileNotFoundError };
 
 /** An SNI override REALITY will never complete a handshake for. Saving it
  *  yields a host that looks healthy and hands out URLs that cannot connect,
@@ -64,12 +75,24 @@ async function assertSniMatchesProfile(opts: {
   });
   if (!binding) return; // caller already raises BindingNotFoundError
 
-  const verdict = checkSniConsistency({
+  await assertSniMatchesProfileConfig({
     protocol: binding.profile.protocol,
     config: binding.profile.config,
     sniOverride: opts.sniOverride,
     securityLayer: opts.securityLayer,
   });
+}
+
+/** Same check against a profile already in hand, so create can run it before
+ *  opening a transaction rather than after writing the binding. */
+async function assertSniMatchesProfileConfig(opts: {
+  protocol: string;
+  config: unknown;
+  sniOverride: string | null | undefined;
+  securityLayer: string | null | undefined;
+}): Promise<void> {
+  if (!opts.sniOverride) return;
+  const verdict = checkSniConsistency(opts);
   if (verdict) throw new SniMismatchError(opts.sniOverride, verdict.expected);
 }
 
@@ -100,40 +123,128 @@ export async function getHostById(id: string): Promise<PublicHostDto> {
 }
 
 export async function createHost(input: CreateHostInput): Promise<PublicHostDto> {
-  const binding = await prisma.profileNodeBinding.findUnique({
-    where: { id: input.bindingId },
-  });
-  if (!binding) throw new BindingNotFoundError(input.bindingId);
+  // Everything that can be rejected is checked BEFORE anything is written, and
+  // the two writes then happen together. Creating the binding first and letting
+  // the host fail afterwards would leave an orphan the operator cannot see or
+  // remove: the new UI has no screen for bindings at all.
+  const plan = await planHostCreate(input);
 
-  await assertSniMatchesProfile({
-    bindingId: input.bindingId,
+  await assertSniMatchesProfileConfig({
+    protocol: plan.profile.protocol,
+    config: plan.profile.config,
     sniOverride: input.sniOverride,
     securityLayer: input.securityLayer,
   });
 
-  const created = await prisma.host.create({
-    data: {
-      bindingId: input.bindingId,
-      remark: input.remark,
-      priority: input.priority,
-      enabled: input.enabled,
-      addressOverride: input.addressOverride ?? null,
-      portOverride: input.portOverride ?? null,
-      sniOverride: input.sniOverride ?? null,
-      hostHeaderOverride: input.hostHeaderOverride ?? null,
-      pathOverride: input.pathOverride ?? null,
-      fingerprintOverride: input.fingerprintOverride ?? null,
-      alpn: input.alpn,
-      allowInsecure: input.allowInsecure,
-      securityLayer: input.securityLayer,
-      disableForFormats: input.disableForFormats,
-    },
+  const hostData = {
+    remark: input.remark,
+    priority: input.priority,
+    enabled: input.enabled,
+    addressOverride: input.addressOverride ?? null,
+    portOverride: input.portOverride ?? null,
+    sniOverride: input.sniOverride ?? null,
+    hostHeaderOverride: input.hostHeaderOverride ?? null,
+    pathOverride: input.pathOverride ?? null,
+    fingerprintOverride: input.fingerprintOverride ?? null,
+    alpn: input.alpn,
+    allowInsecure: input.allowInsecure,
+    securityLayer: input.securityLayer,
+    disableForFormats: input.disableForFormats,
+  };
+
+  const { created, newBinding } = await prisma.$transaction(async (tx) => {
+    let bindingId = plan.bindingId;
+    let newBinding: { id: string; profileId: string; nodeId: string } | null = null;
+    if (!bindingId) {
+      const b = await tx.profileNodeBinding.create({
+        data: {
+          profileId: plan.profile.id,
+          nodeId: plan.nodeId!,
+          port: plan.port!,
+          enabled: true,
+        },
+        select: { id: true, profileId: true, nodeId: true },
+      });
+      bindingId = b.id;
+      newBinding = b;
+    }
+    const created = await tx.host.create({ data: { bindingId, ...hostData } });
+    return { created, newBinding };
   });
+
+  // A binding created here skips ensureDefaultHost on purpose: the host the
+  // caller asked for IS this binding's first host, and seeding another one
+  // would hand every user a duplicate endpoint.
+  if (newBinding) {
+    eventBus.emit('binding.created', {
+      bindingId: newBinding.id,
+      profileId: newBinding.profileId,
+      nodeId: newBinding.nodeId,
+    });
+  }
   // A host IS an endpoint in the subscription, so every mutation here changes
-  // what users are handed. ensureDefaultHost needs no emit: createBinding
-  // already announces itself, and that busts the same cache.
+  // what users are handed.
   eventBus.emit('host.changed', {});
   return mapHost(created);
+}
+
+/**
+ * Work out which binding a new host will hang off, and prove the request is
+ * satisfiable, without writing anything.
+ *
+ * Returns either an existing `bindingId` (given directly, or found for the
+ * profile/node pair) or the pieces needed to create one. An existing binding
+ * for the pair is REUSED rather than rejected: a second host on the same node
+ * is an ordinary thing to want (a CDN-fronted variant next to the direct one),
+ * and erroring there would push the operator back into the dead end this whole
+ * change exists to remove.
+ */
+async function planHostCreate(input: CreateHostInput): Promise<{
+  bindingId: string | null;
+  profile: { id: string; protocol: string; config: unknown };
+  nodeId?: string;
+  port?: number;
+}> {
+  if (input.bindingId) {
+    const binding = await prisma.profileNodeBinding.findUnique({
+      where: { id: input.bindingId },
+      select: { id: true, profile: { select: { id: true, protocol: true, config: true } } },
+    });
+    if (!binding) throw new BindingNotFoundError(input.bindingId);
+    return { bindingId: binding.id, profile: binding.profile };
+  }
+
+  const profileId = input.profileId!;
+  const nodeId = input.nodeId!;
+  const port = input.port!;
+
+  const profile = await prisma.profile.findUnique({
+    where: { id: profileId },
+    select: { id: true, protocol: true, config: true },
+  });
+  if (!profile) throw new ProfileNotFoundError(profileId);
+
+  const node = await prisma.node.findFirst({
+    where: { id: nodeId, deletedAt: null },
+    select: { id: true, name: true },
+  });
+  if (!node) throw new NodeNotFoundError(nodeId);
+
+  const existing = await prisma.profileNodeBinding.findUnique({
+    where: { profileId_nodeId: { profileId, nodeId } },
+    select: { id: true },
+  });
+  if (existing) return { bindingId: existing.id, profile };
+
+  // The port is unique per node across ALL profiles, so a clash names the
+  // profile squatting on it rather than saying "taken".
+  const clash = await prisma.profileNodeBinding.findUnique({
+    where: { nodeId_port: { nodeId, port } },
+    select: { profile: { select: { name: true } } },
+  });
+  if (clash) throw new PortInUseError(port, node.name, clash.profile.name);
+
+  return { bindingId: null, profile, nodeId, port };
 }
 
 export async function updateHost(
