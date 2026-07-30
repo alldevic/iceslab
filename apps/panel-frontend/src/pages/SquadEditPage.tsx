@@ -148,9 +148,47 @@ export function SquadEditPage() {
    * empty case, not the checkbox.
    */
   const [restricted, setRestricted] = useState(false);
-  /** The state the wire cannot carry, and the only one this screen refuses to
-   *  send: `[]` would mean the exact opposite of what the tree shows. */
-  const emptyRestriction = restricted && hostIds.length === 0;
+
+  /**
+   * Every host this squad can actually hand out, restriction and search aside.
+   * The list a restriction starts from, and what "all of them" counts. Built
+   * from the raw data rather than from `groups`, because a typed search narrows
+   * the tree and must not narrow the meaning of "all".
+   *
+   * Disabled hosts are out: the subscription builder skips them, so counting
+   * them here would make "3 of 4 handed out" mean two.
+   */
+  const reachableIds = useMemo(() => {
+    const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
+    const granted = new Set(profileIds);
+    return (hostsQuery.data?.hosts ?? [])
+      .filter((h) => {
+        if (!h.enabled) return false;
+        const binding = bindingById.get(h.bindingId);
+        return binding ? granted.has(binding.profileId) : false;
+      })
+      .map((h) => h.id);
+  }, [hostsQuery.data, bindingsQuery.data, profileIds]);
+
+  // What leaves for the members, which is what the header states. Counted off
+  // `reachableIds` so neither the search box nor a dead id in the list can
+  // change it.
+  const selectedHosts = restricted
+    ? reachableIds.filter((id) => hostIds.includes(id)).length
+    : reachableIds.length;
+
+  /**
+   * The state the wire cannot carry, and the only one this screen refuses to
+   * send: `[]` would mean the exact opposite of what the tree shows.
+   *
+   * Counted in hosts that will actually leave, not in ids on file. A list of
+   * hosts that have since been switched off is the same refusal wearing a
+   * different coat: it is not empty, and it hands out nothing. The middle term
+   * is what keeps a squad with nothing to hand out saveable at all, since a
+   * restriction over an empty world restricts nothing and should not block the
+   * button.
+   */
+  const emptyRestriction = restricted && reachableIds.length > 0 && selectedHosts === 0;
   /**
    * Which squad the form currently holds the values of.
    *
@@ -308,27 +346,6 @@ export function SquadEditPage() {
   ]);
 
   /**
-   * Every host this squad can actually hand out, restriction and search aside.
-   * The list a restriction starts from, and what "all of them" counts. Built
-   * from the raw data rather than from `groups`, because a typed search narrows
-   * the tree and must not narrow the meaning of "all".
-   *
-   * Disabled hosts are out: the subscription builder skips them, so counting
-   * them here would make "3 of 4 handed out" mean two.
-   */
-  const reachableIds = useMemo(() => {
-    const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
-    const granted = new Set(profileIds);
-    return (hostsQuery.data?.hosts ?? [])
-      .filter((h) => {
-        if (!h.enabled) return false;
-        const binding = bindingById.get(h.bindingId);
-        return binding ? granted.has(binding.profileId) : false;
-      })
-      .map((h) => h.id);
-  }, [hostsQuery.data, bindingsQuery.data, profileIds]);
-
-  /**
    * Start restricting from the current reality: everything is ticked, and the
    * operator unticks what this squad should not see. Starting from an empty
    * list would mean the first click silently cuts the squad down to one host.
@@ -406,12 +423,6 @@ export function SquadEditPage() {
       allOn ? prev.filter((x) => !ids.includes(x)) : [...new Set([...prev, ...ids])],
     );
   }
-
-  // Counted off `reachableIds` for the same reason: the header states what the
-  // squad hands out, which a search box does not change.
-  const selectedHosts = restricted
-    ? reachableIds.filter((id) => hostIds.includes(id)).length
-    : reachableIds.length;
 
   const balancers = (cascadesQuery.data?.cascades ?? []).filter((c) => c.mode === 'balancer');
   const policies = policiesQuery.data?.policies ?? [];
