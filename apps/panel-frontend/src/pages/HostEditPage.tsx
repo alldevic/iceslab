@@ -480,16 +480,28 @@ export function HostEditPage() {
             <Box style={{ height: 1, backgroundColor: HAIRLINE, width: '100%' }} />
             <Box style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
               <Box style={{ flex: 1 }}>
+                {/* Most protocols dial the node's own address, so that is what
+                    an empty field means. Naive is the exception: its profile
+                    carries a hostname, and the API reports it as the inherited
+                    value, so the placeholder names it instead of the node. */}
                 <TextInput
                   label={t('hostEdit.address')}
-                  placeholder={currentNode?.address.split(':')[0] ?? 'ams.example.net'}
+                  placeholder={
+                    inherited('addressOverride') ||
+                    currentNode?.address.split(':')[0] ||
+                    'ams.example.net'
+                  }
                   value={address}
                   onChange={(e) => {
                     setAddress(e.currentTarget.value);
                     setDirty(true);
                   }}
                 />
-                <Hint>{t('hostEdit.addressHint')}</Hint>
+                <Hint>
+                  {inherited('addressOverride')
+                    ? t('hostEdit.addressFromProfile', { name: inherited('addressOverride') })
+                    : t('hostEdit.addressHint')}
+                </Hint>
               </Box>
               <Box
                 style={{

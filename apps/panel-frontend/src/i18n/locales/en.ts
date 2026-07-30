@@ -135,6 +135,7 @@ export default {
       'With a single node this can stay empty: the address comes from it. Give it a name of its own when a CDN sits in front, or once there is more than one node.',
     advanced: 'Advanced: SNI, path, fingerprint, formats',
     advancedHint: 'Only needed when a CDN sits in front',
+    addressFromProfile: 'Empty falls back to {{name}} from the profile, not to the node address.',
     advancedFormatsOnly: 'Advanced: subscription formats',
     advancedFormatsHint: 'This profile carries no client-side TLS or transport to override',
     nSet_one: '{{count}} SET',
