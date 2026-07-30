@@ -1,18 +1,18 @@
-import type { RoutingPresetId } from '@iceslab/shared';
+import { ROUTING_PRESET_IDS, isRoutingPresetId, type RoutingPresetId } from '@iceslab/shared';
 
 /**
- * The three built-in device presets, and how to name them.
+ * The built-in device presets, re-exported from the shared package rather than
+ * listed again here.
  *
- * These live here rather than on the Routes page because two screens ask about
- * them: Routes edits them, and the Users filter narrows the roster by which one
- * a user overrides to. Their names are panel copy, not operator data, so both
- * screens translate the id rather than trusting whatever the API calls it.
+ * The backend validates the request with `z.enum(ROUTING_PRESET_IDS)` from the
+ * same module, so a fourth preset added on this side would produce a filter
+ * value the API answers 400 to. One list, one place.
+ *
+ * What DOES belong to the frontend is the naming: these three are panel copy,
+ * not operator data, so their labels are translated from the id whatever the
+ * API happens to call them.
  */
-export const PRESET_IDS: RoutingPresetId[] = ['ru-split', 'cn-split', 'proxy-all'];
-
-export function isBuiltInPresetId(id: string): id is RoutingPresetId {
-  return (PRESET_IDS as string[]).includes(id);
-}
+export { ROUTING_PRESET_IDS, isRoutingPresetId };
 
 /** The i18n suffix under `metadata.preset*` for a built-in id. */
 export function presetKey(id: RoutingPresetId): string {

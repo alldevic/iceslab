@@ -5,7 +5,7 @@ import { Box, Stack, Text, Textarea, UnstyledButton } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { RoutingPresetId } from '@iceslab/shared';
-import { PRESET_IDS, isBuiltInPresetId, presetKey } from '../lib/routingPresets';
+import { ROUTING_PRESET_IDS, isRoutingPresetId, presetKey } from '../lib/routingPresets';
 import {
   ROUTE_POLICY_WRITES_LIVE,
   ROUTING_PRESET_WRITES_LIVE,
@@ -149,7 +149,7 @@ export function RoutesPage() {
   const presets: RoutingPreset[] = useMemo(() => {
     const source: RoutingPreset[] =
       presetsQuery.data?.presets ??
-      PRESET_IDS.map((id) => ({
+      ROUTING_PRESET_IDS.map((id) => ({
         id,
         name: '',
         builtIn: true,
@@ -159,7 +159,7 @@ export function RoutesPage() {
       ...p,
       // The three built-ins are panel copy, not operator data: their name and
       // their notes stay translated here whatever the API calls them.
-      name: isBuiltInPresetId(p.id) ? t(`metadata.preset${presetKey(p.id)}`) : p.name,
+      name: isRoutingPresetId(p.id) ? t(`metadata.preset${presetKey(p.id)}`) : p.name,
       rules: p.rules.map((r) => {
         const key = noteKeyFor(r.match);
         return key === undefined ? r : { ...r, note: t(key) };

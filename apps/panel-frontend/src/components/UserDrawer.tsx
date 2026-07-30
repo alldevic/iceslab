@@ -31,6 +31,7 @@ import {
   type UpdateUserInput,
   type User,
 } from '../lib/api';
+import { ROUTING_PRESET_IDS, presetKey } from '../lib/routingPresets';
 
 /**
  * Create / edit a user. A drawer rather than a modal: this is a form you fill
@@ -686,11 +687,14 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
 
                   <AdvancedGroup icon={<IconRoute size={13} />} title={t('userDrawer.routingOverride')}>
                     <Select
+                      // Built from the shared list the backend validates
+                      // against, not from a copy of it.
                       data={[
                         { value: '', label: t('userDrawer.routingInherit') },
-                        { value: 'proxy-all', label: 'proxy-all' },
-                        { value: 'ru-split', label: 'ru-split' },
-                        { value: 'cn-split', label: 'cn-split' },
+                        ...ROUTING_PRESET_IDS.map((id) => ({
+                          value: id,
+                          label: t(`metadata.preset${presetKey(id)}`),
+                        })),
                       ]}
                       allowDeselect={false}
                       {...form.getInputProps('routingPreset')}

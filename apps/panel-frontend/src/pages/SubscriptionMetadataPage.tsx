@@ -6,6 +6,7 @@ import { Box, NumberInput, Stack, Switch, Text, Textarea, TextInput, UnstyledBut
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { RoutingPresetId } from '@iceslab/shared';
+import { ROUTING_PRESET_IDS, presetKey } from '../lib/routingPresets';
 import { apiErrorMessage, getSettings, updateSettings, type AdminSettings } from '../lib/api';
 
 /**
@@ -36,11 +37,16 @@ const MONO = "'Geist Mono', monospace";
 
 const PLACEHOLDERS = ['{{TRAFFIC_LEFT}}', '{{DAYS_LEFT}}', '{{SUPPORT_URL}}'] as const;
 
-const PRESETS: { id: RoutingPresetId; title: string; hint: string }[] = [
-  { id: 'proxy-all', title: 'metadata.presetProxyAll', hint: 'metadata.presetProxyAllHint' },
-  { id: 'ru-split', title: 'metadata.presetRuSplit', hint: 'metadata.presetRuSplitHint' },
-  { id: 'cn-split', title: 'metadata.presetCnSplit', hint: 'metadata.presetCnSplitHint' },
-];
+// Derived from the shared list rather than restated: the backend validates the
+// saved value against the same array, so a preset added there shows up here
+// without an edit, and one that is not there cannot be offered.
+const PRESETS: { id: RoutingPresetId; title: string; hint: string }[] = ROUTING_PRESET_IDS.map(
+  (id) => ({
+    id,
+    title: `metadata.preset${presetKey(id)}`,
+    hint: `metadata.preset${presetKey(id)}Hint`,
+  }),
+);
 
 /** The user the preview pretends to render for: a 50 GiB plan, part spent,
  *  expiring in under a fortnight. Fixed on purpose, so the preview shows the

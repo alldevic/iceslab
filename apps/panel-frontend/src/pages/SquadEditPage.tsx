@@ -36,6 +36,7 @@ import {
 } from '../lib/api';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { COUNTRIES, countryName } from '../lib/countries';
+import { ROUTING_PRESET_IDS, presetKey } from '../lib/routingPresets';
 
 /**
  * Squad editor as a page, not a modal: it is the screen where an operator
@@ -486,11 +487,14 @@ export function SquadEditPage() {
                     setDirty(true);
                   }}
                   allowDeselect={false}
+                  // Built from the shared list the backend validates against,
+                  // so a fourth preset cannot appear here and be rejected there.
                   data={[
                     { value: '', label: t('squadEdit.routingInherit') },
-                    { value: 'proxy-all', label: 'proxy-all' },
-                    { value: 'ru-split', label: 'ru-split' },
-                    { value: 'cn-split', label: 'cn-split' },
+                    ...ROUTING_PRESET_IDS.map((id) => ({
+                      value: id,
+                      label: t(`metadata.preset${presetKey(id)}`),
+                    })),
                   ]}
                 />
                 <Hint>{t('squadEdit.routingHint')}</Hint>

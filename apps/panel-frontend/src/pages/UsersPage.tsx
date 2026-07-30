@@ -18,7 +18,7 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { copyToClipboard } from '../lib/clipboard';
-import { PRESET_IDS, presetKey } from '../lib/routingPresets';
+import { ROUTING_PRESET_IDS, isRoutingPresetId, presetKey } from '../lib/routingPresets';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
@@ -716,7 +716,7 @@ export function UsersPage() {
                 data={[
                   { value: 'any', label: t('users.filters.routingAny') },
                   { value: 'none', label: t('users.filters.routingNone') },
-                  ...PRESET_IDS.map((id) => ({
+                  ...ROUTING_PRESET_IDS.map((id) => ({
                     value: id,
                     label: t(`metadata.preset${presetKey(id)}`),
                   })),
@@ -895,7 +895,7 @@ export function UsersPage() {
                             >
                               <IconRoute size={10} stroke={2} color={VIOLET} />
                               <Text style={{ ...MONO, fontSize: 10, lineHeight: '13px', color: VIOLET }}>
-                                {PRESET_IDS.includes(u.routingPreset)
+                                {isRoutingPresetId(u.routingPreset)
                                   ? t(`metadata.preset${presetKey(u.routingPreset)}`)
                                   : u.routingPreset}
                               </Text>
