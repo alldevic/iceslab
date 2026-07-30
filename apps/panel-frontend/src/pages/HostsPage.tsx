@@ -91,8 +91,9 @@ export function HostsPage() {
           host: h,
           profile,
           nodes: node ? [node] : [],
-          // Deleting the last host of a binding leaves the inbound running on
-          // the node with nothing to hand out, so the confirmation has to say so.
+          // Deleting the last host of a binding takes the binding with it, which
+          // restarts xray on that node. The confirmation has to say so, and it
+          // only applies in this one case.
           lastOfBinding:
             (hostsQuery.data?.hosts ?? []).filter((x) => x.bindingId === h.bindingId).length === 1,
           nodeName: node?.name ?? null,
@@ -126,10 +127,11 @@ export function HostsPage() {
    * Deleting a host is the one destructive action on this page, so it confirms
    * first and names the consequence rather than asking "are you sure".
    *
-   * The last host of a binding is the case worth spelling out: the inbound keeps
-   * running on the node, but nothing from it reaches a subscription any more.
-   * The binding is deliberately left alone, since silently tearing an inbound
-   * off a live node is worse than leaving it idle.
+   * The last host of a binding is the case worth spelling out, and the reason is
+   * not the host: the binding goes with it, so the inbound comes off the node
+   * and xray restarts there. That restart drops live sessions on every OTHER
+   * inbound of the same machine, which is a blast radius the operator cannot
+   * guess from "remove one line from a client".
    */
   function confirmDelete(row: Row) {
     modals.openConfirmModal({

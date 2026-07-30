@@ -316,7 +316,7 @@ export default {
     deleteTitle: 'Delete {{name}}?',
     deleteBody: 'The line disappears from every subscription on the next fetch.',
     deleteLast:
-      'This is the last host on {{node}}. The inbound keeps running there, but nothing from it reaches a subscription any more.',
+      'This is the last host on {{node}}, so the inbound comes off that node and the port is freed. The node config is rewritten and xray restarts there, which drops live sessions on every inbound of that machine, not only this one.',
     deleted: 'Host deleted',
     empty: 'No hosts yet. A host is one entry in the user\'s client: a name, a port and the nodes behind it.',
     unbound: 'binding missing',
