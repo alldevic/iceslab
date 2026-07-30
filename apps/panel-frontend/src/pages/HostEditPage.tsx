@@ -30,10 +30,12 @@ import {
 import {
   createHost,
   getProfileHostFields,
+  goneWhileEditing,
   listBindings,
   listHosts,
   listNodes,
   listProfiles,
+  portConflict,
   sniMismatch,
   updateHost,
   type Fingerprint,
@@ -108,6 +110,9 @@ export function HostEditPage() {
   const [enabled, setEnabled] = useState(true);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [bindingId, setBindingId] = useState<string | null>(null);
+  // The node the operator picked. On create this is what gets sent; the binding
+  // is the API's business, not the form's.
+  const [nodeId, setNodeId] = useState<string | null>(null);
   const [address, setAddress] = useState('');
   const [sni, setSni] = useState('');
   const [hostHeader, setHostHeader] = useState('');
@@ -122,7 +127,8 @@ export function HostEditPage() {
   const [dirty, setDirty] = useState(false);
 
   const currentBinding = bindings.find((b) => b.id === (bindingId ?? host?.bindingId));
-  const currentNode = currentBinding ? nodes.find((n) => n.id === currentBinding.nodeId) : undefined;
+  // On create there is no binding yet, so the chosen node is the only source.
+  const currentNode = nodes.find((n) => n.id === (nodeId ?? currentBinding?.nodeId));
 
   /**
    * Which of these fields can actually reach a client, asked per profile rather
@@ -162,6 +168,8 @@ export function HostEditPage() {
   /** Names the profile's node actually serves, filled in from a 400 the API
    *  returns instead of saving a host that hands out unusable URLs. */
   const [sniExpected, setSniExpected] = useState<string[] | null>(null);
+  /** The API's own sentence about who holds the port, shown by the port field. */
+  const [portConflictMsg, setPortConflictMsg] = useState<string | null>(null);
 
   /** Set when the whole TLS and transport group is dead for this profile, which
    *  is the case for every protocol except xray. */
@@ -185,6 +193,7 @@ export function HostEditPage() {
     setEnabled(host.enabled);
     setProfileId(binding?.profileId ?? null);
     setBindingId(host.bindingId);
+    setNodeId(binding?.nodeId ?? null);
     setAddress(host.addressOverride ?? '');
     setSni(host.sniOverride ?? '');
     setHostHeader(host.hostHeaderOverride ?? '');
@@ -222,7 +231,7 @@ export function HostEditPage() {
         const taken = takenPort.get(n.id);
         return {
           node: n,
-          selected: currentBinding?.nodeId === n.id,
+          selected: nodeId === n.id,
           reason:
             port === ''
               ? // Without a port there is nothing to check yet, and "- free"
@@ -250,7 +259,7 @@ export function HostEditPage() {
     port,
     nodeSearch,
     onlyAttachable,
-    currentBinding,
+    nodeId,
     host?.id,
     hostsQuery.data,
     t,
@@ -277,8 +286,10 @@ export function HostEditPage() {
         disableForFormats: disabledFormats,
       };
       if (isNew) {
-        if (!bindingId) throw new Error(t('hostEdit.pickNodeFirst'));
-        return createHost({ bindingId, ...payload });
+        // Say what the operator means: serve this profile from this node on this
+        // port. The binding is created server-side in the same transaction.
+        if (!profileId || !nodeId || port === '') throw new Error(t('hostEdit.pickNodeFirst'));
+        return createHost({ profileId, nodeId, port: Number(port), ...payload });
       }
       return updateHost(host!.id, payload);
     },
@@ -301,6 +312,22 @@ export function HostEditPage() {
         setSniExpected(expected);
         setAdvancedOpen(true);
         notifications.show({ color: 'red', message: t('hostEdit.sniMismatchToast') });
+        return;
+      }
+      // The port is taken on that node, and the API names the profile holding
+      // it. Shown verbatim next to the port, which is the control to change.
+      const conflict = portConflict(err);
+      if (conflict !== null) {
+        setPortConflictMsg(conflict || t('hostEdit.portConflictFallback'));
+        return;
+      }
+      // The profile or the node went away while this form was open. Refetching
+      // is the fix, so say that instead of a bare 404.
+      if (goneWhileEditing(err)) {
+        qc.invalidateQueries({ queryKey: ['profiles'] });
+        qc.invalidateQueries({ queryKey: ['nodes'] });
+        qc.invalidateQueries({ queryKey: ['bindings'] });
+        notifications.show({ color: 'red', message: t('hostEdit.goneWhileEditing') });
         return;
       }
       notifications.show({
@@ -327,6 +354,18 @@ export function HostEditPage() {
       </Box>
     );
   }
+
+  // What is missing before this can be saved, in the order the form is filled.
+  // Null means nothing is: the button is live.
+  const blocker: string | null = !name.trim()
+    ? t('hostEdit.needName')
+    : isNew && !profileId
+      ? t('hostEdit.needProfile')
+      : isNew && port === ''
+        ? t('hostEdit.needPort')
+        : isNew && !nodeId
+          ? t('hostEdit.needNode')
+          : null;
 
   const selectedProfile = profiles.find((p) => p.id === profileId);
   // Only fields this profile can actually serve are counted. A leftover SNI on
@@ -399,12 +438,22 @@ export function HostEditPage() {
 
         <Box style={{ flex: 1 }} />
 
+        {/* A disabled button that does not say why is a dead end, and this one
+            used to be permanently disabled on a fresh install. The missing piece
+            is named next to it, in the order the form is filled. */}
         <Box style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {blocker && (
+            <Text
+              style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: AMBER }}
+            >
+              {blocker}
+            </Text>
+          )}
           <PageButton onClick={() => navigate('/hosts')}>{t('common.cancel')}</PageButton>
           <PageButton
             primary
             onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending || name.trim().length === 0 || (isNew && !bindingId)}
+            disabled={saveMutation.isPending || blocker !== null}
           >
             {isNew ? t('hostEdit.create') : t('common.save')}
           </PageButton>
@@ -452,12 +501,22 @@ export function HostEditPage() {
                   value={port}
                   min={1}
                   max={65535}
+                  error={portConflictMsg ? true : undefined}
                   onChange={(v) => {
                     setPort(typeof v === 'number' ? v : '');
+                    setPortConflictMsg(null);
                     setDirty(true);
                   }}
                 />
-                <Hint>{t('hostEdit.portHint')}</Hint>
+                {/* The API's own sentence: it names the profile holding the port,
+                    which is more use than repeating "port busy". */}
+                {portConflictMsg ? (
+                  <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED }}>
+                    {portConflictMsg}
+                  </Text>
+                ) : (
+                  <Hint>{t('hostEdit.portHint')}</Hint>
+                )}
               </Box>
               <Box style={{ flex: 1 }}>
                 <Text style={{ ...LABEL, marginBottom: 8 }}>{t('hostEdit.state')}</Text>
@@ -889,10 +948,11 @@ export function HostEditPage() {
                     key={r.node.id}
                     onClick={() => {
                       if (!attachable && !r.selected) return;
-                      const b = bindings.find(
-                        (x) => x.nodeId === r.node.id && x.profileId === profileId,
-                      );
-                      setBindingId(b?.id ?? null);
+                      // Just remember the node. Looking up an existing binding
+                      // here used to select nothing on a fresh install, because
+                      // nothing in this UI creates bindings: the API builds one
+                      // from (profile, node, port) when the host is saved.
+                      setNodeId(r.node.id);
                       setDirty(true);
                     }}
                     style={{

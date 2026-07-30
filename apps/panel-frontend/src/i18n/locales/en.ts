@@ -150,6 +150,13 @@ export default {
     formats: 'SUBSCRIPTION FORMATS',
     formatsComputed: 'COMPUTED FROM PROFILE + OVERRIDES',
     optional: 'OPTIONAL',
+    needName: 'Name it first',
+    needProfile: 'Pick a profile',
+    needPort: 'Set a port',
+    needNode: 'Pick a node',
+    portConflictFallback: 'That port is already taken on this node.',
+    goneWhileEditing:
+      'The profile or the node is gone. The lists were refreshed, pick again before saving.',
     sniMismatchToast: 'This SNI is not one the node serves.',
     sniExpected: 'The node serves: {{names}}. Use one of these or clear the field.',
     address: 'Own address',

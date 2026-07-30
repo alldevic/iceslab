@@ -1415,8 +1415,22 @@ export interface Host {
   updatedAt: string;
 }
 
+/**
+ * Two ways to say where a host lives, and the second is the one the create
+ * screen uses.
+ *
+ * `bindingId` attaches to a binding that already exists. Nothing in this UI
+ * creates bindings, so on a fresh install that path had no way to start.
+ * `profileId` + `nodeId` + `port` says what the operator means, and the API
+ * creates the binding in the same transaction as the host: a refused host
+ * leaves no orphan behind, and no screen here lists bindings to clean up.
+ */
 export interface CreateHostInput {
-  bindingId: string;
+  bindingId?: string;
+  profileId?: string;
+  nodeId?: string;
+  /** Listen port for the binding. Required only when creating one. */
+  port?: number;
   remark?: string;
   priority?: number;
   enabled?: boolean;
@@ -1432,7 +1446,24 @@ export interface CreateHostInput {
   disableForFormats?: string[];
 }
 
-export type UpdateHostInput = Partial<Omit<CreateHostInput, 'bindingId'>>;
+// The binding is immutable: moving a host to another node is a delete plus a
+// create, not an edit.
+export type UpdateHostInput = Partial<
+  Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId' | 'port'>
+>;
+
+/** The port is taken on that node. The message names the profile holding it, so
+ *  it is worth showing verbatim rather than replacing with "port busy". */
+export function portConflict(err: unknown): string | null {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+  if (res?.status !== 409) return null;
+  return res.data?.message ?? '';
+}
+
+/** The profile or the node disappeared while the form was open. */
+export function goneWhileEditing(err: unknown): boolean {
+  return (err as { response?: { status?: number } }).response?.status === 404;
+}
 
 export async function listHosts(params?: {
   bindingId?: string;
