@@ -18,6 +18,9 @@ import {
 } from '@mantine/core';
 import { useOverview } from '../hooks/useOverview';
 import { usePageMeta } from '../hooks/usePageMeta';
+// Shared with the user list, which is where the wording and the flooring were
+// settled. This page used to carry its own copy, in English, past i18n.
+import { relativeTime } from '../lib/relativeTime';
 import {
   IconActivity,
   IconArrowDownRight,
@@ -187,16 +190,6 @@ function formatDelta(
   return { text: `${sign}${formatBytes(Math.abs(delta))}`, positive: delta >= 0, noData: false };
 }
 
-function relativeTime(iso: string): string {
-  const diffMs = now() - new Date(iso).getTime();
-  const sec = Math.round(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.round(hr / 24)}d ago`;
-}
 
 function thresholdColor(p: number, warn = 60, crit = 85): string {
   if (p > crit) return RED;
@@ -492,7 +485,9 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
                         <Tooltip
                           label={
                             n.lastStatusChange
-                              ? t('dashboard.nodes.statusChanged', { when: relativeTime(n.lastStatusChange) })
+                              ? t('dashboard.nodes.statusChanged', {
+                                  when: relativeTime(n.lastStatusChange, t).text,
+                                })
                               : t('dashboard.nodes.statusUnknown')
                           }
                         >
@@ -671,7 +666,7 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
                     </Group>
                     <Tooltip label={new Date(e.createdAt).toLocaleString()}>
                       <Text size="xs" style={{ color: MIST }}>
-                        {relativeTime(e.createdAt)}
+                        {relativeTime(e.createdAt, t).text}
                       </Text>
                     </Tooltip>
                   </Group>

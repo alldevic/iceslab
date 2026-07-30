@@ -20,7 +20,8 @@ import {
 import { copyToClipboard } from '../lib/clipboard';
 // One definition of "online" for the whole panel: the dashboard used to count a
 // 3-minute window while this list glowed for 5.
-import { ONLINE_WINDOW_MS, isOnlineAt } from '@iceslab/shared';
+import { isOnlineAt } from '@iceslab/shared';
+import { relativeTime, type TFn } from '../lib/relativeTime';
 import { ROUTING_PRESET_IDS, isRoutingPresetId, presetKey } from '../lib/routingPresets';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
@@ -131,40 +132,9 @@ function trafficPercent(used: number, limit: number | null): number | null {
   return Math.min(100, (used / limit) * 100);
 }
 
-type TFn = (key: string, opts?: Record<string, unknown>) => string;
-
-/**
- * Elapsed time, floored at every step, so "ago" means "at least this long" and
- * not "roughly".
- *
- * Rounding put the label ahead of the threshold it sits next to: at 4m50s the
- * text already said 5m while the dot was still filled, and at 5m00s the same
- * words appeared beside a hollow one. Identical wording on opposite sides of
- * the line reads as a broken dot. Flooring makes 4m59s read as 4m and both
- * flip in the same second.
- */
-function relativeTime(
-  iso: string | null,
-  t: TFn,
-): { text: string; tone: 'fresh' | 'stale' | 'never' } {
-  if (!iso) return { text: t('userTime.never'), tone: 'never' };
-  const diffMs = now() - new Date(iso).getTime();
-  const sec = Math.floor(diffMs / 1000);
-  // Same window the dot and the dashboard use: "fresh" here and "online" there
-  // must not be able to disagree about the same user.
-  const tone: 'fresh' | 'stale' = diffMs < ONLINE_WINDOW_MS ? 'fresh' : 'stale';
-  if (sec < 60) return { text: t('userTime.sAgo', { n: sec }), tone };
-  const min = Math.floor(sec / 60);
-  if (min < 60) return { text: t('userTime.mAgo', { n: min }), tone };
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return { text: t('userTime.hAgo', { n: hr }), tone };
-  const days = Math.floor(hr / 24);
-  return { text: t('userTime.dAgo', { n: days }), tone };
-}
-
-// expireRelative below counts DOWN, so it keeps rounding: flooring would turn
-// "expires in 20 hours" into "in 0 days", which is worse than being approximate.
-
+// Counts DOWN, unlike relativeTime next to it, so it keeps rounding: flooring
+// would turn "expires in 20 hours" into "in 0 days", which is worse than being
+// approximate. Different question, different rule.
 function expireRelative(
   iso: string | null,
   t: TFn,
