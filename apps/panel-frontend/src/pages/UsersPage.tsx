@@ -439,7 +439,8 @@ export function UsersPage() {
   // Wave-14 #16: subscriptionUrl(token) without a second arg falls back to
   // API_BASE_URL, which defaults to http://localhost:3000, so a prod SPA
   // built without VITE_API_BASE_URL silently copies a localhost link to the
-  // operator's clipboard. Same panel-metadata source UserFormModal uses.
+  // operator's clipboard. Hence the panel host from /auth/status, which is
+  // where the row's copy-link action and the drawer both read it from.
   const authStatusQuery = useQuery({
     queryKey: ['auth', 'status'],
     queryFn: fetchAuthStatus,
