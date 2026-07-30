@@ -1457,10 +1457,9 @@ export default {
       descriptionPlaceholder: 'What this group is for (optional)',
       routing: 'Routing override',
       routingDesc: 'Subscription routing for this squad. Inherit = use the panel-wide setting.',
+      // Per-preset labels live under `metadata.preset*`: every picker builds its
+      // options from the shared id list and translates them from one place.
       routingInherit: 'Inherit (panel default)',
-      routingProxyAll: 'Proxy all',
-      routingRuSplit: 'RU split (ru-split)',
-      routingCnSplit: 'CN split (cn-split)',
       hwidLimit: 'HWID device limit (squad default)',
       hwidLimitDesc: 'Default device cap for members without their own limit. Empty = none. Across squads the most-permissive (max) wins.',
       hwidLimitPlaceholder: 'No squad default',

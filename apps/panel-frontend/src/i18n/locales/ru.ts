@@ -1513,10 +1513,9 @@ export default {
       descriptionPlaceholder: 'Зачем эта группа нужна (необязательно)',
       routing: 'Переопределение routing',
       routingDesc: 'Routing подписки для этого сквада. Наследовать = панельная настройка.',
+      // Подписи отдельных пресетов живут в `metadata.preset*`: каждый пикер
+      // строит варианты из общего списка id и переводит их в одном месте.
       routingInherit: 'Наследовать (дефолт панели)',
-      routingProxyAll: 'Проксировать всё',
-      routingRuSplit: 'RU split (ru-split)',
-      routingCnSplit: 'CN split (cn-split)',
       hwidLimit: 'Лимит устройств HWID (дефолт сквада)',
       hwidLimitDesc: 'Дефолтный лимит устройств для членов без своего лимита. Пусто = нет. По сквадам выигрывает самый щедрый (max).',
       hwidLimitPlaceholder: 'Нет дефолта сквада',
