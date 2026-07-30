@@ -310,6 +310,12 @@ export async function listUsers(params?: {
   groupId?: string;
   /** Exact tag match (Filters popover), unlike `search` which is a substring. */
   tag?: string;
+  /**
+   * Routing-preset override filter. A preset id pins to that preset, `any`
+   * returns everyone carrying an override, `none` everyone inheriting from
+   * squad or panel. An unknown id is a 400, not a silently unfiltered list.
+   */
+  routingPreset?: RoutingPresetId | 'any' | 'none';
   /** Server-side, because the list is paged: sorting one page would lie. */
   sort?: UserSort;
   order?: 'asc' | 'desc';

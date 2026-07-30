@@ -314,6 +314,7 @@ export default {
       hosts: 'HOSTS',
       live: 'LIVE',
       noNodes: 'NO NODES',
+      degraded: 'DEGRADED',
     },
     card: {
       profile: 'Profile',
@@ -325,6 +326,9 @@ export default {
       reach_other: '{{count}} users reach it',
       live: 'LIVE',
       noNodes: 'NO NODES',
+      // Still handing out URLs, but through a node that is not answering.
+      degraded_one: 'SERVING, {{count}} NODE DOWN',
+      degraded_other: 'SERVING, {{count}} NODES DOWN',
       off: 'OFF',
     },
   },
@@ -1096,12 +1100,17 @@ export default {
     create: 'Create user',
     searchPlaceholder: 'Search by username, email, telegram or tag…',
     empty: 'No users.',
+    routingOverrideHint: 'This user overrides the routing preset their squad would give them.',
     filters: {
       button: 'Filters',
       squad: 'Squad',
       anySquad: 'Any squad',
       tag: 'Tag',
       anyTag: 'Any tag',
+      routing: 'Routing override',
+      anyRouting: 'Any routing',
+      routingAny: 'Has an override',
+      routingNone: 'Inherits',
       clear: 'Clear filters',
     },
     table: {

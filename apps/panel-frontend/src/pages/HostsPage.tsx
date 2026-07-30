@@ -115,7 +115,12 @@ export function HostsPage() {
   ]);
 
   const total = hostsQuery.data?.hosts.length ?? 0;
-  const live = rows.filter((r) => r.host.enabled && r.nodes.length > 0).length;
+  // The bar counts the same three states the cards show, so a degraded host is
+  // not filed under LIVE where it would go unnoticed.
+  const isDegraded = (r: Row) =>
+    r.host.enabled && r.nodes.length > 0 && r.nodes.some((n) => n.status !== 'online');
+  const live = rows.filter((r) => r.host.enabled && r.nodes.length > 0 && !isDegraded(r)).length;
+  const degraded = rows.filter(isDegraded).length;
   const orphaned = rows.filter((r) => r.nodes.length === 0).length;
   const countries = [...new Set(rows.map((r) => r.countryCode).filter(Boolean))] as string[];
 
@@ -158,6 +163,12 @@ export function HostsPage() {
             <Fact value={total} label={t('hostsPage.bar.hosts')} />
             <Dot />
             <Fact value={live} label={t('hostsPage.bar.live')} accent={MOSS} />
+            {degraded > 0 && (
+              <>
+                <Dot />
+                <Fact value={degraded} label={t('hostsPage.bar.degraded')} accent={AMBER} />
+              </>
+            )}
             {orphaned > 0 && (
               <>
                 <Dot />
@@ -272,8 +283,14 @@ type Row = {
 function HostCard({ row, onEdit }: { row: Row; onEdit: () => void }) {
   const { t } = useTranslation();
   const orphaned = row.nodes.length === 0;
-  const live = row.host.enabled && !orphaned;
-  const accent = orphaned ? AMBER : row.host.enabled ? VIOLET : DIM;
+  // A host with nodes is not automatically serving: the state used to read
+  // "a node exists" and never looked at whether the node answers. Between LIVE
+  // and NO NODES there is a third state, still handing out URLs but through a
+  // node that is not online, and it is the one worth catching early.
+  const down = row.nodes.filter((n) => n.status !== 'online');
+  const degraded = row.host.enabled && !orphaned && down.length > 0;
+  const live = row.host.enabled && !orphaned && !degraded;
+  const accent = orphaned ? AMBER : degraded ? AMBER : row.host.enabled ? VIOLET : DIM;
 
   return (
     <Box
@@ -458,7 +475,7 @@ function HostCard({ row, onEdit }: { row: Row; onEdit: () => void }) {
               width: 6,
               height: 6,
               borderRadius: 999,
-              backgroundColor: live ? MOSS : orphaned ? AMBER : DIM,
+              backgroundColor: live ? MOSS : orphaned || degraded ? AMBER : DIM,
             }}
           />
           <Text
@@ -467,14 +484,18 @@ function HostCard({ row, onEdit }: { row: Row; onEdit: () => void }) {
               fontSize: 11,
               fontWeight: 500,
               letterSpacing: '0.08em',
-              color: live ? MOSS : orphaned ? AMBER : MIST,
+              color: live ? MOSS : orphaned || degraded ? AMBER : MIST,
             }}
+            // Which node is down, since the card lists several by name.
+            title={degraded ? down.map((n) => n.name).join(', ') : undefined}
           >
             {live
               ? t('hostsPage.card.live')
               : orphaned
                 ? t('hostsPage.card.noNodes')
-                : t('hostsPage.card.off')}
+                : degraded
+                  ? t('hostsPage.card.degraded', { count: down.length })
+                  : t('hostsPage.card.off')}
           </Text>
         </Box>
       </Box>

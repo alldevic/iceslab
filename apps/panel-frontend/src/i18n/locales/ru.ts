@@ -346,6 +346,7 @@ export default {
       hosts: 'ХОСТОВ',
       live: 'ЖИВЫХ',
       noNodes: 'БЕЗ НОД',
+      degraded: 'С ДЕГРАДАЦИЕЙ',
     },
     card: {
       profile: 'Профиль',
@@ -361,6 +362,11 @@ export default {
       reach_other: 'достают {{count}} юзера',
       live: 'ЖИВОЙ',
       noNodes: 'БЕЗ НОД',
+      // Ссылки ещё раздаются, но через ноду, которая не отвечает.
+      degraded_one: 'РАЗДАЁТ, {{count}} НОДА ЛЕЖИТ',
+      degraded_few: 'РАЗДАЁТ, {{count}} НОДЫ ЛЕЖАТ',
+      degraded_many: 'РАЗДАЁТ, {{count}} НОД ЛЕЖИТ',
+      degraded_other: 'РАЗДАЁТ, {{count}} НОДЫ ЛЕЖАТ',
       off: 'ВЫКЛ',
     },
   },
@@ -1145,6 +1151,7 @@ export default {
     title: 'Пользователи',
     create: 'Создать юзера',
     searchPlaceholder: 'Поиск по имени, email, телеграму или тегу…',
+    routingOverrideHint: 'У этого юзера свой пресет маршрутов, он перебивает то, что даёт сквад.',
     empty: 'Пользователей нет.',
     filters: {
       button: 'Фильтры',
@@ -1152,6 +1159,10 @@ export default {
       anySquad: 'Любой сквад',
       tag: 'Тег',
       anyTag: 'Любой тег',
+      routing: 'Переопределение маршрутов',
+      anyRouting: 'Любой роутинг',
+      routingAny: 'Есть переопределение',
+      routingNone: 'Наследует',
       clear: 'Сбросить фильтры',
     },
     table: {

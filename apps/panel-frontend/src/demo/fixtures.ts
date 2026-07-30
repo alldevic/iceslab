@@ -275,7 +275,9 @@ export const USERS: User[] = USER_SEEDS.map((u, i) => ({
   subscriptionToken: `demo-sub-${u.name}`,
   subRevokedAt: null,
   hwidDeviceLimit: u.premium ? 5 : null,
-  routingPreset: null,
+  // One user carries a per-user override, so the list chip and the routing
+  // filter have something to show. The rest inherit from squad or panel.
+  routingPreset: u.name === 'kenji' ? 'ru-split' : null,
   description: null,
   tag: u.premium ? 'premium' : 'standard',
   telegramId: null,

@@ -5,6 +5,7 @@ import { Box, Stack, Text, Textarea, UnstyledButton } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { RoutingPresetId } from '@iceslab/shared';
+import { PRESET_IDS, isBuiltInPresetId, presetKey } from '../lib/routingPresets';
 import {
   ROUTE_POLICY_WRITES_LIVE,
   ROUTING_PRESET_WRITES_LIVE,
@@ -110,11 +111,8 @@ const PRESET_DNS: Partial<Record<RoutingPresetId, string>> = {
   'cn-split': '223.5.5.5',
 };
 
-const PRESET_IDS: RoutingPresetId[] = ['ru-split', 'cn-split', 'proxy-all'];
-
-function isBuiltInId(id: string): id is RoutingPresetId {
-  return (PRESET_IDS as string[]).includes(id);
-}
+// PRESET_IDS / presetKey / isBuiltInPresetId now live in lib/routingPresets.ts:
+// the Users filter needs the same list and the same labels.
 
 /* ───── Page ────────────────────────────────────────────────────────────── */
 
@@ -161,7 +159,7 @@ export function RoutesPage() {
       ...p,
       // The three built-ins are panel copy, not operator data: their name and
       // their notes stay translated here whatever the API calls them.
-      name: isBuiltInId(p.id) ? t(`metadata.preset${presetKey(p.id)}`) : p.name,
+      name: isBuiltInPresetId(p.id) ? t(`metadata.preset${presetKey(p.id)}`) : p.name,
       rules: p.rules.map((r) => {
         const key = noteKeyFor(r.match);
         return key === undefined ? r : { ...r, note: t(key) };
@@ -527,9 +525,6 @@ function DevicePane({
 }
 
 /** i18n suffix for a preset id, so the labels stay in one place. */
-function presetKey(id: RoutingPresetId): string {
-  return id === 'ru-split' ? 'RuSplit' : id === 'cn-split' ? 'CnSplit' : 'ProxyAll';
-}
 
 /* ───── The operator's own layer ────────────────────────────────────────── */
 

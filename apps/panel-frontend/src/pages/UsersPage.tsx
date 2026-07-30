@@ -18,6 +18,7 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { copyToClipboard } from '../lib/clipboard';
+import { PRESET_IDS, presetKey } from '../lib/routingPresets';
 import { useDebouncedValue, useDisclosure } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
@@ -27,6 +28,7 @@ import {
   IconArrowUp,
   IconBan,
   IconFilter,
+  IconRoute,
   IconChevronLeft,
   IconChevronRight,
   IconCircleCheck,
@@ -374,7 +376,11 @@ export function UsersPage() {
   // the primary split and stay one click away.
   const [squadFilter, setSquadFilter] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  const activeFilters = (squadFilter ? 1 : 0) + (tagFilter ? 1 : 0);
+  // Routing is the third "narrow the roster" question, and the only one whose
+  // answer is invisible in the row otherwise: an override changes what a user
+  // gets without changing anything the table already shows.
+  const [routingFilter, setRoutingFilter] = useState<string | null>(null);
+  const activeFilters = (squadFilter ? 1 : 0) + (tagFilter ? 1 : 0) + (routingFilter ? 1 : 0);
 
   function toggleSort(next: UserSort) {
     if (next === sort) {
@@ -404,6 +410,7 @@ export function UsersPage() {
         search: serverSearch,
         groupId: squadFilter,
         tag: tagFilter,
+        routingPreset: routingFilter,
         sort,
         order,
       },
@@ -416,6 +423,7 @@ export function UsersPage() {
         search: serverSearch,
         groupId: squadFilter ?? undefined,
         tag: tagFilter ?? undefined,
+        routingPreset: (routingFilter as 'any' | 'none' | undefined) ?? undefined,
         sort,
         order,
       }),
@@ -473,7 +481,7 @@ export function UsersPage() {
   // result set doesn't drop us into an empty page (page 5 of 1 page).
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, debouncedSearch, rowsPerPage, squadFilter, tagFilter]);
+  }, [statusFilter, debouncedSearch, rowsPerPage, squadFilter, tagFilter, routingFilter]);
 
   const totalPages = Math.max(1, Math.ceil(totalUsers / rowsPerPage));
   const safePage = Math.min(page, totalPages);
@@ -696,11 +704,30 @@ export function UsersPage() {
                 searchable
                 data={knownTags}
               />
+              {/* `any` and `none` are questions about the presence of an
+                  override, which is what an operator actually asks before
+                  asking which preset. A concrete id pins to that preset. */}
+              <Select
+                label={t('users.filters.routing')}
+                placeholder={t('users.filters.anyRouting')}
+                value={routingFilter}
+                onChange={setRoutingFilter}
+                clearable
+                data={[
+                  { value: 'any', label: t('users.filters.routingAny') },
+                  { value: 'none', label: t('users.filters.routingNone') },
+                  ...PRESET_IDS.map((id) => ({
+                    value: id,
+                    label: t(`metadata.preset${presetKey(id)}`),
+                  })),
+                ]}
+              />
               {activeFilters > 0 && (
                 <UnstyledButton
                   onClick={() => {
                     setSquadFilter(null);
                     setTagFilter(null);
+                    setRoutingFilter(null);
                   }}
                   style={{ ...MONO_LABEL, color: CYAN, alignSelf: 'flex-start' }}
                 >
@@ -843,11 +870,38 @@ export function UsersPage() {
                     >
                       <StatusDot accent={statusAccent} glow={isOnline(u)} />
                       <Stack gap={2}>
-                        <Text
-                          style={{ ...DISPLAY, fontSize: 14, fontWeight: 500, lineHeight: '18px', color: SNOW }}
-                        >
-                          {u.username}
-                        </Text>
+                        <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Text
+                            style={{ ...DISPLAY, fontSize: 14, fontWeight: 500, lineHeight: '18px', color: SNOW }}
+                          >
+                            {u.username}
+                          </Text>
+                          {/* An override changes what this user gets without
+                              changing anything else in the row, so without a
+                              mark it is invisible until you open the drawer. */}
+                          {u.routingPreset && (
+                            <Box
+                              title={t('users.routingOverrideHint')}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                height: 18,
+                                paddingInline: 6,
+                                borderRadius: 5,
+                                backgroundColor: `${VIOLET}14`,
+                                border: `1px solid ${VIOLET}2E`,
+                              }}
+                            >
+                              <IconRoute size={10} stroke={2} color={VIOLET} />
+                              <Text style={{ ...MONO, fontSize: 10, lineHeight: '13px', color: VIOLET }}>
+                                {PRESET_IDS.includes(u.routingPreset)
+                                  ? t(`metadata.preset${presetKey(u.routingPreset)}`)
+                                  : u.routingPreset}
+                              </Text>
+                            </Box>
+                          )}
+                        </Box>
                         <Text style={{ ...MONO, fontSize: 12, lineHeight: '16px', color: MIST }}>
                           {u.shortId}
                           {u.telegramId ? ` · ${u.telegramId.startsWith('@') ? u.telegramId : '@' + u.telegramId}` : ''}
