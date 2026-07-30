@@ -144,15 +144,20 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
 }
 
 /** A4: map each given node id that is the ENTRY (position 0) of an enabled
- *  BALANCER cascade to the route-PROFILES a user in `groupIds` can pick there.
- *  A profile = (allowed exit) x (plain OR a granted ad-split policy), carrying a
- *  `label` (client-facing name) and the `tag` its UUID must encode (routeTag).
+ *  cascade to the route-PROFILES a user in `groupIds` can pick there. A profile
+ *  = (allowed exit) x (plain OR a granted ad-split policy), carrying a `label`
+ *  (client-facing name) and the `tag` its UUID must encode (routeTag).
  *  Two ACL axes: exits are opt-in RESTRICTION (no rows = all exits), policies are
  *  opt-in GRANT (plain always; extra policy only if a squad granted it). Nodes
- *  that aren't balancer entries, and balancers with no allowed exit, are absent.
- *  Chain cascades are excluded (fixed path, no choice). The subscription builder
- *  expands one entry endpoint into one config per profile. */
-export async function getBalancerExitsByEntryNode(
+ *  that aren't entries, and cascades with no allowed exit, are absent. The
+ *  subscription builder expands one entry endpoint into one config per profile.
+ *
+ *  Chains used to be excluded here by a `mode: 'balancer'` filter, on the
+ *  reasoning that a fixed path offers no choice. True for the EXIT, false for
+ *  the policy: an operator could define an ad-split policy, grant it to a squad,
+ *  and get nothing at all on a chain. Chains now take part, with one guard below
+ *  so an untouched chain keeps handing out exactly the links it does today. */
+export async function getRouteProfilesByEntryNode(
   nodeIds: string[],
   groupIds: string[] = [],
 ): Promise<Map<string, { label: string; tag: number }[]>> {
@@ -161,7 +166,6 @@ export async function getBalancerExitsByEntryNode(
   const cascades = await prisma.cascade.findMany({
     where: {
       enabled: true,
-      mode: 'balancer',
       hops: { some: { nodeId: { in: nodeIds }, position: 0 } },
     },
     include: {
@@ -212,12 +216,22 @@ export async function getBalancerExitsByEntryNode(
   for (const c of cascades) {
     const entry = c.hops.find((h) => h.position === 0);
     if (!entry || !nodeIds.includes(entry.nodeId)) continue;
+    const isBalancer = c.mode === 'balancer';
+    // A chain with no granted policy emits NOTHING, deliberately. Its only
+    // profile would be the plain one, which resolves to the same single exit an
+    // untagged UUID already reaches, so tagging would rewrite every user's UUID
+    // for zero behavioural gain. Balancers always emit: there the tag is what
+    // pins the exit, and that is existing shipped behaviour.
+    if (!isBalancer && grantedPolicies.length === 0) continue;
     // index = position in the FULL exit list (position-asc), matching the node's
     // cascade-link-out-<index>; computed BEFORE the squad filter so a kept subset
     // still tags each exit with the right link-out.
-    const fullExits = c.hops
-      .filter((h) => h.position !== 0)
-      .map((h, i) => ({ name: h.node.name, index: i, nodeId: h.node.id }));
+    //
+    // A chain has exactly one exit, its last hop, and it carries index 0: the
+    // chain entry emits a single unindexed link-out, so every tag routed there
+    // must use exitIndex 0.
+    const exitHops = isBalancer ? c.hops.filter((h) => h.position !== 0) : c.hops.slice(-1);
+    const fullExits = exitHops.map((h, i) => ({ name: h.node.name, index: i, nodeId: h.node.id }));
     const exits = applyExitAcl(fullExits, allowByCascade.get(c.id));
     if (exits.length === 0) continue;
     // Cartesian: each exit x (plain + granted policies). Plain first per exit so
@@ -511,6 +525,23 @@ export async function getCascadeFragmentsForNode(
     nodeHost: h.node.address.split(':')[0]!,
   }));
 
+  // A4 ad-split: emit EVERY defined policy's rules on the entry (policies are
+  // global). The per-squad grant only gates which profiles the subscription
+  // hands out; the node carries all so any granted tag resolves. Plain
+  // (ordinal 0) is implicit in the builders.
+  //
+  // Read once for BOTH shapes. Until 2026-07-30 this lived inside the balancer
+  // branch only, which is half of why ad-split silently did nothing on chains.
+  const policies: CascadePolicy[] = (
+    await prisma.routePolicy.findMany({
+      select: { ordinal: true, directDomains: true, blockDomains: true },
+    })
+  ).map((p) => ({
+    ordinal: p.ordinal,
+    directDomains: p.directDomains,
+    blockDomains: p.blockDomains,
+  }));
+
   // C3-auto: a `balancer` cascade fans one entry out to N parallel exits. The
   // link creds live on the EXIT hops (hops[1..]); the entry dials each. The
   // entry's fragments carry the observatory + balancer; each exit terminates its
@@ -524,19 +555,6 @@ export async function getCascadeFragmentsForNode(
       if (!cred) return null;
       exitCreds.push(cred);
     }
-    // A4 ad-split: emit EVERY defined policy's rules on the entry (policies are
-    // global). The per-squad grant only gates which profiles the subscription
-    // hands out; the node carries all so any granted tag resolves. Plain (ordinal
-    // 0) is implicit in the builder.
-    const policies: CascadePolicy[] = (
-      await prisma.routePolicy.findMany({
-        select: { ordinal: true, directDomains: true, blockDomains: true },
-      })
-    ).map((p) => ({
-      ordinal: p.ordinal,
-      directDomains: p.directDomains,
-      blockDomains: p.blockDomains,
-    }));
     const configs = buildBalancerCascadeConfigs(
       hopInputs[0]!,
       hopInputs.slice(1),
@@ -569,7 +587,7 @@ export async function getCascadeFragmentsForNode(
     linkCreds.push(cred);
   }
 
-  const configs = buildCascadeConfigs(hopInputs, linkCreds);
+  const configs = buildCascadeConfigs(hopInputs, linkCreds, policies);
   const mine = configs.find((c) => c.nodeId === nodeId);
   if (!mine) return null;
 

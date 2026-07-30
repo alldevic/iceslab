@@ -11,6 +11,67 @@ import {
   type LinkCred,
 } from './cascade.config.js';
 
+// Regression cover for the prod defect found 2026-07-29: ad-split policies
+// reached balancer entries only, so on a chain an operator could define a
+// policy, grant it, see the panel report success, and get no rules on the node.
+describe('buildCascadeConfigs (chain) ad-split', () => {
+  const hops: CascadeConfigHopInput[] = [
+    { nodeId: 'n-ru', position: 0, nodeHost: 'ru.example.com' },
+    { nodeId: 'n-de', position: 1, nodeHost: 'de.example.com' },
+  ];
+  const creds: LinkCred[] = [{ protocol: 'vless', port: 24000, uuid: 'u-0' }];
+  const noAds = {
+    ordinal: 1,
+    directDomains: ['geosite:ru'],
+    blockDomains: ['geosite:category-ads-all'],
+  };
+
+  it('without policies the entry rules are unchanged: QUIC drop then catch-all', () => {
+    const entryRules = buildCascadeConfigs(hops, creds)[0]!.routingRules;
+    expect(entryRules).toHaveLength(2);
+    expect(entryRules[0]).toMatchObject({ network: 'udp', port: 443, outboundTag: 'blocked' });
+    expect(entryRules[1]).toMatchObject({ network: 'tcp,udp', outboundTag: 'cascade-link-out' });
+    expect(entryRules.some((r) => 'vlessRoute' in r)).toBe(false);
+  });
+
+  it('a granted policy lands on the chain entry, tagged and above the catch-all', () => {
+    const entryRules = buildCascadeConfigs(hops, creds, [noAds])[0]!.routingRules;
+    // ordinal 1, exitIndex 0 -> 1*256 + 0 + 1
+    const tag = String(257);
+    const block = entryRules.findIndex((r) => r.outboundTag === 'blocked' && 'domain' in r);
+    const direct = entryRules.findIndex((r) => r.outboundTag === 'direct');
+    const catchAll = entryRules.findIndex(
+      (r) => r.outboundTag === 'cascade-link-out' && !('vlessRoute' in r),
+    );
+    expect(entryRules[block]).toMatchObject({
+      vlessRoute: tag,
+      domain: ['geosite:category-ads-all'],
+    });
+    expect(entryRules[direct]).toMatchObject({ vlessRoute: tag, domain: ['geosite:ru'] });
+    // Order is the whole point: a split rule below the catch-all never fires.
+    expect(block).toBeLessThan(catchAll);
+    expect(direct).toBeLessThan(catchAll);
+  });
+
+  it('emits no rule for the plain profile: one exit means nothing to select', () => {
+    const entryRules = buildCascadeConfigs(hops, creds, [noAds])[0]!.routingRules;
+    // routeTag(0, 0) = 1 would be the plain tag; an untagged client and a plain
+    // one both fall through to the same catch-all, so a rule would be noise.
+    expect(entryRules.some((r) => r.vlessRoute === '1')).toBe(false);
+  });
+
+  it('leaves transit and exit hops alone', () => {
+    const cfgs = buildCascadeConfigs(
+      [...hops, { nodeId: 'n-nl', position: 2, nodeHost: 'nl.example.com' }],
+      [...creds, { protocol: 'vless', port: 24001, uuid: 'u-1' }],
+      [noAds],
+    );
+    for (const c of cfgs.slice(1)) {
+      expect(c.routingRules.some((r) => 'vlessRoute' in r)).toBe(false);
+    }
+  });
+});
+
 describe('buildBalancerCascadeConfigs (auto node)', () => {
   const entry: CascadeConfigHopInput = { nodeId: 'n-entry', position: 0, nodeHost: 'ru.example.com' };
   const exits: CascadeConfigHopInput[] = [

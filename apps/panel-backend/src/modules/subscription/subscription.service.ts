@@ -10,7 +10,7 @@ import {
 // kept on the User row for backwards-compat but never filters subscription
 // output.
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
-import { getHiddenCascadeNodeIds, getBalancerExitsByEntryNode } from '../cascades/cascade.service.js';
+import { getHiddenCascadeNodeIds, getRouteProfilesByEntryNode } from '../cascades/cascade.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/credentials.js';
@@ -327,10 +327,12 @@ export async function generateSubscription(
     bindings.push(...filtered);
   }
 
-  // A4: which of these nodes are balancer-cascade entries + their exits. One
-  // query for the whole binding set; the xray branch attaches the match so
-  // buildXrayJsonArray can expand that endpoint into one config per exit.
-  const balancerExits = await getBalancerExitsByEntryNode(
+  // A4: which of these nodes are cascade entries + the route profiles they
+  // offer. One query for the whole binding set; the xray branch attaches the
+  // match so buildXrayJsonArray can expand that endpoint into one config per
+  // profile. Chains take part too, but only once a policy is granted (see
+  // getRouteProfilesByEntryNode).
+  const balancerExits = await getRouteProfilesByEntryNode(
     [...new Set(bindings.map((b) => b.node.id))],
     groupIds,
   );
