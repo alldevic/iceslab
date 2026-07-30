@@ -865,8 +865,11 @@ export function HostEditPage() {
               <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('hostEdit.nodesBehind')}</Text>
               <Box style={{ flex: 1 }} />
               <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
+                {/* Counts the picked node, not a binding that may not exist yet.
+                    On create it never does, so this read 0 while the row was
+                    ticked and the button was live. */}
                 {t('hostEdit.nodesSelected', {
-                  selected: currentBinding ? 1 : 0,
+                  selected: nodeId ? 1 : 0,
                   total: nodeRows.length,
                 })}
               </Text>
