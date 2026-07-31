@@ -2173,12 +2173,14 @@ export default {
     remarkRequired: 'required',
   },
 
-  // One axis: whether the subscription works. Presence is stated by the dot and
-  // the last-online column, so online/offline are gone from here: sitting in the
-  // same object they claimed to be alternatives to the rest, and "Active" was
-  // read as "connected right now" next to a hollow dot.
+  // The pill in a user row. A working subscription splits by presence, so
+  // "valid" never appears here: the user is either online or offline. A word
+  // carries that better than the dot that used to sit beside it, which is why
+  // the dot is gone. The filter chips and the dashboard breakdown count
+  // lifecycle and say Valid: different question, different vocabulary.
   userStatus: {
-    active: 'Valid',
+    online: 'ONLINE',
+    offline: 'OFFLINE',
     limited: 'Limited',
     expired: 'Expired',
     disabled: 'Disabled',

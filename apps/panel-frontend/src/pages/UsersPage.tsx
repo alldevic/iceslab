@@ -97,23 +97,35 @@ const MONO_LABEL = {
 };
 
 /**
- * The pill states the user's LIFECYCLE (active / expired / limited /
- * disabled), which is what an operator acts on. Connection state is not a
- * status here: it rides the dot next to the username, which glows when the
- * user was seen in the last five minutes. Showing "online" in the pill hid
- * the fact that an account was, say, active but idle for a week.
+ * What the pill says about a user, in one word.
+ *
+ * A working subscription splits by presence, so "active" never reaches the
+ * screen: it says ONLINE or OFFLINE instead. A word carries this better than a
+ * mark did, which is why the dot beside the username is gone. What stays next
+ * to it is the last-online column, and that is a different question: OFFLINE
+ * covers both "28m ago" and "3 days ago", and an operator acts differently on
+ * those two.
+ *
+ * PROBLEMS ARE CHECKED FIRST, and that order is the point. An expired, limited
+ * or disabled user is pulled from every node, so they cannot be online except
+ * for the couple of minutes right after the switch, while the five-minute
+ * window has not run out. In those minutes the problem is what an operator
+ * needs to see, not the tail of a connection that is already gone.
  */
-type ComputedStatus = 'active' | 'limited' | 'expired' | 'disabled';
+type ComputedStatus = 'online' | 'offline' | 'limited' | 'expired' | 'disabled';
 
 function computedStatus(u: User): ComputedStatus {
   if (u.status === 'expired') return 'expired';
   if (u.status === 'limited') return 'limited';
   if (u.status === 'disabled') return 'disabled';
-  return 'active';
+  return isOnlineAt(u.lastOnlineAt, now()) ? 'online' : 'offline';
 }
 
 const COMPUTED_STATUS_ACCENT: Record<ComputedStatus, string> = {
-  active: MOSS,
+  online: MOSS,
+  // Dim, not another alarm colour: being away is the ordinary state of a
+  // working account, not something to act on.
+  offline: MIST,
   limited: AMBER,
   expired: RED,
   disabled: MIST,
@@ -855,7 +867,6 @@ export function UsersPage() {
                         minWidth: 0,
                       }}
                     >
-                      <StatusDot online={isOnlineAt(u.lastOnlineAt, now())} />
                       <Stack gap={2}>
                         <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <Text
@@ -1177,28 +1188,7 @@ export function UsersPage() {
   );
 }
 
-/**
- * One mark, one fact: is this user passing traffic right now.
- *
- * It used to be coloured by lifecycle and to carry presence in an 8px shadow at
- * 60% opacity. The colour repeated the pill two lanes over, and the one thing
- * only the dot knew was the part that could not be seen: an active account is
- * green whether it was last seen a minute or a month ago, so the row read as
- * permanently live. Filled against hollow is legible out of the corner of an
- * eye, a glow is not.
- */
-function StatusDot({ online }: { online: boolean }) {
-  return (
-    <span
-      style={{
-        width: 10,
-        height: 10,
-        borderRadius: '50%',
-        backgroundColor: online ? MOSS : 'transparent',
-        border: online ? 'none' : `1px solid ${HAIRLINE}`,
-        flexShrink: 0,
-        display: 'inline-block',
-      }}
-    />
-  );
-}
+// The presence dot lived here. The pill says ONLINE or OFFLINE in a word now,
+// so a mark repeating it in colour would have made three signs for one fact,
+// counting the last-online column. A word reads better than a mark, so the mark
+// is what went.

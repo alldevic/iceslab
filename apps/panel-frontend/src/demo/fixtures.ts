@@ -262,7 +262,11 @@ const USER_SEEDS: UserSeed[] = [
   { id: 'user-kenji', name: 'kenji', status: 'active', squads: ['00000000-0000-0000-0000-000000000001', 'squad-premium'], usedGiB: 140, limitGiB: null, expDays: 40, onlineMin: 1, premium: true },
   { id: 'user-sofia', name: 'sofia', status: 'active', squads: ['squad-premium'], usedGiB: 70, limitGiB: 150, expDays: 22, onlineMin: 2, premium: true },
   { id: 'user-liam', name: 'liam', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 41, limitGiB: 100, expDays: 18, onlineMin: 2, premium: false },
-  { id: 'user-nadia', name: 'nadia', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 33, limitGiB: 100, expDays: 30, onlineMin: 2, premium: false },
+  // Away for an hour and a half: a working subscription that is simply not
+  // connected right now, which is the only way the OFFLINE pill shows up. The
+  // expired and disabled seeds below cannot stand in for it, their own state
+  // wins over presence.
+  { id: 'user-nadia', name: 'nadia', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 33, limitGiB: 100, expDays: 30, onlineMin: 92, premium: false },
   { id: 'user-diego', name: 'diego', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 88, limitGiB: null, expDays: 12, onlineMin: 1, premium: false },
   { id: 'user-omar', name: 'omar', status: 'limited', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 52, limitGiB: 50, expDays: 25, onlineMin: 1, premium: false },
   { id: 'user-yuki', name: 'yuki', status: 'expired', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 64, limitGiB: 100, expDays: -3, onlineMin: 300, premium: false },
@@ -417,7 +421,10 @@ export function buildOverview(): DashboardOverview {
     users: {
       total: 10,
       byStatus: { active: 7, limited: 1, expired: 1, disabled: 1 },
-      onlineNow: 8,
+      // Counted off the seeds above, not made up: seven users inside the
+      // five-minute window. The list would contradict this card otherwise, and
+      // that disagreement is exactly what the shared window was extracted for.
+      onlineNow: 7,
       onlineToday: 9,
       onlineThisWeek: 10,
       neverOnline: 0,
