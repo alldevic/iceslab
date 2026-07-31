@@ -297,8 +297,22 @@ export default {
     online: 'ONLINE',
     configs: 'configs',
     nodes: 'nodes',
+    // Not "nodes": several lines can ride one entry, and cascade exits never
+    // reach the client as configs at all.
+    addresses: 'addresses',
     protocols: 'protocols',
     andMore: '+{{count}} more',
+    previewEstimate:
+      'An estimate from the deployed profiles. The exact list appears once saved: it is built by the same pipeline that serves the subscription.',
+    devices: 'Devices',
+    devicesCounter: '{{used}} of {{limit}} slots used',
+    devicesCounterNoLimit: 'registered: {{used}}',
+    devicesEmpty:
+      'No devices, which is normal: a row appears the first time a client sends its identifier.',
+    devicesFull: 'Every slot is taken. A new device cannot connect until one of these is reset.',
+    devicesError: 'Could not load the device list.',
+    deviceReset: 'Device reset',
+    deviceResetHint: 'Reset this device and free its slot',
     traffic: 'Traffic',
     expires: 'Expires',
     routing: 'Routing',

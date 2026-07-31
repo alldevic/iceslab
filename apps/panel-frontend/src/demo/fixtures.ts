@@ -15,6 +15,7 @@ import type {
   Cascade,
   DashboardOverview,
   Host,
+  HwidDevice,
   Insights,
   Node as PanelNode,
   Profile,
@@ -24,6 +25,7 @@ import type {
   Squad,
   SystemVersion,
   User,
+  UserEndpoint,
 } from '../lib/api';
 import { DEMO_NOW } from '../lib/demoFlag';
 
@@ -304,6 +306,55 @@ export const USERS: User[] = USER_SEEDS.map((u, i) => ({
 }));
 
 export const USERS_LIST = { users: USERS, total: USERS.length, page: 1, limit: 25 };
+
+/**
+ * What a user's client would actually receive.
+ *
+ * Written out rather than derived, on purpose: the panel stopped recomputing
+ * the subscription in the browser precisely because that recomputation kept
+ * disagreeing with the real one. The demo would repeat the same mistake with
+ * the same result. So these are fixed answers in the shape the endpoint
+ * returns, and they show the two things a binding count can never show: a
+ * cascade entry fanning out into one line per direction and per policy, and
+ * exits that never reach the client as their own line.
+ */
+const DEMO_URI = 'vless://demo-uri-not-a-real-key';
+const PREMIUM_ENDPOINTS: UserEndpoint[] = [
+  { protocol: 'xray', nodeName: 'US · us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'xray', nodeName: 'DE', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'xray', nodeName: 'DE · Без рекламы', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'hysteria', nodeName: 'NL · nl-01', host: 'nl-01.example.com', port: 8443, uri: DEMO_URI },
+  { protocol: 'shadowsocks', nodeName: 'FI · fi-01', host: 'fi-01.example.com', port: 8388, uri: DEMO_URI },
+  { protocol: 'amneziawg', nodeName: 'SE · se-01', host: 'se-01.example.com', port: 51820, uri: DEMO_URI },
+];
+const STANDARD_ENDPOINTS: UserEndpoint[] = [
+  { protocol: 'xray', nodeName: 'DE · de-02', host: 'de-02.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'hysteria', nodeName: 'SG · sg-01', host: 'sg-01.example.com', port: 8443, uri: DEMO_URI },
+];
+
+export function endpointsFor(userId: string): UserEndpoint[] {
+  const user = USERS.find((u) => u.id === userId);
+  if (!user) return [];
+  return user.groupIds.includes('squad-premium') ? PREMIUM_ENDPOINTS : STANDARD_ENDPOINTS;
+}
+
+/**
+ * HWID slots in use. alex sits at his limit so the "every slot is taken" line
+ * has something to appear next to, and one device carries no label, which is
+ * the ordinary case: a label is only there if a client sent one.
+ */
+export const HWID_DEVICES: Record<string, HwidDevice[]> = {
+  'user-alex': [
+    { id: 'dev-1', userId: 'user-alex', hwid: 'a4f1c8e2b90d47ac9f3e', label: 'MacBook Pro', firstSeenAt: iso(30 * DAY), lastSeenAt: iso(4 * 60_000) },
+    { id: 'dev-2', userId: 'user-alex', hwid: '77b2d091fe3a4c58ab61', label: 'iPhone 15', firstSeenAt: iso(21 * DAY), lastSeenAt: iso(2 * HOUR) },
+    { id: 'dev-3', userId: 'user-alex', hwid: 'c93e5a17d84b26f0cc42', label: null, firstSeenAt: iso(9 * DAY), lastSeenAt: iso(3 * DAY) },
+    { id: 'dev-4', userId: 'user-alex', hwid: '5d81aa3c6e97b420f1d8', label: 'Windows-PC', firstSeenAt: iso(6 * DAY), lastSeenAt: iso(11 * HOUR) },
+    { id: 'dev-5', userId: 'user-alex', hwid: 'e0c4b7529d1af86b3a70', label: 'iPad', firstSeenAt: iso(2 * DAY), lastSeenAt: iso(26 * HOUR) },
+  ],
+  'user-mia': [
+    { id: 'dev-6', userId: 'user-mia', hwid: '1f9d6b34ca82e57d0b93', label: 'Pixel 8', firstSeenAt: iso(12 * DAY), lastSeenAt: iso(9 * 60_000) },
+  ],
+};
 
 // ───── Cascades (xray -> xray only, the realised cell) ─────
 

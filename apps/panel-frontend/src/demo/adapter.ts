@@ -14,6 +14,7 @@ import {
   BINDINGS,
   CASCADES,
   HOSTS,
+  HWID_DEVICES,
   INSIGHTS,
   NODES_LIST,
   PROFILES,
@@ -25,7 +26,13 @@ import {
   USERS_LIST,
   VERSION,
   buildOverview,
+  endpointsFor,
 } from './fixtures';
+
+/** `/api/users/<id>/<sub-resource>` - the id is the fourth segment. */
+function userIdIn(path: string): string {
+  return path.split('/')[3] ?? '';
+}
 
 function respond(config: InternalAxiosRequestConfig, data: unknown, status = 200): AxiosResponse {
   return {
@@ -58,8 +65,13 @@ const GET_ROUTES: Array<[RegExp, (path: string) => unknown]> = [
   [/^\/api\/users\/tags$/, () => ({ tags: ['premium', 'standard'] })],
   [/^\/api\/squads$/, () => ({ squads: SQUADS })],
   [/^\/api\/users$/, () => USERS_LIST],
-  [/^\/api\/users\/[^/]+\/endpoints$/, () => ({ endpoints: [] })],
-  [/^\/api\/users\/[^/]+\/hwid-devices$/, () => ({ devices: [] })],
+  // Both are per-user, so they read the id out of the path rather than
+  // answering the same thing for everyone.
+  [/^\/api\/users\/[^/]+\/endpoints$/, (url) => ({ endpoints: endpointsFor(userIdIn(url)) })],
+  [
+    /^\/api\/users\/[^/]+\/hwid-devices$/,
+    (url) => ({ devices: HWID_DEVICES[userIdIn(url)] ?? [] }),
+  ],
   [/^\/api\/srr$/, () => ({ rules: [] })],
   [/^\/api\/api-tokens$/, () => ({ tokens: [] })],
   [/^\/api\/inbounds$/, () => ({ inbounds: [] })],

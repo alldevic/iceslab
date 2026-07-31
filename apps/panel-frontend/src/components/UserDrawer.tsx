@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Drawer, NumberInput, Select, Stack, Text, TextInput, Textarea, UnstyledButton } from '@mantine/core';
 import { useForm } from '@mantine/form';
-import { useQuery } from '@tanstack/react-query';
+import { notifications } from '@mantine/notifications';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   IconCheck,
   IconChevronDown,
@@ -21,16 +22,20 @@ import {
 } from '@tabler/icons-react';
 import {
   ALL_SQUAD_ID,
+  deleteHwidDevice,
+  fetchUserEndpoints,
   listBindings,
   listNodes,
   listProfiles,
   listSquads,
+  listUserDevices,
   listUsers,
   type CreateUserInput,
   type TrafficLimitStrategy,
   type UpdateUserInput,
   type User,
 } from '../lib/api';
+import { relativeTime } from '../lib/relativeTime';
 import { ROUTING_PRESET_IDS, presetKey } from '../lib/routingPresets';
 
 /**
@@ -213,12 +218,30 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
   const nameFree = !isEdit && nameProbe.length >= 3 && !nameQuery.isFetching && !nameTaken;
 
   /**
-   * What this user will actually receive, derived the same way the
-   * subscription is: squads grant profiles, profiles are deployed to nodes as
-   * bindings. No squad picked means the backend falls back to ALL, so the
-   * preview does too.
+   * The real answer for a user who already exists: the endpoints endpoint runs
+   * generateSubscription, the very pipeline behind /sub, so what shows here is
+   * what will leave, by construction.
+   *
+   * This used to be recomputed in the browser from bindings, one row each, and
+   * it drifted. That version knew nothing about hidden cascade exits, about an
+   * entry fanning out into one config per direction and policy, about hosts
+   * (a binding can have several or none), about a host being disabled, about a
+   * squad narrowing hosts, or about disableForFormats. It reported "4 configs ·
+   * 4 nodes" and named two nodes the client never receives directly.
    */
-  const preview = useMemo(() => {
+  const endpointsQuery = useQuery({
+    queryKey: ['user-endpoints', user?.id],
+    queryFn: () => fetchUserEndpoints(user!.id),
+    enabled: opened && isEdit,
+    staleTime: 30_000,
+  });
+
+  /**
+   * The estimate for a user who does not exist yet. No id means nothing to ask
+   * the server about, so squads to profiles to bindings is the best guess
+   * available, and the block says so instead of presenting it as fact.
+   */
+  const estimate = useMemo(() => {
     const picked = form.values.groupIds.length > 0 ? form.values.groupIds : [ALL_SQUAD_ID];
     const profileIds = new Set<string>();
     for (const s of squads) {
@@ -227,13 +250,7 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
     const profileById = new Map((profilesQuery.data?.profiles ?? []).map((p) => [p.id, p]));
     const nodeById = new Map((nodesQuery.data?.nodes ?? []).map((n) => [n.id, n]));
 
-    const rows: {
-      key: string;
-      nodeName: string;
-      protocol: string;
-      country: string | null;
-      online: boolean;
-    }[] = [];
+    const rows: PreviewRowData[] = [];
     const nodeIds = new Set<string>();
     const protocols = new Set<string>();
 
@@ -246,9 +263,9 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
       protocols.add(profile.protocol);
       rows.push({
         key: b.id,
-        nodeName: node.name,
+        title: node.name,
         protocol: profile.protocol,
-        country: node.countryCode,
+        note: node.countryCode ? node.countryCode.toUpperCase() : null,
         online: node.status === 'online',
       });
     }
@@ -256,11 +273,38 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
     return {
       rows,
       configs: rows.length,
-      nodes: nodeIds.size,
+      places: nodeIds.size,
       protocols: protocols.size,
       online: rows.filter((r) => r.online).length,
+      estimate: true as const,
     };
   }, [form.values.groupIds, squads, profilesQuery.data, bindingsQuery.data, nodesQuery.data]);
+
+  const preview: PreviewData = useMemo(() => {
+    if (!isEdit) return estimate;
+    const endpoints = endpointsQuery.data?.endpoints ?? [];
+    const hosts = new Set(endpoints.map((e) => e.host));
+    return {
+      // The label is what the client will show for this line, which is the
+      // thing an operator is asked about over support chat.
+      rows: endpoints.map((e, i) => ({
+        key: `${e.uri.slice(0, 40)}#${i}`,
+        title: e.nodeName,
+        protocol: e.protocol,
+        note: String(e.port),
+        // The DTO carries no node id, so per-line liveness cannot be joined
+        // without guessing: nodeName here is a display label, not a node.
+        online: null,
+      })),
+      configs: endpoints.length,
+      // Distinct addresses the client will dial. Not a node count: several
+      // lines can ride one entry, and cascade exits never appear at all.
+      places: hosts.size,
+      protocols: new Set(endpoints.map((e) => e.protocol)).size,
+      online: null,
+      estimate: false as const,
+    };
+  }, [isEdit, estimate, endpointsQuery.data]);
 
   function applyPreset(p: Preset) {
     setPresetId(p.id);
@@ -645,6 +689,11 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
                       />
                     </Box>
                     <Hint>{t('userDrawer.hwidHint')}</Hint>
+                    {/* Only for a user who exists: devices are registered by a
+                        client that has already connected. */}
+                    {isEdit && user && (
+                      <DeviceList userId={user.id} limit={form.values.hwidDeviceLimit} />
+                    )}
                     <Textarea
                       label={t('userDrawer.note')}
                       placeholder={t('userDrawer.notePlaceholder')}
@@ -858,17 +907,166 @@ function FooterButton({
   );
 }
 
+/**
+ * The devices holding this user's HWID slots, and the way to free one.
+ *
+ * Lost when the form moved from a modal to this drawer, which left the limit
+ * above it answering half a question: an operator told "3 of 3, reset one"
+ * could see the 3 and nothing to act on. The count against the limit is the
+ * point of the block, the list is what makes it actionable.
+ */
+function DeviceList({ userId, limit }: { userId: string; limit: number | '' }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const devicesQuery = useQuery({
+    queryKey: ['user-devices', userId],
+    queryFn: () => listUserDevices(userId),
+    staleTime: 30_000,
+  });
+  const resetMutation = useMutation({
+    mutationFn: (id: string) => deleteHwidDevice(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['user-devices', userId] });
+      notifications.show({ color: 'green', message: t('userDrawer.deviceReset') });
+    },
+    onError: (err) =>
+      notifications.show({
+        color: 'red',
+        title: t('common.deleteError'),
+        message: err instanceof Error ? err.message : String(err),
+      }),
+  });
+
+  const devices = devicesQuery.data?.devices ?? [];
+  const used = devices.length;
+  const cap = limit === '' ? null : Number(limit);
+  const full = cap !== null && cap > 0 && used >= cap;
+
+  return (
+    <Box
+      style={{
+        borderRadius: 8,
+        border: `1px solid ${HAIRLINE}`,
+        backgroundColor: SUNK,
+        padding: '10px 12px',
+      }}
+    >
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: devices.length ? 8 : 0 }}>
+        <IconDeviceDesktop size={13} stroke={1.8} color={full ? RED : MIST} />
+        <Text style={{ ...LABEL, letterSpacing: '0.14em' }}>{t('userDrawer.devices')}</Text>
+        <Box style={{ flex: 1 }} />
+        <Text style={{ fontFamily: MONO, fontSize: 10, color: full ? RED : MIST }}>
+          {cap === null
+            ? t('userDrawer.devicesCounterNoLimit', { used })
+            : t('userDrawer.devicesCounter', { used, limit: cap })}
+        </Text>
+      </Box>
+
+      {devicesQuery.isLoading && (
+        <Text style={{ fontSize: 11, color: MIST }}>{t('common.loading')}</Text>
+      )}
+      {devicesQuery.isError && (
+        <Text style={{ fontSize: 11, color: RED }}>{t('userDrawer.devicesError')}</Text>
+      )}
+
+      <Stack gap={5}>
+        {devices.map((d) => (
+          <Box
+            key={d.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '7px 9px',
+              borderRadius: 6,
+              backgroundColor: WELL,
+            }}
+          >
+            <Text
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontFamily: DISPLAY,
+                fontSize: 12,
+                color: SNOW,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              // The full hwid is what the client actually sent, and it is the
+              // only way to tell two unlabelled devices apart.
+              title={d.hwid}
+            >
+              {d.label ?? `${d.hwid.slice(0, 12)}…`}
+            </Text>
+            <Text style={{ fontFamily: MONO, fontSize: 10, color: MIST, flexShrink: 0 }}>
+              {relativeTime(d.lastSeenAt, t).text}
+            </Text>
+            <UnstyledButton
+              onClick={() => resetMutation.mutate(d.id)}
+              disabled={resetMutation.isPending}
+              title={t('userDrawer.deviceResetHint')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 22,
+                height: 22,
+                borderRadius: 5,
+                border: `1px solid ${HAIRLINE}`,
+                color: MIST,
+                flexShrink: 0,
+              }}
+            >
+              <IconX size={12} stroke={2.2} />
+            </UnstyledButton>
+          </Box>
+        ))}
+      </Stack>
+
+      {!devicesQuery.isLoading && !devicesQuery.isError && devices.length === 0 && (
+        // Empty is the normal starting state, not a fault: a device row appears
+        // the first time a client sends its identifier, and never before.
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST }}>
+          {t('userDrawer.devicesEmpty')}
+        </Text>
+      )}
+      {full && devices.length > 0 && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED, marginTop: 8 }}>
+          {t('userDrawer.devicesFull')}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+interface PreviewRowData {
+  key: string;
+  /** What the client will show for this line. */
+  title: string;
+  protocol: string;
+  /** Country for the estimate, port for the real thing. */
+  note: string | null;
+  /** null when liveness is not knowable from the source. */
+  online: boolean | null;
+}
+
 interface PreviewData {
-  rows: { key: string; nodeName: string; protocol: string; country: string | null; online: boolean }[];
+  rows: PreviewRowData[];
   configs: number;
-  nodes: number;
+  /** Nodes while estimating, distinct addresses once the server has answered. */
+  places: number;
   protocols: number;
-  online: number;
+  /** null when the source cannot say, which is the server's answer today. */
+  online: number | null;
+  /** Guessed from bindings because the user has no id yet. */
+  estimate: boolean;
 }
 
 /**
  * The answer to "what did I just build for this person". Derived, never
- * entered: every number here comes from the squads picked above.
+ * entered: for an existing user it is the subscription itself, for a draft it
+ * is a guess that says so.
  */
 function PreviewCard({
   preview,
@@ -911,7 +1109,7 @@ function PreviewCard({
           <IconEye size={16} stroke={1.8} color={CYAN} />
           <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('userDrawer.previewTitle')}</Text>
         </Box>
-        {preview.configs > 0 && (
+        {preview.online !== null && preview.configs > 0 && (
           <Box style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Box style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: MOSS }} />
             <Text style={{ fontFamily: MONO, fontSize: 10, color: MOSS }}>
@@ -924,7 +1122,10 @@ function PreviewCard({
       <Box style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
         <Count value={preview.configs} label={t('userDrawer.configs')} />
         <Text style={{ fontFamily: MONO, fontSize: 12, color: DIM }}>·</Text>
-        <Count value={preview.nodes} label={t('userDrawer.nodes')} />
+        <Count
+          value={preview.places}
+          label={preview.estimate ? t('userDrawer.nodes') : t('userDrawer.addresses')}
+        />
         <Text style={{ fontFamily: MONO, fontSize: 12, color: DIM }}>·</Text>
         <Count value={preview.protocols} label={t('userDrawer.protocols')} />
       </Box>
@@ -945,31 +1146,47 @@ function PreviewCard({
               backgroundColor: WELL,
             }}
           >
-            <Box
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: 3,
-                backgroundColor: r.online ? MOSS : MIST,
-                flexShrink: 0,
-              }}
-            />
+            {r.online !== null && (
+              <Box
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 3,
+                  backgroundColor: r.online ? MOSS : MIST,
+                  flexShrink: 0,
+                }}
+              />
+            )}
             <Text
-              style={{ flex: 1, minWidth: 0, fontFamily: DISPLAY, fontSize: 12, color: SNOW }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontFamily: DISPLAY,
+                fontSize: 12,
+                color: SNOW,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
             >
-              {r.nodeName}
+              {r.title}
             </Text>
             <ProtocolChip protocol={r.protocol} />
-            {r.country && (
-              <Text style={{ fontFamily: MONO, fontSize: 10, color: MIST }}>
-                {r.country.toUpperCase()}
-              </Text>
+            {r.note && (
+              <Text style={{ fontFamily: MONO, fontSize: 10, color: MIST }}>{r.note}</Text>
             )}
           </Box>
         ))}
         {preview.rows.length > shown.length && (
           <Text style={{ fontFamily: MONO, fontSize: 10, color: MIST }}>
             {t('userDrawer.andMore', { count: preview.rows.length - shown.length })}
+          </Text>
+        )}
+        {/* A guess has to admit it. Presented as fact, this block was believed
+            over the subscription it disagreed with. */}
+        {preview.estimate && (
+          <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST }}>
+            {t('userDrawer.previewEstimate')}
           </Text>
         )}
       </Stack>
