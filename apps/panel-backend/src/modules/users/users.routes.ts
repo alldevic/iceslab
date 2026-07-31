@@ -154,9 +154,6 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
           // `nodeId` is the join key.
           label: e.nodeName,
           nodeId: e.nodeId,
-          // DEPRECATED alias, kept so the drawer that shipped today keeps its
-          // labels through one deploy. Remove once the UI reads `label`.
-          nodeName: e.nodeName,
           host: e.host,
           port: e.port,
           uri: e.uri,
