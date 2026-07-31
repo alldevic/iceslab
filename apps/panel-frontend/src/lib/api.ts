@@ -382,7 +382,13 @@ export function subscriptionUrl(
 
 export interface UserEndpoint {
   protocol: string;
-  nodeName: string;
+  /** What the client will show for this line: a host remark, or country plus
+   *  node name. One node produces several of these, so it is a caption, never
+   *  an identity. */
+  label: string;
+  /** The node this endpoint leaves from. The only sound key for joining an
+   *  endpoint to node state: labels differ per line and would match nothing. */
+  nodeId: string;
   host: string;
   port: number;
   uri: string;

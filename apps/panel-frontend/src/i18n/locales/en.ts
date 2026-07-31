@@ -295,12 +295,14 @@ export default {
     previewTitle: 'What the client gets',
     previewEmpty: 'Nothing yet: the picked squads have no deployed profiles.',
     online: 'ONLINE',
-    configs: 'configs',
-    nodes: 'nodes',
-    // Not "nodes": several lines can ride one entry, and cascade exits never
-    // reach the client as configs at all.
-    addresses: 'addresses',
-    protocols: 'protocols',
+    // The number is rendered next to the word, so the value is the word alone
+    // and the form is picked by the count passed to t().
+    configs_one: 'config',
+    configs_other: 'configs',
+    nodes_one: 'node',
+    nodes_other: 'nodes',
+    protocols_one: 'protocol',
+    protocols_other: 'protocols',
     andMore: '+{{count}} more',
     previewEstimate:
       'An estimate from the deployed profiles. The exact list appears once saved: it is built by the same pipeline that serves the subscription.',

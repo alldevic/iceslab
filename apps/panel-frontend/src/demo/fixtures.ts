@@ -319,17 +319,19 @@ export const USERS_LIST = { users: USERS, total: USERS.length, page: 1, limit: 2
  * exits that never reach the client as their own line.
  */
 const DEMO_URI = 'vless://demo-uri-not-a-real-key';
+// The first three ride one entry node: that is the point of the fixture, a
+// count of nodes and a count of configs must be free to disagree.
 const PREMIUM_ENDPOINTS: UserEndpoint[] = [
-  { protocol: 'xray', nodeName: 'US · us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
-  { protocol: 'xray', nodeName: 'DE', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
-  { protocol: 'xray', nodeName: 'DE · Без рекламы', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
-  { protocol: 'hysteria', nodeName: 'NL · nl-01', host: 'nl-01.example.com', port: 8443, uri: DEMO_URI },
-  { protocol: 'shadowsocks', nodeName: 'FI · fi-01', host: 'fi-01.example.com', port: 8388, uri: DEMO_URI },
-  { protocol: 'amneziawg', nodeName: 'SE · se-01', host: 'se-01.example.com', port: 51820, uri: DEMO_URI },
+  { protocol: 'xray', label: 'US · us-01', nodeId: 'node-xray-us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'xray', label: 'DE', nodeId: 'node-xray-us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'xray', label: 'DE · Без рекламы', nodeId: 'node-xray-us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'hysteria', label: 'NL · nl-01', nodeId: 'node-hy2-nl-01', host: 'nl-01.example.com', port: 8443, uri: DEMO_URI },
+  { protocol: 'shadowsocks', label: 'FI · fi-01', nodeId: 'node-ss-fi-01', host: 'fi-01.example.com', port: 8388, uri: DEMO_URI },
+  { protocol: 'amneziawg', label: 'SE · se-01', nodeId: 'node-awg-se-01', host: 'se-01.example.com', port: 51820, uri: DEMO_URI },
 ];
 const STANDARD_ENDPOINTS: UserEndpoint[] = [
-  { protocol: 'xray', nodeName: 'DE · de-02', host: 'de-02.example.com', port: 443, uri: DEMO_URI },
-  { protocol: 'hysteria', nodeName: 'SG · sg-01', host: 'sg-01.example.com', port: 8443, uri: DEMO_URI },
+  { protocol: 'xray', label: 'DE · de-02', nodeId: 'node-xray-de-02', host: 'de-02.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'hysteria', label: 'SG · sg-01', nodeId: 'node-hy2-sg-01', host: 'sg-01.example.com', port: 8443, uri: DEMO_URI },
 ];
 
 export function endpointsFor(userId: string): UserEndpoint[] {

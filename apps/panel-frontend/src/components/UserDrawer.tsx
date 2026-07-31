@@ -283,28 +283,29 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
   const preview: PreviewData = useMemo(() => {
     if (!isEdit) return estimate;
     const endpoints = endpointsQuery.data?.endpoints ?? [];
-    const hosts = new Set(endpoints.map((e) => e.host));
+    // Joined by node id, never by name: one node hands out several lines under
+    // different labels, so matching on the caption would match nothing at all.
+    const nodeById = new Map((nodesQuery.data?.nodes ?? []).map((n) => [n.id, n]));
+    const rows = endpoints.map((e, i) => ({
+      key: `${e.uri.slice(0, 40)}#${i}`,
+      // The caption the client will show, which is what an operator gets asked
+      // about over support chat.
+      title: e.label,
+      protocol: e.protocol,
+      note: String(e.port),
+      online: nodeById.get(e.nodeId)?.status === 'online',
+    }));
     return {
-      // The label is what the client will show for this line, which is the
-      // thing an operator is asked about over support chat.
-      rows: endpoints.map((e, i) => ({
-        key: `${e.uri.slice(0, 40)}#${i}`,
-        title: e.nodeName,
-        protocol: e.protocol,
-        note: String(e.port),
-        // The DTO carries no node id, so per-line liveness cannot be joined
-        // without guessing: nodeName here is a display label, not a node.
-        online: null,
-      })),
-      configs: endpoints.length,
-      // Distinct addresses the client will dial. Not a node count: several
-      // lines can ride one entry, and cascade exits never appear at all.
-      places: hosts.size,
+      rows,
+      configs: rows.length,
+      // Real nodes again, now that there is an id to count. Two endpoints on
+      // one address with different ports are one node, and one address.
+      places: new Set(endpoints.map((e) => e.nodeId)).size,
       protocols: new Set(endpoints.map((e) => e.protocol)).size,
-      online: null,
+      online: rows.filter((r) => r.online).length,
       estimate: false as const,
     };
-  }, [isEdit, estimate, endpointsQuery.data]);
+  }, [isEdit, estimate, endpointsQuery.data, nodesQuery.data]);
 
   function applyPreset(p: Preset) {
     setPresetId(p.id);
@@ -1047,18 +1048,16 @@ interface PreviewRowData {
   protocol: string;
   /** Country for the estimate, port for the real thing. */
   note: string | null;
-  /** null when liveness is not knowable from the source. */
-  online: boolean | null;
+  online: boolean;
 }
 
 interface PreviewData {
   rows: PreviewRowData[];
   configs: number;
-  /** Nodes while estimating, distinct addresses once the server has answered. */
+  /** Distinct nodes behind those configs. */
   places: number;
   protocols: number;
-  /** null when the source cannot say, which is the server's answer today. */
-  online: number | null;
+  online: number;
   /** Guessed from bindings because the user has no id yet. */
   estimate: boolean;
 }
@@ -1109,7 +1108,7 @@ function PreviewCard({
           <IconEye size={16} stroke={1.8} color={CYAN} />
           <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('userDrawer.previewTitle')}</Text>
         </Box>
-        {preview.online !== null && preview.configs > 0 && (
+        {preview.configs > 0 && (
           <Box style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Box style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: MOSS }} />
             <Text style={{ fontFamily: MONO, fontSize: 10, color: MOSS }}>
@@ -1119,15 +1118,20 @@ function PreviewCard({
         )}
       </Box>
 
+      {/* Each label is pluralised on its own number: "1 конфиг" against
+          "4 конфига" against "6 конфигов". */}
       <Box style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-        <Count value={preview.configs} label={t('userDrawer.configs')} />
-        <Text style={{ fontFamily: MONO, fontSize: 12, color: DIM }}>·</Text>
         <Count
-          value={preview.places}
-          label={preview.estimate ? t('userDrawer.nodes') : t('userDrawer.addresses')}
+          value={preview.configs}
+          label={t('userDrawer.configs', { count: preview.configs })}
         />
         <Text style={{ fontFamily: MONO, fontSize: 12, color: DIM }}>·</Text>
-        <Count value={preview.protocols} label={t('userDrawer.protocols')} />
+        <Count value={preview.places} label={t('userDrawer.nodes', { count: preview.places })} />
+        <Text style={{ fontFamily: MONO, fontSize: 12, color: DIM }}>·</Text>
+        <Count
+          value={preview.protocols}
+          label={t('userDrawer.protocols', { count: preview.protocols })}
+        />
       </Box>
 
       <Stack gap={6}>
@@ -1146,17 +1150,15 @@ function PreviewCard({
               backgroundColor: WELL,
             }}
           >
-            {r.online !== null && (
-              <Box
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: 3,
-                  backgroundColor: r.online ? MOSS : MIST,
-                  flexShrink: 0,
-                }}
-              />
-            )}
+            <Box
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: r.online ? MOSS : MIST,
+                flexShrink: 0,
+              }}
+            />
             <Text
               style={{
                 flex: 1,
