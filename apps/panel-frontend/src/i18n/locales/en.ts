@@ -73,7 +73,7 @@ export default {
   pageMeta: {
     users_one: '{{count}} account',
     users_other: '{{count}} accounts',
-    usersActive: '{{count}} active',
+    usersActive: '{{count}} valid',
     usersLimited: '{{count}} limited',
     hosts_one: '{{count}} host',
     hosts_other: '{{count}} hosts',
@@ -886,7 +886,7 @@ export default {
       trafficToday: 'Traffic today',
       trafficVsYesterday: '{{delta}} vs yesterday',
       trafficNoData: 'no data yet',
-      activeUsers: 'Active users',
+      activeUsers: 'Valid accounts',
       ofTotal: 'of {{total}} total',
       nodesOnline: 'Nodes online',
       allNodesUp: 'All nodes responding',
@@ -907,7 +907,7 @@ export default {
     userStatus: {
       title: 'Users by status',
       total: 'Total',
-      active: 'Active',
+      active: 'Valid',
       expired: 'Expired',
       limited: 'Limited',
       disabled: 'Disabled',
@@ -1171,7 +1171,7 @@ export default {
     },
     statChips: {
       all: 'All',
-      active: 'Active',
+      active: 'Valid',
       expired: 'Expired',
       limited: 'Limited',
       disabled: 'Off',
@@ -1183,7 +1183,7 @@ export default {
     rotateTitle: 'Rotate subscription for "{{name}}"?',
     rotateBody: 'A new link is issued; the old link stops working immediately. Any revoke is cleared.',
     resetTrafficTitle: 'Reset traffic for "{{name}}"?',
-    resetTrafficBody: 'Used traffic is zeroed and a traffic limit (if any) is lifted - the user goes back to active.',
+    resetTrafficBody: 'Used traffic is zeroed and a traffic limit (if any) is lifted - the account goes back to valid.',
     notify: {
       created: 'User created',
       updated: 'User updated',
@@ -1859,7 +1859,7 @@ export default {
     dashboardHeadlineBusy: 'Busy fleet today.',
     dashboardHeadlineSteady: 'Steady traffic.',
     dashboardSubtitle:
-      '{{nodes}} nodes online, {{users}} users active. Aggregated traffic and live host telemetry below - pulled fresh every ten seconds.',
+      '{{nodes}} nodes online, {{users}} valid accounts. Aggregated traffic and live host telemetry below - pulled fresh every ten seconds.',
     dashboardFooterNeverOnline:
       '{{count}} user never online · Review provisioning',
     dashboardFooterNeverOnlinePlural:
@@ -2173,10 +2173,12 @@ export default {
     remarkRequired: 'required',
   },
 
+  // One axis: whether the subscription works. Presence is stated by the dot and
+  // the last-online column, so online/offline are gone from here: sitting in the
+  // same object they claimed to be alternatives to the rest, and "Active" was
+  // read as "connected right now" next to a hollow dot.
   userStatus: {
-    online: 'Online',
-    offline: 'Offline',
-    active: 'Active',
+    active: 'Valid',
     limited: 'Limited',
     expired: 'Expired',
     disabled: 'Disabled',

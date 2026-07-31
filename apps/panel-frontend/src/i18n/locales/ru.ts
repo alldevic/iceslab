@@ -79,7 +79,7 @@ export default {
     users_few: '{{count}} аккаунта',
     users_many: '{{count}} аккаунтов',
     users_other: '{{count}} аккаунта',
-    usersActive: '{{count}} активных',
+    usersActive: '{{count}} действующих',
     usersLimited: '{{count}} ограничено',
     hosts_one: '{{count}} хост',
     hosts_few: '{{count}} хоста',
@@ -939,7 +939,7 @@ export default {
       trafficToday: 'Трафик сегодня',
       trafficVsYesterday: '{{delta}} ко вчерашнему',
       trafficNoData: 'нет данных за вчера',
-      activeUsers: 'Активных пользователей',
+      activeUsers: 'Действующих аккаунтов',
       ofTotal: 'из {{total}} всего',
       nodesOnline: 'Ноды онлайн',
       allNodesUp: 'Все ноды отвечают',
@@ -960,7 +960,7 @@ export default {
     userStatus: {
       title: 'Пользователи по статусу',
       total: 'Всего',
-      active: 'Активных',
+      active: 'Действующих',
       expired: 'Истёкших',
       limited: 'Лимит',
       disabled: 'Отключён',
@@ -1225,7 +1225,7 @@ export default {
     },
     statChips: {
       all: 'Все',
-      active: 'Активен',
+      active: 'Действует',
       expired: 'Истёк',
       limited: 'Лимит',
       disabled: 'Откл.',
@@ -1237,7 +1237,7 @@ export default {
     rotateTitle: 'Перевыпустить подписку «{{name}}»?',
     rotateBody: 'Выдаётся новая ссылка; старая сразу перестаёт работать. Отзыв (если был) снимается.',
     resetTrafficTitle: 'Сбросить трафик «{{name}}»?',
-    resetTrafficBody: 'Использованный трафик обнуляется, лимит (если был) снимается - пользователь снова active.',
+    resetTrafficBody: 'Использованный трафик обнуляется, лимит (если был) снимается - аккаунт снова действует.',
     notify: {
       created: 'Пользователь создан',
       updated: 'Пользователь обновлён',
@@ -1910,7 +1910,7 @@ export default {
     dashboardHeadlineBusy: 'Загруженный флот сегодня.',
     dashboardHeadlineSteady: 'Стабильный трафик.',
     dashboardSubtitle:
-      '{{nodes}} нод онлайн, {{users}} активных пользователей. Агрегированный трафик и живая телеметрия хоста ниже - обновляется каждые десять секунд.',
+      '{{nodes}} нод онлайн, {{users}} действующих аккаунтов. Агрегированный трафик и живая телеметрия хоста ниже - обновляется каждые десять секунд.',
     dashboardFooterNeverOnline:
       '{{count}} пользователь ни разу не был онлайн · Проверь provisioning',
     dashboardFooterNeverOnlinePlural:
@@ -2233,10 +2233,12 @@ export default {
     remarkRequired: 'обязательно',
   },
 
+  // Одна ось: работает подписка или нет. Присутствие живёт на точке и в колонке
+  // последнего входа, поэтому «онлайн» и «офлайн» отсюда убраны: лежа в одном
+  // объекте с остальными, они утверждали, что это варианты одного выбора, а
+  // «Активен» дочитывался как «сейчас в сети» при полой точке рядом.
   userStatus: {
-    online: 'Онлайн',
-    offline: 'Офлайн',
-    active: 'Активен',
+    active: 'Действует',
     limited: 'Ограничен',
     expired: 'Истёк',
     disabled: 'Отключён',
