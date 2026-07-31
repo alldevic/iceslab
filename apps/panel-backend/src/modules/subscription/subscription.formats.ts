@@ -70,7 +70,19 @@ export function encodePlainList(uris: string[]): string {
 
 interface SubscriptionEndpointBase {
   protocol: ProtocolName;
+  /**
+   * DISPLAY LABEL, not the node's name, whatever the field is called: it is
+   * built by `subscriptionServerName` out of the flag, the host remark and the
+   * node name, and a cascade entry emits several endpoints carrying different
+   * labels off one node. Never join on it. `nodeId` below is the join key.
+   */
   nodeName: string;
+  /**
+   * Node this endpoint is served from. Added 2026-07-31: the admin endpoints
+   * view needed to show which of them are live, and the only other field that
+   * looked like an identity was the label above, which is not one.
+   */
+  nodeId: string;
   /** Public host the client connects to (no port). */
   host: string;
   /** Public port the client connects to. */

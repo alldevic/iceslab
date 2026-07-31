@@ -437,6 +437,10 @@ export async function generateSubscription(
         ? securityLayerRaw
         : 'default';
     const hostMeta = {
+      // Rides in `hostMeta` rather than being written out at each of the ten
+      // pushes below: it is the same for every endpoint of this binding, and
+      // one spread cannot be forgotten in a branch the way ten copies can.
+      nodeId: b.node.id,
       hostId: hostOverrides?.id,
       // Only carried when this binding has MORE THAN ONE host. It exists to
       // tell apart the several cascade profiles a multi-host entry produces,

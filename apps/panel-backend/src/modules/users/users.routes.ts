@@ -147,6 +147,15 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({
         endpoints: result.endpoints.map((e) => ({
           protocol: e.protocol,
+          // `label` is the string the client shows. It was called `nodeName`
+          // until 2026-07-31 while never holding a node name: one node emits
+          // several of these (a cascade entry produces one per direction and
+          // policy), so the old name invited a join that quietly drops rows.
+          // `nodeId` is the join key.
+          label: e.nodeName,
+          nodeId: e.nodeId,
+          // DEPRECATED alias, kept so the drawer that shipped today keeps its
+          // labels through one deploy. Remove once the UI reads `label`.
           nodeName: e.nodeName,
           host: e.host,
           port: e.port,
