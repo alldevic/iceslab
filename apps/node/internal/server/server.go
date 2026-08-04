@@ -248,6 +248,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			if r, ok := adapter.(core.RestartReporter); ok {
 				st := r.RestartStats()
 				dtoRestarts := dto.CoreRestartsDto{
+					Core:             adapter.Name(),
 					Total:            st.Crash + st.Memory,
 					Crash:            st.Crash,
 					Memory:           st.Memory,
@@ -257,6 +258,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				}
 				if !st.LastAt.IsZero() {
 					dtoRestarts.LastAt = st.LastAt.UTC().Format(time.RFC3339)
+				}
+				if !st.SinceAt.IsZero() {
+					dtoRestarts.SinceAt = st.SinceAt.UTC().Format(time.RFC3339)
 				}
 				cs.Restarts = &dtoRestarts
 			}

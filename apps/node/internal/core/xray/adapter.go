@@ -100,6 +100,9 @@ type Adapter struct {
 	restartsMemory    int
 	lastRestartAt     time.Time
 	lastRestartReason string
+	// countingSince: when this adapter started tallying (agent start). Sent
+	// alongside the counters so a bare "3 restarts" has a time window.
+	countingSince time.Time
 
 	// restartMu serializes regenerateAndRestart so concurrent config changes
 	// can't race the subprocess swap. Never held together with mu across IO.
@@ -130,6 +133,7 @@ func (a *Adapter) RestartStats() core.RestartStats {
 		Memory:           a.restartsMemory,
 		LastAt:           a.lastRestartAt,
 		LastReason:       a.lastRestartReason,
+		SinceAt:          a.countingSince,
 		MemoryLimitBytes: a.cfg.MemoryLimitBytes,
 	}
 	proc := a.proc
@@ -148,9 +152,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.RunCmd = defaultRunCmd
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]xrayClient),
+		cfg:           cfg,
+		logger:        logger,
+		users:         make(map[string]xrayClient),
+		countingSince: time.Now(),
 	}
 }
 

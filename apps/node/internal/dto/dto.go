@@ -164,14 +164,25 @@ type GetStatsResponse struct {
 // by adapters that don't supervise a subprocess and by pre-2026-08 agents, so
 // the panel must treat its absence as "unknown", not as "zero restarts".
 type CoreRestartsDto struct {
+	// Core names which core these numbers belong to ("xray", ...). Present so a
+	// reader never has to infer it from the node's protocol: today only xray
+	// arms the watchdog, but the mechanism is core-agnostic.
+	Core string `json:"core"`
 	// Total is Crash+Memory, sent explicitly so a reader doesn't have to know
-	// the breakdown is exhaustive.
+	// the breakdown is exhaustive (a future third cause would keep Total right
+	// while crash+memory silently stopped adding up).
 	Total  int `json:"total"`
 	Crash  int `json:"crash"`
 	Memory int `json:"memory"`
 	// LastAt is RFC3339, empty when nothing has restarted yet.
-	LastAt     string `json:"lastAt,omitempty"`
+	LastAt string `json:"lastAt,omitempty"`
+	// LastReason is "crash" or "memory" (subprocess.RestartReason), empty until
+	// something restarts.
 	LastReason string `json:"lastReason,omitempty"`
+	// SinceAt (RFC3339) is when the agent started counting. Counters are
+	// in-memory, so they reset when the agent restarts; without this a bare
+	// "3 restarts" can't be dated.
+	SinceAt string `json:"sinceAt,omitempty"`
 	// MemoryLimitBytes is the armed ceiling; 0 means the watchdog is off.
 	// RssBytes is the latest sample (0 = not sampled / not supported).
 	MemoryLimitBytes uint64 `json:"memoryLimitBytes,omitempty"`

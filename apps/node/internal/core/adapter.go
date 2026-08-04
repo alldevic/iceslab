@@ -109,6 +109,10 @@ type RestartStats struct {
 	// LastAt is zero when nothing has restarted yet.
 	LastAt     time.Time
 	LastReason string
+	// SinceAt is when this adapter started counting, i.e. when the agent came
+	// up. Without it "3 restarts" is unreadable: it could mean this morning or
+	// six months ago. Reported so the panel can say "3 since <date>".
+	SinceAt time.Time
 	// MemoryLimitBytes is the armed ceiling (0 = watchdog off), RSSBytes the
 	// latest sample. Together they let the panel show how close a core runs
 	// to the line instead of only counting the times it crossed it.

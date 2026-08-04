@@ -1,4 +1,5 @@
 import type { Node } from '../../generated/prisma/client.js';
+import type { NodeCoreRestarts } from '@iceslab/shared';
 
 // G (Zashchita / hardening) - public shape of the nodes.hardening jsonb blob.
 // Mirrors HardeningInput in nodes.schemas.ts; the frontend reads this to seed
@@ -10,38 +11,14 @@ export interface HardeningDto {
   sshAllowlist?: string[];
 }
 
-/**
- * Public shape of the nodes.coreRestarts jsonb blob (2026-08-04).
- *
- * The agent restarts xray once its memory crosses a ceiling, instead of waiting
- * for the kernel OOM killer. That restart drops every live connection, so the
- * count has to be visible: otherwise the core bounces silently, users complain
- * about drops, and the node card stays green.
- *
- * ⚠ `null` on the node DTO means "no reporting agent has checked in", NOT
- * "zero restarts". Older agents never send this.
- */
-export interface CoreRestartsDto {
-  /** crash + memory. */
-  total: number;
-  /** Died on its own - a rising number here is a bug to chase. */
-  crash: number;
-  /** Watchdog acted before an OOM - rising here means the ceiling is working
-   *  (or is set too low). */
-  memory: number;
-  /** ISO timestamp of the last restart; absent until one happens. */
-  lastAt?: string;
-  /** `crash` | `memory`. */
-  lastReason?: string;
-  /** Armed ceiling in bytes; absent means the watchdog is off on that node. */
-  memoryLimitBytes?: number;
-  /** Latest resident-size sample in bytes. Read together with the ceiling to
-   *  see how close the core runs, not just how often it crossed. */
-  rssBytes?: number;
-  /** ISO timestamp of the poll that produced these numbers, so the UI can say
-   *  how fresh they are (they are only refreshed while the node is reachable). */
-  observedAt: string;
-}
+// Shape of the nodes.coreRestarts jsonb blob. Defined once in @iceslab/shared
+// (NodeCoreRestarts) and re-exported here for the modules that already import
+// node DTO types from this file; panel-frontend imports the same type straight
+// from shared, so there is a single definition to keep in sync.
+//
+// ⚠ `null` on the node DTO means "no reporting agent has checked in", NOT
+// "zero restarts". Older agents never send this.
+export type { NodeCoreRestarts } from '@iceslab/shared';
 
 export interface PublicNodeDto {
   id: string;
@@ -52,8 +29,8 @@ export interface PublicNodeDto {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
-  /** See CoreRestartsDto. null = never reported (not the same as zero). */
-  coreRestarts: CoreRestartsDto | null;
+  /** See NodeCoreRestarts. null = never reported (not the same as zero). */
+  coreRestarts: NodeCoreRestarts | null;
   // T7: proxy-core version reported by the agent (e.g. xray "26.3.27"), NULL
   // until a versioned agent checks in. Shown on the node card; the cascade form
   // uses it to warn before selecting an old node as a balancer entry.
@@ -88,7 +65,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     status: node.status,
     lastStatusChange: node.lastStatusChange?.toISOString() ?? null,
     lastStatusMessage: node.lastStatusMessage,
-    coreRestarts: (node.coreRestarts as CoreRestartsDto | null) ?? null,
+    coreRestarts: (node.coreRestarts as NodeCoreRestarts | null) ?? null,
     coreVersion: node.coreVersion,
     consumptionMultiplier: node.consumptionMultiplier.toString(),
     regionId: node.regionId,

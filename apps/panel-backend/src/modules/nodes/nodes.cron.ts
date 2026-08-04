@@ -6,7 +6,7 @@ import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
 import { getLogger } from '../../lib/logger.js';
 import { Prisma } from '../../generated/prisma/client.js';
-import type { CoreRestartsDto } from './nodes.mapper.js';
+import type { NodeCoreRestarts } from '@iceslab/shared';
 
 const METRICS_KEY_PREFIX = 'node:metrics:';
 const METRICS_TTL_SECONDS = 60;
@@ -80,10 +80,10 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
         result.coreVersion !== undefined && result.coreVersion !== node.coreVersion;
       // Same rule for the restart tally: undefined = the node was unreachable
       // or runs a pre-2026-08 agent, so keep whatever is stored.
-      const storedRestarts = (node.coreRestarts as CoreRestartsDto | null) ?? null;
+      const storedRestarts = (node.coreRestarts as NodeCoreRestarts | null) ?? null;
       const restartsChanged =
         result.coreRestarts !== undefined &&
-        restartsWorthWriting(storedRestarts, result.coreRestarts);
+        restartsWorthWriting(storedRestarts, result.coreRestarts, Date.now());
       if (statusChanged || messageChanged || versionChanged || restartsChanged) {
         await prisma.node.update({
           where: { id: node.id },
@@ -159,31 +159,54 @@ interface PollResult {
   coreVersion?: string;
   // 2026-08-04: restart tally from the same /healthz. Undefined follows the
   // same rule as coreVersion - unreachable node or pre-2026-08 agent.
-  coreRestarts?: CoreRestartsDto;
+  coreRestarts?: NodeCoreRestarts;
 }
+
+/**
+ * Heartbeat for `observedAt`: even when nothing changed, refresh the row this
+ * often so the stamp keeps meaning "we polled this node recently".
+ *
+ * Added 2026-08-04 after the frontend pointed out the original hole: writes
+ * only happened when a counter or RSS moved, so on a healthy node `observedAt`
+ * froze for hours and the card could not tell "quiet and fine" from "nobody has
+ * polled this node since lunch". One write per node per 10 minutes is nothing
+ * next to being unable to trust the freshness stamp at all.
+ *
+ * Consumers: treat data older than roughly twice this as "not being refreshed".
+ */
+const RESTARTS_HEARTBEAT_MS = 10 * 60 * 1000;
 
 /**
  * Should this tally replace the stored one?
  *
  * The counters move rarely, but `rssBytes` moves on every 30s tick, and writing
  * a row per node per tick just to record memory jitter is pure WAL churn on a
- * fleet. So: always write when anything meaningful changed, and otherwise only
- * when RSS drifted more than 10% from what is stored (enough for the card to
- * track the trend without a write every half-minute).
+ * fleet. So: write when anything meaningful changed, when RSS drifted more than
+ * 10% (enough for the card to track the trend), or when the freshness stamp is
+ * older than the heartbeat above.
  */
 function restartsWorthWriting(
-  stored: CoreRestartsDto | null,
-  fresh: CoreRestartsDto,
+  stored: NodeCoreRestarts | null,
+  fresh: NodeCoreRestarts,
+  nowMs: number,
 ): boolean {
   if (!stored) return true;
   if (
+    stored.core !== fresh.core ||
     stored.total !== fresh.total ||
     stored.crash !== fresh.crash ||
     stored.memory !== fresh.memory ||
     stored.lastAt !== fresh.lastAt ||
     stored.lastReason !== fresh.lastReason ||
+    stored.sinceAt !== fresh.sinceAt ||
     stored.memoryLimitBytes !== fresh.memoryLimitBytes
   ) {
+    return true;
+  }
+  const storedAt = Date.parse(stored.observedAt);
+  // NaN (missing/garbled stamp on a row written by an older build) counts as
+  // stale, so the next poll repairs it instead of freezing forever.
+  if (!Number.isFinite(storedAt) || nowMs - storedAt >= RESTARTS_HEARTBEAT_MS) {
     return true;
   }
   const prevRss = stored.rssBytes ?? 0;
@@ -245,19 +268,34 @@ async function checkOne(node: {
     // agents and non-xray nodes omit it, leaving coreVersion undefined).
     const xrayCore = res.cores.find((c) => c.name === 'xray');
     const coreVersion = xrayCore?.version || undefined;
+    // Restart tally: prefer xray (the only core that arms the watchdog today),
+    // but fall back to whichever core reported one. The agent contract allows
+    // any subprocess-backed core to report, so hard-coding xray would leave the
+    // field empty on a node whose other core started reporting.
+    // ⚠ Single tally by design: when a second core actually arms a watchdog,
+    // this becomes a list and `core` inside the object is what disambiguates.
+    const restartCore = xrayCore?.restarts ? xrayCore : res.cores.find((c) => c.restarts);
     // 2026-08-04: restart tally, stamped with the observation time so the card
     // can show how fresh it is. `total` is recomputed rather than trusted, so a
     // malformed agent response can't produce a tally that contradicts itself.
-    const raw = xrayCore?.restarts;
-    const coreRestarts: CoreRestartsDto | undefined = raw
+    const raw = restartCore?.restarts;
+    const coreRestarts: NodeCoreRestarts | undefined = raw
       ? {
+          // `core` comes from the agent (which core these numbers are for);
+          // fall back to the core's own name for agents built before that
+          // field existed.
+          core: raw.core || restartCore?.name || 'xray',
           total: raw.crash + raw.memory,
           crash: raw.crash,
           memory: raw.memory,
           lastAt: raw.lastAt,
           lastReason: raw.lastReason,
-          memoryLimitBytes: raw.memoryLimitBytes,
-          rssBytes: raw.rssBytes,
+          sinceAt: raw.sinceAt,
+          // Normalise 0 to absent. On the wire the agent means the same thing
+          // by both ("no ceiling" / "not sampled"), and storing one of the two
+          // spellings keeps consumers from having to check for each.
+          memoryLimitBytes: raw.memoryLimitBytes || undefined,
+          rssBytes: raw.rssBytes || undefined,
           observedAt: new Date().toISOString(),
         }
       : undefined;

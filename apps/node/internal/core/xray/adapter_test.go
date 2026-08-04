@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
@@ -294,6 +295,41 @@ func TestN1_LiveAdd_FallsBackWhenAduAddsNobody(t *testing.T) {
 
 	if a.liveUpdateUser(context.Background(), liveAdd, xrayClient{ID: "uuid-a", Email: "alice"}) {
 		t.Errorf("liveUpdateUser must return false when adu added 0 users (force restart fallback)")
+	}
+}
+
+// TestRestartStatsReporting covers what the panel puts on the node card: the
+// tally must be split by cause, carry the reason of the last one, and be dated
+// via SinceAt (a bare "3 restarts" can't be read without knowing since when).
+func TestRestartStatsReporting(t *testing.T) {
+	a, _ := newTestAdapter(t)
+
+	st := a.RestartStats()
+	if st.Crash != 0 || st.Memory != 0 {
+		t.Errorf("fresh adapter: got crash=%d memory=%d, want 0/0", st.Crash, st.Memory)
+	}
+	if st.SinceAt.IsZero() {
+		t.Error("SinceAt must be stamped at construction, else the counters can't be dated")
+	}
+	if !st.LastAt.IsZero() || st.LastReason != "" {
+		t.Errorf("fresh adapter must report no last restart, got %v / %q", st.LastAt, st.LastReason)
+	}
+
+	at := time.Now()
+	a.recordRestart(subprocess.RestartEvent{Reason: subprocess.RestartReasonCrash, At: at})
+	a.recordRestart(subprocess.RestartEvent{Reason: subprocess.RestartReasonMemory, At: at})
+
+	st = a.RestartStats()
+	if st.Crash != 1 || st.Memory != 1 {
+		t.Errorf("after one of each: got crash=%d memory=%d, want 1/1", st.Crash, st.Memory)
+	}
+	// Causes are counted separately on purpose: rising `crash` is a bug to
+	// chase, rising `memory` is the watchdog working as intended.
+	if st.LastReason != string(subprocess.RestartReasonMemory) {
+		t.Errorf("LastReason: got %q, want %q", st.LastReason, subprocess.RestartReasonMemory)
+	}
+	if !st.LastAt.Equal(at) {
+		t.Errorf("LastAt: got %v, want %v", st.LastAt, at)
 	}
 }
 

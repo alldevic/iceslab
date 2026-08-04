@@ -413,8 +413,15 @@ export interface GetStatsResponse {
  * a visible counter the panel would show a healthy green node while users
  * complain about drops.
  */
+export type CoreRestartReason = 'crash' | 'memory';
+
 export interface CoreRestarts {
-  /** crash + memory, sent explicitly. */
+  /** Which core these numbers belong to ("xray", ...). Present so a reader
+   *  never infers it from the node's protocol: today only xray arms the
+   *  watchdog, but the mechanism is core-agnostic. */
+  core: string;
+  /** crash + memory, sent explicitly rather than derived: a future third cause
+   *  would keep this right while crash+memory quietly stopped adding up. */
   total: number;
   /** Died on its own. A rising number here is a bug, not maintenance. */
   crash: number;
@@ -423,14 +430,37 @@ export interface CoreRestarts {
   memory: number;
   /** RFC3339. Absent until something has restarted. */
   lastAt?: string;
-  /** `crash` | `memory`. */
-  lastReason?: string;
-  /** Armed ceiling in bytes; absent/0 = watchdog off. */
+  lastReason?: CoreRestartReason;
+  /** RFC3339 instant the agent started counting. Counters live in the agent's
+   *  memory and reset when it restarts, so without this "3 restarts" cannot be
+   *  dated: it could be this morning or six months ago. */
+  sinceAt?: string;
+  /** Armed ceiling in bytes; absent = watchdog off. Never sent as 0. */
   memoryLimitBytes?: number;
-  /** Latest resident-size sample in bytes; absent/0 = not sampled (or the
+  /** Latest resident-size sample in bytes; absent = not sampled (or the
    *  platform can't read it). Shown next to the ceiling so an operator sees
-   *  how close a core runs, not just how often it crossed. */
+   *  how close a core runs, not just how often it crossed. Never sent as 0. */
   rssBytes?: number;
+}
+
+/**
+ * What the PANEL stores and serves on the node DTO: the agent's tally plus the
+ * panel's own freshness stamp. Single definition on purpose - panel-backend's
+ * mapper and panel-frontend's api client both import this one, so the contract
+ * can't drift between three copies.
+ */
+export interface NodeCoreRestarts extends CoreRestarts {
+  /**
+   * RFC3339 instant of the poll these numbers came from.
+   *
+   * ⚠ Refreshed at most every few minutes, not on every 30s poll: the panel
+   * only writes the row when something moved (or on a periodic heartbeat), so
+   * a quiet node would otherwise churn a database write per tick. Treat it as
+   * "data is no older than this, give or take the heartbeat interval". A stamp
+   * far past that interval means the node stopped being polled, not that it is
+   * healthy and quiet.
+   */
+  observedAt: string;
 }
 
 export interface CoreStatus {
