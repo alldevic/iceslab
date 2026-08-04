@@ -5,6 +5,7 @@ import { NodeTransport, NodeRequestError } from './nodes.transport.js';
 import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
 import { getLogger } from '../../lib/logger.js';
+import { Prisma } from '../../generated/prisma/client.js';
 import type { CoreRestartsDto } from './nodes.mapper.js';
 
 const METRICS_KEY_PREFIX = 'node:metrics:';
@@ -91,7 +92,12 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
             lastStatusChange: statusChanged ? new Date() : undefined,
             lastStatusMessage: result.message,
             ...(versionChanged ? { coreVersion: result.coreVersion } : {}),
-            ...(restartsChanged ? { coreRestarts: result.coreRestarts } : {}),
+            // Cast mirrors the jsonb-write pattern used for `hardening` in
+            // nodes.service.ts: a typed interface has no index signature, so it
+            // needs the explicit widening to InputJsonValue.
+            ...(restartsChanged
+              ? { coreRestarts: result.coreRestarts as unknown as Prisma.InputJsonValue }
+              : {}),
           },
         });
       }
