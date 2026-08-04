@@ -2142,6 +2142,26 @@ export default {
     metricsPending: 'Metrics pending - first poll within 15s',
     loadLabel: 'Load',
     coreVersion: 'xray core version (exit selection needs >= 25.9.5)',
+    coreNoData: 'no core data',
+    coreNoDataTip:
+      'This node has never reported its core: an older agent, or it has not checked in. That is not the same as "no restarts" - the panel simply does not know how many there were.',
+    coreNoRss: 'no memory sample',
+    coreNoLimit: 'no ceiling set',
+    coreMemTip:
+      'xray core memory: {{rss}} against a {{limit}} ceiling. Cross it and the agent restarts the core, dropping every live connection.',
+    coreMemNoLimitTip:
+      'No memory ceiling is armed on this node, the watchdog is off: nothing will stop the core before the system kills it. Last sample: {{rss}}.',
+    coreObservedTip:
+      'Numbers taken at {{at}}. The panel polls every 30s but only stores a sample when a counter moved or memory drifted more than 10%, so a calm core keeps the same stamp for a long while.',
+    coreFrozen: 'The node is unreachable right now, these numbers are frozen at its last answer.',
+    restartsNone: 'no restarts',
+    restartsNoneTip: 'The core has not restarted once for as long as the agent has been counting.',
+    restarts_one: '{{count}} restart',
+    restarts_other: '{{count}} restarts',
+    restartsTip:
+      'Crashes: {{crash}}, memory ceiling: {{memory}}. Last one: {{when}}. Every restart drops live connections, so match complaints about drops against this counter. A rising crash count is a bug; a rising memory count is the ceiling doing its job.',
+    reasonMemory: 'memory',
+    reasonCrash: 'crash',
   },
 
   squadForm: {

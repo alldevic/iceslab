@@ -423,6 +423,43 @@ export interface NodeHardening {
   sshAllowlist?: string[];
 }
 
+/**
+ * How often the node's xray core came back up, and how close it runs to the
+ * ceiling that makes the agent restart it (2026-08-04).
+ *
+ * A restart drops every live connection, so this is the one number that turns
+ * "users complain, panel is green" into something an operator can see.
+ *
+ * ⚠ The whole object is null on a node that never reported it - a pre-2026-08
+ * agent, or one that has not checked in yet. That is NOT the same as zero
+ * restarts, and the card must not print it as one. Same rule one level down:
+ * `memoryLimitBytes` absent means the watchdog is off, not that it is zero.
+ */
+export interface CoreRestarts {
+  /** crash + memory. */
+  total: number;
+  /** Core died on its own - growth here is a bug to chase, not maintenance. */
+  crash: number;
+  /** Watchdog acted before the kernel would have. */
+  memory: number;
+  /** Absent until something has actually restarted. */
+  lastAt?: string;
+  /** `crash` | `memory` - kept as a plain string, the panel treats anything
+   *  that is not `memory` as a crash rather than rejecting it. */
+  lastReason?: string;
+  /** Armed ceiling in bytes; absent = watchdog off on that node. */
+  memoryLimitBytes?: number;
+  /** Latest resident-size sample of the core process. */
+  rssBytes?: number;
+  /**
+   * When the panel last WROTE this tally, not when it last polled the node.
+   * The status cron ticks every 30s but only persists when a counter moved or
+   * RSS drifted >10%, so a steady core legitimately carries an old stamp. Show
+   * it as a fact, never colour it as staleness - see NodeCard.
+   */
+  observedAt: string;
+}
+
 export interface Node {
   id: string;
   name: string;
@@ -432,6 +469,8 @@ export interface Node {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
+  /** See CoreRestarts. null = never reported, not zero. */
+  coreRestarts: CoreRestarts | null;
   // T7 - proxy-core version (e.g. xray "26.3.27"), null until a versioned agent
   // reports in. Shown on the node card; cascade form warns on an old balancer entry.
   coreVersion: string | null;

@@ -76,6 +76,31 @@ const NODE_SEEDS: NodeSeed[] = [
   { id: 'node-xray-us-01', name: 'xray-us-01', host: 'us-01.example.com', cc: 'US', protocol: 'xray', region: 'reg-us', selfSteal: true, cpu: 53, ram: 68, disk: 56, cores: 4, ramGiB: 8, diskGiB: 80, todayGiB: 38.2 },
 ];
 
+// Restart tallies for the demo fleet. Only xray reports one, and the three
+// xray nodes deliberately show the three states the card has to tell apart: a
+// core that never blinked, a core the memory watchdog has been bouncing, and a
+// node that never reported at all (null, which is NOT zero restarts).
+const CORE_RESTARTS: Record<string, PanelNode['coreRestarts']> = {
+  'node-xray-de-01': {
+    total: 0,
+    crash: 0,
+    memory: 0,
+    memoryLimitBytes: 2 * GiB,
+    rssBytes: Math.round(0.42 * GiB),
+    observedAt: iso(4 * 60_000),
+  },
+  'node-xray-de-02': {
+    total: 3,
+    crash: 0,
+    memory: 3,
+    lastAt: iso(5 * HOUR),
+    lastReason: 'memory',
+    memoryLimitBytes: GiB,
+    rssBytes: Math.round(0.79 * GiB),
+    observedAt: iso(2 * 60_000),
+  },
+};
+
 export const NODES: PanelNode[] = NODE_SEEDS.map((n) => ({
   id: n.id,
   name: n.name,
@@ -85,6 +110,7 @@ export const NODES: PanelNode[] = NODE_SEEDS.map((n) => ({
   status: 'online',
   lastStatusChange: iso(3 * HOUR),
   lastStatusMessage: null,
+  coreRestarts: CORE_RESTARTS[n.id] ?? null,
   coreVersion: n.protocol === 'xray' ? '26.3.27' : null,
   consumptionMultiplier: '1',
   regionId: n.region,
