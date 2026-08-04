@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // CoreAdapter is the central abstraction of Iceslab: every proxy core wraps
@@ -84,6 +85,44 @@ type CoreAdapter interface {
 	// admins had to hand-edit on every change. Panel auto-pushes via
 	// /applyInbounds, dispatcher fans out to the matching adapter.
 	ApplyInbound(port int, cfg json.RawMessage) error
+}
+
+// RestartStats is an adapter's running tally of core restarts, surfaced on
+// /healthz and stored per node by the panel.
+//
+// Why this is reported at all (2026-08-04): the memory watchdog restarts a core
+// before it eats the box, and a restart drops live connections. Without a
+// visible counter that trade is invisible - the core quietly bounces, users
+// complain about drops, and the panel shows a green node. The number is the
+// feature as much as the restart is.
+//
+// Counters are cumulative since the ADAPTER started, not since the process
+// started: a config push replaces the underlying process, and resetting the
+// tally exactly when an operator is investigating would defeat the point. They
+// do reset when the agent restarts; the panel tolerates a counter going
+// backwards (it means "agent restarted", not "restarts un-happened").
+type RestartStats struct {
+	// Crash / Memory: restarts by cause. Memory means the watchdog acted
+	// before an OOM; Crash means the process died on its own.
+	Crash  int
+	Memory int
+	// LastAt is zero when nothing has restarted yet.
+	LastAt     time.Time
+	LastReason string
+	// MemoryLimitBytes is the armed ceiling (0 = watchdog off), RSSBytes the
+	// latest sample. Together they let the panel show how close a core runs
+	// to the line instead of only counting the times it crossed it.
+	MemoryLimitBytes uint64
+	RSSBytes         uint64
+}
+
+// RestartReporter is an OPTIONAL interface an adapter may implement to report
+// the above. /healthz type-asserts each adapter against it, exactly like
+// Versioner below; adapters that don't implement it simply report nothing.
+type RestartReporter interface {
+	// RestartStats must be goroutine-safe and cheap: it is called on every
+	// healthcheck poll (every 30s per node).
+	RestartStats() RestartStats
 }
 
 // Versioner is an OPTIONAL interface an adapter may implement to report the

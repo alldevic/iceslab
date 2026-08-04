@@ -43,6 +43,16 @@ type Config struct {
 	// Defaults to os/exec; tests inject a fake to assert behaviour without
 	// shelling out.
 	RunCmd RunCmdFunc
+
+	// MemoryLimitBytes arms the subprocess memory watchdog for xray when > 0
+	// (0 = off, the pre-2026-08 behaviour). main.go derives it from a percent
+	// of host RAM. See subprocess.Config.MemoryLimitBytes for the trade-off:
+	// a restart drops live connections, so this ceiling is meant to sit high.
+	//
+	// xray specifically because that is where the memory problem showed up in
+	// the field (XHTTP inbounds); the mechanism itself is protocol-agnostic
+	// and can be armed for other cores by passing a limit the same way.
+	MemoryLimitBytes uint64
 }
 
 // RunCmdFunc executes an external command synchronously and returns its
@@ -82,9 +92,54 @@ type Adapter struct {
 
 	proc *subprocess.Subprocess
 
+	// Restart tally (under mu). Lives on the ADAPTER, not on Subprocess, on
+	// purpose: every config push builds a fresh Subprocess, so per-process
+	// counters would reset to zero at the worst possible moment. Fed by
+	// recordRestart via subprocess.Config.OnRestart, read by RestartStats.
+	restartsCrash     int
+	restartsMemory    int
+	lastRestartAt     time.Time
+	lastRestartReason string
+
 	// restartMu serializes regenerateAndRestart so concurrent config changes
 	// can't race the subprocess swap. Never held together with mu across IO.
 	restartMu sync.Mutex
+}
+
+// recordRestart accumulates what the supervisor did. Called from the
+// subprocess watcher goroutine with no subprocess lock held, so taking a.mu
+// here keeps the existing a.mu -> subprocess.mu ordering intact.
+func (a *Adapter) recordRestart(ev subprocess.RestartEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ev.Reason == subprocess.RestartReasonMemory {
+		a.restartsMemory++
+	} else {
+		a.restartsCrash++
+	}
+	a.lastRestartAt = ev.At
+	a.lastRestartReason = string(ev.Reason)
+}
+
+// RestartStats implements the optional core.RestartReporter interface so
+// /healthz can surface the tally (and the panel can put it on the node card).
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	st := core.RestartStats{
+		Crash:            a.restartsCrash,
+		Memory:           a.restartsMemory,
+		LastAt:           a.lastRestartAt,
+		LastReason:       a.lastRestartReason,
+		MemoryLimitBytes: a.cfg.MemoryLimitBytes,
+	}
+	proc := a.proc
+	a.mu.Unlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock, and there is no
+	// reason to hold both.
+	if proc != nil {
+		st.RSSBytes = proc.RSSBytes()
+	}
+	return st
 }
 
 // New builds an adapter; nothing is spawned until Start is called.
@@ -766,6 +821,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	cascade := a.cascade
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
+	memLimit := a.cfg.MemoryLimitBytes
 	a.mu.Unlock()
 
 	blob, err := renderConfigWithCascade(inbound, clients, cascade)
@@ -811,6 +867,10 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
+		// Memory ceiling + reporting. memLimit is read under a.mu above with
+		// the rest of the config snapshot; 0 leaves the watchdog disarmed.
+		MemoryLimitBytes: memLimit,
+		OnRestart:        a.recordRestart,
 	})
 	if err := proc.Start(ctx); err != nil {
 		a.mu.Lock()

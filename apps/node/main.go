@@ -20,6 +20,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/xray"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/heartbeat"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/metrics"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/server"
 )
@@ -34,6 +35,10 @@ const (
 	defaultXrayRealitySNI      = "www.cloudflare.com"
 	defaultInboundsStorePath   = "/etc/iceslab-node/inbounds.json"
 	adapterStopShutdownTimeout = 10 * time.Second
+	// defaultXrayMemLimitPercent: share of host RAM above which the agent
+	// restarts xray instead of waiting for the kernel OOM killer. See
+	// xrayMemoryCeiling for why it is a percentage and why it is this high.
+	defaultXrayMemLimitPercent = 80
 )
 
 func main() {
@@ -152,6 +157,7 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 			cfg.ConfigPath = getenv("XRAY_CONFIG", defaultXrayConfigPath)
 			cfg.Inbound.ApiPort = getenvInt("XRAY_API_PORT", 8080)
 		}
+		cfg.MemoryLimitBytes = xrayMemoryCeiling(logger)
 		adapters = append(adapters, xray.New(cfg, logger))
 		logger.Info("xray adapter registered")
 	}
@@ -347,6 +353,40 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 	}
 
 	return adapters
+}
+
+// xrayMemoryCeiling turns XRAY_MEM_LIMIT_PERCENT into the byte figure the
+// subprocess watchdog compares RSS against. Returns 0 (watchdog disarmed) when
+// the percentage is 0 or host RAM can't be read.
+//
+// Percent of host RAM rather than an absolute number: the same agent build runs
+// on a 1 GB VPS and a 32 GB one, and an absolute default would be either
+// useless on the big box or a restart storm on the small one.
+//
+// Default 80: the ceiling must mean "this is about to end badly", not "more
+// than I expected". A restart drops every live connection (xray has no drain),
+// so firing early costs users more than it saves. Set 0 to disable.
+func xrayMemoryCeiling(logger *slog.Logger) uint64 {
+	pct := getenvInt("XRAY_MEM_LIMIT_PERCENT", defaultXrayMemLimitPercent)
+	if pct <= 0 {
+		logger.Info("xray memory ceiling disabled (XRAY_MEM_LIMIT_PERCENT=0)")
+		return 0
+	}
+	if pct > 100 {
+		logger.Warn("XRAY_MEM_LIMIT_PERCENT above 100, clamping", "value", pct)
+		pct = 100
+	}
+	total, err := metrics.TotalRAMBytes()
+	if err != nil {
+		// Dev box (Windows) or an unreadable /proc/meminfo. Disarm rather than
+		// guess: a wrong ceiling restarts a healthy core.
+		logger.Warn("xray memory ceiling disabled: cannot read host RAM", "err", err)
+		return 0
+	}
+	limit := total / 100 * uint64(pct)
+	logger.Info("xray memory ceiling armed",
+		"percent", pct, "limitBytes", limit, "hostRamBytes", total)
+	return limit
 }
 
 func buildXrayConfig() (xray.Config, bool) {

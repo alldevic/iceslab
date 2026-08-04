@@ -160,9 +160,31 @@ type GetStatsResponse struct {
 
 // ───── GET /healthz ─────
 
+// CoreRestartsDto is the per-core restart tally (2026-08-04). Omitted entirely
+// by adapters that don't supervise a subprocess and by pre-2026-08 agents, so
+// the panel must treat its absence as "unknown", not as "zero restarts".
+type CoreRestartsDto struct {
+	// Total is Crash+Memory, sent explicitly so a reader doesn't have to know
+	// the breakdown is exhaustive.
+	Total  int `json:"total"`
+	Crash  int `json:"crash"`
+	Memory int `json:"memory"`
+	// LastAt is RFC3339, empty when nothing has restarted yet.
+	LastAt     string `json:"lastAt,omitempty"`
+	LastReason string `json:"lastReason,omitempty"`
+	// MemoryLimitBytes is the armed ceiling; 0 means the watchdog is off.
+	// RssBytes is the latest sample (0 = not sampled / not supported).
+	MemoryLimitBytes uint64 `json:"memoryLimitBytes,omitempty"`
+	RssBytes         uint64 `json:"rssBytes,omitempty"`
+}
+
 type CoreStatus struct {
 	Name    ProtocolName `json:"name"`
 	Running bool         `json:"running"`
+	// Restarts is present only for cores that supervise a real process. See
+	// CoreRestartsDto: absent means "this agent/core doesn't report", which is
+	// NOT the same as zero.
+	Restarts *CoreRestartsDto `json:"restarts,omitempty"`
 	// Version is the underlying core binary version (e.g. "26.3.27" from
 	// `xray version`), empty when the adapter can't report one. The panel
 	// stores it per node to gate features needing a minimum core version

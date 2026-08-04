@@ -283,6 +283,19 @@ model Node {
   // versioned agent checks in. The panel gates cascade exit selection
   // (vlessRoute) on xray >= 25.9.5 using this.
   coreVersion           String?   @map("core_version") @db.VarChar(32)
+  // 2026-08-04: last restart tally reported by the agent's xray core, refreshed
+  // by the same status poller. Shape (see CoreRestarts in packages/shared):
+  //   { total, crash, memory, lastAt?, lastReason?, memoryLimitBytes?,
+  //     rssBytes?, observedAt }
+  // Json because this is display/diagnostic data whose shape will grow (other
+  // cores, per-core breakdown) and nothing queries inside it.
+  //
+  // Why store it at all: the agent restarts xray once its memory crosses a
+  // ceiling, BEFORE the kernel OOM-kills it. That drops live connections, so
+  // without a stored counter the panel would show a green node while users
+  // complain about drops. NULL = no reporting agent has checked in yet, which
+  // is NOT the same as "zero restarts".
+  coreRestarts          Json?     @map("core_restarts")
   // Stamped when the node ACKNOWLEDGES an inbound push (applyInbounds returned
   // ok), never on a failure and never on a plain liveness tick. That makes it a
   // truthful "this node applied the config we sent" marker: comparing it with a

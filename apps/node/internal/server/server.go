@@ -242,6 +242,24 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			if v, ok := adapter.(core.Versioner); ok {
 				cs.Version = v.CoreVersion()
 			}
+			// Restart tally, same optional-interface pattern. Without it a
+			// memory-watchdog restart is invisible: the core bounces, users
+			// see drops, and this endpoint keeps saying "running: true".
+			if r, ok := adapter.(core.RestartReporter); ok {
+				st := r.RestartStats()
+				dtoRestarts := dto.CoreRestartsDto{
+					Total:            st.Crash + st.Memory,
+					Crash:            st.Crash,
+					Memory:           st.Memory,
+					LastReason:       st.LastReason,
+					MemoryLimitBytes: st.MemoryLimitBytes,
+					RssBytes:         st.RSSBytes,
+				}
+				if !st.LastAt.IsZero() {
+					dtoRestarts.LastAt = st.LastAt.UTC().Format(time.RFC3339)
+				}
+				cs.Restarts = &dtoRestarts
+			}
 			cores[i] = cs
 		}(i, adapter)
 	}

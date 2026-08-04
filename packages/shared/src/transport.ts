@@ -401,9 +401,43 @@ export interface GetStatsResponse {
 
 // ───── GET /healthz ─────
 
+/**
+ * Per-core restart tally (2026-08-04). Reported only by cores that supervise a
+ * real subprocess, and only by agents from 2026-08 onward.
+ *
+ * ⚠ Absent means "not reported", NOT "zero restarts". The panel must keep its
+ * stored value when this is missing, the same way it does for `version`.
+ *
+ * Why it exists: the agent restarts a core once its memory crosses a ceiling,
+ * before the kernel OOM-kills it. A restart drops live connections, so without
+ * a visible counter the panel would show a healthy green node while users
+ * complain about drops.
+ */
+export interface CoreRestarts {
+  /** crash + memory, sent explicitly. */
+  total: number;
+  /** Died on its own. A rising number here is a bug, not maintenance. */
+  crash: number;
+  /** Watchdog acted before an OOM. Rising here means the ceiling is doing its
+   *  job (or is set too low). */
+  memory: number;
+  /** RFC3339. Absent until something has restarted. */
+  lastAt?: string;
+  /** `crash` | `memory`. */
+  lastReason?: string;
+  /** Armed ceiling in bytes; absent/0 = watchdog off. */
+  memoryLimitBytes?: number;
+  /** Latest resident-size sample in bytes; absent/0 = not sampled (or the
+   *  platform can't read it). Shown next to the ceiling so an operator sees
+   *  how close a core runs, not just how often it crossed. */
+  rssBytes?: number;
+}
+
 export interface CoreStatus {
   name: ProtocolName;
   running: boolean;
+  /** See CoreRestarts. Absent = this core/agent doesn't report it. */
+  restarts?: CoreRestarts;
   /** T7: underlying core binary version (e.g. "26.3.27" from `xray version`),
    *  absent when the adapter can't report one (config-only mode, non-versioned
    *  core, or a pre-T7 agent). The panel persists it per node to gate features
