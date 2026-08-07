@@ -52,6 +52,16 @@ export class SubscriptionForbiddenError extends Error {
   }
 }
 
+/**
+ * How long a node may be `unreachable` before it stops being served.
+ *
+ * Sized against the poller: it ticks every 30 seconds, so this is three
+ * consecutive failures. Short enough that a genuinely dead node leaves within
+ * the 90 seconds the acceptance criterion names, long enough that a single
+ * missed tick (or a brief panel-to-node network blip) changes nothing.
+ */
+const UNREACHABLE_GRACE_MS = 90_000;
+
 export interface RequestContext {
   ip?: string | null;
   userAgent?: string | null;
@@ -249,7 +259,26 @@ export async function generateSubscription(
                 enabled: true,
                 groupProfiles: { some: { groupId: { in: groupIds } } },
               },
-              node: { deletedAt: null, status: { not: 'disabled' } },
+              node: {
+                deletedAt: null,
+                status: { not: 'disabled' },
+                // Liveness, with hysteresis. `unreachable` means "the panel
+                // could not reach the AGENT", not "the proxy is down": the
+                // mTLS control channel and the user-facing port fail
+                // independently. Dropping a node the moment that flag appears
+                // would turn one bad minute between panel and fleet into every
+                // user losing every endpoint at once.
+                //
+                // So a node leaves the subscription only once it has been
+                // unreachable for longer than UNREACHABLE_GRACE_MS, and
+                // returns on the first successful poll (the poller moves
+                // lastStatusChange when it flips back).
+                OR: [
+                  { status: { not: 'unreachable' } },
+                  { lastStatusChange: null },
+                  { lastStatusChange: { gt: new Date(Date.now() - UNREACHABLE_GRACE_MS) } },
+                ],
+              },
             },
             include: {
               profile: { select: { id: true, protocol: true, config: true } },

@@ -34,6 +34,13 @@ export interface DomainEventMap {
   // subscription read caches at once rather than serving a dead endpoint for
   // the rest of the cache TTL.
   'node.deleted':         { nodeId: string };
+  // node.status-changed → the liveness poller saw a node go up or down. Kept
+  // separate from node.changed on purpose: this fires on a machine's own
+  // behaviour rather than on an operator edit, and it must NOT re-push config
+  // (a node flapping would otherwise restart cores across the fleet). Its only
+  // job is to drop read caches, because once liveness filters the subscription
+  // a stale cache keeps handing out a node that is already down.
+  'node.status-changed':  { nodeId: string; from: string; to: string };
   // host.changed → a Host row (the per-binding public endpoint override:
   // address, port, priority, enabled, disableForFormats) was created, edited,
   // deleted or reordered. Affects subscription OUTPUT only, never the config

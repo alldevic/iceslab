@@ -5,6 +5,7 @@ import { NodeTransport, NodeRequestError } from './nodes.transport.js';
 import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
 import { getLogger } from '../../lib/logger.js';
+import { eventBus } from '../../lib/event-bus.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import type { NodeCoreRestarts } from '@iceslab/shared';
 
@@ -114,6 +115,17 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
           `♻️ *Core restarted*\nnode: \`${escapeMarkdown(node.name)}\`\n` +
             `reason: ${escapeMarkdown(reason)}\ncount: +${delta} (total ${result.coreRestarts.total})`,
         );
+      }
+      // Tell the read caches that liveness moved. Deliberately NOT
+      // node.changed: that one re-pushes config and would restart cores on
+      // every flap. This only invalidates caches, which is what a subscription
+      // filtered by liveness needs.
+      if (statusChanged) {
+        eventBus.emit('node.status-changed', {
+          nodeId: node.id,
+          from: node.status,
+          to: result.status,
+        });
       }
       // Re-push inbounds when a node comes back up. Without this, any
       // applyInbounds attempts that happened while the node was offline
