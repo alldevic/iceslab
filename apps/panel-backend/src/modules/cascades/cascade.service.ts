@@ -154,12 +154,33 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
   // hops. An operator who unchecks `hideHopsFromSub` keeps the exits visible as
   // direct subscription picks (they still work standalone; the cascade just
   // additionally offers them behind its "Auto" entry).
-  const hops = await prisma.cascadeHop.findMany({
-    where: { cascade: { enabled: true, hideHopsFromSub: true } },
-    select: { nodeId: true, position: true },
-  });
+  const [hops, positions, directionNodes] = await Promise.all([
+    prisma.cascadeHop.findMany({
+      where: { cascade: { enabled: true, hideHopsFromSub: true } },
+      select: { nodeId: true, position: true },
+    }),
+    // v4: the same rule, read from the topology tables. Without this a v4-only
+    // cascade would leak its transits and exits into subscriptions as direct
+    // endpoints, which is exactly the bypass this function exists to stop.
+    prisma.cascadePosition.findMany({
+      where: { cascade: { enabled: true, hideHopsFromSub: true } },
+      select: { position: true, nodes: { select: { nodeId: true } } },
+    }),
+    prisma.cascadeDirectionNode.findMany({
+      where: { direction: { cascade: { enabled: true, hideHopsFromSub: true } } },
+      select: { nodeId: true },
+    }),
+  ]);
   const entry = new Set<string>();
   const nonEntry = new Set<string>();
+  for (const p of positions) {
+    for (const n of p.nodes) {
+      if (p.position === 0) entry.add(n.nodeId);
+      else nonEntry.add(n.nodeId);
+    }
+  }
+  // A direction is never an entry: it is the way OUT.
+  for (const d of directionNodes) nonEntry.add(d.nodeId);
   for (const h of hops) {
     if (h.position === 0) entry.add(h.nodeId);
     else nonEntry.add(h.nodeId);

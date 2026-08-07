@@ -67,6 +67,61 @@ function scoreNode(n: NodeForRanking, country: string | null): number {
   return regionScore + utilization * 50;
 }
 
+/**
+ * Rendezvous hashing (highest random weight), weighted by capacity.
+ *
+ * Replaces "sort by score" for entry selection, which was fully deterministic:
+ * with equal data every user got the SAME node, so a pool balanced nothing and
+ * the load metric's lag produced herding (everyone piles onto whichever node
+ * currently looks least loaded, then the metric catches up and the herd swings
+ * back).
+ *
+ * HRW gives three properties at once, which is why it beats plain random:
+ *   - stability: the same user maps to the same node while the pool is
+ *     unchanged, so a subscription refresh does not move anyone (on a router,
+ *     their actual product, a move drops every live connection);
+ *   - spread: proportional to weight across the population;
+ *   - minimal disruption: when a node leaves, only ITS users are rehashed, and
+ *     everyone else stays put.
+ *
+ * The weight is `maxUsers` (an existing capacity hint), not a new field: a node
+ * with maxUsers 1000 should take twice the share of one with 500, and a second
+ * "weight" column would only create ambiguity about which one wins.
+ */
+export function rendezvousOrder<N extends NodeForRanking>(
+  nodes: readonly N[],
+  userId: string,
+): N[] {
+  return nodes
+    .map((n) => ({ n, w: hrwScore(userId, n.id, n.maxUsers ?? DEFAULT_MAX_USERS) }))
+    // Ties broken by node id so the order is total and reproducible.
+    .sort((a, b) => b.w - a.w || (a.n.id < b.n.id ? -1 : 1))
+    .map((x) => x.n);
+}
+
+/**
+ * Weighted HRW score. `-weight / ln(h)` is the standard weighted form: h is a
+ * uniform (0,1) hash of (user, node), so a heavier node wins proportionally
+ * more often without any coordination between requests.
+ */
+function hrwScore(userId: string, nodeId: string, weight: number): number {
+  const h = unitHash(`${userId}:${nodeId}`);
+  if (h <= 0 || h >= 1) return 0;
+  return -Math.max(weight, 1) / Math.log(h);
+}
+
+/** Stable hash of a string into (0,1). FNV-1a: no crypto needed here, only an
+ *  even spread that is identical across processes and restarts. */
+function unitHash(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  // >>> 0 keeps it unsigned; +0.5 keeps the result strictly inside (0,1).
+  return ((h >>> 0) + 0.5) / 4294967296;
+}
+
 export function rankNodesForUser<N extends NodeForRanking>(
   nodes: readonly N[],
   country: string | null,
