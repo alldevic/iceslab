@@ -129,7 +129,7 @@ export function useCascadeRows(cascades: Cascade[], nodes: Node[]): CascadeRow[]
       // real tag and the country the operator chose. A pre-v4 cascade has none,
       // and its exits are read from the hop list as before, where the tag can
       // only be guessed from the order.
-      const directions: DirectionView[] = cascade.directions?.length
+      const directions: DirectionView[] = cascade.directions.length
         ? cascade.directions.map((d) => {
             const nodeId = d.nodeIds[0] ?? null;
             const node = nodeId ? nodeById.get(nodeId) ?? null : null;

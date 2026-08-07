@@ -397,6 +397,15 @@ export const CASCADES: Cascade[] = [
       { id: 'hop-ru-0', nodeId: 'node-xray-de-01', nodeName: 'xray-de-01', position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
       { id: 'hop-ru-1', nodeId: 'node-xray-de-02', nodeName: 'xray-de-02', position: 1, entryProtocol: null, linkProtocol: null },
     ],
+    // v4: one entry, one way out. The demo carries both shapes so the screens
+    // render off `directions`, the way a live panel does.
+    positions: [
+      { position: 0, nodeIds: ['node-xray-de-01'], entryProtocol: 'xray', linkProtocol: 'vless' },
+    ],
+    directions: [
+      { id: 'dir-ru-de', tag: 1, countryCode: 'DE', nodeIds: ['node-xray-de-02'] },
+    ],
+    nextDirectionTag: 2,
     createdAt: iso(20 * DAY),
     updatedAt: iso(2 * DAY),
   },
@@ -410,6 +419,16 @@ export const CASCADES: Cascade[] = [
       { id: 'hop-us-0', nodeId: 'node-xray-us-01', nodeName: 'xray-us-01', position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
       { id: 'hop-us-1', nodeId: 'node-xray-de-01', nodeName: 'xray-de-01', position: 1, entryProtocol: null, linkProtocol: null },
     ],
+    positions: [
+      { position: 0, nodeIds: ['node-xray-us-01'], entryProtocol: 'xray', linkProtocol: 'vless' },
+    ],
+    // Tag 3 with only two directions on file is the point: tag 2 was spent by a
+    // direction that has since been deleted, and it never comes back.
+    directions: [
+      { id: 'dir-us-de', tag: 1, countryCode: 'DE', nodeIds: ['node-xray-de-01'] },
+      { id: 'dir-us-se', tag: 3, countryCode: 'SE', nodeIds: [] },
+    ],
+    nextDirectionTag: 4,
     createdAt: iso(18 * DAY),
     updatedAt: iso(2 * DAY),
   },

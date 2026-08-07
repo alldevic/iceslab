@@ -1155,10 +1155,16 @@ export interface Cascade {
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
   hops: CascadeHop[];
-  /** v4 shape (2026-08-04). Empty on cascades created before the move, where
-   *  `hops` stays the source of truth. */
-  positions?: CascadePosition[];
-  directions?: CascadeDirection[];
+  /** v4 shape (2026-08-04). Always present; EMPTY means the cascade predates
+   *  the move and is still described by `hops`. */
+  positions: CascadePosition[];
+  directions: CascadeDirection[];
+  /**
+   * The tag the next new direction will get. Cannot be derived on this side:
+   * tags are never reused, so after a direction is deleted `max(tag) + 1` names
+   * a number that is already spent. Read it, never compute it.
+   */
+  nextDirectionTag: number;
   createdAt: string;
   updatedAt: string;
 }

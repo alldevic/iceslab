@@ -563,7 +563,7 @@ export function CascadeEditPage() {
                 <DirectionRow
                   key={dir.key}
                   tag={dir.tag}
-                  prospectiveTag={nextFreeTag(directions, i)}
+                  prospectiveTag={nextFreeTag(directions, i, draft.nextTag)}
                   countryCode={dir.countryCode}
                   onCountry={(code) => setDirection(i, { countryCode: code })}
                   nodeIds={dir.nodeIds}
@@ -679,7 +679,7 @@ export function CascadeEditPage() {
                   <PreviewDirection
                     key={dir.key}
                     countryCode={dir.countryCode}
-                    prospectiveTag={dir.tag ?? nextFreeTag(directions, i)}
+                    prospectiveTag={dir.tag ?? nextFreeTag(directions, i, draft.nextTag)}
                     note={directionNote(dir, nodeById, todayByNode, t)}
                   />
                 ) : (
@@ -873,6 +873,11 @@ interface Draft {
   /** The entry and any transits. The exit is `directions`. */
   pools: PositionDraft[];
   directions: DirectionDraft[];
+  /** The tag the server will hand the next new direction, straight from the
+   *  cascade's counter. Carried in the draft so the preview can name it without
+   *  guessing: a guess drifts as soon as a direction is deleted, because spent
+   *  tags are never handed out again. */
+  nextTag: number;
 }
 
 /**
@@ -899,12 +904,12 @@ function toDraft(
   const key = () => (frozenKeys ? 0 : nextKey());
 
   // v4 (2026-08-04): the API answers in positions and directions, and that
-  // answer wins whenever it is there. It carries two things the hop list cannot
-  // express and this form now depends on: the identity of a direction, which is
-  // what preserves its tag across a save, and the real tag rather than a row
-  // number. Cascades created before the move come back with both lists empty,
-  // and fall through to the hop reading below.
-  if (c.positions?.length && c.directions?.length) {
+  // answer wins. It carries two things the hop list cannot express and this
+  // form now depends on: the identity of a direction, which is what preserves
+  // its tag across a save, and the real tag rather than a row number. Both
+  // lists are always present; EMPTY means the cascade predates the move and is
+  // read from hops below.
+  if (c.positions.length && c.directions.length) {
     return {
       name: c.name,
       enabled: c.enabled,
@@ -927,6 +932,7 @@ function toDraft(
         nodeIds: d.nodeIds.length ? [...d.nodeIds] : [''],
         tag: d.tag,
       })),
+      nextTag: c.nextDirectionTag,
     };
   }
   const head = sorted[0];
@@ -963,6 +969,10 @@ function toDraft(
           tag: i + 1,
         }))
       : [{ key: key(), id: null, countryCode: '', nodeIds: [''], tag: null }],
+    // The counter is kept per cascade and answered even for one still stored as
+    // hops, so a direction added here gets the number the server will actually
+    // issue rather than one derived from the rows on screen.
+    nextTag: c.nextDirectionTag,
   };
 }
 
@@ -978,13 +988,18 @@ function frozen(d: Draft): Draft {
 
 /* ───── Derived views ───────────────────────────────────────────────────── */
 
-/** A tag is issued once and never reused, so a new direction takes the next
- *  number above every tag this cascade has ever held, not the row index. */
-function nextFreeTag(directions: DirectionDraft[], index: number): number {
-  const issued = directions.map((d) => d.tag ?? 0);
-  const highest = Math.max(0, ...issued);
+/**
+ * The tag a not-yet-saved direction will receive.
+ *
+ * The starting number comes from the cascade's own counter (`nextDirectionTag`)
+ * and is NOT derived from the rows on screen. Tags are never reused, so once a
+ * direction has been deleted the highest tag still visible is behind the
+ * counter, and `max + 1` would promise a number that is already spent. All this
+ * adds is the offset for other new rows queued above this one.
+ */
+function nextFreeTag(directions: DirectionDraft[], index: number, nextTag: number): number {
   const newBefore = directions.slice(0, index).filter((d) => d.tag === null).length;
-  return highest + newBefore + 1;
+  return nextTag + newBefore;
 }
 
 /** The line under a direction in the rail: its nodes, and what they carried. */
@@ -1024,7 +1039,7 @@ function subscriptionRows(
     rows.push({
       label: t('cascadeEdit.subVia', { name: d.name, where: dir.countryCode }),
       note: t('cascadeEdit.subTag', {
-        tag: (dir.tag ?? nextFreeTag(d.directions, i)).toString(16).padStart(4, '0'),
+        tag: (dir.tag ?? nextFreeTag(d.directions, i, d.nextTag)).toString(16).padStart(4, '0'),
       }),
       tone: MOSS,
     });
