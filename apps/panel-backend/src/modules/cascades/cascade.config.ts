@@ -328,6 +328,213 @@ function linkOutbound(host: string, cred: LinkCred): Record<string, unknown> {
 
 const freedomOutbound: Record<string, unknown> = { tag: DIRECT_TAG, protocol: 'freedom' };
 
+// ───── v4 fragment builder ─────
+
+/** One resolved leg for the v4 builder: who dials whom, for which direction. */
+export interface TopologyLinkRow {
+  fromNodeId: string;
+  toNodeId: string;
+  directionTag: number;
+  cred: LinkCred;
+}
+
+export interface TopologyNodeInput {
+  nodeId: string;
+  /** Public host other nodes dial to reach this one (no agent port). */
+  host: string;
+}
+
+export interface TopologyInput {
+  /** Ordered steps; index 0 is the entry. Each holds a pool of node ids. */
+  positions: { position: number; nodeIds: string[] }[];
+  /** Ways out, each with its frozen tag and a (possibly empty) pool. */
+  directions: { tag: number; nodeIds: string[] }[];
+  links: TopologyLinkRow[];
+  /** Public host per node id, for both dialling and firewall allow-lists. */
+  hosts: Map<string, string>;
+  policies?: CascadePolicy[];
+}
+
+/** Per-direction outbound tag. Unlike the old index-based `-0/-1` suffix this
+ *  is stable: it names the DIRECTION, which no longer moves when a neighbour
+ *  is deleted. */
+function dirOutTag(directionTag: number, idx: number): string {
+  return `${LINK_OUT_TAG}-d${directionTag}-${idx}`;
+}
+
+/** Email given to a link's inbound client. It is how a TRANSIT tells directions
+ *  apart: the transit sees an internal link rather than a user, so the only
+ *  thing that says "this traffic is headed for direction 7" is which credential
+ *  it arrived on. Routing then matches on `user`. */
+function linkClientEmail(directionTag: number, fromNodeId: string): string {
+  return `lnk-d${directionTag}-${fromNodeId.slice(0, 8)}`;
+}
+
+/**
+ * Build the xray fragments for ONE node of a v4 cascade.
+ *
+ * Shape-agnostic by design: entry, transit and direction nodes all fall out of
+ * the same two questions - which links end here, and which start here. The old
+ * builders needed one function per mode because `position` meant different
+ * things in each; here it means one thing.
+ *
+ * Returns null when the node carries no links at all (not part of this cascade,
+ * or a direction with an empty pool).
+ */
+export function buildTopologyFragmentsForNode(
+  nodeId: string,
+  input: TopologyInput,
+): HopConfig | null {
+  const incoming = input.links.filter((l) => l.toNodeId === nodeId);
+  const outgoing = input.links.filter((l) => l.fromNodeId === nodeId);
+  if (incoming.length === 0 && outgoing.length === 0) return null;
+
+  const posIndex = input.positions.findIndex((p) => p.nodeIds.includes(nodeId));
+  const isEntry = posIndex === 0;
+  const isDirection = input.directions.some((d) => d.nodeIds.includes(nodeId));
+  const role: HopRole = isEntry ? 'entry' : isDirection ? 'exit' : 'transit';
+
+  // ── Inbound side: every leg that ends here shares ONE listener (the port is
+  // per receiving step), so several credentials live on one inbound. That is
+  // why the multi-client form is used even for a single link.
+  const inbounds: Record<string, unknown>[] = [];
+  let linkIngressPort: number | undefined;
+  const allowFrom: string[] = [];
+  if (incoming.length > 0) {
+    linkIngressPort = incoming[0]!.cred.port;
+    for (const l of incoming) {
+      const host = input.hosts.get(l.fromNodeId);
+      if (host) allowFrom.push(host);
+    }
+    inbounds.push(multiClientLinkInbound(incoming));
+  }
+
+  // ── Outbound side: one outbound per leg, grouped by direction.
+  const outbounds: Record<string, unknown>[] = [];
+  const byDirection = new Map<number, string[]>();
+  const perDirCounter = new Map<number, number>();
+  for (const l of outgoing) {
+    const host = input.hosts.get(l.toNodeId);
+    if (!host) continue;
+    const idx = perDirCounter.get(l.directionTag) ?? 0;
+    perDirCounter.set(l.directionTag, idx + 1);
+    const tag = dirOutTag(l.directionTag, idx);
+    outbounds.push({ ...linkOutbound(host, l.cred), tag });
+    const list = byDirection.get(l.directionTag) ?? [];
+    list.push(tag);
+    byDirection.set(l.directionTag, list);
+  }
+  outbounds.push(freedomOutbound);
+
+  const routingRules: Record<string, unknown>[] = [];
+  const balancers: Record<string, unknown>[] = [];
+
+  if (role === 'exit') {
+    // A direction's node is the end of the road: everything that arrives on the
+    // link egresses locally.
+    routingRules.push({ type: 'field', inboundTag: [LINK_IN_TAG], outboundTag: DIRECT_TAG });
+    return {
+      nodeId,
+      position: input.positions.length,
+      role,
+      inbounds,
+      outbounds: [freedomOutbound],
+      routingRules,
+      ...(linkIngressPort !== undefined ? { linkIngressPort } : {}),
+      ...(allowFrom.length > 0 ? { linkAllowFrom: [...new Set(allowFrom)] } : {}),
+    };
+  }
+
+  // Entry and transit both steer by direction; they differ only in what they
+  // read the direction FROM.
+  if (isEntry) routingRules.push(QUIC_BLOCK_RULE);
+
+  for (const [directionTag, tags] of [...byDirection.entries()].sort((a, b) => a[0] - b[0])) {
+    // A pool on the next step means several outbounds serve one direction. Let
+    // xray pick by latency rather than pinning the first, which is the whole
+    // point of a pool.
+    let target: Record<string, unknown>;
+    if (tags.length > 1) {
+      const balancerTag = `bal-d${directionTag}`;
+      balancers.push({ tag: balancerTag, selector: tags, strategy: { type: 'leastPing' } });
+      target = { balancerTag };
+    } else {
+      target = { outboundTag: tags[0]! };
+    }
+    if (isEntry) {
+      // The client encodes (policy, direction) in its UUID; xray surfaces it as
+      // vlessRoute. Plain profile is ordinal 0.
+      const routeTags = [routeTag(0, directionTag - 1)];
+      for (const p of input.policies ?? []) routeTags.push(routeTag(p.ordinal, directionTag - 1));
+      routingRules.push({ type: 'field', vlessRoute: routeTags, ...target });
+    } else {
+      // A transit cannot read the client's choice, so it matches the credential
+      // the traffic arrived on.
+      const users = input.links
+        .filter((l) => l.toNodeId === nodeId && l.directionTag === directionTag)
+        .map((l) => linkClientEmail(l.directionTag, l.fromNodeId));
+      routingRules.push({ type: 'field', user: users, ...target });
+    }
+  }
+
+  return {
+    nodeId,
+    position: posIndex >= 0 ? posIndex : input.positions.length,
+    role,
+    inbounds,
+    outbounds,
+    routingRules,
+    ...(linkIngressPort !== undefined ? { linkIngressPort } : {}),
+    ...(allowFrom.length > 0 ? { linkAllowFrom: [...new Set(allowFrom)] } : {}),
+    ...(balancers.length > 0 ? { balancers } : {}),
+  };
+}
+
+/**
+ * One listener holding every credential that terminates on this step.
+ *
+ * vless takes a clients array natively. SS2022 also supports multiple users in
+ * xray, which matters here: pre-v4 the SS cell was strictly point-to-point (one
+ * PSK per inbound), and that shape cannot carry several directions on one port.
+ */
+function multiClientLinkInbound(links: TopologyLinkRow[]): Record<string, unknown> {
+  const first = links[0]!.cred;
+  if (first.protocol === 'shadowsocks') {
+    return {
+      tag: LINK_IN_TAG,
+      port: first.port,
+      listen: '0.0.0.0',
+      protocol: 'shadowsocks',
+      settings: {
+        clients: links
+          .filter((l) => l.cred.protocol === 'shadowsocks')
+          .map((l) => ({
+            email: linkClientEmail(l.directionTag, l.fromNodeId),
+            password: (l.cred as Ss2022LinkCred).psk,
+            method: (l.cred as Ss2022LinkCred).method,
+          })),
+        network: 'tcp,udp',
+      },
+    };
+  }
+  return {
+    tag: LINK_IN_TAG,
+    port: first.port,
+    listen: '0.0.0.0',
+    protocol: 'vless',
+    settings: {
+      clients: links
+        .filter((l) => l.cred.protocol === 'vless')
+        .map((l) => ({
+          id: (l.cred as VlessLinkCred).uuid,
+          email: linkClientEmail(l.directionTag, l.fromNodeId),
+        })),
+      decryption: 'none',
+    },
+    streamSettings: { network: 'raw', security: 'none' },
+  };
+}
+
 export function buildCascadeConfigs(
   hops: CascadeConfigHopInput[],
   linkCreds: LinkCred[],

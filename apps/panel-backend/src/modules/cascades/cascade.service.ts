@@ -11,6 +11,7 @@ import {
 import {
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
+  buildTopologyFragmentsForNode,
   generateLinkCreds,
   generateTopologyLinks,
   normalizeLinkProtocol,
@@ -20,6 +21,7 @@ import {
   type CascadeConfigHopInput,
   type CascadePolicy,
   type LinkCred,
+  type TopologyLinkRow,
 } from './cascade.config.js';
 import type { CreateCascadeInput, UpdateCascadeInput } from './cascade.schemas.js';
 import { mapCascade, type CascadeDto } from './cascade.mapper.js';
@@ -646,6 +648,11 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
 export async function getCascadeFragmentsForNode(
   nodeId: string,
 ): Promise<XrayCascadeFragments | null> {
+  // v4 first. Falls through to the hop path for cascades written before the
+  // topology tables existed, so a half-migrated fleet keeps serving.
+  const v4 = await getTopologyFragmentsForNode(nodeId);
+  if (v4) return v4;
+
   // A node belongs to at most one cascade in the v1 model; first enabled match.
   const member = await prisma.cascadeHop.findFirst({
     where: { nodeId, cascade: { enabled: true } },
@@ -747,6 +754,99 @@ export async function getCascadeFragmentsForNode(
     // inter-hop link itself (was a manual `ufw allow from <entry-ip>` step).
     linkIngressPort: mine.linkIngressPort,
     linkAllowFrom: mine.linkAllowFrom,
+  };
+}
+
+/**
+ * v4 fragment resolution: read the topology tables and let the shape-agnostic
+ * builder do the work. Returns null when this node has no v4 links, which is
+ * both "not in a cascade" and "this cascade predates the topology tables" - the
+ * caller then falls back to the hop path.
+ */
+async function getTopologyFragmentsForNode(
+  nodeId: string,
+): Promise<XrayCascadeFragments | null> {
+  const link = await prisma.cascadeLink.findFirst({
+    where: {
+      cascade: { enabled: true },
+      OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }],
+    },
+    select: { cascadeId: true },
+  });
+  if (!link) return null;
+
+  const [positions, directions, links, policyRows] = await Promise.all([
+    prisma.cascadePosition.findMany({
+      where: { cascadeId: link.cascadeId },
+      orderBy: { position: 'asc' },
+      select: { position: true, nodes: { select: { nodeId: true } } },
+    }),
+    prisma.cascadeDirection.findMany({
+      where: { cascadeId: link.cascadeId },
+      orderBy: { tag: 'asc' },
+      select: { tag: true, nodes: { select: { nodeId: true } } },
+    }),
+    prisma.cascadeLink.findMany({
+      where: { cascadeId: link.cascadeId },
+      select: { fromNodeId: true, toNodeId: true, directionTag: true, config: true },
+    }),
+    prisma.routePolicy.findMany({
+      select: { ordinal: true, directDomains: true, blockDomains: true },
+    }),
+  ]);
+
+  // Public host per node, for dialling and for the firewall allow-list. The
+  // stored address is host[:agentPort]; the link binds its own port.
+  const nodeIds = new Set<string>();
+  for (const l of links) {
+    nodeIds.add(l.fromNodeId);
+    nodeIds.add(l.toNodeId);
+  }
+  const nodeRows = await prisma.node.findMany({
+    where: { id: { in: [...nodeIds] } },
+    select: { id: true, address: true },
+  });
+  const hosts = new Map(nodeRows.map((n) => [n.id, n.address.split(':')[0]!]));
+
+  const rows: TopologyLinkRow[] = [];
+  for (const l of links) {
+    const cred = parseLinkCred(l.config);
+    // Malformed cred (data drift): ship nothing rather than a half-wired path
+    // that blackholes user traffic.
+    if (!cred) return null;
+    rows.push({
+      fromNodeId: l.fromNodeId,
+      toNodeId: l.toNodeId,
+      directionTag: l.directionTag,
+      cred,
+    });
+  }
+
+  const mine = buildTopologyFragmentsForNode(nodeId, {
+    positions: positions.map((p) => ({
+      position: p.position,
+      nodeIds: p.nodes.map((n) => n.nodeId),
+    })),
+    directions: directions.map((d) => ({ tag: d.tag, nodeIds: d.nodes.map((n) => n.nodeId) })),
+    links: rows,
+    hosts,
+    policies: policyRows.map((p) => ({
+      ordinal: p.ordinal,
+      directDomains: p.directDomains,
+      blockDomains: p.blockDomains,
+    })),
+  });
+  if (!mine) return null;
+
+  return {
+    inbounds: mine.inbounds,
+    // The node ships its own `direct` outbound; two with one tag make xray
+    // reject the whole config.
+    outbounds: mine.outbounds.filter((o) => o.tag !== 'direct'),
+    routingRules: mine.routingRules,
+    linkIngressPort: mine.linkIngressPort,
+    linkAllowFrom: mine.linkAllowFrom,
+    balancers: mine.balancers,
   };
 }
 
