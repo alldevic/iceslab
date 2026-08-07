@@ -3,11 +3,16 @@ import { cascadeProfileLabel } from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
-import { foldPositionsIntoHops, validateCascadeHops } from './cascade.validation.js';
+import {
+  foldPositionsIntoHops,
+  validateCascadeHops,
+  validateCascadeTopology,
+} from './cascade.validation.js';
 import {
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
   generateLinkCreds,
+  generateTopologyLinks,
   normalizeLinkProtocol,
   parseLinkCred,
   routeTag,
@@ -336,6 +341,110 @@ export async function getCascadeStatus(id: string): Promise<CascadeStatusDto> {
   return { done: hops.length > 0 && hops.every((h) => h.applied), hops };
 }
 
+/**
+ * Write a cascade's v4 topology (positions, directions, links) inside `tx`.
+ *
+ * Runs ALONGSIDE the legacy hop write for now: storage moves first, readers
+ * (fragment rendering, route profiles) follow in the next step. Until they do,
+ * hops remain the source of truth and this is a shadow copy - which is exactly
+ * what makes the switchover boring instead of a big-bang rewrite.
+ *
+ * Tag preservation is the whole point of the model, so it is spelled out here:
+ *   - a direction the client identified by `id` keeps its tag;
+ *   - one the client did not identify, but whose node pool matches a stored
+ *     direction, is treated as that same direction (the panel does not send ids
+ *     yet; without this fallback every save would burn new tags and silently
+ *     reroute users);
+ *   - anything else is new and draws the next tag from the cascade's counter;
+ *   - a stored direction absent from the payload is deleted, and its tag is
+ *     never handed out again.
+ */
+async function writeTopologyV4(
+  tx: Prisma.TransactionClient,
+  cascadeId: string,
+  positions: { nodeIds: string[]; position: number; entryProtocol?: string; linkProtocol?: string }[],
+  directions: { id?: string; nodeIds: string[]; countryCode?: string | null }[],
+): Promise<void> {
+  const stored = await tx.cascadeDirection.findMany({
+    where: { cascadeId },
+    select: { id: true, tag: true, nodes: { select: { nodeId: true } } },
+  });
+  const storedById = new Map(stored.map((d) => [d.id, d]));
+  const unclaimed = new Set(stored.map((d) => d.id));
+
+  // Resolve each incoming direction to a tag before writing anything.
+  const cascade = await tx.cascade.findUniqueOrThrow({
+    where: { id: cascadeId },
+    select: { nextDirectionTag: true },
+  });
+  let nextTag = cascade.nextDirectionTag;
+  const resolved = directions.map((d) => {
+    let match = d.id ? storedById.get(d.id) : undefined;
+    if (!match && d.nodeIds.length > 0) {
+      // Same pool = same direction. Compared as a set: reordering the pool in
+      // the UI must not look like a different way out.
+      const want = new Set(d.nodeIds);
+      match = stored.find(
+        (s) =>
+          unclaimed.has(s.id) &&
+          s.nodes.length === want.size &&
+          s.nodes.every((n) => want.has(n.nodeId)),
+      );
+    }
+    if (match && unclaimed.has(match.id)) {
+      unclaimed.delete(match.id);
+      return { ...d, tag: match.tag };
+    }
+    return { ...d, tag: nextTag++ };
+  });
+
+  await tx.cascadeLink.deleteMany({ where: { cascadeId } });
+  await tx.cascadePosition.deleteMany({ where: { cascadeId } });
+  await tx.cascadeDirection.deleteMany({ where: { cascadeId } });
+
+  for (const p of positions) {
+    await tx.cascadePosition.create({
+      data: {
+        cascadeId,
+        position: p.position,
+        entryProtocol: p.entryProtocol ?? null,
+        linkProtocol: p.linkProtocol ?? null,
+        nodes: { create: p.nodeIds.map((nodeId) => ({ nodeId })) },
+      },
+    });
+  }
+  for (const d of resolved) {
+    await tx.cascadeDirection.create({
+      data: {
+        cascadeId,
+        tag: d.tag,
+        countryCode: d.countryCode ?? null,
+        nodes: { create: d.nodeIds.map((nodeId) => ({ nodeId })) },
+      },
+    });
+  }
+
+  const links = generateTopologyLinks(positions, resolved);
+  if (links.length > 0) {
+    await tx.cascadeLink.createMany({
+      data: links.map((l) => ({
+        cascadeId,
+        fromNodeId: l.fromNodeId,
+        toNodeId: l.toNodeId,
+        directionTag: l.directionTag,
+        protocol: l.protocol,
+        config: serializeLinkCred(l.cred),
+      })),
+    });
+  }
+
+  // Advance the counter past every tag handed out. Never `max(tag) + 1`: a
+  // direction deleted later must not pass its tag to the next one.
+  if (nextTag !== cascade.nextDirectionTag) {
+    await tx.cascade.update({ where: { id: cascadeId }, data: { nextDirectionTag: nextTag } });
+  }
+}
+
 export async function createCascade(input: CreateCascadeInput): Promise<CascadeDto> {
   // The redesigned screens send positions + directions; storage still holds
   // single-node hops. Fold when that is what arrived, and let the fold decide
@@ -368,30 +477,42 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // Cred index for hop `idx`, or -1 if it carries no link cred.
   const credIdx = (idx: number): number =>
     isBalancer ? (idx >= 1 ? idx - 1 : -1) : idx < hops.length - 1 ? idx : -1;
+  // v4 topology, validated separately from the fold: the fold answers "can the
+  // old storage hold this", these rules answer "is this a sane cascade at all".
+  const topology =
+    input.positions && input.directions
+      ? validateCascadeTopology(input.positions, input.directions)
+      : null;
   try {
-    const c = await prisma.cascade.create({
-      data: {
-        name: input.name,
-        enabled: input.enabled,
-        mode,
-        hideHopsFromSub: input.hideHopsFromSub,
-        hops: {
-          create: hops.map((h, idx) => ({
-            // Nested create uses the checked input -> connect the relation
-            // rather than setting the raw nodeId scalar.
-            node: { connect: { id: h.nodeId } },
-            position: h.position,
-            entryProtocol: h.entryProtocol ?? null,
-            linkProtocol: h.linkProtocol ?? null,
-            // Fresh object literal so it's assignable to Prisma's Json input
-            // (a typed LinkCred lacks the index signature Json requires).
-            ...(credIdx(idx) >= 0
-              ? { linkConfig: serializeLinkCred(creds[credIdx(idx)]!) }
-              : {}),
-          })),
+    const c = await prisma.$transaction(async (tx) => {
+      const created = await tx.cascade.create({
+        data: {
+          name: input.name,
+          enabled: input.enabled,
+          mode,
+          hideHopsFromSub: input.hideHopsFromSub,
+          hops: {
+            create: hops.map((h, idx) => ({
+              // Nested create uses the checked input -> connect the relation
+              // rather than setting the raw nodeId scalar.
+              node: { connect: { id: h.nodeId } },
+              position: h.position,
+              entryProtocol: h.entryProtocol ?? null,
+              linkProtocol: h.linkProtocol ?? null,
+              // Fresh object literal so it's assignable to Prisma's Json input
+              // (a typed LinkCred lacks the index signature Json requires).
+              ...(credIdx(idx) >= 0
+                ? { linkConfig: serializeLinkCred(creds[credIdx(idx)]!) }
+                : {}),
+            })),
+          },
         },
-      },
-      include: hopInclude,
+        include: hopInclude,
+      });
+      if (topology) {
+        await writeTopologyV4(tx, created.id, topology.positions, topology.directions);
+      }
+      return created;
     });
     // Push the chaining fragments to every hop now, not on some later unrelated
     // edit. inbounds.events re-syncs each node's inbound set, where
@@ -484,6 +605,12 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
               : {}),
           })),
         });
+      }
+      // Shadow-write the v4 topology alongside the hops. Only when the payload
+      // actually carried one: an enabled-only toggle must not wipe positions.
+      if (input.positions && input.directions) {
+        const topology = validateCascadeTopology(input.positions, input.directions);
+        await writeTopologyV4(tx, id, topology.positions, topology.directions);
       }
       return tx.cascade.findUniqueOrThrow({ where: { id }, include: hopInclude });
     });

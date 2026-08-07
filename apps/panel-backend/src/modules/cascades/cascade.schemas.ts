@@ -7,6 +7,28 @@ import { z } from 'zod';
 // 0..MAX_CASCADE_HOPS-1.
 export const MAX_CASCADE_HOPS = 5;
 
+// ───── v4 limits ─────
+//
+// Longest path a client's traffic may take: the entry, any transits, and the
+// direction it leaves through. Each step adds latency and one inter-node link,
+// so it is capped. The limit covers positions AND the direction, which is why
+// the positions-only bound is one lower.
+export const MAX_CASCADE_PATH = 5;
+/** Positions only: the direction occupies the last step of the path. */
+export const MAX_CASCADE_POSITIONS = MAX_CASCADE_PATH - 1;
+
+// A direction tag is the low byte of the uint16 route tag (the high byte is the
+// route-policy ordinal), so 255 is a hard ceiling. It is also a LIFETIME
+// ceiling per cascade: tags are never reused, so deleting and recreating
+// directions consumes the space. Burning through it must produce a clear error,
+// not a silently colliding tag.
+export const MAX_DIRECTION_TAG = 255;
+
+// Total node-to-node links a cascade may carry. With a pool of M nodes on one
+// step and N on the next, that step alone costs M*N listeners, each with its
+// own port and secret. The cap is on the sum across every step.
+export const MAX_CASCADE_LINKS = 64;
+
 // The full 7-core protocol set. Stored as free strings on the hop; the
 // node-agent realises each entry/link cell native-first (xray entry ->
 // vless/ss2022/wg links), bridges later. See docs/ROADMAP.md "C. Каскады".
@@ -59,12 +81,21 @@ export const CascadePositionSchema = z.object({
 });
 
 export const CascadeDirectionSchema = z.object({
-  /** Ignored on input: the tag is derived from the exit's position, exactly as
-   *  the current generator does. Accepted so the client can round-trip its own
+  /** Identifies a direction that ALREADY EXISTS, so it keeps its tag across an
+   *  edit. Absent = a new direction, which gets the next tag from the cascade's
+   *  counter. A stored direction missing from the payload is deleted and its
+   *  tag burns with it, never handed to anyone else. */
+  id: z.uuid().optional(),
+  /** Never accepted from the client: the panel issues tags and never reuses
+   *  them, because a tag travels in the user's UUID and squad ACL cuts access
+   *  by it. Kept in the schema (and ignored) so a client can round-trip its own
    *  payload without stripping fields. */
   tag: z.number().int().optional(),
   countryCode: z.string().length(2).nullish(),
-  nodeIds: z.array(z.uuid()).min(1),
+  /** May be EMPTY: v4 can express "the tag exists, the node behind it does
+   *  not yet". Serving skips such a direction until it has a node. The old
+   *  model could not express this, because a direction WAS a node. */
+  nodeIds: z.array(z.uuid()).default([]),
 });
 
 const CascadeBaseFields = {

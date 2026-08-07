@@ -79,6 +79,86 @@ export function generateLinkCreds(linkProtocols: LinkProtocol[]): LinkCred[] {
   });
 }
 
+/** One node-to-node leg of a v4 cascade, carrying traffic for ONE direction. */
+export interface TopologyLink {
+  fromNodeId: string;
+  toNodeId: string;
+  /** Direction whose traffic this leg carries (CascadeDirection.tag). */
+  directionTag: number;
+  protocol: LinkProtocol;
+  cred: LinkCred;
+}
+
+/**
+ * Generate every link a v4 topology implies: each node on a step pairs with
+ * each node on the next, once PER DIRECTION.
+ *
+ * Why per direction, when the old model had one cred per hop: only the ENTRY
+ * can read which direction a client chose, because it rides in the UUID the
+ * client authenticates with. A transit further down the path sees an internal
+ * link, not a user. Giving every leg its own credentials per direction is what
+ * lets a transit tell them apart and fan them back out - the shape the old
+ * model could not express at all.
+ *
+ * The listen PORT is shared per RECEIVING step (LINK_PORT_BASE + step), not per
+ * link: xray and SS2022 both accept several clients on one inbound, so N
+ * directions cost N secrets but one port, and a pool does not eat ports
+ * proportionally to (nodes x directions).
+ *
+ * `directionNodeIds` may be empty for a direction whose pool is not filled yet:
+ * it simply contributes no links, and the tag stays reserved.
+ */
+export function generateTopologyLinks(
+  positions: { nodeIds: string[]; linkProtocol?: string | null }[],
+  directions: { tag: number; nodeIds: string[] }[],
+): TopologyLink[] {
+  const links: TopologyLink[] = [];
+  const emit = (
+    from: string,
+    to: string,
+    directionTag: number,
+    protocol: LinkProtocol,
+    step: number,
+  ): void => {
+    const port = LINK_PORT_BASE + step;
+    const cred: LinkCred =
+      protocol === 'shadowsocks'
+        ? {
+            protocol: 'shadowsocks',
+            port,
+            psk: randomBytes(32).toString('base64'),
+            method: SS_LINK_METHOD,
+          }
+        : { protocol: 'vless', port, uuid: randomUUID() };
+    links.push({ fromNodeId: from, toNodeId: to, directionTag, protocol, cred });
+  };
+
+  // Position -> position legs. Every direction rides every leg: a transit must
+  // be able to route each direction onwards separately.
+  for (let step = 0; step < positions.length - 1; step++) {
+    const proto = normalizeLinkProtocol(positions[step]!.linkProtocol);
+    for (const from of positions[step]!.nodeIds) {
+      for (const to of positions[step + 1]!.nodeIds) {
+        for (const d of directions) emit(from, to, d.tag, proto, step);
+      }
+    }
+  }
+
+  // Last position -> the directions themselves. This leg is where a direction
+  // stops being an abstraction and becomes concrete machines.
+  const last = positions[positions.length - 1];
+  if (last) {
+    const step = positions.length - 1;
+    const proto = normalizeLinkProtocol(last.linkProtocol);
+    for (const from of last.nodeIds) {
+      for (const d of directions) {
+        for (const to of d.nodeIds) emit(from, to, d.tag, proto, step);
+      }
+    }
+  }
+  return links;
+}
+
 /** Serialise a link cred to the plain JSON persisted in CascadeHop.linkConfig
  *  (a typed LinkCred lacks the index signature Prisma's Json input needs). */
 export function serializeLinkCred(cred: LinkCred): Record<string, string | number> {
