@@ -96,6 +96,17 @@ const hopInclude = {
     orderBy: { position: 'asc' as const },
     include: { node: { select: { id: true, name: true } } },
   },
+  // v4 shape, served alongside hops. The panel needs `directions[].id` back on
+  // save to keep a direction's tag: without it every edit looks like a new
+  // direction and the tag (which lives in clients' UUIDs) would move.
+  positions: {
+    orderBy: { position: 'asc' as const },
+    include: { nodes: { select: { nodeId: true } } },
+  },
+  directions: {
+    orderBy: { tag: 'asc' as const },
+    include: { nodes: { select: { nodeId: true } } },
+  },
 };
 
 async function assertNodesExist(nodeIds: string[]): Promise<void> {
