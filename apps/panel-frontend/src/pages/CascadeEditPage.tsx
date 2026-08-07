@@ -12,7 +12,6 @@ import {
   getCascadeStatus,
   listCascades,
   listNodes,
-  unsupportedShape,
   updateCascadeV4,
   type Cascade,
   type CascadeProtocol,
@@ -255,7 +254,11 @@ export function CascadeEditPage() {
   const trimmedName = name.trim();
   const entryIds = pools[0]?.nodeIds.filter(Boolean) ?? [];
   const poolsFilled = pools.every((p) => p.nodeIds.some(Boolean));
-  const directionsFilled = directions.every((d) => d.countryCode && d.nodeIds.some(Boolean));
+  // A direction only needs a country to be saveable. An empty pool is a state
+  // v4 can hold on purpose: the tag exists, no node stands behind it yet, and
+  // the direction is simply not handed to clients. The preview says so per row
+  // rather than the save button going dead for the whole form.
+  const directionsFilled = directions.every((d) => Boolean(d.countryCode));
   const duplicate = new Set(allIds).size !== allIds.length;
   const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
 
@@ -273,17 +276,12 @@ export function CascadeEditPage() {
     })
     .filter((x): x is { node: string; bad: string[] } => x !== null);
 
-  // Two shapes this editor can draw have nowhere to be stored yet, and the API
-  // refuses them by name rather than mangling them.
-  const unsupported = unsupportedShape(pools, directions);
-
   const valid =
     trimmedName.length > 0 &&
     poolsFilled &&
     directionsFilled &&
     !duplicate &&
     links <= MAX_LINKS &&
-    unsupported === null &&
     legacy.length === 0;
   const dirty =
     JSON.stringify(frozen(draft)) !== JSON.stringify(toDraft(cascade, nodeById, () => 0, true));
@@ -312,14 +310,12 @@ export function CascadeEditPage() {
           ? t('cascadeCreate.needDirection')
           : links > MAX_LINKS
             ? t('cascadeCreate.tooManyLinks', { n: links, max: MAX_LINKS })
-            : unsupported
-              ? t(`cascadeCreate.unsupported.${unsupported}`)
-              : legacy.length > 0
-                ? t('cascadeEdit.legacyProtocol', {
-                    node: legacy[0]!.node,
-                    value: legacy[0]!.bad.join(', '),
-                  })
-                : null;
+            : legacy.length > 0
+              ? t('cascadeEdit.legacyProtocol', {
+                  node: legacy[0]!.node,
+                  value: legacy[0]!.bad.join(', '),
+                })
+              : null;
 
   function confirmDelete() {
     modals.openConfirmModal({
@@ -592,7 +588,7 @@ export function CascadeEditPage() {
                   patch({
                     directions: [
                       ...directions,
-                      { key: nextKey.current++, countryCode: '', nodeIds: [''], tag: null },
+                      { key: nextKey.current++, id: null, countryCode: '', nodeIds: [''], tag: null },
                     ],
                   })
                 }
@@ -901,6 +897,38 @@ function toDraft(
 ): Draft {
   const sorted = [...c.hops].sort((a, b) => a.position - b.position);
   const key = () => (frozenKeys ? 0 : nextKey());
+
+  // v4 (2026-08-04): the API answers in positions and directions, and that
+  // answer wins whenever it is there. It carries two things the hop list cannot
+  // express and this form now depends on: the identity of a direction, which is
+  // what preserves its tag across a save, and the real tag rather than a row
+  // number. Cascades created before the move come back with both lists empty,
+  // and fall through to the hop reading below.
+  if (c.positions?.length && c.directions?.length) {
+    return {
+      name: c.name,
+      enabled: c.enabled,
+      hideHops: c.hideHopsFromSub ?? true,
+      pools: [...c.positions]
+        .sort((a, b) => a.position - b.position)
+        .map((p) => ({
+          key: key(),
+          // An empty row keeps the picker drawable; save filters it back out.
+          nodeIds: p.nodeIds.length ? [...p.nodeIds] : [''],
+          entryProtocol: (p.entryProtocol ?? 'xray') as CascadeProtocol,
+          linkProtocol: (p.linkProtocol ?? 'xray') as CascadeProtocol,
+        })),
+      directions: c.directions.map((d) => ({
+        key: key(),
+        id: d.id,
+        countryCode: d.countryCode ?? '',
+        // A direction with no nodes is a legitimate state, not a broken row:
+        // the tag exists and waits for a node to stand behind it.
+        nodeIds: d.nodeIds.length ? [...d.nodeIds] : [''],
+        tag: d.tag,
+      })),
+    };
+  }
   const head = sorted[0];
   const rest = sorted.slice(1);
   const exits = c.mode === 'balancer' ? rest : rest.slice(-1);
@@ -923,14 +951,18 @@ function toDraft(
       ...(head ? [pool(head)] : [{ key: key(), nodeIds: [''], entryProtocol: 'xray' as CascadeProtocol, linkProtocol: 'xray' as CascadeProtocol }]),
       ...transits.map(pool),
     ],
+    // Pre-v4 cascade: there are no direction ids to keep, and the tag is the
+    // position-derived number the old generator produced. Saving such a cascade
+    // is what moves it onto the new model.
     directions: exits.length
       ? exits.map((h, i) => ({
           key: key(),
+          id: null,
           countryCode: byId.get(h.nodeId)?.countryCode ?? '',
           nodeIds: [h.nodeId],
           tag: i + 1,
         }))
-      : [{ key: key(), countryCode: '', nodeIds: [''], tag: null }],
+      : [{ key: key(), id: null, countryCode: '', nodeIds: [''], tag: null }],
   };
 }
 

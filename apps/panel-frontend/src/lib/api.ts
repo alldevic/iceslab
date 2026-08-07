@@ -1118,6 +1118,35 @@ export interface CascadeHop {
   linkProtocol: string | null;
 }
 
+/**
+ * One step of the path as the API now answers it: a POOL of interchangeable
+ * nodes rather than a single machine. Position 0 is the entry.
+ */
+export interface CascadePosition {
+  position: number;
+  nodeIds: string[];
+  entryProtocol: string | null;
+  linkProtocol: string | null;
+}
+
+/**
+ * A way out of the cascade. The identity is `id`, not the nodes behind it: the
+ * pool can be swapped whole and the direction stays the same direction.
+ *
+ * ⚠ `tag` is the number that lives inside every client's UUID and gates squad
+ * access. The panel issues it and never reuses it, so it is read-only here and
+ * must NOT be sent back. What must be sent back is `id` - see
+ * CascadeDirectionInput.
+ */
+export interface CascadeDirection {
+  id: string;
+  tag: number;
+  countryCode: string;
+  /** May legitimately be empty: the tag exists, no node stands behind it yet,
+   *  and the direction is simply not handed to clients. */
+  nodeIds: string[];
+}
+
 export interface Cascade {
   id: string;
   name: string;
@@ -1126,6 +1155,10 @@ export interface Cascade {
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
   hops: CascadeHop[];
+  /** v4 shape (2026-08-04). Empty on cascades created before the move, where
+   *  `hops` stays the source of truth. */
+  positions?: CascadePosition[];
+  directions?: CascadeDirection[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1175,10 +1208,20 @@ export interface CascadePositionInput {
 }
 
 /**
- * A way out of the cascade. The tag is issued by the backend the first time the
- * direction is saved and is never reused, so it is absent on create.
+ * A way out of the cascade, on the way in.
+ *
+ * ⚠ `id` is what keeps the tag. Send it back for every direction that already
+ * exists: a direction that arrives without one is treated as new, gets a fresh
+ * tag, and everyone holding a link to the old one silently lands in another
+ * country. The API does have a fallback that matches on the node set, but it
+ * stops helping exactly when the pool is edited, which is the ordinary case.
+ *
+ * `tag` is deliberately absent: the panel issues tags and never reuses them, so
+ * sending one back could only ever contradict the server.
  */
 export interface CascadeDirectionInput {
+  /** Omit only for a direction being created right now. */
+  id?: string;
   countryCode: string;
   nodeIds: string[];
 }
@@ -1192,35 +1235,15 @@ export interface CreateCascadeV4Input {
 }
 
 /**
- * The API takes positions and directions since 2026-07-30 and folds them into
- * its stored hop list. Two shapes it cannot store yet are refused by name, and
- * the form catches both before the request: see `unsupportedShape` below.
+ * Storage moved to positions and directions on 2026-08-04, so the two shapes
+ * the screens used to block, a pool of several nodes on one step and transits
+ * combined with several directions, are now ordinary saves. What remains is a
+ * cap on the total number of node-to-node links, which the forms still count
+ * themselves because pools multiply it.
  */
 export const CASCADE_V4_WRITES_LIVE = true;
 
 export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input>;
-
-/**
- * Shapes the form can draw but the current storage cannot hold. Named here so
- * both cascade screens block them the same way, before the request rather than
- * after a 400.
- *
- * The API refuses them rather than mangling them, which is the right call: a
- * pool quietly saved as its first node would leave an operator sure of a
- * redundancy they do not have. Both disappear once positions and directions
- * land in storage.
- */
-export function unsupportedShape(
-  positions: { nodeIds: string[] }[],
-  directions: { nodeIds: string[] }[],
-): 'pool' | 'transitsWithFan' | null {
-  const pooled =
-    positions.some((p) => p.nodeIds.filter(Boolean).length > 1) ||
-    directions.some((d) => d.nodeIds.filter(Boolean).length > 1);
-  if (pooled) return 'pool';
-  if (positions.length > 1 && directions.length > 1) return 'transitsWithFan';
-  return null;
-}
 
 /** The API's own sentence when it refuses a shape it cannot store. */
 export function cascadeShapeError(err: unknown): string | null {
