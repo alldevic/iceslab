@@ -192,7 +192,10 @@ export async function getRouteProfilesByEntryNode(
   const cascades = await prisma.cascade.findMany({
     where: {
       enabled: true,
-      hops: { some: { nodeId: { in: nodeIds }, position: 0 } },
+      OR: [
+        { hops: { some: { nodeId: { in: nodeIds }, position: 0 } } },
+        { positions: { some: { position: 0, nodes: { some: { nodeId: { in: nodeIds } } } } } },
+      ],
     },
     include: {
       hops: {
@@ -200,6 +203,16 @@ export async function getRouteProfilesByEntryNode(
         // countryCode drives the flag and the label of a route profile: what a
         // client picks here is a COUNTRY to leave from, not a machine.
         include: { node: { select: { id: true, name: true, countryCode: true } } },
+      },
+      positions: {
+        orderBy: { position: 'asc' },
+        include: { nodes: { select: { nodeId: true } } },
+      },
+      directions: {
+        orderBy: { tag: 'asc' },
+        include: {
+          nodes: { select: { node: { select: { id: true, name: true, countryCode: true } } } },
+        },
       },
     },
   });
@@ -242,6 +255,35 @@ export async function getRouteProfilesByEntryNode(
   }
 
   for (const c of cascades) {
+    // v4 path: profiles come from DIRECTIONS, and the tag is the direction's
+    // own frozen tag rather than its ordinal in a list. This has to match how
+    // the node routes (buildTopologyFragmentsForNode uses the same tag): with
+    // ordinals, a cascade whose tag 2 was burned by a deletion would hand
+    // clients a tag that resolves to a different country.
+    if (c.directions.length > 0) {
+      const entryPos = c.positions.find((p) => p.position === 0);
+      const entryNodeId = entryPos?.nodes.map((n) => n.nodeId).find((id) => nodeIds.includes(id));
+      if (!entryNodeId) continue;
+      const allowed = allowByCascade.get(c.id);
+      const profiles: { label: string; tag: number }[] = [];
+      for (const d of c.directions) {
+        // A direction with no node serves nobody; offering it would hand out a
+        // config that cannot connect.
+        if (d.nodes.length === 0) continue;
+        // Squad ACL is keyed on exit NODES, so a direction survives if any of
+        // its pool is allowed.
+        if (allowed && !d.nodes.some((n) => allowed.has(n.node.id))) continue;
+        const first = d.nodes[0]!.node;
+        const label = cascadeProfileLabel(c.name, d.countryCode ?? first.countryCode, first.name);
+        profiles.push({ label, tag: routeTag(0, d.tag - 1) });
+        for (const p of grantedPolicies) {
+          profiles.push({ label: `${label} · ${p.name}`, tag: routeTag(p.ordinal, d.tag - 1) });
+        }
+      }
+      if (profiles.length > 0) out.set(entryNodeId, profiles);
+      continue;
+    }
+
     const entry = c.hops.find((h) => h.position === 0);
     if (!entry || !nodeIds.includes(entry.nodeId)) continue;
     const isBalancer = c.mode === 'balancer';
