@@ -4,6 +4,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
 import {
+  CascadeValidationError,
   foldPositionsIntoHops,
   validateCascadeHops,
   validateCascadeTopology,
@@ -23,7 +24,13 @@ import {
   type LinkCred,
   type TopologyLinkRow,
 } from './cascade.config.js';
-import type { CreateCascadeInput, UpdateCascadeInput } from './cascade.schemas.js';
+import type {
+  CascadeDirectionInput,
+  CascadeHopInput,
+  CascadePositionInput,
+  CreateCascadeInput,
+  UpdateCascadeInput,
+} from './cascade.schemas.js';
 import { mapCascade, type CascadeDto } from './cascade.mapper.js';
 
 export class CascadeNotFoundError extends Error {
@@ -355,6 +362,26 @@ export async function getCascadeStatus(id: string): Promise<CascadeStatusDto> {
 }
 
 /**
+ * Fold a v4 payload into hops, or return null when the shape cannot be held by
+ * the old model (a pool, or transits with several directions).
+ *
+ * Returning null rather than throwing is the point: v4 is the storage that
+ * matters now, and the legacy hop rows are a convenience for rollback. A
+ * topology that only v4 can express must still save.
+ */
+function tryFoldPositions(
+  positions: CascadePositionInput[],
+  directions: CascadeDirectionInput[],
+): { mode: 'chain' | 'balancer'; hops: CascadeHopInput[] } | null {
+  try {
+    return foldPositionsIntoHops(positions, directions);
+  } catch (err) {
+    if (err instanceof CascadeValidationError) return null;
+    throw err;
+  }
+}
+
+/**
  * Write a cascade's v4 topology (positions, directions, links) inside `tx`.
  *
  * Runs ALONGSIDE the legacy hop write for now: storage moves first, readers
@@ -463,20 +490,40 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // single-node hops. Fold when that is what arrived, and let the fold decide
   // the mode from the shape rather than trusting a field the new UI no longer
   // has. See foldPositionsIntoHops for what cannot be folded and why.
+  // The fold is now BEST-EFFORT. v4 accepts shapes the hop model cannot hold (a
+  // pool on a step, transits combined with several directions), and the panel
+  // offers them, so refusing here would block the very topologies the rewrite
+  // exists for. When a shape does not fold we store v4 only; rendering already
+  // prefers it, and hops stay behind purely as the rollback path for shapes
+  // that still fit.
   const folded =
     input.positions && input.directions
-      ? foldPositionsIntoHops(input.positions, input.directions)
+      ? tryFoldPositions(input.positions, input.directions)
       : null;
   const mode = folded ? folded.mode : (input.mode ?? 'chain');
   const isBalancer = mode === 'balancer';
   // Validate the topology in the effective mode (balancer exits carry no
-  // linkProtocol, which the chain rules would wrongly reject).
-  const hops = validateCascadeHops(folded ? folded.hops : input.hops!, mode);
-  await assertNodesExist(hops.map((h) => h.nodeId));
+  // linkProtocol, which the chain rules would wrongly reject). Empty when the
+  // shape is v4-only: there are no hops to write, and everything below that
+  // touches them is skipped.
+  const legacyInput = folded ? folded.hops : input.hops;
+  const hops = legacyInput ? validateCascadeHops(legacyInput, mode) : [];
+  // Node existence is checked against whatever shape actually arrived.
+  const allNodeIds = legacyInput
+    ? hops.map((h) => h.nodeId)
+    : [
+        ...new Set([
+          ...(input.positions ?? []).flatMap((p) => p.nodeIds),
+          ...(input.directions ?? []).flatMap((d) => d.nodeIds),
+        ]),
+      ];
+  await assertNodesExist(allNodeIds);
   // T7: an enabled balancer entry serves vlessRoute-tagged exit configs; gate
   // it on the entry's xray version. Disabled cascades don't expand in subs.
-  if (isBalancer && input.enabled) {
-    await assertBalancerEntrySupportsVlessRoute(hops[0]!.nodeId);
+  // A v4-only shape gates on its entry position instead.
+  const entryNodeId = hops[0]?.nodeId ?? input.positions?.find((p) => p.position === 0)?.nodeIds[0];
+  if (input.enabled && entryNodeId && (isBalancer || !folded)) {
+    await assertBalancerEntrySupportsVlessRoute(entryNodeId);
   }
   // Pre-generate inter-hop link creds.
   //   chain:    one cred per link, stored on each non-exit (originating) hop.
@@ -530,7 +577,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
     // Push the chaining fragments to every hop now, not on some later unrelated
     // edit. inbounds.events re-syncs each node's inbound set, where
     // getCascadeFragmentsForNode injects the link-in/out + routing.
-    eventBus.emit('cascade.changed', { nodeIds: hops.map((h) => h.nodeId) });
+    eventBus.emit('cascade.changed', { nodeIds: allNodeIds });
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
@@ -558,9 +605,10 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
 
   // Same fold as create. A v4 payload also decides the mode, since the shape
   // now says it: one direction is a chain, several are a balancer.
+  // Best-effort, same as create: a v4-only shape saves without hops.
   const folded =
     input.positions && input.directions
-      ? foldPositionsIntoHops(input.positions, input.directions)
+      ? tryFoldPositions(input.positions, input.directions)
       : null;
   const mode = (folded?.mode ?? input.mode ?? existing.mode) as 'chain' | 'balancer';
   const isBalancer = mode === 'balancer';
@@ -600,6 +648,11 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
             : {}),
         },
       });
+      if (!hops && input.positions && input.directions) {
+        // v4-only shape replacing a foldable one: the stale hop rows would
+        // otherwise keep describing a topology that no longer exists.
+        await tx.cascadeHop.deleteMany({ where: { cascadeId: id } });
+      }
       if (hops) {
         // Hops are interdependent (positions/protocols), so replace the whole
         // set rather than diffing.

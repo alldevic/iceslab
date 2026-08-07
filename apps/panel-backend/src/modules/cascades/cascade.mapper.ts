@@ -45,10 +45,16 @@ export interface CascadeDto {
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
   hops: CascadeHopDto[];
-  /** v4 shape. Empty on cascades written before the topology tables existed;
-   *  those still describe themselves through `hops`. */
+  /** v4 shape. Always present (possibly empty): empty means the cascade was
+   *  written before the topology tables existed and still describes itself
+   *  through `hops`. */
   positions: CascadePositionDto[];
   directions: CascadeDirectionDto[];
+  /** Tag the NEXT new direction will receive. Reported because the panel shows
+   *  it before saving and cannot derive it: tags are never reused, so after a
+   *  delete `max(tag) + 1` guesses wrong (delete 5, add one, the server issues
+   *  6 while the form promises 5). */
+  nextDirectionTag: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -59,6 +65,7 @@ interface CascadeRow {
   enabled: boolean;
   mode: string;
   hideHopsFromSub: boolean;
+  nextDirectionTag?: number;
   createdAt: Date;
   updatedAt: Date;
   hops: {
@@ -116,6 +123,7 @@ export function mapCascade(c: CascadeRow): CascadeDto {
         countryCode: d.countryCode,
         nodeIds: d.nodes.map((n) => n.nodeId),
       })),
+    nextDirectionTag: c.nextDirectionTag ?? 1,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };
