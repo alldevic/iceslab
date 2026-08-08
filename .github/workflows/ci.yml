@@ -263,3 +263,130 @@ jobs:
       # docker job at action-resolution), and the scan should land report-only
       # first so an unpatched base CVE doesn't wedge every deploy. Add it as a
       # separate, watched change once the baseline is known clean.
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Secrets. The repository is PUBLIC, so a leaked node key or JWT secret is
+  # not "fix it in the next commit": it is already in the history and in every
+  # clone. Cheap to run, and the one check whose absence is unrecoverable.
+  # ───────────────────────────────────────────────────────────────────────
+  secrets-scan:
+    name: secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a secret committed and "removed" a few commits later
+          # is still there, and scanning only the tip would call that clean.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Go static analysis. `go vet` in the node-agent job is the bare minimum;
+  # this agent runs on other people's machines and holds their traffic, so
+  # data races and leaked resources cost more here than in the panel. Newly
+  # relevant after the memory watchdog added a goroutine and more locking.
+  # ───────────────────────────────────────────────────────────────────────
+  go-lint:
+    name: go lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: apps/node/go.sum
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: apps/node
+          # Report-only for now: turning a fresh linter loose on existing code
+          # usually produces a wall of findings, and a red pipeline nobody can
+          # green is a pipeline people learn to ignore. Flip this off once the
+          # baseline is clean.
+          args: --timeout=5m --issues-exit-code=0
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Smoke: does the BUILT IMAGE actually come up?
+  #
+  # The suite exercises source; the image is a different execution path with
+  # its own install, its own module resolution and its own entrypoint. That
+  # gap bit us in production once already, when @iceslab/shared failed to
+  # resolve inside the container while every test and build was green.
+  # ───────────────────────────────────────────────────────────────────────
+  smoke:
+    name: smoke (image boots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ice
+          POSTGRES_PASSWORD: ice
+          POSTGRES_DB: iceslab_smoke
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/panel-backend/Dockerfile
+          push: false
+          load: true
+          tags: iceslab-backend:smoke
+          cache-from: type=gha,scope=iceslab-backend
+
+      - name: Migrate and boot
+        run: |
+          set -euo pipefail
+          DB='postgres://ice:ice@172.17.0.1:5432/iceslab_smoke'
+          # Migrations run from the image too: a migration that only applies
+          # from a developer checkout is not a migration that ships.
+          docker run --rm --network host -e DATABASE_URL="$DB" \
+            --entrypoint sh iceslab-backend:smoke \
+            -c 'cd /app/apps/panel-backend && pnpm exec prisma migrate deploy'
+          docker run -d --name smoke --network host \
+            -e DATABASE_URL="$DB" \
+            -e REDIS_URL='redis://172.17.0.1:6379/0' \
+            -e JWT_SECRET='ci-smoke-secret-must-be-at-least-32-chars' \
+            -e PUBLIC_URL='https://panel.smoke.test' \
+            -e NODE_ENV='production' \
+            iceslab-backend:smoke
+
+      - name: Wait for /health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health >/dev/null; then
+              echo "panel answered after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "panel never answered on /health"
+          docker logs smoke || true
+          exit 1
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs smoke || true
