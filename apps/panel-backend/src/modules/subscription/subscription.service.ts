@@ -467,9 +467,31 @@ export async function generateSubscription(
   // match so buildXrayJsonArray can expand that endpoint into one config per
   // profile. Chains take part too, but only once a policy is granted (see
   // getRouteProfilesByEntryNode).
+  // Which squads actually hand out each entry node. A route policy belongs to
+  // the squad that granted it, so it may only add variants to entries THAT
+  // squad hands out: without this, one squad's "no ads" grant appeared on
+  // another squad's exit, which the operator never configured and could not
+  // switch off (field 2026-08-08). Built from the same host grants the ACL
+  // above uses, so the two can't drift.
+  //
+  // Unrestricted squads (no host rows at all) reach every entry, matching the
+  // opt-in convention the host and exit allow-lists already follow.
+  const entryReach = new Map<string, Set<string>>();
+  for (const b of bindings) {
+    let reach = entryReach.get(b.node.id);
+    if (!reach) {
+      reach = new Set<string>();
+      entryReach.set(b.node.id, reach);
+    }
+    for (const g of groupIds) {
+      if (!narrowedSquads.has(g) || b.hosts.some((h) => h.groupHosts.some((gh) => gh.groupId === g)))
+        reach.add(g);
+    }
+  }
   const balancerExits = await getRouteProfilesByEntryNode(
     [...new Set(bindings.map((b) => b.node.id))],
     groupIds,
+    entryReach,
   );
 
   const endpoints: SubscriptionEndpoint[] = [];

@@ -207,6 +207,7 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
 export async function getRouteProfilesByEntryNode(
   nodeIds: string[],
   groupIds: string[] = [],
+  entryReach?: Map<string, Set<string>>,
 ): Promise<Map<string, { label: string; tag: number }[]>> {
   const out = new Map<string, { label: string; tag: number }[]>();
   if (nodeIds.length === 0) return out;
@@ -247,10 +248,6 @@ export async function getRouteProfilesByEntryNode(
   // squad that granted it (see policiesForDirection).
   const allowByGroupCascade = new Map<string, Set<string>>(); // `${groupId}|${cascadeId}`
   const policiesByGroup = new Map<string, { ordinal: number; name: string }[]>();
-  // A4 ad-split: policies GRANTED to the user's squads (opt-in grant). The plain
-  // profile (ordinal 0) is always available and synthesized below; these are the
-  // extra ad-split policies, deduped by ordinal across squads.
-  const grantedPolicies: { ordinal: number; name: string }[] = [];
   if (groupIds.length > 0) {
     const [exitRows, grants] = await Promise.all([
       prisma.groupCascadeExit.findMany({
@@ -281,13 +278,6 @@ export async function getRouteProfilesByEntryNode(
       }
       set.add(r.exitNodeId);
     }
-    const seenOrdinal = new Set<number>();
-    for (const g of grants) {
-      if (!seenOrdinal.has(g.policy.ordinal)) {
-        seenOrdinal.add(g.policy.ordinal);
-        grantedPolicies.push(g.policy);
-      }
-    }
   }
 
   for (const c of cascades) {
@@ -317,21 +307,20 @@ export async function getRouteProfilesByEntryNode(
        * existing opt-in convention), so its policies apply to all of that
        * cascade's directions.
        */
-      const policiesForDirection = (nodeIds: string[]): { ordinal: number; name: string }[] => {
-        const seen = new Set<number>();
-        const outPolicies: { ordinal: number; name: string }[] = [];
-        for (const groupId of groupIds) {
-          const groupAllows = allowByGroupCascade.get(`${groupId}|${c.id}`);
-          const reaches = !groupAllows || nodeIds.some((id) => groupAllows.has(id));
-          if (!reaches) continue;
-          for (const p of policiesByGroup.get(groupId) ?? []) {
-            if (seen.has(p.ordinal)) continue;
-            seen.add(p.ordinal);
-            outPolicies.push(p);
-          }
-        }
-        return outPolicies;
-      };
+      const exitAllowByGroup = new Map<string, Set<string>>();
+      for (const groupId of groupIds) {
+        const allows = allowByGroupCascade.get(`${groupId}|${c.id}`);
+        if (allows) exitAllowByGroup.set(groupId, allows);
+      }
+      const policiesForDirection = (directionNodeIds: string[]): RoutePolicyRef[] =>
+        policiesForEntry({
+          groupIds,
+          entryNodeId,
+          policiesByGroup,
+          entryReach,
+          directionNodeIds,
+          exitAllowByGroup,
+        });
       for (const d of c.directions) {
         // A direction with no node serves nobody; offering it would hand out a
         // config that cannot connect.
@@ -353,6 +342,15 @@ export async function getRouteProfilesByEntryNode(
     const entry = c.hops.find((h) => h.position === 0);
     if (!entry || !nodeIds.includes(entry.nodeId)) continue;
     const isBalancer = c.mode === 'balancer';
+    // Same entry gate as the v4 path above: only squads that hand out THIS
+    // entry add their policy variants to it. Exits are filtered separately here
+    // (applyExitAcl below), so the direction gate is not used on this path.
+    const grantedPolicies = policiesForEntry({
+      groupIds,
+      entryNodeId: entry.nodeId,
+      policiesByGroup,
+      entryReach,
+    });
     // A chain with no granted policy emits NOTHING, deliberately. Its only
     // profile would be the plain one, which resolves to the same single exit an
     // untagged UUID already reaches, so tagging would rewrite every user's UUID
@@ -384,6 +382,61 @@ export async function getRouteProfilesByEntryNode(
       }
     }
     out.set(entry.nodeId, profiles);
+  }
+  return out;
+}
+
+export interface RoutePolicyRef {
+  ordinal: number;
+  name: string;
+}
+
+/**
+ * Which ad-split policies add a variant at ONE entry (and optionally on one
+ * direction out of it). Two independent gates, both opt-in restrictions:
+ *
+ *  - `entryReach`: squads that hand this ENTRY out. A grant lives inside the
+ *    squad that made it, and a squad only speaks where it hands something out.
+ *    Missing map = no gate (other callers keep their old behaviour); a node
+ *    absent FROM the map is reached by nobody, since the caller builds it from
+ *    the very bindings the user is being served.
+ *  - `exitAllowByGroup`: that squad's exit allow-list for this cascade. A squad
+ *    with no rows is unrestricted, the existing convention.
+ *
+ * Both were needed to fix the field report of 2026-08-08: a squad handing out
+ * the Dutch entry with "no ads" granted also stamped a "no ads" variant onto a
+ * Swedish entry belonging to a different squad, which the operator never
+ * configured, could not switch off, and which the squad screen's own preview
+ * did not show. Exit-list scoping alone could not catch it, because neither
+ * squad had restricted its exits at all.
+ *
+ * Pure and exported so the semantics can be tested without a database.
+ */
+export function policiesForEntry(args: {
+  groupIds: string[];
+  entryNodeId: string;
+  policiesByGroup: Map<string, RoutePolicyRef[]>;
+  entryReach?: Map<string, Set<string>>;
+  /** Exit nodes of the direction being offered. Omit to skip the exit gate. */
+  directionNodeIds?: string[];
+  /** groupId -> allowed exit nodes for THIS cascade. */
+  exitAllowByGroup?: Map<string, Set<string>>;
+}): RoutePolicyRef[] {
+  const { groupIds, entryNodeId, policiesByGroup, entryReach, directionNodeIds } = args;
+  const reach = entryReach?.get(entryNodeId);
+  const seen = new Set<number>();
+  const out: RoutePolicyRef[] = [];
+  for (const groupId of groupIds) {
+    if (entryReach && !reach?.has(groupId)) continue;
+    if (directionNodeIds) {
+      const allows = args.exitAllowByGroup?.get(groupId);
+      if (allows && !directionNodeIds.some((id) => allows.has(id))) continue;
+    }
+    for (const p of policiesByGroup.get(groupId) ?? []) {
+      if (seen.has(p.ordinal)) continue;
+      seen.add(p.ordinal);
+      out.push(p);
+    }
   }
   return out;
 }
