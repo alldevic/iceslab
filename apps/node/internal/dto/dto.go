@@ -202,6 +202,15 @@ type CoreStatus struct {
 	// (exit selection needs xray >= 25.9.5). Optional/omitempty so pre-T7
 	// agents and non-versioned cores stay wire-compatible.
 	Version string `json:"version,omitempty"`
+	// Provisioned tells "this core has a config and should be running" apart
+	// from "nobody has configured this core yet". The installer registers an
+	// adapter for every protocol the operator might switch on later, so an
+	// idle core is the normal state of a healthy node, not a fault.
+	//
+	// Pointer + omitempty on purpose: absent means the agent is older than the
+	// field, which is NOT the same as false. A panel reading absent must assume
+	// configured, the behaviour that predates it.
+	Provisioned *bool `json:"provisioned,omitempty"`
 }
 
 type HealthcheckResponse struct {

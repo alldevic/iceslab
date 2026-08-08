@@ -288,14 +288,20 @@ func parseXrayVersion(out []byte) string {
 	return ""
 }
 
+// Provisioned implements core.Provisionable: xray can run once it has either a
+// pushed inbound or install-time REALITY keys. Shares the condition with Start
+// so "deferred" and "not provisioned" cannot drift apart.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.inbounds) > 0 || a.cfg.Inbound.RealityPrivateKey != ""
+}
+
 // Start writes the initial config to disk and spawns xray.
 // If REALITY keys are not yet configured (deferred via ApplyInbound), Start
 // is a no-op, the adapter will activate on the first ApplyInbound call.
 func (a *Adapter) Start(ctx context.Context) error {
-	a.mu.Lock()
-	noKey := a.cfg.Inbound.RealityPrivateKey == ""
-	a.mu.Unlock()
-	if noKey {
+	if !a.Provisioned() {
 		a.logger.Info("xray adapter: no REALITY key yet, waiting for ApplyInbound from panel")
 		return nil
 	}

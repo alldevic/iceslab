@@ -326,7 +326,12 @@ async function checkOne(node: {
     // four nodes of the field fleet stored a message that ends mid-JSON, before
     // any core that is actually down. A truncated explanation is worse than a
     // short one, because it still looks like an explanation.
-    const down = res.cores.filter((c) => !c.running).map((c) => c.name);
+    // A core with `provisioned: false` was never configured, so it is idle by
+    // design, not down. Absent means an agent older than the field: read as
+    // configured, which is how this behaved before.
+    const down = res.cores
+      .filter((c) => !c.running && c.provisioned !== false)
+      .map((c) => c.name);
     return {
       status: 'online',
       message: down.length

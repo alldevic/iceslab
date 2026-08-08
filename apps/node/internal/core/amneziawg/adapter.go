@@ -128,6 +128,15 @@ func (a *Adapter) Engine() string { return "amneziawg" }
 // until ApplyInbound supplies real values, that handler already calls
 // restartInterfaceLocked which writes the config + awg-quick up and flips
 // `started` to true. Caught live cycle #6 2026-05-12 on awg-VPS.
+// Provisioned implements core.Provisionable: without a server key the interface
+// cannot come up at all. Same condition Start defers on, kept as one expression
+// so the two cannot drift apart.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Inbound.PrivateKey != ""
+}
+
 func (a *Adapter) Start(ctx context.Context) error {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()

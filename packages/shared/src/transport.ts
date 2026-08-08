@@ -489,6 +489,15 @@ export interface CoreStatus {
    *  needing a minimum core version (cascade exit selection needs xray
    *  >= 25.9.5). */
   version?: string;
+  /** Whether this core is CONFIGURED, i.e. has an inbound and is expected to
+   *  run. The installer registers an adapter for every protocol the operator
+   *  might switch on later, and an unconfigured one sits idle by design.
+   *
+   *  Absent = the agent predates the field, which is NOT the same as false:
+   *  read it as configured, the behaviour that came before. Without the
+   *  distinction a healthy node reported `degraded` forever (every node of the
+   *  field fleet did), so the status stopped changing when something broke. */
+  provisioned?: boolean;
 }
 
 export interface HealthcheckResponse {

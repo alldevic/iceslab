@@ -136,6 +136,27 @@ type InboundReconciler interface {
 	RetainInbounds(keep []string) error
 }
 
+// Provisionable is an OPTIONAL interface for adapters that can be REGISTERED
+// without being CONFIGURED. The installer registers an adapter for every
+// protocol the operator might switch on later, and such an adapter sits idle
+// until the panel pushes it an inbound ("waiting for ApplyInbound from panel").
+//
+// Without this distinction /healthz reports one thing for two different states:
+// a core that is configured and has died (a fault worth waking someone for) and
+// a core nobody has configured yet (the normal state of a fresh node). Every
+// node of the field fleet therefore reported `degraded` permanently, so when a
+// core actually crashes the status does not change. A signal that is always on
+// carries nothing.
+//
+// Adapters that don't implement this are treated as configured, which is the
+// behaviour that predates the interface.
+type Provisionable interface {
+	// Provisioned reports whether this core has the configuration it needs to
+	// run. It must be the SAME condition Start uses to decide whether to defer,
+	// otherwise the two disagree and the status is a guess.
+	Provisioned() bool
+}
+
 // RestartReporter is an OPTIONAL interface an adapter may implement to report
 // the above. /healthz type-asserts each adapter against it, exactly like
 // Versioner below; adapters that don't implement it simply report nothing.

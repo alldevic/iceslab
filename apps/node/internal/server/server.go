@@ -242,6 +242,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			if v, ok := adapter.(core.Versioner); ok {
 				cs.Version = v.CoreVersion()
 			}
+			// Whether this core is configured at all. Same optional-interface
+			// pattern; adapters that don't report count as configured.
+			if p, ok := adapter.(core.Provisionable); ok {
+				provisioned := p.Provisioned()
+				cs.Provisioned = &provisioned
+			}
 			// Restart tally, same optional-interface pattern. Without it a
 			// memory-watchdog restart is invisible: the core bounces, users
 			// see drops, and this endpoint keeps saying "running: true".
@@ -269,8 +275,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
+	// Only a CONFIGURED core that is down makes the node degraded. A core the
+	// operator never configured is idle by design and used to make every healthy
+	// node report `degraded` forever, which meant the status stopped changing
+	// when something actually broke.
 	allHealthy := true
 	for _, c := range cores {
+		if c.Provisioned != nil && !*c.Provisioned {
+			continue
+		}
 		if !c.Running {
 			allHealthy = false
 			break
