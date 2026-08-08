@@ -466,7 +466,11 @@ export function buildTopologyFragmentsForNode(
       // vlessRoute. Plain profile is ordinal 0.
       const routeTags = [routeTag(0, directionTag - 1)];
       for (const p of input.policies ?? []) routeTags.push(routeTag(p.ordinal, directionTag - 1));
-      routingRules.push({ type: 'field', vlessRoute: routeTags, ...target });
+      // ⚠ STRING, comma-separated - never an array. xray parses `vlessRoute`
+      // with its port-list parser, so an array of numbers fails the whole
+      // config with "invalid port", and the core then refuses to start at all.
+      // Caught in the field 2026-08-08.
+      routingRules.push({ type: 'field', vlessRoute: routeTags.join(','), ...target });
     } else {
       // A transit cannot read the client's choice, so it matches the credential
       // the traffic arrived on.

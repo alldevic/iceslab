@@ -1,3 +1,4 @@
+import { buildTopologyFragmentsForNode } from './cascade.config.js';
 import { describe, expect, it } from 'vitest';
 import {
   CascadeValidationError,
@@ -29,6 +30,48 @@ const dir = (
   nodeIds: string[],
   over: Partial<CascadeDirectionInput> = {},
 ): CascadeDirectionInput => ({ nodeIds, ...over });
+
+// Field incident 2026-08-08: the entry rule carried `vlessRoute` as an ARRAY of
+// numbers. xray parses that field with its port-list parser, so the whole
+// config failed with "invalid port: [1, 257]" and every entry node's core
+// refused to start. Structure tests passed the entire time, because they never
+// asked whether xray would accept the result.
+describe('buildTopologyFragmentsForNode wire format', () => {
+  const entryNode = N(1);
+  const exitNode = N(2);
+  const input = {
+    positions: [{ position: 0, nodeIds: [entryNode] }],
+    directions: [{ tag: 7, nodeIds: [exitNode] }],
+    links: [
+      {
+        fromNodeId: entryNode,
+        toNodeId: exitNode,
+        directionTag: 7,
+        cred: { protocol: 'vless' as const, port: 24000, uuid: 'u-1' },
+      },
+    ],
+    hosts: new Map([
+      [entryNode, 'entry.example'],
+      [exitNode, 'exit.example'],
+    ]),
+    policies: [{ ordinal: 1, directDomains: [], blockDomains: [] }],
+  };
+
+  it('emits vlessRoute as a comma-separated STRING, not an array', () => {
+    const cfg = buildTopologyFragmentsForNode(entryNode, input)!;
+    const rule = cfg.routingRules.find((r) => 'vlessRoute' in r)!;
+    expect(typeof rule.vlessRoute).toBe('string');
+    // Direction tag 7 -> plain profile 7, policy ordinal 1 -> 263.
+    expect(rule.vlessRoute).toBe('7,263');
+  });
+
+  it('never puts a non-primitive in a routing rule port', () => {
+    const cfg = buildTopologyFragmentsForNode(entryNode, input)!;
+    for (const r of cfg.routingRules) {
+      if ('port' in r) expect(['string', 'number']).toContain(typeof r.port);
+    }
+  });
+});
 
 describe('validateCascadeTopology', () => {
   it('accepts the old chain shape: one entry, one direction', () => {
