@@ -243,6 +243,10 @@ export async function getRouteProfilesByEntryNode(
   // cascade. OPT-IN restriction: a cascade absent from this map is unrestricted
   // (no rows => all exits); present => keep only the allowed exit nodes.
   const allowByCascade = new Map<string, Set<string>>();
+  // Per-SQUAD views of the same two facts, so a policy can be attributed to the
+  // squad that granted it (see policiesForDirection).
+  const allowByGroupCascade = new Map<string, Set<string>>(); // `${groupId}|${cascadeId}`
+  const policiesByGroup = new Map<string, { ordinal: number; name: string }[]>();
   // A4 ad-split: policies GRANTED to the user's squads (opt-in grant). The plain
   // profile (ordinal 0) is always available and synthesized below; these are the
   // extra ad-split policies, deduped by ordinal across squads.
@@ -251,13 +255,24 @@ export async function getRouteProfilesByEntryNode(
     const [exitRows, grants] = await Promise.all([
       prisma.groupCascadeExit.findMany({
         where: { groupId: { in: groupIds }, cascadeId: { in: cascades.map((c) => c.id) } },
-        select: { cascadeId: true, exitNodeId: true },
+        select: { groupId: true, cascadeId: true, exitNodeId: true },
       }),
       prisma.groupRoutePolicy.findMany({
         where: { groupId: { in: groupIds } },
-        select: { policy: { select: { ordinal: true, name: true } } },
+        select: { groupId: true, policy: { select: { ordinal: true, name: true } } },
       }),
     ]);
+    for (const r of exitRows) {
+      const k = `${r.groupId}|${r.cascadeId}`;
+      const s = allowByGroupCascade.get(k) ?? new Set<string>();
+      s.add(r.exitNodeId);
+      allowByGroupCascade.set(k, s);
+    }
+    for (const g of grants) {
+      const list = policiesByGroup.get(g.groupId) ?? [];
+      if (!list.some((p) => p.ordinal === g.policy.ordinal)) list.push(g.policy);
+      policiesByGroup.set(g.groupId, list);
+    }
     for (const r of exitRows) {
       let set = allowByCascade.get(r.cascadeId);
       if (!set) {
@@ -287,6 +302,36 @@ export async function getRouteProfilesByEntryNode(
       if (!entryNodeId) continue;
       const allowed = allowByCascade.get(c.id);
       const profiles: { label: string; tag: number }[] = [];
+      /**
+       * Policies that apply to THIS direction: only the ones granted by squads
+       * that also let the user reach it.
+       *
+       * Before this, grants were pooled across every squad and sprayed onto
+       * every direction of every cascade, so a squad handing out "no ads" for
+       * the Dutch exit also produced a "no ads" profile on the Swedish one -
+       * which the operator never configured and cannot switch off. A grant is
+       * meaningful only inside the squad that made it, because the squad is
+       * also what decides which exits the user sees.
+       *
+       * A squad with no allow-rows for a cascade is unrestricted there (the
+       * existing opt-in convention), so its policies apply to all of that
+       * cascade's directions.
+       */
+      const policiesForDirection = (nodeIds: string[]): { ordinal: number; name: string }[] => {
+        const seen = new Set<number>();
+        const outPolicies: { ordinal: number; name: string }[] = [];
+        for (const groupId of groupIds) {
+          const groupAllows = allowByGroupCascade.get(`${groupId}|${c.id}`);
+          const reaches = !groupAllows || nodeIds.some((id) => groupAllows.has(id));
+          if (!reaches) continue;
+          for (const p of policiesByGroup.get(groupId) ?? []) {
+            if (seen.has(p.ordinal)) continue;
+            seen.add(p.ordinal);
+            outPolicies.push(p);
+          }
+        }
+        return outPolicies;
+      };
       for (const d of c.directions) {
         // A direction with no node serves nobody; offering it would hand out a
         // config that cannot connect.
@@ -297,7 +342,7 @@ export async function getRouteProfilesByEntryNode(
         const first = d.nodes[0]!.node;
         const label = cascadeProfileLabel(c.name, d.countryCode ?? first.countryCode, first.name);
         profiles.push({ label, tag: routeTag(0, d.tag - 1) });
-        for (const p of grantedPolicies) {
+        for (const p of policiesForDirection(d.nodes.map((n) => n.node.id))) {
           profiles.push({ label: `${label} · ${p.name}`, tag: routeTag(p.ordinal, d.tag - 1) });
         }
       }
