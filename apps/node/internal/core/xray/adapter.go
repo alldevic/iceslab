@@ -104,13 +104,41 @@ type Adapter struct {
 	// alongside the counters so a bare "3 restarts" has a time window.
 	countingSince time.Time
 
-	// lastInboundID is the id of the inbound currently rendered. Groundwork for
-	// holding several: today it exists to make the overwrite visible in the log.
-	lastInboundID string
+	// inbounds holds every inbound the panel has pushed, keyed by its panel id.
+	// cfg.Inbound remains the install-time/legacy single inbound and is used
+	// when the panel is older and sends no id.
+	//
+	// A map rather than a slice: a push REPLACES one inbound by identity, and
+	// the panel sends them one call at a time. Order is restored on render by
+	// sorting on the key, so a config regenerated from the same state is
+	// byte-identical - otherwise every push would look like a change and
+	// restart the core for nothing.
+	inbounds map[string]InboundConfig
 
 	// restartMu serializes regenerateAndRestart so concurrent config changes
 	// can't race the subprocess swap. Never held together with mu across IO.
 	restartMu sync.Mutex
+}
+
+// inboundTagFor derives a per-inbound xray tag from the panel's inbound id.
+//
+// Unique because xray refuses a config with two identically tagged inbounds -
+// and refuses the WHOLE config, so a clash would take every inbound down, not
+// just the offender. Stable because traffic counters are tagged with it: a tag
+// that changed between pushes would read as a new inbound and zero the
+// accounting on this node.
+//
+// Derived from the id rather than random for that same reason, and prefixed
+// with the base tag so a human reading the config still sees what it is.
+func inboundTagFor(inboundID, baseTag string) string {
+	short := inboundID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	if baseTag == "" {
+		baseTag = "vless-in"
+	}
+	return baseTag + "-" + short
 }
 
 // recordRestart accumulates what the supervisor did. Called from the
@@ -159,6 +187,7 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg:           cfg,
 		logger:        logger,
 		users:         make(map[string]xrayClient),
+		inbounds:      make(map[string]InboundConfig),
 		countingSince: time.Now(),
 	}
 }
@@ -666,19 +695,6 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		return fmt.Errorf("xray ApplyInbound: realityPrivateKey is required for REALITY security")
 	}
 
-	// Multi-inbound groundwork: the panel now names each inbound. The adapter
-	// still keeps one, so a second inbound on this node silently replaces the
-	// first - log it plainly rather than letting an operator discover it by
-	// missing traffic.
-	a.mu.Lock()
-	prevID := a.lastInboundID
-	a.lastInboundID = wire.InboundID
-	a.mu.Unlock()
-	if wire.InboundID != "" && prevID != "" && prevID != wire.InboundID {
-		a.logger.Warn("xray ApplyInbound: a different inbound replaced the previous one "+
-			"(this core holds one inbound today; multi-inbound is in progress)",
-			"previous", prevID, "incoming", wire.InboundID)
-	}
 
 	// Wave-14 C1: port now flows from the panel binding into REALITY's
 	// listen port. Pre-wave port was install-time only and admin port
@@ -724,20 +740,44 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		Warp:                                    wire.Warp,
 	}
 
+	// Multi-inbound: an identified inbound lives in the map under its own id, so
+	// a second one ADDS rather than replaces. Its tag has to be unique inside
+	// the core, and stable across pushes because traffic counters carry it, so
+	// it is derived from that same id.
+	//
+	// No id (older panel) keeps the legacy single-inbound behaviour untouched.
+	key := wire.InboundID
+	if key != "" {
+		newInbound.Tag = inboundTagFor(key, newInbound.Tag)
+	}
+
 	a.mu.Lock()
 	// Idempotency check, same config → noop. Compare struct fields
 	// instead of byte-marshalling for speed; slice equality via reflect.
 	// C3: a cascade change alone (same inbound) must still trigger a restart,
 	// so factor the cascade fragments into the gate.
-	if inboundEqual(a.cfg.Inbound, newInbound) && cascadeEqual(a.cascade, wire.Cascade) {
+	unchanged := cascadeEqual(a.cascade, wire.Cascade)
+	if key == "" {
+		unchanged = unchanged && inboundEqual(a.cfg.Inbound, newInbound)
+	} else {
+		prev, had := a.inbounds[key]
+		unchanged = unchanged && had && inboundEqual(prev, newInbound)
+	}
+	if unchanged {
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyInbound: config unchanged, skipping restart")
 		return nil
 	}
-	a.cfg.Inbound = newInbound
+	if key == "" {
+		a.cfg.Inbound = newInbound
+	} else {
+		a.inbounds[key] = newInbound
+	}
 	a.cascade = wire.Cascade
+	count := len(a.inbounds)
 	a.mu.Unlock()
 	a.logger.Info("xray ApplyInbound: config changed, regenerating and restarting",
+		"inboundId", key, "inboundsHeld", count,
 		"sni", wire.RealityServerNames, "shortIds", len(wire.RealityShortIDs))
 
 	// Use background context for the restart, the request that triggered
@@ -857,9 +897,26 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
 	memLimit := a.cfg.MemoryLimitBytes
+	// Panel-pushed inbounds, in a deterministic order: the map is keyed by id,
+	// so sort the keys. Without this the rendered config would differ between
+	// identical states and every push would look like a change.
+	ids := make([]string, 0, len(a.inbounds))
+	for id := range a.inbounds {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	pushed := make([]InboundConfig, 0, len(ids))
+	for _, id := range ids {
+		pushed = append(pushed, a.inbounds[id])
+	}
 	a.mu.Unlock()
 
-	blob, err := renderConfigWithCascade(inbound, clients, cascade)
+	// The install-time inbound is used only while the panel has pushed nothing
+	// identified - once it has, those are the truth.
+	if len(pushed) == 0 {
+		pushed = []InboundConfig{inbound}
+	}
+	blob, err := renderMultiConfig(pushed, clients, cascade)
 	if err != nil {
 		return fmt.Errorf("render xray config: %w", err)
 	}
