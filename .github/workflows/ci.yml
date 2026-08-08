@@ -280,10 +280,17 @@ jobs:
           # is still there, and scanning only the tip would call that clean.
           fetch-depth: 0
 
+      # The tool itself, not gitleaks/gitleaks-action: that wrapper requires a
+      # paid licence for repositories owned by an ORGANISATION, and ours is.
+      # gitleaks is free either way, so the licence buys the action's reporting
+      # niceties - not the scanning we actually want.
+      #
+      # --redact so a finding does not print the secret into a public build log,
+      # which would leak it a second time to a wider audience.
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source=/repo --redact --verbose --no-banner
 
   # ───────────────────────────────────────────────────────────────────────
   # Go static analysis. `go vet` in the node-agent job is the bare minimum;
