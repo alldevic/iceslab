@@ -1,4 +1,6 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { z } from 'zod';
+import type { Prisma } from '../../generated/prisma/client.js';
 import { requireAuth } from '../auth/auth.hook.js';
 import {
   CreateUserSchema,
@@ -7,6 +9,7 @@ import {
   UserIdParamSchema,
 } from './users.schemas.js';
 import * as usersService from './users.service.js';
+import { mapUserToPublic } from './users.mapper.js';
 import { prisma } from '../../prisma.js';
 import {
   generateSubscription,
@@ -107,6 +110,53 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       orderBy: { tag: 'asc' },
     });
     return reply.send({ tags: rows.map((r) => r.tag).filter((t): t is string => t !== null) });
+  });
+
+  // ───── Lookups by natural key ─────
+  //
+  // A Telegram bot never holds our internal uuid: it knows the person by their
+  // telegram id, and support knows them by username, email or the token in the
+  // link they pasted. Without these, every bot action starts with a full-list
+  // scan and a client-side filter, which is both slow and racy on a roster of
+  // thousands.
+  //
+  // Declared BEFORE /api/users/:id so `by-telegram-id` is not parsed as an id.
+  //
+  // All four return the same shape as GET /:id, so a caller can switch lookup
+  // key without touching the rest of its code.
+  const lookup = async (
+    where: Prisma.UserWhereInput,
+    reply: FastifyReply,
+  ): Promise<unknown> => {
+    const user = await prisma.user.findFirst({
+      where: { ...where, deletedAt: null },
+      include: { traffic: true },
+    });
+    if (!user) return reply.code(404).send({ error: 'USER_NOT_FOUND' });
+    return reply.send(mapUserToPublic(user, user.traffic));
+  };
+
+  app.get('/api/users/by-telegram-id/:telegramId', auth, async (request, reply) => {
+    const { telegramId } = z
+      .object({ telegramId: z.string().regex(/^\d+$/, 'telegram id must be digits') })
+      .parse(request.params);
+    // BigInt: Telegram ids passed 2^32 long ago and will pass 2^53 eventually.
+    return lookup({ telegramId: BigInt(telegramId) }, reply);
+  });
+
+  app.get('/api/users/by-username/:username', auth, async (request, reply) => {
+    const { username } = z.object({ username: z.string().min(1).max(64) }).parse(request.params);
+    return lookup({ username }, reply);
+  });
+
+  app.get('/api/users/by-subscription-token/:token', auth, async (request, reply) => {
+    const { token } = z.object({ token: z.string().min(8).max(64) }).parse(request.params);
+    return lookup({ subscriptionToken: token }, reply);
+  });
+
+  app.get('/api/users/by-email/:email', auth, async (request, reply) => {
+    const { email } = z.object({ email: z.string().min(3).max(255) }).parse(request.params);
+    return lookup({ email }, reply);
   });
 
   // GET /api/users/:id
