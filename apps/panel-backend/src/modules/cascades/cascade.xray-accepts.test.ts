@@ -58,6 +58,9 @@ function wrap(fragment: ReturnType<typeof buildTopologyFragmentsForNode>): strin
       rules: fragment?.routingRules ?? [],
       ...(fragment?.balancers ? { balancers: fragment.balancers } : {}),
     },
+    // Top-level, exactly where the node-agent puts it: a leastPing balancer
+    // has no pings without it, and xray rejects the whole config.
+    ...(fragment?.observatory ? { observatory: fragment.observatory } : {}),
   });
 }
 

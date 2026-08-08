@@ -97,6 +97,25 @@ jobs:
           pnpm exec prisma generate
           pnpm exec prisma migrate deploy
 
+      # An xray binary so the cascade suite can ask the CORE whether the config
+      # we generate actually loads. Every other cascade test checks structure
+      # and none can answer that; on 2026-08-08 the gap cost both cascade
+      # entries (vlessRoute went out as an array, xray rejected the whole file,
+      # cores sat in a crash loop) while 88 green tests said nothing. See
+      # BACKLOG E10. Without XRAY_BIN those tests skip themselves, so this step
+      # is what turns them on.
+      #
+      # Pinned, not "latest": a moving core version would make CI fail for
+      # reasons unrelated to the commit under test. Bump deliberately.
+      - name: Install xray (for config-validity tests)
+        run: |
+          curl -fsSL -o /tmp/xray.zip \
+            https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+          unzip -o /tmp/xray.zip xray -d /tmp/xray-bin
+          chmod +x /tmp/xray-bin/xray
+          echo "XRAY_BIN=/tmp/xray-bin/xray" >> "$GITHUB_ENV"
+          /tmp/xray-bin/xray version | head -1
+
       - name: Typecheck backend
         working-directory: apps/panel-backend
         run: pnpm exec tsc --noEmit

@@ -428,6 +428,7 @@ export function buildTopologyFragmentsForNode(
 
   const routingRules: Record<string, unknown>[] = [];
   const balancers: Record<string, unknown>[] = [];
+  let needsObservatory = false;
 
   if (role === 'exit') {
     // A direction's node is the end of the road: everything that arrives on the
@@ -458,6 +459,11 @@ export function buildTopologyFragmentsForNode(
       const balancerTag = `bal-d${directionTag}`;
       balancers.push({ tag: balancerTag, selector: tags, strategy: { type: 'leastPing' } });
       target = { balancerTag };
+      // leastPing needs somebody to measure the pings. Without an observatory
+      // xray refuses the whole config with "not all dependencies are resolved"
+      // and the core never starts - caught by the config-validity test, before
+      // this shape reached a node.
+      needsObservatory = true;
     } else {
       target = { outboundTag: tags[0]! };
     }
@@ -491,6 +497,19 @@ export function buildTopologyFragmentsForNode(
     ...(linkIngressPort !== undefined ? { linkIngressPort } : {}),
     ...(allowFrom.length > 0 ? { linkAllowFrom: [...new Set(allowFrom)] } : {}),
     ...(balancers.length > 0 ? { balancers } : {}),
+    // One observatory covers every balancer on this node: it probes all
+    // link-outs by tag prefix, and each balancer selects from that pool.
+    ...(needsObservatory
+      ? {
+          observatory: {
+            subjectSelector: [LINK_OUT_TAG],
+            // xray's json tag is `probeURL` (capital URL); a lowercase spelling
+            // is silently ignored and the probe quietly targets xray's default.
+            probeURL: OBSERVATORY_PROBE_URL,
+            probeInterval: OBSERVATORY_PROBE_INTERVAL,
+          },
+        }
+      : {}),
   };
 }
 
