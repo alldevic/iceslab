@@ -36,4 +36,13 @@ regexes = [
   # assigns an obvious dummy. Real values never live in the repository: they are
   # supplied through the environment on the host.
   '''JWT_SECRET:\s*ci-''',
+  # The .env.test fixture value. Its whole purpose is to be recognised: the
+  # panel refuses to boot outside NODE_ENV=test when JWT_SECRET equals it, so
+  # nobody can ship the public fixture by accident. The scanner flagged the very
+  # constant that exists to prevent the leak.
+  #
+  # Matched by VALUE rather than by file, so it stays silent wherever it appears
+  # while a genuine key added to the same file is still caught. It also sits in
+  # git history, where a fix cannot remove it.
+  '''test_secret_at_least_32_characters_long_for_zod_validation''',
 ]
