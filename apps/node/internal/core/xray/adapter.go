@@ -120,6 +120,44 @@ type Adapter struct {
 	restartMu sync.Mutex
 }
 
+// RetainInbounds implements core.InboundReconciler: forget every inbound the
+// panel no longer sends, then re-render if anything was dropped.
+//
+// This is what makes deletion work at all. The push arrives inbound by inbound,
+// so an adapter that only ever adds keeps serving a deleted one indefinitely -
+// a listener the operator believes is gone, still accepting its old users.
+//
+// A push carrying NO xray inbounds is meaningful, not a no-op to ignore: it
+// means the last one was removed. Note the deliberate exception below for the
+// legacy single inbound.
+func (a *Adapter) RetainInbounds(keep []string) error {
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, id := range keep {
+		keepSet[id] = struct{}{}
+	}
+
+	a.mu.Lock()
+	dropped := make([]string, 0)
+	for id := range a.inbounds {
+		if _, ok := keepSet[id]; !ok {
+			delete(a.inbounds, id)
+			dropped = append(dropped, id)
+		}
+	}
+	remaining := len(a.inbounds)
+	// The install-time inbound has no panel id and is not managed here; it only
+	// applies while the panel has pushed nothing identified.
+	legacyOnly := remaining == 0 && a.cfg.Inbound.RealityPrivateKey != ""
+	a.mu.Unlock()
+
+	if len(dropped) == 0 {
+		return nil
+	}
+	a.logger.Info("xray: inbounds removed by the panel, regenerating",
+		"dropped", dropped, "remaining", remaining, "fallingBackToInstallTime", legacyOnly)
+	return a.regenerateAndRestart(context.Background())
+}
+
 // inboundTagFor derives a per-inbound xray tag from the panel's inbound id.
 //
 // Unique because xray refuses a config with two identically tagged inbounds -

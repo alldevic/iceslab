@@ -462,6 +462,30 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		applied++
 	}
 
+	// Reconcile: the push above is per-inbound, so an adapter holding several
+	// has no way to notice a DELETION. Hand each one the full set that just
+	// arrived for it, and let it drop the rest. Runs even when the list is
+	// empty for an adapter - that is exactly the "last inbound removed" case,
+	// and skipping it would leave a deleted inbound serving forever.
+	keepByProtocol := make(map[string][]string, len(req.Inbounds))
+	for _, ib := range req.Inbounds {
+		key := string(ib.Protocol) + "|" + string(ib.ResolvedEngine())
+		keepByProtocol[key] = append(keepByProtocol[key], ib.ID)
+	}
+	for _, adapter := range s.cfg.Adapters {
+		rec, ok := adapter.(core.InboundReconciler)
+		if !ok {
+			continue
+		}
+		key := adapter.Name() + "|" + adapter.Engine()
+		if err := rec.RetainInbounds(keepByProtocol[key]); err != nil {
+			// Not fatal for the request: the inbounds that DID apply are live,
+			// and reporting this as a total failure would make the panel retry
+			// a push that already half-landed.
+			s.logger.Error("adapter RetainInbounds failed", "core", adapter.Name(), "err", err)
+		}
+	}
+
 	if failed > 0 {
 		writeError(w, http.StatusInternalServerError, "ADAPTER_FAILED",
 			fmt.Sprintf("%d/%d inbounds failed to apply", failed, len(req.Inbounds)))

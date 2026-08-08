@@ -120,6 +120,22 @@ type RestartStats struct {
 	RSSBytes         uint64
 }
 
+// InboundReconciler is an OPTIONAL interface for adapters that hold SEVERAL
+// inbounds at once. `applyInbounds` carries the panel's full set for this node,
+// but it is dispatched to adapters one inbound at a time, so an adapter that
+// accumulates them never learns that one was deleted.
+//
+// Without this, removing an inbound in the panel leaves it serving on the node
+// forever: still listening, still accepting the users it knew about. Found in
+// the field 2026-08-08, right after multi-inbound landed.
+type InboundReconciler interface {
+	// RetainInbounds drops every inbound whose id is not in `keep`, and
+	// restarts the core if anything went away. `keep` is the complete set for
+	// this adapter in the push that just landed. An EMPTY set means the node
+	// has no inbounds of this kind any more, which is a legitimate state.
+	RetainInbounds(keep []string) error
+}
+
 // RestartReporter is an OPTIONAL interface an adapter may implement to report
 // the above. /healthz type-asserts each adapter against it, exactly like
 // Versioner below; adapters that don't implement it simply report nothing.

@@ -144,6 +144,72 @@ func TestPortClashIsRefusedByName(t *testing.T) {
 	}
 }
 
+// Deleting an inbound in the panel must actually stop it on the node. The push
+// is per-inbound, so without reconciliation the adapter never hears about a
+// removal and keeps the listener up - found in the field 2026-08-08, where a
+// binding deleted from the panel was still serving on port 8443.
+func TestRemovedInboundStopsBeingServed(t *testing.T) {
+	a := multiAdapter(t)
+	keep := "aaaaaaaa-1111-4000-8000-000000000001"
+	drop := "bbbbbbbb-2222-4000-8000-000000000002"
+	_ = a.ApplyInbound(443, inboundWire(t, keep, 443))
+	_ = a.ApplyInbound(8443, inboundWire(t, drop, 8443))
+
+	// The panel now sends only the surviving one.
+	if err := a.RetainInbounds([]string{keep}); err != nil {
+		t.Fatalf("RetainInbounds: %v", err)
+	}
+
+	a.mu.Lock()
+	_, keptStill := a.inbounds[keep]
+	_, droppedStill := a.inbounds[drop]
+	a.mu.Unlock()
+	if !keptStill {
+		t.Error("the inbound the panel still sends was dropped")
+	}
+	if droppedStill {
+		t.Fatal("the deleted inbound is still held; it would keep listening on the node")
+	}
+
+	for _, in := range renderedInbounds(t, a) {
+		if tag, _ := in["tag"].(string); tag == inboundTagFor(drop, "vless-in") {
+			t.Fatal("the deleted inbound is still rendered into the config")
+		}
+	}
+}
+
+// Removing the LAST inbound is a real state, not a no-op to skip: an empty keep
+// set has to be honoured, or the final inbound could never be turned off.
+func TestRetainWithEmptySetDropsEverything(t *testing.T) {
+	a := multiAdapter(t)
+	_ = a.ApplyInbound(443, inboundWire(t, "aaaaaaaa-1111-4000-8000-000000000001", 443))
+	if err := a.RetainInbounds(nil); err != nil {
+		t.Fatalf("RetainInbounds: %v", err)
+	}
+	a.mu.Lock()
+	held := len(a.inbounds)
+	a.mu.Unlock()
+	if held != 0 {
+		t.Fatalf("adapter still holds %d inbounds after the panel sent none", held)
+	}
+}
+
+// Reconciliation must not restart the core when nothing changed: a push that
+// changes one inbound would otherwise bounce every other one along with it.
+func TestRetainIsQuietWhenNothingChanged(t *testing.T) {
+	a := multiAdapter(t)
+	id := "aaaaaaaa-1111-4000-8000-000000000001"
+	_ = a.ApplyInbound(443, inboundWire(t, id, 443))
+	before := a.RestartStats()
+	if err := a.RetainInbounds([]string{id}); err != nil {
+		t.Fatalf("RetainInbounds: %v", err)
+	}
+	after := a.RestartStats()
+	if before.Crash != after.Crash || before.Memory != after.Memory {
+		t.Error("a no-op reconciliation disturbed the running core")
+	}
+}
+
 // An older panel sends no id; that path must behave exactly as before.
 func TestUnidentifiedInboundKeepsLegacyBehaviour(t *testing.T) {
 	a := multiAdapter(t)
