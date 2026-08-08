@@ -159,6 +159,93 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     return lookup({ email }, reply);
   });
 
+  /**
+   * GET /api/users/:id/usage?start=&end=
+   *
+   * Per-day traffic for one user. The rows have been accumulating since the
+   * stats poller landed; there was simply no way to read them, so a bot asking
+   * "how much did I use this month" had nothing to answer with.
+   *
+   * Daily granularity, because that is what is stored: the poller folds each
+   * node's deltas into a per-(node, user, day) row. Days with no traffic have
+   * no row at all rather than a zero, so a caller charting a period must fill
+   * gaps itself - inventing zeroes here would hide the difference between "used
+   * nothing" and "node reported nothing".
+   *
+   * Totals are summed across nodes and returned alongside, since that is what
+   * the caller almost always wants and it saves them adding bigints correctly.
+   */
+  app.get('/api/users/:id/usage', auth, async (request, reply) => {
+    const params = UserIdParamSchema.parse(request.params);
+    const query = z
+      .object({
+        start: z.iso.date().optional(),
+        end: z.iso.date().optional(),
+        // Per-node breakdown is opt-in: most callers want one number per day,
+        // and the split multiplies the row count by the size of the fleet.
+        byNode: z.enum(['true', 'false']).default('false'),
+      })
+      .parse(request.query);
+
+    const user = await prisma.user.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!user) return reply.code(404).send({ error: 'USER_NOT_FOUND' });
+
+    // Default window: the last 30 days, which is the period a subscription
+    // question is almost always about.
+    const end = query.end ? new Date(query.end) : new Date();
+    const start = query.start
+      ? new Date(query.start)
+      : new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+    const rows = await prisma.nodeUserUsageHistory.findMany({
+      where: { userId: params.id, date: { gte: start, lte: end } },
+      orderBy: { date: 'asc' },
+      select: { date: true, bytesIn: true, bytesOut: true, nodeId: true },
+    });
+
+    const perNode = query.byNode === 'true';
+    const buckets = new Map<string, { date: string; nodeId?: string; bytesIn: bigint; bytesOut: bigint }>();
+    for (const r of rows) {
+      const date = r.date.toISOString().slice(0, 10);
+      const key = perNode ? `${date}|${r.nodeId}` : date;
+      const b = buckets.get(key) ?? {
+        date,
+        ...(perNode ? { nodeId: r.nodeId } : {}),
+        bytesIn: 0n,
+        bytesOut: 0n,
+      };
+      b.bytesIn += r.bytesIn;
+      b.bytesOut += r.bytesOut;
+      buckets.set(key, b);
+    }
+
+    let totalIn = 0n;
+    let totalOut = 0n;
+    for (const b of buckets.values()) {
+      totalIn += b.bytesIn;
+      totalOut += b.bytesOut;
+    }
+
+    // Bytes go out as strings: a month of traffic passes 2^53 long before a
+    // year does, and JSON numbers would round it silently.
+    return reply.send({
+      userId: params.id,
+      start: start.toISOString().slice(0, 10),
+      end: end.toISOString().slice(0, 10),
+      totalBytesIn: totalIn.toString(),
+      totalBytesOut: totalOut.toString(),
+      days: [...buckets.values()].map((b) => ({
+        date: b.date,
+        ...(b.nodeId ? { nodeId: b.nodeId } : {}),
+        bytesIn: b.bytesIn.toString(),
+        bytesOut: b.bytesOut.toString(),
+      })),
+    });
+  });
+
   // GET /api/users/:id
   app.get('/api/users/:id', auth, async (request, reply) => {
     const params = UserIdParamSchema.parse(request.params);
