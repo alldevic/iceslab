@@ -175,11 +175,24 @@ jobs:
     name: docker (build + publish)
     runs-on: ubuntu-latest
     needs: [panel, node-agent]
+    # Runs on a pull request too, but only BUILDS there (see `push:` below).
+    # A Dockerfile break used to surface after merge, when the job first ran on
+    # develop - which is also the branch the operator's test server pulls from,
+    # so the first sign of trouble was a deploy that had nothing to deploy.
+    # Building on the PR moves that discovery before the merge; publishing stays
+    # restricted, because an image from an unmerged branch has nowhere to go.
+    # ⚠ Same-repo pull requests only. `docker build` executes whatever the
+    # Dockerfile says, so building an arbitrary fork's PR would run a stranger's
+    # code on our runner. The repo is public and fork PRs are routine here, so
+    # that is not theoretical. A fork PR still gets the panel and node-agent
+    # checks; only the image build is withheld.
     if: >-
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' ||
-       github.ref == 'refs/heads/develop' ||
-       startsWith(github.ref, 'refs/tags/v'))
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/main' ||
+        github.ref == 'refs/heads/develop' ||
+        startsWith(github.ref, 'refs/tags/v')))
     permissions:
       contents: read
       packages: write
@@ -201,7 +214,11 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # Only needed to publish. Skipped on a pull request, where the job builds
+      # and throws the image away - a fork PR has no write token anyway, so
+      # attempting the login there would fail the job for no reason.
       - name: Log in to GHCR
+        if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -224,7 +241,10 @@ jobs:
         with:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.dockerfile }}
-          push: true
+          # Build everywhere, publish only from the branches that something
+          # actually pulls. On a pull request the image is built and discarded:
+          # the point there is to prove the Dockerfile still works.
+          push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Cache via GHA cache (free, ephemeral), speeds up incremental
