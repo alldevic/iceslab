@@ -196,6 +196,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      # build-push-action uploads a build record artifact per image on every
+      # run (~60 KB each, three images). They are only useful for opening a
+      # build in Docker Desktop, which nobody here does, and they accumulate
+      # against the storage quota. The build summary in the job page stays.
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     strategy:
       matrix:
         image:
