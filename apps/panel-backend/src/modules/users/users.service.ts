@@ -87,13 +87,25 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
 
       hysteriaPassword:    creds.hysteriaPassword,
       naivePassword:       creds.naivePassword,
-      xrayUuid:            creds.xrayUuid,
+      // Import: carry the user's existing VLESS identity so their current link
+      // keeps working. Anything not supplied is freshly generated as before.
+      xrayUuid:            input.vlessUuid ?? creds.xrayUuid,
       amneziawgPrivateKey: creds.amneziawgPrivateKey,
       amneziawgPublicKey:  creds.amneziawgPublicKey,
 
       trafficLimitBytes:    gbToBytes(input.trafficLimitGb),
       trafficLimitStrategy: input.trafficLimitStrategy,
-      expireAt:             daysFromNow(input.expireDays),
+      // An absolute instant wins over a relative span: expireAt is a fact being
+      // transferred from another panel, expireDays is a convenience for humans
+      // creating a user by hand.
+      expireAt:             input.expireAt ? new Date(input.expireAt) : daysFromNow(input.expireDays),
+      // Registration date from the source panel; without it a three-year
+      // customer reads as "registered today" and every other number on the page
+      // loses credibility.
+      ...(input.createdAt ? { createdAt: new Date(input.createdAt) } : {}),
+      // Provenance: what makes a second import run a delta instead of a
+      // duplicate. Never set for a user created by hand.
+      sourceId:             input.sourceId ?? null,
 
       hwidDeviceLimit: input.hwidDeviceLimit ?? null,
       // R3 - per-user routing override; null = inherit (squad -> global -> default).

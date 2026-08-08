@@ -41,6 +41,30 @@ export const CreateUserSchema = z.object({
   trafficLimitGb: z.number().int().positive().nullish(),         // null/undefined = unlimited
   trafficLimitStrategy: TrafficLimitStrategy.default('no_reset'),
   expireDays: z.number().int().positive().nullish(),             // null/undefined = no expiry
+  // ───── Import fields ─────
+  //
+  // A migration needs to state a user's EXISTING values, not derive fresh ones.
+  // Without these the importer has to create a user and immediately PUT it,
+  // which doubles the call count (13608 instead of 6804 on the deal in
+  // progress) and still cannot carry credentials, so every client would have to
+  // re-import their config by hand.
+  //
+  // All optional: a normal create ignores them entirely and behaves as before.
+  //
+  // expireAt wins over expireDays when both are sent: an absolute instant is a
+  // fact being transferred, a relative span is a convenience for humans.
+  expireAt: z.iso.datetime().nullish(),
+  // Carry the user's existing VLESS identity so their current link keeps
+  // working. The tag bytes inside it are rewritten by the panel on route
+  // selection, so what matters is the rest of the value.
+  vlessUuid: z.uuid().optional(),
+  // Registration date from the source panel. Purely informational, but an
+  // operator reading "registered today" for a three-year customer loses trust
+  // in every other number on the page.
+  createdAt: z.iso.datetime().optional(),
+  // Provenance, see the sourceId column. Set by the importer, never by a human;
+  // it is what makes a second run a delta instead of a duplicate.
+  sourceId: z.string().max(128).optional(),
   hwidDeviceLimit: z.number().int().positive().nullish(),
   description: z.string().max(1000).nullish(),
   tag: z.string().max(64).nullish(),
