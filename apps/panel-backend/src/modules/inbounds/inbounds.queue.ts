@@ -171,6 +171,23 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
       }
     }
 
+    // Multi-inbound: tell the agent WHICH inbound this config is, so it can
+    // hold several at once instead of letting each push overwrite the last.
+    // It travels inside the config because ApplyInbound is shared by all seven
+    // core adapters, and widening that signature would touch every one of them
+    // for the benefit of a single core.
+    //
+    // The binding id is the right identity here: it is what the panel already
+    // keys everything else on (mtproto secrets above, subscription rendering),
+    // and it lives as long as the inbound does. Traffic counters end up tagged
+    // with it, so it must not be regenerated per push.
+    if (b.profile.protocol === 'xray') {
+      config = {
+        ...(config as Record<string, unknown>),
+        inboundId: b.id,
+      } as InboundDto['config'];
+    }
+
     // AmneziaWG: inject the binding-level port into the protocol config so
     // the agent binds the awg-quick interface to the port the admin set
     // (typical 443 for stealth) instead of WireGuard's default 51820.

@@ -105,6 +105,21 @@ export interface InboundDto {
 }
 
 export interface XrayInboundCfg {
+  /**
+   * Identity of THIS inbound, so the agent can hold several at once.
+   *
+   * Rides inside the config rather than as an argument because `ApplyInbound`
+   * is shared by all seven core adapters: widening its signature to carry an id
+   * would touch every one of them for the benefit of a single core.
+   *
+   * The agent keys its stored inbounds on this. It must stay stable for the
+   * life of the inbound: traffic counters are tagged with it, so a changed id
+   * reads as a brand-new inbound and zeroes the accounting on that node.
+   *
+   * Optional for now: an agent from before multi-inbound ignores it, and a
+   * panel that omits it keeps the old single-inbound behaviour.
+   */
+  inboundId?: string;
   /** Stream security. 'reality' (default), 'none' (plain transport, for
    *  ws/httpupgrade behind a CDN that terminates TLS, or local testing), or
    *  'tls' (node-terminated TLS with an operator-supplied certificate). The
