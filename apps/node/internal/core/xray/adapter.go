@@ -104,6 +104,10 @@ type Adapter struct {
 	// alongside the counters so a bare "3 restarts" has a time window.
 	countingSince time.Time
 
+	// lastInboundID is the id of the inbound currently rendered. Groundwork for
+	// holding several: today it exists to make the overwrite visible in the log.
+	lastInboundID string
+
 	// restartMu serializes regenerateAndRestart so concurrent config changes
 	// can't race the subprocess swap. Never held together with mu across IO.
 	restartMu sync.Mutex
@@ -582,6 +586,18 @@ func (a *Adapter) Healthy() bool {
 // xrayInboundCfgWire mirrors `XrayInboundCfg` in packages/shared/src/transport.ts.
 // Field tags match the wire JSON the panel sends via /applyInbounds.
 type xrayInboundCfgWire struct {
+	// Which inbound this config is. The panel sends the binding id; it is
+	// stable for the life of the inbound, which matters because traffic
+	// counters end up tagged with it.
+	//
+	// Read but not yet acted on: the adapter still holds exactly one inbound
+	// (see cfg.Inbound), so a second push overwrites the first. Keying the
+	// stored inbounds on this is the next step, and it has to land in one
+	// piece - a half-done version renders a config xray rejects, which takes
+	// the whole core down rather than one inbound.
+	//
+	// Empty from a pre-multi-inbound panel; treated as "the single inbound".
+	InboundID          string   `json:"inboundId"`
 	RealityDest        string   `json:"realityDest"`
 	RealityServerNames []string `json:"realityServerNames"`
 	RealityShortIDs    []string `json:"realityShortIds"`
@@ -648,6 +664,20 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// REALITY needs a private key; "none" (plain) and "tls" (own cert) do not.
 	if (wire.Security == "" || wire.Security == "reality") && wire.RealityPrivateKey == "" {
 		return fmt.Errorf("xray ApplyInbound: realityPrivateKey is required for REALITY security")
+	}
+
+	// Multi-inbound groundwork: the panel now names each inbound. The adapter
+	// still keeps one, so a second inbound on this node silently replaces the
+	// first - log it plainly rather than letting an operator discover it by
+	// missing traffic.
+	a.mu.Lock()
+	prevID := a.lastInboundID
+	a.lastInboundID = wire.InboundID
+	a.mu.Unlock()
+	if wire.InboundID != "" && prevID != "" && prevID != wire.InboundID {
+		a.logger.Warn("xray ApplyInbound: a different inbound replaced the previous one "+
+			"(this core holds one inbound today; multi-inbound is in progress)",
+			"previous", prevID, "incoming", wire.InboundID)
 	}
 
 	// Wave-14 C1: port now flows from the panel binding into REALITY's
