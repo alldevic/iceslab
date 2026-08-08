@@ -1257,6 +1257,9 @@ export default {
     clientPicks: 'client picks',
     directionTag: 'direction {{tag}}',
     directionUnnamed: 'no country',
+    // A legitimate v4 state: the tag is issued, no node stands behind it yet,
+    // and the direction is not handed to clients.
+    directionNoNode: 'no node yet',
     directionDown: 'out',
     outShort: 'out',
     reaches: 'Reaches',
@@ -1374,16 +1377,8 @@ export default {
     chainPendingDirection: 'no direction picked yet',
     chainPendingDirectionN: 'direction {{n}} not picked yet',
     needEntry: 'Pick at least one entry node to enable Create.',
-    needDirection: 'Give every direction a country and a node to enable Create.',
+    needDirection: 'Give every direction a country to enable Create.',
     tooManyLinks: '{{n}} links, the ceiling is {{max}}. Drop an entry or a direction.',
-    // Shapes the editor can draw that storage cannot hold yet. Named rather than
-    // silently folded: a pool saved as its first node would leave the operator
-    // sure of a redundancy they do not have.
-    unsupported: {
-      pool: 'Several nodes on one position is not storable yet. Leave one node per position and per direction.',
-      transitsWithFan:
-        'Transits together with several directions is not storable yet. Either drop the transit positions or keep one direction.',
-    },
   },
   // The edit page. Shares most of its wording with `cascadeCreate`; what lives
   // here is what only a LIVE cascade has: a push to report, subscribers already
@@ -2142,6 +2137,26 @@ export default {
     metricsPending: 'Metrics pending - first poll within 15s',
     loadLabel: 'Load',
     coreVersion: 'xray core version (exit selection needs >= 25.9.5)',
+    coreNoData: 'no core data',
+    coreNoDataTip:
+      'This node has never reported its core: an older agent, or it has not checked in. That is not the same as "no restarts" - the panel simply does not know how many there were.',
+    coreNoRss: 'no memory sample',
+    coreNoLimit: 'no ceiling set',
+    coreMemTip:
+      'xray core memory: {{rss}} against a {{limit}} ceiling. Cross it and the agent restarts the core, dropping every live connection.',
+    coreMemNoLimitTip:
+      'No memory ceiling is armed on this node, the watchdog is off: nothing will stop the core before the system kills it. Last sample: {{rss}}.',
+    coreObservedTip:
+      'Numbers taken at {{at}}. The panel polls every 30s but only stores a sample when a counter moved or memory drifted more than 10%, so a calm core keeps the same stamp for a long while.',
+    coreFrozen: 'The node is unreachable right now, these numbers are frozen at its last answer.',
+    restartsNone: 'no restarts',
+    restartsNoneTip: 'The core has not restarted once for as long as the agent has been counting.',
+    restarts_one: '{{count}} restart',
+    restarts_other: '{{count}} restarts',
+    restartsTip:
+      'Crashes: {{crash}}, memory ceiling: {{memory}}. Last one: {{when}}. Every restart drops live connections, so match complaints about drops against this counter. A rising crash count is a bug; a rising memory count is the ceiling doing its job.',
+    reasonMemory: 'memory',
+    reasonCrash: 'crash',
   },
 
   squadForm: {

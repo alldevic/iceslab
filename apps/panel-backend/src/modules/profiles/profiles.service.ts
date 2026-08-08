@@ -10,6 +10,7 @@ import {
   generateSsServerPsk,
 } from './ss-helpers.js';
 import { engineValidForProtocol } from './profiles.schemas.js';
+import { stripInapplicableTransportFields } from '../inbounds/xray-transport-fields.js';
 import type {
   CreateBindingInput,
   CreateProfileInput,
@@ -147,6 +148,12 @@ export async function createProfile(input: CreateProfileInput): Promise<PublicPr
       configToStore = { ...ss, serverPsk: generateSsServerPsk(ss.method) };
     }
   }
+  // Keep only the transport settings this profile's transport uses, so a field
+  // typed for a transport that was later switched away cannot come back to life
+  // when the operator switches back. See stripInapplicableTransportFields.
+  if (input.protocol === 'xray') {
+    configToStore = stripInapplicableTransportFields(configToStore);
+  }
 
   const created = await prisma.$transaction(async (tx) => {
     const p = await tx.profile.create({
@@ -222,7 +229,13 @@ export async function updateProfile(
     ];
     if (!schema) throw new Error(`Unknown protocol ${existing.protocol}`);
     const parsed = schema.parse(input.config);
-    data.config = parsed as never;
+    // After parse, so schema defaults are filled in first and only then the
+    // fields belonging to other transports are dropped.
+    data.config = (
+      existing.protocol === 'xray'
+        ? stripInapplicableTransportFields(parsed as Record<string, unknown>)
+        : parsed
+    ) as never;
   }
 
   const updated = await prisma.profile.update({

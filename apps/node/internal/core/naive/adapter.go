@@ -104,11 +104,16 @@ func (a *Adapter) Engine() string { return "naive" }
 // Caught live cycle #8 2026-05-13: agent crash-looped with
 // `render Caddyfile: Hostname is required` because Start tried to render
 // before applyInbound landed.
-func (a *Adapter) Start(ctx context.Context) error {
+// Provisioned implements core.Provisionable: Caddy needs the FQDN before it can
+// render a site. Shares the condition with Start so the two cannot drift apart.
+func (a *Adapter) Provisioned() bool {
 	a.mu.Lock()
-	noHost := a.cfg.Inbound.Hostname == ""
-	a.mu.Unlock()
-	if noHost {
+	defer a.mu.Unlock()
+	return a.cfg.Inbound.Hostname != ""
+}
+
+func (a *Adapter) Start(ctx context.Context) error {
+	if !a.Provisioned() {
 		a.logger.Info("naive adapter: hostname not set, waiting for ApplyInbound from panel")
 		return nil
 	}

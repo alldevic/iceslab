@@ -1,4 +1,5 @@
 import type { Node } from '../../generated/prisma/client.js';
+import type { NodeCoreRestarts } from '@iceslab/shared';
 
 // G (Zashchita / hardening) - public shape of the nodes.hardening jsonb blob.
 // Mirrors HardeningInput in nodes.schemas.ts; the frontend reads this to seed
@@ -10,6 +11,15 @@ export interface HardeningDto {
   sshAllowlist?: string[];
 }
 
+// Shape of the nodes.coreRestarts jsonb blob. Defined once in @iceslab/shared
+// (NodeCoreRestarts) and re-exported here for the modules that already import
+// node DTO types from this file; panel-frontend imports the same type straight
+// from shared, so there is a single definition to keep in sync.
+//
+// ⚠ `null` on the node DTO means "no reporting agent has checked in", NOT
+// "zero restarts". Older agents never send this.
+export type { NodeCoreRestarts } from '@iceslab/shared';
+
 export interface PublicNodeDto {
   id: string;
   name: string;
@@ -19,6 +29,8 @@ export interface PublicNodeDto {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
+  /** See NodeCoreRestarts. null = never reported (not the same as zero). */
+  coreRestarts: NodeCoreRestarts | null;
   // T7: proxy-core version reported by the agent (e.g. xray "26.3.27"), NULL
   // until a versioned agent checks in. Shown on the node card; the cascade form
   // uses it to warn before selecting an old node as a balancer entry.
@@ -53,6 +65,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     status: node.status,
     lastStatusChange: node.lastStatusChange?.toISOString() ?? null,
     lastStatusMessage: node.lastStatusMessage,
+    coreRestarts: (node.coreRestarts as NodeCoreRestarts | null) ?? null,
     coreVersion: node.coreVersion,
     consumptionMultiplier: node.consumptionMultiplier.toString(),
     regionId: node.regionId,

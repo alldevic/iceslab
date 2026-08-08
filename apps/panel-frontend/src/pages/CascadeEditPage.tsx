@@ -12,7 +12,6 @@ import {
   getCascadeStatus,
   listCascades,
   listNodes,
-  unsupportedShape,
   updateCascadeV4,
   type Cascade,
   type CascadeProtocol,
@@ -255,7 +254,11 @@ export function CascadeEditPage() {
   const trimmedName = name.trim();
   const entryIds = pools[0]?.nodeIds.filter(Boolean) ?? [];
   const poolsFilled = pools.every((p) => p.nodeIds.some(Boolean));
-  const directionsFilled = directions.every((d) => d.countryCode && d.nodeIds.some(Boolean));
+  // A direction only needs a country to be saveable. An empty pool is a state
+  // v4 can hold on purpose: the tag exists, no node stands behind it yet, and
+  // the direction is simply not handed to clients. The preview says so per row
+  // rather than the save button going dead for the whole form.
+  const directionsFilled = directions.every((d) => Boolean(d.countryCode));
   const duplicate = new Set(allIds).size !== allIds.length;
   const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
 
@@ -273,17 +276,12 @@ export function CascadeEditPage() {
     })
     .filter((x): x is { node: string; bad: string[] } => x !== null);
 
-  // Two shapes this editor can draw have nowhere to be stored yet, and the API
-  // refuses them by name rather than mangling them.
-  const unsupported = unsupportedShape(pools, directions);
-
   const valid =
     trimmedName.length > 0 &&
     poolsFilled &&
     directionsFilled &&
     !duplicate &&
     links <= MAX_LINKS &&
-    unsupported === null &&
     legacy.length === 0;
   const dirty =
     JSON.stringify(frozen(draft)) !== JSON.stringify(toDraft(cascade, nodeById, () => 0, true));
@@ -312,14 +310,12 @@ export function CascadeEditPage() {
           ? t('cascadeCreate.needDirection')
           : links > MAX_LINKS
             ? t('cascadeCreate.tooManyLinks', { n: links, max: MAX_LINKS })
-            : unsupported
-              ? t(`cascadeCreate.unsupported.${unsupported}`)
-              : legacy.length > 0
-                ? t('cascadeEdit.legacyProtocol', {
-                    node: legacy[0]!.node,
-                    value: legacy[0]!.bad.join(', '),
-                  })
-                : null;
+            : legacy.length > 0
+              ? t('cascadeEdit.legacyProtocol', {
+                  node: legacy[0]!.node,
+                  value: legacy[0]!.bad.join(', '),
+                })
+              : null;
 
   function confirmDelete() {
     modals.openConfirmModal({
@@ -567,7 +563,7 @@ export function CascadeEditPage() {
                 <DirectionRow
                   key={dir.key}
                   tag={dir.tag}
-                  prospectiveTag={nextFreeTag(directions, i)}
+                  prospectiveTag={nextFreeTag(directions, i, draft.nextTag)}
                   countryCode={dir.countryCode}
                   onCountry={(code) => setDirection(i, { countryCode: code })}
                   nodeIds={dir.nodeIds}
@@ -592,7 +588,7 @@ export function CascadeEditPage() {
                   patch({
                     directions: [
                       ...directions,
-                      { key: nextKey.current++, countryCode: '', nodeIds: [''], tag: null },
+                      { key: nextKey.current++, id: null, countryCode: '', nodeIds: [''], tag: null },
                     ],
                   })
                 }
@@ -683,7 +679,7 @@ export function CascadeEditPage() {
                   <PreviewDirection
                     key={dir.key}
                     countryCode={dir.countryCode}
-                    prospectiveTag={dir.tag ?? nextFreeTag(directions, i)}
+                    prospectiveTag={dir.tag ?? nextFreeTag(directions, i, draft.nextTag)}
                     note={directionNote(dir, nodeById, todayByNode, t)}
                   />
                 ) : (
@@ -877,6 +873,11 @@ interface Draft {
   /** The entry and any transits. The exit is `directions`. */
   pools: PositionDraft[];
   directions: DirectionDraft[];
+  /** The tag the server will hand the next new direction, straight from the
+   *  cascade's counter. Carried in the draft so the preview can name it without
+   *  guessing: a guess drifts as soon as a direction is deleted, because spent
+   *  tags are never handed out again. */
+  nextTag: number;
 }
 
 /**
@@ -901,6 +902,39 @@ function toDraft(
 ): Draft {
   const sorted = [...c.hops].sort((a, b) => a.position - b.position);
   const key = () => (frozenKeys ? 0 : nextKey());
+
+  // v4 (2026-08-04): the API answers in positions and directions, and that
+  // answer wins. It carries two things the hop list cannot express and this
+  // form now depends on: the identity of a direction, which is what preserves
+  // its tag across a save, and the real tag rather than a row number. Both
+  // lists are always present; EMPTY means the cascade predates the move and is
+  // read from hops below.
+  if (c.positions.length && c.directions.length) {
+    return {
+      name: c.name,
+      enabled: c.enabled,
+      hideHops: c.hideHopsFromSub ?? true,
+      pools: [...c.positions]
+        .sort((a, b) => a.position - b.position)
+        .map((p) => ({
+          key: key(),
+          // An empty row keeps the picker drawable; save filters it back out.
+          nodeIds: p.nodeIds.length ? [...p.nodeIds] : [''],
+          entryProtocol: (p.entryProtocol ?? 'xray') as CascadeProtocol,
+          linkProtocol: (p.linkProtocol ?? 'xray') as CascadeProtocol,
+        })),
+      directions: c.directions.map((d) => ({
+        key: key(),
+        id: d.id,
+        countryCode: d.countryCode ?? '',
+        // A direction with no nodes is a legitimate state, not a broken row:
+        // the tag exists and waits for a node to stand behind it.
+        nodeIds: d.nodeIds.length ? [...d.nodeIds] : [''],
+        tag: d.tag,
+      })),
+      nextTag: c.nextDirectionTag,
+    };
+  }
   const head = sorted[0];
   const rest = sorted.slice(1);
   const exits = c.mode === 'balancer' ? rest : rest.slice(-1);
@@ -923,14 +957,22 @@ function toDraft(
       ...(head ? [pool(head)] : [{ key: key(), nodeIds: [''], entryProtocol: 'xray' as CascadeProtocol, linkProtocol: 'xray' as CascadeProtocol }]),
       ...transits.map(pool),
     ],
+    // Pre-v4 cascade: there are no direction ids to keep, and the tag is the
+    // position-derived number the old generator produced. Saving such a cascade
+    // is what moves it onto the new model.
     directions: exits.length
       ? exits.map((h, i) => ({
           key: key(),
+          id: null,
           countryCode: byId.get(h.nodeId)?.countryCode ?? '',
           nodeIds: [h.nodeId],
           tag: i + 1,
         }))
-      : [{ key: key(), countryCode: '', nodeIds: [''], tag: null }],
+      : [{ key: key(), id: null, countryCode: '', nodeIds: [''], tag: null }],
+    // The counter is kept per cascade and answered even for one still stored as
+    // hops, so a direction added here gets the number the server will actually
+    // issue rather than one derived from the rows on screen.
+    nextTag: c.nextDirectionTag,
   };
 }
 
@@ -946,13 +988,18 @@ function frozen(d: Draft): Draft {
 
 /* ───── Derived views ───────────────────────────────────────────────────── */
 
-/** A tag is issued once and never reused, so a new direction takes the next
- *  number above every tag this cascade has ever held, not the row index. */
-function nextFreeTag(directions: DirectionDraft[], index: number): number {
-  const issued = directions.map((d) => d.tag ?? 0);
-  const highest = Math.max(0, ...issued);
+/**
+ * The tag a not-yet-saved direction will receive.
+ *
+ * The starting number comes from the cascade's own counter (`nextDirectionTag`)
+ * and is NOT derived from the rows on screen. Tags are never reused, so once a
+ * direction has been deleted the highest tag still visible is behind the
+ * counter, and `max + 1` would promise a number that is already spent. All this
+ * adds is the offset for other new rows queued above this one.
+ */
+function nextFreeTag(directions: DirectionDraft[], index: number, nextTag: number): number {
   const newBefore = directions.slice(0, index).filter((d) => d.tag === null).length;
-  return highest + newBefore + 1;
+  return nextTag + newBefore;
 }
 
 /** The line under a direction in the rail: its nodes, and what they carried. */
@@ -992,7 +1039,7 @@ function subscriptionRows(
     rows.push({
       label: t('cascadeEdit.subVia', { name: d.name, where: dir.countryCode }),
       note: t('cascadeEdit.subTag', {
-        tag: (dir.tag ?? nextFreeTag(d.directions, i)).toString(16).padStart(4, '0'),
+        tag: (dir.tag ?? nextFreeTag(d.directions, i, d.nextTag)).toString(16).padStart(4, '0'),
       }),
       tone: MOSS,
     });

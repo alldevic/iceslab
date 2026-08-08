@@ -423,6 +423,43 @@ export interface NodeHardening {
   sshAllowlist?: string[];
 }
 
+/**
+ * How often the node's xray core came back up, and how close it runs to the
+ * ceiling that makes the agent restart it (2026-08-04).
+ *
+ * A restart drops every live connection, so this is the one number that turns
+ * "users complain, panel is green" into something an operator can see.
+ *
+ * ⚠ The whole object is null on a node that never reported it - a pre-2026-08
+ * agent, or one that has not checked in yet. That is NOT the same as zero
+ * restarts, and the card must not print it as one. Same rule one level down:
+ * `memoryLimitBytes` absent means the watchdog is off, not that it is zero.
+ */
+export interface CoreRestarts {
+  /** crash + memory. */
+  total: number;
+  /** Core died on its own - growth here is a bug to chase, not maintenance. */
+  crash: number;
+  /** Watchdog acted before the kernel would have. */
+  memory: number;
+  /** Absent until something has actually restarted. */
+  lastAt?: string;
+  /** `crash` | `memory` - kept as a plain string, the panel treats anything
+   *  that is not `memory` as a crash rather than rejecting it. */
+  lastReason?: string;
+  /** Armed ceiling in bytes; absent = watchdog off on that node. */
+  memoryLimitBytes?: number;
+  /** Latest resident-size sample of the core process. */
+  rssBytes?: number;
+  /**
+   * When the panel last WROTE this tally, not when it last polled the node.
+   * The status cron ticks every 30s but only persists when a counter moved or
+   * RSS drifted >10%, so a steady core legitimately carries an old stamp. Show
+   * it as a fact, never colour it as staleness - see NodeCard.
+   */
+  observedAt: string;
+}
+
 export interface Node {
   id: string;
   name: string;
@@ -432,6 +469,8 @@ export interface Node {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
+  /** See CoreRestarts. null = never reported, not zero. */
+  coreRestarts: CoreRestarts | null;
   // T7 - proxy-core version (e.g. xray "26.3.27"), null until a versioned agent
   // reports in. Shown on the node card; cascade form warns on an old balancer entry.
   coreVersion: string | null;
@@ -1079,6 +1118,35 @@ export interface CascadeHop {
   linkProtocol: string | null;
 }
 
+/**
+ * One step of the path as the API now answers it: a POOL of interchangeable
+ * nodes rather than a single machine. Position 0 is the entry.
+ */
+export interface CascadePosition {
+  position: number;
+  nodeIds: string[];
+  entryProtocol: string | null;
+  linkProtocol: string | null;
+}
+
+/**
+ * A way out of the cascade. The identity is `id`, not the nodes behind it: the
+ * pool can be swapped whole and the direction stays the same direction.
+ *
+ * ⚠ `tag` is the number that lives inside every client's UUID and gates squad
+ * access. The panel issues it and never reuses it, so it is read-only here and
+ * must NOT be sent back. What must be sent back is `id` - see
+ * CascadeDirectionInput.
+ */
+export interface CascadeDirection {
+  id: string;
+  tag: number;
+  countryCode: string;
+  /** May legitimately be empty: the tag exists, no node stands behind it yet,
+   *  and the direction is simply not handed to clients. */
+  nodeIds: string[];
+}
+
 export interface Cascade {
   id: string;
   name: string;
@@ -1087,6 +1155,16 @@ export interface Cascade {
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
   hops: CascadeHop[];
+  /** v4 shape (2026-08-04). Always present; EMPTY means the cascade predates
+   *  the move and is still described by `hops`. */
+  positions: CascadePosition[];
+  directions: CascadeDirection[];
+  /**
+   * The tag the next new direction will get. Cannot be derived on this side:
+   * tags are never reused, so after a direction is deleted `max(tag) + 1` names
+   * a number that is already spent. Read it, never compute it.
+   */
+  nextDirectionTag: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -1136,10 +1214,20 @@ export interface CascadePositionInput {
 }
 
 /**
- * A way out of the cascade. The tag is issued by the backend the first time the
- * direction is saved and is never reused, so it is absent on create.
+ * A way out of the cascade, on the way in.
+ *
+ * ⚠ `id` is what keeps the tag. Send it back for every direction that already
+ * exists: a direction that arrives without one is treated as new, gets a fresh
+ * tag, and everyone holding a link to the old one silently lands in another
+ * country. The API does have a fallback that matches on the node set, but it
+ * stops helping exactly when the pool is edited, which is the ordinary case.
+ *
+ * `tag` is deliberately absent: the panel issues tags and never reuses them, so
+ * sending one back could only ever contradict the server.
  */
 export interface CascadeDirectionInput {
+  /** Omit only for a direction being created right now. */
+  id?: string;
   countryCode: string;
   nodeIds: string[];
 }
@@ -1153,35 +1241,15 @@ export interface CreateCascadeV4Input {
 }
 
 /**
- * The API takes positions and directions since 2026-07-30 and folds them into
- * its stored hop list. Two shapes it cannot store yet are refused by name, and
- * the form catches both before the request: see `unsupportedShape` below.
+ * Storage moved to positions and directions on 2026-08-04, so the two shapes
+ * the screens used to block, a pool of several nodes on one step and transits
+ * combined with several directions, are now ordinary saves. What remains is a
+ * cap on the total number of node-to-node links, which the forms still count
+ * themselves because pools multiply it.
  */
 export const CASCADE_V4_WRITES_LIVE = true;
 
 export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input>;
-
-/**
- * Shapes the form can draw but the current storage cannot hold. Named here so
- * both cascade screens block them the same way, before the request rather than
- * after a 400.
- *
- * The API refuses them rather than mangling them, which is the right call: a
- * pool quietly saved as its first node would leave an operator sure of a
- * redundancy they do not have. Both disappear once positions and directions
- * land in storage.
- */
-export function unsupportedShape(
-  positions: { nodeIds: string[] }[],
-  directions: { nodeIds: string[] }[],
-): 'pool' | 'transitsWithFan' | null {
-  const pooled =
-    positions.some((p) => p.nodeIds.filter(Boolean).length > 1) ||
-    directions.some((d) => d.nodeIds.filter(Boolean).length > 1);
-  if (pooled) return 'pool';
-  if (positions.length > 1 && directions.length > 1) return 'transitsWithFan';
-  return null;
-}
 
 /** The API's own sentence when it refuses a shape it cannot store. */
 export function cascadeShapeError(err: unknown): string | null {

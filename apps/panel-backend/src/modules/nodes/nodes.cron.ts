@@ -5,6 +5,9 @@ import { NodeTransport, NodeRequestError } from './nodes.transport.js';
 import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
 import { getLogger } from '../../lib/logger.js';
+import { eventBus } from '../../lib/event-bus.js';
+import { Prisma } from '../../generated/prisma/client.js';
+import type { NodeCoreRestarts } from '@iceslab/shared';
 
 const METRICS_KEY_PREFIX = 'node:metrics:';
 const METRICS_TTL_SECONDS = 60;
@@ -43,7 +46,15 @@ export async function readCachedNodeMetrics(
 export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> {
   const nodes = await prisma.node.findMany({
     where: { deletedAt: null, status: { not: 'disabled' } },
-    select: { id: true, name: true, address: true, status: true, lastStatusMessage: true, coreVersion: true },
+    select: {
+      id: true,
+      name: true,
+      address: true,
+      status: true,
+      lastStatusMessage: true,
+      coreVersion: true,
+      coreRestarts: true,
+    },
   });
 
   if (nodes.length === 0) return { ok: 0, down: 0 };
@@ -68,7 +79,13 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // reachable agent that reported an xray core). Undefined = keep stored.
       const versionChanged =
         result.coreVersion !== undefined && result.coreVersion !== node.coreVersion;
-      if (statusChanged || messageChanged || versionChanged) {
+      // Same rule for the restart tally: undefined = the node was unreachable
+      // or runs a pre-2026-08 agent, so keep whatever is stored.
+      const storedRestarts = (node.coreRestarts as NodeCoreRestarts | null) ?? null;
+      const restartsChanged =
+        result.coreRestarts !== undefined &&
+        restartsWorthWriting(storedRestarts, result.coreRestarts, Date.now());
+      if (statusChanged || messageChanged || versionChanged || restartsChanged) {
         await prisma.node.update({
           where: { id: node.id },
           data: {
@@ -76,7 +93,38 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
             lastStatusChange: statusChanged ? new Date() : undefined,
             lastStatusMessage: result.message,
             ...(versionChanged ? { coreVersion: result.coreVersion } : {}),
+            // Cast mirrors the jsonb-write pattern used for `hardening` in
+            // nodes.service.ts: a typed interface has no index signature, so it
+            // needs the explicit widening to InputJsonValue.
+            ...(restartsChanged
+              ? { coreRestarts: result.coreRestarts as unknown as Prisma.InputJsonValue }
+              : {}),
           },
+        });
+      }
+      // Alert on a core that restarted since the previous tick. This is the
+      // whole reason the counter exists: a memory-ceiling restart drops live
+      // connections, and without a notification it looks like nothing happened
+      // (the node stays online, so the status alert below never fires).
+      // Only on growth - a smaller total means the AGENT restarted and lost its
+      // in-memory tally, which is not a core restart.
+      if (result.coreRestarts && storedRestarts && result.coreRestarts.total > storedRestarts.total) {
+        const delta = result.coreRestarts.total - storedRestarts.total;
+        const reason = result.coreRestarts.lastReason === 'memory' ? 'memory ceiling' : 'crash';
+        notifyTelegramAsync(
+          `♻️ *Core restarted*\nnode: \`${escapeMarkdown(node.name)}\`\n` +
+            `reason: ${escapeMarkdown(reason)}\ncount: +${delta} (total ${result.coreRestarts.total})`,
+        );
+      }
+      // Tell the read caches that liveness moved. Deliberately NOT
+      // node.changed: that one re-pushes config and would restart cores on
+      // every flap. This only invalidates caches, which is what a subscription
+      // filtered by liveness needs.
+      if (statusChanged) {
+        eventBus.emit('node.status-changed', {
+          nodeId: node.id,
+          from: node.status,
+          to: result.status,
         });
       }
       // Re-push inbounds when a node comes back up. Without this, any
@@ -121,6 +169,62 @@ interface PollResult {
   // the node was unreachable / reported no xray core / runs a pre-T7 agent.
   // Undefined means "leave the stored coreVersion untouched".
   coreVersion?: string;
+  // 2026-08-04: restart tally from the same /healthz. Undefined follows the
+  // same rule as coreVersion - unreachable node or pre-2026-08 agent.
+  coreRestarts?: NodeCoreRestarts;
+}
+
+/**
+ * Heartbeat for `observedAt`: even when nothing changed, refresh the row this
+ * often so the stamp keeps meaning "we polled this node recently".
+ *
+ * Added 2026-08-04 after the frontend pointed out the original hole: writes
+ * only happened when a counter or RSS moved, so on a healthy node `observedAt`
+ * froze for hours and the card could not tell "quiet and fine" from "nobody has
+ * polled this node since lunch". One write per node per 10 minutes is nothing
+ * next to being unable to trust the freshness stamp at all.
+ *
+ * Consumers: treat data older than roughly twice this as "not being refreshed".
+ */
+const RESTARTS_HEARTBEAT_MS = 10 * 60 * 1000;
+
+/**
+ * Should this tally replace the stored one?
+ *
+ * The counters move rarely, but `rssBytes` moves on every 30s tick, and writing
+ * a row per node per tick just to record memory jitter is pure WAL churn on a
+ * fleet. So: write when anything meaningful changed, when RSS drifted more than
+ * 10% (enough for the card to track the trend), or when the freshness stamp is
+ * older than the heartbeat above.
+ */
+function restartsWorthWriting(
+  stored: NodeCoreRestarts | null,
+  fresh: NodeCoreRestarts,
+  nowMs: number,
+): boolean {
+  if (!stored) return true;
+  if (
+    stored.core !== fresh.core ||
+    stored.total !== fresh.total ||
+    stored.crash !== fresh.crash ||
+    stored.memory !== fresh.memory ||
+    stored.lastAt !== fresh.lastAt ||
+    stored.lastReason !== fresh.lastReason ||
+    stored.sinceAt !== fresh.sinceAt ||
+    stored.memoryLimitBytes !== fresh.memoryLimitBytes
+  ) {
+    return true;
+  }
+  const storedAt = Date.parse(stored.observedAt);
+  // NaN (missing/garbled stamp on a row written by an older build) counts as
+  // stale, so the next poll repairs it instead of freezing forever.
+  if (!Number.isFinite(storedAt) || nowMs - storedAt >= RESTARTS_HEARTBEAT_MS) {
+    return true;
+  }
+  const prevRss = stored.rssBytes ?? 0;
+  const nextRss = fresh.rssBytes ?? 0;
+  if (prevRss === 0) return nextRss !== 0;
+  return Math.abs(nextRss - prevRss) / prevRss > 0.1;
 }
 
 /**
@@ -174,19 +278,70 @@ async function checkOne(node: {
     const res = await transport.healthcheck();
     // T7: capture the xray core version if the agent reported one (pre-T7
     // agents and non-xray nodes omit it, leaving coreVersion undefined).
-    const coreVersion = res.cores.find((c) => c.name === 'xray')?.version || undefined;
+    const xrayCore = res.cores.find((c) => c.name === 'xray');
+    const coreVersion = xrayCore?.version || undefined;
+    // Restart tally: prefer xray (the only core that arms the watchdog today),
+    // but fall back to whichever core reported one. The agent contract allows
+    // any subprocess-backed core to report, so hard-coding xray would leave the
+    // field empty on a node whose other core started reporting.
+    // ⚠ Single tally by design: when a second core actually arms a watchdog,
+    // this becomes a list and `core` inside the object is what disambiguates.
+    const restartCore = xrayCore?.restarts ? xrayCore : res.cores.find((c) => c.restarts);
+    // 2026-08-04: restart tally, stamped with the observation time so the card
+    // can show how fresh it is. `total` is recomputed rather than trusted, so a
+    // malformed agent response can't produce a tally that contradicts itself.
+    const raw = restartCore?.restarts;
+    const coreRestarts: NodeCoreRestarts | undefined = raw
+      ? {
+          // `core` comes from the agent (which core these numbers are for);
+          // fall back to the core's own name for agents built before that
+          // field existed.
+          core: raw.core || restartCore?.name || 'xray',
+          total: raw.crash + raw.memory,
+          crash: raw.crash,
+          memory: raw.memory,
+          lastAt: raw.lastAt,
+          lastReason: raw.lastReason,
+          sinceAt: raw.sinceAt,
+          // Normalise 0 to absent. On the wire the agent means the same thing
+          // by both ("no ceiling" / "not sampled"), and storing one of the two
+          // spellings keeps consumers from having to check for each.
+          memoryLimitBytes: raw.memoryLimitBytes || undefined,
+          rssBytes: raw.rssBytes || undefined,
+          observedAt: new Date().toISOString(),
+        }
+      : undefined;
     if (res.status === 'ok') {
-      return { status: 'online', message: null, coreVersion };
+      return { status: 'online', message: null, coreVersion, coreRestarts };
     }
     // node-agent reachable + healthy, but one of the protocol sub-cores
     // isn't running. Normal for a fresh node with no Profile+Binding yet
     // (xray/ss/etc have no config → not started). Keep status online,
     // surface detail in lastStatusMessage; it auto-clears once a binding
     // lands and the core boots.
+    //
+    // Name the cores that are down instead of dumping the raw payload. The dump
+    // used to fit, then the restart tally (2026-08-04) landed inside the first
+    // core's object and pushed everything informative past the 160-char cut: all
+    // four nodes of the field fleet stored a message that ends mid-JSON, before
+    // any core that is actually down. A truncated explanation is worse than a
+    // short one, because it still looks like an explanation.
+    // A core with `provisioned: false` was never configured, so it is idle by
+    // design, not down. Absent means an agent older than the field: read as
+    // configured, which is how this behaved before.
+    const down = res.cores
+      .filter((c) => !c.running && c.provisioned !== false)
+      .map((c) => c.name);
     return {
       status: 'online',
-      message: `degraded: ${JSON.stringify(res).slice(0, 160)}`,
+      message: down.length
+        ? `degraded: not running: ${down.join(', ')}`.slice(0, 200)
+        : // No core reports itself down, yet the agent called the node degraded.
+          // Keep the payload here: this is the case where the detail is not
+          // something we can name in advance.
+          `degraded: ${JSON.stringify(res).slice(0, 160)}`,
       coreVersion,
+      coreRestarts,
     };
   } catch (err) {
     if (err instanceof NodeRequestError) {

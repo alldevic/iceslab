@@ -65,11 +65,24 @@ interface HopView {
 }
 
 /**
- * One way out of the cascade. Today the backend still stores exits as hops, so
- * the tag is the exit's ordinal and the country comes from the node underneath;
- * both become fields of their own once directions ship.
+ * One way out of the cascade.
+ *
+ * Since v4 the tag and the country are the direction's own fields, read from
+ * the API rather than derived from the node under it. That matters after a
+ * delete: tags are never renumbered, so a row index would start naming the
+ * wrong country while the link in a client still points at the old tag.
+ *
+ * `hop` and `nodeName` are null when the pool is empty, which is a state the
+ * new model can hold on purpose: the tag exists, no node stands behind it yet.
  */
-interface DirectionView extends HopView {
+interface DirectionView {
+  key: string;
+  hop: CascadeHop | null;
+  nodeName: string | null;
+  node: Node | null;
+  status: string;
+  todayBytes: number | null;
+  applied: boolean | null;
   tag: number;
   countryCode: string | null;
 }
@@ -111,11 +124,40 @@ export function useCascadeRows(cascades: Cascade[], nodes: Node[]): CascadeRow[]
       // and everything before it is a transit position.
       const exits = cascade.mode === 'balancer' ? rest : rest.slice(-1);
       const transits = cascade.mode === 'balancer' ? [] : rest.slice(0, -1);
-      const directions: DirectionView[] = exits.map((h, i) => ({
-        ...h,
-        tag: i + 1,
-        countryCode: h.node?.countryCode ?? null,
-      }));
+
+      // v4 answers with directions of their own, and those win: they carry the
+      // real tag and the country the operator chose. A pre-v4 cascade has none,
+      // and its exits are read from the hop list as before, where the tag can
+      // only be guessed from the order.
+      const directions: DirectionView[] = cascade.directions.length
+        ? cascade.directions.map((d) => {
+            const nodeId = d.nodeIds[0] ?? null;
+            const node = nodeId ? nodeById.get(nodeId) ?? null : null;
+            const ov = nodeId ? overviewById.get(nodeId) : undefined;
+            const hop = nodeId ? hops.find((h) => h.nodeId === nodeId) ?? null : null;
+            return {
+              key: d.id,
+              hop,
+              nodeName: node?.name ?? hop?.nodeName ?? null,
+              node,
+              status: ov?.status ?? node?.status ?? 'unknown',
+              todayBytes: ov?.todayBytes ?? null,
+              applied: null,
+              tag: d.tag,
+              countryCode: d.countryCode || node?.countryCode || null,
+            };
+          })
+        : exits.map((h, i) => ({
+            key: h.hop.id,
+            hop: h.hop,
+            nodeName: h.hop.nodeName,
+            node: h.node,
+            status: h.status,
+            todayBytes: h.todayBytes,
+            applied: h.applied,
+            tag: i + 1,
+            countryCode: h.node?.countryCode ?? null,
+          }));
 
       // Who can actually use this cascade: squads holding a profile that is
       // bound on the entry node, since that is the door clients dial.
@@ -265,7 +307,7 @@ function CascadeCard({
             </Box>
           ))}
           {directions.map((d) => (
-            <Box key={d.hop.id} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <Box key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
               <Arrow tone={EDGE} />
               <Text style={{ fontFamily: MONO, fontSize: 12, lineHeight: '15px', color: FAINT }}>
                 {d.countryCode ? `${d.countryCode} ${tagLabel(d.tag)}` : tagLabel(d.tag)}
@@ -337,7 +379,7 @@ function CascadeCard({
           />
           <Stack gap={8} style={{ flex: 1, minWidth: 0 }}>
             {directions.map((d) => (
-              <DirectionLine key={d.hop.id} direction={d} />
+              <DirectionLine key={d.key} direction={d} />
             ))}
           </Stack>
         </Box>
@@ -353,7 +395,7 @@ function CascadeCard({
             </Box>
           ))}
           {directions.map((d) => (
-            <Box key={d.hop.id} style={{ display: 'flex', alignItems: 'stretch' }}>
+            <Box key={d.key} style={{ display: 'flex', alignItems: 'stretch' }}>
               <LinkColumn
                 protocol={
                   (transits.length ? transits[transits.length - 1]?.hop.linkProtocol : entry?.hop.linkProtocol) ??
@@ -630,8 +672,8 @@ function DirectionLine({ direction }: { direction: DirectionView }) {
           whiteSpace: 'nowrap',
         }}
       >
-        {direction.hop.nodeName}
-        {dead ? ` · ${direction.status}` : ''}
+        {direction.nodeName ?? t('cascades.directionNoNode')}
+        {dead && direction.nodeName ? ` · ${direction.status}` : ''}
       </Text>
       <Box style={{ flex: 1, minWidth: 0 }} />
       <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: dead ? DIM : MIST }}>
@@ -682,7 +724,7 @@ function DirectionTile({ direction }: { direction: DirectionView }) {
         </Box>
       </Box>
       <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: FAINT }}>
-        {direction.hop.nodeName}
+        {direction.nodeName ?? t('cascades.directionNoNode')}
         {direction.node?.address ? ` · ${direction.node.address}` : ''}
       </Text>
       <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -769,7 +811,7 @@ function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () =>
           </Box>
         ))}
         {directions.map((d) => (
-          <DirectionPill key={d.hop.id} direction={d} />
+          <DirectionPill key={d.key} direction={d} />
         ))}
       </Box>
 
@@ -865,8 +907,8 @@ function DirectionPill({ direction }: { direction: DirectionView }) {
           whiteSpace: 'nowrap',
         }}
       >
-        {direction.hop.nodeName}
-        {dead ? ` · ${t('cascades.directionDown')}` : ''}
+        {direction.nodeName ?? t('cascades.directionNoNode')}
+        {dead && direction.nodeName ? ` · ${t('cascades.directionDown')}` : ''}
       </Text>
     </Box>
   );

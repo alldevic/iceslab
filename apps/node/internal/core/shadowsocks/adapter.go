@@ -80,13 +80,18 @@ func (a *Adapter) Name() string { return Name }
 // so its native engine is "xray"; engine-choice can route ss to sing-box.
 func (a *Adapter) Engine() string { return "xray" }
 
+// Provisioned implements core.Provisionable: without a cipher there is nothing
+// to render. Shares the condition with Start so the two cannot drift apart.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Inbound.Method != ""
+}
+
 // Start writes the initial config and spawns xray. If the inbound has no
 // Method set (deferred via ApplyInbound), Start is a no-op.
 func (a *Adapter) Start(ctx context.Context) error {
-	a.mu.Lock()
-	noMethod := a.cfg.Inbound.Method == ""
-	a.mu.Unlock()
-	if noMethod {
+	if !a.Provisioned() {
 		a.logger.Info("shadowsocks adapter: no Method yet, waiting for ApplyInbound from panel")
 		return nil
 	}

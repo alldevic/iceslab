@@ -425,6 +425,13 @@ export interface DirectionDraft {
   key: number;
   countryCode: string;
   nodeIds: string[];
+  /**
+   * Server identity of a direction that already exists. This is what carries
+   * the tag across an edit, so it is threaded through the draft untouched and
+   * sent back on save. Null means the row is new and the panel will issue it a
+   * fresh tag.
+   */
+  id: string | null;
   /** Issued by the backend on first save, and never reused. Null while drafting. */
   tag: number | null;
 }
@@ -444,8 +451,23 @@ export function toPositionInputs(pools: PositionDraft[]) {
   }));
 }
 
+/**
+ * ⚠ The `id` is the whole point of this function. A direction that goes back
+ * without one is a NEW direction to the API: it gets a fresh tag, and every
+ * client whose UUID carries the old tag quietly starts leaving through another
+ * country. The API does fall back to matching on the node set, but that stops
+ * working exactly when the pool is edited, which is the ordinary reason to open
+ * this form at all.
+ *
+ * `tag` is deliberately not sent. The panel issues tags and never reuses them,
+ * so a tag from the client could only contradict the server.
+ */
 export function toDirectionInputs(directions: DirectionDraft[]) {
-  return directions.map((d) => ({ countryCode: d.countryCode, nodeIds: d.nodeIds.filter(Boolean) }));
+  return directions.map((d) => ({
+    ...(d.id ? { id: d.id } : {}),
+    countryCode: d.countryCode,
+    nodeIds: d.nodeIds.filter(Boolean),
+  }));
 }
 
 /**

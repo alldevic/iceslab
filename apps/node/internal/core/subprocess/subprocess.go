@@ -37,6 +37,58 @@ const (
 // still exhausts MaxRestarts within the window.
 const restartResetWindow = 60 * time.Second
 
+// Memory watchdog (2026-08-04, operator request). Restart the core BEFORE it
+// eats the box, instead of waiting for the kernel OOM killer to do it at a
+// random moment. The honest trade: a restart drops every live connection, so
+// we swap an unpredictable OOM for a predictable one. That's why the limit is
+// meant to sit high (see MemoryLimitBytes) and why every restart is counted
+// and reported - a watchdog nobody can see turns "cores keep dying" into
+// "users complain while the panel stays green".
+const defaultMemoryCheckInterval = 30 * time.Second
+
+// var, not const, purely so tests can shrink the windows; production code never
+// assigns to these.
+var (
+	// memoryBreachesToRestart: consecutive over-limit samples before we act.
+	// One sample can catch a transient spike (a burst of connections being
+	// set up); two spaced by the check interval means it actually settled
+	// above the line.
+	memoryBreachesToRestart = 2
+	// memoryMinUptime: a process younger than this is never memory-killed.
+	// Guards the one way this can go badly wrong - a limit set below the
+	// core's normal footprint would otherwise produce an endless
+	// kill/respawn storm. With this, the worst case is one restart per
+	// memoryMinUptime, and the log says the limit is too low.
+	memoryMinUptime = 5 * time.Minute
+)
+
+// RestartReason labels why the supervisor respawned the core. Reported to the
+// panel so an operator can tell "the core is crashing" (a bug) from "the core
+// hit the memory ceiling" (the watchdog doing its job).
+type RestartReason string
+
+const (
+	RestartReasonCrash  RestartReason = "crash"
+	RestartReasonMemory RestartReason = "memory"
+)
+
+// RestartEvent is handed to Config.OnRestart just before a respawn. Adapters
+// accumulate these: the counters must NOT live on Subprocess, because a config
+// push builds a brand-new Subprocess and would reset them to zero, which is
+// exactly when an operator is looking at the number.
+type RestartEvent struct {
+	Reason RestartReason
+	// Attempt / Max are the crash-restart budget position (RestartReasonCrash
+	// only; a memory restart doesn't spend the crash budget).
+	Attempt int
+	Max     int
+	// RSSBytes / LimitBytes are the measurement that triggered a memory
+	// restart. Zero for crashes.
+	RSSBytes   uint64
+	LimitBytes uint64
+	At         time.Time
+}
+
 type Config struct {
 	// Name appears in log lines (`source=<name>`) and error messages.
 	Name string
@@ -53,6 +105,30 @@ type Config struct {
 	// restartResetWindow, waiting RestartBackoff between attempts.
 	MaxRestarts    int
 	RestartBackoff time.Duration
+
+	// MemoryLimitBytes arms the memory watchdog when > 0: the process is
+	// restarted once its RSS stays above this for memoryBreachesToRestart
+	// consecutive samples. Callers derive it as a PERCENTAGE of host RAM
+	// rather than an absolute number, so the same agent build behaves
+	// sensibly on a 1 GB and a 32 GB box.
+	//
+	// Set it HIGH. A restart kills every live connection (no drain exists),
+	// so the ceiling should mean "this is about to end badly anyway", not
+	// "this is more than I expected".
+	//
+	// Requires MaxRestarts > 0: the watchdog kills, and it's the crash
+	// watcher that brings the process back. With auto-restart off, arming
+	// this would just stop the core, so it is refused and logged.
+	MemoryLimitBytes uint64
+	// MemoryCheckInterval between RSS samples. Defaults to 30s.
+	MemoryCheckInterval time.Duration
+	// ReadRSS reads a process's resident set size in bytes. nil means the
+	// platform default (/proc/<pid>/statm on Linux). Tests inject a fake to
+	// drive the watchdog without a real memory hog.
+	ReadRSS func(pid int) (uint64, error)
+	// OnRestart is called just before each respawn (and never for a Stop).
+	// Optional. Must not block: it runs on the watcher goroutine.
+	OnRestart func(RestartEvent)
 }
 
 // Subprocess is a single managed os/exec process. Methods are goroutine-safe.
@@ -78,6 +154,11 @@ type Subprocess struct {
 	stopping     bool            // set by Stop so the watcher won't respawn
 	restartCount int             // crashes within the current reset window
 	lastSpawnAt  time.Time       // when the live process was spawned
+	// Memory watchdog state (under mu). memKill is set by the watchdog right
+	// before it signals the process, so the crash watcher can tell an
+	// intentional memory restart from a real crash and label it accordingly.
+	memKill bool
+	memRSS  uint64 // last RSS sample, 0 until the watchdog takes one
 }
 
 // New builds a Subprocess; nothing is spawned until Start is called.
@@ -134,6 +215,17 @@ func (s *Subprocess) spawnLocked(ctx context.Context) error {
 	s.exitErr = nil
 	s.cfg.Logger.Info(s.cfg.Name+" subprocess started", "pid", cmd.Process.Pid)
 	go s.watch(cmd, exited, ctx)
+	if s.cfg.MemoryLimitBytes > 0 {
+		if s.cfg.MaxRestarts <= 0 {
+			// Arming the watchdog without a restart policy would kill the core
+			// and leave it down, which is strictly worse than the OOM we're
+			// trying to pre-empt. Refuse, loudly.
+			s.cfg.Logger.Error(s.cfg.Name+" memory watchdog NOT armed: needs MaxRestarts > 0",
+				"limitBytes", s.cfg.MemoryLimitBytes)
+		} else {
+			go s.watchMemory(cmd, exited, ctx)
+		}
+	}
 	return nil
 }
 
@@ -161,28 +253,61 @@ func (s *Subprocess) watch(cmd *exec.Cmd, exited chan struct{}, ctx context.Cont
 	exhausted := false
 	var backoff time.Duration
 	var attempt, maxR int
+	// memKill: this exit is the memory watchdog's doing, not a crash. Read and
+	// clear it here so a later real crash isn't mislabelled.
+	memKill := isCurrent && s.memKill
+	s.memKill = false
+	rss := s.memRSS
 	if isCurrent && !s.stopping && s.cfg.MaxRestarts > 0 {
-		if time.Since(s.lastSpawnAt) > restartResetWindow {
-			s.restartCount = 0 // stable run, fresh budget
-		}
-		if s.restartCount < s.cfg.MaxRestarts {
-			s.restartCount++
+		switch {
+		case memKill:
+			// A memory restart is planned maintenance, so it does NOT spend the
+			// crash budget: five ceiling hits over a week must not leave the
+			// core down. memoryMinUptime is what bounds this instead - it caps
+			// memory restarts at one per that window even with a silly limit.
+			s.restartCount = 0
 			restart = true
 			backoff = s.cfg.RestartBackoff
-			attempt = s.restartCount
 			maxR = s.cfg.MaxRestarts
-		} else {
-			exhausted = true
-			maxR = s.cfg.MaxRestarts
+		default:
+			if time.Since(s.lastSpawnAt) > restartResetWindow {
+				s.restartCount = 0 // stable run, fresh budget
+			}
+			if s.restartCount < s.cfg.MaxRestarts {
+				s.restartCount++
+				restart = true
+				backoff = s.cfg.RestartBackoff
+				attempt = s.restartCount
+				maxR = s.cfg.MaxRestarts
+			} else {
+				exhausted = true
+				maxR = s.cfg.MaxRestarts
+			}
 		}
 	}
+	limit := s.cfg.MemoryLimitBytes
+	onRestart := s.cfg.OnRestart
 	s.mu.Unlock()
 
 	close(exited)
-	if err != nil {
+	switch {
+	case memKill:
+		s.cfg.Logger.Warn(s.cfg.Name+" subprocess exited (memory watchdog)",
+			"rssBytes", rss, "limitBytes", limit)
+	case err != nil:
 		s.cfg.Logger.Warn(s.cfg.Name+" subprocess exited", "err", err)
-	} else {
+	default:
 		s.cfg.Logger.Info(s.cfg.Name + " subprocess exited cleanly")
+	}
+	if restart && onRestart != nil {
+		ev := RestartEvent{Reason: RestartReasonCrash, Attempt: attempt, Max: maxR, At: time.Now()}
+		if memKill {
+			ev = RestartEvent{
+				Reason: RestartReasonMemory, Max: maxR,
+				RSSBytes: rss, LimitBytes: limit, At: time.Now(),
+			}
+		}
+		onRestart(ev)
 	}
 	if exhausted {
 		s.cfg.Logger.Error(s.cfg.Name+" exceeded crash-restart budget, leaving down",
@@ -212,6 +337,118 @@ func (s *Subprocess) watch(cmd *exec.Cmd, exited chan struct{}, ctx context.Cont
 	if err := s.spawnLocked(ctx); err != nil {
 		s.cfg.Logger.Error(s.cfg.Name+" crash-restart failed", "err", err)
 	}
+}
+
+// watchMemory samples the process's RSS and restarts it once it stays above
+// MemoryLimitBytes. One goroutine per spawned process; it exits when that
+// process exits (`exited` closed) or the lifetime ctx is cancelled, so a
+// respawn gets a fresh watchdog with a clean breach counter.
+//
+// It does not respawn anything itself: it signals the process and lets the
+// crash watcher's restart path bring it back, tagged via s.memKill. One
+// restart mechanism, not two.
+func (s *Subprocess) watchMemory(cmd *exec.Cmd, exited chan struct{}, ctx context.Context) {
+	interval := s.cfg.MemoryCheckInterval
+	if interval <= 0 {
+		interval = defaultMemoryCheckInterval
+	}
+	read := s.cfg.ReadRSS
+	if read == nil {
+		read = readRSSBytes
+	}
+	limit := s.cfg.MemoryLimitBytes
+	pid := cmd.Process.Pid
+
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	breaches := 0
+	readFailed := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-exited:
+			return
+		case <-tick.C:
+		}
+
+		rss, err := read(pid)
+		if err != nil {
+			// Unsupported platform or the process just went away. Log once so a
+			// dev box doesn't spam, then keep looping: the process may still be
+			// alive and the next read may work.
+			if !readFailed {
+				readFailed = true
+				s.cfg.Logger.Warn(s.cfg.Name+" memory watchdog: cannot read RSS, ceiling not enforced",
+					"pid", pid, "err", err)
+			}
+			continue
+		}
+		readFailed = false
+
+		s.mu.Lock()
+		s.memRSS = rss
+		spawnedAt := s.lastSpawnAt
+		stillCurrent := s.cmd == cmd
+		s.mu.Unlock()
+		if !stillCurrent {
+			return // swapped out by a config push; that process has its own watchdog
+		}
+
+		if rss <= limit {
+			breaches = 0
+			continue
+		}
+		breaches++
+		if breaches < memoryBreachesToRestart {
+			s.cfg.Logger.Warn(s.cfg.Name+" memory above ceiling",
+				"rssBytes", rss, "limitBytes", limit,
+				"breach", breaches, "needed", memoryBreachesToRestart)
+			continue
+		}
+		if uptime := time.Since(spawnedAt); uptime < memoryMinUptime {
+			// Over the ceiling this soon after a start means the ceiling is
+			// below the core's normal footprint. Restarting would just storm.
+			s.cfg.Logger.Error(s.cfg.Name+" memory above ceiling right after start, NOT restarting "+
+				"(ceiling looks set too low, raise it)",
+				"rssBytes", rss, "limitBytes", limit, "uptime", uptime.String())
+			breaches = 0
+			continue
+		}
+
+		s.mu.Lock()
+		// Re-check under the lock: a Stop or a config-push swap may have landed
+		// while we were deciding, and killing then would fight them.
+		if s.stopping || s.cmd != cmd {
+			s.mu.Unlock()
+			return
+		}
+		s.memKill = true
+		s.mu.Unlock()
+
+		s.cfg.Logger.Warn(s.cfg.Name+" memory ceiling hit, restarting core "+
+			"(live connections will drop)",
+			"rssBytes", rss, "limitBytes", limit, "pid", pid)
+		if err := terminateGroup(cmd); err != nil {
+			s.cfg.Logger.Warn(s.cfg.Name+" memory watchdog: sigterm failed", "err", err)
+		}
+		select {
+		case <-exited:
+		case <-time.After(StopGracePeriod):
+			_ = killGroup(cmd)
+		}
+		return // the crash watcher respawns; the new process gets a new watchdog
+	}
+}
+
+// RSSBytes returns the watchdog's most recent resident-size sample, or 0 when
+// the watchdog is disarmed or hasn't sampled yet. Reporting only; the panel
+// shows it next to the ceiling so an operator can see how close a core runs.
+func (s *Subprocess) RSSBytes() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.memRSS
 }
 
 // Stop gracefully terminates the process: SIGTERM, wait up to StopGracePeriod

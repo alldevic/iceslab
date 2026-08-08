@@ -8,6 +8,7 @@
 package metrics
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -47,6 +48,23 @@ type DiskMetrics struct {
 	TotalBytes  uint64  `json:"totalBytes"`
 	UsedBytes   uint64  `json:"usedBytes"`
 	UsedPercent float64 `json:"usedPercent"`
+}
+
+// TotalRAMBytes reports the machine's total physical memory. Standalone (no
+// Collector needed) because it is read once at startup to turn a
+// "percent of RAM" core-memory ceiling into the byte figure the subprocess
+// watchdog compares against. Returns an error on platforms without a real
+// implementation, so callers can disarm the ceiling instead of computing one
+// from a zero.
+func TotalRAMBytes() (uint64, error) {
+	m, err := readMemInfo()
+	if err != nil {
+		return 0, err
+	}
+	if m.TotalBytes == 0 {
+		return 0, errors.New("host metrics: total memory reported as 0")
+	}
+	return m.TotalBytes, nil
 }
 
 // Collector keeps a CPU snapshot between calls so the second call onward can

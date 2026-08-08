@@ -11,7 +11,6 @@ import {
   createCascadeV4,
   listCascades,
   listNodes,
-  unsupportedShape,
   type CascadeProtocol,
 } from '../lib/api';
 import { watchCascadeProvisioning } from '../lib/cascadeProvision';
@@ -99,8 +98,10 @@ export function CascadeCreatePage() {
   const [pools, setPools] = useState<PositionDraft[]>([
     { key: 0, nodeIds: [''], entryProtocol: 'xray', linkProtocol: 'xray' },
   ]);
+  // Nothing on this page exists server-side yet, so every direction carries a
+  // null id and gets its tag from the panel on create.
   const [directions, setDirections] = useState<DirectionDraft[]>([
-    { key: 1, countryCode: '', nodeIds: [''], tag: null },
+    { key: 1, id: null, countryCode: '', nodeIds: [''], tag: null },
   ]);
 
   usePageMeta([t('cascadeCreate.crumbSection'), t('cascadeCreate.crumbNew')]);
@@ -203,7 +204,7 @@ export function CascadeCreatePage() {
       if (prev.length >= want) return prev;
       const next = [...prev];
       while (next.length < want) {
-        next.push({ key: nextKey.current++, countryCode: '', nodeIds: [''], tag: null });
+        next.push({ key: nextKey.current++, id: null, countryCode: '', nodeIds: [''], tag: null });
       }
       return next;
     });
@@ -212,22 +213,15 @@ export function CascadeCreatePage() {
   const trimmedName = name.trim();
   const entryIds = pools[0]?.nodeIds.filter(Boolean) ?? [];
   const poolsFilled = pools.every((p) => p.nodeIds.some(Boolean));
-  const directionsFilled = directions.every((d) => d.countryCode && d.nodeIds.some(Boolean));
+  // Country is enough. A direction with an empty pool is legitimate in v4: the
+  // tag exists and waits for a node, and clients are simply not offered it.
+  const directionsFilled = directions.every((d) => Boolean(d.countryCode));
   const duplicate = new Set(allIds).size !== allIds.length;
   const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
   const overLinks = links > MAX_LINKS;
-  // Two shapes this editor can draw have nowhere to be stored yet, and the API
-  // refuses them by name. Catching them here means the operator learns while
-  // building rather than after pressing Create.
-  const unsupported = unsupportedShape(pools, directions);
 
   const valid =
-    trimmedName.length > 0 &&
-    poolsFilled &&
-    directionsFilled &&
-    !duplicate &&
-    !overLinks &&
-    unsupported === null;
+    trimmedName.length > 0 && poolsFilled && directionsFilled && !duplicate && !overLinks;
 
   // T7: below this the entry rejects the per-direction UUID at auth, so a
   // direction the client picks would fail silently. Any entry node can be the
@@ -281,9 +275,7 @@ export function CascadeCreatePage() {
           ? t('cascadeCreate.needDirection')
           : overLinks
             ? t('cascadeCreate.tooManyLinks', { n: links, max: MAX_LINKS })
-            : unsupported
-              ? t(`cascadeCreate.unsupported.${unsupported}`)
-              : null;
+            : null;
 
   return (
     <Stack gap={20}>
@@ -543,7 +535,7 @@ export function CascadeCreatePage() {
                 onClick={() =>
                   setDirections((prev) => [
                     ...prev,
-                    { key: nextKey.current++, countryCode: '', nodeIds: [''], tag: null },
+                    { key: nextKey.current++, id: null, countryCode: '', nodeIds: [''], tag: null },
                   ])
                 }
               />

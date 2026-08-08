@@ -242,13 +242,48 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			if v, ok := adapter.(core.Versioner); ok {
 				cs.Version = v.CoreVersion()
 			}
+			// Whether this core is configured at all. Same optional-interface
+			// pattern; adapters that don't report count as configured.
+			if p, ok := adapter.(core.Provisionable); ok {
+				provisioned := p.Provisioned()
+				cs.Provisioned = &provisioned
+			}
+			// Restart tally, same optional-interface pattern. Without it a
+			// memory-watchdog restart is invisible: the core bounces, users
+			// see drops, and this endpoint keeps saying "running: true".
+			if r, ok := adapter.(core.RestartReporter); ok {
+				st := r.RestartStats()
+				dtoRestarts := dto.CoreRestartsDto{
+					Core:             adapter.Name(),
+					Total:            st.Crash + st.Memory,
+					Crash:            st.Crash,
+					Memory:           st.Memory,
+					LastReason:       st.LastReason,
+					MemoryLimitBytes: st.MemoryLimitBytes,
+					RssBytes:         st.RSSBytes,
+				}
+				if !st.LastAt.IsZero() {
+					dtoRestarts.LastAt = st.LastAt.UTC().Format(time.RFC3339)
+				}
+				if !st.SinceAt.IsZero() {
+					dtoRestarts.SinceAt = st.SinceAt.UTC().Format(time.RFC3339)
+				}
+				cs.Restarts = &dtoRestarts
+			}
 			cores[i] = cs
 		}(i, adapter)
 	}
 	wg.Wait()
 
+	// Only a CONFIGURED core that is down makes the node degraded. A core the
+	// operator never configured is idle by design and used to make every healthy
+	// node report `degraded` forever, which meant the status stopped changing
+	// when something actually broke.
 	allHealthy := true
 	for _, c := range cores {
+		if c.Provisioned != nil && !*c.Provisioned {
+			continue
+		}
 		if !c.Running {
 			allHealthy = false
 			break
@@ -438,6 +473,30 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		// fragment, not a top-level inbound, so ensureInboundFirewall misses it).
 		s.ensureCascadeFirewall(r.Context(), ib)
 		applied++
+	}
+
+	// Reconcile: the push above is per-inbound, so an adapter holding several
+	// has no way to notice a DELETION. Hand each one the full set that just
+	// arrived for it, and let it drop the rest. Runs even when the list is
+	// empty for an adapter - that is exactly the "last inbound removed" case,
+	// and skipping it would leave a deleted inbound serving forever.
+	keepByProtocol := make(map[string][]string, len(req.Inbounds))
+	for _, ib := range req.Inbounds {
+		key := string(ib.Protocol) + "|" + string(ib.ResolvedEngine())
+		keepByProtocol[key] = append(keepByProtocol[key], ib.ID)
+	}
+	for _, adapter := range s.cfg.Adapters {
+		rec, ok := adapter.(core.InboundReconciler)
+		if !ok {
+			continue
+		}
+		key := adapter.Name() + "|" + adapter.Engine()
+		if err := rec.RetainInbounds(keepByProtocol[key]); err != nil {
+			// Not fatal for the request: the inbounds that DID apply are live,
+			// and reporting this as a total failure would make the panel retry
+			// a push that already half-landed.
+			s.logger.Error("adapter RetainInbounds failed", "core", adapter.Name(), "err", err)
+		}
 	}
 
 	if failed > 0 {

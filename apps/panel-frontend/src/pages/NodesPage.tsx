@@ -476,6 +476,12 @@ export function NodesPage() {
         limit: 100,
         regionId: regionFilter === 'all' ? undefined : regionFilter,
       }),
+    // Core version and the restart tally ride on this response, not on the
+    // overview blob, and until 2026-08-04 nothing refetched it: a core could
+    // bounce with the page open and the card would keep the numbers it was
+    // mounted with. 30s matches the backend status cron that produces them, so
+    // a faster tick would only re-read the same row.
+    refetchInterval: 30_000,
   });
   const regionsQuery = useQuery({ queryKey: ['regions'], queryFn: listRegions });
   const regionsById = useMemo(() => {
@@ -983,6 +989,11 @@ export function NodesPage() {
                   regionLabel,
                   cascadeLabel: cascade ? `${cascade.name} · ${cascade.role}` : null,
                   coreVersion: n.coreVersion ?? null,
+                  // Restart tally + memory headroom of the core. Lives on
+                  // /api/nodes, not on the overview blob, so it refreshes on
+                  // the nodes query's own tick.
+                  coreRestarts: n.coreRestarts ?? null,
+                  protocol: n.protocol,
                   maxUsers: n.maxUsers ?? null,
                   // approxUsers: capacity bar source. Real per-node user
                   // counter lands with slice 28; here we reuse the today's

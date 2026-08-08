@@ -34,11 +34,12 @@ import { DevicePresetEditor, blankPreset } from '../components/DevicePresetEdito
  *                   the operator's own domain lists and raw rules. Decides what
  *                   never enters the tunnel at all.
  *
- * Both panes are editors, and both write to endpoints that do not exist yet:
- * route-policies ships list-only (route-policies.routes.ts says so in as many
- * words) and the presets are three fixed ids compiled into the subscription
- * builders. Reading is real, saving reports what it hits. The one layer that IS
- * stored as data, the operator's own lists and raw rules, is editable below.
+ * Both panes are editors, but only one of them writes for real. Route policies
+ * are stored data with a full CRUD behind them, and saving one re-pushes every
+ * cascade entry, so the change reaches the fleet. Presets are still three fixed
+ * ids compiled into the subscription builders: their pane reads real data and
+ * reports what saving hits, until GET /api/routing-presets exists. The
+ * operator's own lists and raw rules are stored as data and editable below.
  */
 
 const HAIRLINE = '#1C2A3D';

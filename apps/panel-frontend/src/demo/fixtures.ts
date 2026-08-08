@@ -76,6 +76,31 @@ const NODE_SEEDS: NodeSeed[] = [
   { id: 'node-xray-us-01', name: 'xray-us-01', host: 'us-01.example.com', cc: 'US', protocol: 'xray', region: 'reg-us', selfSteal: true, cpu: 53, ram: 68, disk: 56, cores: 4, ramGiB: 8, diskGiB: 80, todayGiB: 38.2 },
 ];
 
+// Restart tallies for the demo fleet. Only xray reports one, and the three
+// xray nodes deliberately show the three states the card has to tell apart: a
+// core that never blinked, a core the memory watchdog has been bouncing, and a
+// node that never reported at all (null, which is NOT zero restarts).
+const CORE_RESTARTS: Record<string, PanelNode['coreRestarts']> = {
+  'node-xray-de-01': {
+    total: 0,
+    crash: 0,
+    memory: 0,
+    memoryLimitBytes: 2 * GiB,
+    rssBytes: Math.round(0.42 * GiB),
+    observedAt: iso(4 * 60_000),
+  },
+  'node-xray-de-02': {
+    total: 3,
+    crash: 0,
+    memory: 3,
+    lastAt: iso(5 * HOUR),
+    lastReason: 'memory',
+    memoryLimitBytes: GiB,
+    rssBytes: Math.round(0.79 * GiB),
+    observedAt: iso(2 * 60_000),
+  },
+};
+
 export const NODES: PanelNode[] = NODE_SEEDS.map((n) => ({
   id: n.id,
   name: n.name,
@@ -85,6 +110,7 @@ export const NODES: PanelNode[] = NODE_SEEDS.map((n) => ({
   status: 'online',
   lastStatusChange: iso(3 * HOUR),
   lastStatusMessage: null,
+  coreRestarts: CORE_RESTARTS[n.id] ?? null,
   coreVersion: n.protocol === 'xray' ? '26.3.27' : null,
   consumptionMultiplier: '1',
   regionId: n.region,
@@ -371,6 +397,15 @@ export const CASCADES: Cascade[] = [
       { id: 'hop-ru-0', nodeId: 'node-xray-de-01', nodeName: 'xray-de-01', position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
       { id: 'hop-ru-1', nodeId: 'node-xray-de-02', nodeName: 'xray-de-02', position: 1, entryProtocol: null, linkProtocol: null },
     ],
+    // v4: one entry, one way out. The demo carries both shapes so the screens
+    // render off `directions`, the way a live panel does.
+    positions: [
+      { position: 0, nodeIds: ['node-xray-de-01'], entryProtocol: 'xray', linkProtocol: 'vless' },
+    ],
+    directions: [
+      { id: 'dir-ru-de', tag: 1, countryCode: 'DE', nodeIds: ['node-xray-de-02'] },
+    ],
+    nextDirectionTag: 2,
     createdAt: iso(20 * DAY),
     updatedAt: iso(2 * DAY),
   },
@@ -384,6 +419,16 @@ export const CASCADES: Cascade[] = [
       { id: 'hop-us-0', nodeId: 'node-xray-us-01', nodeName: 'xray-us-01', position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
       { id: 'hop-us-1', nodeId: 'node-xray-de-01', nodeName: 'xray-de-01', position: 1, entryProtocol: null, linkProtocol: null },
     ],
+    positions: [
+      { position: 0, nodeIds: ['node-xray-us-01'], entryProtocol: 'xray', linkProtocol: 'vless' },
+    ],
+    // Tag 3 with only two directions on file is the point: tag 2 was spent by a
+    // direction that has since been deleted, and it never comes back.
+    directions: [
+      { id: 'dir-us-de', tag: 1, countryCode: 'DE', nodeIds: ['node-xray-de-01'] },
+      { id: 'dir-us-se', tag: 3, countryCode: 'SE', nodeIds: [] },
+    ],
+    nextDirectionTag: 4,
     createdAt: iso(18 * DAY),
     updatedAt: iso(2 * DAY),
   },

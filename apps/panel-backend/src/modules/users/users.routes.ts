@@ -1,12 +1,16 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { z } from 'zod';
+import type { Prisma } from '../../generated/prisma/client.js';
 import { requireAuth } from '../auth/auth.hook.js';
 import {
+  BulkUsersSchema,
   CreateUserSchema,
   UpdateUserSchema,
   ListUsersQuerySchema,
   UserIdParamSchema,
 } from './users.schemas.js';
 import * as usersService from './users.service.js';
+import { mapUserToPublic } from './users.mapper.js';
 import { prisma } from '../../prisma.js';
 import {
   generateSubscription,
@@ -107,6 +111,159 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       orderBy: { tag: 'asc' },
     });
     return reply.send({ tags: rows.map((r) => r.tag).filter((t): t is string => t !== null) });
+  });
+
+  // POST /api/users/bulk - one action, many users. Declared before
+  // /api/users/:id so "bulk" is not read as an id.
+  //
+  // Always 200, even when some users failed: the response body is the report.
+  // A blanket 4xx would tell the caller nothing about WHICH of two hundred ids
+  // went wrong, and rolling the whole batch back over three stale ids would be
+  // worse than doing the other hundred and ninety-seven.
+  app.post('/api/users/bulk', auth, async (request, reply) => {
+    const input = BulkUsersSchema.parse(request.body);
+    const result = await usersService.bulkUsers(input);
+    return reply.send({
+      action: input.action,
+      requested: input.userIds.length,
+      succeeded: result.ok.length,
+      ok: result.ok,
+      failed: result.failed,
+    });
+  });
+
+  // ───── Lookups by natural key ─────
+  //
+  // A Telegram bot never holds our internal uuid: it knows the person by their
+  // telegram id, and support knows them by username, email or the token in the
+  // link they pasted. Without these, every bot action starts with a full-list
+  // scan and a client-side filter, which is both slow and racy on a roster of
+  // thousands.
+  //
+  // Declared BEFORE /api/users/:id so `by-telegram-id` is not parsed as an id.
+  //
+  // All four return the same shape as GET /:id, so a caller can switch lookup
+  // key without touching the rest of its code.
+  const lookup = async (
+    where: Prisma.UserWhereInput,
+    reply: FastifyReply,
+  ): Promise<unknown> => {
+    const user = await prisma.user.findFirst({
+      where: { ...where, deletedAt: null },
+      include: { traffic: true },
+    });
+    if (!user) return reply.code(404).send({ error: 'USER_NOT_FOUND' });
+    return reply.send(mapUserToPublic(user, user.traffic));
+  };
+
+  app.get('/api/users/by-telegram-id/:telegramId', auth, async (request, reply) => {
+    const { telegramId } = z
+      .object({ telegramId: z.string().regex(/^\d+$/, 'telegram id must be digits') })
+      .parse(request.params);
+    // BigInt: Telegram ids passed 2^32 long ago and will pass 2^53 eventually.
+    return lookup({ telegramId: BigInt(telegramId) }, reply);
+  });
+
+  app.get('/api/users/by-username/:username', auth, async (request, reply) => {
+    const { username } = z.object({ username: z.string().min(1).max(64) }).parse(request.params);
+    return lookup({ username }, reply);
+  });
+
+  app.get('/api/users/by-subscription-token/:token', auth, async (request, reply) => {
+    const { token } = z.object({ token: z.string().min(8).max(64) }).parse(request.params);
+    return lookup({ subscriptionToken: token }, reply);
+  });
+
+  app.get('/api/users/by-email/:email', auth, async (request, reply) => {
+    const { email } = z.object({ email: z.string().min(3).max(255) }).parse(request.params);
+    return lookup({ email }, reply);
+  });
+
+  /**
+   * GET /api/users/:id/usage?start=&end=
+   *
+   * Per-day traffic for one user. The rows have been accumulating since the
+   * stats poller landed; there was simply no way to read them, so a bot asking
+   * "how much did I use this month" had nothing to answer with.
+   *
+   * Daily granularity, because that is what is stored: the poller folds each
+   * node's deltas into a per-(node, user, day) row. Days with no traffic have
+   * no row at all rather than a zero, so a caller charting a period must fill
+   * gaps itself - inventing zeroes here would hide the difference between "used
+   * nothing" and "node reported nothing".
+   *
+   * Totals are summed across nodes and returned alongside, since that is what
+   * the caller almost always wants and it saves them adding bigints correctly.
+   */
+  app.get('/api/users/:id/usage', auth, async (request, reply) => {
+    const params = UserIdParamSchema.parse(request.params);
+    const query = z
+      .object({
+        start: z.iso.date().optional(),
+        end: z.iso.date().optional(),
+        // Per-node breakdown is opt-in: most callers want one number per day,
+        // and the split multiplies the row count by the size of the fleet.
+        byNode: z.enum(['true', 'false']).default('false'),
+      })
+      .parse(request.query);
+
+    const user = await prisma.user.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!user) return reply.code(404).send({ error: 'USER_NOT_FOUND' });
+
+    // Default window: the last 30 days, which is the period a subscription
+    // question is almost always about.
+    const end = query.end ? new Date(query.end) : new Date();
+    const start = query.start
+      ? new Date(query.start)
+      : new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+    const rows = await prisma.nodeUserUsageHistory.findMany({
+      where: { userId: params.id, date: { gte: start, lte: end } },
+      orderBy: { date: 'asc' },
+      select: { date: true, bytesIn: true, bytesOut: true, nodeId: true },
+    });
+
+    const perNode = query.byNode === 'true';
+    const buckets = new Map<string, { date: string; nodeId?: string; bytesIn: bigint; bytesOut: bigint }>();
+    for (const r of rows) {
+      const date = r.date.toISOString().slice(0, 10);
+      const key = perNode ? `${date}|${r.nodeId}` : date;
+      const b = buckets.get(key) ?? {
+        date,
+        ...(perNode ? { nodeId: r.nodeId } : {}),
+        bytesIn: 0n,
+        bytesOut: 0n,
+      };
+      b.bytesIn += r.bytesIn;
+      b.bytesOut += r.bytesOut;
+      buckets.set(key, b);
+    }
+
+    let totalIn = 0n;
+    let totalOut = 0n;
+    for (const b of buckets.values()) {
+      totalIn += b.bytesIn;
+      totalOut += b.bytesOut;
+    }
+
+    // Bytes go out as strings: a month of traffic passes 2^53 long before a
+    // year does, and JSON numbers would round it silently.
+    return reply.send({
+      userId: params.id,
+      start: start.toISOString().slice(0, 10),
+      end: end.toISOString().slice(0, 10),
+      totalBytesIn: totalIn.toString(),
+      totalBytesOut: totalOut.toString(),
+      days: [...buckets.values()].map((b) => ({
+        date: b.date,
+        ...(b.nodeId ? { nodeId: b.nodeId } : {}),
+        bytesIn: b.bytesIn.toString(),
+        bytesOut: b.bytesOut.toString(),
+      })),
+    });
   });
 
   // GET /api/users/:id
