@@ -141,6 +141,45 @@ describe.skipIf(!XRAY_BIN)('xray accepts the generated cascade config', () => {
     expect(r.ok, r.output).toBe(true);
   });
 
+  // REALITY + VISION wrapping of the leg. Its own corner of the parser: keys
+  // must decode, VISION must be named on both ends, and mux must be absent
+  // (xray refuses VISION together with multiplexing).
+  const realityLink = {
+    ...twoDirections,
+    links: [
+      {
+        ...link(ENTRY, EXIT_A, 1, 24000),
+        cred: {
+          protocol: 'vless' as const,
+          port: 24000,
+          uuid: N(5),
+          reality: {
+            // base64URL, no padding - the form `xray x25519` emits and the
+            // only one the config validator accepts. Standard base64 is
+            // rejected outright, which is what generateRealityKeyPair produces
+            // correctly and this test originally got wrong.
+            privateKey: Buffer.alloc(32, 7).toString('base64url'),
+            publicKey: Buffer.alloc(32, 9).toString('base64url'),
+            shortId: '0123456789abcdef',
+            serverName: 'www.microsoft.com',
+            dest: 'www.microsoft.com:443',
+          },
+        },
+      },
+    ],
+    directions: [{ tag: 1, nodeIds: [EXIT_A] }],
+  };
+
+  it('loads an entry whose link is wrapped in REALITY', () => {
+    const r = xrayAccepts(wrap(buildTopologyFragmentsForNode(ENTRY, realityLink)));
+    expect(r.ok, r.output).toBe(true);
+  });
+
+  it('loads the receiving side of a REALITY link', () => {
+    const r = xrayAccepts(wrap(buildTopologyFragmentsForNode(EXIT_A, realityLink)));
+    expect(r.ok, r.output).toBe(true);
+  });
+
   // A pool on the next step turns into a balancer; balancers and their selectors
   // are a separate corner of xray's config parser.
   it('loads an entry whose direction is served by a pool', () => {

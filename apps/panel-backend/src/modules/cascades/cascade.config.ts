@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { generateRealityKeyPair } from '../../lib/credentials.js';
 
 /**
  * C2/C3b - cascade config generation for the native inter-hop link cells the
@@ -41,6 +42,31 @@ interface VlessLinkCred {
   port: number;
   /** VLESS user id shared by the originating outbound and the next inbound. */
   uuid: string;
+  /**
+   * REALITY + VISION wrapping for the leg (2026-08).
+   *
+   * Until now an inter-hop link was plain VLESS over raw TCP on a public port.
+   * That is fine between two datacenters nobody inspects, and wrong for the
+   * shape our operator runs: their entry sits in Russia, so this leg crosses a
+   * border looking exactly like the thing being searched for. Their own hops
+   * use REALITY+VISION, and ours should not be the weak link in a chain built
+   * for censorship resistance.
+   *
+   * Absent on links generated before this landed; those keep working as plain
+   * VLESS, so a cascade does not break on deploy. New links get it.
+   */
+  reality?: {
+    /** Held by the RECEIVING side (its inbound decrypts with this). */
+    privateKey: string;
+    /** Held by the DIALLING side (its outbound presents this). */
+    publicKey: string;
+    shortId: string;
+    /** Site the handshake is camouflaged as, and dialled through. Both sides
+     *  must agree, hence storing it with the credentials rather than deriving
+     *  it per node. */
+    serverName: string;
+    dest: string;
+  };
 }
 
 interface Ss2022LinkCred {
@@ -75,9 +101,36 @@ export function generateLinkCreds(linkProtocols: LinkProtocol[]): LinkCred[] {
         method: SS_LINK_METHOD,
       };
     }
-    return { protocol: 'vless', port, uuid: randomUUID() };
+    return { protocol: 'vless', port, uuid: randomUUID(), reality: newLinkReality() };
   });
 }
+
+/**
+ * REALITY material for one inter-hop leg.
+ *
+ * A fresh keypair per link, not one shared across the cascade: the two ends of
+ * a leg are the only parties that need it, and reuse would let a compromised
+ * node impersonate every other hop.
+ *
+ * The camouflage target is a large, always-up site that a datacenter connecting
+ * to it looks unremarkable doing. It is fixed rather than configurable for now
+ * because a bad choice here is invisible until traffic gets blocked, and the
+ * operator has no way to evaluate it.
+ */
+function newLinkReality(): NonNullable<VlessLinkCred['reality']> {
+  const { privateKey, publicKey } = generateRealityKeyPair();
+  return {
+    privateKey,
+    publicKey,
+    // shortId is a hex string of even length, up to 16 bytes; 8 is what the
+    // panel already uses for user-facing inbounds.
+    shortId: randomBytes(8).toString('hex'),
+    serverName: LINK_CAMOUFLAGE_SNI,
+    dest: `${LINK_CAMOUFLAGE_SNI}:443`,
+  };
+}
+
+const LINK_CAMOUFLAGE_SNI = 'www.microsoft.com';
 
 /** One node-to-node leg of a v4 cascade, carrying traffic for ONE direction. */
 export interface TopologyLink {
@@ -129,7 +182,7 @@ export function generateTopologyLinks(
             psk: randomBytes(32).toString('base64'),
             method: SS_LINK_METHOD,
           }
-        : { protocol: 'vless', port, uuid: randomUUID() };
+        : { protocol: 'vless', port, uuid: randomUUID(), reality: newLinkReality() };
     links.push({ fromNodeId: from, toNodeId: to, directionTag, protocol, cred });
   };
 
@@ -179,7 +232,28 @@ export function parseLinkCred(raw: unknown): LinkCred | null {
     return { protocol: 'shadowsocks', port: o.port, psk: o.psk, method: o.method };
   }
   if (typeof o.uuid !== 'string') return null;
-  return { protocol: 'vless', port: o.port, uuid: o.uuid };
+  const cred: VlessLinkCred = { protocol: 'vless', port: o.port, uuid: o.uuid };
+  // REALITY block is optional: links generated before it existed carry none
+  // and keep working as plain VLESS. Accepted only whole - a partial block
+  // would render a config one side can't complete a handshake against.
+  const r = o.reality as Record<string, unknown> | undefined;
+  if (
+    r &&
+    typeof r.privateKey === 'string' &&
+    typeof r.publicKey === 'string' &&
+    typeof r.shortId === 'string' &&
+    typeof r.serverName === 'string' &&
+    typeof r.dest === 'string'
+  ) {
+    cred.reality = {
+      privateKey: r.privateKey,
+      publicKey: r.publicKey,
+      shortId: r.shortId,
+      serverName: r.serverName,
+      dest: r.dest,
+    };
+  }
+  return cred;
 }
 
 export type HopRole = 'entry' | 'transit' | 'exit';
@@ -235,8 +309,26 @@ function vlessLinkInbound(cred: VlessLinkCred): Record<string, unknown> {
     port: cred.port,
     listen: '0.0.0.0',
     protocol: 'vless',
-    settings: { clients: [{ id: cred.uuid }], decryption: 'none' },
-    streamSettings: { network: 'raw', security: 'none' },
+    settings: {
+      // VISION on the receiving side too: the flow is negotiated per user, so
+      // both ends have to name it or the client is rejected.
+      clients: [{ id: cred.uuid, ...(cred.reality ? { flow: 'xtls-rprx-vision' } : {}) }],
+      decryption: 'none',
+    },
+    streamSettings: cred.reality
+      ? {
+          network: 'raw',
+          security: 'reality',
+          realitySettings: {
+            // dest/serverNames make the leg indistinguishable from traffic to
+            // a real site; without them REALITY has nothing to hide behind.
+            dest: cred.reality.dest,
+            serverNames: [cred.reality.serverName],
+            privateKey: cred.reality.privateKey,
+            shortIds: [cred.reality.shortId],
+          },
+        }
+      : { network: 'raw', security: 'none' },
   };
 }
 
@@ -281,10 +373,39 @@ function vlessLinkOutbound(host: string, cred: VlessLinkCred): Record<string, un
     tag: LINK_OUT_TAG,
     protocol: 'vless',
     settings: {
-      vnext: [{ address: host, port: cred.port, users: [{ id: cred.uuid, encryption: 'none' }] }],
+      vnext: [
+        {
+          address: host,
+          port: cred.port,
+          users: [
+            {
+              id: cred.uuid,
+              encryption: 'none',
+              ...(cred.reality ? { flow: 'xtls-rprx-vision' } : {}),
+            },
+          ],
+        },
+      ],
     },
-    streamSettings: { network: 'raw', security: 'none', sockopt: LINK_SOCKOPT },
-    mux: LINK_MUX,
+    streamSettings: cred.reality
+      ? {
+          network: 'raw',
+          security: 'reality',
+          realitySettings: {
+            serverName: cred.reality.serverName,
+            publicKey: cred.reality.publicKey,
+            shortId: cred.reality.shortId,
+            // Browser fingerprint: without one the TLS ClientHello is a
+            // recognisable non-browser, which defeats the point of hiding the
+            // handshake behind a real site.
+            fingerprint: 'firefox',
+          },
+          sockopt: LINK_SOCKOPT,
+        }
+      : { network: 'raw', security: 'none', sockopt: LINK_SOCKOPT },
+    // Mux and VISION are mutually exclusive in xray: VISION splices the
+    // connection, which is exactly what mux's multiplexing breaks.
+    ...(cred.reality ? {} : { mux: LINK_MUX }),
   };
 }
 
