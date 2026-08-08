@@ -3,6 +3,7 @@ import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
   rankNodesForUser,
+  rendezvousOrder,
   type NodeForRanking,
 } from './node-selection.js';
 // Slice 27 follow-up: enabledProtocols is no longer consulted, squad ACL is
@@ -61,6 +62,18 @@ export class SubscriptionForbiddenError extends Error {
  * missed tick (or a brief panel-to-node network blip) changes nothing.
  */
 const UNREACHABLE_GRACE_MS = 90_000;
+
+/**
+ * How many interchangeable entries a user gets for one profile.
+ *
+ * Three is a deliberate middle. One entry means a user whose node dies waits
+ * for their next subscription refresh (hours on a router) before anything
+ * works again. The whole pool means every client carries the complete map of
+ * entries, so a single leaked subscription hands over the entire ingress
+ * surface and a blocklist can take all of it at once. Three leaves somewhere to
+ * fall twice without publishing the fleet.
+ */
+const ENTRY_POOL_SIZE = 3;
 
 export interface RequestContext {
   ip?: string | null;
@@ -293,6 +306,10 @@ export async function generateSubscription(
                   // Drives the flag emoji in the server name a client displays.
                   countryCode: true,
                   createdAt: true,
+                  // Capacity hint, used as the WEIGHT when picking which
+                  // entries of a pool a user gets: a node with twice the cap
+                  // should take twice the share. Null = treated as the default.
+                  maxUsers: true,
                   // Slice 28: region.code drives the "same-region bonus" in the
                   // smart-selection ranker. Null when admin hasn't tagged a region;
                   // ranker still works (utilization-only score for that node).
@@ -392,6 +409,57 @@ export async function generateSubscription(
     // Preserve original order within the kept set so format output is stable.
     bindings.length = 0;
     bindings.push(...filtered);
+  }
+
+  // Entry pool. Nodes serving the SAME profile are interchangeable ways in, so
+  // a user needs a few of them, not all: handing out every node makes the pool
+  // decorative (everyone dials the first one that works) and publishes the
+  // whole entry surface to every client, so one leaked subscription exposes the
+  // lot.
+  //
+  // Order is rendezvous hashing on (user, node), which is what makes this safe
+  // to do per request: the same user keeps the same first node while the pool
+  // is unchanged - their router does not silently move on every refresh - and
+  // when a node drops out only ITS users are rehashed. Sorting by load instead
+  // would herd everyone onto whichever node currently looks least busy, then
+  // swing them back once the metric caught up.
+  //
+  // Liveness is already applied by the query above, so "the first three" means
+  // three that are actually being served.
+  if (bindings.length > 0) {
+    const byProfile = new Map<string, typeof bindings>();
+    for (const b of bindings) {
+      const list = byProfile.get(b.profile.id) ?? [];
+      list.push(b);
+      byProfile.set(b.profile.id, list);
+    }
+    // Kept by reference: the binding rows have no field guaranteed unique here,
+    // and keying on a missing one would silently drop everything.
+    const kept = new Set<(typeof bindings)[number]>();
+    for (const list of byProfile.values()) {
+      const nodeIds = new Set(list.map((b) => b.node.id));
+      if (nodeIds.size <= ENTRY_POOL_SIZE) {
+        for (const b of list) kept.add(b);
+        continue;
+      }
+      const nodes = [...new Map(list.map((b) => [b.node.id, b.node])).values()].map((n) => ({
+        id: n.id,
+        name: n.name,
+        regionCode: null,
+        maxUsers: n.maxUsers ?? null,
+      }));
+      const allow = new Set(
+        rendezvousOrder(nodes, user.id)
+          .slice(0, ENTRY_POOL_SIZE)
+          .map((n) => n.id),
+      );
+      for (const b of list) if (allow.has(b.node.id)) kept.add(b);
+    }
+    if (kept.size < bindings.length) {
+      const filtered = bindings.filter((b) => kept.has(b));
+      bindings.length = 0;
+      bindings.push(...filtered);
+    }
   }
 
   // A4: which of these nodes are cascade entries + the route profiles they
