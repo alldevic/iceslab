@@ -319,9 +319,22 @@ async function checkOne(node: {
     // (xray/ss/etc have no config → not started). Keep status online,
     // surface detail in lastStatusMessage; it auto-clears once a binding
     // lands and the core boots.
+    //
+    // Name the cores that are down instead of dumping the raw payload. The dump
+    // used to fit, then the restart tally (2026-08-04) landed inside the first
+    // core's object and pushed everything informative past the 160-char cut: all
+    // four nodes of the field fleet stored a message that ends mid-JSON, before
+    // any core that is actually down. A truncated explanation is worse than a
+    // short one, because it still looks like an explanation.
+    const down = res.cores.filter((c) => !c.running).map((c) => c.name);
     return {
       status: 'online',
-      message: `degraded: ${JSON.stringify(res).slice(0, 160)}`,
+      message: down.length
+        ? `degraded: not running: ${down.join(', ')}`.slice(0, 200)
+        : // No core reports itself down, yet the agent called the node degraded.
+          // Keep the payload here: this is the case where the detail is not
+          // something we can name in advance.
+          `degraded: ${JSON.stringify(res).slice(0, 160)}`,
       coreVersion,
       coreRestarts,
     };
