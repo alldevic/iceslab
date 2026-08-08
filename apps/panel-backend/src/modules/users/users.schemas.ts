@@ -87,6 +87,41 @@ export const CreateUserSchema = z.object({
 });
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 
+// ───── POST /api/users/bulk ─────
+//
+// One billing cycle of a reseller touches hundreds of users at once (extend the
+// paid ones, reset counters on the strategy date, revoke the lapsed). Doing
+// that one HTTP call at a time turns a routine job into thousands of requests
+// and leaves the operator with no idea which of them failed.
+
+/** Cap per request. Not a performance limit - the work is the same either way -
+ *  but a bound on the blast radius of one mistaken call, and on how long a
+ *  single request holds a connection. Larger jobs page. */
+export const MAX_BULK_USERS = 500;
+
+export const BulkUserActionSchema = z.enum([
+  'extend',        // push expiry out by `expireDays`
+  'reset-traffic', // zero the counter, same path as the cron strategy reset
+  'revoke',        // kill the current subscription link
+  'delete',        // soft-delete
+  'enable',
+  'disable',
+]);
+
+export const BulkUsersSchema = z
+  .object({
+    userIds: z.array(PermissiveUuid).min(1).max(MAX_BULK_USERS),
+    action: BulkUserActionSchema,
+    /** Required by `extend`, meaningless elsewhere. */
+    expireDays: z.number().int().positive().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.action === 'extend' && val.expireDays === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'extend needs expireDays', path: ['expireDays'] });
+    }
+  });
+export type BulkUsersInput = z.infer<typeof BulkUsersSchema>;
+
 // ───── PUT /api/users/:id ─────
 
 export const UpdateUserSchema = z.object({

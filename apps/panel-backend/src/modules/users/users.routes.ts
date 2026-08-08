@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { requireAuth } from '../auth/auth.hook.js';
 import {
+  BulkUsersSchema,
   CreateUserSchema,
   UpdateUserSchema,
   ListUsersQuerySchema,
@@ -110,6 +111,25 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       orderBy: { tag: 'asc' },
     });
     return reply.send({ tags: rows.map((r) => r.tag).filter((t): t is string => t !== null) });
+  });
+
+  // POST /api/users/bulk - one action, many users. Declared before
+  // /api/users/:id so "bulk" is not read as an id.
+  //
+  // Always 200, even when some users failed: the response body is the report.
+  // A blanket 4xx would tell the caller nothing about WHICH of two hundred ids
+  // went wrong, and rolling the whole batch back over three stale ids would be
+  // worse than doing the other hundred and ninety-seven.
+  app.post('/api/users/bulk', auth, async (request, reply) => {
+    const input = BulkUsersSchema.parse(request.body);
+    const result = await usersService.bulkUsers(input);
+    return reply.send({
+      action: input.action,
+      requested: input.userIds.length,
+      succeeded: result.ok.length,
+      ok: result.ok,
+      failed: result.failed,
+    });
   });
 
   // ───── Lookups by natural key ─────
