@@ -89,6 +89,8 @@ model KeygenCa {
 // are switched over.
 
 model Profile {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id          String   @id @default(uuid()) @db.Uuid
   // Globally unique within the panel. Becomes the user-facing label of the
   // logical inbound (replaces the per-node Inbound.name when N nodes share
@@ -167,6 +169,8 @@ model ProfileNodeBinding {
 // Inspired by Remnawave's hosts table; field set tightened to the overrides
 // our URI builders / format formatters actually consume.
 model Host {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id                String   @id @default(uuid()) @db.Uuid
   bindingId         String   @map("binding_id") @db.Uuid
 
@@ -263,6 +267,8 @@ model GroupHost {
 // ────────────────────────────────────────────────────────────────────────
 
 model Node {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id                    String    @id @default(uuid()) @db.Uuid
   // `name` and `address` are unique only among ACTIVE rows, see the
   // partial unique indexes `nodes_name_active_key` / `nodes_address_active_key`
@@ -422,6 +428,8 @@ model Inbound {
 }
 
 model Group {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id          String   @id @default(uuid()) @db.Uuid
   name        String   @unique @db.VarChar(64)
   description String?
@@ -464,6 +472,13 @@ model GroupInbound {
 }
 
 model User {
+  // Provenance of an imported row: its id in the SOURCE panel. NULL for rows
+  // created here, which is the normal case. Makes an import repeatable - a
+  // second run matches on this instead of duplicating the set or guessing by
+  // username (which the source lets people change). UNIQUE is a PARTIAL index
+  // applied in the raw migration (NULLs excluded), so Prisma must not be told
+  // to enforce it here.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id       String @id @default(uuid()) @db.Uuid
   shortId  String @unique @map("short_id") @db.VarChar(16)
   username String @db.VarChar(64)
