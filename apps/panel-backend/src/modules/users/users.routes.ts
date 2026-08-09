@@ -142,9 +142,48 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
   //
   // Declared BEFORE /api/users/:id so `by-telegram-id` is not parsed as an id.
   //
-  // All four return the same shape as GET /:id, so a caller can switch lookup
-  // key without touching the rest of its code.
-  const lookup = async (
+  // ⚠ Two of these four keys can match SEVERAL people, so they return a LIST.
+  //
+  //   - `telegramId`: in the operator's live data 151 telegram ids belong to
+  //     more than one account and one belongs to 24. Families share a login,
+  //     resellers hold several subscriptions under one chat.
+  //   - `email`: no constraint anywhere, and nothing stops two accounts from
+  //     carrying the same address.
+  //
+  // They used to answer with `findFirst`, i.e. with an ARBITRARY one of the
+  // matches, and a bot acting on that answer acted on the wrong person's
+  // subscription - silently, because the reply looked perfectly valid.
+  //
+  // The other two stay single. `subscriptionToken` is UNIQUE in the schema, and
+  // a token identifying exactly one person is the whole point of a token.
+  // `username` has no DB constraint but createUser refuses a duplicate (409),
+  // so at most one live user carries a given name. ⚠ That guarantee comes from
+  // the service, not the column: an importer writing to the database directly
+  // could seed duplicates, and then this lookup would hide all but the first.
+  //
+  // The lists are not paginated and not capped on purpose. These are natural-key
+  // lookups over a handful of rows; a cap would either truncate silently (the
+  // failure this change exists to remove) or need a page cursor nobody would
+  // use. Listing at scale is what GET /api/users is for.
+  const lookupMany = async (
+    where: Prisma.UserWhereInput,
+    reply: FastifyReply,
+  ): Promise<unknown> => {
+    const users = await prisma.user.findMany({
+      where: { ...where, deletedAt: null },
+      include: { traffic: true },
+      // Stable order, oldest first: without it the same request can come back
+      // in a different order and a caller that takes "the first one" behaves
+      // differently on identical data.
+      orderBy: { createdAt: 'asc' },
+    });
+    return reply.send({
+      users: users.map((u) => mapUserToPublic(u, u.traffic)),
+      total: users.length,
+    });
+  };
+
+  const lookupOne = async (
     where: Prisma.UserWhereInput,
     reply: FastifyReply,
   ): Promise<unknown> => {
@@ -161,22 +200,22 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       .object({ telegramId: z.string().regex(/^\d+$/, 'telegram id must be digits') })
       .parse(request.params);
     // BigInt: Telegram ids passed 2^32 long ago and will pass 2^53 eventually.
-    return lookup({ telegramId: BigInt(telegramId) }, reply);
+    return lookupMany({ telegramId: BigInt(telegramId) }, reply);
   });
 
   app.get('/api/users/by-username/:username', auth, async (request, reply) => {
     const { username } = z.object({ username: z.string().min(1).max(64) }).parse(request.params);
-    return lookup({ username }, reply);
+    return lookupOne({ username }, reply);
   });
 
   app.get('/api/users/by-subscription-token/:token', auth, async (request, reply) => {
     const { token } = z.object({ token: z.string().min(8).max(64) }).parse(request.params);
-    return lookup({ subscriptionToken: token }, reply);
+    return lookupOne({ subscriptionToken: token }, reply);
   });
 
   app.get('/api/users/by-email/:email', auth, async (request, reply) => {
     const { email } = z.object({ email: z.string().min(3).max(255) }).parse(request.params);
-    return lookup({ email }, reply);
+    return lookupMany({ email }, reply);
   });
 
   /**

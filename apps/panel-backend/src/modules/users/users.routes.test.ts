@@ -324,6 +324,137 @@ describe('GET /api/users/:id', () => {
   });
 });
 
+// A telegram id is not a person. In the operator's live data 151 telegram ids
+// belong to more than one account and one belongs to 24 - families sharing a
+// login, resellers holding several subscriptions under one chat. The lookup used
+// to answer with an arbitrary match, so a bot acting on it acted on the wrong
+// person's subscription, and the reply looked perfectly valid while doing it.
+describe('lookups by a key that is not unique', () => {
+  async function create(payload: Record<string, unknown>) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: auth(),
+      payload,
+    });
+    expect(res.statusCode).toBe(201);
+    return JSON.parse(res.body);
+  }
+
+  it('returns every account sharing a telegram id', async () => {
+    await create({ username: 'family_dad', telegramId: '777000111' });
+    await create({ username: 'family_kid', telegramId: '777000111' });
+    await create({ username: 'someone_else', telegramId: '777000222' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/users/by-telegram-id/777000111',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(2);
+    expect(body.users.map((u: { username: string }) => u.username).sort()).toEqual([
+      'family_dad',
+      'family_kid',
+    ]);
+  });
+
+  // Oldest first, always: a caller that takes users[0] must get the same person
+  // on every call, not whatever the database felt like returning.
+  it('orders the list by creation, oldest first', async () => {
+    const first = await create({ username: 'joined_first', telegramId: '888000111' });
+    const second = await create({ username: 'joined_second', telegramId: '888000111' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/users/by-telegram-id/888000111',
+      headers: auth(),
+    });
+
+    const ids = JSON.parse(res.body).users.map((u: { id: string }) => u.id);
+    expect(ids).toEqual([first.id, second.id]);
+  });
+
+  // Nobody found is an empty list, not an error: "this chat has no subscription
+  // yet" is a normal answer for a bot, and 404 would make it look like a fault.
+  it('answers an unknown telegram id with an empty list', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/users/by-telegram-id/999000999',
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ users: [], total: 0 });
+  });
+
+  // Username stays single, and this test says WHY: the column carries no unique
+  // constraint, so the guarantee comes from createUser refusing a duplicate. If
+  // that ever stops being true, this test fails and the lookup has to grow a
+  // list like the two above.
+  it('cannot have two accounts on one username, so the lookup stays single', async () => {
+    await create({ username: 'twin' });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: auth(),
+      payload: { username: 'twin' },
+    });
+    expect(second.statusCode).toBe(409);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/users/by-username/twin',
+      headers: auth(),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.username).toBe('twin');
+    expect(body.users).toBeUndefined();
+  });
+
+  it('returns every account sharing an email', async () => {
+    await create({ username: 'mail_one', email: 'shared@example.com' });
+    await create({ username: 'mail_two', email: 'shared@example.com' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/users/by-email/shared@example.com',
+      headers: auth(),
+    });
+
+    expect(JSON.parse(res.body).total).toBe(2);
+  });
+
+  // The one key that IS unique keeps the single-object shape: a token identifies
+  // exactly one person, and that is the whole point of a token.
+  it('still returns one object for a subscription token', async () => {
+    const user = await create({ username: 'token_holder' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/users/by-subscription-token/${user.subscriptionToken}`,
+      headers: auth(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.username).toBe('token_holder');
+    expect(body.users).toBeUndefined();
+  });
+
+  it('still 404s on an unknown subscription token', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/users/by-subscription-token/definitely-not-a-real-token',
+      headers: auth(),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
 describe('PUT /api/users/:id', () => {
   it('updates editable fields', async () => {
     const created = await app.inject({
