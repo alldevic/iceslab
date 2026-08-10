@@ -146,15 +146,20 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 	}
 	remaining := len(a.inbounds)
 	// The install-time inbound has no panel id and is not managed here; it only
-	// applies while the panel has pushed nothing identified.
+	// applies while the panel has pushed nothing identified, and only when it is
+	// usable at all. On a node installed empty it carries no REALITY key, so
+	// with the last inbound gone there is nothing to fall back TO - the node
+	// then serves nobody, which is a legitimate state and not an error.
 	legacyOnly := remaining == 0 && a.cfg.Inbound.RealityPrivateKey != ""
+	servesNobody := remaining == 0 && !legacyOnly
 	a.mu.Unlock()
 
 	if len(dropped) == 0 {
 		return nil
 	}
 	a.logger.Info("xray: inbounds removed by the panel, regenerating",
-		"dropped", dropped, "remaining", remaining, "fallingBackToInstallTime", legacyOnly)
+		"dropped", dropped, "remaining", remaining,
+		"fallingBackToInstallTime", legacyOnly, "servesNobody", servesNobody)
 	return a.regenerateAndRestart(context.Background())
 }
 
@@ -498,7 +503,7 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 	// same way regenerateAndRestart does it: rendering the single install-time
 	// inbound here would overwrite a multi-inbound config on disk with one that
 	// serves a fraction of it.
-	blob, err := renderMultiConfig(inbounds, clients, cascade)
+	blob, err := renderMultiConfig(inbounds, clients, cascade, inbounds[0].withDefaults().ApiPort)
 	if err != nil {
 		return false
 	}
@@ -1026,11 +1031,19 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	a.mu.Unlock()
 
 	// The install-time inbound is used only while the panel has pushed nothing
-	// identified - once it has, those are the truth.
-	if len(pushed) == 0 {
+	// identified - and only if it is actually usable. A node installed empty
+	// (everything arrives from the panel, which is the normal case now) has no
+	// REALITY key there, so falling back to it renders nothing at all: the
+	// render fails, the previous config stays on disk, and the core keeps
+	// serving inbounds the operator has deleted. Seen in the field 2026-08-10
+	// when the last inbound was removed.
+	//
+	// With nothing to serve, that is what we render: no user inbounds, just the
+	// management one. "Serves nobody" is a state, not an error.
+	if len(pushed) == 0 && inbound.RealityPrivateKey != "" {
 		pushed = []InboundConfig{inbound}
 	}
-	blob, err := renderMultiConfig(pushed, clients, cascade)
+	blob, err := renderMultiConfig(pushed, clients, cascade, inbound.withDefaults().ApiPort)
 	if err != nil {
 		return fmt.Errorf("render xray config: %w", err)
 	}

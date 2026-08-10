@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -34,7 +35,7 @@ func inboundWire(t *testing.T, id string, port int) []byte {
 
 func renderedInbounds(t *testing.T, a *Adapter) []map[string]any {
 	t.Helper()
-	blob, err := renderMultiConfig(currentInbounds(a), sortedClients(a.users), a.cascade)
+	blob, err := renderMultiConfig(currentInbounds(a), sortedClients(a.users), a.cascade, 8080)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestPortClashIsRefusedByName(t *testing.T) {
 	_ = a.ApplyInbound(443, inboundWire(t, "aaaaaaaa-1111-4000-8000-000000000001", 443))
 	_ = a.ApplyInbound(443, inboundWire(t, "bbbbbbbb-2222-4000-8000-000000000002", 443))
 
-	_, err := renderMultiConfig(currentInbounds(a), nil, nil)
+	_, err := renderMultiConfig(currentInbounds(a), nil, nil, 8080)
 	if err == nil {
 		t.Fatal("expected a port clash to be refused")
 	}
@@ -191,6 +192,60 @@ func TestRetainWithEmptySetDropsEverything(t *testing.T) {
 	a.mu.Unlock()
 	if held != 0 {
 		t.Fatalf("adapter still holds %d inbounds after the panel sent none", held)
+	}
+}
+
+// Serving nobody has to be renderable. On a node installed empty - the normal
+// case, where everything arrives from the panel - the install-time inbound has
+// no REALITY key, so with the last inbound removed there is nothing to fall back
+// to. Refusing to render that left the PREVIOUS config on disk and the core kept
+// serving the inbound the operator had just deleted (field, 2026-08-10: panel
+// said "no inbounds", the node still listened on 443).
+func TestLastInboundRemovedLeavesNothingServed(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	// Install-time inbound with no credentials: exactly what a panel-provisioned
+	// node has.
+	a := New(Config{
+		ConfigPath: cfgPath,
+		Inbound:    InboundConfig{ApiPort: 9090},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	id := "aaaaaaaa-1111-4000-8000-000000000001"
+	if err := a.ApplyInbound(443, inboundWire(t, id, 443)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
+	if err := a.RetainInbounds(nil); err != nil {
+		t.Fatalf("RetainInbounds with an empty set: %v", err)
+	}
+
+	blob, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg struct {
+		Inbounds []struct {
+			Tag  string `json:"tag"`
+			Port int    `json:"port"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, blob)
+	}
+	for _, in := range cfg.Inbounds {
+		if in.Tag != "api-in" {
+			t.Errorf("still serving %q on %d after the panel removed every inbound",
+				in.Tag, in.Port)
+		}
+	}
+	if len(cfg.Inbounds) != 1 {
+		t.Fatalf("expected only the management inbound, got %d", len(cfg.Inbounds))
+	}
+	// The management port is install-time identity and must survive having no
+	// inbound to read it from; guessing the default would break stats on a node
+	// whose operator moved it.
+	if cfg.Inbounds[0].Port != 9090 {
+		t.Errorf("management port: got %d want 9090", cfg.Inbounds[0].Port)
 	}
 }
 
