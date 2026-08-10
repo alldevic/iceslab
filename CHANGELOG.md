@@ -5,6 +5,28 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ## Unreleased
 
+### Changed
+
+- **A deployed node now always appears in subscriptions.** Entries were capped
+  at three per profile, so a healthy, serving node could be missing from a
+  subscription with nothing anywhere explaining why. From the operator's chair
+  that is indistinguishable from a fault, and it was reported as one.
+
+  Subscribers receive every node they are entitled to. The list is ordered per
+  subscriber by rendezvous hash, so clients (which dial the first entry, and few
+  subscribers ever change that) still spread across the fleet instead of all
+  landing on whichever node the query returned first. The order is stable for a
+  given person, and a node going down reshuffles only the people who were on it.
+
+  The cap is kept as an opt-in setting, `subscriptionEntryPoolSize`: an operator
+  who would rather a leaked subscription expose a slice of their entry surface
+  than all of it can set it. `0`, the default, means no cap.
+
+- **Host reach counts people, not memberships.** The hosts screen reported
+  "N users reach it" by summing each squad's member count, so one person in two
+  squads read as two. The count now comes from the API, deduplicated, and
+  respects squad narrowing.
+
 ### Security
 
 - **The panel UI is no longer published on every interface.** The frontend port

@@ -13,6 +13,7 @@ import {
 import { subscriptionServerName } from '../../lib/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
 import { getHiddenCascadeNodeIds, getRouteProfilesByEntryNode } from '../cascades/cascade.service.js';
+import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/credentials.js';
@@ -64,16 +65,20 @@ export class SubscriptionForbiddenError extends Error {
 const UNREACHABLE_GRACE_MS = 90_000;
 
 /**
- * How many interchangeable entries a user gets for one profile.
+ * Default cap on interchangeable entries per profile: none.
  *
- * Three is a deliberate middle. One entry means a user whose node dies waits
- * for their next subscription refresh (hours on a router) before anything
- * works again. The whole pool means every client carries the complete map of
- * entries, so a single leaked subscription hands over the entire ingress
- * surface and a blocklist can take all of it at once. Three leaves somewhere to
- * fall twice without publishing the fleet.
+ * This was a hard-coded 3 until 2026-08-10. It read as a bug from the operator
+ * side and was reported as one: a node was deployed, healthy and serving, and
+ * simply did not appear in a subscription, with nothing anywhere saying why.
+ * Whatever a capped pool buys (a leaked subscription exposing a slice of the
+ * entry surface rather than all of it) is not worth an operator doubting
+ * whether their own fleet works.
+ *
+ * The mechanism is kept and is now opt-in through `subscriptionEntryPoolSize`.
+ * When set, selection is by rendezvous hash: stable per person, and a node
+ * dropping out reshuffles only its own users.
  */
-const ENTRY_POOL_SIZE = 3;
+const ENTRY_POOL_SIZE_DEFAULT = 0;
 
 export interface RequestContext {
   ip?: string | null;
@@ -411,21 +416,30 @@ export async function generateSubscription(
     bindings.push(...filtered);
   }
 
-  // Entry pool. Nodes serving the SAME profile are interchangeable ways in, so
-  // a user needs a few of them, not all: handing out every node makes the pool
-  // decorative (everyone dials the first one that works) and publishes the
-  // whole entry surface to every client, so one leaked subscription exposes the
-  // lot.
+  // Entry order, and optionally an entry cap.
   //
-  // Order is rendezvous hashing on (user, node), which is what makes this safe
-  // to do per request: the same user keeps the same first node while the pool
-  // is unchanged - their router does not silently move on every refresh - and
-  // when a node drops out only ITS users are rehashed. Sorting by load instead
-  // would herd everyone onto whichever node currently looks least busy, then
-  // swing them back once the metric caught up.
+  // Nodes serving the SAME profile are interchangeable ways in, so the order
+  // they arrive in decides which one most clients actually dial: apps offer the
+  // first as the default and few subscribers ever change it. One order for
+  // everybody therefore herds the whole userbase onto whichever node the query
+  // happened to return first, while the rest idle.
   //
-  // Liveness is already applied by the query above, so "the first three" means
-  // three that are actually being served.
+  // So the list is ordered by rendezvous hash on (user, node). Every subscriber
+  // still receives every node they are entitled to - the operator deployed it,
+  // it has to be there - but they each start somewhere different, and the
+  // ordering is a pure function of (user, node), which buys two things: a
+  // subscriber's router does not wander on every refresh, and a node dropping
+  // out reshuffles only the people who were on it. Sorting by live load would
+  // do neither: it moves everyone at once, then moves them back when the metric
+  // catches up.
+  //
+  // `subscriptionEntryPoolSize` additionally caps the list per profile. Off by
+  // default (see ENTRY_POOL_SIZE_DEFAULT); an operator who would rather a leaked
+  // subscription expose a slice of the entry surface than all of it turns it on.
+  //
+  // Liveness is already applied by the query above, so this only ever orders
+  // nodes that are actually being served.
+  const entryPoolSize = (await getSubscriptionSettings()).entryPoolSize ?? ENTRY_POOL_SIZE_DEFAULT;
   if (bindings.length > 0) {
     const byProfile = new Map<string, typeof bindings>();
     for (const b of bindings) {
@@ -433,33 +447,25 @@ export async function generateSubscription(
       list.push(b);
       byProfile.set(b.profile.id, list);
     }
-    // Kept by reference: the binding rows have no field guaranteed unique here,
-    // and keying on a missing one would silently drop everything.
-    const kept = new Set<(typeof bindings)[number]>();
+    const ordered: typeof bindings = [];
     for (const list of byProfile.values()) {
-      const nodeIds = new Set(list.map((b) => b.node.id));
-      if (nodeIds.size <= ENTRY_POOL_SIZE) {
-        for (const b of list) kept.add(b);
-        continue;
-      }
       const nodes = [...new Map(list.map((b) => [b.node.id, b.node])).values()].map((n) => ({
         id: n.id,
         name: n.name,
         regionCode: null,
         maxUsers: n.maxUsers ?? null,
       }));
-      const allow = new Set(
-        rendezvousOrder(nodes, user.id)
-          .slice(0, ENTRY_POOL_SIZE)
-          .map((n) => n.id),
-      );
-      for (const b of list) if (allow.has(b.node.id)) kept.add(b);
+      let ranked = rendezvousOrder(nodes, user.id);
+      if (entryPoolSize > 0) ranked = ranked.slice(0, entryPoolSize);
+      const rank = new Map(ranked.map((n, i) => [n.id, i]));
+      const kept = list.filter((b) => rank.has(b.node.id));
+      // Sort is stable, so several hosts sharing one node keep the relative
+      // order the operator gave them and only the nodes move.
+      kept.sort((a, b) => rank.get(a.node.id)! - rank.get(b.node.id)!);
+      ordered.push(...kept);
     }
-    if (kept.size < bindings.length) {
-      const filtered = bindings.filter((b) => kept.has(b));
-      bindings.length = 0;
-      bindings.push(...filtered);
-    }
+    bindings.length = 0;
+    bindings.push(...ordered);
   }
 
   // A4: which of these nodes are cascade entries + the route profiles they

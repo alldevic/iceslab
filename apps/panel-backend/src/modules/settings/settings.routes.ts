@@ -51,6 +51,10 @@ const UpsertInput = z.object({
   subscriptionSupportUrl: z.string().url().max(255).nullable().optional(),
   subscriptionAnnounceTemplate: z.string().max(512).nullable().optional(),
   subscriptionRoutingPreset: z.enum(ROUTING_PRESET_IDS).optional(),
+  // Entry pool cap. 0 = hand out every node the subscriber is entitled to,
+  // which is the default and what an operator expects after deploying a
+  // profile to a node. See SubscriptionSettings.entryPoolSize.
+  subscriptionEntryPoolSize: z.number().int().min(0).max(64).optional(),
   // TLS-fragment - split the client's outgoing ClientHello so SNI-based DPI
   // (RU TSPU / RKN) cannot cleanly match the handshake. Xray JSON format only.
   subscriptionTlsFragment: z.boolean().optional(),
