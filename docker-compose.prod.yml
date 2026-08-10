@@ -130,6 +130,24 @@ services:
       # and returned 404 instead of the plausible-empty 200 + IP blacklist.
       HONEY_USER_TOKENS: ${HONEY_USER_TOKENS:-}
       RATE_LIMIT_SUB_IP_PER_MIN: ${RATE_LIMIT_SUB_IP_PER_MIN:-120}
+      # K2 outbound webhook bus. Same omission as HONEY_USER_TOKENS above, found
+      # the same way: the feature existed in the schema, in the env template and
+      # in the code, but without these two lines the container saw neither, so
+      # an operator who filled them in got silence and nothing to debug with.
+      # Caught 2026-08-10 while field-testing webhooks - no delivery attempt was
+      # even logged, because to the backend the bus was simply disabled.
+      WEBHOOK_URLS: ${WEBHOOK_URLS:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      # Subscription addressing. Without these an operator cannot move /sub onto
+      # its own domain, nor change the path prefix away from the recognisable
+      # `/sub` - both are documented knobs that silently did nothing in
+      # production. The domain one also blocks the migration plan, where the
+      # incoming panel's links live at the root of a separate host.
+      SUBSCRIPTION_PUBLIC_URL: ${SUBSCRIPTION_PUBLIC_URL:-}
+      SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
+      # Safety ceiling on device rows per user, and the login-alert toggle.
+      HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
+      TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}
     depends_on:
       postgres:
         condition: service_healthy

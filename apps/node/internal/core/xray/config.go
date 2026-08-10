@@ -332,7 +332,7 @@ func renderConfig(inbound InboundConfig, users []xrayClient) ([]byte, error) {
 // several. Kept as a thin wrapper so the many existing call sites and tests
 // that deal with a single inbound stay unchanged.
 func renderConfigWithCascade(inbound InboundConfig, users []xrayClient, cascade *CascadeFragments) ([]byte, error) {
-	return renderMultiConfig([]InboundConfig{inbound}, users, cascade)
+	return renderMultiConfig([]InboundConfig{inbound}, users, cascade, inbound.withDefaults().ApiPort)
 }
 
 // renderConfigWithCascade is renderConfig plus optional cascade fragments (C3).
@@ -351,10 +351,18 @@ func renderConfigWithCascade(inbound InboundConfig, users []xrayClient, cascade 
 //
 // The same user list is served on every inbound: a user's access is decided by
 // the panel when it pushes bindings, not by which door they walk through.
-func renderMultiConfig(inboundCfgs []InboundConfig, users []xrayClient, cascade *CascadeFragments) ([]byte, error) {
-	if len(inboundCfgs) == 0 {
-		return nil, fmt.Errorf("render xray config: no inbounds")
-	}
+// An EMPTY list is legal and means "this node serves nobody": the panel removed
+// the last inbound. Refusing to render that was a real failure - the render
+// errored, the old config stayed on disk, and the core kept serving the inbound
+// the operator had just deleted (field, 2026-08-10). `apiPort` carries the
+// process-level identity that would otherwise come from the first inbound, so
+// the management inbound survives having no user inbounds to sit beside.
+func renderMultiConfig(
+	inboundCfgs []InboundConfig,
+	users []xrayClient,
+	cascade *CascadeFragments,
+	apiPort int,
+) ([]byte, error) {
 	inbounds := make([]any, 0, len(inboundCfgs)+1)
 	seenTags := make(map[string]struct{}, len(inboundCfgs))
 	seenPorts := make(map[int]struct{}, len(inboundCfgs))
@@ -395,12 +403,17 @@ func renderMultiConfig(inboundCfgs []InboundConfig, users []xrayClient, cascade 
 	}
 
 	// One management inbound for the whole process, not one per user inbound:
-	// the stats API is per-core. `cfg` here is the last inbound rendered; the
-	// api port is install-time identity and identical across them.
+	// the stats API is per-core. The port is install-time identity, so it comes
+	// from the caller rather than from an inbound - with no inbounds left there
+	// would be none to read it from, and guessing the default would silently
+	// break stats on a node whose operator moved the port.
+	if apiPort == 0 {
+		apiPort = cfg.ApiPort
+	}
 	inbounds = append(inbounds, map[string]any{
 		"tag":      "api-in",
 		"listen":   "127.0.0.1",
-		"port":     cfg.ApiPort,
+		"port":     apiPort,
 		"protocol": "dokodemo-door",
 		"settings": map[string]any{
 			"address": "127.0.0.1",

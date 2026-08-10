@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -34,7 +35,7 @@ func inboundWire(t *testing.T, id string, port int) []byte {
 
 func renderedInbounds(t *testing.T, a *Adapter) []map[string]any {
 	t.Helper()
-	blob, err := renderMultiConfig(currentInbounds(a), sortedClients(a.users), a.cascade)
+	blob, err := renderMultiConfig(currentInbounds(a), sortedClients(a.users), a.cascade, 8080)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestPortClashIsRefusedByName(t *testing.T) {
 	_ = a.ApplyInbound(443, inboundWire(t, "aaaaaaaa-1111-4000-8000-000000000001", 443))
 	_ = a.ApplyInbound(443, inboundWire(t, "bbbbbbbb-2222-4000-8000-000000000002", 443))
 
-	_, err := renderMultiConfig(currentInbounds(a), nil, nil)
+	_, err := renderMultiConfig(currentInbounds(a), nil, nil, 8080)
 	if err == nil {
 		t.Fatal("expected a port clash to be refused")
 	}
@@ -194,6 +195,60 @@ func TestRetainWithEmptySetDropsEverything(t *testing.T) {
 	}
 }
 
+// Serving nobody has to be renderable. On a node installed empty - the normal
+// case, where everything arrives from the panel - the install-time inbound has
+// no REALITY key, so with the last inbound removed there is nothing to fall back
+// to. Refusing to render that left the PREVIOUS config on disk and the core kept
+// serving the inbound the operator had just deleted (field, 2026-08-10: panel
+// said "no inbounds", the node still listened on 443).
+func TestLastInboundRemovedLeavesNothingServed(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	// Install-time inbound with no credentials: exactly what a panel-provisioned
+	// node has.
+	a := New(Config{
+		ConfigPath: cfgPath,
+		Inbound:    InboundConfig{ApiPort: 9090},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	id := "aaaaaaaa-1111-4000-8000-000000000001"
+	if err := a.ApplyInbound(443, inboundWire(t, id, 443)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
+	if err := a.RetainInbounds(nil); err != nil {
+		t.Fatalf("RetainInbounds with an empty set: %v", err)
+	}
+
+	blob, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg struct {
+		Inbounds []struct {
+			Tag  string `json:"tag"`
+			Port int    `json:"port"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v\n%s", err, blob)
+	}
+	for _, in := range cfg.Inbounds {
+		if in.Tag != "api-in" {
+			t.Errorf("still serving %q on %d after the panel removed every inbound",
+				in.Tag, in.Port)
+		}
+	}
+	if len(cfg.Inbounds) != 1 {
+		t.Fatalf("expected only the management inbound, got %d", len(cfg.Inbounds))
+	}
+	// The management port is install-time identity and must survive having no
+	// inbound to read it from; guessing the default would break stats on a node
+	// whose operator moved it.
+	if cfg.Inbounds[0].Port != 9090 {
+		t.Errorf("management port: got %d want 9090", cfg.Inbounds[0].Port)
+	}
+}
+
 // Reconciliation must not restart the core when nothing changed: a push that
 // changes one inbound would otherwise bounce every other one along with it.
 func TestRetainIsQuietWhenNothingChanged(t *testing.T) {
@@ -207,6 +262,75 @@ func TestRetainIsQuietWhenNothingChanged(t *testing.T) {
 	after := a.RestartStats()
 	if before.Crash != after.Crash || before.Memory != after.Memory {
 		t.Error("a no-op reconciliation disturbed the running core")
+	}
+}
+
+// Adding a user must reach EVERY inbound the node serves, and must do it live.
+//
+// The live path used to build its `xray api adu` payload from the install-time
+// inbound alone. Once the panel pushes identified inbounds, the running config
+// carries tags derived from their ids, so that payload named a tag that no
+// longer existed: adu added nobody, AddUser fell back to a full core restart,
+// and every single user added tore down every live connection on the node.
+// Caught in the field 2026-08-08, by an SSH session through a cascade dying each
+// time a user was created.
+func TestAduPayloadCoversEveryServedInbound(t *testing.T) {
+	a := multiAdapter(t)
+	first := "aaaaaaaa-1111-4000-8000-000000000001"
+	second := "bbbbbbbb-2222-4000-8000-000000000002"
+	_ = a.ApplyInbound(443, inboundWire(t, first, 443))
+	_ = a.ApplyInbound(8443, inboundWire(t, second, 8443))
+
+	a.mu.Lock()
+	served := a.servedInboundsLocked()
+	a.mu.Unlock()
+	if len(served) != 2 {
+		t.Fatalf("served %d inbounds, want 2", len(served))
+	}
+
+	data, err := buildAduPayload(served, xrayClient{ID: "uuid-a", Email: "alice"})
+	if err != nil {
+		t.Fatalf("buildAduPayload: %v", err)
+	}
+	var doc struct {
+		Inbounds []struct {
+			Tag string `json:"tag"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, data)
+	}
+	if len(doc.Inbounds) != 2 {
+		t.Fatalf("adu payload carries %d inbounds, want 2: a user missing from one "+
+			"inbound cannot connect there", len(doc.Inbounds))
+	}
+	// The tags must be the ones the RUNNING config uses, not the install-time
+	// tag: naming an absent tag is what made adu a silent no-op.
+	rendered := map[string]bool{}
+	for _, in := range renderedInbounds(t, a) {
+		if tag, _ := in["tag"].(string); tag != "" {
+			rendered[tag] = true
+		}
+	}
+	for _, in := range doc.Inbounds {
+		if !rendered[in.Tag] {
+			t.Errorf("adu payload names tag %q, which is not in the rendered config", in.Tag)
+		}
+	}
+}
+
+// A partial add is a failure: the user would be live on one inbound and missing
+// on another, and nothing would say so.
+func TestLiveAddDemandsEveryInbound(t *testing.T) {
+	out := []byte("Added 1 user(s) in total.")
+	if liveOpSucceeded(out, "Added", 2) {
+		t.Error("adding 1 of 2 inbounds counted as success")
+	}
+	if !liveOpSucceeded(out, "Added", 1) {
+		t.Error("adding the only inbound should count as success")
+	}
+	if !liveOpSucceeded([]byte("Added 2 user(s) in total."), "Added", 2) {
+		t.Error("adding both inbounds should count as success")
 	}
 }
 
