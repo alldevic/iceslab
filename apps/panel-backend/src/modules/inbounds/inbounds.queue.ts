@@ -113,10 +113,27 @@ interface ActiveUser {
   naivePassword: string;
 }
 
-async function fetchActiveUsers(): Promise<ActiveUser[]> {
+/**
+ * Users a node should be able to serve right now.
+ *
+ * ⚠ `deletedAt: null` is load-bearing. Deletion is soft and leaves `status` as
+ * `active`, so without it a deleted person is handed back to the node on the
+ * next inbound change. Their subscription link is dead, but the credentials
+ * their client already holds keep working - deletion would revoke access only
+ * until the next config push, which is not what anyone means by deleting a user.
+ *
+ * Seen in the field 2026-08-10: adding an inbound on a node re-seeded 19 users
+ * onto it while the panel had exactly one. The sibling backfill in
+ * `users.queue.ts` had the filter; this one did not, and the two silently
+ * disagreed about who exists.
+ *
+ * Exported for the test that pins this.
+ */
+export async function fetchActiveUsers(): Promise<ActiveUser[]> {
   const now = new Date();
   return prisma.user.findMany({
     where: {
+      deletedAt: null,
       status: 'active',
       OR: [{ expireAt: null }, { expireAt: { gt: now } }],
     },
