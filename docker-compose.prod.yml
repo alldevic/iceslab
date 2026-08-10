@@ -189,8 +189,19 @@ services:
         condition: service_healthy
     ports:
       # Front the panel with your own reverse proxy (Traefik / Caddy / nginx)
-      # to terminate TLS and bind to :443. Default exposes only :8080.
-      - "${FRONTEND_PORT:-8080}:80"
+      # to terminate TLS and bind to :443.
+      #
+      # FRONTEND_BIND defaults to loopback, and that default is load-bearing:
+      # a docker-published port is DNAT'd in nat/PREROUTING, BEFORE ufw's filter
+      # chains ever run, so `ufw deny` on it does exactly nothing. Publishing on
+      # 0.0.0.0 therefore serves the admin UI over plain HTTP to the whole
+      # internet while `ufw status` shows the port as closed - which is how it
+      # went unnoticed until a community install report (issue #33) and a probe
+      # of our own panel returned 200 on :8080 from outside.
+      #
+      # Set FRONTEND_BIND=0.0.0.0 only when there is no reverse proxy and the
+      # browser must reach this port directly (bare-IP / testing installs).
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
     restart: unless-stopped
 
 volumes:

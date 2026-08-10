@@ -133,7 +133,10 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      # Loopback by default. See the long note on the same line in
+      # docker-compose.prod.yml: ufw cannot gate a docker-published port, so the
+      # bind address is the only thing keeping the admin UI off the internet.
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
     restart: unless-stopped
 
 volumes:

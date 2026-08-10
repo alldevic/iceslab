@@ -3,6 +3,29 @@
 All notable changes to Iceslab are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags.
 
+## Unreleased
+
+### Security
+
+- **The panel UI is no longer published on every interface.** The frontend port
+  was mapped as `0.0.0.0:8080`, so on a domain install the admin UI answered
+  plain HTTP to the whole internet, bypassing the TLS proxy in front of it -
+  and the login password went across the wire in the clear. The installer's own
+  firewall step reported "default deny incoming", which was true and beside the
+  point: **a docker-published port is DNAT'd before ufw's filter chains run, so
+  the firewall cannot close it.** The bind address is the only control, and it
+  is now `FRONTEND_BIND`, defaulting to `127.0.0.1`.
+
+  Reported from a clean community install (#33) and reproduced against our own
+  panel, which returned HTTP 200 on `:8080` from the public internet while
+  `ufw status` listed no rule for it.
+
+  ⚠ **Action required for installs WITHOUT a reverse proxy.** If you reach the
+  panel directly at `http://<ip>:8080`, add `FRONTEND_BIND=0.0.0.0` to
+  `.env.production` before your next deploy, or the port will stop answering.
+  Installs behind Caddy/nginx/Traefik on the same host need no change; a fresh
+  install picks the right value for its mode automatically.
+
 ## v0.1.9
 
 The sing-box engine release. Iceslab gains a second proxy engine beside its

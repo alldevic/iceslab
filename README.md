@@ -148,6 +148,7 @@ Both installers read env overrides. The ones people reach for most:
 | `SKIP_SWAP` | `0` | Set `1` to skip the auto 4 GB swapfile on small-RAM VPS. The build may OOM on <3.5 GB RAM without swap; only opt out if you manage swap yourself. |
 | `NODE_PORT` | `1337` | node-agent mTLS listen port. Change per-node to dodge port scanners. |
 | `FRONTEND_PORT` | `8080` | Panel SPA port in bare-IP mode (ignored when `PANEL_DOMAIN` is set, Caddy fronts 443). |
+| `FRONTEND_BIND` | `127.0.0.1` behind a domain, `0.0.0.0` in bare-IP mode | Host address that port is published on. A docker-published port is DNAT'd before the firewall's filter rules, so `ufw` cannot close it: this is the only control. Leave it on loopback whenever a reverse proxy sits in front. |
 
 ## Operating the panel
 
