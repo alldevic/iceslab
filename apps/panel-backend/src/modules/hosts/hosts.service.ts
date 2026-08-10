@@ -9,7 +9,7 @@ import {
   PortInUseError,
   ProfileNotFoundError,
 } from '../profiles/profiles.service.js';
-import { mapHost, type PublicHostDto } from './hosts.mapper.js';
+import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
 import type {
   CreateHostInput,
   ListHostsQuery,
@@ -113,7 +113,47 @@ export async function listHosts(q: ListHostsQuery): Promise<PublicHostDto[]> {
     where,
     orderBy: [{ bindingId: 'asc' }, { priority: 'asc' }, { createdAt: 'asc' }],
   });
-  return rows.map(mapHost);
+  const reach = await reachByHost(rows.map((r) => r.id));
+  return rows.map((r) => mapHost(r, reach.get(r.id) ?? { squads: 0, users: 0 }));
+}
+
+/**
+ * Squads and people a host actually reaches, per host, in one query.
+ *
+ * Counting has to happen here rather than on the screen: deduplicating people
+ * across squads needs their ids, and the squad list only carries totals. See
+ * HostReach for the miscount this replaces.
+ *
+ * The squad narrowing rule matches the one the subscription applies (GroupHost):
+ * no rows for a squad means it hands out every host of its profiles, any rows
+ * mean exactly those. Getting this wrong in the other direction would be worse
+ * than a wrong number, since the screen would promise reach a subscriber does
+ * not have.
+ *
+ * Deleted people are left out through the LEFT JOIN condition, so the count is
+ * of `users.id` rather than of the membership row: a squad whose members are all
+ * deleted reports zero rather than its historical size.
+ */
+async function reachByHost(hostIds: string[]): Promise<Map<string, HostReach>> {
+  if (hostIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<{ host_id: string; squads: number; users: number }[]>`
+    SELECT h.id                        AS host_id,
+           COUNT(DISTINCT gp.group_id)::int AS squads,
+           COUNT(DISTINCT u.id)::int        AS users
+    FROM hosts h
+    JOIN profile_node_bindings b ON b.id = h.binding_id
+    JOIN group_profiles gp       ON gp.profile_id = b.profile_id
+    LEFT JOIN group_members gm   ON gm.group_id = gp.group_id
+    LEFT JOIN users u            ON u.id = gm.user_id AND u.deleted_at IS NULL
+    WHERE h.id IN (${Prisma.join(hostIds)})
+      AND (
+        NOT EXISTS (SELECT 1 FROM group_hosts x WHERE x.group_id = gp.group_id)
+        OR EXISTS (SELECT 1 FROM group_hosts y
+                   WHERE y.group_id = gp.group_id AND y.host_id = h.id)
+      )
+    GROUP BY h.id
+  `;
+  return new Map(rows.map((r) => [r.host_id, { squads: r.squads, users: r.users }]));
 }
 
 export async function getHostById(id: string): Promise<PublicHostDto> {
