@@ -210,6 +210,75 @@ func TestRetainIsQuietWhenNothingChanged(t *testing.T) {
 	}
 }
 
+// Adding a user must reach EVERY inbound the node serves, and must do it live.
+//
+// The live path used to build its `xray api adu` payload from the install-time
+// inbound alone. Once the panel pushes identified inbounds, the running config
+// carries tags derived from their ids, so that payload named a tag that no
+// longer existed: adu added nobody, AddUser fell back to a full core restart,
+// and every single user added tore down every live connection on the node.
+// Caught in the field 2026-08-08, by an SSH session through a cascade dying each
+// time a user was created.
+func TestAduPayloadCoversEveryServedInbound(t *testing.T) {
+	a := multiAdapter(t)
+	first := "aaaaaaaa-1111-4000-8000-000000000001"
+	second := "bbbbbbbb-2222-4000-8000-000000000002"
+	_ = a.ApplyInbound(443, inboundWire(t, first, 443))
+	_ = a.ApplyInbound(8443, inboundWire(t, second, 8443))
+
+	a.mu.Lock()
+	served := a.servedInboundsLocked()
+	a.mu.Unlock()
+	if len(served) != 2 {
+		t.Fatalf("served %d inbounds, want 2", len(served))
+	}
+
+	data, err := buildAduPayload(served, xrayClient{ID: "uuid-a", Email: "alice"})
+	if err != nil {
+		t.Fatalf("buildAduPayload: %v", err)
+	}
+	var doc struct {
+		Inbounds []struct {
+			Tag string `json:"tag"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, data)
+	}
+	if len(doc.Inbounds) != 2 {
+		t.Fatalf("adu payload carries %d inbounds, want 2: a user missing from one "+
+			"inbound cannot connect there", len(doc.Inbounds))
+	}
+	// The tags must be the ones the RUNNING config uses, not the install-time
+	// tag: naming an absent tag is what made adu a silent no-op.
+	rendered := map[string]bool{}
+	for _, in := range renderedInbounds(t, a) {
+		if tag, _ := in["tag"].(string); tag != "" {
+			rendered[tag] = true
+		}
+	}
+	for _, in := range doc.Inbounds {
+		if !rendered[in.Tag] {
+			t.Errorf("adu payload names tag %q, which is not in the rendered config", in.Tag)
+		}
+	}
+}
+
+// A partial add is a failure: the user would be live on one inbound and missing
+// on another, and nothing would say so.
+func TestLiveAddDemandsEveryInbound(t *testing.T) {
+	out := []byte("Added 1 user(s) in total.")
+	if liveOpSucceeded(out, "Added", 2) {
+		t.Error("adding 1 of 2 inbounds counted as success")
+	}
+	if !liveOpSucceeded(out, "Added", 1) {
+		t.Error("adding the only inbound should count as success")
+	}
+	if !liveOpSucceeded([]byte("Added 2 user(s) in total."), "Added", 2) {
+		t.Error("adding both inbounds should count as success")
+	}
+}
+
 // An older panel sends no id; that path must behave exactly as before.
 func TestUnidentifiedInboundKeepsLegacyBehaviour(t *testing.T) {
 	a := multiAdapter(t)

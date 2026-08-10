@@ -399,7 +399,49 @@ const (
 // just the one user; buildUserInboundSettings keeps the client shape identical
 // to the full config (vless -> clients[{id,email,flow}], trojan -> clients[
 // {password,email}], etc).
-func buildAduInbound(inbound InboundConfig, target xrayClient) ([]byte, error) {
+// servedInboundsLocked returns the inbounds this adapter currently serves, in a
+// deterministic order. a.mu MUST be held.
+//
+// The map is keyed by id, so the keys are sorted: without that the rendered
+// config would differ between identical states and every push would look like a
+// change. The install-time inbound is the answer only while the panel has pushed
+// nothing identified - once it has, those are the truth.
+func (a *Adapter) servedInboundsLocked() []InboundConfig {
+	ids := make([]string, 0, len(a.inbounds))
+	for id := range a.inbounds {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]InboundConfig, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, a.inbounds[id])
+	}
+	if len(out) == 0 {
+		return []InboundConfig{a.cfg.Inbound}
+	}
+	return out
+}
+
+// buildAduPayload builds the `xray api adu` document that adds one user to EVERY
+// inbound the adapter serves.
+//
+// One entry per inbound, not one for the install-time inbound: a user has to
+// exist on all of them, and the tags of the running config come from the pushed
+// inbound ids (see inboundTagFor). Naming a tag that isn't in the running config
+// makes adu add nobody, which sends AddUser down the restart path - and a restart
+// drops every live connection on the node. That is exactly what happened on the
+// field fleet the day multi-inbound landed: every single user added restarted the
+// core, and long-lived sessions (a cascade, an SSH session through it) died with
+// it.
+func buildAduPayload(inbounds []InboundConfig, target xrayClient) ([]byte, error) {
+	entries := make([]any, 0, len(inbounds))
+	for _, in := range inbounds {
+		entries = append(entries, buildAduInboundEntry(in, target))
+	}
+	return json.Marshal(map[string]any{"inbounds": entries})
+}
+
+func buildAduInboundEntry(inbound InboundConfig, target xrayClient) map[string]any {
 	c := inbound.withDefaults()
 	// listen+port must be present. adu re-validates this inbound through the
 	// same conf.InboundDetour path as a full config, which rejects an AnyIP
@@ -410,17 +452,16 @@ func buildAduInbound(inbound InboundConfig, target xrayClient) ([]byte, error) {
 	// withDefaults() guarantees both (the real pushed port, else 443); adu never
 	// binds the socket, the port only has to satisfy config validation. Mirrors
 	// the full render in config.go.
-	return json.Marshal(map[string]any{
-		"inbounds": []any{
-			map[string]any{
-				"tag":      c.Tag,
-				"listen":   c.ListenHost,
-				"port":     c.ListenPort,
-				"protocol": userInboundProtocol(c),
-				"settings": buildUserInboundSettings(c, []xrayClient{target}),
-			},
-		},
-	})
+	return map[string]any{
+		// Whatever tag the renderer used for this inbound - ApplyInbound already
+		// derived it from the panel's inbound id, so this is the tag the running
+		// config actually carries.
+		"tag":      c.Tag,
+		"listen":   c.ListenHost,
+		"port":     c.ListenPort,
+		"protocol": userInboundProtocol(c),
+		"settings": buildUserInboundSettings(c, []xrayClient{target}),
+	}
 }
 
 // liveUpdateUser performs a single add/remove against the RUNNING xray via the
@@ -433,7 +474,11 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 
 	a.mu.Lock()
 	clients := sortedClients(a.users)
-	inbound := a.cfg.Inbound
+	// EVERY inbound this node serves, not just the install-time one. A user
+	// belongs on all of them, and the tags of the running config come from the
+	// pushed inbound ids - so a live op aimed at the install-time inbound names
+	// a tag that is not there, adds nobody, and sends the caller into a restart.
+	inbounds := a.servedInboundsLocked()
 	cascade := a.cascade
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
@@ -449,8 +494,11 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 	}
 
 	// Keep the on-disk config current so a later restart has the same user set
-	// (and the same cascade fragments).
-	blob, err := renderConfigWithCascade(inbound, clients, cascade)
+	// (and the same cascade fragments). Rendered from the full inbound set, the
+	// same way regenerateAndRestart does it: rendering the single install-time
+	// inbound here would overwrite a multi-inbound config on disk with one that
+	// serves a fraction of it.
+	blob, err := renderMultiConfig(inbounds, clients, cascade)
 	if err != nil {
 		return false
 	}
@@ -460,14 +508,16 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 		}
 	}
 
-	cfg := inbound.withDefaults()
+	// The api port is install-time identity and identical across inbounds; the
+	// renderer emits one management inbound for the whole core.
+	cfg := inbounds[0].withDefaults()
 	cctx, cancel := context.WithTimeout(ctx, apiCallTimeout)
 	defer cancel()
 	server := fmt.Sprintf("--server=127.0.0.1:%d", cfg.ApiPort)
 
 	switch op {
 	case liveAdd:
-		data, err := buildAduInbound(inbound, target)
+		data, err := buildAduPayload(inbounds, target)
 		if err != nil {
 			return false
 		}
@@ -493,28 +543,42 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 		// adu exits 0 even when it adds nobody (bad payload, per-user gRPC error).
 		// Trust the "Added N user(s)" count, not the exit code, or a silent no-op
 		// would skip the restart fallback and the user would never go live.
-		if !liveOpSucceeded(out, "Added") {
-			a.logger.Warn("xray api adu added no user (exit 0); falling back to restart",
-				"email", target.Email, "out", strings.TrimSpace(string(out)))
+		//
+		// The count must reach the number of inbounds: adding the user to two of
+		// three would pass a >=1 check while leaving them unable to connect on the
+		// third, and nothing would ever say so.
+		if !liveOpSucceeded(out, "Added", len(inbounds)) {
+			a.logger.Warn("xray api adu did not add the user on every inbound; falling back to restart",
+				"email", target.Email, "inbounds", len(inbounds),
+				"out", strings.TrimSpace(string(out)))
 			return false
 		}
-		a.logger.Info("xray user added live (no restart)", "email", target.Email)
+		a.logger.Info("xray user added live (no restart)",
+			"email", target.Email, "inbounds", len(inbounds))
 		return true
 	case liveRemove:
-		out, err := runLiveOp(cctx, run, binPath, "api", "rmu", server, "-tag="+cfg.Tag, target.Email)
-		if err != nil {
-			a.logger.Warn("xray api rmu failed; falling back to restart",
-				"email", target.Email, "err", err, "out", strings.TrimSpace(string(out)))
-			return false
+		// rmu takes ONE tag per call, so walk the inbounds. A user we failed to
+		// remove anywhere is still connectable there, which is the whole point of
+		// removing them - so any miss falls back to the restart.
+		for _, in := range inbounds {
+			tag := in.withDefaults().Tag
+			out, err := runLiveOp(cctx, run, binPath, "api", "rmu", server, "-tag="+tag, target.Email)
+			if err != nil {
+				a.logger.Warn("xray api rmu failed; falling back to restart",
+					"email", target.Email, "tag", tag, "err", err,
+					"out", strings.TrimSpace(string(out)))
+				return false
+			}
+			// Same as adu: rmu exits 0 even on a per-user failure (e.g. the inbound
+			// isn't a live UserManager). A restart actually applies the removal.
+			if !liveOpSucceeded(out, "Removed", 1) {
+				a.logger.Warn("xray api rmu removed no user (exit 0); falling back to restart",
+					"email", target.Email, "tag", tag, "out", strings.TrimSpace(string(out)))
+				return false
+			}
 		}
-		// Same as adu: rmu exits 0 even on a per-user failure (e.g. the inbound
-		// isn't a live UserManager). A restart actually applies the removal.
-		if !liveOpSucceeded(out, "Removed") {
-			a.logger.Warn("xray api rmu removed no user (exit 0); falling back to restart",
-				"email", target.Email, "out", strings.TrimSpace(string(out)))
-			return false
-		}
-		a.logger.Info("xray user removed live (no restart)", "email", target.Email)
+		a.logger.Info("xray user removed live (no restart)",
+			"email", target.Email, "inbounds", len(inbounds))
 		return true
 	default:
 		return false
@@ -544,10 +608,17 @@ func runLiveOp(ctx context.Context, run RunCmdFunc, binary string, args ...strin
 }
 
 // liveOpSucceeded parses xray's "<verb> N user(s) in total." summary line and
-// reports whether N >= 1. `xray api adu`/`rmu` print per-user errors but still
-// exit 0, so the process exit code is not a success signal; the count is. verb
-// is "Added" (adu) or "Removed" (rmu).
-func liveOpSucceeded(out []byte, verb string) bool {
+// reports whether N reached `want`. `xray api adu`/`rmu` print per-user errors
+// but still exit 0, so the process exit code is not a success signal; the count
+// is. verb is "Added" (adu) or "Removed" (rmu).
+//
+// `want` is the number of inbounds the operation covered: one adu call carries
+// an entry per inbound, and a partial success there means the user is live on
+// some of them and missing on the rest, silently.
+func liveOpSucceeded(out []byte, verb string, want int) bool {
+	if want < 1 {
+		want = 1
+	}
 	s := string(out)
 	idx := strings.Index(s, verb+" ")
 	if idx < 0 {
@@ -559,7 +630,7 @@ func liveOpSucceeded(out []byte, verb string) bool {
 		n = n*10 + int(rest[i]-'0')
 		seen = true
 	}
-	return seen && n >= 1
+	return seen && n >= want
 }
 
 // GetStats reports two things from xray's StatsService, read non-destructively
@@ -738,7 +809,6 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	if (wire.Security == "" || wire.Security == "reality") && wire.RealityPrivateKey == "" {
 		return fmt.Errorf("xray ApplyInbound: realityPrivateKey is required for REALITY security")
 	}
-
 
 	// Wave-14 C1: port now flows from the panel binding into REALITY's
 	// listen port. Pre-wave port was install-time only and admin port

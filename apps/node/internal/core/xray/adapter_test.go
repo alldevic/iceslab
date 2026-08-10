@@ -119,12 +119,12 @@ func newTestAdapter(t *testing.T) (*Adapter, string) {
 // + decryption. A wrong shape would make every live add silently fall back to a
 // restart, so this is the high-value guard for N1.
 func TestN1_BuildAduInbound_VLESS(t *testing.T) {
-	data, err := buildAduInbound(
-		InboundConfig{Subprotocol: "vless"},
+	data, err := buildAduPayload(
+		[]InboundConfig{{Subprotocol: "vless"}},
 		xrayClient{ID: "uuid-a", Email: "alice", Flow: "xtls-rprx-vision"},
 	)
 	if err != nil {
-		t.Fatalf("buildAduInbound: %v", err)
+		t.Fatalf("buildAduPayload: %v", err)
 	}
 	// adu input must be a full config with a top-level "inbounds" array.
 	var doc struct {
@@ -177,12 +177,12 @@ func TestN1_BuildAduInbound_VLESS(t *testing.T) {
 // TestN1_BuildAduInbound_Trojan verifies the Trojan shape: clients use
 // `password` (not `id`) and respect a custom tag.
 func TestN1_BuildAduInbound_Trojan(t *testing.T) {
-	data, err := buildAduInbound(
-		InboundConfig{Subprotocol: "trojan", Tag: "trojan-in"},
+	data, err := buildAduPayload(
+		[]InboundConfig{{Subprotocol: "trojan", Tag: "trojan-in"}},
 		xrayClient{ID: "secret-pass", Email: "bob"},
 	)
 	if err != nil {
-		t.Fatalf("buildAduInbound: %v", err)
+		t.Fatalf("buildAduPayload: %v", err)
 	}
 	// adu input must be a full config with a top-level "inbounds" array.
 	var doc struct {
@@ -219,12 +219,12 @@ func TestN1_BuildAduInbound_Trojan(t *testing.T) {
 // render. An 8443 REALITY inbound whose adu payload dropped the port would
 // re-validate as AnyIP-no-port and fall back to a restart on every add.
 func TestN1_BuildAduInbound_PropagatesListenPort(t *testing.T) {
-	data, err := buildAduInbound(
-		InboundConfig{Subprotocol: "vless", ListenHost: "10.0.0.5", ListenPort: 8443},
+	data, err := buildAduPayload(
+		[]InboundConfig{{Subprotocol: "vless", ListenHost: "10.0.0.5", ListenPort: 8443}},
 		xrayClient{ID: "uuid-a", Email: "alice"},
 	)
 	if err != nil {
-		t.Fatalf("buildAduInbound: %v", err)
+		t.Fatalf("buildAduPayload: %v", err)
 	}
 	var doc struct {
 		Inbounds []struct {
@@ -257,7 +257,7 @@ func TestLiveOpSucceeded(t *testing.T) {
 		{"Added 1 user(s) in total.", "Added", true},
 		{"result: ok\nAdded 1 user(s) in total.", "Added", true},
 		{"Added 12 user(s) in total.", "Added", true},
-		{"Added 0 user(s) in total.", "Added", false},                       // accepted nothing
+		{"Added 0 user(s) in total.", "Added", false},                             // accepted nothing
 		{"User alice already exists.\nAdded 0 user(s) in total.", "Added", false}, // per-user error, exit 0
 		{"Removed 1 user(s) in total.", "Removed", true},
 		{"Removed 0 user(s) in total.", "Removed", false},
@@ -265,7 +265,9 @@ func TestLiveOpSucceeded(t *testing.T) {
 		{"", "Added", false},
 	}
 	for _, c := range cases {
-		if got := liveOpSucceeded([]byte(c.out), c.verb); got != c.want {
+		// want=1: the single-inbound case these cases were written for. The
+		// multi-inbound threshold has its own test.
+		if got := liveOpSucceeded([]byte(c.out), c.verb, 1); got != c.want {
 			t.Errorf("liveOpSucceeded(%q, %q) = %v, want %v", c.out, c.verb, got, c.want)
 		}
 	}
