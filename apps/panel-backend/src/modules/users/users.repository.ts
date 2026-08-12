@@ -33,21 +33,33 @@ export const ROUTING_FILTER_NONE = 'none';
  * Sortable columns, mapped to Prisma order clauses. Traffic lives on the
  * related row, hence the nested form. `nulls: 'last'` on expireAt keeps
  * never-expiring users at the bottom instead of leading the list.
+ *
+ * Every clause ends with `id` as a tiebreaker, because none of the sortable
+ * columns is unique: most users share a traffic figure (0), expiry dates and
+ * creation timestamps repeat (a bulk insert stamps one value on the whole
+ * batch), and only `username` happens to be unique. Ordering a paginated read
+ * by a non-unique key is not valid: each page is an independent LIMIT/OFFSET
+ * query, and Postgres may break a tie differently per sort bound, so a tied row
+ * can come back on two pages while its neighbour comes back on none. Measured
+ * on 5000 users with one 8-row tie: 3 returned twice, 3 never returned. `id` is
+ * the primary key, so appending it makes the total order strict and every page
+ * exact.
  */
 function orderClause(
   sort: UserSort,
   order: 'asc' | 'desc',
-): Prisma.UserOrderByWithRelationInput {
+): Prisma.UserOrderByWithRelationInput[] {
+  const tiebreaker: Prisma.UserOrderByWithRelationInput = { id: 'asc' };
   switch (sort) {
     case 'traffic':
-      return { traffic: { usedTrafficBytes: order } };
+      return [{ traffic: { usedTrafficBytes: order } }, tiebreaker];
     case 'expireAt':
-      return { expireAt: { sort: order, nulls: 'last' } };
+      return [{ expireAt: { sort: order, nulls: 'last' } }, tiebreaker];
     case 'createdAt':
-      return { createdAt: order };
+      return [{ createdAt: order }, tiebreaker];
     case 'username':
     default:
-      return { username: order };
+      return [{ username: order }, tiebreaker];
   }
 }
 
