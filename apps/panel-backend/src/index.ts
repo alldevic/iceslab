@@ -8,6 +8,7 @@ import { registerUserEventHandlers } from './modules/users/users.events.js';
 import { registerNodeEventHandlers } from './modules/nodes/nodes.events.js';
 import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events.js';
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
+import { registerRemnawaveWebhookEmitter } from './modules/remnawave-compat/remnawave.webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
 import { startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
@@ -45,6 +46,9 @@ async function start() {
     registerNodeEventHandlers();
     registerInboundEventHandlers();
     registerWebhookEventHandlers();
+    // Remnawave-compat: emit user.expired to the minishop (no-op when the facade
+    // or its webhook url/secret are unset).
+    registerRemnawaveWebhookEmitter();
     // B6 - invalidate the /sub binding cache on profile/binding/node changes.
     registerBindingsCacheBust();
     nodeUsersWorker = startNodeUsersWorker();
@@ -60,6 +64,20 @@ async function start() {
     app.log.info('Redis connection verified');
     app.log.info('Event handlers registered');
     app.log.info('Workers started');
+
+    // Remnawave-compat: a half-configured webhook (only ONE of URL/SECRET set)
+    // makes every lifecycle webhook silently no-op — including the 24h auto-renew
+    // CHARGE trigger the minishop depends on — with no other signal. Surface it
+    // loudly at boot so the operator doesn't believe auto-renew is working.
+    if (config.REMNAWAVE_COMPAT_ENABLED) {
+      const hasUrl = !!config.REMNAWAVE_COMPAT_WEBHOOK_URL;
+      const hasSecret = !!config.REMNAWAVE_COMPAT_WEBHOOK_SECRET;
+      if (hasUrl !== hasSecret) {
+        app.log.warn(
+          `remnawave-compat: webhook is half-configured (${hasUrl ? 'URL set, SECRET missing' : 'SECRET set, URL missing'}) — ALL lifecycle webhooks incl. the 24h auto-renew charge trigger are DISABLED. Set BOTH REMNAWAVE_COMPAT_WEBHOOK_URL and REMNAWAVE_COMPAT_WEBHOOK_SECRET, or clear both.`,
+        );
+      }
+    }
 
     await registerCronJobs();
     app.log.info('Cron jobs registered');

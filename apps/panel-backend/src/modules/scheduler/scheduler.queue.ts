@@ -11,6 +11,7 @@ import {
 import { pollNodeStatuses, pollNodeMetrics } from '../nodes/nodes.cron.js';
 import { pollNodeStats } from '../stats/stats.cron.js';
 import { pruneHistory } from '../maintenance/retention.cron.js';
+import { scanRemnaExpiryNotifications } from '../remnawave-compat/remnawave.webhook.js';
 import { getLogger } from '../../lib/logger.js';
 
 // ───── Queue ─────
@@ -46,6 +47,7 @@ const CRON_JOBS: CronJobSpec[] = [
   { name: 'reconcile-orphan-users',         pattern: '*/10 * * * *' },   // каждые 10 минут - catch-up for status-flip crashes / dropped jobs
   { name: 'prune-history',                  pattern: '30 3 * * *' },     // 03:30 каждый день - B2 retention для append-only history-таблиц
   { name: 'alert-near-expiry',              pattern: '0 9 * * *'  },     // 09:00 каждый день - K3 near-expiry/near-cap дайджест в Telegram
+  { name: 'remnawave-expiry-notify',        pattern: '5 * * * *'  },     // :05 каждый час - Remnawave-compat expires-in-{72,48,24}h вебхуки (no-op если фасад/вебхук выкл)
 ];
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────
@@ -133,6 +135,11 @@ export function startCronTasksWorker(): Worker {
         case 'alert-near-expiry': {
           const n = await alertNearLimits();
           if (n > 0) getLogger().info(`[cron] alert-near-expiry - digest sent for ${n} user(s)`);
+          break;
+        }
+        case 'remnawave-expiry-notify': {
+          const n = await scanRemnaExpiryNotifications();
+          if (n > 0) getLogger().info(`[cron] remnawave-expiry-notify - emitted ${n} expiry webhook(s)`);
           break;
         }
         case 'prune-history': {

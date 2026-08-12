@@ -37,6 +37,8 @@ export interface PublicUserDto {
   tag: string | null;
   telegramId: string | null;        // BigInt → string
   email: string | null;
+  // Remnawave-compat: opaque external-squad id, echoed verbatim (passthrough).
+  externalSquadUuid: string | null;
 
   // Per-user enabled protocols (subset of {hysteria,xray,amneziawg,naive})
   enabledProtocols: string[];
@@ -93,6 +95,7 @@ export function mapUserToPublic(
     tag: user.tag,
     telegramId: user.telegramId !== null ? user.telegramId.toString() : null,
     email: user.email,
+    externalSquadUuid: user.externalSquadUuid,
 
     enabledProtocols: parseEnabledProtocols(user.enabledProtocols),
 

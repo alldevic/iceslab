@@ -32,6 +32,7 @@ import { settingsRoutes } from './modules/settings/settings.routes.js';
 import { bullBoardRoutes } from './modules/admin/bull-board.routes.js';
 import { systemRoutes } from './modules/system/system.routes.js';
 import { recipesRoutes } from './modules/recipes/recipes.routes.js';
+import { remnawaveCompatRoutes } from './modules/remnawave-compat/remnawave.routes.js';
 import { registerSecurityGate } from './lib/security-gate.js';
 import { registry as metricsRegistry, httpRequestDuration, routeLabel } from './lib/metrics.js';
 import { requireAuth } from './modules/auth/auth.hook.js';
@@ -268,6 +269,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(bullBoardRoutes);
   await app.register(systemRoutes);
   await app.register(recipesRoutes);
+
+  // Remnawave-compat facade (fork-only, OFF by default). Registered under a
+  // configurable prefix so its Remnawave-shaped /api/* routes don't collide
+  // with the native API. When disabled, nothing is mounted (the panel is
+  // byte-identical to upstream). See docs/remnawave-compat.md.
+  if (config.REMNAWAVE_COMPAT_ENABLED) {
+    await app.register(remnawaveCompatRoutes, {
+      prefix: `/${config.REMNAWAVE_COMPAT_PREFIX}`,
+    });
+  }
 
   return app;
 }

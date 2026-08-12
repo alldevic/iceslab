@@ -12,3 +12,18 @@ export const ALL_SQUAD_ID = '00000000-0000-0000-0000-000000000001';
 
 /** Display name shown in panel UI; matches the seeded row's `name` column. */
 export const ALL_SQUAD_NAME = 'All';
+
+/**
+ * Stable, well-known UUID for the remnawave-compat "no access" squad — a group
+ * with NO profiles, so its members get an empty subscription. The facade maps a
+ * Remnawave empty `activeInternalSquads` (zero squads = no access) onto this
+ * group instead of the native ALL fallback (which would grant full access).
+ * Created on demand (upsert-by-id) by the facade, and — like ALL — system-
+ * managed: squads.service refuses to modify or delete it, so its members can
+ * never be silently backstopped into ALL. A constant id (not a name lookup)
+ * keeps it refactor-safe and free of stale-cache / rename hazards.
+ */
+export const NO_ACCESS_SQUAD_ID = '00000000-0000-0000-0000-000000000002';
+
+/** Display name for the no-access squad row. */
+export const NO_ACCESS_SQUAD_NAME = 'No access (remnawave-compat)';

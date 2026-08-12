@@ -528,6 +528,12 @@ model User {
   telegramId  BigInt? @map("telegram_id")
   email       String? @db.VarChar(255)
 
+  // Remnawave-compat: opaque external-squad id passed through from the shop and
+  // echoed back verbatim on the user object (the minishop round-trip-verifies it
+  // and rolls back paid activations on mismatch). Not a FK, not validated, not
+  // queried — pure passthrough. NULL when the shop configures no external squad.
+  externalSquadUuid String? @map("external_squad_uuid") @db.VarChar(64)
+
   // Lifecycle
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -765,6 +771,13 @@ model HwidUserDevice {
   lastSeenAt   DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
   // Optional admin label ("Phone", "Laptop"), set via API later, NULL by default.
   label        String?  @db.VarChar(64)
+  // Remnawave-compat: client-reported device metadata, captured from the
+  // Remnawave subscription-client headers on /sub (x-device-os / x-ver-os /
+  // x-device-model / user-agent). All nullable — non-Remnawave clients omit them.
+  platform     String?  @map("platform")     @db.VarChar(64)
+  osVersion    String?  @map("os_version")    @db.VarChar(64)
+  deviceModel  String?  @map("device_model")  @db.VarChar(128)
+  userAgent    String?  @map("user_agent")    @db.Text
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

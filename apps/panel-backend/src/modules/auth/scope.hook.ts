@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { config } from '../../config.js';
 
 /**
  * Map an authenticated API-token request to the scope it requires. Returns null
@@ -25,6 +26,66 @@ export function requiredScopeFor(method: string, url: string | undefined): strin
   if (!resource) return null;
   const verb = method === 'GET' || method === 'HEAD' ? 'read' : 'write';
   return `${resource}:${verb}`;
+}
+
+/**
+ * Remnawave-compat facade routes live at `/<prefix>/api/<resource>/...` and use
+ * Remnawave resource names that don't map 1:1 to the native scope resources.
+ * This maps a facade route to the NATIVE scope a token must hold to reach it, so
+ * a scoped token is bound on the facade exactly as it is on `/api/*` (a
+ * dashboard:read-only token can NOT create/delete users via the facade). Returns
+ * null → default-deny. Kept next to requiredScopeFor so the two stay in sync.
+ */
+const COMPAT_SCOPE_RESOURCE: Record<string, string> = {
+  users: 'users',
+  'internal-squads': 'squads',
+  'external-squads': 'squads',
+  hwid: 'hwid-devices',
+  nodes: 'nodes',
+  hosts: 'hosts',
+  system: 'system',
+  'bandwidth-stats': 'system',
+  subscriptions: 'sub',
+  'subscription-page-configs': 'sub',
+  sub: 'sub',
+};
+
+export function requiredCompatScope(
+  method: string,
+  url: string | undefined,
+  prefix: string,
+): string | null {
+  const base = `/${prefix}/api/`;
+  if (!url || !url.startsWith(base)) return null;
+  const rest = url.slice(base.length);
+  const resource = rest.split('/')[0];
+  const native = resource ? COMPAT_SCOPE_RESOURCE[resource] : undefined;
+  if (!native) return null;
+  // Squad bulk-actions (add-/remove-users) rewrite a USER's group membership
+  // (that user's access), which native gates behind users:write via PATCH
+  // /api/users — not a squad-row op. Require users:write for parity, so a
+  // squads:write-only token can't silently alter arbitrary users' access.
+  if (native === 'squads' && url.includes('/bulk-actions/')) return 'users:write';
+  // Per-user analytics (/bandwidth-stats/users/:uuid and
+  // /bandwidth-stats/nodes/:uuid/users) return user identity + usage — that is
+  // users:read data, NOT system:read (which natively grants only the version
+  // string). Bind them to users:read so a system/dashboard-scoped monitoring
+  // token can't enumerate per-user PII (usernames + traffic).
+  if (resource === 'bandwidth-stats' && (rest.includes('/users/') || rest.endsWith('/users'))) {
+    return 'users:read';
+  }
+  // Aggregate analytics (/system/stats* and /bandwidth-stats top-level) are
+  // dashboard-level; native puts the equivalent overview behind dashboard:read.
+  // So a bare system:read token — which natively sees only the version — cannot
+  // read panel-wide stats through the facade either.
+  if (resource === 'system' && rest.startsWith('system/stats')) return 'dashboard:read';
+  if (resource === 'bandwidth-stats') return 'dashboard:read';
+  // The facade's only remaining `system` route is the happ-encrypt probe, which
+  // always 404s (feature disabled) and does nothing privileged. Treat facade
+  // `system` routes as read so a least-privilege token (system:read) reaches
+  // them and gets the intended 404 instead of a 403.
+  const verb = native === 'system' || method === 'GET' || method === 'HEAD' ? 'read' : 'write';
+  return `${native}:${verb}`;
 }
 
 /**
@@ -90,7 +151,36 @@ export async function enforceScopes(
   const scopes = token.scopes;
   if (scopes.length === 0 || scopes.includes('*')) return; // full / legacy token
 
-  const required = requiredScopeFor(request.method, request.routeOptions?.url);
+  // The remnawave-compat facade (/<prefix>/api/*) uses Remnawave resource names
+  // that don't match the native <resource>:<verb> convention, so requiredScopeFor
+  // would return null (→ default-deny) and lock the intended facade token out.
+  // Map each facade route to the equivalent NATIVE scope and enforce THAT, so a
+  // scoped token is bound on the facade exactly as on /api/* — a token without
+  // users:write can't create/delete users through the facade either. No-op unless
+  // the facade is enabled.
+  const routeUrl = request.routeOptions?.url;
+  if (
+    config.REMNAWAVE_COMPAT_ENABLED &&
+    routeUrl &&
+    routeUrl.startsWith(`/${config.REMNAWAVE_COMPAT_PREFIX}/`)
+  ) {
+    const requiredCompat = requiredCompatScope(
+      request.method,
+      routeUrl,
+      config.REMNAWAVE_COMPAT_PREFIX,
+    );
+    if (!requiredCompat || !scopes.includes(requiredCompat)) {
+      return reply.code(403).send({
+        error: 'FORBIDDEN',
+        message: requiredCompat
+          ? `API token is missing the required scope (${requiredCompat}) for this facade route`
+          : 'API token scope does not grant access to this facade route',
+      });
+    }
+    return;
+  }
+
+  const required = requiredScopeFor(request.method, routeUrl);
   if (!required || !scopes.includes(required)) {
     return reply.code(403).send({
       error: 'FORBIDDEN',

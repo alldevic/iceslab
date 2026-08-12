@@ -230,6 +230,35 @@ export const ConfigSchema = z.object({
             .filter((s) => s.length >= 8 && s.length <= 128)
         : [],
     ),
+
+  // ───── Remnawave-compat facade (fork-only, off by default) ─────
+  // Mounts a Remnawave-API-shaped read/write facade at /<prefix>/api/* so an
+  // UNMODIFIED remnawave-minishop can drive this panel (its PANEL_API_URL points
+  // at the prefix). OFF by default → the routes are never registered, so the
+  // panel is byte-identical to upstream when disabled. See docs/remnawave-compat.md.
+  REMNAWAVE_COMPAT_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // Mount prefix; routes live at /<prefix>/api/*. Must be a single URL segment
+  // (no slashes) and never 'api' — that would collide with the native API.
+  REMNAWAVE_COMPAT_PREFIX: z
+    .string()
+    .default('rw')
+    .refine((s) => /^[a-zA-Z0-9_-]+$/.test(s) && s !== 'api', {
+      message: 'REMNAWAVE_COMPAT_PREFIX must be a single URL segment and not "api"',
+    }),
+  // Phase-2 webhook emitter: target (minishop's <WEBHOOK_BASE_URL>/webhook/panel)
+  // and the HMAC-SHA256 secret (= minishop PANEL_WEBHOOK_SECRET). Either empty →
+  // emitter disabled.
+  REMNAWAVE_COMPAT_WEBHOOK_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
+  REMNAWAVE_COMPAT_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

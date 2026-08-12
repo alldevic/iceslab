@@ -50,13 +50,33 @@ function toBigIntOrNull(value: number | string | null | undefined): bigint | nul
   return value != null ? BigInt(value) : null;
 }
 
+/**
+ * True only for a P2002 raised by the USERNAME uniqueness index. createUser
+ * writes nested rows too (group_members has a composite PK), so a blanket
+ * "P2002 means the username is taken" turned an unrelated collision into a
+ * bogus 409 "user already exists" for a username that did not exist — a
+ * dead-end for the caller, who then looks it up and gets 404. Inspect the
+ * violated target and let anything else propagate as itself.
+ */
 function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code?: string }).code === 'P2002'
-  );
+  if (typeof err !== 'object' || err === null || !('code' in err)) return false;
+  if ((err as { code?: string }).code !== 'P2002') return false;
+  // WHERE the violated column is reported depends on the Prisma driver: the Rust
+  // engine fills `meta.target`, while the pg driver adapter this project uses
+  // leaves `target` undefined and puts it under
+  // `meta.driverAdapterError.cause.constraint.fields` (plus the constraint name
+  // in `originalMessage`, here the partial index `users_username_active_key`).
+  // Serialise the whole `meta` and look for the column so the check holds across
+  // both shapes — matching only one of them silently turns a real 409 into a 500.
+  // The other unique write in createUser is the group_members composite PK,
+  // whose meta never mentions `username`, so this stays precise.
+  let meta = '';
+  try {
+    meta = JSON.stringify((err as { meta?: unknown }).meta ?? '');
+  } catch {
+    meta = '';
+  }
+  return meta.includes('username');
 }
 
 // ───── Service methods ─────
@@ -94,7 +114,11 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       amneziawgPrivateKey: creds.amneziawgPrivateKey,
       amneziawgPublicKey:  creds.amneziawgPublicKey,
 
-      trafficLimitBytes:    gbToBytes(input.trafficLimitGb),
+      // Byte-precise limit (Remnawave-compat facade) wins over the whole-GiB
+      // trafficLimitGb, so a byte-exact limit round-trips unquantized.
+      trafficLimitBytes:    input.trafficLimitBytes !== undefined
+        ? toBigIntOrNull(input.trafficLimitBytes)
+        : gbToBytes(input.trafficLimitGb),
       trafficLimitStrategy: input.trafficLimitStrategy,
       // An absolute instant wins over a relative span: expireAt is a fact being
       // transferred from another panel, expireDays is a convenience for humans
@@ -115,6 +139,7 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       tag:             input.tag ?? null,
       telegramId:      toBigIntOrNull(input.telegramId),
       email:           input.email ?? null,
+      externalSquadUuid: input.externalSquadUuid ?? null,
 
       enabledProtocols: input.enabledProtocols,
 
@@ -189,7 +214,12 @@ export async function updateUser(
     data.status = input.status;
     changedFields.push('status');
   }
-  if (input.trafficLimitGb !== undefined) {
+  // Byte-precise limit (Remnawave-compat facade) wins over whole-GiB, so a
+  // byte-exact limit round-trips unquantized (the shop exact-int-verifies it).
+  if (input.trafficLimitBytes !== undefined) {
+    data.trafficLimitBytes = toBigIntOrNull(input.trafficLimitBytes);
+    changedFields.push('trafficLimitBytes');
+  } else if (input.trafficLimitGb !== undefined) {
     data.trafficLimitBytes = gbToBytes(input.trafficLimitGb);
     changedFields.push('trafficLimitBytes');
   }
@@ -226,6 +256,11 @@ export async function updateUser(
     data.email = input.email;
     changedFields.push('email');
   }
+  if (input.externalSquadUuid !== undefined) {
+    // Remnawave-compat passthrough; null clears it.
+    data.externalSquadUuid = input.externalSquadUuid ?? null;
+    changedFields.push('externalSquadUuid');
+  }
   if (input.groupIds !== undefined) {
     // Mirror createUser's fallback: an empty groupIds means "no squads picked",
     // but deleteMany + create:[] would leave the user in zero groups and their
@@ -243,7 +278,24 @@ export async function updateUser(
     changedFields.push('enabledProtocols');
   }
 
-  const updated = await repo.updateById(id, data);
+  // A groupIds rewrite is `deleteMany + create`. Two concurrent rewrites for the
+  // same user interleave as delete/delete/create/create and the loser hits the
+  // group_members composite PK (P2002) — surfacing as a 500 for a write whose
+  // desired end-state is identical and already achieved. The operation is
+  // idempotent (set membership to X), so retry once: the retry re-runs
+  // deleteMany against the now-committed state and succeeds.
+  let updated;
+  try {
+    updated = await repo.updateById(id, data);
+  } catch (err) {
+    const isGroupMemberConflict =
+      data.groupMembers !== undefined &&
+      typeof err === 'object' &&
+      err !== null &&
+      (err as { code?: string }).code === 'P2002';
+    if (!isGroupMemberConflict) throw err;
+    updated = await repo.updateById(id, data);
+  }
 
   if (changedFields.length > 0) {
     eventBus.emit('user.updated', {
