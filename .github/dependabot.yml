@@ -6,33 +6,44 @@ version: 2
 # gate caught on 2026-08-08 had been sitting in the lockfile for a while. Both
 # are the same failure mode - nobody re-reads dependency versions on a schedule.
 #
-# Weekly rather than daily, and grouped rather than one PR per package: a flood
-# of pull requests gets ignored wholesale, which is worse than none at all.
+# Monthly rather than weekly, grouped rather than one PR per package, and no
+# major bumps at all. The first run proved the point: four majors arrived at
+# once, three of them red, on top of the two grouped PRs that were green. A
+# flood gets ignored wholesale, which is worse than none at all.
+#
+# Skipping majors is safe HERE specifically because CI already runs
+# `pnpm audit --audit-level high` and fails on it, so a real advisory stops the
+# build whether or not a bot opened a PR for it. What is left for this file is
+# routine drift, and drift does not need a major version bump: those are a
+# deliberate decision (a typescript or i18n major changes how we write code),
+# taken when we choose to, not when a bot notices.
 updates:
   # The workflow actions themselves. Cheapest to keep current and the most
   # likely to break loudly, since a removed runtime fails every job at once.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       actions:
         patterns: ['*']
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     commit-message:
       prefix: ci
 
-  # The pnpm workspace. Grouped by risk: patch and minor land together and are
-  # usually safe to merge on green CI, majors come one at a time because they
-  # need reading.
+  # The pnpm workspace. One grouped PR of patch and minor updates, usually safe
+  # to merge on green CI. Majors are ignored on purpose, see the header.
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       minor-and-patch:
         update-types: [minor, patch]
-    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
 
@@ -41,10 +52,13 @@ updates:
   - package-ecosystem: gomod
     directory: /apps/node
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       go:
         patterns: ['*']
-    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
