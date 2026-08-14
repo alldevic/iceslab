@@ -3,6 +3,15 @@
 All notable changes to Iceslab are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags.
 
+## Unreleased
+
+### Fixed
+
+- **The hosts screen shows how many people reach a host, not how many
+  memberships.** It now reads the count v0.2.0 added to the API instead of
+  summing each squad's member count, which reported one person in two squads as
+  two. The page also stops fetching the squad list it no longer needs.
+
 ## v0.2.0
 
 The operator release. Iceslab gains the API surface another program needs to
@@ -106,10 +115,12 @@ Field-verified against a seven-node fleet.
   who would rather a leaked subscription expose a slice of their entry surface
   than all of it can set it. `0`, the default, means no cap.
 
-- **Host reach counts people, not memberships.** The hosts screen reported
-  "N users reach it" by summing each squad's member count, so one person in two
-  squads read as two. The count now comes from the API, deduplicated, and
-  respects squad narrowing.
+- **The API reports host reach as people, not memberships.** `GET /api/hosts`
+  now returns, per host, how many squads hand it out and how many DISTINCT
+  people that is, honouring squad narrowing. The hosts screen was adding up each
+  squad's member count, which read one person in two squads as two people; it
+  cannot be fixed there, since the squad list carries totals rather than user
+  ids. The screen switches to this in the next release.
 
 - **A node that stops answering leaves the subscription, after a grace period.**
   Ninety seconds, three failed polls: long enough that a blip changes nothing,

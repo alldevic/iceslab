@@ -27,7 +27,6 @@ import {
   listHosts,
   listNodes,
   listProfiles,
-  listSquads,
 } from '../lib/api';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { COUNTRIES } from '../lib/countries';
@@ -70,23 +69,17 @@ export function HostsPage() {
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
   const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
-  const squadsQuery = useQuery({ queryKey: ['squads'], queryFn: listSquads });
 
   const rows = useMemo(() => {
     const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
     const nodeById = new Map((nodesQuery.data?.nodes ?? []).map((n) => [n.id, n]));
     const profileById = new Map((profilesQuery.data?.profiles ?? []).map((p) => [p.id, p]));
-    const squads = squadsQuery.data?.squads ?? [];
 
     return (hostsQuery.data?.hosts ?? [])
       .map((h) => {
         const binding = bindingById.get(h.bindingId);
         const node = binding ? nodeById.get(binding.nodeId) : undefined;
         const profile = binding ? profileById.get(binding.profileId) : undefined;
-        // Reach: squads holding this host's profile, and everyone inside them.
-        const holders = binding
-          ? squads.filter((s) => s.profileIds.includes(binding.profileId))
-          : [];
         return {
           host: h,
           profile,
@@ -100,8 +93,12 @@ export function HostsPage() {
           port: h.portOverride ?? binding?.publicPort ?? binding?.port ?? null,
           address: h.addressOverride ?? binding?.publicHost ?? null,
           countryCode: node?.countryCode ? node.countryCode.toUpperCase() : null,
-          squadCount: holders.length,
-          userCount: holders.reduce((sum, s) => sum + s.memberCount, 0),
+          // Reach comes from the API. It used to be worked out here by adding up
+          // each squad's member count, which counted one person in two squads
+          // twice, and cannot be fixed here: the squad list carries totals, not
+          // user ids, so there is nothing to deduplicate against.
+          squadCount: h.reach?.squads ?? 0,
+          userCount: h.reach?.users ?? 0,
         };
       })
       .filter((r) => {
@@ -118,7 +115,6 @@ export function HostsPage() {
     bindingsQuery.data,
     nodesQuery.data,
     profilesQuery.data,
-    squadsQuery.data,
     search,
     country,
   ]);

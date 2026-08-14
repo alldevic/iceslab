@@ -1539,6 +1539,16 @@ export type Fingerprint =
 export interface Host {
   id: string;
   bindingId: string;
+  /**
+   * Squads that hand this host out, and how many DISTINCT people that is.
+   * Present on the list endpoint only.
+   *
+   * Counted server-side on purpose: one person can be in several squads, and
+   * the squad list carries member counts rather than user ids, so there is
+   * nothing here to deduplicate against. Adding them up read one person in two
+   * squads as two people.
+   */
+  reach?: { squads: number; users: number };
   remark: string;
   priority: number;
   enabled: boolean;
