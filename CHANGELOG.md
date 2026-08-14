@@ -12,6 +12,17 @@ All notable changes to Iceslab are documented here. Format loosely follows
   summing each squad's member count, which reported one person in two squads as
   two. The page also stops fetching the squad list it no longer needs.
 
+- **A mistyped install-time email no longer costs eleven minutes and says
+  nothing.** The installer's ACME address check accepted any non-space
+  characters around the `@`, so a single Cyrillic letter (one unswitched
+  keyboard layout) passed it, went into `.env.production`, and the panel then
+  refused to boot on it at step 9 of 9. All the operator saw was "container is
+  unhealthy" plus a tail of the installer's own output, which named nothing.
+
+  The check is now ASCII-only, matching what the panel accepts, and says to look
+  at the keyboard layout. When the stack still fails to come up, the installer
+  prints the backend's own log, where the reason is one line.
+
 ## v0.2.0
 
 The operator release. Iceslab gains the API surface another program needs to

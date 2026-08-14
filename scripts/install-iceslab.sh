@@ -237,11 +237,18 @@ if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
   read -r ACME_DEFAULT_EMAIL </dev/tty || ACME_DEFAULT_EMAIL=""
 
   if [[ -n "$ACME_DEFAULT_EMAIL" ]]; then
-    # Loose email check: must contain `@` and a `.` after it. Catches typos /
-    # pasted strings with no dot in the TLD. LE itself rejects @example.com /
-    # @example.net / @example.org as forbidden test domains.
-    if [[ ! "$ACME_DEFAULT_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+    # ASCII-only on purpose, and this has to stay in step with what the panel
+    # accepts. The old check was `[^@[:space:]]+@...`, which happily took a
+    # Cyrillic character: caught live 2026-08-10, an operator whose keyboard
+    # layout had not switched yet typed one Russian letter into the address.
+    # The installer accepted it, wrote it to .env.production, and the panel then
+    # refused to boot on it eleven minutes later, at step 9 of 9, reported as
+    # "container is unhealthy". Reject it here, where the operator can just
+    # retype it.
+    if [[ ! "$ACME_DEFAULT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
       printf '\033[1;31m"%s" не похож на email. Установка прервана.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
+      printf '\033[1;33mПроверь раскладку: одна русская буква в адресе выглядит\n' >&2
+      printf 'как латинская, но панель такой адрес не примет.\033[0m\n' >&2
       exit 1
     fi
     if [[ "$ACME_DEFAULT_EMAIL" =~ @(example\.com|example\.net|example\.org)$ ]]; then
@@ -556,7 +563,18 @@ step "Database migrations"
 docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" run --rm migrate
 
 step "Launch stack + health check"
-docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" up -d
+# Show the backend's own log when the stack refuses to come up. Without this the
+# operator gets "container is unhealthy" plus a tail of THIS script's output,
+# which says nothing about the cause: the reason is inside the container, and it
+# is usually one line. Caught live 2026-08-10, where a single mistyped character
+# in the ACME email failed config validation and the install ended in eleven
+# minutes of build followed by a message naming nothing.
+if ! docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" up -d; then
+  printf '\n\033[1;31mThe stack did not come up. The backend says:\033[0m\n' >&2
+  docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" logs --tail 30 backend >&2 || true
+  printf '\n' >&2
+  fail "docker compose up failed, see the backend log above"
+fi
 for i in $(seq 1 60); do
   if docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
        wget -qO- http://127.0.0.1:3000/health 2>/dev/null | grep -q '"status":"ok"'; then
@@ -565,8 +583,9 @@ for i in $(seq 1 60); do
   fi
   sleep 1
   if [[ $i -eq 60 ]]; then
-    warn "Backend didn't reach /health within 60s, check logs:"
-    warn "  docker compose -f $ICESLAB_DIR/docker-compose.prod.yml logs backend"
+    warn "Backend didn't reach /health within 60s. Its log:"
+    docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" logs --tail 30 backend >&2 || true
+    warn "Full log: docker compose -f $ICESLAB_DIR/docker-compose.prod.yml logs backend"
   fi
 done
 
