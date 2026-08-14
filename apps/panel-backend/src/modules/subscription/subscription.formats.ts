@@ -70,7 +70,19 @@ export function encodePlainList(uris: string[]): string {
 
 interface SubscriptionEndpointBase {
   protocol: ProtocolName;
+  /**
+   * DISPLAY LABEL, not the node's name, whatever the field is called: it is
+   * built by `subscriptionServerName` out of the flag, the host remark and the
+   * node name, and a cascade entry emits several endpoints carrying different
+   * labels off one node. Never join on it. `nodeId` below is the join key.
+   */
   nodeName: string;
+  /**
+   * Node this endpoint is served from. Added 2026-07-31: the admin endpoints
+   * view needed to show which of them are live, and the only other field that
+   * looked like an identity was the label above, which is not one.
+   */
+  nodeId: string;
   /** Public host the client connects to (no port). */
   host: string;
   /** Public port the client connects to. */
@@ -101,6 +113,19 @@ interface SubscriptionEndpointBase {
    *  handler filters by this before invoking the format-specific formatter,
    *  so each formatter can stay format-agnostic. */
   disableForFormats?: string[];
+
+  // ───── A4: route-profiles (exit x policy selection) ─────────────────
+  /** When this endpoint's node is the ENTRY of an enabled balancer cascade, the
+   *  route-PROFILES a user may pick there = (allowed exit) x (plain OR a granted
+   *  ad-split policy). buildXrayJsonArray / expandEndpointUris expand one such
+   *  endpoint into one standalone config per profile: same entry host, UUID bytes
+   *  7-8 set to the profile's `tag` (xray reads them as `vlessRoute`, auth ignores
+   *  them), remark = `label`. `tag` is computed by routeTag(policyOrdinal,
+   *  exitIndex) so the entry node's routing rules and this UUID agree. `label` is
+   *  the exit name (plain) or `exit · policy` (ad-split). Empty/undefined = a
+   *  single plain config (the pre-A4 behaviour, non-balancer-entry endpoints).
+   *  Only the xrayjson-array + plain formats consume this. */
+  cascadeExits?: { label: string; tag: number }[];
 }
 
 export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {

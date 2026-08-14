@@ -1,0 +1,15 @@
+-- 2026-08-04: per-node core restart tally reported by the agent in /healthz and
+-- refreshed by the status poller. Shape:
+--   { total, crash, memory, lastAt?, lastReason?, memoryLimitBytes?, rssBytes?,
+--     observedAt }
+-- Json because it is diagnostic data whose shape will grow (other cores) and
+-- nothing queries inside it.
+--
+-- Context: the agent now restarts xray when its RSS crosses a ceiling, instead
+-- of waiting for the kernel OOM killer. A restart drops live connections, so
+-- the count has to be visible - otherwise the core bounces silently and the
+-- panel keeps showing a healthy node.
+--
+-- Non-breaking: existing rows stay NULL, which readers must treat as "not
+-- reported yet", not as zero restarts.
+ALTER TABLE "nodes" ADD COLUMN "core_restarts" JSONB;

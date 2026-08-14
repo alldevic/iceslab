@@ -7,16 +7,24 @@
 # a 2 GB box). The build-based docker-compose.prod.yml is unchanged and still
 # the default; this file is opt-in.
 #
-# Pick the version with ICESLAB_IMAGE_TAG (a published tag: `main`, `v0.1.5`,
-# or `sha-<7c>`); defaults to `main`. CI publishes these on every main push and
-# every v* tag (see .github/workflows/ci.yml).
+# Pick the version with ICESLAB_IMAGE_TAG (a published tag: `main`, `develop`,
+# `v0.1.5`, or `sha-<7c>`); defaults to `main`. CI publishes on every push to
+# main or develop and on every v* tag (see .github/workflows/ci.yml).
+#
+#   main     - released, what the public gets
+#   develop  - integration branch, what the test server runs
+#   v*       - a frozen release
+#
+# The packages are PRIVATE, so the host needs credentials before the first
+# pull, even though the repository itself is public:
+#   echo <PAT-with-read:packages> | docker login ghcr.io -u <github-user> --password-stdin
 #
 # Usage:
-#   ICESLAB_IMAGE_TAG=v0.1.5 docker compose -f docker-compose.ghcr.yml \
+#   ICESLAB_IMAGE_TAG=develop docker compose -f docker-compose.ghcr.yml \
 #     --env-file .env.production pull
-#   ICESLAB_IMAGE_TAG=v0.1.5 docker compose -f docker-compose.ghcr.yml \
+#   ICESLAB_IMAGE_TAG=develop docker compose -f docker-compose.ghcr.yml \
 #     --env-file .env.production run --rm migrate
-#   ICESLAB_IMAGE_TAG=v0.1.5 docker compose -f docker-compose.ghcr.yml \
+#   ICESLAB_IMAGE_TAG=develop docker compose -f docker-compose.ghcr.yml \
 #     --env-file .env.production up -d
 
 services:
@@ -125,7 +133,10 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      # Loopback by default. See the long note on the same line in
+      # docker-compose.prod.yml: ufw cannot gate a docker-published port, so the
+      # bind address is the only thing keeping the admin UI off the internet.
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
     restart: unless-stopped
 
 volumes:

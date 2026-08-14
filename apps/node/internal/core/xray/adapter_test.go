@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
@@ -118,12 +119,12 @@ func newTestAdapter(t *testing.T) (*Adapter, string) {
 // + decryption. A wrong shape would make every live add silently fall back to a
 // restart, so this is the high-value guard for N1.
 func TestN1_BuildAduInbound_VLESS(t *testing.T) {
-	data, err := buildAduInbound(
-		InboundConfig{Subprotocol: "vless"},
+	data, err := buildAduPayload(
+		[]InboundConfig{{Subprotocol: "vless"}},
 		xrayClient{ID: "uuid-a", Email: "alice", Flow: "xtls-rprx-vision"},
 	)
 	if err != nil {
-		t.Fatalf("buildAduInbound: %v", err)
+		t.Fatalf("buildAduPayload: %v", err)
 	}
 	// adu input must be a full config with a top-level "inbounds" array.
 	var doc struct {
@@ -176,12 +177,12 @@ func TestN1_BuildAduInbound_VLESS(t *testing.T) {
 // TestN1_BuildAduInbound_Trojan verifies the Trojan shape: clients use
 // `password` (not `id`) and respect a custom tag.
 func TestN1_BuildAduInbound_Trojan(t *testing.T) {
-	data, err := buildAduInbound(
-		InboundConfig{Subprotocol: "trojan", Tag: "trojan-in"},
+	data, err := buildAduPayload(
+		[]InboundConfig{{Subprotocol: "trojan", Tag: "trojan-in"}},
 		xrayClient{ID: "secret-pass", Email: "bob"},
 	)
 	if err != nil {
-		t.Fatalf("buildAduInbound: %v", err)
+		t.Fatalf("buildAduPayload: %v", err)
 	}
 	// adu input must be a full config with a top-level "inbounds" array.
 	var doc struct {
@@ -218,12 +219,12 @@ func TestN1_BuildAduInbound_Trojan(t *testing.T) {
 // render. An 8443 REALITY inbound whose adu payload dropped the port would
 // re-validate as AnyIP-no-port and fall back to a restart on every add.
 func TestN1_BuildAduInbound_PropagatesListenPort(t *testing.T) {
-	data, err := buildAduInbound(
-		InboundConfig{Subprotocol: "vless", ListenHost: "10.0.0.5", ListenPort: 8443},
+	data, err := buildAduPayload(
+		[]InboundConfig{{Subprotocol: "vless", ListenHost: "10.0.0.5", ListenPort: 8443}},
 		xrayClient{ID: "uuid-a", Email: "alice"},
 	)
 	if err != nil {
-		t.Fatalf("buildAduInbound: %v", err)
+		t.Fatalf("buildAduPayload: %v", err)
 	}
 	var doc struct {
 		Inbounds []struct {
@@ -256,7 +257,7 @@ func TestLiveOpSucceeded(t *testing.T) {
 		{"Added 1 user(s) in total.", "Added", true},
 		{"result: ok\nAdded 1 user(s) in total.", "Added", true},
 		{"Added 12 user(s) in total.", "Added", true},
-		{"Added 0 user(s) in total.", "Added", false},                       // accepted nothing
+		{"Added 0 user(s) in total.", "Added", false},                             // accepted nothing
 		{"User alice already exists.\nAdded 0 user(s) in total.", "Added", false}, // per-user error, exit 0
 		{"Removed 1 user(s) in total.", "Removed", true},
 		{"Removed 0 user(s) in total.", "Removed", false},
@@ -264,7 +265,9 @@ func TestLiveOpSucceeded(t *testing.T) {
 		{"", "Added", false},
 	}
 	for _, c := range cases {
-		if got := liveOpSucceeded([]byte(c.out), c.verb); got != c.want {
+		// want=1: the single-inbound case these cases were written for. The
+		// multi-inbound threshold has its own test.
+		if got := liveOpSucceeded([]byte(c.out), c.verb, 1); got != c.want {
 			t.Errorf("liveOpSucceeded(%q, %q) = %v, want %v", c.out, c.verb, got, c.want)
 		}
 	}
@@ -297,10 +300,97 @@ func TestN1_LiveAdd_FallsBackWhenAduAddsNobody(t *testing.T) {
 	}
 }
 
+// TestRestartStatsReporting covers what the panel puts on the node card: the
+// tally must be split by cause, carry the reason of the last one, and be dated
+// via SinceAt (a bare "3 restarts" can't be read without knowing since when).
+func TestRestartStatsReporting(t *testing.T) {
+	a, _ := newTestAdapter(t)
+
+	st := a.RestartStats()
+	if st.Crash != 0 || st.Memory != 0 {
+		t.Errorf("fresh adapter: got crash=%d memory=%d, want 0/0", st.Crash, st.Memory)
+	}
+	if st.SinceAt.IsZero() {
+		t.Error("SinceAt must be stamped at construction, else the counters can't be dated")
+	}
+	if !st.LastAt.IsZero() || st.LastReason != "" {
+		t.Errorf("fresh adapter must report no last restart, got %v / %q", st.LastAt, st.LastReason)
+	}
+
+	at := time.Now()
+	a.recordRestart(subprocess.RestartEvent{Reason: subprocess.RestartReasonCrash, At: at})
+	a.recordRestart(subprocess.RestartEvent{Reason: subprocess.RestartReasonMemory, At: at})
+
+	st = a.RestartStats()
+	if st.Crash != 1 || st.Memory != 1 {
+		t.Errorf("after one of each: got crash=%d memory=%d, want 1/1", st.Crash, st.Memory)
+	}
+	// Causes are counted separately on purpose: rising `crash` is a bug to
+	// chase, rising `memory` is the watchdog working as intended.
+	if st.LastReason != string(subprocess.RestartReasonMemory) {
+		t.Errorf("LastReason: got %q, want %q", st.LastReason, subprocess.RestartReasonMemory)
+	}
+	if !st.LastAt.Equal(at) {
+		t.Errorf("LastAt: got %v, want %v", st.LastAt, at)
+	}
+}
+
 func TestNameMatchesProtocol(t *testing.T) {
 	a, _ := newTestAdapter(t)
 	if a.Name() != Name {
 		t.Errorf("Name: got %q want %q", a.Name(), Name)
+	}
+}
+
+// T7: parseXrayVersion pulls the semver from `xray version`'s first line.
+func TestParseXrayVersion(t *testing.T) {
+	cases := map[string]string{
+		"Xray 26.3.27 (Xray, Penetrates Everything.) d2758a0 (go1.26.1)\nA unified platform.": "26.3.27",
+		"Xray 25.9.5 (Xray) abc": "25.9.5",
+		"xray 1.8.4 (foo)":       "1.8.4",
+		"":                       "",
+		"garbage output here":    "",
+		"NotXray 26.0.0":         "",
+	}
+	for in, want := range cases {
+		if got := parseXrayVersion([]byte(in)); got != want {
+			t.Errorf("parseXrayVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// T7: CoreVersion queries `xray version` once, caches the result, and reports
+// empty in config-only mode without forking.
+func TestCoreVersionCachesAndParses(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	calls := 0
+	a := New(Config{
+		BinaryPath: "/usr/bin/xray",
+		Inbound:    validInbound(),
+		RunCmd: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			calls++
+			if len(args) != 1 || args[0] != "version" {
+				t.Errorf("expected `xray version`, got args %v", args)
+			}
+			return []byte("Xray 26.3.27 (Xray) hash\n"), nil
+		},
+	}, logger)
+	if got := a.CoreVersion(); got != "26.3.27" {
+		t.Fatalf("CoreVersion = %q, want 26.3.27", got)
+	}
+	if got := a.CoreVersion(); got != "26.3.27" {
+		t.Fatalf("CoreVersion (cached) = %q, want 26.3.27", got)
+	}
+	if calls != 1 {
+		t.Errorf("expected version query to fork once (cached), got %d", calls)
+	}
+}
+
+func TestCoreVersionConfigOnlyEmpty(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	a := New(Config{Inbound: validInbound()}, logger) // no BinaryPath
+	if got := a.CoreVersion(); got != "" {
+		t.Fatalf("CoreVersion (config-only) = %q, want empty", got)
 	}
 }
 

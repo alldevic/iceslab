@@ -105,6 +105,21 @@ export interface InboundDto {
 }
 
 export interface XrayInboundCfg {
+  /**
+   * Identity of THIS inbound, so the agent can hold several at once.
+   *
+   * Rides inside the config rather than as an argument because `ApplyInbound`
+   * is shared by all seven core adapters: widening its signature to carry an id
+   * would touch every one of them for the benefit of a single core.
+   *
+   * The agent keys its stored inbounds on this. It must stay stable for the
+   * life of the inbound: traffic counters are tagged with it, so a changed id
+   * reads as a brand-new inbound and zeroes the accounting on that node.
+   *
+   * Optional for now: an agent from before multi-inbound ignores it, and a
+   * panel that omits it keeps the old single-inbound behaviour.
+   */
+  inboundId?: string;
   /** Stream security. 'reality' (default), 'none' (plain transport, for
    *  ws/httpupgrade behind a CDN that terminates TLS, or local testing), or
    *  'tls' (node-terminated TLS with an operator-supplied certificate). The
@@ -401,9 +416,88 @@ export interface GetStatsResponse {
 
 // ───── GET /healthz ─────
 
+/**
+ * Per-core restart tally (2026-08-04). Reported only by cores that supervise a
+ * real subprocess, and only by agents from 2026-08 onward.
+ *
+ * ⚠ Absent means "not reported", NOT "zero restarts". The panel must keep its
+ * stored value when this is missing, the same way it does for `version`.
+ *
+ * Why it exists: the agent restarts a core once its memory crosses a ceiling,
+ * before the kernel OOM-kills it. A restart drops live connections, so without
+ * a visible counter the panel would show a healthy green node while users
+ * complain about drops.
+ */
+export type CoreRestartReason = 'crash' | 'memory';
+
+export interface CoreRestarts {
+  /** Which core these numbers belong to ("xray", ...). Present so a reader
+   *  never infers it from the node's protocol: today only xray arms the
+   *  watchdog, but the mechanism is core-agnostic. */
+  core: string;
+  /** crash + memory, sent explicitly rather than derived: a future third cause
+   *  would keep this right while crash+memory quietly stopped adding up. */
+  total: number;
+  /** Died on its own. A rising number here is a bug, not maintenance. */
+  crash: number;
+  /** Watchdog acted before an OOM. Rising here means the ceiling is doing its
+   *  job (or is set too low). */
+  memory: number;
+  /** RFC3339. Absent until something has restarted. */
+  lastAt?: string;
+  lastReason?: CoreRestartReason;
+  /** RFC3339 instant the agent started counting. Counters live in the agent's
+   *  memory and reset when it restarts, so without this "3 restarts" cannot be
+   *  dated: it could be this morning or six months ago. */
+  sinceAt?: string;
+  /** Armed ceiling in bytes; absent = watchdog off. Never sent as 0. */
+  memoryLimitBytes?: number;
+  /** Latest resident-size sample in bytes; absent = not sampled (or the
+   *  platform can't read it). Shown next to the ceiling so an operator sees
+   *  how close a core runs, not just how often it crossed. Never sent as 0. */
+  rssBytes?: number;
+}
+
+/**
+ * What the PANEL stores and serves on the node DTO: the agent's tally plus the
+ * panel's own freshness stamp. Single definition on purpose - panel-backend's
+ * mapper and panel-frontend's api client both import this one, so the contract
+ * can't drift between three copies.
+ */
+export interface NodeCoreRestarts extends CoreRestarts {
+  /**
+   * RFC3339 instant of the poll these numbers came from.
+   *
+   * ⚠ Refreshed at most every few minutes, not on every 30s poll: the panel
+   * only writes the row when something moved (or on a periodic heartbeat), so
+   * a quiet node would otherwise churn a database write per tick. Treat it as
+   * "data is no older than this, give or take the heartbeat interval". A stamp
+   * far past that interval means the node stopped being polled, not that it is
+   * healthy and quiet.
+   */
+  observedAt: string;
+}
+
 export interface CoreStatus {
   name: ProtocolName;
   running: boolean;
+  /** See CoreRestarts. Absent = this core/agent doesn't report it. */
+  restarts?: CoreRestarts;
+  /** T7: underlying core binary version (e.g. "26.3.27" from `xray version`),
+   *  absent when the adapter can't report one (config-only mode, non-versioned
+   *  core, or a pre-T7 agent). The panel persists it per node to gate features
+   *  needing a minimum core version (cascade exit selection needs xray
+   *  >= 25.9.5). */
+  version?: string;
+  /** Whether this core is CONFIGURED, i.e. has an inbound and is expected to
+   *  run. The installer registers an adapter for every protocol the operator
+   *  might switch on later, and an unconfigured one sits idle by design.
+   *
+   *  Absent = the agent predates the field, which is NOT the same as false:
+   *  read it as configured, the behaviour that came before. Without the
+   *  distinction a healthy node reported `degraded` forever (every node of the
+   *  field fleet did), so the status stopped changing when something broke. */
+  provisioned?: boolean;
 }
 
 export interface HealthcheckResponse {

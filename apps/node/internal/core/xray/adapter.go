@@ -43,6 +43,16 @@ type Config struct {
 	// Defaults to os/exec; tests inject a fake to assert behaviour without
 	// shelling out.
 	RunCmd RunCmdFunc
+
+	// MemoryLimitBytes arms the subprocess memory watchdog for xray when > 0
+	// (0 = off, the pre-2026-08 behaviour). main.go derives it from a percent
+	// of host RAM. See subprocess.Config.MemoryLimitBytes for the trade-off:
+	// a restart drops live connections, so this ceiling is meant to sit high.
+	//
+	// xray specifically because that is where the memory problem showed up in
+	// the field (XHTTP inbounds); the mechanism itself is protocol-agnostic
+	// and can be armed for other cores by passing a limit the same way.
+	MemoryLimitBytes uint64
 }
 
 // RunCmdFunc executes an external command synchronously and returns its
@@ -62,6 +72,13 @@ type Adapter struct {
 	users   map[string]xrayClient // key: userId
 	started bool                  // set true after first successful regenerateAndRestart
 
+	// version caches the parsed `xray version` output (e.g. "26.3.27"). Queried
+	// once lazily on the first CoreVersion() call and cached: the binary can't
+	// change without an agent restart, so a single fork is enough. versionDone
+	// guards against re-forking when the query legitimately yields "".
+	version     string
+	versionDone bool
+
 	// cascade holds the optional C3 chaining fragments (link-in inbound,
 	// link-out outbound, routing rules) for THIS node's hop, pushed by the
 	// panel via ApplyInbound. nil = node is not part of any cascade, in which
@@ -75,9 +92,133 @@ type Adapter struct {
 
 	proc *subprocess.Subprocess
 
+	// Restart tally (under mu). Lives on the ADAPTER, not on Subprocess, on
+	// purpose: every config push builds a fresh Subprocess, so per-process
+	// counters would reset to zero at the worst possible moment. Fed by
+	// recordRestart via subprocess.Config.OnRestart, read by RestartStats.
+	restartsCrash     int
+	restartsMemory    int
+	lastRestartAt     time.Time
+	lastRestartReason string
+	// countingSince: when this adapter started tallying (agent start). Sent
+	// alongside the counters so a bare "3 restarts" has a time window.
+	countingSince time.Time
+
+	// inbounds holds every inbound the panel has pushed, keyed by its panel id.
+	// cfg.Inbound remains the install-time/legacy single inbound and is used
+	// when the panel is older and sends no id.
+	//
+	// A map rather than a slice: a push REPLACES one inbound by identity, and
+	// the panel sends them one call at a time. Order is restored on render by
+	// sorting on the key, so a config regenerated from the same state is
+	// byte-identical - otherwise every push would look like a change and
+	// restart the core for nothing.
+	inbounds map[string]InboundConfig
+
 	// restartMu serializes regenerateAndRestart so concurrent config changes
 	// can't race the subprocess swap. Never held together with mu across IO.
 	restartMu sync.Mutex
+}
+
+// RetainInbounds implements core.InboundReconciler: forget every inbound the
+// panel no longer sends, then re-render if anything was dropped.
+//
+// This is what makes deletion work at all. The push arrives inbound by inbound,
+// so an adapter that only ever adds keeps serving a deleted one indefinitely -
+// a listener the operator believes is gone, still accepting its old users.
+//
+// A push carrying NO xray inbounds is meaningful, not a no-op to ignore: it
+// means the last one was removed. Note the deliberate exception below for the
+// legacy single inbound.
+func (a *Adapter) RetainInbounds(keep []string) error {
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, id := range keep {
+		keepSet[id] = struct{}{}
+	}
+
+	a.mu.Lock()
+	dropped := make([]string, 0)
+	for id := range a.inbounds {
+		if _, ok := keepSet[id]; !ok {
+			delete(a.inbounds, id)
+			dropped = append(dropped, id)
+		}
+	}
+	remaining := len(a.inbounds)
+	// The install-time inbound has no panel id and is not managed here; it only
+	// applies while the panel has pushed nothing identified, and only when it is
+	// usable at all. On a node installed empty it carries no REALITY key, so
+	// with the last inbound gone there is nothing to fall back TO - the node
+	// then serves nobody, which is a legitimate state and not an error.
+	legacyOnly := remaining == 0 && a.cfg.Inbound.RealityPrivateKey != ""
+	servesNobody := remaining == 0 && !legacyOnly
+	a.mu.Unlock()
+
+	if len(dropped) == 0 {
+		return nil
+	}
+	a.logger.Info("xray: inbounds removed by the panel, regenerating",
+		"dropped", dropped, "remaining", remaining,
+		"fallingBackToInstallTime", legacyOnly, "servesNobody", servesNobody)
+	return a.regenerateAndRestart(context.Background())
+}
+
+// inboundTagFor derives a per-inbound xray tag from the panel's inbound id.
+//
+// Unique because xray refuses a config with two identically tagged inbounds -
+// and refuses the WHOLE config, so a clash would take every inbound down, not
+// just the offender. Stable because traffic counters are tagged with it: a tag
+// that changed between pushes would read as a new inbound and zero the
+// accounting on this node.
+//
+// Derived from the id rather than random for that same reason, and prefixed
+// with the base tag so a human reading the config still sees what it is.
+func inboundTagFor(inboundID, baseTag string) string {
+	short := inboundID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	if baseTag == "" {
+		baseTag = "vless-in"
+	}
+	return baseTag + "-" + short
+}
+
+// recordRestart accumulates what the supervisor did. Called from the
+// subprocess watcher goroutine with no subprocess lock held, so taking a.mu
+// here keeps the existing a.mu -> subprocess.mu ordering intact.
+func (a *Adapter) recordRestart(ev subprocess.RestartEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ev.Reason == subprocess.RestartReasonMemory {
+		a.restartsMemory++
+	} else {
+		a.restartsCrash++
+	}
+	a.lastRestartAt = ev.At
+	a.lastRestartReason = string(ev.Reason)
+}
+
+// RestartStats implements the optional core.RestartReporter interface so
+// /healthz can surface the tally (and the panel can put it on the node card).
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	st := core.RestartStats{
+		Crash:            a.restartsCrash,
+		Memory:           a.restartsMemory,
+		LastAt:           a.lastRestartAt,
+		LastReason:       a.lastRestartReason,
+		SinceAt:          a.countingSince,
+		MemoryLimitBytes: a.cfg.MemoryLimitBytes,
+	}
+	proc := a.proc
+	a.mu.Unlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock, and there is no
+	// reason to hold both.
+	if proc != nil {
+		st.RSSBytes = proc.RSSBytes()
+	}
+	return st
 }
 
 // New builds an adapter; nothing is spawned until Start is called.
@@ -86,9 +227,11 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.RunCmd = defaultRunCmd
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]xrayClient),
+		cfg:           cfg,
+		logger:        logger,
+		users:         make(map[string]xrayClient),
+		inbounds:      make(map[string]InboundConfig),
+		countingSince: time.Now(),
 	}
 }
 
@@ -101,14 +244,69 @@ func (a *Adapter) Name() string { return Name }
 // Engine reports the native proxy core (xray-core).
 func (a *Adapter) Engine() string { return "xray" }
 
+// CoreVersion returns the xray-core version (e.g. "26.3.27") from `xray version`,
+// queried once and cached. Returns "" in config-only mode (no binary) or if the
+// query fails. Implements the optional core.Versioner interface so /healthz can
+// surface it; the panel gates cascade exit selection (vlessRoute) on >= 25.9.5.
+func (a *Adapter) CoreVersion() string {
+	a.mu.Lock()
+	if a.versionDone {
+		v := a.version
+		a.mu.Unlock()
+		return v
+	}
+	bin := a.cfg.BinaryPath
+	run := a.cfg.RunCmd
+	a.mu.Unlock()
+
+	v := ""
+	if bin != "" && run != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		out, err := run(ctx, bin, "version")
+		cancel()
+		if err == nil {
+			v = parseXrayVersion(out)
+		} else {
+			a.logger.Warn("xray version query failed", "err", err)
+		}
+	}
+
+	a.mu.Lock()
+	a.version = v
+	a.versionDone = true
+	a.mu.Unlock()
+	return v
+}
+
+// parseXrayVersion pulls the semver token out of `xray version` output, whose
+// first line reads "Xray 26.3.27 (Xray, Penetrates Everything.) <hash> ...".
+// Returns "" if the shape is unexpected.
+func parseXrayVersion(out []byte) string {
+	line := string(out)
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	fields := strings.Fields(line)
+	if len(fields) >= 2 && strings.EqualFold(fields[0], "Xray") {
+		return fields[1]
+	}
+	return ""
+}
+
+// Provisioned implements core.Provisionable: xray can run once it has either a
+// pushed inbound or install-time REALITY keys. Shares the condition with Start
+// so "deferred" and "not provisioned" cannot drift apart.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.inbounds) > 0 || a.cfg.Inbound.RealityPrivateKey != ""
+}
+
 // Start writes the initial config to disk and spawns xray.
 // If REALITY keys are not yet configured (deferred via ApplyInbound), Start
 // is a no-op, the adapter will activate on the first ApplyInbound call.
 func (a *Adapter) Start(ctx context.Context) error {
-	a.mu.Lock()
-	noKey := a.cfg.Inbound.RealityPrivateKey == ""
-	a.mu.Unlock()
-	if noKey {
+	if !a.Provisioned() {
 		a.logger.Info("xray adapter: no REALITY key yet, waiting for ApplyInbound from panel")
 		return nil
 	}
@@ -206,7 +404,49 @@ const (
 // just the one user; buildUserInboundSettings keeps the client shape identical
 // to the full config (vless -> clients[{id,email,flow}], trojan -> clients[
 // {password,email}], etc).
-func buildAduInbound(inbound InboundConfig, target xrayClient) ([]byte, error) {
+// servedInboundsLocked returns the inbounds this adapter currently serves, in a
+// deterministic order. a.mu MUST be held.
+//
+// The map is keyed by id, so the keys are sorted: without that the rendered
+// config would differ between identical states and every push would look like a
+// change. The install-time inbound is the answer only while the panel has pushed
+// nothing identified - once it has, those are the truth.
+func (a *Adapter) servedInboundsLocked() []InboundConfig {
+	ids := make([]string, 0, len(a.inbounds))
+	for id := range a.inbounds {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]InboundConfig, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, a.inbounds[id])
+	}
+	if len(out) == 0 {
+		return []InboundConfig{a.cfg.Inbound}
+	}
+	return out
+}
+
+// buildAduPayload builds the `xray api adu` document that adds one user to EVERY
+// inbound the adapter serves.
+//
+// One entry per inbound, not one for the install-time inbound: a user has to
+// exist on all of them, and the tags of the running config come from the pushed
+// inbound ids (see inboundTagFor). Naming a tag that isn't in the running config
+// makes adu add nobody, which sends AddUser down the restart path - and a restart
+// drops every live connection on the node. That is exactly what happened on the
+// field fleet the day multi-inbound landed: every single user added restarted the
+// core, and long-lived sessions (a cascade, an SSH session through it) died with
+// it.
+func buildAduPayload(inbounds []InboundConfig, target xrayClient) ([]byte, error) {
+	entries := make([]any, 0, len(inbounds))
+	for _, in := range inbounds {
+		entries = append(entries, buildAduInboundEntry(in, target))
+	}
+	return json.Marshal(map[string]any{"inbounds": entries})
+}
+
+func buildAduInboundEntry(inbound InboundConfig, target xrayClient) map[string]any {
 	c := inbound.withDefaults()
 	// listen+port must be present. adu re-validates this inbound through the
 	// same conf.InboundDetour path as a full config, which rejects an AnyIP
@@ -217,17 +457,16 @@ func buildAduInbound(inbound InboundConfig, target xrayClient) ([]byte, error) {
 	// withDefaults() guarantees both (the real pushed port, else 443); adu never
 	// binds the socket, the port only has to satisfy config validation. Mirrors
 	// the full render in config.go.
-	return json.Marshal(map[string]any{
-		"inbounds": []any{
-			map[string]any{
-				"tag":      c.Tag,
-				"listen":   c.ListenHost,
-				"port":     c.ListenPort,
-				"protocol": userInboundProtocol(c),
-				"settings": buildUserInboundSettings(c, []xrayClient{target}),
-			},
-		},
-	})
+	return map[string]any{
+		// Whatever tag the renderer used for this inbound - ApplyInbound already
+		// derived it from the panel's inbound id, so this is the tag the running
+		// config actually carries.
+		"tag":      c.Tag,
+		"listen":   c.ListenHost,
+		"port":     c.ListenPort,
+		"protocol": userInboundProtocol(c),
+		"settings": buildUserInboundSettings(c, []xrayClient{target}),
+	}
 }
 
 // liveUpdateUser performs a single add/remove against the RUNNING xray via the
@@ -240,7 +479,11 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 
 	a.mu.Lock()
 	clients := sortedClients(a.users)
-	inbound := a.cfg.Inbound
+	// EVERY inbound this node serves, not just the install-time one. A user
+	// belongs on all of them, and the tags of the running config come from the
+	// pushed inbound ids - so a live op aimed at the install-time inbound names
+	// a tag that is not there, adds nobody, and sends the caller into a restart.
+	inbounds := a.servedInboundsLocked()
 	cascade := a.cascade
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
@@ -256,8 +499,11 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 	}
 
 	// Keep the on-disk config current so a later restart has the same user set
-	// (and the same cascade fragments).
-	blob, err := renderConfigWithCascade(inbound, clients, cascade)
+	// (and the same cascade fragments). Rendered from the full inbound set, the
+	// same way regenerateAndRestart does it: rendering the single install-time
+	// inbound here would overwrite a multi-inbound config on disk with one that
+	// serves a fraction of it.
+	blob, err := renderMultiConfig(inbounds, clients, cascade, inbounds[0].withDefaults().ApiPort)
 	if err != nil {
 		return false
 	}
@@ -267,14 +513,16 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 		}
 	}
 
-	cfg := inbound.withDefaults()
+	// The api port is install-time identity and identical across inbounds; the
+	// renderer emits one management inbound for the whole core.
+	cfg := inbounds[0].withDefaults()
 	cctx, cancel := context.WithTimeout(ctx, apiCallTimeout)
 	defer cancel()
 	server := fmt.Sprintf("--server=127.0.0.1:%d", cfg.ApiPort)
 
 	switch op {
 	case liveAdd:
-		data, err := buildAduInbound(inbound, target)
+		data, err := buildAduPayload(inbounds, target)
 		if err != nil {
 			return false
 		}
@@ -300,28 +548,42 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, op liveOp, target xrayClie
 		// adu exits 0 even when it adds nobody (bad payload, per-user gRPC error).
 		// Trust the "Added N user(s)" count, not the exit code, or a silent no-op
 		// would skip the restart fallback and the user would never go live.
-		if !liveOpSucceeded(out, "Added") {
-			a.logger.Warn("xray api adu added no user (exit 0); falling back to restart",
-				"email", target.Email, "out", strings.TrimSpace(string(out)))
+		//
+		// The count must reach the number of inbounds: adding the user to two of
+		// three would pass a >=1 check while leaving them unable to connect on the
+		// third, and nothing would ever say so.
+		if !liveOpSucceeded(out, "Added", len(inbounds)) {
+			a.logger.Warn("xray api adu did not add the user on every inbound; falling back to restart",
+				"email", target.Email, "inbounds", len(inbounds),
+				"out", strings.TrimSpace(string(out)))
 			return false
 		}
-		a.logger.Info("xray user added live (no restart)", "email", target.Email)
+		a.logger.Info("xray user added live (no restart)",
+			"email", target.Email, "inbounds", len(inbounds))
 		return true
 	case liveRemove:
-		out, err := runLiveOp(cctx, run, binPath, "api", "rmu", server, "-tag="+cfg.Tag, target.Email)
-		if err != nil {
-			a.logger.Warn("xray api rmu failed; falling back to restart",
-				"email", target.Email, "err", err, "out", strings.TrimSpace(string(out)))
-			return false
+		// rmu takes ONE tag per call, so walk the inbounds. A user we failed to
+		// remove anywhere is still connectable there, which is the whole point of
+		// removing them - so any miss falls back to the restart.
+		for _, in := range inbounds {
+			tag := in.withDefaults().Tag
+			out, err := runLiveOp(cctx, run, binPath, "api", "rmu", server, "-tag="+tag, target.Email)
+			if err != nil {
+				a.logger.Warn("xray api rmu failed; falling back to restart",
+					"email", target.Email, "tag", tag, "err", err,
+					"out", strings.TrimSpace(string(out)))
+				return false
+			}
+			// Same as adu: rmu exits 0 even on a per-user failure (e.g. the inbound
+			// isn't a live UserManager). A restart actually applies the removal.
+			if !liveOpSucceeded(out, "Removed", 1) {
+				a.logger.Warn("xray api rmu removed no user (exit 0); falling back to restart",
+					"email", target.Email, "tag", tag, "out", strings.TrimSpace(string(out)))
+				return false
+			}
 		}
-		// Same as adu: rmu exits 0 even on a per-user failure (e.g. the inbound
-		// isn't a live UserManager). A restart actually applies the removal.
-		if !liveOpSucceeded(out, "Removed") {
-			a.logger.Warn("xray api rmu removed no user (exit 0); falling back to restart",
-				"email", target.Email, "out", strings.TrimSpace(string(out)))
-			return false
-		}
-		a.logger.Info("xray user removed live (no restart)", "email", target.Email)
+		a.logger.Info("xray user removed live (no restart)",
+			"email", target.Email, "inbounds", len(inbounds))
 		return true
 	default:
 		return false
@@ -351,10 +613,17 @@ func runLiveOp(ctx context.Context, run RunCmdFunc, binary string, args ...strin
 }
 
 // liveOpSucceeded parses xray's "<verb> N user(s) in total." summary line and
-// reports whether N >= 1. `xray api adu`/`rmu` print per-user errors but still
-// exit 0, so the process exit code is not a success signal; the count is. verb
-// is "Added" (adu) or "Removed" (rmu).
-func liveOpSucceeded(out []byte, verb string) bool {
+// reports whether N reached `want`. `xray api adu`/`rmu` print per-user errors
+// but still exit 0, so the process exit code is not a success signal; the count
+// is. verb is "Added" (adu) or "Removed" (rmu).
+//
+// `want` is the number of inbounds the operation covered: one adu call carries
+// an entry per inbound, and a partial success there means the user is live on
+// some of them and missing on the rest, silently.
+func liveOpSucceeded(out []byte, verb string, want int) bool {
+	if want < 1 {
+		want = 1
+	}
 	s := string(out)
 	idx := strings.Index(s, verb+" ")
 	if idx < 0 {
@@ -366,7 +635,7 @@ func liveOpSucceeded(out []byte, verb string) bool {
 		n = n*10 + int(rest[i]-'0')
 		seen = true
 	}
-	return seen && n >= 1
+	return seen && n >= want
 }
 
 // GetStats reports two things from xray's StatsService, read non-destructively
@@ -466,6 +735,18 @@ func (a *Adapter) Healthy() bool {
 // xrayInboundCfgWire mirrors `XrayInboundCfg` in packages/shared/src/transport.ts.
 // Field tags match the wire JSON the panel sends via /applyInbounds.
 type xrayInboundCfgWire struct {
+	// Which inbound this config is. The panel sends the binding id; it is
+	// stable for the life of the inbound, which matters because traffic
+	// counters end up tagged with it.
+	//
+	// Read but not yet acted on: the adapter still holds exactly one inbound
+	// (see cfg.Inbound), so a second push overwrites the first. Keying the
+	// stored inbounds on this is the next step, and it has to land in one
+	// piece - a half-done version renders a config xray rejects, which takes
+	// the whole core down rather than one inbound.
+	//
+	// Empty from a pre-multi-inbound panel; treated as "the single inbound".
+	InboundID          string   `json:"inboundId"`
 	RealityDest        string   `json:"realityDest"`
 	RealityServerNames []string `json:"realityServerNames"`
 	RealityShortIDs    []string `json:"realityShortIds"`
@@ -578,20 +859,44 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		Warp:                                    wire.Warp,
 	}
 
+	// Multi-inbound: an identified inbound lives in the map under its own id, so
+	// a second one ADDS rather than replaces. Its tag has to be unique inside
+	// the core, and stable across pushes because traffic counters carry it, so
+	// it is derived from that same id.
+	//
+	// No id (older panel) keeps the legacy single-inbound behaviour untouched.
+	key := wire.InboundID
+	if key != "" {
+		newInbound.Tag = inboundTagFor(key, newInbound.Tag)
+	}
+
 	a.mu.Lock()
 	// Idempotency check, same config → noop. Compare struct fields
 	// instead of byte-marshalling for speed; slice equality via reflect.
 	// C3: a cascade change alone (same inbound) must still trigger a restart,
 	// so factor the cascade fragments into the gate.
-	if inboundEqual(a.cfg.Inbound, newInbound) && cascadeEqual(a.cascade, wire.Cascade) {
+	unchanged := cascadeEqual(a.cascade, wire.Cascade)
+	if key == "" {
+		unchanged = unchanged && inboundEqual(a.cfg.Inbound, newInbound)
+	} else {
+		prev, had := a.inbounds[key]
+		unchanged = unchanged && had && inboundEqual(prev, newInbound)
+	}
+	if unchanged {
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyInbound: config unchanged, skipping restart")
 		return nil
 	}
-	a.cfg.Inbound = newInbound
+	if key == "" {
+		a.cfg.Inbound = newInbound
+	} else {
+		a.inbounds[key] = newInbound
+	}
 	a.cascade = wire.Cascade
+	count := len(a.inbounds)
 	a.mu.Unlock()
 	a.logger.Info("xray ApplyInbound: config changed, regenerating and restarting",
+		"inboundId", key, "inboundsHeld", count,
 		"sni", wire.RealityServerNames, "shortIds", len(wire.RealityShortIDs))
 
 	// Use background context for the restart, the request that triggered
@@ -710,9 +1015,35 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	cascade := a.cascade
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
+	memLimit := a.cfg.MemoryLimitBytes
+	// Panel-pushed inbounds, in a deterministic order: the map is keyed by id,
+	// so sort the keys. Without this the rendered config would differ between
+	// identical states and every push would look like a change.
+	ids := make([]string, 0, len(a.inbounds))
+	for id := range a.inbounds {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	pushed := make([]InboundConfig, 0, len(ids))
+	for _, id := range ids {
+		pushed = append(pushed, a.inbounds[id])
+	}
 	a.mu.Unlock()
 
-	blob, err := renderConfigWithCascade(inbound, clients, cascade)
+	// The install-time inbound is used only while the panel has pushed nothing
+	// identified - and only if it is actually usable. A node installed empty
+	// (everything arrives from the panel, which is the normal case now) has no
+	// REALITY key there, so falling back to it renders nothing at all: the
+	// render fails, the previous config stays on disk, and the core keeps
+	// serving inbounds the operator has deleted. Seen in the field 2026-08-10
+	// when the last inbound was removed.
+	//
+	// With nothing to serve, that is what we render: no user inbounds, just the
+	// management one. "Serves nobody" is a state, not an error.
+	if len(pushed) == 0 && inbound.RealityPrivateKey != "" {
+		pushed = []InboundConfig{inbound}
+	}
+	blob, err := renderMultiConfig(pushed, clients, cascade, inbound.withDefaults().ApiPort)
 	if err != nil {
 		return fmt.Errorf("render xray config: %w", err)
 	}
@@ -755,6 +1086,10 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
+		// Memory ceiling + reporting. memLimit is read under a.mu above with
+		// the rest of the config snapshot; 0 leaves the watchdog disarmed.
+		MemoryLimitBytes: memLimit,
+		OnRestart:        a.recordRestart,
 	})
 	if err := proc.Start(ctx); err != nil {
 		a.mu.Lock()

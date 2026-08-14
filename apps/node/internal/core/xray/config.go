@@ -328,16 +328,61 @@ func renderConfig(inbound InboundConfig, users []xrayClient) ([]byte, error) {
 	return renderConfigWithCascade(inbound, users, nil)
 }
 
+// renderConfigWithCascade renders ONE user inbound; renderMultiConfig renders
+// several. Kept as a thin wrapper so the many existing call sites and tests
+// that deal with a single inbound stay unchanged.
+func renderConfigWithCascade(inbound InboundConfig, users []xrayClient, cascade *CascadeFragments) ([]byte, error) {
+	return renderMultiConfig([]InboundConfig{inbound}, users, cascade, inbound.withDefaults().ApiPort)
+}
+
 // renderConfigWithCascade is renderConfig plus optional cascade fragments (C3).
 // When cascade is nil the output is byte-identical to the pre-cascade config.
-func renderConfigWithCascade(inbound InboundConfig, users []xrayClient, cascade *CascadeFragments) ([]byte, error) {
-	if err := inbound.validate(); err != nil {
-		return nil, err
-	}
-	cfg := inbound.withDefaults()
-
-	inbounds := []any{
-		map[string]any{
+// renderMultiConfig renders N user-facing inbounds into one xray config.
+//
+// One process, not one per inbound: two xray instances on a node would fight
+// over the stats API port and the config path, and each would carry its own
+// copy of the user list. The core is built to serve several inbounds, so this
+// follows its grain.
+//
+// Every inbound needs a UNIQUE tag and port, or xray refuses the whole config
+// and the node loses ALL of them rather than the one that clashed. The tag is
+// derived from the panel's inbound id (see Adapter.inbounds), so it is stable
+// across pushes - traffic counters are tagged with it.
+//
+// The same user list is served on every inbound: a user's access is decided by
+// the panel when it pushes bindings, not by which door they walk through.
+// An EMPTY list is legal and means "this node serves nobody": the panel removed
+// the last inbound. Refusing to render that was a real failure - the render
+// errored, the old config stayed on disk, and the core kept serving the inbound
+// the operator had just deleted (field, 2026-08-10). `apiPort` carries the
+// process-level identity that would otherwise come from the first inbound, so
+// the management inbound survives having no user inbounds to sit beside.
+func renderMultiConfig(
+	inboundCfgs []InboundConfig,
+	users []xrayClient,
+	cascade *CascadeFragments,
+	apiPort int,
+) ([]byte, error) {
+	inbounds := make([]any, 0, len(inboundCfgs)+1)
+	seenTags := make(map[string]struct{}, len(inboundCfgs))
+	seenPorts := make(map[int]struct{}, len(inboundCfgs))
+	var cfg InboundConfig
+	for _, ib := range inboundCfgs {
+		if err := ib.validate(); err != nil {
+			return nil, err
+		}
+		cfg = ib.withDefaults()
+		// Reject a clash here, with a message naming it, rather than handing
+		// xray a config it rejects wholesale with a parser error.
+		if _, dup := seenTags[cfg.Tag]; dup {
+			return nil, fmt.Errorf("render xray config: duplicate inbound tag %q", cfg.Tag)
+		}
+		if _, dup := seenPorts[cfg.ListenPort]; dup {
+			return nil, fmt.Errorf("render xray config: two inbounds on port %d", cfg.ListenPort)
+		}
+		seenTags[cfg.Tag] = struct{}{}
+		seenPorts[cfg.ListenPort] = struct{}{}
+		inbounds = append(inbounds, map[string]any{
 			"tag":            cfg.Tag,
 			"listen":         cfg.ListenHost,
 			"port":           cfg.ListenPort,
@@ -354,17 +399,26 @@ func renderConfigWithCascade(inbound InboundConfig, users []xrayClient, cascade 
 				"enabled":      true,
 				"destOverride": []string{"http", "tls", "quic"},
 			},
-		},
-		map[string]any{
-			"tag":      "api-in",
-			"listen":   "127.0.0.1",
-			"port":     cfg.ApiPort,
-			"protocol": "dokodemo-door",
-			"settings": map[string]any{
-				"address": "127.0.0.1",
-			},
-		},
+		})
 	}
+
+	// One management inbound for the whole process, not one per user inbound:
+	// the stats API is per-core. The port is install-time identity, so it comes
+	// from the caller rather than from an inbound - with no inbounds left there
+	// would be none to read it from, and guessing the default would silently
+	// break stats on a node whose operator moved the port.
+	if apiPort == 0 {
+		apiPort = cfg.ApiPort
+	}
+	inbounds = append(inbounds, map[string]any{
+		"tag":      "api-in",
+		"listen":   "127.0.0.1",
+		"port":     apiPort,
+		"protocol": "dokodemo-door",
+		"settings": map[string]any{
+			"address": "127.0.0.1",
+		},
+	})
 
 	// Outbounds, slice 24c part 2:
 	//   - `direct` (freedom): default exit

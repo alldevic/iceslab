@@ -71,7 +71,17 @@ export const XrayConfigSchema = z.object({
    * security is 'none'.
    */
   realityDest: z.string().regex(/^[a-zA-Z0-9.-]+:\d{1,5}$/).or(z.literal('')).default(''),
-  realityServerNames: z.array(z.string().min(1).max(255)).max(8).default([]),
+  /**
+   * REALITY masquerade names.
+   *
+   * Cap raised 8 -> 32 on 2026-08-10. The old number was a guess at what anyone
+   * would need; a migration audit of an incoming panel found inbounds carrying
+   * 21 names, so the guess was about to cost that operator either a failed
+   * import or a silently shortened masquerade list. 32 is still a bound on
+   * accidents (a paste of a whole domain list), not on legitimate use - xray
+   * itself sets no limit here.
+   */
+  realityServerNames: z.array(z.string().min(1).max(255)).max(32).default([]),
   /** REALITY shortIds: hex strings, max 16 chars each. */
   realityShortIds: z
     .array(z.string().regex(/^[0-9a-fA-F]{0,16}$/))

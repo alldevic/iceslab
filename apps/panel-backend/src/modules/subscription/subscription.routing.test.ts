@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSquadRouting } from './subscription.service.js';
+import { resolveSquadRouting, expandEndpointUris } from './subscription.service.js';
+import type { SubscriptionEndpoint } from './subscription.formats.js';
 
 // R3-a - the per-squad routing merge rule (the one design decision in R3-a).
 describe('resolveSquadRouting', () => {
@@ -66,5 +67,88 @@ describe('routing-preset precedence (R1a + R3-a + R3)', () => {
 
   it('defaults to proxy-all all the way down', () => {
     expect(resolve(undefined, null, null, 'proxy-all')).toBe('proxy-all');
+  });
+});
+
+// A4: plain / base64 URI expansion for balancer-cascade exits.
+describe('expandEndpointUris', () => {
+  const uuid = '84a8029e-b874-4418-8cec-a7da9af31157';
+  const entry: SubscriptionEndpoint = {
+    protocol: 'xray',
+    nodeName: 'ru-entry',
+    host: 'ru.example.com',
+    port: 443,
+    uuid,
+    publicKey: 'pk',
+    shortId: 'abc',
+    sni: 'www.cloudflare.com',
+    flow: 'xtls-rprx-vision',
+    fingerprint: 'chrome',
+    uri: `vless://${uuid}@ru.example.com:443?security=reality&pbk=pk&sid=abc#ru-entry`,
+  };
+
+  it('returns the single original URI when there are no cascade exits', () => {
+    expect(expandEndpointUris(entry)).toEqual([entry.uri]);
+  });
+
+  it('expands one re-tagged URI per profile, remark = profile label', () => {
+    const out = expandEndpointUris({
+      ...entry,
+      cascadeExits: [
+        { label: 'de exit', tag: 1 },
+        { label: 'nl', tag: 2 },
+        { label: 'de exit · Без рекламы', tag: 257 }, // ad-split policy band -> 0101
+      ],
+    });
+    expect(out).toEqual([
+      'vless://84a8029e-b874-0001-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#de%20exit',
+      'vless://84a8029e-b874-0002-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#nl',
+      `vless://84a8029e-b874-0101-8cec-a7da9af31157@ru.example.com:443?security=reality&pbk=pk&sid=abc#${encodeURIComponent('de exit · Без рекламы')}`,
+    ]);
+  });
+
+  it('suffixes profile remarks with the host remark on a multi-host entry', () => {
+    // Only reached when the entry binding has more than one host: several
+    // hosts on one entry produce the same set of ways out, so without the
+    // suffix the client would list the same string twice. The caller decides
+    // (subscription.service passes hostRemark only when hosts.length > 1),
+    // which is why a single-host entry no longer glues its host name onto
+    // every profile.
+    const out = expandEndpointUris({
+      ...entry,
+      hostRemark: 'test 2',
+      cascadeExits: [
+        { label: 'first way out', tag: 1 },
+        { label: 'second way out', tag: 2 },
+      ],
+    });
+    expect(out[0]!.endsWith(`#${encodeURIComponent('first way out · test 2')}`)).toBe(true);
+    expect(out[1]!.endsWith(`#${encodeURIComponent('second way out · test 2')}`)).toBe(true);
+  });
+
+  it('leaves the profile label alone when the entry has a single host', () => {
+    // The regression: a client read "balancer · SE · ru-01-xhttp-reality",
+    // the way out followed by our internal host name, on an entry that had
+    // exactly one host and therefore nothing to disambiguate.
+    const out = expandEndpointUris({
+      ...entry,
+      hostRemark: undefined,
+      cascadeExits: [{ label: '🇸🇪 balancer · SE', tag: 1 }],
+    });
+    expect(out[0]!.endsWith(`#${encodeURIComponent('🇸🇪 balancer · SE')}`)).toBe(true);
+  });
+
+  it('does not re-tag vmess (UUID is not in the userinfo)', () => {
+    const vmess: SubscriptionEndpoint = {
+      ...entry,
+      subprotocol: 'vmess',
+      uri: 'vmess://eyJ2IjoiMiJ9',
+      cascadeExits: [{ label: 'de', tag: 1 }],
+    };
+    expect(expandEndpointUris(vmess)).toEqual(['vmess://eyJ2IjoiMiJ9']);
+  });
+
+  it('drops an endpoint with an empty URI', () => {
+    expect(expandEndpointUris({ ...entry, uri: '' })).toEqual([]);
   });
 });

@@ -1,0 +1,50 @@
+version: 2
+
+# Why this exists: version drift here is invisible until it breaks something.
+# GitHub Actions announced the Node 20 runtime as deprecated and our workflow
+# started warning in every job; the three high-severity advisories the audit
+# gate caught on 2026-08-08 had been sitting in the lockfile for a while. Both
+# are the same failure mode - nobody re-reads dependency versions on a schedule.
+#
+# Weekly rather than daily, and grouped rather than one PR per package: a flood
+# of pull requests gets ignored wholesale, which is worse than none at all.
+updates:
+  # The workflow actions themselves. Cheapest to keep current and the most
+  # likely to break loudly, since a removed runtime fails every job at once.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+
+  # The pnpm workspace. Grouped by risk: patch and minor land together and are
+  # usually safe to merge on green CI, majors come one at a time because they
+  # need reading.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+
+  # The node-agent. Its dependency surface is deliberately small, so this is
+  # quiet - which is exactly why it would otherwise be forgotten.
+  - package-ecosystem: gomod
+    directory: /apps/node
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        patterns: ['*']
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore

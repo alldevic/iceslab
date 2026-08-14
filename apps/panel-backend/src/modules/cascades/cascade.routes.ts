@@ -21,6 +21,17 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof svc.CascadeNameTakenError) {
     return reply.code(409).send({ error: 'CONFLICT', message: err.message });
   }
+  if (err instanceof svc.CascadeEntryCoreTooOldError) {
+    // T7: entry node's xray is too old for exit selection. 409: the request is
+    // well-formed but conflicts with the node's current core version.
+    return reply.code(409).send({
+      error: 'ENTRY_CORE_TOO_OLD',
+      message: err.message,
+      nodeName: err.nodeName,
+      coreVersion: err.coreVersion,
+      minVersion: err.minVersion,
+    });
+  }
   throw err;
 }
 

@@ -1,4 +1,4 @@
-import type { HostMetricsResponse } from '@iceslab/shared';
+import { ONLINE_WINDOW_MS, type HostMetricsResponse } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/redis.js';
 import { collectSystemMetrics, type SystemMetrics } from './system-metrics.js';
@@ -20,7 +20,6 @@ import { readCachedNodeMetrics } from '../nodes/nodes.cron.js';
 const OVERVIEW_CACHE_KEY = 'dashboard:overview:v1';
 const OVERVIEW_CACHE_TTL_SECONDS = 30;
 
-const ONLINE_NOW_WINDOW_MS = 3 * 60 * 1000;
 const TOP_USERS_LIMIT = 5;
 const RECENT_EVENTS_LIMIT = 10;
 
@@ -62,6 +61,7 @@ export interface DashboardOverview {
   inventory: {
     profileCount: number;
     squadCount: number;
+    hostCount: number;
   };
   host: SystemMetrics;
   nodes: {
@@ -178,7 +178,10 @@ async function last24hHourly(): Promise<{ hour: string; bytes: number }[]> {
 
 async function userMetrics(): Promise<DashboardOverview['users']> {
   const now = new Date();
-  const onlineCutoff = new Date(now.getTime() - ONLINE_NOW_WINDOW_MS);
+  // Shared with the user list: the roster used to glow for five minutes while
+  // this counted three, so the same user was online in one place and not in
+  // the other on the same screen.
+  const onlineCutoff = new Date(now.getTime() - ONLINE_WINDOW_MS);
   const todayCutoff = startOfToday();
   const weekCutoff = startOfWeek();
 
@@ -426,24 +429,35 @@ async function recentEvents(): Promise<DashboardOverview['recentEvents']> {
 }
 
 async function computeOverview(): Promise<DashboardOverview> {
-  const [users, traffic, nodesAndSystem, byProtocol, topUsers, events, host, profileCount, squadCount] =
-    await Promise.all([
-      userMetrics(),
-      trafficMetrics(),
-      nodeMetrics(),
-      protocolMetrics(),
-      topUsersToday(),
-      recentEvents(),
-      collectSystemMetrics(),
-      prisma.profile.count(),
-      prisma.group.count(),
-    ]);
+  const [
+    users,
+    traffic,
+    nodesAndSystem,
+    byProtocol,
+    topUsers,
+    events,
+    host,
+    profileCount,
+    squadCount,
+    hostCount,
+  ] = await Promise.all([
+    userMetrics(),
+    trafficMetrics(),
+    nodeMetrics(),
+    protocolMetrics(),
+    topUsersToday(),
+    recentEvents(),
+    collectSystemMetrics(),
+    prisma.profile.count(),
+    prisma.group.count(),
+    prisma.host.count(),
+  ]);
 
   const overview: DashboardOverview = {
     users,
     traffic,
     system: nodesAndSystem.system,
-    inventory: { profileCount, squadCount },
+    inventory: { profileCount, squadCount, hostCount },
     host,
     nodes: nodesAndSystem.nodes,
     byProtocol,

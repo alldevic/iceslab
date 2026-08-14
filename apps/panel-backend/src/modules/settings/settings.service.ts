@@ -29,6 +29,20 @@ export interface SubscriptionSettings {
    *  language. NULL = fall back to the visitor's Accept-Language. The /sub page
    *  has an in-page RU/EN selector (?lang=) that overrides this per visitor. */
   defaultLocale: 'ru' | 'en' | null;
+  /**
+   * How many interchangeable entry nodes one profile hands a subscriber.
+   *
+   * 0 (the default) hands out every node the subscriber is entitled to. That is
+   * what an operator expects when they deploy a profile to a node: it should
+   * show up in subscriptions, full stop. Anything else looks like the node
+   * silently broke, which is exactly how this surfaced.
+   *
+   * A positive value caps it, picking that many per profile by rendezvous hash
+   * (stable per person, only the fallen node's users get reshuffled). The
+   * trade-off it buys: a leaked subscription then exposes a slice of the entry
+   * surface instead of all of it. Worth having, not worth defaulting to.
+   */
+  entryPoolSize: number;
 }
 
 // B5 - in-process cache for the subscription settings. `/sub/:token` is hit on
@@ -119,6 +133,9 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     customRoutingRules,
     customDomainLists,
     defaultLocale,
+    // Negative or garbage reads as "no cap": the failure mode of a bad row must
+    // be a subscriber seeing everything, never a subscriber seeing nothing.
+    entryPoolSize: Math.max(0, asInt('subscriptionEntryPoolSize', 0)),
   };
   settingsCache = { value, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS };
   return value;

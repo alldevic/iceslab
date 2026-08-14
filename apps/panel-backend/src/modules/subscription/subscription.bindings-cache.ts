@@ -110,7 +110,16 @@ export function registerBindingsCacheBust(): void {
   //   node.deleted    → its endpoints must stop being served immediately
   //   host.changed    → per-binding endpoint override added/edited/reordered
   //   cascade.changed → hops came or went, which moves what is exposed
+  //   squad.changed   → which profiles/hosts a squad reaches; the key is the
+  //                     squad SET, so an edit changes contents, not the key
+  eventBus.on('squad.changed', bust);
   eventBus.on('node.changed', bust);
+  // A node going down changes WHICH endpoints a subscription may hand out, so
+  // the cached binding set is stale the moment liveness flips. The poller
+  // writes status straight to the database (bypassing the service that emits
+  // node.changed), so without this event the cache would serve a dead node
+  // until its TTL expired.
+  eventBus.on('node.status-changed', bust);
   eventBus.on('node.deleted', bust);
   eventBus.on('host.changed', bust);
   eventBus.on('cascade.changed', bust);

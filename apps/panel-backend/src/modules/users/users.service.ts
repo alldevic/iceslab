@@ -7,6 +7,7 @@ import type {
   CreateUserInput,
   UpdateUserInput,
   ListUsersQuery,
+  BulkUsersInput,
 } from './users.schemas.js';
 import { mapUserToPublic, type PublicUserDto } from './users.mapper.js';
 
@@ -87,13 +88,25 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
 
       hysteriaPassword:    creds.hysteriaPassword,
       naivePassword:       creds.naivePassword,
-      xrayUuid:            creds.xrayUuid,
+      // Import: carry the user's existing VLESS identity so their current link
+      // keeps working. Anything not supplied is freshly generated as before.
+      xrayUuid:            input.vlessUuid ?? creds.xrayUuid,
       amneziawgPrivateKey: creds.amneziawgPrivateKey,
       amneziawgPublicKey:  creds.amneziawgPublicKey,
 
       trafficLimitBytes:    gbToBytes(input.trafficLimitGb),
       trafficLimitStrategy: input.trafficLimitStrategy,
-      expireAt:             daysFromNow(input.expireDays),
+      // An absolute instant wins over a relative span: expireAt is a fact being
+      // transferred from another panel, expireDays is a convenience for humans
+      // creating a user by hand.
+      expireAt:             input.expireAt ? new Date(input.expireAt) : daysFromNow(input.expireDays),
+      // Registration date from the source panel; without it a three-year
+      // customer reads as "registered today" and every other number on the page
+      // loses credibility.
+      ...(input.createdAt ? { createdAt: new Date(input.createdAt) } : {}),
+      // Provenance: what makes a second import run a delta instead of a
+      // duplicate. Never set for a user created by hand.
+      sourceId:             input.sourceId ?? null,
 
       hwidDeviceLimit: input.hwidDeviceLimit ?? null,
       // R3 - per-user routing override; null = inherit (squad -> global -> default).
@@ -249,6 +262,73 @@ export async function updateUser(
   }
 
   return mapUserToPublic(updated, updated.traffic);
+}
+
+export interface BulkResult {
+  ok: string[];
+  failed: { userId: string; error: string }[];
+}
+
+/**
+ * Apply one action to many users.
+ *
+ * Deliberately built ON TOP of the single-user functions rather than as a set
+ * of bulk SQL statements. Those functions carry more than a database write:
+ * they emit the domain events that push the change to nodes, invalidate the
+ * subscription caches and feed the audit trail. A hand-written `updateMany`
+ * would be faster and would silently skip all of it, so "reset 300 users" would
+ * behave differently from resetting 300 users one at a time - the kind of
+ * divergence nobody notices until traffic accounting disagrees with reality.
+ *
+ * The cost is N round trips. Accepted: bulk jobs run on hundreds, not on the
+ * whole roster, and the migration path uses the importer, not this endpoint.
+ *
+ * Partial failure is normal and reported per user rather than rolled back: if
+ * three of two hundred ids are already deleted, the operator wants the other
+ * hundred and ninety-seven done, plus a list of which three to look at.
+ */
+export async function bulkUsers(input: BulkUsersInput): Promise<BulkResult> {
+  const result: BulkResult = { ok: [], failed: [] };
+  for (const userId of input.userIds) {
+    try {
+      switch (input.action) {
+        case 'extend': {
+          const current = await repo.findActiveById(userId);
+          if (!current) throw new UserNotFoundError(userId);
+          // Extend from the CURRENT expiry when it is still in the future, so
+          // renewing early does not quietly shorten a subscription; from now
+          // when it has already lapsed.
+          const base =
+            current.expireAt && current.expireAt > new Date() ? current.expireAt : new Date();
+          const expireAt = new Date(base.getTime() + input.expireDays! * 24 * 60 * 60 * 1000);
+          await updateUser(userId, { expireAt: expireAt.toISOString() });
+          break;
+        }
+        case 'reset-traffic':
+          await resetUserTraffic(userId);
+          break;
+        case 'revoke':
+          await revokeSubscription(userId);
+          break;
+        case 'delete':
+          await deleteUser(userId);
+          break;
+        case 'enable':
+          await updateUser(userId, { status: 'active' });
+          break;
+        case 'disable':
+          await updateUser(userId, { status: 'disabled' });
+          break;
+      }
+      result.ok.push(userId);
+    } catch (err) {
+      result.failed.push({
+        userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return result;
 }
 
 export async function deleteUser(id: string): Promise<void> {

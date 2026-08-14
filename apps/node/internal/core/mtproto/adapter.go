@@ -96,13 +96,18 @@ func (a *Adapter) Name() string { return Name }
 // Engine reports the native proxy core (mtg; no alternate engine).
 func (a *Adapter) Engine() string { return "mtproto" }
 
+// Provisioned implements core.Provisionable: mtg needs both the domain it fronts
+// and the secret. Shares the condition with Start so the two cannot drift apart.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Inbound.Domain != "" && a.cfg.Inbound.Secret != ""
+}
+
 // Start writes the initial config (if Domain+Secret are set) and spawns
 // mtg. If either is empty, defers, first ApplyInbound activates it.
 func (a *Adapter) Start(ctx context.Context) error {
-	a.mu.Lock()
-	notReady := a.cfg.Inbound.Domain == "" || a.cfg.Inbound.Secret == ""
-	a.mu.Unlock()
-	if notReady {
+	if !a.Provisioned() {
 		a.logger.Info("mtproto adapter: domain or secret not set, waiting for ApplyInbound from panel")
 		return nil
 	}

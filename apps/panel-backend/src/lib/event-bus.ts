@@ -34,12 +34,27 @@ export interface DomainEventMap {
   // subscription read caches at once rather than serving a dead endpoint for
   // the rest of the cache TTL.
   'node.deleted':         { nodeId: string };
+  // node.status-changed → the liveness poller saw a node go up or down. Kept
+  // separate from node.changed on purpose: this fires on a machine's own
+  // behaviour rather than on an operator edit, and it must NOT re-push config
+  // (a node flapping would otherwise restart cores across the fleet). Its only
+  // job is to drop read caches, because once liveness filters the subscription
+  // a stale cache keeps handing out a node that is already down.
+  'node.status-changed':  { nodeId: string; from: string; to: string };
   // host.changed → a Host row (the per-binding public endpoint override:
   // address, port, priority, enabled, disableForFormats) was created, edited,
   // deleted or reordered. Affects subscription OUTPUT only, never the config
   // pushed to a node, so read-cache invalidation is the whole job. No payload:
   // a reorder moves many rows at once and naming one of them would mislead.
   'host.changed':         Record<string, never>;
+  // squad.changed → a squad's ACL moved: which profiles it grants, which of
+  // their hosts it hands out, which policies it grants. Subscription OUTPUT
+  // only, never a node config, so like host.changed this exists purely to bust
+  // read caches. The binding cache is keyed by squad-set, but its CONTENTS
+  // depend on what those squads reach, so a squad edit can make a cached entry
+  // wrong without changing its key. Caught 2026-07-31 by the first test that
+  // narrowed a squad and got a stale, empty result.
+  'squad.changed':        { squadId: string };
   // inbound.* → push the full inbound set of the affected node to its
   // node-agent over mTLS, so the protocol server (xray/hysteria/awg/naive)
   // gets the live config without admin SSH editing /etc/iceslab-node/env.

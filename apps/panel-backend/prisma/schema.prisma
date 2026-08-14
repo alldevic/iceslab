@@ -89,6 +89,8 @@ model KeygenCa {
 // are switched over.
 
 model Profile {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id          String   @id @default(uuid()) @db.Uuid
   // Globally unique within the panel. Becomes the user-facing label of the
   // logical inbound (replaces the per-node Inbound.name when N nodes share
@@ -167,6 +169,8 @@ model ProfileNodeBinding {
 // Inspired by Remnawave's hosts table; field set tightened to the overrides
 // our URI builders / format formatters actually consume.
 model Host {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id                String   @id @default(uuid()) @db.Uuid
   bindingId         String   @map("binding_id") @db.Uuid
 
@@ -211,6 +215,8 @@ model Host {
   updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   binding ProfileNodeBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  // Squads that narrow their handout to this specific host. See GroupHost.
+  groupHosts GroupHost[]
 
   @@index([bindingId, priority])
   @@map("hosts")
@@ -229,9 +235,40 @@ model GroupProfile {
   @@map("group_profiles")
 }
 
+/// Which HOSTS of a squad's profiles that squad actually hands out.
+///
+/// A squad grants PROFILES, and every host of a granted profile came with it.
+/// That made "this tier sees two countries, that one sees all" impossible to
+/// express: the only workaround was duplicating the profile, which means
+/// different REALITY keys and a second inbound on the nodes, i.e. solving an
+/// access problem by duplicating infrastructure.
+///
+/// OPT-IN RESTRICTION, deliberately the same rule the cascade exit allow-list
+/// already uses, so the panel has one access idea rather than two:
+///   - no rows for a squad  -> it hands out EVERY host of its profiles
+///     (what every existing squad does, so nothing needs migrating);
+///   - one or more rows     -> it hands out exactly those.
+///
+/// Keyed on the host, not the binding: bindings are internal plumbing an
+/// operator never sees, hosts are the lines subscribers read.
+model GroupHost {
+  groupId   String   @map("group_id") @db.Uuid
+  hostId    String   @map("host_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  host  Host  @relation(fields: [hostId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, hostId])
+  @@index([hostId])
+  @@map("group_hosts")
+}
+
 // ────────────────────────────────────────────────────────────────────────
 
 model Node {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id                    String    @id @default(uuid()) @db.Uuid
   // `name` and `address` are unique only among ACTIVE rows, see the
   // partial unique indexes `nodes_name_active_key` / `nodes_address_active_key`
@@ -247,6 +284,24 @@ model Node {
   status                String    @default("unknown") @db.VarChar(16)
   lastStatusChange      DateTime? @map("last_status_change") @db.Timestamptz(6)
   lastStatusMessage     String?   @map("last_status_message")
+  // T7: version of this node's proxy core (e.g. xray "26.3.27"), reported by
+  // the agent in /healthz and refreshed by the status poller. NULL until a
+  // versioned agent checks in. The panel gates cascade exit selection
+  // (vlessRoute) on xray >= 25.9.5 using this.
+  coreVersion           String?   @map("core_version") @db.VarChar(32)
+  // 2026-08-04: last restart tally reported by the agent's xray core, refreshed
+  // by the same status poller. Shape (see CoreRestarts in packages/shared):
+  //   { total, crash, memory, lastAt?, lastReason?, memoryLimitBytes?,
+  //     rssBytes?, observedAt }
+  // Json because this is display/diagnostic data whose shape will grow (other
+  // cores, per-core breakdown) and nothing queries inside it.
+  //
+  // Why store it at all: the agent restarts xray once its memory crosses a
+  // ceiling, BEFORE the kernel OOM-kills it. That drops live connections, so
+  // without a stored counter the panel would show a green node while users
+  // complain about drops. NULL = no reporting agent has checked in yet, which
+  // is NOT the same as "zero restarts".
+  coreRestarts          Json?     @map("core_restarts")
   // Stamped when the node ACKNOWLEDGES an inbound push (applyInbounds returned
   // ok), never on a failure and never on a plain liveness tick. That makes it a
   // truthful "this node applied the config we sent" marker: comparing it with a
@@ -308,6 +363,14 @@ model Node {
   usageHistory     NodeUsageHistory[]
   bootstrapTokens NodeBootstrapToken[]
   cascadeHops     CascadeHop[]
+  // Cascades v4. Deleting a node a live cascade routes through has to be a
+  // deliberate act (RESTRICT on the join rows), not something the operator
+  // learns about from a user complaint.
+  cascadePositions  CascadePositionNode[]
+  cascadeDirections CascadeDirectionNode[]
+  cascadeLinksFrom  CascadeLink[] @relation("CascadeLinkFrom")
+  cascadeLinksTo    CascadeLink[] @relation("CascadeLinkTo")
+  groupCascadeExits GroupCascadeExit[]
   region          Region?  @relation(fields: [regionId], references: [id], onDelete: SetNull)
 
   @@index([status])
@@ -365,6 +428,8 @@ model Inbound {
 }
 
 model Group {
+  // See User.sourceId. Partial unique index lives in the raw migration.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id          String   @id @default(uuid()) @db.Uuid
   name        String   @unique @db.VarChar(64)
   description String?
@@ -381,7 +446,14 @@ model Group {
 
   groupInbounds GroupInbound[]
   groupProfiles GroupProfile[]
+  // Opt-in narrowing of which HOSTS of those profiles this squad hands out.
+  // See GroupHost.
+  groupHosts    GroupHost[]
   members       GroupMember[]
+  // A4 increment 2: per-cascade exit allow-list. See GroupCascadeExit.
+  cascadeExits  GroupCascadeExit[]
+  // A4 ad-split: per-squad grant of extra route-policies. See GroupRoutePolicy.
+  routePolicies GroupRoutePolicy[]
 
   @@map("groups")
 }
@@ -400,6 +472,13 @@ model GroupInbound {
 }
 
 model User {
+  // Provenance of an imported row: its id in the SOURCE panel. NULL for rows
+  // created here, which is the normal case. Makes an import repeatable - a
+  // second run matches on this instead of duplicating the set or guessing by
+  // username (which the source lets people change). UNIQUE is a PARTIAL index
+  // applied in the raw migration (NULLs excluded), so Prisma must not be told
+  // to enforce it here.
+  sourceId String? @map("source_id") @db.VarChar(128)
   id       String @id @default(uuid()) @db.Uuid
   shortId  String @unique @map("short_id") @db.VarChar(16)
   username String @db.VarChar(64)
@@ -739,7 +818,20 @@ model Cascade {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  // v4: monotonic issuer for direction tags. A tag identifies a DIRECTION and
+  // travels in the client's UUID, so it must survive the exit node changing
+  // underneath it, and a deleted direction must never hand its tag to the next
+  // one (that would silently reroute everyone holding the old link). Hence a
+  // counter rather than `max(tag) + 1`.
+  nextDirectionTag Int @default(1) @map("next_direction_tag")
+
+  // v4: `hops` and `mode` become the rollback path once positions/directions
+  // land. Nothing new should read them.
   hops CascadeHop[]
+  positions  CascadePosition[]
+  directions CascadeDirection[]
+  links      CascadeLink[]
+  groupExits GroupCascadeExit[]
 
   @@map("cascades")
 }
@@ -766,4 +858,185 @@ model CascadeHop {
   @@unique([cascadeId, position])
   @@index([nodeId])
   @@map("cascade_hops")
+}
+
+// ───── Cascades v4 (2026-08-07) ─────
+//
+// Two renames that are really one change: a hop became a POSITION that holds a
+// POOL of interchangeable nodes, and an exit became a DIRECTION with a stable
+// tag. They ship together because `position` used to mean two things at once
+// (for a chain the last position was the exit, for a balancer every non-zero
+// position was one), and a pool cannot be introduced under that ambiguity
+// without breaking one of the readings.
+
+// One step of the path: the entry or a transit. The EXIT is deliberately not a
+// position, it is a CascadeDirection - what a client picks is a way out, not a
+// machine, and the machine behind it must be replaceable without the client
+// noticing.
+model CascadePosition {
+  id            String   @id @default(uuid()) @db.Uuid
+  cascadeId     String   @map("cascade_id") @db.Uuid
+  // 0 = entry. Transits follow in ascending order.
+  position      Int
+  // Client-facing protocol; set ONLY on position 0.
+  entryProtocol String?  @map("entry_protocol") @db.VarChar(32)
+  // Protocol of the hop OUT of this position, towards the next position or a
+  // direction. Concrete credentials live per node pair in CascadeLink.
+  linkProtocol  String?  @map("link_protocol") @db.VarChar(32)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  cascade Cascade               @relation(fields: [cascadeId], references: [id], onDelete: Cascade)
+  nodes   CascadePositionNode[]
+
+  @@unique([cascadeId, position])
+  @@map("cascade_positions")
+}
+
+model CascadePositionNode {
+  positionId String @map("position_id") @db.Uuid
+  nodeId     String @map("node_id") @db.Uuid
+
+  position CascadePosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  node     Node            @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+
+  @@id([positionId, nodeId])
+  @@index([nodeId])
+  @@map("cascade_position_nodes")
+}
+
+// A way out of the cascade. `tag` is the stable identity: it is written into the
+// client's UUID (bytes 7-8, read by xray as vlessRoute) and squad ACL cuts
+// access by it, so the panel issues it once and never reuses it. The nodes
+// behind it are a pool and may change freely.
+//
+// Before v4 the tag was the exit's ORDINAL POSITION in a sorted list, so
+// deleting one exit renumbered every exit after it and silently sent those
+// users to a different country.
+model CascadeDirection {
+  id          String   @id @default(uuid()) @db.Uuid
+  cascadeId   String   @map("cascade_id") @db.Uuid
+  // Issued from Cascade.nextDirectionTag. 1..255: routeTag() packs it into the
+  // low byte of a uint16 whose high byte is the route-policy ordinal.
+  tag         Int
+  // Shown to the client as the name of the direction. Null when the pool is
+  // empty or its nodes carry no country, which is legitimate in v4: a direction
+  // can exist with its tag frozen while it has no live node.
+  countryCode String?  @map("country_code") @db.Char(2)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  cascade Cascade                @relation(fields: [cascadeId], references: [id], onDelete: Cascade)
+  nodes   CascadeDirectionNode[]
+
+  @@unique([cascadeId, tag])
+  @@map("cascade_directions")
+}
+
+model CascadeDirectionNode {
+  directionId String @map("direction_id") @db.Uuid
+  nodeId      String @map("node_id") @db.Uuid
+
+  direction CascadeDirection @relation(fields: [directionId], references: [id], onDelete: Cascade)
+  node      Node             @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+
+  @@id([directionId, nodeId])
+  @@index([nodeId])
+  @@map("cascade_direction_nodes")
+}
+
+// Credentials for one node-to-node hop inside a cascade.
+//
+// These could not stay on the hop row: with a pool of M nodes on one step and N
+// on the next there are M*N distinct secrets, and one JSON column on one row
+// cannot hold that.
+//
+// A link is identified by THREE things, not two: from, to, and the DIRECTION it
+// serves. Only the entry can read a client's chosen direction (it rides in the
+// UUID the client authenticates with); a transit downstream sees an internal
+// link, not a user. Per-direction credentials on every leg are what let a
+// transit tell them apart and fan them back out.
+//
+// The listen PORT is shared per receiving step (LINK_PORT_BASE + step): xray
+// and SS2022 both take several clients on one inbound, so N directions cost N
+// secrets but one port, and a pool does not eat ports proportionally to M*N.
+model CascadeLink {
+  id           String   @id @default(uuid()) @db.Uuid
+  cascadeId    String   @map("cascade_id") @db.Uuid
+  fromNodeId   String   @map("from_node_id") @db.Uuid
+  toNodeId     String   @map("to_node_id") @db.Uuid
+  // Tag of the direction this leg carries traffic for. Matches
+  // CascadeDirection.tag within the same cascade.
+  directionTag Int      @map("direction_tag")
+  protocol     String   @db.VarChar(32)
+  // Serialised LinkCred (see cascade.config.ts): vless uuid or shadowsocks psk
+  // plus the listen port on the receiving side.
+  config       Json
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  cascade  Cascade @relation(fields: [cascadeId], references: [id], onDelete: Cascade)
+  fromNode Node    @relation("CascadeLinkFrom", fields: [fromNodeId], references: [id], onDelete: Restrict)
+  toNode   Node    @relation("CascadeLinkTo", fields: [toNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([cascadeId, fromNodeId, toNodeId, directionTag])
+  @@index([fromNodeId])
+  @@index([toNodeId])
+  @@map("cascade_links")
+}
+
+// A4 increment 2: per-squad cascade-exit allow-list. A row means "group X allows
+// its members to use exit node Y of balancer cascade Z". OPT-IN restriction: if a
+// user has NO allow row for a cascade across all their groups, they get ALL exits
+// (back-compat with increment 1); if they have >=1, they get the UNION of allowed
+// exits across their groups. Keyed on (cascade, exit_node) not the hop id: hops are
+// recreated on every cascade edit, node ids are stable. A stale row for a node no
+// longer in the cascade is harmless (filtered out at build time).
+model GroupCascadeExit {
+  groupId    String @map("group_id") @db.Uuid
+  cascadeId  String @map("cascade_id") @db.Uuid
+  exitNodeId String @map("exit_node_id") @db.Uuid
+
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  cascade Cascade @relation(fields: [cascadeId], references: [id], onDelete: Cascade)
+  node    Node    @relation(fields: [exitNodeId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, cascadeId, exitNodeId])
+  @@index([cascadeId])
+  @@index([exitNodeId])
+  @@map("group_cascade_exits")
+}
+
+// A4 ad-split: a named route-policy = a set of direct/block domain lists layered
+// onto a chosen cascade exit at the ENTRY node. A route-profile the client sees =
+// (cascade exit) x (plain OR this policy). `ordinal` is the tag band: the vlessRoute
+// tag = ordinal*256 + exitIndex + 1. Ordinal 0 is the IMPLICIT plain profile (no
+// row, no rules) and yields the pre-ad-split exit tags (exitIndex+1) unchanged, so
+// this table holds only EXTRA policies (ordinal >= 1). directDomains/blockDomains
+// hold xray geosite/domain strings ("geosite:google", "geosite:category-ads-all").
+model RoutePolicy {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @unique @db.VarChar(64)
+  // Tag band (1..255). Unique so tags never collide across policies. 0 = implicit plain.
+  ordinal      Int      @unique
+  directDomains String[] @map("direct_domains")
+  blockDomains  String[] @map("block_domains")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  grants GroupRoutePolicy[]
+
+  @@map("route_policies")
+}
+
+// A4 ad-split: per-squad GRANT of an extra route-policy (opt-in, unlike the exit
+// allow-list which is opt-in restriction). The plain policy (ordinal 0) is always
+// available; a member gets an extra policy only if one of their squads grants it.
+model GroupRoutePolicy {
+  groupId  String @map("group_id") @db.Uuid
+  policyId String @map("policy_id") @db.Uuid
+
+  group  Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  policy RoutePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, policyId])
+  @@index([policyId])
+  @@map("group_route_policies")
 }

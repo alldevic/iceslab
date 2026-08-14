@@ -299,13 +299,34 @@ export interface UpdateUserInput {
   groupIds?: string[];
 }
 
+export type UserSort = 'username' | 'createdAt' | 'expireAt' | 'traffic';
+
 export async function listUsers(params?: {
   page?: number;
   limit?: number;
   status?: string;
   search?: string;
+  /** Squad membership filter (Filters popover). */
+  groupId?: string;
+  /** Exact tag match (Filters popover), unlike `search` which is a substring. */
+  tag?: string;
+  /**
+   * Routing-preset override filter. A preset id pins to that preset, `any`
+   * returns everyone carrying an override, `none` everyone inheriting from
+   * squad or panel. An unknown id is a 400, not a silently unfiltered list.
+   */
+  routingPreset?: RoutingPresetId | 'any' | 'none';
+  /** Server-side, because the list is paged: sorting one page would lie. */
+  sort?: UserSort;
+  order?: 'asc' | 'desc';
 }): Promise<UsersListResponse> {
   const { data } = await api.get<UsersListResponse>('/api/users', { params });
+  return data;
+}
+
+/** Distinct tags in use, to populate the Filters popover. */
+export async function listUserTags(): Promise<{ tags: string[] }> {
+  const { data } = await api.get<{ tags: string[] }>('/api/users/tags');
   return data;
 }
 
@@ -361,7 +382,13 @@ export function subscriptionUrl(
 
 export interface UserEndpoint {
   protocol: string;
-  nodeName: string;
+  /** What the client will show for this line: a host remark, or country plus
+   *  node name. One node produces several of these, so it is a caption, never
+   *  an identity. */
+  label: string;
+  /** The node this endpoint leaves from. The only sound key for joining an
+   *  endpoint to node state: labels differ per line and would match nothing. */
+  nodeId: string;
   host: string;
   port: number;
   uri: string;
@@ -396,6 +423,43 @@ export interface NodeHardening {
   sshAllowlist?: string[];
 }
 
+/**
+ * How often the node's xray core came back up, and how close it runs to the
+ * ceiling that makes the agent restart it (2026-08-04).
+ *
+ * A restart drops every live connection, so this is the one number that turns
+ * "users complain, panel is green" into something an operator can see.
+ *
+ * ⚠ The whole object is null on a node that never reported it - a pre-2026-08
+ * agent, or one that has not checked in yet. That is NOT the same as zero
+ * restarts, and the card must not print it as one. Same rule one level down:
+ * `memoryLimitBytes` absent means the watchdog is off, not that it is zero.
+ */
+export interface CoreRestarts {
+  /** crash + memory. */
+  total: number;
+  /** Core died on its own - growth here is a bug to chase, not maintenance. */
+  crash: number;
+  /** Watchdog acted before the kernel would have. */
+  memory: number;
+  /** Absent until something has actually restarted. */
+  lastAt?: string;
+  /** `crash` | `memory` - kept as a plain string, the panel treats anything
+   *  that is not `memory` as a crash rather than rejecting it. */
+  lastReason?: string;
+  /** Armed ceiling in bytes; absent = watchdog off on that node. */
+  memoryLimitBytes?: number;
+  /** Latest resident-size sample of the core process. */
+  rssBytes?: number;
+  /**
+   * When the panel last WROTE this tally, not when it last polled the node.
+   * The status cron ticks every 30s but only persists when a counter moved or
+   * RSS drifted >10%, so a steady core legitimately carries an old stamp. Show
+   * it as a fact, never colour it as staleness - see NodeCard.
+   */
+  observedAt: string;
+}
+
 export interface Node {
   id: string;
   name: string;
@@ -405,6 +469,11 @@ export interface Node {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
+  /** See CoreRestarts. null = never reported, not zero. */
+  coreRestarts: CoreRestarts | null;
+  // T7 - proxy-core version (e.g. xray "26.3.27"), null until a versioned agent
+  // reports in. Shown on the node card; cascade form warns on an old balancer entry.
+  coreVersion: string | null;
   consumptionMultiplier: string;
   // Slice 27.5
   regionId: string | null;
@@ -509,6 +578,23 @@ export async function listNodes(params?: {
   return data;
 }
 
+/** Largest page the list endpoint accepts; asking for more is a 400. */
+const NODES_PAGE_MAX = 100;
+
+/**
+ * One node by id. There is no single-node GET, so this walks the list a page
+ * at a time and stops at the first match. Cheap for any fleet that fits one
+ * page, and correct for the ones that do not.
+ */
+export async function findNode(id: string): Promise<Node | null> {
+  for (let page = 1; ; page++) {
+    const res = await listNodes({ page, limit: NODES_PAGE_MAX });
+    const hit = res.nodes.find((n) => n.id === id);
+    if (hit) return hit;
+    if (page * NODES_PAGE_MAX >= res.total || res.nodes.length === 0) return null;
+  }
+}
+
 // ───── Regions (slice 27.5) ─────
 
 export async function listRegions(): Promise<{ regions: Region[] }> {
@@ -566,7 +652,7 @@ export async function getNodeExposure(id: string): Promise<PortExposureResult> {
 // ───── Subscription Response Rules (SRR) ─────
 
 export type SubscriptionFormat =
-  | 'plain' | 'json' | 'clash' | 'singbox' | 'wgconf' | 'xrayjson' | 'xkeen'
+  | 'plain' | 'json' | 'clash' | 'singbox' | 'wgconf' | 'xrayjson' | 'xrayjson-array' | 'xkeen'
   | 'outline' | 'surge' | 'quantumultx' | 'loon';
 
 export interface SrrRule {
@@ -793,12 +879,169 @@ export async function testSrrRule(userAgent: string): Promise<TestSrrResponse> {
  *  to render the row as read-only (rename/delete is rejected backend-side). */
 export const ALL_SQUAD_ID = '00000000-0000-0000-0000-000000000001';
 
+/** A4 increment 2, per-cascade exit allow-list entry. */
+export interface SquadExitAclEntry {
+  cascadeId: string;
+  exitNodeIds: string[];
+}
+
+/**
+ * What a route rule does with the traffic it matched.
+ *   block  - dropped on the node, never leaves
+ *   direct - straight out of the node's own IP
+ *   warp   - out through the node's WARP egress (needs warpEnabled on the node)
+ *   proxy  - on through the rest of the chain, the default door
+ */
+export type RouteAction = 'block' | 'direct' | 'warp' | 'proxy';
+
+/** One rule of a policy. Order matters: first match wins. */
+export interface RouteRule {
+  id: string;
+  /** Matcher tokens (`geosite:google`, `geoip:private`, `port:25`, ...). */
+  match: string[];
+  action: RouteAction;
+  /** Operator's own note. Never used for matching. */
+  note: string;
+}
+
+/** A4 ad-split, a named route-policy (extra, ordinal >= 1) grantable to squads. */
+export interface RoutePolicy {
+  id: string;
+  name: string;
+  ordinal: number;
+  /**
+   * The ordered rule list. The API does not ship it yet: today the list
+   * endpoint answers with the two flat domain arrays below, and the panel
+   * derives a rule list from them. Once the backend stores rules this becomes
+   * the source of truth and the two arrays can go.
+   */
+  rules?: RouteRule[];
+  directDomains: string[];
+  blockDomains: string[];
+}
+
+export async function listRoutePolicies(): Promise<{ policies: RoutePolicy[] }> {
+  const { data } = await api.get<{ policies: RoutePolicy[] }>('/api/route-policies');
+  return data;
+}
+
+/**
+ * What the API stores: a name and two flat domain lists. The editor works in an
+ * ordered rule list, which is the shape an operator thinks in, so it folds the
+ * rules down on save. `ordinal` is never sent: the band is the API's to assign
+ * and, once assigned, cannot move at all.
+ */
+export interface RoutePolicyInput {
+  name: string;
+  directDomains: string[];
+  blockDomains: string[];
+}
+
+/** Rules to the two lists the API keeps. `proxy` and `warp` have nowhere to go
+ *  in a policy: it only ever answers "around the tunnel" or "nowhere". */
+export function toPolicyInput(name: string, rules: Pick<RouteRule, 'match' | 'action'>[]): RoutePolicyInput {
+  const pick = (action: RouteAction) =>
+    rules.filter((r) => r.action === action).flatMap((r) => r.match.filter(Boolean));
+  return { name, directDomains: pick('direct'), blockDomains: pick('block') };
+}
+
+/**
+ * Whether the two write surfaces below exist yet. Policy writes shipped on
+ * 2026-07-30; presets are still list-only, so their controls stay disabled and
+ * say why rather than offering a button that answers 404.
+ */
+export const ROUTE_POLICY_WRITES_LIVE = true;
+export const ROUTING_PRESET_WRITES_LIVE = false;
+
+/**
+ * Policy writes. Saving reaches the fleet on its own: the API re-pushes the
+ * config to every enabled cascade entry, so there is no separate apply step.
+ */
+export async function createRoutePolicy(input: RoutePolicyInput): Promise<RoutePolicy> {
+  const { data } = await api.post<RoutePolicy>('/api/route-policies', input);
+  return data;
+}
+
+export async function updateRoutePolicy(id: string, input: RoutePolicyInput): Promise<RoutePolicy> {
+  const { data } = await api.put<RoutePolicy>(`/api/route-policies/${id}`, input);
+  return data;
+}
+
+/** A name or a band collided. The text says which, because the fix differs:
+ *  rename, or let the API pick the band. */
+export function policyConflict(err: unknown): string | null {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+  if (res?.status !== 409 && res?.status !== 400) return null;
+  return res.data?.message ?? null;
+}
+
+export async function deleteRoutePolicy(id: string): Promise<void> {
+  await api.delete(`/api/route-policies/${id}`);
+}
+
+/**
+ * A routing preset: the rule set written into the client's own config.
+ *
+ * NOT LIVE either. Today a preset is one of three ids in `ROUTING_PRESET_IDS`
+ * whose rules are compiled into the subscription builder, so there is nothing
+ * to list, create or edit. This is the shape the editor is written against:
+ * the three built-ins come back with `builtIn: true` and stay read-only, and
+ * an operator's own presets are ordinary rows.
+ *
+ * A device can only bypass, block or tunnel. WARP is a node egress and has no
+ * meaning here, which is why `RouteAction` is narrowed at the call site.
+ */
+export interface RoutingPreset {
+  id: string;
+  name: string;
+  builtIn: boolean;
+  rules: RouteRule[];
+}
+
+export interface RoutingPresetInput {
+  name: string;
+  rules: Omit<RouteRule, 'id'>[];
+}
+
+export async function listRoutingPresets(): Promise<{ presets: RoutingPreset[] }> {
+  const { data } = await api.get<{ presets: RoutingPreset[] }>('/api/routing-presets');
+  return data;
+}
+
+export async function createRoutingPreset(input: RoutingPresetInput): Promise<RoutingPreset> {
+  const { data } = await api.post<RoutingPreset>('/api/routing-presets', input);
+  return data;
+}
+
+export async function updateRoutingPreset(
+  id: string,
+  input: RoutingPresetInput,
+): Promise<RoutingPreset> {
+  const { data } = await api.put<RoutingPreset>(`/api/routing-presets/${id}`, input);
+  return data;
+}
+
+export async function deleteRoutingPreset(id: string): Promise<void> {
+  await api.delete(`/api/routing-presets/${id}`);
+}
+
 export interface Squad {
   id: string;
   name: string;
   description: string | null;
   /** Slice 27, squad ACL is profile-level. Renamed from inboundIds. */
   profileIds: string[];
+  /** A4 increment 2, per-cascade allowed exits. Empty = no exit restriction. */
+  exitAcl: SquadExitAclEntry[];
+  /** A4 ad-split, extra route-policies granted to this squad. Empty = plain only. */
+  policyIds: string[];
+  /**
+   * Which hosts of the granted profiles this squad hands out. Opt-in, like
+   * `exitAcl`: EMPTY MEANS EVERY HOST, not none. A tier that should see two
+   * countries while another sees all used to need a duplicated profile, which
+   * meant different REALITY keys and a second inbound on every node.
+   */
+  hostIds: string[];
   /** R3-a, per-squad routing-preset override; null = inherit panel default. */
   routingPreset: RoutingPresetId | null;
   /** K7, per-squad HWID device-limit default; null = none. */
@@ -814,6 +1057,9 @@ export interface CreateSquadInput {
   routingPreset?: RoutingPresetId | null;
   hwidDeviceLimit?: number | null;
   profileIds?: string[];
+  exitAcl?: SquadExitAclEntry[];
+  policyIds?: string[];
+  hostIds?: string[];
 }
 
 export interface UpdateSquadInput {
@@ -823,6 +1069,17 @@ export interface UpdateSquadInput {
   hwidDeviceLimit?: number | null;
   /** Replaces the full profile set when provided. */
   profileIds?: string[];
+  /** Replaces the full exit allow-list when provided. */
+  exitAcl?: SquadExitAclEntry[];
+  /** Replaces the full route-policy grant set when provided. */
+  policyIds?: string[];
+  /**
+   * Replaces the full host restriction when provided. Sending `[]` CLEARS the
+   * restriction (back to every host); omitting the field leaves it as it was.
+   * Those are different requests and the difference is the only way an operator
+   * can undo a restriction.
+   */
+  hostIds?: string[];
 }
 
 export async function listSquads(): Promise<{ squads: Squad[] }> {
@@ -861,6 +1118,35 @@ export interface CascadeHop {
   linkProtocol: string | null;
 }
 
+/**
+ * One step of the path as the API now answers it: a POOL of interchangeable
+ * nodes rather than a single machine. Position 0 is the entry.
+ */
+export interface CascadePosition {
+  position: number;
+  nodeIds: string[];
+  entryProtocol: string | null;
+  linkProtocol: string | null;
+}
+
+/**
+ * A way out of the cascade. The identity is `id`, not the nodes behind it: the
+ * pool can be swapped whole and the direction stays the same direction.
+ *
+ * ⚠ `tag` is the number that lives inside every client's UUID and gates squad
+ * access. The panel issues it and never reuses it, so it is read-only here and
+ * must NOT be sent back. What must be sent back is `id` - see
+ * CascadeDirectionInput.
+ */
+export interface CascadeDirection {
+  id: string;
+  tag: number;
+  countryCode: string;
+  /** May legitimately be empty: the tag exists, no node stands behind it yet,
+   *  and the direction is simply not handed to clients. */
+  nodeIds: string[];
+}
+
 export interface Cascade {
   id: string;
   name: string;
@@ -869,6 +1155,16 @@ export interface Cascade {
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
   hops: CascadeHop[];
+  /** v4 shape (2026-08-04). Always present; EMPTY means the cascade predates
+   *  the move and is still described by `hops`. */
+  positions: CascadePosition[];
+  directions: CascadeDirection[];
+  /**
+   * The tag the next new direction will get. Cannot be derived on this side:
+   * tags are never reused, so after a direction is deleted `max(tag) + 1` names
+   * a number that is already spent. Read it, never compute it.
+   */
+  nextDirectionTag: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -894,6 +1190,82 @@ export interface UpdateCascadeInput {
   mode?: CascadeMode;
   hideHopsFromSub?: boolean;
   hops?: CascadeHopInput[];
+}
+
+/* ───── Cascades, v4 shape ──────────────────────────────────────────────────
+ * The panel describes a cascade as positions and directions rather than hops:
+ * a position is a POOL of nodes that all do the same job, and a direction is a
+ * way out that owns a tag for good, whatever nodes currently sit under it.
+ *
+ * The API still speaks the older `hops` shape, so the write below is held
+ * behind the flag until it lands. Everything above it (types, form, preview)
+ * is already in the new shape, and flipping the flag is the whole migration on
+ * this side.
+ */
+
+/** One step of the path. Every node in the pool does the same job in parallel. */
+export interface CascadePositionInput {
+  nodeIds: string[];
+  position: number;
+  /** Entry only: the core clients dial. */
+  entryProtocol?: CascadeProtocol;
+  /** What this position speaks to the next one. The exit position carries none. */
+  linkProtocol?: CascadeProtocol;
+}
+
+/**
+ * A way out of the cascade, on the way in.
+ *
+ * ⚠ `id` is what keeps the tag. Send it back for every direction that already
+ * exists: a direction that arrives without one is treated as new, gets a fresh
+ * tag, and everyone holding a link to the old one silently lands in another
+ * country. The API does have a fallback that matches on the node set, but it
+ * stops helping exactly when the pool is edited, which is the ordinary case.
+ *
+ * `tag` is deliberately absent: the panel issues tags and never reuses them, so
+ * sending one back could only ever contradict the server.
+ */
+export interface CascadeDirectionInput {
+  /** Omit only for a direction being created right now. */
+  id?: string;
+  countryCode: string;
+  nodeIds: string[];
+}
+
+export interface CreateCascadeV4Input {
+  name: string;
+  enabled?: boolean;
+  hideHopsFromSub?: boolean;
+  positions: CascadePositionInput[];
+  directions: CascadeDirectionInput[];
+}
+
+/**
+ * Storage moved to positions and directions on 2026-08-04, so the two shapes
+ * the screens used to block, a pool of several nodes on one step and transits
+ * combined with several directions, are now ordinary saves. What remains is a
+ * cap on the total number of node-to-node links, which the forms still count
+ * themselves because pools multiply it.
+ */
+export const CASCADE_V4_WRITES_LIVE = true;
+
+export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input>;
+
+/** The API's own sentence when it refuses a shape it cannot store. */
+export function cascadeShapeError(err: unknown): string | null {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+  if (res?.status !== 400) return null;
+  return res.data?.message ?? null;
+}
+
+export async function createCascadeV4(input: CreateCascadeV4Input): Promise<Cascade> {
+  const { data } = await api.post<Cascade>('/api/cascades', input);
+  return data;
+}
+
+export async function updateCascadeV4(id: string, input: UpdateCascadeV4Input): Promise<Cascade> {
+  const { data } = await api.put<Cascade>(`/api/cascades/${id}`, input);
+  return data;
 }
 
 export async function listCascades(): Promise<{ cascades: Cascade[] }> {
@@ -1013,6 +1385,39 @@ export async function listProfiles(params?: {
 }): Promise<{ profiles: Profile[] }> {
   const { data } = await api.get<{ profiles: Profile[] }>('/api/profiles', { params });
   return data;
+}
+
+/**
+ * Which Host columns mean anything for a given profile, and what each inherits
+ * when the host leaves it NULL.
+ *
+ * The set depends on the profile's CONFIG, not just its protocol: path and Host
+ * exist only on an HTTP-ish transport, a fingerprint only where the client
+ * speaks TLS. Outside xray almost nothing applies, so the form asks rather than
+ * guessing.
+ */
+export interface HostFieldSupport {
+  supported: boolean;
+  /** Profile-level default. Null means there is nothing to inherit, either
+   *  because the adapter decides or because the value is per node. */
+  inherited?: string | string[] | null;
+  /** Written for an operator, so it can be shown verbatim. */
+  reason?: string;
+}
+
+export type HostFieldMap = Record<string, HostFieldSupport>;
+
+export async function getProfileHostFields(id: string): Promise<{ fields: HostFieldMap }> {
+  const { data } = await api.get<{ fields: HostFieldMap }>(`/api/profiles/${id}/host-fields`);
+  return data;
+}
+
+/** A host whose SNI the profile's node would not serve. `expected` carries the
+ *  names it does serve, so the form can name them instead of just refusing. */
+export function sniMismatch(err: unknown): string[] | null {
+  const body = (err as { response?: { data?: { error?: string; expected?: unknown } } }).response?.data;
+  if (body?.error !== 'SNI_MISMATCH') return null;
+  return Array.isArray(body.expected) ? body.expected.filter((x): x is string => typeof x === 'string') : [];
 }
 
 export async function createProfile(input: CreateProfileInput): Promise<Profile> {
@@ -1151,8 +1556,22 @@ export interface Host {
   updatedAt: string;
 }
 
+/**
+ * Two ways to say where a host lives, and the second is the one the create
+ * screen uses.
+ *
+ * `bindingId` attaches to a binding that already exists. Nothing in this UI
+ * creates bindings, so on a fresh install that path had no way to start.
+ * `profileId` + `nodeId` + `port` says what the operator means, and the API
+ * creates the binding in the same transaction as the host: a refused host
+ * leaves no orphan behind, and no screen here lists bindings to clean up.
+ */
 export interface CreateHostInput {
-  bindingId: string;
+  bindingId?: string;
+  profileId?: string;
+  nodeId?: string;
+  /** Listen port for the binding. Required only when creating one. */
+  port?: number;
   remark?: string;
   priority?: number;
   enabled?: boolean;
@@ -1168,7 +1587,24 @@ export interface CreateHostInput {
   disableForFormats?: string[];
 }
 
-export type UpdateHostInput = Partial<Omit<CreateHostInput, 'bindingId'>>;
+// The binding is immutable: moving a host to another node is a delete plus a
+// create, not an edit.
+export type UpdateHostInput = Partial<
+  Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId' | 'port'>
+>;
+
+/** The port is taken on that node. The message names the profile holding it, so
+ *  it is worth showing verbatim rather than replacing with "port busy". */
+export function portConflict(err: unknown): string | null {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
+  if (res?.status !== 409) return null;
+  return res.data?.message ?? '';
+}
+
+/** The profile or the node disappeared while the form was open. */
+export function goneWhileEditing(err: unknown): boolean {
+  return (err as { response?: { status?: number } }).response?.status === 404;
+}
 
 export async function listHosts(params?: {
   bindingId?: string;
@@ -1290,6 +1726,7 @@ export interface DashboardOverview {
   inventory: {
     profileCount: number;
     squadCount: number;
+    hostCount: number;
   };
   host: {
     cpu: {
@@ -1450,6 +1887,8 @@ export interface SystemVersion {
   latest: string | null;
   updateAvailable: boolean;
   releaseUrl: string | null;
+  /** Stargazer count for the topbar chip, null when the check couldn't run. */
+  stars: number | null;
   checkedAt: string | null;
 }
 

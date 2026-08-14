@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-const ConfigSchema = z.object({
+// Exported for the guard test that feeds it a compose-shaped environment: every
+// optional setting must survive being handed an EMPTY STRING, because that is
+// what `${VAR:-}` in docker-compose delivers when the operator left it blank.
+export const ConfigSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 
   APP_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -46,7 +49,17 @@ const ConfigSchema = z.object({
   // from PUBLIC_URL so operators can serve /sub from a separate, CDN/block-
   // resistant domain (e.g. a grey-cloud relay) while the panel/admin and node
   // bootstrap stay on PUBLIC_URL. Falls back to PUBLIC_URL when unset.
-  SUBSCRIPTION_PUBLIC_URL: z.url().optional(),
+  //
+  // Empty is read as unset. Compose passes `${VAR:-}` for optional settings, so
+  // an operator who has not split the domain still hands the container an EMPTY
+  // STRING - which `.url()` rejects, and the panel then refuses to boot at all.
+  // That took the panel down on 2026-08-10, and "you left a setting blank" is
+  // not a reason to refuse to start.
+  SUBSCRIPTION_PUBLIC_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? v : undefined))
+    .pipe(z.url().optional()),
 
   // Path prefix where the subscription endpoint is mounted. Default
   // `/sub` matches the historical default. Operators with concerns

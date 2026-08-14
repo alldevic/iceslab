@@ -164,6 +164,155 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
   ],
 };
 
+// Preset selectors, shared by the single-config builder and the array (T2) so
+// both pick the same split rules / DNS from one place.
+function splitRulesFor(
+  preset: RoutingPresetId,
+): ReadonlyArray<Record<string, unknown>> | null {
+  return preset === 'ru-split' ? RU_SPLIT_RULES : preset === 'cn-split' ? CN_SPLIT_RULES : null;
+}
+function splitDnsFor(preset: RoutingPresetId): Record<string, unknown> | null {
+  return preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
+}
+
+/**
+ * Build one xray proxy outbound from an endpoint. Extracted from buildXrayJson
+ * (T1) so the single-config builder and buildXrayJsonArray emit byte-identical
+ * outbounds from one place. The caller owns the proxyTags bookkeeping; the tag
+ * is also on the returned object as `.tag`.
+ */
+function buildProxyOutbound(
+  e: SubscriptionEndpoint,
+  tlsFragment: boolean,
+  fragmentTag: string,
+): Record<string, unknown> {
+  if (e.protocol !== 'xray') throw new Error('unreachable'); // narrowing
+  const tag = `${e.nodeName}-xray`;
+  const sub = e.subprotocol ?? 'vless';
+  const network = e.network ?? 'raw';
+  // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none' (plain).
+  const sec = e.securityLayer ?? 'default';
+  const security = sec === 'default' ? 'reality' : sec;
+  const useTls = sec !== 'none';
+
+  // settings block by subprotocol.
+  let settings: Record<string, unknown>;
+  if (sub === 'trojan') {
+    settings = { servers: [{ address: e.host, port: e.port, password: e.uuid }] };
+  } else if (sub === 'vmess') {
+    settings = {
+      vnext: [
+        { address: e.host, port: e.port, users: [{ id: e.uuid, security: 'auto', alterId: 0 }] },
+      ],
+    };
+  } else {
+    settings = {
+      vnext: [
+        {
+          address: e.host,
+          port: e.port,
+          // Vision flow needs a TLS-like layer (reality or tls), not none.
+          users: [{ id: e.uuid, encryption: 'none', ...(useTls && e.flow ? { flow: e.flow } : {}) }],
+        },
+      ],
+    };
+  }
+
+  const streamSettings: Record<string, unknown> = { network, security };
+  if (security === 'reality') {
+    streamSettings.realitySettings = {
+      publicKey: e.publicKey,
+      shortId: e.shortId,
+      serverName: e.sni,
+      fingerprint: e.fingerprint,
+      show: false,
+      spiderX: '',
+    };
+  } else if (security === 'tls') {
+    streamSettings.tlsSettings = {
+      serverName: e.sni,
+      fingerprint: e.fingerprint,
+      ...(e.alpn && e.alpn.length > 0 ? { alpn: e.alpn } : {}),
+      ...(e.allowInsecure ? { allowInsecure: true } : {}),
+    };
+  }
+  // transport-specific settings.
+  if (network === 'ws') {
+    streamSettings.wsSettings = {
+      ...(e.path ? { path: e.path } : {}),
+      ...(e.hostHeader ? { headers: { Host: e.hostHeader } } : {}),
+    };
+  } else if (network === 'httpupgrade') {
+    streamSettings.httpupgradeSettings = {
+      ...(e.path ? { path: e.path } : {}),
+      ...(e.hostHeader ? { host: e.hostHeader } : {}),
+    };
+  } else if (network === 'xhttp') {
+    streamSettings.xhttpSettings = {
+      ...(e.path ? { path: e.path } : {}),
+      ...(e.hostHeader ? { host: e.hostHeader } : {}),
+      mode: 'auto',
+    };
+  } else if (network === 'grpc') {
+    streamSettings.grpcSettings = { serviceName: e.serviceName ?? '' };
+  } else if (network === 'kcp') {
+    streamSettings.kcpSettings = { header: { type: 'none' } };
+  }
+
+  // TLS-fragment - dial this proxy THROUGH the fragment freedom outbound.
+  // Merge into any existing sockopt so we never clobber other fields.
+  if (tlsFragment) {
+    const existingSockopt =
+      (streamSettings.sockopt as Record<string, unknown> | undefined) ?? {};
+    streamSettings.sockopt = { ...existingSockopt, dialerProxy: fragmentTag };
+  }
+
+  return {
+    tag,
+    protocol: sub === 'trojan' ? 'trojan' : sub === 'vmess' ? 'vmess' : 'vless',
+    settings,
+    streamSettings,
+  };
+}
+
+/**
+ * Build a hysteria2 outbound for the array format, in xray-core's documented
+ * client shape (protocol "hysteria", settings.version 2 + address/port,
+ * streamSettings.network "hysteria" + hysteriaSettings).
+ *
+ * FIELD-PENDING, do not treat as verified. Two open risks:
+ *   1. xray-core's hy2 outbound has NO Salamander obfs field. Our RU nodes set
+ *      obfsPassword (bare QUIC is DPI-throttled in RU), so on an obfs node this
+ *      outbound will NOT connect via xray-core. It only works on non-obfs hy2
+ *      nodes. The Remnawave эталон likely routes protocol:"hysteria" through
+ *      Happ's NATIVE hy2 core (not xray-core), which does support obfs, so the
+ *      real working shape must be confirmed against that эталон + a live hy2
+ *      node before tester sign-off.
+ *   2. xray-core has open bugs on the hy2 outbound (XTLS/Xray-core#5619).
+ * Isolated here so the exact shape is one edit once the эталон lands.
+ */
+function buildHysteriaOutbound(e: SubscriptionEndpoint, tag: string): Record<string, unknown> {
+  if (e.protocol !== 'hysteria') throw new Error('unreachable'); // narrowing
+  const hysteriaSettings: Record<string, unknown> = { version: 2, auth: e.password };
+  // Brutal CC bandwidth. Xray wants a unit-suffixed string ("100mbps").
+  if (typeof e.upMbps === 'number') hysteriaSettings.up = `${e.upMbps}mbps`;
+  if (typeof e.downMbps === 'number') hysteriaSettings.down = `${e.downMbps}mbps`;
+  // NB: obfsPassword is intentionally NOT emitted, xray-core hy2 outbound has no
+  // field for it. See the FIELD-PENDING note above: an obfs node needs Happ's
+  // native hy2 core, and the эталон is the source of truth for that shape.
+  return {
+    tag,
+    protocol: 'hysteria',
+    settings: { version: 2, address: e.host, port: e.port },
+    streamSettings: {
+      network: 'hysteria',
+      security: 'tls',
+      tlsSettings: { serverName: e.host },
+      hysteriaSettings,
+    },
+  };
+}
+
 export function buildXrayJson(
   endpoints: SubscriptionEndpoint[],
   opts: XrayJsonBuildOpts = {},
@@ -175,18 +324,8 @@ export function buildXrayJson(
   // split-DNS block; proxy-all leaves both null so the output stays
   // byte-identical to pre-R1 builds.
   const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules =
-    preset === 'ru-split'
-      ? RU_SPLIT_RULES
-      : preset === 'cn-split'
-        ? CN_SPLIT_RULES
-        : null;
-  const splitDns =
-    preset === 'ru-split'
-      ? RU_SPLIT_DNS
-      : preset === 'cn-split'
-        ? CN_SPLIT_DNS
-        : null;
+  const splitRules = splitRulesFor(preset);
+  const splitDns = splitDnsFor(preset);
 
   // TLS-fragment - the fragment outbound's tag must not collide with any proxy
   // (`${nodeName}-xray`), `direct`, or `block` tag, and must exactly equal the
@@ -201,95 +340,12 @@ export function buildXrayJson(
   }
   const fragmentTag = reservedTags.has('fragment') ? 'tls-fragment' : 'fragment';
 
+  // T1: per-endpoint outbound now built by the shared buildProxyOutbound. Caller
+  // keeps the proxyTags bookkeeping (order and values unchanged, so the output
+  // stays byte-identical to the inline version).
   const proxyOutbounds = xrayEps.map((e) => {
-    if (e.protocol !== 'xray') throw new Error('unreachable'); // narrowing
-    const tag = `${e.nodeName}-xray`;
-    proxyTags.push(tag);
-    const sub = e.subprotocol ?? 'vless';
-    const network = e.network ?? 'raw';
-    // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none' (plain).
-    const sec = e.securityLayer ?? 'default';
-    const security = sec === 'default' ? 'reality' : sec;
-    const useTls = sec !== 'none';
-
-    // settings block by subprotocol.
-    let settings: Record<string, unknown>;
-    if (sub === 'trojan') {
-      settings = { servers: [{ address: e.host, port: e.port, password: e.uuid }] };
-    } else if (sub === 'vmess') {
-      settings = {
-        vnext: [
-          { address: e.host, port: e.port, users: [{ id: e.uuid, security: 'auto', alterId: 0 }] },
-        ],
-      };
-    } else {
-      settings = {
-        vnext: [
-          {
-            address: e.host,
-            port: e.port,
-            // Vision flow needs a TLS-like layer (reality or tls), not none.
-            users: [{ id: e.uuid, encryption: 'none', ...(useTls && e.flow ? { flow: e.flow } : {}) }],
-          },
-        ],
-      };
-    }
-
-    const streamSettings: Record<string, unknown> = { network, security };
-    if (security === 'reality') {
-      streamSettings.realitySettings = {
-        publicKey: e.publicKey,
-        shortId: e.shortId,
-        serverName: e.sni,
-        fingerprint: e.fingerprint,
-        show: false,
-        spiderX: '',
-      };
-    } else if (security === 'tls') {
-      streamSettings.tlsSettings = {
-        serverName: e.sni,
-        fingerprint: e.fingerprint,
-        ...(e.alpn && e.alpn.length > 0 ? { alpn: e.alpn } : {}),
-        ...(e.allowInsecure ? { allowInsecure: true } : {}),
-      };
-    }
-    // transport-specific settings.
-    if (network === 'ws') {
-      streamSettings.wsSettings = {
-        ...(e.path ? { path: e.path } : {}),
-        ...(e.hostHeader ? { headers: { Host: e.hostHeader } } : {}),
-      };
-    } else if (network === 'httpupgrade') {
-      streamSettings.httpupgradeSettings = {
-        ...(e.path ? { path: e.path } : {}),
-        ...(e.hostHeader ? { host: e.hostHeader } : {}),
-      };
-    } else if (network === 'xhttp') {
-      streamSettings.xhttpSettings = {
-        ...(e.path ? { path: e.path } : {}),
-        ...(e.hostHeader ? { host: e.hostHeader } : {}),
-        mode: 'auto',
-      };
-    } else if (network === 'grpc') {
-      streamSettings.grpcSettings = { serviceName: e.serviceName ?? '' };
-    } else if (network === 'kcp') {
-      streamSettings.kcpSettings = { header: { type: 'none' } };
-    }
-
-    // TLS-fragment - dial this proxy THROUGH the fragment freedom outbound.
-    // Merge into any existing sockopt so we never clobber other fields.
-    if (tlsFragment) {
-      const existingSockopt =
-        (streamSettings.sockopt as Record<string, unknown> | undefined) ?? {};
-      streamSettings.sockopt = { ...existingSockopt, dialerProxy: fragmentTag };
-    }
-
-    return {
-      tag,
-      protocol: sub === 'trojan' ? 'trojan' : sub === 'vmess' ? 'vmess' : 'vless',
-      settings,
-      streamSettings,
-    };
+    proxyTags.push(`${e.nodeName}-xray`);
+    return buildProxyOutbound(e, tlsFragment, fragmentTag);
   });
 
   // Slice 29 follow-up: when balancer is on AND we have ≥2 proxies, wrap
@@ -379,4 +435,147 @@ export function buildXrayJson(
   };
   if (observatory) config.observatory = observatory;
   return JSON.stringify(config, null, 2) + '\n';
+}
+
+/** A4: overwrite UUID bytes 7-8 (the 3rd hyphen-group) with a big-endian uint16
+ *  route tag, e.g. tag 1 -> "...-0001-...". Xray reads those two bytes as
+ *  `vlessRoute` and ignores them for authentication (documented + verified in
+ *  field 2026-07-25), so the result authenticates as the SAME user but is
+ *  pinned to a specific cascade exit. A malformed UUID is returned untouched. */
+export function withVlessRouteTag(uuid: string, tag: number): string {
+  const parts = uuid.split('-');
+  if (parts.length !== 5 || parts[2]!.length !== 4) return uuid;
+  parts[2] = (tag & 0xffff).toString(16).padStart(4, '0');
+  return parts.join('-');
+}
+
+/** A4: label for an expanded exit config. When the entry endpoint came from a
+ *  NAMED host (a node with several hosts fans out into multiple entry endpoints,
+ *  each producing the same exit set), suffix the exit name with the host remark
+ *  so the configs stay distinct instead of showing duplicate labels ("nl2",
+ *  "nl2"). The default/unnamed host keeps the plain exit name. */
+export function cascadeExitLabel(exitName: string, hostRemark?: string): string {
+  return hostRemark && hostRemark !== 'Default' ? `${exitName} · ${hostRemark}` : exitName;
+}
+
+/**
+ * A1 array format (T1 skeleton + T2 routing + hy2). A top-level JSON array of
+ * standalone configs, one per xray OR hysteria endpoint, each with its own
+ * `remarks` (server name), SOCKS inbound, outbounds (its proxy + direct + block)
+ * and per-config routing. This is what Happ / V2RayTun parse as N separate
+ * servers;
+ * the single-config buildXrayJson (one config, N outbounds) they read as one
+ * server, which is the migration blocker this closes.
+ *
+ * A4 (route-profiles, exit selection): an xray endpoint whose node is a balancer-
+ * cascade entry carries `cascadeExits`. Such an endpoint expands into one config
+ * PER exit instead of one: same entry host/transport, UUID bytes 7-8 set to the
+ * exit index+1 (the node's `vlessRoute:<i+1> -> cascade-link-out-<i>` rule pins
+ * it), remark = exit name. The client picks the exit by picking the server.
+ *
+ * T2: each config carries the SAME routing surface the single-config builder
+ * does (custom rules, custom domain lists, split preset + split DNS, TLS-
+ * fragment), but every "proxy" target is THIS config's own proxy rather than a
+ * shared first-outbound. buildXrayJson stays untouched, the balancer bundle
+ * still needs it.
+ */
+export function buildXrayJsonArray(
+  endpoints: SubscriptionEndpoint[],
+  opts: XrayJsonBuildOpts = {},
+): string {
+  // xray endpoints AND hysteria endpoints, in endpoint order so the array order
+  // matches the эталон. hy2 is FIELD-PENDING (see buildHysteriaOutbound). Other
+  // protocols are skipped, this is an xray/hy2 surface.
+  const supported = endpoints.filter(
+    (e) => e.protocol === 'xray' || e.protocol === 'hysteria',
+  );
+  const preset = opts.routingPreset ?? 'proxy-all';
+  const splitRules = splitRulesFor(preset);
+  const splitDns = splitDnsFor(preset);
+  const tlsFragment = opts.tlsFragment === true;
+  const cdl = opts.customDomainLists;
+
+  // Builds one standalone config. `remark` is the client-facing server label:
+  // the node name normally, the exit name for an A4 route-profile expansion.
+  const makeConfig = (e: SubscriptionEndpoint, remark: string) => {
+    // Per-protocol primary outbound + tag. TLS-fragment is xray-only (it splits
+    // the TCP ClientHello; hy2 rides QUIC, nothing to fragment). Tags carry a
+    // protocol suffix so `fragment` can never collide.
+    const isXray = e.protocol === 'xray';
+    const tag = isXray ? `${e.nodeName}-xray` : `${e.nodeName}-hysteria`;
+    const fragmentTag = 'fragment';
+    const applyFragment = tlsFragment && isXray;
+    const primary = isXray
+      ? buildProxyOutbound(e, applyFragment, fragmentTag)
+      : buildHysteriaOutbound(e, tag);
+
+    const outbounds: Record<string, unknown>[] = [
+      primary,
+      { tag: 'direct', protocol: 'freedom' },
+      { tag: 'block', protocol: 'blackhole' },
+    ];
+    if (applyFragment) {
+      outbounds.push({
+        tag: fragmentTag,
+        protocol: 'freedom',
+        settings: { fragment: { ...TLS_FRAGMENT_SETTINGS } },
+      });
+    }
+
+    // R3 custom domain lists, this config's own outbound is the only proxy target.
+    const customDomainRules: Record<string, unknown>[] = cdl
+      ? [
+          ...(cdl.block.length ? [{ type: 'field', domain: cdl.block, outboundTag: 'block' }] : []),
+          ...(cdl.direct.length ? [{ type: 'field', domain: cdl.direct, outboundTag: 'direct' }] : []),
+          ...(cdl.proxy.length ? [{ type: 'field', domain: cdl.proxy, outboundTag: tag }] : []),
+        ]
+      : [];
+
+    const rules: Record<string, unknown>[] = [
+      // Precedence mirrors buildXrayJson: raw custom rules, then domain lists,
+      // then the split preset. Then the per-config contract (эталон Remnawave):
+      // torrent off the tunnel, everything else through this proxy.
+      ...(opts.customRules ?? []),
+      ...customDomainRules,
+      ...(splitRules ?? []),
+      { type: 'field', protocol: ['bittorrent'], outboundTag: 'direct' },
+      { type: 'field', network: 'tcp,udp', outboundTag: tag },
+    ];
+
+    return {
+      remarks: remark,
+      log: { loglevel: 'warning' },
+      ...(splitDns ? { dns: splitDns } : {}),
+      inbounds: [
+        {
+          tag: 'socks-in',
+          port: 10808,
+          listen: '127.0.0.1',
+          protocol: 'socks',
+          settings: { auth: 'noauth', udp: true },
+        },
+      ],
+      outbounds,
+      routing: {
+        domainStrategy: splitRules ? 'IPIfNonMatch' : 'AsIs',
+        rules,
+      },
+    };
+  };
+
+  // A4: an xray endpoint fronting a balancer cascade expands into one config per
+  // exit (tag in UUID bytes 7-8), each labelled by its exit. Everything else
+  // (hy2, or an xray endpoint with no exits) stays a single config as before.
+  const configs = supported.flatMap((e) => {
+    if (e.protocol === 'xray' && e.cascadeExits && e.cascadeExits.length > 0) {
+      return e.cascadeExits.map((profile) =>
+        makeConfig(
+          { ...e, uuid: withVlessRouteTag(e.uuid, profile.tag) },
+          cascadeExitLabel(profile.label, e.hostRemark),
+        ),
+      );
+    }
+    return [makeConfig(e, e.nodeName)];
+  });
+  return JSON.stringify(configs, null, 2) + '\n';
 }

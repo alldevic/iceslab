@@ -3,14 +3,17 @@ import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
   rankNodesForUser,
+  rendezvousOrder,
   type NodeForRanking,
 } from './node-selection.js';
 // Slice 27 follow-up: enabledProtocols is no longer consulted, squad ACL is
 // the single source of truth for which protocols a user sees. The column is
 // kept on the User row for backwards-compat but never filters subscription
 // output.
+import { subscriptionServerName } from '../../lib/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
-import { getHiddenCascadeNodeIds } from '../cascades/cascade.service.js';
+import { getHiddenCascadeNodeIds, getRouteProfilesByEntryNode } from '../cascades/cascade.service.js';
+import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/credentials.js';
@@ -33,6 +36,7 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
+import { withVlessRouteTag, cascadeExitLabel } from './formats/xrayjson.js';
 
 // ───── Domain errors ─────
 
@@ -49,6 +53,32 @@ export class SubscriptionForbiddenError extends Error {
     this.name = 'SubscriptionForbiddenError';
   }
 }
+
+/**
+ * How long a node may be `unreachable` before it stops being served.
+ *
+ * Sized against the poller: it ticks every 30 seconds, so this is three
+ * consecutive failures. Short enough that a genuinely dead node leaves within
+ * the 90 seconds the acceptance criterion names, long enough that a single
+ * missed tick (or a brief panel-to-node network blip) changes nothing.
+ */
+const UNREACHABLE_GRACE_MS = 90_000;
+
+/**
+ * Default cap on interchangeable entries per profile: none.
+ *
+ * This was a hard-coded 3 until 2026-08-10. It read as a bug from the operator
+ * side and was reported as one: a node was deployed, healthy and serving, and
+ * simply did not appear in a subscription, with nothing anywhere saying why.
+ * Whatever a capped pool buys (a leaked subscription exposing a slice of the
+ * entry surface rather than all of it) is not worth an operator doubting
+ * whether their own fleet works.
+ *
+ * The mechanism is kept and is now opt-in through `subscriptionEntryPoolSize`.
+ * When set, selection is by rendezvous hash: stable per person, and a node
+ * dropping out reshuffles only its own users.
+ */
+const ENTRY_POOL_SIZE_DEFAULT = 0;
 
 export interface RequestContext {
   ip?: string | null;
@@ -145,6 +175,38 @@ interface NaiveInboundConfig {
 }
 
 /**
+ * A4: expand one endpoint into the share-link URIs the plain / base64
+ * subscription emits. A balancer-cascade entry (an xray endpoint carrying
+ * `cascadeExits`) yields one re-tagged URI per exit: the userinfo UUID gets
+ * bytes 7-8 set to exit index+1 (xray reads them as vlessRoute, auth ignores
+ * them) and the `#remark` becomes the exit name. Unlike the JSON array this
+ * keeps every server as a plain URI, so Happ / any client can ping it, at the
+ * cost of the per-config split-routing only the JSON form carries.
+ *
+ * vmess is skipped (its UUID lives inside a base64 blob, not the userinfo, so a
+ * plain string swap can't reach it) and returned as its single original URI.
+ * Every non-entry endpoint returns its one original URI unchanged.
+ */
+export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
+  if (
+    e.protocol !== 'xray' ||
+    !e.cascadeExits ||
+    e.cascadeExits.length === 0 ||
+    e.subprotocol === 'vmess'
+  ) {
+    return e.uri ? [e.uri] : [];
+  }
+  // vless:// and trojan:// both put the UUID in the userinfo, so replacing the
+  // first occurrence of it retargets the link. Strip the original #remark first.
+  const hashIdx = e.uri.indexOf('#');
+  const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
+  return e.cascadeExits.map((profile) => {
+    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, profile.tag));
+    return `${tagged}#${encodeURIComponent(cascadeExitLabel(profile.label, e.hostRemark))}`;
+  });
+}
+
+/**
  * Resolve a subscription token to a list of per-inbound endpoints.
  *
  * Walks every enabled inbound on every active node, filters by the user's
@@ -215,7 +277,26 @@ export async function generateSubscription(
                 enabled: true,
                 groupProfiles: { some: { groupId: { in: groupIds } } },
               },
-              node: { deletedAt: null, status: { not: 'disabled' } },
+              node: {
+                deletedAt: null,
+                status: { not: 'disabled' },
+                // Liveness, with hysteresis. `unreachable` means "the panel
+                // could not reach the AGENT", not "the proxy is down": the
+                // mTLS control channel and the user-facing port fail
+                // independently. Dropping a node the moment that flag appears
+                // would turn one bad minute between panel and fleet into every
+                // user losing every endpoint at once.
+                //
+                // So a node leaves the subscription only once it has been
+                // unreachable for longer than UNREACHABLE_GRACE_MS, and
+                // returns on the first successful poll (the poller moves
+                // lastStatusChange when it flips back).
+                OR: [
+                  { status: { not: 'unreachable' } },
+                  { lastStatusChange: null },
+                  { lastStatusChange: { gt: new Date(Date.now() - UNREACHABLE_GRACE_MS) } },
+                ],
+              },
             },
             include: {
               profile: { select: { id: true, protocol: true, config: true } },
@@ -227,7 +308,13 @@ export async function generateSubscription(
                   // B3/G - node FQDN, used as the REALITY serverName/SNI for
                   // self-steal xray endpoints (per-node, must resolve to node IP).
                   domain: true,
+                  // Drives the flag emoji in the server name a client displays.
+                  countryCode: true,
                   createdAt: true,
+                  // Capacity hint, used as the WEIGHT when picking which
+                  // entries of a pool a user gets: a node with twice the cap
+                  // should take twice the share. Null = treated as the default.
+                  maxUsers: true,
                   // Slice 28: region.code drives the "same-region bonus" in the
                   // smart-selection ranker. Null when admin hasn't tagged a region;
                   // ranker still works (utilization-only score for that node).
@@ -239,6 +326,10 @@ export async function generateSubscription(
               hosts: {
                 where: { enabled: true },
                 orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+                // Which squads narrowed themselves to this specific host.
+                // Read here rather than as a second query so the whole ACL
+                // decision stays inside the cached binding set.
+                include: { groupHosts: { select: { groupId: true } } },
               },
             },
             orderBy: [{ port: 'asc' }],
@@ -247,6 +338,37 @@ export async function generateSubscription(
   // Shallow copy - the cached array is shared across requests/users, and the
   // sort here plus the topN filter below both mutate the array in place.
   const bindings = [...cachedBindings];
+
+  // Per-squad host allow-list. A squad grants PROFILES, and every host of a
+  // granted profile came with it, which made "this tier sees two countries,
+  // that one sees all" impossible without duplicating the profile.
+  //
+  // OPT-IN, the same rule the cascade exit allow-list uses: a squad with NO
+  // rows restricts nothing. Only squads that actually narrowed themselves are
+  // collected here, so a user in a narrowed squad and an unrestricted one
+  // still sees everything, which is the permissive-union behaviour the rest of
+  // the ACL already has.
+  const narrowedSquads = new Set(
+    (
+      await prisma.groupHost.findMany({
+        where: { groupId: { in: groupIds } },
+        select: { groupId: true },
+        distinct: ['groupId'],
+      })
+    ).map((r) => r.groupId),
+  );
+  if (narrowedSquads.size > 0) {
+    // A host is served when at least one of the user's squads reaches it:
+    // either a squad that never narrowed itself, or one that named this host.
+    const unrestricted = groupIds.some((g) => !narrowedSquads.has(g));
+    if (!unrestricted) {
+      for (const b of bindings) {
+        b.hosts = b.hosts.filter((h) =>
+          h.groupHosts.some((gh) => groupIds.includes(gh.groupId)),
+        );
+      }
+    }
+  }
   // Sort by node createdAt then port so the order across formats stays stable.
   bindings.sort((a, b) => {
     const t = a.node.createdAt.getTime() - b.node.createdAt.getTime();
@@ -294,6 +416,90 @@ export async function generateSubscription(
     bindings.push(...filtered);
   }
 
+  // Entry order, and optionally an entry cap.
+  //
+  // Nodes serving the SAME profile are interchangeable ways in, so the order
+  // they arrive in decides which one most clients actually dial: apps offer the
+  // first as the default and few subscribers ever change it. One order for
+  // everybody therefore herds the whole userbase onto whichever node the query
+  // happened to return first, while the rest idle.
+  //
+  // So the list is ordered by rendezvous hash on (user, node). Every subscriber
+  // still receives every node they are entitled to - the operator deployed it,
+  // it has to be there - but they each start somewhere different, and the
+  // ordering is a pure function of (user, node), which buys two things: a
+  // subscriber's router does not wander on every refresh, and a node dropping
+  // out reshuffles only the people who were on it. Sorting by live load would
+  // do neither: it moves everyone at once, then moves them back when the metric
+  // catches up.
+  //
+  // `subscriptionEntryPoolSize` additionally caps the list per profile. Off by
+  // default (see ENTRY_POOL_SIZE_DEFAULT); an operator who would rather a leaked
+  // subscription expose a slice of the entry surface than all of it turns it on.
+  //
+  // Liveness is already applied by the query above, so this only ever orders
+  // nodes that are actually being served.
+  const entryPoolSize = (await getSubscriptionSettings()).entryPoolSize ?? ENTRY_POOL_SIZE_DEFAULT;
+  if (bindings.length > 0) {
+    const byProfile = new Map<string, typeof bindings>();
+    for (const b of bindings) {
+      const list = byProfile.get(b.profile.id) ?? [];
+      list.push(b);
+      byProfile.set(b.profile.id, list);
+    }
+    const ordered: typeof bindings = [];
+    for (const list of byProfile.values()) {
+      const nodes = [...new Map(list.map((b) => [b.node.id, b.node])).values()].map((n) => ({
+        id: n.id,
+        name: n.name,
+        regionCode: null,
+        maxUsers: n.maxUsers ?? null,
+      }));
+      let ranked = rendezvousOrder(nodes, user.id);
+      if (entryPoolSize > 0) ranked = ranked.slice(0, entryPoolSize);
+      const rank = new Map(ranked.map((n, i) => [n.id, i]));
+      const kept = list.filter((b) => rank.has(b.node.id));
+      // Sort is stable, so several hosts sharing one node keep the relative
+      // order the operator gave them and only the nodes move.
+      kept.sort((a, b) => rank.get(a.node.id)! - rank.get(b.node.id)!);
+      ordered.push(...kept);
+    }
+    bindings.length = 0;
+    bindings.push(...ordered);
+  }
+
+  // A4: which of these nodes are cascade entries + the route profiles they
+  // offer. One query for the whole binding set; the xray branch attaches the
+  // match so buildXrayJsonArray can expand that endpoint into one config per
+  // profile. Chains take part too, but only once a policy is granted (see
+  // getRouteProfilesByEntryNode).
+  // Which squads actually hand out each entry node. A route policy belongs to
+  // the squad that granted it, so it may only add variants to entries THAT
+  // squad hands out: without this, one squad's "no ads" grant appeared on
+  // another squad's exit, which the operator never configured and could not
+  // switch off (field 2026-08-08). Built from the same host grants the ACL
+  // above uses, so the two can't drift.
+  //
+  // Unrestricted squads (no host rows at all) reach every entry, matching the
+  // opt-in convention the host and exit allow-lists already follow.
+  const entryReach = new Map<string, Set<string>>();
+  for (const b of bindings) {
+    let reach = entryReach.get(b.node.id);
+    if (!reach) {
+      reach = new Set<string>();
+      entryReach.set(b.node.id, reach);
+    }
+    for (const g of groupIds) {
+      if (!narrowedSquads.has(g) || b.hosts.some((h) => h.groupHosts.some((gh) => gh.groupId === g)))
+        reach.add(g);
+    }
+  }
+  const balancerExits = await getRouteProfilesByEntryNode(
+    [...new Set(bindings.map((b) => b.node.id))],
+    groupIds,
+    entryReach,
+  );
+
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
     // Resolve deployable config: profile.config + binding.overrides.
@@ -310,12 +516,22 @@ export async function generateSubscription(
       config: cfgMerged,
     };
 
-    // Slice 30: fan-out per host. Backfill migration guarantees ≥1 host
-    // per binding; ensureDefaultHost() does the same for new bindings.
-    // The fallback below covers a migration-skipped binding so the
-    // subscription never silently drops to zero URLs.
-    const hostRows = b.hosts.length > 0 ? b.hosts : [null];
-    for (const hostRow of hostRows) {
+    // Slice 30: fan-out per host. A binding with no ENABLED host serves
+    // nothing, full stop.
+    //
+    // This used to fall back to `[null]` so a binding skipped by the backfill
+    // migration would not silently drop out of the subscription. That guard
+    // outlived its data and became a bug the moment hosts got a delete button:
+    // the query filters on `enabled: true`, so removing the last host, or
+    // merely switching it off, left the binding with zero rows and the
+    // fallback handed the client a nameless endpoint labelled with the NODE
+    // name. Seen in the field 2026-07-30: a deleted host reappeared in Happ as
+    // "nl2". The panel meanwhile says, under the toggle, "Off hides it from
+    // every subscription", which the fallback made untrue.
+    //
+    // Zero hosts is now a state an operator can deliberately reach, so it
+    // means what it says.
+    for (const hostRow of b.hosts) {
       const baseHost = b.publicHost ?? hostFromAddress(b.node.address);
       const basePort = b.publicPort ?? b.port;
 
@@ -324,9 +540,16 @@ export async function generateSubscription(
       const host = hostRow?.addressOverride ?? baseHost;
       const port = hostRow?.portOverride ?? basePort;
       const hostRemark = hostRow?.remark ?? '';
-      const nodeName = hostRemark && hostRemark !== 'Default'
-        ? `${b.node.name} · ${hostRemark}`
-        : b.node.name;
+      // The line a user reads in their client. A named host wins outright and
+      // the flag leads; see subscriptionServerName. Until 2026-07-30 this was
+      // `${node} · ${host}`, which put an internal node name in front of the
+      // label the operator wrote, and carried no flag at all even though the
+      // panel's own preview showed one.
+      const nodeName = subscriptionServerName({
+        hostRemark,
+        nodeName: b.node.name,
+        countryCode: b.node.countryCode,
+      });
       const hostOverrides = hostRow ?? null;
 
     // Slice 30: common per-host metadata threaded onto each endpoint so
@@ -339,8 +562,17 @@ export async function generateSubscription(
         ? securityLayerRaw
         : 'default';
     const hostMeta = {
+      // Rides in `hostMeta` rather than being written out at each of the ten
+      // pushes below: it is the same for every endpoint of this binding, and
+      // one spread cannot be forgotten in a branch the way ten copies can.
+      nodeId: b.node.id,
       hostId: hostOverrides?.id,
-      hostRemark: hostOverrides?.remark,
+      // Only carried when this binding has MORE THAN ONE host. It exists to
+      // tell apart the several cascade profiles a multi-host entry produces,
+      // which are otherwise identical strings. With a single host there is
+      // nothing to disambiguate, and appending it just glued our internal host
+      // name onto every way out ("balancer · SE · ru-01-xhttp-reality").
+      hostRemark: b.hosts.length > 1 ? hostOverrides?.remark : undefined,
       alpn: hostOverrides?.alpn,
       allowInsecure: hostOverrides?.allowInsecure ?? false,
       securityLayer,
@@ -506,6 +738,9 @@ export async function generateSubscription(
         serviceName: cfg.serviceName,
         subprotocol,
         uri,
+        // A4: set only when this node is a balancer-cascade entry. Undefined
+        // otherwise, so the array format emits a single config as before.
+        cascadeExits: balancerExits.get(b.node.id),
       });
     } else if (ib.protocol === 'amneziawg' && user.amneziawgPrivateKey) {
       const cfg = ib.config as unknown as AmneziawgInboundConfig;
@@ -615,9 +850,16 @@ export async function generateSubscription(
       });
     } else if (ib.protocol === 'naive' && user.naivePassword) {
       const cfg = ib.config as unknown as NaiveInboundConfig;
-      // Public host for naive is the inbound's TLS hostname, not the panel's
-      // node.address (Caddy answers ACME on `cfg.hostname`).
-      const naiveHost = cfg.hostname || host;
+      // Public host for naive defaults to the inbound's TLS hostname rather
+      // than node.address, because Caddy answers ACME on `cfg.hostname`.
+      //
+      // A host's addressOverride still wins over it. Until 2026-07-29 the
+      // profile value came first, which inverted the whole override model: the
+      // operator set an address on the host, the form reported it as active,
+      // and the subscription quietly emitted the profile's hostname instead.
+      // Every other protocol resolves address overrides before the protocol
+      // switch (`host` above), naive was the one exception.
+      const naiveHost = hostOverrides?.addressOverride ?? (cfg.hostname || host);
       endpoints.push({
         protocol: 'naive',
         nodeName,
@@ -751,7 +993,7 @@ export async function generateSubscription(
 
   return {
     endpoints,
-    textPlain: encodePlainList(endpoints.map((e) => e.uri)),
+    textPlain: encodePlainList(endpoints.flatMap((e) => expandEndpointUris(e))),
     json: buildSubscriptionJson(user, endpoints),
     squadRoutingPreset,
     // R3 - per-user override (scalar already loaded on `user`). Garbage / unset

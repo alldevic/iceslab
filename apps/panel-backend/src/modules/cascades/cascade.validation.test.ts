@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { validateCascadeHops, CascadeValidationError } from './cascade.validation.js';
+import {
+  foldPositionsIntoHops,
+  validateCascadeHops,
+  CascadeValidationError,
+} from './cascade.validation.js';
 import type { CascadeHopInput } from './cascade.schemas.js';
 
 const N1 = '11111111-1111-1111-1111-111111111111';
@@ -27,6 +31,82 @@ function valid2(): CascadeHopInput[] {
     { nodeId: N2, position: 1 },
   ];
 }
+
+// The redesigned screens send positions + directions. Storage still holds
+// single-node hops, so the payload is folded. Everything E1 shipped has to
+// survive that fold, and what cannot be stored has to be refused by name.
+describe('foldPositionsIntoHops', () => {
+  const entry = (nodeId: string) => ({
+    nodeIds: [nodeId],
+    position: 0,
+    entryProtocol: 'xray' as const,
+    linkProtocol: 'xray' as const,
+  });
+
+  it('one entry, one direction becomes a chain', () => {
+    const { hops, mode } = foldPositionsIntoHops([entry(N1)], [{ nodeIds: [N2] }]);
+    expect(mode).toBe('chain');
+    expect(hops).toEqual([
+      { nodeId: N1, position: 0, entryProtocol: 'xray', linkProtocol: 'xray' },
+      { nodeId: N2, position: 1 },
+    ]);
+    // The folded result must satisfy the rules it will be checked against.
+    expect(() => validateCascadeHops(hops, mode)).not.toThrow();
+  });
+
+  it('one entry, several directions becomes a balancer', () => {
+    const { hops, mode } = foldPositionsIntoHops(
+      [entry(N1)],
+      [{ nodeIds: [N2] }, { nodeIds: [N3] }],
+    );
+    expect(mode).toBe('balancer');
+    expect(hops.map((h) => h.position)).toEqual([0, 1, 2]);
+    // Exits carry no link protocol; only the entry does.
+    expect(hops[1]!.linkProtocol).toBeUndefined();
+    expect(() => validateCascadeHops(hops, mode)).not.toThrow();
+  });
+
+  it('transits keep their own link protocol on the way to the single exit', () => {
+    const { hops, mode } = foldPositionsIntoHops(
+      [entry(N1), { nodeIds: [N2], position: 1, linkProtocol: 'shadowsocks' }],
+      [{ nodeIds: [N3] }],
+    );
+    expect(mode).toBe('chain');
+    expect(hops[1]).toEqual({ nodeId: N2, position: 1, linkProtocol: 'shadowsocks' });
+    expect(hops[2]).toEqual({ nodeId: N3, position: 2 });
+    expect(() => validateCascadeHops(hops, mode)).not.toThrow();
+  });
+
+  it('sorts positions before folding', () => {
+    const { hops } = foldPositionsIntoHops(
+      [{ nodeIds: [N2], position: 1, linkProtocol: 'xray' }, entry(N1)],
+      [{ nodeIds: [N3] }],
+    );
+    expect(hops.map((h) => h.nodeId)).toEqual([N1, N2, N3]);
+  });
+
+  it('refuses a pool on a position, naming the limit', () => {
+    expect(() => foldPositionsIntoHops([{ ...entry(N1), nodeIds: [N1, N2] }], [{ nodeIds: [N3] }]))
+      .toThrow(/pool on a position/);
+  });
+
+  it('refuses a pool behind a direction', () => {
+    expect(() => foldPositionsIntoHops([entry(N1)], [{ nodeIds: [N2, N3] }])).toThrow(
+      /pool behind a direction/,
+    );
+  });
+
+  it('refuses transits combined with several directions', () => {
+    // The one shape the old model never had a representation for, which is why
+    // the rewrite exists at all.
+    expect(() =>
+      foldPositionsIntoHops(
+        [entry(N1), { nodeIds: [N2], position: 1, linkProtocol: 'xray' }],
+        [{ nodeIds: [N3] }, { nodeIds: [N4] }],
+      ),
+    ).toThrow(/transits together with several directions/);
+  });
+});
 
 describe('validateCascadeHops', () => {
   it('accepts a valid 2-hop entry->exit cascade and returns it sorted', () => {

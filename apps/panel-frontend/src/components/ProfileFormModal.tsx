@@ -3,10 +3,10 @@ import { useTranslation } from 'react-i18next';
 import {
   Accordion,
   Alert,
+  Box,
   Button,
   Card,
-  Chip,
-  Divider,
+  Collapse,
   Group,
   Modal,
   NumberInput,
@@ -20,15 +20,28 @@ import {
   TextInput,
   Textarea,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
 import { DEMO_MODE } from '../lib/demoFlag';
 import { useForm } from '@mantine/form';
 import { useDisclosure } from '@mantine/hooks';
-import { IconBolt, IconDownload, IconKey } from '@tabler/icons-react';
+import {
+  IconAlertTriangle,
+  IconBolt,
+  IconCheck,
+  IconChevronDown,
+  IconDownload,
+  IconInfoCircle,
+  IconKey,
+  IconPlus,
+  IconShield,
+} from '@tabler/icons-react';
+import { useQuery } from '@tanstack/react-query';
 import { notifications } from '@mantine/notifications';
 import { useMutation } from '@tanstack/react-query';
 import {
   generateInboundKeypair,
+  listNodes,
   type CreateProfileInput,
   type Profile,
   type ProtocolName,
@@ -42,7 +55,11 @@ import { protocolLabel } from '../lib/protocols';
 // Xray stream transports. The whole stack already handles all six (Zod schema,
 // node config.go renderer, client URI builder) - this is just the operator-
 // facing picker that previously surfaced only raw/xhttp/grpc.
-const XRAY_TRANSPORTS: { value: string; label: string; hint: string }[] = [
+const XRAY_TRANSPORTS: {
+  value: FormValues['xrayNetwork'];
+  label: string;
+  hint: string;
+}[] = [
   { value: 'raw', label: 'raw', hint: 'Plain TCP. Canonical REALITY + Vision, best latency, no CDN.' },
   { value: 'ws', label: 'ws', hint: 'WebSocket. CDN-frontable (Cloudflare etc). Set path + host.' },
   { value: 'grpc', label: 'gRPC', hint: 'HTTP/2 multiplexed. CDN-frontable. Set a serviceName.' },
@@ -473,13 +490,22 @@ interface Props {
   profile: Profile | null;
   onSubmit: (input: CreateProfileInput | UpdateProfileInput, mode: Mode) => Promise<void>;
   loading?: boolean;
+  /**
+   * Render the form inline instead of inside a modal. The profile form is the
+   * largest editor in the panel (protocol, transport, security, REALITY keys,
+   * recipes), and a dialog is the wrong container for it: on a laptop it
+   * scrolls inside a box while the page behind it sits empty. The page routes
+   * use this; the modal path stays for the places not migrated yet.
+   */
+  inline?: boolean;
 }
 
-export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }: Props) {
+export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, inline }: Props) {
   const { t } = useTranslation();
   const isEdit = profile !== null;
   const mode: Mode = isEdit ? 'edit' : 'create';
   const [exportOpen, exportCtl] = useDisclosure(false);
+  const [advOpen, advCtl] = useDisclosure(false);
 
   const form = useForm<FormValues>({
     initialValues: defaults(profile),
@@ -759,7 +785,8 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
   }
 
   return (
-    <Modal
+    <FormShell
+      inline={inline}
       opened={opened}
       onClose={() => {
         form.reset();
@@ -801,18 +828,52 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
       }
       size="lg"
     >
-      <form onSubmit={form.onSubmit(handleSubmit)}>
+      <form id="profile-form" onSubmit={form.onSubmit(handleSubmit)}>
         <Stack>
-          <Group grow align="flex-end">
+          {/* Which binary runs this profile, then which protocol that binary
+              speaks. Two questions in the order they are actually answered,
+              instead of one select holding thirteen mixed options. */}
+          {inline && !isEdit && (
+            <EnginePicker
+              engine={form.values.engine}
+              protocol={form.values.protocol}
+              onPick={(kind) => {
+                form.setFieldValue('engine', kind.engine);
+                form.setFieldValue('protocol', kind.protocol);
+              }}
+            />
+          )}
+
+          <SectionCard
+            title={t('profiles.form.cfg.basicsTitle')}
+            icon={<IconShield size={15} color="#7DD3FC" stroke={1.8} />}
+          >
+          {/* Name, description and the switch share one row: three short
+              answers, not three stacked sections. */}
+          <Group align="flex-start" gap={16} wrap="nowrap" style={{ width: '100%' }}>
             <TextInput
+              style={{ flex: 1, minWidth: 0 }}
               label={t('profiles.form.name')}
               placeholder="vless-reality"
               required
               {...form.getInputProps('name')}
             />
+            <Textarea
+              style={{ flex: 2, minWidth: 0 }}
+              label={t('profiles.form.description')}
+              placeholder={t('profiles.form.descriptionPlaceholder')}
+              autosize
+              minRows={1}
+              maxRows={3}
+              {...form.getInputProps('description')}
+            />
             <Select
               label={t('profiles.form.protocol')}
               description={isEdit ? t('profiles.form.protocolEdit') : undefined}
+              // On the page, the protocol is picked from the engine tabs below;
+              // the select stays for the modal path and for edit, where the
+              // protocol is fixed anyway.
+              style={inline && !isEdit ? { display: 'none' } : undefined}
               data={
                 isEdit
                   ? PROFILE_KINDS.filter((k) => k.protocol === form.values.protocol).map((k) => ({
@@ -836,31 +897,13 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                 if (!isEdit) form.setFieldValue('protocol', kind.protocol);
               }}
             />
+            <Switch
+              style={{ flexShrink: 0, marginTop: 26 }}
+              label={t('common.enabled')}
+              {...form.getInputProps('enabled', { type: 'checkbox' })}
+            />
           </Group>
-
-          <Textarea
-            label={t('profiles.form.description')}
-            placeholder=""
-            autosize
-            minRows={1}
-            maxRows={3}
-            {...form.getInputProps('description')}
-          />
-
-          <Switch label={t('common.enabled')} {...form.getInputProps('enabled', { type: 'checkbox' })} />
-
-          <Divider label={protocolLabel(form.values.protocol)} labelPosition="center" />
-
-          <Group justify="flex-end" mt={-4}>
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              leftSection={<IconDownload size={12} />}
-              onClick={exportCtl.open}
-            >
-              {t('recipes.export.button')}
-            </Button>
-          </Group>
+          </SectionCard>
 
           <RecipeExportModal
             opened={exportOpen}
@@ -869,6 +912,10 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
             values={form.values as unknown as Record<string, unknown>}
           />
 
+          {/* Recipes ride the right rail on the page (see index.css): they are
+              a shortcut into the fields, not a step before them, so they sit
+              alongside the form instead of pushing it down. */}
+          <Box className="recipes-slot">
           <RecipePicker
             key={form.values.protocol}
             protocol={form.values.protocol}
@@ -941,7 +988,42 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
               }
             }}
           />
+          </Box>
 
+          <SectionCard
+            title={t('profiles.form.cfg.configTitle', {
+              protocol: protocolLabel(form.values.protocol),
+            })}
+            accent={PROTOCOL_ACCENT[form.values.protocol] ?? '#A78BFA'}
+            icon={
+              <IconBolt
+                size={15}
+                color={PROTOCOL_ACCENT[form.values.protocol] ?? '#A78BFA'}
+                stroke={1.8}
+              />
+            }
+            action={
+              <UnstyledButton
+                type="button"
+                onClick={exportCtl.open}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  height: 26,
+                  padding: '0 10px',
+                  borderRadius: 6,
+                  backgroundColor: '#0B1420',
+                  border: '1px solid #1C2A3D',
+                }}
+              >
+                <IconDownload size={12} color="#7A8BA3" />
+                <Text style={{ fontSize: 11, lineHeight: '14px', color: '#7A8BA3' }}>
+                  {t('recipes.export.button')}
+                </Text>
+              </UnstyledButton>
+            }
+          >
           {form.values.protocol === 'xray' && (() => {
             const issues = validateXrayConfig({
               xrayNetwork: form.values.xrayNetwork,
@@ -1018,66 +1100,68 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
 
           {form.values.protocol === 'xray' && (
             <Stack>
-              {/* 3x-ui progressive flow: pick Protocol, then Transport, then
-                  Security. Each step is a labeled section. */}
-              <Divider label="1 · Protocol" labelPosition="left" />
-              <Stack gap={6}>
-                <Chip.Group
-                  multiple={false}
-                  value={form.values.xraySubprotocol}
-                  onChange={(v) => {
-                    if (v) form.setFieldValue('xraySubprotocol', v as typeof form.values.xraySubprotocol);
-                  }}
-                >
-                  <Group gap="xs">
-                    <Chip value="vless" size="sm" variant="light">VLESS</Chip>
-                    <Chip value="vmess" size="sm" variant="light">VMess</Chip>
-                    <Chip value="trojan" size="sm" variant="light">Trojan</Chip>
-                  </Group>
-                </Chip.Group>
-                <Text size="xs" c="dimmed">
-                  {t('profiles.form.cfg.realitySubprotocolDesc')}
-                </Text>
-              </Stack>
-              <Select
-                label="Flow"
-                description={t('profiles.form.cfg.realityFlowDesc')}
-                data={[
-                  { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' },
-                  { value: 'xtls-rprx-vision-udp443', label: 'xtls-rprx-vision-udp443' },
-                  { value: '', label: t('profiles.form.cfg.realityFlowNone') },
-                ]}
-                disabled={
-                  form.values.xraySubprotocol !== 'vless' ||
-                  !FLOW_COMPATIBLE_TRANSPORTS.includes(form.values.xrayNetwork)
-                }
-                {...form.getInputProps('xrayFlow')}
-              />
-
-              {/* Transport family picker. The full matrix is supported end to
-                  end (Zod schema / node renderer / client URI); this surfaces
-                  all six. Vision flow auto-clears for transports that reject it. */}
-              <Divider label="2 · Transport" labelPosition="left" />
-              <Stack gap={6}>
-                <Chip.Group
-                  multiple={false}
-                  value={form.values.xrayNetwork}
-                  onChange={(v) => {
-                    if (v) form.setFieldValue('xrayNetwork', v as typeof form.values.xrayNetwork);
-                  }}
-                >
-                  <Group gap="xs">
-                    {XRAY_TRANSPORTS.map((tr) => (
-                      <Chip key={tr.value} value={tr.value} size="sm" variant="light">
-                        {tr.label}
-                      </Chip>
+              {/* The three decisions in one row, the way the artboard frames
+                  them: what it speaks, how it travels, how it hides. Transport
+                  gets the widest lane because it holds six pills; their shared
+                  hint sits under the row so the columns stay aligned. */}
+              <Group align="flex-start" gap={24} wrap="nowrap" style={{ width: '100%' }}>
+                <Stack gap={8} style={{ flex: 1, minWidth: 0 }}>
+                  <StepLabel>{t('profiles.form.cfg.stepProtocol')}</StepLabel>
+                  <Group gap={8}>
+                    {(['vless', 'vmess', 'trojan'] as const).map((v) => (
+                      <PillChip
+                        key={v}
+                        label={v === 'vless' ? 'VLESS' : v === 'vmess' ? 'VMess' : 'Trojan'}
+                        active={form.values.xraySubprotocol === v}
+                        onClick={() => form.setFieldValue('xraySubprotocol', v)}
+                      />
                     ))}
                   </Group>
-                </Chip.Group>
-                <Text size="xs" c="dimmed">
-                  {XRAY_TRANSPORTS.find((tr) => tr.value === form.values.xrayNetwork)?.hint}
-                </Text>
-              </Stack>
+                </Stack>
+
+                <Stack gap={8} style={{ flex: 2, minWidth: 0 }}>
+                  <StepLabel>{t('profiles.form.cfg.stepTransport')}</StepLabel>
+                  <Group gap={8}>
+                    {/* What each transport actually is stays on hover: the
+                        artboard keeps this row to pills alone. */}
+                    {XRAY_TRANSPORTS.map((tr) => (
+                      <PillChip
+                        key={tr.value}
+                        label={tr.label}
+                        title={tr.hint}
+                        active={form.values.xrayNetwork === tr.value}
+                        onClick={() => form.setFieldValue('xrayNetwork', tr.value)}
+                      />
+                    ))}
+                  </Group>
+                </Stack>
+
+                <Stack gap={8} style={{ flex: 1.2, minWidth: 0 }}>
+                  <StepLabel>{t('profiles.form.cfg.stepSecurity')}</StepLabel>
+                  <Group gap={8}>
+                    <PillChip
+                      label="REALITY"
+                      title="TLS-replacement, no domain or certificate needed."
+                      active={form.values.xraySecurity === 'reality'}
+                      disabled={form.values.xraySubprotocol === 'vmess'}
+                      onClick={() => form.setFieldValue('xraySecurity', 'reality')}
+                    />
+                    <PillChip
+                      label="none"
+                      title="Plain transport, for a CDN that terminates TLS in front."
+                      active={form.values.xraySecurity === 'none'}
+                      onClick={() => form.setFieldValue('xraySecurity', 'none')}
+                    />
+                    <PillChip
+                      label="TLS"
+                      title="The node terminates TLS with your own certificate."
+                      active={form.values.xraySecurity === 'tls'}
+                      onClick={() => form.setFieldValue('xraySecurity', 'tls')}
+                    />
+                  </Group>
+                </Stack>
+              </Group>
+
               {PATH_HOST_TRANSPORTS.includes(form.values.xrayNetwork) && (
                 <Group grow align="flex-start">
                   <TextInput
@@ -1113,132 +1197,83 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                 </Alert>
               )}
 
-              {/* Security: REALITY (default) or none (plain transport for
-                  ws/httpupgrade behind a CDN that terminates TLS, or local
-                  testing). Node-terminated TLS-with-cert is a later step. */}
-              <Divider label="3 · Security" labelPosition="left" />
-              <Stack gap={6}>
-                <Chip.Group
-                  multiple={false}
-                  value={form.values.xraySecurity}
-                  onChange={(v) => {
-                    if (v) form.setFieldValue('xraySecurity', v as typeof form.values.xraySecurity);
-                  }}
-                >
-                  <Group gap="xs">
-                    <Chip
-                      value="reality"
-                      size="sm"
-                      variant="light"
-                      disabled={form.values.xraySubprotocol === 'vmess'}
-                    >
-                      REALITY
-                    </Chip>
-                    <Chip value="none" size="sm" variant="light">none (CDN / plain)</Chip>
-                    <Chip value="tls" size="sm" variant="light">TLS (own cert)</Chip>
-                  </Group>
-                </Chip.Group>
-                <Text size="xs" c="dimmed">
-                  {form.values.xraySecurity === 'reality'
-                    ? 'REALITY: TLS-replacement, no domain or certificate needed. Recommended.'
-                    : form.values.xraySecurity === 'tls'
-                      ? 'TLS: the node terminates TLS with your own certificate (no ACME). Needs a domain + cert. REALITY is stealthier for RU.'
-                      : 'none: plain transport. Use behind a CDN that terminates TLS (ws / httpupgrade) or for local testing. No REALITY keypair required.'}
-                </Text>
-              </Stack>
+              {/* The four settings an operator actually touches per profile,
+                  in one row. Dest, fingerprint, flow and the public key live
+                  under Advanced: they are either derived or set once. */}
               {form.values.xraySecurity === 'reality' && (
-                <>
+                <Group align="flex-start" gap={16} wrap="nowrap" style={{ width: '100%' }}>
                   <Select
+                    style={{ flex: 1.4, minWidth: 0 }}
                     label={t('profiles.form.cfg.realityModeLabel')}
-                    description={t('profiles.form.cfg.realityModeDesc')}
                     data={[
                       { value: 'steal-others', label: t('profiles.form.cfg.realityModeStealOthers') },
                       { value: 'self-steal', label: t('profiles.form.cfg.realityModeSelfSteal') },
                     ]}
                     {...form.getInputProps('xrayRealityMode')}
                   />
-                  {form.values.xrayRealityMode === 'self-steal' && (
-                    <Text size="xs" c="dimmed">
-                      {t('profiles.form.cfg.realityModeSelfStealHint')}
-                    </Text>
-                  )}
-                  {form.values.xrayRealityMode === 'self-steal' && (
-                    <TextInput
-                      label={t('profiles.form.cfg.realityFallbackUpstreamLabel')}
-                      description={t('profiles.form.cfg.realityFallbackUpstreamDesc')}
-                      placeholder="https://example.com"
-                      {...form.getInputProps('xrayRealityFallbackUpstream')}
-                    />
-                  )}
-                  <Group grow align="flex-end">
-                    <TextInput
-                      label="REALITY dest (target site)"
-                      description={t('profiles.form.cfg.realityDestDesc')}
-                      placeholder="www.cloudflare.com:443"
-                      required={form.values.xrayRealityMode !== 'self-steal'}
-                      disabled={form.values.xrayRealityMode === 'self-steal'}
-                      {...form.getInputProps('xrayDest')}
-                    />
-                    <TextInput
-                      label={
-                        form.values.xrayRealityMode === 'self-steal'
-                          ? t('profiles.form.cfg.realitySelfStealDomainLabel')
-                          : 'REALITY serverNames'
-                      }
-                      description={
-                        form.values.xrayRealityMode === 'self-steal'
-                          ? t('profiles.form.cfg.realitySelfStealDomainDesc')
-                          : t('profiles.form.cfg.realityServerNamesDesc')
-                      }
-                      placeholder={
-                        form.values.xrayRealityMode === 'self-steal'
-                          ? 'des-01.example.com'
-                          : 'www.cloudflare.com, cdn.cloudflare.com'
-                      }
-                      required
-                      {...form.getInputProps('xrayServerNames')}
-                    />
-                  </Group>
-                  <Group grow align="flex-start">
-                    <TextInput
-                      label="REALITY shortIds"
-                      description={t('profiles.form.cfg.realityShortIdsDesc')}
-                      placeholder="abc123, deadbeef"
-                      required
-                      {...form.getInputProps('xrayShortIds')}
-                    />
-                    <Select
-                      label="Fingerprint"
-                      description={t('profiles.form.cfg.realityFingerprintDesc')}
-                      data={['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random']}
-                      {...form.getInputProps('xrayFingerprint')}
-                    />
-                  </Group>
-                  <Group align="end" wrap="nowrap" gap="xs">
-                    <PasswordInput
-                      flex={1}
-                      label="REALITY private key"
-                      description={t('profiles.form.cfg.realityPrivateKeyDesc')}
-                      required
-                      {...form.getInputProps('xrayPrivateKey')}
-                    />
-                    <Button
-                      leftSection={<IconKey size={14} />}
-                      variant="light"
-                      loading={keypairMutation.isPending}
-                      onClick={generateXrayKeys}
-                      type="button"
-                    >
-                      {t('profiles.form.cfg.generate')}
-                    </Button>
-                  </Group>
                   <TextInput
-                    label="REALITY public key"
-                    description={t('profiles.form.cfg.realityPublicKeyDesc')}
+                    style={{ flex: 1.2, minWidth: 0 }}
+                    label={
+                      form.values.xrayRealityMode === 'self-steal'
+                        ? t('profiles.form.cfg.realitySelfStealDomainLabel')
+                        : t('profiles.form.cfg.serverNamesLabel')
+                    }
+                    placeholder={
+                      form.values.xrayRealityMode === 'self-steal'
+                        ? 'des-01.example.com'
+                        : 'node1.example.com'
+                    }
                     required
-                    {...form.getInputProps('xrayPublicKey')}
+                    {...form.getInputProps('xrayServerNames')}
                   />
-                </>
+                  <TextInput
+                    style={{ flex: 1, minWidth: 0 }}
+                    label={t('profiles.form.cfg.shortIdsLabel')}
+                    placeholder="6ba85179e30d4fc2"
+                    required
+                    {...form.getInputProps('xrayShortIds')}
+                  />
+                  <Stack gap={6} style={{ flex: 1.2, minWidth: 0 }}>
+                    <StepLabel>{t('profiles.form.cfg.keypairLabel')}</StepLabel>
+                    <Group gap={8} wrap="nowrap" style={{ width: '100%' }}>
+                      <PasswordInput
+                        style={{ flex: 1, minWidth: 0 }}
+                        placeholder={t('profiles.form.cfg.keypairPlaceholder')}
+                        required
+                        {...form.getInputProps('xrayPrivateKey')}
+                      />
+                      <UnstyledButton
+                        type="button"
+                        onClick={generateXrayKeys}
+                        disabled={keypairMutation.isPending}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          height: 36,
+                          padding: '0 14px',
+                          borderRadius: 8,
+                          backgroundColor: '#0B1420',
+                          border: '1px solid #1C2A3D',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <IconKey size={14} color="#7DD3FC" stroke={1.8} />
+                        <Text
+                          style={{
+                            fontFamily: "'Space Grotesk', Inter, sans-serif",
+                            fontSize: 12,
+                            fontWeight: 500,
+                            lineHeight: '16px',
+                            color: '#C8D4E3',
+                          }}
+                        >
+                          {t('profiles.form.cfg.generate')}
+                        </Text>
+                      </UnstyledButton>
+                    </Group>
+                  </Stack>
+                </Group>
               )}
               {form.values.xraySecurity === 'tls' && (
                 <>
@@ -1275,7 +1310,48 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                   controls when network=xhttp, grpc control when network=grpc).
                   Tabs whose underlying transport/security isn't selected just
                   render an inactive hint, so the operator sees why. */}
-              <Divider label={t('profiles.form.cfg.advTitle')} labelPosition="left" />
+              {/* Collapsed by default: the row above is the whole decision for
+                  a normal profile, and these knobs are the exception. */}
+              <UnstyledButton
+                type="button"
+                onClick={advCtl.toggle}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%',
+                  padding: '13px 16px',
+                  borderRadius: 10,
+                  backgroundColor: '#0B1420',
+                  border: '1px solid #1C2A3D',
+                }}
+              >
+                <Text
+                  style={{
+                    fontFamily: "'Space Grotesk', Inter, sans-serif",
+                    fontSize: 13,
+                    lineHeight: '16px',
+                    color: '#C8D4E3',
+                  }}
+                >
+                  {t('profiles.form.cfg.advTitle')}
+                </Text>
+                <Group gap={10} wrap="nowrap">
+                  <Text style={{ fontSize: 11, lineHeight: '14px', color: '#5A6B82' }}>
+                    {t('profiles.form.cfg.advHint')}
+                  </Text>
+                  <IconChevronDown
+                    size={14}
+                    stroke={2}
+                    color="#7A8BA3"
+                    style={{
+                      transform: advOpen ? 'rotate(180deg)' : 'none',
+                      transition: 'transform 120ms',
+                    }}
+                  />
+                </Group>
+              </UnstyledButton>
+              <Collapse in={advOpen}>
               <Tabs defaultValue="reality" variant="outline">
                 <Tabs.List>
                   <Tabs.Tab value="reality">{t('profiles.form.cfg.advRealityTab')}</Tabs.Tab>
@@ -1286,6 +1362,54 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                 <Tabs.Panel value="reality" pt="sm">
                   {form.values.xraySecurity === 'reality' ? (
                     <Stack gap="sm">
+                      {/* Moved down from the main row: set once per profile,
+                          derived, or only meaningful in one REALITY mode. */}
+                      <Group grow align="flex-end">
+                        <TextInput
+                          label="REALITY dest (target site)"
+                          description={t('profiles.form.cfg.realityDestDesc')}
+                          placeholder="www.cloudflare.com:443"
+                          required={form.values.xrayRealityMode !== 'self-steal'}
+                          disabled={form.values.xrayRealityMode === 'self-steal'}
+                          {...form.getInputProps('xrayDest')}
+                        />
+                        <Select
+                          label="Fingerprint"
+                          description={t('profiles.form.cfg.realityFingerprintDesc')}
+                          data={['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random']}
+                          {...form.getInputProps('xrayFingerprint')}
+                        />
+                      </Group>
+                      <Group grow align="flex-end">
+                        <TextInput
+                          label="REALITY public key"
+                          description={t('profiles.form.cfg.realityPublicKeyDesc')}
+                          required
+                          {...form.getInputProps('xrayPublicKey')}
+                        />
+                        <Select
+                          label="Flow"
+                          description={t('profiles.form.cfg.realityFlowDesc')}
+                          data={[
+                            { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' },
+                            { value: 'xtls-rprx-vision-udp443', label: 'xtls-rprx-vision-udp443' },
+                            { value: '', label: t('profiles.form.cfg.realityFlowNone') },
+                          ]}
+                          disabled={
+                            form.values.xraySubprotocol !== 'vless' ||
+                            !FLOW_COMPATIBLE_TRANSPORTS.includes(form.values.xrayNetwork)
+                          }
+                          {...form.getInputProps('xrayFlow')}
+                        />
+                      </Group>
+                      {form.values.xrayRealityMode === 'self-steal' && (
+                        <TextInput
+                          label={t('profiles.form.cfg.realityFallbackUpstreamLabel')}
+                          description={t('profiles.form.cfg.realityFallbackUpstreamDesc')}
+                          placeholder="https://example.com"
+                          {...form.getInputProps('xrayRealityFallbackUpstream')}
+                        />
+                      )}
                       <Group grow align="flex-end">
                         <Select
                           label={t('profiles.form.cfg.realityXverLabel')}
@@ -1390,6 +1514,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                   )}
                 </Tabs.Panel>
               </Tabs>
+              </Collapse>
             </Stack>
           )}
 
@@ -1415,37 +1540,53 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                   </ul>
                 </Text>
               </Alert>
-              <TextInput
-                label={t('profiles.form.cfg.awgSubnetLabel')}
-                placeholder="10.66.66.0/24"
-                required
-                {...form.getInputProps('awgSubnet')}
-              />
-              <Group align="end" wrap="nowrap" gap="xs">
-                <PasswordInput
-                  flex={1}
-                  label={t('profiles.form.cfg.awgServerPrivLabel')}
+              {/* Subnet and both keys read as one decision, so they sit on one
+                  line. The subnet note differs by mode: before the first save it
+                  is advice, afterwards it is a consequence. */}
+              <Group align="flex-start" wrap="nowrap" gap="md">
+                <TextInput
+                  w={220}
+                  label={t('profiles.form.cfg.awgSubnetLabel')}
+                  placeholder="10.66.66.0/24"
+                  description={
+                    isEdit
+                      ? t('profiles.form.cfg.awgSubnetLockedHint')
+                      : t('profiles.form.cfg.awgSubnetHint')
+                  }
+                  // The note explains the field, so it reads after it. Without
+                  // this the row's inputs stop sharing a baseline.
+                  inputWrapperOrder={['label', 'input', 'description', 'error']}
                   required
-                  {...form.getInputProps('awgServerPriv')}
+                  {...form.getInputProps('awgSubnet')}
                 />
-                <Button
-                  leftSection={<IconKey size={14} />}
-                  variant="light"
-                  loading={keypairMutation.isPending}
-                  onClick={generateAwgKeys}
-                  type="button"
-                >
-                  {t('profiles.form.cfg.generate')}
-                </Button>
+                <Group flex={1} align="end" wrap="nowrap" gap="xs">
+                  <PasswordInput
+                    flex={1}
+                    label={t('profiles.form.cfg.awgServerPrivLabel')}
+                    required
+                    {...form.getInputProps('awgServerPriv')}
+                  />
+                  <Button
+                    leftSection={<IconKey size={14} />}
+                    variant="light"
+                    loading={keypairMutation.isPending}
+                    onClick={generateAwgKeys}
+                    type="button"
+                  >
+                    {t('profiles.form.cfg.generate')}
+                  </Button>
+                </Group>
+                <TextInput
+                  flex={1}
+                  label={t('profiles.form.cfg.awgServerPubLabel')}
+                  placeholder={t('profiles.form.cfg.awgServerPubPlaceholder')}
+                  required
+                  {...form.getInputProps('awgServerPub')}
+                />
               </Group>
-              <TextInput
-                label={t('profiles.form.cfg.awgServerPubLabel')}
-                required
-                {...form.getInputProps('awgServerPub')}
-              />
-              <Stack gap={4}>
+              <Group justify="space-between" align="center" wrap="nowrap" gap="md">
                 <Text size="sm" fw={500}>
-                  Obfuscation preset
+                  {t('profiles.form.cfg.awgPresetLabel')}
                 </Text>
                 <SegmentedControl
                   value={form.values.awgPreset}
@@ -1456,7 +1597,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                     { label: 'Custom', value: 'custom' },
                   ]}
                 />
-              </Stack>
+              </Group>
               <Group grow>
                 <NumberInput label="Jc" min={0} {...form.getInputProps('awgJc')} />
                 <NumberInput label="Jmin" min={0} {...form.getInputProps('awgJmin')} />
@@ -1465,8 +1606,22 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
               <Group grow>
                 <NumberInput label="S1" min={0} {...form.getInputProps('awgS1')} />
                 <NumberInput label="S2" min={0} {...form.getInputProps('awgS2')} />
-                <NumberInput label="S3" min={0} {...form.getInputProps('awgS3')} />
-                <NumberInput label="S4" min={0} {...form.getInputProps('awgS4')} />
+                {/* S3/S4 stay 0 until AmneziaVPN ships the fix for #2582: a
+                    non-zero value there drops traffic on 4.8.15.x clients. */}
+                <NumberInput
+                  label="S3"
+                  description={t('profiles.form.cfg.awgKeepZero')}
+                  inputWrapperOrder={['label', 'input', 'description', 'error']}
+                  min={0}
+                  {...form.getInputProps('awgS3')}
+                />
+                <NumberInput
+                  label="S4"
+                  description={t('profiles.form.cfg.awgKeepZero')}
+                  inputWrapperOrder={['label', 'input', 'description', 'error']}
+                  min={0}
+                  {...form.getInputProps('awgS4')}
+                />
               </Group>
               <Group align="flex-end" gap="xs" wrap="nowrap">
                 <NumberInput
@@ -1527,13 +1682,13 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
                 <Accordion.Item value="awg-mimicry">
                   <Accordion.Control>
                     <Text size="sm" fw={500}>
-                      Advanced: I1–I5 mimicry packets (опционально)
+                      {t('profiles.form.cfg.awgMimicryTitle')}
                     </Text>
                   </Accordion.Control>
                   <Accordion.Panel>
                     <Stack gap={6}>
                       <Text size="xs" c="dimmed">
-                        AmneziaWG v2.0 фича - маскирует handshake под другой протокол (QUIC / DNS / STUN). Нужно ТОЛЬКО если стандартный TSPU/Mobile preset не проходит DPI. Пустые поля = выключено, безопасно. Значения hex, до 256 символов каждое, ДОЛЖНЫ совпадать с клиентом.
+                        {t('profiles.form.cfg.awgMimicryDesc')}
                       </Text>
                       <Group grow>
                         <TextInput label="I1" placeholder="hex" {...form.getInputProps('awgI1')} />
@@ -1698,9 +1853,11 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
               </Alert>
             </Stack>
           )}
+          </SectionCard>
 
-          <Divider />
-
+          {/* Inline mode has Cancel and Save in the page bar already; a second
+              pair at the end of a long form is just noise. */}
+          {!inline && (
           <Group justify="space-between" gap="sm">
             <Text
               style={{
@@ -1729,9 +1886,614 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading }
               </Tooltip>
             </Group>
           </Group>
+          )}
         </Stack>
       </form>
-    </Modal>
+    </FormShell>
+  );
+}
+
+/**
+ * Engine tabs plus protocol tiles, the way the artboard frames the choice: the
+ * tab decides which binary runs on the node, the tile decides what it speaks.
+ * A protocol served by two engines (xray, hysteria, shadowsocks) appears under
+ * both, which is exactly the fact the old single select hid.
+ */
+function EnginePicker({
+  engine,
+  protocol,
+  onPick,
+}: {
+  engine: 'native' | 'singbox';
+  protocol: string;
+  onPick: (kind: ProfileKind) => void;
+}) {
+  const { t } = useTranslation();
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+
+  const tabs: { value: EngineTab; label: string }[] = [
+    { value: 'native', label: t('profiles.engine.native') },
+    { value: 'xray', label: t('profiles.engine.xray') },
+    { value: 'singbox', label: t('profiles.engine.singbox') },
+  ];
+  const activeTab = engineTabOf(protocol, engine);
+  const kinds = PROFILE_KINDS.filter((k) => engineTabOf(k.protocol, k.engine) === activeTab);
+
+  // Core version is a property of the node, not of the profile: one xray
+  // process serves every xray-core profile on that box. Show what the fleet
+  // actually runs, and name the nodes that lag behind.
+  const coreVersions = (nodesQuery.data?.nodes ?? [])
+    .map((n) => n.coreVersion)
+    .filter((v): v is string => !!v);
+  const newest = [...coreVersions].sort().at(-1) ?? null;
+  const behind = coreVersions.filter((v) => v !== newest);
+
+  // Tiles come in fours on the artboard, and a short row is padded with dashed
+  // placeholders rather than left ragged.
+  const emptySlots = (4 - (kinds.length % 4)) % 4;
+
+  return (
+    <SectionCard title={t('profiles.form.protocol')} icon={<IconBolt size={15} color="#7DD3FC" />}>
+      {/* A tab strip sitting on a hairline, not a row of buttons: the active
+          tab masks the line under itself, which is what makes it read as the
+          sheet you are currently looking at. */}
+      <Box
+        style={{
+          display: 'flex',
+          alignItems: 'flex-end',
+          width: '100%',
+          borderBottom: '1px solid #1C2A3D',
+        }}
+      >
+        {tabs.map((e) => {
+          const active = activeTab === e.value;
+          const count = PROFILE_KINDS.filter(
+            (k) => engineTabOf(k.protocol, k.engine) === e.value,
+          ).length;
+          return (
+            <UnstyledButton
+              key={e.value}
+              type="button"
+              onClick={() => {
+                const first = PROFILE_KINDS.find(
+                  (k) => engineTabOf(k.protocol, k.engine) === e.value,
+                );
+                if (first) onPick(first);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                height: 36,
+                padding: '0 16px',
+                backgroundColor: active ? '#0F1A28' : 'transparent',
+                borderTop: `1px solid ${active ? '#1C2A3D' : 'transparent'}`,
+                borderLeft: `1px solid ${active ? '#1C2A3D' : 'transparent'}`,
+                borderRight: `1px solid ${active ? '#1C2A3D' : 'transparent'}`,
+                borderBottom: `1px solid ${active ? '#0F1A28' : 'transparent'}`,
+                borderTopLeftRadius: 8,
+                borderTopRightRadius: 8,
+                marginBottom: -1,
+              }}
+            >
+              <Text
+                style={{
+                  fontFamily: 'Geist Mono, monospace',
+                  fontSize: 11,
+                  letterSpacing: '0.1em',
+                  textTransform: 'uppercase',
+                  color: active ? '#C8D4E3' : '#7A8BA3',
+                }}
+              >
+                {e.label}
+              </Text>
+              <Box
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: 18,
+                  minWidth: 18,
+                  padding: '0 5px',
+                  borderRadius: 999,
+                  backgroundColor: active ? '#7DD3FC24' : '#152233',
+                }}
+              >
+                <Text
+                  style={{
+                    fontFamily: 'Geist Mono, monospace',
+                    fontSize: 10,
+                    color: active ? '#7DD3FC' : '#7A8BA3',
+                  }}
+                >
+                  {count}
+                </Text>
+              </Box>
+            </UnstyledButton>
+          );
+        })}
+        <Box style={{ flex: 1, minWidth: 0 }} />
+        <Group gap={8} wrap="nowrap" style={{ height: 36, paddingLeft: 16, paddingRight: 4 }}>
+          <IconInfoCircle size={13} color="#5A6B82" stroke={1.8} />
+          <Text style={{ fontSize: 11, lineHeight: '14px', color: '#5A6B82' }}>
+            {t(`profiles.engine.tabHint.${activeTab}`)}
+          </Text>
+        </Group>
+      </Box>
+
+      {/* The binary's version belongs to the fleet, not to this template. Say
+          so, and name how many boxes still run something older. Only the xray
+          core reports its version to the panel, so the other two tabs stay
+          quiet rather than showing a number that belongs to a different
+          binary. */}
+      {activeTab === 'xray' && newest && (
+        <Group
+          gap={14}
+          wrap="nowrap"
+          align="center"
+          style={{
+            padding: '10px 14px',
+            borderRadius: 8,
+            backgroundColor: '#0B1420',
+            border: '1px solid #1C2A3D',
+          }}
+        >
+          <Group gap={10} wrap="nowrap" style={{ flexShrink: 0 }}>
+            <Text
+              style={{
+                fontFamily: 'Geist Mono, monospace',
+                fontSize: 10,
+                fontWeight: 500,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                color: '#7A8BA3',
+              }}
+            >
+              {t('profiles.engine.coreVersion')}
+            </Text>
+            <Group
+              gap={10}
+              wrap="nowrap"
+              style={{
+                height: 32,
+                padding: '0 12px',
+                borderRadius: 8,
+                backgroundColor: '#08101A',
+                border: '1px solid #1C2A3D',
+              }}
+            >
+              <Text style={{ fontFamily: 'Geist Mono, monospace', fontSize: 12, color: '#C8D4E3' }}>
+                xray {newest}
+              </Text>
+              <Box
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  height: 18,
+                  padding: '0 7px',
+                  borderRadius: 6,
+                  backgroundColor: '#A7D8B91F',
+                }}
+              >
+                <Text
+                  style={{
+                    fontFamily: 'Geist Mono, monospace',
+                    fontSize: 9,
+                    letterSpacing: '0.08em',
+                    color: '#A7D8B9',
+                  }}
+                >
+                  {t('profiles.engine.latest')}
+                </Text>
+              </Box>
+            </Group>
+          </Group>
+          <Box style={{ width: 1, height: 22, backgroundColor: '#1C2A3D', flexShrink: 0 }} />
+          <Text style={{ fontSize: 11, lineHeight: '16px', color: '#7A8BA3', flex: 1, minWidth: 0 }}>
+            {t('profiles.engine.coreVersionHint')}
+          </Text>
+          {behind.length > 0 ? (
+            <Group
+              gap={8}
+              wrap="nowrap"
+              style={{
+                height: 28,
+                padding: '0 12px',
+                borderRadius: 8,
+                backgroundColor: '#F5B14C1A',
+                border: '1px solid #F5B14C40',
+                flexShrink: 0,
+              }}
+            >
+              <IconAlertTriangle size={13} color="#F5B14C" stroke={1.9} />
+              <Text style={{ fontSize: 11, lineHeight: '14px', color: '#F5B14C' }}>
+                {t('profiles.engine.behind', {
+                  count: behind.length,
+                  total: coreVersions.length,
+                  version: behind[0],
+                })}
+              </Text>
+            </Group>
+          ) : (
+            <Group
+              gap={8}
+              wrap="nowrap"
+              style={{
+                height: 28,
+                padding: '0 12px',
+                borderRadius: 8,
+                backgroundColor: '#A7D8B91A',
+                border: '1px solid #A7D8B940',
+                flexShrink: 0,
+              }}
+            >
+              <IconCheck size={13} color="#A7D8B9" stroke={2.2} />
+              <Text style={{ fontSize: 11, lineHeight: '14px', color: '#A7D8B9' }}>
+                {t('profiles.engine.allCurrent', {
+                  count: coreVersions.length,
+                  version: newest,
+                })}
+              </Text>
+            </Group>
+          )}
+        </Group>
+      )}
+
+      {/* Tiles, not a list: each one says what the protocol actually speaks,
+          which is the thing an operator is choosing between. Every protocol
+          keeps its own accent so the fleet reads the same colour everywhere. */}
+      <Box style={{ display: 'flex', flexWrap: 'wrap', gap: 10, width: '100%' }}>
+        {kinds.map((k) => {
+          const active = k.protocol === protocol && k.engine === engine;
+          const accent = PROTOCOL_ACCENT[k.protocol] ?? '#7A8BA3';
+          return (
+            <UnstyledButton
+              key={k.key}
+              type="button"
+              onClick={() => onPick(k)}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 5,
+                flexBasis: '21%',
+                flexGrow: 1,
+                minWidth: 0,
+                padding: '13px 14px',
+                borderRadius: 10,
+                backgroundColor: active ? `${accent}14` : '#0B1420',
+                border: `1px solid ${active ? accent : '#1C2A3D'}`,
+              }}
+            >
+              <Box
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                }}
+              >
+                <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+                  <Box
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 4,
+                      backgroundColor: accent,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <Text
+                    style={{
+                      fontFamily: "'Space Grotesk', Inter, sans-serif",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      lineHeight: '16px',
+                      color: '#C8D4E3',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {PROTOCOL_TILE_LABEL[k.key] ?? k.label}
+                  </Text>
+                </Group>
+                {active && <IconCheck size={14} stroke={2.4} color={accent} />}
+              </Box>
+              <Text
+                style={{
+                  fontSize: 11,
+                  lineHeight: '14px',
+                  color: '#7A8BA3',
+                  textAlign: 'left',
+                }}
+              >
+                {PROTOCOL_TILE_HINT[k.key] ?? PROTOCOL_TILE_HINT[k.protocol] ?? ''}
+              </Text>
+              {/* The caveat line only earns its place where a protocol shows
+                  up under more than one binary: on the xray tab the tab name
+                  has already said everything it would say. */}
+              {activeTab !== 'xray' && (
+                <Text
+                  style={{
+                    fontFamily: 'Geist Mono, monospace',
+                    fontSize: 10,
+                    lineHeight: '12px',
+                    color: active ? accent : '#5A6B82',
+                    textAlign: 'left',
+                  }}
+                >
+                  {PROTOCOL_TILE_NOTE[k.key] ?? ''}
+                </Text>
+              )}
+            </UnstyledButton>
+          );
+        })}
+        {Array.from({ length: emptySlots }, (_, i) => (
+          <Box
+            key={`slot-${i}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexBasis: '21%',
+              flexGrow: 1,
+              minWidth: 0,
+              padding: '13px 14px',
+              borderRadius: 10,
+              border: '1px dashed #1C2A3D',
+            }}
+          >
+            <IconPlus size={14} stroke={2} color="#2C3A4E" />
+          </Box>
+        ))}
+      </Box>
+    </SectionCard>
+  );
+}
+
+/**
+ * Which binary serves a profile. Shadowsocks 2022 rides the xray process, so
+ * it belongs on the xray tab even though its engine field says "native": the
+ * tab answers "what runs on the node", not "what does the column say".
+ */
+type EngineTab = 'native' | 'xray' | 'singbox';
+
+function engineTabOf(protocol: string, engine: 'native' | 'singbox'): EngineTab {
+  if (engine === 'singbox') return 'singbox';
+  return protocol === 'xray' || protocol === 'shadowsocks' ? 'xray' : 'native';
+}
+
+/** One line per protocol: what it speaks, in the operator's terms. */
+const PROTOCOL_TILE_HINT: Record<string, string> = {
+  xray: 'VLESS, VMess, Trojan, REALITY',
+  hysteria: 'QUIC, Brutal CC, port hopping',
+  shadowsocks: 'blake3 ciphers, minimal overhead',
+  amneziawg: 'WireGuard with obfuscation',
+  naive: 'Chromium TLS, Caddy fork',
+  mtproto: 'Telegram only, no per-user stats',
+  mieru: 'Stealth proxy, no handshake',
+  'xray#singbox': 'VLESS, VMess, Trojan',
+  'hysteria#singbox': 'Same protocol, one less process',
+  'shadowsocks#singbox': '2022 ciphers, sing-box core',
+  tuic: 'QUIC-based, UDP relay',
+  anytls: 'TLS-in-TLS, padding scheme',
+  shadowtls: 'Handshake proxied to a real site',
+};
+
+/** Tile titles drop the engine suffix: the active tab already said it. */
+const PROTOCOL_TILE_LABEL: Record<string, string> = {
+  xray: 'Xray',
+  hysteria: 'Hysteria 2',
+  shadowsocks: 'Shadowsocks 2022',
+  amneziawg: 'AmneziaWG',
+  naive: 'NaiveProxy',
+  mtproto: 'MTProto',
+  mieru: 'Mieru',
+  'xray#singbox': 'Xray protocols',
+  'hysteria#singbox': 'Hysteria 2',
+  'shadowsocks#singbox': 'Shadowsocks 2022',
+  tuic: 'TUIC',
+  anytls: 'AnyTLS',
+  shadowtls: 'ShadowTLS',
+};
+
+/**
+ * A titled block of the form. The caption stays muted and the icon carries the
+ * colour; the protocol config card additionally wears its accent as a top edge,
+ * which is what separates "what this is called" from "how the wire behaves".
+ */
+function SectionCard({
+  title,
+  icon,
+  accent,
+  action,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  accent?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <Stack
+      gap={16}
+      style={{
+        padding: 20,
+        borderRadius: 10,
+        backgroundColor: '#0F1A28',
+        border: '1px solid #1C2A3D',
+        borderTop: accent ? `3px solid ${accent}` : '1px solid #1C2A3D',
+      }}
+    >
+      <Group justify="space-between" wrap="nowrap" style={{ width: '100%' }}>
+        <Group gap={8} wrap="nowrap">
+          {icon}
+          <Text
+            style={{
+              fontFamily: 'Geist Mono, monospace',
+              fontSize: 10,
+              fontWeight: 500,
+              letterSpacing: '0.16em',
+              textTransform: 'uppercase',
+              color: '#7A8BA3',
+            }}
+          >
+            {title}
+          </Text>
+        </Group>
+        {action}
+      </Group>
+      {children}
+    </Stack>
+  );
+}
+
+/** Each protocol keeps one accent across every screen it appears on. */
+const PROTOCOL_ACCENT: Record<string, string> = {
+  xray: '#A78BFA',
+  shadowsocks: '#F5A3B8',
+  hysteria: '#7DD3FC',
+  amneziawg: '#A7D8B9',
+  naive: '#F5B14C',
+  mtproto: '#67E8F9',
+  mieru: '#C78BFA',
+  tuic: '#7DD3FC',
+  anytls: '#7A8BA3',
+  shadowtls: '#7A8BA3',
+};
+
+/** Third line of a protocol tile: the caveat, not the pitch. */
+const PROTOCOL_TILE_NOTE: Record<string, string> = {
+  xray: 'REALITY probe-resist tuning',
+  hysteria: 'own process, own port',
+  shadowsocks: 'multi-user, per-user keys',
+  amneziawg: 'kernel module, no userspace proc',
+  naive: 'Caddy fork, no per-user stats',
+  mtproto: 'Telegram only, no per-user stats',
+  mieru: 'no handshake to fingerprint',
+  'xray#singbox': 'no REALITY probe-resist tuning',
+  'hysteria#singbox': 'stats via sing-box API',
+  'shadowsocks#singbox': 'multi-user, per-user keys',
+  tuic: 'sing-box only',
+  anytls: 'sing-box only',
+  shadowtls: 'sing-box only',
+};
+
+/**
+ * One choice in a step row. A pill, not a Mantine Chip: the artboard carries
+ * selection with fill and weight alone, and the check glyph a Chip insists on
+ * would make every row jump a few pixels as the choice moves.
+ */
+function PillChip({
+  label,
+  active,
+  disabled,
+  title,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+}) {
+  return (
+    <UnstyledButton
+      type="button"
+      disabled={disabled}
+      title={title}
+      onClick={onClick}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '6px 14px',
+        borderRadius: 999,
+        backgroundColor: active ? '#7DD3FC29' : '#0B1420',
+        border: `1px solid ${active ? '#7DD3FC' : '#1C2A3D'}`,
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      <Text
+        style={{
+          fontFamily: "'Space Grotesk', Inter, sans-serif",
+          fontSize: 12,
+          fontWeight: active ? 600 : 400,
+          lineHeight: '16px',
+          color: active ? '#C8D4E3' : '#7A8BA3',
+        }}
+      >
+        {label}
+      </Text>
+    </UnstyledButton>
+  );
+}
+
+/**
+ * Step caption above a chip row in the xray config card: a numbered marker in
+ * cyan, then the step name. Numbers come from the label text itself, so the
+ * three columns read as one sequence left to right.
+ */
+function StepLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <Text
+      style={{
+        fontFamily: 'Geist Mono, monospace',
+        fontSize: 10,
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+        color: '#7A8BA3',
+      }}
+    >
+      {children}
+    </Text>
+  );
+}
+
+/**
+ * Either a modal or a plain section, with the same title block. Keeping one
+ * shell means the form body below never has to know which one it is in.
+ */
+function FormShell({
+  inline,
+  opened,
+  onClose,
+  title,
+  size,
+  children,
+}: {
+  inline?: boolean;
+  opened: boolean;
+  onClose: () => void;
+  title: React.ReactNode;
+  size?: string;
+  children: React.ReactNode;
+}) {
+  if (!inline) {
+    return (
+      <Modal opened={opened} onClose={onClose} title={title} size={size}>
+        {children}
+      </Modal>
+    );
+  }
+  if (!opened) return null;
+  // Inline mode drops the title block: the page it sits on already names the
+  // profile in its own bar, and two identical headings read as a bug. The
+  // class turns the form into a two-column grid, recipes on the right rail.
+  return (
+    <Box
+      className="profile-form-inline"
+      style={{
+        padding: 20,
+        borderRadius: 10,
+        backgroundColor: '#0F1A28',
+        border: '1px solid #1C2A3D',
+      }}
+    >
+      {children}
+    </Box>
   );
 }
 

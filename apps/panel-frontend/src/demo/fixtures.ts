@@ -14,14 +14,18 @@ import type {
   Binding,
   Cascade,
   DashboardOverview,
+  Host,
+  HwidDevice,
   Insights,
   Node as PanelNode,
   Profile,
   PublicSettings,
   Region,
+  RoutePolicy,
   Squad,
   SystemVersion,
   User,
+  UserEndpoint,
 } from '../lib/api';
 import { DEMO_NOW } from '../lib/demoFlag';
 
@@ -72,6 +76,31 @@ const NODE_SEEDS: NodeSeed[] = [
   { id: 'node-xray-us-01', name: 'xray-us-01', host: 'us-01.example.com', cc: 'US', protocol: 'xray', region: 'reg-us', selfSteal: true, cpu: 53, ram: 68, disk: 56, cores: 4, ramGiB: 8, diskGiB: 80, todayGiB: 38.2 },
 ];
 
+// Restart tallies for the demo fleet. Only xray reports one, and the three
+// xray nodes deliberately show the three states the card has to tell apart: a
+// core that never blinked, a core the memory watchdog has been bouncing, and a
+// node that never reported at all (null, which is NOT zero restarts).
+const CORE_RESTARTS: Record<string, PanelNode['coreRestarts']> = {
+  'node-xray-de-01': {
+    total: 0,
+    crash: 0,
+    memory: 0,
+    memoryLimitBytes: 2 * GiB,
+    rssBytes: Math.round(0.42 * GiB),
+    observedAt: iso(4 * 60_000),
+  },
+  'node-xray-de-02': {
+    total: 3,
+    crash: 0,
+    memory: 3,
+    lastAt: iso(5 * HOUR),
+    lastReason: 'memory',
+    memoryLimitBytes: GiB,
+    rssBytes: Math.round(0.79 * GiB),
+    observedAt: iso(2 * 60_000),
+  },
+};
+
 export const NODES: PanelNode[] = NODE_SEEDS.map((n) => ({
   id: n.id,
   name: n.name,
@@ -81,6 +110,8 @@ export const NODES: PanelNode[] = NODE_SEEDS.map((n) => ({
   status: 'online',
   lastStatusChange: iso(3 * HOUR),
   lastStatusMessage: null,
+  coreRestarts: CORE_RESTARTS[n.id] ?? null,
+  coreVersion: n.protocol === 'xray' ? '26.3.27' : null,
   consumptionMultiplier: '1',
   regionId: n.region,
   maxUsers: 1000,
@@ -145,6 +176,35 @@ export const BINDINGS: Binding[] = NODE_SEEDS.map((n, i) => ({
   updatedAt: iso(5 * DAY),
 }));
 
+/**
+ * One host per binding: the demo needs them for the Hosts page and for the
+ * squad editor's country tree, both of which read hosts rather than bindings.
+ * The remark is what a member sees in their client, so it reads like a place,
+ * not like an id.
+ */
+export const HOSTS: Host[] = NODE_SEEDS.map((n, i) => ({
+  id: `host-${i}`,
+  bindingId: `bind-${i}`,
+  remark: n.name,
+  priority: i,
+  // One host is off, so the states that depend on it have something to show:
+  // it sits in the squad tree at half strength and counts for nothing, because
+  // the subscription builder only reads enabled hosts.
+  enabled: n.id !== 'node-ss-fi-01',
+  addressOverride: null,
+  portOverride: null,
+  sniOverride: null,
+  hostHeaderOverride: null,
+  pathOverride: null,
+  fingerprintOverride: null,
+  alpn: [],
+  allowInsecure: false,
+  securityLayer: 'default',
+  disableForFormats: [],
+  createdAt: iso(50 * DAY),
+  updatedAt: iso(5 * DAY),
+}));
+
 // ───── Squads ─────
 
 export const SQUADS: Squad[] = [
@@ -154,21 +214,60 @@ export const SQUADS: Squad[] = [
     description: 'Standard squad',
     profileIds: ['prof-vless-reality', 'prof-hy2', 'prof-ss2022'],
     routingPreset: null,
+    exitAcl: [],
+    policyIds: [],
+    hostIds: [],
     hwidDeviceLimit: null,
     memberCount: 7,
     createdAt: iso(50 * DAY),
     updatedAt: iso(5 * DAY),
   },
+  // A paid tier: fewer protocols than premium, and its exits are restricted to
+  // one, so the card shows the "1 of N" state.
+  {
+    id: 'squad-basic',
+    name: 'basic',
+    description: 'Paid tier, RU entry plus one EU exit',
+    profileIds: ['prof-vless-reality', 'prof-hy2'],
+    routingPreset: null,
+    exitAcl: [{ cascadeId: 'casc-us-relay', exitNodeIds: ['node-xray-de-01'] }],
+    policyIds: ['policy-no-ads'],
+    // A tier that sees two of its profiles' hosts, so the restricted mode of the
+    // squad screen has something to show.
+    hostIds: ['host-5', 'host-2'],
+    hwidDeviceLimit: 3,
+    memberCount: 12,
+    createdAt: iso(40 * DAY),
+    updatedAt: iso(3 * DAY),
+  },
   {
     id: 'squad-premium',
     name: 'premium',
-    description: 'Premium squad (adds AmneziaWG)',
+    description: 'Every protocol, every exit, no policy limits',
     profileIds: ['prof-vless-reality', 'prof-hy2', 'prof-ss2022', 'prof-awg'],
     routingPreset: null,
+    exitAcl: [],
+    policyIds: [],
+    hostIds: [],
     hwidDeviceLimit: 5,
     memberCount: 5,
     createdAt: iso(50 * DAY),
     updatedAt: iso(5 * DAY),
+  },
+  // Nothing granted yet: the one broken state the list is meant to surface.
+  {
+    id: 'squad-reseller',
+    name: 'reseller',
+    description: 'Partner accounts, no hosts granted yet',
+    profileIds: [],
+    routingPreset: null,
+    exitAcl: [],
+    policyIds: [],
+    hostIds: [],
+    hwidDeviceLimit: null,
+    memberCount: 3,
+    createdAt: iso(12 * DAY),
+    updatedAt: iso(1 * DAY),
   },
 ];
 
@@ -191,7 +290,11 @@ const USER_SEEDS: UserSeed[] = [
   { id: 'user-kenji', name: 'kenji', status: 'active', squads: ['00000000-0000-0000-0000-000000000001', 'squad-premium'], usedGiB: 140, limitGiB: null, expDays: 40, onlineMin: 1, premium: true },
   { id: 'user-sofia', name: 'sofia', status: 'active', squads: ['squad-premium'], usedGiB: 70, limitGiB: 150, expDays: 22, onlineMin: 2, premium: true },
   { id: 'user-liam', name: 'liam', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 41, limitGiB: 100, expDays: 18, onlineMin: 2, premium: false },
-  { id: 'user-nadia', name: 'nadia', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 33, limitGiB: 100, expDays: 30, onlineMin: 2, premium: false },
+  // Away for an hour and a half: a working subscription that is simply not
+  // connected right now, which is the only way the OFFLINE pill shows up. The
+  // expired and disabled seeds below cannot stand in for it, their own state
+  // wins over presence.
+  { id: 'user-nadia', name: 'nadia', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 33, limitGiB: 100, expDays: 30, onlineMin: 92, premium: false },
   { id: 'user-diego', name: 'diego', status: 'active', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 88, limitGiB: null, expDays: 12, onlineMin: 1, premium: false },
   { id: 'user-omar', name: 'omar', status: 'limited', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 52, limitGiB: 50, expDays: 25, onlineMin: 1, premium: false },
   { id: 'user-yuki', name: 'yuki', status: 'expired', squads: ['00000000-0000-0000-0000-000000000001'], usedGiB: 64, limitGiB: 100, expDays: -3, onlineMin: 300, premium: false },
@@ -213,7 +316,9 @@ export const USERS: User[] = USER_SEEDS.map((u, i) => ({
   subscriptionToken: `demo-sub-${u.name}`,
   subRevokedAt: null,
   hwidDeviceLimit: u.premium ? 5 : null,
-  routingPreset: null,
+  // One user carries a per-user override, so the list chip and the routing
+  // filter have something to show. The rest inherit from squad or panel.
+  routingPreset: u.name === 'kenji' ? 'ru-split' : null,
   description: null,
   tag: u.premium ? 'premium' : 'standard',
   telegramId: null,
@@ -228,6 +333,57 @@ export const USERS: User[] = USER_SEEDS.map((u, i) => ({
 
 export const USERS_LIST = { users: USERS, total: USERS.length, page: 1, limit: 25 };
 
+/**
+ * What a user's client would actually receive.
+ *
+ * Written out rather than derived, on purpose: the panel stopped recomputing
+ * the subscription in the browser precisely because that recomputation kept
+ * disagreeing with the real one. The demo would repeat the same mistake with
+ * the same result. So these are fixed answers in the shape the endpoint
+ * returns, and they show the two things a binding count can never show: a
+ * cascade entry fanning out into one line per direction and per policy, and
+ * exits that never reach the client as their own line.
+ */
+const DEMO_URI = 'vless://demo-uri-not-a-real-key';
+// The first three ride one entry node: that is the point of the fixture, a
+// count of nodes and a count of configs must be free to disagree.
+const PREMIUM_ENDPOINTS: UserEndpoint[] = [
+  { protocol: 'xray', label: 'US · us-01', nodeId: 'node-xray-us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'xray', label: 'DE', nodeId: 'node-xray-us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'xray', label: 'DE · Без рекламы', nodeId: 'node-xray-us-01', host: 'us-01.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'hysteria', label: 'NL · nl-01', nodeId: 'node-hy2-nl-01', host: 'nl-01.example.com', port: 8443, uri: DEMO_URI },
+  { protocol: 'shadowsocks', label: 'FI · fi-01', nodeId: 'node-ss-fi-01', host: 'fi-01.example.com', port: 8388, uri: DEMO_URI },
+  { protocol: 'amneziawg', label: 'SE · se-01', nodeId: 'node-awg-se-01', host: 'se-01.example.com', port: 51820, uri: DEMO_URI },
+];
+const STANDARD_ENDPOINTS: UserEndpoint[] = [
+  { protocol: 'xray', label: 'DE · de-02', nodeId: 'node-xray-de-02', host: 'de-02.example.com', port: 443, uri: DEMO_URI },
+  { protocol: 'hysteria', label: 'SG · sg-01', nodeId: 'node-hy2-sg-01', host: 'sg-01.example.com', port: 8443, uri: DEMO_URI },
+];
+
+export function endpointsFor(userId: string): UserEndpoint[] {
+  const user = USERS.find((u) => u.id === userId);
+  if (!user) return [];
+  return user.groupIds.includes('squad-premium') ? PREMIUM_ENDPOINTS : STANDARD_ENDPOINTS;
+}
+
+/**
+ * HWID slots in use. alex sits at his limit so the "every slot is taken" line
+ * has something to appear next to, and one device carries no label, which is
+ * the ordinary case: a label is only there if a client sent one.
+ */
+export const HWID_DEVICES: Record<string, HwidDevice[]> = {
+  'user-alex': [
+    { id: 'dev-1', userId: 'user-alex', hwid: 'a4f1c8e2b90d47ac9f3e', label: 'MacBook Pro', firstSeenAt: iso(30 * DAY), lastSeenAt: iso(4 * 60_000) },
+    { id: 'dev-2', userId: 'user-alex', hwid: '77b2d091fe3a4c58ab61', label: 'iPhone 15', firstSeenAt: iso(21 * DAY), lastSeenAt: iso(2 * HOUR) },
+    { id: 'dev-3', userId: 'user-alex', hwid: 'c93e5a17d84b26f0cc42', label: null, firstSeenAt: iso(9 * DAY), lastSeenAt: iso(3 * DAY) },
+    { id: 'dev-4', userId: 'user-alex', hwid: '5d81aa3c6e97b420f1d8', label: 'Windows-PC', firstSeenAt: iso(6 * DAY), lastSeenAt: iso(11 * HOUR) },
+    { id: 'dev-5', userId: 'user-alex', hwid: 'e0c4b7529d1af86b3a70', label: 'iPad', firstSeenAt: iso(2 * DAY), lastSeenAt: iso(26 * HOUR) },
+  ],
+  'user-mia': [
+    { id: 'dev-6', userId: 'user-mia', hwid: '1f9d6b34ca82e57d0b93', label: 'Pixel 8', firstSeenAt: iso(12 * DAY), lastSeenAt: iso(9 * 60_000) },
+  ],
+};
+
 // ───── Cascades (xray -> xray only, the realised cell) ─────
 
 export const CASCADES: Cascade[] = [
@@ -241,6 +397,15 @@ export const CASCADES: Cascade[] = [
       { id: 'hop-ru-0', nodeId: 'node-xray-de-01', nodeName: 'xray-de-01', position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
       { id: 'hop-ru-1', nodeId: 'node-xray-de-02', nodeName: 'xray-de-02', position: 1, entryProtocol: null, linkProtocol: null },
     ],
+    // v4: one entry, one way out. The demo carries both shapes so the screens
+    // render off `directions`, the way a live panel does.
+    positions: [
+      { position: 0, nodeIds: ['node-xray-de-01'], entryProtocol: 'xray', linkProtocol: 'vless' },
+    ],
+    directions: [
+      { id: 'dir-ru-de', tag: 1, countryCode: 'DE', nodeIds: ['node-xray-de-02'] },
+    ],
+    nextDirectionTag: 2,
     createdAt: iso(20 * DAY),
     updatedAt: iso(2 * DAY),
   },
@@ -254,8 +419,37 @@ export const CASCADES: Cascade[] = [
       { id: 'hop-us-0', nodeId: 'node-xray-us-01', nodeName: 'xray-us-01', position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
       { id: 'hop-us-1', nodeId: 'node-xray-de-01', nodeName: 'xray-de-01', position: 1, entryProtocol: null, linkProtocol: null },
     ],
+    positions: [
+      { position: 0, nodeIds: ['node-xray-us-01'], entryProtocol: 'xray', linkProtocol: 'vless' },
+    ],
+    // Tag 3 with only two directions on file is the point: tag 2 was spent by a
+    // direction that has since been deleted, and it never comes back.
+    directions: [
+      { id: 'dir-us-de', tag: 1, countryCode: 'DE', nodeIds: ['node-xray-de-01'] },
+      { id: 'dir-us-se', tag: 3, countryCode: 'SE', nodeIds: [] },
+    ],
+    nextDirectionTag: 4,
     createdAt: iso(18 * DAY),
     updatedAt: iso(2 * DAY),
+  },
+];
+
+// ───── Route policies (A4 ad-split) ─────
+
+export const ROUTE_POLICIES: RoutePolicy[] = [
+  {
+    id: 'policy-no-ads',
+    name: 'Без рекламы',
+    ordinal: 1,
+    directDomains: [],
+    blockDomains: Array.from({ length: 412 }, (_, i) => `ads-${i}.example`),
+  },
+  {
+    id: 'policy-ru-direct',
+    name: 'RU direct',
+    ordinal: 2,
+    directDomains: Array.from({ length: 1800 }, (_, i) => `ru-${i}.example`),
+    blockDomains: [],
   },
 ];
 
@@ -286,6 +480,7 @@ export const VERSION: SystemVersion = {
   latest: '0.1.9',
   updateAvailable: false,
   releaseUrl: null,
+  stars: 19,
   checkedAt: iso(2 * HOUR),
 };
 
@@ -324,7 +519,10 @@ export function buildOverview(): DashboardOverview {
     users: {
       total: 10,
       byStatus: { active: 7, limited: 1, expired: 1, disabled: 1 },
-      onlineNow: 8,
+      // Counted off the seeds above, not made up: seven users inside the
+      // five-minute window. The list would contradict this card otherwise, and
+      // that disagreement is exactly what the shared window was extracted for.
+      onlineNow: 7,
       onlineToday: 9,
       onlineThisWeek: 10,
       neverOnline: 0,
@@ -348,7 +546,9 @@ export function buildOverview(): DashboardOverview {
       }),
     },
     system: { onlineNodeCount: 8, totalNodeCount: 8 },
-    inventory: { profileCount: 4, squadCount: 2 },
+    // Counts feed the sidebar badges, so they have to agree with the lists
+    // above or the demo contradicts itself on screen.
+    inventory: { profileCount: PROFILES.length, squadCount: SQUADS.length, hostCount: HOSTS.length },
     host: {
       cpu: { loadPercent: 4, samplePercent: 4, cores: 6, loadavg: [0.23, 0.34, 0.4] },
       memory: { totalBytes: Math.round(11.6 * GiB), usedBytes: Math.round(1.84 * GiB), usedPercent: 15.8 },

@@ -36,8 +36,26 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
       const h = await svc.createHost(input);
       return reply.code(201).send(h);
     } catch (err) {
-      if (err instanceof svc.BindingNotFoundError) {
+      if (
+        err instanceof svc.BindingNotFoundError ||
+        err instanceof svc.ProfileNotFoundError ||
+        err instanceof svc.NodeNotFoundError
+      ) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+      }
+      // Creating a host can now create the binding under it, so the port clash
+      // that used to belong to the bindings route surfaces here too.
+      if (err instanceof svc.PortInUseError) {
+        return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+      }
+      // The form shows this next to the SNI field, so it carries the served
+      // names rather than only prose.
+      if (err instanceof svc.SniMismatchError) {
+        return reply.code(400).send({
+          error: 'SNI_MISMATCH',
+          message: err.message,
+          expected: err.expected,
+        });
       }
       throw err;
     }
@@ -51,6 +69,13 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       if (err instanceof svc.HostNotFoundError) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+      }
+      if (err instanceof svc.SniMismatchError) {
+        return reply.code(400).send({
+          error: 'SNI_MISMATCH',
+          message: err.message,
+          expected: err.expected,
+        });
       }
       throw err;
     }

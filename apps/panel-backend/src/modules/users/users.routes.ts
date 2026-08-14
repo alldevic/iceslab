@@ -1,12 +1,16 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { z } from 'zod';
+import type { Prisma } from '../../generated/prisma/client.js';
 import { requireAuth } from '../auth/auth.hook.js';
 import {
+  BulkUsersSchema,
   CreateUserSchema,
   UpdateUserSchema,
   ListUsersQuerySchema,
   UserIdParamSchema,
 } from './users.schemas.js';
 import * as usersService from './users.service.js';
+import { mapUserToPublic } from './users.mapper.js';
 import { prisma } from '../../prisma.js';
 import {
   generateSubscription,
@@ -95,6 +99,212 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // GET /api/users/tags - distinct tags in use, for the Filters popover.
+  // Declared before /api/users/:id so "tags" isn't parsed as an id.
+  // Cheap (one indexed DISTINCT) and small: a tag set is operator-authored, so
+  // it stays in the dozens even on a large install.
+  app.get('/api/users/tags', auth, async (_request, reply) => {
+    const rows = await prisma.user.findMany({
+      where: { deletedAt: null, tag: { not: null } },
+      distinct: ['tag'],
+      select: { tag: true },
+      orderBy: { tag: 'asc' },
+    });
+    return reply.send({ tags: rows.map((r) => r.tag).filter((t): t is string => t !== null) });
+  });
+
+  // POST /api/users/bulk - one action, many users. Declared before
+  // /api/users/:id so "bulk" is not read as an id.
+  //
+  // Always 200, even when some users failed: the response body is the report.
+  // A blanket 4xx would tell the caller nothing about WHICH of two hundred ids
+  // went wrong, and rolling the whole batch back over three stale ids would be
+  // worse than doing the other hundred and ninety-seven.
+  app.post('/api/users/bulk', auth, async (request, reply) => {
+    const input = BulkUsersSchema.parse(request.body);
+    const result = await usersService.bulkUsers(input);
+    return reply.send({
+      action: input.action,
+      requested: input.userIds.length,
+      succeeded: result.ok.length,
+      ok: result.ok,
+      failed: result.failed,
+    });
+  });
+
+  // ───── Lookups by natural key ─────
+  //
+  // A Telegram bot never holds our internal uuid: it knows the person by their
+  // telegram id, and support knows them by username, email or the token in the
+  // link they pasted. Without these, every bot action starts with a full-list
+  // scan and a client-side filter, which is both slow and racy on a roster of
+  // thousands.
+  //
+  // Declared BEFORE /api/users/:id so `by-telegram-id` is not parsed as an id.
+  //
+  // ⚠ Two of these four keys can match SEVERAL people, so they return a LIST.
+  //
+  //   - `telegramId`: in the operator's live data 151 telegram ids belong to
+  //     more than one account and one belongs to 24. Families share a login,
+  //     resellers hold several subscriptions under one chat.
+  //   - `email`: no constraint anywhere, and nothing stops two accounts from
+  //     carrying the same address.
+  //
+  // They used to answer with `findFirst`, i.e. with an ARBITRARY one of the
+  // matches, and a bot acting on that answer acted on the wrong person's
+  // subscription - silently, because the reply looked perfectly valid.
+  //
+  // The other two stay single. `subscriptionToken` is UNIQUE in the schema, and
+  // a token identifying exactly one person is the whole point of a token.
+  // `username` has no DB constraint but createUser refuses a duplicate (409),
+  // so at most one live user carries a given name. ⚠ That guarantee comes from
+  // the service, not the column: an importer writing to the database directly
+  // could seed duplicates, and then this lookup would hide all but the first.
+  //
+  // The lists are not paginated and not capped on purpose. These are natural-key
+  // lookups over a handful of rows; a cap would either truncate silently (the
+  // failure this change exists to remove) or need a page cursor nobody would
+  // use. Listing at scale is what GET /api/users is for.
+  const lookupMany = async (
+    where: Prisma.UserWhereInput,
+    reply: FastifyReply,
+  ): Promise<unknown> => {
+    const users = await prisma.user.findMany({
+      where: { ...where, deletedAt: null },
+      include: { traffic: true },
+      // Stable order, oldest first: without it the same request can come back
+      // in a different order and a caller that takes "the first one" behaves
+      // differently on identical data.
+      orderBy: { createdAt: 'asc' },
+    });
+    return reply.send({
+      users: users.map((u) => mapUserToPublic(u, u.traffic)),
+      total: users.length,
+    });
+  };
+
+  const lookupOne = async (
+    where: Prisma.UserWhereInput,
+    reply: FastifyReply,
+  ): Promise<unknown> => {
+    const user = await prisma.user.findFirst({
+      where: { ...where, deletedAt: null },
+      include: { traffic: true },
+    });
+    if (!user) return reply.code(404).send({ error: 'USER_NOT_FOUND' });
+    return reply.send(mapUserToPublic(user, user.traffic));
+  };
+
+  app.get('/api/users/by-telegram-id/:telegramId', auth, async (request, reply) => {
+    const { telegramId } = z
+      .object({ telegramId: z.string().regex(/^\d+$/, 'telegram id must be digits') })
+      .parse(request.params);
+    // BigInt: Telegram ids passed 2^32 long ago and will pass 2^53 eventually.
+    return lookupMany({ telegramId: BigInt(telegramId) }, reply);
+  });
+
+  app.get('/api/users/by-username/:username', auth, async (request, reply) => {
+    const { username } = z.object({ username: z.string().min(1).max(64) }).parse(request.params);
+    return lookupOne({ username }, reply);
+  });
+
+  app.get('/api/users/by-subscription-token/:token', auth, async (request, reply) => {
+    const { token } = z.object({ token: z.string().min(8).max(64) }).parse(request.params);
+    return lookupOne({ subscriptionToken: token }, reply);
+  });
+
+  app.get('/api/users/by-email/:email', auth, async (request, reply) => {
+    const { email } = z.object({ email: z.string().min(3).max(255) }).parse(request.params);
+    return lookupMany({ email }, reply);
+  });
+
+  /**
+   * GET /api/users/:id/usage?start=&end=
+   *
+   * Per-day traffic for one user. The rows have been accumulating since the
+   * stats poller landed; there was simply no way to read them, so a bot asking
+   * "how much did I use this month" had nothing to answer with.
+   *
+   * Daily granularity, because that is what is stored: the poller folds each
+   * node's deltas into a per-(node, user, day) row. Days with no traffic have
+   * no row at all rather than a zero, so a caller charting a period must fill
+   * gaps itself - inventing zeroes here would hide the difference between "used
+   * nothing" and "node reported nothing".
+   *
+   * Totals are summed across nodes and returned alongside, since that is what
+   * the caller almost always wants and it saves them adding bigints correctly.
+   */
+  app.get('/api/users/:id/usage', auth, async (request, reply) => {
+    const params = UserIdParamSchema.parse(request.params);
+    const query = z
+      .object({
+        start: z.iso.date().optional(),
+        end: z.iso.date().optional(),
+        // Per-node breakdown is opt-in: most callers want one number per day,
+        // and the split multiplies the row count by the size of the fleet.
+        byNode: z.enum(['true', 'false']).default('false'),
+      })
+      .parse(request.query);
+
+    const user = await prisma.user.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!user) return reply.code(404).send({ error: 'USER_NOT_FOUND' });
+
+    // Default window: the last 30 days, which is the period a subscription
+    // question is almost always about.
+    const end = query.end ? new Date(query.end) : new Date();
+    const start = query.start
+      ? new Date(query.start)
+      : new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+    const rows = await prisma.nodeUserUsageHistory.findMany({
+      where: { userId: params.id, date: { gte: start, lte: end } },
+      orderBy: { date: 'asc' },
+      select: { date: true, bytesIn: true, bytesOut: true, nodeId: true },
+    });
+
+    const perNode = query.byNode === 'true';
+    const buckets = new Map<string, { date: string; nodeId?: string; bytesIn: bigint; bytesOut: bigint }>();
+    for (const r of rows) {
+      const date = r.date.toISOString().slice(0, 10);
+      const key = perNode ? `${date}|${r.nodeId}` : date;
+      const b = buckets.get(key) ?? {
+        date,
+        ...(perNode ? { nodeId: r.nodeId } : {}),
+        bytesIn: 0n,
+        bytesOut: 0n,
+      };
+      b.bytesIn += r.bytesIn;
+      b.bytesOut += r.bytesOut;
+      buckets.set(key, b);
+    }
+
+    let totalIn = 0n;
+    let totalOut = 0n;
+    for (const b of buckets.values()) {
+      totalIn += b.bytesIn;
+      totalOut += b.bytesOut;
+    }
+
+    // Bytes go out as strings: a month of traffic passes 2^53 long before a
+    // year does, and JSON numbers would round it silently.
+    return reply.send({
+      userId: params.id,
+      start: start.toISOString().slice(0, 10),
+      end: end.toISOString().slice(0, 10),
+      totalBytesIn: totalIn.toString(),
+      totalBytesOut: totalOut.toString(),
+      days: [...buckets.values()].map((b) => ({
+        date: b.date,
+        ...(b.nodeId ? { nodeId: b.nodeId } : {}),
+        bytesIn: b.bytesIn.toString(),
+        bytesOut: b.bytesOut.toString(),
+      })),
+    });
+  });
+
   // GET /api/users/:id
   app.get('/api/users/:id', auth, async (request, reply) => {
     const params = UserIdParamSchema.parse(request.params);
@@ -133,7 +343,13 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({
         endpoints: result.endpoints.map((e) => ({
           protocol: e.protocol,
-          nodeName: e.nodeName,
+          // `label` is the string the client shows. It was called `nodeName`
+          // until 2026-07-31 while never holding a node name: one node emits
+          // several of these (a cascade entry produces one per direction and
+          // policy), so the old name invited a join that quietly drops rows.
+          // `nodeId` is the join key.
+          label: e.nodeName,
+          nodeId: e.nodeId,
           host: e.host,
           port: e.port,
           uri: e.uri,

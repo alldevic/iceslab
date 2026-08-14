@@ -18,20 +18,23 @@ import {
   IconDownload,
   IconEdit,
   IconKey,
+  IconRefresh,
   IconRoute,
   IconServer2,
   IconTrash,
   IconUpload,
 } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
-import type { DashboardOverview } from '../lib/api';
+import type { CoreRestarts, DashboardOverview } from '../lib/api';
 import { countryFlag } from '../lib/countries';
+import { relativeTime } from '../lib/relativeTime';
 
 const HAIRLINE = '#1C2A3D';
 const CARD = '#0F1A28';
 const GROUND = '#08101A';
 const SNOW = '#C8D4E3';
 const MIST = '#7A8BA3';
+const FAINT = '#5A6B82';
 const CYAN = '#7DD3FC';
 const MOSS = '#A7D8B9';
 const AMBER = '#F5B14C';
@@ -57,6 +60,18 @@ interface CardNode {
   /** When this node is a hop in a cascade: "<cascade name> · <role>" for the
    *  chain badge. Null when the node is standalone. */
   cascadeLabel?: string | null;
+  /** T7 - proxy-core version (xray "26.3.27"), null until a versioned agent
+   *  reports in. Shown as a small chip so operators can spot nodes too old for
+   *  cascade exit selection (needs xray >= 25.9.5). */
+  coreVersion?: string | null;
+  /** Restart tally + memory headroom of the xray core. null = never reported.
+   *  See the CoreHealth block below for why the two are read as one thing. */
+  coreRestarts?: CoreRestarts | null;
+  /** Only xray reports a tally today, so a missing one is expected news on an
+   *  AmneziaWG node and unexpected news on an xray one. Without the protocol
+   *  the card would have to print "no data" on every node that will never have
+   *  any. */
+  protocol?: string;
 }
 
 interface Props {
@@ -273,6 +288,12 @@ export function NodeCard({
           </Box>
         )}
 
+        <CoreHealth
+          restarts={node.coreRestarts ?? null}
+          protocol={node.protocol}
+          nodeReachable={!isOffline}
+        />
+
         {node.maxUsers && node.maxUsers > 0 && (
           <Box>
             <Group justify="space-between" mb={2}>
@@ -327,6 +348,19 @@ export function NodeCard({
               </Text>
             </Group>
           </Tooltip>
+          {node.coreVersion && (
+            <Tooltip label={t('nodeCard.coreVersion')}>
+              <Group gap={4} wrap="nowrap" style={{ marginLeft: 'auto' }}>
+                <IconCpu size={12} style={{ color: MIST }} />
+                <Text
+                  size="xs"
+                  style={{ color: MIST, fontFamily: "'Geist Mono', monospace" }}
+                >
+                  xray {node.coreVersion}
+                </Text>
+              </Group>
+            </Tooltip>
+          )}
         </Group>
       </Stack>
 
@@ -337,6 +371,179 @@ export function NodeCard({
         }
       `}</style>
     </Card>
+  );
+}
+
+/**
+ * The core's restart tally, read as one thought: how often it came back, and
+ * how close it runs to the ceiling that will bounce it again.
+ *
+ * Three things this block refuses to conflate:
+ *  - a `null` tally is "nobody told us", not "zero restarts". A node on an old
+ *    agent and a node whose core never blinked are opposite news to an
+ *    operator, so they must not look alike here.
+ *  - a missing ceiling is a watchdog that is OFF, not a ceiling of zero. There
+ *    is no bar to draw then, and a bar sitting at 0% would read as "endless
+ *    headroom" when the truth is "nothing will catch an OOM".
+ *  - `observedAt` is when the panel last WROTE these numbers, not when it last
+ *    polled the node. The status cron ticks every 30s but persists only when a
+ *    counter moved or RSS drifted more than 10%, so a calm core carries an old
+ *    stamp by design. The age is printed as a plain fact and never coloured;
+ *    colouring it would flag healthy nodes as stale.
+ */
+function CoreHealth({
+  restarts,
+  protocol,
+  nodeReachable,
+}: {
+  restarts: CoreRestarts | null;
+  protocol?: string;
+  nodeReachable: boolean;
+}) {
+  const { t } = useTranslation();
+
+  // Only the xray core reports a tally today. On an AmneziaWG node its absence
+  // is nothing to say; on an xray node the silence is itself the news.
+  if (!restarts) {
+    if (protocol !== 'xray') return null;
+    return (
+      <Tooltip label={t('nodeCard.coreNoDataTip')} withArrow multiline w={280}>
+        <Group gap={6} wrap="nowrap">
+          <IconRefresh size={12} style={{ color: FAINT }} />
+          <Text size="xs" style={{ color: FAINT }}>
+            {t('nodeCard.coreNoData')}
+          </Text>
+        </Group>
+      </Tooltip>
+    );
+  }
+
+  const rss = restarts.rssBytes ?? null;
+  const limit = restarts.memoryLimitBytes ?? null;
+  // Over 100% is possible: the sample that tripped the watchdog is the one
+  // stored, so the bar clamps but the number does not lie.
+  const percent = rss !== null && limit ? (rss / limit) * 100 : null;
+  const tone = restarts.crash > 0 ? RED : restarts.total > 0 ? AMBER : FAINT;
+
+  const memTip = limit
+    ? t('nodeCard.coreMemTip', {
+        rss: rss === null ? '-' : formatBytes(rss),
+        limit: formatBytes(limit),
+      })
+    : t('nodeCard.coreMemNoLimitTip', { rss: rss === null ? '-' : formatBytes(rss) });
+
+  const restartTip =
+    restarts.total === 0
+      ? t('nodeCard.restartsNoneTip')
+      : t('nodeCard.restartsTip', {
+          crash: restarts.crash,
+          memory: restarts.memory,
+          when: restarts.lastAt ? relativeTime(restarts.lastAt, t).text : '-',
+        });
+
+  const freshness =
+    t('nodeCard.coreObservedTip', { at: new Date(restarts.observedAt).toLocaleString() }) +
+    (nodeReachable ? '' : ` ${t('nodeCard.coreFrozen')}`);
+
+  // The reason belongs to the LAST restart, so it is only appended when the
+  // agent actually named one. Defaulting a missing reason to "crash" would
+  // invent a bug report out of a blank field.
+  const restartLine =
+    restarts.total === 0
+      ? t('nodeCard.restartsNone')
+      : [
+          t('nodeCard.restarts', { count: restarts.total }),
+          restarts.lastReason === 'memory'
+            ? t('nodeCard.reasonMemory')
+            : restarts.lastReason
+              ? t('nodeCard.reasonCrash')
+              : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+
+  return (
+    <Stack gap={4}>
+      <Tooltip label={memTip} withArrow multiline w={280}>
+        <Box>
+          <Group gap={6} mb={2} wrap="nowrap">
+            <Box style={{ color: tone, display: 'flex' }}>
+              <IconRefresh size={12} />
+            </Box>
+            <Text
+              size="xs"
+              fw={500}
+              style={{
+                color: MIST,
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+              }}
+            >
+              CORE
+            </Text>
+            <Text
+              size="xs"
+              truncate
+              style={{
+                flex: 1,
+                minWidth: 0,
+                color: FAINT,
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: 10,
+              }}
+            >
+              {rss === null
+                ? t('nodeCard.coreNoRss')
+                : limit
+                  ? `${formatBytes(rss)} / ${formatBytes(limit)}`
+                  : `${formatBytes(rss)} · ${t('nodeCard.coreNoLimit')}`}
+            </Text>
+            <Text
+              size="xs"
+              fw={600}
+              style={{ color: percent === null ? FAINT : SNOW, fontFamily: "'Geist Mono', monospace" }}
+            >
+              {percent === null ? '-' : `${percent.toFixed(0)}%`}
+            </Text>
+          </Group>
+          {/* No ceiling, no bar. An empty track would read as "0% used, plenty
+              of room" when the truth is that nothing is measuring the room. */}
+          {percent !== null && (
+            <Progress
+              value={Math.min(100, percent)}
+              size="xs"
+              radius="xs"
+              styles={{
+                root: { backgroundColor: HAIRLINE },
+                section: { backgroundColor: thresholdColor(percent) },
+              }}
+            />
+          )}
+        </Box>
+      </Tooltip>
+
+      <Group justify="space-between" gap={6} wrap="nowrap">
+        <Tooltip label={restartTip} withArrow multiline w={280}>
+          <Text
+            size="xs"
+            truncate
+            style={{ color: tone, fontFamily: "'Geist Mono', monospace", fontSize: 10 }}
+          >
+            {restartLine}
+          </Text>
+        </Tooltip>
+        <Tooltip label={freshness} withArrow multiline w={280}>
+          <Text
+            size="xs"
+            style={{ color: FAINT, fontFamily: "'Geist Mono', monospace", fontSize: 10, flexShrink: 0 }}
+          >
+            {relativeTime(restarts.observedAt, t).text}
+          </Text>
+        </Tooltip>
+      </Group>
+    </Stack>
   );
 }
 

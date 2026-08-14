@@ -1,0 +1,48 @@
+# gitleaks configuration.
+#
+# The first scan found thirteen "secrets", all of them test fixtures and CI
+# placeholders. That is the normal starting state: the scanner judges a string
+# by its entropy and cannot know whether it guards anything.
+#
+# The temptation is to silence it broadly. Resist that - a scanner that ignores
+# whole directories will also ignore the real key someone pastes into one of
+# them. Every entry below names WHAT is being allowed and WHY, so an addition is
+# a decision rather than a side effect.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fixtures and placeholders that guard nothing"
+
+paths = [
+  # Test files. Credentials here exist so an assertion has something to compare
+  # against; they are generated for the test and never reach a running system.
+  '''.*\.test\.ts$''',
+  '''.*_test\.go$''',
+  # The test environment file, committed on purpose so the suite runs without
+  # setup. Its values only ever address a throwaway local database.
+  '''^\.env\.test$''',
+  # Fixtures for the demo build (read-only panel with invented data).
+  '''^apps/panel-frontend/src/demo/.*''',
+]
+
+regexes = [
+  # CI placeholders. They are deliberately long enough to satisfy the config
+  # validator's minimum length, which is exactly what makes them look like keys.
+  '''ci-jwt-secret-must-be-at-least-32-chars-long''',
+  '''ci-smoke-secret-must-be-at-least-32-chars''',
+  # The literal name of the variable, matched where a workflow or example file
+  # assigns an obvious dummy. Real values never live in the repository: they are
+  # supplied through the environment on the host.
+  '''JWT_SECRET:\s*ci-''',
+  # The .env.test fixture value. Its whole purpose is to be recognised: the
+  # panel refuses to boot outside NODE_ENV=test when JWT_SECRET equals it, so
+  # nobody can ship the public fixture by accident. The scanner flagged the very
+  # constant that exists to prevent the leak.
+  #
+  # Matched by VALUE rather than by file, so it stays silent wherever it appears
+  # while a genuine key added to the same file is still caught. It also sits in
+  # git history, where a fix cannot remove it.
+  '''test_secret_at_least_32_characters_long_for_zod_validation''',
+]

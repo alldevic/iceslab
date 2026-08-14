@@ -11,6 +11,116 @@ import {
   type LinkCred,
 } from './cascade.config.js';
 
+// Regression cover for the prod defect found 2026-07-29: ad-split policies
+// reached balancer entries only, so on a chain an operator could define a
+// policy, grant it, see the panel report success, and get no rules on the node.
+describe('buildCascadeConfigs (chain) ad-split', () => {
+  const hops: CascadeConfigHopInput[] = [
+    { nodeId: 'n-entry', position: 0, nodeHost: 'entry.example.com' },
+    { nodeId: 'n-exit', position: 1, nodeHost: 'exit.example.com' },
+  ];
+  const creds: LinkCred[] = [{ protocol: 'vless', port: 24000, uuid: 'u-0' }];
+  const noAds = {
+    ordinal: 1,
+    directDomains: ['geosite:ru'],
+    blockDomains: ['geosite:category-ads-all'],
+  };
+
+  it('without policies the entry rules are unchanged: QUIC drop then catch-all', () => {
+    const entryRules = buildCascadeConfigs(hops, creds)[0]!.routingRules;
+    expect(entryRules).toHaveLength(2);
+    expect(entryRules[0]).toMatchObject({ network: 'udp', port: 443, outboundTag: 'blocked' });
+    expect(entryRules[1]).toMatchObject({ network: 'tcp,udp', outboundTag: 'cascade-link-out' });
+    expect(entryRules.some((r) => 'vlessRoute' in r)).toBe(false);
+  });
+
+  it('a granted policy lands on the chain entry, tagged and above the catch-all', () => {
+    const entryRules = buildCascadeConfigs(hops, creds, [noAds])[0]!.routingRules;
+    // ordinal 1, exitIndex 0 -> 1*256 + 0 + 1
+    const tag = String(257);
+    const block = entryRules.findIndex((r) => r.outboundTag === 'blocked' && 'domain' in r);
+    const direct = entryRules.findIndex((r) => r.outboundTag === 'direct');
+    const catchAll = entryRules.findIndex(
+      (r) => r.outboundTag === 'cascade-link-out' && !('vlessRoute' in r),
+    );
+    expect(entryRules[block]).toMatchObject({
+      vlessRoute: tag,
+      domain: ['geosite:category-ads-all'],
+    });
+    expect(entryRules[direct]).toMatchObject({ vlessRoute: tag, domain: ['geosite:ru'] });
+    // Order is the whole point: a split rule below the catch-all never fires.
+    expect(block).toBeLessThan(catchAll);
+    expect(direct).toBeLessThan(catchAll);
+  });
+
+  it('emits no rule for the plain profile: one exit means nothing to select', () => {
+    const entryRules = buildCascadeConfigs(hops, creds, [noAds])[0]!.routingRules;
+    // routeTag(0, 0) = 1 would be the plain tag; an untagged client and a plain
+    // one both fall through to the same catch-all, so a rule would be noise.
+    expect(entryRules.some((r) => r.vlessRoute === '1')).toBe(false);
+  });
+
+  it('leaves transit and exit hops alone', () => {
+    const cfgs = buildCascadeConfigs(
+      [...hops, { nodeId: 'n-transit', position: 2, nodeHost: 'transit.example.com' }],
+      [...creds, { protocol: 'vless', port: 24001, uuid: 'u-1' }],
+      [noAds],
+    );
+    for (const c of cfgs.slice(1)) {
+      expect(c.routingRules.some((r) => 'vlessRoute' in r)).toBe(false);
+    }
+  });
+});
+
+// The inter-hop link is the LONGEST leg of a cascade, and until 2026-07-30 it
+// was the only outbound with no socket tuning at all: the node's own `direct`
+// has carried BBR since slice 23.1. Reported from the field as pages loading
+// heavily while raw throughput looked fine.
+describe('inter-hop link tuning', () => {
+  // Deliberately unnamed by geography: this applies to every link between two
+  // hops, whatever the countries. The field report happened to be RU to NL,
+  // but the tuning is not about that pair.
+  const hops: CascadeConfigHopInput[] = [
+    { nodeId: 'n-entry', position: 0, nodeHost: 'entry.example.com' },
+    { nodeId: 'n-exit', position: 1, nodeHost: 'exit.example.com' },
+  ];
+
+  function linkOut(cred: LinkCred) {
+    const entry = buildCascadeConfigs(hops, [cred])[0]!;
+    return entry.outbounds.find((o) => o.tag === 'cascade-link-out')!;
+  }
+
+  it.each([
+    ['vless', { protocol: 'vless', port: 24000, uuid: 'u-0' } as LinkCred],
+    [
+      'shadowsocks',
+      { protocol: 'shadowsocks', port: 24000, psk: 'p', method: '2022-blake3-aes-256-gcm' } as LinkCred,
+    ],
+  ])('%s link runs BBR with fast open', (_name, cred) => {
+    const out = linkOut(cred);
+    const ss = out.streamSettings as Record<string, unknown>;
+    expect(ss.sockopt).toMatchObject({ tcpCongestion: 'bbr', tcpFastOpen: true });
+  });
+
+  it.each([
+    ['vless', { protocol: 'vless', port: 24000, uuid: 'u-0' } as LinkCred],
+    [
+      'shadowsocks',
+      { protocol: 'shadowsocks', port: 24000, psk: 'p', method: '2022-blake3-aes-256-gcm' } as LinkCred,
+    ],
+  ])('%s link multiplexes so a page does not pay a round trip per request', (_name, cred) => {
+    expect(linkOut(cred).mux).toMatchObject({ enabled: true, concurrency: 8 });
+  });
+
+  it('leaves the exit egress alone: only the link between hops is tuned', () => {
+    const cfgs = buildCascadeConfigs(hops, [{ protocol: 'vless', port: 24000, uuid: 'u-0' }]);
+    const exitDirect = cfgs[1]!.outbounds.find((o) => o.tag === 'direct')!;
+    // The node's base config already owns `direct`; duplicating tuning here
+    // would be a second opinion on a tag we do not control.
+    expect(exitDirect).not.toHaveProperty('mux');
+  });
+});
+
 describe('buildBalancerCascadeConfigs (auto node)', () => {
   const entry: CascadeConfigHopInput = { nodeId: 'n-entry', position: 0, nodeHost: 'ru.example.com' };
   const exits: CascadeConfigHopInput[] = [
@@ -42,11 +152,59 @@ describe('buildBalancerCascadeConfigs (auto node)', () => {
     expect(bal.tag).toBe('auto');
     expect(bal.selector).toEqual(['cascade-link-out']);
     expect((bal.strategy as Record<string, unknown>).type).toBe('leastPing');
-    // QUIC (udp/443) is dropped first so clients fall back to TCP; the user
-    // rule then targets the balancer, not a fixed outbound
+    // QUIC (udp/443) is dropped first so clients fall back to TCP; then the A4
+    // explicit-exit vlessRoute rules (one per exit); the untagged catch-all
+    // targets the balancer LAST so a normal UUID auto-balances.
     expect(e.routingRules[0]).toMatchObject({ network: 'udp', port: 443, outboundTag: 'blocked' });
-    expect(e.routingRules[1]).toMatchObject({ balancerTag: 'auto' });
-    expect(e.routingRules[1]).not.toHaveProperty('outboundTag');
+    const last = e.routingRules[e.routingRules.length - 1]!;
+    expect(last).toMatchObject({ balancerTag: 'auto' });
+    expect(last).not.toHaveProperty('outboundTag');
+  });
+
+  it('A4: one vlessRoute rule per exit, tag i+1 -> cascade-link-out-i, above the balancer', () => {
+    const cfgs = buildBalancerCascadeConfigs(entry, exits, creds);
+    const rules = cfgs[0]!.routingRules;
+    // [0]=QUIC block, [1..N]=vlessRoute per exit, [last]=balancer
+    expect(rules[1]).toMatchObject({
+      vlessRoute: '1',
+      network: 'tcp,udp',
+      outboundTag: 'cascade-link-out-0',
+    });
+    expect(rules[2]).toMatchObject({
+      vlessRoute: '2',
+      network: 'tcp,udp',
+      outboundTag: 'cascade-link-out-1',
+    });
+    // tag value is a string (xray port-like syntax); 0 is never emitted so the
+    // untagged/auto config can't collide with an explicit exit.
+    const tags = rules.filter((r) => 'vlessRoute' in r).map((r) => r.vlessRoute);
+    expect(tags).toEqual(['1', '2']);
+    // every vlessRoute rule sits before the balancer catch-all
+    const balIdx = rules.findIndex((r) => 'balancerTag' in r);
+    const lastVlessIdx = rules.map((r) => 'vlessRoute' in r).lastIndexOf(true);
+    expect(lastVlessIdx).toBeLessThan(balIdx);
+  });
+
+  it('A4 ad-split: a policy (ordinal 1) emits block/direct rules above the exit-catch-all in its tag band', () => {
+    const policies = [
+      { ordinal: 1, directDomains: ['geosite:google'], blockDomains: ['geosite:category-ads-all'] },
+    ];
+    const rules = buildBalancerCascadeConfigs(entry, exits, creds, policies)[0]!.routingRules;
+    // Plain tags 1,2 still present for both exits.
+    const plainTags = rules.filter((r) => 'network' in r && 'vlessRoute' in r).map((r) => r.vlessRoute);
+    expect(plainTags).toEqual(expect.arrayContaining(['1', '2', '257', '258']));
+    // Policy band = ordinal*256 + i + 1 -> exit 0 = 257, exit 1 = 258.
+    const band = rules.filter((r) => r.vlessRoute === '257');
+    // block (ads) then direct (google) then the exit-catch-all, in that order.
+    expect(band[0]).toMatchObject({ vlessRoute: '257', domain: ['geosite:category-ads-all'], outboundTag: 'blocked' });
+    expect(band[1]).toMatchObject({ vlessRoute: '257', domain: ['geosite:google'], outboundTag: 'direct' });
+    expect(band[2]).toMatchObject({ vlessRoute: '257', network: 'tcp,udp', outboundTag: 'cascade-link-out-0' });
+    // The block/direct rules sit ABOVE the exit-catch-all for that tag.
+    const idxBlock = rules.findIndex((r) => r.vlessRoute === '257' && r.outboundTag === 'blocked');
+    const idxExit = rules.findIndex((r) => r.vlessRoute === '257' && r.outboundTag === 'cascade-link-out-0');
+    expect(idxBlock).toBeLessThan(idxExit);
+    // Still ends on the balancer catch-all.
+    expect(rules[rules.length - 1]).toMatchObject({ balancerTag: 'auto' });
   });
 
   it('each exit terminates its link and egresses via freedom, firewalled to the entry', () => {
