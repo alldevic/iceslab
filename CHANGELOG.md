@@ -3,7 +3,91 @@
 All notable changes to Iceslab are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags.
 
-## Unreleased
+## v0.2.0
+
+The operator release. Iceslab gains the API surface another program needs to
+drive it (lookups, bulk actions, usage history, signed webhooks), the groundwork
+for moving a live userbase in from another panel, and cascades rebuilt around
+positions and directions so a tier keeps its identity when the fleet changes.
+The panel itself moved from modals to pages, and the node-agent learned to hold
+several inbounds and to restart a core before it runs the host out of memory.
+Field-verified against a seven-node fleet.
+
+### Security
+
+- **The panel UI is no longer published on every interface.** The frontend port
+  was mapped as `0.0.0.0:8080`, so on a domain install the admin UI answered
+  plain HTTP to the whole internet, bypassing the TLS proxy in front of it -
+  and the login password went across the wire in the clear. The installer's own
+  firewall step reported "default deny incoming", which was true and beside the
+  point: **a docker-published port is DNAT'd before ufw's filter chains run, so
+  the firewall cannot close it.** The bind address is the only control, and it
+  is now `FRONTEND_BIND`, defaulting to `127.0.0.1`.
+
+  Reported from a clean community install (#33) and reproduced against our own
+  panel, which returned HTTP 200 on `:8080` from the public internet while
+  `ufw status` listed no rule for it.
+
+  ⚠ **Action required for installs WITHOUT a reverse proxy.** If you reach the
+  panel directly at `http://<ip>:8080`, add `FRONTEND_BIND=0.0.0.0` to
+  `.env.production` before your next deploy, or the port will stop answering.
+  Installs behind Caddy/nginx/Traefik on the same host need no change; a fresh
+  install picks the right value for its mode automatically.
+
+- **AmneziaWG mimicry values are validated as hex.** They are interpolated into
+  the interface's `PostUp`, so anything else was a command-injection surface on
+  the node.
+- **Test-connect will not probe your own network.** An SSRF guard on the target,
+  plus ReDoS and cache hardening on the subscription response rules.
+- **API token scopes are checked against a known-scope allowlist** rather than
+  accepted as given.
+- **The honeypot blacklist skips non-routable addresses**, so a probe from a
+  private range can no longer get an operator's own network blocked.
+- **A cap on distinct device rows per user**, so a `/sub` audit loop cannot fill
+  the disk.
+- Dependency advisories closed, and CI now scans for secrets, lints Go, and
+  proves the built image boots.
+
+### Added
+
+- **An API another program can run the panel with.** Look a user up by Telegram
+  id, username, subscription token or email; apply one action (extend, reset
+  traffic, revoke, delete, enable, disable) to up to 500 users at once; read one
+  user's traffic history for a period, optionally split per node. Telegram id
+  and email answer with a list rather than one record, because one id really can
+  belong to several accounts.
+- **Signed outbound webhooks.** The panel now tells subscribers when a user is
+  created, changed, expires, hits a limit, has traffic reset or is deleted, and
+  when a node goes down or comes back. HMAC-SHA256 over `<timestamp>.<body>`, so
+  a bot can stop polling.
+- **Groundwork for importing a live userbase.** A user can be created with
+  values carried from another panel (expiry, subscription token, credentials,
+  registration date), and every imported row records where it came from, so a
+  second import run updates rather than duplicates.
+- **Cascades by positions and directions.** A direction now keeps its identity
+  across saves: deleting one exit no longer renumbers the rest, which used to
+  move a subscriber from one country to another without anyone touching their
+  account. Exits can be selected per subscriber through `vlessRoute`, exposed in
+  the subscription per cascade, and a save reports provisioning status per hop.
+- **Squads got granular.** A squad can hand out only some hosts of its profiles,
+  restrict which cascade exits it grants, and carry its own route policies (the
+  "no ads" split), each scoped to the squad that granted it.
+- **A node-agent that holds a fleet's worth of state.** Several xray inbounds on
+  one node; a memory ceiling that restarts the core before the kernel OOM-kills
+  it, with the restart tally and headroom on the node card; an unconfigured core
+  told apart from a failed one; core version reported and gated for cascade exit
+  selection.
+- **Hosts as a first-class thing.** Create one by naming a profile, node and
+  port and the binding underneath appears by itself; host fields are resolved
+  per profile so the form only offers what that protocol actually emits, and an
+  SNI the node will not serve is rejected on save.
+- **Community recipe registry, plus bring-your-own sources.** Import a profile
+  recipe from a registry or your own list, export your own.
+- **Subscription reach.** The `xrayjson-array` format with the full routing
+  surface per config, the AmneziaVPN `vpn://` key, and `SUBSCRIPTION_PUBLIC_URL`
+  for serving `/sub` from its own domain.
+- **`iceslab.sh`, one menu for ops.** Deploy, logs, backup, restore and cleanup
+  behind a single entry point that explains each action before running it.
 
 ### Changed
 
@@ -27,26 +111,63 @@ All notable changes to Iceslab are documented here. Format loosely follows
   squads read as two. The count now comes from the API, deduplicated, and
   respects squad narrowing.
 
-### Security
+- **A node that stops answering leaves the subscription, after a grace period.**
+  Ninety seconds, three failed polls: long enough that a blip changes nothing,
+  short enough that a genuinely dead node stops being handed out. Its users are
+  redistributed across the rest rather than herded onto one replacement.
 
-- **The panel UI is no longer published on every interface.** The frontend port
-  was mapped as `0.0.0.0:8080`, so on a domain install the admin UI answered
-  plain HTTP to the whole internet, bypassing the TLS proxy in front of it -
-  and the login password went across the wire in the clear. The installer's own
-  firewall step reported "default deny incoming", which was true and beside the
-  point: **a docker-published port is DNAT'd before ufw's filter chains run, so
-  the firewall cannot close it.** The bind address is the only control, and it
-  is now `FRONTEND_BIND`, defaulting to `127.0.0.1`.
+- **The panel rebuilt around pages.** Users, hosts, profiles and cascades moved
+  out of modals into pages with a drawer for detail. The user row now says one
+  thing per mark: the pill is the account's state, the dot is the connection,
+  and the column that used to be labelled "Subscription" while holding last-seen
+  is now labelled for what it holds.
 
-  Reported from a clean community install (#33) and reproduced against our own
-  panel, which returned HTTP 200 on `:8080` from the public internet while
-  `ufw status` listed no rule for it.
+- **Cascade links carry BBR, TCP Fast Open and multiplexing, and drop QUIC at
+  the entry.** A page of forty requests used to pay forty full round trips
+  through the whole chain; the operator's report of "loads heavily" was that,
+  not the second hop. QUIC at the entry stalls tunneled video, so it is refused
+  there deliberately.
 
-  ⚠ **Action required for installs WITHOUT a reverse proxy.** If you reach the
-  panel directly at `http://<ip>:8080`, add `FRONTEND_BIND=0.0.0.0` to
-  `.env.production` before your next deploy, or the port will stop answering.
-  Installs behind Caddy/nginx/Traefik on the same host need no change; a fresh
-  install picks the right value for its mode automatically.
+- **Subscription names lead with the flag and the host.** Cascade ways out lead
+  with the exit country instead of gluing the entry host onto every line.
+
+### Fixed
+
+- **Adding a user no longer restarts the core.** The live path pushed a user to
+  a tag the running config did not have, so every single addition fell back to a
+  full config regeneration and restart, dropping every connection on that node.
+  On a fleet with one dead node the work tripled, since the retry hit the others
+  again.
+- **A deleted user stopped coming back.** Deletion is soft, and the query that
+  hands a node its user set did not filter on it, so the next inbound change
+  re-seeded people whose accounts had been removed. Their subscription link was
+  dead, but the credentials their client already held kept working.
+- **A blank optional setting no longer crash-loops the panel.** One empty line
+  in `.env.production` failed URL validation at boot; blanks now read as unset,
+  and a test checks every optional setting for the same trap.
+- **Settings that never reached the container.** The webhook bus and the
+  subscription addressing knobs existed in the schema, the env template and the
+  code, but were missing from the compose passthrough, so an operator who filled
+  them in got silence. A test now compares the config schema against compose.
+- **`vlessRoute` is rendered as a string, not an array.** As an array the engine
+  accepted the config and quietly routed both entries the same way, which is the
+  worst shape a bug can take: no error anywhere and a subscriber in the wrong
+  country.
+- **A route policy stays inside the squad that granted it.** One squad's "no
+  ads" variant was appearing on another squad's exits, which the operator never
+  configured and could not remove.
+- **Traffic accounting across mixed nodes.** Cumulative counters are now flagged
+  per user rather than assumed per node, so a fleet mixing cumulative and delta
+  reporting bills correctly.
+- **AmneziaWG configs iOS can parse**, zero `S3`/`S4` and empty pre-shared keys
+  omitted rather than emitted; peer allocation retries further before giving up;
+  the default `PostUp` opens FORWARD on hosts whose policy is DROP.
+- **The node-agent stopped serving an inbound the panel deleted**, and reports
+  serving nobody as a state rather than as a render failure.
+- Subscription cache invalidated on node and host edits, host address override
+  winning over a profile hostname, hysteria status read from systemd instead of
+  a subprocess never spawned, ufw retried on lock contention, the
+  append-only subscription-events table pruned, and the rest of the audit tail.
 
 ## v0.1.9
 
