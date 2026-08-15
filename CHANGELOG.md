@@ -26,6 +26,27 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ### Changed
 
+- **One Auto line per cascade, not one per way in.** Every entry of a pool
+  offers the same profiles, so a two-entry cascade produced two rows both called
+  Auto, and when the entries shared a transport the two were labelled
+  identically. Auto exists so nobody has to choose; two of them ask the
+  subscriber to choose anyway. Which entry keeps the row is decided by
+  rendezvous hash on (user, entry): stable for one person, so a refresh does not
+  move them, and spread across the population, so Auto users do not all land on
+  one entry. The balancing itself is untouched - the exit is still chosen at the
+  entry node, per connection.
+
+  A share link is one host, one port, one transport, so a URI list cannot offer
+  a row that balances the way IN as well. That needs a client-side balancer,
+  which only the config formats can carry, and it is not built yet.
+
+- **A cascade entry re-measures its exits every minute instead of every five.**
+  `leastPing` reads the last measurement and skips exits marked not alive, so
+  that interval IS the failure-detection window. Found in the field: with the
+  Dutch exit stopped, one entry had already moved to Sweden while the other kept
+  dialling the dead one. A minute is also xray's own default for its health
+  pinger; the cost is one request per exit per entry per minute.
+
 - **A node whose core is dead no longer reports itself online.** Status had two
   values, so it answered "did the agent pick up the phone" rather than "is this
   serving anybody": a cascade entry sat with its core down for hours behind a

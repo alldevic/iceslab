@@ -125,7 +125,7 @@ interface SubscriptionEndpointBase {
    *  the exit name (plain) or `exit · policy` (ad-split). Empty/undefined = a
    *  single plain config (the pre-A4 behaviour, non-balancer-entry endpoints).
    *  Only the xrayjson-array + plain formats consume this. */
-  cascadeExits?: { label: string; tag: number }[];
+  cascadeExits?: { label: string; tag: number; cascadeId?: string }[];
 }
 
 export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {

@@ -193,6 +193,19 @@ export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
   return nonEntry;
 }
 
+/** One line a subscriber can pick at a cascade entry: what it is called, the tag
+ *  its UUID must encode, and which cascade it belongs to.
+ *
+ *  `cascadeId` exists because every entry of a pool offers the same profiles, so
+ *  the subscription has to recognise "these lines are the same cascade seen from
+ *  two ways in" to collapse them. Grouping by label would work until an operator
+ *  named two cascades alike. */
+export interface CascadeRouteProfile {
+  label: string;
+  tag: number;
+  cascadeId: string;
+}
+
 /** A4: map each given node id that is the ENTRY (position 0) of an enabled
  *  cascade to the route-PROFILES a user in `groupIds` can pick there. A profile
  *  = (allowed exit) x (plain OR a granted ad-split policy), carrying a `label`
@@ -211,8 +224,8 @@ export async function getRouteProfilesByEntryNode(
   nodeIds: string[],
   groupIds: string[] = [],
   entryReach?: Map<string, Set<string>>,
-): Promise<Map<string, { label: string; tag: number }[]>> {
-  const out = new Map<string, { label: string; tag: number }[]>();
+): Promise<Map<string, CascadeRouteProfile[]>> {
+  const out = new Map<string, CascadeRouteProfile[]>();
   if (nodeIds.length === 0) return out;
   const cascades = await prisma.cascade.findMany({
     where: {
@@ -340,7 +353,7 @@ export async function getRouteProfilesByEntryNode(
             directionNodeIds,
             exitAllowByGroup,
           });
-        const profiles: { label: string; tag: number }[] = [];
+        const profiles: CascadeRouteProfile[] = [];
         /**
          * AUTO first, when the operator turned it on and the user is free to
          * use every exit.
@@ -360,12 +373,16 @@ export async function getRouteProfilesByEntryNode(
         const usable = c.directions.filter((d) => d.nodes.length > 0);
         if (c.autoProfile && !allowed && usable.length > 1) {
           const autoLabel = cascadeAutoProfileLabel(c.name);
-          profiles.push({ label: autoLabel, tag: autoRouteTag(0) });
+          profiles.push({ label: autoLabel, tag: autoRouteTag(0), cascadeId: c.id });
           // Policy variants of Auto are gated by the direction they can reach,
           // so a policy granted only for one direction does not become an Auto
           // row that can egress through another.
           for (const p of policiesForDirection(usable.flatMap((d) => d.nodes.map((n) => n.node.id)))) {
-            profiles.push({ label: `${autoLabel} · ${p.name}`, tag: autoRouteTag(p.ordinal) });
+            profiles.push({
+              label: `${autoLabel} · ${p.name}`,
+              tag: autoRouteTag(p.ordinal),
+              cascadeId: c.id,
+            });
           }
         }
         for (const d of c.directions) {
@@ -377,9 +394,13 @@ export async function getRouteProfilesByEntryNode(
           if (allowed && !d.nodes.some((n) => allowed.has(n.node.id))) continue;
           const first = d.nodes[0]!.node;
           const label = cascadeProfileLabel(c.name, d.countryCode ?? first.countryCode, first.name);
-          profiles.push({ label, tag: routeTag(0, d.tag - 1) });
+          profiles.push({ label, tag: routeTag(0, d.tag - 1), cascadeId: c.id });
           for (const p of policiesForDirection(d.nodes.map((n) => n.node.id))) {
-            profiles.push({ label: `${label} · ${p.name}`, tag: routeTag(p.ordinal, d.tag - 1) });
+            profiles.push({
+              label: `${label} · ${p.name}`,
+              tag: routeTag(p.ordinal, d.tag - 1),
+              cascadeId: c.id,
+            });
           }
         }
         if (profiles.length > 0) out.set(entryNodeId, profiles);
@@ -422,7 +443,7 @@ export async function getRouteProfilesByEntryNode(
     if (exits.length === 0) continue;
     // Cartesian: each exit x (plain + granted policies). Plain first per exit so
     // the client list reads CH, CH-no-ads, TR, TR-no-ads.
-    const profiles: { label: string; tag: number }[] = [];
+    const profiles: CascadeRouteProfile[] = [];
     // AUTO on the legacy balancer shape. No node change is needed here: that
     // entry ends its rules with a catch-all into the same balancer, so a tag it
     // does not recognise already means "let the balancer choose". Same two gates
@@ -430,15 +451,23 @@ export async function getRouteProfilesByEntryNode(
     // since Auto can reach any exit.
     if (c.autoProfile && isBalancer && !allowByCascade.get(c.id) && fullExits.length > 1) {
       const autoLabel = cascadeAutoProfileLabel(c.name);
-      profiles.push({ label: autoLabel, tag: autoRouteTag(0) });
+      profiles.push({ label: autoLabel, tag: autoRouteTag(0), cascadeId: c.id });
       for (const p of grantedPolicies) {
-        profiles.push({ label: `${autoLabel} · ${p.name}`, tag: autoRouteTag(p.ordinal) });
+        profiles.push({
+          label: `${autoLabel} · ${p.name}`,
+          tag: autoRouteTag(p.ordinal),
+          cascadeId: c.id,
+        });
       }
     }
     for (const ex of exits) {
-      profiles.push({ label: ex.name, tag: routeTag(0, ex.index) });
+      profiles.push({ label: ex.name, tag: routeTag(0, ex.index), cascadeId: c.id });
       for (const p of grantedPolicies) {
-        profiles.push({ label: `${ex.name} · ${p.name}`, tag: routeTag(p.ordinal, ex.index) });
+        profiles.push({
+          label: `${ex.name} · ${p.name}`,
+          tag: routeTag(p.ordinal, ex.index),
+          cascadeId: c.id,
+        });
       }
     }
     out.set(entry.nodeId, profiles);

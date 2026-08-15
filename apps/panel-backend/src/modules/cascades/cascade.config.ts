@@ -813,7 +813,23 @@ export function buildCascadeConfigs(
 // subscription-side balancer.
 const BALANCER_TAG = 'auto';
 const OBSERVATORY_PROBE_URL = 'https://www.gstatic.com/generate_204';
-const OBSERVATORY_PROBE_INTERVAL = '5m';
+/**
+ * How often the entry re-measures its exits, and therefore how long it can keep
+ * sending traffic into a dead one.
+ *
+ * `leastPing` reads the LAST measurement and skips exits marked not alive, so
+ * this interval IS the failure-detection window: nothing else tells the entry an
+ * exit died. It was 5m, inherited from the pre-v4 balancer cascade where nobody
+ * had thought about failure. Caught in the field on 2026-08-15: with the Dutch
+ * exit stopped, one entry had already moved to Sweden while the other kept
+ * dialling the dead one, and would have for minutes.
+ *
+ * A minute is also xray's own default for its burst health-pinger. The cost is
+ * one request per exit per entry per minute, which is noise next to user traffic.
+ * Below ~30s the measurement starts reporting network jitter rather than the
+ * state of the exit.
+ */
+const OBSERVATORY_PROBE_INTERVAL = '1m';
 
 /** Like linkOutbound but with a caller-chosen tag, so N link-outs can share the
  *  LINK_OUT_TAG prefix (xray selectors are prefix matches) while staying
@@ -864,6 +880,14 @@ export const MAX_DIRECTION_ORDINAL = 254;
  */
 export function autoRouteTag(policyOrdinal: number): number {
   return 0xffff - policyOrdinal;
+}
+
+/** Whether a tag names an Auto profile rather than a direction. The Auto band
+ *  is the top `MAX_DIRECTION_ORDINAL + 1` values; everything below belongs to
+ *  `routeTag`. Used by the subscription, which has to recognise an Auto line
+ *  without carrying a second flag alongside every tag. */
+export function isAutoRouteTag(tag: number): boolean {
+  return tag >= autoRouteTag(MAX_DIRECTION_ORDINAL);
 }
 
 /** Balancer that spans every direction of one entry, as opposed to `bal-d<tag>`

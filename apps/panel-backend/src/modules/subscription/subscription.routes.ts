@@ -404,8 +404,10 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       );
       const filteredPlain = result.endpoints
         .filter((e) => !(e.disableForFormats ?? []).includes('plain'))
-        // A4: a balancer-cascade entry expands into one re-tagged URI per exit
-        // (pingable in Happ, unlike the JSON array); other endpoints pass through.
+        // A4: a balancer-cascade entry expands into one re-tagged URI per exit;
+        // other endpoints pass through. (This note used to claim the JSON array
+        // is not pingable in Happ. It is - checked in the field 2026-08-16 - and
+        // the claim had been steering design decisions.)
         .flatMap((e) => service.expandEndpointUris(e));
 
       // Slice S1: emit subscription-metadata HTTP headers every client

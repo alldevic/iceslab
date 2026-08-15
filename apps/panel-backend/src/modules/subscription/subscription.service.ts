@@ -13,6 +13,7 @@ import {
 import { subscriptionServerName } from '../../lib/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
 import { getHiddenCascadeNodeIds, getRouteProfilesByEntryNode } from '../cascades/cascade.service.js';
+import { isAutoRouteTag } from '../cascades/cascade.config.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
@@ -179,9 +180,11 @@ interface NaiveInboundConfig {
  * subscription emits. A balancer-cascade entry (an xray endpoint carrying
  * `cascadeExits`) yields one re-tagged URI per exit: the userinfo UUID gets
  * bytes 7-8 set to exit index+1 (xray reads them as vlessRoute, auth ignores
- * them) and the `#remark` becomes the exit name. Unlike the JSON array this
- * keeps every server as a plain URI, so Happ / any client can ping it, at the
- * cost of the per-config split-routing only the JSON form carries.
+ * them) and the `#remark` becomes the exit name. Every server stays a plain URI,
+ * at the cost of the per-config split-routing only the JSON form carries.
+ *
+ * This used to say the JSON array cannot be pinged in Happ, so URIs were the
+ * only format that showed latency. Not true, checked in the field 2026-08-16.
  *
  * vmess is skipped (its UUID lives inside a base64 blob, not the userinfo, so a
  * plain string swap can't reach it) and returned as its single original URI.
@@ -218,6 +221,67 @@ const TRANSPORT_LABEL: Record<string, string> = {
  * They could not see collisions, only their own endpoint, so they suffixed
  * labels that needed nothing and left the ones that did.
  */
+/**
+ * One Auto line per cascade, not one per way in.
+ *
+ * Every entry of a pool offers the same profiles, so a cascade with two entries
+ * produced two Auto rows, and with three it produces three. They are not a
+ * choice a subscriber can reason about: Auto exists precisely so nobody has to
+ * pick, and two rows called Auto ask them to pick anyway. Worse, when the
+ * entries share a transport the two rows are labelled identically.
+ *
+ * A share link is one server - host, port, transport - so this cannot be solved
+ * by making the row itself balance; that needs a client-side balancer, which
+ * only the config formats can carry. What a URI list CAN do is stop offering the
+ * same thing twice, and the auto part that matters is untouched by this: the
+ * EXIT is still chosen by the entry node, per connection, which is where the
+ * balancing lives.
+ *
+ * Which entry keeps it is decided by rendezvous hash on (user, entry), the same
+ * mechanism that orders their servers: stable for one person, so their Auto row
+ * does not jump hosts on every refresh, and spread across the population, so
+ * Auto users do not all pile onto whichever entry the query returned first.
+ */
+export function keepOneAutoPerCascade(
+  endpoints: SubscriptionEndpoint[],
+  userId: string,
+): void {
+  // An endpoint is identified by where it actually points: two hosts on one node
+  // are two different ways in, and each is a candidate on its own.
+  const keyOf = (e: SubscriptionEndpoint): string =>
+    `${e.nodeName}|${e.host}|${e.port}|${e.protocol === 'xray' ? (e.network ?? '') : ''}`;
+
+  const candidates = new Map<string, Map<string, SubscriptionEndpoint>>();
+  for (const e of endpoints) {
+    for (const x of e.cascadeExits ?? []) {
+      if (!isAutoRouteTag(x.tag) || !x.cascadeId) continue;
+      const perCascade = candidates.get(x.cascadeId) ?? new Map<string, SubscriptionEndpoint>();
+      perCascade.set(keyOf(e), e);
+      candidates.set(x.cascadeId, perCascade);
+    }
+  }
+
+  for (const [cascadeId, perCascade] of candidates) {
+    if (perCascade.size < 2) continue;
+    const ranked = rendezvousOrder(
+      [...perCascade.keys()].map((id) => ({ id, name: id, regionCode: null, maxUsers: null })),
+      userId,
+    );
+    const winner = perCascade.get(ranked[0]!.id);
+    for (const e of perCascade.values()) {
+      if (e === winner) continue;
+      const kept = (e.cascadeExits ?? []).filter(
+        (x) => !(isAutoRouteTag(x.tag) && x.cascadeId === cascadeId),
+      );
+      // Never strip an endpoint down to nothing: an entry with no profiles is
+      // emitted as an ordinary direct server, which is how a subscriber ends up
+      // egressing in the ENTRY country while their client shows an exit. That
+      // exact leak cost us a day on 2026-08-15.
+      if (kept.length > 0) e.cascadeExits = kept;
+    }
+  }
+}
+
 export function disambiguateCascadeLabels(endpoints: SubscriptionEndpoint[]): void {
   const seen = new Map<string, number>();
   for (const e of endpoints) {
@@ -1036,6 +1100,11 @@ export async function generateSubscription(
     usedTags.add(`${name}-${e.protocol}`);
     e.nodeName = name;
   }
+
+  // Auto is one line per cascade, not one per way in. Before the labels are
+  // told apart, because the rows this drops would otherwise be handed a
+  // transport suffix to distinguish two rows that should have been one.
+  keepOneAutoPerCascade(endpoints, user.id);
 
   // Same idea one level down: two entries of one pool offer the same exits, so
   // their lines carry the same label until told apart.
