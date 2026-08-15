@@ -23,8 +23,6 @@ paths = [
   # The test environment file, committed on purpose so the suite runs without
   # setup. Its values only ever address a throwaway local database.
   '''^\.env\.test$''',
-  # Fixtures for the demo build (read-only panel with invented data).
-  '''^apps/panel-frontend/src/demo/.*''',
 ]
 
 regexes = [

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { now } from '../lib/demoFlag';
 import {
   Alert,
   Badge,
@@ -94,7 +93,7 @@ export function NodePayloadModal({ opened, onClose, nodeName, payload, bootstrap
                   {t('nodePayloadModal.expiresIn', {
                     min: Math.max(
                       0,
-                      Math.round((new Date(bootstrap.expiresAt).getTime() - now()) / 60000),
+                      Math.round((new Date(bootstrap.expiresAt).getTime() - Date.now()) / 60000),
                     ),
                   })}
                 </Badge>

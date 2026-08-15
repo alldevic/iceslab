@@ -21,7 +21,6 @@ import {
   ThemeIcon,
   Tooltip,
 } from '@mantine/core';
-import { DEMO_MODE } from '../lib/demoFlag';
 import { useForm } from '@mantine/form';
 import type { RoutingPresetId } from '@iceslab/shared';
 import {
@@ -589,17 +588,14 @@ export function SquadFormModal({
                 {isAllSquad ? t('common.close') : t('common.cancel')}
               </Button>
               {!isAllSquad && (
-                <Tooltip label="Read-only demo" disabled={!DEMO_MODE} withArrow>
-                  <Button
-                    type="submit"
-                    loading={loading}
-                    disabled={DEMO_MODE}
-                    leftSection={<IconCheck size={16} />}
-                    style={{ backgroundColor: '#2A93D1', color: '#08101A', fontWeight: 500 }}
-                  >
-                    {isEdit ? t('squads.form.submitEdit') : t('squads.form.submitCreate')}
-                  </Button>
-                </Tooltip>
+                <Button
+                  type="submit"
+                  loading={loading}
+                  leftSection={<IconCheck size={16} />}
+                  style={{ backgroundColor: '#2A93D1', color: '#08101A', fontWeight: 500 }}
+                >
+                  {isEdit ? t('squads.form.submitEdit') : t('squads.form.submitCreate')}
+                </Button>
               )}
             </Group>
           </Group>

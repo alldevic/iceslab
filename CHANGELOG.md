@@ -5,6 +5,18 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ## Unreleased
 
+### Removed
+
+- **The demo build and its seeded dataset.** A `VITE_DEMO_MODE` frontend build
+  served the panel read-only from invented fixtures for an iframe on the
+  marketing site, and a `DEMO=1` backend switch plus `seed:demo` /
+  `demo:metrics` scripts kept a fake fleet looking alive by turning the node
+  pollers off. It existed to make a screenshot, and it cost more than it
+  earned: fixtures to keep in step with every DTO, a build-time flag threaded
+  through router setup and three forms, a clock indirection in four more files,
+  and a scheduler that could be told to stop watching nodes. The panel is easier
+  to reason about with one build and one clock.
+
 ### Fixed
 
 - **The hosts screen shows how many people reach a host, not how many

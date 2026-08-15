@@ -1,5 +1,4 @@
 import { ONLINE_WINDOW_MS } from '@iceslab/shared';
-import { now } from './demoFlag';
 
 export type TFn = (key: string, opts?: Record<string, unknown>) => string;
 
@@ -32,7 +31,7 @@ export function relativeTime(
   t: TFn,
 ): { text: string; tone: RelativeTone } {
   if (!iso) return { text: t('userTime.never'), tone: 'never' };
-  const diffMs = now() - new Date(iso).getTime();
+  const diffMs = Date.now() - new Date(iso).getTime();
   const sec = Math.floor(diffMs / 1000);
   // The same window the presence dot and the dashboard's "online now" use, so
   // none of the three can disagree about the same user.

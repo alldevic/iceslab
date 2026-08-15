@@ -19,10 +19,8 @@ import {
   Text,
   TextInput,
   Textarea,
-  Tooltip,
   UnstyledButton,
 } from '@mantine/core';
-import { DEMO_MODE } from '../lib/demoFlag';
 import { useForm } from '@mantine/form';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -1874,16 +1872,13 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
               <Button variant="default" onClick={onClose} disabled={loading}>
                 {t('common.cancel')}
               </Button>
-              <Tooltip label="Read-only demo" disabled={!DEMO_MODE} withArrow>
-                <Button
-                  type="submit"
-                  loading={loading}
-                  disabled={DEMO_MODE}
-                  style={{ backgroundColor: '#2A93D1', color: '#08101A', fontWeight: 500 }}
-                >
-                  {isEdit ? t('profiles.form.submitEdit') : t('profiles.form.submitCreate')}
-                </Button>
-              </Tooltip>
+              <Button
+                type="submit"
+                loading={loading}
+                style={{ backgroundColor: '#2A93D1', color: '#08101A', fontWeight: 500 }}
+              >
+                {isEdit ? t('profiles.form.submitEdit') : t('profiles.form.submitCreate')}
+              </Button>
             </Group>
           </Group>
           )}

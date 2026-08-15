@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { now } from '../lib/demoFlag';
 import {
   Badge,
   Box,
@@ -709,7 +708,7 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
           </Text>
         </Group>
         <Text style={{ ...MONO_LABEL }}>
-          {new Date(now()).toLocaleString('en-GB', {
+          {new Date().toLocaleString('en-GB', {
             day: '2-digit',
             month: 'short',
             year: 'numeric',
@@ -763,7 +762,7 @@ function SystemHealth({ host }: { host: DashboardOverview['host'] }) {
           {t('pageHero.uptimeLabel').toUpperCase()}{' '}
           {formatUptime(host.process.uptimeSeconds).toUpperCase()} ·{' '}
           {t('pageHero.sampledLabel').toUpperCase()}{' '}
-          {new Date(now()).toLocaleTimeString('en-GB', { hour12: false })}
+          {new Date().toLocaleTimeString('en-GB', { hour12: false })}
         </Text>
       </Group>
 
