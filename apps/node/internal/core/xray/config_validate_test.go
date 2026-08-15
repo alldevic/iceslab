@@ -124,6 +124,33 @@ func TestValidationAsksTheCoreBeforeWriting(t *testing.T) {
 	}
 }
 
+// A core that is not running has no counters to give, and asking it anyway used
+// to write two WARN lines every 30 seconds for as long as it stayed down. On a
+// node still waiting for its first config that is a permanent warning about a
+// normal state; on a node whose core died it buries the one line explaining why.
+func TestStatsAreNotQueriedWhileTheCoreIsDown(t *testing.T) {
+	core := &fakeCore{}
+	dir := t.TempDir()
+	a := New(Config{
+		ConfigPath: filepath.Join(dir, "config.json"),
+		BinaryPath: stubBinary(t, dir),
+		RunCmd:     core.run,
+		Inbound:    validInbound(),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	// Never started: no subprocess, so nothing can answer a stats query.
+	stats, err := a.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats should degrade quietly, got: %v", err)
+	}
+	if stats == nil {
+		t.Fatal("expected stats, got nil")
+	}
+	if len(core.calls) != 0 {
+		t.Fatalf("expected no core invocation while it is down, got %v", core.calls)
+	}
+}
+
 func TestConfigOnlyModeSkipsValidation(t *testing.T) {
 	// No binary: there is nothing to ask and nothing will be started either.
 	// The check must not turn a dev/test setup into a hard failure.

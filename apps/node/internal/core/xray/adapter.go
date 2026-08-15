@@ -664,10 +664,24 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		users = append(users, core.UserStats{UserID: id})
 	}
 	run := a.cfg.RunCmd
+	proc := a.proc
 	a.mu.Unlock()
 
 	if binary == "" || run == nil {
 		// Config-only mode: report tracked users with zero counters.
+		return &core.Stats{Users: users}, nil
+	}
+
+	// No core running: there is nothing to ask, and asking anyway used to write
+	// two WARN lines every 30 seconds, for as long as the core stayed down. On a
+	// node waiting for its first config that is a permanent stream of warnings
+	// about a state that is entirely normal, and on a node whose core really did
+	// die it buries the one line that says why under thousands that do not.
+	//
+	// The counters are cumulative and read non-destructively, so skipping a poll
+	// loses nothing: the next successful one reports the same totals.
+	if proc == nil || !proc.Running() {
+		a.logger.Debug("xray GetStats: core not running, skipping the query", "users", len(users))
 		return &core.Stats{Users: users}, nil
 	}
 
