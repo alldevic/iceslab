@@ -1021,19 +1021,24 @@ function directionNote(
 }
 
 /**
- * What lands in a subscriber's client. The cascade itself is one entry, named
- * after the cascade, and every direction adds one more carrying its tag. With a
- * single direction the two lead to the same exit, which the hint under the list
- * says out loud rather than hiding one of the rows.
+ * What lands in a subscriber's client: one entry per DIRECTION, each carrying
+ * that direction's tag.
+ *
+ * This list used to lead with an "Auto" row named after the cascade, and that
+ * row was fiction: the subscription has never contained an untagged config. It
+ * could not, safely. The entry's routing matches on the tag in the client's
+ * UUID and has no catch-all, so an untagged client would match no direction and
+ * egress at the ENTRY instead - a subscriber picking "Auto" from a cascade sold
+ * as a Dutch exit would come out in the entry country. An operator planned
+ * around the phantom row and asked how to switch it off (2026-08-15); the row
+ * was the bug, not the missing switch.
  */
 function subscriptionRows(
   d: Draft,
   byId: Map<string, Node>,
   t: (k: string, o?: Record<string, unknown>) => string,
 ): { label: string; note: string; tone: string }[] {
-  const rows: { label: string; note: string; tone: string }[] = [
-    { label: d.name, note: t('cascadeEdit.subAuto'), tone: CYAN },
-  ];
+  const rows: { label: string; note: string; tone: string }[] = [];
   d.directions.forEach((dir, i) => {
     if (!dir.countryCode || !dir.nodeIds.some(Boolean)) return;
     rows.push({

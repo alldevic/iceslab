@@ -1403,14 +1403,13 @@ export default {
       'The chaining config is removed from all {{count}} nodes on the next push. The nodes themselves stay, along with their own hosts.',
     subTitle: 'What subscribers see',
     subDisabled: 'Nothing. A disabled cascade is not served to anybody.',
-    subAuto: 'auto exit',
-    subVia: '{{name}} via {{where}}',
+    subVia: '{{name}} → {{where}}',
     subTag: 'tag {{tag}} · plain',
     subDirect: 'also a direct pick',
     subHintMany:
-      'A squad can narrow this down: granted one direction only, the member sees Auto and that one. A direction with no live node under it never reaches a subscription.',
+      'One entry per direction, and a squad can narrow the list to the directions it grants. A direction with no live node under it never reaches a subscription. Every entry of a pool offers the same set, so those lines carry their transport to stay distinct.',
     subHintOne:
-      'One direction, so the Auto entry and the direction entry lead to the same exit. A squad granted no policy sees only the plain pair.',
+      'One direction, so one entry. A squad granted no policy sees just this one.',
     legacyProtocol:
       '{{node}} stores "{{value}}", which this panel can no longer write. Pick a protocol before saving.',
     pushTitle: 'Last push',
