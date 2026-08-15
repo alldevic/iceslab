@@ -21,6 +21,7 @@ import {
   serializeLinkCred,
   type CascadeConfigHopInput,
   type CascadePolicy,
+  type HopConfig,
   type LinkCred,
   type TopologyLinkRow,
 } from './cascade.config.js';
@@ -870,6 +871,41 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
  * here: the node's base xray config already ships a `direct` outbound, and two
  * outbounds sharing a tag make xray reject the whole config.
  */
+/**
+ * The wire shape a node receives, from a built hop config. Every path goes
+ * through here.
+ *
+ * It exists because the three paths (v4 topology, legacy balancer, legacy
+ * chain) each hand-copied the same field list, and the v4 one copied all of
+ * them except `observatory`. A node then got a `leastPing` balancer with nobody
+ * to measure the pings, and xray answers that by refusing the ENTIRE config
+ * with "not all dependencies are resolved": no inbound, no cascade, core never
+ * starts. The entry of a live cascade sat dead for hours behind a green node
+ * card (2026-08-15).
+ *
+ * What makes it worth a helper rather than a fixed line: the builder was
+ * correct and its config-validity test passed, because that test feeds xray the
+ * BUILDER's output. The field was lost afterwards, in the copy. A shared mapper
+ * is the only version of this that a future field cannot fall out of.
+ */
+export function toWireFragments(mine: HopConfig): XrayCascadeFragments {
+  return {
+    inbounds: mine.inbounds,
+    // The node ships its own `direct` outbound; two with one tag make xray
+    // reject the whole config.
+    outbounds: mine.outbounds.filter((o) => o.tag !== 'direct'),
+    routingRules: mine.routingRules,
+    // Carry the link port + peer address so the node-agent can open UFW for the
+    // inter-hop link itself (was a manual `ufw allow from <entry-ip>` step).
+    linkIngressPort: mine.linkIngressPort,
+    linkAllowFrom: mine.linkAllowFrom,
+    // These two travel together or not at all: a balancer without its
+    // observatory is a config xray rejects outright.
+    balancers: mine.balancers,
+    observatory: mine.observatory,
+  };
+}
+
 export async function getCascadeFragmentsForNode(
   nodeId: string,
 ): Promise<XrayCascadeFragments | null> {
@@ -943,15 +979,7 @@ export async function getCascadeFragmentsForNode(
     );
     const mine = configs.find((c) => c.nodeId === nodeId);
     if (!mine) return null;
-    return {
-      inbounds: mine.inbounds,
-      outbounds: mine.outbounds.filter((o) => o.tag !== 'direct'),
-      routingRules: mine.routingRules,
-      linkIngressPort: mine.linkIngressPort,
-      linkAllowFrom: mine.linkAllowFrom,
-      observatory: mine.observatory,
-      balancers: mine.balancers,
-    };
+    return toWireFragments(mine);
   }
 
   // Rebuild link creds from each originating hop's persisted linkConfig.
@@ -971,15 +999,7 @@ export async function getCascadeFragmentsForNode(
   const mine = configs.find((c) => c.nodeId === nodeId);
   if (!mine) return null;
 
-  return {
-    inbounds: mine.inbounds,
-    outbounds: mine.outbounds.filter((o) => o.tag !== 'direct'),
-    routingRules: mine.routingRules,
-    // Carry the link port + peer address so the node-agent can open UFW for the
-    // inter-hop link itself (was a manual `ufw allow from <entry-ip>` step).
-    linkIngressPort: mine.linkIngressPort,
-    linkAllowFrom: mine.linkAllowFrom,
-  };
+  return toWireFragments(mine);
 }
 
 /**
@@ -1063,16 +1083,7 @@ async function getTopologyFragmentsForNode(
   });
   if (!mine) return null;
 
-  return {
-    inbounds: mine.inbounds,
-    // The node ships its own `direct` outbound; two with one tag make xray
-    // reject the whole config.
-    outbounds: mine.outbounds.filter((o) => o.tag !== 'direct'),
-    routingRules: mine.routingRules,
-    linkIngressPort: mine.linkIngressPort,
-    linkAllowFrom: mine.linkAllowFrom,
-    balancers: mine.balancers,
-  };
+  return toWireFragments(mine);
 }
 
 export async function deleteCascade(id: string): Promise<void> {
