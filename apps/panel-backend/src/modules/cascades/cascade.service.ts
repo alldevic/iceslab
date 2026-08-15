@@ -1,5 +1,5 @@
 import type { XrayCascadeFragments } from '@iceslab/shared';
-import { cascadeProfileLabel } from '../../lib/country-flag.js';
+import { cascadeAutoProfileLabel, cascadeProfileLabel } from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
@@ -11,6 +11,7 @@ import {
   validateCascadeTopology,
 } from './cascade.validation.js';
 import {
+  autoRouteTag,
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
   buildTopologyFragmentsForNode,
@@ -340,6 +341,33 @@ export async function getRouteProfilesByEntryNode(
             exitAllowByGroup,
           });
         const profiles: { label: string; tag: number }[] = [];
+        /**
+         * AUTO first, when the operator turned it on and the user is free to
+         * use every exit.
+         *
+         * The restriction check is the load-bearing half. A squad's exit
+         * allow-list is enforced by which TAGS a user is handed, and Auto names
+         * no exit at all: the entry's balancer spans every direction, because a
+         * node config is one config for everybody and cannot be narrowed per
+         * user. Handing Auto to a restricted user would walk straight past the
+         * allow-list their operator set. So they simply do not get the row; a
+         * per-subset balancer is the shape that would let them, and that is a
+         * separate piece of work.
+         *
+         * Two directions minimum, matching the node side exactly: with one, Auto
+         * resolves to the same single destination as the row above it.
+         */
+        const usable = c.directions.filter((d) => d.nodes.length > 0);
+        if (c.autoProfile && !allowed && usable.length > 1) {
+          const autoLabel = cascadeAutoProfileLabel(c.name);
+          profiles.push({ label: autoLabel, tag: autoRouteTag(0) });
+          // Policy variants of Auto are gated by the direction they can reach,
+          // so a policy granted only for one direction does not become an Auto
+          // row that can egress through another.
+          for (const p of policiesForDirection(usable.flatMap((d) => d.nodes.map((n) => n.node.id)))) {
+            profiles.push({ label: `${autoLabel} · ${p.name}`, tag: autoRouteTag(p.ordinal) });
+          }
+        }
         for (const d of c.directions) {
           // A direction with no node serves nobody; offering it would hand out a
           // config that cannot connect.
@@ -395,6 +423,18 @@ export async function getRouteProfilesByEntryNode(
     // Cartesian: each exit x (plain + granted policies). Plain first per exit so
     // the client list reads CH, CH-no-ads, TR, TR-no-ads.
     const profiles: { label: string; tag: number }[] = [];
+    // AUTO on the legacy balancer shape. No node change is needed here: that
+    // entry ends its rules with a catch-all into the same balancer, so a tag it
+    // does not recognise already means "let the balancer choose". Same two gates
+    // as the v4 path: the operator asked for it, and the user is unrestricted,
+    // since Auto can reach any exit.
+    if (c.autoProfile && isBalancer && !allowByCascade.get(c.id) && fullExits.length > 1) {
+      const autoLabel = cascadeAutoProfileLabel(c.name);
+      profiles.push({ label: autoLabel, tag: autoRouteTag(0) });
+      for (const p of grantedPolicies) {
+        profiles.push({ label: `${autoLabel} · ${p.name}`, tag: autoRouteTag(p.ordinal) });
+      }
+    }
     for (const ex of exits) {
       profiles.push({ label: ex.name, tag: routeTag(0, ex.index) });
       for (const p of grantedPolicies) {
@@ -732,6 +772,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
           enabled: input.enabled,
           mode,
           hideHopsFromSub: input.hideHopsFromSub,
+          autoProfile: input.autoProfile,
           hops: {
             create: hops.map((h, idx) => ({
               // Nested create uses the checked input -> connect the relation
@@ -883,6 +924,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
           ...(input.hideHopsFromSub !== undefined
             ? { hideHopsFromSub: input.hideHopsFromSub }
             : {}),
+          ...(input.autoProfile !== undefined ? { autoProfile: input.autoProfile } : {}),
         },
       });
       if (!hops && input.positions && input.directions) {
@@ -1102,7 +1144,11 @@ async function getTopologyFragmentsForNode(
   });
   if (!link) return null;
 
-  const [positions, directions, links, policyRows] = await Promise.all([
+  const [cascadeRow, positions, directions, links, policyRows] = await Promise.all([
+    prisma.cascade.findUnique({
+      where: { id: link.cascadeId },
+      select: { autoProfile: true },
+    }),
     prisma.cascadePosition.findMany({
       where: { cascadeId: link.cascadeId },
       orderBy: { position: 'asc' },
@@ -1162,6 +1208,10 @@ async function getTopologyFragmentsForNode(
       directDomains: p.directDomains,
       blockDomains: p.blockDomains,
     })),
+    // The node has to know before the subscription hands the tag out: an Auto
+    // profile whose rule is missing at the entry egresses from the entry
+    // country instead of failing, which is the one outcome worth preventing.
+    auto: cascadeRow?.autoProfile ?? false,
   });
   if (!mine) return null;
 

@@ -193,4 +193,33 @@ describe.skipIf(!XRAY_BIN)('xray accepts the generated cascade config', () => {
     const r = xrayAccepts(wrap(buildTopologyFragmentsForNode(ENTRY, pooled)));
     expect(r.ok, r.output).toBe(true);
   });
+
+  // Auto adds a second balancer next to any per-direction ones, sharing the one
+  // observatory. Two balancers over overlapping selectors is a shape xray has
+  // never been asked about here, and the cost of guessing wrong is the entry's
+  // core refusing to start at all.
+  it('loads an entry that offers the Auto profile', () => {
+    const r = xrayAccepts(wrap(buildTopologyFragmentsForNode(ENTRY, { ...twoDirections, auto: true })));
+    expect(r.ok, r.output).toBe(true);
+  });
+
+  it('loads an Auto entry whose directions are pools', () => {
+    const both = {
+      positions: [{ position: 0, nodeIds: [ENTRY] }],
+      directions: [
+        { tag: 1, nodeIds: [EXIT_A, EXIT_B] },
+        { tag: 2, nodeIds: [TRANSIT] },
+      ],
+      links: [
+        link(ENTRY, EXIT_A, 1, 24000),
+        link(ENTRY, EXIT_B, 1, 24000),
+        link(ENTRY, TRANSIT, 2, 24000),
+      ],
+      hosts,
+      policies: [{ ordinal: 1, directDomains: ['ads.example'], blockDomains: ['bad.example'] }],
+      auto: true,
+    };
+    const r = xrayAccepts(wrap(buildTopologyFragmentsForNode(ENTRY, both)));
+    expect(r.ok, r.output).toBe(true);
+  });
 });

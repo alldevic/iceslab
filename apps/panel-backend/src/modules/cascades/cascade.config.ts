@@ -474,6 +474,10 @@ export interface TopologyInput {
   /** Public host per node id, for both dialling and firewall allow-lists. */
   hosts: Map<string, string>;
   policies?: CascadePolicy[];
+  /** Emit the AUTO profile: one extra rule at the entry that hands the exit
+   *  choice to a latency balancer spanning every direction. Off unless the
+   *  operator turned it on for this cascade. */
+  auto?: boolean;
 }
 
 /** Per-direction outbound tag. Unlike the old index-based `-0/-1` suffix this
@@ -606,6 +610,44 @@ export function buildTopologyFragmentsForNode(
         .map((l) => linkClientEmail(l.directionTag, l.fromNodeId));
       routingRules.push({ type: 'field', user: users, ...target });
     }
+  }
+
+  /**
+   * AUTO: one more profile at the entry that names no direction at all and lets
+   * the balancer pick the fastest way out.
+   *
+   * It must be an explicit rule, which is why this could not simply be drawn in
+   * the client's list. There is no catch-all at a v4 entry: a tag with no rule
+   * falls through to `freedom` and the user egresses from the ENTRY country
+   * while their client says they chose otherwise. Wrong quietly is worse than
+   * broken loudly, so a phantom Auto row was removed on 2026-08-15 and comes
+   * back only now that the entry knows the tag.
+   *
+   * The selector is the link-out PREFIX, so it spans directions and any pools
+   * inside them: the choice is "fastest hop out of here", not "fastest inside
+   * the direction you already picked", which is what `bal-d<tag>` above does.
+   *
+   * Only worth it from two directions up. With one, auto resolves to the same
+   * single destination, and the subscription would show a second line that does
+   * exactly what the first one does.
+   */
+  if (isEntry && input.auto && byDirection.size > 1) {
+    balancers.push({
+      tag: AUTO_BALANCER_TAG,
+      selector: [LINK_OUT_TAG],
+      strategy: { type: 'leastPing' },
+    });
+    needsObservatory = true;
+    const autoTags = [autoRouteTag(0)];
+    for (const p of input.policies ?? []) autoTags.push(autoRouteTag(p.ordinal));
+    // Same STRING form as the per-direction rule above: an array here fails the
+    // whole config and the core refuses to start.
+    routingRules.push({
+      type: 'field',
+      vlessRoute: autoTags.join(','),
+      network: 'tcp,udp',
+      balancerTag: AUTO_BALANCER_TAG,
+    });
   }
 
   return {
@@ -798,9 +840,35 @@ export function routeTag(policyOrdinal: number, exitIndex: number): number {
 }
 
 /** Highest policy ordinal that still fits the uint16 tag: the ordinal occupies
- *  the high byte, the exit index the low one. 255 policies is far past any real
- *  use, but the bound has to exist somewhere, and this is where it comes from. */
-export const MAX_DIRECTION_ORDINAL = 255;
+ *  the high byte, the exit index the low one. 254 policies is far past any real
+ *  use, but the bound has to exist somewhere, and this is where it comes from.
+ *
+ *  254 rather than 255 because the top band belongs to the Auto tags below.
+ *  With 255 allowed, the two spaces met at exactly one value - policy 255 on
+ *  direction 255 IS plain Auto - and a collision there is not a wrong label, it
+ *  is a user leaving through an exit they did not choose. */
+export const MAX_DIRECTION_ORDINAL = 254;
+
+/**
+ * Tag of the AUTO profile: "let the entry pick the exit by latency".
+ *
+ * Taken from the top of the uint16 space downwards, so it cannot collide with
+ * `routeTag`, which grows from the bottom: a collision would need 255 policies
+ * and 255 directions at once. Reserving the natural-looking value instead
+ * (`policyOrdinal * 256`, i.e. exit index -1) would have put the plain profile
+ * on tag 0, and xray reads `vlessRoute` with its port-list parser, where 0 is
+ * not a value we want to lean on.
+ *
+ * Both sides use this: the node routes it to the auto balancer, the
+ * subscription writes it into the UUID of the "Auto" line.
+ */
+export function autoRouteTag(policyOrdinal: number): number {
+  return 0xffff - policyOrdinal;
+}
+
+/** Balancer that spans every direction of one entry, as opposed to `bal-d<tag>`
+ *  which spans the pool INSIDE one direction. */
+const AUTO_BALANCER_TAG = 'bal-auto';
 
 /**
  * Build the entry + exit fragments for a BALANCER cascade (one entry, N parallel
@@ -866,6 +934,24 @@ export function buildBalancerCascadeConfigs(
           ];
         }),
       ),
+      /**
+       * AUTO with an ad-split policy. The plain Auto tag needs no rule here,
+       * the catch-all below already means "let the balancer choose", but a
+       * policy variant does: its domain rules are keyed on the tag, so without
+       * these lines an "Auto · no ads" profile would fall through and quietly
+       * serve ads while the client's list said otherwise.
+       */
+      ...policies.flatMap((p) => {
+        const tag = String(autoRouteTag(p.ordinal));
+        return [
+          ...(p.blockDomains.length
+            ? [{ type: 'field', vlessRoute: tag, domain: p.blockDomains, outboundTag: 'blocked' }]
+            : []),
+          ...(p.directDomains.length
+            ? [{ type: 'field', vlessRoute: tag, domain: p.directDomains, outboundTag: DIRECT_TAG }]
+            : []),
+        ];
+      }),
       { type: 'field', network: 'tcp,udp', balancerTag: BALANCER_TAG },
     ],
     observatory: {

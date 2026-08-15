@@ -44,6 +44,9 @@ export interface CascadeDto {
   mode: string;
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
+  /** Offer the Auto line in the subscription: one profile that names no
+   *  direction and lets the entry pick the fastest exit by measured RTT. */
+  autoProfile: boolean;
   hops: CascadeHopDto[];
   /** v4 shape. Always present (possibly empty): empty means the cascade was
    *  written before the topology tables existed and still describes itself
@@ -65,6 +68,9 @@ interface CascadeRow {
   enabled: boolean;
   mode: string;
   hideHopsFromSub: boolean;
+  /** Optional so a caller selecting a narrow row shape still type-checks; a
+   *  missing value reads as off, which is the default. */
+  autoProfile?: boolean;
   nextDirectionTag?: number;
   createdAt: Date;
   updatedAt: Date;
@@ -97,6 +103,7 @@ export function mapCascade(c: CascadeRow): CascadeDto {
     enabled: c.enabled,
     mode: c.mode,
     hideHopsFromSub: c.hideHopsFromSub,
+    autoProfile: c.autoProfile ?? false,
     hops: c.hops.map((h) => ({
       id: h.id,
       nodeId: h.nodeId,

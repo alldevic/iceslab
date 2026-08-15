@@ -104,6 +104,9 @@ const CascadeBaseFields = {
   /** When true (default), hide the cascade's non-entry (exit/transit) nodes
    *  from the raw subscription; uncheck to also expose them as direct picks. */
   hideHopsFromSub: z.boolean().default(true),
+  /** Offer the Auto line: one profile that names no direction and lets the
+   *  entry pick the fastest exit. Off by default, see the schema comment. */
+  autoProfile: z.boolean().default(false),
 };
 
 export const CreateCascadeSchema = z
@@ -135,6 +138,7 @@ export const UpdateCascadeSchema = z
     enabled: z.boolean().optional(),
     mode: CascadeMode.optional(),
     hideHopsFromSub: z.boolean().optional(),
+    autoProfile: z.boolean().optional(),
     hops: z.array(CascadeHopSchema).min(2).max(MAX_CASCADE_HOPS).optional(),
     positions: z.array(CascadePositionSchema).min(1).max(MAX_CASCADE_HOPS).optional(),
     directions: z.array(CascadeDirectionSchema).min(1).optional(),

@@ -5,6 +5,25 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ## Unreleased
 
+### Added
+
+- **An Auto line in the subscription.** A cascade can now offer one extra entry
+  that names no country: the client hands the choice to the cascade entry, which
+  routes it through whichever direction it measures as fastest, per connection.
+  A switch on the cascade page, off by default, because turning it on adds a row
+  to every subscriber's server list.
+
+  Two limits are deliberate. It needs at least two directions with nodes, since
+  with one it would be the row above it under another name. And a user whose
+  squad restricts exits does not get it: that restriction is enforced by which
+  profiles the user is handed, and Auto can leave through any exit, so handing
+  it out would walk straight past the operator's own allow-list.
+
+  Worth naming for anyone who saw the earlier row: a preview Auto entry existed
+  in the panel for a while and was fiction, removed in this same cycle. The
+  entry had no rule for it, so choosing Auto egressed in the ENTRY country while
+  the client showed an exit. The row is back only now that the node routes it.
+
 ### Changed
 
 - **A node whose core is dead no longer reports itself online.** Status had two

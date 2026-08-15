@@ -815,6 +815,11 @@ model Cascade {
   // expose the cascade's exit nodes as directly-connectable endpoints, for
   // operators who want users to pick those regions raw as well as via "Auto".
   hideHopsFromSub Boolean @default(true) @map("hide_hops_from_sub")
+  // Offer an "Auto" line in the subscription: one profile that names no
+  // direction and lets the entry pick the fastest way out by measured RTT.
+  // Off by default so an existing operator's client lists do not grow a row
+  // they never asked for after an update.
+  autoProfile Boolean @default(false) @map("auto_profile")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

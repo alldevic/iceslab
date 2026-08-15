@@ -56,6 +56,20 @@ export function subscriptionServerName(opts: {
  * The exit node name survives only as the fallback for a node with no country
  * set, where it is the sole thing distinguishing one way out from another.
  */
+/**
+ * The line a client shows for the AUTO way out: no country named, the entry
+ * picks the fastest exit it can measure.
+ *
+ * Same shape as the per-direction label so the two sort together in a client
+ * list, with a symbol in the flag's place: something has to occupy that column,
+ * or the Auto row loses its left edge and stops looking like a sibling of the
+ * rows above it. "Auto" stays in English deliberately: it is the word the
+ * clients themselves use for this, in every locale.
+ */
+export function cascadeAutoProfileLabel(cascadeName: string): string {
+  return `⚡ ${cascadeName} → Auto`;
+}
+
 export function cascadeProfileLabel(
   cascadeName: string,
   exitCountryCode: string | null | undefined,
