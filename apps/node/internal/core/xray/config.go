@@ -8,6 +8,7 @@
 package xray
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -797,6 +798,46 @@ func buildWarpOutbound(w *WarpConfig) map[string]any {
 		"tag":      "warp",
 		"settings": settings,
 	}
+}
+
+// validateConfig asks the core itself whether it would load this config, by
+// running `xray -test -c` against a copy in a temp dir.
+//
+// Why the core and not our own checks: xray answers a rejected config by
+// refusing ALL of it, not the offending part. One bad field takes down the
+// user inbounds too, so a node that was serving fine goes dark. Nothing we can
+// assert about the JSON ourselves is the same question as "will it start", and
+// on 2026-08-15 that difference cost a live cascade both of its entries for
+// hours: the panel sent a balancer with no observatory, the agent wrote it over
+// the working config, and the core then crash-looped until its restart budget
+// ran out.
+//
+// The check runs against the operator's own binary, which is the point. The
+// panel validates its fragments in CI, but with OUR pinned xray; the node may
+// run a different build, and it is the node's core that has to accept it.
+//
+// An empty binary path (config-only mode) skips the check: there is nothing to
+// ask, and nothing will be started either.
+func validateConfig(ctx context.Context, run RunCmdFunc, binary string, blob []byte) error {
+	if binary == "" || run == nil {
+		return nil
+	}
+	dir, err := os.MkdirTemp("", "iceslab-xray-test-")
+	if err != nil {
+		return fmt.Errorf("temp dir for config test: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	candidate := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(candidate, blob, 0o600); err != nil {
+		return fmt.Errorf("write candidate config: %w", err)
+	}
+	out, err := run(ctx, binary, "-test", "-c", candidate)
+	if err != nil {
+		// The core's own words, trimmed: they name the offending part, and this
+		// message is what an operator will read in the agent's journal.
+		return fmt.Errorf("core rejected the config: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // writeConfig atomically writes the config to disk via the shared

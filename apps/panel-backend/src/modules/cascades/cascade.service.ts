@@ -3,6 +3,7 @@ import { cascadeProfileLabel } from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
+import { getLogger } from '../../lib/logger.js';
 import {
   CascadeValidationError,
   foldPositionsIntoHops,
@@ -757,7 +758,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
     // Push the chaining fragments to every hop now, not on some later unrelated
     // edit. inbounds.events re-syncs each node's inbound set, where
     // getCascadeFragmentsForNode injects the link-in/out + routing.
-    eventBus.emit('cascade.changed', { nodeIds: allNodeIds });
+    emitCascadeChanged(c.id, allNodeIds, 'create');
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
@@ -785,6 +786,28 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
  * pushing to none. The entry cores sat with a config their xray had already
  * rejected and no way to ever receive a fixed one.
  */
+/**
+ * Announce a cascade change to the nodes it touches.
+ *
+ * Pushing to nobody is a bug, never a success. The panel tells the operator
+ * "saving pushes the config to all N nodes"; when the member list came out
+ * empty it pushed to none and said nothing, which is how a cascade with a
+ * pooled entry stayed broken for hours on 2026-08-15 while every save looked
+ * like it worked. An empty list means the cascade is stored in a shape nobody
+ * can read, so it goes in the log at error level with the cascade named.
+ */
+function emitCascadeChanged(cascadeId: string, nodeIds: string[], action: string): void {
+  if (nodeIds.length === 0) {
+    getLogger().error(
+      { cascadeId, action },
+      '[cascades] nothing to push: this cascade has no member nodes in either shape, ' +
+        'so no node was told about the change',
+    );
+    return;
+  }
+  eventBus.emit('cascade.changed', { nodeIds });
+}
+
 export function cascadeMemberNodeIds(c: {
   hops?: { nodeId: string }[];
   positions?: { nodes: { nodeId: string }[] }[];
@@ -905,7 +928,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
       ...(input.positions ?? []).flatMap((p) => p.nodeIds),
       ...(input.directions ?? []).flatMap((d) => d.nodeIds),
     ];
-    eventBus.emit('cascade.changed', { nodeIds: [...new Set([...oldNodeIds, ...newNodeIds])] });
+    emitCascadeChanged(id, [...new Set([...oldNodeIds, ...newNodeIds])], 'update');
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
@@ -1167,8 +1190,6 @@ export async function deleteCascade(id: string): Promise<void> {
     throw err;
   }
   const members = existing ? cascadeMemberNodeIds(existing) : [];
-  if (members.length > 0) {
-    eventBus.emit('cascade.changed', { nodeIds: members });
-  }
+  emitCascadeChanged(id, members, 'delete');
   invalidateHiddenCascadeNodeCache();
 }

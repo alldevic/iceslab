@@ -5,7 +5,35 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ## Unreleased
 
+### Changed
+
+- **A node whose core is dead no longer reports itself online.** Status had two
+  values, so it answered "did the agent pick up the phone" rather than "is this
+  serving anybody": a cascade entry sat with its core down for hours behind a
+  green card, and the one place that knew (the poller already wrote "not
+  running: xray" into the status message) is not somewhere anyone looks. There
+  is now a third value, `degraded`, and the node card shows it in amber.
+
+  Deliberately NOT treated as offline: the subscription's liveness filter keys
+  on `unreachable`, so a degraded node keeps handing out the endpoints that do
+  work, and the poller's re-push now includes it, because a core that will not
+  start is exactly the one waiting for a config it can load.
+
 ### Fixed
+
+- **The agent asks the core before replacing a working config.** xray refuses a
+  bad config whole, taking the user inbounds down with whatever was wrong, so a
+  push that the core rejects used to turn a serving node dark and then burn its
+  crash-restart budget proving it. The agent now runs the candidate through
+  `xray -test` in a temp dir and, if the core says no, keeps the running config,
+  starts nothing, and returns the core's own words to the panel. Validation
+  happens against the operator's binary on purpose: the panel checks its own
+  fragments in CI, but with our pinned build, and it is the node's core that has
+  to accept them.
+
+- **Saving a cascade that pushes to nobody says so.** An empty member list was
+  silent, while the panel promised "saving pushes the config to all N nodes";
+  it now logs at error level with the cascade named.
 
 - **A cascade with a pool on its entry never pushed anything.** Saving one
   emitted its change event with the member list read from the legacy `hops`

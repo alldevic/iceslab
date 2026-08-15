@@ -65,6 +65,9 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
   await Promise.all(
     nodes.map(async (node) => {
       const result = await checkOne(node);
+      // `degraded` counts with down on purpose: the agent answers, but a core
+      // the operator configured is not serving anybody, and a summary that
+      // called that "ok" is what let a dead cascade entry look healthy.
       if (result.status === 'online') ok++;
       else down++;
       // Write to DB when status OR message changed since last tick. We also
@@ -133,7 +136,11 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // network blip) get exhausted by BullMQ retries and never resume,
       // xray/etc would stay unconfigured even though the agent is alive.
       // Cheap: the node-agent dedupes identical pushes on its side.
-      if (statusChanged && result.status === 'online') {
+      //
+      // `degraded` counts as back up here, and that matters: a node whose core
+      // will not start is exactly the one that needs the config again. Keying
+      // this on `online` would have skipped the only nodes it was written for.
+      if (statusChanged && result.status !== 'unreachable') {
         void inboundSyncQueue
           .add(
             'applyNodeInbounds',
@@ -150,7 +157,8 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // notifyTelegramAsync helper is a no-op when env isn't configured,
       // so this stays free for operators who don't use Telegram.
       if (statusChanged && node.status !== 'unknown') {
-        const icon = result.status === 'online' ? '✅' : '🔴';
+        const icon =
+          result.status === 'online' ? '✅' : result.status === 'degraded' ? '⚠️' : '🔴';
         notifyTelegramAsync(
           `${icon} *Node ${result.status}*\nname: \`${escapeMarkdown(node.name)}\`\naddress: \`${escapeMarkdown(node.address)}\`` +
             (result.message ? `\nlast: ${escapeMarkdown(result.message)}` : ''),
@@ -163,7 +171,15 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
 }
 
 interface PollResult {
-  status: 'online' | 'unreachable';
+  /**
+   * `online`     - the agent answers and every configured core is serving.
+   * `degraded`   - the agent answers, a configured core is not running. Still
+   *                served in subscriptions: its other endpoints work, and the
+   *                liveness filter is keyed on `unreachable`, not on this.
+   * `unreachable`- the panel could not reach the AGENT. Says nothing about the
+   *                proxy ports, which fail independently.
+   */
+  status: 'online' | 'degraded' | 'unreachable';
   message: string | null;
   // T7: xray core version reported by this poll's /healthz, or undefined when
   // the node was unreachable / reported no xray core / runs a pre-T7 agent.
@@ -311,14 +327,34 @@ async function checkOne(node: {
           observedAt: new Date().toISOString(),
         }
       : undefined;
-    if (res.status === 'ok') {
-      return { status: 'online', message: null, coreVersion, coreRestarts };
+    const verdict = statusFromHealth(res);
+    return { ...verdict, coreVersion, coreRestarts };
+  } catch (err) {
+    if (err instanceof NodeRequestError) {
+      return { status: 'unreachable', message: `${err.status} ${err.message}`.slice(0, 200) };
     }
-    // node-agent reachable + healthy, but one of the protocol sub-cores
-    // isn't running. Normal for a fresh node with no Profile+Binding yet
-    // (xray/ss/etc have no config → not started). Keep status online,
-    // surface detail in lastStatusMessage; it auto-clears once a binding
-    // lands and the core boots.
+    return {
+      status: 'unreachable',
+      message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+    };
+  }
+}
+
+/**
+ * What a reachable node's answer means. Pure, so the rule can be read and
+ * tested without a transport.
+ */
+export function statusFromHealth(res: {
+  status: string;
+  cores: { name: string; running: boolean; provisioned?: boolean }[];
+}): { status: 'online' | 'degraded'; message: string | null } {
+  if (res.status === 'ok') {
+    return { status: 'online', message: null };
+  }
+  {
+    // node-agent reachable, but one of the protocol sub-cores isn't running.
+    // A fresh node with no Profile+Binding yet reports its cores unprovisioned,
+    // and those are idle by design rather than down - see the filter below.
     //
     // Name the cores that are down instead of dumping the raw payload. The dump
     // used to fit, then the restart tally (2026-08-04) landed inside the first
@@ -332,24 +368,23 @@ async function checkOne(node: {
     const down = res.cores
       .filter((c) => !c.running && c.provisioned !== false)
       .map((c) => c.name);
+    // The node is reachable and its cores are not. Until 2026-08-15 this stayed
+    // `online` and said so only in the message, so an operator's node list
+    // showed a green card while the cascade entry behind it served nobody: the
+    // core had been dead for hours and nothing in the panel said a word. A
+    // status is what people read; it has to carry this.
+    //
+    // Still not `unreachable`: the subscription's liveness filter is keyed on
+    // that word, and a core being down is not a reason to pull the node's other
+    // endpoints out of every subscriber's client.
     return {
-      status: 'online',
+      status: 'degraded',
       message: down.length
-        ? `degraded: not running: ${down.join(', ')}`.slice(0, 200)
+        ? `not running: ${down.join(', ')}`.slice(0, 200)
         : // No core reports itself down, yet the agent called the node degraded.
           // Keep the payload here: this is the case where the detail is not
           // something we can name in advance.
           `degraded: ${JSON.stringify(res).slice(0, 160)}`,
-      coreVersion,
-      coreRestarts,
-    };
-  } catch (err) {
-    if (err instanceof NodeRequestError) {
-      return { status: 'unreachable', message: `${err.status} ${err.message}`.slice(0, 200) };
-    }
-    return {
-      status: 'unreachable',
-      message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
     };
   }
 }

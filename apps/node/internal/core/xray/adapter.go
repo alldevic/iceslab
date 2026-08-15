@@ -1015,6 +1015,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	cascade := a.cascade
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
+	run := a.cfg.RunCmd
 	memLimit := a.cfg.MemoryLimitBytes
 	// Panel-pushed inbounds, in a deterministic order: the map is keyed by id,
 	// so sort the keys. Without this the rendered config would differ between
@@ -1047,6 +1048,18 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("render xray config: %w", err)
 	}
+
+	// Ask the core before replacing anything. A config it rejects is refused
+	// WHOLE, so writing one over a working config turns a serving node into a
+	// dark one, and the agent then burns its restart budget proving it. Failing
+	// here instead leaves the running core untouched and hands the reason back
+	// to the panel, which is the only place an operator will see it.
+	if err := validateConfig(ctx, run, binPath, blob); err != nil {
+		a.logger.Error("xray refused the new config, keeping the running one",
+			"err", err, "inbounds", len(pushed), "users", len(clients))
+		return fmt.Errorf("validate xray config: %w", err)
+	}
+
 	if cfgPath != "" {
 		if err := writeConfig(cfgPath, blob); err != nil {
 			return err
