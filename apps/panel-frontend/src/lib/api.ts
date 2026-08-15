@@ -1154,6 +1154,9 @@ export interface Cascade {
   mode: CascadeMode;
   /** Hide the cascade's non-entry nodes from the raw subscription (default). */
   hideHopsFromSub: boolean;
+  /** Offer the Auto line: one profile that names no direction and lets the
+   *  entry pick the fastest exit by measured RTT. */
+  autoProfile: boolean;
   hops: CascadeHop[];
   /** v4 shape (2026-08-04). Always present; EMPTY means the cascade predates
    *  the move and is still described by `hops`. */
@@ -1236,6 +1239,7 @@ export interface CreateCascadeV4Input {
   name: string;
   enabled?: boolean;
   hideHopsFromSub?: boolean;
+  autoProfile?: boolean;
   positions: CascadePositionInput[];
   directions: CascadeDirectionInput[];
 }

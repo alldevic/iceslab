@@ -148,6 +148,7 @@ export function CascadeEditPage() {
         name: draft.name.trim(),
         enabled: draft.enabled,
         hideHopsFromSub: draft.hideHops,
+        autoProfile: draft.autoProfile,
         positions: toPositionInputs(draft.pools),
         directions: toDirectionInputs(draft.directions),
       });
@@ -197,7 +198,7 @@ export function CascadeEditPage() {
     );
   }
 
-  const { name, enabled, hideHops, pools, directions } = draft;
+  const { name, enabled, hideHops, autoProfile, pools, directions } = draft;
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
   const positionCount = pools.length + 1;
 
@@ -331,6 +332,9 @@ export function CascadeEditPage() {
     .flatMap((d) => d.nodeIds.filter(Boolean))
     .map((nid) => nodeById.get(nid)?.name)
     .filter((n): n is string => Boolean(n));
+  // Directions that actually carry a node. An empty one is a tag with nothing
+  // behind it yet, and it is not something the balancer can pick.
+  const filledDirections = directions.filter((d) => d.nodeIds.some(Boolean)).length;
 
   return (
     <Stack gap={20}>
@@ -453,6 +457,21 @@ export function CascadeEditPage() {
                 directionNames.length > 0
                   ? t('cascadeEdit.hideHopsHintNamed', { names: directionNames.join(', ') })
                   : t('cascadeCreate.hideHopsHint')
+              }
+            />
+
+            {/* Locked below two directions, because there the balancer would
+                choose between one thing and the subscriber would get a second
+                row that behaves exactly like the first. */}
+            <ToggleRow
+              checked={autoProfile}
+              disabled={filledDirections < 2}
+              onChange={(v) => patch({ autoProfile: v })}
+              title={t('cascadeEdit.autoProfile')}
+              hint={
+                filledDirections < 2
+                  ? t('cascadeEdit.autoProfileNeedsTwo')
+                  : t('cascadeEdit.autoProfileHint')
               }
             />
           </SectionCard>
@@ -870,6 +889,9 @@ interface Draft {
   name: string;
   enabled: boolean;
   hideHops: boolean;
+  /** Offer the Auto line in the subscription: the entry picks the fastest
+   *  direction instead of the subscriber picking a country. */
+  autoProfile: boolean;
   /** The entry and any transits. The exit is `directions`. */
   pools: PositionDraft[];
   directions: DirectionDraft[];
@@ -914,6 +936,7 @@ function toDraft(
       name: c.name,
       enabled: c.enabled,
       hideHops: c.hideHopsFromSub ?? true,
+      autoProfile: c.autoProfile ?? false,
       pools: [...c.positions]
         .sort((a, b) => a.position - b.position)
         .map((p) => ({
@@ -953,6 +976,7 @@ function toDraft(
     name: c.name,
     enabled: c.enabled,
     hideHops: c.hideHopsFromSub ?? true,
+    autoProfile: c.autoProfile ?? false,
     pools: [
       ...(head ? [pool(head)] : [{ key: key(), nodeIds: [''], entryProtocol: 'xray' as CascadeProtocol, linkProtocol: 'xray' as CascadeProtocol }]),
       ...transits.map(pool),
@@ -1022,16 +1046,13 @@ function directionNote(
 
 /**
  * What lands in a subscriber's client: one entry per DIRECTION, each carrying
- * that direction's tag.
+ * that direction's tag, plus the Auto row when the operator asked for it.
  *
- * This list used to lead with an "Auto" row named after the cascade, and that
- * row was fiction: the subscription has never contained an untagged config. It
- * could not, safely. The entry's routing matches on the tag in the client's
- * UUID and has no catch-all, so an untagged client would match no direction and
- * egress at the ENTRY instead - a subscriber picking "Auto" from a cascade sold
- * as a Dutch exit would come out in the entry country. An operator planned
- * around the phantom row and asked how to switch it off (2026-08-15); the row
- * was the bug, not the missing switch.
+ * This list once led with an Auto row unconditionally, and that row was
+ * fiction: the entry matches on the tag in the client's UUID and had no rule for
+ * an Auto tag, so picking it egressed at the ENTRY country instead of the exit
+ * the cascade was sold as. The row was removed on 2026-08-15 and comes back here
+ * only paired with the switch that also puts the matching rule on the node.
  */
 function subscriptionRows(
   d: Draft,
@@ -1039,6 +1060,15 @@ function subscriptionRows(
   t: (k: string, o?: Record<string, unknown>) => string,
 ): { label: string; note: string; tone: string }[] {
   const rows: { label: string; note: string; tone: string }[] = [];
+  // Same two conditions the panel enforces when it builds the subscription: the
+  // switch is on, and there are at least two directions to choose between.
+  if (d.autoProfile && d.directions.filter((x) => x.nodeIds.some(Boolean)).length > 1) {
+    rows.push({
+      label: t('cascadeEdit.subAuto', { name: d.name }),
+      note: t('cascadeEdit.subTag', { tag: 'ffff' }),
+      tone: MOSS,
+    });
+  }
   d.directions.forEach((dir, i) => {
     if (!dir.countryCode || !dir.nodeIds.some(Boolean)) return;
     rows.push({

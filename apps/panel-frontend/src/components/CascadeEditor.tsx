@@ -1342,11 +1342,15 @@ export function ToggleRow({
   onChange,
   title,
   hint,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   title: string;
   hint: string;
+  /** Greyed out and unclickable, for a switch whose effect the cascade cannot
+   *  deliver yet. The hint is expected to say why. */
+  disabled?: boolean;
 }) {
   return (
     <Box
@@ -1359,9 +1363,15 @@ export function ToggleRow({
         borderRadius: 10,
         backgroundColor: WELL,
         border: `1px solid ${HAIRLINE}`,
+        opacity: disabled ? 0.55 : 1,
       }}
     >
-      <Switch checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} style={{ flexShrink: 0 }} />
+      <Switch
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.currentTarget.checked)}
+        style={{ flexShrink: 0 }}
+      />
       <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, fontWeight: 500, lineHeight: '17px', color: SNOW }}>
           {title}

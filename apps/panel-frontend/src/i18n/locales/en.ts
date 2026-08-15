@@ -1401,9 +1401,15 @@ export default {
     deleteTitle: 'Delete {{name}}?',
     deleteBody:
       'The chaining config is removed from all {{count}} nodes on the next push. The nodes themselves stay, along with their own hosts.',
+    autoProfile: 'Auto line in the subscription',
+    autoProfileHint:
+      'A separate entry that names no country: the entry picks the lowest-latency direction itself and re-picks it on every new connection. A user whose squad restricts exits does not get it, because Auto can leave through any of them and would walk past that restriction.',
+    autoProfileNeedsTwo:
+      'Needs at least two directions with nodes. With one, Auto leads exactly where the row above it does.',
     subTitle: 'What subscribers see',
     subDisabled: 'Nothing. A disabled cascade is not served to anybody.',
     subVia: '{{name}} → {{where}}',
+    subAuto: '⚡ {{name}} → Auto',
     subTag: 'tag {{tag}} · plain',
     subDirect: 'also a direct pick',
     subHintMany:
