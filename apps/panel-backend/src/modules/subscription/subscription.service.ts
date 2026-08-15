@@ -36,7 +36,7 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
-import { withVlessRouteTag, cascadeExitLabel } from './formats/xrayjson.js';
+import { withVlessRouteTag } from './formats/xrayjson.js';
 
 // ───── Domain errors ─────
 
@@ -187,6 +187,56 @@ interface NaiveInboundConfig {
  * plain string swap can't reach it) and returned as its single original URI.
  * Every non-entry endpoint returns its one original URI unchanged.
  */
+/**
+ * How the client shows one transport, for telling two otherwise identical
+ * cascade lines apart. Short on purpose: it sits at the end of a label.
+ */
+const TRANSPORT_LABEL: Record<string, string> = {
+  raw: 'TCP',
+  xhttp: 'XHTTP',
+  ws: 'WS',
+  grpc: 'gRPC',
+  httpupgrade: 'HTTPUpgrade',
+  kcp: 'KCP',
+};
+
+/**
+ * Make every cascade line in one subscription distinguishable.
+ *
+ * A cascade's entry is a POOL, and every node in it offers the same set of
+ * exits, so two entries produce the same label twice: a subscriber sees "ru →
+ * NL" and "ru → NL" and has no way to tell which is which. It got worse the
+ * moment pooled entries started expanding correctly (2026-08-15): before that
+ * the second entry was leaking into subscriptions as a plain direct server,
+ * which was a bigger problem and hid this one.
+ *
+ * Only actual collisions are touched. A unique label stays exactly as it is,
+ * because a differentiator on every line is noise: the transport matters to the
+ * reader only when it is the thing that differs.
+ *
+ * This replaces two separate places that each appended the host remark blindly.
+ * They could not see collisions, only their own endpoint, so they suffixed
+ * labels that needed nothing and left the ones that did.
+ */
+export function disambiguateCascadeLabels(endpoints: SubscriptionEndpoint[]): void {
+  const seen = new Map<string, number>();
+  for (const e of endpoints) {
+    for (const x of e.cascadeExits ?? []) {
+      seen.set(x.label, (seen.get(x.label) ?? 0) + 1);
+    }
+  }
+  for (const e of endpoints) {
+    for (const x of e.cascadeExits ?? []) {
+      if ((seen.get(x.label) ?? 0) < 2) continue;
+      const network = e.protocol === 'xray' ? e.network : undefined;
+      const suffix =
+        (network ? TRANSPORT_LABEL[network] : undefined) ??
+        (e.hostRemark && e.hostRemark !== 'Default' ? e.hostRemark : e.nodeName);
+      x.label = `${x.label} · ${suffix}`;
+    }
+  }
+}
+
 export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
   if (
     e.protocol !== 'xray' ||
@@ -202,7 +252,9 @@ export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
   const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
   return e.cascadeExits.map((profile) => {
     const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, profile.tag));
-    return `${tagged}#${encodeURIComponent(cascadeExitLabel(profile.label, e.hostRemark))}`;
+    // The label is already unique across this subscription (see
+    // disambiguateCascadeLabels); nothing to append here.
+    return `${tagged}#${encodeURIComponent(profile.label)}`;
   });
 }
 
@@ -984,6 +1036,10 @@ export async function generateSubscription(
     usedTags.add(`${name}-${e.protocol}`);
     e.nodeName = name;
   }
+
+  // Same idea one level down: two entries of one pool offer the same exits, so
+  // their lines carry the same label until told apart.
+  disambiguateCascadeLabels(endpoints);
 
   // R3-a - resolve the per-squad routing override across the user's squads,
   // reusing the memberships already loaded above (no extra query).

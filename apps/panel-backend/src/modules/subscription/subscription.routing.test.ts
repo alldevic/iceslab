@@ -107,13 +107,12 @@ describe('expandEndpointUris', () => {
     ]);
   });
 
-  it('suffixes profile remarks with the host remark on a multi-host entry', () => {
-    // Only reached when the entry binding has more than one host: several
-    // hosts on one entry produce the same set of ways out, so without the
-    // suffix the client would list the same string twice. The caller decides
-    // (subscription.service passes hostRemark only when hosts.length > 1),
-    // which is why a single-host entry no longer glues its host name onto
-    // every profile.
+  it('writes the profile label verbatim, suffixing nothing of its own', () => {
+    // It used to append the host remark here, per endpoint. An endpoint cannot
+    // see whether anything collided, so that suffixed labels needing nothing
+    // and applied the same rule from two formats at once. Uniqueness is now
+    // settled once for the whole subscription
+    // (disambiguateCascadeLabels), and every format takes the label as given.
     const out = expandEndpointUris({
       ...entry,
       hostRemark: 'test 2',
@@ -122,8 +121,8 @@ describe('expandEndpointUris', () => {
         { label: 'second way out', tag: 2 },
       ],
     });
-    expect(out[0]!.endsWith(`#${encodeURIComponent('first way out · test 2')}`)).toBe(true);
-    expect(out[1]!.endsWith(`#${encodeURIComponent('second way out · test 2')}`)).toBe(true);
+    expect(out[0]!.endsWith(`#${encodeURIComponent('first way out')}`)).toBe(true);
+    expect(out[1]!.endsWith(`#${encodeURIComponent('second way out')}`)).toBe(true);
   });
 
   it('leaves the profile label alone when the entry has a single host', () => {

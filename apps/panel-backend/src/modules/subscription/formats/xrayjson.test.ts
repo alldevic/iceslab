@@ -609,13 +609,17 @@ describe('buildXrayJsonArray A4 profile expansion', () => {
     expect(hostOf(arr[1])).toBe('n1.example.com');
   });
 
-  it('suffixes profile labels with the host remark on a multi-host entry', () => {
-    expect(
-      parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'Default' }])).map((c: any) => c.remarks),
-    ).toEqual(['de-exit', 'nl-exit']);
-    expect(
-      parse(buildXrayJsonArray([{ ...entryEp, hostRemark: 'test 2' }])).map((c: any) => c.remarks),
-    ).toEqual(['de-exit · test 2', 'nl-exit · test 2']);
+  it('takes the profile label as given, whatever the host is called', () => {
+    // This format used to append the host remark itself, and so did the plain
+    // one, each blind to the other and to whether anything actually collided.
+    // Labels are made unique once for the whole subscription now
+    // (disambiguateCascadeLabels in subscription.service), so a format that
+    // still decorated them would double the suffix.
+    for (const hostRemark of ['Default', 'test 2']) {
+      expect(
+        parse(buildXrayJsonArray([{ ...entryEp, hostRemark }])).map((c: any) => c.remarks),
+      ).toEqual(['de-exit', 'nl-exit']);
+    }
   });
 
   it('an xray endpoint with no profiles stays a single unmodified config', () => {

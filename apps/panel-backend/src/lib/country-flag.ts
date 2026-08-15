@@ -62,6 +62,10 @@ export function cascadeProfileLabel(
   exitNodeName: string,
 ): string {
   const flag = countryFlag(exitCountryCode);
-  if (!flag) return `${cascadeName} · ${exitNodeName}`;
-  return `${flag} ${cascadeName} · ${exitCountryCode!.toUpperCase()}`;
+  // An arrow, not a separator dot. The first half is the cascade's NAME, which
+  // an operator usually takes from where the traffic ENTERS, and the second is
+  // where it leaves. Written as "ru · NL" that reads as "ru via NL", i.e.
+  // backwards, and it was read that way the first time an operator saw it.
+  if (!flag) return `${cascadeName} → ${exitNodeName}`;
+  return `${flag} ${cascadeName} → ${exitCountryCode!.toUpperCase()}`;
 }

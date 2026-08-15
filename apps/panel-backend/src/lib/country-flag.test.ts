@@ -51,13 +51,16 @@ describe('subscriptionServerName', () => {
     // The regression: clients read "<exit node> · <entry host>", two internal
     // names glued together. Neither is a thing the person choosing a country
     // has an opinion about. Any code works, these two are arbitrary.
-    expect(cascadeProfileLabel('cascade', 'DE', 'exit-01')).toBe('🇩🇪 cascade · DE');
-    expect(cascadeProfileLabel('cascade', 'fr', 'exit-02')).toBe('🇫🇷 cascade · FR');
+    // The arrow replaced a dot on 2026-08-15: with a cascade named after its
+    // ENTRY (the usual habit), "ru · NL" reads as "ru via NL", which is
+    // backwards, and it was read that way the first time an operator saw it.
+    expect(cascadeProfileLabel('cascade', 'DE', 'exit-01')).toBe('🇩🇪 cascade → DE');
+    expect(cascadeProfileLabel('cascade', 'fr', 'exit-02')).toBe('🇫🇷 cascade → FR');
   });
 
   it('falls back to the exit node name when the node has no country', () => {
     // Without a country there is nothing else telling two ways out apart.
-    expect(cascadeProfileLabel('cascade', null, 'exit-01')).toBe('cascade · exit-01');
+    expect(cascadeProfileLabel('cascade', null, 'exit-01')).toBe('cascade → exit-01');
   });
 
   it('puts the flag first so it survives truncation in a client list', () => {

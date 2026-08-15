@@ -449,14 +449,13 @@ export function withVlessRouteTag(uuid: string, tag: number): string {
   return parts.join('-');
 }
 
-/** A4: label for an expanded exit config. When the entry endpoint came from a
- *  NAMED host (a node with several hosts fans out into multiple entry endpoints,
- *  each producing the same exit set), suffix the exit name with the host remark
- *  so the configs stay distinct instead of showing duplicate labels ("nl2",
- *  "nl2"). The default/unnamed host keeps the plain exit name. */
-export function cascadeExitLabel(exitName: string, hostRemark?: string): string {
-  return hostRemark && hostRemark !== 'Default' ? `${exitName} · ${hostRemark}` : exitName;
-}
+// `cascadeExitLabel` lived here until 2026-08-15. It suffixed a label with the
+// host remark whenever the host was named, which it did per endpoint, blind to
+// whether anything actually collided: labels that needed no differentiator got
+// one, and two entries of a pool (a real collision) got the same suffix rule
+// applied from two places that could not see each other. Making labels unique
+// needs the whole list at once, so it now happens once in
+// subscription.service (disambiguateCascadeLabels) and every format inherits it.
 
 /**
  * A1 array format (T1 skeleton + T2 routing + hy2). A top-level JSON array of
@@ -569,10 +568,10 @@ export function buildXrayJsonArray(
   const configs = supported.flatMap((e) => {
     if (e.protocol === 'xray' && e.cascadeExits && e.cascadeExits.length > 0) {
       return e.cascadeExits.map((profile) =>
-        makeConfig(
-          { ...e, uuid: withVlessRouteTag(e.uuid, profile.tag) },
-          cascadeExitLabel(profile.label, e.hostRemark),
-        ),
+        // The label is already unique across the subscription, made so once for
+        // every format rather than guessed per format (see
+        // disambiguateCascadeLabels in subscription.service).
+        makeConfig({ ...e, uuid: withVlessRouteTag(e.uuid, profile.tag) }, profile.label),
       );
     }
     return [makeConfig(e, e.nodeName)];
