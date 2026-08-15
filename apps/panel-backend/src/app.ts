@@ -57,6 +57,38 @@ export async function buildApp(): Promise<FastifyInstance> {
     trustProxy: config.TRUST_PROXY_HOPS,
   });
 
+  /**
+   * An empty body with `Content-Type: application/json` means "no fields", not
+   * a malformed request.
+   *
+   * Fastify's built-in JSON parser rejects it outright, so every action that
+   * takes no input at all - reset a user's traffic, revoke a subscription -
+   * answered 400 to the most natural way of calling it. Every HTTP client sends
+   * that header by default on a POST, so the caller has to know to strip it,
+   * and the 400 says nothing about why. Found while driving the API by hand
+   * (BACKLOG E16).
+   *
+   * Only the empty case is special-cased; anything else still goes through
+   * JSON.parse and still fails loudly if it is genuinely broken.
+   */
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req, body: string, done) => {
+      if (body === undefined || body === null || body.trim() === '') {
+        done(null, {});
+        return;
+      }
+      try {
+        done(null, JSON.parse(body));
+      } catch (err) {
+        const e = err as Error & { statusCode?: number };
+        e.statusCode = 400;
+        done(e, undefined);
+      }
+    },
+  );
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
       // Log the issues to stdout so admins can see *which field* failed

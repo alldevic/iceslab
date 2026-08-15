@@ -35,6 +35,19 @@ All notable changes to Iceslab are documented here. Format loosely follows
   silent, while the panel promised "saving pushes the config to all N nodes";
   it now logs at error level with the cascade named.
 
+- **A POST with no body is no longer a 400.** Actions that take no input at all
+  (reset traffic, revoke a subscription) were rejected whenever the caller sent
+  `Content-Type: application/json`, which every HTTP client does by default, and
+  the error said nothing about why. An empty body now reads as "no fields";
+  malformed JSON still fails, and still fails loudly, because reading it as
+  empty would turn a request meant to change something into a silent no-op.
+
+- **The agent stops warning about a core that is not running.** A node waiting
+  for its first config wrote two WARN lines every 30 seconds about failing to
+  read stats from a core that was never started, which is a permanent warning
+  about a normal state, and on a node whose core really did die it buried the
+  one line that explained why under thousands that did not.
+
 - **A cascade with a pool on its entry never pushed anything.** Saving one
   emitted its change event with the member list read from the legacy `hops`
   rows, and a pool on a position is one of the two shapes that deliberately
