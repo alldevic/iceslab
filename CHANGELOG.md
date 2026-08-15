@@ -5,6 +5,31 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ## Unreleased
 
+### Fixed
+
+- **A cascade with a pool on its entry never pushed anything.** Saving one
+  emitted its change event with the member list read from the legacy `hops`
+  rows, and a pool on a position is one of the two shapes that deliberately
+  cannot be folded into hops, so such a cascade has none. The list came out
+  empty, no node was told anything, and the panel reported "Saving pushes the
+  config to all 5 nodes again" while pushing to nobody. Creating a cascade
+  already read both shapes; only editing and deleting did not, so a cascade
+  could be created and then never changed again. Deleting one left its
+  fragments live on the nodes for the same reason.
+
+- **The observatory reached the builder but not the node.** Three paths
+  hand-copied the same field list when turning a built hop config into the
+  wire shape, and the v4 one copied everything except `observatory`. A node
+  then received a `leastPing` balancer with nobody to measure the pings, which
+  xray answers by refusing the ENTIRE config ("not all dependencies are
+  resolved"): no inbound, no cascade, the core never starts. The config-validity
+  test did not catch it because it feeds xray the builder's output, and the
+  field was lost after that. All three paths now go through one mapper.
+
+  Both faults met on one fleet: the entry cores of a live cascade sat dead for
+  hours while the panel showed the nodes green, and the second fault meant the
+  panel could not have delivered a fix even after the first was repaired.
+
 ### Removed
 
 - **The demo build and its seeded dataset.** A `VITE_DEMO_MODE` frontend build
