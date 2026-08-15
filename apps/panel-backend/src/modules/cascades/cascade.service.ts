@@ -289,10 +289,23 @@ export async function getRouteProfilesByEntryNode(
     // clients a tag that resolves to a different country.
     if (c.directions.length > 0) {
       const entryPos = c.positions.find((p) => p.position === 0);
-      const entryNodeId = entryPos?.nodes.map((n) => n.nodeId).find((id) => nodeIds.includes(id));
-      if (!entryNodeId) continue;
+      /**
+       * EVERY entry of the pool, not just the first one that matched.
+       *
+       * A position holds interchangeable nodes, so each of them is a way into
+       * the same cascade and each must expand into the same per-direction
+       * configs. Taking only the first left the others without cascade
+       * profiles, and an endpoint with no profiles is emitted as an ordinary
+       * direct server: the subscriber saw the second entry as a plain node,
+       * picked it, and egressed from the ENTRY country instead of the exit they
+       * were choosing. Found 2026-08-15 on a two-node entry pool, where the
+       * second entry showed up as its own line next to the cascade's.
+       */
+      const entryNodeIds = (entryPos?.nodes.map((n) => n.nodeId) ?? []).filter((id) =>
+        nodeIds.includes(id),
+      );
+      if (entryNodeIds.length === 0) continue;
       const allowed = allowByCascade.get(c.id);
-      const profiles: { label: string; tag: number }[] = [];
       /**
        * Policies that apply to THIS direction: only the ones granted by squads
        * that also let the user reach it.
@@ -313,30 +326,35 @@ export async function getRouteProfilesByEntryNode(
         const allows = allowByGroupCascade.get(`${groupId}|${c.id}`);
         if (allows) exitAllowByGroup.set(groupId, allows);
       }
-      const policiesForDirection = (directionNodeIds: string[]): RoutePolicyRef[] =>
-        policiesForEntry({
-          groupIds,
-          entryNodeId,
-          policiesByGroup,
-          entryReach,
-          directionNodeIds,
-          exitAllowByGroup,
-        });
-      for (const d of c.directions) {
-        // A direction with no node serves nobody; offering it would hand out a
-        // config that cannot connect.
-        if (d.nodes.length === 0) continue;
-        // Squad ACL is keyed on exit NODES, so a direction survives if any of
-        // its pool is allowed.
-        if (allowed && !d.nodes.some((n) => allowed.has(n.node.id))) continue;
-        const first = d.nodes[0]!.node;
-        const label = cascadeProfileLabel(c.name, d.countryCode ?? first.countryCode, first.name);
-        profiles.push({ label, tag: routeTag(0, d.tag - 1) });
-        for (const p of policiesForDirection(d.nodes.map((n) => n.node.id))) {
-          profiles.push({ label: `${label} · ${p.name}`, tag: routeTag(p.ordinal, d.tag - 1) });
+      // Per entry, because the granted policies depend on which squads hand out
+      // THAT entry: two entries of one pool can legitimately differ.
+      for (const entryNodeId of entryNodeIds) {
+        const policiesForDirection = (directionNodeIds: string[]): RoutePolicyRef[] =>
+          policiesForEntry({
+            groupIds,
+            entryNodeId,
+            policiesByGroup,
+            entryReach,
+            directionNodeIds,
+            exitAllowByGroup,
+          });
+        const profiles: { label: string; tag: number }[] = [];
+        for (const d of c.directions) {
+          // A direction with no node serves nobody; offering it would hand out a
+          // config that cannot connect.
+          if (d.nodes.length === 0) continue;
+          // Squad ACL is keyed on exit NODES, so a direction survives if any of
+          // its pool is allowed.
+          if (allowed && !d.nodes.some((n) => allowed.has(n.node.id))) continue;
+          const first = d.nodes[0]!.node;
+          const label = cascadeProfileLabel(c.name, d.countryCode ?? first.countryCode, first.name);
+          profiles.push({ label, tag: routeTag(0, d.tag - 1) });
+          for (const p of policiesForDirection(d.nodes.map((n) => n.node.id))) {
+            profiles.push({ label: `${label} · ${p.name}`, tag: routeTag(p.ordinal, d.tag - 1) });
+          }
         }
+        if (profiles.length > 0) out.set(entryNodeId, profiles);
       }
-      if (profiles.length > 0) out.set(entryNodeId, profiles);
       continue;
     }
 
