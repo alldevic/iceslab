@@ -26,19 +26,25 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ### Changed
 
-- **One Auto line per cascade, not one per way in.** Every entry of a pool
-  offers the same profiles, so a two-entry cascade produced two rows both called
-  Auto, and when the entries shared a transport the two were labelled
-  identically. Auto exists so nobody has to choose; two of them ask the
-  subscriber to choose anyway. Which entry keeps the row is decided by
-  rendezvous hash on (user, entry): stable for one person, so a refresh does not
-  move them, and spread across the population, so Auto users do not all land on
-  one entry. The balancing itself is untouched - the exit is still chosen at the
-  entry node, per connection.
+- **A pooled cascade shows each of its lines once, not once per way in.** Two
+  entries meant every row twice: two called Auto, two "ru → NL", two "ru → SE",
+  and when the entries shared a transport the duplicates were labelled
+  identically. The only thing differing between them is which of our machines
+  the traffic enters through, which a subscriber has no way to judge.
 
-  A share link is one host, one port, one transport, so a URI list cannot offer
-  a row that balances the way IN as well. That needs a client-side balancer,
-  which only the config formats can carry, and it is not built yet.
+  The lines are dealt across the pool's entries rather than all moved onto one:
+  which entry carries a line is a pure function of (user, entry), so a refresh
+  never moves anybody, and the deal is keyed on the line's tag, so adding or
+  deleting a direction leaves everyone else's rows where they were. An entry
+  left with nothing to offer is dropped from the subscription instead of being
+  emitted as a plain direct server, which is how the entry-country leak happens.
+
+  Named as a cost, not hidden: a subscriber no longer sees every way into a
+  country, so if the entry under one row is blocked for them they can only move
+  to another row, not to the same country through the other entry. A share link
+  is one host, one port, one transport; a row that balances the way IN needs a
+  client-side balancer, which only the config formats can carry, and that is not
+  built yet.
 
 - **A cascade entry re-measures its exits every minute instead of every five.**
   `leastPing` reads the last measurement and skips exits marked not alive, so

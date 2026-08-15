@@ -222,27 +222,39 @@ const TRANSPORT_LABEL: Record<string, string> = {
  * labels that needed nothing and left the ones that did.
  */
 /**
- * One Auto line per cascade, not one per way in.
+ * One line per cascade profile, not one per way in.
  *
  * Every entry of a pool offers the same profiles, so a cascade with two entries
- * produced two Auto rows, and with three it produces three. They are not a
- * choice a subscriber can reason about: Auto exists precisely so nobody has to
- * pick, and two rows called Auto ask them to pick anyway. Worse, when the
- * entries share a transport the two rows are labelled identically.
+ * showed each of its lines twice: two rows called Auto, two called "ru → NL",
+ * two called "ru → SE". None of that is a choice a subscriber can reason about.
+ * The country is already in the label, the exit is already chosen by the entry
+ * node, and the only thing that differs between the duplicates is which of OUR
+ * machines the traffic enters through - which they have no way to judge and, when
+ * both entries share a transport, no way to even tell apart.
  *
- * A share link is one server - host, port, transport - so this cannot be solved
- * by making the row itself balance; that needs a client-side balancer, which
- * only the config formats can carry. What a URI list CAN do is stop offering the
- * same thing twice, and the auto part that matters is untouched by this: the
- * EXIT is still chosen by the entry node, per connection, which is where the
- * balancing lives.
+ * A share link is one server - host, port, transport - so this cannot be fixed
+ * by making a row balance the way IN; that needs a client-side balancer, which
+ * only the config formats can carry. What a URI list can do is stop offering the
+ * same thing twice.
  *
- * Which entry keeps it is decided by rendezvous hash on (user, entry), the same
- * mechanism that orders their servers: stable for one person, so their Auto row
- * does not jump hosts on every refresh, and spread across the population, so
- * Auto users do not all pile onto whichever entry the query returned first.
+ * Two properties matter and both come from the assignment rule below:
+ *
+ *  - stable per person. Which entry carries a line is a pure function of (user,
+ *    entry) via rendezvous hash, so a subscription refresh does not move anyone;
+ *    on a router, a move drops every live connection.
+ *  - spread. Lines are dealt across the entries by tag rather than all landing
+ *    on the winner, so a pool keeps doing its job: the population is spread, and
+ *    a subscriber whose entry is blocked still has other rows on the other one.
+ *    Modulo by TAG, not by position in the list, so adding or deleting a
+ *    direction leaves everybody else's rows exactly where they were.
+ *
+ * The pool's redundancy does get quieter here: a user no longer sees every way
+ * into a country, so if the entry under "ru → NL" is blocked for them they
+ * cannot switch to the other one by hand, only to another row. That is the cost
+ * of the short list, and it is why the spread above is part of the feature
+ * rather than a nicety.
  */
-export function keepOneAutoPerCascade(
+export function collapseCascadeLines(
   endpoints: SubscriptionEndpoint[],
   userId: string,
 ): void {
@@ -251,34 +263,72 @@ export function keepOneAutoPerCascade(
   const keyOf = (e: SubscriptionEndpoint): string =>
     `${e.nodeName}|${e.host}|${e.port}|${e.protocol === 'xray' ? (e.network ?? '') : ''}`;
 
-  const candidates = new Map<string, Map<string, SubscriptionEndpoint>>();
+  // cascadeId -> entry key -> endpoint
+  const entriesByCascade = new Map<string, Map<string, SubscriptionEndpoint>>();
   for (const e of endpoints) {
     for (const x of e.cascadeExits ?? []) {
-      if (!isAutoRouteTag(x.tag) || !x.cascadeId) continue;
-      const perCascade = candidates.get(x.cascadeId) ?? new Map<string, SubscriptionEndpoint>();
+      if (!x.cascadeId) continue;
+      const perCascade = entriesByCascade.get(x.cascadeId) ?? new Map<string, SubscriptionEndpoint>();
       perCascade.set(keyOf(e), e);
-      candidates.set(x.cascadeId, perCascade);
+      entriesByCascade.set(x.cascadeId, perCascade);
     }
   }
 
-  for (const [cascadeId, perCascade] of candidates) {
+  for (const [cascadeId, perCascade] of entriesByCascade) {
     if (perCascade.size < 2) continue;
-    const ranked = rendezvousOrder(
+    const order = rendezvousOrder(
       [...perCascade.keys()].map((id) => ({ id, name: id, regionCode: null, maxUsers: null })),
       userId,
-    );
-    const winner = perCascade.get(ranked[0]!.id);
-    for (const e of perCascade.values()) {
-      if (e === winner) continue;
-      const kept = (e.cascadeExits ?? []).filter(
-        (x) => !(isAutoRouteTag(x.tag) && x.cascadeId === cascadeId),
-      );
-      // Never strip an endpoint down to nothing: an entry with no profiles is
-      // emitted as an ordinary direct server, which is how a subscriber ends up
-      // egressing in the ENTRY country while their client shows an exit. That
-      // exact leak cost us a day on 2026-08-15.
-      if (kept.length > 0) e.cascadeExits = kept;
+    ).map((n) => n.id);
+
+    // Which entries can actually serve each tag. Squad ACLs are resolved per
+    // entry, so two entries of one pool may legitimately offer different sets,
+    // and a line has to be dealt to an entry that carries it.
+    const offeredBy = new Map<number, Set<string>>();
+    for (const [key, e] of perCascade) {
+      for (const x of e.cascadeExits ?? []) {
+        if (x.cascadeId !== cascadeId) continue;
+        const set = offeredBy.get(x.tag) ?? new Set<string>();
+        set.add(key);
+        offeredBy.set(x.tag, set);
+      }
     }
+
+    const holderOf = new Map<number, string>();
+    for (const [tag, offering] of offeredBy) {
+      // Deal from a per-tag offset so consecutive directions land on different
+      // entries; walk the rendezvous order from there to the first entry that
+      // offers this tag.
+      const start = tag % order.length;
+      for (let i = 0; i < order.length; i++) {
+        const key = order[(start + i) % order.length]!;
+        if (offering.has(key)) {
+          holderOf.set(tag, key);
+          break;
+        }
+      }
+    }
+
+    for (const [key, e] of perCascade) {
+      e.cascadeExits = (e.cascadeExits ?? []).filter(
+        (x) => x.cascadeId !== cascadeId || holderOf.get(x.tag) === key,
+      );
+    }
+  }
+
+  /**
+   * An entry left with no profiles must LEAVE the subscription, not stay.
+   *
+   * An endpoint carrying an empty exit list is emitted as an ordinary direct
+   * server, and that is exactly how a subscriber ends up egressing in the ENTRY
+   * country while their client shows a cascade line - the leak that cost a day
+   * on 2026-08-15. With more entries than lines, dealing them out empties one,
+   * and it has nothing left to offer anyway: every line it used to carry is on
+   * another entry now.
+   */
+  for (let i = endpoints.length - 1; i >= 0; i--) {
+    const e = endpoints[i]!;
+    if (e.cascadeExits && e.cascadeExits.length === 0) endpoints.splice(i, 1);
   }
 }
 
@@ -1101,13 +1151,14 @@ export async function generateSubscription(
     e.nodeName = name;
   }
 
-  // Auto is one line per cascade, not one per way in. Before the labels are
-  // told apart, because the rows this drops would otherwise be handed a
-  // transport suffix to distinguish two rows that should have been one.
-  keepOneAutoPerCascade(endpoints, user.id);
+  // One line per cascade profile, dealt across the pool's entries. Runs BEFORE
+  // the labels are told apart: the duplicates this removes are exactly the rows
+  // that would otherwise be handed a transport suffix to distinguish two rows
+  // that should have been one.
+  collapseCascadeLines(endpoints, user.id);
 
-  // Same idea one level down: two entries of one pool offer the same exits, so
-  // their lines carry the same label until told apart.
+  // Same idea one level down: whatever cascade lines remain must still be
+  // distinguishable from each other, and from any non-cascade endpoint.
   disambiguateCascadeLabels(endpoints);
 
   // R3-a - resolve the per-squad routing override across the user's squads,
