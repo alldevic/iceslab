@@ -750,6 +750,37 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   }
 }
 
+/**
+ * Every node a cascade touches, whichever shape it is stored in.
+ *
+ * A cascade lives in two storages at once: the legacy `hops` chain and the v4
+ * `positions`/`directions` topology. The fold that keeps `hops` in step
+ * deliberately refuses two v4 shapes it cannot express, and a pool on a
+ * position is one of them, so a perfectly ordinary cascade can have ZERO hop
+ * rows. Read the membership from hops alone and such a cascade reports no
+ * members at all.
+ *
+ * That is not cosmetic: this list is who gets the config pushed to them. On
+ * 2026-08-15 a live cascade with a two-node entry pool had `hops = 0`, so every
+ * save emitted `cascade.changed` with an empty list, no node was ever told
+ * anything, and the panel said "Saving pushes the config to all 5 nodes" while
+ * pushing to none. The entry cores sat with a config their xray had already
+ * rejected and no way to ever receive a fixed one.
+ */
+export function cascadeMemberNodeIds(c: {
+  hops?: { nodeId: string }[];
+  positions?: { nodes: { nodeId: string }[] }[];
+  directions?: { nodes: { nodeId: string }[] }[];
+}): string[] {
+  return [
+    ...new Set([
+      ...(c.hops ?? []).map((h) => h.nodeId),
+      ...(c.positions ?? []).flatMap((p) => p.nodes.map((n) => n.nodeId)),
+      ...(c.directions ?? []).flatMap((d) => d.nodes.map((n) => n.nodeId)),
+    ]),
+  ];
+}
+
 export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<CascadeDto> {
   const existing = await prisma.cascade.findUnique({
     where: { id },
@@ -758,12 +789,15 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
       mode: true,
       enabled: true,
       hops: { select: { nodeId: true, position: true } },
+      // Read the v4 side too, or a cascade with no hop rows looks memberless.
+      positions: { select: { nodes: { select: { nodeId: true } } } },
+      directions: { select: { nodes: { select: { nodeId: true } } } },
     },
   });
   if (!existing) throw new CascadeNotFoundError(id);
-  // Capture the pre-update hop nodes: a node dropped from the cascade (or a
+  // Capture the pre-update members: a node dropped from the cascade (or a
   // disable toggle) must also re-push so its now-stale fragments are removed.
-  const oldNodeIds = existing.hops.map((h) => h.nodeId);
+  const oldNodeIds = cascadeMemberNodeIds(existing);
 
   // Same fold as create. A v4 payload also decides the mode, since the shape
   // now says it: one direction is a chain, several are a balancer.
@@ -842,10 +876,17 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
       }
       return tx.cascade.findUniqueOrThrow({ where: { id }, include: hopInclude });
     });
-    // Re-push old + new hops (deduped): old-only nodes drop their fragments,
-    // new/kept nodes get the refreshed chain. An enabled-only toggle has no
-    // `hops` input, so newNodeIds is empty and we re-push the existing hops.
-    const newNodeIds = hops ? hops.map((h) => h.nodeId) : [];
+    // Re-push old + new members (deduped): old-only nodes drop their fragments,
+    // new/kept nodes get the refreshed chain. An enabled-only toggle carries
+    // neither shape, so newNodeIds is empty and we re-push the existing members.
+    //
+    // Both shapes are read, because either can be the only one present: a v4
+    // payload whose entry carries a pool writes no hops at all.
+    const newNodeIds = [
+      ...(hops ?? []).map((h) => h.nodeId),
+      ...(input.positions ?? []).flatMap((p) => p.nodeIds),
+      ...(input.directions ?? []).flatMap((d) => d.nodeIds),
+    ];
     eventBus.emit('cascade.changed', { nodeIds: [...new Set([...oldNodeIds, ...newNodeIds])] });
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
@@ -1087,11 +1128,17 @@ async function getTopologyFragmentsForNode(
 }
 
 export async function deleteCascade(id: string): Promise<void> {
-  // Grab the hop nodes before deleting so we can re-push them afterwards to
-  // strip the cascade fragments from their live xray config.
+  // Grab the member nodes before deleting so we can re-push them afterwards to
+  // strip the cascade fragments from their live xray config. Both shapes: a
+  // v4-only cascade has no hop rows, and reading hops alone would leave its
+  // nodes serving a cascade that no longer exists.
   const existing = await prisma.cascade.findUnique({
     where: { id },
-    select: { hops: { select: { nodeId: true } } },
+    select: {
+      hops: { select: { nodeId: true } },
+      positions: { select: { nodes: { select: { nodeId: true } } } },
+      directions: { select: { nodes: { select: { nodeId: true } } } },
+    },
   });
   try {
     await prisma.cascade.delete({ where: { id } });
@@ -1101,8 +1148,9 @@ export async function deleteCascade(id: string): Promise<void> {
     }
     throw err;
   }
-  if (existing && existing.hops.length > 0) {
-    eventBus.emit('cascade.changed', { nodeIds: existing.hops.map((h) => h.nodeId) });
+  const members = existing ? cascadeMemberNodeIds(existing) : [];
+  if (members.length > 0) {
+    eventBus.emit('cascade.changed', { nodeIds: members });
   }
   invalidateHiddenCascadeNodeCache();
 }
