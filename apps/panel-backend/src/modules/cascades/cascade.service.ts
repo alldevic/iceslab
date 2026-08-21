@@ -842,6 +842,29 @@ async function writeTopologyV4(
     return { ...d, tag: nextTag++ };
   });
 
+  // A policy may force traffic through a named direction. Tags are resolved
+  // just above, so this is the first moment the check can be made — and it has
+  // to be made HERE rather than left to render time: an unresolvable tag is
+  // silently dropped when the fragments are built, so the operator would save a
+  // rule, see it accepted, and never learn that it does nothing. Refuse the save
+  // instead, naming the tag and what does exist.
+  const liveTags = new Set(resolved.map((d) => d.tag));
+  for (const p of positions) {
+    for (const [nodeId, policy] of Object.entries(p.egressPolicies ?? {})) {
+      for (const rule of policy) {
+        if (rule.target !== 'direction') continue;
+        if (rule.directionTag === undefined || !liveTags.has(rule.directionTag)) {
+          throw new CascadeValidationError(
+            `geo split on node ${nodeId} forces direction ${rule.directionTag ?? '(none)'}, ` +
+              `which this cascade does not have (${
+                liveTags.size ? `available: ${[...liveTags].sort((a, b) => a - b).join(', ')}` : 'none'
+              })`,
+          );
+        }
+      }
+    }
+  }
+
   await tx.cascadeLink.deleteMany({ where: { cascadeId } });
   await tx.cascadePosition.deleteMany({ where: { cascadeId } });
   await tx.cascadeDirection.deleteMany({ where: { cascadeId } });
