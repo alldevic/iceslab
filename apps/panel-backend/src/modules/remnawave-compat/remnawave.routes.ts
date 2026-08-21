@@ -253,9 +253,10 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
 
   // ─────────────── Users: lifecycle ───────────────
 
-  // POST /api/users — create. Native create takes trafficLimitGb + expireDays +
-  // defaults status=active, so the exact absolute expireAt and a disabled status
-  // are applied via a follow-up update.
+  // POST /api/users — create. Native create now accepts an absolute expireAt
+  // (0.2.0 added it for panel-to-panel import), so the shop's create lands in a
+  // SINGLE write. Only a disabled-on-create still needs a follow-up, because
+  // native always creates a user active.
   app.post('/api/users', opts, async (request, reply) => {
     const body = RemnaCreateSchema.parse(request.body);
     const nativeInput = CreateUserSchema.parse({
@@ -270,26 +271,23 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       description: body.description ?? undefined,
       tag: body.tag ?? undefined,
       externalSquadUuid: body.externalSquadUuid ?? undefined,
+      // Absolute instant, straight into the create — no follow-up write, so the
+      // row is never briefly committed with a NULL expireAt.
+      expireAt: body.expireAt ?? undefined,
       groupIds: await resolveGroupIds(body.activeInternalSquads ?? []),
     });
     let dto = await usersService.createUser(nativeInput);
 
-    // The native create commits the row with expireAt=NULL (native takes only a
-    // relative expireDays; the shop sends an ABSOLUTE expireAt), so the exact
-    // expireAt + a disabled status are applied via a follow-up update, and squad
-    // names for the echo come from mapCtx(). All three run AFTER the row is
-    // committed. If any throws we'd surface an error to the shop — which treats
-    // the create as FAILED and never compensates — while a never-expiring active
-    // orphan lingers on the panel (NULL expireAt is never reaped by the expiry
-    // cron). Make create atomic-or-clean: on any post-create failure, best-effort
-    // soft-delete the just-created user before propagating, so the shop's "create
-    // failed" is truthful and the username is freed for the retry.
+    // Anything still running after the row is committed can strand it: the shop
+    // reads an error as "create failed" and never compensates, so a user it does
+    // not know about would linger on the panel holding the username. Only two
+    // things remain — the disabled-on-create follow-up and mapCtx() for the echo
+    // — but both are AFTER the commit, so keep the create atomic-or-clean:
+    // best-effort soft-delete before propagating, leaving the shop's "failed"
+    // truthful and the username free for the retry.
     try {
-      const patch: Record<string, unknown> = {};
-      if (body.expireAt) patch.expireAt = body.expireAt;
-      if (statusToNative(body.status) === 'disabled') patch.status = 'disabled';
-      if (Object.keys(patch).length > 0) {
-        dto = await usersService.updateUser(dto.id, UpdateUserSchema.parse(patch));
+      if (statusToNative(body.status) === 'disabled') {
+        dto = await usersService.updateUser(dto.id, UpdateUserSchema.parse({ status: 'disabled' }));
       }
       return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
     } catch (err) {
