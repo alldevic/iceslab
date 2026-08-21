@@ -148,6 +148,18 @@ services:
       # Safety ceiling on device rows per user, and the login-alert toggle.
       HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
       TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}
+      # Self-hosted geo. OFF by default, so a stock deployment keeps fetching
+      # geo databases from the external mirrors exactly as before. With it on,
+      # the panel serves its own .dat/.srs under the public /geo/<token>/ path -
+      # the mirrors are unreliable from RU, which is the whole point.
+      # GEO_ARTIFACT_TOKEN is the capability prefix on that path; leave it empty
+      # and the panel derives one deterministically from JWT_SECRET.
+      # SINGBOX_BIN points at a sing-box binary and enables .srs compilation
+      # (sing-box dropped geosite:/geoip: in 1.12, so .srs is the only portable
+      # vehicle); unset means the sing-box format keeps the external URLs.
+      GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
+      GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
+      SINGBOX_BIN: ${SINGBOX_BIN:-}
     depends_on:
       postgres:
         condition: service_healthy

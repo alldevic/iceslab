@@ -72,16 +72,11 @@ export async function refreshGeoAndRepush(): Promise<{
   const changed = CUSTOM_ARTIFACTS.some((n) => before[n] !== after[n]);
   if (!changed) return { rebuilt: true, changed: false, nodes: 0 };
 
-  // A custom category .dat changed -> re-push the cascade entry nodes that carry
-  // an egress policy so they fetch the new file. (Filtered in JS rather than a
-  // Prisma Json-null WHERE to sidestep JsonNull/DbNull filter quirks.)
-  const cascades = await prisma.cascade.findMany({
-    where: { enabled: true },
-    include: { hops: { select: { nodeId: true } } },
-  });
-  const nodeIds = [
-    ...new Set(cascades.filter((c) => c.egressPolicy != null).flatMap((c) => c.hops.map((h) => h.nodeId))),
-  ];
-  if (nodeIds.length > 0) eventBus.emit('cascade.changed', { nodeIds });
-  return { rebuilt: true, changed: true, nodes: nodeIds.length };
+  // A rebuilt .dat has to reach the nodes that serve it, which means re-pushing
+  // the cascade entry hops carrying an egress policy. That policy (and the
+  // column it lives in) arrives with the cascade geo-split, which is being
+  // ported separately on top of the rewritten cascade model - so until it lands
+  // the rebuild stops here: the new artifact is on the panel and served over
+  // /geo/:token/:name, it simply is not pushed at nodes yet.
+  return { rebuilt: true, changed: true, nodes: 0 };
 }
