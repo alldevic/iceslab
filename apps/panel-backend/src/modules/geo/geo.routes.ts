@@ -11,6 +11,7 @@ import {
   reorderSources,
 } from './geo.sources.js';
 import { listSourceCategories, previewSourceCategory } from './geo.inspect.js';
+import { nodesUsingGeoCategory } from '../cascades/cascade.service.js';
 import {
   addCategory,
   deleteCategory,
@@ -171,6 +172,21 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete('/api/geo/categories/:id', auth, async (req, reply) => {
     const { id } = IdParam.parse(req.params);
+    // Refuse while a cascade still routes by it. Deleting anyway is not an error
+    // anyone sees: the unsatisfiable ext: matcher is stripped at render (it must
+    // be, xray refuses a config naming a .dat it cannot find), so the split
+    // silently stops splitting on a screen nobody is looking at.
+    const cat = (await getCategories()).find((c) => c.id === id);
+    if (cat) {
+      const used = await nodesUsingGeoCategory(cat.name);
+      if (used.length > 0) {
+        return reply.code(409).send({
+          error: 'CATEGORY_IN_USE',
+          message: `"${cat.name}" is used by a geo split in: ${used.join(', ')}. Remove those rules first.`,
+          cascades: used,
+        });
+      }
+    }
     const ok = await deleteCategory(id);
     if (!ok) return reply.code(404).send({ error: 'NOT_FOUND' });
     return reply.code(204).send();

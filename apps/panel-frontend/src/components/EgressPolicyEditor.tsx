@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Box, Button, Group, Modal, Select, Stack, TagsInput, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import type { EgressRule, EgressTarget } from '../lib/api';
-import { CARD, EDGE, FAINT, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from './CascadeEditor';
+import { AMBER, CARD, EDGE, FAINT, HAIRLINE, MIST, MONO, WELL } from './CascadeEditor';
 
 /**
  * Authors the geo split for ONE node.
@@ -26,6 +26,12 @@ export interface DirectionChoice {
 }
 
 const EMPTY_RULE: EgressRule = { geosite: [], target: 'direct' };
+
+/** Does the rule name anything at all to match on? Without it xray would treat
+ *  the rule as a catch-all and it would shadow every rule below. */
+function hasMatcher(r: EgressRule): boolean {
+  return Boolean(r.geosite?.length || r.geoip?.length || r.domain?.length || r.ip?.length);
+}
 
 /** A rule the form cannot draw without losing part of it (port/network matchers
  *  are API-only for now). Shown read-only rather than silently rewritten. */
@@ -128,6 +134,13 @@ export function EgressPolicyEditor({
                   value={r.domain ?? []}
                   onChange={(v) => patch(i, { domain: v })}
                 />
+                <TagsInput
+                  size="xs"
+                  label={t('cascades.splitIp')}
+                  description={t('cascades.splitIpHint')}
+                  value={r.ip ?? []}
+                  onChange={(v) => patch(i, { ip: v })}
+                />
                 <Group gap={8} align="flex-end" wrap="nowrap">
                   <Select
                     size="xs"
@@ -164,6 +177,14 @@ export function EgressPolicyEditor({
                     {t('cascades.removeRule')}
                   </Button>
                 </Group>
+                {!hasMatcher(r) && (
+                  // Saving drops it (a rule with nothing to match on would act as
+                  // a catch-all and shadow everything under it), so say that here
+                  // rather than let the row quietly disappear on save.
+                  <Text size="xs" style={{ color: AMBER }}>
+                    {t('cascades.splitRuleEmpty')}
+                  </Text>
+                )}
               </Stack>
             </Box>
           ),
@@ -182,11 +203,7 @@ export function EgressPolicyEditor({
             onClick={() => {
               // Drop rules with nothing to match on: an empty rule would behave
               // as a catch-all on the node and shadow the routing below it.
-              const cleaned = rules.filter(
-                (r) =>
-                  isAdvanced(r) ||
-                  (r.geosite?.length || r.geoip?.length || r.domain?.length || r.ip?.length),
-              );
+              const cleaned = rules.filter((r) => isAdvanced(r) || hasMatcher(r));
               onSave(cleaned);
               onClose();
             }}
@@ -209,7 +226,9 @@ export function SplitBadge({ count, onClick }: { count: number; onClick: () => v
       color={count > 0 ? 'cyan' : 'gray'}
       onClick={onClick}
       title={t('cascades.split')}
-      style={{ flexShrink: 0, color: count > 0 ? undefined : SNOW, borderColor: count > 0 ? undefined : RED }}
+      // Muted until there is something to show: a node without a split is the
+      // ordinary case, and an accent on every row would read as a warning.
+      style={{ flexShrink: 0, ...(count > 0 ? {} : { color: FAINT }) }}
     >
       {count > 0 ? `geo ${count}` : 'geo'}
     </Button>

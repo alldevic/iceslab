@@ -130,3 +130,35 @@ describe('a geo rule may only force a direction the cascade actually has', () =>
     ).rejects.toThrow(/does not have/);
   });
 });
+
+describe('a custom geo category cannot be deleted while a split routes by it', () => {
+  it('reports the cascades using it', async () => {
+    const { nodesUsingGeoCategory } = await import('./cascade.service.js');
+    const entry = await node('entry');
+    const exit = await node('exit');
+    await createCascade({
+      name: 'uses-ads',
+      enabled: true,
+      positions: [
+        {
+          position: 0,
+          nodeIds: [entry],
+          entryProtocol: 'xray',
+          linkProtocol: 'xray',
+          egressPolicies: {
+            [entry]: [{ domain: ['ext:geo-custom.dat:ADS'], target: 'block' }],
+          },
+        },
+      ],
+      directions: [{ countryCode: 'NL', nodeIds: [exit] }],
+    });
+
+    // Case-insensitive, the way the builder normalises category names.
+    expect(await nodesUsingGeoCategory('ads')).toEqual(['uses-ads']);
+    expect(await nodesUsingGeoCategory('ADS')).toEqual(['uses-ads']);
+    // A category nobody routes by is free to delete.
+    expect(await nodesUsingGeoCategory('unused')).toEqual([]);
+    // A bundled category is not an ext: reference and must not count.
+    expect(await nodesUsingGeoCategory('category-ru')).toEqual([]);
+  });
+});

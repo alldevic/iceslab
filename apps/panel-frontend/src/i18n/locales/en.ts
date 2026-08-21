@@ -1444,7 +1444,10 @@ export default {
     targetLinkOut: 'as chosen (out of the cascade)',
     targetDirection: 'force direction',
     targetBlock: 'block',
+    splitIp: 'Literal IPs / CIDRs',
+    splitIpHint: 'An IP match needs the node to resolve names first, so a rule using these is slower to take effect than a domain one.',
     splitDirectionTag: 'direction',
+    splitRuleEmpty: 'Matches nothing yet — this rule is dropped on save.',
     splitRawRule: 'Advanced rule (edit via API): {{summary}}',
     removeRule: 'Remove rule',
     linkHint:

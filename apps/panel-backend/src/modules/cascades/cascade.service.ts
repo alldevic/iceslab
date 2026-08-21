@@ -165,6 +165,40 @@ export function reconcileEntryGeo(
   return { policy: cleaned, assets };
 }
 
+/**
+ * Cascade members whose geo split still references a custom category, by node id.
+ *
+ * Deleting a category that a policy names is not an error the operator ever
+ * sees: reconciliation strips the unsatisfiable ext: matcher at render time (it
+ * has to — xray refuses a config naming a .dat it cannot find), so the split
+ * quietly stops splitting on a screen the operator is not looking at. Callers
+ * use this to refuse the delete and say where it is used.
+ */
+export async function nodesUsingGeoCategory(category: string): Promise<string[]> {
+  const needle = `:${category.toUpperCase()}`;
+  const members = await prisma.cascadePositionNode.findMany({
+    where: { position: { cascade: { enabled: true } } },
+    select: { nodeId: true, egressPolicy: true, position: { select: { cascade: { select: { name: true } } } } },
+  });
+  const hits: string[] = [];
+  for (const m of members) {
+    const policy = coerceEgressPolicy(m.egressPolicy);
+    if (!policy) continue;
+    const refs = policy.flatMap((r) => [
+      ...(r.geosite ?? []),
+      ...(r.geoip ?? []),
+      ...(r.domain ?? []),
+      ...(r.ip ?? []),
+    ]);
+    // `ext:<file>:<CATEGORY>` — compare on the category, case-insensitively, the
+    // way the builder normalises it.
+    if (refs.some((x) => x.startsWith('ext:') && x.toUpperCase().endsWith(needle))) {
+      hits.push(m.position.cascade.name);
+    }
+  }
+  return [...new Set(hits)];
+}
+
 /** Per-node policies for one cascade, reconciled against the current geo build.
  *  Returns the map to hand the fragment builder plus the union of assets the
  *  node must fetch. */

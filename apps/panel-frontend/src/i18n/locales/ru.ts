@@ -1508,7 +1508,10 @@ export default {
     targetLinkOut: 'как выбрано (из каскада)',
     targetDirection: 'форсировать направление',
     targetBlock: 'блок',
+    splitIp: 'IP / CIDR списком',
+    splitIpHint: 'Для сопоставления по IP ноде нужно сперва резолвить имена, поэтому такое правило срабатывает позже доменного.',
     splitDirectionTag: 'направление',
+    splitRuleEmpty: 'Пока ничего не сопоставляет — при сохранении правило отбрасывается.',
     splitRawRule: 'Расширенное правило (правится через API): {{summary}}',
     removeRule: 'Удалить правило',
     linkHint:
