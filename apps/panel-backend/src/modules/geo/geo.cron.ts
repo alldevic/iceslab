@@ -72,11 +72,17 @@ export async function refreshGeoAndRepush(): Promise<{
   const changed = CUSTOM_ARTIFACTS.some((n) => before[n] !== after[n]);
   if (!changed) return { rebuilt: true, changed: false, nodes: 0 };
 
-  // A rebuilt .dat has to reach the nodes that serve it, which means re-pushing
-  // the cascade entry hops carrying an egress policy. That policy (and the
-  // column it lives in) arrives with the cascade geo-split, which is being
-  // ported separately on top of the rewritten cascade model - so until it lands
-  // the rebuild stops here: the new artifact is on the panel and served over
-  // /geo/:token/:name, it simply is not pushed at nodes yet.
-  return { rebuilt: true, changed: true, nodes: 0 };
+  // A rebuilt .dat has to reach the nodes that actually serve it: the cascade
+  // members carrying an egress policy. Per NODE, not per cascade - a position is
+  // a pool and only the boxes with a split need the new file, so re-pushing the
+  // whole cascade would churn nodes whose config cannot have changed.
+  // (Filtered in JS rather than a Prisma Json-null WHERE to sidestep the
+  // JsonNull/DbNull filter quirks.)
+  const members = await prisma.cascadePositionNode.findMany({
+    where: { position: { cascade: { enabled: true } } },
+    select: { nodeId: true, egressPolicy: true },
+  });
+  const nodeIds = [...new Set(members.filter((m) => m.egressPolicy != null).map((m) => m.nodeId))];
+  if (nodeIds.length > 0) eventBus.emit('cascade.changed', { nodeIds });
+  return { rebuilt: true, changed: true, nodes: nodeIds.length };
 }

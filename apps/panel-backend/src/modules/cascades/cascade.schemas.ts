@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EgressPolicySchema } from './cascade.geo.js';
 
 // Max hops in a single cascade. Each hop adds latency + an inter-hop link
 // (UFW port LINK_PORT_BASE+i), so the chain is capped. Enforced at the schema
@@ -78,6 +79,12 @@ export const CascadePositionSchema = z.object({
   position: z.number().int().min(0).max(MAX_CASCADE_HOPS - 1),
   entryProtocol: CascadeProtocol.optional(),
   linkProtocol: CascadeProtocol.optional(),
+  /** E - server-side geo split, keyed by node id. Per NODE because a position is
+   *  a POOL: an operator splitting geo does it on a specific box, and one policy
+   *  spread over the whole pool is the class of bug the pool model removed. A
+   *  node absent from this map has no split and renders as before. Keys outside
+   *  `nodeIds` are ignored. */
+  egressPolicies: z.record(z.uuid(), EgressPolicySchema).optional(),
 });
 
 export const CascadeDirectionSchema = z.object({

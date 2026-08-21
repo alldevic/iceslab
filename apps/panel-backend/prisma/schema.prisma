@@ -901,6 +901,16 @@ model CascadePositionNode {
   positionId String @map("position_id") @db.Uuid
   nodeId     String @map("node_id") @db.Uuid
 
+  // E - server-side geo split, per NODE. An EgressPolicy (array of
+  // {match -> direct/block/link-out/direction}) validated by EgressPolicySchema
+  // and compiled into routing rules that sit ahead of this node's direction
+  // rules. NULL/absent = no split, so the node renders byte-identical to a plain
+  // cascade member. Per node rather than per position on purpose: a pool is not
+  // required to be homogeneous, and an operator splitting geo usually does it on
+  // one specific box. Stored as JSON (migration-free evolution, mirrors
+  // linkConfig/hardening).
+  egressPolicy Json? @map("egress_policy")
+
   position CascadePosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
   node     Node            @relation(fields: [nodeId], references: [id], onDelete: Restrict)
 
