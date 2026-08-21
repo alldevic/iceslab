@@ -71,7 +71,15 @@ export const ConfigSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
-  GEO_ARTIFACT_TOKEN: z.string().min(16).optional(),
+  // Empty-string → unset, same as PANEL_PUBLIC_IP / ACME_DEFAULT_EMAIL: the
+  // compose passthrough emits `GEO_ARTIFACT_TOKEN=` when the operator leaves
+  // it blank, which is the documented way of asking for the JWT_SECRET-derived
+  // token — and a bare .min(16).optional() would reject "" and crash-loop the
+  // panel on the very default it documents.
+  GEO_ARTIFACT_TOKEN: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(16).optional(),
+  ),
   // Path to a sing-box binary. When set, the geo builder compiles per-category
   // .srs rule-sets (sing-box removed geosite:/geoip: in 1.12, so remote .srs is
   // the only portable vehicle) from the source mirror, self-hosting what the
