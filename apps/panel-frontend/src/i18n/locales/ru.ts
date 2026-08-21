@@ -1498,6 +1498,11 @@ export default {
     splitAddRule: 'Добавить правило',
     splitHint:
       'Совпавший трафик уходит direct / блокируется / идёт тем выходом, который выбрал клиент / принудительно в одно направление — раньше обычной маршрутизации. Пусто = без сплита. Бандл-категории (например category-ru, youtube) работают как есть; кастомные — через ext:-файл из geo-реестра.',
+    splitGeosite: 'Категории доменов (geosite)',
+    splitGeositeHint:
+      'Бандл-имена работают как есть (category-ru, youtube). Кастомная — ext:geo-custom.dat:ИМЯ из geo-реестра.',
+    splitGeoip: 'Категории IP (geoip)',
+    splitDomain: 'Домены списком',
     splitTarget: 'цель',
     targetDirect: 'direct',
     targetLinkOut: 'как выбрано (из каскада)',

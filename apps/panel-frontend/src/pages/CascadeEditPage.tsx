@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { countryFlag } from '../lib/countries';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Box, Stack, Text, TextInput } from '@mantine/core';
 import { modals } from '@mantine/modals';
@@ -336,6 +337,19 @@ export function CascadeEditPage() {
   // behind it yet, and it is not something the balancer can pick.
   const filledDirections = directions.filter((d) => d.nodeIds.some(Boolean)).length;
 
+  // E - ways out a geo rule can force traffic through. Only SAVED directions
+  // qualify: the tag is what the rule stores, and an unsaved row has none yet.
+  const directionChoices = directions
+    .filter((d): d is typeof d & { tag: number } => d.tag != null)
+    .map((d) => ({
+      tag: d.tag,
+      label: `${d.countryCode ? countryFlag(d.countryCode) + ' ' : ''}${
+        d.nodeIds.map((nid) => nodeById.get(nid)?.name).filter(Boolean).join(', ') ||
+        d.countryCode ||
+        `#${d.tag}`
+      }`,
+    }));
+
   return (
     <Stack gap={20}>
       {/* Page bar */}
@@ -513,6 +527,17 @@ export function CascadeEditPage() {
                 usedElsewhere={othersThan(pool.nodeIds)}
                 addNodeLabel={t('cascadeCreate.addNode')}
                 onNodes={(ids) => setPoolNodes(i, ids)}
+                egressPolicies={pool.egressPolicies}
+                directions={directionChoices}
+                onPolicyChange={(nodeId, rules) => {
+                  // Clearing a split REMOVES the key rather than storing an empty
+                  // array: `{}` is what a freshly loaded cascade looks like, and
+                  // `{node: []}` would read as an unsaved edit forever.
+                  const next = { ...(pool.egressPolicies ?? {}) };
+                  if (rules.length > 0) next[nodeId] = rules;
+                  else delete next[nodeId];
+                  setPool(i, { egressPolicies: next });
+                }}
                 entryProtocol={i === 0 ? pool.entryProtocol : null}
                 onEntryProtocol={(v) => setPool(i, { entryProtocol: v })}
                 linkProtocol={pool.linkProtocol}
@@ -945,6 +970,9 @@ function toDraft(
           nodeIds: p.nodeIds.length ? [...p.nodeIds] : [''],
           entryProtocol: (p.entryProtocol ?? 'xray') as CascadeProtocol,
           linkProtocol: (p.linkProtocol ?? 'xray') as CascadeProtocol,
+          // E - the split as saved, so reopening the form shows it instead of
+          // silently clearing it on the next save.
+          egressPolicies: p.egressPolicies ?? {},
         })),
       directions: c.directions.map((d) => ({
         key: key(),

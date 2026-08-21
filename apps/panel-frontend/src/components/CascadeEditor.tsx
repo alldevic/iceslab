@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Select, Stack, Switch, Text, UnstyledButton } from '@mantine/core';
-import type { CascadeMode, CascadeProtocol, Node } from '../lib/api';
+import type { CascadeMode, CascadeProtocol, EgressRule, Node } from '../lib/api';
 import { COUNTRIES, countryFlag } from '../lib/countries';
+import { EgressPolicyEditor, SplitBadge, type DirectionChoice } from './EgressPolicyEditor';
 
 /**
  * The pieces both cascade pages are built from. Creating and editing a cascade
@@ -419,6 +420,9 @@ export interface PositionDraft {
   nodeIds: string[];
   entryProtocol: CascadeProtocol;
   linkProtocol: CascadeProtocol;
+  /** E - geo split per node id. Absent for a position nobody split, which is
+   *  the ordinary case, so every existing draft construction stays valid. */
+  egressPolicies?: Record<string, EgressRule[]>;
 }
 
 export interface DirectionDraft {
@@ -443,12 +447,22 @@ export function poolRoleAt(index: number): HopRole {
 }
 
 export function toPositionInputs(pools: PositionDraft[]) {
-  return pools.map((p, i) => ({
-    nodeIds: p.nodeIds.filter(Boolean),
-    position: i,
-    ...(i === 0 ? { entryProtocol: p.entryProtocol } : {}),
-    linkProtocol: p.linkProtocol,
-  }));
+  return pools.map((p, i) => {
+    const ids = p.nodeIds.filter(Boolean);
+    // Only nodes still in the pool: a policy left behind by a removed node would
+    // be stored against a member that no longer exists, and would come back the
+    // moment that node is added again.
+    const policies = Object.fromEntries(
+      Object.entries(p.egressPolicies ?? {}).filter(([id, rules]) => ids.includes(id) && rules.length > 0),
+    );
+    return {
+      nodeIds: ids,
+      position: i,
+      ...(i === 0 ? { entryProtocol: p.entryProtocol } : {}),
+      linkProtocol: p.linkProtocol,
+      ...(Object.keys(policies).length > 0 ? { egressPolicies: policies } : {}),
+    };
+  });
 }
 
 /**
@@ -483,6 +497,9 @@ export function PoolField({
   meta = 'status',
   addLabel,
   onChange,
+  policies,
+  directions,
+  onPolicyChange,
 }: {
   nodeIds: string[];
   nodes: Node[];
@@ -491,8 +508,15 @@ export function PoolField({
   meta?: 'status' | 'core';
   addLabel: string;
   onChange: (ids: string[]) => void;
+  /** E - per-node geo split. Omit the three together to hide the affordance
+   *  (the directions block has no split of its own). */
+  policies?: Record<string, EgressRule[]>;
+  directions?: DirectionChoice[];
+  onPolicyChange?: (nodeId: string, rules: EgressRule[]) => void;
 }) {
   const rows = nodeIds.length ? nodeIds : [''];
+  const [editing, setEditing] = useState<string | null>(null);
+  const splitEnabled = Boolean(policies && onPolicyChange);
   return (
     <Stack gap={8} style={{ width: '100%' }}>
       {rows.map((id, i) => (
@@ -508,6 +532,9 @@ export function PoolField({
               onChange={(v) => onChange(rows.map((r, j) => (j === i ? v : r)))}
             />
           </Box>
+          {splitEnabled && id && (
+            <SplitBadge count={(policies?.[id] ?? []).length} onClick={() => setEditing(id)} />
+          )}
           {rows.length > 1 && (
             <IconButton onClick={() => onChange(rows.filter((_, j) => j !== i))}>
               <TrashIcon size={14} color={RED} />
@@ -515,6 +542,16 @@ export function PoolField({
           )}
         </Box>
       ))}
+      {splitEnabled && editing && (
+        <EgressPolicyEditor
+          opened
+          nodeLabel={nodes.find((n) => n.id === editing)?.name ?? editing}
+          policy={policies?.[editing] ?? []}
+          directions={directions ?? []}
+          onClose={() => setEditing(null)}
+          onSave={(next) => onPolicyChange?.(editing, next)}
+        />
+      )}
       <DashedAdd label={addLabel} onClick={() => onChange([...rows, ''])} />
     </Stack>
   );
@@ -530,6 +567,9 @@ export function PositionRow({
   usedElsewhere,
   addNodeLabel,
   onNodes,
+  egressPolicies,
+  directions,
+  onPolicyChange,
   entryProtocol,
   onEntryProtocol,
   linkProtocol,
@@ -551,6 +591,10 @@ export function PositionRow({
   usedElsewhere: string[];
   addNodeLabel: string;
   onNodes: (ids: string[]) => void;
+  /** E - per-node geo split, forwarded to the pool. */
+  egressPolicies?: Record<string, EgressRule[]>;
+  directions?: DirectionChoice[];
+  onPolicyChange?: (nodeId: string, rules: EgressRule[]) => void;
   entryProtocol: CascadeProtocol | null;
   onEntryProtocol: (v: CascadeProtocol) => void;
   linkProtocol: CascadeProtocol;
@@ -591,6 +635,9 @@ export function PositionRow({
           meta={role === 'entry' ? 'core' : 'status'}
           addLabel={addNodeLabel}
           onChange={onNodes}
+          policies={egressPolicies}
+          directions={directions}
+          onPolicyChange={onPolicyChange}
         />
         {children}
       </Stack>

@@ -441,6 +441,19 @@ export function CascadeCreatePage() {
                 usedElsewhere={othersThan(pool.nodeIds)}
                 addNodeLabel={t('cascadeCreate.addNode')}
                 onNodes={(ids) => setPoolNodes(i, ids)}
+                egressPolicies={pool.egressPolicies}
+                // No directions yet: their tags are issued on first save, so the
+                // 'force direction' target is unavailable until then.
+                directions={[]}
+                onPolicyChange={(nodeId, rules) => {
+                  // Clearing a split REMOVES the key rather than storing an empty
+                  // array: `{}` is what a freshly loaded cascade looks like, and
+                  // `{node: []}` would read as an unsaved edit forever.
+                  const next = { ...(pool.egressPolicies ?? {}) };
+                  if (rules.length > 0) next[nodeId] = rules;
+                  else delete next[nodeId];
+                  setPool(i, { egressPolicies: next });
+                }}
                 entryProtocol={i === 0 ? pool.entryProtocol : null}
                 onEntryProtocol={(v) => setPool(i, { entryProtocol: v })}
                 linkProtocol={pool.linkProtocol}

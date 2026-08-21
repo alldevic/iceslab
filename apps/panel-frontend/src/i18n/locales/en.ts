@@ -1434,6 +1434,11 @@ export default {
     splitAddRule: 'Add rule',
     splitHint:
       'Matched traffic egresses direct / is blocked / follows the way out the client chose / is forced through one direction — ahead of the default routing. Empty = no split. Bundled categories (e.g. category-ru, youtube) work as-is; custom ones ride an ext: file from the geo registry.',
+    splitGeosite: 'Domain categories (geosite)',
+    splitGeositeHint:
+      'Bundled names work as-is (category-ru, youtube). A custom one is ext:geo-custom.dat:NAME from the Geo registry.',
+    splitGeoip: 'IP categories (geoip)',
+    splitDomain: 'Literal domains',
     splitTarget: 'target',
     targetDirect: 'direct',
     targetLinkOut: 'as chosen (out of the cascade)',
