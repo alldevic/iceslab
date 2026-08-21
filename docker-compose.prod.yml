@@ -148,6 +148,16 @@ services:
       # Safety ceiling on device rows per user, and the login-alert toggle.
       HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
       TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}
+      # Remnawave-compat facade. Off unless ENABLED is true, so the default
+      # deployment is byte-identical to upstream. PREFIX decides where the
+      # facade mounts (/<prefix>/api/*), and the shop is pointed at that URL.
+      # The webhook pair drives the shop's expiry notifications and its 24h
+      # auto-renew charge: set BOTH or neither, a half-configured pair is
+      # silently dead (the panel warns about it at boot).
+      REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
+      REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
+      REMNAWAVE_COMPAT_WEBHOOK_URL: ${REMNAWAVE_COMPAT_WEBHOOK_URL:-}
+      REMNAWAVE_COMPAT_WEBHOOK_SECRET: ${REMNAWAVE_COMPAT_WEBHOOK_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

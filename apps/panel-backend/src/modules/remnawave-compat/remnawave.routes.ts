@@ -123,29 +123,6 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // handler only for facade routes.
   app.setErrorHandler(remnawaveErrorHandler);
 
-  // The minishop sets `Content-Type: application/json` on EVERY request
-  // (_prepare_headers in panel_api_core.py) — including the ones it sends with
-  // no body at all: enable / disable / reset-traffic and DELETE user. Fastify's
-  // stock JSON parser rejects an empty body under that content-type
-  // (FST_ERR_CTP_EMPTY_JSON_BODY), which made every one of those calls fail.
-  // Treat an empty body as `{}` on facade routes so the shop's bodyless
-  // POST/DELETE work as intended; a non-empty body still parses (and still
-  // errors) exactly as before. Encapsulated to this plugin — native routes keep
-  // the stock strict parser.
-  app.addContentTypeParser(
-    'application/json',
-    { parseAs: 'string' },
-    (_req, body: string | Buffer, done) => {
-      const raw = typeof body === 'string' ? body : body.toString('utf8');
-      if (raw.trim().length === 0) return done(null, {});
-      try {
-        done(null, JSON.parse(raw));
-      } catch {
-        done(new RemnaError(400, 'VALIDATION_ERROR', 'Invalid JSON body'), undefined);
-      }
-    },
-  );
-
   // Every authenticated facade route: auth via the native icp_ bearer hook, plus
   // a generous (not disabled) rate limit — this is a trusted server-to-server
   // integration that bursts during user sync, but an uncapped surface would let
@@ -382,7 +359,17 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     const size = Math.min(Math.max(parseInt(q.size ?? '100', 10) || 100, 1), 500);
     const offset = Math.max(parseInt(q.cursor ?? '0', 10) || 0, 0);
     const page = Math.floor(offset / size) + 1;
-    const { users, total } = await usersService.listUsers({ page, limit: size });
+    const { users, total } = await usersService.listUsers({
+      page,
+      limit: size,
+      // Pin the order explicitly: the shop walks these pages to build a
+      // full picture of the panel, so the sort must be stable and identical
+      // across both pagination routes. (Upstream made sort/order required
+      // when it added server-side sorting; this keeps the previous
+      // newest-first ordering the facade has always emitted.)
+      sort: 'createdAt',
+      order: 'desc',
+    });
     const ctx = await mapCtx();
     const nextCursor = users.length < size ? null : String(offset + size);
     return sendResponse(reply, {
@@ -404,7 +391,17 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     const size = Math.min(Math.max(parseInt(q.size ?? '100', 10) || 100, 1), 1000);
     const start = Math.max(parseInt(q.start ?? '0', 10) || 0, 0);
     const page = Math.floor(start / size) + 1;
-    const { users, total } = await usersService.listUsers({ page, limit: size });
+    const { users, total } = await usersService.listUsers({
+      page,
+      limit: size,
+      // Pin the order explicitly: the shop walks these pages to build a
+      // full picture of the panel, so the sort must be stable and identical
+      // across both pagination routes. (Upstream made sort/order required
+      // when it added server-side sorting; this keeps the previous
+      // newest-first ordering the facade has always emitted.)
+      sort: 'createdAt',
+      order: 'desc',
+    });
     const ctx = await mapCtx();
     return sendResponse(reply, { users: users.map((u) => mapUserToRemna(u, ctx)), total });
   });
