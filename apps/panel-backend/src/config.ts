@@ -231,6 +231,21 @@ export const ConfigSchema = z.object({
         : [],
     ),
 
+  // F1 — keyed, rotating entry ordering (fork-only). Off by default: the
+  // subscription's entry order is byte-identical to upstream until this is set.
+  // It pairs with the `subscriptionEntryPoolSize` setting — the cap is what
+  // turns the ordering into a per-user SLICE of the fleet, and keying is what
+  // stops that slice from being recomputable by anyone who learns the node set.
+  // See RendezvousKeying in subscription/node-selection.ts.
+  EXT_DIVERSITY_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // Rotation window in seconds: a user's slice is stable within a window and
+  // moves between windows, so a leaked subscription decays instead of being a
+  // permanent view. Default 86400 = daily.
+  EXT_DIVERSITY_WINDOW_SEC: z.coerce.number().int().min(60).default(86400),
+
   // F2 cold-pool hotswap (fork-only, ext_vptech_pool). When enabled, the panel
   // subscribes a HotswapController to node.anomaly: a sustained-down node is
   // replaced by a diverse cold spare (promote → repoint → retire). Disabled →

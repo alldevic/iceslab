@@ -1,8 +1,10 @@
 import { isRoutingPresetId, type RoutingPresetId } from '@iceslab/shared';
+import { config } from '../../config.js';
 import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
   rankNodesForUser,
+  rendezvousEpoch,
   rendezvousOrder,
   type NodeForRanking,
 } from './node-selection.js';
@@ -606,6 +608,17 @@ export async function generateSubscription(
   // Liveness is already applied by the query above, so this only ever orders
   // nodes that are actually being served.
   const entryPoolSize = (await getSubscriptionSettings()).entryPoolSize ?? ENTRY_POOL_SIZE_DEFAULT;
+  // F1 — keyed + rotating variant of the ordering below. Off by default, and
+  // deliberately so: the ordering also decides which entry most clients dial,
+  // so switching it on moves people once. It earns that only when the pool cap
+  // is on too, because that is when the order stops being cosmetic and starts
+  // deciding WHICH nodes a subscription reveals. See RendezvousKeying.
+  const entryKeying = config.EXT_DIVERSITY_ENABLED
+    ? {
+        salt: config.JWT_SECRET,
+        epoch: rendezvousEpoch(Date.now(), config.EXT_DIVERSITY_WINDOW_SEC),
+      }
+    : undefined;
   if (bindings.length > 0) {
     const byProfile = new Map<string, typeof bindings>();
     for (const b of bindings) {
@@ -621,7 +634,7 @@ export async function generateSubscription(
         regionCode: null,
         maxUsers: n.maxUsers ?? null,
       }));
-      let ranked = rendezvousOrder(nodes, user.id);
+      let ranked = rendezvousOrder(nodes, user.id, entryKeying);
       if (entryPoolSize > 0) ranked = ranked.slice(0, entryPoolSize);
       const rank = new Map(ranked.map((n, i) => [n.id, i]));
       const kept = list.filter((b) => rank.has(b.node.id));

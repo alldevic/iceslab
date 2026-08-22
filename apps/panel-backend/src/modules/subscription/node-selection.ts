@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { redis } from '../../lib/redis.js';
 import { config } from '../../config.js';
 
@@ -91,12 +92,45 @@ function scoreNode(n: NodeForRanking, country: string | null): number {
 export function rendezvousOrder<N extends NodeForRanking>(
   nodes: readonly N[],
   userId: string,
+  keying?: RendezvousKeying,
 ): N[] {
   return nodes
-    .map((n) => ({ n, w: hrwScore(userId, n.id, n.maxUsers ?? DEFAULT_MAX_USERS) }))
+    .map((n) => ({ n, w: hrwScore(userId, n.id, n.maxUsers ?? DEFAULT_MAX_USERS, keying) }))
     // Ties broken by node id so the order is total and reproducible.
     .sort((a, b) => b.w - a.w || (a.n.id < b.n.id ? -1 : 1))
     .map((x) => x.n);
+}
+
+/**
+ * Optional keying for the ordering above (F1). Two things it buys, both of
+ * which matter only when the order is ALSO used to hand out a subset — i.e.
+ * when `subscriptionEntryPoolSize` is on and a subscription therefore reveals
+ * a slice of the fleet rather than all of it:
+ *
+ *   - `salt` (a server-only secret) makes the order unguessable. Unkeyed, the
+ *     ranking is a pure function of (userId, nodeId) — and userId is disclosed
+ *     to the client in the subscription JSON — so anyone who learns the node
+ *     set can recompute EVERY subscriber's slice and reassemble the fleet from
+ *     a handful of leaks. That is the containment the pool cap is there for.
+ *   - `epoch` rotates the slice between windows, so a leaked subscription
+ *     decays in value instead of being a permanent view of those nodes.
+ *
+ * Absent → the unkeyed FNV-1a path below, byte-for-byte the original ordering.
+ * That is deliberate: the ordering also decides which entry a client dials by
+ * default, so turning keying on must be an explicit choice, not a side effect
+ * of upgrading.
+ */
+export interface RendezvousKeying {
+  /** Server-only secret. Never derived from anything the client can see. */
+  salt: string;
+  /** Rotation window index, e.g. floor(now / windowSeconds). */
+  epoch: number;
+}
+
+/** Current rotation window. Pulled out so callers derive it from the clock
+ *  while tests pin it. */
+export function rendezvousEpoch(nowMs: number, windowSec: number): number {
+  return Math.floor(nowMs / Math.max(1, windowSec) / 1000);
 }
 
 /**
@@ -104,14 +138,39 @@ export function rendezvousOrder<N extends NodeForRanking>(
  * uniform (0,1) hash of (user, node), so a heavier node wins proportionally
  * more often without any coordination between requests.
  */
-function hrwScore(userId: string, nodeId: string, weight: number): number {
-  const h = unitHash(`${userId}:${nodeId}`);
+function hrwScore(
+  userId: string,
+  nodeId: string,
+  weight: number,
+  keying?: RendezvousKeying,
+): number {
+  const h = keying
+    ? keyedUnitHash(`${keying.epoch}:${userId}:${nodeId}`, keying.salt)
+    : unitHash(`${userId}:${nodeId}`);
   if (h <= 0 || h >= 1) return 0;
   return -Math.max(weight, 1) / Math.log(h);
 }
 
-/** Stable hash of a string into (0,1). FNV-1a: no crypto needed here, only an
- *  even spread that is identical across processes and restarts. */
+/**
+ * Keyed counterpart of unitHash, for the salted path.
+ *
+ * HMAC-SHA256 rather than salting the FNV below, because here the secret has to
+ * actually hold: FNV-1a is a short multiply/xor chain, not a MAC, and prefixing
+ * a key to its input does not make it one. The cost is one HMAC per (user,
+ * node) — tens per subscription fetch, which is nothing next to the request
+ * itself. It also removes a hazard the unkeyed path has to work around: SHA-256
+ * avalanches fully, so adjacent epochs and adjacent user ids land nowhere near
+ * each other without any extra mixing step.
+ */
+function keyedUnitHash(s: string, salt: string): number {
+  const digest = createHmac('sha256', salt).update(s).digest();
+  // Top 32 bits, same (0,1) mapping as unitHash so both paths score alike.
+  return (digest.readUInt32BE(0) + 0.5) / 4294967296;
+}
+
+/** Stable hash of a string into (0,1). FNV-1a: no crypto needed on the UNKEYED
+ *  path — it only has to spread evenly and identically across processes and
+ *  restarts. See keyedUnitHash for why the salted path does not reuse it. */
 function unitHash(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {

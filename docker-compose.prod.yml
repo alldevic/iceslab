@@ -148,6 +148,10 @@ services:
       # Safety ceiling on device rows per user, and the login-alert toggle.
       HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
       TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}
+      # F1 keyed/rotating entry ordering (fork-only). Off → entry order is
+      # byte-identical to upstream. Only meaningful with the entry-pool cap on.
+      EXT_DIVERSITY_ENABLED: ${EXT_DIVERSITY_ENABLED:-false}
+      EXT_DIVERSITY_WINDOW_SEC: ${EXT_DIVERSITY_WINDOW_SEC:-86400}
       # F2 cold-pool hotswap (fork-only). Off by default: with ENABLED unset the
       # controller is never subscribed and the panel behaves as upstream. The
       # ansible trio is what the promote step shells out to; leaving PLAYBOOK
