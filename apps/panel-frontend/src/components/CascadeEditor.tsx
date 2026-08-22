@@ -4,7 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { Box, Select, Stack, Switch, Text, UnstyledButton } from '@mantine/core';
 import type { CascadeMode, CascadeProtocol, EgressRule, Node } from '../lib/api';
 import { COUNTRIES, countryFlag } from '../lib/countries';
-import { EgressPolicyEditor, SplitBadge, type DirectionChoice } from './EgressPolicyEditor';
+import {
+  EgressPolicyEditor,
+  SplitBadge,
+  type DirectionChoice,
+  type SplitPreviewContext,
+} from './EgressPolicyEditor';
 
 /**
  * The pieces both cascade pages are built from. Creating and editing a cascade
@@ -446,6 +451,38 @@ export function poolRoleAt(index: number): HopRole {
   return index === 0 ? 'entry' : 'transit';
 }
 
+/**
+ * The draft topology around one position, as the split preview needs it.
+ *
+ * `outbounds` is what decides balancer vs plain outbound, and it is NOT a
+ * property of the direction: it is the size of whatever comes next from HERE -
+ * the following position's pool for a transit, the direction's own pool for the
+ * last position. Reading it off the direction alone would show a balancer where
+ * the node dials a single box, and vice versa.
+ *
+ * Directions still without a tag are left out: a rule stores the tag, and an
+ * unsaved direction has none to store.
+ */
+export function splitPreviewContext(
+  pools: { nodeIds: string[] }[],
+  directions: { tag: number | null; nodeIds: string[] }[],
+  index: number,
+): SplitPreviewContext {
+  const filled = (ids: string[]) => ids.filter(Boolean);
+  const isLast = index >= pools.length - 1;
+  const nextPoolSize = isLast ? null : filled(pools[index + 1]!.nodeIds).length;
+  const outbounds: Record<number, number> = {};
+  for (const d of directions) {
+    if (d.tag == null) continue;
+    outbounds[d.tag] = nextPoolSize ?? filled(d.nodeIds).length;
+  }
+  return {
+    position: index,
+    prevNodeIds: index === 0 ? [] : filled(pools[index - 1]!.nodeIds),
+    outbounds,
+  };
+}
+
 export function toPositionInputs(pools: PositionDraft[]) {
   return pools.map((p, i) => {
     const ids = p.nodeIds.filter(Boolean);
@@ -499,6 +536,7 @@ export function PoolField({
   onChange,
   policies,
   directions,
+  preview,
   onPolicyChange,
 }: {
   nodeIds: string[];
@@ -512,6 +550,9 @@ export function PoolField({
    *  (the directions block has no split of its own). */
   policies?: Record<string, EgressRule[]>;
   directions?: DirectionChoice[];
+  /** Where this pool sits in the draft, so the split editor can preview what the
+   *  policy compiles to. Omitted while the shape is not knowable. */
+  preview?: SplitPreviewContext;
   onPolicyChange?: (nodeId: string, rules: EgressRule[]) => void;
 }) {
   const rows = nodeIds.length ? nodeIds : [''];
@@ -548,6 +589,7 @@ export function PoolField({
           nodeLabel={nodes.find((n) => n.id === editing)?.name ?? editing}
           policy={policies?.[editing] ?? []}
           directions={directions ?? []}
+          preview={preview}
           onClose={() => setEditing(null)}
           onSave={(next) => onPolicyChange?.(editing, next)}
         />
@@ -569,6 +611,7 @@ export function PositionRow({
   onNodes,
   egressPolicies,
   directions,
+  splitPreview,
   onPolicyChange,
   entryProtocol,
   onEntryProtocol,
@@ -594,6 +637,8 @@ export function PositionRow({
   /** E - per-node geo split, forwarded to the pool. */
   egressPolicies?: Record<string, EgressRule[]>;
   directions?: DirectionChoice[];
+  /** Draft topology around this position, for the split editor's preview. */
+  splitPreview?: SplitPreviewContext;
   onPolicyChange?: (nodeId: string, rules: EgressRule[]) => void;
   entryProtocol: CascadeProtocol | null;
   onEntryProtocol: (v: CascadeProtocol) => void;
@@ -637,6 +682,7 @@ export function PositionRow({
           onChange={onNodes}
           policies={egressPolicies}
           directions={directions}
+          preview={splitPreview}
           onPolicyChange={onPolicyChange}
         />
         {children}

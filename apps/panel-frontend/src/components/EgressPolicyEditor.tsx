@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Box, Button, Group, Modal, Select, Stack, TagsInput, Text } from '@mantine/core';
+import { Box, Button, Code, Group, Loader, Modal, Select, Stack, TagsInput, Text } from '@mantine/core';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import type { EgressRule, EgressTarget } from '../lib/api';
-import { AMBER, CARD, EDGE, FAINT, HAIRLINE, MIST, MONO, WELL } from './CascadeEditor';
+import { apiErrorMessage, previewGeoPolicy, type EgressRule, type EgressTarget } from '../lib/api';
+import { AMBER, CARD, EDGE, FAINT, HAIRLINE, MIST, MONO, RED, WELL } from './CascadeEditor';
 
 /**
  * Authors the geo split for ONE node.
@@ -18,11 +19,34 @@ import { AMBER, CARD, EDGE, FAINT, HAIRLINE, MIST, MONO, WELL } from './CascadeE
  *   direction  - force one way out, whatever they chose
  * The last one names a direction by TAG, because a tag outlives the nodes
  * currently standing behind it.
+ *
+ * ORDER IS SEMANTICS. xray stops at the FIRST rule whose condition matches, so
+ * two rules over overlapping categories mean different things depending on which
+ * one is above. The list is therefore explicitly ordered and reorderable here -
+ * before this, changing your mind about precedence meant deleting a rule and
+ * retyping it lower down, which is the kind of thing an operator does wrong once
+ * and then does not trust again.
  */
 
 export interface DirectionChoice {
   tag: number;
   label: string;
+}
+
+/**
+ * What the PREVIEW needs and the policy cannot say: where the node sits, who is
+ * on the step behind it, and how many outbounds serve each direction from here
+ * (more than one means the node balances rather than dials).
+ *
+ * Threaded down from the page because only the page holds the draft topology,
+ * and the draft is the point - the preview has to answer for the cascade being
+ * edited, not for the one last saved.
+ */
+export interface SplitPreviewContext {
+  position: number;
+  prevNodeIds: string[];
+  /** direction tag -> outbounds serving it from this node. */
+  outbounds: Record<number, number>;
 }
 
 const EMPTY_RULE: EgressRule = { geosite: [], target: 'direct' };
@@ -39,6 +63,17 @@ function isAdvanced(r: EgressRule): boolean {
   return r.port !== undefined || r.network !== undefined;
 }
 
+/**
+ * Can this rule be compiled as it stands? The preview asks the API to run the
+ * REAL compiler, and the API refuses a policy the save would also refuse - so an
+ * unfinished rule is held back and counted rather than turned into a red error
+ * message that appears mid-keystroke.
+ */
+function previewable(r: EgressRule): boolean {
+  if (r.target === 'direction' && r.directionTag == null) return false;
+  return isAdvanced(r) || hasMatcher(r);
+}
+
 function summarise(r: EgressRule): string {
   const parts = [
     ...(r.geosite ?? []),
@@ -50,11 +85,63 @@ function summarise(r: EgressRule): string {
   return `${head || '—'} → ${r.target}`;
 }
 
+/**
+ * The row above every rule: its position in the match order, and the two arrows
+ * that change it.
+ *
+ * The number is not decoration - xray evaluates rules top to bottom and stops at
+ * the first match, so "#1" is a statement about precedence. Both the plain and
+ * the advanced (API-authored) rule boxes carry this, because an advanced rule
+ * that cannot be edited here can still be in the wrong place.
+ */
+function RuleHead({
+  index,
+  total,
+  onMove,
+}: {
+  index: number;
+  total: number;
+  onMove: (i: number, delta: -1 | 1) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Group gap={6} wrap="nowrap" align="center">
+      <Text size="xs" style={{ color: FAINT, fontFamily: MONO }}>
+        {`#${index + 1}`}
+      </Text>
+      <Box style={{ flex: 1, minWidth: 0 }} />
+      <Button
+        size="compact-xs"
+        variant="subtle"
+        style={{ color: MIST }}
+        disabled={index === 0}
+        title={t('cascades.splitMoveUp')}
+        aria-label={t('cascades.splitMoveUp')}
+        onClick={() => onMove(index, -1)}
+      >
+        ↑
+      </Button>
+      <Button
+        size="compact-xs"
+        variant="subtle"
+        style={{ color: MIST }}
+        disabled={index === total - 1}
+        title={t('cascades.splitMoveDown')}
+        aria-label={t('cascades.splitMoveDown')}
+        onClick={() => onMove(index, 1)}
+      >
+        ↓
+      </Button>
+    </Group>
+  );
+}
+
 export function EgressPolicyEditor({
   opened,
   nodeLabel,
   policy,
   directions,
+  preview,
   onClose,
   onSave,
 }: {
@@ -63,6 +150,8 @@ export function EgressPolicyEditor({
   policy: EgressRule[];
   /** Ways out this cascade currently has, for the `direction` target. */
   directions: DirectionChoice[];
+  /** Omit to hide the compiled-rules preview (nothing to compile against). */
+  preview?: SplitPreviewContext;
   onClose: () => void;
   onSave: (next: EgressRule[]) => void;
 }) {
@@ -79,6 +168,16 @@ export function EgressPolicyEditor({
 
   const patch = (i: number, next: Partial<EgressRule>) =>
     setRules(rules.map((r, j) => (j === i ? { ...r, ...next } : r)));
+
+  /** Swap a rule with its neighbour. Order is the policy's meaning (xray takes
+   *  the first match), so this is an edit like any other, not a view preference. */
+  const move = (i: number, delta: -1 | 1) => {
+    const j = i + delta;
+    if (j < 0 || j >= rules.length) return;
+    const next = [...rules];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    setRules(next);
+  };
 
   // Forcing a direction needs a direction that already has its TAG, and tags are
   // issued server-side on first save. While creating a cascade there are none,
@@ -99,15 +198,26 @@ export function EgressPolicyEditor({
           {t('cascades.splitHint')}
         </Text>
 
+        {rules.length > 1 && (
+          // Said once, above the list, because it explains what the numbers and
+          // the arrows are FOR. Without it the order reads as cosmetic.
+          <Text size="xs" style={{ color: AMBER, lineHeight: 1.5 }}>
+            {t('cascades.splitOrderHint')}
+          </Text>
+        )}
+
         {rules.map((r, i) =>
           isAdvanced(r) ? (
             <Box
               key={i}
               style={{ padding: 12, borderRadius: 8, backgroundColor: WELL, border: `1px solid ${HAIRLINE}` }}
             >
-              <Text size="xs" style={{ color: FAINT, fontFamily: MONO }}>
-                {t('cascades.splitRawRule', { summary: summarise(r) })}
-              </Text>
+              <Stack gap={8}>
+                <RuleHead index={i} total={rules.length} onMove={move} />
+                <Text size="xs" style={{ color: FAINT, fontFamily: MONO }}>
+                  {t('cascades.splitRawRule', { summary: summarise(r) })}
+                </Text>
+              </Stack>
             </Box>
           ) : (
             <Box
@@ -115,6 +225,7 @@ export function EgressPolicyEditor({
               style={{ padding: 12, borderRadius: 8, backgroundColor: CARD, border: `1px solid ${EDGE}` }}
             >
               <Stack gap={8}>
+                <RuleHead index={i} total={rules.length} onMove={move} />
                 <TagsInput
                   size="xs"
                   label={t('cascades.splitGeosite')}
@@ -194,6 +305,8 @@ export function EgressPolicyEditor({
           {t('cascades.splitAddRule')}
         </Button>
 
+        {preview && <CompiledPreview rules={rules} context={preview} />}
+
         <Group justify="flex-end" gap={8}>
           <Button size="xs" variant="subtle" style={{ color: MIST }} onClick={onClose}>
             {t('common.cancel')}
@@ -213,6 +326,124 @@ export function EgressPolicyEditor({
         </Group>
       </Stack>
     </Modal>
+  );
+}
+
+/**
+ * What the draft actually compiles to, as the node will receive it.
+ *
+ * Computed by the SERVER, running the same compiler the push runs, because the
+ * distance between "category-ru -> direct" and a routing rule is where an
+ * operator debugging a split gets stuck - and a second implementation living
+ * here would agree with the node right up until it quietly stopped.
+ *
+ * Collapsed by default: authoring is the common case, and reading xray JSON is
+ * what you do when something is wrong.
+ */
+function CompiledPreview({
+  rules,
+  context,
+}: {
+  rules: EgressRule[];
+  context: SplitPreviewContext;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+
+  // Only complete rules go to the API, which refuses a policy the save would
+  // also refuse. The rest are counted out loud below rather than dropped.
+  const ready = rules.filter(previewable);
+  const incomplete = rules.length - ready.length;
+
+  const body = {
+    policy: ready,
+    position: context.position,
+    prevNodeIds: context.prevNodeIds,
+    directions: Object.entries(context.outbounds).map(([tag, outbounds]) => ({
+      tag: Number(tag),
+      outbounds,
+    })),
+  };
+
+  const query = useQuery({
+    // The whole request is the key: the draft IS the question, so any edit is a
+    // different question and re-asking it is the point.
+    queryKey: ['geo-preview', body],
+    queryFn: () => previewGeoPolicy(body),
+    enabled: open && ready.length > 0,
+    // A preview is a pure function of the draft; nothing on the server moves
+    // underneath it except a geo rebuild, which the operator triggers by hand.
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  return (
+    <Box style={{ padding: 12, borderRadius: 8, backgroundColor: WELL, border: `1px solid ${HAIRLINE}` }}>
+      <Group gap={8} wrap="nowrap" align="center">
+        <Button size="compact-xs" variant="subtle" style={{ color: MIST }} onClick={() => setOpen(!open)}>
+          {open ? `▾ ${t('cascades.splitPreview')}` : `▸ ${t('cascades.splitPreview')}`}
+        </Button>
+        {open && query.isFetching && <Loader size="xs" />}
+      </Group>
+
+      {open && (
+        <Stack gap={8} style={{ marginTop: 8 }}>
+          <Text size="xs" style={{ color: MIST, lineHeight: 1.5 }}>
+            {t('cascades.splitPreviewHint')}
+          </Text>
+
+          {incomplete > 0 && (
+            <Text size="xs" style={{ color: AMBER }}>
+              {t('cascades.splitPreviewIncomplete', { count: incomplete })}
+            </Text>
+          )}
+
+          {ready.length === 0 ? (
+            <Text size="xs" style={{ color: FAINT }}>
+              {t('cascades.splitPreviewEmpty')}
+            </Text>
+          ) : query.isError ? (
+            <Text size="xs" style={{ color: RED }}>
+              {apiErrorMessage(query.error)}
+            </Text>
+          ) : query.data ? (
+            <Stack gap={8}>
+              {/* A matcher the node will never see is the single most common
+                  reason a split "does nothing", so it leads. */}
+              {query.data.dropped.length > 0 && (
+                <Text size="xs" style={{ color: AMBER, lineHeight: 1.5 }}>
+                  {t('cascades.splitPreviewDropped', { matchers: query.data.dropped.join(', ') })}
+                </Text>
+              )}
+              {query.data.domainStrategy && (
+                <Text size="xs" style={{ color: MIST }}>
+                  {t('cascades.splitPreviewStrategy', { strategy: query.data.domainStrategy })}
+                </Text>
+              )}
+              {query.data.rules.length === 0 ? (
+                <Text size="xs" style={{ color: AMBER }}>
+                  {t('cascades.splitPreviewNoRules')}
+                </Text>
+              ) : (
+                <Code
+                  block
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 11,
+                    maxHeight: 260,
+                    overflow: 'auto',
+                    backgroundColor: CARD,
+                    color: FAINT,
+                  }}
+                >
+                  {JSON.stringify(query.data.rules, null, 2)}
+                </Code>
+              )}
+            </Stack>
+          ) : null}
+        </Stack>
+      )}
+    </Box>
   );
 }
 

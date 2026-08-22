@@ -160,6 +160,34 @@ export const UpdateCascadeSchema = z
     }
   });
 
+/**
+ * A dry run of one node's geo split: compile it and hand back the xray rules,
+ * without touching anything.
+ *
+ * Takes the DRAFT rather than a saved cascade id, because the question an
+ * operator has ("what did my rule turn into?") is asked while editing, before
+ * there is anything saved to point at. Everything the compiler cannot infer from
+ * the policy alone is therefore supplied here.
+ */
+export const GeoPreviewSchema = z.object({
+  policy: EgressPolicySchema,
+  /** 0 = the entry. Only the entry can read the client's chosen direction. */
+  position: z.number().int().min(0).max(MAX_CASCADE_HOPS - 1),
+  /** Nodes on the previous position; how a transit tells directions apart. */
+  prevNodeIds: z.array(z.uuid()).max(MAX_CASCADE_LINKS).default([]),
+  directions: z
+    .array(
+      z.object({
+        tag: z.number().int().positive(),
+        /** Outbounds serving this direction from the previewed node, i.e. the
+         *  next step's pool size. More than one means a balancer. */
+        outbounds: z.number().int().min(0).max(MAX_CASCADE_LINKS),
+      }),
+    )
+    .max(MAX_DIRECTION_TAG)
+    .default([]),
+});
+
 export const CascadeIdParamSchema = z.object({ id: z.uuid() });
 
 export type CascadeHopInput = z.infer<typeof CascadeHopSchema>;
@@ -167,3 +195,4 @@ export type CascadePositionInput = z.infer<typeof CascadePositionSchema>;
 export type CascadeDirectionInput = z.infer<typeof CascadeDirectionSchema>;
 export type CreateCascadeInput = z.infer<typeof CreateCascadeSchema>;
 export type UpdateCascadeInput = z.infer<typeof UpdateCascadeSchema>;
+export type GeoPreviewRequest = z.infer<typeof GeoPreviewSchema>;

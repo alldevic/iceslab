@@ -241,6 +241,15 @@ export async function getGeoCategories(): Promise<{ categories: GeoCategorySpec[
   const { data } = await api.get<{ categories: GeoCategorySpec[] }>('/api/geo/categories');
   return data;
 }
+/**
+ * Which cascades route by each custom category, keyed by the UPPERCASED category
+ * name. Only ENABLED cascades count, matching the delete guard exactly - the
+ * panel must not promise a refusal the API would not give.
+ */
+export async function getGeoCategoryUsage(): Promise<{ usage: Record<string, string[]> }> {
+  const { data } = await api.get<{ usage: Record<string, string[]> }>('/api/geo/categories/usage');
+  return data;
+}
 export async function addGeoCategory(input: GeoCategoryInput): Promise<GeoCategorySpec> {
   const { data } = await api.post<GeoCategorySpec>('/api/geo/categories', input);
   return data;
@@ -1326,6 +1335,38 @@ export interface EgressRule {
   target: EgressTarget;
   /** Required for target 'direction': the direction's tag. */
   directionTag?: number;
+}
+
+/**
+ * A dry run of one node's geo split: what the draft policy compiles to, asked
+ * for while editing rather than after saving.
+ *
+ * Everything the compiler cannot infer from the policy alone travels with it,
+ * because the cascade being previewed may not exist yet: which position holds
+ * the node, who sits on the step before it, and how many outbounds serve each
+ * direction (more than one = a balancer).
+ */
+export interface GeoPreviewRequest {
+  policy: EgressRule[];
+  position: number;
+  prevNodeIds: string[];
+  directions: { tag: number; outbounds: number }[];
+}
+
+export interface GeoPreviewResult {
+  /** The xray routing rules the node would receive, in match order. */
+  rules: Record<string, unknown>[];
+  /** routing.domainStrategy the policy forces on the entry, when it needs one. */
+  domainStrategy?: string;
+  /** Matchers stripped before the node ever sees them - a custom category that
+   *  is not built, or is empty in the current build. Usually the answer to "the
+   *  rule is right there and nothing happens". */
+  dropped: string[];
+}
+
+export async function previewGeoPolicy(input: GeoPreviewRequest): Promise<GeoPreviewResult> {
+  const { data } = await api.post<GeoPreviewResult>('/api/cascades/geo/preview', input);
+  return data;
 }
 
 export interface Cascade {

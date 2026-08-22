@@ -53,6 +53,12 @@ export interface CascadeRow {
   squads: { name: string; members: number }[];
   policies: { name: string; ordinal: number }[];
   users: number;
+  /** E - how many of the cascade's nodes carry a geo split, and how many rules
+   *  that is in total. Counted here so both densities can say "this cascade
+   *  splits" without opening the editor: a split changes where traffic leaves,
+   *  and until now the only screen that admitted one existed was the dialog
+   *  that authors it. */
+  split: { nodes: number; rules: number };
 }
 
 interface HopView {
@@ -167,11 +173,22 @@ export function useCascadeRows(cascades: Cascade[], nodes: Node[]): CascadeRow[]
       const reaching = squads.filter((s) => s.profileIds.some((p) => entryProfiles.has(p)));
       const grantedIds = new Set(reaching.flatMap((s) => s.policyIds));
 
+      // Split policies live per NODE inside a position's pool, so the count is
+      // over nodes rather than positions: two split nodes in one pool are two
+      // places where traffic can leave differently.
+      const splitPolicies = cascade.positions.flatMap((p) =>
+        Object.values(p.egressPolicies ?? {}).filter((rules) => rules.length > 0),
+      );
+
       return {
         cascade,
         entry,
         transits,
         directions,
+        split: {
+          nodes: splitPolicies.length,
+          rules: splitPolicies.reduce((sum, rules) => sum + rules.length, 0),
+        },
         todayBytes: entry?.todayBytes ?? null,
         squads: reaching.map((s) => ({ name: s.name, members: s.memberCount })),
         policies: policies
@@ -296,6 +313,7 @@ function CascadeCard({
           {t('cascades.disabled')}
         </Chip>
         <ShapeChip row={row} />
+        <SplitChip split={row.split} />
         <Divider />
         <Box style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           {[entry, ...transits].filter(Boolean).map((h, i) => (
@@ -349,6 +367,7 @@ function CascadeCard({
           {t('cascades.enabled')}
         </Chip>
         <ShapeChip row={row} />
+        <SplitChip split={row.split} />
         <Dot />
         <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>
           {fan ? t('cascades.fanHint', { n: directions.length }) : t('cascades.oneWayHint')}
@@ -612,6 +631,24 @@ function ShapeChip({ row }: { row: CascadeRow }) {
 }
 
 /**
+ * E - "this cascade splits traffic by geo, on N of its nodes".
+ *
+ * Absent when nothing splits, which is the ordinary cascade: a chip on every
+ * row would read as a warning and stop meaning anything. Present, it is the
+ * only thing on these screens that says the path a client sees is not the whole
+ * story about where their traffic leaves.
+ */
+function SplitChip({ split }: { split: { nodes: number; rules: number } }) {
+  const { t } = useTranslation();
+  if (split.nodes === 0) return null;
+  return (
+    <Chip tone={VIOLET} title={t('cascades.splitChipTitle', { count: split.nodes, rules: split.rules })}>
+      geo {split.nodes}
+    </Chip>
+  );
+}
+
+/**
  * One way out, as a line. The direction is what the client picks, so the
  * country and the tag lead; the node under it is a detail that can change
  * without the tag ever moving.
@@ -781,8 +818,9 @@ function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () =>
         {off && <Chip edge small>{t('cascades.off')}</Chip>}
       </Box>
 
-      <Box style={{ width: 120, flexShrink: 0 }}>
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 6, width: 120, flexShrink: 0 }}>
         <ShapeChip row={row} />
+        <SplitChip split={row.split} />
       </Box>
 
       <Box style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1, minWidth: 0, flexWrap: 'wrap' }}>
@@ -1050,15 +1088,20 @@ function Chip({
   edge,
   dot,
   small,
+  title,
 }: {
   children: React.ReactNode;
   tone?: string;
   edge?: boolean;
   dot?: boolean;
   small?: boolean;
+  /** Native tooltip. Lets a chip stay two tokens wide and still say what it
+   *  counts, which is the only way "geo 2" is readable at a glance. */
+  title?: string;
 }) {
   return (
     <Box
+      title={title}
       style={{
         display: 'flex',
         alignItems: 'center',

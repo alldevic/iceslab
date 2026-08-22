@@ -499,7 +499,7 @@ export interface TopologyInput {
 /** Per-direction outbound tag. Unlike the old index-based `-0/-1` suffix this
  *  is stable: it names the DIRECTION, which no longer moves when a neighbour
  *  is deleted. */
-function dirOutTag(directionTag: number, idx: number): string {
+export function dirOutTag(directionTag: number, idx: number): string {
   return `${LINK_OUT_TAG}-d${directionTag}-${idx}`;
 }
 
@@ -534,18 +534,108 @@ function directionCondition(
   isEntry: boolean,
 ): Record<string, unknown> {
   if (isEntry) {
-    const routeTags = [routeTag(0, directionTag - 1)];
-    for (const p of input.policies ?? []) routeTags.push(routeTag(p.ordinal, directionTag - 1));
-    // ⚠ STRING, comma-separated - never an array. xray parses `vlessRoute` with
-    // its port-list parser, so an array of numbers fails the whole config with
-    // "invalid port", and the core then refuses to start at all.
-    return { vlessRoute: routeTags.join(',') };
+    return entryDirectionCondition(
+      directionTag,
+      (input.policies ?? []).map((p) => p.ordinal),
+    );
   }
-  return {
-    user: input.links
+  return transitDirectionCondition(
+    directionTag,
+    input.links
       .filter((l) => l.toNodeId === nodeId && l.directionTag === directionTag)
-      .map((l) => linkClientEmail(l.directionTag, l.fromNodeId)),
+      .map((l) => l.fromNodeId),
+  );
+}
+
+/** The entry half of directionCondition, over the route-policy ordinals alone.
+ *  Split out so the geo PREVIEW can produce the same condition from a draft,
+ *  where there is no TopologyInput to read. */
+export function entryDirectionCondition(
+  directionTag: number,
+  policyOrdinals: number[],
+): Record<string, unknown> {
+  const routeTags = [routeTag(0, directionTag - 1)];
+  for (const ordinal of policyOrdinals) routeTags.push(routeTag(ordinal, directionTag - 1));
+  // ⚠ STRING, comma-separated - never an array. xray parses `vlessRoute` with
+  // its port-list parser, so an array of numbers fails the whole config with
+  // "invalid port", and the core then refuses to start at all.
+  return { vlessRoute: routeTags.join(',') };
+}
+
+/** The transit half of directionCondition, over the ids of the nodes on the
+ *  PREVIOUS position (every one of them links here, once per direction). Split
+ *  out for the same reason as its entry counterpart. */
+export function transitDirectionCondition(
+  directionTag: number,
+  fromNodeIds: string[],
+): Record<string, unknown> {
+  return { user: fromNodeIds.map((from) => linkClientEmail(directionTag, from)) };
+}
+
+/** Where one direction's traffic actually leaves, given the outbounds that serve
+ *  it: a balancer when the next step is a pool, a plain outbound otherwise.
+ *  `balancers` collects the balancer definitions the caller must also emit. */
+export function directionTargetFor(
+  directionTag: number,
+  outboundTags: string[],
+  balancers: Record<string, unknown>[],
+): Record<string, unknown> {
+  // A pool on the next step means several outbounds serve one direction. Let
+  // xray pick by latency rather than pinning the first, which is the whole
+  // point of a pool.
+  if (outboundTags.length > 1) {
+    const balancerTag = `bal-d${directionTag}`;
+    balancers.push({ tag: balancerTag, selector: outboundTags, strategy: { type: 'leastPing' } });
+    return { balancerTag };
+  }
+  return { outboundTag: outboundTags[0]! };
+}
+
+/**
+ * Pass 2 of a node's routing: its geo split, compiled into the rules that go
+ * AHEAD of the plain direction rules so a geo match wins over "wherever the
+ * client pointed".
+ *
+ * Two shapes, because a v4 way out is not one outbound:
+ *   * direct / block / direction  - independent of what the client chose, so
+ *     one rule each, matched on the geo condition alone.
+ *   * link-out - means "the way out this client already chose", which here is
+ *     a different target per direction. It cannot be one prepended rule, so it
+ *     is emitted once PER DIRECTION, carrying that direction's own condition
+ *     (vlessRoute at an entry, the arrival credential at a transit). Emitting
+ *     it as a single rule would silently pin every client to one direction.
+ *
+ * Pulled out of buildTopologyFragmentsForNode so the panel's PREVIEW can show
+ * the operator the very rules the node will get, rather than a second
+ * implementation that agrees with this one until it stops agreeing.
+ */
+export function compileNodeGeoRules(
+  policy: EgressPolicy,
+  /** Where each direction egresses, from pass 1. */
+  dirTargets: Map<number, Record<string, unknown>>,
+  /** How this node recognises traffic bound for a direction. */
+  conditionFor: (directionTag: number) => Record<string, unknown>,
+): Record<string, unknown>[] {
+  const targets: TargetRouting = {
+    direct: { outboundTag: DIRECT_TAG },
+    // `blocked` is the node-agent's base blackhole, always present.
+    block: { outboundTag: 'blocked' },
   };
+  for (const [tag, t] of dirTargets) targets[directionTargetKey(tag)] = t;
+
+  const rules: Record<string, unknown>[] = [];
+  const independent = policy.filter((r) => r.target !== 'link-out');
+  rules.push(...compileEntryGeoRules(independent, targets).rules);
+
+  const followsClient = policy.filter((r) => r.target === 'link-out');
+  if (followsClient.length > 0) {
+    for (const [directionTag, target] of dirTargets) {
+      const compiled = compileEntryGeoRules(followsClient, { 'link-out': target });
+      const condition = conditionFor(directionTag);
+      for (const rule of compiled.rules) rules.push({ ...rule, ...condition });
+    }
+  }
+  return rules;
 }
 
 export function buildTopologyFragmentsForNode(
@@ -623,56 +713,25 @@ export function buildTopologyFragmentsForNode(
   const sortedDirections = [...byDirection.entries()].sort((a, b) => a[0] - b[0]);
   const dirTargets = new Map<number, Record<string, unknown>>();
   for (const [directionTag, tags] of sortedDirections) {
-    // A pool on the next step means several outbounds serve one direction. Let
-    // xray pick by latency rather than pinning the first, which is the whole
-    // point of a pool.
-    let target: Record<string, unknown>;
-    if (tags.length > 1) {
-      const balancerTag = `bal-d${directionTag}`;
-      balancers.push({ tag: balancerTag, selector: tags, strategy: { type: 'leastPing' } });
-      target = { balancerTag };
-      // leastPing needs somebody to measure the pings. Without an observatory
-      // xray refuses the whole config with "not all dependencies are resolved"
-      // and the core never starts - caught by the config-validity test, before
-      // this shape reached a node.
-      needsObservatory = true;
-    } else {
-      target = { outboundTag: tags[0]! };
-    }
+    const target = directionTargetFor(directionTag, tags, balancers);
+    // leastPing needs somebody to measure the pings. Without an observatory
+    // xray refuses the whole config with "not all dependencies are resolved"
+    // and the core never starts - caught by the config-validity test, before
+    // this shape reached a node.
+    if ('balancerTag' in target) needsObservatory = true;
     dirTargets.set(directionTag, target);
   }
 
   // ── Pass 2: this NODE's geo split, ahead of the direction rules so a match
-  // wins over the plain "wherever the client pointed" routing.
-  //
-  // Two shapes, because a v4 way out is not one outbound:
-  //   * direct / block / direction  - independent of what the client chose, so
-  //     one rule each, matched on the geo condition alone.
-  //   * link-out - means "the way out this client already chose", which here is
-  //     a different target per direction. It cannot be one prepended rule, so it
-  //     is emitted once PER DIRECTION, carrying that direction's own condition
-  //     (vlessRoute at an entry, the arrival credential at a transit). Emitting
-  //     it as a single rule would silently pin every client to one direction.
+  // wins over the plain "wherever the client pointed" routing. See
+  // compileNodeGeoRules for why link-out is not one rule.
   const nodePolicy = input.egressPolicies?.get(nodeId);
   if (nodePolicy && nodePolicy.length > 0) {
-    const targets: TargetRouting = {
-      direct: { outboundTag: DIRECT_TAG },
-      // `blocked` is the node-agent's base blackhole, always present.
-      block: { outboundTag: 'blocked' },
-    };
-    for (const [tag, t] of dirTargets) targets[directionTargetKey(tag)] = t;
-
-    const independent = nodePolicy.filter((r) => r.target !== 'link-out');
-    routingRules.push(...compileEntryGeoRules(independent, targets).rules);
-
-    const followsClient = nodePolicy.filter((r) => r.target === 'link-out');
-    if (followsClient.length > 0) {
-      for (const [directionTag, target] of dirTargets) {
-        const { rules } = compileEntryGeoRules(followsClient, { 'link-out': target });
-        const condition = directionCondition(directionTag, nodeId, input, isEntry);
-        for (const rule of rules) routingRules.push({ ...rule, ...condition });
-      }
-    }
+    routingRules.push(
+      ...compileNodeGeoRules(nodePolicy, dirTargets, (directionTag) =>
+        directionCondition(directionTag, nodeId, input, isEntry),
+      ),
+    );
   }
 
   // ── Pass 3: the direction rules themselves.

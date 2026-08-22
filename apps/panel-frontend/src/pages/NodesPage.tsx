@@ -28,6 +28,7 @@ import {
   IconSearch,
   IconServer2,
   IconTrash,
+  IconWorld,
   IconX,
 } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
@@ -533,6 +534,21 @@ export function NodesPage() {
     return m;
   }, [cascadesQuery.data, t]);
 
+  // nodeId -> how many geo-split rules that node carries. Read off the same
+  // cascades query: the policy is stored per NODE inside a position's pool, so a
+  // node's split is its own and does not follow from which cascade it is in.
+  const nodeSplitMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of cascadesQuery.data?.cascades ?? []) {
+      for (const p of c.positions) {
+        for (const [nodeId, rules] of Object.entries(p.egressPolicies ?? {})) {
+          if (rules.length > 0) m.set(nodeId, (m.get(nodeId) ?? 0) + rules.length);
+        }
+      }
+    }
+    return m;
+  }, [cascadesQuery.data]);
+
   // What the cascades carried today: the entry node's traffic, because that is
   // where a client's bytes enter and everything downstream is the same bytes
   // counted again.
@@ -1007,6 +1023,7 @@ export function NodesPage() {
                   address: n.address,
                   regionLabel,
                   cascadeLabel: cascade ? `${cascade.name} · ${cascade.role}` : null,
+                  splitRules: nodeSplitMap.get(n.id) ?? null,
                   coreVersion: n.coreVersion ?? null,
                   // Restart tally + memory headroom of the core. Lives on
                   // /api/nodes, not on the overview blob, so it refreshes on
@@ -1054,6 +1071,7 @@ export function NodesPage() {
                 const accent = STATUS_ACCENT[n.status] ?? MIST;
                 const isOffline = n.status === 'offline' || n.status === 'unreachable';
                 const cascade = nodeCascadeMap.get(n.id);
+                const splitRules = nodeSplitMap.get(n.id) ?? 0;
                 return (
                   <Table.Tr
                     key={n.id}
@@ -1079,6 +1097,13 @@ export function NodesPage() {
                           <Tooltip label={`${cascade.name} · ${cascade.role}`} withArrow>
                             <span style={{ display: 'inline-flex', color: '#A78BFA', flexShrink: 0 }}>
                               <IconRoute size={13} />
+                            </span>
+                          </Tooltip>
+                        )}
+                        {splitRules > 0 && (
+                          <Tooltip label={t('nodes.splitBadgeHint', { count: splitRules })} withArrow>
+                            <span style={{ display: 'inline-flex', color: CYAN, flexShrink: 0 }}>
+                              <IconWorld size={13} />
                             </span>
                           </Tooltip>
                         )}

@@ -41,6 +41,7 @@ import {
   getSourceCategories,
   getSourceCategoryPreview,
   getGeoCategories,
+  getGeoCategoryUsage,
   addGeoCategory,
   updateGeoCategory,
   deleteGeoCategory,
@@ -64,6 +65,10 @@ export function GeoPanel() {
   const sourcesQuery = useQuery({ queryKey: ['geo', 'sources'], queryFn: getGeoSources });
   const categoriesQuery = useQuery({ queryKey: ['geo', 'categories'], queryFn: getGeoCategories });
   const buildQuery = useQuery({ queryKey: ['geo', 'build'], queryFn: getGeoBuild });
+  // Where each category is routed by. Read alongside the list rather than on
+  // demand: the point is that the operator sees it without having to ask, and
+  // the answer is what the delete guard will say if they reach for the bin.
+  const usageQuery = useQuery({ queryKey: ['geo', 'category-usage'], queryFn: getGeoCategoryUsage });
 
   const [srcModal, setSrcModal] = useState<GeoSource | 'new' | null>(null);
   const [catModal, setCatModal] = useState<GeoCategorySpec | 'new' | null>(null);
@@ -310,6 +315,10 @@ export function GeoPanel() {
                         ips: c.manualIps.length,
                       })}
                     </Text>
+                    <CategoryUsage
+                      cascades={usageQuery.data?.usage[c.name.toUpperCase()] ?? []}
+                      loading={usageQuery.isLoading}
+                    />
                   </div>
                   <Group gap={4} wrap="nowrap">
                     <Switch
@@ -327,7 +336,10 @@ export function GeoPanel() {
                       color="red"
                       onClick={() =>
                         deleteGeoCategory(c.id)
-                          .then(() => qc.invalidateQueries({ queryKey: ['geo', 'categories'] }))
+                          .then(() => {
+                            qc.invalidateQueries({ queryKey: ['geo', 'categories'] });
+                            qc.invalidateQueries({ queryKey: ['geo', 'category-usage'] });
+                          })
                           .catch(onError)
                       }
                       aria-label="delete"
@@ -413,12 +425,37 @@ export function GeoPanel() {
           onSaved={() => {
             setCatModal(null);
             qc.invalidateQueries({ queryKey: ['geo', 'categories'] });
+            // A rename moves the category to a different usage key, so the
+            // "used by" line under every row has to be re-read, not just this
+            // one's.
+            qc.invalidateQueries({ queryKey: ['geo', 'category-usage'] });
           }}
           onError={onError}
         />
       )}
       {browseSrc && <SourceCategoriesModal source={browseSrc} onClose={() => setBrowseSrc(null)} />}
     </Stack>
+  );
+}
+
+/**
+ * "Routed by: <cascades>" under a custom category.
+ *
+ * A category is not just a list of domains - it is something a cascade's geo
+ * split may already depend on, and deleting it is refused for exactly that
+ * reason. Saying so here means the operator learns it while reading, not while
+ * being told no. Silence would be ambiguous, so an unused category says so out
+ * loud rather than rendering nothing.
+ */
+function CategoryUsage({ cascades, loading }: { cascades: string[]; loading: boolean }) {
+  const { t } = useTranslation();
+  if (loading) return null;
+  return (
+    <Text size="xs" c={cascades.length > 0 ? 'yellow.6' : 'dimmed'}>
+      {cascades.length > 0
+        ? t('geo.usedBy', { cascades: cascades.join(', ') })
+        : t('geo.usedByNobody')}
+    </Text>
   );
 }
 

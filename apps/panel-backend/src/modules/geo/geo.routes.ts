@@ -11,7 +11,7 @@ import {
   reorderSources,
 } from './geo.sources.js';
 import { listSourceCategories, previewSourceCategory } from './geo.inspect.js';
-import { nodesUsingGeoCategory } from '../cascades/cascade.service.js';
+import { geoCategoryUsage, nodesUsingGeoCategory } from '../cascades/cascade.service.js';
 import {
   addCategory,
   deleteCategory,
@@ -152,6 +152,16 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+  });
+
+  // Where each custom category is routed by, for the whole list at once. Static
+  // path, so it is declared before the `:id` routes and never eaten by them.
+  //
+  // The delete below refuses while a category is in use; this is the same answer
+  // offered BEFORE the operator reaches for delete, because "you cannot do that"
+  // is a worse way to learn where something is used than simply being told.
+  app.get('/api/geo/categories/usage', auth, async (_req, reply) => {
+    return reply.send({ usage: await geoCategoryUsage() });
   });
 
   app.patch('/api/geo/categories/:id', auth, async (req, reply) => {

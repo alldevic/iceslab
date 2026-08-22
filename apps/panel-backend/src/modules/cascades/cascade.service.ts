@@ -3,7 +3,7 @@ import { config } from '../../config.js';
 import { getGeoBuildMeta } from '../geo/geo.registry.js';
 import { geoArtifactBaseUrl } from '../geo/geo.url.js';
 import { GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT } from '../geo/geo.orchestrator.js';
-import { coerceEgressPolicy, type EgressPolicy } from './cascade.geo.js';
+import { coerceEgressPolicy, entryDomainStrategy, type EgressPolicy } from './cascade.geo.js';
 import { cascadeAutoProfileLabel, cascadeProfileLabel } from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
@@ -20,6 +20,11 @@ import {
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
   buildTopologyFragmentsForNode,
+  compileNodeGeoRules,
+  dirOutTag,
+  directionTargetFor,
+  entryDirectionCondition,
+  transitDirectionCondition,
   generateLinkCreds,
   generateTopologyLinks,
   normalizeLinkProtocol,
@@ -175,12 +180,29 @@ export function reconcileEntryGeo(
  * use this to refuse the delete and say where it is used.
  */
 export async function nodesUsingGeoCategory(category: string): Promise<string[]> {
-  const needle = `:${category.toUpperCase()}`;
+  return (await geoCategoryUsage())[category.toUpperCase()] ?? [];
+}
+
+/**
+ * The whole picture behind nodesUsingGeoCategory: every custom category a live
+ * split routes by, mapped to the cascades that name it. Keys are UPPERCASED,
+ * the way the builder normalises category names.
+ *
+ * One scan for every category rather than one scan per category, because the geo
+ * screen wants the answer for the whole list at once. It exists so the operator
+ * learns where a category is used BEFORE reaching for delete - the 409 tells the
+ * truth, but only to somebody who already decided to destroy something.
+ *
+ * Scoped to ENABLED cascades, exactly like the delete guard it backs: a screen
+ * that counted more than the guard refuses would promise a delete would fail
+ * when it succeeds.
+ */
+export async function geoCategoryUsage(): Promise<Record<string, string[]>> {
   const members = await prisma.cascadePositionNode.findMany({
     where: { position: { cascade: { enabled: true } } },
     select: { nodeId: true, egressPolicy: true, position: { select: { cascade: { select: { name: true } } } } },
   });
-  const hits: string[] = [];
+  const usage = new Map<string, Set<string>>();
   for (const m of members) {
     const policy = coerceEgressPolicy(m.egressPolicy);
     if (!policy) continue;
@@ -190,13 +212,102 @@ export async function nodesUsingGeoCategory(category: string): Promise<string[]>
       ...(r.domain ?? []),
       ...(r.ip ?? []),
     ]);
-    // `ext:<file>:<CATEGORY>` — compare on the category, case-insensitively, the
-    // way the builder normalises it.
-    if (refs.some((x) => x.startsWith('ext:') && x.toUpperCase().endsWith(needle))) {
-      hits.push(m.position.cascade.name);
+    for (const ref of refs) {
+      // `ext:<file>:<CATEGORY>` - only an ext: reference names a category the
+      // panel owns. A bundled `geosite:ads` resolves from the node's own
+      // databases and is nothing this registry can break.
+      const e = parseExtMatcher(ref);
+      if (!e) continue;
+      const key = e.cat.toUpperCase();
+      const names = usage.get(key) ?? new Set<string>();
+      names.add(m.position.cascade.name);
+      usage.set(key, names);
     }
   }
-  return [...new Set(hits)];
+  return Object.fromEntries([...usage].map(([cat, names]) => [cat, [...names]]));
+}
+
+/** Every matcher a policy names, flattened. Used to say which ones survive
+ *  reconciliation and which the node will never see. */
+function policyMatchers(policy: EgressPolicy | undefined): string[] {
+  return (policy ?? []).flatMap((r) => [
+    ...(r.geosite ?? []),
+    ...(r.geoip ?? []),
+    ...(r.domain ?? []),
+    ...(r.ip ?? []),
+  ]);
+}
+
+export interface GeoPreviewInput {
+  policy: EgressPolicy;
+  /** Index of the position holding this node. 0 is the entry, and the entry is
+   *  the only hop that can read the client's chosen direction out of its UUID. */
+  position: number;
+  /** Node ids on the position BEFORE this one. Every one of them opens a link
+   *  here per direction, and their credentials are how a transit tells the
+   *  directions apart. Empty at the entry. */
+  prevNodeIds: string[];
+  /** The cascade's directions, with how many outbounds serve each FROM THIS
+   *  NODE - i.e. the size of the next step's pool, since a pool means a
+   *  balancer rather than a single outbound. */
+  directions: { tag: number; outbounds: number }[];
+}
+
+export interface GeoPreviewResult {
+  /** The routing rules the node would receive, in match order. */
+  rules: Record<string, unknown>[];
+  /** The entry's routing.domainStrategy override, when the policy needs one. */
+  domainStrategy?: string;
+  /** Matchers reconciliation removes before the node ever sees them (a custom
+   *  category that is not built, or is empty in the current build). This is the
+   *  usual answer to "the rule is there and nothing happens". */
+  dropped: string[];
+}
+
+/**
+ * What a draft geo policy actually compiles to, for the panel to show BEFORE it
+ * is saved.
+ *
+ * Runs the real compiler (compileNodeGeoRules) over the real reconciliation
+ * (resolveNodeGeo), so the preview cannot drift from what the node gets: the
+ * only thing synthesised here is the topology the draft describes but has not
+ * saved yet - which outbounds serve each direction, and which nodes sit on the
+ * previous step.
+ */
+export async function previewNodeGeo(input: GeoPreviewInput): Promise<GeoPreviewResult> {
+  const { policy: reconciled } = resolveNodeGeo(input.policy);
+  const survived = new Set(policyMatchers(reconciled));
+  const dropped = [...new Set(policyMatchers(input.policy).filter((m) => !survived.has(m)))];
+
+  // Pass 1 of the real builder, over the draft's directions. A direction with no
+  // outbound from here cannot be steered into, so it is left out rather than
+  // given a rule pointing nowhere - exactly what the builder does.
+  const balancers: Record<string, unknown>[] = [];
+  const dirTargets = new Map<number, Record<string, unknown>>();
+  for (const d of [...input.directions].sort((a, b) => a.tag - b.tag)) {
+    if (d.outbounds < 1) continue;
+    const tags = Array.from({ length: d.outbounds }, (_, i) => dirOutTag(d.tag, i));
+    dirTargets.set(d.tag, directionTargetFor(d.tag, tags, balancers));
+  }
+
+  // The entry's direction condition names every route policy's ordinal, so the
+  // ad-blocking variants of a profile steer the same way as the plain one.
+  const ordinals =
+    input.position === 0
+      ? (await prisma.routePolicy.findMany({ select: { ordinal: true } })).map((p) => p.ordinal)
+      : [];
+
+  const rules =
+    reconciled && reconciled.length > 0
+      ? compileNodeGeoRules(reconciled, dirTargets, (tag) =>
+          input.position === 0
+            ? entryDirectionCondition(tag, ordinals)
+            : transitDirectionCondition(tag, input.prevNodeIds),
+        )
+      : [];
+
+  const domainStrategy = entryDomainStrategy(reconciled);
+  return { rules, ...(domainStrategy ? { domainStrategy } : {}), dropped };
 }
 
 /** Per-node policies for one cascade, reconciled against the current geo build.

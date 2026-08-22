@@ -71,6 +71,7 @@ import {
   WarnIcon,
   WELL,
   poolRoleAt,
+  splitPreviewContext,
   statusTone,
   toDirectionInputs,
   toPositionInputs,
@@ -528,6 +529,7 @@ export function CascadeEditPage() {
                 addNodeLabel={t('cascadeCreate.addNode')}
                 onNodes={(ids) => setPoolNodes(i, ids)}
                 egressPolicies={pool.egressPolicies}
+                splitPreview={splitPreviewContext(pools, directions, i)}
                 directions={directionChoices}
                 onPolicyChange={(nodeId, rules) => {
                   // Clearing a split REMOVES the key rather than storing an empty

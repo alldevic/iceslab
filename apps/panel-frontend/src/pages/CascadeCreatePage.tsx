@@ -59,6 +59,7 @@ import {
   CYAN,
   FAINT,
   poolRoleAt,
+  splitPreviewContext,
   toDirectionInputs,
   toPositionInputs,
   type DirectionDraft,
@@ -442,6 +443,7 @@ export function CascadeCreatePage() {
                 addNodeLabel={t('cascadeCreate.addNode')}
                 onNodes={(ids) => setPoolNodes(i, ids)}
                 egressPolicies={pool.egressPolicies}
+                splitPreview={splitPreviewContext(pools, directions, i)}
                 // No directions yet: their tags are issued on first save, so the
                 // 'force direction' target is unavailable until then.
                 directions={[]}

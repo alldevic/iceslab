@@ -820,6 +820,14 @@ export default {
     metricsLoading: 'Метрики ещё не пришли - первый poll в течение 15 сек.',
     bindingsCount: '{{count}} bindings',
     todayLabel: 'сегодня',
+    splitBadge_one: 'geo {{count}}',
+    splitBadge_few: 'geo {{count}}',
+    splitBadge_many: 'geo {{count}}',
+    splitBadge_other: 'geo {{count}}',
+    splitBadgeHint_one: 'Geo-сплит: {{count}} правило решает, куда нода отправит подошедший трафик.',
+    splitBadgeHint_few: 'Geo-сплит: {{count}} правила решают, куда нода отправит подошедший трафик.',
+    splitBadgeHint_many: 'Geo-сплит: {{count}} правил решают, куда нода отправит подошедший трафик.',
+    splitBadgeHint_other: 'Geo-сплит: {{count}} правила решают, куда нода отправит подошедший трафик.',
     table: {
       name: 'Имя',
       address: 'Адрес',
@@ -1513,6 +1521,28 @@ export default {
     splitDirectionTag: 'направление',
     splitRuleEmpty: 'Пока ничего не сопоставляет — при сохранении правило отбрасывается.',
     splitRawRule: 'Расширенное правило (правится через API): {{summary}}',
+    splitOrderHint:
+      'Порядок значим: нода применяет ПЕРВОЕ подошедшее правило и дальше не смотрит. Узкие правила держите выше широких.',
+    splitMoveUp: 'Поднять правило',
+    splitMoveDown: 'Опустить правило',
+    splitChipTitle_one: 'Geo-сплит на {{count}} ноде ({{rules}} правил)',
+    splitChipTitle_few: 'Geo-сплит на {{count}} нодах ({{rules}} правил)',
+    splitChipTitle_many: 'Geo-сплит на {{count}} нодах ({{rules}} правил)',
+    splitChipTitle_other: 'Geo-сплит на {{count}} нодах ({{rules}} правил)',
+    splitPreview: 'Скомпилированные правила',
+    splitPreviewHint:
+      'Во что политика превращается на ноде, в порядке сопоставления. Считает тот же компилятор, что и пуш.',
+    splitPreviewEmpty: 'Пока нечего компилировать — добавьте правило.',
+    splitPreviewNoRules:
+      'Политика компилируется в ноль правил: сопоставлять нечего или направлять некуда.',
+    splitPreviewIncomplete_one: '{{count}} незаконченное правило не показано (выберите направление или добавьте матчер).',
+    splitPreviewIncomplete_few: '{{count}} незаконченных правила не показаны (выберите направление или добавьте матчер).',
+    splitPreviewIncomplete_many: '{{count}} незаконченных правил не показаны (выберите направление или добавьте матчер).',
+    splitPreviewIncomplete_other: '{{count}} незаконченных правила не показаны (выберите направление или добавьте матчер).',
+    splitPreviewDropped:
+      'Этих матчеров нода не увидит — кастомная категория не собрана или пуста в текущей сборке: {{matchers}}',
+    splitPreviewStrategy:
+      'Вход переключит routing.domainStrategy на {{strategy}}, иначе IP-правила не сработают.',
     removeRule: 'Удалить правило',
     linkHint:
       'Протокол линка shadowsocks = SS2022 (нативный UDP, без head-of-line blocking для войса; AEAD-шифрование). vless = plaintext raw-линк. Межхоповый линк доверенный DC↔DC, обход DPI на нём не нужен.',
@@ -1527,6 +1557,8 @@ export default {
     categoriesEmpty:
       'Нет. Кастом-категория объединяет выбранные категории из источников плюс ручные домены/IP в один ext:-набор.',
     refsSummary: '{{refs}} ссылок · {{domains}} доменов · {{ips}} IP',
+    usedBy: 'Используется в каскадах: {{cascades}}',
+    usedByNobody: 'Ни один каскад по ней не маршрутизирует — можно удалять.',
     build: 'Сборка',
     rebuild: 'Пересобрать',
     notBuilt: 'Ещё не собрано. Пересборка скачивает все включённые источники и компилит артефакты.',
