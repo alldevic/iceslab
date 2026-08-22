@@ -94,6 +94,14 @@ export interface RemnaMapCtx {
  * token, used consistently as id and as the /sub URL tail). `squadNames` maps a
  * groupId → its display name for `activeInternalSquads`; a missing name falls
  * back to the id.
+ *
+ * IDENTITY IS `id`, AND `uuid` IS DELIBERATELY ABSENT. Remnawave 3.0 dropped
+ * `uuid` from the user object; the client restores its own historical `uuid` key
+ * from the numeric `id` when none is present, but PREFERS a `uuid` that IS
+ * present. Echoing our native UUID here would therefore make the client adopt an
+ * identifier that its own 3.x guard then refuses to send — every user-scoped
+ * call for that subscriber would fail locally, with no request and no error to
+ * see. Squad/node/host/subscription ids stay UUIDs: 3.x only renumbered users.
  */
 export function mapUserToRemna(
   dto: PublicUserDto,
@@ -103,7 +111,10 @@ export function mapUserToRemna(
   const usedBytes = dto.trafficUsedBytes;
   const lifetimeBytes = dto.lifetimeTrafficBytes;
   return {
-    uuid: dto.id,
+    // Number, not string: the client validates this as an integer id and a
+    // quoted value would read as a 2.x-style reference. Safe — the column is a
+    // sequence and parseUserRef bounds it to 2^53.
+    id: Number(dto.numericId),
     subscriptionUuid: dto.subscriptionToken,
     shortUuid: dto.subscriptionToken,
     username: dto.username,

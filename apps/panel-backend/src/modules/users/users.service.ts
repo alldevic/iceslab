@@ -175,7 +175,16 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
   return mapUserToPublic(user, user.traffic);
 }
 
-export async function listUsers(query: ListUsersQuery): Promise<{
+/** Filters the native HTTP query has no field for, supplied by internal callers
+ *  only. The Remnawave facade needs exact telegramId/email lookups; widening the
+ *  public query schema for them would put two near-identical search knobs on the
+ *  admin API, where `search` already covers the human case. */
+export interface InternalUserFilters {
+  telegramId?: bigint;
+  email?: string;
+}
+
+export async function listUsers(query: ListUsersQuery & InternalUserFilters): Promise<{
   users: PublicUserDto[];
   total: number;
   page: number;
@@ -188,6 +197,19 @@ export async function listUsers(query: ListUsersQuery): Promise<{
     page: query.page,
     limit: query.limit,
   };
+}
+
+/**
+ * Resolve a user by their NUMERIC handle (Remnawave-compat), or null when no
+ * such user exists. Returns null rather than throwing because the only caller
+ * is a facade route translating an identifier it did not issue: "no such user"
+ * is an ordinary answer there, not an exception.
+ */
+export async function findUserByNumericId(
+  numericId: bigint,
+): Promise<PublicUserDto | null> {
+  const user = await repo.findActiveByNumericId(numericId);
+  return user ? mapUserToPublic(user, user.traffic) : null;
 }
 
 export async function getUserById(id: string): Promise<PublicUserDto> {

@@ -14,7 +14,9 @@ const PREFIX = 'rw';
 const bearer = (tok: string) => ({ authorization: `Bearer ${tok}` });
 const adminToken = `icp_rwprobe_${Date.now()}`;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
-const createdUserIds: string[] = [];
+// Users are tracked by the NUMERIC reference the facade hands out — the
+// native uuid is no longer on the wire in the 3.x shape.
+const createdUserRefs: number[] = [];
 
 // Valid 8-4-4-4-12 hex shape (passes PermissiveUuid) but no such Group row.
 const GHOST_SQUAD = '11111111-1111-4111-8111-111111111111';
@@ -33,10 +35,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (createdUserIds.length) {
-    await prisma.groupMember.deleteMany({ where: { userId: { in: createdUserIds } } });
-    await prisma.userTraffic.deleteMany({ where: { userId: { in: createdUserIds } } });
-    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  if (createdUserRefs.length) {
+    await prisma.groupMember.deleteMany({ where: { user: { numericId: { in: createdUserRefs.map((n) => BigInt(n)) } } } });
+    await prisma.userTraffic.deleteMany({ where: { user: { numericId: { in: createdUserRefs.map((n) => BigInt(n)) } } } });
+    await prisma.user.deleteMany({ where: { numericId: { in: createdUserRefs.map((n) => BigInt(n)) } } });
   }
   await prisma.apiToken.deleteMany({ where: { tokenHash: sha(adminToken) } });
   await app.close();
@@ -50,7 +52,7 @@ const get = (url: string) => app.inject({ method: 'GET', url: `/${PREFIX}/api/${
 
 async function mk(body: Record<string, unknown>) {
   const res = await post('users', body);
-  if (res.statusCode === 200) createdUserIds.push(res.json().response.uuid);
+  if (res.statusCode === 200) createdUserRefs.push(res.json().response.id);
   return res;
 }
 
@@ -59,14 +61,20 @@ describe('R6 empirical: full lifecycle sequence', () => {
     const tg = String(Date.now()).slice(-9);
     const c = await mk({ username: `probe_life_${Date.now()}`, telegramId: tg, trafficLimitBytes: 13_237_418_240 });
     expect(c.statusCode).toBe(200);
-    const uuid = c.json().response.uuid;
-    expect((await get(`users/${uuid}`)).statusCode).toBe(200);
-    expect((await patch({ uuid, trafficLimitBytes: 61_424_509_440 })).statusCode).toBe(200);
-    expect((await post(`users/${uuid}/actions/disable`, {})).json().response.status).toBe('DISABLED');
-    expect((await post(`users/${uuid}/actions/enable`, {})).json().response.status).toBe('ACTIVE');
-    expect((await post(`users/${uuid}/actions/reset-traffic`, {})).statusCode).toBe(200);
-    expect(Array.isArray((await get(`users/by-telegram-id/${tg}`)).json().response)).toBe(true);
-    expect((await app.inject({ method: 'DELETE', url: `/${PREFIX}/api/users/${uuid}`, headers: bearer(adminToken) })).statusCode).toBe(200);
+    const ref = c.json().response.id;
+    expect((await get(`users/${ref}`)).statusCode).toBe(200);
+    expect((await patch({ id: ref, trafficLimitBytes: 61_424_509_440 })).statusCode).toBe(200);
+    expect((await post(`users/${ref}/actions/disable`, {})).json().response.status).toBe('DISABLED');
+    expect((await post(`users/${ref}/actions/enable`, {})).json().response.status).toBe('ACTIVE');
+    expect((await post(`users/${ref}/actions/reset-traffic`, {})).statusCode).toBe(200);
+    // Revoke hands out a NEW subscription link; the old one must stop being echoed.
+    const beforeUrl = (await get(`users/${ref}`)).json().response.subscriptionUrl;
+    const revoked = await post(`users/${ref}/actions/revoke`, {});
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json().response.subscriptionUrl).not.toBe(beforeUrl);
+    // 3.x lookup is the filtered stream, not the removed by-telegram-id route.
+    expect((await get(`users/stream?size=50&telegramId=${tg}`)).json().response.users.length).toBe(1);
+    expect((await app.inject({ method: 'DELETE', url: `/${PREFIX}/api/users/${ref}`, headers: bearer(adminToken) })).statusCode).toBe(200);
   });
 });
 
@@ -79,16 +87,18 @@ describe('R6 empirical: nonexistent-squad reference (operator-misconfigured USER
 
   it('PATCH activeInternalSquads to a nonexistent squad → clean 4xx, NOT 500', async () => {
     const c = await mk({ username: `probe_ghost2_${Date.now()}` });
-    const uuid = c.json().response.uuid;
-    const res = await patch({ uuid, activeInternalSquads: [GHOST_SQUAD] });
+    const ref = c.json().response.id;
+    const res = await patch({ id: ref, activeInternalSquads: [GHOST_SQUAD] });
     expect(res.statusCode).not.toBe(500);
     expect([400, 404, 422]).toContain(res.statusCode);
   });
 
-  it('bulk add-users to a nonexistent squad → NOT 500', async () => {
+  it('bulk add-many-users to a nonexistent squad → NOT 500', async () => {
     const c = await mk({ username: `probe_ghost3_${Date.now()}` });
-    const uuid = c.json().response.uuid;
-    const res = await post(`internal-squads/${GHOST_SQUAD}/bulk-actions/add-users`, { userUuids: [uuid] });
+    const ref = c.json().response.id;
+    const res = await post(`internal-squads/${GHOST_SQUAD}/bulk-actions/add-many-users`, {
+      userIds: [ref],
+    });
     expect(res.statusCode).not.toBe(500);
   });
 });
@@ -119,7 +129,7 @@ describe('R6 empirical: concurrency', () => {
   it('parallel create of the SAME username → exactly one 200, others 409 A019 (no 500)', async () => {
     const username = `probe_race_${Date.now()}`;
     const results = await Promise.all(Array.from({ length: 5 }, () => post('users', { username })));
-    for (const r of results) if (r.statusCode === 200) createdUserIds.push(r.json().response.uuid);
+    for (const r of results) if (r.statusCode === 200) createdUserRefs.push(r.json().response.id);
     const codes = results.map((r) => r.statusCode);
     expect(codes.filter((c) => c === 200)).toHaveLength(1);
     expect(codes.filter((c) => c === 500)).toHaveLength(0);

@@ -22,6 +22,7 @@ import {
   type RemnaMapCtx,
 } from './remnawave.mappers.js';
 import { RemnaError, sendResponse, remnawaveErrorHandler } from './remnawave.http.js';
+import { parseUserRef, resolveUserId, resolveUserRef } from './remnawave.identity.js';
 
 // Same include the users repository uses, so mapUserToPublic sees traffic +
 // group membership for the facade's direct lookups (by-telegram-id/email/username).
@@ -29,6 +30,30 @@ const USER_INCLUDE = {
   traffic: true,
   groupMembers: { select: { groupId: true } },
 } as const;
+
+/**
+ * The Remnawave API version this facade claims at GET /system/metadata.
+ *
+ * Its MAJOR is the load-bearing part: the client derives the user-identity model
+ * and the whole route set from it, so changing this to a 2.x string silently
+ * re-points every user-scoped call at an identity this facade no longer emits.
+ * The exact value is the client's certified preset for the 3.x generation, which
+ * keeps us on its tested matrix instead of in best-effort mode.
+ */
+const REMNAWAVE_API_VERSION = '3.3.2';
+
+/** A telegram id from a stream filter, or null when it is not one. Separate from
+ *  parseUserRef despite the similar shape: a telegram id is Telegram's number,
+ *  not ours, and tying the two together would silently couple our identity
+ *  bounds to theirs. */
+function parseTelegramId(raw: string): bigint | null {
+  return /^[0-9]{1,19}$/.test(raw) ? BigInt(raw) : null;
+}
+
+/** A telegramId no row can hold, for a filter that failed to parse — see the
+ *  stream route for why an unparseable filter must match nothing rather than
+ *  fall away. */
+const NO_SUCH_ID = -1n;
 
 // "Online now" window — the same 3 min the dashboard uses, so the facade's
 // per-node counts agree with the panel's global "online now".
@@ -103,17 +128,25 @@ const RemnaCreateSchema = z
 // therefore 400'd every real update (activation/extension/topup/traffic-package/
 // trial/squad-sync) → the shop read None → it rolled back the paid activation.
 // uuid is required; username (and everything else) is optional here.
+// The 3.x selector is the integer `id`; the client pops `uuid` and sets `id`
+// once it has detected a numeric-identity panel. `uuid` is still accepted so a
+// 2.x-shaped body (a stale in-flight request during a restart, or a hand-made
+// call) is answered rather than 400'd — resolveUserRef rejects it as "no such
+// user" if it is not in fact a numeric reference.
 const RemnaUpdateSchema = RemnaCreateSchema.extend({
-  uuid: z.string(),
+  id: z.union([z.number().int(), z.string()]).optional(),
+  uuid: z.string().optional(),
   username: z.string().optional(),
+}).refine((b) => b.id !== undefined || b.uuid !== undefined, {
+  message: 'update needs a user selector (id)',
 });
 
-// Bulk squad membership: cap the array so one request can't fan out into an
-// unbounded number of per-user DB writes (each id = a getUserById + updateUser).
+// Bulk squad membership. The 3.x selector is `userIds` (numeric); the cap
+// matches the client's own chunk size, and exists so one request can't fan out
+// into an unbounded number of per-user DB writes (each id = a lookup + update).
 const BulkUsersSchema = z
   .object({
-    users: z.array(z.string()).max(1000).optional(),
-    userUuids: z.array(z.string()).max(1000).optional(),
+    userIds: z.array(z.union([z.number().int(), z.string()])).max(1000).optional(),
   })
   .loose();
 
@@ -316,33 +349,54 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     const nativeStatus = statusToNative(body.status);
     if (nativeStatus !== undefined) patch.status = nativeStatus;
 
-    const dto = await usersService.updateUser(body.uuid, UpdateUserSchema.parse(patch));
+    const userId = await resolveUserId(
+      body.id !== undefined ? String(body.id) : body.uuid,
+    );
+    const dto = await usersService.updateUser(userId, UpdateUserSchema.parse(patch));
     return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
   });
 
   // enable / disable / reset-traffic
-  app.post('/api/users/:uuid/actions/enable', opts, async (request, reply) => {
-    const { uuid } = request.params as { uuid: string };
-    const dto = await usersService.updateUser(uuid, UpdateUserSchema.parse({ status: 'active' }));
+  app.post('/api/users/:ref/actions/enable', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    const userId = await resolveUserId(ref);
+    const dto = await usersService.updateUser(userId, UpdateUserSchema.parse({ status: 'active' }));
     return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
   });
 
-  app.post('/api/users/:uuid/actions/disable', opts, async (request, reply) => {
-    const { uuid } = request.params as { uuid: string };
-    const dto = await usersService.updateUser(uuid, UpdateUserSchema.parse({ status: 'disabled' }));
+  app.post('/api/users/:ref/actions/disable', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    const userId = await resolveUserId(ref);
+    const dto = await usersService.updateUser(userId, UpdateUserSchema.parse({ status: 'disabled' }));
     return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
   });
 
-  app.post('/api/users/:uuid/actions/reset-traffic', opts, async (request, reply) => {
-    const { uuid } = request.params as { uuid: string };
-    const dto = await usersService.resetUserTraffic(uuid);
+  app.post('/api/users/:ref/actions/reset-traffic', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    const dto = await usersService.resetUserTraffic(await resolveUserId(ref));
+    return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
+  });
+
+  // POST /api/users/:ref/actions/revoke — hand the subscriber a fresh link.
+  //
+  // Native `rotateSubscription` is exactly Remnawave's revoke: it issues a new
+  // subscription token (so the old URL stops resolving) and clears any standing
+  // revoke, so the link in the echoed `subscriptionUrl` is live. NOT native
+  // `revokeSubscription`, which only stamps sub_revoked_at — that kills the link
+  // without minting a replacement, and the shop shows the user the dead one.
+  //
+  // The shop deletes the user's HWID devices itself before calling this, so the
+  // device limit does not have to be cleared here.
+  app.post('/api/users/:ref/actions/revoke', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    const dto = await usersService.rotateSubscription(await resolveUserId(ref));
     return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
   });
 
   // DELETE /api/users/:uuid — soft delete (minishop only checks `not error`).
-  app.delete('/api/users/:uuid', opts, async (request, reply) => {
-    const { uuid } = request.params as { uuid: string };
-    await usersService.deleteUser(uuid);
+  app.delete('/api/users/:ref', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    await usersService.deleteUser(await resolveUserId(ref));
     return sendResponse(reply, { deleted: true });
   });
 
@@ -352,14 +406,33 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // prefers them over the `:uuid` param at the same depth.
 
   // GET /api/users/stream — cursor pagination (cursor = numeric offset).
+  //
+  // FILTERS ARE NOT OPTIONAL HERE. In 3.x the stream replaces the by-telegram-id
+  // and by-email lookup routes, and the client has no fallback for it: once it
+  // knows the panel is 3.x, a failing stream is logged as an error and the read
+  // is abandoned rather than retried against /users. Ignoring the filter would
+  // technically still work — the client re-checks every row it receives — but a
+  // single telegram lookup would then page the entire user table.
   app.get('/api/users/stream', opts, async (request, reply) => {
-    const q = request.query as { size?: string; cursor?: string };
+    const q = request.query as {
+      size?: string;
+      cursor?: string;
+      telegramId?: string;
+      email?: string;
+    };
     const size = Math.min(Math.max(parseInt(q.size ?? '100', 10) || 100, 1), 500);
     const offset = Math.max(parseInt(q.cursor ?? '0', 10) || 0, 0);
     const page = Math.floor(offset / size) + 1;
+    // An unparseable telegramId is pinned to a value no row can hold rather than
+    // dropped: dropping it would widen the query to EVERY user and the client
+    // would take that page as the lookup's answer.
+    const telegramId =
+      q.telegramId === undefined ? undefined : (parseTelegramId(q.telegramId) ?? NO_SUCH_ID);
     const { users, total } = await usersService.listUsers({
       page,
       limit: size,
+      ...(telegramId !== undefined ? { telegramId } : {}),
+      ...(q.email !== undefined ? { email: q.email } : {}),
       // Pin the order explicitly: the shop walks these pages to build a
       // full picture of the panel, so the sort must be stable and identical
       // across both pagination routes. (Upstream made sort/order required
@@ -404,33 +477,10 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     return sendResponse(reply, { users: users.map((u) => mapUserToRemna(u, ctx)), total });
   });
 
-  // GET /api/users/by-telegram-id/:tg — array (Remnawave allows many per tg).
-  app.get('/api/users/by-telegram-id/:tg', opts, async (request, reply) => {
-    const { tg } = request.params as { tg: string };
-    let tgId: bigint;
-    try {
-      tgId = BigInt(tg);
-    } catch {
-      return sendResponse(reply, []);
-    }
-    const rows = await prisma.user.findMany({
-      where: { telegramId: tgId, deletedAt: null },
-      include: USER_INCLUDE,
-    });
-    const ctx = await mapCtx();
-    return sendResponse(reply, rows.map((u) => mapUserToRemna(mapUserToPublic(u, u.traffic), ctx)));
-  });
-
-  // GET /api/users/by-email/:email — array.
-  app.get('/api/users/by-email/:email', opts, async (request, reply) => {
-    const { email } = request.params as { email: string };
-    const rows = await prisma.user.findMany({
-      where: { email, deletedAt: null },
-      include: USER_INCLUDE,
-    });
-    const ctx = await mapCtx();
-    return sendResponse(reply, rows.map((u) => mapUserToRemna(mapUserToPublic(u, u.traffic), ctx)));
-  });
+  // by-telegram-id and by-email are 2.x-only routes: in 3.x the client looks a
+  // user up by streaming with a filter (see /api/users/stream above) and never
+  // calls these, so serving them would be dead surface. by-username stays — it
+  // is unchanged across both generations.
 
   // GET /api/users/by-username/:username — single dict; A062 when absent so the
   // minishop treats it as "no such user" rather than an error.
@@ -445,10 +495,9 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   });
 
   // GET /api/users/:uuid — single dict.
-  app.get('/api/users/:uuid', opts, async (request, reply) => {
-    const { uuid } = request.params as { uuid: string };
-    const dto = await usersService.getUserById(uuid); // throws UserNotFoundError → 404
-    return sendResponse(reply, mapUserToRemna(dto, await mapCtx()));
+  app.get('/api/users/:ref', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    return sendResponse(reply, mapUserToRemna(await resolveUserRef(ref), await mapCtx()));
   });
 
   // ─────────────── Squads (internal + external) ───────────────
@@ -497,53 +546,57 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     sendResponse(reply, await accessibleNodesForSquad((request.params as { uuid: string }).uuid)),
   );
 
-  // POST /api/internal-squads/:uuid/bulk-actions/add-users — membership is a
-  // full-set replacement of groupIds on the user; add = read-modify-write.
+  // POST /api/internal-squads/:uuid/bulk-actions/add-many-users — membership is
+  // a full-set replacement of groupIds on the user; add = read-modify-write.
   // Adding a real squad drops the no-access group (they're mutually exclusive).
-  app.post('/api/internal-squads/:uuid/bulk-actions/add-users', opts, async (request, reply) => {
+  //
+  // `add-many-users` is the 3.x spelling, and it is NOT optional the way the
+  // other 3.x-only routes are: the client has no per-user fallback for it once
+  // it holds numeric ids, so a 404 here does not degrade squad assignment, it
+  // stops it. (The 2.x route was `add-users`, which meant ALL users and which
+  // the client therefore never calls — serving it was dead surface.)
+  app.post('/api/internal-squads/:uuid/bulk-actions/add-many-users', opts, async (request, reply) => {
     // Normalise the target the same way as create/PATCH: a case-variant uuid
     // would miss the "already a member" check and then collide on the
     // group_members PK (500), and the system groups are never a valid target.
     const [uuid] = normalizeSquadIds([(request.params as { uuid: string }).uuid]);
     const body = BulkUsersSchema.parse(request.body ?? {});
-    const userIds = body.userUuids ?? body.users ?? [];
-    for (const userId of userIds) {
-      try {
-        const dto = await usersService.getUserById(userId);
-        const base = realSquadsOf(dto);
-        if (uuid && base.includes(uuid)) continue;
-        await usersService.updateUser(userId, UpdateUserSchema.parse({ groupIds: [...base, uuid] }));
-      } catch (err) {
-        if (err instanceof usersService.UserNotFoundError) continue;
-        throw err;
-      }
+    const refs = body.userIds ?? [];
+    let affected = 0;
+    for (const ref of refs) {
+      // A reference this panel never issued is skipped, not fatal: the client
+      // sends a whole chunk and an error would abandon the rest of it.
+      const dto = await resolveUserRef(String(ref)).catch(() => null);
+      if (!dto) continue;
+      const base = realSquadsOf(dto);
+      if (uuid && base.includes(uuid)) continue;
+      await usersService.updateUser(dto.id, UpdateUserSchema.parse({ groupIds: [...base, uuid] }));
+      affected += 1;
     }
-    return sendResponse(reply, { affected: userIds.length });
+    return sendResponse(reply, { affected });
   });
 
   // DELETE /api/internal-squads/:uuid/bulk-actions/remove-users — removing the
   // last squad drops the user into the no-access group (not the "All" squad).
-  app.delete('/api/internal-squads/:uuid/bulk-actions/remove-users', opts, async (request, reply) => {
+  app.delete('/api/internal-squads/:uuid/bulk-actions/remove-many-users', opts, async (request, reply) => {
     const [uuid] = normalizeSquadIds([(request.params as { uuid: string }).uuid]);
     const body = BulkUsersSchema.parse(request.body ?? {});
-    const userIds = body.userUuids ?? body.users ?? [];
-    for (const userId of userIds) {
-      try {
-        const dto = await usersService.getUserById(userId);
-        if (!dto.groupIds.includes(uuid!)) continue;
-        // Drop the removed squad AND any system group, then backstop: losing
-        // your last real squad must land in no-access, never in "All".
-        const next = realSquadsOf(dto).filter((g) => g !== uuid);
-        await usersService.updateUser(
-          userId,
-          UpdateUserSchema.parse({ groupIds: await withNoAccessFallback(next) }),
-        );
-      } catch (err) {
-        if (err instanceof usersService.UserNotFoundError) continue;
-        throw err;
-      }
+    const refs = body.userIds ?? [];
+    let affected = 0;
+    for (const ref of refs) {
+      const dto = await resolveUserRef(String(ref)).catch(() => null);
+      if (!dto) continue;
+      if (!dto.groupIds.includes(uuid!)) continue;
+      // Drop the removed squad AND any system group, then backstop: losing
+      // your last real squad must land in no-access, never in "All".
+      const next = realSquadsOf(dto).filter((g) => g !== uuid);
+      await usersService.updateUser(
+        dto.id,
+        UpdateUserSchema.parse({ groupIds: await withNoAccessFallback(next) }),
+      );
+      affected += 1;
     }
-    return sendResponse(reply, { affected: userIds.length });
+    return sendResponse(reply, { affected });
   });
 
   // GET /api/external-squads/:uuid — iceslab has no external-squad entity; the
@@ -581,12 +634,26 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     sendResponse(reply, {}),
   );
 
-  // ─────────────── System / tools ───────────────
+  // ─────────────── System / metadata ───────────────
 
-  // happ link encryption — unsupported; a 404 makes the minishop disable the
-  // feature (it checks for HTTP 404/410).
-  app.post('/api/system/tools/happ/encrypt', opts, async (_request, reply) =>
-    reply.code(404).send({ errorCode: 'NOT_FOUND', message: 'happ link encryption is not supported' }),
+  // GET /api/system/metadata — the version probe, and the single place where
+  // this facade declares WHICH Remnawave API it speaks.
+  //
+  // The client reads `response.version`, takes the major, and derives the whole
+  // contract from it: 3 means numeric user identity, the cursor stream with
+  // lookup filters, and the targeted squad-bulk routes. Everything else in this
+  // module exists to make that declaration true — so this string and the shapes
+  // below move together or not at all.
+  //
+  // 3.3.2 is the client's certified preset for that generation (its
+  // remnawave_support.json), which puts us on the matrix it actually tests
+  // rather than in the best-effort mode an unrecognised version falls into.
+  //
+  // (happ link encryption used to live under System/tools. The shop encrypts
+  // those links locally now and the route is gone from its registry, so the
+  // stub it used to need went with it.)
+  app.get('/api/system/metadata', opts, async (_request, reply) =>
+    sendResponse(reply, { version: REMNAWAVE_API_VERSION }),
   );
 
   // ─────────────── System / stats / bandwidth ───────────────
@@ -679,19 +746,25 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     return sendResponse(reply, { topNodes });
   });
 
-  // GET /api/bandwidth-stats/users/:uuid — no production consumer; cheap real total.
-  app.get('/api/bandwidth-stats/users/:uuid', opts, async (request, reply) => {
-    const { uuid } = request.params as { uuid: string };
+  // GET /api/bandwidth-stats/users/:ref — cheap real total. Node uuids stay
+  // uuids: 3.x renumbered users only.
+  app.get('/api/bandwidth-stats/users/:ref', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    const dto = await resolveUserRef(ref);
     const grouped = await prisma.nodeUserUsageHistory.groupBy({
       by: ['nodeId'],
-      where: { userId: uuid },
+      where: { userId: dto.id },
       _sum: { bytesIn: true, bytesOut: true },
     });
     const nodes = grouped.map((g) => ({
       uuid: g.nodeId,
       total: Number(g._sum.bytesIn ?? 0n) + Number(g._sum.bytesOut ?? 0n),
     }));
-    return sendResponse(reply, { uuid, total: nodes.reduce((s, n) => s + n.total, 0), nodes });
+    return sendResponse(reply, {
+      id: Number(dto.numericId),
+      total: nodes.reduce((s, n) => s + n.total, 0),
+      nodes,
+    });
   });
 
   // GET /api/bandwidth-stats/nodes/:uuid/users — per-node per-user totals (drives
@@ -727,24 +800,36 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // ─────────────── HWID devices ───────────────
 
   // GET /api/hwid/devices/:userUuid — list a user's devices (metadata nullable).
-  app.get('/api/hwid/devices/:userUuid', opts, async (request, reply) => {
-    const { userUuid } = request.params as { userUuid: string };
-    const rows = await hwidService.listUserDevices(userUuid);
+  app.get('/api/hwid/devices/:ref', opts, async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    const rows = await hwidService.listUserDevices(await resolveUserId(ref));
     return sendResponse(reply, { devices: rows.map(mapDevice) });
   });
 
-  // POST /api/hwid/devices/delete {userUuid, hwid} — native delete is by row id,
-  // so resolve hwid→id. Missing device → idempotent {deleted:false} (200) so the
-  // minishop still invalidates its cache instead of showing an error.
+  // POST /api/hwid/devices/delete {userId, hwid} — the 3.x selector is the
+  // numeric `userId` (2.x sent `userUuid`; both are accepted, and the client
+  // learns which one this panel takes from the first success). Missing device →
+  // idempotent {deleted:false} (200) so the minishop still invalidates its cache
+  // instead of showing an error.
   app.post('/api/hwid/devices/delete', opts, async (request, reply) => {
-    const body = z.object({ userUuid: z.string(), hwid: z.string().min(1).max(255) }).loose().parse(request.body);
+    const body = z
+      .object({
+        userId: z.union([z.number().int(), z.string()]).optional(),
+        userUuid: z.string().optional(),
+        hwid: z.string().min(1).max(255),
+      })
+      .loose()
+      .parse(request.body);
+    const userId = await resolveUserId(
+      body.userId !== undefined ? String(body.userId) : body.userUuid,
+    );
     // Single atomic statement instead of find-then-delete-by-id: the read/write
     // gap let two concurrent deletes of the same device both resolve a row, and
     // the loser's delete-by-id then threw P2025 ("record required but not
     // found") — a 500 for work that was already done. deleteMany is a no-op when
     // the row is gone, so a repeat/concurrent delete is simply {deleted:false}.
     const { count } = await prisma.hwidUserDevice.deleteMany({
-      where: { userId: body.userUuid, hwid: body.hwid },
+      where: { userId, hwid: body.hwid },
     });
     return sendResponse(reply, { deleted: count > 0 });
   });

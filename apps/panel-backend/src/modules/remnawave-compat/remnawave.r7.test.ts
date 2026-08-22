@@ -14,7 +14,9 @@ const PREFIX = 'rw';
 const bearer = (tok: string) => ({ authorization: `Bearer ${tok}` });
 const adminToken = `icp_r7reg_${Date.now()}`;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
-const createdUserIds: string[] = [];
+// Users are tracked by the NUMERIC reference the facade hands out — the
+// native uuid is no longer on the wire in the 3.x shape.
+const createdUserRefs: number[] = [];
 const createdSquadIds: string[] = [];
 
 beforeAll(async () => {
@@ -31,10 +33,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (createdUserIds.length) {
-    await prisma.groupMember.deleteMany({ where: { userId: { in: createdUserIds } } });
-    await prisma.userTraffic.deleteMany({ where: { userId: { in: createdUserIds } } });
-    await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  if (createdUserRefs.length) {
+    await prisma.groupMember.deleteMany({ where: { user: { numericId: { in: createdUserRefs.map((n) => BigInt(n)) } } } });
+    await prisma.userTraffic.deleteMany({ where: { user: { numericId: { in: createdUserRefs.map((n) => BigInt(n)) } } } });
+    await prisma.user.deleteMany({ where: { numericId: { in: createdUserRefs.map((n) => BigInt(n)) } } });
   }
   if (createdSquadIds.length) {
     await prisma.groupMember.deleteMany({ where: { groupId: { in: createdSquadIds } } });
@@ -50,13 +52,20 @@ const post = (url: string, payload?: unknown) =>
 
 async function mkUser(body: Record<string, unknown> = {}) {
   const res = await post('users', { username: `r7reg_${Date.now()}_${Math.trunc(performance.now() * 1000)}`, ...body });
-  if (res.statusCode === 200) createdUserIds.push(res.json().response.uuid);
+  if (res.statusCode === 200) createdUserRefs.push(res.json().response.id);
   return res;
 }
 async function mkSquad(name?: string) {
   const g = await prisma.group.create({ data: { name: name ?? `r7reg squad ${Date.now()}_${createdSquadIds.length}` } });
   createdSquadIds.push(g.id);
   return g.id as string;
+}
+
+/** The wire hands out the numeric reference; assertions that reach into the
+ *  database still need the native uuid primary key. */
+async function nativeId(ref: number): Promise<string> {
+  const row = await prisma.user.findFirst({ where: { numericId: BigInt(ref) }, select: { id: true } });
+  return row.id as string;
 }
 
 describe('R7: pagination must return every user EXACTLY once (non-unique createdAt tiebreaker)', () => {
@@ -67,25 +76,25 @@ describe('R7: pagination must return every user EXACTLY once (non-unique created
     // pages and their siblings on none, and the shop deactivated those users'
     // paid subscriptions as "not on the panel".
     const N = 24;
-    const mine: string[] = [];
+    const mine: number[] = [];
     for (let i = 0; i < N; i++) {
       const r = await mkUser();
-      mine.push(r.json().response.uuid);
+      mine.push(r.json().response.id);
     }
     // One shared, far-future createdAt: identical sort key (maximum tie) AND
     // deterministically the top of the DESC ordering, so a few pages cover them
     // regardless of what else lives in the test DB.
     await prisma.$executeRawUnsafe(
-      `UPDATE users SET created_at = TIMESTAMP '2099-01-01 00:00:00' WHERE id = ANY($1::uuid[])`,
+      `UPDATE users SET created_at = TIMESTAMP '2099-01-01 00:00:00' WHERE numeric_id = ANY($1::bigint[])`,
       mine,
     );
 
     for (const size of [5, 7]) {
-      const seen: string[] = [];
+      const seen: number[] = [];
       for (let start = 0; start < N + size * 2; start += size) {
         const res = await get(`users?size=${size}&start=${start}`);
         expect(res.statusCode).toBe(200);
-        for (const u of res.json().response.users) seen.push(u.uuid);
+        for (const u of res.json().response.users) seen.push(u.id);
       }
       const mineSeen = seen.filter((id) => mine.includes(id));
       const missing = mine.filter((id) => !mineSeen.includes(id));
@@ -107,7 +116,7 @@ describe('R7: the shop sends Content-Type: application/json on BODYLESS POST/DEL
     });
 
   it('enable / disable / reset-traffic / DELETE all succeed with an empty JSON body', async () => {
-    const uuid = (await mkUser()).json().response.uuid;
+    const uuid = (await mkUser()).json().response.id;
     expect((await jsonNoBody('POST', `users/${uuid}/actions/disable`)).statusCode).toBe(200);
     expect((await jsonNoBody('POST', `users/${uuid}/actions/enable`)).statusCode).toBe(200);
     expect((await jsonNoBody('POST', `users/${uuid}/actions/reset-traffic`)).statusCode).toBe(200);
@@ -136,12 +145,12 @@ describe('R7: squad ids are normalised (dedupe + case) and system squads are rej
 
   it('a duplicated / case-variant squad uuid on PATCH is deduped, not a 500', async () => {
     const squad = await mkSquad();
-    const uuid = (await mkUser()).json().response.uuid;
+    const ref = (await mkUser()).json().response.id;
     const res = await app.inject({
       method: 'PATCH',
       url: `/${PREFIX}/api/users`,
       headers: bearer(adminToken),
-      payload: { uuid, activeInternalSquads: [squad, squad.toUpperCase()] },
+      payload: { id: ref, activeInternalSquads: [squad, squad.toUpperCase()] },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().response.activeInternalSquads.map((s: { uuid: string }) => s.uuid)).toEqual([squad]);
@@ -161,37 +170,45 @@ describe('R7: squad ids are normalised (dedupe + case) and system squads are rej
 describe('R7: concurrent writes must not 500', () => {
   it('two identical simultaneous squad PATCHes both resolve without a 500', async () => {
     const squad = await mkSquad();
-    const uuid = (await mkUser()).json().response.uuid;
-    const body = { uuid, activeInternalSquads: [squad] };
+    const ref = (await mkUser()).json().response.id;
+    const body = { id: ref, activeInternalSquads: [squad] };
     const results = await Promise.all([
       app.inject({ method: 'PATCH', url: `/${PREFIX}/api/users`, headers: bearer(adminToken), payload: body }),
       app.inject({ method: 'PATCH', url: `/${PREFIX}/api/users`, headers: bearer(adminToken), payload: body }),
     ]);
     expect(results.map((r) => r.statusCode).filter((c) => c >= 500)).toEqual([]);
-    const members = await prisma.groupMember.findMany({ where: { userId: uuid }, select: { groupId: true } });
+    const members = await prisma.groupMember.findMany({
+      where: { userId: await nativeId(ref) },
+      select: { groupId: true },
+    });
     expect(members.map((m: { groupId: string }) => m.groupId)).toEqual([squad]);
   });
 
   it('two simultaneous deletes of the same HWID device do not 500 (idempotent)', async () => {
-    const uuid = (await mkUser()).json().response.uuid;
+    const ref = (await mkUser()).json().response.id;
+    const userId = await nativeId(ref);
     const hwid = `r7reg-dev-${Date.now()}`;
-    await prisma.hwidUserDevice.create({ data: { userId: uuid, hwid } });
+    await prisma.hwidUserDevice.create({ data: { userId, hwid } });
     const results = await Promise.all([
-      post('hwid/devices/delete', { userUuid: uuid, hwid }),
-      post('hwid/devices/delete', { userUuid: uuid, hwid }),
+      // 3.x selector: the numeric userId, not userUuid.
+      post('hwid/devices/delete', { userId: ref, hwid }),
+      post('hwid/devices/delete', { userId: ref, hwid }),
     ]);
     expect(results.map((r) => r.statusCode).filter((c) => c >= 500)).toEqual([]);
-    expect(await prisma.hwidUserDevice.findFirst({ where: { userId: uuid, hwid } })).toBeNull();
+    expect(await prisma.hwidUserDevice.findFirst({ where: { userId, hwid } })).toBeNull();
   });
 });
 
 describe('R7: deleting a squad must not hand its members full access (facade on)', () => {
   it('an orphaned member lands in no-access, never in the ALL squad', async () => {
     const squad = await mkSquad();
-    const uuid = (await mkUser({ activeInternalSquads: [squad] })).json().response.uuid;
+    const ref = (await mkUser({ activeInternalSquads: [squad] })).json().response.id;
     const squadsService = await import('../squads/squads.service.js');
     await squadsService.deleteSquad(squad);
-    const members = await prisma.groupMember.findMany({ where: { userId: uuid }, select: { groupId: true } });
+    const members = await prisma.groupMember.findMany({
+      where: { userId: await nativeId(ref) },
+      select: { groupId: true },
+    });
     const ids = members.map((m: { groupId: string }) => m.groupId);
     expect(ids).toContain(NO_ACCESS_SQUAD_ID);
     expect(ids).not.toContain(ALL_SQUAD_ID);

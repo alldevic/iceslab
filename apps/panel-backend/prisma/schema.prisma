@@ -480,6 +480,15 @@ model User {
   // to enforce it here.
   sourceId String? @map("source_id") @db.VarChar(128)
   id       String @id @default(uuid()) @db.Uuid
+
+  // Remnawave-compat: a stable NUMERIC handle for this user, alongside the UUID
+  // primary key. Remnawave 3.0 dropped `uuid` from the user object and made the
+  // integer `id` the only identifier its API accepts, so a panel that presents
+  // itself as 3.x has to have one. Issued by a sequence, never reused, never
+  // reissued — it travels in the shop's database as that user's identity, so
+  // changing it would silently detach a paying subscriber from their account.
+  // Unused while the facade is off; see docs/remnawave-compat.md.
+  numericId BigInt @unique @default(autoincrement()) @map("numeric_id")
   shortId  String @unique @map("short_id") @db.VarChar(16)
   username String @db.VarChar(64)
   status   String @default("active") @db.VarChar(16)

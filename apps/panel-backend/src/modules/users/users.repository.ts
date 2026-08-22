@@ -21,6 +21,12 @@ export interface ListParams {
    *  collapsed Advanced block on one user's page, so nobody can answer "who did
    *  we pin, and why is that one person routed differently". */
   routingPreset?: string;
+  /** Exact-match filters, as opposed to `search`'s fuzzy OR. Remnawave 3.x
+   *  looks a user up by streaming the list with one of these pinned, and an
+   *  approximate answer there would hand the shop the wrong account — so these
+   *  are equality, never `contains`. */
+  telegramId?: bigint;
+  email?: string;
   sort?: UserSort;
   order?: 'asc' | 'desc';
 }
@@ -87,6 +93,21 @@ export async function findActiveById(id: string): Promise<UserWithTraffic | null
   });
 }
 
+/**
+ * Resolve a user by their NUMERIC handle (Remnawave-compat). Separate from
+ * findActiveById because the two identities are different columns and must not
+ * be conflated: a decimal string is never a UUID, so a caller that has one has
+ * unambiguously been given the numeric identity and must be answered from it.
+ */
+export async function findActiveByNumericId(
+  numericId: bigint,
+): Promise<UserWithTraffic | null> {
+  return prisma.user.findFirst({
+    where: { numericId, deletedAt: null },
+    include: { traffic: true, groupMembers: { select: { groupId: true } } },
+  });
+}
+
 export async function existsActive(id: string): Promise<boolean> {
   const count = await prisma.user.count({
     where: { id, deletedAt: null },
@@ -140,6 +161,12 @@ export async function list(params: ListParams): Promise<{
       ? { groupMembers: { some: { groupId: params.groupId } } }
       : {}),
     ...(params.tag ? { tag: params.tag } : {}),
+    ...(params.telegramId !== undefined ? { telegramId: params.telegramId } : {}),
+    // Case-insensitive EQUALITY: addresses are compared case-folded by the
+    // caller too, but the match itself must stay exact.
+    ...(params.email !== undefined
+      ? { email: { equals: params.email, mode: 'insensitive' as const } }
+      : {}),
     ...(params.routingPreset === ROUTING_FILTER_ANY
       ? { routingPreset: { not: null } }
       : params.routingPreset === ROUTING_FILTER_NONE

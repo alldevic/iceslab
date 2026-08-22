@@ -37,6 +37,10 @@ export interface PublicUserDto {
   tag: string | null;
   telegramId: string | null;        // BigInt → string
   email: string | null;
+  // Remnawave-compat: the user's stable NUMERIC handle (BigInt → string, like
+  // telegramId). Present natively because it is a real property of the row, not
+  // a facade invention — the facade is only the first thing that needed it.
+  numericId: string;
   // Remnawave-compat: opaque external-squad id, echoed verbatim (passthrough).
   externalSquadUuid: string | null;
 
@@ -95,6 +99,7 @@ export function mapUserToPublic(
     tag: user.tag,
     telegramId: user.telegramId !== null ? user.telegramId.toString() : null,
     email: user.email,
+    numericId: user.numericId.toString(),
     externalSquadUuid: user.externalSquadUuid,
 
     enabledProtocols: parseEnabledProtocols(user.enabledProtocols),
