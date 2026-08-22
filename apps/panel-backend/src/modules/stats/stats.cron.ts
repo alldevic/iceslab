@@ -194,13 +194,21 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
 
         // U7 — traffic-anomaly sensor. Pure verdict in stats.anomaly.ts; the
         // debounce + prev-active-user state lives here like the snapshots above.
-        // `userList` is the post-delta list, so its length is the count of users
-        // moving traffic this poll — a sharp, sustained, correlated drop in that
-        // plus bytes means the node went dark. Fire node.anomaly ONCE when the
+        // A sharp, sustained drop in bytes AND in how many users are still moving
+        // traffic means the node went dark. Fire node.anomaly ONCE when the
         // debounce is first crossed (re-arms after recovery). Best-effort: the
         // event bus swallows handler errors, so this never breaks the poll.
         {
-          const activeUsers = userList.length;
+          // COUNT THE ONES THAT MOVED BYTES, not the length of the list.
+          // `userList` here is post-delta, but computeUserDeltas emits an entry
+          // for EVERY user the node reported, zero-delta included — and a
+          // cumulative core (xray) keeps reporting a user forever once it has
+          // seen them. So the list length barely moves when a node goes dark,
+          // `usersDropped` stays ~0, and since the breadth signal is a required
+          // conjunct in evaluateNodeDrop, the sensor would never fire at all.
+          const activeUsers = userList.filter(
+            (u) => (u.bytesIn || 0) + (u.bytesOut || 0) > 0,
+          ).length;
           const thisPollBytes = Number(w.nodeDownload + w.nodeUpload);
           const base = baselinePerPoll.get(node.id) ?? 0;
           const expected = updateExpectedActiveUsers(

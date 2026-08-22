@@ -275,4 +275,59 @@ describe('pollNodeStats anomaly sensor (U7, integration)', () => {
     await pollNodeStats();
     expect(anomalies()).toHaveLength(1);
   });
+
+  // The case above models a DELTA core: a node that goes dark simply stops
+  // listing its users, so the reported list shrinks. A CUMULATIVE core (xray,
+  // the common one) does the opposite — it keeps listing every user it has ever
+  // seen, with counters that stop growing. Counting the list instead of the
+  // users who actually moved bytes therefore leaves the breadth signal flat, and
+  // because evaluateNodeDrop requires it, the sensor goes silent exactly on the
+  // core most nodes run. It passes every pure-logic test while doing nothing.
+  it('fires on a cumulative core, where the node keeps listing users that stopped moving', async () => {
+    const nodeId = await createNode('ru-cum', '10.0.0.11:8443');
+    const users: string[] = [];
+    for (let i = 0; i < 10; i++) users.push(await createUser(`cumanon${i}`));
+
+    const pastHour = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    pastHour.setUTCMinutes(0, 0, 0);
+    await prisma.nodeUsageHistory.create({
+      data: { nodeId, hour: pastHour, downloadBytes: 3_000_000_000n, uploadBytes: 1_000_000_000n },
+    });
+
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+
+    // Cumulative counters: EVERY user is listed on EVERY poll, always.
+    const cumPoll = (perUser: number): GetStatsResponse => ({
+      users: users.map((id) => ({ userId: id, bytesIn: perUser, bytesOut: 0, cumulative: true })),
+      uptime: 1,
+      totalBytesIn: 0,
+      totalBytesOut: 0,
+      cumulative: true,
+    });
+
+    // Two healthy polls: counters climb, so 10 users are genuinely moving bytes.
+    // (The first poll only baselines the cumulative counters — its deltas are 0.)
+    // Re-mocking via mockStats() replaces the implementation in place; calling
+    // vi.restoreAllMocks() here would also drop the emit spy above and silently
+    // stop recording the very events this test asserts on.
+    mockStats(cumPoll(1_000_000));
+    await pollNodeStats();
+    mockStats(cumPoll(2_000_000));
+    await pollNodeStats();
+    expect(anomalies()).toHaveLength(0);
+
+    // Node goes dark: counters FROZEN. The list is still 10 users long — only
+    // the deltas are zero. This is what the old `userList.length` could not see.
+    const frozen = () => mockStats(cumPoll(2_000_000));
+    frozen(); await pollNodeStats();
+    frozen(); await pollNodeStats();
+    frozen(); await pollNodeStats();
+
+    const fired = anomalies();
+    expect(fired).toHaveLength(1);
+    const payload = fired[0]![1] as { nodeId: string; droppedUsers: number };
+    expect(payload.nodeId).toBe(nodeId);
+    expect(payload.droppedUsers).toBeGreaterThanOrEqual(5);
+  });
 });
