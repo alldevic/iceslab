@@ -133,9 +133,15 @@ export const defaultAnsibleRunner: AnsibleRunner = {
  * Build the HotswapDeps backed by the DB + ansible runner. promote: mint a
  * bootstrap token → provision via ansible → flip the spare to active (and
  * re-push its inbounds via node.updated). retire: flip the burned node to
- * disabled + mark its IP burned. repoint: a no-op — once the spare is active
- * and the burned node disabled, F1 diversity naturally excludes the burned one
- * and includes the spare on the next /sub.
+ * disabled + mark its IP burned.
+ *
+ * repoint is a deliberate no-op, and what makes that safe is the subscription
+ * query itself: it selects `status: { not: 'disabled' }`, so the moment retire
+ * flips the burned node it stops being handed out, and the promoted spare
+ * starts. Nothing has to move users explicitly. (Entry ORDER then settles on
+ * its own — rendezvous ranking rehashes only the subscribers who were on the
+ * node that left.) Verified against that query rather than assumed: if the
+ * exclusion ever moves, this whole step silently stops retiring anything.
  */
 export function makeHotswapDeps(runner: AnsibleRunner = defaultAnsibleRunner): HotswapDeps {
   return {
@@ -149,7 +155,7 @@ export function makeHotswapDeps(runner: AnsibleRunner = defaultAnsibleRunner): H
     },
     repoint: async (burnedId, spareId) => {
       getLogger().info(
-        `[pool] repoint ${burnedId} → ${spareId}: handled by status change + F1 diversity on next /sub`,
+        `[pool] repoint ${burnedId} → ${spareId}: carried by the status flip — the burned node drops out of /sub and the spare appears on the next fetch`,
       );
     },
     retire: async (burnedId) => {

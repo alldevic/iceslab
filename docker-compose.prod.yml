@@ -148,6 +148,15 @@ services:
       # Safety ceiling on device rows per user, and the login-alert toggle.
       HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
       TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}
+      # F2 cold-pool hotswap (fork-only). Off by default: with ENABLED unset the
+      # controller is never subscribed and the panel behaves as upstream. The
+      # ansible trio is what the promote step shells out to; leaving PLAYBOOK
+      # empty keeps promote a dry-run, which is the safe default for a panel
+      # that has no control node.
+      EXT_VPTECH_POOL_ENABLED: ${EXT_VPTECH_POOL_ENABLED:-false}
+      EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK: ${EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK:-}
+      EXT_VPTECH_POOL_ANSIBLE_INVENTORY: ${EXT_VPTECH_POOL_ANSIBLE_INVENTORY:-}
+      EXT_VPTECH_POOL_ANSIBLE_BIN: ${EXT_VPTECH_POOL_ANSIBLE_BIN:-ansible-playbook}
     depends_on:
       postgres:
         condition: service_healthy
