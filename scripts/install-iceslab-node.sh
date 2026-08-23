@@ -865,6 +865,13 @@ case "$PROTOCOL" in
     log "XTLS xray.service disabled; iceslab-node manages xray directly"
     PROTO_BINARY=$(command -v xray)
     PROTO_CONFIG=/usr/local/etc/xray/config.json
+    # The XTLS bootstrap creates this directory, but it is skipped when xray is
+    # already installed (e.g. the ansible role put the pinned binary there
+    # first). The agent cannot create it later: ProtectSystem=strict + a
+    # ReadWritePaths entry opens an existing path, it does not make one. Without
+    # it every config push dies on `mkdir ...: read-only file system` and the
+    # node reports "degraded: not running: xray" while looking installed.
+    mkdir -p "$(dirname "$PROTO_CONFIG")"
     ;;
   amneziawg)
     log "Chaining bootstrap-amneziawg.sh"

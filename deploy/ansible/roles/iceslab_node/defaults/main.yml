@@ -7,6 +7,9 @@
 iceslab_xray_version: "26.3.27"
 iceslab_xray_bin: /usr/local/bin/xray
 iceslab_xray_share: /usr/local/share/xray
+# Where the node-agent writes the xray config it generates. Must exist before
+# the agent starts: ProtectSystem=strict lets it write there and not create it.
+iceslab_xray_config_dir: /usr/local/etc/xray
 
 # BBR congestion control — the node-agent's `direct` outbound sets
 # tcpCongestion=bbr, which needs fq qdisc + bbr enabled on the host.

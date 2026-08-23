@@ -61,3 +61,19 @@
         path: "{{ iceslab_xray_tmp.path }}"
         state: absent
       when: iceslab_xray_tmp.path is defined
+
+# The agent writes its generated xray config here and CANNOT create the
+# directory itself: its unit runs ProtectSystem=strict, and a ReadWritePaths
+# entry opens an existing path rather than creating one. Nothing else creates it
+# either when the role installs xray from the pinned tarball - on a node where
+# the XTLS bootstrap never ran (because the role had already put the binary
+# there), the agent fails every push with
+# `mkdir /usr/local/etc/xray: read-only file system` and the node sits at
+# "degraded: not running: xray" while looking fully provisioned. Outside the
+# download block on purpose: the directory has to exist even when the binary is
+# already at the pinned version and nothing is downloaded.
+- name: Ensure the xray config dir the agent writes into
+  ansible.builtin.file:
+    path: "{{ iceslab_xray_config_dir }}"
+    state: directory
+    mode: "0755"
