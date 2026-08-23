@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EgressPolicySchema } from '../egress/egress.policy.js';
 
 const NameSchema = z
   .string()
@@ -55,6 +56,11 @@ export const HardeningSchema = z
       })
       .strict()
       .optional(),
+    // B1 - this node's egress policy: which flows leave by which way out.
+    // Compiled per node at push time against the ways out the node actually
+    // has (see modules/egress/egress.policy.ts), which is also why it lives on
+    // the node rather than on a profile.
+    egressPolicy: EgressPolicySchema.optional(),
   })
   .strict()
   .nullish();

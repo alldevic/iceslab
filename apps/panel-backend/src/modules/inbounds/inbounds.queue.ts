@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 import { Queue, Worker, type Job } from 'bullmq';
 import type { ApplyInboundsRequest, InboundDto, ProtocolName } from '@iceslab/shared';
+import { coerceEgressPolicy, compileEgressPolicy } from '../egress/egress.policy.js';
 import { hostFromAddress } from '../subscription/subscription.formats.js';
 import { redis } from '../../lib/redis.js';
 import { prisma } from '../../prisma.js';
@@ -322,7 +323,7 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   if (warpXrayInbound) {
     const nodeWarp = await prisma.node.findUnique({
       where: { id: nodeId },
-      select: { warpEnabled: true, warpAccount: true },
+      select: { warpEnabled: true, warpAccount: true, hardening: true },
     });
     if (nodeWarp?.warpEnabled && nodeWarp.warpAccount) {
       const acct = nodeWarp.warpAccount as {
@@ -348,6 +349,46 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
           `[inbound-sync] node ${nodeId} has warpEnabled but warpAccount is incomplete; WARP egress not applied`,
         );
       }
+    }
+
+    // B1 - compile this node's egress policy (which flows leave by which way
+    // out) against the ways out it actually has, and attach the result to the
+    // same xray inbound. Compiled here rather than stored on the profile
+    // because a rule's target is a capability of THIS machine: a rule naming a
+    // channel the node lacks is dropped, since an unknown outboundTag is a
+    // config xray refuses to start on. No policy = nothing attached = the node
+    // renders byte-identically to before.
+    const warpUsable = Boolean(
+      nodeWarp?.warpEnabled &&
+        (nodeWarp.warpAccount as { secretKey?: string; address?: string[] } | null)?.secretKey,
+    );
+    const compiled = compileEgressPolicy(
+      coerceEgressPolicy((nodeWarp?.hardening as { egressPolicy?: unknown } | null)?.egressPolicy),
+      { warp: warpUsable },
+    );
+    for (const drop of compiled.dropped) {
+      getLogger().info(
+        `[inbound-sync] node ${nodeId} egress policy rule #${drop.index} targets "${drop.target}" but ${drop.reason}; rule dropped`,
+      );
+    }
+    if (compiled.fragments) {
+      warpXrayInbound.config = {
+        ...(warpXrayInbound.config as Record<string, unknown>),
+        routingFragments: compiled.fragments,
+      } as InboundDto['config'];
+    }
+  } else {
+    // A policy on a node with no xray inbound has nowhere to render: the other
+    // cores emit no routing section. Say so rather than let the operator read
+    // the split in the panel and believe it.
+    const nodeRouting = await prisma.node.findUnique({
+      where: { id: nodeId },
+      select: { hardening: true },
+    });
+    if (coerceEgressPolicy((nodeRouting?.hardening as { egressPolicy?: unknown } | null)?.egressPolicy)) {
+      getLogger().info(
+        `[inbound-sync] node ${nodeId} has an egress policy but no xray inbound; policy not applied`,
+      );
     }
   }
 

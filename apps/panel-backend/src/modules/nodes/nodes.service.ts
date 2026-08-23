@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { Prisma } from '../../generated/prisma/client.js';
 import { issueNodeCert, encodeNodePayload } from '../keygen/keygen.service.js';
 import { eventBus } from '../../lib/event-bus.js';
@@ -336,22 +337,31 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   }
   if (input.singboxEngine !== undefined) data.singboxEngine = input.singboxEngine;
 
-  // Two fields feed the config we push to the agent, so editing either has to
-  // re-push it. Detect them before the write, otherwise the live node config
-  // drifts until an unrelated binding/profile edit or an agent restart happens
-  // to fire a sync. Caught in review 2026-06-17.
+  // Three fields feed the config we push to the agent, so editing any of them
+  // has to re-push it. Detect them before the write, otherwise the live node
+  // config drifts until an unrelated binding/profile edit or an agent restart
+  // happens to fire a sync. Caught in review 2026-06-17.
   //   domain  → per-node REALITY self-steal serverNames (and the client SNI)
   //   address → the name hysteria's ACME certificate is issued for, which has
   //             to match what clients dial; without a push the node keeps
   //             serving a certificate for the address it no longer has
+  //   hardening.egressPolicy → B1, the node's egress split. Editing a split is
+  //             usually the ONLY thing an operator changes in that request, so
+  //             without this the panel would show a split the node never got.
   const domainChanged =
     input.domain !== undefined && input.domain !== existing.domain;
   const addressChanged =
     input.address !== undefined && input.address !== existing.address;
+  const egressPolicyChanged =
+    input.hardening !== undefined &&
+    !isDeepStrictEqual(
+      (input.hardening as { egressPolicy?: unknown } | null)?.egressPolicy,
+      (existing.hardening as { egressPolicy?: unknown } | null)?.egressPolicy,
+    );
 
   const updated = await repo.updateById(id, data);
 
-  if (domainChanged || addressChanged) {
+  if (domainChanged || addressChanged || egressPolicyChanged) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });
   }
   // Read caches hold the node row as the subscription renders it, so any edit
