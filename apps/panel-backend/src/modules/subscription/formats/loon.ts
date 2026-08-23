@@ -1,4 +1,7 @@
-import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import {
+  cannotCarryVlessEncryption,
+  type SubscriptionEndpoint,
+} from '../subscription.formats.js';
 
 /**
  * Loon proxy-line list (`?format=loon`). Comma-positional + colon-keyed params:
@@ -25,6 +28,9 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
       if (e.obfsPassword) p.push(`salamander-password:${e.obfsPassword}`);
       lines.push(p.join(','));
     } else if (e.protocol === 'xray') {
+      // U5: Loon's proxy line has no place for the VLESS-Encryption client
+      // string, so such an endpoint would import and then fail every connect.
+      if (cannotCarryVlessEncryption(e)) continue;
       const sec = e.securityLayer ?? 'default';
       const reality = sec === 'default';
       const tls = sec !== 'none';

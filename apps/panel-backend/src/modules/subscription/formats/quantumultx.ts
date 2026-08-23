@@ -1,4 +1,7 @@
-import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import {
+  cannotCarryVlessEncryption,
+  type SubscriptionEndpoint,
+} from '../subscription.formats.js';
 
 /**
  * Quantumult X server_local proxy-line list (`?format=quantumultx`). One
@@ -21,6 +24,9 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
     if (e.protocol === 'shadowsocks') {
       lines.push(`shadowsocks=${e.host}:${e.port}, method=${e.method}, password=${e.password}, udp-relay=true, tag=${tag}`);
     } else if (e.protocol === 'xray') {
+      // U5: QX's vless line carries `method=none` and has no field for a
+      // VLESS-Encryption client string, so such an endpoint is unrepresentable.
+      if (cannotCarryVlessEncryption(e)) continue;
       const sec = e.securityLayer ?? 'default';
       const reality = sec === 'default';
       const tls = sec !== 'none';

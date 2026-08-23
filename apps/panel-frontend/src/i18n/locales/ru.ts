@@ -1222,17 +1222,27 @@ export default {
           'Постквантовая криптография (по умолч. выкл.). Opaque-значения генерируются бинарём xray (xray mldsa65 / xray vlessenc) и вставляются сюда. Нужна сборка xray с поддержкой PQ.',
         pqGenerateMldsa: 'Сгенерировать на ноде',
         pqGenerateVless: 'Сгенерировать на ноде',
-        pqGenerated: 'Сгенерировано на {{node}} и подставлено ниже.',
+        pqGenerated: 'Сгенерировано на {{node}}: обе половины подставлены ниже.',
         pqGeneratedUnparsed:
-          'Сгенерировано на {{node}}, но эта сборка вывела результат иначе — скопируй значение из вывода ниже.',
+          'Сгенерировано на {{node}}, но эта сборка вывела результат иначе — скопируй недостающую половину из вывода ниже.',
         pqRawHint:
-          'Сырой вывод с {{node}}. Половина, которую профиль не хранит (verify-ключ, клиентская encryption-строка), нужна клиентам и читается только отсюда.',
-        pqMldsaLabel: 'REALITY ML-DSA-65 seed',
+          'Сырой вывод с {{node}} — на случай, если поле выше осталось пустым: сборку с незнакомой формулировкой всё равно можно дочитать отсюда.',
+        pqMldsaLabel: 'REALITY ML-DSA-65 seed (сервер)',
         pqMldsaDesc:
           'Серверный seed — добавляет постквантовую подпись на REALITY-сертификат. Только для security=reality; cert от target должен быть >3500 байт.',
-        pqVlessLabel: 'VLESS-Encryption (ML-KEM-768)',
+        pqMldsaVerifyLabel: 'REALITY ML-DSA-65 verify-ключ (клиент)',
+        pqMldsaVerifyDesc:
+          'Парный verify-ключ, уезжает клиентам как pqv=. Без него клиент проверяет сертификат по-классике и постквантовую подпись не смотрит вообще — фича включена и не делает ничего.',
+        pqVlessLabel: 'VLESS-Encryption (ML-KEM-768), сервер',
         pqVlessDesc:
-          'Серверная decryption-строка (mlkem768x25519plus.native.…). Только для subprotocol=vless.',
+          'Серверная decryption-строка (mlkem768x25519plus.native.600s.…). Только для subprotocol=vless.',
+        pqVlessEncLabel: 'VLESS-Encryption (ML-KEM-768), клиент',
+        pqVlessEncDesc:
+          'Парная клиентская строка (mlkem768x25519plus.native.0rtt.…), уезжает клиентам как encryption=. Обязательна: с одной серверной половиной нода требует ML-KEM-рукопожатие и отваливаются все.',
+        pqNeedsVerify: 'Нужен ещё verify-ключ: без него клиенты не проверяют подпись.',
+        pqNeedsSeed: 'Нужен ещё серверный seed, иначе клиенты требуют подпись, которую нода не шлёт.',
+        pqNeedsEncryption: 'Нужна ещё клиентская строка, иначе к профилю никто не подключится.',
+        pqNeedsDecryption: 'Нужна ещё серверная строка, иначе клиенты шифруют в inbound, который ничего не расшифровывает.',
         realityXverLabel: 'REALITY xver',
         realityXverDesc: 'HTTP-версия для декоя: 0 = авто, 1 = HTTP/1.1, 2 = HTTP/2',
         realityMaxTimeDiffLabel: 'Макс. расхождение времени (мс)',

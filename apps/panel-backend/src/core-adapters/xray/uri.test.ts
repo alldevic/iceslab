@@ -110,4 +110,35 @@ describe('buildVlessRealityUri', () => {
     expect(uri).toContain('headerType=none');
     expect(uri).not.toContain('flow=');
   });
+
+  // ───── U5: the client half of the post-quantum material ─────
+  // Param names are xray's and v2rayN's, not ours: `encryption` is read
+  // straight into the VLESS account, `pqv` into realitySettings.mldsa65Verify.
+
+  it('carries the VLESS-Encryption client string in `encryption`', () => {
+    const enc = 'mlkem768x25519plus.native.0rtt.AAAA';
+    const uri = buildVlessRealityUri({ ...baseOpts, vlessEncryption: enc });
+    expect(uri).toContain(`encryption=${encodeURIComponent(enc)}`);
+    expect(uri).not.toContain('encryption=none');
+  });
+
+  it('carries the ML-DSA-65 verify key in `pqv`', () => {
+    const uri = buildVlessRealityUri({ ...baseOpts, mldsa65Verify: 'VERIFYKEY_abc-123' });
+    expect(uri).toContain('pqv=VERIFYKEY_abc-123');
+  });
+
+  // A CDN-fronted host has no REALITY layer to verify, so the key would be a
+  // param no client can act on.
+  it('drops `pqv` when the client layer is not reality', () => {
+    const uri = buildVlessRealityUri({
+      ...baseOpts,
+      mldsa65Verify: 'VERIFYKEY',
+      securityLayer: 'tls',
+    });
+    expect(uri).not.toContain('pqv=');
+  });
+
+  it('keeps encryption=none when no client string is set (pre-U5 wire)', () => {
+    expect(buildVlessRealityUri(baseOpts)).toContain('encryption=none');
+  });
 });

@@ -134,6 +134,12 @@ interface XrayInboundConfig {
   realityPrivateKey: string;
   realityPublicKey: string;
   realityMode?: 'steal-others' | 'self-steal';
+  /** U5 client halves. The server halves (`realityMldsa65Seed`,
+   *  `vlessDecryption`) are the node's business and never appear here; these
+   *  two exist only to be handed to a client. The schema refuses to store one
+   *  half of either pair, so a set value always has its server counterpart. */
+  realityMldsa65Verify?: string;
+  vlessEncryption?: string;
   flow: string;
   fingerprint: string;
   network: 'raw' | 'xhttp' | 'ws' | 'grpc';
@@ -842,6 +848,13 @@ export async function generateSubscription(
             : profileSecurity === 'tls'
               ? 'tls'
               : 'default';
+      // U5 - the client halves, scoped to where they mean anything. The verify
+      // key belongs to the REALITY layer, so a host that overrides security to
+      // plain tls/none must not carry it; the encryption string belongs to the
+      // vless subprotocol, which is the only one xray reads it for.
+      const mldsa65Verify =
+        effectiveSecurityLayer === 'default' ? cfg.realityMldsa65Verify : undefined;
+      const vlessEncryption = subprotocol === 'vless' ? cfg.vlessEncryption : undefined;
       let uri: string;
       if (subprotocol === 'trojan') {
         uri = buildTrojanRealityUri({
@@ -860,6 +873,7 @@ export async function generateSubscription(
           alpn: hostAlpn,
           allowInsecure: hostAllowInsecure,
           securityLayer: effectiveSecurityLayer,
+          mldsa65Verify,
         });
       } else if (subprotocol === 'vmess') {
         // VMess share link carries no REALITY: security is none (CDN-fronted /
@@ -896,6 +910,8 @@ export async function generateSubscription(
           alpn: hostAlpn,
           allowInsecure: hostAllowInsecure,
           securityLayer: effectiveSecurityLayer,
+          mldsa65Verify,
+          vlessEncryption,
         });
       }
       endpoints.push({
@@ -916,6 +932,8 @@ export async function generateSubscription(
         hostHeader: xrayHostHeader,
         serviceName: cfg.serviceName,
         subprotocol,
+        realityMldsa65Verify: mldsa65Verify,
+        vlessEncryption,
         uri,
         // A4: set only when this node is a balancer-cascade entry. Undefined
         // otherwise, so the array format emits a single config as before.

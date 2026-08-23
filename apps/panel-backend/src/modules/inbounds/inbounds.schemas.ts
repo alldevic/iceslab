@@ -173,12 +173,54 @@ export const XrayConfigSchema = z.object({
     .regex(/^[A-Za-z0-9+/=_-]*$/, 'must be a base64-ish ML-DSA-65 seed')
     .optional(),
   /**
+   * U5 post-quantum, CLIENT half of `xray mldsa65`: the verify key, emitted as
+   * `pqv=` in the share link and as `realitySettings.mldsa65Verify` in a full
+   * config.
+   *
+   * Its absence does not break the connection, which is precisely why it needs
+   * a guard rather than trust. xray checks the extra signature only when the
+   * client holds a verify key, and otherwise takes the classical branch and
+   * marks the connection verified (transport/internet/reality/reality.go,
+   * VerifyPeerCertificate). A seed without a verify key is therefore a profile
+   * that advertises post-quantum REALITY and delivers classical REALITY, with
+   * nothing anywhere saying so.
+   *
+   * The length is fixed by the algorithm - an ML-DSA-65 public key is 1952
+   * bytes and xray rejects any other length outright - so a truncated paste is
+   * worth catching at save time instead of at push time.
+   */
+  realityMldsa65Verify: z
+    .string()
+    .max(4096)
+    .regex(/^[A-Za-z0-9+/=_-]*$/, 'must be a base64-ish ML-DSA-65 verify key')
+    .refine(
+      (v) => Buffer.from(v, 'base64').length === 1952,
+      'must decode to a 1952-byte ML-DSA-65 verify key',
+    )
+    .optional(),
+  /**
    * U5 post-quantum: server-side VLESS-Encryption string (ML-KEM-768 native
    * encryption with PFS), e.g. "mlkem768x25519plus.native.600s.…", from
    * `xray vlessenc`. Optional (no default): absent → VLESS decryption renders as
    * "none" (byte-identical to pre-U5). Only the vless subprotocol uses it.
    */
   vlessDecryption: z
+    .string()
+    .max(4096)
+    .regex(/^[A-Za-z0-9._-]*$/, 'must be a VLESS-Encryption string (mlkem768x25519plus.…)')
+    .optional(),
+  /**
+   * U5 post-quantum, CLIENT half of the same `xray vlessenc` pair: it rides the
+   * share link as `encryption=` and a full client config as the VLESS user's
+   * `encryption` (xray builds the outbound account from it in
+   * infra/conf/vless.go; Clash Meta parses the same grammar).
+   *
+   * Required whenever the server half is set, and the reverse: an inbound whose
+   * `decryption` is set demands an ML-KEM handshake, and a client still sending
+   * the pre-U5 `encryption=none` is refused, not degraded. Half a pair is a
+   * profile nobody can connect to - see the superRefine at the bottom.
+   */
+  vlessEncryption: z
     .string()
     .max(4096)
     .regex(/^[A-Za-z0-9._-]*$/, 'must be a VLESS-Encryption string (mlkem768x25519plus.…)')
@@ -271,11 +313,75 @@ export const XrayConfigSchema = z.object({
    * untouched). When the object IS present, each flag defaults to true, so the
    * wire always carries a fully-specified policy and the operator only has to
    * flip the rule(s) they want to relax (e.g. blockTorrent:false on a
-   * residential exit). Kept a plain ZodObject (no .refine) so XrayConfigSchema
-   * stays usable in the InboundConfigByProtocol discriminated union.
+   * residential exit).
    */
   abusePolicy: AbusePolicySchema.optional(),
-});
+})
+  /**
+   * U5: post-quantum material comes in pairs, and half a pair is never what the
+   * operator meant. Refining here is safe for the same reason it is safe on
+   * AmneziawgConfigSchema below: the discriminated unions this schema feeds key
+   * off the top-level `protocol` literal, not off this `config` member.
+   */
+  .superRefine((cfg, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+
+    // The asymmetry between the two pairs is the point. A missing client half
+    // of VLESS-Encryption breaks every connection to the profile the moment it
+    // is saved; a missing verify key breaks nothing and quietly removes the
+    // feature. Both are refused, because "enabled and doing nothing" is the
+    // failure mode this fork keeps finding.
+    if (cfg.vlessDecryption && !cfg.vlessEncryption) {
+      issue(
+        'vlessEncryption',
+        'VLESS-Encryption needs its client half: the inbound would demand an ML-KEM handshake and every client link the panel emits answers with encryption=none',
+      );
+    }
+    if (cfg.vlessEncryption && !cfg.vlessDecryption) {
+      issue(
+        'vlessDecryption',
+        'VLESS-Encryption needs its server half: clients would encrypt to an inbound that decrypts nothing',
+      );
+    }
+    if (cfg.vlessDecryption && vlessEncryptionHalf(cfg.vlessDecryption) === 'client') {
+      issue(
+        'vlessDecryption',
+        'this is the client half (third part is a handshake mode, 1rtt/0rtt); the server half carries a ticket lifetime, e.g. 600s',
+      );
+    }
+    if (cfg.vlessEncryption && vlessEncryptionHalf(cfg.vlessEncryption) === 'server') {
+      issue(
+        'vlessEncryption',
+        'this is the server half (third part is a ticket lifetime, e.g. 600s); the client half carries a handshake mode, 1rtt/0rtt',
+      );
+    }
+    // One half from each of the two authentications `xray vlessenc` prints in a
+    // single run. Both halves are well-formed and the shapes agree; the key
+    // material simply does not, and the handshake fails with nothing to read.
+    if (cfg.vlessDecryption && cfg.vlessEncryption) {
+      const server = vlessEncryptionAuth(cfg.vlessDecryption);
+      const client = vlessEncryptionAuth(cfg.vlessEncryption);
+      if (server !== 'unknown' && client !== 'unknown' && server !== client) {
+        issue(
+          'vlessEncryption',
+          `the two halves are from different authentications (server: ${server}, client: ${client}) - "xray vlessenc" prints both in one run and they cannot be mixed`,
+        );
+      }
+    }
+    if (cfg.realityMldsa65Seed && !cfg.realityMldsa65Verify) {
+      issue(
+        'realityMldsa65Verify',
+        'post-quantum REALITY needs its verify key: without it clients take the classical branch and the extra signature is never checked',
+      );
+    }
+    if (cfg.realityMldsa65Verify && !cfg.realityMldsa65Seed) {
+      issue(
+        'realityMldsa65Seed',
+        'post-quantum REALITY needs its server seed: clients would demand a signature the node never puts in the certificate',
+      );
+    }
+  });
 
 // Bounds and defaults match upstream amnezia-vpn AmneziaWG v2.0 spec
 // (docs.amnezia.org/documentation/amnezia-wg). Old TSPU presets from

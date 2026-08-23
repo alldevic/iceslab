@@ -57,6 +57,26 @@ export function hostFromAddress(address: string): string {
 }
 
 /**
+ * U5 - can this endpoint be expressed at all without VLESS-Encryption?
+ *
+ * A vless endpoint whose inbound runs `decryption` needs the client to send the
+ * matching `encryption`; a format with nowhere to put that string can only
+ * produce an outbound that the node refuses at handshake time. sing-box has no
+ * such field on its VLESS outbound at all (option/vless.go), and neither Loon
+ * nor Quantumult X expose one, so those three skip the endpoint instead of
+ * shipping a config that cannot work. An empty section in a client is a bad
+ * outcome; a server entry that fails every connect and says nothing is worse.
+ *
+ * Not applicable to the ML-DSA-65 verify key: dropping that one degrades the
+ * connection to classical REALITY, it does not break it.
+ */
+export function cannotCarryVlessEncryption(e: SubscriptionEndpoint): boolean {
+  return (
+    e.protocol === 'xray' && (e.subprotocol ?? 'vless') === 'vless' && !!e.vlessEncryption
+  );
+}
+
+/**
  * Universal subscription body: base64 of newline-separated URIs. Works with
  * every mainstream client (NekoRay, Hiddify, v2rayN, ...).
  */
@@ -163,6 +183,23 @@ export interface XraySubscriptionEndpoint extends SubscriptionEndpointBase {
   /** Slice 24c part 3: controls URI scheme (`vless://` vs `trojan://`)
    *  and downstream singbox/clash outbound type. */
   subprotocol?: 'vless' | 'trojan' | 'vmess';
+
+  // ───── U5: the client halves of the post-quantum material ───────────
+  // The profile stores both halves of each pair; these are the ones that only
+  // ever leave the panel towards a client. Set only where they mean something:
+  // `vlessEncryption` on the vless subprotocol, `realityMldsa65Verify` on the
+  // reality layer.
+
+  /** Client half of VLESS-Encryption. Formats that can carry it emit it
+   *  (`encryption=` in the URI, the VLESS user's `encryption` in xray JSON,
+   *  `encryption:` in Clash); formats that cannot must SKIP the endpoint
+   *  rather than emit one - see `cannotCarryVlessEncryption`. */
+  vlessEncryption?: string;
+  /** Client half of post-quantum REALITY (ML-DSA-65 verify key). Formats that
+   *  cannot carry it emit the endpoint anyway: the client then verifies the
+   *  certificate the classical way and connects, which is a downgrade rather
+   *  than an outage. */
+  realityMldsa65Verify?: string;
 }
 
 export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase {

@@ -1107,11 +1107,12 @@ export interface PqKeys {
   /** Which node produced them, i.e. which xray build they came from. */
   nodeName: string;
   raw: string;
-  /** mldsa65: the server seed (what the profile stores) and the verify key. */
+  /** mldsa65: the server seed and the client verify key. The profile stores
+   *  both - the node renders the seed, the subscription hands out the key. */
   seed?: string;
   verify?: string;
-  /** vlessenc: the server decryption string (what the profile stores) and the
-   *  client encryption string for the share link. */
+  /** vlessenc: the server decryption string and the client encryption string,
+   *  likewise both stored on the profile. */
   decryption?: string;
   encryption?: string;
 }

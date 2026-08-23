@@ -8,7 +8,10 @@
  * Query params we set (per Xray docs as of v24.9.30):
  *   type=raw          - network mode (renamed from `tcp` in v24.9.30)
  *   security=reality  - REALITY TLS replacement
- *   encryption=none   - VLESS does no payload crypto (TLS does it)
+ *   encryption=...    - `none` unless the inbound runs VLESS-Encryption, in
+ *                       which case it is that profile's client string (U5)
+ *   pqv=<verifyKey>   - ML-DSA-65 verify key, only when the inbound signs its
+ *                       REALITY certificate with the matching seed (U5)
  *   pbk=<pubkey>      - REALITY public key (paired with server's privateKey)
  *   sid=<shortId>     - one of the inbound's REALITY shortIds
  *   sni=<host>        - REALITY target serverName the client claims
@@ -50,6 +53,17 @@ export interface VlessRealityUriOpts {
    *  even when the adapter's default would be reality. `default` omits the
    *  override and lets the client follow the adapter's chosen security. */
   securityLayer?: 'default' | 'tls' | 'none';
+  /** U5 - client half of VLESS-Encryption. Emitted as `encryption=`; empty
+   *  keeps the pre-U5 `encryption=none`. Every mainstream client reads this
+   *  param straight into the VLESS user's `encryption` (checked against
+   *  v2rayN's VLESSFmt and mihomo's URI converter), so an inbound with
+   *  `decryption` set is unreachable without it. */
+  vlessEncryption?: string;
+  /** U5 - client half of post-quantum REALITY: the ML-DSA-65 verify key, from
+   *  the same `xray mldsa65` run as the inbound's seed. Emitted as `pqv=`
+   *  (v2rayN BaseFmt maps `pqv` <-> realitySettings.mldsa65Verify). Only
+   *  meaningful on the reality layer. */
+  mldsa65Verify?: string;
 }
 
 export function buildVlessRealityUri(opts: VlessRealityUriOpts): string {
@@ -68,7 +82,11 @@ export function buildVlessRealityUri(opts: VlessRealityUriOpts): string {
   const params = new URLSearchParams({
     type: network,
     security,
-    encryption: 'none',
+    // U5: the profile's client string when the inbound runs VLESS-Encryption,
+    // otherwise the historical `none`. Not a cosmetic difference - the server
+    // half alone gets the handshake refused, so this param is the whole
+    // client side of the feature.
+    encryption: opts.vlessEncryption || 'none',
   });
 
   // REALITY public key + shortId apply only to the reality layer. SNI +
@@ -78,6 +96,10 @@ export function buildVlessRealityUri(opts: VlessRealityUriOpts): string {
   if (security === 'reality') {
     params.set('pbk', opts.publicKey);
     params.set('sid', opts.shortId);
+    // Without it the client verifies the REALITY certificate the classical way
+    // and never looks at the post-quantum signature the node went to the
+    // trouble of adding - a downgrade nothing reports.
+    if (opts.mldsa65Verify) params.set('pqv', opts.mldsa65Verify);
   }
   if (security !== 'none') {
     params.set('sni', opts.sni);

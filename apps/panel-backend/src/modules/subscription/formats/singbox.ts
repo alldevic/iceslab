@@ -1,5 +1,8 @@
 import type { RoutingPresetId } from '@iceslab/shared';
-import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import {
+  cannotCarryVlessEncryption,
+  type SubscriptionEndpoint,
+} from '../subscription.formats.js';
 
 /**
  * Sing-box JSON subscription formatter (sing-box 1.10+).
@@ -260,6 +263,11 @@ export function buildSingboxJson(
         },
       });
     } else if (e.protocol === 'xray') {
+      // U5: sing-box's VLESS outbound has no `encryption` field at all
+      // (option/vless.go), so an inbound running VLESS-Encryption cannot be
+      // described here. Skipping beats emitting an outbound whose every
+      // handshake the node rejects.
+      if (cannotCarryVlessEncryption(e)) continue;
       proxyTags.push(tag);
       const sub = e.subprotocol ?? 'vless';
       // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none'

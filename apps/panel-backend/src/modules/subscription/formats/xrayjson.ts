@@ -212,7 +212,16 @@ function buildProxyOutbound(
           address: e.host,
           port: e.port,
           // Vision flow needs a TLS-like layer (reality or tls), not none.
-          users: [{ id: e.uuid, encryption: 'none', ...(useTls && e.flow ? { flow: e.flow } : {}) }],
+          // U5: `encryption` is a per-user field on the VLESS outbound (xray
+          // infra/conf/vless.go reads it off the account), so the client string
+          // goes here and nowhere else. Absent -> the historical 'none'.
+          users: [
+            {
+              id: e.uuid,
+              encryption: e.vlessEncryption || 'none',
+              ...(useTls && e.flow ? { flow: e.flow } : {}),
+            },
+          ],
         },
       ],
     };
@@ -227,6 +236,9 @@ function buildProxyOutbound(
       fingerprint: e.fingerprint,
       show: false,
       spiderX: '',
+      // U5: the client half of post-quantum REALITY. Same key name as
+      // xray's own client config (infra/conf/transport_security.go).
+      ...(e.realityMldsa65Verify ? { mldsa65Verify: e.realityMldsa65Verify } : {}),
     };
   } else if (security === 'tls') {
     streamSettings.tlsSettings = {

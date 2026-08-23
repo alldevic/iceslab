@@ -319,6 +319,15 @@ export function buildClashYaml(
       if (sub === 'vless' && useTls && e.flow) {
         block.push(`    flow: ${yamlString(e.flow)}`);
       }
+      // U5: Clash Meta carries the client half of VLESS-Encryption on the
+      // proxy's `encryption` key and parses the very grammar xray-core does
+      // (transport/vless/encryption/factory.go). Omitted -> mihomo treats the
+      // proxy as unencrypted, which is the pre-U5 behaviour. It has no field
+      // for the ML-DSA-65 verify key, so post-quantum REALITY degrades to the
+      // classical check here and the endpoint still connects.
+      if (sub === 'vless' && e.vlessEncryption) {
+        block.push(`    encryption: ${yamlString(e.vlessEncryption)}`);
+      }
       if (e.alpn && e.alpn.length > 0) {
         block.push(`    alpn: [${e.alpn.map((a) => yamlString(a)).join(', ')}]`);
       }

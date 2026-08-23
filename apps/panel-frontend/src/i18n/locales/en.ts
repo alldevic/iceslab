@@ -1160,17 +1160,27 @@ export default {
           'Post-quantum crypto (off by default). Opaque values are generated with the xray binary (xray mldsa65 / xray vlessenc) and pasted here. Requires an xray build with PQ support.',
         pqGenerateMldsa: 'Generate on a node',
         pqGenerateVless: 'Generate on a node',
-        pqGenerated: 'Generated on {{node}} and filled in below.',
+        pqGenerated: 'Generated on {{node}}: both halves filled in below.',
         pqGeneratedUnparsed:
-          'Generated on {{node}}, but this build worded its output differently - copy the value from the output below.',
+          'Generated on {{node}}, but this build worded its output differently - copy the missing half from the output below.',
         pqRawHint:
-          'Raw output from {{node}}. The half this profile does not store (the verify key, the client encryption string) goes to clients and is only readable here.',
-        pqMldsaLabel: 'REALITY ML-DSA-65 seed',
+          'Raw output from {{node}}, kept in case a field above stayed empty: a build whose wording we do not recognise still leaves the values readable here.',
+        pqMldsaLabel: 'REALITY ML-DSA-65 seed (server)',
         pqMldsaDesc:
           'Server seed adding a post-quantum signature to the REALITY cert. Only for security=reality; the target cert must be >3500 bytes.',
-        pqVlessLabel: 'VLESS-Encryption (ML-KEM-768)',
+        pqMldsaVerifyLabel: 'REALITY ML-DSA-65 verify key (client)',
+        pqMldsaVerifyDesc:
+          'The paired verify key, handed to clients as pqv=. Without it a client verifies the certificate the classical way and the post-quantum signature is never checked - the feature looks on and does nothing.',
+        pqVlessLabel: 'VLESS-Encryption (ML-KEM-768), server',
         pqVlessDesc:
-          'Server decryption string (mlkem768x25519plus.native.…). Only for the vless subprotocol.',
+          'Server decryption string (mlkem768x25519plus.native.600s.…). Only for the vless subprotocol.',
+        pqVlessEncLabel: 'VLESS-Encryption (ML-KEM-768), client',
+        pqVlessEncDesc:
+          'The paired client string (mlkem768x25519plus.native.0rtt.…), handed to clients as encryption=. Required: with the server half alone the node demands an ML-KEM handshake and every client is disconnected.',
+        pqNeedsVerify: 'Also needs the verify key: without it clients never check the signature.',
+        pqNeedsSeed: 'Also needs the server seed, or clients demand a signature the node never sends.',
+        pqNeedsEncryption: 'Also needs the client string, or nobody can connect to this profile.',
+        pqNeedsDecryption: 'Also needs the server string, or clients encrypt to an inbound that decrypts nothing.',
         realityXverLabel: 'REALITY xver',
         realityXverDesc: 'HTTP version sent to the decoy: 0 = auto, 1 = HTTP/1.1, 2 = HTTP/2',
         realityMaxTimeDiffLabel: 'Max time diff (ms)',

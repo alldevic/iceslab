@@ -757,6 +757,39 @@ describe('buildXrayJsonArray routing (T2)', () => {
     }
   });
 
+  // ───── U5: the client half reaches a full xray config ─────
+
+  it('puts the VLESS-Encryption client string on the outbound user', () => {
+    const enc = 'mlkem768x25519plus.native.0rtt.AAAA';
+    const cfg = parse(buildXrayJson([{ ...xrayEp, vlessEncryption: enc }]));
+    const v = cfg.outbounds.find((o: any) => o.protocol === 'vless');
+    // Not on the outbound and not in streamSettings: xray reads `encryption`
+    // off the VLESS ACCOUNT (infra/conf/vless.go), so anywhere else is inert.
+    expect(v.settings.vnext[0].users[0].encryption).toBe(enc);
+  });
+
+  it('puts the ML-DSA-65 verify key in realitySettings', () => {
+    const cfg = parse(buildXrayJson([{ ...xrayEp, realityMldsa65Verify: 'VERIFYKEY' }]));
+    const v = cfg.outbounds.find((o: any) => o.protocol === 'vless');
+    expect(v.streamSettings.realitySettings.mldsa65Verify).toBe('VERIFYKEY');
+  });
+
+  it('emits neither key when the profile has no post-quantum material', () => {
+    const cfg = parse(buildXrayJson([xrayEp]));
+    const v = cfg.outbounds.find((o: any) => o.protocol === 'vless');
+    expect(v.settings.vnext[0].users[0].encryption).toBe('none');
+    expect('mldsa65Verify' in v.streamSettings.realitySettings).toBe(false);
+  });
+
+  it('carries both halves into the per-endpoint array configs too', () => {
+    const enc = 'mlkem768x25519plus.native.0rtt.AAAA';
+    const v = parse(
+      buildXrayJsonArray([{ ...xrayEp, vlessEncryption: enc, realityMldsa65Verify: 'VK' }]),
+    )[0].outbounds.find((o: any) => o.protocol === 'vless');
+    expect(v.settings.vnext[0].users[0].encryption).toBe(enc);
+    expect(v.streamSettings.realitySettings.mldsa65Verify).toBe('VK');
+  });
+
   it('carries the endpoint transport into the array proxy (xhttp)', () => {
     const xhttpEp: SubscriptionEndpoint = {
       ...xrayEp,

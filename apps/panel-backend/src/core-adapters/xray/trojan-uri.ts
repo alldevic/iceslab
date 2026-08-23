@@ -35,6 +35,11 @@ export interface TrojanRealityUriOpts {
   alpn?: string[];
   allowInsecure?: boolean;
   securityLayer?: 'default' | 'tls' | 'none';
+  /** U5 - ML-DSA-65 verify key, emitted as `pqv=`. REALITY is a stream-level
+   *  layer, so a Trojan inbound on a profile with a post-quantum seed signs its
+   *  certificate exactly like the VLESS one and its clients need the same key.
+   *  See VlessRealityUriOpts.mldsa65Verify. */
+  mldsa65Verify?: string;
 }
 
 export function buildTrojanRealityUri(opts: TrojanRealityUriOpts): string {
@@ -55,6 +60,7 @@ export function buildTrojanRealityUri(opts: TrojanRealityUriOpts): string {
   if (security === 'reality') {
     params.set('pbk', opts.publicKey);
     params.set('sid', opts.shortId);
+    if (opts.mldsa65Verify) params.set('pqv', opts.mldsa65Verify);
   }
   if (security !== 'none') {
     params.set('sni', opts.sni);

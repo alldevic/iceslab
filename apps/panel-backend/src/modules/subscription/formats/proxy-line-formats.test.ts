@@ -102,3 +102,29 @@ describe('buildLoonConf (best-effort, incl REALITY)', () => {
     );
   });
 });
+
+// U5 - neither line grammar has a slot for the VLESS-Encryption client string,
+// so an endpoint that needs one cannot be written down here at all. It is left
+// out rather than written down wrong: an imported server that fails every
+// connect and explains nothing is worse than one that never appeared.
+describe('proxy-line formats and VLESS-Encryption (U5)', () => {
+  const pq: SubscriptionEndpoint = {
+    ...vlessReality,
+    vlessEncryption: 'mlkem768x25519plus.native.0rtt.AAAA',
+  };
+
+  it('quantumult x drops the endpoint', () => {
+    expect(buildQuantumultXConf([pq])).toBe('');
+  });
+
+  it('loon drops the endpoint', () => {
+    expect(buildLoonConf([pq])).toBe('');
+  });
+
+  it('keeps the endpoint when only the verify key is unrepresentable', () => {
+    const degraded: SubscriptionEndpoint = { ...vlessReality, realityMldsa65Verify: 'VK' };
+    expect(buildQuantumultXConf([degraded])).toContain('vless=');
+    expect(buildLoonConf([degraded])).toContain('VLESS');
+  });
+});
+

@@ -190,9 +190,13 @@ interface FormValues {
   xrayBlockSmtp: boolean;
   xrayBlockDnsHijack: boolean;
   // U5 post-quantum (opaque strings from `xray mldsa65` / `xray vlessenc`).
-  // Empty = off.
+  // Empty = off. Each keygen prints a PAIR and the profile stores both halves:
+  // the node renders the server one, the subscription hands the client one out.
+  // One without the other is refused by the backend - see the validators below.
   xrayMldsa65Seed: string;
+  xrayMldsa65Verify: string;
   xrayVlessDecryption: string;
+  xrayVlessEncryption: string;
 
   // AmneziaWG
   awgSubnet: string;
@@ -345,7 +349,9 @@ function defaults(profile: Profile | null): FormValues {
     xrayBlockSmtp: true,
     xrayBlockDnsHijack: true,
     xrayMldsa65Seed: '',
+    xrayMldsa65Verify: '',
     xrayVlessDecryption: '',
+    xrayVlessEncryption: '',
 
     awgSubnet: '10.66.66.0/24',
     awgServerPriv: '',
@@ -437,7 +443,9 @@ function defaults(profile: Profile | null): FormValues {
         xrayBlockDnsHijack:
           (cfg.abusePolicy as { blockDnsHijack?: boolean } | undefined)?.blockDnsHijack ?? true,
         xrayMldsa65Seed: (cfg.realityMldsa65Seed as string) ?? '',
+        xrayMldsa65Verify: (cfg.realityMldsa65Verify as string) ?? '',
         xrayVlessDecryption: (cfg.vlessDecryption as string) ?? '',
+        xrayVlessEncryption: (cfg.vlessEncryption as string) ?? '',
       };
     case 'amneziawg': {
       const obf = (cfg.obfuscation as Record<string, number | string> | undefined) ?? {};
@@ -542,16 +550,22 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
   const pqKeygen = useMutation({
     mutationFn: (kind: 'mldsa65' | 'vlessenc') => generatePqKeys(kind),
     onSuccess: (keys) => {
-      if (keys.kind === 'mldsa65' && keys.seed) {
-        form.setFieldValue('xrayMldsa65Seed', keys.seed);
+      if (keys.kind === 'mldsa65') {
+        if (keys.seed) form.setFieldValue('xrayMldsa65Seed', keys.seed);
+        if (keys.verify) form.setFieldValue('xrayMldsa65Verify', keys.verify);
       }
-      if (keys.kind === 'vlessenc' && keys.decryption) {
-        form.setFieldValue('xrayVlessDecryption', keys.decryption);
+      if (keys.kind === 'vlessenc') {
+        if (keys.decryption) form.setFieldValue('xrayVlessDecryption', keys.decryption);
+        if (keys.encryption) form.setFieldValue('xrayVlessEncryption', keys.encryption);
       }
-      const placed = keys.kind === 'mldsa65' ? keys.seed : keys.decryption;
-      // The half the profile does NOT store still has to reach the operator:
-      // the verify key and the client encryption string go to clients, and
-      // there is nowhere else to read them from.
+      // Both halves have to land, and a run that placed only one is a run the
+      // operator has to finish by hand: the profile will not save half a pair.
+      const placed =
+        keys.kind === 'mldsa65'
+          ? Boolean(keys.seed && keys.verify)
+          : Boolean(keys.decryption && keys.encryption);
+      // Whatever did not parse still has to reach the operator, and the raw
+      // output is the only place it exists.
       setPqRaw({ kind: keys.kind, nodeName: keys.nodeName, text: keys.raw });
       notifications.show({
         color: placed ? 'green' : 'yellow',
@@ -579,6 +593,29 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
         }
         return null;
       },
+      // U5 - both halves or neither. Mirrors the backend superRefine so the
+      // error lands on the field that is missing instead of arriving as a
+      // notification with no idea which box to fill.
+      xrayMldsa65Verify: (v, values) =>
+        values.protocol === 'xray' && values.xraySecurity === 'reality' &&
+        values.xrayMldsa65Seed.trim() && !v.trim()
+          ? t('profiles.form.cfg.pqNeedsVerify')
+          : null,
+      xrayMldsa65Seed: (v, values) =>
+        values.protocol === 'xray' && values.xraySecurity === 'reality' &&
+        values.xrayMldsa65Verify.trim() && !v.trim()
+          ? t('profiles.form.cfg.pqNeedsSeed')
+          : null,
+      xrayVlessEncryption: (v, values) =>
+        values.protocol === 'xray' && values.xraySubprotocol === 'vless' &&
+        values.xrayVlessDecryption.trim() && !v.trim()
+          ? t('profiles.form.cfg.pqNeedsEncryption')
+          : null,
+      xrayVlessDecryption: (v, values) =>
+        values.protocol === 'xray' && values.xraySubprotocol === 'vless' &&
+        values.xrayVlessEncryption.trim() && !v.trim()
+          ? t('profiles.form.cfg.pqNeedsDecryption')
+          : null,
     },
   });
 
@@ -760,12 +797,21 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                 },
               }
             : {}),
-          // U5 post-quantum — opaque, gated on the layer they apply to.
+          // U5 post-quantum — opaque, gated on the layer they apply to. Both
+          // halves ride together: dropping the client one leaves a profile that
+          // either cannot be connected to (vless encryption) or verifies
+          // nothing while claiming otherwise (PQ REALITY).
           ...(values.xraySecurity === 'reality' && values.xrayMldsa65Seed.trim()
             ? { realityMldsa65Seed: values.xrayMldsa65Seed.trim() }
             : {}),
+          ...(values.xraySecurity === 'reality' && values.xrayMldsa65Verify.trim()
+            ? { realityMldsa65Verify: values.xrayMldsa65Verify.trim() }
+            : {}),
           ...(values.xraySubprotocol === 'vless' && values.xrayVlessDecryption.trim()
             ? { vlessDecryption: values.xrayVlessDecryption.trim() }
+            : {}),
+          ...(values.xraySubprotocol === 'vless' && values.xrayVlessEncryption.trim()
+            ? { vlessEncryption: values.xrayVlessEncryption.trim() }
             : {}),
         };
         break;
@@ -1646,6 +1692,16 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                       disabled={form.values.xraySecurity !== 'reality' || form.values.engine === 'singbox'}
                       {...form.getInputProps('xrayMldsa65Seed')}
                     />
+                    <Textarea
+                      label={t('profiles.form.cfg.pqMldsaVerifyLabel')}
+                      description={t('profiles.form.cfg.pqMldsaVerifyDesc')}
+                      placeholder="verify…"
+                      autosize
+                      minRows={2}
+                      maxRows={4}
+                      disabled={form.values.xraySecurity !== 'reality' || form.values.engine === 'singbox'}
+                      {...form.getInputProps('xrayMldsa65Verify')}
+                    />
                     <Button
                       variant="light"
                       size="xs"
@@ -1667,6 +1723,16 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                       maxRows={4}
                       disabled={form.values.xraySubprotocol !== 'vless' || form.values.engine === 'singbox'}
                       {...form.getInputProps('xrayVlessDecryption')}
+                    />
+                    <Textarea
+                      label={t('profiles.form.cfg.pqVlessEncLabel')}
+                      description={t('profiles.form.cfg.pqVlessEncDesc')}
+                      placeholder="mlkem768x25519plus.native.0rtt.…"
+                      autosize
+                      minRows={2}
+                      maxRows={4}
+                      disabled={form.values.xraySubprotocol !== 'vless' || form.values.engine === 'singbox'}
+                      {...form.getInputProps('xrayVlessEncryption')}
                     />
                     <Button
                       variant="light"

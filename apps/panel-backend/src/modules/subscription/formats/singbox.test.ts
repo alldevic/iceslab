@@ -491,3 +491,39 @@ describe('buildSingboxJson', () => {
     });
   });
 });
+
+// U5 - sing-box's VLESS outbound has no `encryption` field at all
+// (option/vless.go) and its REALITY options carry only public_key/short_id, so
+// neither half of the post-quantum material can be described here. The two
+// cases are not symmetric: a missing verify key still connects, a missing
+// encryption string is refused by the node at handshake time.
+describe('buildSingboxJson post-quantum (U5)', () => {
+  const parse = (s: string) => JSON.parse(s);
+
+  it('skips a VLESS-Encryption endpoint instead of emitting a dead outbound', () => {
+    const cfg = parse(
+      buildSingboxJson([{ ...xrayEp, vlessEncryption: 'mlkem768x25519plus.native.0rtt.AAAA' }]),
+    );
+    expect(cfg.outbounds.some((o: any) => o.type === 'vless')).toBe(false);
+    // and the selector must not advertise a tag with no outbound behind it
+    const auto = cfg.outbounds.find((o: any) => o.tag === 'Auto');
+    expect(auto?.outbounds ?? []).not.toContain('eu-1');
+  });
+
+  it('still emits a trojan endpoint on the same profile', () => {
+    const cfg = parse(
+      buildSingboxJson([
+        { ...trojanEp, vlessEncryption: 'mlkem768x25519plus.native.0rtt.AAAA' },
+      ]),
+    );
+    expect(cfg.outbounds.some((o: any) => o.type === 'trojan')).toBe(true);
+  });
+
+  it('emits the endpoint when only the verify key is missing (degrades, not breaks)', () => {
+    const cfg = parse(buildSingboxJson([{ ...xrayEp, realityMldsa65Verify: 'VERIFYKEY' }]));
+    const v = cfg.outbounds.find((o: any) => o.type === 'vless');
+    expect(v.tls.reality.enabled).toBe(true);
+    expect(JSON.stringify(v)).not.toContain('VERIFYKEY');
+  });
+});
+

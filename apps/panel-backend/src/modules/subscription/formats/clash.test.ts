@@ -525,3 +525,28 @@ describe('buildClashYaml', () => {
     });
   });
 });
+
+// U5 - Clash Meta is the one non-xray client that can express VLESS-Encryption:
+// mihomo's vless adapter takes an `encryption` key and parses the very grammar
+// xray-core does. It has no field for the ML-DSA-65 verify key, so post-quantum
+// REALITY degrades to the classical certificate check here - a downgrade, not
+// an outage, so the endpoint still ships.
+describe('buildClashYaml post-quantum (U5)', () => {
+  const enc = 'mlkem768x25519plus.native.0rtt.AAAA';
+
+  it('emits the VLESS-Encryption client string on the proxy', () => {
+    const out = buildClashYaml([{ ...xrayEp, vlessEncryption: enc }]);
+    expect(out).toContain(`encryption: ${enc}`);
+  });
+
+  it('emits no encryption key when the profile has none (pre-U5 output)', () => {
+    expect(buildClashYaml([xrayEp])).not.toContain('encryption:');
+  });
+
+  it('ships the endpoint without the verify key it cannot express', () => {
+    const out = buildClashYaml([{ ...xrayEp, realityMldsa65Verify: 'VERIFYKEY' }]);
+    expect(out).toContain('reality-opts:');
+    expect(out).not.toContain('VERIFYKEY');
+  });
+});
+
