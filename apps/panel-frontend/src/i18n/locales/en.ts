@@ -1167,7 +1167,7 @@ export default {
           'Raw output from {{node}}, kept in case a field above stayed empty: a build whose wording we do not recognise still leaves the values readable here.',
         pqMldsaLabel: 'REALITY ML-DSA-65 seed (server)',
         pqMldsaDesc:
-          'Server seed adding a post-quantum signature to the REALITY cert. Only for security=reality; the target cert must be >3500 bytes.',
+          'Server seed adding a post-quantum signature to the REALITY cert. Only for security=reality. The REALITY target must be a site with LARGE TLS handshake records - the post-quantum certificate is padded to match them, and a target too small kills every connection to this profile (the node logs "padding: -N", the client just retries). Measured on xray 26.3.27: www.cloudflare.com fails, www.amazon.com works.',
         pqMldsaVerifyLabel: 'REALITY ML-DSA-65 verify key (client)',
         pqMldsaVerifyDesc:
           'The paired verify key, handed to clients as pqv=. Without it a client verifies the certificate the classical way and the post-quantum signature is never checked - the feature looks on and does nothing.',

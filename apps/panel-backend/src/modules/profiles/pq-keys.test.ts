@@ -104,6 +104,12 @@ describe('parsePqKeyOutput: vlessenc', () => {
  * with X25519 and one with ML-KEM-768, under a header telling the operator not
  * to mix them. Every fixture above was hand-written prose; this one is the
  * shape the button meets on a real node.
+ *
+ * Verified against the binary, not just the source: xray 26.3.27 (the version
+ * s1 runs), 2026-08-24. Its output is these nine lines, with the key bodies
+ * 43 / 43 / 86 / 1579 chars - the lengths below reproduce them exactly. The
+ * pre-fix parser given this same output returned the X25519 half with the
+ * closing quote attached, which the config schema then refused.
  */
 describe('parsePqKeyOutput: vlessenc, real xray output', () => {
   // Key sizes are what tells the two pairs apart, and they come from xray's own
@@ -167,7 +173,7 @@ describe('parsePqKeyOutput: vlessenc, real xray output', () => {
 /**
  * The output `xray mldsa65` actually prints: `Seed: <43 chars>` and
  * `Verify: <2603 chars>`, both base64.RawURLEncoding of a 32-byte seed and a
- * 1952-byte public key.
+ * 1952-byte public key. Confirmed on xray 26.3.27, 2026-08-24.
  */
 describe('parsePqKeyOutput: mldsa65, real xray output', () => {
   it('takes both halves out of the real two-line output', () => {

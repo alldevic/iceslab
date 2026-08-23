@@ -163,9 +163,24 @@ export const XrayConfigSchema = z.object({
    * U5 post-quantum: server ML-DSA-65 seed (`xray mldsa65`) that adds an extra
    * post-quantum signature to the REALITY certificate. Optional (no default):
    * absent → omitted from the wire, node renders REALITY without it (byte-
-   * identical to pre-U5). Opaque base64-ish string (keygen needs the xray
-   * binary — generation is a follow-up). Enabling it requires the REALITY
-   * target cert to be >3500 bytes (xray-core constraint).
+   * identical to pre-U5). Opaque base64-ish string.
+   *
+   * THE TARGET MATTERS, and not the way this comment used to say. REALITY does
+   * not serve the target's certificate: it forges its own and writes the
+   * ML-DSA-65 signature into a fixed 3309-byte extension slot (XTLS/REALITY
+   * handshake_server_tls13.go). What it does copy are the target's TLS record
+   * LENGTHS, and the forged post-quantum handshake has to fit inside them. A
+   * target whose records are too small makes every connection to the profile
+   * die - measured on xray 26.3.27, 2026-08-24: `www.cloudflare.com:443`
+   * (EncryptedExtensions record 2043 bytes) fails by 1614 bytes,
+   * `www.amazon.com:443` works.
+   *
+   * The failure is invisible from here and nearly invisible on the node: the
+   * agent logs `REALITY ... hs.handshake() err: payload[0]: 8, padding: -N`
+   * and "handshake did not complete successfully", the client just retries,
+   * and nothing anywhere names the target as the cause. Left unguarded on
+   * purpose for now - the only honest check is to probe the live target and
+   * measure, which is a feature, not a validator.
    */
   realityMldsa65Seed: z
     .string()
