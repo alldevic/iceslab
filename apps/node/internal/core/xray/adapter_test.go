@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -594,3 +595,44 @@ func contains(haystack []byte, needle string) bool {
 
 // silence unused "json" warning if config_test.go doesn't import it elsewhere
 var _ = json.Marshal
+
+// U5 keygen. The adapter runs the core's own subcommand and hands back its
+// output untouched; the panel is what parses it.
+func TestGenerateKeys(t *testing.T) {
+	var got []string
+	a := New(Config{
+		BinaryPath: "/usr/local/bin/xray",
+		RunCmd: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			got = append([]string{name}, args...)
+			return []byte("Seed: c2VlZA==\nVerify: dmVyaWZ5\n"), nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	raw, err := a.GenerateKeys("mldsa65")
+	if err != nil {
+		t.Fatalf("GenerateKeys: %v", err)
+	}
+	if want := []string{"/usr/local/bin/xray", "mldsa65"}; !slices.Equal(got, want) {
+		t.Errorf("ran %v, want %v", got, want)
+	}
+	if !strings.Contains(raw, "Seed: c2VlZA==") {
+		t.Errorf("output must come back verbatim, got %q", raw)
+	}
+
+	// The kind arrives from the panel and ends up as an argv element, so an
+	// unknown one is refused rather than passed to the binary.
+	before := len(got)
+	if _, err := a.GenerateKeys("; rm -rf /"); err == nil {
+		t.Error("expected an unknown kind to be refused")
+	}
+	if len(got) != before {
+		t.Error("an unknown kind must not reach the binary")
+	}
+}
+
+func TestGenerateKeys_NoBinary(t *testing.T) {
+	a := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := a.GenerateKeys("mldsa65"); err == nil {
+		t.Error("expected an error on a node with no xray binary")
+	}
+}

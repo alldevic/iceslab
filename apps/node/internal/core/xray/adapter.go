@@ -305,6 +305,48 @@ func (a *Adapter) CoreVersion() string {
 	return v
 }
 
+// keygenKinds are the xray subcommands this adapter will run for /generateKeys.
+// An allowlist rather than a passthrough: the kind arrives from the panel and
+// ends up as an argv element, and "run whatever you are told on the node" is
+// not a thing to build even behind mTLS.
+//
+//   - mldsa65: the post-quantum REALITY signing key (U5). Its SEED goes into the
+//     profile; the verify key goes to clients.
+//   - vlessenc: the VLESS-Encryption pair (U5). The server half is the profile's
+//     decryption string, the client half rides the share link.
+var keygenKinds = map[string]bool{"mldsa65": true, "vlessenc": true}
+
+// GenerateKeys implements core.KeyGenerator: it runs the xray binary's keygen
+// subcommand and hands back its stdout untouched for the panel to parse.
+//
+// This exists because the alternative is worse in a specific way: a post-quantum
+// profile needs key material only the core binary can produce, and without this
+// an operator has to find a box with the right xray build, run it by hand, and
+// paste the result - which in practice means the feature ships and nobody turns
+// it on. Running it on a NODE (rather than shipping xray with the panel) also
+// means the keys come from the very build that will use them.
+func (a *Adapter) GenerateKeys(kind string) (string, error) {
+	if !keygenKinds[kind] {
+		return "", fmt.Errorf("xray GenerateKeys: unsupported kind %q", kind)
+	}
+	a.mu.Lock()
+	bin := a.cfg.BinaryPath
+	run := a.cfg.RunCmd
+	a.mu.Unlock()
+	if bin == "" || run == nil {
+		return "", fmt.Errorf("xray GenerateKeys: no xray binary on this node")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+	defer cancel()
+	out, err := run(ctx, bin, kind)
+	if err != nil {
+		// The output carries the reason (an old build without the subcommand
+		// says so), and it is what the operator needs to see.
+		return "", fmt.Errorf("xray %s failed: %w (%s)", kind, err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
 // parseXrayVersion pulls the semver token out of `xray version` output, whose
 // first line reads "Xray 26.3.27 (Xray, Penetrates Everything.) <hash> ...".
 // Returns "" if the shape is unexpected.

@@ -1151,6 +1151,13 @@ export default {
         abuseDnsHijackDesc: 'Route DNS to the dns-out outbound so the resolver never sees client IPs.',
         pqDesc:
           'Post-quantum crypto (off by default). Opaque values are generated with the xray binary (xray mldsa65 / xray vlessenc) and pasted here. Requires an xray build with PQ support.',
+        pqGenerateMldsa: 'Generate on a node',
+        pqGenerateVless: 'Generate on a node',
+        pqGenerated: 'Generated on {{node}} and filled in below.',
+        pqGeneratedUnparsed:
+          'Generated on {{node}}, but this build worded its output differently - copy the value from the output below.',
+        pqRawHint:
+          'Raw output from {{node}}. The half this profile does not store (the verify key, the client encryption string) goes to clients and is only readable here.',
         pqMldsaLabel: 'REALITY ML-DSA-65 seed',
         pqMldsaDesc:
           'Server seed adding a post-quantum signature to the REALITY cert. Only for security=reality; the target cert must be >3500 bytes.',

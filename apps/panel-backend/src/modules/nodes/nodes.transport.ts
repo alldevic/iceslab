@@ -11,6 +11,8 @@ import type {
   ApplyEgressRequest,
   ApplyEgressResponse,
   UfwPortsResponse,
+  GenerateKeysRequest,
+  GenerateKeysResponse,
 } from '@iceslab/shared';
 import { bootstrapCa, getPanelClientCert } from '../keygen/keygen.service.js';
 
@@ -248,6 +250,20 @@ export class NodeTransport {
    * A 404 from an agent predating /applyEgress lets the caller treat the node
    * as "channel not supported" (see applyEgressForNode).
    */
+  /**
+   * U5 - ask this node's core binary to mint key material. A node whose agent
+   * predates the endpoint answers 404, and one whose core is too old to know
+   * the subcommand answers 500 with the binary's own complaint; the caller
+   * treats both as "try another node".
+   */
+  async generateKeys(req: GenerateKeysRequest): Promise<GenerateKeysResponse> {
+    return this.request<GenerateKeysResponse>('POST', '/generateKeys', req, {
+      // Keygen is a short-lived local exec, but ML-KEM on a small VPS is not
+      // instant; the agent caps it at its own timeout anyway.
+      timeoutMs: 20_000,
+    });
+  }
+
   async applyEgress(req: ApplyEgressRequest): Promise<ApplyEgressResponse> {
     return this.request<ApplyEgressResponse>('POST', '/applyEgress', req, {
       // Restarting zapret2 (docker compose up/down or the init script) reloads

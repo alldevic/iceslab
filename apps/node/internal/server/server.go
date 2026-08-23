@@ -215,6 +215,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/removeUser", s.handleRemoveUser)
 	mux.HandleFunc("/applyInbounds", s.handleApplyInbounds)
 	mux.HandleFunc("/applyEgress", s.handleApplyEgress)
+	mux.HandleFunc("/generateKeys", s.handleGenerateKeys)
 	mux.HandleFunc("/stats", s.handleStats)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/ufwPorts", s.handleUfwPorts)
@@ -564,6 +565,52 @@ func (s *Server) handleApplyEgress(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.Info("applyEgress ok", "enabled", req.Enabled, "applied", applied)
 	writeJSON(w, http.StatusOK, dto.ApplyEgressResponse{OK: true, Applied: applied})
+}
+
+// handleGenerateKeys runs a core's keygen subcommand on this node and returns
+// its output. The panel calls it so an operator does not have to find a machine
+// with the right core build, run it by hand and paste the result.
+//
+// Dispatches to the first adapter that implements core.KeyGenerator and knows
+// the kind: the kinds are core-specific, so "which adapter" is answered by
+// which one accepts it rather than by a mapping the server would have to keep
+// in sync.
+func (s *Server) handleGenerateKeys(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.GenerateKeysRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	if req.Kind == "" {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "kind is required")
+		return
+	}
+
+	var lastErr error
+	for _, adapter := range s.cfg.Adapters {
+		gen, ok := adapter.(core.KeyGenerator)
+		if !ok {
+			continue
+		}
+		raw, err := gen.GenerateKeys(req.Kind)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		s.logger.Info("generateKeys ok", "kind", req.Kind, "core", adapter.Name())
+		writeJSON(w, http.StatusOK, dto.GenerateKeysResponse{OK: true, Kind: req.Kind, Raw: raw})
+		return
+	}
+	if lastErr != nil {
+		s.logger.Error("generateKeys failed", "kind", req.Kind, "err", lastErr)
+		writeError(w, http.StatusInternalServerError, "KEYGEN_FAILED", lastErr.Error())
+		return
+	}
+	writeError(w, http.StatusNotFound, "KEYGEN_UNSUPPORTED",
+		"no core on this node can generate keys of kind "+req.Kind)
 }
 
 // ensureInboundFirewall opens UFW for one inbound's port. Per-protocol UDP vs

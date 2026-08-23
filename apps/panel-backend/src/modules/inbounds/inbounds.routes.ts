@@ -6,6 +6,7 @@ import { generateWireguardKeyPair, generateRealityKeyPair } from '../../lib/cred
 const KeypairQuery = z.object({
   protocol: z.enum(['xray', 'amneziawg']).default('amneziawg'),
 });
+
 import {
   CreateInboundSchema,
   UpdateInboundSchema,

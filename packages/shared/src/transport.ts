@@ -479,6 +479,30 @@ export interface ApplyEgressResponse {
   applied: boolean;
 }
 
+// ───── POST /generateKeys ─────
+
+/**
+ * U5 - mint key material with the core binary that will use it, so an operator
+ * does not have to find a machine with the right build, run it by hand and
+ * paste the result.
+ *
+ * `kind` is the core's own keygen subcommand, and the node returns that
+ * command's stdout VERBATIM: what the panel wants out of it moves with the core
+ * version, and a parser on the node would have to be shipped to every node to
+ * keep up.
+ */
+export interface GenerateKeysRequest {
+  /** 'mldsa65' (post-quantum REALITY) or 'vlessenc' (VLESS-Encryption). */
+  kind: string;
+}
+
+export interface GenerateKeysResponse {
+  ok: true;
+  kind: string;
+  /** The subcommand's stdout, untouched. */
+  raw: string;
+}
+
 // ───── POST /removeUser ─────
 
 export interface RemoveUserRequest {

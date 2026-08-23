@@ -1092,6 +1092,34 @@ export async function generateInboundKeypair(
   return data;
 }
 
+/**
+ * U5 - post-quantum key material, minted on a NODE because only the xray binary
+ * can produce it. `raw` is that command's output and is always present: when a
+ * build's wording is one the parser does not know, it is still the operator's
+ * key.
+ */
+export interface PqKeys {
+  kind: 'mldsa65' | 'vlessenc';
+  /** Which node produced them, i.e. which xray build they came from. */
+  nodeName: string;
+  raw: string;
+  /** mldsa65: the server seed (what the profile stores) and the verify key. */
+  seed?: string;
+  verify?: string;
+  /** vlessenc: the server decryption string (what the profile stores) and the
+   *  client encryption string for the share link. */
+  decryption?: string;
+  encryption?: string;
+}
+
+export async function generatePqKeys(
+  kind: PqKeys['kind'],
+  nodeId?: string,
+): Promise<PqKeys> {
+  const { data } = await api.post<PqKeys>('/api/profiles/generate-pq-keys', { kind, nodeId });
+  return data;
+}
+
 export async function testSrrRule(userAgent: string): Promise<TestSrrResponse> {
   const { data } = await api.post<TestSrrResponse>('/api/srr/test', { userAgent });
   return data;

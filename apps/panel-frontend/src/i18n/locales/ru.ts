@@ -1213,6 +1213,13 @@ export default {
         abuseDnsHijackDesc: 'Слать DNS в dns-out, чтобы резолвер не видел IP клиентов.',
         pqDesc:
           'Постквантовая криптография (по умолч. выкл.). Opaque-значения генерируются бинарём xray (xray mldsa65 / xray vlessenc) и вставляются сюда. Нужна сборка xray с поддержкой PQ.',
+        pqGenerateMldsa: 'Сгенерировать на ноде',
+        pqGenerateVless: 'Сгенерировать на ноде',
+        pqGenerated: 'Сгенерировано на {{node}} и подставлено ниже.',
+        pqGeneratedUnparsed:
+          'Сгенерировано на {{node}}, но эта сборка вывела результат иначе — скопируй значение из вывода ниже.',
+        pqRawHint:
+          'Сырой вывод с {{node}}. Половина, которую профиль не хранит (verify-ключ, клиентская encryption-строка), нужна клиентам и читается только отсюда.',
         pqMldsaLabel: 'REALITY ML-DSA-65 seed',
         pqMldsaDesc:
           'Серверный seed — добавляет постквантовую подпись на REALITY-сертификат. Только для security=reality; cert от target должен быть >3500 байт.',

@@ -137,6 +137,25 @@ type ApplyEgressResponse struct {
 	Applied bool `json:"applied"`
 }
 
+// ───── POST /generateKeys ─────
+//
+// U5 - mint key material with the core binary that will use it. Mirrors
+// GenerateKeysRequest/Response in packages/shared/src/transport.ts.
+// `raw` is the subcommand's stdout verbatim; the panel parses it, and shows it
+// as-is when it cannot (see the KeyGenerator interface for why the node does
+// not parse).
+
+type GenerateKeysRequest struct {
+	// Kind is the core's own keygen subcommand ("mldsa65", "vlessenc").
+	Kind string `json:"kind"`
+}
+
+type GenerateKeysResponse struct {
+	OK   bool   `json:"ok"`
+	Kind string `json:"kind"`
+	Raw  string `json:"raw"`
+}
+
 // ───── POST /removeUser ─────
 
 type RemoveUserRequest struct {

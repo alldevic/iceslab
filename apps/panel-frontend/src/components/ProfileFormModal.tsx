@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Accordion,
@@ -6,6 +6,7 @@ import {
   Box,
   Button,
   Card,
+  Code,
   Collapse,
   Group,
   Modal,
@@ -38,7 +39,9 @@ import { useQuery } from '@tanstack/react-query';
 import { notifications } from '@mantine/notifications';
 import { useMutation } from '@tanstack/react-query';
 import {
+  apiErrorMessage,
   generateInboundKeypair,
+  generatePqKeys,
   listNodes,
   type CreateProfileInput,
   type Profile,
@@ -528,6 +531,40 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
   const mode: Mode = isEdit ? 'edit' : 'create';
   const [exportOpen, exportCtl] = useDisclosure(false);
   const [advOpen, advCtl] = useDisclosure(false);
+
+  /**
+   * U5 - post-quantum key material comes from the xray binary, which lives on
+   * the nodes and not in the panel, so the button asks a node. The whole output
+   * is kept: when the parser does not recognise a build's wording, showing it is
+   * the difference between "the button is broken" and "copy your key from here".
+   */
+  const [pqRaw, setPqRaw] = useState<{ kind: string; nodeName: string; text: string } | null>(null);
+  const pqKeygen = useMutation({
+    mutationFn: (kind: 'mldsa65' | 'vlessenc') => generatePqKeys(kind),
+    onSuccess: (keys) => {
+      if (keys.kind === 'mldsa65' && keys.seed) {
+        form.setFieldValue('xrayMldsa65Seed', keys.seed);
+      }
+      if (keys.kind === 'vlessenc' && keys.decryption) {
+        form.setFieldValue('xrayVlessDecryption', keys.decryption);
+      }
+      const placed = keys.kind === 'mldsa65' ? keys.seed : keys.decryption;
+      // The half the profile does NOT store still has to reach the operator:
+      // the verify key and the client encryption string go to clients, and
+      // there is nowhere else to read them from.
+      setPqRaw({ kind: keys.kind, nodeName: keys.nodeName, text: keys.raw });
+      notifications.show({
+        color: placed ? 'green' : 'yellow',
+        message: placed
+          ? t('profiles.form.cfg.pqGenerated', { node: keys.nodeName })
+          : t('profiles.form.cfg.pqGeneratedUnparsed', { node: keys.nodeName }),
+      });
+    },
+    onError: (err) => {
+      notifications.show({ color: 'red', message: apiErrorMessage(err) });
+    },
+  });
+
 
   const form = useForm<FormValues>({
     initialValues: defaults(profile),
@@ -1609,6 +1646,18 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                       disabled={form.values.xraySecurity !== 'reality' || form.values.engine === 'singbox'}
                       {...form.getInputProps('xrayMldsa65Seed')}
                     />
+                    <Button
+                      variant="light"
+                      size="xs"
+                      leftSection={<IconKey size={14} />}
+                      loading={pqKeygen.isPending && pqKeygen.variables === 'mldsa65'}
+                      disabled={
+                        form.values.xraySecurity !== 'reality' || form.values.engine === 'singbox'
+                      }
+                      onClick={() => pqKeygen.mutate('mldsa65')}
+                    >
+                      {t('profiles.form.cfg.pqGenerateMldsa')}
+                    </Button>
                     <Textarea
                       label={t('profiles.form.cfg.pqVlessLabel')}
                       description={t('profiles.form.cfg.pqVlessDesc')}
@@ -1619,6 +1668,28 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                       disabled={form.values.xraySubprotocol !== 'vless' || form.values.engine === 'singbox'}
                       {...form.getInputProps('xrayVlessDecryption')}
                     />
+                    <Button
+                      variant="light"
+                      size="xs"
+                      leftSection={<IconKey size={14} />}
+                      loading={pqKeygen.isPending && pqKeygen.variables === 'vlessenc'}
+                      disabled={
+                        form.values.xraySubprotocol !== 'vless' || form.values.engine === 'singbox'
+                      }
+                      onClick={() => pqKeygen.mutate('vlessenc')}
+                    >
+                      {t('profiles.form.cfg.pqGenerateVless')}
+                    </Button>
+                    {pqRaw && (
+                      <Stack gap={4}>
+                        <Text size="xs" c="dimmed">
+                          {t('profiles.form.cfg.pqRawHint', { node: pqRaw.nodeName })}
+                        </Text>
+                        <Code block style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                          {pqRaw.text}
+                        </Code>
+                      </Stack>
+                    )}
                   </Stack>
                 </Tabs.Panel>
               </Tabs>

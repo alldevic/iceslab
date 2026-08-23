@@ -17,9 +17,16 @@ import {
 } from './profiles.schemas.js';
 import { resolveHostFields } from './host-fields.js';
 import * as svc from './profiles.service.js';
+import { generatePqKeys, NoKeygenNodeError, PQ_KEY_KINDS } from './pq-keys.js';
 
 const KeypairQuery = z.object({
   protocol: z.enum(['xray', 'amneziawg']).default('amneziawg'),
+});
+
+/** U5 keygen: which material, and optionally which node should mint it. */
+const PqKeygenSchema = z.object({
+  kind: z.enum(PQ_KEY_KINDS),
+  nodeId: z.uuid().optional(),
 });
 
 export async function profilesRoutes(app: FastifyInstance): Promise<void> {
@@ -33,6 +40,28 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
     const pair =
       protocol === 'xray' ? generateRealityKeyPair() : generateWireguardKeyPair();
     return reply.send(pair);
+  });
+
+  /**
+   * U5 - mint post-quantum key material on a NODE, because only the xray binary
+   * can produce it and the panel has none. Without this an operator has to find
+   * a box with the right build, run `xray mldsa65` / `xray vlessenc` by hand and
+   * paste the result, which is how a shipped feature stays off.
+   *
+   * `nodeId` pins which node; without it the panel tries the likeliest online
+   * ones. The node's raw output always comes back, so a build whose wording the
+   * parser does not know still leaves the operator able to copy their key.
+   */
+  app.post('/api/profiles/generate-pq-keys', auth, async (req, reply) => {
+    const { kind, nodeId } = PqKeygenSchema.parse(req.body);
+    try {
+      return reply.send(await generatePqKeys(kind, nodeId));
+    } catch (err) {
+      if (err instanceof NoKeygenNodeError) {
+        return reply.code(503).send({ error: 'KEYGEN_UNAVAILABLE', message: err.message });
+      }
+      throw err;
+    }
   });
 
   // ───── Profiles ─────
