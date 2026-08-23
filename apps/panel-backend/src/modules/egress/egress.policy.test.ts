@@ -62,27 +62,38 @@ describe('compileEgressPolicy', () => {
 
   it('qualifies bare category names and leaves qualified ones alone', () => {
     const policy = EgressPolicySchema.parse([
-      { geosite: ['youtube', 'ext:custom.dat:vpn'], geoip: ['ru'], target: 'direct' },
+      { geosite: ['youtube', 'ext:custom.dat:vpn'], target: 'direct' },
     ]) as EgressPolicy;
     const { fragments } = compileEgressPolicy(policy, NO_CHANNELS);
     expect(fragments?.rules[0]).toEqual({
       domain: ['geosite:youtube', 'ext:custom.dat:vpn'],
-      ip: ['geoip:ru'],
       outboundTag: 'direct',
     });
   });
 
-  it('merges literal matchers into the same rule', () => {
+  // xray ANDs the conditions inside one rule, so a single rule carrying both a
+  // domain and an ip matcher fires only when the destination matches BOTH. The
+  // form reads as "any of these -> target", so one authored rule has to compile
+  // to one rule per matcher KIND, sharing the port/network/target.
+  it('splits domain and ip matchers into separate rules', () => {
     const policy = EgressPolicySchema.parse([
-      { geosite: ['ru'], domain: ['example.com'], port: '443', network: 'tcp', target: 'block' },
+      { geosite: ['youtube'], geoip: ['ru'], port: '443', network: 'tcp', target: 'block' },
     ]) as EgressPolicy;
     const { fragments } = compileEgressPolicy(policy, NO_CHANNELS);
-    expect(fragments?.rules[0]).toEqual({
-      domain: ['geosite:ru', 'example.com'],
-      port: '443',
-      network: 'tcp',
-      outboundTag: 'blocked',
-    });
+    expect(fragments?.rules).toEqual([
+      { domain: ['geosite:youtube'], port: '443', network: 'tcp', outboundTag: 'blocked' },
+      { ip: ['geoip:ru'], port: '443', network: 'tcp', outboundTag: 'blocked' },
+    ]);
+  });
+
+  it('keeps matchers of the same kind in one rule', () => {
+    const policy = EgressPolicySchema.parse([
+      { geosite: ['ru'], domain: ['example.com'], target: 'block' },
+    ]) as EgressPolicy;
+    const { fragments } = compileEgressPolicy(policy, NO_CHANNELS);
+    expect(fragments?.rules).toEqual([
+      { domain: ['geosite:ru', 'example.com'], outboundTag: 'blocked' },
+    ]);
   });
 
   it('preserves the operator order, which is the precedence xray applies', () => {

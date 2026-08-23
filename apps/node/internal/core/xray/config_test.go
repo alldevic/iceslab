@@ -1386,3 +1386,118 @@ func TestInboundEqual_RoutingFragments(t *testing.T) {
 		})
 	}
 }
+
+// One config has ONE routing.domainStrategy, and two independent features ask
+// to raise it: a cascade entry's geo split and the node's egress policy. Both
+// ask for the same reason (an ip/geoip rule cannot fire under IPIfNonMatch once
+// a later rule matches everything), so honouring one and dropping the other
+// would leave that feature's rules silently dead on any node running both.
+func TestRender_DomainStrategy_CombinesBothRequests(t *testing.T) {
+	strategyOf := func(t *testing.T, cascade *CascadeFragments, rf *RoutingFragments) string {
+		t.Helper()
+		cfg := validInbound()
+		cfg.RoutingFragments = rf
+		blob, err := renderConfigWithCascade(cfg, []xrayClient{{ID: "u1", Email: "u1"}}, cascade)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(blob, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return m["routing"].(map[string]any)["domainStrategy"].(string)
+	}
+	policy := func(s string) *RoutingFragments {
+		return &RoutingFragments{
+			Rules:          []RoutingRule{{IP: []string{"geoip:ru"}, OutboundTag: "direct"}},
+			DomainStrategy: s,
+		}
+	}
+	cascadeWith := func(s string) *CascadeFragments {
+		return &CascadeFragments{DomainStrategy: s}
+	}
+
+	cases := []struct {
+		name    string
+		cascade *CascadeFragments
+		frags   *RoutingFragments
+		want    string
+	}{
+		{"neither asks", nil, nil, "IPIfNonMatch"},
+		{"only the geo split asks", cascadeWith("IPOnDemand"), nil, "IPOnDemand"},
+		{"only the egress policy asks", nil, policy("IPOnDemand"), "IPOnDemand"},
+		{"both ask", cascadeWith("IPOnDemand"), policy("IPOnDemand"), "IPOnDemand"},
+		// The one that resolves more wins: the other feature's ip rules would
+		// never fire otherwise, and an extra lookup is the cheaper mistake.
+		{"they disagree", cascadeWith("AsIs"), policy("IPOnDemand"), "IPOnDemand"},
+		{"they disagree, other way", cascadeWith("IPOnDemand"), policy("AsIs"), "IPOnDemand"},
+		// xray refuses to start on an unknown strategy, so a drifted wire value
+		// must fall back rather than reach the config and take the node down.
+		{"unknown value falls back", cascadeWith("Nonsense"), policy("also-nonsense"), "IPIfNonMatch"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := strategyOf(t, tc.cascade, tc.frags); got != tc.want {
+				t.Errorf("domainStrategy = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A node can carry BOTH policies at once: its own egress policy and, as a
+// cascade hop, that chain's geo split. They land in one rule list, so the order
+// between them is the answer to "which one wins", and it has to be a decision
+// rather than whatever the render happened to do.
+//
+// The node's own policy goes first. It answers "does this flow leave the
+// machine here at all" (direct, the desync proxy, WARP), while the cascade's
+// rules answer "for what stays in the tunnel, which way through the chain" and
+// end in a catch-all that matches everything. Putting the cascade first would
+// mean that catch-all shadows the node policy entirely.
+func TestRender_NodePolicyBeforeCascadeRules(t *testing.T) {
+	cfg := validInbound()
+	cfg.RoutingFragments = &RoutingFragments{
+		Rules: []RoutingRule{{Domain: []string{"geosite:youtube"}, OutboundTag: "direct"}},
+	}
+	cascade := &CascadeFragments{
+		RoutingRules: []json.RawMessage{
+			json.RawMessage(`{"type":"field","domain":["geosite:ru"],"outboundTag":"direct"}`),
+			// The catch-all every cascade hop ends with.
+			json.RawMessage(`{"type":"field","network":"tcp,udp","outboundTag":"link-out"}`),
+		},
+	}
+	blob, err := renderConfigWithCascade(cfg, []xrayClient{{ID: "u1", Email: "u1"}}, cascade)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(blob, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	rules := m["routing"].(map[string]any)["rules"].([]any)
+
+	policyIdx, splitIdx, catchAllIdx := -1, -1, -1
+	for i, raw := range rules {
+		r := raw.(map[string]any)
+		if doms, ok := r["domain"].([]any); ok {
+			for _, d := range doms {
+				if d == "geosite:youtube" {
+					policyIdx = i
+				}
+				if d == "geosite:ru" {
+					splitIdx = i
+				}
+			}
+		}
+		if r["outboundTag"] == "link-out" {
+			catchAllIdx = i
+		}
+	}
+	if policyIdx == -1 || splitIdx == -1 || catchAllIdx == -1 {
+		t.Fatalf("expected all three, got policy=%d split=%d catchAll=%d", policyIdx, splitIdx, catchAllIdx)
+	}
+	if !(policyIdx < splitIdx && splitIdx < catchAllIdx) {
+		t.Errorf("order must be node policy -> cascade split -> catch-all, got %d, %d, %d",
+			policyIdx, splitIdx, catchAllIdx)
+	}
+}

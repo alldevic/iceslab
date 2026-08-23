@@ -3,121 +3,135 @@ import type { RoutingFragmentsCfg } from '@iceslab/shared';
 import { ZAPRET2_OUTBOUND_TAG } from './egress.presets.js';
 
 /**
- * B1 - a node's server-side egress policy: which flows leave this node by which
- * way out. The operator authors match -> target rules; this module compiles
- * them into the xray routing fragments the node renders (RoutingFragmentsCfg in
- * packages/shared, RoutingFragments in apps/node/.../xray/config.go).
+ * The fork's egress language: an operator writes match -> target rules, and a
+ * compiler turns them into the xray routing rules a node renders.
  *
- * Why the policy belongs to the NODE and not to the profile: a target is a
- * capability of one machine. A desync proxy runs on the nodes where it was
- * provisioned, WARP is registered per node, a cascade link-out exists only on a
- * hop. A profile is deployed to many nodes at once, so a rule authored there
- * would reach nodes that do not have the channel it names, and an xray config
- * with an unknown outboundTag is one xray refuses to start on: a single stale
- * policy row would take those nodes dark. Compiling per node also means the
- * panel, which knows the fleet, resolves the target - the node stays a
- * renderer.
+ * ONE language, two scopes, because the same sentence is worth saying in two
+ * places:
  *
- * A rule naming a capability this node lacks is DROPPED, not rendered pointing
- * nowhere. The caller logs what it dropped (see compileEgressPolicy).
+ *   - per NODE (B1, Node.hardening.egressPolicy): which flows leave this
+ *     machine by which way out. Compiled here against the node's capabilities.
+ *   - per CASCADE MEMBER (E, CascadePositionNode.egressPolicy): the same, for
+ *     one hop of one chain, where the ways out are the chain's directions.
+ *     Compiled in cascade.config.ts, which supplies those as targets.
+ *
+ * The scopes stay separate because a node can be a hop in several cascades with
+ * a different split in each - the storage is keyed (position, node) for exactly
+ * that. What must NOT differ is the language: two schemas of the same idea let
+ * a policy authored in one place fail validation in the other, and let one
+ * compiler carry a fix the other never gets. That happened once already; see
+ * compileRules on why domain and ip cannot share a rule.
+ *
+ * A rule's target is a capability, not an outbound tag. Resolution is per scope
+ * and per node, and a rule naming something this node cannot serve is DROPPED:
+ * an xray config with an outboundTag no outbound answers is one xray refuses to
+ * start on, so a single stale row would otherwise take the node dark.
  */
 
 /** A matcher token: a geosite/geoip category name, or a literal domain/ip. */
 const Matcher = z.string().min(1).max(256);
 
 /**
- * Where a matched flow leaves the node.
+ * Where a matched flow leaves.
  *
- *   - `direct`: this node's own IP, bypassing whatever the node's default
- *     egress is (the point of a "RU domains stay local" split).
+ *   - `direct`: the node's own IP, bypassing whatever its default egress is.
  *   - `block`: the blackhole.
  *   - `warp`: the Cloudflare WARP outbound, on a node that has WARP enabled.
- *     Mostly redundant there, since the node already sends everything the
- *     policy did NOT match to WARP, but it lets a rule say so explicitly and
- *     survive the node's default egress changing.
- *   - `zapret2`: the node's local DPI-desync proxy (B2a). The flow goes into
- *     ss-zapret2's SOCKS frontend and leaves desynchronised from there, which
- *     is how a node inside a censored network reaches a blocked destination.
+ *   - `zapret2`: the node's local DPI-desync proxy (B2a), which is how a node
+ *     inside a censored network reaches a blocked destination.
+ *   - `link-out`: the way out the client already chose, i.e. onward through the
+ *     cascade. Only a cascade hop can serve it.
+ *   - `direction`: a specific way out of the cascade, named by `directionTag`,
+ *     overriding what the client asked for.
  *
- * This is where the three egress channels compose. They are NOT three
- * independent toggles racing each other: WARP is the node's DEFAULT egress
- * (upstream renders a catch-all rule for it), zapret2 is a CHANNEL that only
- * the flows named here take, and `direct` is the way to opt a flow out of
- * whichever of the two the node runs. The sing-box engine is not a channel at
- * all: it is an alternative renderer that emits no routing section, so a node
- * serving this profile through it is refused the policy outright (see the
- * guard in apps/node/internal/core/singbox/adapter.go).
- *
- * Extended, not redefined, as more channels land: the geo subsystem's cascade
- * targets ('link-out', a frozen direction tag) join here when the branches
- * meet. Adding a target means adding one entry to the capability resolution
- * below.
+ * The vocabulary is shared even though no single scope serves all of it: a node
+ * policy naming `direction` and a cascade policy naming `zapret2` both compile
+ * to nothing, which is the same safe outcome as naming a channel the node has
+ * not got. That also means a combination we have not built yet (routing a
+ * cascade hop's blocked traffic into its desync proxy) is a resolution entry
+ * away rather than a schema change.
  */
-export const EGRESS_TARGETS = ['direct', 'block', 'warp', 'zapret2'] as const;
+export const EGRESS_TARGETS = [
+  'direct',
+  'block',
+  'warp',
+  'zapret2',
+  'link-out',
+  'direction',
+] as const;
 export const EgressTargetSchema = z.enum(EGRESS_TARGETS);
 
 export const EgressRuleSchema = z
   .object({
-    /** geosite category names ('youtube', or already-qualified 'ext:f.dat:c'). */
+    /** geosite category names (xray-bundled or `ext:file.dat:cat`); prefixed
+     *  `geosite:` unless already qualified (contains a colon). */
     geosite: z.array(Matcher).max(512).optional(),
-    /** geoip category names ('ru', 'private'). */
+    /** geoip category names ('ru', 'private'); prefixed `geoip:` unless already
+     *  qualified. */
     geoip: z.array(Matcher).max(512).optional(),
     /** Literal domain matchers, passed through verbatim ('example.com',
-     *  'domain:foo', 'full:bar.example'). */
-    domain: z.array(Matcher).max(1024).optional(),
+     *  'domain:foo', 'ext:f.dat:c'). */
+    domain: z.array(Matcher).max(4096).optional(),
     /** Literal IP/CIDR matchers, passed through verbatim ('10.0.0.0/8'). */
-    ip: z.array(Matcher).max(1024).optional(),
-    /** Single port, range '1000-2000', or comma list '80,443'. */
+    ip: z.array(Matcher).max(4096).optional(),
+    /** xray port matcher ('443', '1000-2000', '80,443'). */
     port: z
       .string()
       .max(64)
       .regex(/^\d{1,5}(-\d{1,5})?(,\d{1,5}(-\d{1,5})?)*$/)
       .optional(),
+    /** Restrict the rule to a transport. */
     network: z.enum(['tcp', 'udp', 'tcp,udp']).optional(),
     target: EgressTargetSchema,
+    /** Required for target 'direction': the frozen tag of the way out a match is
+     *  forced through. Tags identify a DIRECTION and survive its node pool
+     *  changing, which is why the policy stores the tag and not a node id. */
+    directionTag: z.number().int().positive().optional(),
   })
+  // Strict: a mistyped key must fail the save instead of persisting as a no-op
+  // the operator cannot see. Same reason HardeningSchema is strict.
   .strict()
+  .refine((r) => r.target !== 'direction' || r.directionTag !== undefined, {
+    message: "target 'direction' needs a directionTag",
+  })
   .refine(
-    (r) => Boolean(r.geosite?.length || r.geoip?.length || r.domain?.length || r.ip?.length || r.port),
+    (r) =>
+      Boolean(r.geosite?.length || r.geoip?.length || r.domain?.length || r.ip?.length || r.port),
     { message: 'each egress rule needs at least one matcher (geosite/geoip/domain/ip/port)' },
   );
 
-export const EgressPolicySchema = z.array(EgressRuleSchema).max(64);
+export const EgressPolicySchema = z.array(EgressRuleSchema).max(128);
 
 export type EgressTarget = z.infer<typeof EgressTargetSchema>;
 export type EgressRule = z.infer<typeof EgressRuleSchema>;
 export type EgressPolicy = z.infer<typeof EgressPolicySchema>;
 
 /**
- * Defensively coerce a persisted policy (a Prisma JsonValue out of
- * Node.hardening) into an EgressPolicy, or undefined when it is absent or has
- * drifted out of shape. A half-valid policy compiles to nothing rather than to
- * a partial split the operator cannot see: the node then routes as it did
- * before, which is the safe direction to fail in.
+ * What to merge into a rule for each target: `{ outboundTag }` for a fixed
+ * outbound, or `{ balancerTag }` when a pool serves that way out.
+ *
+ * Keys are target names, plus `direction:<tag>` per direction the caller can
+ * steer into. A target the caller did not supply resolves to nothing and its
+ * rules are dropped.
+ */
+export type TargetRouting = Record<string, Record<string, unknown>>;
+
+/** The targets key for a rule that forces a specific way out. */
+export function directionTargetKey(tag: number): string {
+  return `direction:${tag}`;
+}
+
+/**
+ * Defensively coerce a persisted policy (a Prisma JsonValue) into an
+ * EgressPolicy, or undefined when it is absent or has drifted out of shape. A
+ * half-valid policy compiles to nothing rather than to a partial split the
+ * operator cannot see: the node then routes as it did before, which is the safe
+ * direction to fail in.
  */
 export function coerceEgressPolicy(raw: unknown): EgressPolicy | undefined {
   if (raw == null) return undefined;
   const parsed = EgressPolicySchema.safeParse(raw);
   return parsed.success && parsed.data.length > 0 ? parsed.data : undefined;
-}
-
-/**
- * What ways out a node actually has. Built from the node row by the caller, so
- * this module needs no database access and stays a pure compiler.
- *
- * `direct` and `block` are not listed: every xray config carries the `direct`
- * and `blocked` outbounds unconditionally.
- */
-export interface NodeEgressCapabilities {
-  /** Cloudflare WARP is registered and enabled on this node. */
-  warp: boolean;
-  /**
-   * The zapret2 desync channel runs here, with its SOCKS frontend on this port.
-   * null when the node does not run it (never provisioned, or switched off),
-   * in which case a rule targeting zapret2 is dropped rather than pointed at a
-   * port nothing listens on.
-   */
-  zapret2SocksPort: number | null;
 }
 
 /** One rule that could not be rendered, for the caller to log. */
@@ -128,14 +142,16 @@ export interface DroppedRule {
   reason: string;
 }
 
-export interface CompiledEgressPolicy {
-  /** What to attach to the node's xray inbound, or null when nothing survived. */
-  fragments: RoutingFragmentsCfg | null;
+export interface CompiledRules {
+  /** Field rules, in the operator's order. */
+  rules: Record<string, unknown>[];
+  /** True when a rule targets 'block' (the caller must have a blackhole). */
+  needsBlock: boolean;
   dropped: DroppedRule[];
 }
 
-/** A colon means the matcher is already qualified (geosite:/geoip:/ext:/full:/
- *  domain:/regexp:/keyword:) or is an IPv6 literal, so leave it untouched. */
+// A colon means the matcher is already qualified (geosite:/geoip:/ext:/domain:/
+// full:/regexp:/keyword:) or is an IPv6 literal - leave it untouched.
 const QUALIFIED = /:/;
 
 function qualify(prefix: string, values: string[] | undefined): string[] {
@@ -143,20 +159,124 @@ function qualify(prefix: string, values: string[] | undefined): string[] {
 }
 
 /**
- * Resolve a target to the outbound tag that carries it on THIS node, or null
- * when the node has no such way out.
+ * True when the policy has an ip/geoip matcher, i.e. a rule that can only be
+ * evaluated once xray has resolved the destination to an IP.
+ *
+ * Such a policy needs routing.domainStrategy raised to IPOnDemand. With
+ * sniffing on, a flow is routed by its sniffed DOMAIN, and under the default
+ * IPIfNonMatch xray resolves that domain for a second pass only if NO rule
+ * matched the first - a node with a cascade catch-all or a WARP rule always has
+ * a later rule that matches, so the second pass never comes and the ip rule is
+ * dead. A geosite/domain-only policy keeps the default, so it stays
+ * byte-identical to a node without one.
+ *
+ * CAVEAT, still unvalidated on a live node: IPOnDemand resolves through the
+ * NODE's DNS, which can answer differently than the client's resolver for CDN
+ * and geo-DNS names, so a geoip match is approximate.
  */
-function outboundTagFor(target: EgressTarget, caps: NodeEgressCapabilities): string | null {
-  switch (target) {
-    case 'direct':
-      return 'direct';
-    case 'block':
-      return 'blocked';
-    case 'warp':
-      return caps.warp ? 'warp' : null;
-    case 'zapret2':
-      return caps.zapret2SocksPort === null ? null : ZAPRET2_OUTBOUND_TAG;
-  }
+export function policyNeedsIpResolution(policy: EgressPolicy | undefined): boolean {
+  return (policy ?? []).some((r) => Boolean(r.geoip?.length || r.ip?.length));
+}
+
+/** The domainStrategy a policy needs, or undefined to keep the node default. */
+export function egressDomainStrategy(policy: EgressPolicy | undefined): 'IPOnDemand' | undefined {
+  return policyNeedsIpResolution(policy) ? 'IPOnDemand' : undefined;
+}
+
+/**
+ * Compile a policy into xray field rules against a scope's targets.
+ *
+ * Rule order is preserved: xray takes the first matching rule, so the
+ * operator's order is the precedence they see in the UI.
+ *
+ * domain and ip go into SEPARATE rules. xray ANDs the conditions inside one
+ * rule, so a rule carrying both would demand that the destination match a
+ * domain AND an IP condition - the classic geosite+geoip-in-one-rule trap. The
+ * policy means "any of these -> target", and a rule that reads as "or" in the
+ * UI must not compile to "and".
+ */
+export function compileRules(
+  policy: EgressPolicy | undefined,
+  targets: TargetRouting,
+): CompiledRules {
+  const rules: Record<string, unknown>[] = [];
+  const dropped: DroppedRule[] = [];
+  let needsBlock = false;
+
+  (policy ?? []).forEach((r, index) => {
+    const domain = [...qualify('geosite', r.geosite), ...(r.domain ?? [])];
+    const ip = [...qualify('geoip', r.geoip), ...(r.ip ?? [])];
+    // A rule with no matcher at all behaves as a catch-all and would shadow
+    // every rule under it, including the cascade's own. The schema rejects one,
+    // so this only catches drifted data, but the cost of being wrong is the
+    // whole node's traffic.
+    if (domain.length === 0 && ip.length === 0 && r.port === undefined) {
+      dropped.push({ index, target: r.target, reason: 'rule has no matcher' });
+      return;
+    }
+    const key = r.target === 'direction' ? directionTargetKey(r.directionTag!) : r.target;
+    const fragment = targets[key];
+    if (fragment === undefined) {
+      dropped.push({
+        index,
+        target: r.target,
+        reason:
+          r.target === 'direction'
+            ? `no direction ${r.directionTag} here`
+            : `node has no ${r.target} egress`,
+      });
+      return;
+    }
+    const base: Record<string, unknown> = { type: 'field' };
+    if (r.port !== undefined) base.port = r.port;
+    if (r.network !== undefined) base.network = r.network;
+    Object.assign(base, fragment);
+    if (r.target === 'block') needsBlock = true;
+    if (domain.length > 0) rules.push({ ...base, domain });
+    if (ip.length > 0) rules.push({ ...base, ip });
+    if (domain.length === 0 && ip.length === 0) rules.push(base); // port/network only
+  });
+
+  return { rules, needsBlock, dropped };
+}
+
+// ───── node scope ─────
+
+/**
+ * What ways out a node has. Built from the node row by the caller, so this
+ * module needs no database access and stays a pure compiler.
+ *
+ * `direct` and `block` are not listed: every xray config carries the `direct`
+ * and `blocked` outbounds unconditionally.
+ */
+export interface NodeEgressCapabilities {
+  /** Cloudflare WARP is registered and enabled on this node. */
+  warp: boolean;
+  /**
+   * The zapret2 desync channel runs here, with its SOCKS frontend on this port.
+   * null when the node does not run it (never provisioned, or switched off), in
+   * which case a rule targeting zapret2 is dropped rather than pointed at a
+   * port nothing listens on.
+   */
+  zapret2SocksPort: number | null;
+}
+
+export interface CompiledEgressPolicy {
+  /** What to attach to the node's xray inbound, or null when nothing survived. */
+  fragments: RoutingFragmentsCfg | null;
+  dropped: DroppedRule[];
+}
+
+/** The ways out a node itself can serve. The cascade scope builds its own map
+ *  from the chain's directions (see cascade.config.ts). */
+function nodeTargets(caps: NodeEgressCapabilities): TargetRouting {
+  const targets: TargetRouting = {
+    direct: { outboundTag: 'direct' },
+    block: { outboundTag: 'blocked' },
+  };
+  if (caps.warp) targets.warp = { outboundTag: 'warp' };
+  if (caps.zapret2SocksPort !== null) targets.zapret2 = { outboundTag: ZAPRET2_OUTBOUND_TAG };
+  return targets;
 }
 
 /**
@@ -173,52 +293,14 @@ function zapret2SocksOutbound(port: number): Record<string, unknown> {
   };
 }
 
-/**
- * Compile an authored policy against one node's capabilities.
- *
- * Rule order is preserved: xray takes the first matching rule, so the operator's
- * order is the precedence they see in the UI.
- *
- * domainStrategy: a rule that matches on IP can only fire once xray has resolved
- * the destination, and with sniffing on a flow is routed by its sniffed DOMAIN.
- * Under the default IPIfNonMatch xray resolves it only if NO rule matched, and a
- * node with a cascade or WARP catch-all always has a later rule that matches, so
- * the second pass never comes. Any ip/geoip matcher therefore pushes the whole
- * config to IPOnDemand, which resolves as a rule needs an IP. A domain-only
- * policy keeps the default, so it stays byte-identical to a node without one.
- */
+/** Compile a NODE's policy against the ways out that node actually has. */
 export function compileEgressPolicy(
   policy: EgressPolicy | undefined,
   caps: NodeEgressCapabilities,
 ): CompiledEgressPolicy {
   if (!policy || policy.length === 0) return { fragments: null, dropped: [] };
 
-  const rules: NonNullable<RoutingFragmentsCfg['rules']> = [];
-  const dropped: DroppedRule[] = [];
-  let needsIpResolution = false;
-
-  policy.forEach((rule, index) => {
-    const outboundTag = outboundTagFor(rule.target, caps);
-    if (outboundTag === null) {
-      dropped.push({
-        index,
-        target: rule.target,
-        reason: `node has no ${rule.target} egress`,
-      });
-      return;
-    }
-    const domain = [...qualify('geosite', rule.geosite), ...(rule.domain ?? [])];
-    const ip = [...qualify('geoip', rule.geoip), ...(rule.ip ?? [])];
-    if (ip.length > 0) needsIpResolution = true;
-    rules.push({
-      ...(domain.length > 0 ? { domain } : {}),
-      ...(ip.length > 0 ? { ip } : {}),
-      ...(rule.port ? { port: rule.port } : {}),
-      ...(rule.network ? { network: rule.network } : {}),
-      outboundTag,
-    });
-  });
-
+  const { rules, dropped } = compileRules(policy, nodeTargets(caps));
   if (rules.length === 0) return { fragments: null, dropped };
 
   const outbounds: unknown[] = [];
@@ -226,12 +308,19 @@ export function compileEgressPolicy(
     // Non-null: a rule only carries this tag when the capability was present.
     outbounds.push(zapret2SocksOutbound(caps.zapret2SocksPort as number));
   }
+  // Only the rules that survived can need IP resolution.
+  const needsIp = rules.some((r) => Array.isArray(r.ip) && (r.ip as unknown[]).length > 0);
 
   return {
     fragments: {
-      rules,
+      // `type: 'field'` is dropped here on purpose: the cascade scope merges its
+      // rules into the config as raw xray objects and needs it, while the node
+      // scope sends a structured shape the agent renders itself (it adds the
+      // type). Leaving it on would put a key on the wire that the documented
+      // RoutingFragmentsCfg does not have and the node ignores.
+      rules: rules.map(({ type: _type, ...rule }) => rule) as RoutingFragmentsCfg['rules'],
       ...(outbounds.length > 0 ? { outbounds } : {}),
-      ...(needsIpResolution ? { domainStrategy: 'IPOnDemand' as const } : {}),
+      ...(needsIp ? { domainStrategy: 'IPOnDemand' as const } : {}),
     },
     dropped,
   };
