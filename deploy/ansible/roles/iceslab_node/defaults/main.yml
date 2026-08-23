@@ -16,6 +16,14 @@ iceslab_enable_bbr: true
 # OFF by default. When true, provisions the docker stack the panel's
 # /applyEgress manager then drives (it overwrites the strategy `config`).
 iceslab_zapret2_enabled: false
+# What the stack needs, installed by the role so a node never depends on
+# someone having run apt by hand. `git` is listed because the role CLONES
+# ss-zapret2 with it: on a stock Debian cloud image it is absent and only
+# arrived at all as a transitive dependency of docker.io, which is luck, not a
+# dependency. Set false only if you provision these yourself - the role still
+# verifies `docker compose` works either way.
+iceslab_zapret2_install_prereqs: true
+iceslab_zapret2_prereqs: [docker.io, docker-compose, git]
 iceslab_zapret2_dir: /opt/ss-zapret2
 iceslab_zapret2_repo: https://github.com/vernette/ss-zapret2
 iceslab_zapret2_version: master

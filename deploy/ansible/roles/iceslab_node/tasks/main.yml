@@ -17,3 +17,12 @@
     - iceslab_panel_url | length > 0
     - iceslab_bootstrap_token | length > 0
   tags: [agent]
+
+# Wiring the stack into the agent comes LAST: it edits /etc/iceslab-node/env and
+# drops a unit override, neither of which exists until agent.yml has run. On a
+# freshly-bought server these tasks used to sit inside zapret2.yml, be guarded
+# on that env file, and skip - so the first provisioning run produced a node
+# with both halves installed and nothing joining them.
+- import_tasks: zapret2_agent.yml
+  when: iceslab_zapret2_enabled | bool
+  tags: [zapret2, egress, agent]

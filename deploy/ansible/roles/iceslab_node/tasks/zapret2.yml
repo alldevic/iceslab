@@ -4,7 +4,36 @@
 # `docker compose up -d`). Integration is socks-via-container: route blocked
 # traffic into ss-zapret2's SOCKS (127.0.0.1:{{ iceslab_zapret2_socks_port }})
 # via B1 routingFragments. See deploy/ansible/README.md.
-- name: Assert docker is available
+# The stack is docker-compose, so the role installs docker rather than
+# demanding it. Asserting instead used to fail the play on any node that did not
+# happen to have it, and the way that gets resolved in practice is an operator
+# apt-getting it by hand - which is how two nodes stop being the same node.
+#
+# Package names checked on Debian 13 (trixie), 2026-08-24: `docker.io` plus
+# `docker-compose`, which is what provides the compose V2 PLUGIN there
+# (`docker compose version` -> 2.26.1). There is no `docker-compose-v2` package
+# on trixie, and `docker-compose` is no longer the old Python V1 script.
+- name: Install what this stack needs (docker for the compose stack, git for the clone)
+  ansible.builtin.apt:
+    name: "{{ iceslab_zapret2_prereqs }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when:
+    - iceslab_zapret2_install_prereqs | bool
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Ensure docker is running
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+  when: iceslab_zapret2_install_prereqs | bool
+
+# Kept as a post-condition, not a precondition: it now says "the thing the role
+# just provisioned actually works", and still catches a non-Debian node or an
+# operator who set iceslab_zapret2_install_prereqs=false and did not deliver.
+- name: Confirm docker compose is usable
   ansible.builtin.command: docker compose version
   register: iceslab_docker_check
   changed_when: false
@@ -68,63 +97,3 @@
     state: started
     daemon_reload: true
   when: iceslab_zapret2_selftune | bool
-
-# Wire the node-agent's egress manager to this stack so panel /applyEgress
-# pushes can write the strategy config + reload the container. Only when the
-# agent is installed (its env file exists). UP_CMD uses --force-recreate so a
-# config change actually reloads zapret2.
-- name: Check for the node-agent env file
-  ansible.builtin.stat:
-    path: "{{ iceslab_node_env_file }}"
-  register: iceslab_agent_env_stat
-  when: iceslab_zapret2_agent_env | bool
-
-# The agent's unit runs ProtectSystem=strict with an explicit ReadWritePaths
-# list, and this stack's directory is not on it - so the env above points the
-# egress manager at a file it is not allowed to create. /applyEgress then fails
-# with "read-only file system" in the agent's journal, the panel logs a warning
-# nobody reads, and the node sits there with zapret2 marked enabled and no
-# strategy ever written. Caught on a live node 2026-08-24; before that the whole
-# B2a push path had never actually written a byte.
-#
-# A drop-in rather than an edit of the unit: the installer owns that file and
-# rewrites it on every re-run, and ReadWritePaths entries from drop-ins are
-# appended to the list rather than replacing it. The `-` prefix keeps the unit
-# startable before the directory exists, matching the installer's own entries.
-- name: Ensure the node-agent drop-in directory exists
-  ansible.builtin.file:
-    path: /etc/systemd/system/iceslab-node.service.d
-    state: directory
-    mode: "0755"
-  when:
-    - iceslab_zapret2_agent_env | bool
-    - iceslab_agent_env_stat.stat.exists | default(false)
-
-- name: Let the node-agent write this stack's config (ProtectSystem=strict drop-in)
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/iceslab-node.service.d/zapret2-rw.conf
-    mode: "0644"
-    content: |
-      # Managed by the iceslab_node role.
-      [Service]
-      ReadWritePaths=-{{ iceslab_zapret2_dir }}
-  when:
-    - iceslab_zapret2_agent_env | bool
-    - iceslab_agent_env_stat.stat.exists | default(false)
-  notify:
-    - reload systemd
-    - restart iceslab-node
-
-- name: Wire ZAPRET2_* into the node-agent env
-  ansible.builtin.blockinfile:
-    path: "{{ iceslab_node_env_file }}"
-    marker: "# {mark} ANSIBLE MANAGED zapret2 egress"
-    block: |
-      ZAPRET2_CONFIG_PATH={{ iceslab_zapret2_dir }}/config
-      ZAPRET2_UP_CMD=docker compose -f {{ iceslab_zapret2_dir }}/docker-compose.yml up -d --force-recreate
-      ZAPRET2_DOWN_CMD=docker compose -f {{ iceslab_zapret2_dir }}/docker-compose.yml down
-      {% if iceslab_zapret2_selftune | bool %}ZAPRET2_TUNE_PATH={{ iceslab_zapret2_tune_path }}{% endif %}
-  when:
-    - iceslab_zapret2_agent_env | bool
-    - iceslab_agent_env_stat.stat.exists | default(false)
-  notify: restart iceslab-node

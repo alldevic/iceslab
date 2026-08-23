@@ -1,0 +1,67 @@
+---
+# B2a - connect the provisioned zapret2 stack to the node-agent. SEPARATE from
+# zapret2.yml and imported after agent.yml on purpose: these tasks need
+# /etc/iceslab-node/env to exist, and on a freshly-bought server it does not
+# exist until the agent has been installed. Living next to the stack tasks, they
+# were guarded on that file and simply skipped on the first run - leaving a node
+# whose zapret2 container is up and healthy, whose agent is running, and which
+# are not connected to each other. /applyEgress then answers "no egress manager
+# configured" and B2a is absent with nothing saying so. A second run fixed it,
+# which is no use to a pipeline that provisions a server once.
+# Only meaningful once the agent is installed; a play run without panel
+# credentials skips agent.yml, and then there is nothing here to wire.
+- name: Check for the node-agent env file
+  ansible.builtin.stat:
+    path: "{{ iceslab_node_env_file }}"
+  register: iceslab_agent_env_stat
+  when: iceslab_zapret2_agent_env | bool
+
+# The agent's unit runs ProtectSystem=strict with an explicit ReadWritePaths
+# list, and this stack's directory is not on it - so the env wired below points
+# the egress manager at a file it may not create. /applyEgress then fails
+# with "read-only file system" in the agent's journal, the panel logs a warning
+# nobody reads, and the node sits there with zapret2 marked enabled and no
+# strategy ever written. Caught on a live node 2026-08-24; before that the whole
+# B2a push path had never actually written a byte.
+#
+# A drop-in rather than an edit of the unit: the installer owns that file and
+# rewrites it on every re-run, and ReadWritePaths entries from drop-ins are
+# appended to the list rather than replacing it. The `-` prefix keeps the unit
+# startable before the directory exists, matching the installer's own entries.
+- name: Ensure the node-agent drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/iceslab-node.service.d
+    state: directory
+    mode: "0755"
+  when:
+    - iceslab_zapret2_agent_env | bool
+    - iceslab_agent_env_stat.stat.exists | default(false)
+
+- name: Let the node-agent write this stack's config (ProtectSystem=strict drop-in)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/iceslab-node.service.d/zapret2-rw.conf
+    mode: "0644"
+    content: |
+      # Managed by the iceslab_node role.
+      [Service]
+      ReadWritePaths=-{{ iceslab_zapret2_dir }}
+  when:
+    - iceslab_zapret2_agent_env | bool
+    - iceslab_agent_env_stat.stat.exists | default(false)
+  notify:
+    - reload systemd
+    - restart iceslab-node
+
+- name: Wire ZAPRET2_* into the node-agent env
+  ansible.builtin.blockinfile:
+    path: "{{ iceslab_node_env_file }}"
+    marker: "# {mark} ANSIBLE MANAGED zapret2 egress"
+    block: |
+      ZAPRET2_CONFIG_PATH={{ iceslab_zapret2_dir }}/config
+      ZAPRET2_UP_CMD=docker compose -f {{ iceslab_zapret2_dir }}/docker-compose.yml up -d --force-recreate
+      ZAPRET2_DOWN_CMD=docker compose -f {{ iceslab_zapret2_dir }}/docker-compose.yml down
+      {% if iceslab_zapret2_selftune | bool %}ZAPRET2_TUNE_PATH={{ iceslab_zapret2_tune_path }}{% endif %}
+  when:
+    - iceslab_zapret2_agent_env | bool
+    - iceslab_agent_env_stat.stat.exists | default(false)
+  notify: restart iceslab-node
