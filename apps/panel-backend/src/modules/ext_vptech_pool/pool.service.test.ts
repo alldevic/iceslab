@@ -129,3 +129,64 @@ describe('F2 pool.service (DB-backed hotswap wiring)', () => {
     expect(runner.provision).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A hotswap replaces the box, not the operator's intent. The split they
+ * authored has to arrive on the spare, or the swap quietly undoes it and the
+ * only symptom is traffic leaving the wrong way.
+ *
+ * What does NOT carry is as deliberate: a channel (the zapret2 desync proxy) is
+ * a property of a machine that has to be provisioned on it, and claiming one the
+ * spare does not run would point rules at a port nothing answers.
+ */
+describe('F2 hotswap carries the egress policy', () => {
+  const POLICY = [{ geosite: ['ru'], target: 'direct' }];
+
+  async function nodeWith(name: string, status: string, hardening: unknown) {
+    seq += 1;
+    return prisma.node.create({
+      data: {
+        name: `${name}-${seq}`,
+        address: `${name}-${seq}.test:1337`,
+        status,
+        heartbeatSecret: Buffer.alloc(32),
+        hardening: hardening as never,
+      },
+    });
+  }
+
+  it('moves the policy onto the spare and leaves the channel behind', async () => {
+    const burned = await nodeWith('burned', 'active', {
+      pool: { asn: 'AS1' },
+      egressPolicy: POLICY,
+      zapret2: { enabled: true, preset: 'rf-default' },
+    });
+    const spare = await nodeWith('spare', 'standby', { pool: { asn: 'AS2' } });
+
+    const deps = makeHotswapDeps({ provision: vi.fn() } as unknown as AnsibleRunner);
+    await deps.repoint(burned.id, spare.id);
+
+    const after = (await prisma.node.findUnique({ where: { id: spare.id } }))!.hardening as {
+      pool?: unknown;
+      egressPolicy?: unknown;
+      zapret2?: unknown;
+    };
+    expect(after.egressPolicy).toEqual(POLICY);
+    // The spare's own labels survive: this is a merge, not a replacement.
+    expect(after.pool).toEqual({ asn: 'AS2' });
+    // The desync channel is the burned box's, not the policy's.
+    expect(after.zapret2).toBeUndefined();
+  });
+
+  it('leaves a spare alone when the burned node had no policy', async () => {
+    const burned = await nodeWith('burned-plain', 'active', { pool: { asn: 'AS1' } });
+    const spare = await nodeWith('spare-plain', 'standby', { pool: { asn: 'AS2' } });
+
+    const deps = makeHotswapDeps({ provision: vi.fn() } as unknown as AnsibleRunner);
+    await deps.repoint(burned.id, spare.id);
+
+    expect((await prisma.node.findUnique({ where: { id: spare.id } }))!.hardening).toEqual({
+      pool: { asn: 'AS2' },
+    });
+  });
+});

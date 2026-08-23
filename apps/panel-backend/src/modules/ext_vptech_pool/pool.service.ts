@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { Prisma } from '../../generated/prisma/client.js';
 import { config } from '../../config.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
@@ -155,8 +156,9 @@ export function makeHotswapDeps(runner: AnsibleRunner = defaultAnsibleRunner): H
     },
     repoint: async (burnedId, spareId) => {
       getLogger().info(
-        `[pool] repoint ${burnedId} → ${spareId}: carried by the status flip — the burned node drops out of /sub and the spare appears on the next fetch`,
+        `[pool] repoint ${burnedId} → ${spareId}: users are carried by the status flip — the burned node drops out of /sub and the spare appears on the next fetch`,
       );
+      await carryEgressPolicy(burnedId, spareId);
     },
     retire: async (burnedId) => {
       const row = await prisma.node.findUnique({
@@ -173,6 +175,56 @@ export function makeHotswapDeps(runner: AnsibleRunner = defaultAnsibleRunner): H
       });
     },
   };
+}
+
+/**
+ * Move the burned node's egress policy onto the spare, so a hotswap does not
+ * quietly undo an operator's split.
+ *
+ * The POLICY carries and the CHANNELS do not, and that asymmetry is the model
+ * rather than a shortcut: a policy says which flows leave by which way out,
+ * which is a statement about traffic and true wherever it runs, while a channel
+ * (the zapret2 desync proxy, a WARP registration) is a property of one machine
+ * that has to be provisioned on it. Copying a channel would claim something the
+ * spare does not run. Copying the policy is safe by construction, because the
+ * compiler drops any rule naming a way out that node has not got - the split
+ * comes back to whatever the spare can actually serve, and the rest is logged.
+ *
+ * Merged into the spare's own hardening rather than replacing it: the spare has
+ * pool labels of its own, and possibly a channel it was provisioned with.
+ */
+async function carryEgressPolicy(burnedId: string, spareId: string): Promise<void> {
+  const [burned, spare] = await Promise.all([
+    prisma.node.findUnique({ where: { id: burnedId }, select: { hardening: true } }),
+    prisma.node.findUnique({ where: { id: spareId }, select: { name: true, hardening: true } }),
+  ]);
+  const burnedHardening = burned?.hardening as
+    | { egressPolicy?: unknown; zapret2?: unknown }
+    | null;
+  if (burnedHardening?.egressPolicy == null) return;
+
+  // A channel the burned node ran is worth saying out loud: the spare keeps the
+  // rules that name it only if it was provisioned with one too, and an operator
+  // reading "hotswap done" should not have to discover that by traffic.
+  if (burnedHardening.zapret2 != null) {
+    getLogger().info(
+      `[pool] repoint ${burnedId} → ${spareId}: the burned node ran a zapret2 channel; the spare keeps the policy but only serves rules for channels IT runs`,
+    );
+  }
+
+  const merged = {
+    ...((spare?.hardening as object | null) ?? {}),
+    egressPolicy: burnedHardening.egressPolicy,
+  };
+  await prisma.node.update({
+    where: { id: spareId },
+    data: { hardening: merged as Prisma.InputJsonValue },
+  });
+  // promote() already emitted for the spare, but that was BEFORE the policy
+  // landed on it; without a second push the spare serves the old config until
+  // something unrelated moves.
+  eventBus.emit('node.updated', { nodeId: spareId, nodeName: spare?.name ?? spareId });
+  getLogger().info(`[pool] repoint ${burnedId} → ${spareId}: egress policy carried over`);
 }
 
 /**
