@@ -811,10 +811,36 @@ type xrayInboundCfgWire struct {
 	// link-out outbound, routing rules). Generated panel-side by
 	// buildCascadeConfigs; nil/missing for plain (non-cascade) nodes.
 	Cascade *CascadeFragments `json:"cascade,omitempty"`
-
 	// Warp is the optional Cloudflare WARP egress (per-node v1). nil/absent =
 	// direct egress. Reuses the config.go WarpConfig type (json-tagged).
 	Warp *WarpConfig `json:"warp,omitempty"`
+	// U4: configurable anti-abuse. nil/missing = all built-in block rules
+	// enabled (byte-identical to pre-U4). Mirrors `abusePolicy` in
+	// packages/shared/src/transport.ts XrayInboundCfg.
+	AbusePolicy *abusePolicyWire `json:"abusePolicy,omitempty"`
+}
+
+// abusePolicyWire mirrors the optional `abusePolicy` object on XrayInboundCfg
+// in packages/shared/src/transport.ts. All three flags are always present when
+// the object is sent (the panel schema defaults each to true), so a non-nil
+// pointer carries a fully-specified policy.
+type abusePolicyWire struct {
+	BlockTorrent   bool `json:"blockTorrent"`
+	BlockSmtp      bool `json:"blockSmtp"`
+	BlockDnsHijack bool `json:"blockDnsHijack"`
+}
+
+// abusePolicyFromWire converts the wire form to the config form, preserving the
+// nil-means-defaults contract (nil wire = nil config field = all rules enabled).
+func abusePolicyFromWire(w *abusePolicyWire) *AbusePolicy {
+	if w == nil {
+		return nil
+	}
+	return &AbusePolicy{
+		BlockTorrent:   w.BlockTorrent,
+		BlockSmtp:      w.BlockSmtp,
+		BlockDnsHijack: w.BlockDnsHijack,
+	}
 }
 
 // ApplyInbound parses the panel-pushed Xray config, swaps it into the live
@@ -879,6 +905,9 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		XhttpPaddingBytes:                       wire.XhttpPaddingBytes,
 		GrpcMultiMode:                           wire.GrpcMultiMode,
 		Warp:                                    wire.Warp,
+		// U4: configurable anti-abuse. nil wire = nil field = all block rules
+		// enabled (byte-identical to pre-U4).
+		AbusePolicy: abusePolicyFromWire(wire.AbusePolicy),
 	}
 
 	// Multi-inbound: an identified inbound lives in the map under its own id, so
@@ -958,6 +987,11 @@ func inboundEqual(a, b InboundConfig) bool {
 	if !warpEqual(a.Warp, b.Warp) {
 		return false
 	}
+	// U4: an abusePolicy change alone must trigger a re-render, so the rules
+	// section reflects the new flags. Pointer-deep: nil==nil, nil!=non-nil.
+	if !abusePolicyEqual(a.AbusePolicy, b.AbusePolicy) {
+		return false
+	}
 	return true
 }
 
@@ -983,6 +1017,13 @@ func warpEqual(a, b *WarpConfig) bool {
 		}
 	}
 	return true
+}
+
+func abusePolicyEqual(a, b *AbusePolicy) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func stringSliceEqual(a, b []string) bool {

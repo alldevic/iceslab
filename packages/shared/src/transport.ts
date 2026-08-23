@@ -197,6 +197,13 @@ export interface XrayInboundCfg {
    *  it. Registered + provisioned panel-side. Absent = direct egress (default).
    *  See docs/studies/STUDY-warp-native.md. */
   warp?: WarpCfg;
+  /** U4 configurable anti-abuse. Gates the node's built-in xray BLOCK rules
+   *  (BitTorrent, SMTP port 25) and the DNS-hijack protection rule. Absent means
+   *  the node enables all three (byte-identical to the historical hardcoded
+   *  behaviour); present means each rule renders only when its flag is true, so an
+   *  operator can selectively relax a node's AUP enforcement. The three flags
+   *  must mirror the abusePolicyWire json tags exactly (wire-sync). */
+  abusePolicy?: { blockTorrent: boolean; blockSmtp: boolean; blockDnsHijack: boolean };
 }
 
 /**

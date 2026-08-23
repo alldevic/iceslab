@@ -695,6 +695,137 @@ func TestInboundEqual_PQFields(t *testing.T) {
 	})
 }
 
+// classifyRules returns which of the three U4-gated routing rules are present,
+// plus the total rule count (api-in is always present).
+func classifyRules(t *testing.T, rules []any) (dns, bt, smtp bool, count int) {
+	t.Helper()
+	count = len(rules)
+	for _, raw := range rules {
+		r := raw.(map[string]any)
+		out := r["outboundTag"]
+		if protocols, ok := r["protocol"].([]any); ok {
+			for _, p := range protocols {
+				if p == "dns" && out == "dns-out" {
+					dns = true
+				}
+				if p == "bittorrent" && out == "blocked" {
+					bt = true
+				}
+			}
+		}
+		if r["port"] == "25" && out == "blocked" {
+			smtp = true
+		}
+	}
+	return
+}
+
+func TestRender_AbusePolicy(t *testing.T) {
+	rulesFor := func(t *testing.T, ap *AbusePolicy) []any {
+		t.Helper()
+		cfg := validInbound()
+		cfg.AbusePolicy = ap
+		m := renderToMap(t, cfg)
+		return m["routing"].(map[string]any)["rules"].([]any)
+	}
+
+	t.Run("nil policy keeps all rules (default)", func(t *testing.T) {
+		dns, bt, smtp, count := classifyRules(t, rulesFor(t, nil))
+		if !dns || !bt || !smtp {
+			t.Errorf("nil policy: want all rules, got dns=%v bt=%v smtp=%v", dns, bt, smtp)
+		}
+		if count != 4 { // api-in + dns + bittorrent + smtp
+			t.Errorf("nil policy: want 4 rules, got %d", count)
+		}
+	})
+
+	t.Run("blockTorrent=false drops only the bittorrent rule", func(t *testing.T) {
+		dns, bt, smtp, count := classifyRules(t, rulesFor(t,
+			&AbusePolicy{BlockTorrent: false, BlockSmtp: true, BlockDnsHijack: true}))
+		if bt {
+			t.Errorf("blockTorrent=false: bittorrent rule should be absent")
+		}
+		if !dns || !smtp {
+			t.Errorf("blockTorrent=false: dns/smtp should remain, got dns=%v smtp=%v", dns, smtp)
+		}
+		if count != 3 {
+			t.Errorf("blockTorrent=false: want 3 rules, got %d", count)
+		}
+	})
+
+	t.Run("blockDnsHijack=false drops only the dns rule", func(t *testing.T) {
+		dns, bt, smtp, count := classifyRules(t, rulesFor(t,
+			&AbusePolicy{BlockTorrent: true, BlockSmtp: true, BlockDnsHijack: false}))
+		if dns {
+			t.Errorf("blockDnsHijack=false: dns rule should be absent")
+		}
+		if !bt || !smtp {
+			t.Errorf("blockDnsHijack=false: bt/smtp should remain, got bt=%v smtp=%v", bt, smtp)
+		}
+		if count != 3 {
+			t.Errorf("blockDnsHijack=false: want 3 rules, got %d", count)
+		}
+	})
+
+	t.Run("all false leaves only the api-in loopback rule", func(t *testing.T) {
+		rules := rulesFor(t, &AbusePolicy{})
+		dns, bt, smtp, count := classifyRules(t, rules)
+		if dns || bt || smtp {
+			t.Errorf("all-false: no block/dns rules expected, got dns=%v bt=%v smtp=%v", dns, bt, smtp)
+		}
+		if count != 1 {
+			t.Fatalf("all-false: want 1 rule (api-in), got %d", count)
+		}
+		first := rules[0].(map[string]any)
+		if first["outboundTag"] != "api" {
+			t.Errorf("all-false: surviving rule should be api-in, got %v", first)
+		}
+	})
+
+	t.Run("explicit all-true is byte-identical to nil (default)", func(t *testing.T) {
+		users := []xrayClient{{ID: "u1", Email: "u1"}}
+		nilBlob, err := renderConfig(validInbound(), users)
+		if err != nil {
+			t.Fatalf("render nil: %v", err)
+		}
+		allTrue := validInbound()
+		allTrue.AbusePolicy = &AbusePolicy{BlockTorrent: true, BlockSmtp: true, BlockDnsHijack: true}
+		allTrueBlob, err := renderConfig(allTrue, users)
+		if err != nil {
+			t.Fatalf("render all-true: %v", err)
+		}
+		if !bytes.Equal(nilBlob, allTrueBlob) {
+			t.Errorf("explicit all-true policy must render byte-identically to nil (default)")
+		}
+	})
+}
+
+func TestInboundEqual_AbusePolicy(t *testing.T) {
+	policy := func(bt, bs, bd bool) *AbusePolicy {
+		return &AbusePolicy{BlockTorrent: bt, BlockSmtp: bs, BlockDnsHijack: bd}
+	}
+	cases := []struct {
+		name string
+		a, b *AbusePolicy
+		want bool
+	}{
+		{"both nil", nil, nil, true},
+		{"nil vs set", nil, policy(true, true, true), false},
+		{"set vs nil", policy(true, true, true), nil, false},
+		{"equal", policy(true, false, true), policy(true, false, true), true},
+		{"differ", policy(true, false, true), policy(false, false, true), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := validInbound(), validInbound()
+			a.AbusePolicy, b.AbusePolicy = tc.a, tc.b
+			if got := inboundEqual(a, b); got != tc.want {
+				t.Errorf("inboundEqual abusePolicy %s: got %v want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRender_DirectOutboundUsesBBR(t *testing.T) {
 	m := renderToMap(t, validInbound())
 	outbounds := m["outbounds"].([]any)

@@ -4,7 +4,7 @@ import { XrayConfigSchema } from './inbounds.schemas.js';
 // U5 post-quantum fields. The contract that keeps every existing profile
 // byte-stable: omitted → the parsed config carries no PQ key at all, so the
 // node renders exactly what it rendered before the fields existed.
-// (The U4/B1 sections of this file stayed behind with their tracks.)
+// (The B1 section of this file stayed behind with its track.)
 describe('XrayConfigSchema post-quantum fields (U5)', () => {
   it('omits both PQ fields when absent (preserves pre-U5 wire)', () => {
     const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'k' });
@@ -32,6 +32,65 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
     ).toThrow();
     expect(() =>
       XrayConfigSchema.parse({ realityPrivateKey: 'k', vlessDecryption: 'semi;colon' }),
+    ).toThrow();
+  });
+});
+
+// U4 configurable anti-abuse. The `abusePolicy` object gates the node's
+// built-in xray BLOCK rules. The schema contract that keeps existing profiles
+// byte-stable on the wire:
+//   - omitted  → parsed config has NO abusePolicy key (nothing sent → node
+//                enables all rules, byte-identical to pre-U4)
+//   - present  → each flag defaults to true, so the wire always carries a
+//                fully-specified policy and the operator flips only what they
+//                want to relax.
+describe('XrayConfigSchema abusePolicy (U4)', () => {
+  it('is absent from the parsed config when omitted (preserves pre-U4 wire)', () => {
+    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'k' });
+    expect('abusePolicy' in cfg).toBe(false);
+    expect(cfg.abusePolicy).toBeUndefined();
+  });
+
+  it('defaults every flag to true when the object is present but empty', () => {
+    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'k', abusePolicy: {} });
+    expect(cfg.abusePolicy).toEqual({
+      blockTorrent: true,
+      blockSmtp: true,
+      blockDnsHijack: true,
+    });
+  });
+
+  it('fills the unspecified flags with true when one is flipped', () => {
+    const cfg = XrayConfigSchema.parse({
+      realityPrivateKey: 'k',
+      abusePolicy: { blockTorrent: false },
+    });
+    expect(cfg.abusePolicy).toEqual({
+      blockTorrent: false,
+      blockSmtp: true,
+      blockDnsHijack: true,
+    });
+  });
+
+  it('preserves a fully-specified policy', () => {
+    const cfg = XrayConfigSchema.parse({
+      realityPrivateKey: 'k',
+      abusePolicy: { blockTorrent: false, blockSmtp: false, blockDnsHijack: false },
+    });
+    expect(cfg.abusePolicy).toEqual({
+      blockTorrent: false,
+      blockSmtp: false,
+      blockDnsHijack: false,
+    });
+  });
+
+  it('rejects a non-boolean flag', () => {
+    expect(() =>
+      XrayConfigSchema.parse({
+        realityPrivateKey: 'k',
+        // @ts-expect-error - intentionally wrong type
+        abusePolicy: { blockTorrent: 'yes' },
+      }),
     ).toThrow();
   });
 });

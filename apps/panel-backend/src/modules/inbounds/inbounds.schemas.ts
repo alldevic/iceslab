@@ -196,6 +196,28 @@ export const XrayConfigSchema = z.object({
    * commit.
    */
   subprotocol: z.enum(['vless', 'trojan', 'vmess']).default('vless'),
+
+  /**
+   * U4 configurable anti-abuse. Gates the node's built-in xray routing BLOCK
+   * rules (BitTorrent, SMTP port 25) and the DNS-hijack protection rule.
+   *
+   * Optional WITHOUT a top-level default on purpose: when omitted the parsed
+   * config carries no `abusePolicy`, nothing is sent on the wire, the node's
+   * adapter decodes nil, and renderConfig enables all three rules — byte-
+   * identical to the pre-U4 hardcoded behaviour (so existing profiles are
+   * untouched). When the object IS present, each flag defaults to true, so the
+   * wire always carries a fully-specified policy and the operator only has to
+   * flip the rule(s) they want to relax (e.g. blockTorrent:false on a
+   * residential exit). Kept a plain ZodObject (no .refine) so XrayConfigSchema
+   * stays usable in the InboundConfigByProtocol discriminated union.
+   */
+  abusePolicy: z
+    .object({
+      blockTorrent: z.boolean().default(true),
+      blockSmtp: z.boolean().default(true),
+      blockDnsHijack: z.boolean().default(true),
+    })
+    .optional(),
 });
 
 // Bounds and defaults match upstream amnezia-vpn AmneziaWG v2.0 spec
