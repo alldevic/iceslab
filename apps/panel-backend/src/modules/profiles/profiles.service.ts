@@ -9,7 +9,7 @@ import { ensureDefaultHost } from '../hosts/hosts.service.js';
 import {
   generateSsServerPsk,
 } from './ss-helpers.js';
-import { engineValidForProtocol } from './profiles.schemas.js';
+import { engineValidForProtocol, xrayFieldsUnsupportedByEngine } from './profiles.schemas.js';
 import { stripInapplicableTransportFields } from '../inbounds/xray-transport-fields.js';
 import type {
   CreateBindingInput,
@@ -270,6 +270,21 @@ export async function updateProfile(
         ? stripInapplicableTransportFields(parsed as Record<string, unknown>)
         : parsed
     ) as never;
+  }
+
+  // The engine and the config can move in separate requests, so the guard has
+  // to run on the pair the profile ENDS UP with, not on what this request
+  // happened to carry. Without it a profile could be given an abusePolicy
+  // first and switched to sing-box second, and the policy would go dark.
+  const effectiveEngine = input.engine !== undefined ? input.engine : existing.engine;
+  const effectiveConfig = data.config !== undefined ? data.config : existing.config;
+  if (existing.protocol === 'xray') {
+    const unsupported = xrayFieldsUnsupportedByEngine(effectiveEngine, effectiveConfig);
+    if (unsupported.length > 0) {
+      throw new Error(
+        `${unsupported.join(', ')} not supported by the sing-box engine (use the xray engine)`,
+      );
+    }
   }
 
   const updated = await prisma.profile.update({

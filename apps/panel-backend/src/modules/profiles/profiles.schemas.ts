@@ -65,6 +65,34 @@ const ENGINE_OPTIONS: Record<string, readonly string[]> = {
   shadowtls: ['singbox'],
 };
 
+/**
+ * Fork-only xray config features the sing-box engine cannot render, listed by
+ * the config key that carries them.
+ *
+ * The sing-box adapter decodes a narrow subset of the xray inbound config
+ * (xrayFamilyWire), so any key it does not know silently disappears: the push
+ * succeeds, the node comes up healthy, and the feature the panel shows as
+ * enabled is simply not there. For an anti-abuse policy that means a node
+ * enforcing nothing; for post-quantum REALITY it means a profile advertised as
+ * post-quantum running classical X25519. The node-agent rejects all three, and
+ * this is the panel half of the same guard so the operator hears about it while
+ * saving rather than after the push.
+ *
+ * Returns the offending keys (empty when the pair is fine).
+ */
+export function xrayFieldsUnsupportedByEngine(
+  engine: string | null | undefined,
+  config: unknown,
+): string[] {
+  if (engine !== 'singbox' || config == null || typeof config !== 'object') return [];
+  const cfg = config as Record<string, unknown>;
+  const offending: string[] = [];
+  if (cfg.abusePolicy != null) offending.push('abusePolicy');
+  if (cfg.realityMldsa65Seed) offending.push('realityMldsa65Seed');
+  if (cfg.vlessDecryption) offending.push('vlessDecryption');
+  return offending;
+}
+
 /** A null/undefined engine (native) is always valid; a set engine must be one
  *  of the protocol's allowed cores. */
 export function engineValidForProtocol(
@@ -107,6 +135,13 @@ export const CreateProfileSchema = z
         code: 'custom',
         message: `engine "${val.engine}" is not valid for protocol "${val.protocol}"`,
         path: ['engine'],
+      });
+    }
+    for (const field of xrayFieldsUnsupportedByEngine(val.engine, val.config)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${field} is not supported by the sing-box engine (use the xray engine)`,
+        path: ['config', field],
       });
     }
   });

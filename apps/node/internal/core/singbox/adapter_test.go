@@ -179,9 +179,14 @@ func TestXrayFamilyApplyInboundGuards(t *testing.T) {
 	}
 	reality := `"realityPrivateKey":"k","realityServerNames":["a.example"],"realityShortIds":["ab"]`
 	cases := map[string]string{
-		"non-raw transport":   `{"subprotocol":"vless","network":"ws",` + reality + `}`,
-		"self-steal":          `{"subprotocol":"vless","realityMode":"self-steal",` + reality + `}`,
-		"cascade":             `{"subprotocol":"vless","cascade":{"x":1},` + reality + `}`,
+		"non-raw transport": `{"subprotocol":"vless","network":"ws",` + reality + `}`,
+		"self-steal":        `{"subprotocol":"vless","realityMode":"self-steal",` + reality + `}`,
+		"cascade":           `{"subprotocol":"vless","cascade":{"x":1},` + reality + `}`,
+		// Fork fields with no sing-box equivalent: rejected loudly rather than
+		// applied as a config that quietly enforces / protects nothing.
+		"abusePolicy":         `{"subprotocol":"vless","abusePolicy":{"blockTorrent":false,"blockSmtp":true,"blockDnsHijack":true},` + reality + `}`,
+		"pq reality seed":     `{"subprotocol":"vless","realityMldsa65Seed":"seed",` + reality + `}`,
+		"pq vless decryption": `{"subprotocol":"vless","vlessDecryption":"mlkem768x25519plus.native",` + reality + `}`,
 		"tls security":        `{"subprotocol":"vless","security":"tls",` + reality + `}`,
 		"bad subprotocol":     `{"subprotocol":"shadowtls",` + reality + `}`,
 		"missing reality key": `{"subprotocol":"vless","realityServerNames":["a.example"],"realityShortIds":["ab"]}`,

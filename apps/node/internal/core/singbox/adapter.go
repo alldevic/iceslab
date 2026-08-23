@@ -415,6 +415,20 @@ type xrayFamilyWire struct {
 	RealityMode        string          `json:"realityMode"`
 	Flow               string          `json:"flow"`
 	Cascade            json.RawMessage `json:"cascade"`
+	// Fork fields the sing-box renderer has no equivalent for. Carried here
+	// ONLY so toInboundConfig can reject them: left out of the struct they
+	// would decode to nothing and the profile would apply looking healthy
+	// while the feature it promises is absent.
+	AbusePolicy        json.RawMessage `json:"abusePolicy"`
+	RealityMldsa65Seed string          `json:"realityMldsa65Seed"`
+	VlessDecryption    string          `json:"vlessDecryption"`
+}
+
+// present reports whether a raw JSON field carries an actual object (a missing
+// field and an explicit `null` both decode to a RawMessage we must treat as
+// absent).
+func present(raw json.RawMessage) bool {
+	return len(raw) > 0 && string(raw) != "null"
 }
 
 // toInboundConfig validates the pushed xray config against what the sing-box
@@ -440,8 +454,26 @@ func (w xrayFamilyWire) toInboundConfig(port int) (InboundConfig, error) {
 	if w.Network != "" && w.Network != "raw" {
 		return InboundConfig{}, fmt.Errorf("transport %q not supported via sing-box engine (use the xray engine)", w.Network)
 	}
-	if len(w.Cascade) > 0 && string(w.Cascade) != "null" {
+	if present(w.Cascade) {
 		return InboundConfig{}, fmt.Errorf("cascade not supported via sing-box engine (use the xray engine)")
+	}
+	// U4: the anti-abuse BLOCK rules live in the xray renderer, and the
+	// sing-box engine emits no route rules at all, so a profile that carries an
+	// abusePolicy here would render a node that enforces nothing while the
+	// panel shows the policy as applied. Reject rather than no-op: the whole
+	// point of the field is that an operator can tell what a node enforces.
+	if present(w.AbusePolicy) {
+		return InboundConfig{}, fmt.Errorf("abusePolicy not supported via sing-box engine (it renders no anti-abuse rules; use the xray engine)")
+	}
+	// U5: post-quantum REALITY (ML-DSA-65) and VLESS-Encryption are xray-core
+	// features. Silently dropping them would leave a profile advertised as
+	// post-quantum running classical X25519, which is the one downgrade that
+	// must never be quiet.
+	if w.RealityMldsa65Seed != "" {
+		return InboundConfig{}, fmt.Errorf("post-quantum REALITY (realityMldsa65Seed) not supported via sing-box engine (use the xray engine)")
+	}
+	if w.VlessDecryption != "" {
+		return InboundConfig{}, fmt.Errorf("VLESS-Encryption (vlessDecryption) not supported via sing-box engine (use the xray engine)")
 	}
 	if w.RealityPrivateKey == "" {
 		return InboundConfig{}, fmt.Errorf("realityPrivateKey is required")
