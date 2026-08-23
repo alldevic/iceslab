@@ -1,5 +1,5 @@
 import type { Node } from '../../generated/prisma/client.js';
-import type { NodeCoreRestarts } from '@iceslab/shared';
+import type { NodeCoreRestarts, NodeEgressTune } from '@iceslab/shared';
 
 // G (Zashchita / hardening) - public shape of the nodes.hardening jsonb blob.
 // Mirrors HardeningInput in nodes.schemas.ts; the frontend reads this to seed
@@ -18,7 +18,7 @@ export interface HardeningDto {
 //
 // ⚠ `null` on the node DTO means "no reporting agent has checked in", NOT
 // "zero restarts". Older agents never send this.
-export type { NodeCoreRestarts } from '@iceslab/shared';
+export type { NodeCoreRestarts, NodeEgressTune } from '@iceslab/shared';
 
 export interface PublicNodeDto {
   id: string;
@@ -31,6 +31,10 @@ export interface PublicNodeDto {
   lastStatusMessage: string | null;
   /** See NodeCoreRestarts. null = never reported (not the same as zero). */
   coreRestarts: NodeCoreRestarts | null;
+  /** F3: the DPI-bypass strategy this node found for itself and is running.
+   *  null = never reported, which is not the same as "nothing was blocked"
+   *  (that is a reported tune with working: 0). */
+  egressTune: NodeEgressTune | null;
   // T7: proxy-core version reported by the agent (e.g. xray "26.3.27"), NULL
   // until a versioned agent checks in. Shown on the node card; the cascade form
   // uses it to warn before selecting an old node as a balancer entry.
@@ -66,6 +70,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     lastStatusChange: node.lastStatusChange?.toISOString() ?? null,
     lastStatusMessage: node.lastStatusMessage,
     coreRestarts: (node.coreRestarts as NodeCoreRestarts | null) ?? null,
+    egressTune: (node.egressTune as NodeEgressTune | null) ?? null,
     coreVersion: node.coreVersion,
     consumptionMultiplier: node.consumptionMultiplier.toString(),
     regionId: node.regionId,

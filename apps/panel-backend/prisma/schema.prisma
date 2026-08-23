@@ -302,6 +302,14 @@ model Node {
   // complain about drops. NULL = no reporting agent has checked in yet, which
   // is NOT the same as "zero restarts".
   coreRestarts          Json?     @map("core_restarts")
+  // F3: the DPI-bypass strategy a self-tuning node found for itself and is
+  // running, as it reports it in /healthz. Shape (see NodeEgressTune in
+  // packages/shared): { domain, protocol, args, coverage?, total, working,
+  // observedAt }. Reported state, not configuration: the node picks and applies
+  // the strategy, the panel records which one so an operator can see it and
+  // promote a winner into a preset. NULL = never reported, which is not the
+  // same as "no strategy needed" (that is a row with working: 0).
+  egressTune            Json?     @map("egress_tune")
   // Stamped when the node ACKNOWLEDGES an inbound push (applyInbounds returned
   // ok), never on a failure and never on a plain liveness tick. That makes it a
   // truthful "this node applied the config we sent" marker: comparing it with a

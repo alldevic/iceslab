@@ -41,6 +41,34 @@
     ('Created' in iceslab_zapret2_up.stderr) or
     ('Recreate' in iceslab_zapret2_up.stderr)
 
+# F3 - node-side self-tune scan. The script only writes reports; the agent is
+# what applies them (ZAPRET2_TUNE_PATH in the env block below).
+- name: Deploy the self-tune script
+  ansible.builtin.copy:
+    src: iceslab-egress-selftune.sh
+    dest: /usr/local/bin/iceslab-egress-selftune.sh
+    mode: "0755"
+  when: iceslab_zapret2_selftune | bool
+
+- name: Install the self-tune systemd service + timer
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: iceslab-egress-selftune.service.j2, dest: iceslab-egress-selftune.service }
+    - { src: iceslab-egress-selftune.timer.j2, dest: iceslab-egress-selftune.timer }
+  when: iceslab_zapret2_selftune | bool
+  notify: reload systemd
+
+- name: Enable the self-tune timer
+  ansible.builtin.systemd_service:
+    name: iceslab-egress-selftune.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: iceslab_zapret2_selftune | bool
+
 # Wire the node-agent's egress manager to this stack so panel /applyEgress
 # pushes can write the strategy config + reload the container. Only when the
 # agent is installed (its env file exists). UP_CMD uses --force-recreate so a
@@ -59,6 +87,7 @@
       ZAPRET2_CONFIG_PATH={{ iceslab_zapret2_dir }}/config
       ZAPRET2_UP_CMD=docker compose -f {{ iceslab_zapret2_dir }}/docker-compose.yml up -d --force-recreate
       ZAPRET2_DOWN_CMD=docker compose -f {{ iceslab_zapret2_dir }}/docker-compose.yml down
+      {% if iceslab_zapret2_selftune | bool %}ZAPRET2_TUNE_PATH={{ iceslab_zapret2_tune_path }}{% endif %}
   when:
     - iceslab_zapret2_agent_env | bool
     - iceslab_agent_env_stat.stat.exists | default(false)

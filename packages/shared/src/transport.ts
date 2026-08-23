@@ -589,6 +589,40 @@ export interface CoreStatus {
 export interface HealthcheckResponse {
   status: 'ok' | 'degraded';
   cores: CoreStatus[];
+  /** F3: the DPI-bypass strategy this node found for itself and is running.
+   *  Absent on a node that never scanned, whose scan found nothing, or that
+   *  runs a pre-F3 agent. */
+  egressTune?: EgressTune;
+}
+
+/**
+ * F3 - a self-tuned egress strategy, as the node reports it and the panel
+ * stores it (nodes.egress_tune).
+ *
+ * The node picks and applies it: a strategy that works is a property of THIS
+ * node's uplink, and the node is where the config gets written. The panel keeps
+ * the answer so an operator can see which strategy a node settled on, compare
+ * nodes on the same uplink, and promote a winner into a vendored preset.
+ */
+export interface EgressTune {
+  /** Domain the scan proved the strategy against. */
+  domain: string;
+  /** blockcheckw's protocol label, e.g. "HTTPS/TLS1.3". */
+  protocol: string;
+  /** The nfqws2 strategy verbatim, as spliced into the node's NFQWS2_OPT. */
+  args: string;
+  /** blockcheckw's own score, when it reports one. */
+  coverage?: number;
+  /** Strategies tried, and how many got through. Both zero with no strategy
+   *  means nothing was blocked, which is not the same as "found nothing that
+   *  works" - the difference decides whether an operator should worry. */
+  total: number;
+  working: number;
+}
+
+/** What the panel stores per node: the reported tune plus when it was seen. */
+export interface NodeEgressTune extends EgressTune {
+  observedAt: string;
 }
 
 // ───── GET /metrics ─────

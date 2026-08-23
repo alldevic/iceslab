@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=Run iceslab zapret2 egress self-tune periodically
+
+[Timer]
+OnCalendar={{ iceslab_selftune_oncalendar }}
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

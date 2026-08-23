@@ -36,6 +36,11 @@ type RunCmdFunc func(ctx context.Context, name string, args ...string) ([]byte, 
 // applyTimeout caps a single up/down invocation (compose pull+restart can be slow).
 const applyTimeout = 60 * time.Second
 
+// TuneRefreshInterval is how often the agent re-reads the self-tune report. The
+// scan behind it runs on a timer measured in hours, so this only decides how
+// long a fresh result waits, and each tick is one file read.
+const TuneRefreshInterval = 5 * time.Minute
+
 // Config configures the egress Manager.
 type Config struct {
 	// ConfigPath is where the resolved zapret2 `config` body is written
@@ -50,6 +55,13 @@ type Config struct {
 	DownCmd []string
 	// RunCmd runs UpCmd/DownCmd; defaults to exec.CommandContext. Injectable.
 	RunCmd RunCmdFunc
+	// TunePath (F3) is where the node's self-tune timer drops the raw
+	// blockcheckw output. When set and readable, the winning TLS strategy is
+	// spliced into the config the panel pushed before it is written, so the two
+	// coexist instead of overwriting each other: the panel owns the config, the
+	// node owns one line of it. Empty = no self-tune, the pushed config is
+	// written verbatim.
+	TunePath string
 }
 
 // Manager applies egress policies idempotently. Safe for concurrent use.
@@ -60,7 +72,12 @@ type Manager struct {
 	mu          sync.Mutex
 	applied     bool
 	lastEnabled bool
-	lastConfig  string
+	// lastPushed is the config body as the panel sent it; lastConfig is what was
+	// actually written (pushed + tune). Both are kept because a re-tune has to
+	// be merged into the panel's latest body, not into the previous merge.
+	lastPushed string
+	lastConfig string
+	lastTune   *Tune
 }
 
 func New(cfg Config, logger *slog.Logger) *Manager {
@@ -82,13 +99,45 @@ func defaultRunCmd(ctx context.Context, name string, args ...string) ([]byte, er
 func (m *Manager) Apply(enabled bool, config string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.applyLocked(enabled, config)
+}
 
+// Refresh (F3) re-applies the panel's last config against the tune file as it
+// stands now, and reports whether that changed anything. Called on a ticker,
+// because a scan that finds a better strategy has to reach zapret2 without
+// waiting for the panel's next push, which only happens when an admin edits
+// something.
+func (m *Manager) Refresh() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.applied || !m.lastEnabled {
+		return false, nil // nothing pushed yet, or the channel is torn down.
+	}
+	return m.applyLocked(m.lastEnabled, m.lastPushed)
+}
+
+// LastTune reports the strategy currently spliced into the config, for /healthz.
+// nil when the node never scanned, the scan found nothing, or the file is gone.
+func (m *Manager) LastTune() *Tune {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastTune
+}
+
+func (m *Manager) applyLocked(enabled bool, config string) (bool, error) {
 	if m.cfg.ConfigPath == "" {
 		m.logger.Info("egress: no ConfigPath configured, ignoring applyEgress")
 		return false, nil
 	}
-	if m.applied && enabled == m.lastEnabled && config == m.lastConfig {
-		m.logger.Info("egress: policy unchanged, skipping", "enabled", enabled)
+
+	// F3: splice in the locally tuned TLS strategy, if any. Done before the
+	// idempotency check so a NEW tune over an unchanged pushed config still
+	// counts as a change.
+	tune := m.readTune()
+	merged := MergeTunedTLS(config, tune)
+
+	if m.applied && enabled == m.lastEnabled && merged == m.lastConfig {
+		m.logger.Info("egress: config unchanged, skipping", "enabled", enabled)
 		return false, nil
 	}
 
@@ -96,7 +145,7 @@ func (m *Manager) Apply(enabled bool, config string) (bool, error) {
 	defer cancel()
 
 	if enabled {
-		if err := writeConfig(m.cfg.ConfigPath, config); err != nil {
+		if err := writeConfig(m.cfg.ConfigPath, merged); err != nil {
 			return false, err
 		}
 		if err := m.run(ctx, true); err != nil {
@@ -108,8 +157,33 @@ func (m *Manager) Apply(enabled bool, config string) (bool, error) {
 
 	m.applied = true
 	m.lastEnabled = enabled
-	m.lastConfig = config
+	m.lastPushed = config
+	m.lastConfig = merged
+	m.lastTune = tune
 	return true, nil
+}
+
+// readTune reads and parses the self-tune report, or returns nil. Every failure
+// is nil + a log line rather than an error: a missing, half-written or
+// unparseable report must leave the node on the strategy the panel sent, never
+// block the push that carries it.
+func (m *Manager) readTune() *Tune {
+	if m.cfg.TunePath == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(m.cfg.TunePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			m.logger.Warn("egress: cannot read self-tune report", "path", m.cfg.TunePath, "err", err)
+		}
+		return nil
+	}
+	tune, err := ParseBlockcheckReports(raw)
+	if err != nil {
+		m.logger.Warn("egress: self-tune report unusable", "path", m.cfg.TunePath, "err", err)
+		return nil
+	}
+	return tune
 }
 
 // run execs the up/down argv. An empty argv (zapret2 not provisioned here) logs

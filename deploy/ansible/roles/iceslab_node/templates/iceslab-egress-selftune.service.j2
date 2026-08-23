@@ -1,0 +1,12 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=iceslab zapret2 egress self-tune scan (blockcheckw)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+Environment=ZAPRET2_DIR={{ iceslab_zapret2_dir }}
+Environment=ZAPRET2_TUNE_PATH={{ iceslab_zapret2_tune_path }}
+Environment=SELFTUNE_DOMAINS={{ iceslab_selftune_domains }}
+ExecStart=/usr/local/bin/iceslab-egress-selftune.sh

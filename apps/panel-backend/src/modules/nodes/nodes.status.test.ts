@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { statusFromHealth } from './nodes.cron.js';
+import { statusFromHealth, tuneWorthWriting } from './nodes.cron.js';
 
 /**
  * A node's status has to answer "is this serving anybody", not just "did the
@@ -83,5 +83,41 @@ describe('statusFromHealth', () => {
     const v = statusFromHealth({ status: 'degraded', cores: [] });
     expect(v.status).toBe('degraded');
     expect(v.message).toContain('degraded:');
+  });
+});
+
+// F3: a self-tuning node reports which DPI-bypass strategy it settled on, and
+// the panel records it. Every poll re-reports the same strategy, so the write
+// has to be keyed on the strategy changing, not on the report arriving.
+describe('tuneWorthWriting', () => {
+  const tune = {
+    domain: 'rutracker.org',
+    protocol: 'HTTPS/TLS1.3',
+    args: '--payload=tls_client_hello --lua-desync=tcpseg',
+    total: 42,
+    working: 3,
+    observedAt: '2026-08-23T10:00:00.000Z',
+  };
+
+  it('writes the first report', () => {
+    expect(tuneWorthWriting(null, tune)).toBe(true);
+  });
+
+  // Otherwise every 30-second poll rewrites the row for a stamp nobody reads.
+  it('does not write the same strategy re-reported later', () => {
+    expect(tuneWorthWriting(tune, { ...tune, observedAt: '2026-08-23T11:00:00.000Z' })).toBe(false);
+  });
+
+  it('writes when the node changed its mind about how to get through', () => {
+    expect(tuneWorthWriting(tune, { ...tune, args: '--payload=tls_client_hello --lua-desync=fake' })).toBe(
+      true,
+    );
+  });
+
+  // The counts are the difference between "nothing is blocked here" and "we
+  // could not find anything that works", which is what an operator acts on.
+  it('writes when the scan outcome changed', () => {
+    expect(tuneWorthWriting(tune, { ...tune, working: 0 })).toBe(true);
+    expect(tuneWorthWriting(tune, { ...tune, domain: 'another.example' })).toBe(true);
   });
 });

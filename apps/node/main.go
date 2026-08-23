@@ -81,7 +81,27 @@ func main() {
 		ConfigPath: os.Getenv("ZAPRET2_CONFIG_PATH"),
 		UpCmd:      strings.Fields(os.Getenv("ZAPRET2_UP_CMD")),
 		DownCmd:    strings.Fields(os.Getenv("ZAPRET2_DOWN_CMD")),
+		// F3: where the self-tune timer drops its blockcheckw output. Unset =
+		// no self-tune, the panel's config is written verbatim.
+		TunePath: os.Getenv("ZAPRET2_TUNE_PATH"),
 	}, logger)
+	// F3: a scan that found a better strategy must reach zapret2 without
+	// waiting for the panel's next push, which only happens when an admin edits
+	// something. Cheap: Refresh re-reads one file and returns immediately when
+	// the merged config is unchanged, which is the usual case.
+	if os.Getenv("ZAPRET2_TUNE_PATH") != "" {
+		go func() {
+			ticker := time.NewTicker(zapret2.TuneRefreshInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				if changed, err := egressMgr.Refresh(); err != nil {
+					logger.Warn("egress: self-tune refresh failed", "err", err)
+				} else if changed {
+					logger.Info("egress: self-tune applied a new strategy")
+				}
+			}
+		}()
+	}
 
 	srv, err := server.New(server.Config{
 		Host:              getenv("NODE_HOST", defaultHost),

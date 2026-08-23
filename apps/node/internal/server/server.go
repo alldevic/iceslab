@@ -298,7 +298,24 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if !allHealthy {
 		status = "degraded"
 	}
-	writeJSON(w, http.StatusOK, dto.HealthcheckResponse{Status: status, Cores: cores})
+	// F3: report the self-tuned egress strategy, when this node has one. The
+	// health poll is the channel because it already exists and runs every 30s;
+	// a strategy the panel learns a poll late costs nothing, and the node is
+	// the one applying it either way.
+	var tune *dto.EgressTuneDto
+	if s.cfg.Egress != nil {
+		if t := s.cfg.Egress.LastTune(); t != nil {
+			tune = &dto.EgressTuneDto{
+				Domain:   t.Domain,
+				Protocol: t.Protocol,
+				Args:     t.Args,
+				Coverage: t.Coverage,
+				Total:    t.Total,
+				Working:  t.Working,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, dto.HealthcheckResponse{Status: status, Cores: cores, EgressTune: tune})
 }
 
 // handleUfwPorts (G4 probe-exposure) reports the ufw-allowed inbound ports so

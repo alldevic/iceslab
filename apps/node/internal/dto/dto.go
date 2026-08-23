@@ -230,9 +230,26 @@ type CoreStatus struct {
 	Provisioned *bool `json:"provisioned,omitempty"`
 }
 
+// EgressTuneDto (F3) is the DPI-bypass strategy this node found for itself and
+// is currently running. Reported so an operator can see WHICH strategy a node
+// settled on, compare nodes on the same uplink, and promote a winner into a
+// vendored preset later. Absent on a node that never scanned, whose scan found
+// nothing, or that runs a pre-F3 agent, which are three different things the
+// counts below tell apart.
+type EgressTuneDto struct {
+	Domain   string  `json:"domain"`
+	Protocol string  `json:"protocol"`
+	Args     string  `json:"args"`
+	Coverage float64 `json:"coverage,omitempty"`
+	Total    int     `json:"total"`
+	Working  int     `json:"working"`
+}
+
 type HealthcheckResponse struct {
 	Status string       `json:"status"`
 	Cores  []CoreStatus `json:"cores"`
+	// F3: the self-tuned egress strategy, when this node runs one.
+	EgressTune *EgressTuneDto `json:"egressTune,omitempty"`
 }
 
 // ───── GET /metrics ─────

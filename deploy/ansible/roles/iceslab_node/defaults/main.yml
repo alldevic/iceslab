@@ -32,6 +32,18 @@ iceslab_zapret2_encrypt: chacha20-ietf-poly1305
 iceslab_zapret2_agent_env: true
 iceslab_node_env_file: /etc/iceslab-node/env
 
+# F3 node-side self-tune (off by default). When true, deploys
+# iceslab-egress-selftune.sh + a systemd timer that periodically runs
+# blockcheckw and writes its reports to iceslab_zapret2_tune_path. The agent
+# reads that file, splices the winning TLS strategy into the config the panel
+# pushed, and reports which strategy it settled on via /healthz. Composes with
+# a panel-managed channel rather than replacing it: the panel owns the config,
+# the node owns one line of it. Independent of iceslab_zapret2_enabled.
+iceslab_zapret2_selftune: false
+iceslab_zapret2_tune_path: /var/lib/iceslab-node/egress-tune.json
+iceslab_selftune_domains: "rutracker.org"
+iceslab_selftune_oncalendar: "*-*-* 04:00:00"
+
 # Node-agent (bootstrap-token flow). Requires a reachable panel — the agent
 # task is GUARDED on these two being set, so it's skipped on a base run.
 iceslab_panel_url: ""

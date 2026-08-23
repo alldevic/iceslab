@@ -7,7 +7,7 @@ import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.j
 import { getLogger } from '../../lib/logger.js';
 import { eventBus } from '../../lib/event-bus.js';
 import { Prisma } from '../../generated/prisma/client.js';
-import type { NodeCoreRestarts } from '@iceslab/shared';
+import type { NodeCoreRestarts, NodeEgressTune } from '@iceslab/shared';
 
 const METRICS_KEY_PREFIX = 'node:metrics:';
 const METRICS_TTL_SECONDS = 60;
@@ -54,6 +54,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       lastStatusMessage: true,
       coreVersion: true,
       coreRestarts: true,
+      egressTune: true,
     },
   });
 
@@ -88,7 +89,14 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       const restartsChanged =
         result.coreRestarts !== undefined &&
         restartsWorthWriting(storedRestarts, result.coreRestarts, Date.now());
-      if (statusChanged || messageChanged || versionChanged || restartsChanged) {
+      // F3: write only when the STRATEGY moved, not on every poll. observedAt
+      // changes every 30 seconds, so comparing the whole object would rewrite
+      // the row forever; what an operator cares about is that the node changed
+      // its mind about how to get through.
+      const storedTune = (node.egressTune as NodeEgressTune | null) ?? null;
+      const tuneChanged =
+        result.egressTune !== undefined && tuneWorthWriting(storedTune, result.egressTune);
+      if (statusChanged || messageChanged || versionChanged || restartsChanged || tuneChanged) {
         await prisma.node.update({
           where: { id: node.id },
           data: {
@@ -101,6 +109,9 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
             // needs the explicit widening to InputJsonValue.
             ...(restartsChanged
               ? { coreRestarts: result.coreRestarts as unknown as Prisma.InputJsonValue }
+              : {}),
+            ...(tuneChanged
+              ? { egressTune: result.egressTune as unknown as Prisma.InputJsonValue }
               : {}),
           },
         });
@@ -188,6 +199,12 @@ interface PollResult {
   // 2026-08-04: restart tally from the same /healthz. Undefined follows the
   // same rule as coreVersion - unreachable node or pre-2026-08 agent.
   coreRestarts?: NodeCoreRestarts;
+  // F3: the self-tuned egress strategy this poll observed. Undefined follows
+  // the same rule as the two above - unreachable node, pre-F3 agent, or a node
+  // that does not self-tune. Undefined means "leave the stored one alone",
+  // which matters because a node that stops reporting has not stopped running
+  // the strategy it last found.
+  egressTune?: NodeEgressTune;
 }
 
 /**
@@ -213,6 +230,22 @@ const RESTARTS_HEARTBEAT_MS = 10 * 60 * 1000;
  * 10% (enough for the card to track the trend), or when the freshness stamp is
  * older than the heartbeat above.
  */
+/**
+ * Whether a reported tune differs from the stored one in a way worth a write.
+ * Everything but observedAt: the same strategy re-reported on the next poll is
+ * the normal case and must not touch the row.
+ */
+export function tuneWorthWriting(stored: NodeEgressTune | null, fresh: NodeEgressTune): boolean {
+  if (!stored) return true;
+  return (
+    stored.args !== fresh.args ||
+    stored.domain !== fresh.domain ||
+    stored.protocol !== fresh.protocol ||
+    stored.working !== fresh.working ||
+    stored.total !== fresh.total
+  );
+}
+
 function restartsWorthWriting(
   stored: NodeCoreRestarts | null,
   fresh: NodeCoreRestarts,
@@ -327,8 +360,13 @@ async function checkOne(node: {
           observedAt: new Date().toISOString(),
         }
       : undefined;
+    // F3: stamp the observation time the same way the restart tally does, so
+    // the UI can tell a strategy found this morning from one found in June.
+    const egressTune: NodeEgressTune | undefined = res.egressTune
+      ? { ...res.egressTune, observedAt: new Date().toISOString() }
+      : undefined;
     const verdict = statusFromHealth(res);
-    return { ...verdict, coreVersion, coreRestarts };
+    return { ...verdict, coreVersion, coreRestarts, egressTune };
   } catch (err) {
     if (err instanceof NodeRequestError) {
       return { status: 'unreachable', message: `${err.status} ${err.message}`.slice(0, 200) };
