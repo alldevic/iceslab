@@ -7,6 +7,7 @@ import {
   Box,
   Button,
   Card,
+  Code,
   Divider,
   Group,
   Modal,
@@ -39,6 +40,7 @@ import {
   IconLink,
   IconPlus,
   IconRocket,
+  IconRoute,
   IconShieldLock,
   IconTrash,
   IconWorld,
@@ -58,10 +60,12 @@ import {
   apiErrorMessage,
   type Host,
   type Node as PanelNode,
+  type NodeEgressRule,
   type NodeHardening,
   type NodeProtocol,
   type PortExposureResult,
   type UpdateNodeInput,
+  ZAPRET2_PRESETS,
 } from '../lib/api';
 import { useOverview } from '../hooks/useOverview';
 import { COUNTRY_OPTIONS, countryFlag } from '../lib/countries';
@@ -111,6 +115,74 @@ interface FormValues {
   hardenFail2ban: boolean;
   hardenRealisticFallback: boolean;
   hardenSshAllowlist: string[];
+  // B2a - the zapret2 desync channel on this node. `zapret2Present` remembers
+  // whether the node ever had it: a node that never did stays byte-identical
+  // (no key at all), while switching an existing one off has to persist
+  // {enabled:false} so the agent gets a tear-down push.
+  zapret2Present: boolean;
+  zapret2Enabled: boolean;
+  zapret2Preset: string;
+  zapret2SocksPort: number | '';
+  zapret2PortsTcp: string;
+  zapret2PortsUdp: string;
+  // B1 - the egress policy, one row per rule. Matchers are comma-separated
+  // here and split on submit.
+  egressRules: EgressRuleForm[];
+}
+
+/**
+ * One egress rule as the form holds it. Matchers are comma-separated strings
+ * (the API takes arrays); `target` is a way out of THIS node, which the panel
+ * resolves to an outbound when it pushes.
+ */
+interface EgressRuleForm {
+  geosite: string;
+  geoip: string;
+  domain: string;
+  ip: string;
+  port: string;
+  network: '' | 'tcp' | 'udp' | 'tcp,udp';
+  target: NodeEgressRule['target'];
+}
+
+/** Split a comma-separated matcher field into the array the API takes. */
+function csvList(v: string): string[] {
+  return v
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/** Load a stored policy into form rows. */
+function egressRulesToForm(policy: NodeEgressRule[] | undefined): EgressRuleForm[] {
+  return (policy ?? []).map((r) => ({
+    geosite: (r.geosite ?? []).join(', '),
+    geoip: (r.geoip ?? []).join(', '),
+    domain: (r.domain ?? []).join(', '),
+    ip: (r.ip ?? []).join(', '),
+    port: r.port ?? '',
+    network: r.network ?? '',
+    target: r.target,
+  }));
+}
+
+/**
+ * Form rows back to a policy. A row with no matcher at all is dropped rather
+ * than sent: the backend rejects it, and half-filled rows are what an operator
+ * leaves behind after clicking "add rule" and changing their mind.
+ */
+function egressRulesFromForm(rows: EgressRuleForm[]): NodeEgressRule[] {
+  return rows
+    .filter((r) => r.geosite.trim() || r.geoip.trim() || r.domain.trim() || r.ip.trim() || r.port.trim())
+    .map((r) => ({
+      ...(csvList(r.geosite).length ? { geosite: csvList(r.geosite) } : {}),
+      ...(csvList(r.geoip).length ? { geoip: csvList(r.geoip) } : {}),
+      ...(csvList(r.domain).length ? { domain: csvList(r.domain) } : {}),
+      ...(csvList(r.ip).length ? { ip: csvList(r.ip) } : {}),
+      ...(r.port.trim() ? { port: r.port.trim() } : {}),
+      ...(r.network ? { network: r.network } : {}),
+      target: r.target,
+    }));
 }
 
 /**
@@ -138,6 +210,26 @@ function buildHardening(v: FormValues, existing?: NodeHardening | null): NodeHar
   if (v.hardenFail2ban) h.fail2ban = true;
   if (v.hardenRealisticFallback) h.realisticFallback = true;
   if (allow.length > 0) h.sshAllowlist = allow;
+
+  // B2a: a node that never ran the channel keeps no key, so it is never
+  // contacted about it. One that did keeps its config even when switched off,
+  // because that is what tells the agent to tear the stack down.
+  delete h.zapret2;
+  if (v.zapret2Enabled || v.zapret2Present) {
+    h.zapret2 = {
+      enabled: v.zapret2Enabled,
+      preset: v.zapret2Preset,
+      ...(v.zapret2SocksPort === '' ? {} : { socksPort: Number(v.zapret2SocksPort) }),
+      ...(v.zapret2PortsTcp.trim() ? { portsTcp: v.zapret2PortsTcp.trim() } : {}),
+      ...(v.zapret2PortsUdp.trim() ? { portsUdp: v.zapret2PortsUdp.trim() } : {}),
+    };
+  }
+
+  // B1: no rules means no key, and the node routes as it did before.
+  delete h.egressPolicy;
+  const rules = egressRulesFromForm(v.egressRules);
+  if (rules.length > 0) h.egressPolicy = rules;
+
   return Object.keys(h).length > 0 ? h : null;
 }
 
@@ -191,6 +283,13 @@ export function NodeEditModal({
       hardenFail2ban: node?.hardening?.fail2ban ?? false,
       hardenRealisticFallback: node?.hardening?.realisticFallback ?? false,
       hardenSshAllowlist: node?.hardening?.sshAllowlist ?? [],
+      zapret2Present: node?.hardening?.zapret2 != null,
+      zapret2Enabled: node?.hardening?.zapret2?.enabled ?? false,
+      zapret2Preset: node?.hardening?.zapret2?.preset ?? ZAPRET2_PRESETS[0],
+      zapret2SocksPort: node?.hardening?.zapret2?.socksPort ?? '',
+      zapret2PortsTcp: node?.hardening?.zapret2?.portsTcp ?? '',
+      zapret2PortsUdp: node?.hardening?.zapret2?.portsUdp ?? '',
+      egressRules: egressRulesToForm(node?.hardening?.egressPolicy),
     },
   });
 
@@ -211,6 +310,13 @@ export function NodeEditModal({
         hardenFail2ban: node.hardening?.fail2ban ?? false,
         hardenRealisticFallback: node.hardening?.realisticFallback ?? false,
         hardenSshAllowlist: node.hardening?.sshAllowlist ?? [],
+        zapret2Present: node.hardening?.zapret2 != null,
+        zapret2Enabled: node.hardening?.zapret2?.enabled ?? false,
+        zapret2Preset: node.hardening?.zapret2?.preset ?? ZAPRET2_PRESETS[0],
+        zapret2SocksPort: node.hardening?.zapret2?.socksPort ?? '',
+        zapret2PortsTcp: node.hardening?.zapret2?.portsTcp ?? '',
+        zapret2PortsUdp: node.hardening?.zapret2?.portsUdp ?? '',
+        egressRules: egressRulesToForm(node.hardening?.egressPolicy),
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -711,6 +817,204 @@ export function NodeEditModal({
                     label={t('nodes.edit.warpToggle')}
                     description={t('nodes.edit.warpToggleDesc')}
                   />
+                </Box>
+              )}
+
+              {/* B1 + B2a + F3 - egress. Which flows leave this node by which
+                  way out, the desync channel a rule can name, and what the node
+                  found for itself. xray only: the policy renders as xray
+                  routing rules, and the other cores emit no routing section. */}
+              {node.protocol === 'xray' && (
+                <Box mt="xs">
+                  <Group gap={8} mb="xs">
+                    <ThemeIcon size={26} radius="md" variant="light" color="indigo">
+                      <IconRoute size={14} />
+                    </ThemeIcon>
+                    <Stack gap={0}>
+                      <Text fw={600} size="sm">
+                        {t('nodes.edit.egressSection')}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {t('nodes.edit.egressSectionDesc')}
+                      </Text>
+                    </Stack>
+                  </Group>
+                  <Stack gap="sm">
+                    <Switch
+                      label={t('nodes.edit.zapret2Toggle')}
+                      description={t('nodes.edit.zapret2ToggleDesc')}
+                      {...form.getInputProps('zapret2Enabled', { type: 'checkbox' })}
+                    />
+                    {form.values.zapret2Enabled && (
+                      <Stack gap="xs" pl="md">
+                        <Group grow>
+                          <Select
+                            label={t('nodes.edit.zapret2Preset')}
+                            description={t('nodes.edit.zapret2PresetDesc')}
+                            allowDeselect={false}
+                            data={ZAPRET2_PRESETS.map((v) => ({ value: v, label: v }))}
+                            {...form.getInputProps('zapret2Preset')}
+                          />
+                          <NumberInput
+                            label={t('nodes.edit.zapret2SocksPort')}
+                            description={t('nodes.edit.zapret2SocksPortDesc')}
+                            placeholder="1080"
+                            min={1}
+                            max={65535}
+                            allowDecimal={false}
+                            allowNegative={false}
+                            {...form.getInputProps('zapret2SocksPort')}
+                          />
+                        </Group>
+                        <Group grow>
+                          <TextInput
+                            label={t('nodes.edit.zapret2PortsTcp')}
+                            placeholder="80,443"
+                            {...form.getInputProps('zapret2PortsTcp')}
+                          />
+                          <TextInput
+                            label={t('nodes.edit.zapret2PortsUdp')}
+                            placeholder="443"
+                            {...form.getInputProps('zapret2PortsUdp')}
+                          />
+                        </Group>
+                      </Stack>
+                    )}
+
+                    <Divider my={4} />
+
+                    <Text size="xs" c="dimmed">
+                      {t('nodes.edit.egressPolicyDesc')}
+                    </Text>
+                    {form.values.egressRules.map((rule, i) => (
+                      <Card key={i} withBorder p="xs" radius="sm">
+                        <Group justify="space-between" mb={4}>
+                          <Text size="xs" fw={500}>
+                            {t('nodes.edit.egressRule')} {i + 1}
+                          </Text>
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            aria-label={t('nodes.edit.egressRuleRemove')}
+                            onClick={() => form.removeListItem('egressRules', i)}
+                          >
+                            <IconTrash size={14} />
+                          </ActionIcon>
+                        </Group>
+                        <Stack gap={6}>
+                          <Group grow>
+                            <TextInput
+                              label={t('nodes.edit.egressGeosite')}
+                              placeholder="youtube, ru"
+                              {...form.getInputProps(`egressRules.${i}.geosite`)}
+                            />
+                            <TextInput
+                              label={t('nodes.edit.egressGeoip')}
+                              placeholder="ru, private"
+                              {...form.getInputProps(`egressRules.${i}.geoip`)}
+                            />
+                          </Group>
+                          <Group grow>
+                            <TextInput
+                              label={t('nodes.edit.egressDomain')}
+                              placeholder="example.com"
+                              {...form.getInputProps(`egressRules.${i}.domain`)}
+                            />
+                            <TextInput
+                              label={t('nodes.edit.egressIp')}
+                              placeholder="10.0.0.0/8"
+                              {...form.getInputProps(`egressRules.${i}.ip`)}
+                            />
+                          </Group>
+                          <Group grow>
+                            <TextInput
+                              label={t('nodes.edit.egressPort')}
+                              placeholder="443"
+                              {...form.getInputProps(`egressRules.${i}.port`)}
+                            />
+                            <Select
+                              label={t('nodes.edit.egressNetwork')}
+                              data={[
+                                { value: '', label: t('nodes.edit.egressNetworkAny') },
+                                { value: 'tcp', label: 'tcp' },
+                                { value: 'udp', label: 'udp' },
+                                { value: 'tcp,udp', label: 'tcp+udp' },
+                              ]}
+                              {...form.getInputProps(`egressRules.${i}.network`)}
+                            />
+                            <Select
+                              label={t('nodes.edit.egressTarget')}
+                              allowDeselect={false}
+                              data={[
+                                { value: 'direct', label: t('nodes.edit.egressTargetDirect') },
+                                { value: 'block', label: t('nodes.edit.egressTargetBlock') },
+                                {
+                                  value: 'warp',
+                                  label: t('nodes.edit.egressTargetWarp'),
+                                  disabled: !node.warpEnabled,
+                                },
+                                {
+                                  value: 'zapret2',
+                                  label: t('nodes.edit.egressTargetZapret2'),
+                                  disabled: !form.values.zapret2Enabled,
+                                },
+                              ]}
+                              {...form.getInputProps(`egressRules.${i}.target`)}
+                            />
+                          </Group>
+                          {/* The panel drops a rule whose way out this node has
+                              not got, rather than pushing an outbound tag xray
+                              would refuse to start on. Say so while it can
+                              still be fixed. */}
+                          {((rule.target === 'warp' && !node.warpEnabled) ||
+                            (rule.target === 'zapret2' && !form.values.zapret2Enabled)) && (
+                            <Text size="xs" c="orange">
+                              {t('nodes.edit.egressTargetMissing')}
+                            </Text>
+                          )}
+                        </Stack>
+                      </Card>
+                    ))}
+                    <Button
+                      variant="light"
+                      size="xs"
+                      leftSection={<IconPlus size={14} />}
+                      onClick={() =>
+                        form.insertListItem('egressRules', {
+                          geosite: '',
+                          geoip: '',
+                          domain: '',
+                          ip: '',
+                          port: '',
+                          network: '',
+                          target: 'direct',
+                        } satisfies EgressRuleForm)
+                      }
+                    >
+                      {t('nodes.edit.egressRuleAdd')}
+                    </Button>
+
+                    {/* F3 - reported, never edited: which strategy this node
+                        found for itself. */}
+                    {node.egressTune && (
+                      <Card withBorder p="xs" radius="sm" bg="var(--mantine-color-default-hover)">
+                        <Text size="xs" fw={500} mb={4}>
+                          {t('nodes.edit.egressTuneTitle')}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {t('nodes.edit.egressTuneMeta', {
+                            domain: node.egressTune.domain,
+                            protocol: node.egressTune.protocol,
+                            working: node.egressTune.working,
+                            total: node.egressTune.total,
+                          })}
+                        </Text>
+                        <Code block mt={4} style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                          {node.egressTune.args}
+                        </Code>
+                      </Card>
+                    )}
+                  </Stack>
                 </Box>
               )}
             </Stack>

@@ -422,13 +422,62 @@ export interface NodeHardening {
   realisticFallback?: boolean;
   sshAllowlist?: string[];
   // Not wizard toggles: other subsystems keep their per-node config in the same
-  // blob (F2 pool labels, the B1 egress policy, the B2a zapret2 channel). A
-  // node update REPLACES hardening, so the form must send these back as it
-  // received them, which is what buildHardening does. Unknown because this form
-  // does not interpret them.
+  // blob. A node update REPLACES hardening, so the form must send these back as
+  // it received them, which is what buildHardening does.
+  /** F2 cold-pool labels. Edited elsewhere; carried through untouched. */
   pool?: unknown;
-  egressPolicy?: unknown;
-  zapret2?: unknown;
+  /** B1: which flows leave this node by which way out. */
+  egressPolicy?: NodeEgressRule[];
+  /** B2a: the zapret2 desync channel. */
+  zapret2?: NodeZapret2Config;
+}
+
+/**
+ * B1 - one egress rule: what to match, and which way out a match takes.
+ *
+ * `target` is a capability of THIS node, not an xray outbound tag: the panel
+ * resolves it per node when it pushes, and drops the rule when the node has no
+ * such way out. That is why the policy is authored here and not on a profile.
+ */
+export interface NodeEgressRule {
+  geosite?: string[];
+  geoip?: string[];
+  domain?: string[];
+  ip?: string[];
+  port?: string;
+  network?: 'tcp' | 'udp' | 'tcp,udp';
+  target: 'direct' | 'block' | 'warp' | 'zapret2';
+}
+
+/** B2a - the zapret2 desync channel on this node. Absent = the node does not
+ *  run it and never gets an /applyEgress push. */
+export interface NodeZapret2Config {
+  enabled: boolean;
+  preset: string;
+  /** Where the stack's SOCKS frontend listens (rules targeting zapret2 are
+   *  pointed here). */
+  socksPort?: number;
+  /** Override the strategy's TCP / UDP port lists, e.g. "80,443". */
+  portsTcp?: string;
+  portsUdp?: string;
+}
+
+/** Vendored zapret2 strategy presets (mirrors the backend egress.presets.ts). */
+export const ZAPRET2_PRESETS = ['rf-default'] as const;
+
+/**
+ * F3 - the DPI-bypass strategy a self-tuning node found for itself. Reported by
+ * the node, never edited here: which strategy works is a property of that
+ * node's uplink, and the node is what applies it.
+ */
+export interface NodeEgressTune {
+  domain: string;
+  protocol: string;
+  args: string;
+  coverage?: number;
+  total: number;
+  working: number;
+  observedAt: string;
 }
 
 /**
@@ -479,6 +528,9 @@ export interface Node {
   lastStatusMessage: string | null;
   /** See CoreRestarts. null = never reported, not zero. */
   coreRestarts: CoreRestarts | null;
+  /** F3 - the bypass strategy this node self-tuned to. null = never reported,
+   *  which is not the same as "nothing was blocked". */
+  egressTune?: NodeEgressTune | null;
   // T7 - proxy-core version (e.g. xray "26.3.27"), null until a versioned agent
   // reports in. Shown on the node card; cascade form warns on an old balancer entry.
   coreVersion: string | null;
