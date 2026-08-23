@@ -709,7 +709,8 @@ fi
 SYSCTL_DROPIN=/etc/sysctl.d/99-iceslab.conf
 log "Tuning kernel network buffers + BBR (drop-in $SYSCTL_DROPIN)"
 cat > "$SYSCTL_DROPIN" <<'EOF'
-# Iceslab node network tuning. Managed by install-iceslab-node.sh.
+# Iceslab node network tuning. Written identically by both
+# install-iceslab-node.sh and the iceslab_node ansible role.
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.core.default_qdisc = fq

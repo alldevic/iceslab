@@ -14,17 +14,57 @@
       - unzip
       - ca-certificates
       - git
+      # The installer installs ufw too; a base run that never reaches the
+      # installer still wants the firewall present for the hardening flags.
+      - ufw
     state: present
     update_cache: true
     cache_valid_time: 3600
 
-- name: Enable BBR congestion control (sysctl drop-in)
+# Same file, same content as install-iceslab-node.sh writes. A node can be
+# provisioned by the role, by the installer, or by both, and two drop-ins saying
+# different things about the same knobs is a thing nobody can debug from the
+# node: whichever sorts last wins, silently.
+#
+# The QUIC buffers belong here and not only in the installer: hysteria2 and TUIC
+# ride QUIC over UDP, and the distro default rmem_max (~208 KiB) caps quic-go's
+# receive buffer, which throttles a fast distant link while the node looks idle.
+# A base run with no panel reachable never invokes the installer, so without
+# this such a node would be tuned for TCP only.
+- name: Tune network buffers + BBR (sysctl drop-in, same file the installer writes)
   ansible.builtin.copy:
-    dest: /etc/sysctl.d/99-iceslab-bbr.conf
+    dest: /etc/sysctl.d/99-iceslab.conf
     content: |
-      # Managed by iceslab_node (U6). BBR needs the fq qdisc.
-      net.core.default_qdisc=fq
-      net.ipv4.tcp_congestion_control=bbr
+      # Iceslab node network tuning. Written identically by both
+      # install-iceslab-node.sh and the iceslab_node ansible role.
+      net.core.rmem_max = 16777216
+      net.core.wmem_max = 16777216
+      net.core.default_qdisc = fq
+      net.ipv4.tcp_congestion_control = bbr
     mode: "0644"
   when: iceslab_enable_bbr | bool
+  notify: reload sysctl
+
+# default_qdisc only takes effect for qdiscs created after it is set, i.e. after
+# a reboot. Swap the live default-route interface now so BBR is on without one.
+- name: Put the live default interface on the fq qdisc
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      iface="$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
+      [ -n "$iface" ] || exit 0
+      tc qdisc replace dev "$iface" root fq
+    executable: /bin/bash
+  register: iceslab_fq
+  changed_when: false
+  failed_when: false
+  when: iceslab_enable_bbr | bool
+
+# Superseded by the file above, which the installer also writes. Left as an
+# explicit removal rather than orphaned: a stale drop-in outlives the run that
+# created it and keeps contradicting the new one.
+- name: Remove the role's older BBR-only drop-in
+  ansible.builtin.file:
+    path: /etc/sysctl.d/99-iceslab-bbr.conf
+    state: absent
   notify: reload sysctl

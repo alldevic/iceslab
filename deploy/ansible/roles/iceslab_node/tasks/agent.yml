@@ -14,16 +14,33 @@
       --panel-url {{ iceslab_panel_url | quote }}
       --bootstrap {{ iceslab_bootstrap_token | quote }}
       --protocol {{ iceslab_node_protocol | quote }}
+      {% if iceslab_singbox_engine | bool %}--with-singbox{% endif %}
+      {% if iceslab_harden_ufw | bool %}--harden-ufw{% endif %}
+      {% if iceslab_fail2ban | bool %}--fail2ban{% endif %}
+      {% if iceslab_ssh_allowlist | length > 0 %}--ssh-allowlist {{ iceslab_ssh_allowlist | join(',') | quote }}{% endif %}
     executable: /bin/bash
     creates: /etc/iceslab-node/env
 
-- name: Wait for the node-agent health endpoint
-  ansible.builtin.uri:
-    url: https://127.0.0.1:8443/healthz
-    validate_certs: false
-    status_code: [200, 401]
-  register: iceslab_agent_health
-  retries: 10
-  delay: 3
-  until: iceslab_agent_health is succeeded
-  failed_when: false
+# Confirm the agent is actually serving before the play calls itself done.
+#
+# NOT by asking /healthz: the agent requires a verified CLIENT certificate, so a
+# request without one dies in the TLS handshake and never reaches an HTTP status
+# at all. The task here used to dial https://127.0.0.1:8443/healthz expecting a
+# 200 or a 401 - wrong port (the agent moved to 1337 in wave-13) AND a response
+# that cannot happen, under failed_when:false so it reported nothing either way.
+# A step that cannot pass and cannot fail is worse than no step: the play ends
+# green and an operator reads that as confirmation.
+#
+# What proves it locally, without a client certificate: the socket is open and
+# systemd says the unit is running.
+- name: Wait for the node-agent to listen
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ iceslab_node_agent_port }}"
+    timeout: 60
+
+- name: Confirm the node-agent unit is running
+  ansible.builtin.command: systemctl is-active iceslab-node
+  register: iceslab_agent_active
+  changed_when: false
+  failed_when: iceslab_agent_active.stdout.strip() != 'active'

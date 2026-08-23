@@ -44,6 +44,26 @@ iceslab_zapret2_tune_path: /var/lib/iceslab-node/egress-tune.json
 iceslab_selftune_domains: "rutracker.org"
 iceslab_selftune_oncalendar: "*-*-* 04:00:00"
 
+# What the installer is asked to do beyond the base install. These mirror
+# install-iceslab-node.sh's own flags one-to-one: the role runs that script
+# rather than reimplementing it, so anything it can do is a flag here, and
+# anything it cannot is not the role's business either.
+#   singbox_engine  → --with-singbox, the sing-box engine alongside the native
+#                     core (needed for tuic/anytls/shadowtls and engine choice)
+#   harden_ufw      → --harden-ufw, rate-limit SSH and tighten the firewall
+#   fail2ban        → --fail2ban
+#   ssh_allowlist   → --ssh-allowlist, the only IPs that may reach 22/tcp.
+#                     EMPTY MEANS NO RESTRICTION: setting it to a list you are
+#                     not currently connecting from locks you out of the box.
+iceslab_singbox_engine: false
+iceslab_harden_ufw: false
+iceslab_fail2ban: false
+iceslab_ssh_allowlist: []
+
+# The agent's mTLS port. Must match what the installer uses (its own default is
+# 1337); the health check below dials it.
+iceslab_node_agent_port: 1337
+
 # Node-agent (bootstrap-token flow). Requires a reachable panel — the agent
 # task is GUARDED on these two being set, so it's skipped on a base run.
 iceslab_panel_url: ""
