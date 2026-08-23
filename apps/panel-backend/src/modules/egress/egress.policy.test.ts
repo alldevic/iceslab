@@ -3,6 +3,7 @@ import {
   coerceEgressPolicy,
   compileEgressPolicy,
   EgressPolicySchema,
+  NodeEgressPolicySchema,
   type EgressPolicy,
 } from './egress.policy.js';
 
@@ -60,13 +61,15 @@ describe('compileEgressPolicy', () => {
     expect(compileEgressPolicy(undefined, NO_CHANNELS)).toEqual({ fragments: null, dropped: [] });
   });
 
+  // A matcher that already carries a prefix is xray's own syntax and must ride
+  // through untouched; a bare name is a category and gets qualified.
   it('qualifies bare category names and leaves qualified ones alone', () => {
     const policy = EgressPolicySchema.parse([
-      { geosite: ['youtube', 'ext:custom.dat:vpn'], target: 'direct' },
+      { geosite: ['youtube', 'full:exact.example.com'], target: 'direct' },
     ]) as EgressPolicy;
     const { fragments } = compileEgressPolicy(policy, NO_CHANNELS);
     expect(fragments?.rules[0]).toEqual({
-      domain: ['geosite:youtube', 'ext:custom.dat:vpn'],
+      domain: ['geosite:youtube', 'full:exact.example.com'],
       outboundTag: 'direct',
     });
   });
@@ -212,5 +215,36 @@ describe('the zapret2 channel', () => {
       { geosite: ['ru'], target: 'direct' },
     ]) as EgressPolicy;
     expect(compileEgressPolicy(onlyDirect, WITH_ZAPRET2).fragments?.outbounds).toBeUndefined();
+  });
+});
+
+// xray fails config load on an ext: file it has not got and crash-loops, taking
+// every user on that node with it. The geo subsystem delivers those files with
+// the cascade fragments, so a node's OWN policy has no way to get one.
+describe('custom (ext:) categories in the node scope', () => {
+  const withExt = [{ geosite: ['ext:geo-custom.dat:MYCAT'], target: 'direct' }];
+
+  it('is refused at the point it is typed', () => {
+    // The cascade scope still takes it: there the file travels with the rules.
+    expect(EgressPolicySchema.safeParse(withExt).success).toBe(true);
+    expect(NodeEgressPolicySchema.safeParse(withExt).success).toBe(false);
+  });
+
+  it('is dropped rather than pushed, for a policy stored before that guard', () => {
+    const policy = EgressPolicySchema.parse([
+      ...withExt,
+      { geosite: ['ru'], target: 'direct' },
+    ]) as EgressPolicy;
+    const { fragments, dropped } = compileEgressPolicy(policy, NO_CHANNELS);
+    expect(dropped).toEqual([
+      { index: 0, target: 'direct', reason: 'custom (ext:) category cannot reach this node' },
+    ]);
+    expect(fragments?.rules).toEqual([{ domain: ['geosite:ru'], outboundTag: 'direct' }]);
+  });
+
+  it('leaves standard categories alone', () => {
+    expect(NodeEgressPolicySchema.safeParse([{ geosite: ['ru'], target: 'direct' }]).success).toBe(
+      true,
+    );
   });
 });

@@ -102,6 +102,45 @@ export const EgressRuleSchema = z
 
 export const EgressPolicySchema = z.array(EgressRuleSchema).max(128);
 
+/**
+ * A matcher naming a custom category out of a panel-built .dat, e.g.
+ * `ext:geo-custom.dat:MYCAT`. Only usable where the file itself reaches the
+ * node.
+ */
+export function isExtMatcher(m: string): boolean {
+  return m.startsWith('ext:');
+}
+
+export function ruleUsesExtMatcher(r: EgressRule): boolean {
+  return [...(r.geosite ?? []), ...(r.geoip ?? []), ...(r.domain ?? []), ...(r.ip ?? [])].some(
+    isExtMatcher,
+  );
+}
+
+/**
+ * The NODE scope's policy: the shared language minus custom categories.
+ *
+ * xray fails config load on an `ext:` file it has not got and then crash-loops,
+ * taking every user on that node with it, so such a matcher may only be shipped
+ * where the panel also delivers the file. Today that delivery rides the cascade
+ * fragments (geoAssets, see the geo subsystem), which reach a node because it is
+ * a hop in a chain - a node's own policy has no such channel. Until it does, the
+ * node scope refuses these at the point they are typed, rather than accepting
+ * them and taking the node down on the next push.
+ */
+export const NodeEgressPolicySchema = EgressPolicySchema.superRefine((policy, ctx) => {
+  policy.forEach((r, index) => {
+    if (ruleUsesExtMatcher(r)) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'custom (ext:) categories are only available on a cascade hop, where the panel also delivers the file; use a standard geosite/geoip category here',
+        path: [index],
+      });
+    }
+  });
+});
+
 export type EgressTarget = z.infer<typeof EgressTargetSchema>;
 export type EgressRule = z.infer<typeof EgressRuleSchema>;
 export type EgressPolicy = z.infer<typeof EgressPolicySchema>;
@@ -198,6 +237,9 @@ export function egressDomainStrategy(policy: EgressPolicy | undefined): 'IPOnDem
 export function compileRules(
   policy: EgressPolicy | undefined,
   targets: TargetRouting,
+  /** Whether this scope can deliver custom (ext:) categories to the node. Only
+   *  the cascade scope can today; see NodeEgressPolicySchema. */
+  { allowExt = true }: { allowExt?: boolean } = {},
 ): CompiledRules {
   const rules: Record<string, unknown>[] = [];
   const dropped: DroppedRule[] = [];
@@ -206,6 +248,12 @@ export function compileRules(
   (policy ?? []).forEach((r, index) => {
     const domain = [...qualify('geosite', r.geosite), ...(r.domain ?? [])];
     const ip = [...qualify('geoip', r.geoip), ...(r.ip ?? [])];
+    if (!allowExt && ruleUsesExtMatcher(r)) {
+      // Defence in depth behind NodeEgressPolicySchema: a rule stored before
+      // that guard existed must not reach a node that cannot resolve it.
+      dropped.push({ index, target: r.target, reason: 'custom (ext:) category cannot reach this node' });
+      return;
+    }
     // A rule with no matcher at all behaves as a catch-all and would shadow
     // every rule under it, including the cascade's own. The schema rejects one,
     // so this only catches drifted data, but the cost of being wrong is the
@@ -302,7 +350,7 @@ export function compileEgressPolicy(
 ): CompiledEgressPolicy {
   if (!policy || policy.length === 0) return { fragments: null, dropped: [] };
 
-  const { rules, dropped } = compileRules(policy, nodeEgressTargets(caps));
+  const { rules, dropped } = compileRules(policy, nodeEgressTargets(caps), { allowExt: false });
   if (rules.length === 0) return { fragments: null, dropped };
 
   const outbounds: unknown[] = [];
