@@ -1594,6 +1594,8 @@ export default {
     splitPreviewIncomplete_other: '{{count}} незаконченных правила не показаны (выберите направление или добавьте матчер).',
     splitPreviewDropped:
       'Этих матчеров нода не увидит — кастомная категория не собрана или пуста в текущей сборке: {{matchers}}',
+    splitPreviewNodePolicy:
+      'У самой ноды есть своя egress-политика: правил — {{count}}, применяются ПЕРЕД сплитом ниже. Трафик, подошедший под оба, уйдёт по ним.',
     splitPreviewStrategy:
       'Вход переключит routing.domainStrategy на {{strategy}}, иначе IP-правила не сработают.',
     removeRule: 'Удалить правило',

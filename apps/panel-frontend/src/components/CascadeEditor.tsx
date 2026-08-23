@@ -589,7 +589,10 @@ export function PoolField({
           nodeLabel={nodes.find((n) => n.id === editing)?.name ?? editing}
           policy={policies?.[editing] ?? []}
           directions={directions ?? []}
-          preview={preview}
+          // The node is known here, not where the context is built (that one is
+          // per position); the preview needs it to also show what this node's
+          // own egress policy contributes ahead of the split.
+          preview={preview ? { ...preview, nodeId: editing } : undefined}
           onClose={() => setEditing(null)}
           onSave={(next) => onPolicyChange?.(editing, next)}
         />

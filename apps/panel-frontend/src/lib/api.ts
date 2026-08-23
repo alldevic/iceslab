@@ -1408,14 +1408,21 @@ export interface EgressRule {
  */
 export interface GeoPreviewRequest {
   policy: EgressRule[];
+  /** The node the split is authored for, so the preview can also show what its
+   *  own egress policy contributes ahead of the split. */
+  nodeId?: string;
   position: number;
   prevNodeIds: string[];
   directions: { tag: number; outbounds: number }[];
 }
 
 export interface GeoPreviewResult {
-  /** The xray routing rules the node would receive, in match order. */
+  /** The xray routing rules this split compiles to, in match order. */
   rules: Record<string, unknown>[];
+  /** What the node's OWN egress policy contributes. The node renders these
+   *  BEFORE the split, so a flow matching both takes this one. Empty when the
+   *  node has no policy of its own. */
+  nodeRules: Record<string, unknown>[];
   /** routing.domainStrategy the policy forces on the entry, when it needs one. */
   domainStrategy?: string;
   /** Matchers stripped before the node ever sees them - a custom category that

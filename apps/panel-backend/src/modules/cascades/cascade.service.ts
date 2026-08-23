@@ -4,6 +4,8 @@ import { getGeoBuildMeta } from '../geo/geo.registry.js';
 import { geoArtifactBaseUrl } from '../geo/geo.url.js';
 import { GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT } from '../geo/geo.orchestrator.js';
 import { coerceEgressPolicy, entryDomainStrategy, type EgressPolicy } from './cascade.geo.js';
+import { compileRules, nodeEgressTargets } from '../egress/egress.policy.js';
+import { zapret2SocksPortFor } from '../egress/egress.zapret2.js';
 import { cascadeAutoProfileLabel, cascadeProfileLabel } from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
@@ -240,6 +242,10 @@ function policyMatchers(policy: EgressPolicy | undefined): string[] {
 
 export interface GeoPreviewInput {
   policy: EgressPolicy;
+  /** The node this split is authored for, so the preview can also show what its
+   *  own egress policy contributes ahead of the split. Optional for callers
+   *  that predate it. */
+  nodeId?: string;
   /** Index of the position holding this node. 0 is the entry, and the entry is
    *  the only hop that can read the client's chosen direction out of its UUID. */
   position: number;
@@ -254,8 +260,14 @@ export interface GeoPreviewInput {
 }
 
 export interface GeoPreviewResult {
-  /** The routing rules the node would receive, in match order. */
+  /** The routing rules this split compiles to, in match order. */
   rules: Record<string, unknown>[];
+  /** The rules the node's OWN egress policy contributes, which the node renders
+   *  BEFORE the ones above (see the render-order test in the node agent). Empty
+   *  when the node has no policy of its own, or when the caller did not say
+   *  which node this is. Separate from `rules` so the operator can see which
+   *  half they are looking at rather than one blurred list. */
+  nodeRules: Record<string, unknown>[];
   /** The entry's routing.domainStrategy override, when the policy needs one. */
   domainStrategy?: string;
   /** Matchers reconciliation removes before the node ever sees them (a custom
@@ -306,8 +318,47 @@ export async function previewNodeGeo(input: GeoPreviewInput): Promise<GeoPreview
         )
       : [];
 
-  const domainStrategy = entryDomainStrategy(reconciled);
-  return { rules, ...(domainStrategy ? { domainStrategy } : {}), dropped };
+  // The node's own egress policy, compiled the same way the push compiles it,
+  // because the node renders those rules ahead of this split and a preview that
+  // omits them answers a question the operator did not ask. Same compiler, same
+  // capability resolution: a preview that agrees with the push only until one
+  // of them changes is worse than no preview.
+  const nodeRules = input.nodeId ? await nodeOwnEgressRules(input.nodeId) : [];
+
+  // One config, one domainStrategy: whichever half needs IP resolution forces
+  // it, mirroring how the node combines the two overrides.
+  const domainStrategy =
+    entryDomainStrategy(reconciled) ??
+    (nodeRules.some((r) => Array.isArray(r.ip)) ? 'IPOnDemand' : undefined);
+  return { rules, nodeRules, ...(domainStrategy ? { domainStrategy } : {}), dropped };
+}
+
+/**
+ * The xray rules a node's OWN egress policy (Node.hardening.egressPolicy)
+ * compiles to, against the ways out that node actually has. Empty for a node
+ * with no policy, an unknown node, or a policy whose every rule names a channel
+ * this node does not run.
+ */
+async function nodeOwnEgressRules(nodeId: string): Promise<Record<string, unknown>[]> {
+  const node = await prisma.node.findUnique({
+    where: { id: nodeId },
+    select: { hardening: true, warpEnabled: true, warpAccount: true },
+  });
+  if (!node) return [];
+  const hardening = node.hardening as { egressPolicy?: unknown; zapret2?: unknown } | null;
+  const policy = coerceEgressPolicy(hardening?.egressPolicy);
+  if (!policy) return [];
+  const warpUsable = Boolean(
+    node.warpEnabled &&
+      (node.warpAccount as { secretKey?: string } | null)?.secretKey,
+  );
+  return compileRules(
+    policy,
+    nodeEgressTargets({
+      warp: warpUsable,
+      zapret2SocksPort: zapret2SocksPortFor(hardening?.zapret2),
+    }),
+  ).rules;
 }
 
 /** Per-node policies for one cascade, reconciled against the current geo build.

@@ -43,6 +43,9 @@ export interface DirectionChoice {
  * edited, not for the one last saved.
  */
 export interface SplitPreviewContext {
+  /** The node being previewed. Lets the preview also show what that node's own
+   *  egress policy contributes ahead of this split. */
+  nodeId?: string;
   position: number;
   prevNodeIds: string[];
   /** direction tag -> outbounds serving it from this node. */
@@ -357,6 +360,7 @@ function CompiledPreview({
 
   const body = {
     policy: ready,
+    ...(context.nodeId ? { nodeId: context.nodeId } : {}),
     position: context.position,
     prevNodeIds: context.prevNodeIds,
     directions: Object.entries(context.outbounds).map(([tag, outbounds]) => ({
@@ -419,6 +423,30 @@ function CompiledPreview({
                 <Text size="xs" style={{ color: MIST }}>
                   {t('cascades.splitPreviewStrategy', { strategy: query.data.domainStrategy })}
                 </Text>
+              )}
+              {/* The node's own egress policy runs BEFORE this split, so a flow
+                  matching both takes that one. Shown above the split rules, in
+                  the order the node applies them, because the overlap is
+                  exactly where an operator's split "does nothing". */}
+              {query.data.nodeRules?.length > 0 && (
+                <Stack gap={4}>
+                  <Text size="xs" style={{ color: AMBER, lineHeight: 1.5 }}>
+                    {t('cascades.splitPreviewNodePolicy', { count: query.data.nodeRules.length })}
+                  </Text>
+                  <Code
+                    block
+                    style={{
+                      fontFamily: MONO,
+                      fontSize: 11,
+                      maxHeight: 140,
+                      overflow: 'auto',
+                      backgroundColor: CARD,
+                      color: FAINT,
+                    }}
+                  >
+                    {JSON.stringify(query.data.nodeRules, null, 2)}
+                  </Code>
+                </Stack>
               )}
               {query.data.rules.length === 0 ? (
                 <Text size="xs" style={{ color: AMBER }}>

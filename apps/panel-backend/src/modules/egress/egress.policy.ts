@@ -268,8 +268,10 @@ export interface CompiledEgressPolicy {
 }
 
 /** The ways out a node itself can serve. The cascade scope builds its own map
- *  from the chain's directions (see cascade.config.ts). */
-function nodeTargets(caps: NodeEgressCapabilities): TargetRouting {
+ *  from the chain's directions (see cascade.config.ts). Exported so the split
+ *  preview can compile the node's own policy the same way the push does,
+ *  instead of a second implementation that agrees until it stops agreeing. */
+export function nodeEgressTargets(caps: NodeEgressCapabilities): TargetRouting {
   const targets: TargetRouting = {
     direct: { outboundTag: 'direct' },
     block: { outboundTag: 'blocked' },
@@ -300,7 +302,7 @@ export function compileEgressPolicy(
 ): CompiledEgressPolicy {
   if (!policy || policy.length === 0) return { fragments: null, dropped: [] };
 
-  const { rules, dropped } = compileRules(policy, nodeTargets(caps));
+  const { rules, dropped } = compileRules(policy, nodeEgressTargets(caps));
   if (rules.length === 0) return { fragments: null, dropped };
 
   const outbounds: unknown[] = [];

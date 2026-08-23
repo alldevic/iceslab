@@ -1531,6 +1531,8 @@ export default {
     splitPreviewIncomplete_other: '{{count}} unfinished rules are not shown (pick a direction or add a matcher).',
     splitPreviewDropped:
       'The node will never see these matchers — the custom category is not built, or is empty in the current build: {{matchers}}',
+    splitPreviewNodePolicy:
+      'This node has an egress policy of its own: {{count}} rule(s), applied BEFORE the split below. A flow matching both takes these.',
     splitPreviewStrategy:
       'The entry switches routing.domainStrategy to {{strategy}} so IP rules can match at all.',
     removeRule: 'Remove rule',

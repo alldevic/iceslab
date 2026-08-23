@@ -171,6 +171,10 @@ export const UpdateCascadeSchema = z
  */
 export const GeoPreviewSchema = z.object({
   policy: EgressPolicySchema,
+  /** The node the split is authored for. Optional only for callers that predate
+   *  it: with it, the preview also shows the rules the node's OWN egress policy
+   *  contributes ahead of these, which is what the node actually gets. */
+  nodeId: z.uuid().optional(),
   /** 0 = the entry. Only the entry can read the client's chosen direction. */
   position: z.number().int().min(0).max(MAX_CASCADE_HOPS - 1),
   /** Nodes on the previous position; how a transit tells directions apart. */

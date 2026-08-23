@@ -174,3 +174,77 @@ describe('the geo preview compiles to exactly what the node is given', () => {
     expect(preview.rules).toEqual([]);
   });
 });
+
+/**
+ * A node can carry its own egress policy as well as this split, and the node
+ * renders that one FIRST. A preview that showed only the split would answer a
+ * question the operator did not ask - and the one case where it matters most is
+ * the one where the two overlap.
+ */
+describe('preview of a node that also has its own egress policy', () => {
+  async function nodeWithPolicy(policy: unknown, warp = false): Promise<string> {
+    const n = await prisma.node.create({
+      data: {
+        name: `own-policy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        address: `own-${Math.random().toString(36).slice(2, 8)}.test:1337`,
+        heartbeatSecret: Buffer.alloc(32),
+        hardening: { egressPolicy: policy } as never,
+        warpEnabled: warp,
+        warpAccount: warp ? ({ secretKey: 'sk', address: ['172.16.0.2/32'] } as never) : undefined,
+      },
+    });
+    return n.id;
+  }
+
+  const split: EgressPolicy = [{ geosite: ['ru'], target: 'direct' }];
+
+  it('shows the node policy separately from the split', async () => {
+    const nodeId = await nodeWithPolicy([{ geosite: ['youtube'], target: 'block' }]);
+    const preview = await previewNodeGeo({
+      policy: split,
+      nodeId,
+      position: 0,
+      prevNodeIds: [],
+      directions: [],
+    });
+    expect(preview.nodeRules).toEqual([
+      { type: 'field', outboundTag: 'blocked', domain: ['geosite:youtube'] },
+    ]);
+    expect(preview.rules.some((r) => JSON.stringify(r).includes('geosite:ru'))).toBe(true);
+  });
+
+  it('drops a node rule whose channel that node does not run', async () => {
+    const nodeId = await nodeWithPolicy([{ geosite: ['youtube'], target: 'warp' }]);
+    const preview = await previewNodeGeo({
+      policy: split,
+      nodeId,
+      position: 0,
+      prevNodeIds: [],
+      directions: [],
+    });
+    // Same resolution the push does: no WARP on this node, so no rule.
+    expect(preview.nodeRules).toEqual([]);
+  });
+
+  it('reports IPOnDemand when only the NODE policy needs it', async () => {
+    const nodeId = await nodeWithPolicy([{ geoip: ['ru'], target: 'direct' }]);
+    const preview = await previewNodeGeo({
+      policy: split, // geosite only, so the split alone would not force it
+      nodeId,
+      position: 0,
+      prevNodeIds: [],
+      directions: [],
+    });
+    expect(preview.domainStrategy).toBe('IPOnDemand');
+  });
+
+  it('says nothing about a node policy when the caller did not name a node', async () => {
+    const preview = await previewNodeGeo({
+      policy: split,
+      position: 0,
+      prevNodeIds: [],
+      directions: [],
+    });
+    expect(preview.nodeRules).toEqual([]);
+  });
+});
