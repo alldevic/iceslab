@@ -1098,6 +1098,26 @@ export default {
         advRealityInactive: 'These apply only when security is REALITY.',
         advTlsInactive: 'This applies only when security is TLS (own cert).',
         advTransportInactive: 'These apply only when the transport is xhttp or gRPC.',
+        advAbuseTab: 'Anti-abuse',
+        advPqTab: 'Post-quantum',
+        abuseDesc:
+          'The node’s built-in BLOCK rules. All on by default (matches the node). Turn one off to allow that traffic on this profile (e.g. BitTorrent on a residential exit).',
+        abuseSingboxUnsupported:
+          'The sing-box engine renders no routing rules, so it has nothing to block and nothing to relax. Use the Xray engine for this profile.',
+        abuseTorrentLabel: 'Block BitTorrent',
+        abuseTorrentDesc: 'Route BitTorrent to the blackhole — most VPS AUPs forbid it.',
+        abuseSmtpLabel: 'Block SMTP (port 25)',
+        abuseSmtpDesc: 'Route outbound port-25 to the blackhole — stops mail-spam abuse.',
+        abuseDnsHijackLabel: 'DNS-hijack protection',
+        abuseDnsHijackDesc: 'Route DNS to the dns-out outbound so the resolver never sees client IPs.',
+        pqDesc:
+          'Post-quantum crypto (off by default). Opaque values are generated with the xray binary (xray mldsa65 / xray vlessenc) and pasted here. Requires an xray build with PQ support.',
+        pqMldsaLabel: 'REALITY ML-DSA-65 seed',
+        pqMldsaDesc:
+          'Server seed adding a post-quantum signature to the REALITY cert. Only for security=reality; the target cert must be >3500 bytes.',
+        pqVlessLabel: 'VLESS-Encryption (ML-KEM-768)',
+        pqVlessDesc:
+          'Server decryption string (mlkem768x25519plus.native.…). Only for the vless subprotocol.',
         realityXverLabel: 'REALITY xver',
         realityXverDesc: 'HTTP version sent to the decoy: 0 = auto, 1 = HTTP/1.1, 2 = HTTP/2',
         realityMaxTimeDiffLabel: 'Max time diff (ms)',

@@ -1158,6 +1158,26 @@ export default {
         advRealityInactive: 'Применимо только при security = REALITY.',
         advTlsInactive: 'Применимо только при security = TLS (свой серт).',
         advTransportInactive: 'Применимо только для транспорта xhttp или gRPC.',
+        advAbuseTab: 'Анти-абьюз',
+        advPqTab: 'Post-quantum',
+        abuseDesc:
+          'Встроенные BLOCK-правила ноды. По умолчанию все включены (как на ноде). Выключи, чтобы разрешить этот трафик в профиле (напр. BitTorrent на residential-выходе).',
+        abuseSingboxUnsupported:
+          'Движок sing-box не рендерит routing-правил: блокировать ему нечего и ослаблять нечего. Для этого профиля нужен движок Xray.',
+        abuseTorrentLabel: 'Блокировать BitTorrent',
+        abuseTorrentDesc: 'Слать BitTorrent в blackhole — большинство AUP у VPS это запрещают.',
+        abuseSmtpLabel: 'Блокировать SMTP (порт 25)',
+        abuseSmtpDesc: 'Слать исходящий порт-25 в blackhole — против почтового спама.',
+        abuseDnsHijackLabel: 'Защита от DNS-hijack',
+        abuseDnsHijackDesc: 'Слать DNS в dns-out, чтобы резолвер не видел IP клиентов.',
+        pqDesc:
+          'Постквантовая криптография (по умолч. выкл.). Opaque-значения генерируются бинарём xray (xray mldsa65 / xray vlessenc) и вставляются сюда. Нужна сборка xray с поддержкой PQ.',
+        pqMldsaLabel: 'REALITY ML-DSA-65 seed',
+        pqMldsaDesc:
+          'Серверный seed — добавляет постквантовую подпись на REALITY-сертификат. Только для security=reality; cert от target должен быть >3500 байт.',
+        pqVlessLabel: 'VLESS-Encryption (ML-KEM-768)',
+        pqVlessDesc:
+          'Серверная decryption-строка (mlkem768x25519plus.native.…). Только для subprotocol=vless.',
         realityXverLabel: 'REALITY xver',
         realityXverDesc: 'HTTP-версия для декоя: 0 = авто, 1 = HTTP/1.1, 2 = HTTP/2',
         realityMaxTimeDiffLabel: 'Макс. расхождение времени (мс)',

@@ -131,6 +131,7 @@ const PROFILE_PROTOCOL_GROUPED = [
 
 type Mode = 'create' | 'edit';
 
+
 interface FormValues {
   protocol: ProtocolName;
   name: string;
@@ -179,6 +180,16 @@ interface FormValues {
   xrayXhttpMode: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
   xrayXhttpPaddingBytes: string;
   xrayGrpcMultiMode: boolean;
+  // U4 anti-abuse. Default all-true (= node's hardcoded behaviour); the form
+  // emits abusePolicy only when an operator relaxes one, keeping the wire
+  // byte-identical for untouched profiles.
+  xrayBlockTorrent: boolean;
+  xrayBlockSmtp: boolean;
+  xrayBlockDnsHijack: boolean;
+  // U5 post-quantum (opaque strings from `xray mldsa65` / `xray vlessenc`).
+  // Empty = off.
+  xrayMldsa65Seed: string;
+  xrayVlessDecryption: string;
 
   // AmneziaWG
   awgSubnet: string;
@@ -327,6 +338,11 @@ function defaults(profile: Profile | null): FormValues {
     xrayXhttpMode: 'auto',
     xrayXhttpPaddingBytes: '',
     xrayGrpcMultiMode: false,
+    xrayBlockTorrent: true,
+    xrayBlockSmtp: true,
+    xrayBlockDnsHijack: true,
+    xrayMldsa65Seed: '',
+    xrayVlessDecryption: '',
 
     awgSubnet: '10.66.66.0/24',
     awgServerPriv: '',
@@ -411,6 +427,14 @@ function defaults(profile: Profile | null): FormValues {
         xrayXhttpMode: ((cfg.xhttpMode as FormValues['xrayXhttpMode']) ?? base.xrayXhttpMode),
         xrayXhttpPaddingBytes: (cfg.xhttpPaddingBytes as string) ?? base.xrayXhttpPaddingBytes,
         xrayGrpcMultiMode: (cfg.grpcMultiMode as boolean) ?? base.xrayGrpcMultiMode,
+        xrayBlockTorrent:
+          (cfg.abusePolicy as { blockTorrent?: boolean } | undefined)?.blockTorrent ?? true,
+        xrayBlockSmtp:
+          (cfg.abusePolicy as { blockSmtp?: boolean } | undefined)?.blockSmtp ?? true,
+        xrayBlockDnsHijack:
+          (cfg.abusePolicy as { blockDnsHijack?: boolean } | undefined)?.blockDnsHijack ?? true,
+        xrayMldsa65Seed: (cfg.realityMldsa65Seed as string) ?? '',
+        xrayVlessDecryption: (cfg.vlessDecryption as string) ?? '',
       };
     case 'amneziawg': {
       const obf = (cfg.obfuscation as Record<string, number | string> | undefined) ?? {};
@@ -687,6 +711,24 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
             : {}),
           ...(values.xrayNetwork === 'grpc'
             ? { grpcMultiMode: values.xrayGrpcMultiMode }
+            : {}),
+          // U4 anti-abuse — emit only when an operator relaxed a rule, so an
+          // untouched profile (all-true) stays byte-identical on the wire.
+          ...(!values.xrayBlockTorrent || !values.xrayBlockSmtp || !values.xrayBlockDnsHijack
+            ? {
+                abusePolicy: {
+                  blockTorrent: values.xrayBlockTorrent,
+                  blockSmtp: values.xrayBlockSmtp,
+                  blockDnsHijack: values.xrayBlockDnsHijack,
+                },
+              }
+            : {}),
+          // U5 post-quantum — opaque, gated on the layer they apply to.
+          ...(values.xraySecurity === 'reality' && values.xrayMldsa65Seed.trim()
+            ? { realityMldsa65Seed: values.xrayMldsa65Seed.trim() }
+            : {}),
+          ...(values.xraySubprotocol === 'vless' && values.xrayVlessDecryption.trim()
+            ? { vlessDecryption: values.xrayVlessDecryption.trim() }
             : {}),
         };
         break;
@@ -1355,6 +1397,8 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   <Tabs.Tab value="reality">{t('profiles.form.cfg.advRealityTab')}</Tabs.Tab>
                   <Tabs.Tab value="tls">{t('profiles.form.cfg.advTlsTab')}</Tabs.Tab>
                   <Tabs.Tab value="transport">{t('profiles.form.cfg.advTransportTab')}</Tabs.Tab>
+                  <Tabs.Tab value="abuse">{t('profiles.form.cfg.advAbuseTab')}</Tabs.Tab>
+                  <Tabs.Tab value="pq">{t('profiles.form.cfg.advPqTab')}</Tabs.Tab>
                 </Tabs.List>
 
                 <Tabs.Panel value="reality" pt="sm">
@@ -1510,6 +1554,72 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                       {t('profiles.form.cfg.advTransportInactive')}
                     </Text>
                   )}
+                </Tabs.Panel>
+
+                {/* U4 anti-abuse — the node's built-in BLOCK rules. All on by
+                    default (matches the node); turning one off relaxes it. */}
+                <Tabs.Panel value="abuse" pt="sm">
+                  <Stack gap="sm">
+                    <Text size="xs" c="dimmed">
+                      {t('profiles.form.cfg.abuseDesc')}
+                    </Text>
+                    {/* The sing-box engine renders no routing rules at all, so
+                        it has no BLOCK rules to relax. Both ends refuse the
+                        pair; saying so here beats a rejected save. */}
+                    {form.values.engine === 'singbox' && (
+                      <Alert color="yellow" variant="light">
+                        {t('profiles.form.cfg.abuseSingboxUnsupported')}
+                      </Alert>
+                    )}
+                    <Switch
+                      disabled={form.values.engine === 'singbox'}
+                      label={t('profiles.form.cfg.abuseTorrentLabel')}
+                      description={t('profiles.form.cfg.abuseTorrentDesc')}
+                      {...form.getInputProps('xrayBlockTorrent', { type: 'checkbox' })}
+                    />
+                    <Switch
+                      disabled={form.values.engine === 'singbox'}
+                      label={t('profiles.form.cfg.abuseSmtpLabel')}
+                      description={t('profiles.form.cfg.abuseSmtpDesc')}
+                      {...form.getInputProps('xrayBlockSmtp', { type: 'checkbox' })}
+                    />
+                    <Switch
+                      disabled={form.values.engine === 'singbox'}
+                      label={t('profiles.form.cfg.abuseDnsHijackLabel')}
+                      description={t('profiles.form.cfg.abuseDnsHijackDesc')}
+                      {...form.getInputProps('xrayBlockDnsHijack', { type: 'checkbox' })}
+                    />
+                  </Stack>
+                </Tabs.Panel>
+
+                {/* U5 post-quantum — opaque seed/encryption strings (keygen via
+                    the xray binary; see backend). Gated on the layer they apply. */}
+                <Tabs.Panel value="pq" pt="sm">
+                  <Stack gap="sm">
+                    <Text size="xs" c="dimmed">
+                      {t('profiles.form.cfg.pqDesc')}
+                    </Text>
+                    <Textarea
+                      label={t('profiles.form.cfg.pqMldsaLabel')}
+                      description={t('profiles.form.cfg.pqMldsaDesc')}
+                      placeholder="seed…"
+                      autosize
+                      minRows={2}
+                      maxRows={4}
+                      disabled={form.values.xraySecurity !== 'reality' || form.values.engine === 'singbox'}
+                      {...form.getInputProps('xrayMldsa65Seed')}
+                    />
+                    <Textarea
+                      label={t('profiles.form.cfg.pqVlessLabel')}
+                      description={t('profiles.form.cfg.pqVlessDesc')}
+                      placeholder="mlkem768x25519plus.native.…"
+                      autosize
+                      minRows={2}
+                      maxRows={4}
+                      disabled={form.values.xraySubprotocol !== 'vless' || form.values.engine === 'singbox'}
+                      {...form.getInputProps('xrayVlessDecryption')}
+                    />
+                  </Stack>
                 </Tabs.Panel>
               </Tabs>
               </Collapse>
