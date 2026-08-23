@@ -79,6 +79,42 @@
   register: iceslab_agent_env_stat
   when: iceslab_zapret2_agent_env | bool
 
+# The agent's unit runs ProtectSystem=strict with an explicit ReadWritePaths
+# list, and this stack's directory is not on it - so the env above points the
+# egress manager at a file it is not allowed to create. /applyEgress then fails
+# with "read-only file system" in the agent's journal, the panel logs a warning
+# nobody reads, and the node sits there with zapret2 marked enabled and no
+# strategy ever written. Caught on a live node 2026-08-24; before that the whole
+# B2a push path had never actually written a byte.
+#
+# A drop-in rather than an edit of the unit: the installer owns that file and
+# rewrites it on every re-run, and ReadWritePaths entries from drop-ins are
+# appended to the list rather than replacing it. The `-` prefix keeps the unit
+# startable before the directory exists, matching the installer's own entries.
+- name: Ensure the node-agent drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/iceslab-node.service.d
+    state: directory
+    mode: "0755"
+  when:
+    - iceslab_zapret2_agent_env | bool
+    - iceslab_agent_env_stat.stat.exists | default(false)
+
+- name: Let the node-agent write this stack's config (ProtectSystem=strict drop-in)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/iceslab-node.service.d/zapret2-rw.conf
+    mode: "0644"
+    content: |
+      # Managed by the iceslab_node role.
+      [Service]
+      ReadWritePaths=-{{ iceslab_zapret2_dir }}
+  when:
+    - iceslab_zapret2_agent_env | bool
+    - iceslab_agent_env_stat.stat.exists | default(false)
+  notify:
+    - reload systemd
+    - restart iceslab-node
+
 - name: Wire ZAPRET2_* into the node-agent env
   ansible.builtin.blockinfile:
     path: "{{ iceslab_node_env_file }}"
