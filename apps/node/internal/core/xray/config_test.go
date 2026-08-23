@@ -1164,3 +1164,180 @@ func TestRender_Trojan_StillUsesRealityStreamSettings(t *testing.T) {
 		}
 	}
 }
+
+// B1: the compiled egress policy. A node that was never given one has to render
+// exactly what it rendered before the field existed.
+func TestRender_RoutingFragments_EmptyIsByteIdentical(t *testing.T) {
+	users := []xrayClient{{ID: "u1", Email: "u1"}}
+	nilBlob, err := renderConfig(validInbound(), users)
+	if err != nil {
+		t.Fatalf("render nil: %v", err)
+	}
+	empty := validInbound()
+	empty.RoutingFragments = &RoutingFragments{} // no rules, no outbounds
+	emptyBlob, err := renderConfig(empty, users)
+	if err != nil {
+		t.Fatalf("render empty: %v", err)
+	}
+	if !bytes.Equal(nilBlob, emptyBlob) {
+		t.Errorf("empty RoutingFragments must render byte-identically to nil (default routing)")
+	}
+}
+
+func TestRender_RoutingFragments_RulesAndOutbounds(t *testing.T) {
+	cfg := validInbound()
+	cfg.RoutingFragments = &RoutingFragments{
+		Rules: []RoutingRule{
+			{Domain: []string{"geosite:youtube"}, OutboundTag: "direct"},
+			{IP: []string{"geoip:ru"}, Network: "tcp", OutboundTag: "blocked"},
+		},
+		Outbounds: []json.RawMessage{
+			json.RawMessage(`{"tag":"ssz","protocol":"socks","settings":{}}`),
+		},
+	}
+	m := renderToMap(t, cfg)
+	rules := m["routing"].(map[string]any)["rules"].([]any)
+
+	var foundYT, foundRU bool
+	for _, raw := range rules {
+		r := raw.(map[string]any)
+		if r["outboundTag"] == "direct" {
+			if doms, ok := r["domain"].([]any); ok {
+				for _, d := range doms {
+					if d == "geosite:youtube" {
+						foundYT = true
+					}
+				}
+			}
+		}
+		if r["outboundTag"] == "blocked" {
+			if ips, ok := r["ip"].([]any); ok {
+				for _, ip := range ips {
+					if ip == "geoip:ru" {
+						foundRU = true
+					}
+				}
+			}
+		}
+	}
+	if !foundYT {
+		t.Errorf("missing geosite:youtube -> direct routing rule")
+	}
+	if !foundRU {
+		t.Errorf("missing geoip:ru -> blocked routing rule")
+	}
+
+	var foundOb bool
+	for _, raw := range m["outbounds"].([]any) {
+		if raw.(map[string]any)["tag"] == "ssz" {
+			foundOb = true
+		}
+	}
+	if !foundOb {
+		t.Errorf("custom outbound 'ssz' not appended")
+	}
+}
+
+// The whole composition contract in one test: the U4 blocks win over the
+// policy, and the policy wins over WARP (which is what unmatched traffic falls
+// through to). Both directions matter, so both are asserted on one render.
+func TestRender_RoutingFragments_OrderBetweenBlocksAndWarp(t *testing.T) {
+	cfg := validInbound()
+	cfg.Warp = &WarpConfig{SecretKey: "sk", Address: []string{"172.16.0.2/32"}}
+	cfg.RoutingFragments = &RoutingFragments{
+		Rules: []RoutingRule{{Domain: []string{"geosite:youtube"}, OutboundTag: "direct"}},
+	}
+	rules := renderToMap(t, cfg)["routing"].(map[string]any)["rules"].([]any)
+
+	btIdx, policyIdx, warpIdx := -1, -1, -1
+	for i, raw := range rules {
+		r := raw.(map[string]any)
+		if protocols, ok := r["protocol"].([]any); ok {
+			for _, p := range protocols {
+				if p == "bittorrent" {
+					btIdx = i
+				}
+			}
+		}
+		if r["outboundTag"] == "direct" {
+			if doms, ok := r["domain"].([]any); ok {
+				for _, d := range doms {
+					if d == "geosite:youtube" {
+						policyIdx = i
+					}
+				}
+			}
+		}
+		if r["outboundTag"] == "warp" {
+			warpIdx = i
+		}
+	}
+	if btIdx == -1 || policyIdx == -1 || warpIdx == -1 {
+		t.Fatalf("expected block, policy and warp rules, got bt=%d policy=%d warp=%d", btIdx, policyIdx, warpIdx)
+	}
+	if policyIdx < btIdx {
+		t.Errorf("policy rule (idx %d) must come AFTER the block rules (idx %d)", policyIdx, btIdx)
+	}
+	if warpIdx < policyIdx {
+		t.Errorf("WARP catch-all (idx %d) must come AFTER the policy rules (idx %d), or the policy never fires", warpIdx, policyIdx)
+	}
+}
+
+// A geoip rule on a node with a later catch-all only fires if xray is allowed
+// to resolve the sniffed domain, which is what the panel sets DomainStrategy
+// for. The node applies whatever the panel decided; it does not re-derive it.
+func TestRender_RoutingFragments_DomainStrategy(t *testing.T) {
+	t.Run("default when unset", func(t *testing.T) {
+		cfg := validInbound()
+		cfg.RoutingFragments = &RoutingFragments{
+			Rules: []RoutingRule{{Domain: []string{"geosite:youtube"}, OutboundTag: "direct"}},
+		}
+		got := renderToMap(t, cfg)["routing"].(map[string]any)["domainStrategy"]
+		if got != "IPIfNonMatch" {
+			t.Errorf("domainStrategy = %v, want IPIfNonMatch when the policy does not ask for another", got)
+		}
+	})
+
+	t.Run("panel override applied", func(t *testing.T) {
+		cfg := validInbound()
+		cfg.RoutingFragments = &RoutingFragments{
+			Rules:          []RoutingRule{{IP: []string{"geoip:ru"}, OutboundTag: "direct"}},
+			DomainStrategy: "IPOnDemand",
+		}
+		got := renderToMap(t, cfg)["routing"].(map[string]any)["domainStrategy"]
+		if got != "IPOnDemand" {
+			t.Errorf("domainStrategy = %v, want IPOnDemand", got)
+		}
+	})
+}
+
+func TestInboundEqual_RoutingFragments(t *testing.T) {
+	rf := func(tag string) *RoutingFragments {
+		return &RoutingFragments{Rules: []RoutingRule{{Domain: []string{"geosite:youtube"}, OutboundTag: tag}}}
+	}
+	strategy := func(s string) *RoutingFragments {
+		out := rf("direct")
+		out.DomainStrategy = s
+		return out
+	}
+	cases := []struct {
+		name string
+		a, b *RoutingFragments
+		want bool
+	}{
+		{"both nil", nil, nil, true},
+		{"nil vs set", nil, rf("direct"), false},
+		{"equal", rf("direct"), rf("direct"), true},
+		{"differ tag", rf("direct"), rf("blocked"), false},
+		{"differ domainStrategy", rf("direct"), strategy("IPOnDemand"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := validInbound(), validInbound()
+			a.RoutingFragments, b.RoutingFragments = tc.a, tc.b
+			if got := inboundEqual(a, b); got != tc.want {
+				t.Errorf("inboundEqual routingFragments %s: got %v want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}

@@ -200,6 +200,40 @@ export interface XrayInboundCfg {
   /** U4 configurable anti-abuse: which built-in BLOCK rules this node renders.
    *  See AbusePolicyCfg. */
   abusePolicy?: AbusePolicyCfg;
+  /** B1 the node's compiled egress policy. Injected by the panel at push time
+   *  from the node's own policy (NOT stored on the profile: the rules name
+   *  outbounds only some nodes have). Absent = default routing, byte-identical
+   *  to pre-B1. Mirrors the Go RoutingFragments json tags exactly (wire-sync). */
+  routingFragments?: RoutingFragmentsCfg;
+}
+
+/**
+ * B1 compiled egress policy: where matching traffic leaves this node. Rendered
+ * into xray routing.rules after the anti-abuse block rules and before the
+ * cascade / WARP catch-alls, so the policy decides for what it matches and
+ * everything else falls through to the node's default egress.
+ *
+ * The panel compiles this against the capabilities the node actually has, so
+ * `outboundTag` always names an outbound the rendered config carries: an
+ * unknown tag is a config xray refuses, which would take the node down.
+ */
+export interface RoutingFragmentsCfg {
+  rules: Array<{
+    /** e.g. ["geosite:youtube", "example.com"]. */
+    domain?: string[];
+    /** e.g. ["geoip:ru", "10.0.0.0/8"]. */
+    ip?: string[];
+    /** Single port, range "1000-2000", or comma list "80,443". */
+    port?: string;
+    network?: 'tcp' | 'udp' | 'tcp,udp';
+    outboundTag: string;
+  }>;
+  /** Custom xray outbound objects the rules name (panel-owned shape). */
+  outbounds?: unknown[];
+  /** routing.domainStrategy override. The panel sets 'IPOnDemand' when the
+   *  policy has an ip/geoip matcher, without which such a rule never fires on a
+   *  node whose later rules include a catch-all. Omitted = node default. */
+  domainStrategy?: 'AsIs' | 'IPIfNonMatch' | 'IPOnDemand';
 }
 
 /**

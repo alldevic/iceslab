@@ -420,6 +420,7 @@ type xrayFamilyWire struct {
 	// would decode to nothing and the profile would apply looking healthy
 	// while the feature it promises is absent.
 	AbusePolicy        json.RawMessage `json:"abusePolicy"`
+	RoutingFragments   json.RawMessage `json:"routingFragments"`
 	RealityMldsa65Seed string          `json:"realityMldsa65Seed"`
 	VlessDecryption    string          `json:"vlessDecryption"`
 }
@@ -464,6 +465,12 @@ func (w xrayFamilyWire) toInboundConfig(port int) (InboundConfig, error) {
 	// point of the field is that an operator can tell what a node enforces.
 	if present(w.AbusePolicy) {
 		return InboundConfig{}, fmt.Errorf("abusePolicy not supported via sing-box engine (it renders no anti-abuse rules; use the xray engine)")
+	}
+	// B1: the egress policy compiles to xray routing rules and outbounds. The
+	// sing-box renderer emits neither, so a node serving this profile would send
+	// every flow out its default egress while the panel shows a split.
+	if present(w.RoutingFragments) {
+		return InboundConfig{}, fmt.Errorf("routingFragments not supported via sing-box engine (it renders no routing rules; use the xray engine)")
 	}
 	// U5: post-quantum REALITY (ML-DSA-65) and VLESS-Encryption are xray-core
 	// features. Silently dropping them would leave a profile advertised as

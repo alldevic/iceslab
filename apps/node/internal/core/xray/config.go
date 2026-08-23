@@ -163,6 +163,11 @@ type InboundConfig struct {
 	// enforcement (e.g. allow BitTorrent on a residential exit). Shared with
 	// the shadowsocks core, which renders the same rules.
 	AbusePolicy *core.AbusePolicy
+
+	// RoutingFragments (B1) is the node's compiled server-side egress policy.
+	// nil (the field absent on the wire) means default routing, byte-identical
+	// to pre-B1. See the RoutingFragments type.
+	RoutingFragments *RoutingFragments
 }
 
 // WarpConfig holds Cloudflare WARP egress credentials from a wgcf-style device
@@ -329,6 +334,77 @@ type CascadeFragments struct {
 	// exposes; its user routing rule targets one via `balancerTag` (instead of a
 	// fixed `outboundTag`), so xray picks the lowest-ping exit per connection.
 	Balancers []json.RawMessage `json:"balancers,omitempty"`
+}
+
+// RoutingFragments (B1) is a node's compiled egress policy: structured rules
+// that send matching traffic (geosite/geoip/domain/port) to a chosen outbound,
+// plus the outbound definitions those rules name (e.g. a socks outbound to a
+// local desync proxy). Rendered into xray routing.rules AFTER the U4 block
+// rules (so blocks win), BEFORE the cascade rules (so a specific geosite route
+// beats the cascade catch-all) and before the WARP rule (so the policy decides
+// and WARP is what UNMATCHED traffic falls through to). nil/empty means the
+// node routes exactly as before, byte-identical to pre-B1.
+//
+// The panel compiles this from the operator's policy against the capabilities
+// the node actually has, so the node never sees a rule naming an outbound that
+// does not exist here: an unknown outboundTag is a config xray refuses, which
+// would take the node down over one stale policy row.
+//
+// geosite:*/geoip:* categories are bundled in the xray binary, so standard
+// categories need no .dat delivery.
+type RoutingFragments struct {
+	Rules []RoutingRule `json:"rules"`
+	// Outbounds are the custom xray outbound objects (raw JSON, panel-owned
+	// shape like cascade outbounds) a rule's OutboundTag names. Appended to the
+	// config's outbounds verbatim.
+	Outbounds []json.RawMessage `json:"outbounds,omitempty"`
+	// DomainStrategy overrides routing.domainStrategy for the whole config.
+	//
+	// Why a policy needs this: with sniffing on, a TLS/HTTP/QUIC connection is
+	// routed by its sniffed DOMAIN, and under the default IPIfNonMatch xray
+	// resolves that domain to an IP for a second rule pass only if NO rule
+	// matched the first. A node with a cascade catch-all or a WARP rule always
+	// has a later rule that matches everything, so the second pass never
+	// happens and an ip/geoip rule would never fire. The panel sets this to
+	// IPOnDemand when the compiled policy contains an ip/geoip matcher, which
+	// resolves as a rule needs an IP. Empty keeps the default.
+	//
+	// CAVEAT (same one the geo subsystem carries): IPOnDemand resolves through
+	// the NODE's DNS, which can answer differently than the client's resolver
+	// for CDN / geo-DNS names, so a geoip match is approximate. Confirm on a
+	// live node before relying on a geoip split.
+	DomainStrategy string `json:"domainStrategy,omitempty"`
+}
+
+// RoutingRule is one structured xray routing rule. At least one matcher is set
+// (the panel enforces this); OutboundTag names a built-in outbound
+// (direct/blocked/dns-out), a WARP/cascade outbound the config already carries,
+// or a RoutingFragments.Outbounds entry.
+type RoutingRule struct {
+	Domain      []string `json:"domain,omitempty"`  // e.g. ["geosite:youtube", "example.com"]
+	IP          []string `json:"ip,omitempty"`      // e.g. ["geoip:ru", "10.0.0.0/8"]
+	Port        string   `json:"port,omitempty"`    // e.g. "443" or "1000-2000"
+	Network     string   `json:"network,omitempty"` // "tcp" | "udp" | "tcp,udp"
+	OutboundTag string   `json:"outboundTag"`
+}
+
+// toXrayRule renders the structured rule into the map xray's routing.rules
+// expects, emitting only the matchers that are set.
+func (r RoutingRule) toXrayRule() map[string]any {
+	m := map[string]any{"type": "field", "outboundTag": r.OutboundTag}
+	if len(r.Domain) > 0 {
+		m["domain"] = r.Domain
+	}
+	if len(r.IP) > 0 {
+		m["ip"] = r.IP
+	}
+	if r.Port != "" {
+		m["port"] = r.Port
+	}
+	if r.Network != "" {
+		m["network"] = r.Network
+	}
+	return m
 }
 
 // renderConfig produces a complete Xray config.json blob for the given users.
@@ -519,6 +595,21 @@ func renderMultiConfig(
 		})
 	}
 
+	// B1: append the node's compiled egress policy. After the U4 block rules
+	// (so DNS-hijack/BitTorrent/SMTP still win) and before the cascade rules and
+	// the WARP rule below, both of which end in a catch-all: the policy decides
+	// where a matched flow leaves, and whatever it does not match falls through
+	// to the node's default egress. nil/empty adds nothing, so the render stays
+	// byte-identical.
+	if cfg.RoutingFragments != nil {
+		for _, ob := range cfg.RoutingFragments.Outbounds {
+			outbounds = append(outbounds, ob)
+		}
+		for _, rule := range cfg.RoutingFragments.Rules {
+			rules = append(rules, rule.toXrayRule())
+		}
+	}
+
 	// C3: append cascade fragments. Order matters: cascade rules come AFTER the
 	// base block/dns rules so a cascade entry's catch-all (user traffic ->
 	// link-out) doesn't shadow DNS-hijack/BitTorrent/SMTP handling.
@@ -552,8 +643,14 @@ func renderMultiConfig(
 	// targets one via balancerTag) plus a top-level `observatory` probing the
 	// link-out outbounds. Both are raw JSON the panel owns; nil/empty = no
 	// balancer, so the output stays byte-identical to a plain / non-cascade node.
+	domainStrategy := "IPIfNonMatch"
+	// B1: a policy with an ip/geoip matcher needs IPOnDemand to fire at all on a
+	// node whose later rules include a catch-all. See RoutingFragments.
+	if cfg.RoutingFragments != nil && cfg.RoutingFragments.DomainStrategy != "" {
+		domainStrategy = cfg.RoutingFragments.DomainStrategy
+	}
 	routing := map[string]any{
-		"domainStrategy": "IPIfNonMatch",
+		"domainStrategy": domainStrategy,
 		"rules":          rules,
 	}
 	if cascade != nil && len(cascade.Balancers) > 0 {

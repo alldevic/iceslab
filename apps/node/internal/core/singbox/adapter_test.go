@@ -185,6 +185,7 @@ func TestXrayFamilyApplyInboundGuards(t *testing.T) {
 		// Fork fields with no sing-box equivalent: rejected loudly rather than
 		// applied as a config that quietly enforces / protects nothing.
 		"abusePolicy":         `{"subprotocol":"vless","abusePolicy":{"blockTorrent":false,"blockSmtp":true,"blockDnsHijack":true},` + reality + `}`,
+		"routingFragments":    `{"subprotocol":"vless","routingFragments":{"rules":[{"domain":["geosite:youtube"],"outboundTag":"direct"}]},` + reality + `}`,
 		"pq reality seed":     `{"subprotocol":"vless","realityMldsa65Seed":"seed",` + reality + `}`,
 		"pq vless decryption": `{"subprotocol":"vless","vlessDecryption":"mlkem768x25519plus.native",` + reality + `}`,
 		"tls security":        `{"subprotocol":"vless","security":"tls",` + reality + `}`,

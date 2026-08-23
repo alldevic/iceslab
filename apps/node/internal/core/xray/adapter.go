@@ -819,6 +819,11 @@ type xrayInboundCfgWire struct {
 	// it doubles as the wire shape (`abusePolicy` on XrayInboundCfg in
 	// packages/shared/src/transport.ts), like Cascade and Warp above.
 	AbusePolicy *core.AbusePolicy `json:"abusePolicy,omitempty"`
+	// B1: the node's compiled egress policy. nil/missing = default routing
+	// (byte-identical to pre-B1). Reuses the config-side RoutingFragments type
+	// directly (json tags match `routingFragments` on XrayInboundCfg in
+	// packages/shared/src/transport.ts). The panel owns the shape.
+	RoutingFragments *RoutingFragments `json:"routingFragments,omitempty"`
 }
 
 // ApplyInbound parses the panel-pushed Xray config, swaps it into the live
@@ -886,6 +891,8 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		// U4: configurable anti-abuse. nil wire = nil field = all block rules
 		// enabled (byte-identical to pre-U4).
 		AbusePolicy: wire.AbusePolicy,
+		// B1: same type on both sides, assign directly. nil = default routing.
+		RoutingFragments: wire.RoutingFragments,
 	}
 
 	// Multi-inbound: an identified inbound lives in the map under its own id, so
@@ -969,6 +976,37 @@ func inboundEqual(a, b InboundConfig) bool {
 	// section reflects the new flags. Pointer-deep: nil==nil, nil!=non-nil.
 	if !a.AbusePolicy.Equal(b.AbusePolicy) {
 		return false
+	}
+	// B1: a policy change alone must re-render too, or an edited split would be
+	// acked and never applied.
+	if !routingFragmentsEqual(a.RoutingFragments, b.RoutingFragments) {
+		return false
+	}
+	return true
+}
+
+func routingFragmentsEqual(a, b *RoutingFragments) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.DomainStrategy != b.DomainStrategy {
+		return false
+	}
+	if !rawSliceEqual(a.Outbounds, b.Outbounds) {
+		return false
+	}
+	if len(a.Rules) != len(b.Rules) {
+		return false
+	}
+	for i := range a.Rules {
+		ar, br := a.Rules[i], b.Rules[i]
+		if ar.OutboundTag != br.OutboundTag ||
+			ar.Port != br.Port ||
+			ar.Network != br.Network ||
+			!stringSliceEqual(ar.Domain, br.Domain) ||
+			!stringSliceEqual(ar.IP, br.IP) {
+			return false
+		}
 	}
 	return true
 }
