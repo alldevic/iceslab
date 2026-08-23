@@ -40,6 +40,19 @@ describe('validateZapret2Config (B2a)', () => {
     expect(() => validateZapret2Config('EVIL_KEY=1\n')).toThrow(/unknown zapret2 config key: EVIL_KEY/);
   });
 
+  // Real strategies use these characters inside the quoted NFQWS2_OPT value,
+  // where they are inert string content. Rejecting them there would make the
+  // validator refuse configs that are both valid and safe.
+  it('allows shell metacharacters INSIDE a quoted value', () => {
+    const body = 'NFQWS2_OPT="\n--filter-tcp=443 --filter-l7=tls --out-range=s1<d1 --new\n"';
+    expect(() => validateZapret2Config(body)).not.toThrow();
+  });
+
+  it('still rejects the same characters outside quotes', () => {
+    expect(() => validateZapret2Config('NFQWS2_ENABLE=1; rm -rf /')).toThrow(Zapret2ConfigError);
+    expect(() => validateZapret2Config('NFQWS2_ENABLE=$(id)')).toThrow(Zapret2ConfigError);
+  });
+
   it('allows legitimate $VAR references (not command substitution)', () => {
     expect(() => validateZapret2Config('SET_MAXELEM=10\nIPSET_OPT="maxelem $SET_MAXELEM"\n')).not.toThrow();
   });

@@ -68,6 +68,16 @@ func TestParseBlockcheckReports(t *testing.T) {
 		}
 	})
 
+	// The strategy lands inside the quoted NFQWS2_OPT block of a file zapret
+	// sources as root. A quote in it would end that quoting.
+	t.Run("refuses a strategy carrying shell quoting", func(t *testing.T) {
+		report := `{"domain":"d","total":1,"working":1,"strategies":[{"protocol":"TLS","args":"--payload=x\" ; rm -rf /"}]}`
+		tune, err := ParseBlockcheckReports([]byte(report))
+		if err == nil || tune != nil {
+			t.Errorf("got tune=%+v err=%v, want nil + an error", tune, err)
+		}
+	})
+
 	t.Run("reports unusable output rather than guessing", func(t *testing.T) {
 		if _, err := ParseBlockcheckReports([]byte("blockcheckw: connection refused")); err == nil {
 			t.Error("expected an error for output with no JSON at all")

@@ -90,10 +90,22 @@ func ParseBlockcheckReports(raw []byte) (*Tune, error) {
 			if s.Args == "" || !strings.Contains(strings.ToLower(s.Protocol), "tls") {
 				continue
 			}
+			args := strings.TrimSpace(s.Args)
+			// The strategy is spliced INSIDE the quoted NFQWS2_OPT block of a
+			// file zapret sources as a shell script. A double quote would end
+			// that quoting and turn the rest of the strategy into commands, so
+			// a report carrying one is treated as unusable rather than
+			// sanitised: blockcheckw has no reason to emit it, and guessing
+			// what the operator meant is not the job of a parser that feeds a
+			// root-sourced file.
+			if strings.ContainsAny(args, "\"`") || strings.Contains(args, "$(") {
+				lastErr = fmt.Errorf("strategy for %q contains shell quoting, refusing to apply it", rep.Domain)
+				continue
+			}
 			best = &Tune{
 				Domain:   rep.Domain,
 				Protocol: s.Protocol,
-				Args:     strings.TrimSpace(s.Args),
+				Args:     args,
 				Coverage: s.Coverage,
 				Total:    rep.Total,
 				Working:  rep.Working,
@@ -109,6 +121,9 @@ func ParseBlockcheckReports(raw []byte) (*Tune, error) {
 	}
 	if !parsedAny {
 		return nil, fmt.Errorf("no JSON object found in blockcheckw output")
+	}
+	if lastErr != nil {
+		return nil, lastErr
 	}
 	return nil, nil
 }

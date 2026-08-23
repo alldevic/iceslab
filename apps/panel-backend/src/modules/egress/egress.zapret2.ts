@@ -72,11 +72,28 @@ export const ALLOWED_ZAPRET2_KEYS: ReadonlySet<string> = new Set([
   'FILTER_TTL_EXPIRED_ICMP',
 ]);
 
-// Shell metacharacters that must never appear in a config body. zapret's own
-// config legitimately uses `$VAR` references (e.g. `$SET_MAXELEM`), so a bare
-// `$` is allowed, but command substitution `$(...)`, backticks, statement
-// separators, pipes, background `&` and redirections are not.
-const SHELL_INJECTION = /[`;|&<>]|\$\(/;
+// Shell metacharacters that are dangerous when the config is sourced
+// (`. config`). They must never appear OUTSIDE double quotes, where `;`/`|`/`&`
+// are command separators, `<`/`>` are redirections and `` ` ``/`$(` are command
+// substitution. Inside the quoted values they are inert string content, and
+// real zapret2 strategies legitimately use them (an NFQWS2_OPT entry with
+// `--out-range=s1<d1`), so the scan has to be quote-aware to be both safe and
+// usable. Bare `$VAR` references (`$SET_MAXELEM`) stay allowed; only `$(` is
+// flagged.
+function hasUnquotedShellMeta(body: string): boolean {
+  let inQuote = false;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+    if (inQuote) continue;
+    if (c === '`' || c === ';' || c === '|' || c === '&' || c === '<' || c === '>') return true;
+    if (c === '$' && body[i + 1] === '(') return true;
+  }
+  return false;
+}
 
 function countDoubleQuotes(s: string): number {
   let n = 0;
@@ -119,8 +136,8 @@ export function topLevelKeys(body: string): string[] {
  * whitelisted. Throws Zapret2ConfigError on the first violation. Pure.
  */
 export function validateZapret2Config(body: string): void {
-  if (SHELL_INJECTION.test(body)) {
-    throw new Zapret2ConfigError('config contains forbidden shell metacharacters');
+  if (hasUnquotedShellMeta(body)) {
+    throw new Zapret2ConfigError('config contains unquoted shell metacharacters');
   }
   for (const key of topLevelKeys(body)) {
     if (!ALLOWED_ZAPRET2_KEYS.has(key)) {
