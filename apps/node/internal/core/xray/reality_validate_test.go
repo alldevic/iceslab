@@ -46,15 +46,15 @@ func TestValidateRealityDest_RejectsInternalIPs(t *testing.T) {
 	// loopback / private-LAN to turn the node into a port scanner via
 	// REALITY's fallback connect.
 	cases := []string{
-		"127.0.0.1:22",       // loopback v4
-		"10.0.0.1:443",       // RFC1918
-		"172.16.0.1:443",     // RFC1918
-		"192.168.1.1:443",    // RFC1918
+		"127.0.0.1:22",      // loopback v4
+		"10.0.0.1:443",      // RFC1918
+		"172.16.0.1:443",    // RFC1918
+		"192.168.1.1:443",   // RFC1918
 		"169.254.169.254:80", // link-local (AWS/GCP metadata!)
-		"0.0.0.0:443",        // unspecified
-		"[::1]:443",          // loopback v6
-		"[fe80::1]:443",      // link-local v6
-		"[fc00::1]:443",      // ULA v6
+		"0.0.0.0:443",       // unspecified
+		"[::1]:443",         // loopback v6
+		"[fe80::1]:443",     // link-local v6
+		"[fc00::1]:443",     // ULA v6
 	}
 	for _, dest := range cases {
 		t.Run(dest, func(t *testing.T) {
