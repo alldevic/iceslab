@@ -18,7 +18,7 @@ describe('fieldsUnsupportedByEngine', () => {
   });
 
   it('passes a plain profile on the sing-box engine', () => {
-    expect(fieldsUnsupportedByEngine('singbox', { realityPrivateKey: 'k' })).toEqual([]);
+    expect(fieldsUnsupportedByEngine('singbox', { realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE' })).toEqual([]);
   });
 
   it('names every unsupported field on the sing-box engine', () => {
@@ -62,7 +62,7 @@ describe('CreateProfileSchema engine guard', () => {
     const parsed = CreateProfileSchema.safeParse({
       ...base,
       engine: 'singbox',
-      config: { realityPrivateKey: 'k', abusePolicy: { blockTorrent: false } },
+      config: { realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', abusePolicy: { blockTorrent: false } },
     });
     expect(parsed.success).toBe(false);
     expect(parsed.error?.issues.some((i) => i.path.join('.') === 'config.abusePolicy')).toBe(true);
@@ -73,7 +73,7 @@ describe('CreateProfileSchema engine guard', () => {
       CreateProfileSchema.safeParse({
         ...base,
         engine: 'xray',
-        config: { realityPrivateKey: 'k', abusePolicy: { blockTorrent: false } },
+        config: { realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', abusePolicy: { blockTorrent: false } },
       }).success,
     ).toBe(true);
   });

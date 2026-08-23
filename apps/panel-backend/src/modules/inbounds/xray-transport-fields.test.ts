@@ -10,7 +10,7 @@ const xhttpWithGrpcLeftovers = {
   xhttpPaddingBytes: '',
   serviceName: 'GunService',
   grpcMultiMode: false,
-  realityPrivateKey: 'private-key-material',
+  realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
   realityPublicKey: 'public-key-material',
   security: 'reality',
 };
@@ -49,7 +49,7 @@ describe('stripInapplicableTransportFields', () => {
       tlsKey: 'key',
       tlsServerName: 'node.example',
     });
-    expect(out.realityPrivateKey).toBe('private-key-material');
+    expect(out.realityPrivateKey).toBe('YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE');
     expect(out.realityPublicKey).toBe('public-key-material');
     expect(out.tlsCert).toBe('cert');
     expect(out.tlsKey).toBe('key');

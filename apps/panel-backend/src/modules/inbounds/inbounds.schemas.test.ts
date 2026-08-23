@@ -16,7 +16,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
   const ENC = 'mlkem768x25519plus.native.0rtt.100-111-1111.75-0-111.50-0-3333.abcXYZ_-';
 
   it('omits every PQ field when absent (preserves pre-U5 wire)', () => {
-    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'k' });
+    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE' });
     expect('realityMldsa65Seed' in cfg).toBe(false);
     expect('realityMldsa65Verify' in cfg).toBe(false);
     expect('vlessDecryption' in cfg).toBe(false);
@@ -25,7 +25,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
 
   it('accepts an ML-DSA-65 pair', () => {
     const cfg = XrayConfigSchema.parse({
-      realityPrivateKey: 'k',
+      realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
       realityMldsa65Seed: 'SEEDvalue_abc-123+/=',
       realityMldsa65Verify: VERIFY,
     });
@@ -35,7 +35,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
 
   it('accepts a VLESS-Encryption pair', () => {
     const cfg = XrayConfigSchema.parse({
-      realityPrivateKey: 'k',
+      realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
       vlessDecryption: DEC,
       vlessEncryption: ENC,
     });
@@ -45,10 +45,10 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
 
   it('rejects a seed/decryption with illegal characters', () => {
     expect(() =>
-      XrayConfigSchema.parse({ realityPrivateKey: 'k', realityMldsa65Seed: 'has space' }),
+      XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', realityMldsa65Seed: 'has space' }),
     ).toThrow();
     expect(() =>
-      XrayConfigSchema.parse({ realityPrivateKey: 'k', vlessDecryption: 'semi;colon' }),
+      XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', vlessDecryption: 'semi;colon' }),
     ).toThrow();
   });
 
@@ -56,13 +56,13 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
   // is one whose every user is disconnected the moment it is saved.
   it('refuses a decryption string with no encryption string', () => {
     expect(() =>
-      XrayConfigSchema.parse({ realityPrivateKey: 'k', vlessDecryption: DEC }),
+      XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', vlessDecryption: DEC }),
     ).toThrow(/client half/);
   });
 
   it('refuses an encryption string with no decryption string', () => {
     expect(() =>
-      XrayConfigSchema.parse({ realityPrivateKey: 'k', vlessEncryption: ENC }),
+      XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', vlessEncryption: ENC }),
     ).toThrow(/server half/);
   });
 
@@ -71,7 +71,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
   it('refuses a seed with no verify key', () => {
     expect(() =>
       XrayConfigSchema.parse({
-        realityPrivateKey: 'k',
+        realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
         realityMldsa65Seed: 'SEEDvalue',
       }),
     ).toThrow(/verify key/);
@@ -79,7 +79,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
 
   it('refuses a verify key with no seed', () => {
     expect(() =>
-      XrayConfigSchema.parse({ realityPrivateKey: 'k', realityMldsa65Verify: VERIFY }),
+      XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', realityMldsa65Verify: VERIFY }),
     ).toThrow(/server seed/);
   });
 
@@ -88,7 +88,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
   it('catches the two VLESS-Encryption halves swapped', () => {
     expect(() =>
       XrayConfigSchema.parse({
-        realityPrivateKey: 'k',
+        realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
         vlessDecryption: ENC,
         vlessEncryption: DEC,
       }),
@@ -98,7 +98,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
   it('lets a grammar it does not recognise through rather than guessing', () => {
     const future = 'mlkem768x25519plus.native.somethingnew.AAAA';
     const cfg = XrayConfigSchema.parse({
-      realityPrivateKey: 'k',
+      realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
       vlessDecryption: future,
       vlessEncryption: future,
     });
@@ -112,7 +112,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
     const b64 = (n: number) => Buffer.alloc(n, 1).toString('base64url');
     expect(() =>
       XrayConfigSchema.parse({
-        realityPrivateKey: 'k',
+        realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
         vlessDecryption: `mlkem768x25519plus.native.600s.${b64(64)}`, // post-quantum
         vlessEncryption: `mlkem768x25519plus.native.0rtt.${b64(32)}`, // X25519
       }),
@@ -122,7 +122,7 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
   it('accepts a matched post-quantum pair', () => {
     const b64 = (n: number) => Buffer.alloc(n, 1).toString('base64url');
     const cfg = XrayConfigSchema.parse({
-      realityPrivateKey: 'k',
+      realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
       vlessDecryption: `mlkem768x25519plus.native.600s.${b64(64)}`,
       vlessEncryption: `mlkem768x25519plus.native.0rtt.${b64(1184)}`,
     });
@@ -132,11 +132,43 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
   it('refuses a verify key of the wrong length', () => {
     expect(() =>
       XrayConfigSchema.parse({
-        realityPrivateKey: 'k',
+        realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
         realityMldsa65Seed: 'SEEDvalue',
         realityMldsa65Verify: Buffer.alloc(1951, 7).toString('base64url'),
       }),
     ).toThrow(/1952/);
+  });
+});
+
+// The REALITY keypair is base64url of 32 bytes and nothing else. A key in the
+// WireGuard alphabet is what a generate-keypair call for the wrong protocol
+// hands you, and xray refuses it: the profile saves, the push fails, and the
+// only explanation is a line in the node's journal.
+describe('XrayConfigSchema REALITY keypair alphabet', () => {
+  const OK = 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE';
+
+  it('accepts a base64url key', () => {
+    expect(XrayConfigSchema.parse({ realityPrivateKey: OK }).realityPrivateKey).toBe(OK);
+  });
+
+  it('keeps empty as the not-configured-yet state', () => {
+    expect(XrayConfigSchema.parse({}).realityPrivateKey).toBe('');
+  });
+
+  it('refuses a standard-base64 (WireGuard) key', () => {
+    expect(() =>
+      XrayConfigSchema.parse({ realityPrivateKey: 'sKOls49SJiDfgZS3yEbgiQnG8xAy2S3+uSFJSCckpXA=' }),
+    ).toThrow(/base64url/);
+  });
+
+  it('refuses a truncated key', () => {
+    expect(() => XrayConfigSchema.parse({ realityPrivateKey: OK.slice(0, 42) })).toThrow(/43/);
+  });
+
+  it('guards the public key the same way (it goes out as pbk= in every link)', () => {
+    expect(() =>
+      XrayConfigSchema.parse({ realityPublicKey: 'NY875Kr+MVKvq4DbDLtN7aAVysX7RYUrIVAW6M65OVk=' }),
+    ).toThrow(/base64url/);
   });
 });
 
@@ -150,13 +182,13 @@ describe('XrayConfigSchema post-quantum fields (U5)', () => {
 //                want to relax.
 describe('XrayConfigSchema abusePolicy (U4)', () => {
   it('is absent from the parsed config when omitted (preserves pre-U4 wire)', () => {
-    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'k' });
+    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE' });
     expect('abusePolicy' in cfg).toBe(false);
     expect(cfg.abusePolicy).toBeUndefined();
   });
 
   it('defaults every flag to true when the object is present but empty', () => {
-    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'k', abusePolicy: {} });
+    const cfg = XrayConfigSchema.parse({ realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', abusePolicy: {} });
     expect(cfg.abusePolicy).toEqual({
       blockTorrent: true,
       blockSmtp: true,
@@ -166,7 +198,7 @@ describe('XrayConfigSchema abusePolicy (U4)', () => {
 
   it('fills the unspecified flags with true when one is flipped', () => {
     const cfg = XrayConfigSchema.parse({
-      realityPrivateKey: 'k',
+      realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
       abusePolicy: { blockTorrent: false },
     });
     expect(cfg.abusePolicy).toEqual({
@@ -178,7 +210,7 @@ describe('XrayConfigSchema abusePolicy (U4)', () => {
 
   it('preserves a fully-specified policy', () => {
     const cfg = XrayConfigSchema.parse({
-      realityPrivateKey: 'k',
+      realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
       abusePolicy: { blockTorrent: false, blockSmtp: false, blockDnsHijack: false },
     });
     expect(cfg.abusePolicy).toEqual({
@@ -191,7 +223,7 @@ describe('XrayConfigSchema abusePolicy (U4)', () => {
   it('rejects a non-boolean flag', () => {
     expect(() =>
       XrayConfigSchema.parse({
-        realityPrivateKey: 'k',
+        realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
         // @ts-expect-error - intentionally wrong type
         abusePolicy: { blockTorrent: 'yes' },
       }),

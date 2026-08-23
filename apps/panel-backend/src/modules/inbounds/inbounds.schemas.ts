@@ -109,6 +109,31 @@ export function vlessEncryptionAuth(s: string): 'x25519' | 'mlkem768' | 'unknown
   return sawClassic ? 'x25519' : 'unknown';
 }
 
+/**
+ * An X25519 key as REALITY spells it: base64url of 32 bytes, unpadded, so
+ * exactly 43 characters out of [A-Za-z0-9_-].
+ *
+ * This is NOT the WireGuard alphabet, and that is the whole point of checking.
+ * xray decodes both `privateKey` and the client's `publicKey` with
+ * base64.RawURLEncoding and refuses anything else
+ * (infra/conf/transport_security.go), so a standard-base64 key - the kind with
+ * `+`, `/` and `=` in it - takes the profile down completely: xray rejects the
+ * config, the node keeps the last good one, and the only place that says why is
+ * the node's journal. The panel logs "1/1 inbounds failed to apply" and the
+ * operator gets to guess. Seen for real on 2026-08-24, from a keypair generated
+ * for the wrong protocol.
+ *
+ * Empty stays legal: it is the "not configured yet" state the form starts in.
+ */
+const RealityKeySchema = z
+  .string()
+  .max(128)
+  .refine(
+    (v) => v === '' || /^[A-Za-z0-9_-]{43}$/.test(v),
+    'must be a base64url X25519 key: 43 chars from [A-Za-z0-9_-], no + / or = (that alphabet is WireGuard\'s, and xray rejects it)',
+  )
+  .default('');
+
 export const XrayConfigSchema = z.object({
   /**
    * Stream security. 'reality' (default) or 'none' (plain transport, e.g.
@@ -150,9 +175,9 @@ export const XrayConfigSchema = z.object({
     .array(z.string().regex(/^[0-9a-fA-F]{0,16}$/))
     .max(8)
     .default([]),
-  realityPrivateKey: z.string().max(128).default(''),
+  realityPrivateKey: RealityKeySchema,
   /** REALITY public key paired with privateKey, emitted in client URI. */
-  realityPublicKey: z.string().max(128).default(''),
+  realityPublicKey: RealityKeySchema,
   /** REALITY protocol version mirrored to the upstream TLS dest. 0 (default)
    *  is the conservative choice; 1/2 enable newer REALITY handshake variants. */
   realityXver: z.number().int().min(0).max(2).default(0),
@@ -165,22 +190,29 @@ export const XrayConfigSchema = z.object({
    * absent → omitted from the wire, node renders REALITY without it (byte-
    * identical to pre-U5). Opaque base64-ish string.
    *
-   * THE TARGET MATTERS, and not the way this comment used to say. REALITY does
-   * not serve the target's certificate: it forges its own and writes the
+   * THE TARGET MATTERS, and the rule is narrower than "big enough". REALITY
+   * does not serve the target's certificate: it forges its own and writes the
    * ML-DSA-65 signature into a fixed 3309-byte extension slot (XTLS/REALITY
-   * handshake_server_tls13.go). What it does copy are the target's TLS record
-   * LENGTHS, and the forged post-quantum handshake has to fit inside them. A
-   * target whose records are too small makes every connection to the profile
-   * die - measured on xray 26.3.27, 2026-08-24: `www.cloudflare.com:443`
-   * (EncryptedExtensions record 2043 bytes) fails by 1614 bytes,
-   * `www.amazon.com:443` works.
+   * handshake_server_tls13.go), which makes the forged EncryptedExtensions
+   * record about 3.6 KB.
+   *
+   * It only commits to matching the target's record length when that length is
+   * over 512 bytes (`if i == 2 && handshakeLen > 512` in XTLS/REALITY tls.go);
+   * below that it records nothing and pads nothing. So the fatal window is a
+   * target whose EncryptedExtensions record is BETWEEN 512 bytes and the size
+   * of the forged handshake: REALITY has promised to match a length its own
+   * post-quantum record overflows. Measured on xray 26.3.27, 2026-08-24:
+   * `www.cloudflare.com:443` (EE record 2043) dies 1614 bytes short of it,
+   * while `www.amazon.com:443` (EE record 41) is never constrained and works.
+   * A very large target is fine again for the same reason.
    *
    * The failure is invisible from here and nearly invisible on the node: the
    * agent logs `REALITY ... hs.handshake() err: payload[0]: 8, padding: -N`
    * and "handshake did not complete successfully", the client just retries,
-   * and nothing anywhere names the target as the cause. Left unguarded on
-   * purpose for now - the only honest check is to probe the live target and
-   * measure, which is a feature, not a validator.
+   * and nothing anywhere names the target as the cause. Not guarded here: the
+   * quantity is a property of the live target's TLS response, so the only
+   * honest check dials it and measures, which is a feature with a network call
+   * in it rather than a validator.
    */
   realityMldsa65Seed: z
     .string()

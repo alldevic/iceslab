@@ -115,8 +115,8 @@ async function createXrayInbound(nodeId: string, port = 8443): Promise<string> {
       realityDest: 'www.cloudflare.com:443',
       realityServerNames: ['www.cloudflare.com'],
       realityShortIds: ['abc123'],
-      realityPrivateKey: 'test-pubkey-for-vitest',
-      realityPublicKey: 'test-pubkey-for-vitest',
+      realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
+      realityPublicKey: 'gy3mpcZB8YXumik_KSTiYG1AqYqxJnD5Ac99zJ370jQ',
     },
     `${nodeId.slice(0, 6)}-${port}`,
   );

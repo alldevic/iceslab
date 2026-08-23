@@ -41,7 +41,7 @@ async function bindXray(nodeId: string): Promise<void> {
     data: {
       name: `p-${seq}`,
       protocol: 'xray',
-      config: { realityPrivateKey: 'k', realityServerNames: ['a.example'] } as never,
+      config: { realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE', realityServerNames: ['a.example'] } as never,
     },
   });
   await prisma.profileNodeBinding.create({
