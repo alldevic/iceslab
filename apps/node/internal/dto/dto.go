@@ -120,6 +120,23 @@ type ApplyInboundsResponse struct {
 	Skipped int  `json:"skipped"`
 }
 
+// ───── POST /applyEgress ─────
+//
+// B2 - zapret2 egress-desync policy. Mirrors ApplyEgressRequest/Response in
+// packages/shared/src/transport.ts (wire-sync: json tags match exactly).
+// Config is the fully-resolved zapret2 `config` file body (the panel renders
+// preset + overrides; the node just writes it). Enabled=false tears it down.
+
+type ApplyEgressRequest struct {
+	Enabled bool   `json:"enabled"`
+	Config  string `json:"config"`
+}
+
+type ApplyEgressResponse struct {
+	OK      bool `json:"ok"`
+	Applied bool `json:"applied"`
+}
+
 // ───── POST /removeUser ─────
 
 type RemoveUserRequest struct {

@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import { Queue, Worker, type Job } from 'bullmq';
 import type { ApplyInboundsRequest, InboundDto, ProtocolName } from '@iceslab/shared';
 import { coerceEgressPolicy, compileEgressPolicy } from '../egress/egress.policy.js';
+import { zapret2SocksPortFor } from '../egress/egress.zapret2.js';
 import { hostFromAddress } from '../subscription/subscription.formats.js';
 import { redis } from '../../lib/redis.js';
 import { prisma } from '../../prisma.js';
@@ -11,6 +12,7 @@ import { inboundSyncJobs } from '../../lib/metrics.js';
 import { allocatePeer, preallocatePeers } from '../amneziawg/amneziawg.service.js';
 import { getCascadeFragmentsForNode } from '../cascades/cascade.service.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/credentials.js';
+import { applyEgressForNode } from '../egress/egress.push.js';
 import { getLogger } from '../../lib/logger.js';
 
 /**
@@ -362,10 +364,13 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
       nodeWarp?.warpEnabled &&
         (nodeWarp.warpAccount as { secretKey?: string; address?: string[] } | null)?.secretKey,
     );
-    const compiled = compileEgressPolicy(
-      coerceEgressPolicy((nodeWarp?.hardening as { egressPolicy?: unknown } | null)?.egressPolicy),
-      { warp: warpUsable },
-    );
+    const hardening = nodeWarp?.hardening as
+      | { egressPolicy?: unknown; zapret2?: unknown }
+      | null;
+    const compiled = compileEgressPolicy(coerceEgressPolicy(hardening?.egressPolicy), {
+      warp: warpUsable,
+      zapret2SocksPort: zapret2SocksPortFor(hardening?.zapret2),
+    });
     for (const drop of compiled.dropped) {
       getLogger().info(
         `[inbound-sync] node ${nodeId} egress policy rule #${drop.index} targets "${drop.target}" but ${drop.reason}; rule dropped`,
@@ -467,6 +472,13 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
     inboundSyncJobs.inc({ result: 'fail' });
     throw err;
   }
+
+  // B2a - re-apply this node's zapret2 channel config on every sync (node.updated
+  // fires when hardening.zapret2 changes; agent-restart resync re-pushes it).
+  // Best-effort and self-contained: applyEgressForNode swallows its own errors,
+  // so a zapret2 push never blocks the user fan-out below. No-op on a node that
+  // does not run the channel.
+  await applyEgressForNode(node);
 
   // Push all active users so protocol servers (xray, hysteria, etc.) have
   // an up-to-date client list. addUser is idempotent on the node side.

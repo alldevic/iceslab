@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { EgressPolicySchema } from '../egress/egress.policy.js';
+import { Zapret2ConfigSchema } from '../egress/egress.zapret2.js';
 
 const NameSchema = z
   .string()
@@ -61,6 +62,12 @@ export const HardeningSchema = z
     // has (see modules/egress/egress.policy.ts), which is also why it lives on
     // the node rather than on a profile.
     egressPolicy: EgressPolicySchema.optional(),
+    // B2a - the zapret2 desync channel itself: whether this node runs it and
+    // with which strategy. Separate from egressPolicy on purpose: the policy
+    // says WHICH flows take a channel, this says the channel EXISTS here. Lives
+    // in this blob (not a new column) to stay migration-free; install-time
+    // appendHardeningFlags ignores it, the live /applyEgress push path reads it.
+    zapret2: Zapret2ConfigSchema.optional(),
   })
   .strict()
   .nullish();

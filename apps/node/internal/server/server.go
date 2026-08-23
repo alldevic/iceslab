@@ -23,6 +23,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/egress/zapret2"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/firewall"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/metrics"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
@@ -62,6 +63,9 @@ type Config struct {
 	// `/etc/iceslab-node/inbounds.json`. Empty means in-memory only
 	// (used in tests).
 	InboundsStorePath string
+	// Egress (B2) handles /applyEgress (zapret2 desync). May be nil — then the
+	// endpoint acks with applied=false (egress not supported on this agent).
+	Egress *zapret2.Manager
 }
 
 type Server struct {
@@ -210,6 +214,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/addUser", s.handleAddUser)
 	mux.HandleFunc("/removeUser", s.handleRemoveUser)
 	mux.HandleFunc("/applyInbounds", s.handleApplyInbounds)
+	mux.HandleFunc("/applyEgress", s.handleApplyEgress)
 	mux.HandleFunc("/stats", s.handleStats)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/ufwPorts", s.handleUfwPorts)
@@ -510,6 +515,38 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		Applied: applied,
 		Skipped: len(req.Inbounds) - applied,
 	})
+}
+
+// handleApplyEgress receives the node's zapret2 egress-desync policy (B2) and
+// hands it to the Egress manager, which writes the config and (re)starts
+// zapret2. Idempotent on the manager side. When no manager is wired (egress not
+// supported / not provisioned) it acks with applied=false so the panel can
+// treat the node as "egress unsupported" without erroring.
+func (s *Server) handleApplyEgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.ApplyEgressRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+
+	if s.cfg.Egress == nil {
+		s.logger.Info("applyEgress received but no egress manager configured — acking as unsupported",
+			"enabled", req.Enabled)
+		writeJSON(w, http.StatusOK, dto.ApplyEgressResponse{OK: true, Applied: false})
+		return
+	}
+
+	applied, err := s.cfg.Egress.Apply(req.Enabled, req.Config)
+	if err != nil {
+		s.logger.Error("applyEgress failed", "err", err, "enabled", req.Enabled)
+		writeError(w, http.StatusInternalServerError, "EGRESS_FAILED", err.Error())
+		return
+	}
+	s.logger.Info("applyEgress ok", "enabled", req.Enabled, "applied", applied)
+	writeJSON(w, http.StatusOK, dto.ApplyEgressResponse{OK: true, Applied: applied})
 }
 
 // ensureInboundFirewall opens UFW for one inbound's port. Per-protocol UDP vs

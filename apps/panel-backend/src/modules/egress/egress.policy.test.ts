@@ -6,8 +6,9 @@ import {
   type EgressPolicy,
 } from './egress.policy.js';
 
-const NO_CHANNELS = { warp: false };
-const WITH_WARP = { warp: true };
+const NO_CHANNELS = { warp: false, zapret2SocksPort: null };
+const WITH_WARP = { warp: true, zapret2SocksPort: null };
+const WITH_ZAPRET2 = { warp: false, zapret2SocksPort: 1080 };
 
 describe('EgressPolicySchema', () => {
   it('rejects a rule with no matcher', () => {
@@ -28,7 +29,7 @@ describe('EgressPolicySchema', () => {
 
   it('rejects an unknown target', () => {
     expect(
-      EgressPolicySchema.safeParse([{ geosite: ['ru'], target: 'zapret2' }]).success,
+      EgressPolicySchema.safeParse([{ geosite: ['ru'], target: 'singbox' }]).success,
     ).toBe(false);
   });
 
@@ -152,5 +153,53 @@ describe('compileEgressPolicy', () => {
       ]) as EgressPolicy;
       expect(compileEgressPolicy(policy, NO_CHANNELS).fragments?.domainStrategy).toBeUndefined();
     });
+  });
+});
+
+// B2a: the desync proxy is a CHANNEL, not a default egress. A rule names it,
+// the compiler points a socks outbound at the port it listens on, and traffic
+// leaves desynchronised from there.
+describe('the zapret2 channel', () => {
+  const policy = () =>
+    EgressPolicySchema.parse([
+      { geosite: ['youtube'], target: 'zapret2' },
+      { geosite: ['ru'], target: 'direct' },
+    ]) as EgressPolicy;
+
+  it('emits the socks outbound the rule points at', () => {
+    const { fragments, dropped } = compileEgressPolicy(policy(), WITH_ZAPRET2);
+    expect(dropped).toEqual([]);
+    expect(fragments?.rules[0]).toEqual({
+      domain: ['geosite:youtube'],
+      outboundTag: 'ext-zapret2',
+    });
+    expect(fragments?.outbounds).toEqual([
+      { tag: 'ext-zapret2', protocol: 'socks', settings: { servers: [{ address: '127.0.0.1', port: 1080 }] } },
+    ]);
+  });
+
+  it('follows the node own SOCKS port', () => {
+    const { fragments } = compileEgressPolicy(policy(), { warp: false, zapret2SocksPort: 1085 });
+    expect(fragments?.outbounds).toEqual([
+      { tag: 'ext-zapret2', protocol: 'socks', settings: { servers: [{ address: '127.0.0.1', port: 1085 }] } },
+    ]);
+  });
+
+  // Pointing a rule into a SOCKS port nothing listens on would black-hole
+  // exactly the traffic the operator cared most about reaching.
+  it('drops the rule on a node that does not run the channel', () => {
+    const { fragments, dropped } = compileEgressPolicy(policy(), NO_CHANNELS);
+    expect(dropped).toEqual([
+      { index: 0, target: 'zapret2', reason: 'node has no zapret2 egress' },
+    ]);
+    expect(fragments?.rules.map((r) => r.outboundTag)).toEqual(['direct']);
+    expect(fragments?.outbounds).toBeUndefined();
+  });
+
+  it('emits no outbound when no surviving rule uses the channel', () => {
+    const onlyDirect = EgressPolicySchema.parse([
+      { geosite: ['ru'], target: 'direct' },
+    ]) as EgressPolicy;
+    expect(compileEgressPolicy(onlyDirect, WITH_ZAPRET2).fragments?.outbounds).toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { RoutingFragmentsCfg } from '@iceslab/shared';
+import { ZAPRET2_OUTBOUND_TAG } from './egress.presets.js';
 
 /**
  * B1 - a node's server-side egress policy: which flows leave this node by which
@@ -34,13 +35,25 @@ const Matcher = z.string().min(1).max(256);
  *     Mostly redundant there, since the node already sends everything the
  *     policy did NOT match to WARP, but it lets a rule say so explicitly and
  *     survive the node's default egress changing.
+ *   - `zapret2`: the node's local DPI-desync proxy (B2a). The flow goes into
+ *     ss-zapret2's SOCKS frontend and leaves desynchronised from there, which
+ *     is how a node inside a censored network reaches a blocked destination.
  *
- * Extended, not redefined, as channels land: B2a adds the zapret2 desync proxy,
- * and the geo subsystem's cascade targets ('link-out', a frozen direction tag)
- * join here when the branches meet. Adding a target means adding one entry to
- * the capability resolution below.
+ * This is where the three egress channels compose. They are NOT three
+ * independent toggles racing each other: WARP is the node's DEFAULT egress
+ * (upstream renders a catch-all rule for it), zapret2 is a CHANNEL that only
+ * the flows named here take, and `direct` is the way to opt a flow out of
+ * whichever of the two the node runs. The sing-box engine is not a channel at
+ * all: it is an alternative renderer that emits no routing section, so a node
+ * serving this profile through it is refused the policy outright (see the
+ * guard in apps/node/internal/core/singbox/adapter.go).
+ *
+ * Extended, not redefined, as more channels land: the geo subsystem's cascade
+ * targets ('link-out', a frozen direction tag) join here when the branches
+ * meet. Adding a target means adding one entry to the capability resolution
+ * below.
  */
-export const EGRESS_TARGETS = ['direct', 'block', 'warp'] as const;
+export const EGRESS_TARGETS = ['direct', 'block', 'warp', 'zapret2'] as const;
 export const EgressTargetSchema = z.enum(EGRESS_TARGETS);
 
 export const EgressRuleSchema = z
@@ -98,6 +111,13 @@ export function coerceEgressPolicy(raw: unknown): EgressPolicy | undefined {
 export interface NodeEgressCapabilities {
   /** Cloudflare WARP is registered and enabled on this node. */
   warp: boolean;
+  /**
+   * The zapret2 desync channel runs here, with its SOCKS frontend on this port.
+   * null when the node does not run it (never provisioned, or switched off),
+   * in which case a rule targeting zapret2 is dropped rather than pointed at a
+   * port nothing listens on.
+   */
+  zapret2SocksPort: number | null;
 }
 
 /** One rule that could not be rendered, for the caller to log. */
@@ -134,7 +154,23 @@ function outboundTagFor(target: EgressTarget, caps: NodeEgressCapabilities): str
       return 'blocked';
     case 'warp':
       return caps.warp ? 'warp' : null;
+    case 'zapret2':
+      return caps.zapret2SocksPort === null ? null : ZAPRET2_OUTBOUND_TAG;
   }
+}
+
+/**
+ * The xray outbound that feeds the local zapret2 proxy. Emitted only when a
+ * surviving rule actually targets it: an unused outbound would be dead weight
+ * in every node's config, and the tag must not exist without a listener behind
+ * it in case a later hand-edit references it.
+ */
+function zapret2SocksOutbound(port: number): Record<string, unknown> {
+  return {
+    tag: ZAPRET2_OUTBOUND_TAG,
+    protocol: 'socks',
+    settings: { servers: [{ address: '127.0.0.1', port }] },
+  };
 }
 
 /**
@@ -185,9 +221,16 @@ export function compileEgressPolicy(
 
   if (rules.length === 0) return { fragments: null, dropped };
 
+  const outbounds: unknown[] = [];
+  if (rules.some((r) => r.outboundTag === ZAPRET2_OUTBOUND_TAG)) {
+    // Non-null: a rule only carries this tag when the capability was present.
+    outbounds.push(zapret2SocksOutbound(caps.zapret2SocksPort as number));
+  }
+
   return {
     fragments: {
       rules,
+      ...(outbounds.length > 0 ? { outbounds } : {}),
       ...(needsIpResolution ? { domainStrategy: 'IPOnDemand' as const } : {}),
     },
     dropped,

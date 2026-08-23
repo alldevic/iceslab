@@ -8,6 +8,8 @@ import type {
   NodeErrorResponse,
   ApplyInboundsRequest,
   ApplyInboundsResponse,
+  ApplyEgressRequest,
+  ApplyEgressResponse,
   UfwPortsResponse,
 } from '@iceslab/shared';
 import { bootstrapCa, getPanelClientCert } from '../keygen/keygen.service.js';
@@ -236,6 +238,20 @@ export class NodeTransport {
       // Re-generating an Xray config + restart can take ~3-5 s; AmneziaWG
       // syncconf is faster but Caddy reload occasionally hits the LE rate
       // limiter. 30 s gives slack without making admin clicks feel hung.
+      timeoutMs: 30_000,
+    });
+  }
+
+  /**
+   * B2a - push the node's zapret2 channel config. Idempotent: the node diffs
+   * against its last-applied config and only restarts zapret2 on a real change.
+   * A 404 from an agent predating /applyEgress lets the caller treat the node
+   * as "channel not supported" (see applyEgressForNode).
+   */
+  async applyEgress(req: ApplyEgressRequest): Promise<ApplyEgressResponse> {
+    return this.request<ApplyEgressResponse>('POST', '/applyEgress', req, {
+      // Restarting zapret2 (docker compose up/down or the init script) reloads
+      // nftables/nfqws; comparable to an inbound restart, so reuse the slack.
       timeoutMs: 30_000,
     });
   }

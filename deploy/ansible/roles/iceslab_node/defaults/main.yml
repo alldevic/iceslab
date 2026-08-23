@@ -24,6 +24,13 @@ iceslab_zapret2_socks_port: 1080
 # Override in inventory/host_vars (ideally via ansible-vault).
 iceslab_zapret2_ss_password: "change-me-in-inventory"
 iceslab_zapret2_encrypt: chacha20-ietf-poly1305
+# Wire the node-agent's egress manager to this stack (written into
+# /etc/iceslab-node/env when the agent is installed). UP_CMD uses
+# --force-recreate so a panel-pushed strategy change actually reloads the
+# container (validated live: plain `up -d` leaves the running container on the
+# old config). Path mirrors the compose `./config:/opt/zapret2/config` mount.
+iceslab_zapret2_agent_env: true
+iceslab_node_env_file: /etc/iceslab-node/env
 
 # Node-agent (bootstrap-token flow). Requires a reachable panel — the agent
 # task is GUARDED on these two being set, so it's skipped on a base run.

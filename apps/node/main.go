@@ -19,6 +19,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/shadowsocks"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/xray"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/egress/zapret2"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/heartbeat"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/metrics"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
@@ -71,6 +72,17 @@ func main() {
 		}
 	}
 
+	// B2 - zapret2 egress manager. Off-by-default: with ZAPRET2_CONFIG_PATH
+	// unset the manager is inert and /applyEgress acks without doing anything,
+	// so a node that hasn't provisioned zapret2 behaves exactly as pre-B2. The
+	// up/down commands are full argv strings (e.g. "docker compose -f
+	// /opt/ss-zapret2/docker-compose.yml up -d"); empty → config staged only.
+	egressMgr := zapret2.New(zapret2.Config{
+		ConfigPath: os.Getenv("ZAPRET2_CONFIG_PATH"),
+		UpCmd:      strings.Fields(os.Getenv("ZAPRET2_UP_CMD")),
+		DownCmd:    strings.Fields(os.Getenv("ZAPRET2_DOWN_CMD")),
+	}, logger)
+
 	srv, err := server.New(server.Config{
 		Host:              getenv("NODE_HOST", defaultHost),
 		Port:              getenv("NODE_PORT", defaultPort),
@@ -78,6 +90,7 @@ func main() {
 		Logger:            logger,
 		Adapters:          adapters,
 		InboundsStorePath: getenv("NODE_INBOUNDS_STORE", defaultInboundsStorePath),
+		Egress:            egressMgr,
 	})
 	if err != nil {
 		logger.Error("build server", "err", err)

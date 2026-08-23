@@ -120,11 +120,51 @@ describe('editing the policy re-pushes the node config', () => {
     expect(emitted).toEqual([id]);
   });
 
+  it('emits node.updated when the zapret2 channel changes', async () => {
+    const id = await node({ zapret2: { enabled: false } });
+    emitted.length = 0;
+    await updateNode(id, UpdateNodeSchema.parse({ hardening: { zapret2: { enabled: true } } }));
+    await drain();
+    expect(emitted).toEqual([id]);
+  });
+
   it('stays quiet when an unrelated hardening toggle changes', async () => {
     const id = await node({ ufwLockdown: true, ...RU_DIRECT });
     emitted.length = 0;
     await updateNode(id, UpdateNodeSchema.parse({ hardening: { fail2ban: true, ...RU_DIRECT } }));
     await drain();
     expect(emitted).toEqual([]);
+  });
+});
+
+// B2a end to end through the database: the channel config on the node decides
+// whether a rule naming it survives the compile.
+describe('the zapret2 channel on the pushed inbound', () => {
+  const YOUTUBE_VIA_ZAPRET2 = {
+    egressPolicy: [{ geosite: ['youtube'], target: 'zapret2' }],
+  };
+
+  it('compiles the socks outbound when the node runs the channel', async () => {
+    const id = await node({ ...YOUTUBE_VIA_ZAPRET2, zapret2: { enabled: true, socksPort: 1085 } });
+    await bindXray(id);
+    expect(await fragmentsOn(id)).toEqual({
+      rules: [{ domain: ['geosite:youtube'], outboundTag: 'ext-zapret2' }],
+      outbounds: [
+        {
+          tag: 'ext-zapret2',
+          protocol: 'socks',
+          settings: { servers: [{ address: '127.0.0.1', port: 1085 }] },
+        },
+      ],
+    });
+  });
+
+  // The stack is torn down when disabled, so its port stops answering; a rule
+  // left pointing there would black-hole exactly the blocked destinations the
+  // operator added it for.
+  it('drops the rule when the channel is switched off', async () => {
+    const id = await node({ ...YOUTUBE_VIA_ZAPRET2, zapret2: { enabled: false } });
+    await bindXray(id);
+    expect(await fragmentsOn(id)).toBeUndefined();
   });
 });

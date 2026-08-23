@@ -8,3 +8,9 @@
     cmd: docker compose up -d --force-recreate
     chdir: "{{ iceslab_zapret2_dir }}"
   changed_when: true
+
+- name: restart iceslab-node
+  ansible.builtin.systemd_service:
+    name: iceslab-node
+    state: restarted
+  failed_when: false

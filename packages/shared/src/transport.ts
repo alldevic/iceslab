@@ -433,6 +433,28 @@ export interface ApplyInboundsResponse {
   skipped: number;
 }
 
+// ───── POST /applyEgress ─────
+
+/**
+ * B2a - push the node's zapret2 desync channel config. `config` is the fully
+ * resolved zapret2 `config` file body (preset + structured overrides applied
+ * panel-side; the node stays dumb and just writes it). `enabled=false` tears
+ * the service down. Off-by-default: a node that does not run the channel never
+ * receives this call, so its behaviour is byte-identical to pre-B2a.
+ */
+export interface ApplyEgressRequest {
+  enabled: boolean;
+  /** zapret2 config file body (KEY=VALUE). Ignored by the node when enabled=false. */
+  config: string;
+}
+
+export interface ApplyEgressResponse {
+  ok: true;
+  /** True when the node (re)applied the policy; false when it was a no-op
+   *  (unchanged) or the node has no egress support provisioned. */
+  applied: boolean;
+}
+
 // ───── POST /removeUser ─────
 
 export interface RemoveUserRequest {

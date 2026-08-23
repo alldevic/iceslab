@@ -305,6 +305,13 @@ export async function disableNodeWarp(id: string): Promise<PublicNodeDto> {
   return mapNodeToPublic(node);
 }
 
+/**
+ * Hardening keys that feed what we push to the agent, as opposed to the
+ * install-time flags (ufw, fail2ban, ssh allowlist) that only matter when the
+ * node is provisioned. Editing one of these has to re-push the config.
+ */
+const EGRESS_HARDENING_KEYS = ['egressPolicy', 'zapret2'] as const;
+
 export async function updateNode(id: string, input: UpdateNodeInput): Promise<PublicNodeDto> {
   const existing = await repo.findActiveById(id);
   if (!existing) throw new NodeNotFoundError(id);
@@ -345,23 +352,28 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   //   address → the name hysteria's ACME certificate is issued for, which has
   //             to match what clients dial; without a push the node keeps
   //             serving a certificate for the address it no longer has
-  //   hardening.egressPolicy → B1, the node's egress split. Editing a split is
-  //             usually the ONLY thing an operator changes in that request, so
-  //             without this the panel would show a split the node never got.
+  //   hardening.egressPolicy → B1, the node's egress split, and
+  //   hardening.zapret2      → B2a, the desync channel that split can name.
+  //             Editing either is usually the ONLY thing an operator changes in
+  //             that request, so without this the panel would show a split, or
+  //             a channel, the node never got.
   const domainChanged =
     input.domain !== undefined && input.domain !== existing.domain;
   const addressChanged =
     input.address !== undefined && input.address !== existing.address;
-  const egressPolicyChanged =
+  const egressChanged =
     input.hardening !== undefined &&
-    !isDeepStrictEqual(
-      (input.hardening as { egressPolicy?: unknown } | null)?.egressPolicy,
-      (existing.hardening as { egressPolicy?: unknown } | null)?.egressPolicy,
+    EGRESS_HARDENING_KEYS.some(
+      (key) =>
+        !isDeepStrictEqual(
+          (input.hardening as Record<string, unknown> | null)?.[key],
+          (existing.hardening as Record<string, unknown> | null)?.[key],
+        ),
     );
 
   const updated = await repo.updateById(id, data);
 
-  if (domainChanged || addressChanged || egressPolicyChanged) {
+  if (domainChanged || addressChanged || egressChanged) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });
   }
   // Read caches hold the node row as the subscription renders it, so any edit
