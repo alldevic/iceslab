@@ -154,7 +154,7 @@ func TestApply_MergesTuneIntoPushedConfig(t *testing.T) {
 	}, testLogger())
 
 	pushed := "NFQWS2_OPT=\"\n--filter-tcp=443 --filter-l7=tls --lua-desync=preset --new\n\""
-	if _, err := m.Apply(true, pushed); err != nil {
+	if _, err := m.Apply(true, pushed, ""); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	written, err := os.ReadFile(cfgPath)
@@ -170,7 +170,7 @@ func TestApply_MergesTuneIntoPushedConfig(t *testing.T) {
 
 	// Re-pushing the same config is still a no-op.
 	callsBefore := len(rec.calls)
-	if changed, err := m.Apply(true, pushed); err != nil || changed {
+	if changed, err := m.Apply(true, pushed, ""); err != nil || changed {
 		t.Errorf("identical push after tune: changed=%v err=%v", changed, err)
 	}
 	if len(rec.calls) != callsBefore {
@@ -193,7 +193,7 @@ func TestRefresh_AppliesANewScanWithoutAPush(t *testing.T) {
 	}, testLogger())
 
 	pushed := "NFQWS2_OPT=\"\n--filter-tcp=443 --filter-l7=tls --lua-desync=preset --new\n\""
-	if _, err := m.Apply(true, pushed); err != nil {
+	if _, err := m.Apply(true, pushed, ""); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	// Nothing scanned yet: a refresh changes nothing.
@@ -238,7 +238,7 @@ func TestApply_UnusableTuneFallsBackToThePushedConfig(t *testing.T) {
 	}, testLogger())
 
 	pushed := "NFQWS2_OPT=\"\n--filter-tcp=443 --filter-l7=tls --lua-desync=preset --new\n\""
-	if _, err := m.Apply(true, pushed); err != nil {
+	if _, err := m.Apply(true, pushed, ""); err != nil {
 		t.Fatalf("apply must not fail on a bad report: %v", err)
 	}
 	written, _ := os.ReadFile(cfgPath)
@@ -247,5 +247,48 @@ func TestApply_UnusableTuneFallsBackToThePushedConfig(t *testing.T) {
 	}
 	if m.LastTune() != nil {
 		t.Errorf("a bad report must not be reported as a running strategy")
+	}
+}
+
+// B2b: a new box should not spend its first hours on the generic preset while
+// its first scan runs, when a sibling on the same uplink already knows what
+// works. The panel suggests that strategy; the node runs it until it has
+// measured its own, and then its own wins - the suggestion is a head start, not
+// an instruction.
+func TestApply_PanelStrategyIsASeedTheLocalScanOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config")
+	tunePath := filepath.Join(dir, "tune.json")
+	m := New(Config{
+		ConfigPath: cfgPath,
+		TunePath:   tunePath,
+		UpCmd:      []string{"up"},
+		RunCmd:     (&recorder{}).run,
+	}, testLogger())
+
+	pushed := "NFQWS2_OPT=\"\n--filter-tcp=443 --filter-l7=tls --lua-desync=preset --new\n\""
+
+	// Nothing scanned here yet: the suggestion is what runs.
+	if _, err := m.Apply(true, pushed, "--payload=tls_client_hello --lua-desync=suggested"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	written, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(written), "--lua-desync=suggested") {
+		t.Errorf("panel suggestion should run on an unscanned node:\n%s", written)
+	}
+
+	// The node scans and finds its own. That one was measured here.
+	if err := os.WriteFile(tunePath, []byte(tlsReport), 0o644); err != nil {
+		t.Fatalf("write tune: %v", err)
+	}
+	if _, err := m.Apply(true, pushed, "--payload=tls_client_hello --lua-desync=suggested"); err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	written, _ = os.ReadFile(cfgPath)
+	if !strings.Contains(string(written), "--lua-desync=tcpseg:pos=0,1:ip_id=rnd:repeats=1") {
+		t.Errorf("a local scan must beat the suggestion:\n%s", written)
+	}
+	if strings.Contains(string(written), "--lua-desync=suggested") {
+		t.Errorf("suggestion still present after a local scan:\n%s", written)
 	}
 }

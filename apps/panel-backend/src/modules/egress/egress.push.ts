@@ -58,7 +58,7 @@ export async function applyEgressForNode(node: EgressNode): Promise<void> {
   try {
     const res = await transport.applyEgress(req);
     getLogger().info(
-      `[egress] node ${node.name}: applyEgress ok, enabled=${req.enabled} applied=${res.applied}`,
+      `[egress] node ${node.name}: applyEgress ok, enabled=${req.enabled} applied=${res.applied}${req.strategy ? ' (with a suggested strategy)' : ''}`,
     );
   } catch (err) {
     if (err instanceof NodeRequestError && err.status === 404) {

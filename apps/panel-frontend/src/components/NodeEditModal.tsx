@@ -21,6 +21,7 @@ import {
   TagsInput,
   Text,
   TextInput,
+  Textarea,
   ThemeIcon,
   Tooltip,
 } from '@mantine/core';
@@ -52,6 +53,7 @@ import {
   listHosts,
   listProfiles,
   listRegions,
+  listEgressCatalogue,
   listSquads,
   updateBinding,
   getNodeExposure,
@@ -125,6 +127,8 @@ interface FormValues {
   zapret2SocksPort: number | '';
   zapret2PortsTcp: string;
   zapret2PortsUdp: string;
+  /** B2b - the strategy this node starts on, adopted from the catalogue. */
+  zapret2Strategy: string;
   // B1 - the egress policy, one row per rule. Matchers are comma-separated
   // here and split on submit.
   egressRules: EgressRuleForm[];
@@ -222,6 +226,7 @@ function buildHardening(v: FormValues, existing?: NodeHardening | null): NodeHar
       ...(v.zapret2SocksPort === '' ? {} : { socksPort: Number(v.zapret2SocksPort) }),
       ...(v.zapret2PortsTcp.trim() ? { portsTcp: v.zapret2PortsTcp.trim() } : {}),
       ...(v.zapret2PortsUdp.trim() ? { portsUdp: v.zapret2PortsUdp.trim() } : {}),
+      ...(v.zapret2Strategy.trim() ? { strategy: v.zapret2Strategy.trim() } : {}),
     };
   }
 
@@ -289,6 +294,7 @@ export function NodeEditModal({
       zapret2SocksPort: node?.hardening?.zapret2?.socksPort ?? '',
       zapret2PortsTcp: node?.hardening?.zapret2?.portsTcp ?? '',
       zapret2PortsUdp: node?.hardening?.zapret2?.portsUdp ?? '',
+      zapret2Strategy: node?.hardening?.zapret2?.strategy ?? '',
       egressRules: egressRulesToForm(node?.hardening?.egressPolicy),
     },
   });
@@ -316,11 +322,28 @@ export function NodeEditModal({
         zapret2SocksPort: node.hardening?.zapret2?.socksPort ?? '',
         zapret2PortsTcp: node.hardening?.zapret2?.portsTcp ?? '',
         zapret2PortsUdp: node.hardening?.zapret2?.portsUdp ?? '',
+        zapret2Strategy: node.hardening?.zapret2?.strategy ?? '',
         egressRules: egressRulesToForm(node.hardening?.egressPolicy),
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opened, node]);
+
+  // B2b - what other nodes found for themselves, so this one can start on a
+  // strategy known to work on its network instead of on the generic preset
+  // while its own first scan runs. Only fetched with the section open.
+  const catalogueQuery = useQuery({
+    queryKey: ['egress-catalogue'],
+    queryFn: listEgressCatalogue,
+    enabled: opened && node?.protocol === 'xray',
+    staleTime: 60_000,
+  });
+  const nodeAsn = (node?.hardening?.pool as { asn?: string } | undefined)?.asn?.trim();
+  // The node's own AS first: a strategy from the same carrier is the one worth
+  // copying, and everything else is context.
+  const catalogue = (catalogueQuery.data ?? [])
+    .slice()
+    .sort((a, b) => Number(b.asn === nodeAsn) - Number(a.asn === nodeAsn));
 
   // Regions list for the Select. Cached across modal opens; cheap query.
   const regionsQuery = useQuery({
@@ -878,6 +901,56 @@ export function NodeEditModal({
                             {...form.getInputProps('zapret2PortsUdp')}
                           />
                         </Group>
+                        <Textarea
+                          label={t('nodes.edit.zapret2Strategy')}
+                          description={t('nodes.edit.zapret2StrategyDesc')}
+                          placeholder="--payload=tls_client_hello --lua-desync=…"
+                          autosize
+                          minRows={2}
+                          maxRows={4}
+                          {...form.getInputProps('zapret2Strategy')}
+                        />
+                        {/* B2b - what other boxes measured. A strategy from the
+                            node's own AS is the one worth copying; the rest is
+                            context, which is why the list says where each came
+                            from and when it was last seen. */}
+                        {catalogue.length > 0 && (
+                          <Stack gap={4}>
+                            <Text size="xs" c="dimmed">
+                              {t('nodes.edit.catalogueHint')}
+                            </Text>
+                            {catalogue.map((group) => (
+                              <Stack key={group.asn} gap={2}>
+                                <Text size="xs" fw={500}>
+                                  {group.asn}
+                                  {group.asn === nodeAsn ? ` · ${t('nodes.edit.catalogueSameAs')}` : ''}
+                                </Text>
+                                {group.strategies.map((strategy) => (
+                                  <Group key={strategy.args} gap={6} wrap="nowrap" align="flex-start">
+                                    <Button
+                                      size="compact-xs"
+                                      variant="light"
+                                      onClick={() =>
+                                        form.setFieldValue('zapret2Strategy', strategy.args)
+                                      }
+                                    >
+                                      {t('nodes.edit.catalogueAdopt')}
+                                    </Button>
+                                    <Code style={{ fontSize: 10, whiteSpace: 'pre-wrap' }}>
+                                      {strategy.args}
+                                    </Code>
+                                    <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                                      {t('nodes.edit.catalogueNodes', {
+                                        count: strategy.nodes.length,
+                                        date: strategy.lastSeen.slice(0, 10),
+                                      })}
+                                    </Text>
+                                  </Group>
+                                ))}
+                              </Stack>
+                            ))}
+                          </Stack>
+                        )}
                       </Stack>
                     )}
 

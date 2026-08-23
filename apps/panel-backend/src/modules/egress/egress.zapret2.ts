@@ -173,6 +173,22 @@ export const Zapret2ConfigSchema = z
      * happens on that proxy's own egress (nfqws runs in its netns).
      */
     socksPort: z.number().int().min(1).max(65535).default(DEFAULT_ZAPRET2_SOCKS_PORT),
+    /**
+     * B2b - the TLS bypass strategy to start this node on, usually adopted from
+     * a node on the same AS that found it by scanning. Pushed as a seed: if
+     * this node self-tunes, what it measures locally wins.
+     *
+     * Validated like a config body because that is where it ends up: it is
+     * spliced into the quoted NFQWS2_OPT block of a file zapret sources as
+     * root, so a quote in it would end that quoting.
+     */
+    strategy: z
+      .string()
+      .max(1024)
+      .refine((v) => !/["`]/.test(v) && !v.includes('$('), {
+        message: 'strategy must not contain quotes or command substitution',
+      })
+      .optional(),
   })
   .strict();
 export type Zapret2ConfigInput = z.infer<typeof Zapret2ConfigSchema>;
@@ -193,6 +209,7 @@ function replaceAssignment(body: string, key: string, value: string): string {
 export function resolveZapret2Config(policy: Zapret2ConfigInput): {
   enabled: boolean;
   config: string;
+  strategy?: string;
 } {
   const base = getPresetBody(policy.preset);
   if (base === undefined) {
@@ -206,7 +223,14 @@ export function resolveZapret2Config(policy: Zapret2ConfigInput): {
     body = replaceAssignment(body, 'NFQWS2_PORTS_UDP', policy.portsUdp);
   }
   validateZapret2Config(body);
-  return { enabled: policy.enabled, config: body };
+  // The strategy travels beside the body rather than spliced into it: the node
+  // already knows how to merge one (it does that for its own scans), and a
+  // second splice here would be the same logic in two languages, drifting.
+  return {
+    enabled: policy.enabled,
+    config: body,
+    ...(policy.strategy ? { strategy: policy.strategy } : {}),
+  };
 }
 
 /**

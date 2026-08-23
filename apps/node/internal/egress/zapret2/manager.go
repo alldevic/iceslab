@@ -77,7 +77,10 @@ type Manager struct {
 	// be merged into the panel's latest body, not into the previous merge.
 	lastPushed string
 	lastConfig string
-	lastTune   *Tune
+	// lastStrategy is what the panel last suggested, kept so a Refresh (which
+	// carries no push) re-applies against the same suggestion.
+	lastStrategy string
+	lastTune     *Tune
 }
 
 func New(cfg Config, logger *slog.Logger) *Manager {
@@ -96,10 +99,10 @@ func defaultRunCmd(ctx context.Context, name string, args ...string) ([]byte, er
 // successful Apply is a no-op (returns false). With ConfigPath unset the
 // Manager is inert (returns false). enabled=false tears the service down via
 // DownCmd and leaves the config file untouched.
-func (m *Manager) Apply(enabled bool, config string) (bool, error) {
+func (m *Manager) Apply(enabled bool, config string, strategy string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.applyLocked(enabled, config)
+	return m.applyLocked(enabled, config, strategy)
 }
 
 // Refresh (F3) re-applies the panel's last config against the tune file as it
@@ -113,7 +116,7 @@ func (m *Manager) Refresh() (bool, error) {
 	if !m.applied || !m.lastEnabled {
 		return false, nil // nothing pushed yet, or the channel is torn down.
 	}
-	return m.applyLocked(m.lastEnabled, m.lastPushed)
+	return m.applyLocked(m.lastEnabled, m.lastPushed, m.lastStrategy)
 }
 
 // LastTune reports the strategy currently spliced into the config, for /healthz.
@@ -124,16 +127,25 @@ func (m *Manager) LastTune() *Tune {
 	return m.lastTune
 }
 
-func (m *Manager) applyLocked(enabled bool, config string) (bool, error) {
+func (m *Manager) applyLocked(enabled bool, config string, strategy string) (bool, error) {
 	if m.cfg.ConfigPath == "" {
 		m.logger.Info("egress: no ConfigPath configured, ignoring applyEgress")
 		return false, nil
 	}
 
-	// F3: splice in the locally tuned TLS strategy, if any. Done before the
+	// F3: splice in the TLS strategy this node should run. Done before the
 	// idempotency check so a NEW tune over an unchanged pushed config still
 	// counts as a change.
+	//
+	// A local scan beats a panel suggestion, always: the scan measured THIS
+	// node's uplink, while the suggestion is what worked from a sibling. The
+	// suggestion is what a node runs until it has scanned, which is the whole
+	// point of B2b - a new box starts on something known to work on its AS
+	// rather than on the generic preset while its first scan runs.
 	tune := m.readTune()
+	if tune == nil && strategy != "" {
+		tune = &Tune{Args: strategy, Protocol: "suggested", Domain: "(panel suggestion)"}
+	}
 	merged := MergeTunedTLS(config, tune)
 
 	if m.applied && enabled == m.lastEnabled && merged == m.lastConfig {
@@ -158,6 +170,7 @@ func (m *Manager) applyLocked(enabled bool, config string) (bool, error) {
 	m.applied = true
 	m.lastEnabled = enabled
 	m.lastPushed = config
+	m.lastStrategy = strategy
 	m.lastConfig = merged
 	m.lastTune = tune
 	return true, nil

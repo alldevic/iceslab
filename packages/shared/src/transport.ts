@@ -470,6 +470,10 @@ export interface ApplyEgressRequest {
   enabled: boolean;
   /** zapret2 config file body (KEY=VALUE). Ignored by the node when enabled=false. */
   config: string;
+  /** B2b - a TLS bypass strategy the panel picked for this node, typically one
+   *  a sibling on the same AS found for itself. A SEED: the node's own scan,
+   *  when it has one, always wins, because that one was measured there. */
+  strategy?: string;
 }
 
 export interface ApplyEgressResponse {

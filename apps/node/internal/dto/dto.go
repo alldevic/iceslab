@@ -130,6 +130,11 @@ type ApplyInboundsResponse struct {
 type ApplyEgressRequest struct {
 	Enabled bool   `json:"enabled"`
 	Config  string `json:"config"`
+	// Strategy (B2b) is a TLS bypass strategy the panel picked for this node,
+	// typically one another node on the same AS found for itself. It is a SEED:
+	// this node's own scan, when it has one, always wins, because that one was
+	// measured here. Empty = nothing suggested.
+	Strategy string `json:"strategy,omitempty"`
 }
 
 type ApplyEgressResponse struct {

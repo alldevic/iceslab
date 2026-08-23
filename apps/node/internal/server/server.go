@@ -557,7 +557,7 @@ func (s *Server) handleApplyEgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	applied, err := s.cfg.Egress.Apply(req.Enabled, req.Config)
+	applied, err := s.cfg.Egress.Apply(req.Enabled, req.Config, req.Strategy)
 	if err != nil {
 		s.logger.Error("applyEgress failed", "err", err, "enabled", req.Enabled)
 		writeError(w, http.StatusInternalServerError, "EGRESS_FAILED", err.Error())

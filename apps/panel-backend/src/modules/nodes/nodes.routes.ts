@@ -10,6 +10,7 @@ import {
   type HardeningFlags,
 } from './nodes.schemas.js';
 import * as nodesService from './nodes.service.js';
+import { egressCatalogue } from '../egress/egress.catalogue.js';
 import { appendHardeningFlags, appendSingboxFlag } from './nodes.service.js';
 import { checkNodePortExposure } from './nodes.exposure.js';
 import * as bootstrap from './bootstrap.service.js';
@@ -187,6 +188,18 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+  });
+
+  /**
+   * B2b - which DPI-bypass strategies have actually worked, grouped by the AS
+   * they worked on. Read-only: it is the fleet's own self-tune reports, not a
+   * curated list, so it says what was measured and leaves adopting one to the
+   * operator.
+   *
+   * A static path, so it is declared before /api/nodes/:id below.
+   */
+  app.get('/api/nodes/egress-catalogue', auth, async (_request, reply) => {
+    return reply.send({ groups: await egressCatalogue() });
   });
 
   app.get('/api/nodes', auth, async (request, reply) => {

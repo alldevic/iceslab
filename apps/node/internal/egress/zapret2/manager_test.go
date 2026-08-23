@@ -27,7 +27,7 @@ func TestApply_NoConfigPathIsInert(t *testing.T) {
 	rec := &recorder{}
 	m := New(Config{RunCmd: rec.run, UpCmd: []string{"up"}}, testLogger())
 
-	changed, err := m.Apply(true, "NFQWS2_ENABLE=1")
+	changed, err := m.Apply(true, "NFQWS2_ENABLE=1", "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestApply_EnabledWritesConfigAndRunsUp(t *testing.T) {
 	}, testLogger())
 
 	body := "NFQWS2_ENABLE=1\nNFQWS2_PORTS_TCP=80,443\n"
-	changed, err := m.Apply(true, body)
+	changed, err := m.Apply(true, body, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -80,10 +80,10 @@ func TestApply_IdempotentSkipsSecondIdenticalPush(t *testing.T) {
 	}, testLogger())
 
 	body := "NFQWS2_ENABLE=1\n"
-	if _, err := m.Apply(true, body); err != nil {
+	if _, err := m.Apply(true, body, ""); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
-	changed, err := m.Apply(true, body)
+	changed, err := m.Apply(true, body, "")
 	if err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
@@ -101,10 +101,10 @@ func TestApply_ConfigChangeReapplies(t *testing.T) {
 	rec := &recorder{}
 	m := New(Config{ConfigPath: path, UpCmd: []string{"up"}, RunCmd: rec.run}, testLogger())
 
-	if _, err := m.Apply(true, "NFQWS2_PORTS_TCP=443\n"); err != nil {
+	if _, err := m.Apply(true, "NFQWS2_PORTS_TCP=443\n", ""); err != nil {
 		t.Fatalf("Apply 1: %v", err)
 	}
-	changed, err := m.Apply(true, "NFQWS2_PORTS_TCP=80,443\n")
+	changed, err := m.Apply(true, "NFQWS2_PORTS_TCP=80,443\n", "")
 	if err != nil {
 		t.Fatalf("Apply 2: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestApply_DisabledRunsDown(t *testing.T) {
 		RunCmd:     rec.run,
 	}, testLogger())
 
-	changed, err := m.Apply(false, "")
+	changed, err := m.Apply(false, "", "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestApply_DormantWritesButSkipsExec(t *testing.T) {
 	// ConfigPath set but UpCmd empty → zapret2 not provisioned: stage config, no exec.
 	m := New(Config{ConfigPath: path, RunCmd: rec.run}, testLogger())
 
-	changed, err := m.Apply(true, "NFQWS2_ENABLE=1\n")
+	changed, err := m.Apply(true, "NFQWS2_ENABLE=1\n", "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

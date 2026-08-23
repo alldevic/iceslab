@@ -944,6 +944,13 @@ export default {
       zapret2PresetDesc: 'Вендоренное тело конфига zapret2 с пином версии.',
       zapret2SocksPort: 'SOCKS-порт',
       zapret2SocksPortDesc: 'Где стек слушает на ноде. По умолчанию 1080.',
+      zapret2Strategy: 'Стратегия обхода TLS',
+      zapret2StrategyDesc:
+        'С чего нода стартует. Это подсказка, а не указание: если нода сама подбирает стратегию, победит измеренная на месте. Пусто — работать на пресете как есть.',
+      catalogueHint: 'Стратегии, которые ноды подобрали себе сами. Возьми одну, чтобы нода стартовала с неё.',
+      catalogueSameAs: 'та же сеть, что у этой ноды',
+      catalogueAdopt: 'Взять',
+      catalogueNodes: 'нод: {{count}}, последний раз {{date}}',
       zapret2PortsTcp: 'Переопределить TCP-порты',
       zapret2PortsUdp: 'Переопределить UDP-порты',
       egressPolicyDesc:

@@ -619,6 +619,10 @@ export interface NodeEgressRule {
 export interface NodeZapret2Config {
   enabled: boolean;
   preset: string;
+  /** B2b - the TLS bypass strategy to start this node on, usually adopted from
+   *  a node on the same AS. A seed: if this node self-tunes, what it measures
+   *  locally wins. */
+  strategy?: string;
   /** Where the stack's SOCKS frontend listens (rules targeting zapret2 are
    *  pointed here). */
   socksPort?: number;
@@ -1110,6 +1114,27 @@ export interface PqKeys {
    *  client encryption string for the share link. */
   decryption?: string;
   encryption?: string;
+}
+
+/**
+ * B2b - what has actually worked, grouped by the network it worked on. The
+ * fleet's own self-tune reports rather than a curated list: it says what was
+ * measured, and adopting one is the operator's call.
+ */
+export interface EgressCatalogueGroup {
+  asn: string;
+  strategies: {
+    args: string;
+    lastSeen: string;
+    nodes: { nodeId: string; nodeName: string; tune: NodeEgressTune }[];
+  }[];
+}
+
+export async function listEgressCatalogue(): Promise<EgressCatalogueGroup[]> {
+  const { data } = await api.get<{ groups: EgressCatalogueGroup[] }>(
+    '/api/nodes/egress-catalogue',
+  );
+  return data.groups;
 }
 
 export async function generatePqKeys(

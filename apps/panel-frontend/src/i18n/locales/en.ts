@@ -883,6 +883,13 @@ export default {
       zapret2PresetDesc: 'Vendored, version-pinned zapret2 config body.',
       zapret2SocksPort: 'SOCKS port',
       zapret2SocksPortDesc: 'Where the stack listens on the node. Default 1080.',
+      zapret2Strategy: 'TLS bypass strategy',
+      zapret2StrategyDesc:
+        'What this node starts on. A seed, not an instruction: if the node self-tunes, what it measures locally wins. Leave empty to use the preset as-is.',
+      catalogueHint: 'Strategies other nodes found for themselves. Adopt one to start this node on it.',
+      catalogueSameAs: 'same network as this node',
+      catalogueAdopt: 'Adopt',
+      catalogueNodes: '{{count}} node(s), last seen {{date}}',
       zapret2PortsTcp: 'TCP ports override',
       zapret2PortsUdp: 'UDP ports override',
       egressPolicyDesc:
