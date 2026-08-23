@@ -59,7 +59,22 @@ api.interceptors.response.use(
  */
 export function apiErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
-    const data = err.response?.data as { message?: string; error?: string } | undefined;
+    const data = err.response?.data as
+      | {
+          message?: string;
+          error?: string;
+          issues?: { path?: (string | number)[]; message?: string }[];
+        }
+      | undefined;
+    // A zod validation error (backend: {error:'VALIDATION_ERROR', message:'Invalid
+    // input', issues:[...]}) carries the actual field-level reason in `issues`;
+    // surface the first one instead of the useless generic "Invalid input" so the
+    // user sees e.g. "name: name may only contain letters, digits, . _ -".
+    const issue = data?.issues?.find((i) => i?.message);
+    if (issue?.message) {
+      const field = issue.path && issue.path.length ? `${issue.path.join('.')}: ` : '';
+      return `${field}${issue.message}`;
+    }
     if (data?.message) return data.message;
     if (data?.error) return data.error;
     return err.message;
@@ -107,6 +122,156 @@ export async function updateRecipeSource(
 
 export async function deleteRecipeSource(id: string): Promise<void> {
   await api.delete(`/api/recipes/sources/${id}`);
+}
+
+// G1 - geo sources (bring your own geo): operator-managed upstream geosite/geoip
+// .dat sources the builder mirrors + minimises. The runetfreedom default is
+// seeded server-side.
+export interface GeoSource {
+  id: string;
+  name: string;
+  geositeUrl: string | null;
+  geoipUrl: string | null;
+  enabled: boolean;
+  /** How often the scheduled refresh re-checks this source upstream (hours). */
+  refreshIntervalHours: number;
+  trusted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GeoSourceInput {
+  name: string;
+  geositeUrl?: string | null;
+  geoipUrl?: string | null;
+  enabled?: boolean;
+  refreshIntervalHours?: number;
+}
+
+export async function getGeoSources(): Promise<{ sources: GeoSource[] }> {
+  const { data } = await api.get<{ sources: GeoSource[] }>('/api/geo/sources');
+  return data;
+}
+
+export async function addGeoSource(input: GeoSourceInput): Promise<GeoSource> {
+  const { data } = await api.post<GeoSource>('/api/geo/sources', input);
+  return data;
+}
+
+export async function updateGeoSource(
+  id: string,
+  patch: Partial<GeoSourceInput>,
+): Promise<GeoSource> {
+  const { data } = await api.patch<GeoSource>(`/api/geo/sources/${id}`, patch);
+  return data;
+}
+
+export async function deleteGeoSource(id: string): Promise<void> {
+  await api.delete(`/api/geo/sources/${id}`);
+}
+
+/** Reorder = set source priority (first enabled with a database wins the
+ *  client-facing full-db mirror). Sends the full ordered id list. */
+export async function reorderGeoSources(ids: string[]): Promise<{ sources: GeoSource[] }> {
+  const { data } = await api.put<{ sources: GeoSource[] }>('/api/geo/sources/order', { ids });
+  return data;
+}
+
+// Browse what categories a source's geosite/geoip .dat actually contains.
+export interface SourceCategories {
+  geosite: { name: string; count: number }[];
+  geoip: { name: string; count: number }[];
+  errors: string[];
+}
+export interface CategoryPreview {
+  entries: string[];
+  total: number;
+  truncated: boolean;
+}
+export async function getSourceCategories(id: string): Promise<SourceCategories> {
+  const { data } = await api.get<SourceCategories>(`/api/geo/sources/${id}/categories`);
+  return data;
+}
+export async function getSourceCategoryPreview(
+  id: string,
+  kind: 'geosite' | 'geoip',
+  name: string,
+): Promise<CategoryPreview> {
+  const { data } = await api.get<CategoryPreview>(
+    `/api/geo/sources/${id}/categories/${kind}/${encodeURIComponent(name)}`,
+  );
+  return data;
+}
+
+// G3 - custom geo categories (compose your own from sources + manual entries).
+export interface GeoCategoryRef {
+  sourceId: string;
+  category: string;
+}
+export interface GeoCategorySpec {
+  id: string;
+  name: string;
+  domainRefs: GeoCategoryRef[];
+  ipRefs: GeoCategoryRef[];
+  manualDomains: string[];
+  manualIps: string[];
+  excludeDomains: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface GeoCategoryInput {
+  name: string;
+  domainRefs?: GeoCategoryRef[];
+  ipRefs?: GeoCategoryRef[];
+  manualDomains?: string[];
+  manualIps?: string[];
+  excludeDomains?: string[];
+  enabled?: boolean;
+}
+
+export interface GeoBuildMeta {
+  builtAt: string;
+  categories: { name: string; domains: number; cidrs: number; missing: string[] }[];
+  sourceErrors: { sourceId: string; url: string; error: string }[];
+  artifacts: { name: string; sha256: string; size: number }[];
+}
+
+export async function getGeoCategories(): Promise<{ categories: GeoCategorySpec[] }> {
+  const { data } = await api.get<{ categories: GeoCategorySpec[] }>('/api/geo/categories');
+  return data;
+}
+/**
+ * Which cascades route by each custom category, keyed by the UPPERCASED category
+ * name. Only ENABLED cascades count, matching the delete guard exactly - the
+ * panel must not promise a refusal the API would not give.
+ */
+export async function getGeoCategoryUsage(): Promise<{ usage: Record<string, string[]> }> {
+  const { data } = await api.get<{ usage: Record<string, string[]> }>('/api/geo/categories/usage');
+  return data;
+}
+export async function addGeoCategory(input: GeoCategoryInput): Promise<GeoCategorySpec> {
+  const { data } = await api.post<GeoCategorySpec>('/api/geo/categories', input);
+  return data;
+}
+export async function updateGeoCategory(
+  id: string,
+  patch: Partial<GeoCategoryInput>,
+): Promise<GeoCategorySpec> {
+  const { data } = await api.patch<GeoCategorySpec>(`/api/geo/categories/${id}`, patch);
+  return data;
+}
+export async function deleteGeoCategory(id: string): Promise<void> {
+  await api.delete(`/api/geo/categories/${id}`);
+}
+
+export async function buildGeo(): Promise<GeoBuildMeta> {
+  const { data } = await api.post<GeoBuildMeta>('/api/geo/build', {});
+  return data;
+}
+export async function getGeoBuild(): Promise<GeoBuildMeta | null> {
+  const { data } = await api.get<GeoBuildMeta | null>('/api/geo/build');
+  return data;
 }
 
 /** Ad-hoc import: validate recipes from a one-off URL or pasted JSON. */
@@ -1166,6 +1331,11 @@ export async function deleteSquad(id: string): Promise<void> {
 export type CascadeProtocol =
   | 'xray' | 'hysteria' | 'amneziawg' | 'naive' | 'shadowsocks' | 'mtproto' | 'mieru';
 
+/** Inter-hop link protocol = the realised link cells (raw vless / SS2022). The
+ *  backend also tolerates the core protocols for legacy data (normalised to
+ *  vless node-side). */
+export type CascadeLinkProtocol = 'vless' | 'shadowsocks';
+
 /** 'chain' (sequential) or 'balancer' (one entry, N latency-balanced exits). */
 export type CascadeMode = 'chain' | 'balancer';
 
@@ -1187,6 +1357,8 @@ export interface CascadePosition {
   nodeIds: string[];
   entryProtocol: string | null;
   linkProtocol: string | null;
+  /** E - geo split per node id. Only nodes that HAVE one appear. */
+  egressPolicies?: Record<string, EgressRule[]>;
 }
 
 /**
@@ -1205,6 +1377,56 @@ export interface CascadeDirection {
   /** May legitimately be empty: the tag exists, no node stands behind it yet,
    *  and the direction is simply not handed to clients. */
   nodeIds: string[];
+}
+
+/** E - where a matched flow egresses. `link-out` follows the way out the client
+ *  itself chose; `direction` forces one, named by its frozen tag. */
+export type EgressTarget = 'direct' | 'block' | 'link-out' | 'direction';
+
+/** One server-side geo-split rule, authored PER NODE (a position is a pool, so
+ *  the split belongs to the box that egresses). */
+export interface EgressRule {
+  geosite?: string[];
+  geoip?: string[];
+  domain?: string[];
+  ip?: string[];
+  port?: string;
+  network?: 'tcp' | 'udp' | 'tcp,udp';
+  target: EgressTarget;
+  /** Required for target 'direction': the direction's tag. */
+  directionTag?: number;
+}
+
+/**
+ * A dry run of one node's geo split: what the draft policy compiles to, asked
+ * for while editing rather than after saving.
+ *
+ * Everything the compiler cannot infer from the policy alone travels with it,
+ * because the cascade being previewed may not exist yet: which position holds
+ * the node, who sits on the step before it, and how many outbounds serve each
+ * direction (more than one = a balancer).
+ */
+export interface GeoPreviewRequest {
+  policy: EgressRule[];
+  position: number;
+  prevNodeIds: string[];
+  directions: { tag: number; outbounds: number }[];
+}
+
+export interface GeoPreviewResult {
+  /** The xray routing rules the node would receive, in match order. */
+  rules: Record<string, unknown>[];
+  /** routing.domainStrategy the policy forces on the entry, when it needs one. */
+  domainStrategy?: string;
+  /** Matchers stripped before the node ever sees them - a custom category that
+   *  is not built, or is empty in the current build. Usually the answer to "the
+   *  rule is right there and nothing happens". */
+  dropped: string[];
+}
+
+export async function previewGeoPolicy(input: GeoPreviewRequest): Promise<GeoPreviewResult> {
+  const { data } = await api.post<GeoPreviewResult>('/api/cascades/geo/preview', input);
+  return data;
 }
 
 export interface Cascade {
@@ -1236,7 +1458,7 @@ export interface CascadeHopInput {
   nodeId: string;
   position: number;
   entryProtocol?: CascadeProtocol;
-  linkProtocol?: CascadeProtocol;
+  linkProtocol?: CascadeLinkProtocol;
 }
 
 export interface CreateCascadeInput {
@@ -1274,6 +1496,9 @@ export interface CascadePositionInput {
   entryProtocol?: CascadeProtocol;
   /** What this position speaks to the next one. The exit position carries none. */
   linkProtocol?: CascadeProtocol;
+  /** E - geo split per node id. A node absent from the map has no split; keys
+   *  outside `nodeIds` are ignored by the panel. */
+  egressPolicies?: Record<string, EgressRule[]>;
 }
 
 /**

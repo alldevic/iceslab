@@ -1,0 +1,11 @@
+-- E: per-node geo split on a cascade member.
+--
+-- On the position-node row rather than on the cascade: v4 lets a position hold a
+-- POOL, and the split is a property of the box that egresses, not of the whole
+-- chain. Putting it on the cascade would silently apply one policy to every node
+-- of the pool - which is exactly the "only the first entry serves the cascade"
+-- class of bug the pool model was introduced to remove.
+--
+-- Nullable: a member without a policy renders exactly as before, so enabling the
+-- column changes nothing until an operator authors a split.
+ALTER TABLE "cascade_position_nodes" ADD COLUMN "egress_policy" JSONB;

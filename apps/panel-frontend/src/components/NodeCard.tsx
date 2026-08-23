@@ -23,6 +23,7 @@ import {
   IconServer2,
   IconTrash,
   IconUpload,
+  IconWorld,
 } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
 import type { CoreRestarts, DashboardOverview } from '../lib/api';
@@ -60,6 +61,11 @@ interface CardNode {
   /** When this node is a hop in a cascade: "<cascade name> · <role>" for the
    *  chain badge. Null when the node is standalone. */
   cascadeLabel?: string | null;
+  /** E - how many geo-split rules THIS node carries in its cascade. 0/null =
+   *  none. Shown because a split silently changes where a client's traffic
+   *  leaves, and the card is where an operator looks first when a node behaves
+   *  unlike its neighbours in the same pool. */
+  splitRules?: number | null;
   /** T7 - proxy-core version (xray "26.3.27"), null until a versioned agent
    *  reports in. Shown as a small chip so operators can spot nodes too old for
    *  cascade exit selection (needs xray >= 25.9.5). */
@@ -188,24 +194,48 @@ export function NodeCard({
                   {node.address}
                 </Text>
               </Tooltip>
-              {node.cascadeLabel && (
-                <Badge
-                  size="xs"
-                  variant="light"
-                  leftSection={<IconRoute size={10} />}
-                  style={{
-                    marginTop: 4,
-                    alignSelf: 'flex-start',
-                    maxWidth: '100%',
-                    backgroundColor: `${VIOLET}1A`,
-                    color: VIOLET,
-                    border: `1px solid ${VIOLET}33`,
-                    textTransform: 'none',
-                    fontFamily: "'Geist Mono', monospace",
-                  }}
-                >
-                  {node.cascadeLabel}
-                </Badge>
+              {(node.cascadeLabel || (node.splitRules ?? 0) > 0) && (
+                <Group gap={4} wrap="wrap" style={{ marginTop: 4 }}>
+                  {node.cascadeLabel && (
+                    <Badge
+                      size="xs"
+                      variant="light"
+                      leftSection={<IconRoute size={10} />}
+                      style={{
+                        maxWidth: '100%',
+                        backgroundColor: `${VIOLET}1A`,
+                        color: VIOLET,
+                        border: `1px solid ${VIOLET}33`,
+                        textTransform: 'none',
+                        fontFamily: "'Geist Mono', monospace",
+                      }}
+                    >
+                      {node.cascadeLabel}
+                    </Badge>
+                  )}
+                  {(node.splitRules ?? 0) > 0 && (
+                    <Tooltip
+                      label={t('nodes.splitBadgeHint', { count: node.splitRules ?? 0 })}
+                      withArrow
+                      openDelay={300}
+                    >
+                      <Badge
+                        size="xs"
+                        variant="light"
+                        leftSection={<IconWorld size={10} />}
+                        style={{
+                          backgroundColor: `${CYAN}1A`,
+                          color: CYAN,
+                          border: `1px solid ${CYAN}33`,
+                          textTransform: 'none',
+                          fontFamily: "'Geist Mono', monospace",
+                        }}
+                      >
+                        {t('nodes.splitBadge', { count: node.splitRules ?? 0 })}
+                      </Badge>
+                    </Tooltip>
+                  )}
+                </Group>
               )}
             </Stack>
           </Group>

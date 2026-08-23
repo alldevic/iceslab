@@ -14,6 +14,9 @@ export interface CascadePositionDto {
   nodeIds: string[];
   entryProtocol: string | null;
   linkProtocol: string | null;
+  /** E - per-node geo split, keyed by node id. Only nodes that HAVE a split
+   *  appear, so an untouched pool reports an empty object. */
+  egressPolicies: Record<string, unknown>;
 }
 
 /**
@@ -86,7 +89,7 @@ interface CascadeRow {
     position: number;
     entryProtocol: string | null;
     linkProtocol: string | null;
-    nodes: { nodeId: string }[];
+    nodes: { nodeId: string; egressPolicy?: unknown }[];
   }[];
   directions?: {
     id: string;
@@ -120,6 +123,9 @@ export function mapCascade(c: CascadeRow): CascadeDto {
         nodeIds: p.nodes.map((n) => n.nodeId),
         entryProtocol: p.entryProtocol,
         linkProtocol: p.linkProtocol,
+        egressPolicies: Object.fromEntries(
+          p.nodes.filter((n) => n.egressPolicy != null).map((n) => [n.nodeId, n.egressPolicy]),
+        ),
       })),
     directions: (c.directions ?? [])
       .slice()

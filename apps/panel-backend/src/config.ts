@@ -61,6 +61,32 @@ export const ConfigSchema = z.object({
     .transform((v) => (v && v.trim() !== '' ? v : undefined))
     .pipe(z.url().optional()),
 
+  // G6 - self-hosted geo distribution. When true, subscription formats point
+  // their geo databases at this panel's public /geo/<token>/ path (a mirror of
+  // the enabled source .dat + composed custom categories) instead of the
+  // hardcoded external mirrors (SagerNet / jsdelivr), which are unstable from
+  // RU. GEO_ARTIFACT_TOKEN is the high-entropy capability prefix on that public
+  // path; when unset it is derived deterministically from JWT_SECRET.
+  GEO_SELF_HOST: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Empty-string → unset, same as PANEL_PUBLIC_IP / ACME_DEFAULT_EMAIL: the
+  // compose passthrough emits `GEO_ARTIFACT_TOKEN=` when the operator leaves
+  // it blank, which is the documented way of asking for the JWT_SECRET-derived
+  // token — and a bare .min(16).optional() would reject "" and crash-loop the
+  // panel on the very default it documents.
+  GEO_ARTIFACT_TOKEN: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(16).optional(),
+  ),
+  // Path to a sing-box binary. When set, the geo builder compiles per-category
+  // .srs rule-sets (sing-box removed geosite:/geoip: in 1.12, so remote .srs is
+  // the only portable vehicle) from the source mirror, self-hosting what the
+  // sing-box subscription format would otherwise fetch from SagerNet's GitHub.
+  // Unset = no .srs generation (sing-box format keeps the external URLs).
+  SINGBOX_BIN: z.string().optional(),
+
   // Path prefix where the subscription endpoint is mounted. Default
   // `/sub` matches the historical default. Operators with concerns
   // about Iceslab fingerprinting can change it (e.g. `/v` or `/get`)

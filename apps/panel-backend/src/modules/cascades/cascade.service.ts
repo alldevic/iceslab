@@ -1,4 +1,9 @@
-import type { XrayCascadeFragments } from '@iceslab/shared';
+import type { XrayCascadeFragments, GeoAssetSpec } from '@iceslab/shared';
+import { config } from '../../config.js';
+import { getGeoBuildMeta } from '../geo/geo.registry.js';
+import { geoArtifactBaseUrl } from '../geo/geo.url.js';
+import { GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT } from '../geo/geo.orchestrator.js';
+import { coerceEgressPolicy, entryDomainStrategy, type EgressPolicy } from './cascade.geo.js';
 import { cascadeAutoProfileLabel, cascadeProfileLabel } from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
@@ -15,6 +20,11 @@ import {
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
   buildTopologyFragmentsForNode,
+  compileNodeGeoRules,
+  dirOutTag,
+  directionTargetFor,
+  entryDirectionCondition,
+  transitDirectionCondition,
   generateLinkCreds,
   generateTopologyLinks,
   normalizeLinkProtocol,
@@ -34,7 +44,289 @@ import type {
   CreateCascadeInput,
   UpdateCascadeInput,
 } from './cascade.schemas.js';
+import { assertEgressCategories } from './cascade.geo.stock.js';
+import { getCategories } from '../geo/geo.categories.js';
 import { mapCascade, type CascadeDto } from './cascade.mapper.js';
+
+// The two custom .dat files the panel itself produces. A matcher pointing at
+// anything else cannot be satisfied by pushing a file, so it is stripped rather
+// than shipped.
+const CUSTOM_EXT_FILES = new Set([GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT]);
+
+/** `ext:<file>:<category>` -> its parts, or null when the matcher is a standard
+ *  geosite:/geoip:/literal one. */
+function parseExtMatcher(m: string): { file: string; cat: string } | null {
+  if (!m.startsWith('ext:')) return null;
+  const rest = m.slice('ext:'.length);
+  const i = rest.indexOf(':');
+  if (i <= 0 || i === rest.length - 1) return null;
+  return { file: rest.slice(0, i), cat: rest.slice(i + 1) };
+}
+
+/**
+ * G4 - reconcile a node's geo split with what that node can actually resolve, so
+ * we NEVER ship an `ext:<file>:<cat>` routing rule whose backing .dat (or the
+ * category inside it) the node will not have. xray fails config load on a
+ * missing ext file and crash-loops, which would wedge the node for every user.
+ *
+ * Returns the policy with UNSATISFIABLE ext: matchers stripped, plus the exact
+ * custom .dat assets to push (only the files the cleaned policy still needs). An
+ * ext:geo-custom.dat:CAT matcher is satisfiable only when self-hosting is on, a
+ * build is cached, and CAT is NON-EMPTY in that build (an empty category is
+ * omitted from the .dat). Standard geosite:/geoip:/literal matchers are always
+ * kept: they resolve from the node's bundled databases, so the source mirror is
+ * NOT pushed - overwriting the comprehensive bundle with a narrow mirror would
+ * break every standard geosite: rule on the node.
+ */
+function resolveNodeGeo(policy: EgressPolicy | undefined): {
+  policy: EgressPolicy | undefined;
+  assets: GeoAssetSpec[] | undefined;
+} {
+  // meta is null when self-hosting is off (we cannot deliver files to nodes) or
+  // no build is cached - either way no custom ext: matcher is satisfiable.
+  const meta = config.GEO_SELF_HOST ? getGeoBuildMeta() : null;
+  return reconcileEntryGeo(policy, meta, geoArtifactBaseUrl());
+}
+
+/** Pure core of resolveNodeGeo (see it): given the policy + the current build
+ *  meta (null = no shippable custom geo) + the public base URL, strip
+ *  unsatisfiable ext: matchers and return the custom .dat assets to push. */
+export function reconcileEntryGeo(
+  policy: EgressPolicy | undefined,
+  meta: {
+    categories: { name: string; domains: number; cidrs: number }[];
+    artifacts: { name: string; sha256: string }[];
+  } | null,
+  baseUrl: string,
+): { policy: EgressPolicy | undefined; assets: GeoAssetSpec[] | undefined } {
+  if (!policy || policy.length === 0) return { policy, assets: undefined };
+
+  const hasDomains = new Map<string, boolean>();
+  const hasCidrs = new Map<string, boolean>();
+  for (const c of meta?.categories ?? []) {
+    hasDomains.set(c.name.toUpperCase(), c.domains > 0);
+    hasCidrs.set(c.name.toUpperCase(), c.cidrs > 0);
+  }
+  const builtArtifacts = new Set((meta?.artifacts ?? []).map((a) => a.name));
+
+  const extSatisfiable = (m: string): boolean => {
+    const e = parseExtMatcher(m);
+    if (!e) return true; // not an ext ref -> standard/literal, always keep
+    if (e.file === GEO_SITE_ARTIFACT) {
+      return builtArtifacts.has(GEO_SITE_ARTIFACT) && hasDomains.get(e.cat.toUpperCase()) === true;
+    }
+    if (e.file === GEO_IP_ARTIFACT) {
+      return builtArtifacts.has(GEO_IP_ARTIFACT) && hasCidrs.get(e.cat.toUpperCase()) === true;
+    }
+    return false; // an ext file the panel never produces
+  };
+  const filterArr = (a?: string[]): string[] | undefined => {
+    if (!a) return a;
+    const kept = a.filter(extSatisfiable);
+    return kept.length ? kept : undefined; // drop an emptied array so the rule can fall away
+  };
+
+  const neededFiles = new Set<string>();
+  const cleaned: EgressPolicy = [];
+  for (const r of policy) {
+    const hadMatchers = Boolean(
+      r.geosite?.length || r.geoip?.length || r.domain?.length || r.ip?.length,
+    );
+    const next = {
+      ...r,
+      geosite: filterArr(r.geosite),
+      geoip: filterArr(r.geoip),
+      domain: filterArr(r.domain),
+      ip: filterArr(r.ip),
+    };
+    const keepsMatchers = Boolean(next.geosite || next.geoip || next.domain || next.ip);
+    // If a rule HAD category/literal matchers and stripping removed them ALL,
+    // DROP it rather than let a surviving `port`/`network` turn it into a
+    // port-scoped catch-all: that would silently broaden the operator's
+    // category-scoped rule to ALL traffic on that port (block => DoS all HTTPS;
+    // direct => egress all HTTPS off this node, exposing its IP as the exit). A
+    // rule that was port/network-only from the start is intentional and kept.
+    if (hadMatchers && !keepsMatchers) continue;
+    for (const m of [
+      ...(next.geosite ?? []),
+      ...(next.geoip ?? []),
+      ...(next.domain ?? []),
+      ...(next.ip ?? []),
+    ]) {
+      const e = parseExtMatcher(m);
+      if (e && CUSTOM_EXT_FILES.has(e.file)) neededFiles.add(e.file);
+    }
+    cleaned.push(next);
+  }
+
+  let assets: GeoAssetSpec[] | undefined;
+  if (meta && neededFiles.size > 0) {
+    const base = baseUrl.replace(/\/+$/, '');
+    const specs = meta.artifacts
+      .filter((a) => neededFiles.has(a.name))
+      .map((a) => ({ name: a.name, url: `${base}/${a.name}`, sha256: a.sha256 }));
+    assets = specs.length ? specs : undefined;
+  }
+  return { policy: cleaned, assets };
+}
+
+/**
+ * Cascade members whose geo split still references a custom category, by node id.
+ *
+ * Deleting a category that a policy names is not an error the operator ever
+ * sees: reconciliation strips the unsatisfiable ext: matcher at render time (it
+ * has to — xray refuses a config naming a .dat it cannot find), so the split
+ * quietly stops splitting on a screen the operator is not looking at. Callers
+ * use this to refuse the delete and say where it is used.
+ */
+export async function nodesUsingGeoCategory(category: string): Promise<string[]> {
+  return (await geoCategoryUsage())[category.toUpperCase()] ?? [];
+}
+
+/**
+ * The whole picture behind nodesUsingGeoCategory: every custom category a live
+ * split routes by, mapped to the cascades that name it. Keys are UPPERCASED,
+ * the way the builder normalises category names.
+ *
+ * One scan for every category rather than one scan per category, because the geo
+ * screen wants the answer for the whole list at once. It exists so the operator
+ * learns where a category is used BEFORE reaching for delete - the 409 tells the
+ * truth, but only to somebody who already decided to destroy something.
+ *
+ * Scoped to ENABLED cascades, exactly like the delete guard it backs: a screen
+ * that counted more than the guard refuses would promise a delete would fail
+ * when it succeeds.
+ */
+export async function geoCategoryUsage(): Promise<Record<string, string[]>> {
+  const members = await prisma.cascadePositionNode.findMany({
+    where: { position: { cascade: { enabled: true } } },
+    select: { nodeId: true, egressPolicy: true, position: { select: { cascade: { select: { name: true } } } } },
+  });
+  const usage = new Map<string, Set<string>>();
+  for (const m of members) {
+    const policy = coerceEgressPolicy(m.egressPolicy);
+    if (!policy) continue;
+    const refs = policy.flatMap((r) => [
+      ...(r.geosite ?? []),
+      ...(r.geoip ?? []),
+      ...(r.domain ?? []),
+      ...(r.ip ?? []),
+    ]);
+    for (const ref of refs) {
+      // `ext:<file>:<CATEGORY>` - only an ext: reference names a category the
+      // panel owns. A bundled `geosite:ads` resolves from the node's own
+      // databases and is nothing this registry can break.
+      const e = parseExtMatcher(ref);
+      if (!e) continue;
+      const key = e.cat.toUpperCase();
+      const names = usage.get(key) ?? new Set<string>();
+      names.add(m.position.cascade.name);
+      usage.set(key, names);
+    }
+  }
+  return Object.fromEntries([...usage].map(([cat, names]) => [cat, [...names]]));
+}
+
+/** Every matcher a policy names, flattened. Used to say which ones survive
+ *  reconciliation and which the node will never see. */
+function policyMatchers(policy: EgressPolicy | undefined): string[] {
+  return (policy ?? []).flatMap((r) => [
+    ...(r.geosite ?? []),
+    ...(r.geoip ?? []),
+    ...(r.domain ?? []),
+    ...(r.ip ?? []),
+  ]);
+}
+
+export interface GeoPreviewInput {
+  policy: EgressPolicy;
+  /** Index of the position holding this node. 0 is the entry, and the entry is
+   *  the only hop that can read the client's chosen direction out of its UUID. */
+  position: number;
+  /** Node ids on the position BEFORE this one. Every one of them opens a link
+   *  here per direction, and their credentials are how a transit tells the
+   *  directions apart. Empty at the entry. */
+  prevNodeIds: string[];
+  /** The cascade's directions, with how many outbounds serve each FROM THIS
+   *  NODE - i.e. the size of the next step's pool, since a pool means a
+   *  balancer rather than a single outbound. */
+  directions: { tag: number; outbounds: number }[];
+}
+
+export interface GeoPreviewResult {
+  /** The routing rules the node would receive, in match order. */
+  rules: Record<string, unknown>[];
+  /** The entry's routing.domainStrategy override, when the policy needs one. */
+  domainStrategy?: string;
+  /** Matchers reconciliation removes before the node ever sees them (a custom
+   *  category that is not built, or is empty in the current build). This is the
+   *  usual answer to "the rule is there and nothing happens". */
+  dropped: string[];
+}
+
+/**
+ * What a draft geo policy actually compiles to, for the panel to show BEFORE it
+ * is saved.
+ *
+ * Runs the real compiler (compileNodeGeoRules) over the real reconciliation
+ * (resolveNodeGeo), so the preview cannot drift from what the node gets: the
+ * only thing synthesised here is the topology the draft describes but has not
+ * saved yet - which outbounds serve each direction, and which nodes sit on the
+ * previous step.
+ */
+export async function previewNodeGeo(input: GeoPreviewInput): Promise<GeoPreviewResult> {
+  const { policy: reconciled } = resolveNodeGeo(input.policy);
+  const survived = new Set(policyMatchers(reconciled));
+  const dropped = [...new Set(policyMatchers(input.policy).filter((m) => !survived.has(m)))];
+
+  // Pass 1 of the real builder, over the draft's directions. A direction with no
+  // outbound from here cannot be steered into, so it is left out rather than
+  // given a rule pointing nowhere - exactly what the builder does.
+  const balancers: Record<string, unknown>[] = [];
+  const dirTargets = new Map<number, Record<string, unknown>>();
+  for (const d of [...input.directions].sort((a, b) => a.tag - b.tag)) {
+    if (d.outbounds < 1) continue;
+    const tags = Array.from({ length: d.outbounds }, (_, i) => dirOutTag(d.tag, i));
+    dirTargets.set(d.tag, directionTargetFor(d.tag, tags, balancers));
+  }
+
+  // The entry's direction condition names every route policy's ordinal, so the
+  // ad-blocking variants of a profile steer the same way as the plain one.
+  const ordinals =
+    input.position === 0
+      ? (await prisma.routePolicy.findMany({ select: { ordinal: true } })).map((p) => p.ordinal)
+      : [];
+
+  const rules =
+    reconciled && reconciled.length > 0
+      ? compileNodeGeoRules(reconciled, dirTargets, (tag) =>
+          input.position === 0
+            ? entryDirectionCondition(tag, ordinals)
+            : transitDirectionCondition(tag, input.prevNodeIds),
+        )
+      : [];
+
+  const domainStrategy = entryDomainStrategy(reconciled);
+  return { rules, ...(domainStrategy ? { domainStrategy } : {}), dropped };
+}
+
+/** Per-node policies for one cascade, reconciled against the current geo build.
+ *  Returns the map to hand the fragment builder plus the union of assets the
+ *  node must fetch. */
+export function resolveCascadeGeo(
+  members: { nodeId: string; egressPolicy: unknown }[],
+): { policies: Map<string, EgressPolicy>; assetsByNode: Map<string, GeoAssetSpec[]> } {
+  const policies = new Map<string, EgressPolicy>();
+  const assetsByNode = new Map<string, GeoAssetSpec[]>();
+  for (const m of members) {
+    const raw = coerceEgressPolicy(m.egressPolicy);
+    if (!raw) continue;
+    const { policy, assets } = resolveNodeGeo(raw);
+    if (policy && policy.length > 0) policies.set(m.nodeId, policy);
+    if (assets && assets.length > 0) assetsByNode.set(m.nodeId, assets);
+  }
+  return { policies, assetsByNode };
+}
 
 export class CascadeNotFoundError extends Error {
   constructor(id: string) {
@@ -111,7 +403,7 @@ const hopInclude = {
   // direction and the tag (which lives in clients' UUIDs) would move.
   positions: {
     orderBy: { position: 'asc' as const },
-    include: { nodes: { select: { nodeId: true } } },
+    include: { nodes: { select: { nodeId: true, egressPolicy: true } } },
   },
   directions: {
     orderBy: { tag: 'asc' as const },
@@ -244,7 +536,7 @@ export async function getRouteProfilesByEntryNode(
       },
       positions: {
         orderBy: { position: 'asc' },
-        include: { nodes: { select: { nodeId: true } } },
+        include: { nodes: { select: { nodeId: true, egressPolicy: true } } },
       },
       directions: {
         orderBy: { tag: 'asc' },
@@ -652,7 +944,14 @@ function tryFoldPositions(
 async function writeTopologyV4(
   tx: Prisma.TransactionClient,
   cascadeId: string,
-  positions: { nodeIds: string[]; position: number; entryProtocol?: string; linkProtocol?: string }[],
+  positions: {
+    nodeIds: string[];
+    position: number;
+    entryProtocol?: string;
+    linkProtocol?: string;
+    /** E - per-node geo split, keyed by node id (see CascadePositionSchema). */
+    egressPolicies?: Record<string, EgressPolicy>;
+  }[],
   directions: { id?: string; nodeIds: string[]; countryCode?: string | null }[],
 ): Promise<void> {
   const stored = await tx.cascadeDirection.findMany({
@@ -688,6 +987,29 @@ async function writeTopologyV4(
     return { ...d, tag: nextTag++ };
   });
 
+  // A policy may force traffic through a named direction. Tags are resolved
+  // just above, so this is the first moment the check can be made — and it has
+  // to be made HERE rather than left to render time: an unresolvable tag is
+  // silently dropped when the fragments are built, so the operator would save a
+  // rule, see it accepted, and never learn that it does nothing. Refuse the save
+  // instead, naming the tag and what does exist.
+  const liveTags = new Set(resolved.map((d) => d.tag));
+  for (const p of positions) {
+    for (const [nodeId, policy] of Object.entries(p.egressPolicies ?? {})) {
+      for (const rule of policy) {
+        if (rule.target !== 'direction') continue;
+        if (rule.directionTag === undefined || !liveTags.has(rule.directionTag)) {
+          throw new CascadeValidationError(
+            `geo split on node ${nodeId} forces direction ${rule.directionTag ?? '(none)'}, ` +
+              `which this cascade does not have (${
+                liveTags.size ? `available: ${[...liveTags].sort((a, b) => a - b).join(', ')}` : 'none'
+              })`,
+          );
+        }
+      }
+    }
+  }
+
   await tx.cascadeLink.deleteMany({ where: { cascadeId } });
   await tx.cascadePosition.deleteMany({ where: { cascadeId } });
   await tx.cascadeDirection.deleteMany({ where: { cascadeId } });
@@ -699,7 +1021,16 @@ async function writeTopologyV4(
         position: p.position,
         entryProtocol: p.entryProtocol ?? null,
         linkProtocol: p.linkProtocol ?? null,
-        nodes: { create: p.nodeIds.map((nodeId) => ({ nodeId })) },
+        nodes: {
+          create: p.nodeIds.map((nodeId) => {
+            const policy = p.egressPolicies?.[nodeId];
+            // Omit the field entirely when there is no split, so the column stays
+            // NULL and the member renders byte-identically to a plain one.
+            return policy && policy.length > 0
+              ? { nodeId, egressPolicy: policy as unknown as Prisma.InputJsonValue }
+              : { nodeId };
+          }),
+        },
       },
     });
   }
@@ -733,6 +1064,27 @@ async function writeTopologyV4(
   if (nextTag !== cascade.nextDirectionTag) {
     await tx.cascade.update({ where: { id: cascadeId }, data: { nextDirectionTag: nextTag } });
   }
+}
+
+/** Reject an egress policy that references custom categories as bare geosite:/
+ *  geoip: or an unknown geoip category, up front (see cascade.geo.stock). No-op
+ *  for an absent/empty policy. Throws EgressCategoryError (-> 400). */
+async function assertPolicyCategories(policy: EgressPolicy | undefined): Promise<void> {
+  if (!policy || policy.length === 0) return;
+  const names = (await getCategories()).map((c) => c.name);
+  assertEgressCategories(policy, names);
+}
+
+/** Same check across every per-node policy in a v4 payload. The category list is
+ *  read ONCE: it is the same for all of them, and a position pool can carry a
+ *  policy per node. */
+async function assertPositionPolicies(
+  positions: { egressPolicies?: Record<string, EgressPolicy> }[] | undefined,
+): Promise<void> {
+  const all = (positions ?? []).flatMap((p) => Object.values(p.egressPolicies ?? {}));
+  if (all.length === 0) return;
+  const names = (await getCategories()).map((c) => c.name);
+  for (const policy of all) assertEgressCategories(policy, names);
 }
 
 export async function createCascade(input: CreateCascadeInput): Promise<CascadeDto> {
@@ -775,6 +1127,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   if (input.enabled && entryNodeId && (isBalancer || !folded)) {
     await assertBalancerEntrySupportsVlessRoute(entryNodeId);
   }
+  await assertPositionPolicies(input.positions);
   // Pre-generate inter-hop link creds.
   //   chain:    one cred per link, stored on each non-exit (originating) hop.
   //   balancer: one cred per exit link (entry->exit), stored on each EXIT hop;
@@ -921,6 +1274,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   const isBalancer = mode === 'balancer';
   const incomingHops = folded ? folded.hops : input.hops;
   const hops = incomingHops ? validateCascadeHops(incomingHops, mode) : null;
+  await assertPositionPolicies(input.positions);
   if (hops) await assertNodesExist(hops.map((h) => h.nodeId));
   // T7: gate an effectively-enabled balancer on the entry node's xray version
   // (covers both enabling an existing cascade and swapping in a new entry hop).
@@ -1056,6 +1410,9 @@ export function toWireFragments(mine: HopConfig): XrayCascadeFragments {
     // observatory is a config xray rejects outright.
     balancers: mine.balancers,
     observatory: mine.observatory,
+    // E - IPOnDemand for a node whose split matches on ip/geoip; absent keeps
+    // the node's default, so a member without a split is unchanged.
+    domainStrategy: mine.domainStrategy,
   };
 }
 
@@ -1181,7 +1538,7 @@ async function getTopologyFragmentsForNode(
     prisma.cascadePosition.findMany({
       where: { cascadeId: link.cascadeId },
       orderBy: { position: 'asc' },
-      select: { position: true, nodes: { select: { nodeId: true } } },
+      select: { position: true, nodes: { select: { nodeId: true, egressPolicy: true } } },
     }),
     prisma.cascadeDirection.findMany({
       where: { cascadeId: link.cascadeId },
@@ -1224,11 +1581,19 @@ async function getTopologyFragmentsForNode(
     });
   }
 
+  // E - per-node geo split, reconciled against the current build: an ext: rule
+  // whose .dat the node cannot get is stripped here rather than shipped, because
+  // xray fails config load on a missing ext file and crash-loops.
+  const { policies: egressPolicies, assetsByNode } = resolveCascadeGeo(
+    positions.flatMap((p) => p.nodes),
+  );
+
   const mine = buildTopologyFragmentsForNode(nodeId, {
     positions: positions.map((p) => ({
       position: p.position,
       nodeIds: p.nodes.map((n) => n.nodeId),
     })),
+    egressPolicies,
     directions: directions.map((d) => ({ tag: d.tag, nodeIds: d.nodes.map((n) => n.nodeId) })),
     links: rows,
     hosts,
@@ -1244,7 +1609,11 @@ async function getTopologyFragmentsForNode(
   });
   if (!mine) return null;
 
-  return toWireFragments(mine);
+  // Assets for THIS node: the files its own policy still references after
+  // reconciliation. Absent when it has no split, so the fragment stays
+  // byte-identical to a plain cascade member.
+  const geoAssets = assetsByNode.get(nodeId);
+  return { ...toWireFragments(mine), ...(geoAssets ? { geoAssets } : {}) };
 }
 
 export async function deleteCascade(id: string): Promise<void> {

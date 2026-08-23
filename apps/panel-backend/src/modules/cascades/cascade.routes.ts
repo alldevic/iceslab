@@ -4,12 +4,17 @@ import {
   CreateCascadeSchema,
   UpdateCascadeSchema,
   CascadeIdParamSchema,
+  GeoPreviewSchema,
 } from './cascade.schemas.js';
 import * as svc from './cascade.service.js';
 import { CascadeValidationError } from './cascade.validation.js';
+import { EgressCategoryError } from './cascade.geo.stock.js';
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof CascadeValidationError) {
+    return reply.code(400).send({ error: 'INVALID', message: err.message });
+  }
+  if (err instanceof EgressCategoryError) {
     return reply.code(400).send({ error: 'INVALID', message: err.message });
   }
   if (err instanceof svc.CascadeNodeMissingError) {
@@ -61,6 +66,20 @@ export async function cascadeRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       return handleError(err, reply);
     }
+  });
+
+  /**
+   * Compile a DRAFT geo split and hand back the xray rules it becomes, in match
+   * order. Reads nothing, writes nothing.
+   *
+   * A static path, and a POST because the policy is a body rather than a key.
+   * It exists because the gap between "category-ru -> direct" and the routing
+   * xray ends up with is exactly where an operator gets stuck, and until now the
+   * only way across it was to save, push, and read the node's config.
+   */
+  app.post('/api/cascades/geo/preview', auth, async (req, reply) => {
+    const input = GeoPreviewSchema.parse(req.body);
+    return reply.send(await svc.previewNodeGeo(input));
   });
 
   app.post('/api/cascades', auth, async (req, reply) => {

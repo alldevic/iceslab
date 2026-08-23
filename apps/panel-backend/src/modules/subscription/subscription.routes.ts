@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ROUTING_PRESET_IDS, type RoutingPresetId } from '@iceslab/shared';
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
-import { buildSingboxJson } from './formats/singbox.js';
+import { buildSingboxJson, type CustomGeoRef } from './formats/singbox.js';
 import { buildWgQuickConf } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
@@ -22,10 +22,63 @@ import {
 import { enforceHwid, resolveSquadHwidLimit } from '../hwid/hwid.service.js';
 import { prisma } from '../../prisma.js';
 import { config, subscriptionOrigin } from '../../config.js';
+import { geoArtifactBaseUrl } from '../geo/geo.url.js';
+import { getCategoryDomains, getGeoBuildMeta } from '../geo/geo.registry.js';
+import { GEO_MIRROR_SITE, GEO_MIRROR_IP } from '../geo/geo.orchestrator.js';
 import { subscriptionRequests } from '../../lib/metrics.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
 import { redis } from '../../lib/redis.js';
 import { isPublicRoutableIp } from '../../lib/ip.js';
+
+/**
+ * Resolve `ext:<file>:<cat>` entries in an operator domain list into the custom
+ * category's inline domains (xray matcher strings). Client subscriptions cannot
+ * fetch a remote .dat, so a custom geo category is inlined here; xray-json uses
+ * the matchers as-is and clash maps the prefixes to its rule types. An ext: ref
+ * with no build / unknown category is dropped (a client cannot use it).
+ */
+function expandGeoRefs(list: string[]): string[] {
+  const out: string[] = [];
+  for (const d of list) {
+    const m = /^ext:[A-Za-z0-9._-]+:(.+)$/.exec(d);
+    if (!m) {
+      out.push(d);
+      continue;
+    }
+    const domains = getCategoryDomains(m[1]!);
+    if (domains) out.push(...domains);
+  }
+  return out;
+}
+
+/**
+ * The `ext:<file>:<cat>` custom-category refs in an operator domain list, as
+ * {cat, bucket} for the sing-box format. sing-box cannot inline domains
+ * (post-1.12), so instead of expandGeoRefs it references each custom category as
+ * a self-hosted remote `.srs`. Plain (non-ext) entries have no sing-box vehicle
+ * and are skipped (same as before this path existed).
+ */
+function geoRefCats(list: string[], bucket: CustomGeoRef['bucket']): CustomGeoRef[] {
+  const out: CustomGeoRef[] = [];
+  for (const d of list) {
+    const m = /^ext:[A-Za-z0-9._-]+:(.+)$/.exec(d);
+    if (m) out.push({ cat: m[1]!, bucket });
+  }
+  return out;
+}
+
+/**
+ * G6 - self-hosted geo for the client formats. Non-null only when the flag is
+ * on AND a build is cached: a rewritten geo URL the panel cannot serve (404)
+ * bricks the client (sing-box refuses to start on a failed remote rule-set), so
+ * the call sites also check per-artifact availability via `names`.
+ */
+function selfHostedGeo(): { base: string; names: Set<string> } | null {
+  if (!config.GEO_SELF_HOST) return null;
+  const meta = getGeoBuildMeta();
+  if (!meta) return null;
+  return { base: geoArtifactBaseUrl(), names: new Set(meta.artifacts.map((a) => a.name)) };
+}
 
 const TokenParamSchema = z.object({
   token: z.string().min(8).max(128),
@@ -474,6 +527,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // R3 - operator-defined custom domain lists (direct/proxy/block), emitted
       // into xray + clash routing rules. Undefined = none = byte-identical.
       let customDomainLists: { direct: string[]; proxy: string[]; block: string[] } | undefined;
+      // sing-box custom-category refs (ext:) captured BEFORE the xray/clash
+      // inline-expansion below overwrites customDomainLists with plain domains.
+      let singboxGeoRefs: CustomGeoRef[] | undefined;
       // TLS-fragment - `?fragment=` query wins, else the panel-wide setting.
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
@@ -493,11 +549,32 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           settings.routingPreset;
         // R3-b custom rules apply only to xray-routing formats (xray/xkeen).
         customRoutingRules = settings.customRoutingRules ?? undefined;
-        // R3 custom domain lists apply to xray/xkeen + clash.
+        // R3 custom domain lists apply to xray/xkeen + clash. Expand any
+        // ext:<file>:<cat> refs into the custom category's inline domains.
         customDomainLists = settings.customDomainLists ?? undefined;
+        if (customDomainLists) {
+          // Capture ext: custom-category refs for sing-box (self-hosted .srs)
+          // BEFORE inlining them into plain domains for xray/clash. Order
+          // block -> direct -> proxy so a category listed in two buckets resolves
+          // the same (block wins, first-match) as the xray/clash formats
+          // (xrayjson/clash emit block, then direct, then proxy) - otherwise
+          // sing-box would silently let a blocked category through direct.
+          singboxGeoRefs = [
+            ...geoRefCats(customDomainLists.block, 'block'),
+            ...geoRefCats(customDomainLists.direct, 'direct'),
+            ...geoRefCats(customDomainLists.proxy, 'proxy'),
+          ];
+          customDomainLists = {
+            direct: expandGeoRefs(customDomainLists.direct),
+            proxy: expandGeoRefs(customDomainLists.proxy),
+            block: expandGeoRefs(customDomainLists.block),
+          };
+        }
         tlsFragment =
           query.fragment !== undefined ? query.fragment === '1' : settings.tlsFragment;
       }
+
+      const geo = selfHostedGeo();
 
       switch (format) {
         case 'json':
@@ -507,7 +584,18 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         case 'clash':
           return reply
             .type('text/yaml; charset=utf-8')
-            .send(buildClashYaml(filtered, { routingPreset, customDomainLists }));
+            .send(
+              buildClashYaml(filtered, {
+                routingPreset,
+                customDomainLists,
+                // Clash points geox-url at BOTH mirror .dat; only rewrite when
+                // the build produced both, else keep the external default.
+                geoBaseUrl:
+                  geo?.names.has(GEO_MIRROR_SITE) && geo.names.has(GEO_MIRROR_IP)
+                    ? geo.base
+                    : undefined,
+              }),
+            );
         case 'singbox': {
           // TLS-fragment is intentionally NOT emitted for sing-box: the
           // upstream field is unstable across 1.12/1.14 (same rationale as the
@@ -521,7 +609,15 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(filtered, { bundle: sbBundle, routingPreset }));
+            .send(
+              buildSingboxJson(filtered, {
+                bundle: sbBundle,
+                routingPreset,
+                geoBaseUrl: geo?.base,
+                geoArtifacts: geo?.names,
+                customGeoRefs: singboxGeoRefs,
+              }),
+            );
         }
         case 'wgconf': {
           // Filename = `<username>-<node>.conf` so a user with several AWG

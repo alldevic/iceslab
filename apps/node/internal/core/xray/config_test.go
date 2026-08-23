@@ -398,6 +398,51 @@ func TestRender_CascadeFragmentsMerged(t *testing.T) {
 	}
 }
 
+func renderedDomainStrategy(t *testing.T, cascade *CascadeFragments) string {
+	t.Helper()
+	blob, err := renderConfigWithCascade(validInbound(), []xrayClient{{ID: "u1", Email: "u1"}}, cascade)
+	if err != nil {
+		t.Fatalf("renderConfigWithCascade: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(blob, &m); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	return m["routing"].(map[string]any)["domainStrategy"].(string)
+}
+
+// E (§3.1): a geo-split entry may override routing.domainStrategy to IPOnDemand
+// so its geoip/ip rules resolve ahead of the catch-all. Default stays
+// IPIfNonMatch; an unknown value is ignored (falls back to the default).
+func TestRender_DomainStrategyOverride(t *testing.T) {
+	if got := renderedDomainStrategy(t, nil); got != "IPIfNonMatch" {
+		t.Errorf("nil cascade: domainStrategy = %q, want IPIfNonMatch", got)
+	}
+	if got := renderedDomainStrategy(t, &CascadeFragments{}); got != "IPIfNonMatch" {
+		t.Errorf("empty cascade: domainStrategy = %q, want IPIfNonMatch", got)
+	}
+	if got := renderedDomainStrategy(t, &CascadeFragments{DomainStrategy: "IPOnDemand"}); got != "IPOnDemand" {
+		t.Errorf("override: domainStrategy = %q, want IPOnDemand", got)
+	}
+	// A malformed/hostile wire value must not be injected verbatim.
+	if got := renderedDomainStrategy(t, &CascadeFragments{DomainStrategy: "evil; drop"}); got != "IPIfNonMatch" {
+		t.Errorf("bad override: domainStrategy = %q, want fallback IPIfNonMatch", got)
+	}
+}
+
+func TestIsKnownDomainStrategy(t *testing.T) {
+	for _, s := range []string{"AsIs", "IPIfNonMatch", "IPOnDemand"} {
+		if !isKnownDomainStrategy(s) {
+			t.Errorf("isKnownDomainStrategy(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "ipondemand", "UseIP", "IPOnDemand ", "evil"} {
+		if isKnownDomainStrategy(s) {
+			t.Errorf("isKnownDomainStrategy(%q) = true, want false", s)
+		}
+	}
+}
+
 // TestRender_CascadeAutoBalancer covers the C3-auto path: a latency-balanced
 // entry ships a top-level `observatory` plus `routing.balancers`, and its user
 // rule targets the balancer via `balancerTag`. All three must land verbatim.

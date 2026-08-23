@@ -1,9 +1,15 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Select, Stack, Switch, Text, UnstyledButton } from '@mantine/core';
-import type { CascadeMode, CascadeProtocol, Node } from '../lib/api';
+import type { CascadeMode, CascadeProtocol, EgressRule, Node } from '../lib/api';
 import { COUNTRIES, countryFlag } from '../lib/countries';
+import {
+  EgressPolicyEditor,
+  SplitBadge,
+  type DirectionChoice,
+  type SplitPreviewContext,
+} from './EgressPolicyEditor';
 
 /**
  * The pieces both cascade pages are built from. Creating and editing a cascade
@@ -419,6 +425,9 @@ export interface PositionDraft {
   nodeIds: string[];
   entryProtocol: CascadeProtocol;
   linkProtocol: CascadeProtocol;
+  /** E - geo split per node id. Absent for a position nobody split, which is
+   *  the ordinary case, so every existing draft construction stays valid. */
+  egressPolicies?: Record<string, EgressRule[]>;
 }
 
 export interface DirectionDraft {
@@ -442,13 +451,55 @@ export function poolRoleAt(index: number): HopRole {
   return index === 0 ? 'entry' : 'transit';
 }
 
+/**
+ * The draft topology around one position, as the split preview needs it.
+ *
+ * `outbounds` is what decides balancer vs plain outbound, and it is NOT a
+ * property of the direction: it is the size of whatever comes next from HERE -
+ * the following position's pool for a transit, the direction's own pool for the
+ * last position. Reading it off the direction alone would show a balancer where
+ * the node dials a single box, and vice versa.
+ *
+ * Directions still without a tag are left out: a rule stores the tag, and an
+ * unsaved direction has none to store.
+ */
+export function splitPreviewContext(
+  pools: { nodeIds: string[] }[],
+  directions: { tag: number | null; nodeIds: string[] }[],
+  index: number,
+): SplitPreviewContext {
+  const filled = (ids: string[]) => ids.filter(Boolean);
+  const isLast = index >= pools.length - 1;
+  const nextPoolSize = isLast ? null : filled(pools[index + 1]!.nodeIds).length;
+  const outbounds: Record<number, number> = {};
+  for (const d of directions) {
+    if (d.tag == null) continue;
+    outbounds[d.tag] = nextPoolSize ?? filled(d.nodeIds).length;
+  }
+  return {
+    position: index,
+    prevNodeIds: index === 0 ? [] : filled(pools[index - 1]!.nodeIds),
+    outbounds,
+  };
+}
+
 export function toPositionInputs(pools: PositionDraft[]) {
-  return pools.map((p, i) => ({
-    nodeIds: p.nodeIds.filter(Boolean),
-    position: i,
-    ...(i === 0 ? { entryProtocol: p.entryProtocol } : {}),
-    linkProtocol: p.linkProtocol,
-  }));
+  return pools.map((p, i) => {
+    const ids = p.nodeIds.filter(Boolean);
+    // Only nodes still in the pool: a policy left behind by a removed node would
+    // be stored against a member that no longer exists, and would come back the
+    // moment that node is added again.
+    const policies = Object.fromEntries(
+      Object.entries(p.egressPolicies ?? {}).filter(([id, rules]) => ids.includes(id) && rules.length > 0),
+    );
+    return {
+      nodeIds: ids,
+      position: i,
+      ...(i === 0 ? { entryProtocol: p.entryProtocol } : {}),
+      linkProtocol: p.linkProtocol,
+      ...(Object.keys(policies).length > 0 ? { egressPolicies: policies } : {}),
+    };
+  });
 }
 
 /**
@@ -483,6 +534,10 @@ export function PoolField({
   meta = 'status',
   addLabel,
   onChange,
+  policies,
+  directions,
+  preview,
+  onPolicyChange,
 }: {
   nodeIds: string[];
   nodes: Node[];
@@ -491,8 +546,18 @@ export function PoolField({
   meta?: 'status' | 'core';
   addLabel: string;
   onChange: (ids: string[]) => void;
+  /** E - per-node geo split. Omit the three together to hide the affordance
+   *  (the directions block has no split of its own). */
+  policies?: Record<string, EgressRule[]>;
+  directions?: DirectionChoice[];
+  /** Where this pool sits in the draft, so the split editor can preview what the
+   *  policy compiles to. Omitted while the shape is not knowable. */
+  preview?: SplitPreviewContext;
+  onPolicyChange?: (nodeId: string, rules: EgressRule[]) => void;
 }) {
   const rows = nodeIds.length ? nodeIds : [''];
+  const [editing, setEditing] = useState<string | null>(null);
+  const splitEnabled = Boolean(policies && onPolicyChange);
   return (
     <Stack gap={8} style={{ width: '100%' }}>
       {rows.map((id, i) => (
@@ -508,6 +573,9 @@ export function PoolField({
               onChange={(v) => onChange(rows.map((r, j) => (j === i ? v : r)))}
             />
           </Box>
+          {splitEnabled && id && (
+            <SplitBadge count={(policies?.[id] ?? []).length} onClick={() => setEditing(id)} />
+          )}
           {rows.length > 1 && (
             <IconButton onClick={() => onChange(rows.filter((_, j) => j !== i))}>
               <TrashIcon size={14} color={RED} />
@@ -515,6 +583,17 @@ export function PoolField({
           )}
         </Box>
       ))}
+      {splitEnabled && editing && (
+        <EgressPolicyEditor
+          opened
+          nodeLabel={nodes.find((n) => n.id === editing)?.name ?? editing}
+          policy={policies?.[editing] ?? []}
+          directions={directions ?? []}
+          preview={preview}
+          onClose={() => setEditing(null)}
+          onSave={(next) => onPolicyChange?.(editing, next)}
+        />
+      )}
       <DashedAdd label={addLabel} onClick={() => onChange([...rows, ''])} />
     </Stack>
   );
@@ -530,6 +609,10 @@ export function PositionRow({
   usedElsewhere,
   addNodeLabel,
   onNodes,
+  egressPolicies,
+  directions,
+  splitPreview,
+  onPolicyChange,
   entryProtocol,
   onEntryProtocol,
   linkProtocol,
@@ -551,6 +634,12 @@ export function PositionRow({
   usedElsewhere: string[];
   addNodeLabel: string;
   onNodes: (ids: string[]) => void;
+  /** E - per-node geo split, forwarded to the pool. */
+  egressPolicies?: Record<string, EgressRule[]>;
+  directions?: DirectionChoice[];
+  /** Draft topology around this position, for the split editor's preview. */
+  splitPreview?: SplitPreviewContext;
+  onPolicyChange?: (nodeId: string, rules: EgressRule[]) => void;
   entryProtocol: CascadeProtocol | null;
   onEntryProtocol: (v: CascadeProtocol) => void;
   linkProtocol: CascadeProtocol;
@@ -591,6 +680,10 @@ export function PositionRow({
           meta={role === 'entry' ? 'core' : 'status'}
           addLabel={addNodeLabel}
           onChange={onNodes}
+          policies={egressPolicies}
+          directions={directions}
+          preview={splitPreview}
+          onPolicyChange={onPolicyChange}
         />
         {children}
       </Stack>

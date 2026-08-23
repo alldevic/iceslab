@@ -28,6 +28,7 @@ import {
   IconSearch,
   IconServer2,
   IconTrash,
+  IconWorld,
   IconX,
 } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
@@ -53,6 +54,7 @@ import { NodePayloadModal } from '../components/NodePayloadModal';
 import { NodeCard } from '../components/NodeCard';
 import { CascadesPanel } from '../components/CascadesPanel';
 import type { CascadeLayout } from '../components/CascadesView';
+import { GeoPanel } from '../components/GeoPanel';
 import { countryFlag } from '../lib/countries';
 import { parseNodeAgentPort, pickFreeQuickDeployPort } from '../lib/ports';
 
@@ -141,7 +143,7 @@ function Segmented({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string; icon: 'server' | 'chain' }[];
+  options: { value: string; label: string; icon: 'server' | 'chain' | 'globe' }[];
 }) {
   return (
     <Box
@@ -180,6 +182,17 @@ function Segmented({
               <svg width="13" height="13" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
                 <rect x="3" y="4" width="18" height="7" rx="2" fill="none" stroke={stroke} strokeWidth="1.8" />
                 <rect x="3" y="13" width="18" height="7" rx="2" fill="none" stroke={stroke} strokeWidth="1.8" />
+              </svg>
+            ) : o.icon === 'globe' ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="9" fill="none" stroke={stroke} strokeWidth="1.8" />
+                <path d="M3 12h18" fill="none" stroke={stroke} strokeWidth="1.8" />
+                <path
+                  d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0 -18z"
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth="1.8"
+                />
               </svg>
             ) : (
               <svg width="15" height="15" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
@@ -415,7 +428,7 @@ const CASCADE_LAYOUT_KEY = 'iceslab:cascades-layout';
 // Nodes page top-level view: the flat node inventory, or the cascades (chains of
 // those same nodes). A node can be standalone AND a cascade hop, so cascades are
 // a SECOND view of one inventory, not a second list.
-type NodesView = 'nodes' | 'cascades';
+type NodesView = 'nodes' | 'cascades' | 'geo';
 const VIEW_KEY = 'iceslab:nodes-view';
 // In the "nodes" view, slice the inventory by cascade membership.
 type MembershipFilter = 'all' | 'standalone' | 'cascade';
@@ -504,11 +517,15 @@ export function NodesPage() {
     const m = new Map<string, { name: string; role: string }>();
     for (const c of cascadesQuery.data?.cascades ?? []) {
       const last = c.hops.length - 1;
+      // Balancer mode: hop 0 is the entry, every hop >= 1 is a parallel EXIT
+      // (no transit). Chain mode: only the last hop is the exit. Match
+      // CascadesPanel's role logic so both views agree.
+      const isBalancer = c.mode === 'balancer';
       c.hops.forEach((h, i) => {
         const role =
           i === 0
             ? t('cascades.entry')
-            : i === last
+            : isBalancer || i === last
               ? t('cascades.exit')
               : t('cascades.transit');
         m.set(h.nodeId, { name: c.name, role });
@@ -516,6 +533,21 @@ export function NodesPage() {
     }
     return m;
   }, [cascadesQuery.data, t]);
+
+  // nodeId -> how many geo-split rules that node carries. Read off the same
+  // cascades query: the policy is stored per NODE inside a position's pool, so a
+  // node's split is its own and does not follow from which cascade it is in.
+  const nodeSplitMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of cascadesQuery.data?.cascades ?? []) {
+      for (const p of c.positions) {
+        for (const [nodeId, rules] of Object.entries(p.egressPolicies ?? {})) {
+          if (rules.length > 0) m.set(nodeId, (m.get(nodeId) ?? 0) + rules.length);
+        }
+      }
+    }
+    return m;
+  }, [cascadesQuery.data]);
 
   // What the cascades carried today: the entry node's traffic, because that is
   // where a client's bytes enter and everything downstream is the same bytes
@@ -735,7 +767,7 @@ export function NodesPage() {
               color: SNOW,
             }}
           >
-            {view === 'cascades' ? t('cascades.title') : t('nodes.title')}
+            {view === 'cascades' ? t('cascades.title') : view === 'geo' ? 'Geo' : t('nodes.title')}
           </Text>
         </Box>
 
@@ -848,6 +880,7 @@ export function NodesPage() {
             options={[
               { value: 'nodes', label: t('nodes.viewNodes'), icon: 'server' },
               { value: 'cascades', label: t('nodes.viewCascades'), icon: 'chain' },
+              { value: 'geo', label: 'Geo', icon: 'globe' },
             ]}
           />
 
@@ -952,6 +985,8 @@ export function NodesPage() {
 
       {view === 'cascades' && <CascadesPanel layout={cascadeLayout} />}
 
+      {view === 'geo' && <GeoPanel />}
+
       {view === 'nodes' && (
         <>
 
@@ -988,6 +1023,7 @@ export function NodesPage() {
                   address: n.address,
                   regionLabel,
                   cascadeLabel: cascade ? `${cascade.name} · ${cascade.role}` : null,
+                  splitRules: nodeSplitMap.get(n.id) ?? null,
                   coreVersion: n.coreVersion ?? null,
                   // Restart tally + memory headroom of the core. Lives on
                   // /api/nodes, not on the overview blob, so it refreshes on
@@ -1035,6 +1071,7 @@ export function NodesPage() {
                 const accent = STATUS_ACCENT[n.status] ?? MIST;
                 const isOffline = n.status === 'offline' || n.status === 'unreachable';
                 const cascade = nodeCascadeMap.get(n.id);
+                const splitRules = nodeSplitMap.get(n.id) ?? 0;
                 return (
                   <Table.Tr
                     key={n.id}
@@ -1060,6 +1097,13 @@ export function NodesPage() {
                           <Tooltip label={`${cascade.name} · ${cascade.role}`} withArrow>
                             <span style={{ display: 'inline-flex', color: '#A78BFA', flexShrink: 0 }}>
                               <IconRoute size={13} />
+                            </span>
+                          </Tooltip>
+                        )}
+                        {splitRules > 0 && (
+                          <Tooltip label={t('nodes.splitBadgeHint', { count: splitRules })} withArrow>
+                            <span style={{ display: 'inline-flex', color: CYAN, flexShrink: 0 }}>
+                              <IconWorld size={13} />
                             </span>
                           </Tooltip>
                         )}

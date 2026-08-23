@@ -761,6 +761,12 @@ export default {
     metricsLoading: 'Metrics not yet collected - first poll within 15s.',
     bindingsCount: '{{count}} bindings',
     todayLabel: 'today',
+    // E - the node carries a geo split of its own. Counts RULES, because that
+    // is the unit the operator authored; the cascade card counts split nodes.
+    splitBadge_one: 'geo {{count}}',
+    splitBadge_other: 'geo {{count}}',
+    splitBadgeHint_one: 'Geo split: {{count}} rule decides where this node sends matched traffic.',
+    splitBadgeHint_other: 'Geo split: {{count}} rules decide where this node sends matched traffic.',
     table: {
       name: 'Name',
       address: 'Address',
@@ -1481,6 +1487,115 @@ export default {
     minAgo: '{{n}} min ago',
     hourAgo: '{{n}} h ago',
     dayAgo: '{{n}} d ago',
+    // Geo split, authored per NODE (a position is a pool, so the split belongs to
+    // the box that egresses, not to the whole cascade).
+    split: 'Geo split (per node)',
+    splitAddRule: 'Add rule',
+    splitHint:
+      'Matched traffic egresses direct / is blocked / follows the way out the client chose / is forced through one direction — ahead of the default routing. Empty = no split. Bundled categories (e.g. category-ru, youtube) work as-is; custom ones ride an ext: file from the geo registry.',
+    splitGeosite: 'Domain categories (geosite)',
+    splitGeositeHint:
+      'Bundled names work as-is (category-ru, youtube). A custom one is ext:geo-custom.dat:NAME from the Geo registry.',
+    splitGeoip: 'IP categories (geoip)',
+    splitDomain: 'Literal domains',
+    splitTarget: 'target',
+    targetDirect: 'direct',
+    targetLinkOut: 'as chosen (out of the cascade)',
+    targetDirection: 'force direction',
+    targetBlock: 'block',
+    splitIp: 'Literal IPs / CIDRs',
+    splitIpHint: 'An IP match needs the node to resolve names first, so a rule using these is slower to take effect than a domain one.',
+    splitDirectionTag: 'direction',
+    splitRuleEmpty: 'Matches nothing yet — this rule is dropped on save.',
+    splitRawRule: 'Advanced rule (edit via API): {{summary}}',
+    // Order is the policy's meaning, not a display preference: xray stops at
+    // the first rule that matches, so a broad rule above a narrow one hides it.
+    splitOrderHint:
+      'Order matters: the node applies the FIRST rule that matches and stops. Put the narrow rules above the broad ones.',
+    splitMoveUp: 'Move rule up',
+    splitMoveDown: 'Move rule down',
+    // The chip counts NODES, because the split belongs to a node; the rule
+    // total rides in the tooltip so "geo 1" is not read as "one rule".
+    splitChipTitle_one: 'Geo split on {{count}} node ({{rules}} rules)',
+    splitChipTitle_other: 'Geo split on {{count}} nodes ({{rules}} rules)',
+    // The compiled-rule preview. Runs the panel's real compiler server-side, so
+    // what it shows is what the node gets — the point is to close the gap
+    // between "category-ru → direct" and the routing xray ends up with.
+    splitPreview: 'Compiled rules',
+    splitPreviewHint:
+      'What this policy becomes on the node, in match order. Computed by the same compiler the push uses.',
+    splitPreviewEmpty: 'Nothing to compile yet — add a rule.',
+    splitPreviewNoRules:
+      'This policy compiles to no rules at all: nothing here can be matched, or steered anywhere that exists.',
+    splitPreviewIncomplete_one: '{{count}} unfinished rule is not shown (pick a direction or add a matcher).',
+    splitPreviewIncomplete_other: '{{count}} unfinished rules are not shown (pick a direction or add a matcher).',
+    splitPreviewDropped:
+      'The node will never see these matchers — the custom category is not built, or is empty in the current build: {{matchers}}',
+    splitPreviewStrategy:
+      'The entry switches routing.domainStrategy to {{strategy}} so IP rules can match at all.',
+    removeRule: 'Remove rule',
+    linkHint:
+      'Link protocol shadowsocks = SS2022 (native UDP, no head-of-line blocking for voice; AEAD-encrypted). vless = plaintext raw link. The inter-hop link is trusted DC-to-DC, so it needs no DPI evasion.',
+  },
+
+  geo: {
+    sources: 'Geo sources',
+    addSource: 'Add source',
+    defaultBadge: 'default',
+    categories: 'Custom categories',
+    addCategory: 'Add category',
+    categoriesEmpty:
+      'None. A custom category merges chosen categories from sources plus hand-added domains/IPs into one ext: dataset.',
+    refsSummary: '{{refs}} source refs · {{domains}} domains · {{ips}} IPs',
+    // Says where a category is depended on before the operator reaches for
+    // delete. Enabled cascades only, matching the guard that refuses it.
+    usedBy: 'Routed by: {{cascades}}',
+    usedByNobody: 'No cascade routes by it — safe to delete.',
+    build: 'Build',
+    rebuild: 'Rebuild',
+    notBuilt: 'Not built yet. Rebuild fetches every enabled source and compiles the artifacts.',
+    builtAt: 'Built {{when}}',
+    catStat: '{{name}}: {{domains}} domains, {{cidrs}} IPs',
+    missing: 'missing {{list}}',
+    sourceErrors: '{{count}} source error(s): {{first}}',
+    rebuilt: 'Geo artifacts rebuilt',
+    editSource: 'Edit source',
+    newSource: 'Add source',
+    name: 'Name',
+    nameHint: 'Letters, digits, . _ - only (used as an ext: routing tag).',
+    nameInvalid: 'Only letters, digits, . _ and - are allowed.',
+    geositeUrl: 'geosite.dat URL',
+    geoipUrl: 'geoip.dat URL',
+    refreshInterval: 'Refresh interval (hours)',
+    refreshIntervalHint: 'How often the scheduled refresh re-checks this source (conditional GET/ETag, so cheap). Default 24.',
+    moveUp: 'Higher priority',
+    moveDown: 'Lower priority',
+    mirrorGeosite: 'mirror: geosite',
+    mirrorGeoip: 'mirror: geoip',
+    mirrorHint:
+      'Clients fetch the FULL database from this source (first enabled, by list order). Reorder to change. Custom categories still merge every referenced source.',
+    everyHours: 'every {{n}}h',
+    browseCategories: 'Browse categories',
+    categoriesOf: 'Categories in {{name}}',
+    tabGeosite: 'geosite ({{n}})',
+    tabGeoip: 'geoip ({{n}})',
+    filterCategories: 'Filter categories…',
+    noCategories: 'No categories match.',
+    previewHint: 'Click a category to preview its entries.',
+    previewCount: 'showing {{shown}} of {{total}}',
+    sourceUrlHint: 'At least one URL. https only; loopback / private hosts are rejected.',
+    editCategory: 'Edit category',
+    newCategory: 'Add category',
+    domainRefs: 'geosite refs (domain categories)',
+    ipRefs: 'geoip refs (IP categories)',
+    manualDomains: 'manual domains',
+    manualIps: 'manual IPs / CIDRs',
+    excludeDomains: 'exclude domains',
+    addRef: 'Add ref',
+    refSource: 'source',
+    refCategory: 'category (e.g. youtube)',
+    rebuildHint: 'Rebuild after editing to regenerate the artifacts',
+    removeRef: 'Remove ref',
   },
   squads: {
     title: 'Internal squads',

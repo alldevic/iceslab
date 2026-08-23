@@ -402,4 +402,92 @@ describe('buildSingboxJson', () => {
       );
     });
   });
+
+  // ───── G6b - operator custom categories (§3.5) ─────
+
+  describe('customGeoRefs (self-hosted custom .srs)', () => {
+    const base = 'https://panel.example.com/geo/tok';
+    // The panel serves composed categories UPPERCASED (composeCategory), so the
+    // built artifacts are custom-<UPPER>.srs; a lowercase-authored ref must still
+    // resolve to them.
+    const avail = new Set(['custom-RUNET.srs', 'custom-ADS.srs']);
+
+    it('is a no-op without a geoBaseUrl (byte-identical to default)', () => {
+      expect(
+        buildSingboxJson([xrayEp], { customGeoRefs: [{ cat: 'runet', bucket: 'direct' }] }),
+      ).toBe(buildSingboxJson([xrayEp]));
+    });
+
+    it('is a no-op with empty refs (byte-identical to default)', () => {
+      expect(
+        buildSingboxJson([xrayEp], { geoBaseUrl: base, geoArtifacts: avail, customGeoRefs: [] }),
+      ).toBe(buildSingboxJson([xrayEp]));
+    });
+
+    it('resolves a lowercase-authored ref to the UPPERCASE artifact + bucket action', () => {
+      const cfg = parse(
+        buildSingboxJson([xrayEp], {
+          geoBaseUrl: base,
+          geoArtifacts: avail,
+          customGeoRefs: [
+            { cat: 'runet', bucket: 'direct' },
+            { cat: 'ads', bucket: 'block' },
+          ],
+        }),
+      );
+      expect(cfg.route.rule_set).toEqual([
+        { type: 'remote', tag: 'custom-RUNET', format: 'binary', url: `${base}/custom-RUNET.srs` },
+        { type: 'remote', tag: 'custom-ADS', format: 'binary', url: `${base}/custom-ADS.srs` },
+      ]);
+      expect(cfg.route.rules).toEqual([
+        { rule_set: ['custom-RUNET'], action: 'route', outbound: 'direct' },
+        { rule_set: ['custom-ADS'], action: 'reject' },
+      ]);
+      expect(cfg.route.final).toBe('Auto');
+    });
+
+    it('maps a proxy bucket to the primary selector tag', () => {
+      const cfg = parse(
+        buildSingboxJson([xrayEp], {
+          geoBaseUrl: base,
+          geoArtifacts: avail,
+          customGeoRefs: [{ cat: 'runet', bucket: 'proxy' }],
+        }),
+      );
+      expect(cfg.route.rules[0]).toEqual({
+        rule_set: ['custom-RUNET'],
+        action: 'route',
+        outbound: 'Auto',
+      });
+    });
+
+    it('skips a ref whose .srs the build did not produce (avoids a 404 that bricks startup)', () => {
+      const cfg = parse(
+        buildSingboxJson([xrayEp], {
+          geoBaseUrl: base,
+          geoArtifacts: avail,
+          customGeoRefs: [
+            { cat: 'runet', bucket: 'direct' },
+            { cat: 'missing', bucket: 'block' },
+          ],
+        }),
+      );
+      expect(cfg.route.rule_set.map((s: any) => s.tag)).toEqual(['custom-RUNET']);
+      expect(cfg.route.rules).toHaveLength(1);
+    });
+
+    it('places custom rules ahead of a split preset (first-match precedence)', () => {
+      const cfg = parse(
+        buildSingboxJson([xrayEp], {
+          routingPreset: 'ru-split',
+          geoBaseUrl: base,
+          geoArtifacts: new Set([...avail, 'geosite-category-ru.srs']),
+          customGeoRefs: [{ cat: 'runet', bucket: 'block' }],
+        }),
+      );
+      expect(cfg.route.rules[0]).toEqual({ rule_set: ['custom-RUNET'], action: 'reject' });
+      // the split preset rules still follow
+      expect(cfg.route.rules.length).toBeGreaterThan(1);
+    });
+  });
 });

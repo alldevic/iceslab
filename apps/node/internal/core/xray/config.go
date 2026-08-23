@@ -334,6 +334,81 @@ type CascadeFragments struct {
 	// exposes; its user routing rule targets one via `balancerTag` (instead of a
 	// fixed `outboundTag`), so xray picks the lowest-ping exit per connection.
 	Balancers []json.RawMessage `json:"balancers,omitempty"`
+	// GeoAssets are panel-managed geo databases (the source mirror + composed
+	// ext: custom .dat) this node must fetch+install so its geosite:/ext: routing
+	// rules resolve. Empty = nothing to fetch (node uses the bundled databases).
+	GeoAssets []GeoAssetSpec `json:"geoAssets,omitempty"`
+	// DomainStrategy overrides the config's global routing.domainStrategy for a
+	// geo-split entry that needs on-demand IP resolution ("IPOnDemand") so its
+	// geoip/ip rules fire ahead of the always-true catch-all. Empty = keep the
+	// default (byte-identical to a plain cascade). Validated against a fixed
+	// allowlist before use so a bad wire value can't inject an arbitrary strategy.
+	DomainStrategy string `json:"domainStrategy,omitempty"`
+}
+
+// domainStrategyResolution ranks the strategies by how far xray will go to
+// learn a connection's IP: AsIs never resolves, IPIfNonMatch resolves only when
+// nothing matched, IPOnDemand resolves as soon as a rule needs an IP. The
+// ranking is what lets two independent overrides combine instead of clobbering
+// each other (see strongerDomainStrategy).
+var domainStrategyResolution = map[string]int{
+	"AsIs":         0,
+	"IPIfNonMatch": 1,
+	"IPOnDemand":   2,
+}
+
+// defaultDomainStrategy is what a config renders with when nothing asks for
+// more. Kept as the floor of strongerDomainStrategy so an unset or unknown
+// override cannot render a config that resolves LESS than before.
+const defaultDomainStrategy = "IPIfNonMatch"
+
+// strongerDomainStrategy picks the most-resolving of the requested strategies,
+// defaulting when none is set.
+//
+// Most-resolving wins because every request here exists to make ip/geoip rules
+// fire at all: honouring the weaker one would leave the other feature's rules
+// silently dead, which is the failure both overrides were added to prevent.
+// Resolving more than asked costs a DNS lookup on a flow that would otherwise
+// have skipped it, which is the cheaper mistake.
+func strongerDomainStrategy(requested ...string) string {
+	best := defaultDomainStrategy
+	for _, s := range requested {
+		if domainStrategyResolution[s] > domainStrategyResolution[best] {
+			best = s
+		}
+	}
+	return best
+}
+
+// cascadeDomainStrategy is the geo split's override on a cascade entry, or "".
+func cascadeDomainStrategy(cascade *CascadeFragments) string {
+	if cascade == nil || !isKnownDomainStrategy(cascade.DomainStrategy) {
+		return ""
+	}
+	return cascade.DomainStrategy
+}
+
+// routingDomainStrategy is the egress policy's override, or "". Allowlisted for
+// the same reason the cascade one is: a malformed wire value must fall back to
+// the default rather than reach xray, which refuses to start on an unknown
+// strategy and would take the node down.
+func routingDomainStrategy(rf *RoutingFragments) string {
+	if rf == nil || !isKnownDomainStrategy(rf.DomainStrategy) {
+		return ""
+	}
+	return rf.DomainStrategy
+}
+
+// isKnownDomainStrategy allowlists the xray routing.domainStrategy values the
+// panel may override an entry with, so a malformed/hostile wire value cannot
+// inject an arbitrary strategy string (it falls back to the default instead).
+func isKnownDomainStrategy(s string) bool {
+	switch s {
+	case "AsIs", "IPIfNonMatch", "IPOnDemand":
+		return true
+	default:
+		return false
+	}
 }
 
 // RoutingFragments (B1) is a node's compiled egress policy: structured rules
@@ -643,12 +718,13 @@ func renderMultiConfig(
 	// targets one via balancerTag) plus a top-level `observatory` probing the
 	// link-out outbounds. Both are raw JSON the panel owns; nil/empty = no
 	// balancer, so the output stays byte-identical to a plain / non-cascade node.
-	domainStrategy := "IPIfNonMatch"
-	// B1: a policy with an ip/geoip matcher needs IPOnDemand to fire at all on a
-	// node whose later rules include a catch-all. See RoutingFragments.
-	if cfg.RoutingFragments != nil && cfg.RoutingFragments.DomainStrategy != "" {
-		domainStrategy = cfg.RoutingFragments.DomainStrategy
-	}
+	// Resolution strategy. Two independent features ask to raise it, for the
+	// same reason: a rule that matches on IP cannot fire under IPIfNonMatch once
+	// a later rule matches everything, and both a cascade entry's geo split and
+	// a node's egress policy can carry such rules. There is one
+	// routing.domainStrategy for the whole config, so the two requests have to
+	// resolve to one value rather than one silently overwriting the other.
+	domainStrategy := strongerDomainStrategy(cascadeDomainStrategy(cascade), routingDomainStrategy(cfg.RoutingFragments))
 	routing := map[string]any{
 		"domainStrategy": domainStrategy,
 		"rules":          rules,
