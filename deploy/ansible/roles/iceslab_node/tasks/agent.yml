@@ -1,16 +1,31 @@
 ---
-# Node-agent install via the existing bootstrap-token installer. GUARDED by
-# main.yml on panel_url + bootstrap_token, so it only runs when a panel is
-# reachable. The installer builds the agent, drops a systemd unit, writes
-# /etc/iceslab-node/env (NODE_PAYLOAD) and starts the service.
+# Node-agent install via the bootstrap-token installer. GUARDED by main.yml on
+# panel_url + bootstrap_token, so it only runs when a panel is reachable. The
+# installer builds the agent, drops a systemd unit, writes /etc/iceslab-node/env
+# (NODE_PAYLOAD) and starts the service. The bootstrap token is single-use with
+# a 15-min TTL.
 #
-# NOTE: not yet exercised end-to-end (no panel reachable from the test node);
-# this wraps the validated scripts/install-iceslab-node.sh so the role is
-# structurally complete. The bootstrap token is single-use / 15-min TTL.
+# The script is SHIPPED from this repository, not fetched. It used to be
+# `bash <(curl -fsSL {{ iceslab_panel_url }}/install-iceslab-node.sh)`, and the
+# panel serves no such route - it answers 404, and the panel's own bootstrap
+# command points at raw.githubusercontent.com instead. Worse than a broken URL:
+# `curl -fsSL` fails silently, `bash <(...)` on the empty substitution exits 0,
+# and the task would have reported success having installed nothing. Which is
+# also why this file could carry "not yet exercised end-to-end" for so long -
+# it could not be.
+#
+# Copying it also means the role deploys the installer it was written against,
+# rather than whatever is at the tip of a branch somewhere.
+- name: Ship the node installer to the node
+  ansible.builtin.copy:
+    src: "{{ iceslab_installer_src }}"
+    dest: /usr/local/sbin/install-iceslab-node.sh
+    mode: "0755"
+
 - name: Run the iceslab-node installer (bootstrap flow)
-  ansible.builtin.shell:
+  ansible.builtin.command:
     cmd: >-
-      bash <(curl -fsSL {{ iceslab_panel_url }}/install-iceslab-node.sh)
+      /usr/local/sbin/install-iceslab-node.sh
       --panel-url {{ iceslab_panel_url | quote }}
       --bootstrap {{ iceslab_bootstrap_token | quote }}
       --protocol {{ iceslab_node_protocol | quote }}
@@ -18,7 +33,6 @@
       {% if iceslab_harden_ufw | bool %}--harden-ufw{% endif %}
       {% if iceslab_fail2ban | bool %}--fail2ban{% endif %}
       {% if iceslab_ssh_allowlist | length > 0 %}--ssh-allowlist {{ iceslab_ssh_allowlist | join(',') | quote }}{% endif %}
-    executable: /bin/bash
     creates: /etc/iceslab-node/env
 
 # Confirm the agent is actually serving before the play calls itself done.

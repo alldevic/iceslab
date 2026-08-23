@@ -66,6 +66,10 @@ iceslab_node_agent_port: 1337
 
 # Node-agent (bootstrap-token flow). Requires a reachable panel — the agent
 # task is GUARDED on these two being set, so it's skipped on a base run.
+# Where the installer script comes from. Default: the copy that ships in this
+# repository, next to the role - so the role and the script it runs are always
+# the same version. Override to point at a script staged elsewhere.
+iceslab_installer_src: "{{ role_path }}/../../../../scripts/install-iceslab-node.sh"
 iceslab_panel_url: ""
 iceslab_bootstrap_token: ""
 iceslab_node_protocol: xray
