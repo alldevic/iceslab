@@ -7,7 +7,7 @@ import {
   UpdateNodeSchema,
   ListNodesQuerySchema,
   NodeIdParamSchema,
-  type HardeningInput,
+  type HardeningFlags,
 } from './nodes.schemas.js';
 import * as nodesService from './nodes.service.js';
 import { appendHardeningFlags, appendSingboxFlag } from './nodes.service.js';
@@ -42,7 +42,7 @@ async function renderRefreshBootstrapCommand(
   token: string,
   protocol: string,
   nodeAddress: string,
-  hardening?: HardeningInput | null,
+  hardening?: HardeningFlags | null,
   singboxEngine?: boolean,
 ): Promise<string> {
   const panelIp = await getPanelPublicIp();

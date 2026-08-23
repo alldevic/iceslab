@@ -73,6 +73,18 @@ export const HardeningSchema = z
   .nullish();
 export type HardeningInput = z.infer<typeof HardeningSchema>;
 
+/**
+ * The install-time half of the blob: the flags the bootstrap command turns into
+ * install-script switches. The rest of hardening (F2 pool labels, the B1 egress
+ * policy, the B2a zapret2 channel) is live-pushed config the installer never
+ * sees, so the command renderers take only this and accept a public DTO, whose
+ * subsystem keys are deliberately untyped.
+ */
+export type HardeningFlags = Pick<
+  NonNullable<HardeningInput>,
+  'ufwLockdown' | 'fail2ban' | 'realisticFallback' | 'sshAllowlist'
+>;
+
 // Slice 27: keep parity with the inbound/profile protocol enum in
 // inbounds.schemas.ts. Node.protocol is a label for "which adapter is the
 // primary / installed on this VPS"; the actual deployment is per-binding.

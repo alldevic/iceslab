@@ -101,15 +101,30 @@ interface FormValues {
  * G - collapse the flat hardening form fields into the NodeHardening blob the
  * backend persists. Returns null when nothing is enabled so the common node
  * keeps hardening = NULL and the install command stays byte-identical.
+ *
+ * On an edit, `existing` is the blob the node already has and the wizard keys
+ * are rebuilt on top of it. Other subsystems keep per-node config in this same
+ * blob (F2 pool labels, the B1 egress policy, the B2a zapret2 channel) and an
+ * update REPLACES hardening, so building it from the four toggles alone
+ * silently deleted all of it the moment an admin saved this form.
  */
-function buildHardening(v: {
-  hardenUfw: boolean;
-  hardenFail2ban: boolean;
-  hardenRealisticFallback: boolean;
-  hardenSshAllowlist: string[];
-}): NodeHardening | null {
+function buildHardening(
+  v: {
+    hardenUfw: boolean;
+    hardenFail2ban: boolean;
+    hardenRealisticFallback: boolean;
+    hardenSshAllowlist: string[];
+  },
+  existing?: NodeHardening | null,
+): NodeHardening | null {
   const allow = v.hardenSshAllowlist.map((s) => s.trim()).filter(Boolean);
-  const h: NodeHardening = {};
+  const h: NodeHardening = { ...(existing ?? {}) };
+  // Each wizard toggle is set or cleared explicitly: turning one off has to
+  // remove the key, not leave the old value standing.
+  delete h.ufwLockdown;
+  delete h.fail2ban;
+  delete h.realisticFallback;
+  delete h.sshAllowlist;
   if (v.hardenUfw) h.ufwLockdown = true;
   if (v.hardenFail2ban) h.fail2ban = true;
   if (v.hardenRealisticFallback) h.realisticFallback = true;
@@ -257,7 +272,7 @@ export function NodeFormModal({ opened, onClose, node, onSubmit, loading }: Prop
       consumptionMultiplier:
         values.consumptionMultiplier === '' ? 1 : Number(values.consumptionMultiplier),
       domain: values.domain.trim() || null,
-      hardening: buildHardening(values),
+      hardening: buildHardening(values, node?.hardening),
       // Engine-choice: only send true for protocols that can run on sing-box.
       singboxEngine:
         SINGBOX_ENGINE_CAPABLE.includes(values.protocol) && values.singboxEngine,

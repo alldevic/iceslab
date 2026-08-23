@@ -9,6 +9,17 @@ export interface HardeningDto {
   fail2ban?: boolean;
   realisticFallback?: boolean;
   sshAllowlist?: string[];
+  // The keys below are not wizard toggles, but they live in the same blob and
+  // an update REPLACES it, so they have to be visible for the editor to send
+  // them back untouched. Left as unknown on purpose: this DTO exists so the
+  // form can round-trip them, not so it can interpret them (each has its own
+  // schema in nodes.schemas.ts).
+  /** F2: cold-pool / hotswap labels (asn, provider, burned). */
+  pool?: unknown;
+  /** B1: which flows leave this node by which way out. */
+  egressPolicy?: unknown;
+  /** B2a: the zapret2 desync channel config. */
+  zapret2?: unknown;
 }
 
 // Shape of the nodes.coreRestarts jsonb blob. Defined once in @iceslab/shared

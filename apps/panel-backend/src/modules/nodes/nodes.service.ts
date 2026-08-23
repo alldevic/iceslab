@@ -20,7 +20,7 @@ import type {
   CreateNodeInput,
   UpdateNodeInput,
   ListNodesQuery,
-  HardeningInput,
+  HardeningFlags,
 } from './nodes.schemas.js';
 
 // ───── Domain errors ─────
@@ -150,7 +150,7 @@ export async function createNode(
  */
 export function appendHardeningFlags(
   lines: string[],
-  hardening?: HardeningInput | null,
+  hardening?: HardeningFlags | null,
 ): void {
   if (!hardening) return;
   const flags: string[] = [];
@@ -196,7 +196,7 @@ async function renderBootstrapCommand(
   token: string,
   protocol: string,
   nodeAddress?: string,
-  hardening?: HardeningInput | null,
+  hardening?: HardeningFlags | null,
   singboxEngine?: boolean,
 ): Promise<string> {
   // Slice S7: auto-detect or accept env-override of the panel's egress

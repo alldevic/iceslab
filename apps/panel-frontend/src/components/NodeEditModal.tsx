@@ -117,10 +117,23 @@ interface FormValues {
  * G - collapse the flat hardening fields into the NodeHardening blob the
  * backend persists. Returns null when nothing is enabled so the node keeps
  * hardening = NULL (install command unchanged).
+ *
+ * `existing` is the blob as the node currently has it, and the wizard keys are
+ * rebuilt on top of it rather than replacing it. Other subsystems keep per-node
+ * config in this same blob (F2 pool labels, the B1 egress policy, the B2a
+ * zapret2 channel) and a node update REPLACES hardening, so building it from
+ * the four toggles alone silently deleted everything else the moment an admin
+ * opened this form and saved.
  */
-function buildHardening(v: FormValues): NodeHardening | null {
+function buildHardening(v: FormValues, existing?: NodeHardening | null): NodeHardening | null {
   const allow = v.hardenSshAllowlist.map((s) => s.trim()).filter(Boolean);
-  const h: NodeHardening = {};
+  const h: NodeHardening = { ...(existing ?? {}) };
+  // Each wizard toggle is set or cleared explicitly: an admin turning one off
+  // has to remove the key, not leave the old value standing.
+  delete h.ufwLockdown;
+  delete h.fail2ban;
+  delete h.realisticFallback;
+  delete h.sshAllowlist;
   if (v.hardenUfw) h.ufwLockdown = true;
   if (v.hardenFail2ban) h.fail2ban = true;
   if (v.hardenRealisticFallback) h.realisticFallback = true;
@@ -411,7 +424,7 @@ export function NodeEditModal({
       maxUsers:
         form.values.maxUsers === '' ? null : Number(form.values.maxUsers),
       domain: form.values.domain.trim() || null,
-      hardening: buildHardening(form.values),
+      hardening: buildHardening(form.values, node?.hardening),
     });
   }
 

@@ -421,6 +421,14 @@ export interface NodeHardening {
   fail2ban?: boolean;
   realisticFallback?: boolean;
   sshAllowlist?: string[];
+  // Not wizard toggles: other subsystems keep their per-node config in the same
+  // blob (F2 pool labels, the B1 egress policy, the B2a zapret2 channel). A
+  // node update REPLACES hardening, so the form must send these back as it
+  // received them, which is what buildHardening does. Unknown because this form
+  // does not interpret them.
+  pool?: unknown;
+  egressPolicy?: unknown;
+  zapret2?: unknown;
 }
 
 /**
