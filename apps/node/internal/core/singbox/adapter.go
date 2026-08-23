@@ -533,6 +533,9 @@ func (w hy2FamilyWire) toInboundConfig(port int) InboundConfig {
 type ssFamilyWire struct {
 	Method    string `json:"method"`
 	ServerPSK string `json:"serverPsk"`
+	// U4: carried only to be rejected, see the abusePolicy guard on
+	// xrayFamilyWire.toInboundConfig.
+	AbusePolicy json.RawMessage `json:"abusePolicy"`
 }
 
 func (w ssFamilyWire) toInboundConfig(port int) (InboundConfig, error) {
@@ -541,6 +544,9 @@ func (w ssFamilyWire) toInboundConfig(port int) (InboundConfig, error) {
 	}
 	if w.ServerPSK == "" {
 		return InboundConfig{}, fmt.Errorf("shadowsocks serverPsk is required")
+	}
+	if present(w.AbusePolicy) {
+		return InboundConfig{}, fmt.Errorf("abusePolicy not supported via sing-box engine (it renders no anti-abuse rules; use the xray engine)")
 	}
 	return InboundConfig{
 		ListenPort: port,

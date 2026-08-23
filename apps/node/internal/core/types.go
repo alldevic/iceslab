@@ -21,6 +21,49 @@ type User struct {
 	ShadowtlsPassword  string
 }
 
+// AbusePolicy (U4) selects which built-in anti-abuse routing rules a core
+// renders. It is shared by every core that emits them (xray and shadowsocks
+// both render an xray routing section) so one profile toggle cannot mean two
+// different things depending on which core serves it.
+//
+// A nil *AbusePolicy means "all enabled", the historical hardcoded behaviour,
+// which is why every accessor below is written to work on a nil receiver: the
+// renderers ask the policy what to block instead of re-deriving the
+// nil-means-defaults rule each time.
+//
+// The json tags let this type double as the panel-pushed wire shape (the
+// `abusePolicy` object on XrayInboundCfg / ShadowsocksInboundCfg in
+// packages/shared/src/transport.ts). All three flags are always present when
+// the object is sent (the panel schema defaults each to true), so a non-nil
+// pointer carries a fully-specified policy.
+type AbusePolicy struct {
+	BlockTorrent   bool `json:"blockTorrent"`
+	BlockSmtp      bool `json:"blockSmtp"`
+	BlockDnsHijack bool `json:"blockDnsHijack"`
+}
+
+// BlocksTorrent reports whether BitTorrent traffic routes to the blackhole.
+func (p *AbusePolicy) BlocksTorrent() bool { return p == nil || p.BlockTorrent }
+
+// BlocksSmtp reports whether outbound port-25 traffic routes to the blackhole.
+func (p *AbusePolicy) BlocksSmtp() bool { return p == nil || p.BlockSmtp }
+
+// BlocksDnsHijack reports whether DNS-protocol traffic is pinned to dns-out so
+// the upstream resolver never sees the client's real IP.
+func (p *AbusePolicy) BlocksDnsHijack() bool { return p == nil || p.BlockDnsHijack }
+
+// Equal reports whether two policies render the same rules, so an adapter can
+// skip a restart when the policy did not actually change. A nil policy and an
+// explicit all-true policy render identically but are NOT equal here: the
+// difference is what the panel sent, and an adapter that swallowed it would
+// keep stale flags after the operator cleared the object.
+func (p *AbusePolicy) Equal(other *AbusePolicy) bool {
+	if p == nil || other == nil {
+		return p == other
+	}
+	return *p == *other
+}
+
 // UserStats are per-user traffic counters reported by a single core.
 type UserStats struct {
 	UserID   string

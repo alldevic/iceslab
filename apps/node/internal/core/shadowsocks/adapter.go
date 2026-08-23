@@ -326,6 +326,10 @@ func liveOpSucceeded(out []byte, verb string) bool {
 type inboundCfgWire struct {
 	Method    string `json:"method"`
 	ServerPSK string `json:"serverPsk"`
+	// U4: configurable anti-abuse. nil/missing = all built-in block rules
+	// enabled (byte-identical to pre-U4). core.AbusePolicy is json-tagged, so
+	// it doubles as the wire shape.
+	AbusePolicy *core.AbusePolicy `json:"abusePolicy,omitempty"`
 }
 
 // ApplyInbound parses the panel-pushed SS config, swaps it into the live
@@ -355,7 +359,10 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	}
 	if a.cfg.Inbound.Method == wire.Method &&
 		a.cfg.Inbound.ServerPSK == wire.ServerPSK &&
-		a.cfg.Inbound.ListenPort == effectivePort {
+		a.cfg.Inbound.ListenPort == effectivePort &&
+		// U4: a policy change alone still has to re-render, or the operator's
+		// relaxation would sit in the panel and never reach the node.
+		a.cfg.Inbound.AbusePolicy.Equal(wire.AbusePolicy) {
 		a.mu.Unlock()
 		a.logger.Info("shadowsocks ApplyInbound: config unchanged, skipping restart")
 		return nil
@@ -363,6 +370,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 
 	a.cfg.Inbound.Method = wire.Method
 	a.cfg.Inbound.ServerPSK = wire.ServerPSK
+	a.cfg.Inbound.AbusePolicy = wire.AbusePolicy
 	if effectivePort != 0 {
 		a.cfg.Inbound.ListenPort = effectivePort
 	}

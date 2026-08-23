@@ -1,6 +1,7 @@
 package shadowsocks
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -204,4 +205,78 @@ func TestRender_ApiInboundOnLoopback(t *testing.T) {
 		}
 	}
 	t.Fatalf("api-in inbound not found")
+}
+
+// U4: the same abusePolicy the xray core honours, on the core that renders the
+// same rules. A nil policy has to stay byte-identical to the pre-U4 literal,
+// because every SS profile in the field carries no policy at all.
+func TestRender_AbusePolicy(t *testing.T) {
+	rulesFor := func(t *testing.T, ap *core.AbusePolicy) []any {
+		t.Helper()
+		cfg := validInbound()
+		cfg.AbusePolicy = ap
+		return renderToMap(t, cfg, nil)["routing"].(map[string]any)["rules"].([]any)
+	}
+	classify := func(rules []any) (dns, bt, smtp bool) {
+		for _, raw := range rules {
+			r := raw.(map[string]any)
+			if protos, ok := r["protocol"].([]any); ok {
+				for _, p := range protos {
+					if p == "dns" && r["outboundTag"] == "dns-out" {
+						dns = true
+					}
+					if p == "bittorrent" && r["outboundTag"] == "blocked" {
+						bt = true
+					}
+				}
+			}
+			if r["port"] == "25" && r["outboundTag"] == "blocked" {
+				smtp = true
+			}
+		}
+		return
+	}
+
+	t.Run("nil policy renders all three rules", func(t *testing.T) {
+		rules := rulesFor(t, nil)
+		if dns, bt, smtp := classify(rules); !dns || !bt || !smtp {
+			t.Errorf("nil policy: dns=%v bt=%v smtp=%v, want all true", dns, bt, smtp)
+		}
+		if len(rules) != 4 {
+			t.Errorf("nil policy rule count = %d, want 4 (api-in + three)", len(rules))
+		}
+	})
+
+	t.Run("blockTorrent=false drops only the bittorrent rule", func(t *testing.T) {
+		rules := rulesFor(t, &core.AbusePolicy{BlockTorrent: false, BlockSmtp: true, BlockDnsHijack: true})
+		if dns, bt, smtp := classify(rules); !dns || bt || !smtp {
+			t.Errorf("relaxed torrent: dns=%v bt=%v smtp=%v, want true/false/true", dns, bt, smtp)
+		}
+	})
+
+	t.Run("all-false leaves the api-in rule only", func(t *testing.T) {
+		rules := rulesFor(t, &core.AbusePolicy{})
+		if len(rules) != 1 {
+			t.Fatalf("all-false rule count = %d, want 1 (api-in)", len(rules))
+		}
+		if rules[0].(map[string]any)["outboundTag"] != "api" {
+			t.Errorf("surviving rule is not the api-in loopback: %v", rules[0])
+		}
+	})
+
+	t.Run("explicit all-true is byte-identical to nil", func(t *testing.T) {
+		nilBlob, err := renderConfig(validInbound(), nil)
+		if err != nil {
+			t.Fatalf("render nil: %v", err)
+		}
+		allTrue := validInbound()
+		allTrue.AbusePolicy = &core.AbusePolicy{BlockTorrent: true, BlockSmtp: true, BlockDnsHijack: true}
+		allTrueBlob, err := renderConfig(allTrue, nil)
+		if err != nil {
+			t.Fatalf("render all-true: %v", err)
+		}
+		if !bytes.Equal(nilBlob, allTrueBlob) {
+			t.Errorf("explicit all-true policy must render byte-identically to nil (default)")
+		}
+	})
 }

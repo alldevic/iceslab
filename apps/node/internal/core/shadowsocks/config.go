@@ -49,6 +49,11 @@ type InboundConfig struct {
 	// Default: 8081 (one above xray's default to avoid conflict if both
 	// adapters run on the same node).
 	ApiPort int
+
+	// U4 configurable anti-abuse, the same policy type the xray core renders
+	// (this core emits an xray routing section too). nil means all three rules
+	// enabled, byte-identical to the pre-U4 hardcoded behaviour.
+	AbusePolicy *core.AbusePolicy
 }
 
 func (c *InboundConfig) withDefaults() InboundConfig {
@@ -198,15 +203,32 @@ func renderConfig(inbound InboundConfig, users []ssClient) ([]byte, error) {
 		},
 		"routing": map[string]any{
 			"domainStrategy": "IPIfNonMatch",
-			"rules": []map[string]any{
-				{"type": "field", "inboundTag": []string{"api-in"}, "outboundTag": "api"},
-				{"type": "field", "protocol": []string{"dns"}, "outboundTag": "dns-out"},
-				{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "blocked"},
-				{"type": "field", "port": "25", "outboundTag": "blocked"},
-			},
+			"rules":          abuseRules(cfg.AbusePolicy),
 		},
 	}
 	return json.MarshalIndent(doc, "", "  ")
+}
+
+// abuseRules renders the routing rules this core emits. The api-in loopback
+// rule is unconditional (management traffic must always reach the api
+// outbound); the other three are gated by the U4 policy, whose accessors are
+// nil-safe, so a node that was never given a policy renders all of them and
+// stays byte-identical to the pre-U4 literal. Order matches the xray core so
+// one profile toggle means the same thing whichever core serves it.
+func abuseRules(policy *core.AbusePolicy) []map[string]any {
+	rules := []map[string]any{
+		{"type": "field", "inboundTag": []string{"api-in"}, "outboundTag": "api"},
+	}
+	if policy.BlocksDnsHijack() {
+		rules = append(rules, map[string]any{"type": "field", "protocol": []string{"dns"}, "outboundTag": "dns-out"})
+	}
+	if policy.BlocksTorrent() {
+		rules = append(rules, map[string]any{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "blocked"})
+	}
+	if policy.BlocksSmtp() {
+		rules = append(rules, map[string]any{"type": "field", "port": "25", "outboundTag": "blocked"})
+	}
+	return rules
 }
 
 // writeConfig atomically writes the config to disk via the shared

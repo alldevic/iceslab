@@ -308,6 +308,36 @@ func TestApplyInbound_PortChangeRegenerates(t *testing.T) {
 	}
 }
 
+// U4: relaxing the anti-abuse policy is often the ONLY thing that changes in a
+// push (same method, psk and port), so the idempotency gate has to see it or
+// the operator's change would be acknowledged and never rendered.
+func TestApplyInbound_AbusePolicyChangeRegenerates(t *testing.T) {
+	a := newConfigOnlyAdapter(t)
+	body, _ := json.Marshal(map[string]any{
+		"method":      "2022-blake3-aes-256-gcm",
+		"serverPsk":   "BASE64-FAKE-SERVER-PSK==",
+		"abusePolicy": map[string]any{"blockTorrent": false, "blockSmtp": true, "blockDnsHijack": true},
+	})
+	if err := a.ApplyInbound(8388, body); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
+	if a.cfg.Inbound.AbusePolicy == nil || a.cfg.Inbound.AbusePolicy.BlockTorrent {
+		t.Fatalf("policy not stored, got %+v", a.cfg.Inbound.AbusePolicy)
+	}
+	if !a.started {
+		t.Errorf("a policy change alone must regenerate + restart")
+	}
+
+	// Re-pushing the same policy is still a no-op.
+	a.started = false
+	if err := a.ApplyInbound(8388, body); err != nil {
+		t.Fatalf("re-ApplyInbound: %v", err)
+	}
+	if a.started {
+		t.Errorf("identical policy must not regenerate")
+	}
+}
+
 func TestApplyInbound_RejectsMissingServerPsk(t *testing.T) {
 	a := newConfigOnlyAdapter(t)
 	body, _ := json.Marshal(map[string]any{"method": "2022-blake3-aes-256-gcm"})

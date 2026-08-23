@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
 
 // InboundConfig is the static part of the Xray config, generated once from
@@ -159,21 +160,9 @@ type InboundConfig struct {
 	// the wire) means "all three enabled", byte-identical to the pre-U4
 	// hardcoded behaviour. A non-nil policy renders each rule only when its
 	// flag is true, so an operator can selectively relax a node's AUP
-	// enforcement (e.g. allow BitTorrent on a residential exit).
-	AbusePolicy *AbusePolicy
-}
-
-// AbusePolicy (U4) selects which built-in anti-abuse routing rules render. A
-// nil *AbusePolicy means "all enabled" (the historical default); see the
-// AbusePolicy field on InboundConfig.
-type AbusePolicy struct {
-	// BlockTorrent routes BitTorrent-protocol traffic to the blackhole.
-	BlockTorrent bool
-	// BlockSmtp routes outbound port-25 (SMTP) traffic to the blackhole.
-	BlockSmtp bool
-	// BlockDnsHijack routes DNS-protocol traffic to dns-out so the upstream
-	// resolver never sees the client's real IP.
-	BlockDnsHijack bool
+	// enforcement (e.g. allow BitTorrent on a residential exit). Shared with
+	// the shadowsocks core, which renders the same rules.
+	AbusePolicy *core.AbusePolicy
 }
 
 // WarpConfig holds Cloudflare WARP egress credentials from a wgcf-style device
@@ -486,17 +475,11 @@ func renderMultiConfig(
 	// U4: the DNS-hijack / BitTorrent / SMTP rules are gated by cfg.AbusePolicy.
 	// A nil policy (the field absent on the wire) keeps all three enabled, so
 	// the output is byte-identical to the pre-U4 hardcoded behaviour. A non-nil
-	// policy renders each rule only when its flag is set. The api-in loopback
+	// policy renders each rule only when its flag is set (the Blocks* accessors
+	// are nil-safe, so the nil case needs no branch here). The api-in loopback
 	// rule is unconditional (management traffic must always reach the api
 	// outbound). Order is preserved (dns -> bittorrent -> smtp) so the all-true
 	// case stays byte-identical to the previous literal.
-	blockDnsHijack, blockTorrent, blockSmtp := true, true, true
-	if cfg.AbusePolicy != nil {
-		blockDnsHijack = cfg.AbusePolicy.BlockDnsHijack
-		blockTorrent = cfg.AbusePolicy.BlockTorrent
-		blockSmtp = cfg.AbusePolicy.BlockSmtp
-	}
-
 	rules := []any{
 		// Loopback management: api inbound traffic only ever talks
 		// to the api outbound (the StatsService).
@@ -509,7 +492,7 @@ func renderMultiConfig(
 	// DNS hijack protection, route all DNS-protocol traffic to
 	// the dns-out outbound so the upstream resolver can't see the
 	// client's real IP.
-	if blockDnsHijack {
+	if cfg.AbusePolicy.BlocksDnsHijack() {
 		rules = append(rules, map[string]any{
 			"type":        "field",
 			"protocol":    []string{"dns"},
@@ -521,14 +504,14 @@ func renderMultiConfig(
 	//     subscriber's torrenting can get the whole node nuked.
 	//   - SMTP (port 25): outbound mail abuse / spam, providers
 	//     blacklist the IP within hours.
-	if blockTorrent {
+	if cfg.AbusePolicy.BlocksTorrent() {
 		rules = append(rules, map[string]any{
 			"type":        "field",
 			"protocol":    []string{"bittorrent"},
 			"outboundTag": "blocked",
 		})
 	}
-	if blockSmtp {
+	if cfg.AbusePolicy.BlocksSmtp() {
 		rules = append(rules, map[string]any{
 			"type":        "field",
 			"port":        "25",

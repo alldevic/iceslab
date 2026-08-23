@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
 
 func validInbound() InboundConfig {
@@ -721,7 +723,7 @@ func classifyRules(t *testing.T, rules []any) (dns, bt, smtp bool, count int) {
 }
 
 func TestRender_AbusePolicy(t *testing.T) {
-	rulesFor := func(t *testing.T, ap *AbusePolicy) []any {
+	rulesFor := func(t *testing.T, ap *core.AbusePolicy) []any {
 		t.Helper()
 		cfg := validInbound()
 		cfg.AbusePolicy = ap
@@ -741,7 +743,7 @@ func TestRender_AbusePolicy(t *testing.T) {
 
 	t.Run("blockTorrent=false drops only the bittorrent rule", func(t *testing.T) {
 		dns, bt, smtp, count := classifyRules(t, rulesFor(t,
-			&AbusePolicy{BlockTorrent: false, BlockSmtp: true, BlockDnsHijack: true}))
+			&core.AbusePolicy{BlockTorrent: false, BlockSmtp: true, BlockDnsHijack: true}))
 		if bt {
 			t.Errorf("blockTorrent=false: bittorrent rule should be absent")
 		}
@@ -755,7 +757,7 @@ func TestRender_AbusePolicy(t *testing.T) {
 
 	t.Run("blockDnsHijack=false drops only the dns rule", func(t *testing.T) {
 		dns, bt, smtp, count := classifyRules(t, rulesFor(t,
-			&AbusePolicy{BlockTorrent: true, BlockSmtp: true, BlockDnsHijack: false}))
+			&core.AbusePolicy{BlockTorrent: true, BlockSmtp: true, BlockDnsHijack: false}))
 		if dns {
 			t.Errorf("blockDnsHijack=false: dns rule should be absent")
 		}
@@ -768,7 +770,7 @@ func TestRender_AbusePolicy(t *testing.T) {
 	})
 
 	t.Run("all false leaves only the api-in loopback rule", func(t *testing.T) {
-		rules := rulesFor(t, &AbusePolicy{})
+		rules := rulesFor(t, &core.AbusePolicy{})
 		dns, bt, smtp, count := classifyRules(t, rules)
 		if dns || bt || smtp {
 			t.Errorf("all-false: no block/dns rules expected, got dns=%v bt=%v smtp=%v", dns, bt, smtp)
@@ -789,7 +791,7 @@ func TestRender_AbusePolicy(t *testing.T) {
 			t.Fatalf("render nil: %v", err)
 		}
 		allTrue := validInbound()
-		allTrue.AbusePolicy = &AbusePolicy{BlockTorrent: true, BlockSmtp: true, BlockDnsHijack: true}
+		allTrue.AbusePolicy = &core.AbusePolicy{BlockTorrent: true, BlockSmtp: true, BlockDnsHijack: true}
 		allTrueBlob, err := renderConfig(allTrue, users)
 		if err != nil {
 			t.Fatalf("render all-true: %v", err)
@@ -801,12 +803,12 @@ func TestRender_AbusePolicy(t *testing.T) {
 }
 
 func TestInboundEqual_AbusePolicy(t *testing.T) {
-	policy := func(bt, bs, bd bool) *AbusePolicy {
-		return &AbusePolicy{BlockTorrent: bt, BlockSmtp: bs, BlockDnsHijack: bd}
+	policy := func(bt, bs, bd bool) *core.AbusePolicy {
+		return &core.AbusePolicy{BlockTorrent: bt, BlockSmtp: bs, BlockDnsHijack: bd}
 	}
 	cases := []struct {
 		name string
-		a, b *AbusePolicy
+		a, b *core.AbusePolicy
 		want bool
 	}{
 		{"both nil", nil, nil, true},

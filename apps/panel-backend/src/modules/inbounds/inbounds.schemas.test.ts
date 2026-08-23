@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { XrayConfigSchema } from './inbounds.schemas.js';
+import { ShadowsocksConfigSchema, XrayConfigSchema } from './inbounds.schemas.js';
 
 // U5 post-quantum fields. The contract that keeps every existing profile
 // byte-stable: omitted → the parsed config carries no PQ key at all, so the
@@ -90,6 +90,37 @@ describe('XrayConfigSchema abusePolicy (U4)', () => {
         realityPrivateKey: 'k',
         // @ts-expect-error - intentionally wrong type
         abusePolicy: { blockTorrent: 'yes' },
+      }),
+    ).toThrow();
+  });
+});
+
+// The shadowsocks core renders the same BLOCK rules as the xray core, so it
+// takes the same policy with the same absent-means-all-enabled contract.
+describe('ShadowsocksConfigSchema abusePolicy (U4)', () => {
+  it('is absent from the parsed config when omitted (preserves pre-U4 wire)', () => {
+    const cfg = ShadowsocksConfigSchema.parse({ serverPsk: 'psk' });
+    expect('abusePolicy' in cfg).toBe(false);
+  });
+
+  it('fills the unspecified flags with true when one is flipped', () => {
+    const cfg = ShadowsocksConfigSchema.parse({
+      serverPsk: 'psk',
+      abusePolicy: { blockTorrent: false },
+    });
+    expect(cfg.abusePolicy).toEqual({
+      blockTorrent: false,
+      blockSmtp: true,
+      blockDnsHijack: true,
+    });
+  });
+
+  it('rejects a non-boolean flag', () => {
+    expect(() =>
+      ShadowsocksConfigSchema.parse({
+        serverPsk: 'psk',
+        // @ts-expect-error - intentionally wrong type
+        abusePolicy: { blockSmtp: 'no' },
       }),
     ).toThrow();
   });

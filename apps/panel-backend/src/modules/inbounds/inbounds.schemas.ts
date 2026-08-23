@@ -10,6 +10,24 @@ const PortSchema = z.number().int().min(1).max(65535);
 
 // ───── Per-protocol config schemas ─────
 
+/**
+ * U4 configurable anti-abuse, shared by every protocol whose core renders the
+ * built-in BLOCK rules (xray and shadowsocks both emit an xray routing
+ * section). One shape for both, so a toggle cannot mean two different things
+ * depending on which core serves the profile.
+ *
+ * Each flag defaults to true, so a policy that IS present always travels the
+ * wire fully specified and the operator only flips the rule they want to relax.
+ * The wrapping `.optional()` (at each use site) is what keeps an untouched
+ * profile byte-identical: no object at all, nothing on the wire, and the node
+ * decodes nil and enables all three.
+ */
+const AbusePolicySchema = z.object({
+  blockTorrent: z.boolean().default(true),
+  blockSmtp: z.boolean().default(true),
+  blockDnsHijack: z.boolean().default(true),
+});
+
 export const HysteriaConfigSchema = z.object({
   /**
    * Public FQDN hysteria issues its ACME (Let's Encrypt) certificate for. Not
@@ -211,13 +229,7 @@ export const XrayConfigSchema = z.object({
    * residential exit). Kept a plain ZodObject (no .refine) so XrayConfigSchema
    * stays usable in the InboundConfigByProtocol discriminated union.
    */
-  abusePolicy: z
-    .object({
-      blockTorrent: z.boolean().default(true),
-      blockSmtp: z.boolean().default(true),
-      blockDnsHijack: z.boolean().default(true),
-    })
-    .optional(),
+  abusePolicy: AbusePolicySchema.optional(),
 });
 
 // Bounds and defaults match upstream amnezia-vpn AmneziaWG v2.0 spec
@@ -361,6 +373,13 @@ export const ShadowsocksConfigSchema = z.object({
    * 2026-05-07: server-side `clients[]` requires `settings.password`.
    */
   serverPsk: z.string().min(1).max(128).optional(),
+
+  /**
+   * U4 configurable anti-abuse. The shadowsocks core renders the same BLOCK
+   * rules as the xray core (it runs an xray process too), so it takes the same
+   * policy. Absent = all three enabled, byte-identical to pre-U4.
+   */
+  abusePolicy: AbusePolicySchema.optional(),
 });
 
 /**

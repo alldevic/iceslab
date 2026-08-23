@@ -66,8 +66,8 @@ const ENGINE_OPTIONS: Record<string, readonly string[]> = {
 };
 
 /**
- * Fork-only xray config features the sing-box engine cannot render, listed by
- * the config key that carries them.
+ * Fork-only config features the sing-box engine cannot render, listed by the
+ * config key that carries them.
  *
  * The sing-box adapter decodes a narrow subset of the xray inbound config
  * (xrayFamilyWire), so any key it does not know silently disappears: the push
@@ -78,9 +78,13 @@ const ENGINE_OPTIONS: Record<string, readonly string[]> = {
  * this is the panel half of the same guard so the operator hears about it while
  * saving rather than after the push.
  *
+ * abusePolicy rides both the xray and the shadowsocks config, and the sing-box
+ * engine serves both, so the check is keyed on the config keys rather than on
+ * the protocol.
+ *
  * Returns the offending keys (empty when the pair is fine).
  */
-export function xrayFieldsUnsupportedByEngine(
+export function fieldsUnsupportedByEngine(
   engine: string | null | undefined,
   config: unknown,
 ): string[] {
@@ -137,7 +141,7 @@ export const CreateProfileSchema = z
         path: ['engine'],
       });
     }
-    for (const field of xrayFieldsUnsupportedByEngine(val.engine, val.config)) {
+    for (const field of fieldsUnsupportedByEngine(val.engine, val.config)) {
       ctx.addIssue({
         code: 'custom',
         message: `${field} is not supported by the sing-box engine (use the xray engine)`,

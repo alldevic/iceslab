@@ -9,7 +9,7 @@ import { ensureDefaultHost } from '../hosts/hosts.service.js';
 import {
   generateSsServerPsk,
 } from './ss-helpers.js';
-import { engineValidForProtocol, xrayFieldsUnsupportedByEngine } from './profiles.schemas.js';
+import { engineValidForProtocol, fieldsUnsupportedByEngine } from './profiles.schemas.js';
 import { stripInapplicableTransportFields } from '../inbounds/xray-transport-fields.js';
 import type {
   CreateBindingInput,
@@ -278,13 +278,11 @@ export async function updateProfile(
   // first and switched to sing-box second, and the policy would go dark.
   const effectiveEngine = input.engine !== undefined ? input.engine : existing.engine;
   const effectiveConfig = data.config !== undefined ? data.config : existing.config;
-  if (existing.protocol === 'xray') {
-    const unsupported = xrayFieldsUnsupportedByEngine(effectiveEngine, effectiveConfig);
-    if (unsupported.length > 0) {
-      throw new Error(
-        `${unsupported.join(', ')} not supported by the sing-box engine (use the xray engine)`,
-      );
-    }
+  const unsupported = fieldsUnsupportedByEngine(effectiveEngine, effectiveConfig);
+  if (unsupported.length > 0) {
+    throw new Error(
+      `${unsupported.join(', ')} not supported by the sing-box engine (use the xray engine)`,
+    );
   }
 
   const updated = await prisma.profile.update({

@@ -198,6 +198,23 @@ func TestXrayFamilyApplyInboundGuards(t *testing.T) {
 	}
 }
 
+// The shadowsocks half of the same guard: the sing-box engine renders no
+// anti-abuse rules for SS either, so a policy pushed here must not be swallowed.
+func TestShadowsocksApplyInboundRejectsAbusePolicy(t *testing.T) {
+	a := New(Config{Protocol: "shadowsocks"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	ok := `{"method":"2022-blake3-aes-256-gcm","serverPsk":"psk"}`
+	if err := a.ApplyInbound(8388, json.RawMessage(ok)); err != nil {
+		t.Fatalf("plain SS config should apply: %v", err)
+	}
+	withPolicy := `{"method":"2022-blake3-aes-256-gcm","serverPsk":"psk","abusePolicy":{"blockTorrent":false,"blockSmtp":true,"blockDnsHijack":true}}`
+	if err := a.ApplyInbound(8388, json.RawMessage(withPolicy)); err == nil {
+		t.Errorf("abusePolicy on the sing-box engine must be rejected, got nil")
+	}
+}
+
 func TestHysteria2Adapter(t *testing.T) {
 	a := New(Config{Protocol: "hysteria"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if a.Name() != "hysteria" || a.Engine() != "singbox" {
