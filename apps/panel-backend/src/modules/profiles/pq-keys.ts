@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma.js';
+import { vlessEncryptionAuth, vlessEncryptionHalf } from '../inbounds/inbounds.schemas.js';
 import { getLogger } from '../../lib/logger.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 
@@ -35,13 +36,15 @@ export interface PqKeys {
   /** The subcommand's output, always returned: when a field below is missing
    *  this is the only way the operator can still get their key. */
   raw: string;
-  /** mldsa65: the server seed, which is what the profile stores. */
+  /** mldsa65: the server seed, rendered into the node's REALITY settings. */
   seed?: string;
-  /** mldsa65: the verify key clients need. */
+  /** mldsa65: the verify key clients need. Stored on the profile too, since
+   *  U5's client half: without it clients silently verify the classical way. */
   verify?: string;
-  /** vlessenc: the server-side decryption string, which the profile stores. */
+  /** vlessenc: the server-side decryption string, rendered into the inbound. */
   decryption?: string;
-  /** vlessenc: the client-side encryption string, for the share link. */
+  /** vlessenc: the client-side encryption string, emitted into share links and
+   *  full client configs. Stored on the profile alongside its server half. */
   encryption?: string;
 }
 
@@ -62,24 +65,56 @@ export function parsePqKeyOutput(kind: PqKeyKind, raw: string): Omit<PqKeys, 'ki
       ...pick(raw, /verify[^:\n]*:\s*(\S+)/i, 'verify'),
     };
   }
-  // vlessenc prints both halves of the pair, and which is which is what matters:
-  // the server half goes in the profile and the client half in the share link,
-  // and swapping them yields a profile nobody can connect to. Match on the label
-  // rather than on order.
-  const strings = [...raw.matchAll(/mlkem768x25519plus\.\S+/g)].map((m) => m[0]);
+  // `xray vlessenc` prints FOUR strings, not two: a complete decryption /
+  // encryption pair for X25519 authentication and another for ML-KEM-768, under
+  // the header "Choose one Authentication to use, do not mix them". Taking the
+  // first thing that looks like a server string hands the operator the
+  // CLASSICAL pair under a field labelled post-quantum - a profile that works
+  // and quietly is not what it says. So the pair is chosen whole, by key
+  // length, and the post-quantum one wins.
+  //
+  // Which half is which comes from the grammar rather than from the labels
+  // around it: xray reads a handshake mode (1rtt/0rtt) out of the client half
+  // and a ticket lifetime (600s) out of the server half. That is another
+  // project's prose against the thing the core actually parses, and the prose
+  // has already changed once.
+  //
+  // The character class matters too: the real output quotes each value
+  // (`"decryption": "mlkem768..."`), and a \S+ match swallows the closing quote
+  // and produces a string the config schema then refuses.
+  const strings = [...raw.matchAll(/mlkem768x25519plus[A-Za-z0-9._-]*/g)].map((m) => m[0]);
   const labelled = (label: RegExp): string | undefined => {
     for (const line of raw.split('\n')) {
       if (!label.test(line)) continue;
-      const m = /mlkem768x25519plus\.\S+/.exec(line);
+      const m = /mlkem768x25519plus[A-Za-z0-9._-]*/.exec(line);
       if (m) return m[0];
     }
     return undefined;
   };
-  // With no labels to go on, a single string is unambiguous (older builds
-  // printed only the server half); two unlabelled ones are not, and guessing is
-  // how a profile ends up holding the client's string.
-  const decryption = labelled(/server|decrypt/i) ?? (strings.length === 1 ? strings[0] : undefined);
-  const encryption = labelled(/client|encrypt/i);
+  // Post-quantum first, then classical, then whatever is left for a build whose
+  // key sizes we do not recognise - but always both halves from the SAME group,
+  // because a server string from one and a client string from the other is a
+  // handshake that fails with nothing to read.
+  const pickPair = (): { decryption?: string; encryption?: string } => {
+    for (const auth of ['mlkem768', 'x25519', 'unknown'] as const) {
+      const group = strings.filter((v) => vlessEncryptionAuth(v) === auth);
+      const decryption = group.find((v) => vlessEncryptionHalf(v) === 'server');
+      const encryption = group.find((v) => vlessEncryptionHalf(v) === 'client');
+      if (decryption || encryption) return { decryption, encryption };
+    }
+    return {};
+  };
+  const chosen = pickPair();
+  // Last resort for output no grammar of ours fits: the labels, and then a lone
+  // string, which older builds printed as the server half. Two unrecognised
+  // strings stay unplaced - guessing there is how a profile ends up holding the
+  // client's string.
+  const lone =
+    strings.length === 1 && vlessEncryptionHalf(strings[0]) === 'unknown'
+      ? strings[0]
+      : undefined;
+  const decryption = chosen.decryption ?? labelled(/server|decrypt/i) ?? lone;
+  const encryption = chosen.encryption ?? labelled(/client|encrypt/i);
   return {
     raw,
     ...(decryption ? { decryption } : {}),

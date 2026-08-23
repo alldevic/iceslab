@@ -64,6 +64,51 @@ export const HysteriaConfigSchema = z.object({
   portHoppingEnd: z.number().int().min(1024).max(65535).optional(),
 });
 
+/**
+ * Which half of an `xray vlessenc` pair a string is, read off xray's own
+ * grammar rather than off the wording around it (infra/conf/vless.go, mirrored
+ * verbatim in mihomo's transport/vless/encryption/factory.go): the third
+ * dot-separated part is a handshake mode on the CLIENT half (`1rtt` / `0rtt`)
+ * and a ticket lifetime on the SERVER half (`600s`, `600-900s`).
+ *
+ * Unknown is a real answer, not a failure: this exists to catch the two halves
+ * swapped, which yields a profile nobody can connect to, and a shape no
+ * released xray prints today must still pass through rather than be rejected on
+ * a guess about the future.
+ */
+export function vlessEncryptionHalf(s: string): 'client' | 'server' | 'unknown' {
+  const parts = s.split('.');
+  if (parts.length < 4 || parts[0] !== 'mlkem768x25519plus') return 'unknown';
+  if (parts[2] === '1rtt' || parts[2] === '0rtt') return 'client';
+  if (/^\d+(-\d+)?s$/.test(parts[2])) return 'server';
+  return 'unknown';
+}
+
+/**
+ * Which authentication a VLESS-Encryption string carries, again read off xray's
+ * own parser: the key parts (dot-separated, 20 chars or longer - shorter ones
+ * are a padding spec) are 32 bytes for X25519 and 64 / 1184 bytes for the
+ * ML-KEM-768 server seed / client encapsulation key.
+ *
+ * `xray vlessenc` prints BOTH authentications in one run and says "do not mix
+ * them", so this is what tells the post-quantum pair from the classical one -
+ * and what catches a profile holding one half of each, which no length or shape
+ * check would.
+ */
+export function vlessEncryptionAuth(s: string): 'x25519' | 'mlkem768' | 'unknown' {
+  const half = vlessEncryptionHalf(s);
+  if (half === 'unknown') return 'unknown';
+  const pqLen = half === 'server' ? 64 : 1184;
+  let sawClassic = false;
+  for (const part of s.split('.').slice(3)) {
+    if (part.length < 20) continue;
+    const len = Buffer.from(part, 'base64').length;
+    if (len === pqLen) return 'mlkem768';
+    if (len === 32) sawClassic = true;
+  }
+  return sawClassic ? 'x25519' : 'unknown';
+}
+
 export const XrayConfigSchema = z.object({
   /**
    * Stream security. 'reality' (default) or 'none' (plain transport, e.g.
