@@ -296,10 +296,12 @@ func validateRealityDest(dest string) error {
 }
 
 // xrayClient mirrors Xray's client-config object.
+// xrayClient is the identity half of a VLESS/Trojan account: who the user is,
+// not how this inbound talks to them. The flow used to live here too and drifted
+// from the inbound that owns it - see buildUserInboundSettings.
 type xrayClient struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
-	Flow  string `json:"flow,omitempty"`
 }
 
 // CascadeFragments are the extra xray config pieces a cascade hop contributes,
@@ -828,8 +830,30 @@ func buildUserInboundSettings(cfg InboundConfig, users []xrayClient) map[string]
 	if cfg.VlessDecryption != "" {
 		decryption = cfg.VlessDecryption
 	}
+	// The flow comes from THIS inbound's config, every time it is rendered.
+	//
+	// It used to come from whatever was stamped on the user when AddUser ran,
+	// which read a.cfg.Inbound - a struct ApplyInbound stops updating as soon as
+	// the panel sends an inboundId (it stores into a.inbounds[id] instead). So
+	// on every current panel the stamp was the install-time zero value, and no
+	// VLESS account on the node ever got Vision while every share link the panel
+	// emitted asked for it: the REALITY handshake completes, the client reports
+	// itself verified, and then not one byte moves.
+	//
+	// It is also simply where the value belongs. Vision has to match the
+	// TRANSPORT (raw/xhttp only), which is a property of the inbound; a node
+	// holding several inbounds can legitimately want it on one and not another,
+	// and one field on a user shared by all of them cannot express that.
+	clients := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		c := map[string]any{"id": u.ID, "email": u.Email}
+		if cfg.Flow != "" {
+			c["flow"] = cfg.Flow
+		}
+		clients = append(clients, c)
+	}
 	return map[string]any{
-		"clients":    users,
+		"clients":    clients,
 		"decryption": decryption,
 	}
 }

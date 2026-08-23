@@ -120,9 +120,12 @@ func newTestAdapter(t *testing.T) (*Adapter, string) {
 // + decryption. A wrong shape would make every live add silently fall back to a
 // restart, so this is the high-value guard for N1.
 func TestN1_BuildAduInbound_VLESS(t *testing.T) {
+	// The flow rides on the INBOUND, not on the user: a live add has to stamp
+	// the same value the full render would, or a user added without a restart
+	// ends up on a Vision inbound with no flow and moves no traffic.
 	data, err := buildAduPayload(
-		[]InboundConfig{{Subprotocol: "vless"}},
-		xrayClient{ID: "uuid-a", Email: "alice", Flow: "xtls-rprx-vision"},
+		[]InboundConfig{{Subprotocol: "vless", Flow: "xtls-rprx-vision"}},
+		xrayClient{ID: "uuid-a", Email: "alice"},
 	)
 	if err != nil {
 		t.Fatalf("buildAduPayload: %v", err)

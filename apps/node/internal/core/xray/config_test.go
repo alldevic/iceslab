@@ -68,8 +68,8 @@ func TestInboundDefaults(t *testing.T) {
 
 func TestRenderConfigShape(t *testing.T) {
 	users := []xrayClient{
-		{ID: "uuid-1", Email: "user-a", Flow: "xtls-rprx-vision"},
-		{ID: "uuid-2", Email: "user-b", Flow: "xtls-rprx-vision"},
+		{ID: "uuid-1", Email: "user-a"},
+		{ID: "uuid-2", Email: "user-b"},
 	}
 	blob, err := renderConfig(validInbound(), users)
 	if err != nil {
@@ -312,7 +312,7 @@ func TestStealOthers_StillRejectsLoopbackDest(t *testing.T) {
 // nodes: passing a nil *CascadeFragments must produce exactly the same bytes as
 // the plain renderConfig path, so every existing node is unaffected.
 func TestRender_CascadeNil_ByteIdenticalToBase(t *testing.T) {
-	users := []xrayClient{{ID: "u1", Email: "u1", Flow: "xtls-rprx-vision"}}
+	users := []xrayClient{{ID: "u1", Email: "u1"}}
 	base, err := renderConfig(validInbound(), users)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
@@ -1499,5 +1499,41 @@ func TestRender_NodePolicyBeforeCascadeRules(t *testing.T) {
 	if !(policyIdx < splitIdx && splitIdx < catchAllIdx) {
 		t.Errorf("order must be node policy -> cascade split -> catch-all, got %d, %d, %d",
 			policyIdx, splitIdx, catchAllIdx)
+	}
+}
+
+// The Vision flow belongs to the inbound, and the render has to take it from
+// there. It used to be stamped on the user by AddUser, which read a struct
+// ApplyInbound stopped updating the moment the panel began sending inbound ids
+// - so on every current panel the server accounts came out with no flow while
+// every share link asked for Vision. Nothing failed loudly: the REALITY
+// handshake completes and the tunnel then carries nothing. Reproduced against
+// a live node on 2026-08-24 before the fix.
+func TestVLESSClientsTakeFlowFromTheInbound(t *testing.T) {
+	in := validInbound()
+	in.Flow = "xtls-rprx-vision"
+	// Users as AddUser now stores them: identity only, no flow.
+	users := []xrayClient{{ID: "u1", Email: "a"}, {ID: "u2", Email: "b"}}
+
+	settings := buildUserInboundSettings(in, users)
+	clients, ok := settings["clients"].([]map[string]any)
+	if !ok || len(clients) != 2 {
+		t.Fatalf("clients: got %#v", settings["clients"])
+	}
+	for i, c := range clients {
+		if c["flow"] != "xtls-rprx-vision" {
+			t.Errorf("client %d: flow = %v, want xtls-rprx-vision", i, c["flow"])
+		}
+	}
+}
+
+// The mirror case, and the reason the flow cannot simply be defaulted: Vision
+// only works over raw/xhttp, and an inbound that does not run it must emit no
+// flow at all, or xray rejects the account for the mismatch.
+func TestVLESSClientsCarryNoFlowWhenTheInboundHasNone(t *testing.T) {
+	settings := buildUserInboundSettings(validInbound(), []xrayClient{{ID: "u1", Email: "a"}})
+	clients := settings["clients"].([]map[string]any)
+	if _, present := clients[0]["flow"]; present {
+		t.Errorf("flow must be absent when the inbound has none, got %v", clients[0]["flow"])
 	}
 }
