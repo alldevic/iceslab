@@ -142,17 +142,19 @@ export async function deliverRemnaWebhook(
  *
  * The emitters are called one per user, and the callers are batch jobs: one
  * expiry tick flips every user whose term ended in the last ten minutes, and at
- * a month boundary that is the whole cohort at once. Unbounded, each of those
- * users would hold a Prisma connection while its row is read and a socket while
- * the POST is in flight - thousands of checkouts against a pool of a dozen, so
- * the reads start failing with pool timeouts on the very path that tells the
- * shop a subscription ended, and the shop meets a thousand-deep burst it was
- * never sized for. There is no retry behind `user.expired`; a delivery lost to
- * the stampede is lost.
+ * a month boundary that is the whole cohort at once. Unbounded, that is one
+ * simultaneous socket per user pointed at a shop whose own inbound cap is 50
+ * concurrent handlers, and there is no retry behind `user.expired`.
+ *
+ * What it is NOT for, measured rather than assumed: the database. Prisma
+ * releases the connection when the row read completes, before the POST, so 300
+ * unbounded deliveries produced no pool error and moved an unrelated query from
+ * 16ms to 50ms. An earlier version of this comment claimed pool exhaustion; it
+ * was wrong.
  *
  * A semaphore turns the stampede into a queue. It does not make the work
- * smaller - a slow shop still takes as long - but nothing is dropped for having
- * arrived at the same instant as everything else.
+ * smaller - a slow shop still takes as long - but nothing arrives all at once,
+ * and the limit is set against the shop's cap rather than against a guess.
  */
 let inFlight = 0;
 const waiting: (() => void)[] = [];

@@ -319,11 +319,25 @@ export const ConfigSchema = z.object({
     .transform((v) => (v === '' ? undefined : v)),
   // How many facade webhooks may be in flight at once. Mass expiry is the case
   // this exists for: a single cron tick can flip thousands of users, and each
-  // one reads a row and POSTs. Unbounded, that is thousands of concurrent
-  // Prisma checkouts against a pool of a dozen (P2024 pool timeouts, on the
-  // path that tells the shop a subscription ended) and a thousand-deep burst at
-  // a shop sized for a trickle. Bounded, the same work becomes a queue.
-  REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
+  // one POSTs to the shop.
+  //
+  // The bound protects the SHOP and this process's sockets, not the database -
+  // measured, because the first version of this comment claimed otherwise. With
+  // 300 deliveries held at 200ms each and the semaphore off, peak concurrency
+  // was 300, every delivery still landed, no Prisma error occurred, and an
+  // unrelated query went from 16ms to 50ms. Prisma releases the connection when
+  // the row read finishes, before the POST, so the pool is never held for the
+  // length of a delivery. The real exposure is thousands of simultaneous
+  // sockets and a burst the shop was not sized for.
+  //
+  // 32, not 8: the shop caps its own inbound webhook handlers at 50
+  // (panel_webhook_service._MAX_CONCURRENT_EVENTS), so sending more
+  // concurrently than that only queues on its side, and sending far fewer just
+  // makes the drain long. The drain matters: at the 5s delivery timeout a shop
+  // that is down turns a 5000-user expiry into 5000*5/limit seconds of
+  // retrying - 52 minutes at 8, under 7 at 32 - and the expiry scan now ticks
+  // every 10 minutes through the same slots.
+  REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(32),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
