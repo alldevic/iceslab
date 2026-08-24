@@ -1,0 +1,274 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import type { FastifyInstance } from 'fastify';
+
+/**
+ * The four capability routes served on 2026-08-24, and specifically the parts of
+ * their contracts that fail SILENTLY when wrong.
+ *
+ * They were unserved while the shop could not certify our declared version - it
+ * never called them. Its `dev` branch certifies 3.3.2, so it will; and because
+ * the shop's admin panel is our admin panel, each of these is an admin feature
+ * rather than spare surface.
+ *
+ * Every case here corresponds to a line in the shop's own client that turns a
+ * wrong answer into a fallback or a mis-billing instead of an error.
+ */
+
+let app: FastifyInstance;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let prisma: any;
+const PREFIX = 'rw';
+const token = `icp_admin_${Date.now()}`;
+const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+const bearer = { authorization: `Bearer ${token}` };
+
+const userIds: string[] = [];
+const nodeIds: string[] = [];
+const squadIds: string[] = [];
+let seq = 0;
+
+beforeAll(async () => {
+  process.env['REMNAWAVE_COMPAT_ENABLED'] = 'true';
+  process.env['REMNAWAVE_COMPAT_PREFIX'] = PREFIX;
+  const [{ buildApp }, prismaMod] = await Promise.all([
+    import('../../app.js'),
+    import('../../prisma.js'),
+  ]);
+  prisma = prismaMod.prisma;
+  app = await buildApp();
+  await app.ready();
+  await prisma.apiToken.create({ data: { name: 'admin-routes', tokenHash: sha(token), scopes: [] } });
+});
+
+afterAll(async () => {
+  await prisma.nodeUserUsageHistory.deleteMany({ where: { nodeId: { in: nodeIds } } });
+  await prisma.groupMember.deleteMany({ where: { userId: { in: userIds } } });
+  await prisma.userTraffic.deleteMany({ where: { userId: { in: userIds } } });
+  await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+  await prisma.node.deleteMany({ where: { id: { in: nodeIds } } });
+  await prisma.group.deleteMany({ where: { id: { in: squadIds } } });
+  await prisma.apiToken.deleteMany({ where: { tokenHash: sha(token) } });
+  await app.close();
+});
+
+const post = (url: string, payload?: unknown) =>
+  app.inject({ method: 'POST', url: `/${PREFIX}/api/${url}`, headers: bearer, payload: payload ?? {} });
+
+async function mkUser(): Promise<{ id: string; numericId: number; username: string }> {
+  seq += 1;
+  const res = await post('users', { username: `adm_${Date.now()}_${seq}` });
+  const body = res.json().response as { id: number; username: string };
+  const row = await prisma.user.findFirst({ where: { numericId: BigInt(body.id) }, select: { id: true } });
+  userIds.push(row.id);
+  return { id: row.id, numericId: body.id, username: body.username };
+}
+
+async function mkNode(): Promise<string> {
+  seq += 1;
+  const n = await prisma.node.create({
+    data: {
+      name: `adm-node-${Date.now()}-${seq}`,
+      address: `adm-${Date.now()}-${seq}.test:1337`,
+      heartbeatSecret: Buffer.alloc(32),
+    },
+  });
+  nodeIds.push(n.id);
+  return n.id as string;
+}
+
+async function mkSquad(): Promise<string> {
+  seq += 1;
+  const g = await prisma.group.create({ data: { name: `adm-squad-${Date.now()}-${seq}` } });
+  squadIds.push(g.id);
+  return g.id as string;
+}
+
+async function usage(nodeId: string, userId: string, bytesIn: number, bytesOut = 0) {
+  await prisma.nodeUserUsageHistory.create({
+    data: { nodeId, userId, date: new Date('2026-08-10T00:00:00.000Z'), bytesIn, bytesOut },
+  });
+}
+
+describe('POST /users/bulk/update-squads', () => {
+  it('reports the count under `affectedRows`, which is the key the client reads', async () => {
+    const u = await mkUser();
+    const squad = await mkSquad();
+    const res = await post('users/bulk/update-squads', {
+      userIds: [u.numericId],
+      activeInternalSquads: [squad],
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json().response as Record<string, unknown>;
+    // Our other bulk routes answer `affected`. This one must not: the client
+    // reads `.get("affectedRows")` and only compares when it is an int, so the
+    // wrong key yields None, no complaint, and a bulk it believes worked.
+    expect(Object.keys(body)).toContain('affectedRows');
+    expect(body.affectedRows).toBe(1);
+  });
+
+  it('sets the exact squad set, replacing what was there', async () => {
+    const u = await mkUser();
+    const [a, b] = [await mkSquad(), await mkSquad()];
+    await post('users/bulk/update-squads', { userIds: [u.numericId], activeInternalSquads: [a] });
+    await post('users/bulk/update-squads', { userIds: [u.numericId], activeInternalSquads: [b] });
+    const got = await prisma.groupMember.findMany({
+      where: { userId: u.id },
+      select: { groupId: true },
+    });
+    expect(got.map((g: { groupId: string }) => g.groupId)).toEqual([b]);
+  });
+
+  it('counts a user ALREADY in the requested state', async () => {
+    // The client treats `affectedRows < len(chunk)` as failure and falls back to
+    // per-user PATCH for the whole chunk. Counting writes instead of matches
+    // would report failure exactly when the bulk had least to do - the common
+    // case on a re-run.
+    const u = await mkUser();
+    const squad = await mkSquad();
+    const first = await post('users/bulk/update-squads', {
+      userIds: [u.numericId],
+      activeInternalSquads: [squad],
+    });
+    const again = await post('users/bulk/update-squads', {
+      userIds: [u.numericId],
+      activeInternalSquads: [squad],
+    });
+    expect(first.json().response.affectedRows).toBe(1);
+    expect(again.json().response.affectedRows).toBe(1);
+  });
+
+  it('skips a reference this panel never issued instead of abandoning the chunk', async () => {
+    const u = await mkUser();
+    const squad = await mkSquad();
+    const res = await post('users/bulk/update-squads', {
+      userIds: [999_000_111, u.numericId],
+      activeInternalSquads: [squad],
+    });
+    expect(res.statusCode).toBe(200);
+    // One of two: the real user was still processed.
+    expect(res.json().response.affectedRows).toBe(1);
+  });
+});
+
+describe('POST /bandwidth-stats/nodes/usage', () => {
+  it('answers for EVERY requested node, including ones with no traffic', async () => {
+    // The client pre-seeds a zero lookup per requested node and overwrites from
+    // the response, so a node we omit reads as "no traffic" rather than
+    // "unknown" - silently, in the path that bills premium tariffs.
+    const [n1, n2] = [await mkNode(), await mkNode()];
+    const u = await mkUser();
+    await usage(n1, u.id, 100, 50);
+    const res = await post('bandwidth-stats/nodes/usage', { nodesUuids: [n1, n2] });
+    expect(res.statusCode).toBe(200);
+    const nodes = res.json().response.nodes as { uuid: string; users: unknown[] }[];
+    expect(nodes.map((n) => n.uuid).sort()).toEqual([n1, n2].sort());
+    expect(nodes.find((n) => n.uuid === n2)!.users).toEqual([]);
+  });
+
+  it('keys users by the NUMERIC id and totals both directions', async () => {
+    const n = await mkNode();
+    const u = await mkUser();
+    await usage(n, u.id, 700, 300);
+    const res = await post('bandwidth-stats/nodes/usage', { nodesUuids: [n] });
+    const users = res.json().response.nodes[0].users as { id: number; totalBytes: number }[];
+    // rw3 identity: the shop keys usage by String(id), so a uuid here would
+    // build a bucket no user matches and the bytes would go unattributed.
+    expect(users).toEqual([{ id: u.numericId, uuid: u.id, username: u.username, totalBytes: 1000 }]);
+  });
+
+  it('honours minTotalBytes', async () => {
+    const n = await mkNode();
+    const small = await mkUser();
+    const big = await mkUser();
+    await usage(n, small.id, 10);
+    await usage(n, big.id, 5000);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/${PREFIX}/api/bandwidth-stats/nodes/usage?minTotalBytes=1000`,
+      headers: bearer,
+      payload: { nodesUuids: [n] },
+    });
+    const users = res.json().response.nodes[0].users as { id: number }[];
+    expect(users.map((x) => x.id)).toEqual([big.numericId]);
+  });
+
+  it('an empty node set is an empty answer, not a 400', async () => {
+    const res = await post('bandwidth-stats/nodes/usage', { nodesUuids: [] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().response.nodes).toEqual([]);
+  });
+});
+
+describe('POST /bandwidth-stats/nodes/users', () => {
+  it('merges one user across nodes into a single row', async () => {
+    const [n1, n2] = [await mkNode(), await mkNode()];
+    const u = await mkUser();
+    await usage(n1, u.id, 400);
+    await usage(n2, u.id, 600);
+    const res = await post('bandwidth-stats/nodes/users', { nodesUuids: [n1, n2] });
+    const top = res.json().response.topUsers as { user: { uuid: string }; total: number }[];
+    const mine = top.filter((t) => t.user.uuid === u.id);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].total).toBe(1000);
+  });
+
+  it('ranks on the merged total, so the limit cuts the right users', async () => {
+    // Ordering by one column of the per-node query (as the single-node route may)
+    // ranks by pre-merge bytes, which truncates the wrong users at the limit.
+    const [n1, n2] = [await mkNode(), await mkNode()];
+    const spread = await mkUser(); // 300 + 300 = 600 across two nodes
+    const single = await mkUser(); // 500 on one node
+    await usage(n1, spread.id, 300);
+    await usage(n2, spread.id, 300);
+    await usage(n1, single.id, 500);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/${PREFIX}/api/bandwidth-stats/nodes/users?topUsersLimit=1`,
+      headers: bearer,
+      payload: { nodesUuids: [n1, n2] },
+    });
+    const top = res.json().response.topUsers as { user: { uuid: string }; total: number }[];
+    expect(top).toHaveLength(1);
+    expect(top[0].user.uuid).toBe(spread.id);
+    expect(top[0].total).toBe(600);
+  });
+});
+
+describe('POST /connections/drop', () => {
+  it('answers A219 when no active node matches, rather than claiming success', async () => {
+    // A219 is the client's own "no connected node matched"; it logs "nothing to
+    // tear down" and moves on. A 200 would claim we dropped sessions on nodes
+    // that do not exist.
+    const u = await mkUser();
+    const res = await post('connections/drop', {
+      dropBy: { by: 'userIds', userIds: [u.numericId] },
+      targetNodes: { target: 'specificNodes', nodeUuids: ['00000000-0000-4000-8000-0000000000ff'] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().errorCode).toBe('A219');
+  });
+
+  it('queues an addUser repair when a node call fails, instead of leaving the user off', async () => {
+    // The node address is unreachable in tests, so every removeUser/addUser
+    // throws - which is precisely the failure this route must not paper over.
+    // Removing an ACTIVE user and not adding them back is worse than not
+    // serving the route at all, so the user is handed to the idempotent job.
+    const { nodeUsersQueue } = await import('../users/users.queue.js');
+    const u = await mkUser();
+    await mkNode();
+    const before = await nodeUsersQueue.getJobCountByTypes('waiting', 'delayed', 'active');
+    const res = await post('connections/drop', {
+      dropBy: { by: 'userIds', userIds: [u.numericId] },
+      targetNodes: { target: 'allNodes' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json().response as { affectedRows: number; repairQueued?: number };
+    expect(body.affectedRows).toBe(0);
+    expect(body.repairQueued).toBe(1);
+    const after = await nodeUsersQueue.getJobCountByTypes('waiting', 'delayed', 'active');
+    expect(after).toBeGreaterThan(before);
+    // Generous: the node address does not resolve, so every call spends a real
+    // DNS failure. The point is the repair, not the latency.
+  }, 30_000);
+});

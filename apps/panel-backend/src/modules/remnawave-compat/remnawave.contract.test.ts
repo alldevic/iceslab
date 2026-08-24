@@ -36,19 +36,25 @@ const OPS = (contract as { operations: Op[] }).operations;
 const RW3 = 'rw3-numeric-user-id';
 
 /**
- * The four operations we deliberately do NOT serve, and the reason that is
- * safe: the shop classifies their 404 as "this panel build has no such route",
- * marks the capability absent and stops asking. Any other 404 shape - one
- * carrying an errorCode - reads as "route exists, entity missing", and the
- * shop would retry the doomed call forever. See UNSERVED_IS_CLASSIFIABLE below,
- * which is the assertion that keeps this list honest.
+ * Operations we deliberately do NOT serve, kept safe by the shop classifying
+ * their 404 as "this panel build has no such route": it marks the capability
+ * absent and stops asking. Any other 404 shape - one carrying an errorCode -
+ * reads as "route exists, entity missing", and the shop would retry the doomed
+ * call forever.
+ *
+ * EMPTY as of 2026-08-24. The four that used to live here (bulk-update-squads,
+ * connections.drop-v3, bandwidth.nodes-users, bandwidth.nodes-usage) are now
+ * served, because the reason not to went away: they are capability-gated, the
+ * shop never called them while it could not certify our declared version, and
+ * its `dev` branch (1c20764a) certifies 3.3.2. From that release it calls them -
+ * and since the shop's admin panel is OUR admin panel, "unserved" stopped
+ * meaning "unused surface" and started meaning "missing admin feature".
+ *
+ * Left as a set rather than deleted: the classifiable-404 property is the thing
+ * that makes NOT serving something safe, and the next route we decline needs it
+ * asserted the same way.
  */
-const DELIBERATELY_UNSERVED = new Set([
-  'users.bulk-update-squads',
-  'users.connections.drop-v3',
-  'bandwidth.nodes-users',
-  'bandwidth.nodes-usage',
-]);
+const DELIBERATELY_UNSERVED = new Set<string>([]);
 
 let app: FastifyInstance;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -180,20 +186,44 @@ describe('every rw3 operation the shop can call reaches a route', () => {
   }
 });
 
-describe('the four unserved operations are unserved in the one way that is safe', () => {
-  for (const op of rw3Ops.filter((o) => DELIBERATELY_UNSERVED.has(o.operation))) {
-    it(`${op.method} ${op.path} answers a classifiable 404`, async () => {
+describe('declining a route stays safe', () => {
+  /**
+   * The property, not a list. Nothing is declined today, but not serving a route
+   * is only ever safe while the shop can TELL it is absent - a 404 carrying an
+   * errorCode reads as "entity missing" and it retries the doomed call forever.
+   *
+   * So this probes a route that will never exist, which is the positive control
+   * the per-operation cases used to provide: it proves the framework still
+   * answers an absent route in the shape the shop classifies. A
+   * `setNotFoundHandler` stamping our own envelope would fail here, which is the
+   * regression that made the old four safe in the first place.
+   */
+  it('an absent facade route answers a 404 the shop reads as "no such route"', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/${PREFIX}/api/a-route-this-facade-will-never-have`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {},
+    });
+    expect(
+      readsAsMissingRoute(res.statusCode, res.body),
+      `-> ${res.statusCode} ${res.body.slice(0, 200)}`,
+    ).toBe(true);
+  });
+
+  it('and any operation we do decline is checked against that same property', async () => {
+    // Empty today; the loop is what makes re-declining a route cheap and safe.
+    for (const op of rw3Ops.filter((o) => DELIBERATELY_UNSERVED.has(o.operation))) {
       for (const path of concretePaths(op.path)) {
         const { status, body } = await probe(op, path);
         expect(
           readsAsMissingRoute(status, body),
-          `${op.method} ${path} -> ${status} ${body.slice(0, 200)}\n` +
-            `Not serving a route is only safe while the shop can TELL it is absent. ` +
-            `A 404 carrying an errorCode reads as "entity missing" and the shop retries forever.`,
+          `${op.method} ${path} -> ${status} ${body.slice(0, 200)}`,
         ).toBe(true);
       }
-    });
-  }
+    }
+    expect(DELIBERATELY_UNSERVED.size).toBe(0);
+  });
 });
 
 describe('the webhook events this facade sends', () => {

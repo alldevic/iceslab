@@ -38,6 +38,13 @@ export function requiredScopeFor(method: string, url: string | undefined): strin
  */
 const COMPAT_SCOPE_RESOURCE: Record<string, string> = {
   users: 'users',
+  // Dropping a user's live sessions is an operation on THAT USER's access, not
+  // on a node — same reasoning as the bulk-actions note below. Unmapped it
+  // returns null, and null is default-deny: the shop's least-privilege
+  // deployment token would take a 403, which its client reads as a permissions
+  // problem rather than an absent route, so it retries the doomed call forever
+  // instead of falling back.
+  connections: 'users',
   'internal-squads': 'squads',
   'external-squads': 'squads',
   hwid: 'hwid-devices',
@@ -71,7 +78,14 @@ export function requiredCompatScope(
   // users:read data, NOT system:read (which natively grants only the version
   // string). Bind them to users:read so a system/dashboard-scoped monitoring
   // token can't enumerate per-user PII (usernames + traffic).
-  if (resource === 'bandwidth-stats' && (rest.includes('/users/') || rest.endsWith('/users'))) {
+  // `nodes/usage` belongs here too: it returns per-user identity and totals for a
+  // set of nodes, which is the same PII as the /users variants. Left to the
+  // generic mapping it would resolve to system:write, which is both wrong about
+  // what it reads and unreachable for the shop's users/squads-scoped token.
+  if (
+    resource === 'bandwidth-stats' &&
+    (rest.includes('/users/') || rest.endsWith('/users') || rest.endsWith('/usage'))
+  ) {
     return 'users:read';
   }
   // Aggregate analytics (/system/stats* and /bandwidth-stats top-level) are

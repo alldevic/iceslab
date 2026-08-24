@@ -91,7 +91,25 @@ async function fanOut<T>(
   }
 }
 
-async function syncAddUser(userId: string): Promise<void> {
+/**
+ * The node payload for one user, or why there is none.
+ *
+ * Exported because the Remnawave-compat facade's connection-drop needs the exact
+ * same request to add a user back after removing them, and a second copy of this
+ * object is a place for the two to drift: every credential the cores derive
+ * (tuic / anytls / shadowtls all hang off xrayUuid) would have to be re-derived
+ * identically in both, and a mismatch is a user the node accepts and no client
+ * can authenticate as.
+ *
+ * The status gate lives here too, so both callers inherit it: a user who is not
+ * active must never be pushed to a node, whichever path asked.
+ */
+export type AddUserPayload =
+  | { kind: 'ok'; req: AddUserRequest }
+  | { kind: 'not-found' }
+  | { kind: 'not-active'; status: string };
+
+export async function buildAddUserRequest(userId: string): Promise<AddUserPayload> {
   const user = await prisma.user.findFirst({
     where: { id: userId, deletedAt: null },
     select: {
@@ -105,37 +123,46 @@ async function syncAddUser(userId: string): Promise<void> {
       amneziawgPublicKey: true,
     },
   });
-  if (!user) {
-    getLogger().info(`[worker:node-users] addUser ${userId} - user not found, skipping`);
-    return;
-  }
+  if (!user) return { kind: 'not-found' };
   // #4 - status-gate. A stale addUser (enqueued before a flip to
   // limited/expired, or racing a removeUser for the same user) must not
   // resurrect a non-active user on the nodes. Together with syncRemoveUser's
   // gate this makes the node user-set converge to the live DB status no matter
   // what order the add/remove jobs happen to run in.
-  if (user.status !== 'active') {
+  if (user.status !== 'active') return { kind: 'not-active', status: user.status };
+  return {
+    kind: 'ok',
+    req: {
+      userId: user.id,
+      shortId: user.shortId,
+      username: user.username,
+      credentials: {
+        hysteriaPassword: user.hysteriaPassword,
+        naivePassword: user.naivePassword,
+        xrayUuid: user.xrayUuid,
+        amneziawgPublicKey: user.amneziawgPublicKey,
+        tuicUuid: user.xrayUuid,
+        tuicPassword: deriveTuicPassword(user.xrayUuid),
+        anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
+        shadowtlsPassword: deriveShadowtlsPassword(user.xrayUuid),
+      },
+    },
+  };
+}
+
+async function syncAddUser(userId: string): Promise<void> {
+  const payload = await buildAddUserRequest(userId);
+  if (payload.kind === 'not-found') {
+    getLogger().info(`[worker:node-users] addUser ${userId} - user not found, skipping`);
+    return;
+  }
+  if (payload.kind === 'not-active') {
     getLogger().info(
-      `[worker:node-users] addUser ${userId} - status=${user.status}, not active, skipping`,
+      `[worker:node-users] addUser ${userId} - status=${payload.status}, not active, skipping`,
     );
     return;
   }
-
-  const req: AddUserRequest = {
-    userId: user.id,
-    shortId: user.shortId,
-    username: user.username,
-    credentials: {
-      hysteriaPassword: user.hysteriaPassword,
-      naivePassword: user.naivePassword,
-      xrayUuid: user.xrayUuid,
-      amneziawgPublicKey: user.amneziawgPublicKey,
-      tuicUuid: user.xrayUuid,
-      tuicPassword: deriveTuicPassword(user.xrayUuid),
-      anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
-      shadowtlsPassword: deriveShadowtlsPassword(user.xrayUuid),
-    },
-  };
+  const req = payload.req;
 
   const nodes = await fetchActiveNodes();
   await fanOut(
