@@ -90,26 +90,6 @@ ensure_webhook_cert() {
   echo "stand: generated a self-signed webhook TLS certificate in $dir"
 }
 
-# Live-risk (3) end to end: the shop's own fleet sync, walking our /users/stream
-# while the set changes underneath it.
-#
-# The unit test proves the panel's paging with inject. This proves the thing the
-# risk is actually about: the SHOP walking every page to decide who still exists,
-# and a user it never sees being marked PANEL_USER_NOT_FOUND. It needs the walk
-# to take more than an instant, so the probe rewrites two of the shop's own knobs
-# in the runtime env - a five-user page and a one-second pause between pages -
-# and puts them there rather than in the committed template, because the
-# differential's two halves must stay comparable.
-churn_probe_env() {
-  fill_token
-  local size="${CHURN_PAGE_SIZE:-5}" delay="${CHURN_PAGE_DELAY:-1.0}"
-  {
-    echo "PANEL_ALL_USERS_PAGE_SIZE=$size"
-    echo "PANEL_ALL_USERS_PAGE_DELAY_SECONDS=$delay"
-  } >> "$RUNTIME_ENV"
-  echo "stand: sync paging forced to $size users, ${delay}s between pages"
-}
-
 # An admin session on the shop, as admin.sh gets one. Prints "<cookiejar> <csrf>".
 shop_admin_session() {
   local jar="$1" email="${ADMIN_EMAIL:-runes.admin@example.com}" req code ver csrf
@@ -436,14 +416,12 @@ print(d.get("id") or d["users"][0]["id"])')"
       | grep -oE 'Panel records checked: [0-9]+' | tail -1 | grep -oE '[0-9]+')"
     echo
     echo "stand: panel had $total users; one was deleted after the walk collected it"
-    echo "stand: the shop walked $checked"
-    if [[ "$checked" == "$total" ]]; then
-      echo "stand: nothing was lost - every user the walk should have seen, it saw"
-    else
-      echo "stand: LOST $((total - checked)) user(s) that were alive throughout the walk." >&2
-      echo "The shop reads each of them as deleted from the panel." >&2
-      exit 1
-    fi
+    # The verdict is delegated because the FIRST thing it has to decide is
+    # whether this run proved anything at all: a walk that fitted in one page
+    # never followed a cursor, and the earlier version of this probe reported
+    # success in exactly that case.
+    docker logs --since "$mark" remnawave-minishop-worker 2>&1 \
+      | python3 "$HERE/churn_verdict.py" "$total" "$checked" "${CHURN_DELETE_AFTER:-4}"
     ;;
 
   webhook-probe)
