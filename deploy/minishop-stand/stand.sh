@@ -337,12 +337,24 @@ case "${1:-}" in
     mkdir -p "$outdir"
     "$0" half iceslab "$outdir"
     "$0" half ref "$outdir"
-    echo; echo "===== call traces: the purchase ====="
-    python3 "$HERE/compare_traces.py" "$outdir/ref-buy.trace" "$outdir/iceslab-buy.trace" || true
-    echo; echo "===== call traces: the admin walkthrough ====="
-    python3 "$HERE/compare_traces.py" "$outdir/ref-admin.trace" "$outdir/iceslab-admin.trace" || true
-    echo; echo "===== what the admin pages rendered ====="
-    python3 "$HERE/compare_admin.py" "$outdir/ref-admin.jsonl" "$outdir/iceslab-admin.jsonl" || true
+    # Each comparison runs even if an earlier one found something - all three
+    # are worth reading. But a REFUSAL (exit 2, "nothing to compare") is not a
+    # finding, it means the run was invalid, and that must not end in a zero
+    # exit code just because the message scrolled past.
+    invalid=0
+    compare_step() { # heading, script, args...
+      local heading="$1"; shift
+      local script="$1"; shift
+      echo; echo "===== $heading ====="
+      python3 "$HERE/$script" "$@" || [[ $? -eq 1 ]] || invalid=1
+    }
+    compare_step "call traces: the purchase" compare_traces.py \
+      "$outdir/ref-buy.trace" "$outdir/iceslab-buy.trace"
+    compare_step "call traces: the admin walkthrough" compare_traces.py \
+      "$outdir/ref-admin.trace" "$outdir/iceslab-admin.trace"
+    compare_step "what the admin pages rendered" compare_admin.py \
+      "$outdir/ref-admin.jsonl" "$outdir/iceslab-admin.jsonl"
+    [[ $invalid -eq 0 ]] || die "a comparison refused to run - the differential proved nothing"
     ;;
 
   full)
