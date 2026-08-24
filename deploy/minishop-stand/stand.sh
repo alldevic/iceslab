@@ -21,6 +21,9 @@ RUNTIME_REF_ENV="$HERE/.runtime/remnawave-ref.env"
 export STAND_DIR="$HERE"
 
 die() { echo "stand: $*" >&2; exit 1; }
+# A run that never reached the code under test. Distinct from die() on purpose:
+# "we did not wait long enough" must not read like "the shop did not call it".
+refuse() { echo "stand: $*" >&2; exit 2; }
 
 [[ -d "$SHOP" ]] || die "no minishop checkout at $SHOP (set MINISHOP_DIR)"
 [[ -f "$SHOP/docker-compose-dev.yml" ]] || die "$SHOP is not a minishop checkout"
@@ -205,6 +208,59 @@ correct, but the fix belongs here." ;;
   done <<< "$names"
 }
 
+# A squad with no NODES is a squad the shop quietly refuses to meter.
+#
+# Called from `premium-probe`, NOT from `up-*`, and that placement is the point:
+# only our half's squads can be given nodes (the reference panel has none to
+# give), so doing it during a differential would make our half meter premium
+# while the reference skips it - one more divergence line per run, explaining
+# nothing about the facade. The probes that need a richer fixture than the
+# comparison does are separate here for exactly this reason; see webhook-probe
+# and churn-probe.
+#
+# A bare group grants no profiles, so the facade's accessible-nodes answers []
+# ("the minishop treats [] the same as an error"), and the tariff worker logs
+# `Premium squads for tariff <key> have no accessible nodes` and skips premium
+# accounting entirely - which is the only thing that ever calls
+# POST /bandwidth-stats/nodes/usage. The stand ran for a day with squads like
+# that and reported no problem, because nothing was asking.
+#
+# So: give each of them a profile that actually resolves to nodes, and then
+# CHECK that it did. Node status does not matter here - the facade maps
+# group -> profiles -> bindings -> nodes without filtering on it - which is why
+# a lab full of disabled and unreachable nodes is still a valid fixture.
+grant_squad_nodes() {
+  local tok squads profile sid nodes
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  squads="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/$PREFIX/api/internal-squads" \
+    | python3 "$HERE/squad_ids.py" "$(python3 "$HERE/squad_names.py" "$HERE/tariffs.template.json" | tr '\n' '|')")" \
+    || die "could not list the panel's squads"
+  profile="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/api/profiles" \
+    | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+rows = d.get("profiles", d)
+print("\n".join(p["id"] for p in rows if p.get("id")))')" || die "could not list the panel's profiles"
+  [[ -n "$profile" ]] || die "the panel has no profile, so no squad can grant a node
+and the shop will skip premium accounting without calling anything."
+  while read -r sid; do
+    [[ -n "$sid" ]] || continue
+    # Every profile: which one carries the node bindings is lab state, not
+    # something this should encode, and the check below is what decides.
+    curl -sS -o /dev/null -w '' -X PUT -H "authorization: Bearer $tok" \
+      -H 'content-type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"profileIds": sys.argv[1].split()}))' "$profile")" \
+      "$PANEL_URL/api/squads/$sid" || die "could not attach a profile to squad $sid"
+    nodes="$(curl -sS -H "authorization: Bearer $tok" \
+      "$PANEL_URL/$PREFIX/api/internal-squads/$sid/nodes" \
+      | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("response") or []))')"
+    (( nodes > 0 )) || die "squad $sid still grants no node after attaching every profile.
+The shop logs 'Premium squads ... have no accessible nodes' and skips premium
+accounting, so POST /bandwidth-stats/nodes/usage is never called and the run
+proves nothing about it. Bind a profile to a node on the panel first."
+    echo "stand: squad $sid grants $nodes node(s)"
+  done <<< "$squads"
+}
+
 # The tariff catalogue itself, through the shop's own admin API. Both halves,
 # same code, resolved against whichever panel the shop is pointed at.
 seed_tariffs() {
@@ -234,7 +290,10 @@ stand_owned_emails() {
   found="$(grep -oE "'[A-Za-z0-9._%+-]+@example\\.com'" "$seed" | tr -d "'" | sort -u)"
   [[ -n "$found" ]] || die "$seed names no @example.com address; the purge would silently purge nothing
 and the next run would inherit this one's panel users."
-  printf '%s\n%s\n' "${STAND_BUYER:-stand-buyer@example.com}" "$found"
+  printf '%s\n%s\n%s\n' \
+    "${STAND_BUYER:-stand-buyer@example.com}" \
+    "${PREMIUM_BUYER:-stand-premium@example.com}" \
+    "$found"
 }
 
 # The shop's WORKER, not just its backend, has to be able to talk to the panel.
@@ -434,6 +493,77 @@ case "${1:-}" in
     which="${1:?usage: stand.sh check <iceslab|ref>}"
     assert_admin_seeded "$which"
     assert_worker_authenticated "$which"
+    ;;
+  premium-probe)
+    # POST /bandwidth-stats/nodes/usage, called by the SHOP rather than asserted
+    # with inject.
+    #
+    # It is one of the four capability routes served in 741d0cd, and until this
+    # probe none of them had ever been called by a real shop in any run here -
+    # their whole guard was our own tests. It is also the one route the shop
+    # reaches only through a chain of preconditions, every link of which fails
+    # QUIETLY: the shop must certify the version we declare (its `dev` branch
+    # does, `support=current`), a premium-bearing subscription must be ALIVE
+    # (the admin walkthrough deletes its buyer at the end, so a probe run after
+    # one finds no candidates), and the tariff's premium squad must resolve to
+    # nodes or the worker logs "no accessible nodes" and skips the whole
+    # accounting. Each of those makes the route uncalled, and an uncalled route
+    # looks exactly like a route with nothing wrong.
+    shift
+    grant_squad_nodes
+    # The worker caches the squad -> nodes answer for 300s
+    # (PANEL_EXTERNAL_SQUADS_CACHE_TTL_SECONDS), so a fixture it was told about
+    # a moment ago is invisible to it, and the tick fires on the stale "no
+    # accessible nodes". Restarting drops the in-process cache; without it this
+    # probe reported "the shop never called it" about a shop that had not been
+    # told yet. Same 300s that keeps reshuffling /system/metadata in the traces.
+    "${compose_iceslab[@]}" restart worker
+    "${compose_iceslab[@]}" up -d --wait worker
+    ppmark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    STAND_ENV="$RUNTIME_ENV" "$HERE/buy.sh" "${PREMIUM_BUYER:-stand-premium@example.com}" \
+      > "${1:-/tmp/premium-probe-buy.log}" 2>&1 \
+      || die "the premium probe's purchase failed; see ${1:-/tmp/premium-probe-buy.log}"
+    echo "stand: bought ${PREMIUM_BUYER:-stand-premium@example.com}; waiting for a FULL tariff tick"
+    # The premium_fast tick does not compute usage; only the full one does, and
+    # it runs once a minute. Waiting for the tick rather than a fixed sleep is
+    # the difference between "the route was not called" and "we did not wait".
+    # The full tick runs every FIVE minutes (measured: 13:53:10, 13:58:10,
+    # 14:03:10), the premium_fast one every minute - and only the full one
+    # computes usage. Waiting for the tick itself rather than sleeping a guessed
+    # interval is the difference between "the route was not called" and "we did
+    # not wait", and the first draft of this waited four minutes and refused.
+    for _ in $(seq 1 66); do
+      if docker logs --since "$ppmark" remnawave-minishop-worker 2>&1 | grep -q 'kind=full'; then
+        ticked=1; break
+      fi
+      sleep 10
+    done
+    [[ "${ticked:-0}" == 1 ]] || refuse "no full tariff tick in eleven minutes - the probe proved
+nothing. A run that never reached the code under test is not a run that found
+nothing, so this is a refusal, not a pass."
+    "$0" trace "${STAND_TRACE:-/tmp/premium-probe.trace}" "$ppmark"
+    grep -q '^POST /bandwidth-stats/nodes ' "${STAND_TRACE:-/tmp/premium-probe.trace}" \
+      || die "the shop never called POST /bandwidth-stats/nodes.
+Check the worker log for 'have no accessible nodes' (the tariff's premium squad
+grants none) or for a version it will not certify."
+    # The label is shared by four operations, two of them POST, so the trace
+    # alone cannot say WHICH. The worker names it: `source=multi_node_usage` is
+    # the branch that consumes /nodes/usage (tariff_worker_premium_usage.py),
+    # and `complete=True` is the shop agreeing we answered for every node it
+    # asked about - which is the contract that route is easiest to break.
+    snap="$(docker logs --since "$ppmark" remnawave-minishop-worker 2>&1 \
+      | grep -o 'premium_usage_snapshot .*' | tail -1)"
+    [[ -n "$snap" ]] || die "no premium usage snapshot in the worker log; the route answered but
+the shop did not build a snapshot from it."
+    echo "stand: $snap"
+    grep -q 'source=multi_node_usage' <<<"$snap" \
+      || die "the snapshot came from '$snap' - not from /nodes/usage, so this probe
+did not exercise the route it exists for."
+    grep -q 'complete=True' <<<"$snap" \
+      || die "the shop calls the snapshot INCOMPLETE: $snap
+It asked about a set of nodes and did not get an answer for all of them, which
+is the silent half of the per-node billing path."
+    echo "stand: premium usage path exercised end to end"
     ;;
   seed-tariffs)
     # Re-run the catalogue step alone, against whatever half is up.
@@ -680,11 +810,36 @@ print(d.get("id") or d["users"][0]["id"])')"
     # and a trace that carries a previous run's calls compares two things that
     # never happened together - it cost me a diff full of 403s from an unseeded
     # panel before I noticed.
-    since="${2:-$(docker inspect -f '{{.State.StartedAt}}' remnawave-minishop-backend)}"
-    docker logs --since "$since" remnawave-minishop-backend 2>&1 \
-      | grep -oE 'method=[A-Z]+ endpoint=[^ ]+ status=[0-9]+' \
-      | sed -E 's/method=([A-Z]+) endpoint=([^ ]+) status=([0-9]+)/\1 \2 \3/' \
-      > "$out"
+    # BOTH containers. This read the backend alone until 2026-08-24, and the
+    # shop is two processes: the fleet sync, the premium tariff workers and
+    # every capability-gated bulk call live in the WORKER. A trace that cannot
+    # see them reports "the shop never called that" about calls it was not
+    # listening for - which is the answer a probe gives when it is looking in
+    # the wrong place, and it is indistinguishable from the real one.
+    #
+    # Compared as multisets, so merging two logs needs no interleaving.
+    mark="${2:-}"
+    : > "$out"
+    for container in remnawave-minishop-backend remnawave-minishop-worker; do
+      docker inspect -f '{{.State.StartedAt}}' "$container" >/dev/null 2>&1 \
+        || die "$container is not there; a trace missing one of the shop's two
+processes silently under-reports what it called."
+      # Each container's OWN start when no mark is given: they start at
+      # different moments, and the backend's stamp would carry the worker's
+      # previous-run lines into this trace.
+      since="${mark:-$(docker inspect -f '{{.State.StartedAt}}' "$container")}"
+      raw="$(docker logs --since "$since" "$container" 2>&1)" \
+        || die "could not read $container's log"
+      # `|| true` because grep exits 1 when a container made NO calls in the
+      # window, which is a fact about the run and not a failure to read it.
+      # Under `set -e` with pipefail that ended the whole script - no message,
+      # an empty trace file, and (once this loop existed) the second container
+      # never read at all.
+      printf '%s\n' "$raw" \
+        | grep -oE 'method=[A-Z]+ endpoint=[^ ]+ status=[0-9]+' \
+        | sed -E 's/method=([A-Z]+) endpoint=([^ ]+) status=([0-9]+)/\1 \2 \3/' \
+        >> "$out" || true
+    done
     [[ "$out" == /dev/stdout ]] || echo "stand: wrote $(wc -l < "$out") call(s) to $out"
     ;;
 
@@ -713,6 +868,9 @@ usage: $(basename "$0") <command>
   mark         print a timestamp to hand to 'trace' later
   check <iceslab|ref>
                re-check what up-* asserts, against a stand already up
+  premium-probe [buylog]
+               buy, wait for a full tariff tick, and check the shop really called
+               POST /bandwidth-stats/nodes/usage and built a COMPLETE snapshot
   seed-tariffs re-store the tariff catalogue on the half that is up (up-* does
                this already; without a catalogue the tariff and premium-override
                admin actions answer 400 and 502 without calling the panel)
