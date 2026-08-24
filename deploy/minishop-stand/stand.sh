@@ -1002,6 +1002,15 @@ print(d.get("id") or d["users"][0]["id"])')"
     [[ $# -eq 2 ]] || die "usage: stand.sh compare-admin <reference.jsonl> <candidate.jsonl>"
     exec python3 "$HERE/compare_admin.py" "$1" "$2"
     ;;
+
+  selftest)
+    # The comparators, against walkthroughs whose answer is known. Needs no
+    # stand and no docker, so there is no excuse for skipping it: a comparator
+    # is a check, and an unchecked check is exactly what this stand keeps
+    # finding - it reports something every run and nothing says whether that
+    # something is true.
+    exec python3 "$HERE/compare_admin.py" --selftest
+    ;;
   status) docker ps --filter name=remnawave --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' ;;
   logs)   shift; "${compose_iceslab[@]}" logs --tail "${1:-80}" backend worker ;;
 
@@ -1094,6 +1103,7 @@ usage: $(basename "$0") <command>
                up, buy, walk the admin, and write both traces into <outdir>
   compare-admin a b
                diff two admin walkthroughs (what the pages rendered)
+  selftest     run the comparators against known answers (no stand, no docker)
   differential <outdir>
                both halves and all three comparisons, in one command
   full <outdir>
