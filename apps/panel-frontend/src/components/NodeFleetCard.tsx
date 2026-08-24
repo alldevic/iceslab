@@ -185,7 +185,7 @@ export function NodeFleetCard({
           label="CPU"
           detail={
             node.metrics.cpu
-              ? t('nodeCard.cpuDetail', {
+              ? t('nodeEdit.cpuDetail', {
                   cores: node.metrics.cpu.cores,
                   la: node.metrics.cpu.loadAvg1.toFixed(2),
                 })

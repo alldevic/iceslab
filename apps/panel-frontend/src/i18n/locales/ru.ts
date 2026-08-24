@@ -7,6 +7,7 @@
  */
 export default {
   common: {
+    error: 'Ошибка',
     save: 'Сохранить',
     cancel: 'Отмена',
     delete: 'Удалить',
@@ -436,6 +437,7 @@ export default {
   },
 
   routes: {
+    empty: 'Пока пусто',
     paneNode: 'На ноде',
     paneNodeHint: 'Трафик уже у нас. Решаем, куда выпустить.',
     paneDevice: 'На устройстве',
@@ -783,6 +785,9 @@ export default {
     },
   },
   nodes: {
+    notify: {
+      updated: 'Нода обновлена',
+    },
     title: 'Ноды',
     bar: {
       vps: 'VPS',
@@ -838,6 +843,7 @@ export default {
       actions: 'Действия',
     },
     form: {
+      warpError: 'Не удалось зарегистрировать WARP',
       stepParams: 'Параметры',
       stepProfiles: 'Профили',
       stepParamsDesc: 'Имя, адрес, протокол',
@@ -1067,6 +1073,7 @@ export default {
       profilesCount_one: '{{count}} профиль',
       profilesCount_few: '{{count}} профилей',
       profilesCount_many: '{{count}} профилей',
+      profilesCount_other: '{{count}} профилей',
       users: 'пользователей',
     },
     topUsers: {
@@ -1362,6 +1369,7 @@ export default {
     },
   },
   cascades: {
+    splitChipTitle: 'На этой позиции трафик делится по назначению',
     title: 'Каскады',
     add: 'Новый каскад',
     empty: 'Каскадов пока нет.',
@@ -1533,6 +1541,7 @@ export default {
   // что есть только у живого каскада: выкатка, подписчики с его конфигом на
   // руках и удаление.
   cascadeEdit: {
+    splitPreviewIncomplete: 'Заполни правило, чтобы увидеть предпросмотр',
     gone: 'Такого каскада больше нет.',
     save: 'Сохранить и разослать',
     saving: 'Сохраняем...',
@@ -1902,6 +1911,7 @@ export default {
     nodesCount_one: '{{count}} нода',
     nodesCount_few: '{{count}} ноды',
     nodesCount_many: '{{count}} нод',
+    nodesCount_other: '{{count}} нод',
     add: 'Добавить',
     deleteTitle: 'Удалить регион «{{name}}»?',
     deleteWithNodes: '{{count}} нод останутся, но потеряют привязку к региону (поле обнулится).',
@@ -1963,6 +1973,18 @@ export default {
       filename: 'файл: {{name}}.json',
     },
     cards: {
+      'xray-reality-grpc-ru': {
+        name: 'REALITY + gRPC (RU-маскировка)',
+        description: 'Прикрытие под российский CDN — для РФ, где режут cloudflare-SNI',
+        details:
+          'gRPC поверх REALITY с dest на крупный российский CDN. Смысл в том, что SNI и IP сходятся внутри страны: у TSPU нет повода считать соединение внешним.',
+        notes: [
+          'dest должен реально отвечать по TLS 1.3 — проверь до раскатки',
+          'gRPC несовместим с Vision: flow остаётся пустым',
+          'serviceName выбирай неприметный, GunService из документации узнаваем',
+          'Проверь размер записи рукопожатия цели, если включаешь постквантовый REALITY',
+        ],
+      },
       'xray-reality-vision-raw': {
         name: 'REALITY + Vision (raw)',
         description: 'Канонический stealth - маскировка под HTTPS-сайт',
@@ -2396,6 +2418,10 @@ export default {
   },
 
   nodeCard: {
+    noCap: 'без лимита',
+    load: 'нагрузка',
+    hosts: 'хостов',
+    coreTooOld: 'ядро слишком старое, чтобы это сообщить',
     reBootstrap: 'Re-bootstrap',
     metricsPending: 'Метрики готовятся - первый опрос в течение 15 сек',
     loadLabel: 'Загрузка',

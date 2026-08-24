@@ -5,6 +5,7 @@
  */
 export default {
   common: {
+    error: 'Error',
     save: 'Save',
     cancel: 'Cancel',
     delete: 'Delete',
@@ -390,6 +391,7 @@ export default {
   },
 
   routes: {
+    empty: 'Nothing here yet',
     paneNode: 'On the node',
     paneNodeHint: 'Traffic is already with us. This decides which door it leaves by.',
     paneDevice: 'On the device',
@@ -726,6 +728,9 @@ export default {
     },
   },
   nodes: {
+    notify: {
+      updated: 'Node updated',
+    },
     title: 'Nodes',
     bar: {
       vps: 'VPS',
@@ -777,6 +782,7 @@ export default {
       actions: 'Actions',
     },
     form: {
+      warpError: 'WARP registration failed',
       stepParams: 'Parameters',
       stepProfiles: 'Profiles',
       stepParamsDesc: 'Name, address, protocol',
@@ -1300,6 +1306,7 @@ export default {
     },
   },
   cascades: {
+    splitChipTitle: 'This position splits traffic by destination',
     title: 'Cascades',
     add: 'New cascade',
     empty: 'No cascades yet.',
@@ -1467,6 +1474,7 @@ export default {
   // here is what only a LIVE cascade has: a push to report, subscribers already
   // holding its config, and a delete.
   cascadeEdit: {
+    splitPreviewIncomplete: 'Fill the rule in to preview it',
     gone: 'This cascade no longer exists.',
     save: 'Save and push',
     saving: 'Saving...',
@@ -2332,6 +2340,10 @@ export default {
   },
 
   nodeCard: {
+    noCap: 'no limit',
+    load: 'load',
+    hosts: 'hosts',
+    coreTooOld: 'core too old to report this',
     reBootstrap: 'Re-bootstrap',
     metricsPending: 'Metrics pending - first poll within 15s',
     loadLabel: 'Load',

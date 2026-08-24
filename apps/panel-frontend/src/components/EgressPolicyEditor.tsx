@@ -118,8 +118,8 @@ function RuleHead({
         variant="subtle"
         style={{ color: MIST }}
         disabled={index === 0}
-        title={t('cascades.splitMoveUp')}
-        aria-label={t('cascades.splitMoveUp')}
+        title={t('cascadeEdit.splitMoveUp')}
+        aria-label={t('cascadeEdit.splitMoveUp')}
         onClick={() => onMove(index, -1)}
       >
         ↑
@@ -129,8 +129,8 @@ function RuleHead({
         variant="subtle"
         style={{ color: MIST }}
         disabled={index === total - 1}
-        title={t('cascades.splitMoveDown')}
-        aria-label={t('cascades.splitMoveDown')}
+        title={t('cascadeEdit.splitMoveDown')}
+        aria-label={t('cascadeEdit.splitMoveDown')}
         onClick={() => onMove(index, 1)}
       >
         ↓
@@ -186,26 +186,26 @@ export function EgressPolicyEditor({
   // issued server-side on first save. While creating a cascade there are none,
   // so the option is left out rather than offered with an empty picker.
   const targetOptions: { value: EgressTarget; label: string }[] = [
-    { value: 'direct', label: t('cascades.targetDirect') },
-    { value: 'link-out', label: t('cascades.targetLinkOut') },
+    { value: 'direct', label: t('cascadeEdit.targetDirect') },
+    { value: 'link-out', label: t('cascadeEdit.targetLinkOut') },
     ...(directions.length > 0
-      ? [{ value: 'direction' as EgressTarget, label: t('cascades.targetDirection') }]
+      ? [{ value: 'direction' as EgressTarget, label: t('cascadeEdit.targetDirection') }]
       : []),
-    { value: 'block', label: t('cascades.targetBlock') },
+    { value: 'block', label: t('cascadeEdit.targetBlock') },
   ];
 
   return (
-    <Modal opened={opened} onClose={onClose} title={`${t('cascades.split')} — ${nodeLabel}`} size="lg" centered>
+    <Modal opened={opened} onClose={onClose} title={`${t('cascadeEdit.split')} — ${nodeLabel}`} size="lg" centered>
       <Stack gap={12}>
         <Text size="xs" style={{ color: MIST, lineHeight: 1.5 }}>
-          {t('cascades.splitHint')}
+          {t('cascadeEdit.splitHint')}
         </Text>
 
         {rules.length > 1 && (
           // Said once, above the list, because it explains what the numbers and
           // the arrows are FOR. Without it the order reads as cosmetic.
           <Text size="xs" style={{ color: AMBER, lineHeight: 1.5 }}>
-            {t('cascades.splitOrderHint')}
+            {t('cascadeEdit.splitOrderHint')}
           </Text>
         )}
 
@@ -218,7 +218,7 @@ export function EgressPolicyEditor({
               <Stack gap={8}>
                 <RuleHead index={i} total={rules.length} onMove={move} />
                 <Text size="xs" style={{ color: FAINT, fontFamily: MONO }}>
-                  {t('cascades.splitRawRule', { summary: summarise(r) })}
+                  {t('cascadeEdit.splitRawRule', { summary: summarise(r) })}
                 </Text>
               </Stack>
             </Box>
@@ -231,34 +231,34 @@ export function EgressPolicyEditor({
                 <RuleHead index={i} total={rules.length} onMove={move} />
                 <TagsInput
                   size="xs"
-                  label={t('cascades.splitGeosite')}
-                  description={t('cascades.splitGeositeHint')}
+                  label={t('cascadeEdit.splitGeosite')}
+                  description={t('cascadeEdit.splitGeositeHint')}
                   value={r.geosite ?? []}
                   onChange={(v) => patch(i, { geosite: v })}
                 />
                 <TagsInput
                   size="xs"
-                  label={t('cascades.splitGeoip')}
+                  label={t('cascadeEdit.splitGeoip')}
                   value={r.geoip ?? []}
                   onChange={(v) => patch(i, { geoip: v })}
                 />
                 <TagsInput
                   size="xs"
-                  label={t('cascades.splitDomain')}
+                  label={t('cascadeEdit.splitDomain')}
                   value={r.domain ?? []}
                   onChange={(v) => patch(i, { domain: v })}
                 />
                 <TagsInput
                   size="xs"
-                  label={t('cascades.splitIp')}
-                  description={t('cascades.splitIpHint')}
+                  label={t('cascadeEdit.splitIp')}
+                  description={t('cascadeEdit.splitIpHint')}
                   value={r.ip ?? []}
                   onChange={(v) => patch(i, { ip: v })}
                 />
                 <Group gap={8} align="flex-end" wrap="nowrap">
                   <Select
                     size="xs"
-                    label={t('cascades.splitTarget')}
+                    label={t('cascadeEdit.splitTarget')}
                     data={targetOptions}
                     value={r.target}
                     allowDeselect={false}
@@ -275,7 +275,7 @@ export function EgressPolicyEditor({
                   {r.target === 'direction' && (
                     <Select
                       size="xs"
-                      label={t('cascades.splitDirectionTag')}
+                      label={t('cascadeEdit.splitDirectionTag')}
                       data={directions.map((d) => ({ value: String(d.tag), label: d.label }))}
                       value={r.directionTag != null ? String(r.directionTag) : null}
                       onChange={(v) => patch(i, { directionTag: v ? Number(v) : undefined })}
@@ -288,7 +288,7 @@ export function EgressPolicyEditor({
                     color="red"
                     onClick={() => setRules(rules.filter((_, j) => j !== i))}
                   >
-                    {t('cascades.removeRule')}
+                    {t('cascadeEdit.removeRule')}
                   </Button>
                 </Group>
                 {!hasMatcher(r) && (
@@ -296,7 +296,7 @@ export function EgressPolicyEditor({
                   // a catch-all and shadow everything under it), so say that here
                   // rather than let the row quietly disappear on save.
                   <Text size="xs" style={{ color: AMBER }}>
-                    {t('cascades.splitRuleEmpty')}
+                    {t('cascadeEdit.splitRuleEmpty')}
                   </Text>
                 )}
               </Stack>
@@ -305,7 +305,7 @@ export function EgressPolicyEditor({
         )}
 
         <Button size="xs" variant="default" onClick={() => setRules([...rules, { ...EMPTY_RULE }])}>
-          {t('cascades.splitAddRule')}
+          {t('cascadeEdit.splitAddRule')}
         </Button>
 
         {preview && <CompiledPreview rules={rules} context={preview} />}
@@ -385,7 +385,7 @@ function CompiledPreview({
     <Box style={{ padding: 12, borderRadius: 8, backgroundColor: WELL, border: `1px solid ${HAIRLINE}` }}>
       <Group gap={8} wrap="nowrap" align="center">
         <Button size="compact-xs" variant="subtle" style={{ color: MIST }} onClick={() => setOpen(!open)}>
-          {open ? `▾ ${t('cascades.splitPreview')}` : `▸ ${t('cascades.splitPreview')}`}
+          {open ? `▾ ${t('cascadeEdit.splitPreview')}` : `▸ ${t('cascadeEdit.splitPreview')}`}
         </Button>
         {open && query.isFetching && <Loader size="xs" />}
       </Group>
@@ -393,18 +393,18 @@ function CompiledPreview({
       {open && (
         <Stack gap={8} style={{ marginTop: 8 }}>
           <Text size="xs" style={{ color: MIST, lineHeight: 1.5 }}>
-            {t('cascades.splitPreviewHint')}
+            {t('cascadeEdit.splitPreviewHint')}
           </Text>
 
           {incomplete > 0 && (
             <Text size="xs" style={{ color: AMBER }}>
-              {t('cascades.splitPreviewIncomplete', { count: incomplete })}
+              {t('cascadeEdit.splitPreviewIncomplete', { count: incomplete })}
             </Text>
           )}
 
           {ready.length === 0 ? (
             <Text size="xs" style={{ color: FAINT }}>
-              {t('cascades.splitPreviewEmpty')}
+              {t('cascadeEdit.splitPreviewEmpty')}
             </Text>
           ) : query.isError ? (
             <Text size="xs" style={{ color: RED }}>
@@ -416,12 +416,12 @@ function CompiledPreview({
                   reason a split "does nothing", so it leads. */}
               {query.data.dropped.length > 0 && (
                 <Text size="xs" style={{ color: AMBER, lineHeight: 1.5 }}>
-                  {t('cascades.splitPreviewDropped', { matchers: query.data.dropped.join(', ') })}
+                  {t('cascadeEdit.splitPreviewDropped', { matchers: query.data.dropped.join(', ') })}
                 </Text>
               )}
               {query.data.domainStrategy && (
                 <Text size="xs" style={{ color: MIST }}>
-                  {t('cascades.splitPreviewStrategy', { strategy: query.data.domainStrategy })}
+                  {t('cascadeEdit.splitPreviewStrategy', { strategy: query.data.domainStrategy })}
                 </Text>
               )}
               {/* The node's own egress policy runs BEFORE this split, so a flow
@@ -431,7 +431,7 @@ function CompiledPreview({
               {query.data.nodeRules?.length > 0 && (
                 <Stack gap={4}>
                   <Text size="xs" style={{ color: AMBER, lineHeight: 1.5 }}>
-                    {t('cascades.splitPreviewNodePolicy', { count: query.data.nodeRules.length })}
+                    {t('cascadeEdit.splitPreviewNodePolicy', { count: query.data.nodeRules.length })}
                   </Text>
                   <Code
                     block
@@ -450,7 +450,7 @@ function CompiledPreview({
               )}
               {query.data.rules.length === 0 ? (
                 <Text size="xs" style={{ color: AMBER }}>
-                  {t('cascades.splitPreviewNoRules')}
+                  {t('cascadeEdit.splitPreviewNoRules')}
                 </Text>
               ) : (
                 <Code
@@ -484,7 +484,7 @@ export function SplitBadge({ count, onClick }: { count: number; onClick: () => v
       variant={count > 0 ? 'light' : 'subtle'}
       color={count > 0 ? 'cyan' : 'gray'}
       onClick={onClick}
-      title={t('cascades.split')}
+      title={t('cascadeEdit.split')}
       // Muted until there is something to show: a node without a split is the
       // ordinary case, and an accent on every row would read as a warning.
       style={{ flexShrink: 0, ...(count > 0 ? {} : { color: FAINT }) }}

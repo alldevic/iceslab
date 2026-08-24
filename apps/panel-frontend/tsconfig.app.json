@@ -21,5 +21,8 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests are not part of the bundle and use node APIs the app deliberately
+  // does not have types for; tsconfig.test.json checks them instead.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

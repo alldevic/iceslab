@@ -1658,10 +1658,10 @@ function ExposureNote({
   const clean = result.checked && (result.unexpectedPorts ?? []).length === 0;
   const tone = !result.checked ? MIST : clean ? MOSS : AMBER;
   const text = !result.checked
-    ? t('nodes.form.exposureSkipped', { note: result.note ?? '-' })
+    ? t('nodes.edit.exposureSkipped', { note: result.note ?? '-' })
     : clean
-      ? t('nodes.form.exposureClean')
-      : t('nodes.form.exposureExtra', { ports: (result.unexpectedPorts ?? []).join(', ') });
+      ? t('nodes.edit.exposureClean')
+      : t('nodes.edit.exposureExtra', { ports: (result.unexpectedPorts ?? []).join(', ') });
   return (
     <Box
       style={{
