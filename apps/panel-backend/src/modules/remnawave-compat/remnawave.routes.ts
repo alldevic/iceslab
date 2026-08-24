@@ -1047,8 +1047,6 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       by: ['userId'],
       where: { nodeId: uuid, date: { gte: startDate, lte: endDate } },
       _sum: { bytesIn: true, bytesOut: true },
-      orderBy: { _sum: { bytesIn: 'desc' } },
-      take: limit,
     });
     const names = new Map(
       (
@@ -1058,10 +1056,21 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
         })
       ).map((u) => [u.id, u.username]),
     );
-    const topUsers = rows.map((r) => ({
-      user: { uuid: r.userId, username: names.get(r.userId) ?? null },
-      total: Number(r._sum.bytesIn ?? 0n) + Number(r._sum.bytesOut ?? 0n),
-    }));
+    // Ranked and cut on the SAME number this reports, which is both directions
+    // added up. It used to order and `take` in SQL on `_sum.bytesIn` alone and
+    // then report bytesIn + bytesOut: a list labelled by one number and ordered
+    // by another, and - once a node has more users than the limit - a cut that
+    // drops whoever is heavy OUTBOUND in favour of a lighter total. The premium
+    // billing worker reads exactly this per node, so a dropped user is a user
+    // whose premium traffic bills as zero. Same rule as the multi-node route,
+    // for the same reason.
+    const topUsers = rows
+      .map((r) => ({
+        user: { uuid: r.userId, username: names.get(r.userId) ?? null },
+        total: Number(r._sum.bytesIn ?? 0n) + Number(r._sum.bytesOut ?? 0n),
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, limit);
     return sendResponse(reply, { topUsers });
   });
 

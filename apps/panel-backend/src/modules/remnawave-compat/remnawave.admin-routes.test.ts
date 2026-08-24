@@ -214,24 +214,104 @@ describe('POST /bandwidth-stats/nodes/users', () => {
   });
 
   it('ranks on the merged total, so the limit cuts the right users', async () => {
-    // Ordering by one column of the per-node query (as the single-node route may)
-    // ranks by pre-merge bytes, which truncates the wrong users at the limit.
+    // The traffic is deliberately LOPSIDED between the two directions. The
+    // earlier version of this test gave every user its bytes through `usage`'s
+    // bytesIn and left bytesOut at its default zero - so "rank by one column"
+    // and "rank by the merged total" were the same number, and the test could
+    // not tell them apart. Mutation-checked: ordering the groupBy by
+    // `_sum.bytesIn` and deleting the sort below passed it.
+    //
+    // Now each candidate wins under exactly one wrong rule and loses under the
+    // right one, so ranking by bytesIn alone, by bytesOut alone, or ascending
+    // each picks a different top user:
+    //
+    //            bytesIn   bytesOut   total
+    //   spread       100        500     600   <- correct winner
+    //   outHeavy       0        550     550   <- wins on bytesOut alone
+    //   single       500          0     500   <- wins on bytesIn alone
     const [n1, n2] = [await mkNode(), await mkNode()];
-    const spread = await mkUser(); // 300 + 300 = 600 across two nodes
-    const single = await mkUser(); // 500 on one node
-    await usage(n1, spread.id, 300);
-    await usage(n2, spread.id, 300);
-    await usage(n1, single.id, 500);
-    const res = await app.inject({
+    const spread = await mkUser();
+    const outHeavy = await mkUser();
+    const single = await mkUser();
+    await usage(n1, spread.id, 50, 250);
+    await usage(n2, spread.id, 50, 250); // and still merged across two nodes
+    await usage(n1, outHeavy.id, 0, 550);
+    await usage(n1, single.id, 500, 0);
+    const one = await app.inject({
       method: 'POST',
       url: `/${PREFIX}/api/bandwidth-stats/nodes/users?topUsersLimit=1`,
       headers: bearer,
       payload: { nodesUuids: [n1, n2] },
     });
-    const top = res.json().response.topUsers as { user: { uuid: string }; total: number }[];
+    const top = one.json().response.topUsers as { user: { uuid: string }; total: number }[];
     expect(top).toHaveLength(1);
     expect(top[0].user.uuid).toBe(spread.id);
     expect(top[0].total).toBe(600);
+
+    // And the whole order, not just the head. This is what a limit larger than
+    // the answer would hand an operator.
+    //
+    // What it does NOT catch on its own: deleting the sort outright. Then the
+    // order is whatever the database returned, which on a fixture this small
+    // can happen to be right. Every ranking rule that is WRONG rather than
+    // ABSENT is caught above, deterministically.
+    const all = await app.inject({
+      method: 'POST',
+      url: `/${PREFIX}/api/bandwidth-stats/nodes/users`,
+      headers: bearer,
+      payload: { nodesUuids: [n1, n2] },
+    });
+    const ranked = (all.json().response.topUsers as { user: { uuid: string }; total: number }[])
+      .filter((t) => [spread.id, outHeavy.id, single.id].includes(t.user.uuid));
+    expect(ranked.map((t) => [t.user.uuid, t.total])).toEqual([
+      [spread.id, 600],
+      [outHeavy.id, 550],
+      [single.id, 500],
+    ]);
+  });
+});
+
+describe('GET /bandwidth-stats/nodes/{uuid}/users', () => {
+  /**
+   * Untested until now, and it can afford it least: the shop's premium billing
+   * worker reads this per node to decide how much premium traffic each user
+   * owes (tariff_worker_premium_usage.py). Mutation-checked the way the gap was
+   * found - the handler could answer an empty list and all 141 tests in this
+   * module still passed.
+   */
+  it('ranks and cuts on the number it reports, not on one direction', async () => {
+    const n = await mkNode();
+    const out = await mkUser(); // 50 in + 500 out = 550
+    const inb = await mkUser(); // 400 in +   0 out = 400
+    await usage(n, out.id, 50, 500);
+    await usage(n, inb.id, 400, 0);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/${PREFIX}/api/bandwidth-stats/nodes/${n}/users?topUsersLimit=1`,
+      headers: bearer,
+    });
+    const top = res.json().response.topUsers as { user: { uuid: string }; total: number }[];
+    // Cut by bytesIn, `inb` survives and `out` - the bigger user - is dropped,
+    // and the shop bills that user's premium traffic as zero.
+    expect(top).toHaveLength(1);
+    expect(top[0].user.uuid).toBe(out.id);
+    expect(top[0].total).toBe(550);
+  });
+
+  it('names the users it returns', async () => {
+    const n = await mkNode();
+    const u = await mkUser();
+    await usage(n, u.id, 700, 300);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/${PREFIX}/api/bandwidth-stats/nodes/${n}/users`,
+      headers: bearer,
+    });
+    const top = res.json().response.topUsers as {
+      user: { uuid: string; username: string | null };
+      total: number;
+    }[];
+    expect(top).toEqual([{ user: { uuid: u.id, username: u.username }, total: 1000 }]);
   });
 });
 
