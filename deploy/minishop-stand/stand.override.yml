@@ -1,0 +1,49 @@
+# Two things the stand needs that the shop's own compose cannot know about, kept
+# here rather than as edits to its files: the minishop stays unmodified by
+# design.
+#
+# 1. A name for the HOST. The shop's dev compose expects the panel to be a
+#    service on its own network (`http://remnawave:3000/api`); ours runs on the
+#    host. `host-gateway` is docker's own alias for it. Only the three services
+#    that talk to the panel get it - the frontend never does, and a container
+#    with a route it does not need is a route to debug later.
+#
+# 2. The version stamp as build args instead of a git call. The Dockerfile
+#    derives the image version by running `git describe` inside the build
+#    context, and the context here is a git WORKTREE: its `.git` is a file
+#    pointing outside the context, so git exits 128 and the build fails. The
+#    Dockerfile already skips git entirely when the commit is supplied, so
+#    supply it. Provenance is `custom` because we built it - the source is the
+#    unmodified v3.6.1 tag, but the image is not an official one.
+x-panel-build: &panel-build
+  context: .
+  dockerfile: deploy/docker/Dockerfile
+  args:
+    REMNAWAVE_MINISHOP_BUILD_TAG: ${MINISHOP_BUILD_TAG:-v3.6.1}
+    REMNAWAVE_MINISHOP_BUILD_COMMIT: ${MINISHOP_BUILD_COMMIT:-unknown}
+    REMNAWAVE_MINISHOP_BUILD_PROVENANCE: custom
+    REMNAWAVE_MINISHOP_BRANCH: ''
+
+services:
+  backend:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    build:
+      <<: *panel-build
+      target: backend
+  worker:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    build:
+      <<: *panel-build
+      target: worker
+  migrate:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    build:
+      <<: *panel-build
+      target: backend
+  frontend:
+    build:
+      <<: *panel-build
+      target: frontend
