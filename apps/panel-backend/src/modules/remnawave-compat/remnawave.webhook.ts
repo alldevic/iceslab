@@ -56,6 +56,27 @@ export const REMNAWAVE_EMITTED_EVENTS: readonly RemnaWebhookEvent[] = [
 ];
 
 /**
+ * Escape every code unit above ASCII as `\uXXXX`.
+ *
+ * The signature is HMAC over the raw body, so the shop's check passes only if
+ * the bytes it reads are the bytes we signed - and between us there is whatever
+ * reverse proxy, WAF or CDN the operator runs. A body that is pure ASCII cannot
+ * be changed by anything that re-encodes character sets, which is the one
+ * mutation of this class that happens quietly rather than loudly. JSON escapes
+ * are not a dialect: any parser recombines them, surrogate pairs included, so
+ * the shop reads exactly the same string either way.
+ *
+ * Only `email` can carry non-ASCII today (uuid, telegramId and expireAt cannot),
+ * which is precisely why this is worth doing pre-emptively: the failure would
+ * appear for one subscriber with an accented address, as a 401 on their expiry
+ * webhook, and nowhere else.
+ */
+function escapeNonAscii(json: string): string {
+  // eslint-disable-next-line no-control-regex
+  return json.replace(/[^\x00-\x7F]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
  * Build the exact JSON string the minishop parses: `{name, payload:{user}, meta}`.
  * telegramId is coerced BigInt→Number (a bare JSON.stringify throws on bigint;
  * Telegram ids are within JS safe-integer range — same as mapUserToRemna). The
@@ -66,7 +87,7 @@ export function buildRemnaWebhookBody(
   user: RemnaWebhookUser,
   meta: Record<string, unknown> = {},
 ): string {
-  return JSON.stringify({
+  return escapeNonAscii(JSON.stringify({
     name,
     payload: {
       user: {
@@ -77,7 +98,7 @@ export function buildRemnaWebhookBody(
       },
     },
     meta,
-  });
+  }));
 }
 
 /**
@@ -117,15 +138,85 @@ export async function deliverRemnaWebhook(
 }
 
 /**
- * Fire-and-forget wrapper (best-effort; used for user.expired, where there is no
- * natural retry point). No-ops when unconfigured; never throws into the caller.
+ * Bounded fan-out for everything this module sends.
+ *
+ * The emitters are called one per user, and the callers are batch jobs: one
+ * expiry tick flips every user whose term ended in the last ten minutes, and at
+ * a month boundary that is the whole cohort at once. Unbounded, each of those
+ * users would hold a Prisma connection while its row is read and a socket while
+ * the POST is in flight - thousands of checkouts against a pool of a dozen, so
+ * the reads start failing with pool timeouts on the very path that tells the
+ * shop a subscription ended, and the shop meets a thousand-deep burst it was
+ * never sized for. There is no retry behind `user.expired`; a delivery lost to
+ * the stampede is lost.
+ *
+ * A semaphore turns the stampede into a queue. It does not make the work
+ * smaller - a slow shop still takes as long - but nothing is dropped for having
+ * arrived at the same instant as everything else.
  */
-export function emitRemnaWebhook(
+let inFlight = 0;
+const waiting: (() => void)[] = [];
+
+function releaseSlot(): void {
+  const next = waiting.shift();
+  if (next) {
+    next();
+    return;
+  }
+  inFlight -= 1;
+}
+
+/** Run `task` once a delivery slot is free. Slots are handed out in FIFO order. */
+export async function withWebhookSlot<T>(task: () => Promise<T>): Promise<T> {
+  const limit = config.REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY;
+  if (inFlight >= limit) {
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  } else {
+    inFlight += 1;
+  }
+  try {
+    return await task();
+  } finally {
+    releaseSlot();
+  }
+}
+
+/** In-flight + queued deliveries; for tests and for a future metric. */
+export function remnaWebhookQueueDepth(): { inFlight: number; waiting: number } {
+  return { inFlight, waiting: waiting.length };
+}
+
+/**
+ * Fire-and-forget delivery for one user, best-effort: used for `user.expired`,
+ * where there is no natural retry point. No-ops when unconfigured; never throws
+ * into the caller.
+ *
+ * The row is resolved by id INSIDE the slot, and the caller passes only the id.
+ * That is the whole point when the caller is a batch: a handler that reads the
+ * row first and only then queues the send has already opened one Prisma
+ * connection per user before the semaphore ever sees them, so the pool is
+ * exhausted by the very code meant to protect it. There is deliberately no
+ * second entry point taking an already-loaded row - the second copy is where
+ * the two would drift.
+ */
+export function emitRemnaWebhookForUser(
   name: RemnaWebhookEvent,
-  user: RemnaWebhookUser,
+  userId: string,
   meta: Record<string, unknown> = {},
 ): void {
-  void deliverRemnaWebhook(name, user, meta);
+  if (!isRemnaWebhookConfigured()) return;
+  void withWebhookSlot(async () => {
+    try {
+      const row = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, telegramId: true, email: true, expireAt: true },
+      });
+      if (!row) return; // raced a hard delete
+      await deliverRemnaWebhook(name, row, meta);
+    } catch (err: unknown) {
+      getLogger().warn({ err, event: name, userId }, '[remnawave-webhook] could not load the user to notify about');
+    }
+  });
 }
 
 /**
@@ -154,26 +245,54 @@ export async function scanRemnaExpiryNotifications(): Promise<number> {
     select: { id: true, telegramId: true, email: true, expireAt: true },
   });
 
-  let emitted = 0;
-  for (const u of users) {
-    if (!u.expireAt) continue;
-    const hoursLeft = (u.expireAt.getTime() - nowMs) / 3_600_000;
-    const stage = hoursLeft <= 24 ? '24' : hoursLeft <= 48 ? '48' : '72';
-    const expireEpochSec = Math.floor(u.expireAt.getTime() / 1000);
-    const key = `rw:expnotify:${u.id}:${stage}:${expireEpochSec}`;
-    // AT-LEAST-ONCE: skip if already delivered for this (user, stage, cycle),
-    // otherwise deliver and claim ONLY on a confirmed 2xx. A failed delivery
-    // leaves the key unset so the next hourly tick retries — critical for the
-    // terminal 24h stage, which is the minishop's auto-renew CHARGE trigger. The
-    // minishop dedups re-sends (24h Redis) and its stale-cycle guard prevents a
-    // double-charge, so at-least-once is safe. Key TTL 8d > the 3d window + slack.
-    // Cron concurrency is 1 + hourly, so the exists-then-set gap can't race.
-    const already = await redis.exists(key).catch(() => 0);
-    if (already) continue;
-    const ok = await deliverRemnaWebhook(`user.expires_in_${stage}_hours`, u, {});
-    if (!ok) continue;
-    await redis.set(key, '1', 'EX', 691_200).catch(() => null);
-    emitted += 1;
-  }
-  return emitted;
+  // The dedup read is ONE round trip for the whole cohort, not one per user.
+  // This runs every ten minutes and most ticks have nothing to send, so the
+  // cost of the tick is the cost of finding that out: an indexed query and an
+  // MGET. Per-user EXISTS made that N round trips, which is what made an hourly
+  // cadence feel necessary - and an hourly cadence is what leaves a term
+  // shorter than an hour with no charge trigger at all.
+  const staged = users
+    .map((u) => stageFor(u, nowMs))
+    .filter((s): s is StagedNotification => s !== null);
+  if (staged.length === 0) return 0;
+  const claimed = await redis.mget(staged.map((s) => s.key)).catch(() => null);
+  const pending = claimed ? staged.filter((_, i) => claimed[i] === null) : staged;
+  if (pending.length === 0) return 0;
+
+  // Through the same slots as everything else. Sequentially this loop was
+  // bounded at one delivery at a time, which is safe and, for a cohort of
+  // thousands at a five-second timeout apiece, slower than the gap between
+  // ticks - a 24h stage that misses its window is a charge that never fires.
+  const sent = await Promise.all(pending.map((s) => withWebhookSlot(() => notifyOne(s))));
+  return sent.reduce<number>((acc, n) => acc + n, 0);
+}
+
+interface StagedNotification {
+  user: RemnaWebhookUser;
+  stage: '72' | '48' | '24';
+  key: string;
+}
+
+/** Which stage this user is in, and the (user, stage, cycle) key that claims it. */
+function stageFor(u: RemnaWebhookUser, nowMs: number): StagedNotification | null {
+  if (!u.expireAt) return null;
+  const hoursLeft = (u.expireAt.getTime() - nowMs) / 3_600_000;
+  const stage = hoursLeft <= 24 ? '24' : hoursLeft <= 48 ? '48' : '72';
+  const expireEpochSec = Math.floor(u.expireAt.getTime() / 1000);
+  return { user: u, stage, key: `rw:expnotify:${u.id}:${stage}:${expireEpochSec}` };
+}
+
+/** One user's expiry notification: 1 if it was delivered and claimed, else 0. */
+async function notifyOne(s: StagedNotification): Promise<number> {
+  // AT-LEAST-ONCE: deliver and claim ONLY on a confirmed 2xx. A failed delivery
+  // leaves the key unset so the next tick retries — critical for the terminal
+  // 24h stage, which is the minishop's auto-renew CHARGE trigger. The minishop
+  // dedups re-sends and its stale-cycle guard prevents a double-charge, so
+  // at-least-once is safe. Key TTL 8d > the 3d window + slack. Cron concurrency
+  // is 1 and the key is per (user, stage, cycle), so running the scan's users
+  // concurrently does not put two writers on one key.
+  const ok = await deliverRemnaWebhook(`user.expires_in_${s.stage}_hours`, s.user, {});
+  if (!ok) return 0;
+  await redis.set(s.key, '1', 'EX', 691_200).catch(() => null);
+  return 1;
 }

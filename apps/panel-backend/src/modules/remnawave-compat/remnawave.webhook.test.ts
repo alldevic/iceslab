@@ -65,3 +65,39 @@ describe('webhook signature scheme (X-Remnawave-Signature)', () => {
     expect(sign('s1', b1)).not.toBe(sign('s2', b1));
   });
 });
+
+describe('the signed body is pure ASCII (live-risk 5: proxies between us and the shop)', () => {
+  // The shop verifies HMAC over the RAW body, so the check passes only if the
+  // bytes it reads are the bytes we signed - and between the two there is
+  // whatever reverse proxy or CDN the operator runs. Anything that re-encodes
+  // character sets changes non-ASCII bytes and nothing else, which is why this
+  // failure would show up as a 401 for one subscriber with an accented address
+  // and be invisible for everyone else.
+  const nonAscii = (o: Partial<RemnaWebhookUser> = {}) =>
+    user({ email: 'почта@пример.рф', ...o });
+
+  it('escapes every non-ASCII character rather than emitting UTF-8', () => {
+    const body = buildRemnaWebhookBody('user.expired', nonAscii());
+    expect(body).toMatch(/^[\x00-\x7F]*$/);
+    expect(body).toContain('\\u043f'); // п, escaped
+  });
+
+  it('still says exactly the same thing to a JSON parser', () => {
+    const parsed = JSON.parse(buildRemnaWebhookBody('user.expired', nonAscii()));
+    expect(parsed.payload.user.email).toBe('почта@пример.рф');
+  });
+
+  it('survives characters outside the basic plane, as a surrogate pair', () => {
+    const parsed = JSON.parse(buildRemnaWebhookBody('user.expired', user({ email: 'a🎉@b.c' })));
+    expect(parsed.payload.user.email).toBe('a🎉@b.c');
+  });
+
+  it('signs the ASCII bytes, so the digest is over what a proxy cannot alter', () => {
+    const body = buildRemnaWebhookBody('user.expired', nonAscii());
+    const sig = createHmac('sha256', 's').update(body).digest('hex');
+    // Re-reading the body as UTF-8 bytes and as ASCII bytes must give the same
+    // digest, because there is no byte above 0x7F to disagree about.
+    expect(createHmac('sha256', 's').update(Buffer.from(body, 'utf8')).digest('hex')).toBe(sig);
+    expect(createHmac('sha256', 's').update(Buffer.from(body, 'latin1')).digest('hex')).toBe(sig);
+  });
+});

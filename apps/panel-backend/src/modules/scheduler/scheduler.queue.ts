@@ -50,7 +50,14 @@ const CRON_JOBS: CronJobSpec[] = [
   { name: 'prune-history',                  pattern: '30 3 * * *' },     // 03:30 каждый день - B2 retention для append-only history-таблиц
   { name: 'geo-rebuild',                    pattern: '40 * * * *' },     // :40 каждый час - re-check sources DUE per their refreshIntervalHours (conditional GET/ETag), rebuild + re-push only on real change
   { name: 'alert-near-expiry',              pattern: '0 9 * * *'  },     // 09:00 каждый день - K3 near-expiry/near-cap дайджест в Telegram
-  { name: 'remnawave-expiry-notify',        pattern: '5 * * * *'  },     // :05 каждый час - Remnawave-compat expires-in-{72,48,24}h вебхуки (no-op если фасад/вебхук выкл)
+  // Каждые 10 минут, не раз в час. 24h-стадия - единственный триггер
+  // авто-списания у витрины, и при часовом такте подписка с сроком короче часа
+  // может истечь между двумя тактами, ни разу не попав в окно: списания не
+  // будет, а выглядеть это будет как отказ клиента платить. Такт стоит один
+  // индексированный запрос и один MGET (дедуп читается пачкой), поэтому
+  // учащение почти бесплатно; побочно 24h-вебхук уходит в пределах 10 минут от
+  // границы, а не 60.
+  { name: 'remnawave-expiry-notify',        pattern: '*/10 * * * *' },   // каждые 10 минут - Remnawave-compat expires-in-{72,48,24}h вебхуки (no-op если фасад/вебхук выкл)
 ];
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────

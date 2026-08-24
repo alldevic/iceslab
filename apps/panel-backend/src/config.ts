@@ -317,6 +317,13 @@ export const ConfigSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v === '' ? undefined : v)),
+  // How many facade webhooks may be in flight at once. Mass expiry is the case
+  // this exists for: a single cron tick can flip thousands of users, and each
+  // one reads a row and POSTs. Unbounded, that is thousands of concurrent
+  // Prisma checkouts against a pool of a dozen (P2024 pool timeouts, on the
+  // path that tells the shop a subscription ended) and a thousand-deep burst at
+  // a shop sized for a trickle. Bounded, the same work becomes a queue.
+  REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
