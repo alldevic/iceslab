@@ -176,8 +176,24 @@ if [[ -n "$TARGET" ]]; then
   record traffic-strategy  POST "/api/admin/users/$TARGET/traffic-strategy" '{"traffic_limit_strategy":"MONTH"}'
   record traffic-grant     POST "/api/admin/users/$TARGET/traffic-grant" '{"kind":"regular","gb":1}'
   record extend            POST "/api/admin/users/$TARGET/extend" '{"days":7}'
+  # Reaches the panel through sync_main_traffic_limit_to_panel - a PATCH of the
+  # user's traffic limit, which is the field the shop bills on.
+  record traffic-override  POST "/api/admin/users/$TARGET/regular-traffic-override" '{"gb":50}'
+  # These two would reach the panel (a squad switch and a premium-squad push,
+  # the most facade-relevant writes the admin can make) but both stop earlier
+  # while the shop has no tariff catalogue: `tariff` answers 400
+  # tariffs_not_configured and `premium-override` answers 502 without making a
+  # single panel call. Recorded anyway, because they are pages an operator uses
+  # and the two halves must agree about them - but they prove nothing about the
+  # facade until a catalogue with REAL squad uuids exists on this stand.
+  record premium-override  POST "/api/admin/users/$TARGET/premium-override" '{"enabled":true}'
+  record tariff-switch     POST "/api/admin/users/$TARGET/tariff" '{"tariff_key":"standard"}'
   record sub-reissue       POST "/api/admin/users/$TARGET/subscription-reissue"
   record user-detail-after GET  "/api/admin/users/$TARGET"
+  # Last, and destructive: delete_user_from_panel is a real panel call, and
+  # after it the target is gone for anything that came before.
+  record user-delete       DELETE "/api/admin/users/$TARGET"
+  record user-detail-gone  GET    "/api/admin/users/$TARGET"
 fi
 
 # Last, because it queues fleet-wide work on the worker: anything recorded after

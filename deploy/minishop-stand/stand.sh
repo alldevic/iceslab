@@ -40,12 +40,14 @@ compose_iceslab=(docker compose
   --project-directory "$SHOP"
   -f "$SHOP/docker-compose-dev.yml"
   -f "$HERE/stand.override.yml"
+  -f "$HERE/data-volume.override.yml"
   --env-file "$RUNTIME_ENV")
 compose_ref=(docker compose
   -p "$STAND_PROJECT"
   --project-directory "$SHOP"
   -f "$SHOP/docker-compose-dev.yml"
   -f "$SHOP/docker-compose.remnawave-dev.yml"
+  -f "$HERE/data-volume.override.yml"
   --env-file "$HERE/remnawave-ref.env")
 
 # newt is a tunnel client the stand has no use for; the env files carry
@@ -363,6 +365,19 @@ case "${1:-}" in
     python3 "$HERE/compare_admin.py" "$outdir/ref-admin.jsonl" "$outdir/iceslab-admin.jsonl" || true
     ;;
 
+  full)
+    # The differential plus the two probes that need a stand of their own.
+    # Ordered: the differential leaves the REFERENCE half up, so the probes -
+    # which test OUR facade - bring the iceslab half back first.
+    shift
+    outdir="${1:?usage: stand.sh full <outdir>}"
+    "$0" differential "$outdir"
+    echo; echo "===== signed webhook through a real TLS proxy ====="
+    "$0" reset >/dev/null 2>&1 || true
+    "$0" up-iceslab > "$outdir/probe-up.log" 2>&1 || { tail -20 "$outdir/probe-up.log" >&2; die "could not bring the stand back for the probes"; }
+    "$0" webhook-probe
+    ;;
+
   churn-probe)
     # Live risk (3), reproduced against the SHOP rather than asserted with
     # inject: its fleet sync walks every page of /users/stream to decide who
@@ -556,6 +571,8 @@ usage: $(basename "$0") <command>
                diff two admin walkthroughs (what the pages rendered)
   differential <outdir>
                both halves and all three comparisons, in one command
+  full <outdir>
+               the differential, then the webhook probe on a fresh iceslab half
   webhook-probe
                send a signed webhook through a real TLS nginx and check the
                shop still accepts it (needs the iceslab stand up)

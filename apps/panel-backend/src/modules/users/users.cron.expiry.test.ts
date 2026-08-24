@@ -171,6 +171,40 @@ describe('findExpiredUsers', () => {
   });
 });
 
+describe('alertNearLimits', () => {
+  it('warns about a limited subscriber whose term is nearly up, not only an active one', async () => {
+    // The same widening as findExpiredUsers, and it only became necessary
+    // because of it: before, a `limited` user never expired at all, so there
+    // was nothing to warn about. Now they do, and an operator told only about
+    // the `active` ones hears about the lapse afterwards.
+    const soon = new Date(Date.now() + 2 * 86_400_000);
+    await prisma.user.update({
+      where: { id: await user({ status: 'limited', expireAt: soon }) },
+      data: { username: 'expiring-limited' },
+    });
+    await prisma.user.update({
+      where: { id: await user({ status: 'active', expireAt: soon }) },
+      data: { username: 'expiring-active' },
+    });
+    await user({ status: 'disabled', expireAt: soon });
+
+    const { notifyTelegramAsync } = await import('../../lib/telegram-notify.js');
+    const spy = vi.spyOn({ notifyTelegramAsync }, 'notifyTelegramAsync');
+    const { alertNearLimits, formatNearLimitsDigest } = await import('./users.cron.js');
+
+    const n = await alertNearLimits();
+    expect(n).toBe(2); // the limited one counts; the disabled one does not
+    spy.mockRestore();
+
+    // And it reads as a digest an operator can act on.
+    const msg = formatNearLimitsDigest(
+      [{ username: 'expiring-limited', expireAt: soon }],
+      [],
+    );
+    expect(msg).toContain('expiring-limited');
+  });
+});
+
 describe('the traffic-reset lift, against an expiry that already happened', () => {
   it('does not resurrect a user the expiry cron has already expired', async () => {
     // The handler used to read the status and then write 'active' unconditionally
