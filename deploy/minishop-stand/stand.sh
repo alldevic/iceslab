@@ -501,6 +501,13 @@ print(d.get("id") or d["users"][0]["id"])')"
     probe "escaped non-ascii body, direct"        "http://127.0.0.1:8080/webhook/panel"        "$escaped" 200
     probe "escaped non-ascii body, through nginx" "https://127.0.0.1:$tls_port/webhook/panel"  "$escaped" 200
     probe_tampered "body altered after signing, through nginx" "https://127.0.0.1:$tls_port/webhook/panel" "$ascii"
+
+    # And the failure the ASCII escaping exists to prevent, shown rather than
+    # asserted: the same payload as raw UTF-8 put through a charset transcoding,
+    # against the same payload escaped. Only the first breaks, because only the
+    # first has bytes above 0x7F for a proxy to change.
+    python3 "$HERE/transcode_probe.py" "$secret" || fail=1
+
     [[ $fail -eq 0 ]] || die "the signature did not survive the path it will take in production"
     echo "stand: the signed body survives a TLS reverse proxy unchanged"
     ;;
