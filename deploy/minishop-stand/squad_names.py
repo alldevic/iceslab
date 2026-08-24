@@ -30,7 +30,18 @@ def main() -> int:
     with open(sys.argv[1], encoding="utf-8") as handle:
         template = json.load(handle)
     found: set[str] = set()
-    walk(template, found)
+    if "--premium" in sys.argv[2:]:
+        # Only the squads a tariff hands out as its PREMIUM segment. Resolved by
+        # name from the template, never by position in the panel's list: that
+        # order is the panel's to choose, and picking "the last one" would put
+        # the premium fixture on whichever squad happened to sort last.
+        for tariff in template.get("tariffs", []):
+            walk(tariff.get("premium_squad_uuids", []), found)
+    else:
+        walk(template, found)
+    if not found:
+        print(f"{sys.argv[1]} names no such squad", file=sys.stderr)
+        return 1
     print("\n".join(sorted(found)))
     return 0
 

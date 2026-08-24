@@ -184,6 +184,45 @@ describe('the capture itself', () => {
     expect(src.webhooks.length, 'the refresh script read no webhook rows').toBeGreaterThan(0);
   });
 
+  it('carries every field the tooling reads off it', () => {
+    // The capture is a dump of the shop's contract classes through their
+    // `__slots__`. A refactor there that moves a field out - or renames it -
+    // produces a fixture that is the right LENGTH and the right shape to a
+    // count-based check, and whatever reads the missing field gets undefined.
+    // The gate would pass and compare_traces.py would fall over mid-run, on a
+    // stand, with the differential half finished.
+    //
+    // Named with their readers so the list is maintainable rather than
+    // mysterious:
+    //   operation, path, generations  - this file, to probe the right routes
+    //   method, log_label             - compare_traces.py, to key a trace line
+    //   success_statuses              - compare_traces.py, to decide whether a
+    //                                   status difference is one to chase
+    const REQUIRED = [
+      'operation',
+      'method',
+      'path',
+      'generations',
+      'log_label',
+      'success_statuses',
+    ] as const;
+    const raw = JSON.parse(
+      readFileSync(new URL('./contracts/minishop-contract.json', import.meta.url), 'utf8'),
+    ) as { operations: Record<string, unknown>[] };
+    const missing = raw.operations.flatMap((op) =>
+      REQUIRED.filter((field) => op[field] === undefined).map(
+        (field) => `${String(op['operation'] ?? '?')}: ${field}`,
+      ),
+    );
+    expect(missing, 'the capture lost a field the stand reads').toEqual([]);
+    // And not merely present: an empty success set would make every status
+    // difference read as "outside the contract" on every future run.
+    const emptyStatuses = raw.operations
+      .filter((op) => !Array.isArray(op['success_statuses']) || !(op['success_statuses'] as unknown[]).length)
+      .map((op) => String(op['operation']));
+    expect(emptyStatuses, 'operations captured with no success statuses').toEqual([]);
+  });
+
   it('every operation the shop declares is either served or listed as unserved', () => {
     // Names, not routes: a renamed operation in a new shop release shows up here
     // as an unknown name rather than as a mysteriously missing route.

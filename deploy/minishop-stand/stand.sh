@@ -206,6 +206,83 @@ The tariff catalogue names it, and without it seed_tariffs.py refuses - which is
 correct, but the fix belongs here." ;;
     esac
   done <<< "$names"
+  clear_squad_profiles
+}
+
+# Put the stand's squads back to granting NOTHING, every time a half comes up.
+#
+# `premium-probe` attaches a profile so the squads resolve to nodes, and that
+# attachment OUTLIVES the run: our panel is not a stand volume. The differential
+# after a probe then had our half metering premium while the reference - whose
+# panel has no nodes to grant - skipped it, which is a divergence the fixture
+# invented. Third time this session that leftover state on our panel changed the
+# next run; the rule is the same each time, so it is applied the same way: a run
+# establishes the fixture it needs instead of inheriting one.
+#
+# Cheap and unconditional rather than conditional on what is attached: reading
+# first and writing only on a difference would make the common path silent about
+# what it did.
+clear_squad_profiles() {
+  local tok sid
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  while read -r sid; do
+    [[ -n "$sid" ]] || continue
+    curl -sS -o /dev/null -X PUT -H "authorization: Bearer $tok" \
+      -H 'content-type: application/json' -d '{"profileIds":[]}' \
+      "$PANEL_URL/api/squads/$sid" || die "could not clear profiles on squad $sid"
+  done <<< "$(stand_squad_ids)"
+  echo "stand: squad profiles cleared (premium-probe grants them when it needs them)"
+}
+
+# The uuids of the squads the tariff template names, on this panel. With
+# --premium, only the squads a tariff hands out as its premium segment.
+stand_squad_ids() {
+  local tok names
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  names="$(python3 "$HERE/squad_names.py" "$HERE/tariffs.template.json" "$@" | tr '\n' '|')" \
+    || die "could not read the squad names out of the tariff template"
+  curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/$PREFIX/api/internal-squads" \
+    | python3 "$HERE/squad_ids.py" "$names"
+}
+
+# The shop caches "which nodes does this squad grant" in TWO places, and a
+# fixture change is invisible until BOTH are dropped, in this order.
+#
+# AsyncTTLCache keeps an in-process copy AND a Redis copy
+# (minishop-iceslab-stand:cache:panel:squads:nodes:<uuid>, 300s). Restarting the
+# worker clears only the first; deleting the keys clears only the second, and if
+# the worker has already loaded the stale value it goes on using it. The probe
+# that first passed here did so because enough time had gone by, not because the
+# restart it performed did anything - which is the same class of mistake as a
+# green test that is green for the wrong reason, made while building a probe
+# against exactly that.
+#
+# This is the SHOP's Redis (a stand container), never the panel's: the panel and
+# the test suite share one Redis instance, and a prefix-scan delete there reaches
+# into a running panel.
+drop_shop_squad_cache() {
+  local keys
+  keys="$(docker exec remnawave-minishop-redis redis-cli --scan --pattern '*cache:panel:squads*' 2>/dev/null || true)"
+  if [[ -n "$keys" ]]; then
+    xargs -r <<<"$keys" docker exec -i remnawave-minishop-redis redis-cli del >/dev/null \
+      || die "could not drop the shop's cached squad answers"
+    echo "stand: dropped $(wc -l <<<"$keys") cached squad key(s) from the shop's redis"
+  fi
+  "${compose_iceslab[@]}" restart worker
+  "${compose_iceslab[@]}" up -d --wait worker
+}
+
+# psql inside the panel's database container. Read from the repo's own .env
+# rather than pinned here, so it cannot drift from the panel this stand drives.
+panel_psql() {
+  local url user db
+  url="$(sed -n 's/^DATABASE_URL=//p' "$HERE/../../.env" | tr -d '"' | tail -1)"
+  [[ -n "$url" ]] || die "no DATABASE_URL in $HERE/../../.env - cannot write the usage fixture"
+  user="$(sed -E 's#^[a-z]+://([^:]+):.*#\1#' <<<"$url")"
+  db="$(sed -E 's#.*/([^/?]+)(\?.*)?$#\1#' <<<"$url")"
+  [[ -n "$user" && -n "$db" ]] || die "could not read a user and database out of DATABASE_URL"
+  docker exec "${PANEL_DB_CONTAINER:-iceslab-postgres-test}" \
+    psql -U "$user" -d "$db" -qtAX "$@"
 }
 
 # A squad with no NODES is a squad the shop quietly refuses to meter.
@@ -232,9 +309,7 @@ correct, but the fix belongs here." ;;
 grant_squad_nodes() {
   local tok squads profile sid nodes
   tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
-  squads="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/$PREFIX/api/internal-squads" \
-    | python3 "$HERE/squad_ids.py" "$(python3 "$HERE/squad_names.py" "$HERE/tariffs.template.json" | tr '\n' '|')")" \
-    || die "could not list the panel's squads"
+  squads="$(stand_squad_ids)" || die "could not list the panel's squads"
   profile="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/api/profiles" \
     | python3 -c 'import json,sys
 d = json.load(sys.stdin)
@@ -349,6 +424,33 @@ The purchase would update it instead of creating one, and the differential
 would report that as a facade divergence." ;;
     esac
   done <<< "$ids"
+}
+
+# The SHOP's copy of a buyer, through its own admin API.
+#
+# Purging the panel side is not enough on its own: the shop's fleet sync imports
+# panel users it does not know, so a panel user deleted after a demotion comes
+# BACK as a shop subscription with no tariff_key - and the next purchase for
+# that address answers `tariff_switch_required` instead of creating anything.
+# That is how this probe failed twice: once on the panel leftover, then on the
+# shop's re-import of it.
+purge_shop_user() {
+  local email="${1:?}" jar csrf uid
+  jar="$(mktemp)"
+  csrf="$(shop_admin_session "$jar")" || { rm -f "$jar"; die "no admin session to purge $email"; }
+  uid="$(curl -sS -b "$jar" -c "$jar" "${SHOP_URL:-http://127.0.0.1:8082}/api/admin/users?limit=200" \
+    | python3 -c 'import json,sys
+rows = json.load(sys.stdin).get("users") or []
+print(next((str(u["user_id"]) for u in rows if u.get("email") == sys.argv[1]), ""))' "$email")"
+  if [[ -n "$uid" ]]; then
+    curl -sS -o /dev/null -b "$jar" -c "$jar" -H "X-CSRF-Token: $csrf" \
+      -X DELETE "${SHOP_URL:-http://127.0.0.1:8082}/api/admin/users/$uid" \
+      || { rm -f "$jar"; die "could not remove the shop user $uid ($email)"; }
+    echo "stand: removed the shop's user $uid ($email)"
+  else
+    echo "stand: no shop user for $email"
+  fi
+  rm -f "$jar"
 }
 
 # Every leftover, not just the buyer. Same reason, one run apart.
@@ -510,28 +612,31 @@ case "${1:-}" in
     # accounting. Each of those makes the route uncalled, and an uncalled route
     # looks exactly like a route with nothing wrong.
     shift
+    # Its own leftovers first, for the reason `half` does the same: our panel is
+    # not a stand volume, so the buyer from the last probe is still there - and
+    # after a demotion it is there in a state the shop reads as a DIFFERENT
+    # tariff, answering `tariff_switch_required` to the purchase. Deleting the
+    # user takes its usage fixture with it (node_user_usage_history cascades).
+    purge_shop_user "${PREMIUM_BUYER:-stand-premium@example.com}"
+    purge_panel_user "${PREMIUM_BUYER:-stand-premium@example.com}"
     grant_squad_nodes
-    # The worker caches the squad -> nodes answer for 300s
-    # (PANEL_EXTERNAL_SQUADS_CACHE_TTL_SECONDS), so a fixture it was told about
-    # a moment ago is invisible to it, and the tick fires on the stale "no
-    # accessible nodes". Restarting drops the in-process cache; without it this
-    # probe reported "the shop never called it" about a shop that had not been
-    # told yet. Same 300s that keeps reshuffling /system/metadata in the traces.
-    "${compose_iceslab[@]}" restart worker
-    "${compose_iceslab[@]}" up -d --wait worker
-    ppmark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    drop_shop_squad_cache
     STAND_ENV="$RUNTIME_ENV" "$HERE/buy.sh" "${PREMIUM_BUYER:-stand-premium@example.com}" \
       > "${1:-/tmp/premium-probe-buy.log}" 2>&1 \
       || die "the premium probe's purchase failed; see ${1:-/tmp/premium-probe-buy.log}"
+    # AFTER the purchase, because the window has to start where the thing being
+    # watched first becomes POSSIBLE. Marked before it instead, the wait below is
+    # satisfied by the tick the restart triggers seconds later - a tick with no
+    # subscription to meter - and the probe then reports that the shop never
+    # called the route. Stage 2 marks before ITS restart for the mirror-image
+    # reason: there the restart is what triggers the one-shot it watches for.
+    ppmark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "stand: bought ${PREMIUM_BUYER:-stand-premium@example.com}; waiting for a FULL tariff tick"
-    # The premium_fast tick does not compute usage; only the full one does, and
-    # it runs once a minute. Waiting for the tick rather than a fixed sleep is
-    # the difference between "the route was not called" and "we did not wait".
-    # The full tick runs every FIVE minutes (measured: 13:53:10, 13:58:10,
-    # 14:03:10), the premium_fast one every minute - and only the full one
-    # computes usage. Waiting for the tick itself rather than sleeping a guessed
+    # Only the FULL tick computes usage, and it runs every five minutes
+    # (measured: 13:53:10, 13:58:10, 14:03:10); premium_fast runs every minute
+    # and does not. Waiting for the tick itself rather than sleeping a guessed
     # interval is the difference between "the route was not called" and "we did
-    # not wait", and the first draft of this waited four minutes and refused.
+    # not wait" - the first draft waited four minutes and refused.
     for _ in $(seq 1 66); do
       if docker logs --since "$ppmark" remnawave-minishop-worker 2>&1 | grep -q 'kind=full'; then
         ticked=1; break
@@ -564,6 +669,83 @@ did not exercise the route it exists for."
 It asked about a set of nodes and did not get an answer for all of them, which
 is the silent half of the per-node billing path."
     echo "stand: premium usage path exercised end to end"
+
+    # ---- stage 2: the demotion, which is what calls the other two routes ----
+    #
+    # `POST /users/bulk/update-squads` and `POST /connections/drop` are queued by
+    # the SAME path: a premium subscriber going over its premium allowance loses
+    # the premium squad and has its sessions dropped
+    # (tariff_worker_premium_batches.py). Neither had ever been called by a real
+    # shop here before this.
+    #
+    # The desired squad set has to stay NON-EMPTY or this proves nothing: the
+    # shop deliberately routes "clear the last squad" through per-user PATCHes
+    # instead, because Remnawave 3.0.0 answers A088/500 to a bulk clear. So the
+    # tariff keeps its base squad and loses only the premium one.
+    pu="$(curl -sS -H "authorization: Bearer $(tr -d '[:space:]' < "$TOKEN_FILE")" \
+      "$PANEL_URL/api/users/by-email/${PREMIUM_BUYER:-stand-premium@example.com}" \
+      | python3 -c 'import json,sys
+rows = (json.load(sys.stdin).get("users") or [])
+print(rows[0]["id"] if rows else "")')"
+    [[ -n "$pu" ]] || die "no panel user for ${PREMIUM_BUYER:-stand-premium@example.com}; the purchase did not reach the panel"
+    read -r allowance node <<<"$(python3 "$HERE/premium_fixture.py" \
+      "$HERE/tariffs.template.json" \
+      "$(curl -sS -H "authorization: Bearer $(tr -d '[:space:]' < "$TOKEN_FILE")" \
+         "$PANEL_URL/$PREFIX/api/internal-squads/$(stand_squad_ids --premium)/nodes")")" \
+      || die "could not decide how much usage to write"
+    # 20% over the allowance, on a node the premium squad actually grants -
+    # usage on any other node is not premium usage and the worker would be right
+    # to ignore it.
+    panel_psql -c "insert into node_user_usage_history (node_id, date, user_id, bytes_in, bytes_out)
+      values ('$node', current_date, '$pu', $allowance, 0)
+      on conflict (node_id, date, user_id) do update set bytes_in = excluded.bytes_in;" >/dev/null \
+      || die "could not write the usage fixture"
+    echo "stand: wrote $allowance bytes of premium usage for $pu on node $node"
+    # Same ordering, and here it decides the result rather than the timing: the
+    # demotion is a ONE-SHOT event on the first full tick after the restart, so
+    # marking afterwards missed it by four seconds and then watched a later tick
+    # do nothing - a probe reporting "the shop never demoted" about a shop that
+    # already had. The window still starts AFTER the usage fixture is written,
+    # so a demotion inside it can only be this fixture's.
+    dmark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    drop_shop_squad_cache
+    for _ in $(seq 1 66); do
+      if docker logs --since "$dmark" remnawave-minishop-worker 2>&1 | grep -q 'kind=full'; then
+        dticked=1; break
+      fi
+      sleep 10
+    done
+    [[ "${dticked:-0}" == 1 ]] || refuse "no full tariff tick in eleven minutes for the demotion stage"
+    "$0" trace "${STAND_TRACE:-/tmp/premium-probe.trace}.demote" "$dmark"
+    dlog="$(docker logs --since "$dmark" remnawave-minishop-worker 2>&1)"
+    grep -q 'premium_squad_write_batch' <<<"$dlog" \
+      || die "the shop never demoted the over-limit subscriber. Check the tick log for
+'have no accessible nodes', or whether the usage landed on a node the premium
+squad grants."
+    # The bulk route's trace label is `/users`, shared with four other
+    # operations, so the trace CANNOT say it was called. The shop's own metric
+    # can, and it names the selector - `userIds` is the numeric rw3 one.
+    grep -q 'panel_squad_bulk .*selector=userIds' <<<"$dlog" \
+      || die "the squad change did not go through POST /users/bulk/update-squads:
+$(grep -o 'panel_squad_bulk .*' <<<"$dlog" | tail -1)
+A per-user PATCH fallback here means the bulk route answered in a shape the shop
+rejected - check the affectedRows key."
+    grep -q '^POST /connections ' "${STAND_TRACE:-/tmp/premium-probe.trace}.demote" \
+      || die "the shop never called POST /connections/drop after limiting premium access"
+    grep -q 'connections-drop=True' <<<"$dlog" \
+      || die "the shop did not record connections-drop as available; it will stop asking"
+    echo "stand: $(grep -o 'panel_squad_bulk .*' <<<"$dlog" | tail -1)"
+    echo "stand: $(grep -o 'panel_connection_drop .*' <<<"$dlog" | tail -1)"
+    # The point of the whole stage, checked on the panel rather than in the log:
+    # premium squad gone, base squad still there.
+    curl -sS -H "authorization: Bearer $(tr -d '[:space:]' < "$TOKEN_FILE")" \
+      "$PANEL_URL/api/users/$pu" \
+      | python3 "$HERE/assert_demoted.py" "$(stand_squad_ids | tr '\n' ' ')" \
+      || die "the panel does not show the demotion the shop reported"
+    echo "stand: premium demotion exercised end to end (bulk squads + connections drop)"
+    # And leave both sides as they were found, usage fixture included.
+    purge_shop_user "${PREMIUM_BUYER:-stand-premium@example.com}"
+    purge_panel_user "${PREMIUM_BUYER:-stand-premium@example.com}"
     ;;
   seed-tariffs)
     # Re-run the catalogue step alone, against whatever half is up.
