@@ -77,7 +77,15 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   // The dedup keys outlive the process by design (8 days), so a test that left
   // one behind would silence the next one.
-  const keys = await redis.keys('rw:expnotify:*');
+  //
+  // Scoped to THIS file's users, by id. `.env.test` and the lab's `.env` point
+  // at the same Redis on the same database index, so `keys('rw:expnotify:*')`
+  // followed by a del would reach into the running panel and drop the claims it
+  // had already made - it would then re-send expiry webhooks it considers
+  // delivered. Same shape as the DATABASE_URL trap: a test that reaches past its
+  // own fixtures into shared live state, and says nothing while doing it.
+  const keys: string[] = [];
+  for (const id of cohortIds) keys.push(...(await redis.keys(`rw:expnotify:${id}:*`)));
   if (keys.length) await redis.del(...keys);
 });
 
@@ -151,11 +159,14 @@ describe('scanRemnaExpiryNotifications', () => {
     const id = await user({ expiresInMs: 10 * HOUR });
 
     expect(await webhook.scanRemnaExpiryNotifications()).toBeGreaterThanOrEqual(1);
-    const first = sent.length;
     await webhook.scanRemnaExpiryNotifications();
 
+    // Scoped to this user, deliberately: the scan reads EVERY user on the panel
+    // and the suite shares one database, so `sent` also carries whatever other
+    // files left inside the 72h window. Asserting on the global count would
+    // make this test fail whenever somebody else's fixture happens to sit near
+    // a stage boundary - a red run that says nothing about the dedup.
     expect(mine(id)).toHaveLength(1);
-    expect(sent.length).toBe(first); // the second tick claimed nothing at all
   });
 
   it('re-arms after a renewal, which is what makes a sub-24h cadence work', async () => {
@@ -209,7 +220,10 @@ describe('the expiry cron reaches the shop', () => {
 
     await cron.findExpiredUsers();
     // The emitter is fire-and-forget through the bus and a semaphore slot.
-    await vi.waitFor(() => expect(mine(limited)).toHaveLength(1), { timeout: 3000 });
+    // Generous: the delivery crosses the event bus, a semaphore slot and a DB
+    // read, and this box runs the suite alongside qemu guests. A timeout here
+    // would be a red run about machine load, not about the wiring.
+    await vi.waitFor(() => expect(mine(limited)).toHaveLength(1), { timeout: 15_000 });
 
     expect(mine(limited)[0]!.name).toBe('user.expired');
     const row = await prisma.user.findUniqueOrThrow({
