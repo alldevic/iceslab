@@ -116,6 +116,20 @@ def main() -> int:
         return 2
     ref, cand = load(sys.argv[1]), load(sys.argv[2])
 
+    # Nothing to compare is not agreement. An empty walkthrough - the login
+    # failed, the half died early, somebody passed the wrong path - would
+    # otherwise print a confident sentence about every admin page having
+    # matched, which is the failure mode this whole file exists to catch,
+    # committed by the file itself.
+    if not ref or not cand:
+        print(
+            f"refusing to compare: {len(ref)} step(s) on the reference side and "
+            f"{len(cand)} on the candidate.\nAn empty walkthrough agrees with "
+            "everything and says nothing.",
+            file=sys.stderr,
+        )
+        return 2
+
     hard: list[str] = []
     soft: list[str] = []
 

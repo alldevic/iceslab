@@ -67,6 +67,17 @@ def main() -> int:
         return 2
     ref_path, cand_path = sys.argv[1], sys.argv[2]
     ref, cand = load(ref_path), load(cand_path)
+
+    # Nothing to compare is not agreement: two empty traces would otherwise be
+    # reported as identical, and a half that died before making a single call
+    # would read as a clean run.
+    if not ref or not cand:
+        print(
+            f"refusing to compare: {len(ref)} call(s) in the reference trace and "
+            f"{len(cand)} in the candidate.\nAn empty trace matches everything.",
+            file=sys.stderr,
+        )
+        return 2
     accepted, covering = contract_index()
 
     ref_ops = Counter((m, e) for m, e, _ in ref)
