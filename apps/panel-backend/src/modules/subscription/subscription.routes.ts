@@ -406,7 +406,22 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         const effectiveHwidLimit =
           userMin.hwidDeviceLimit ??
           resolveSquadHwidLimit(userMin.groupMembers.map((m) => m.group.hwidDeviceLimit));
-        const hwidResult = await enforceHwid(userMin.id, hwid, effectiveHwidLimit);
+        // Remnawave-compat: capture client-reported device metadata from the
+        // subscription-client headers (bounded, like x-hwid) so /hwid/devices
+        // can surface platform/os/model. Non-Remnawave clients omit them → null.
+        const readDeviceHeader = (name: string, max: number): string | null => {
+          const v = request.headers[name];
+          const s = typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined;
+          const t = (s ?? '').trim();
+          return t.length > 0 ? t.slice(0, max) : null;
+        };
+        const deviceMeta = {
+          platform: readDeviceHeader('x-device-os', 64),
+          osVersion: readDeviceHeader('x-ver-os', 64),
+          deviceModel: readDeviceHeader('x-device-model', 128),
+          userAgent: userAgent ? userAgent.slice(0, 512) : null,
+        };
+        const hwidResult = await enforceHwid(userMin.id, hwid, effectiveHwidLimit, deviceMeta);
         // Always emit the gauge header so the client can render "2/3" in
         // its profile detail UI, even on success, even when no limit set.
         // HTTP headers are ISO-8859-1; use ASCII-only "unlimited" instead

@@ -57,10 +57,34 @@ export interface HwidCheckResult {
  * The hwid string is bounded to 255 chars upstream by the route handler;
  * here we trust it. UTF-8 collation is fine for the equality check.
  */
+/**
+ * Client-reported device metadata (Remnawave-compat), captured from the
+ * subscription-client headers on /sub. All optional/nullable — non-Remnawave
+ * clients omit them.
+ */
+export interface HwidDeviceMeta {
+  platform: string | null;
+  osVersion: string | null;
+  deviceModel: string | null;
+  userAgent: string | null;
+}
+
+/** Non-null metadata fields only, for a create/backfill `data` spread. */
+function presentMeta(meta?: HwidDeviceMeta) {
+  if (!meta) return {};
+  return {
+    ...(meta.platform ? { platform: meta.platform } : {}),
+    ...(meta.osVersion ? { osVersion: meta.osVersion } : {}),
+    ...(meta.deviceModel ? { deviceModel: meta.deviceModel } : {}),
+    ...(meta.userAgent ? { userAgent: meta.userAgent } : {}),
+  };
+}
+
 export async function enforceHwid(
   userId: string,
   hwid: string | null,
   limit: number | null,
+  meta?: HwidDeviceMeta,
 ): Promise<HwidCheckResult> {
   if (!hwid) {
     // No header → no enforcement, no row. Return `active=0` for the
@@ -78,7 +102,9 @@ export async function enforceHwid(
   if (existing) {
     await prisma.hwidUserDevice.update({
       where: { id: existing.id },
-      data: { lastSeenAt: new Date() },
+      // Backfill metadata for rows created before this feature / by a header-less
+      // first hit — only overwrite with a present (non-null) incoming value.
+      data: { lastSeenAt: new Date(), ...presentMeta(meta) },
     });
     // For the unlimited (audit-only) path `active` stays cosmetic (0/unlimited);
     // otherwise report the real device count for the X-Hwid-Active gauge.
@@ -115,7 +141,7 @@ export async function enforceHwid(
       return { status: 'denied' as const, active: current, limit };
     }
 
-    await tx.hwidUserDevice.create({ data: { userId, hwid } });
+    await tx.hwidUserDevice.create({ data: { userId, hwid, ...presentMeta(meta) } });
     return {
       status: 'allowed' as const,
       active: limit === null ? 0 : current + 1,

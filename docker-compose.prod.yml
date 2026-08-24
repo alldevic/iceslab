@@ -173,6 +173,16 @@ services:
       GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
       GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
       SINGBOX_BIN: ${SINGBOX_BIN:-}
+      # Remnawave-compat facade. Off unless ENABLED is true, so the default
+      # deployment is byte-identical to upstream. PREFIX decides where the
+      # facade mounts (/<prefix>/api/*), and the shop is pointed at that URL.
+      # The webhook pair drives the shop's expiry notifications and its 24h
+      # auto-renew charge: set BOTH or neither, a half-configured pair is
+      # silently dead (the panel warns about it at boot).
+      REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
+      REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
+      REMNAWAVE_COMPAT_WEBHOOK_URL: ${REMNAWAVE_COMPAT_WEBHOOK_URL:-}
+      REMNAWAVE_COMPAT_WEBHOOK_SECRET: ${REMNAWAVE_COMPAT_WEBHOOK_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

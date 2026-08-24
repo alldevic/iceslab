@@ -36,6 +36,9 @@ const FAKE_ID = '22222222-2222-2222-2222-222222222222';
 function makeFakeUser(overrides: Partial<repo.UserWithTraffic> = {}): repo.UserWithTraffic {
   return {
     id: FAKE_ID,
+    // NOT NULL in the schema (a sequence default), so a row without it is not a
+    // row this code can ever be handed.
+    numericId: 42n,
     shortId: 'shortabc',
     username: 'testuser',
     status: 'active',

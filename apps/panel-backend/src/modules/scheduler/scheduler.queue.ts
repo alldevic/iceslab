@@ -13,6 +13,7 @@ import { pollNodeStats } from '../stats/stats.cron.js';
 import { pruneHistory } from '../maintenance/retention.cron.js';
 import { refreshGeoAndRepush } from '../geo/geo.cron.js';
 import { config } from '../../config.js';
+import { scanRemnaExpiryNotifications } from '../remnawave-compat/remnawave.webhook.js';
 import { getLogger } from '../../lib/logger.js';
 
 // ───── Queue ─────
@@ -49,6 +50,7 @@ const CRON_JOBS: CronJobSpec[] = [
   { name: 'prune-history',                  pattern: '30 3 * * *' },     // 03:30 каждый день - B2 retention для append-only history-таблиц
   { name: 'geo-rebuild',                    pattern: '40 * * * *' },     // :40 каждый час - re-check sources DUE per their refreshIntervalHours (conditional GET/ETag), rebuild + re-push only on real change
   { name: 'alert-near-expiry',              pattern: '0 9 * * *'  },     // 09:00 каждый день - K3 near-expiry/near-cap дайджест в Telegram
+  { name: 'remnawave-expiry-notify',        pattern: '5 * * * *'  },     // :05 каждый час - Remnawave-compat expires-in-{72,48,24}h вебхуки (no-op если фасад/вебхук выкл)
 ];
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────
@@ -151,6 +153,11 @@ export function startCronTasksWorker(): Worker {
               `[cron] geo-rebuild - custom geo databases changed, re-pushed ${r.nodes} cascade node(s)`,
             );
           }
+          break;
+        }
+        case 'remnawave-expiry-notify': {
+          const n = await scanRemnaExpiryNotifications();
+          if (n > 0) getLogger().info(`[cron] remnawave-expiry-notify - emitted ${n} expiry webhook(s)`);
           break;
         }
         case 'prune-history': {

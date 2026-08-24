@@ -488,6 +488,15 @@ model User {
   // to enforce it here.
   sourceId String? @map("source_id") @db.VarChar(128)
   id       String @id @default(uuid()) @db.Uuid
+
+  // Remnawave-compat: a stable NUMERIC handle for this user, alongside the UUID
+  // primary key. Remnawave 3.0 dropped `uuid` from the user object and made the
+  // integer `id` the only identifier its API accepts, so a panel that presents
+  // itself as 3.x has to have one. Issued by a sequence, never reused, never
+  // reissued — it travels in the shop's database as that user's identity, so
+  // changing it would silently detach a paying subscriber from their account.
+  // Unused while the facade is off; see docs/remnawave-compat.md.
+  numericId BigInt @unique @default(autoincrement()) @map("numeric_id")
   shortId  String @unique @map("short_id") @db.VarChar(16)
   username String @db.VarChar(64)
   status   String @default("active") @db.VarChar(16)
@@ -535,6 +544,12 @@ model User {
   tag         String? @db.VarChar(64)
   telegramId  BigInt? @map("telegram_id")
   email       String? @db.VarChar(255)
+
+  // Remnawave-compat: opaque external-squad id passed through from the shop and
+  // echoed back verbatim on the user object (the minishop round-trip-verifies it
+  // and rolls back paid activations on mismatch). Not a FK, not validated, not
+  // queried — pure passthrough. NULL when the shop configures no external squad.
+  externalSquadUuid String? @map("external_squad_uuid") @db.VarChar(64)
 
   // Lifecycle
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -773,6 +788,13 @@ model HwidUserDevice {
   lastSeenAt   DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
   // Optional admin label ("Phone", "Laptop"), set via API later, NULL by default.
   label        String?  @db.VarChar(64)
+  // Remnawave-compat: client-reported device metadata, captured from the
+  // Remnawave subscription-client headers on /sub (x-device-os / x-ver-os /
+  // x-device-model / user-agent). All nullable — non-Remnawave clients omit them.
+  platform     String?  @map("platform")     @db.VarChar(64)
+  osVersion    String?  @map("os_version")    @db.VarChar(64)
+  deviceModel  String?  @map("device_model")  @db.VarChar(128)
+  userAgent    String?  @map("user_agent")    @db.Text
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

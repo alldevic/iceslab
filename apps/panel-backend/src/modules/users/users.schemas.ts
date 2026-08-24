@@ -39,6 +39,12 @@ export const CreateUserSchema = z.object({
     .regex(/^[A-Za-z0-9_-]+$/, 'Subscription token must be URL-safe (A-Z a-z 0-9 _ -)')
     .optional(),
   trafficLimitGb: z.number().int().positive().nullish(),         // null/undefined = unlimited
+  // Remnawave-compat: byte-precise traffic limit. The facade sets THIS (not
+  // trafficLimitGb) so the shop's exact byte value round-trips unchanged — the
+  // shop entitlement-verifies the echoed limit with a strict int compare and
+  // rolls back paid activations on any mismatch, so GiB-quantization is not
+  // tolerable. Wins over trafficLimitGb when both are present. null = unlimited.
+  trafficLimitBytes: z.number().int().positive().nullish(),
   trafficLimitStrategy: TrafficLimitStrategy.default('no_reset'),
   expireDays: z.number().int().positive().nullish(),             // null/undefined = no expiry
   // ───── Import fields ─────
@@ -73,6 +79,9 @@ export const CreateUserSchema = z.object({
     z.string().regex(/^\d+$/),
   ]).nullish(),
   email: z.email().max(255).nullish(),
+  // Remnawave-compat: opaque external-squad id, stored + echoed verbatim (not a
+  // FK, not validated). NULL clears it. Only set by the facade passthrough.
+  externalSquadUuid: z.string().max(64).nullish(),
   groupIds: z.array(PermissiveUuid).default([]),
   // R3 - optional per-user routing-preset override. Null = inherit (squad ->
   // global -> default). Wins over squad/global, loses only to ?routing= query.
@@ -127,6 +136,8 @@ export type BulkUsersInput = z.infer<typeof BulkUsersSchema>;
 export const UpdateUserSchema = z.object({
   status: z.enum(['active', 'disabled']).optional(),             // expired/limited только cron'ом
   trafficLimitGb: z.number().int().positive().nullish(),
+  // Remnawave-compat: byte-precise limit (see CreateUserSchema). Wins over Gb.
+  trafficLimitBytes: z.number().int().positive().nullish(),
   trafficLimitStrategy: TrafficLimitStrategy.optional(),
   expireAt: z.iso.datetime().nullish(),                          // ISO 8601 string OR null
   hwidDeviceLimit: z.number().int().positive().nullish(),
@@ -137,6 +148,8 @@ export const UpdateUserSchema = z.object({
     z.string().regex(/^\d+$/),
   ]).nullish(),
   email: z.email().max(255).nullish(),
+  // Remnawave-compat: opaque external-squad id (see CreateUserSchema). NULL clears.
+  externalSquadUuid: z.string().max(64).nullish(),
   groupIds: z.array(PermissiveUuid).optional(),
   // R3 - per-user routing-preset override. Null clears it (back to inherit).
   routingPreset: z.enum(ROUTING_PRESET_IDS).nullable().optional(),

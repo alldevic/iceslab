@@ -1,6 +1,7 @@
 import { eventBus } from '../../lib/event-bus.js';
 import { prisma } from '../../prisma.js';
-import { ALL_SQUAD_ID } from './squads.constants.js';
+import { config } from '../../config.js';
+import { ALL_SQUAD_ID, NO_ACCESS_SQUAD_ID, NO_ACCESS_SQUAD_NAME } from './squads.constants.js';
 import type { CreateSquadInput, UpdateSquadInput } from './squads.schemas.js';
 import { mapSquadToPublic, type PublicSquadDto } from './squads.mapper.js';
 
@@ -22,7 +23,7 @@ export class SquadAlreadyExistsError extends Error {
 
 export class SquadProtectedError extends Error {
   constructor() {
-    super('The "All" squad is system-managed and cannot be modified or deleted');
+    super('This squad is system-managed and cannot be modified or deleted');
     this.name = 'SquadProtectedError';
   }
 }
@@ -117,7 +118,7 @@ export async function updateSquad(
   // it, can't change its profile set, can't blow it away. Everything else
   // about a user's view-of-the-world depends on this squad existing with its
   // known UUID.
-  if (id === ALL_SQUAD_ID) throw new SquadProtectedError();
+  if (id === ALL_SQUAD_ID || id === NO_ACCESS_SQUAD_ID) throw new SquadProtectedError();
 
   const existing = await prisma.group.findUnique({ where: { id } });
   if (!existing) throw new SquadNotFoundError(id);
@@ -185,13 +186,24 @@ export async function updateSquad(
 }
 
 export async function deleteSquad(id: string): Promise<void> {
-  if (id === ALL_SQUAD_ID) throw new SquadProtectedError();
+  if (id === ALL_SQUAD_ID || id === NO_ACCESS_SQUAD_ID) throw new SquadProtectedError();
   const existing = await prisma.group.findUnique({ where: { id } });
   if (!existing) throw new SquadNotFoundError(id);
 
   // Cascade is on for both group_profiles and group_members (see schema).
-  // Users who lose their last squad would be invisible to subscription,
-  // backstop them into "All" so they don't end up with empty subs.
+  // Users who lose their last squad would be invisible to subscription, so they
+  // get backstopped into a system group.
+  //
+  // WHICH system group depends on the compat facade. Natively the fail-OPEN
+  // choice ("All") is right: an admin deleting a squad shouldn't silently break
+  // those users' subscriptions. But when the Remnawave-compat facade is enabled,
+  // squad membership is a paid ENTITLEMENT: promoting a member of a deleted
+  // squad to "All" hands them full access for free, and because the facade hides
+  // the system groups on read the shop sees activeInternalSquads: [] and cannot
+  // even detect it (its repair PATCH targets the now-deleted squad and 400s).
+  // With the facade on, fail CLOSED into the no-access group instead.
+  const backstopGroupId = config.REMNAWAVE_COMPAT_ENABLED ? NO_ACCESS_SQUAD_ID : ALL_SQUAD_ID;
+
   await prisma.$transaction(async (tx) => {
     const orphanedUserIds = await tx.groupMember
       .findMany({
@@ -213,8 +225,22 @@ export async function deleteSquad(id: string): Promise<void> {
     const reallyOrphaned = orphanedUserIds.filter((id) => !stillHaveAGroup.has(id));
 
     if (reallyOrphaned.length > 0) {
+      if (backstopGroupId === NO_ACCESS_SQUAD_ID) {
+        // The no-access group is created on demand by the facade; make sure it
+        // exists before we point orphans at it (FK).
+        await tx.group.upsert({
+          where: { id: NO_ACCESS_SQUAD_ID },
+          update: {},
+          create: {
+            id: NO_ACCESS_SQUAD_ID,
+            name: NO_ACCESS_SQUAD_NAME,
+            description:
+              'Remnawave-compat: users whose squad set is empty (no access). System-managed, has no profiles — do not edit or assign manually.',
+          },
+        });
+      }
       await tx.groupMember.createMany({
-        data: reallyOrphaned.map((userId) => ({ groupId: ALL_SQUAD_ID, userId })),
+        data: reallyOrphaned.map((userId) => ({ groupId: backstopGroupId, userId })),
         skipDuplicates: true,
       });
     }
