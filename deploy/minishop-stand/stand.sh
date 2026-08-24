@@ -726,7 +726,13 @@ case "${1:-}" in
     # interval is the difference between "the route was not called" and "we did
     # not wait" - the first draft waited four minutes and refused.
     for _ in $(seq 1 66); do
-      if docker logs --since "$ppmark" remnawave-minishop-worker 2>&1 | grep -q 'kind=full'; then
+      # Captured first, NOT piped into `grep -q`. Under `set -o pipefail` a
+      # pipeline reports the writer's status too, and `grep -q` exits the instant
+      # it matches - so the writer takes SIGPIPE and the pipeline returns 141
+      # EXACTLY WHEN THE PATTERN IS FOUND. The check inverts, and only when the
+      # log is long enough that the writer is still going, which is why it
+      # survives being tried by hand. A here-string is a file, not a pipe.
+      if grep -q 'kind=full' <<<"$(docker logs --since "$ppmark" remnawave-minishop-worker 2>&1)"; then
         ticked=1; break
       fi
       sleep 10
@@ -779,9 +785,9 @@ the shop did not build a snapshot from it."
       # stage below, applied to a different starting point - a one-shot is
       # watched from before whatever can trigger it, and nothing before the
       # worker existed could.
-      docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' remnawave-minishop-worker)" \
-        remnawave-minishop-worker 2>&1 \
-        | grep -q 'Observed Remnawave capability multi-node-usage=False' \
+      wlog="$(docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' remnawave-minishop-worker)" \
+        remnawave-minishop-worker 2>&1)"
+      grep -q 'Observed Remnawave capability multi-node-usage=False' <<<"$wlog" \
         || die "the shop never recorded /nodes/usage as missing. Our 404 did not read to
 it as an absent route, so it will go on calling a route that is not there
 instead of using the fallback."
@@ -838,7 +844,8 @@ print(rows[0]["id"] if rows else "")')"
     dmark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     drop_shop_squad_cache
     for _ in $(seq 1 66); do
-      if docker logs --since "$dmark" remnawave-minishop-worker 2>&1 | grep -q 'kind=full'; then
+      # Same reason as the first stage: see the note there.
+      if grep -q 'kind=full' <<<"$(docker logs --since "$dmark" remnawave-minishop-worker 2>&1)"; then
         dticked=1; break
       fi
       sleep 10
@@ -1037,7 +1044,10 @@ print(d.get("id") or d["users"][0]["id"])')"
       -X POST "${SHOP_URL:-http://127.0.0.1:8082}/api/admin/sync" -d '{}' > /dev/null
     wait
 
-    until docker logs --since "$mark" remnawave-minishop-worker 2>&1 | grep -q 'Panel records checked'; do
+    # Same pipefail/SIGPIPE inversion as the premium probe's tick waits, and
+    # here it is worse: this loop has no bound, so a pipeline that returns 141
+    # on a MATCH spins forever and the probe hangs rather than fails.
+    until grep -q 'Panel records checked' <<<"$(docker logs --since "$mark" remnawave-minishop-worker 2>&1)"; do
       sleep 1
     done
     checked="$(docker logs --since "$mark" remnawave-minishop-worker 2>&1 \
