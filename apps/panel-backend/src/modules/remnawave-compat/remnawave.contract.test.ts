@@ -156,9 +156,32 @@ describe('the capture itself', () => {
     expect(rw3Ops.length).toBeGreaterThanOrEqual(30);
     const src = JSON.parse(
       readFileSync(new URL('./contracts/minishop-contract.json', import.meta.url), 'utf8'),
-    ) as { source: { describe: string; commit: string } };
+    ) as { source: { describe: string; commit: string }; webhooks: unknown[] };
     expect(src.source.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(src.source.describe).toBeTruthy();
+
+    // Pinned on a TAG, which until now was a decision recorded in prose and
+    // enforced on nobody: a capture taken from `dev`, or from the working copy
+    // (which lives its own life and is usually on some feature branch), passed
+    // this file unremarked and quietly moved the gate onto whatever that tree
+    // happened to be.
+    //
+    // `git describe --tags` appends `-<N>-g<sha>` exactly when HEAD is PAST a
+    // tag, so that suffix is the property, not a version-string format we would
+    // then have to keep matching release-candidate conventions.
+    expect(src.source.describe, 'the capture is not from a released tag').toMatch(/^v\d/);
+    expect(
+      src.source.describe,
+      `the capture is ${src.source.describe} - commits past a tag, so this gate ` +
+        'is asserting against an unreleased tree rather than a release',
+    ).not.toMatch(/-\d+-g[0-9a-f]+$/);
+
+    // The webhook rows are PROSE - `event` reads "user.expires_in_72_hours /
+    // 48_hours / 24_hours" - so there is nothing here to assert against our
+    // sender, and the machine-readable set is `actionableEvents` below. Checked
+    // only for having been read at all, so the block cannot sit in the fixture
+    // looking like coverage while being empty.
+    expect(src.webhooks.length, 'the refresh script read no webhook rows').toBeGreaterThan(0);
   });
 
   it('every operation the shop declares is either served or listed as unserved', () => {
