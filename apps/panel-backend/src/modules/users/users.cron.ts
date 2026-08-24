@@ -68,45 +68,82 @@ export async function resetTrafficRolling(): Promise<number> {
 }
 
 /**
- * Find active users whose expire_at has passed and flip them to 'expired'.
+ * Find users whose expire_at has passed and flip them to 'expired'.
  * Emits user.status-changed → handler chain enqueues removeUser job.
+ *
+ * 'limited' counts as due, not only 'active'. A period subscriber who burned
+ * their quota before the term ran out sits in 'limited' with expireAt still
+ * ahead; when that date arrives an active-only predicate never sees them, so
+ * the row stays 'limited' forever - on the panel it reads as a live subscriber
+ * who is merely over quota, and under the Remnawave-compat facade the
+ * `user.expired` webhook (which fires off this very transition) is never
+ * emitted for them. The shop's own always-on worker compensates, but only the
+ * shop's; the panel's own view of who is still a subscriber does not.
+ * 'disabled' stays excluded: that is an operator decision, not a lapse, and
+ * expiring it would overwrite the reason the operator set it.
+ *
+ * Selecting 'limited' puts this cron in a race it did not have before, so the
+ * flip is one statement rather than select-then-update. The traffic-reset
+ * handler lifts limited → active (see users.events.ts); with a separate read
+ * and write, a reset landing between them would resurrect a user this pass had
+ * already expired. Here the CTE takes the row locks, the UPDATE happens in the
+ * same transaction, and RETURNING says exactly which rows moved and what they
+ * moved from - so no event is emitted for a user who was not flipped.
+ *
+ * SKIP LOCKED, not a wait: a row locked right now is one another transaction is
+ * mid-write on, and the likeliest such write is the renewal that is about to
+ * push expireAt into the future. Skipping means the next tick re-reads it
+ * instead of expiring a subscriber who just paid.
  */
 export async function findExpiredUsers(): Promise<number> {
-  const users = await prisma.user.findMany({
-    where: { expireAt: { lt: new Date() }, status: 'active', deletedAt: null },
-    select: { id: true },
-  });
+  // updated_at is set explicitly: @updatedAt is a Prisma-client behaviour and
+  // does not apply to raw SQL, and reconcileOrphanNodeUsers finds its orphans
+  // through exactly that column.
+  const rows = await prisma.$queryRaw<{ id: string; previous_status: string }[]>`
+    WITH due AS (
+      SELECT id, status
+      FROM users
+      WHERE expire_at < now()
+        AND status IN ('active', 'limited')
+        AND deleted_at IS NULL
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE users u
+       SET status = 'expired', updated_at = now()
+      FROM due
+     WHERE u.id = due.id
+    RETURNING u.id::text AS id, due.status AS previous_status
+  `;
 
-  if (users.length === 0) return 0;
+  if (rows.length === 0) return 0;
 
-  const ids = users.map((u) => u.id);
+  const ids = rows.map((r) => r.id);
 
-  // #4 - flip the DB status BEFORE enqueuing. syncRemoveUser now status-gates
-  // (it skips removal for a still-active row), so a removeUser job that runs
-  // while the user is still 'active' would skip and strand them on every node.
-  // Flip first, then enqueue; reconcileOrphanNodeUsers is the crash backstop if
-  // the process dies between the flip and the enqueue. This is the
-  // "update-then-enqueue" order the worker's new status-gate calls for.
+  // #4 - the DB status is already 'expired' before this enqueue. syncRemoveUser
+  // status-gates (it skips removal for a still-active row), so a removeUser job
+  // that ran while the user was still 'active' would skip and strand them on
+  // every node. reconcileOrphanNodeUsers is the crash backstop if the process
+  // dies between the flip and the enqueue.
   //
-  // No dedup jobId on the expiry path: a user transitions active -> expired
-  // exactly once (after the flip later ticks don't re-select them), so there
-  // is no repeated-enqueue load to dedup. removeUser is idempotent node-side,
-  // so an occasional duplicate (reconcile also enqueues) is harmless.
+  // No dedup jobId on the expiry path: a user transitions to expired exactly
+  // once (after the flip later ticks don't re-select them), so there is no
+  // repeated-enqueue load to dedup. removeUser is idempotent node-side, so an
+  // occasional duplicate (reconcile also enqueues) is harmless.
   // B11: one addBulk instead of N awaited add()s, a 1000-user expiry batch
   // was 1000 sequential Redis round-trips; addBulk pipelines them.
-  await prisma.user.updateMany({
-    where: { id: { in: ids } },
-    data: { status: 'expired' },
-  });
   await nodeUsersQueue.addBulk(
     ids.map((id) => ({ name: 'removeUser', data: { userId: id } })),
   );
 
-  // Event handlers still fire (Telegram alerts, audit log) but they no
-  // longer carry the sync invariant, that's covered by the direct
-  // enqueue above.
-  for (const id of ids) {
-    eventBus.emit('user.status-changed', { userId: id, from: 'active', to: 'expired' });
+  // Event handlers still fire (Telegram alerts, audit log, the facade's
+  // `user.expired` webhook) but they no longer carry the sync invariant,
+  // that's covered by the direct enqueue above.
+  for (const row of rows) {
+    eventBus.emit('user.status-changed', {
+      userId: row.id,
+      from: row.previous_status,
+      to: 'expired',
+    });
   }
   return ids.length;
 }
@@ -244,8 +281,16 @@ export async function alertNearLimits(): Promise<number> {
   const now = new Date();
   const soon = new Date(now.getTime() + NEAR_EXPIRY_DAYS * 86_400_000);
 
+  // Same widening as findExpiredUsers, for the same reason: a subscriber who is
+  // 'limited' on quota is still a subscriber whose term is about to end, and now
+  // that the cron actually expires them, an operator who is only told about the
+  // 'active' ones hears about the lapse after it happened.
   const expiring = await prisma.user.findMany({
-    where: { status: 'active', deletedAt: null, expireAt: { gte: now, lte: soon } },
+    where: {
+      status: { in: ['active', 'limited'] },
+      deletedAt: null,
+      expireAt: { gte: now, lte: soon },
+    },
     select: { username: true, expireAt: true },
     orderBy: { expireAt: 'asc' },
     take: 50,
