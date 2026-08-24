@@ -88,6 +88,53 @@ ensure_webhook_cert() {
   echo "stand: generated a self-signed webhook TLS certificate in $dir"
 }
 
+# Live-risk (3) end to end: the shop's own fleet sync, walking our /users/stream
+# while the set changes underneath it.
+#
+# The unit test proves the panel's paging with inject. This proves the thing the
+# risk is actually about: the SHOP walking every page to decide who still exists,
+# and a user it never sees being marked PANEL_USER_NOT_FOUND. It needs the walk
+# to take more than an instant, so the probe rewrites two of the shop's own knobs
+# in the runtime env - a five-user page and a one-second pause between pages -
+# and puts them there rather than in the committed template, because the
+# differential's two halves must stay comparable.
+churn_probe_env() {
+  fill_token
+  local size="${CHURN_PAGE_SIZE:-5}" delay="${CHURN_PAGE_DELAY:-1.0}"
+  {
+    echo "PANEL_ALL_USERS_PAGE_SIZE=$size"
+    echo "PANEL_ALL_USERS_PAGE_DELAY_SECONDS=$delay"
+  } >> "$RUNTIME_ENV"
+  echo "stand: sync paging forced to $size users, ${delay}s between pages"
+}
+
+# An admin session on the shop, as admin.sh gets one. Prints "<cookiejar> <csrf>".
+shop_admin_session() {
+  local jar="$1" email="${ADMIN_EMAIL:-runes.admin@example.com}" req code ver csrf
+  req="$(curl -sS -b "$jar" -c "$jar" -H 'content-type: application/json' \
+    -X POST "${SHOP_URL:-http://127.0.0.1:8082}/api/auth/email/request" -d "{\"email\":\"$email\"}")"
+  code="$(python3 -c 'import json,sys,re
+d=json.loads(sys.argv[1])
+def f(o):
+    if isinstance(o,dict):
+        for k,v in o.items():
+            if "code" in k.lower() and isinstance(v,str) and re.fullmatch(r"\d{4,8}",v): return v
+            r=f(v)
+            if r: return r
+    elif isinstance(o,list):
+        for v in o:
+            r=f(v)
+            if r: return r
+    return None
+print(f(d) or "")' "$req")"
+  [[ -n "$code" ]] || die "no verification code for the admin session"
+  ver="$(curl -sS -b "$jar" -c "$jar" -H 'content-type: application/json' \
+    -X POST "${SHOP_URL:-http://127.0.0.1:8082}/api/auth/email/verify" -d "{\"email\":\"$email\",\"code\":\"$code\"}")"
+  csrf="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("csrf_token",""))' "$ver")"
+  [[ -n "$csrf" ]] || die "no csrf token for the admin session"
+  printf '%s' "$csrf"
+}
+
 # The shop's demo seed is EXPECTED to exit non-zero at v3.6.1, so its exit code
 # says nothing about whether the admin user landed. Three statements, no
 # --single-transaction: users, subscriptions, then the payments INSERT that
@@ -185,6 +232,13 @@ preflight_facade() {
 case "${1:-}" in
   up-iceslab)
     fill_token
+    if [[ -n "${CHURN_PAGING:-}" ]]; then
+      {
+        echo "PANEL_ALL_USERS_PAGE_SIZE=${CHURN_PAGE_SIZE:-5}"
+        echo "PANEL_ALL_USERS_PAGE_DELAY_SECONDS=${CHURN_PAGE_DELAY:-1.0}"
+      } >> "$RUNTIME_ENV"
+      echo "stand: sync paging forced to ${CHURN_PAGE_SIZE:-5} users, ${CHURN_PAGE_DELAY:-1.0}s between pages"
+    fi
     preflight_facade
     "${compose_iceslab[@]}" --profile seed up -d --wait "${SHOP_SERVICES[@]}"
     # The shop's demo fixtures, same as the reference half runs: without them
@@ -307,6 +361,74 @@ case "${1:-}" in
     python3 "$HERE/compare_traces.py" "$outdir/ref-admin.trace" "$outdir/iceslab-admin.trace" || true
     echo; echo "===== what the admin pages rendered ====="
     python3 "$HERE/compare_admin.py" "$outdir/ref-admin.jsonl" "$outdir/iceslab-admin.jsonl" || true
+    ;;
+
+  churn-probe)
+    # Live risk (3), reproduced against the SHOP rather than asserted with
+    # inject: its fleet sync walks every page of /users/stream to decide who
+    # still exists, and a user it never sees is PANEL_USER_NOT_FOUND -
+    # is_active=False, a paid subscription quietly ended.
+    #
+    # The shop reports "Panel records checked" at the end of a sync, and that
+    # number is the whole finding. Seed the panel, start a sync slow enough to
+    # watch (the shop's own page-size and page-delay knobs, set in the runtime
+    # env only), delete ONE user the walk has already collected, and count.
+    #
+    #   keyset  + churn : N     (the deleted one was collected before it went)
+    #   offset  + churn : N-1   (and the missing one is somebody still alive)
+    #
+    # Run it with the route reverted to offset paging to see the second line;
+    # that is how it was established, and it is the only way to tell the two
+    # apart - on a quiet panel they are identical.
+    shift
+    seed="${1:-40}"
+    tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+    jar="$(mktemp)"; trap 'rm -f "$jar"' RETURN
+
+    echo "stand: seeding $seed users on the panel"
+    for i in $(seq 1 "$seed"); do
+      curl -sS -o /dev/null -X POST -H "authorization: Bearer $tok" \
+        -H 'content-type: application/json' \
+        -d "{\"username\":\"churn-probe-$(printf '%04d' "$i")\",\"expireDays\":30}" \
+        "$PANEL_URL/api/users" || die "could not seed churn-probe-$i"
+    done
+    total="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/$PREFIX/api/users?size=1" \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["response"]["total"])')"
+    echo "stand: $total users on the panel"
+
+    # Newest first, so the last one seeded is on page one - collected before the
+    # deletion no matter how the walk is paged.
+    victim_name="churn-probe-$(printf '%04d' "$seed")"
+    victim="$(curl -sS -H "authorization: Bearer $tok" \
+      "$PANEL_URL/api/users/by-username/$victim_name" \
+      | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print(d.get("id") or d["users"][0]["id"])')"
+
+    csrf="$(shop_admin_session "$jar")"
+    mark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    ( sleep "${CHURN_DELETE_AFTER:-4}"
+      curl -sS -o /dev/null -X DELETE -H "authorization: Bearer $tok" "$PANEL_URL/api/users/$victim"
+      echo "stand: deleted $victim_name mid-walk" ) &
+    curl -sS -b "$jar" -H 'content-type: application/json' -H "X-CSRF-Token: $csrf" \
+      -X POST "${SHOP_URL:-http://127.0.0.1:8082}/api/admin/sync" -d '{}' > /dev/null
+    wait
+
+    until docker logs --since "$mark" remnawave-minishop-worker 2>&1 | grep -q 'Panel records checked'; do
+      sleep 1
+    done
+    checked="$(docker logs --since "$mark" remnawave-minishop-worker 2>&1 \
+      | grep -oE 'Panel records checked: [0-9]+' | tail -1 | grep -oE '[0-9]+')"
+    echo
+    echo "stand: panel had $total users; one was deleted after the walk collected it"
+    echo "stand: the shop walked $checked"
+    if [[ "$checked" == "$total" ]]; then
+      echo "stand: nothing was lost - every user the walk should have seen, it saw"
+    else
+      echo "stand: LOST $((total - checked)) user(s) that were alive throughout the walk." >&2
+      echo "The shop reads each of them as deleted from the panel." >&2
+      exit 1
+    fi
     ;;
 
   webhook-probe)
@@ -437,6 +559,9 @@ usage: $(basename "$0") <command>
   webhook-probe
                send a signed webhook through a real TLS nginx and check the
                shop still accepts it (needs the iceslab stand up)
+  churn-probe [n]
+               seed n users, run the shop's fleet sync, delete one mid-walk and
+               count what the shop saw (needs CHURN_PAGING=1 on up-iceslab)
   compare a b  diff two traces as multisets
 
 One at a time: the two stands share container names.
