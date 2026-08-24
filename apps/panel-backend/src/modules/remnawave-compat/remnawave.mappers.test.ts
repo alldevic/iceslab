@@ -159,3 +159,63 @@ describe('strategyToNative / statusToNative', () => {
     expect(statusToNative(undefined)).toBeUndefined();
   });
 });
+
+/**
+ * The shop's own read of a panel user's connection state, transcribed from
+ * `bot/services/panel_activity.py::_panel_user_connection_activity` (with the
+ * marker helpers it calls). Reproduced rather than approximated because the
+ * distinction it draws is one an equality assertion cannot express: `never` and
+ * `unknown` differ only by whether the KEY EXISTS, and a mapper that stopped
+ * emitting `onlineAt` would still satisfy every `toBeNull()` written about it.
+ *
+ * Only the containers the facade actually fills are walked — the shop also
+ * looks inside `lastConnectedNode` and the other traffic aliases, which we
+ * never send, so folding them in here would add branches no input can reach.
+ */
+function shopConnectionState(user: Record<string, unknown>): 'connected' | 'never' | 'unknown' {
+  const MARKERS = ['onlineAt', 'lastSeenAt', 'lastConnectedAt', 'firstConnectedAt', 'lastConnectedNodeUuid'];
+  const traffic = (user.userTraffic ?? {}) as Record<string, unknown>;
+  const containers = [user, traffic];
+  const stamped = containers.some((c) =>
+    ['onlineAt', 'lastSeenAt', 'lastConnectedAt', 'firstConnectedAt'].some((k) => {
+      const v = c[k];
+      return typeof v === 'string' && v.trim() !== '';
+    }),
+  );
+  const usedBytes = containers.some((c) => {
+    const v = c['usedTrafficBytes'] ?? c['lifetimeUsedTrafficBytes'];
+    return typeof v === 'number' && v > 0;
+  });
+  if (stamped || usedBytes) return 'connected';
+  if (containers.some((c) => MARKERS.some((k) => k in c))) return 'never';
+  return 'unknown';
+}
+
+describe('mapUserToRemna — the shop can tell "never connected" from "no idea"', () => {
+  // Traffic must be zero throughout: the shop reads positive bytes as a
+  // connection on its own, which would call every case below `connected` and
+  // make the suite pass with `onlineAt` deleted.
+  const quiet = { trafficUsedBytes: 0, lifetimeTrafficBytes: 0 } as const;
+
+  it('emits the onlineAt key even when the user has never been online', () => {
+    const m = mapUserToRemna(dto({ ...quiet, lastOnlineAt: null }));
+    expect('onlineAt' in m).toBe(true);
+    expect(m.onlineAt).toBeNull();
+    expect(shopConnectionState(m)).toBe('never');
+  });
+
+  it('carries the timestamp through when the user has been online', () => {
+    const m = mapUserToRemna(dto({ ...quiet, lastOnlineAt: '2026-08-20T10:00:00.000Z' }));
+    expect(m.onlineAt).toBe('2026-08-20T10:00:00.000Z');
+    expect(shopConnectionState(m)).toBe('connected');
+  });
+
+  it('a payload with no marker at all is what the shop calls unknown', () => {
+    // The pre-fix shape, spelled out: this is the state the mapper must never
+    // produce again, and the reason the two assertions above are about
+    // presence rather than value.
+    const stripped = { ...mapUserToRemna(dto({ ...quiet })) };
+    delete stripped.onlineAt;
+    expect(shopConnectionState(stripped)).toBe('unknown');
+  });
+});

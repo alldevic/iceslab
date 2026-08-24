@@ -145,6 +145,16 @@ export function mapUserToRemna(
     description: dto.description,
     tag: dto.tag,
     subscriptionUrl: subscriptionUrlFor(dto.subscriptionToken),
+    // Always emit the key, null included. The minishop derives a user's
+    // connection state from PRESENCE, not value: a payload carrying no
+    // connection marker at all reads as `unknown`, one carrying `onlineAt: null`
+    // reads as `never`, and only a timestamp reads as `connected`. Omitting it
+    // therefore does not degrade gracefully — it collapses "never connected"
+    // into "we cannot tell", which is what the admin user page rendered and
+    // what emptied the `active_never_connected` broadcast audience, since that
+    // segment requires every one of a user's subscriptions to read exactly
+    // `never`.
+    onlineAt: dto.lastOnlineAt,
     activeInternalSquads: dto.groupIds
       .filter((id) => !ctx.hiddenGroupIds?.has(id))
       .map((id) => ({ uuid: id, name: ctx.squadNames?.get(id) ?? id })),
