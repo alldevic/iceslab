@@ -10,5 +10,7 @@
   // include - so without this line the test project resolves to zero files and
   // `tsc -p tsconfig.test.json` passes by having nothing to check.
   "exclude": [],
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  // e2e/ and the Playwright config live outside src/ (they are not the app),
+  // so this is the only project that checks them.
+  "include": ["src/**/*.ts", "src/**/*.tsx", "e2e/**/*.ts", "playwright.config.ts"]
 }

@@ -52,3 +52,25 @@ pnpm --filter @iceslab/panel-frontend build
 ```
 
 The Dockerfile builds Vite and serves via `nginx:alpine` with a reverse-proxy config that forwards `/api`, `/sub`, `/health`, `/admin/` to the backend service in `docker-compose.prod.yml`. Single-origin in prod, no CORS.
+
+## Tests
+
+Three layers, cheapest first.
+
+```sh
+pnpm test        # vitest: locale parity + component tests (jsdom, no servers needed)
+pnpm typecheck   # both projects: the app, and the tests + e2e
+pnpm test:e2e    # playwright against a RUNNING panel (see below)
+```
+
+`pnpm test` and `pnpm typecheck` need nothing but the repo. `pnpm test:e2e`
+drives a real browser against a real backend and database: start the panel
+first (backend on `:3000`, this dev server on `:5173`), or point
+`E2E_BASE_URL` / `E2E_API_URL` / `E2E_ADMIN_USER` / `E2E_ADMIN_PASS` elsewhere.
+The first run downloads a chromium build (~115 MB) into `~/.cache/ms-playwright`.
+
+The e2e suite runs one browser at a time on purpose, and it is meant to be run
+**about once a minute**: the panel rate-limits login to 5/min and every route to
+100/min per IP, and one full run is a sizeable fraction of that. A run inside
+the window fails saying so by name rather than pretending the panel is broken.
+Everything it creates is prefixed `e2e-` and deleted afterwards.

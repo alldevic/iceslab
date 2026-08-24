@@ -22,7 +22,9 @@ const base: PqFormValues = {
 };
 
 const SEED = 'FbUuTGwFDMOn2ptl9CyMBFQrOTeoHTAJpVnT9RHwXpk';
-const VERIFY = 'a'.repeat(2604); // base64 of 1952 bytes, shape only
+// An ML-DSA-65 public key is 1952 bytes; the backend checks that length, and
+// the fixture is built to it so the two halves of the gate agree on shape.
+const VERIFY = Buffer.alloc(1952, 0x41).toString('base64');
 const DECRYPTION = 'mlkem768x25519plus.native.600s.' + 'b'.repeat(88);
 const ENCRYPTION = 'mlkem768x25519plus.native.0rtt.' + 'c'.repeat(1580);
 
