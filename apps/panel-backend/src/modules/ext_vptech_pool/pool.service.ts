@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { Prisma } from '../../generated/prisma/client.js';
 import { config } from '../../config.js';
 import { prisma } from '../../prisma.js';
+import { createBinding } from '../profiles/profiles.service.js';
 import { eventBus } from '../../lib/event-bus.js';
 import { getLogger } from '../../lib/logger.js';
 import { issueBootstrapToken } from '../nodes/bootstrap.service.js';
@@ -158,6 +159,7 @@ export function makeHotswapDeps(runner: AnsibleRunner = defaultAnsibleRunner): H
       getLogger().info(
         `[pool] repoint ${burnedId} → ${spareId}: users are carried by the status flip — the burned node drops out of /sub and the spare appears on the next fetch`,
       );
+      await carryBindings(burnedId, spareId);
       await carryEgressPolicy(burnedId, spareId);
     },
     retire: async (burnedId) => {
@@ -175,6 +177,81 @@ export function makeHotswapDeps(runner: AnsibleRunner = defaultAnsibleRunner): H
       });
     },
   };
+}
+
+/**
+ * Give the spare the inbounds the burned node was serving.
+ *
+ * Without this the swap completes green and hands users nothing: the comment
+ * below about the status flip is true as far as it goes - the burned node does
+ * drop out of /sub the moment retire disables it - but a node only appears in a
+ * subscription through a BINDING, and a cold spare has none. It was never
+ * provisioned, so nobody ever bound a profile to it. Watched end to end on
+ * 2026-08-24: sensor fired, ansible provisioned the spare, the policy carried,
+ * the burned node retired - and every user came back with one node fewer,
+ * because the replacement served nothing.
+ *
+ * What carries is the profile, the port and the per-node overrides. What does
+ * NOT is `publicHost` / `publicPort`: those name the machine that is being
+ * retired. Left null, the subscription falls back to the spare's own address,
+ * which is the whole point of swapping to it.
+ *
+ * Per binding, best-effort: a spare that already serves that profile keeps what
+ * it has, and one that cannot take a binding (its port is already spoken for)
+ * is logged and skipped rather than aborting a swap that has already promoted a
+ * node and is about to retire another.
+ */
+async function carryBindings(burnedId: string, spareId: string): Promise<void> {
+  const [burnedBindings, spareBindings] = await Promise.all([
+    prisma.profileNodeBinding.findMany({
+      where: { nodeId: burnedId, enabled: true },
+      select: { profileId: true, port: true, overrides: true },
+    }),
+    prisma.profileNodeBinding.findMany({
+      where: { nodeId: spareId },
+      select: { profileId: true, port: true },
+    }),
+  ]);
+  if (burnedBindings.length === 0) return;
+
+  const servedProfiles = new Set(spareBindings.map((b) => b.profileId));
+  const takenPorts = new Set(spareBindings.map((b) => b.port));
+  let carried = 0;
+  for (const b of burnedBindings) {
+    if (servedProfiles.has(b.profileId)) continue;
+    if (takenPorts.has(b.port)) {
+      getLogger().warn(
+        `[pool] repoint ${burnedId} → ${spareId}: port ${b.port} is already used on the spare, profile ${b.profileId} NOT carried`,
+      );
+      continue;
+    }
+    try {
+      // Through the service, not a raw insert: a binding is not just its row.
+      // createBinding also gives it the Default host the subscription iterates
+      // (bindings x hosts), and a binding without one emits no endpoint at all
+      // - the node gets the inbound, xray comes up serving it, and the user's
+      // subscription is empty. Which is exactly what the first version of this
+      // did, and exactly the failure it was written to prevent.
+      await createBinding({
+        profileId: b.profileId,
+        nodeId: spareId,
+        port: b.port,
+        overrides: (b.overrides ?? undefined) as Record<string, unknown> | undefined,
+        enabled: true,
+      });
+      takenPorts.add(b.port);
+      carried++;
+    } catch (err) {
+      getLogger().warn(
+        `[pool] repoint ${burnedId} → ${spareId}: could not carry profile ${b.profileId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+  getLogger().info(
+    `[pool] repoint ${burnedId} → ${spareId}: carried ${carried}/${burnedBindings.length} inbound binding(s)`,
+  );
 }
 
 /**

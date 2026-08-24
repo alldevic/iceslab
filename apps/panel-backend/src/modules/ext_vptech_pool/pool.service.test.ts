@@ -190,3 +190,119 @@ describe('F2 hotswap carries the egress policy', () => {
     });
   });
 });
+
+/**
+ * A swap that promotes a node and hands users nothing is the failure this
+ * guards. The burned node leaves the subscription the moment retire disables
+ * it, but a node only reaches a subscription through a BINDING, and a cold
+ * spare has none - it was never provisioned, so nobody ever bound a profile to
+ * it. Seen end to end on a live pair, 2026-08-24: every user came back one node
+ * short.
+ */
+describe('F2 hotswap carries the inbound bindings', () => {
+  async function node(name: string, status: string) {
+    seq += 1;
+    return prisma.node.create({
+      data: {
+        name: `${name}-${seq}`,
+        address: `${name}-${seq}.test:1337`,
+        status,
+        heartbeatSecret: Buffer.alloc(32),
+      },
+    });
+  }
+  async function profile(name: string) {
+    seq += 1;
+    return prisma.profile.create({
+      data: { name: `${name}-${seq}`, protocol: 'xray', config: {} as never },
+    });
+  }
+
+  it('gives the spare the profiles the burned node served', async () => {
+    const burned = await node('b', 'active');
+    const spare = await node('s', 'standby');
+    const p = await profile('prof');
+    await prisma.profileNodeBinding.create({
+      data: {
+        profileId: p.id,
+        nodeId: burned.id,
+        port: 443,
+        // per-MACHINE, must not follow the profile onto another box
+        publicHost: 'burned.example.com',
+        publicPort: 8443,
+        overrides: { realityShortIds: ['abc123'] } as never,
+      },
+    });
+
+    const deps = makeHotswapDeps({ provision: vi.fn() } as unknown as AnsibleRunner);
+    await deps.repoint(burned.id, spare.id);
+
+    const carried = await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id } });
+    expect(carried).toHaveLength(1);
+    expect(carried[0].profileId).toBe(p.id);
+    expect(carried[0].port).toBe(443);
+    expect(carried[0].overrides).toEqual({ realityShortIds: ['abc123'] });
+    // The retired machine's public identity stays with it; the spare's own
+    // address is what the subscription should now hand out.
+    expect(carried[0].publicHost).toBeNull();
+    expect(carried[0].publicPort).toBeNull();
+    // A binding is not just its row: the subscription walks bindings x hosts,
+    // so one without a Default host emits nothing and the swap still hands the
+    // user an empty list.
+    expect(await prisma.host.count({ where: { bindingId: carried[0].id } })).toBe(1);
+  });
+
+  it('leaves a profile the spare already serves alone', async () => {
+    const burned = await node('b2', 'active');
+    const spare = await node('s2', 'standby');
+    const p = await profile('shared');
+    await prisma.profileNodeBinding.create({
+      data: { profileId: p.id, nodeId: burned.id, port: 443 },
+    });
+    await prisma.profileNodeBinding.create({
+      data: { profileId: p.id, nodeId: spare.id, port: 8443 },
+    });
+
+    const deps = makeHotswapDeps({ provision: vi.fn() } as unknown as AnsibleRunner);
+    await deps.repoint(burned.id, spare.id);
+
+    const onSpare = await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id } });
+    expect(onSpare).toHaveLength(1);
+    expect(onSpare[0].port).toBe(8443); // untouched
+  });
+
+  it('skips a binding whose port the spare already uses, and still swaps', async () => {
+    const burned = await node('b3', 'active');
+    const spare = await node('s3', 'standby');
+    const [pa, pb] = [await profile('a'), await profile('b')];
+    await prisma.profileNodeBinding.create({
+      data: { profileId: pa.id, nodeId: burned.id, port: 443 },
+    });
+    // the spare already runs something else on 443
+    await prisma.profileNodeBinding.create({
+      data: { profileId: pb.id, nodeId: spare.id, port: 443 },
+    });
+
+    const deps = makeHotswapDeps({ provision: vi.fn() } as unknown as AnsibleRunner);
+    await expect(deps.repoint(burned.id, spare.id)).resolves.toBeUndefined();
+
+    const onSpare = await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id } });
+    expect(onSpare).toHaveLength(1);
+    expect(onSpare[0].profileId).toBe(pb.id);
+  });
+
+  it('does not carry a binding the operator had switched off', async () => {
+    const burned = await node('b4', 'active');
+    const spare = await node('s4', 'standby');
+    const p = await profile('off');
+    await prisma.profileNodeBinding.create({
+      data: { profileId: p.id, nodeId: burned.id, port: 443, enabled: false },
+    });
+
+    const deps = makeHotswapDeps({ provision: vi.fn() } as unknown as AnsibleRunner);
+    await deps.repoint(burned.id, spare.id);
+
+    expect(await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id } })).toHaveLength(0);
+  });
+});
+
