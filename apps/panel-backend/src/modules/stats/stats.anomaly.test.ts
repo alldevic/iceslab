@@ -3,6 +3,7 @@ import {
   evaluateNodeDrop,
   anomalySeverity,
   updateExpectedActiveUsers,
+  expectationForPoll,
   type AnomalyConfig,
 } from './stats.anomaly.js';
 
@@ -94,5 +95,53 @@ describe('anomalySeverity', () => {
   it('is critical below the critical ratio, warning otherwise', () => {
     expect(anomalySeverity(0.01, cfg)).toBe('critical');
     expect(anomalySeverity(0.15, cfg)).toBe('warning');
+  });
+});
+
+/**
+ * The debounce and the decay used to cancel each other out. This walks the exact
+ * sequence a node produces when it goes dark: `debounce` polls in a row have to
+ * clear `minUsersDrop`, while the expectation loses 5% every poll. On a node
+ * whose peak is exactly the minimum, that is two hits and never three - the
+ * sensor cannot fire at all under six concurrent users, at a configured minimum
+ * of five. Watched happen on a live node, 2026-08-24.
+ */
+describe('the debounce window must be reachable', () => {
+  /** Replay N dark polls the way the cron does, and count the streak. */
+  function darkPolls(peak: number, polls: number, hold: boolean): number {
+    let expected = peak;
+    let streak = 0;
+    for (let i = 0; i < polls; i++) {
+      expected = hold
+        ? expectationForPoll(expected, 0, cfg.expectedDecay, streak > 0)
+        : updateExpectedActiveUsers(expected, 0, cfg.expectedDecay);
+      const verdict = evaluateNodeDrop(
+        { thisPollBytes: 0, activeUsers: 0, expectedActiveUsers: expected, baselinePerPoll: 10_000_000 },
+        cfg,
+      );
+      streak = verdict.belowThreshold ? streak + 1 : 0;
+    }
+    return streak;
+  }
+
+  it('reaches the debounce on a node whose peak is exactly minUsersDrop', () => {
+    expect(darkPolls(cfg.minUsersDrop, cfg.debounce, true)).toBe(cfg.debounce);
+  });
+
+  it('shows the old behaviour it replaces: two hits, then the streak resets', () => {
+    expect(darkPolls(cfg.minUsersDrop, cfg.debounce, false)).toBe(0);
+  });
+
+  it('still decays outside a streak, so a node that sheds users stops being judged on its peak', () => {
+    // Not confirming: the bar drops, which is what lets a genuinely smaller
+    // node settle at its new size instead of looking permanently anomalous.
+    const once = expectationForPoll(10, 3, cfg.expectedDecay, false);
+    expect(once).toBeCloseTo(9.5, 5);
+    // Confirming: the bar holds where it was.
+    expect(expectationForPoll(10, 0, cfg.expectedDecay, true)).toBe(10);
+  });
+
+  it('a recovering poll takes the bar back up even mid-confirmation', () => {
+    expect(expectationForPoll(4.75, 7, cfg.expectedDecay, true)).toBe(7);
   });
 });

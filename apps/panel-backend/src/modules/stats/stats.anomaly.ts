@@ -77,6 +77,33 @@ export interface NodeDropVerdict {
  * and decays slowly otherwise, so a sustained drop stays "below expected" for
  * many polls while a brief dip is quickly forgiven. Pure.
  */
+/**
+ * The expectation to measure THIS poll against.
+ *
+ * `confirming` means a drop is already being counted towards the debounce. The
+ * bar must not move while that count runs: the decay takes 5% off every poll,
+ * the debounce wants N polls in a row above `minUsersDrop`, and on a node whose
+ * peak is exactly that minimum the two cancel out - round(5*0.95)=5,
+ * round(5*0.95^2)=5, round(5*0.95^3)=4, so the streak dies one poll short every
+ * time and the sensor cannot fire at all below six concurrent users. Observed
+ * on a live node with five, 2026-08-24.
+ *
+ * Outside a streak it decays exactly as before, which is what the decay is for:
+ * a node that legitimately sheds users should stop being judged against its old
+ * peak. A poll that still moves bytes is never below-threshold, so it is never
+ * "confirming" and never holds.
+ */
+export function expectationForPoll(
+  prevExpected: number,
+  activeUsers: number,
+  decay: number,
+  confirming: boolean,
+): number {
+  return confirming
+    ? Math.max(prevExpected, activeUsers)
+    : updateExpectedActiveUsers(prevExpected, activeUsers, decay);
+}
+
 export function updateExpectedActiveUsers(
   prevExpected: number,
   activeUsers: number,

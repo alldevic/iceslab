@@ -10,8 +10,8 @@ import {
 import { eventBus } from '../../lib/event-bus.js';
 import {
   evaluateNodeDrop,
+  expectationForPoll,
   anomalySeverity,
-  updateExpectedActiveUsers,
   ANOMALY_CONFIG,
 } from './stats.anomaly.js';
 
@@ -211,10 +211,13 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
           ).length;
           const thisPollBytes = Number(w.nodeDownload + w.nodeUpload);
           const base = baselinePerPoll.get(node.id) ?? 0;
-          const expected = updateExpectedActiveUsers(
+          // The bar must not move while a drop is being confirmed; see
+          // expectationForPoll for what happens when it does.
+          const expected = expectationForPoll(
             expectedActiveUsers.get(node.id) ?? 0,
             activeUsers,
             ANOMALY_CONFIG.expectedDecay,
+            (anomalyDebounce.get(node.id) ?? 0) > 0,
           );
           expectedActiveUsers.set(node.id, expected);
           const verdict = evaluateNodeDrop(
