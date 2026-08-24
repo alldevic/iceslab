@@ -77,6 +77,41 @@ export function cannotCarryVlessEncryption(e: SubscriptionEndpoint): boolean {
 }
 
 /**
+ * Can this format carry the endpoint's stream transport at all?
+ *
+ * The same trade as `cannotCarryVlessEncryption`, one layer down. A client that
+ * has no XHTTP transport does not render an XHTTP endpoint badly - it has
+ * nowhere to put it, so the entry it imports names a server it dials over plain
+ * TCP and never reaches. That is the outcome the rule above exists to avoid, and
+ * it was happening in ten places (see `formats/transport-matrix.test.ts`).
+ *
+ * `carried` is the set that FORMAT can express, established per client rather
+ * than assumed:
+ *   - sing-box: RAW/WS/gRPC/HTTPUpgrade. XHTTP is refused upstream on purpose
+ *     ("no plan" from the maintainer), and mKCP is not among its V2Ray
+ *     transports either.
+ *   - Quantumult X: RAW and WS only - its VLESS line spells transports through
+ *     `obfs=`, and the official sample.conf carries `http`, `ws`, `wss` and
+ *     `over-tls` and nothing else.
+ *   - Loon: RAW and WS upstream; `grpc` is kept because this builder already
+ *     emitted it and removing it on no evidence would be a regression by guess.
+ *   - Surge: RAW and WS, in the trojan/vmess branch that is the only place it
+ *     emits xray endpoints at all.
+ *
+ * Mihomo is absent on purpose: it DOES implement XHTTP (since v1.19.22), so
+ * `clash.ts` passing the transport through is correct and nothing is skipped.
+ *
+ * `raw` is always carriable - there is no transport to express.
+ */
+export function cannotCarryTransport(
+  e: SubscriptionEndpoint,
+  carried: readonly string[],
+): boolean {
+  if (e.protocol !== 'xray') return false;
+  return !carried.includes(e.network ?? 'raw');
+}
+
+/**
  * Universal subscription body: base64 of newline-separated URIs. Works with
  * every mainstream client (NekoRay, Hiddify, v2rayN, ...).
  */

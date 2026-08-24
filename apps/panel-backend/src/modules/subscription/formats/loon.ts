@@ -1,4 +1,5 @@
 import {
+  cannotCarryTransport,
   cannotCarryVlessEncryption,
   type SubscriptionEndpoint,
 } from '../subscription.formats.js';
@@ -13,6 +14,9 @@ import {
  * upstream cleanly, so this builder is best-effort - validate the import in the
  * Loon app and file an issue if a field name drifted (alpha).
  */
+/** RAW/WS upstream, plus the gRPC this builder already emitted. */
+const LOON_TRANSPORTS = ['raw', 'ws', 'grpc'] as const;
+
 function safeName(name: string): string {
   return name.replace(/[,=]/g, '-').trim();
 }
@@ -31,6 +35,12 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
       // U5: Loon's proxy line has no place for the VLESS-Encryption client
       // string, so such an endpoint would import and then fail every connect.
       if (cannotCarryVlessEncryption(e)) continue;
+      // XHTTP, HTTPUpgrade and mKCP have no spelling in Loon's proxy line - its
+      // official example config carries `transport=tcp` and `transport=ws` and
+      // nothing else. They used to collapse into `transport:tcp` below, which
+      // imports and never connects. `grpc` stays: this builder already emitted
+      // it, and dropping it on no evidence would be a regression by guess.
+      if (cannotCarryTransport(e, LOON_TRANSPORTS)) continue;
       const sec = e.securityLayer ?? 'default';
       const reality = sec === 'default';
       const tls = sec !== 'none';

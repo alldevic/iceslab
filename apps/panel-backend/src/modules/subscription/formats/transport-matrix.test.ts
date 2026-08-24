@@ -154,16 +154,19 @@ function render(): string {
 
 describe('subscription formats against xray stream transports', () => {
   it('the table, exactly as it stands today', () => {
-    // Observed, not designed. Every `degraded` and every `dropped` here is a
-    // config we hand a client that cannot reach the server it names.
+    // No `degraded` and no `dropped` anywhere: every cell either carries the
+    // transport or declines the endpoint. `omitted` is not a shrug - it is the
+    // client having no spelling for that transport at all, established per
+    // client in `cannotCarryTransport`, and the alternative was an entry that
+    // imports cleanly and never connects.
     expect('\n' + render() + '\n').toBe(`
 transport   xrayjson    clash       singbox     loon        surge       quantumultx
 raw         carried     carried     carried     carried     omitted     carried
-xhttp       carried     carried     dropped     degraded    omitted     dropped
-ws          carried     carried     carried     carried     omitted     dropped
-grpc        carried     carried     carried     carried     omitted     dropped
-httpupgrade carried     carried     carried     degraded    omitted     dropped
-kcp         carried     carried     dropped     degraded    omitted     dropped
+xhttp       carried     carried     omitted     omitted     omitted     omitted
+ws          carried     carried     carried     carried     omitted     carried
+grpc        carried     carried     carried     carried     omitted     omitted
+httpupgrade carried     carried     carried     omitted     omitted     omitted
+kcp         carried     carried     omitted     omitted     omitted     omitted
 `);
   });
 
@@ -175,35 +178,63 @@ kcp         carried     carried     dropped     degraded    omitted     dropped
         if (verdict === 'degraded' || verdict === 'dropped') broken.push(`${fmt}:${n}`);
       }
     }
-    // One list, so the product decision has one place to land: each of these
-    // either starts rendering its transport, or stops emitting the endpoint.
-    // `omitted` is deliberately absent - Surge declining VLESS over REALITY
-    // outright is the choice, not the defect.
-    expect(broken.sort()).toEqual([
-      'loon:httpupgrade',
-      'loon:kcp',
-      'loon:xhttp',
-      'quantumultx:grpc',
-      'quantumultx:httpupgrade',
-      'quantumultx:kcp',
-      'quantumultx:ws',
-      'quantumultx:xhttp',
-      'singbox:kcp',
-      'singbox:xhttp',
-    ]);
+    // Empty, and it has to stay empty. This is the assertion that would catch
+    // the defect coming back: a format that starts emitting an endpoint whose
+    // transport it cannot express lands here, whatever the table above says.
+    expect(broken.sort()).toEqual([]);
   });
 
-  it('Surge declines VLESS over REALITY, and carries only ws when it does emit', () => {
-    // Surge's whole column of `omitted` is a decision, not a transport bug: it
-    // skips REALITY entirely. Where it DOES emit - trojan over real TLS - the
-    // same question returns, and only `ws` survives.
-    const carried = NETWORKS.filter((n) => buildSurgeConf([endpoint(n, 'tls')]).includes('ws=true'));
-    expect(carried).toEqual(['ws']);
-    for (const n of NETWORKS) {
-      // The entry is emitted for every transport while carrying no hint of any
-      // but ws, so five of the six dial plain TLS at a server not listening for
-      // it. Same defect as the table above, in the branch the table cannot see.
-      expect(buildSurgeConf([endpoint(n, 'tls')])).toContain('n1.example.com');
-    }
+  it('Surge emits only the transports it can spell, in the branch it does emit', () => {
+    // Surge's whole column of `omitted` above is REALITY, which it does not do
+    // at all. This is the other branch - trojan over real TLS - which the table
+    // cannot see and where the same defect lived: an entry used to come out for
+    // every transport while naming none but ws, so five of six dialled plain
+    // TLS at a server not listening for it.
+    const emitted = NETWORKS.filter((n) =>
+      buildSurgeConf([endpoint(n, 'tls')]).includes('n1.example.com'),
+    );
+    expect(emitted).toEqual(['raw', 'ws']);
+    expect(buildSurgeConf([endpoint('ws', 'tls')])).toContain('ws=true');
+  });
+
+  it('a fleet the format cannot carry degrades to an empty config, not a broken one', () => {
+    // Skipping made the empty fleet a NORMAL outcome rather than a corner: s1's
+    // current inbound is VLESS+XHTTP+REALITY, so for these four formats an
+    // xhttp-only fleet is every endpoint gone. Which is the honest answer - the
+    // project's own client survey already says SINGBOX/STASH/CLASH do not work
+    // against that inbound - but only if what comes out is still loadable.
+    //
+    // sing-box is the one that could go wrong: a config whose `route.final`
+    // names a selector with no members is not an empty config, it is one the
+    // client refuses to start. It falls back to `direct` instead.
+    const xhttpOnly = [endpoint('xhttp')];
+    const singbox = JSON.parse(buildSingboxJson(xhttpOnly));
+    expect(singbox.outbounds.map((o: { tag: string }) => o.tag)).toEqual(['direct']);
+    expect(singbox.route.final).toBe('direct');
+
+    // The proxy-line formats have nothing to dangle, and say nothing.
+    expect(buildLoonConf(xhttpOnly)).toBe('');
+    expect(buildSurgeConf(xhttpOnly)).toBe('');
+    expect(buildQuantumultXConf(xhttpOnly)).toBe('');
+
+    // ...and Mihomo is unaffected, because it actually implements XHTTP. If
+    // this ever goes false, the skip has been copied to a format that did not
+    // need it and real endpoints are being dropped.
+    expect(buildClashYaml(xhttpOnly)).toContain('type: vless');
+  });
+
+  it('QuantumultX spells WebSocket the way its own sample.conf does', () => {
+    // The one cell where the transport could actually be RENDERED rather than
+    // declined. Asserted as the whole line, because the parts are what make it
+    // work: `wss` is QX's way of saying WebSocket AND TLS at once, `obfs-uri`
+    // carries the path, and Vision is absent on purpose - it rides RAW or XHTTP
+    // only, so over WebSocket it is not a weaker config but an invalid one.
+    const line = buildQuantumultXConf([endpoint('ws')]).trim();
+    expect(line).toBe(
+      'vless=n1.example.com:443, method=none, password=11111111-2222-3333-4444-555555555555, ' +
+        'obfs=wss, obfs-host=www.cloudflare.com, obfs-uri=/dl, ' +
+        'reality-base64-pubkey=pk, reality-hex-shortid=abc123, udp-relay=true, tag=eu-1',
+    );
+    expect(line).not.toContain('vless-flow');
   });
 });

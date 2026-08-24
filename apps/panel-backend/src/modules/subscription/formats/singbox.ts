@@ -1,5 +1,6 @@
 import type { RoutingPresetId } from '@iceslab/shared';
 import {
+  cannotCarryTransport,
   cannotCarryVlessEncryption,
   type SubscriptionEndpoint,
 } from '../subscription.formats.js';
@@ -193,6 +194,9 @@ const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
   },
 ];
 
+/** RAW/WS/gRPC/HTTPUpgrade. See `cannotCarryTransport`. */
+const SINGBOX_TRANSPORTS = ['raw', 'ws', 'grpc', 'httpupgrade'] as const;
+
 export function buildSingboxJson(
   endpoints: SubscriptionEndpoint[],
   opts: SingboxBuildOpts = {},
@@ -268,6 +272,12 @@ export function buildSingboxJson(
       // described here. Skipping beats emitting an outbound whose every
       // handshake the node rejects.
       if (cannotCarryVlessEncryption(e)) continue;
+      // sing-box has no XHTTP - refused upstream on purpose, "no plan" from the
+      // maintainer - and no mKCP. Both used to fall through the `ws`/`grpc`
+      // check below into an outbound with NO transport block, which sing-box
+      // dials as plain TCP: an entry that imports cleanly and cannot ever reach
+      // the server.
+      if (cannotCarryTransport(e, SINGBOX_TRANSPORTS)) continue;
       proxyTags.push(tag);
       const sub = e.subprotocol ?? 'vless';
       // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none'

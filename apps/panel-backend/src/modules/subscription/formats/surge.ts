@@ -1,4 +1,7 @@
-import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import {
+  cannotCarryTransport,
+  type SubscriptionEndpoint,
+} from '../subscription.formats.js';
 
 /**
  * Surge proxy-line list (`?format=surge`). One `Name = type, host, port, ...`
@@ -11,6 +14,9 @@ import type { SubscriptionEndpoint } from '../subscription.formats.js';
  * formats instead. Surge meaningfully carries: shadowsocks, hysteria2, and xray
  * vmess/trojan over REAL TLS only.
  */
+/** RAW and WebSocket. See `cannotCarryTransport`. */
+const SURGE_TRANSPORTS = ['raw', 'ws'] as const;
+
 function safeName(name: string): string {
   return name.replace(/[,=]/g, '-').trim();
 }
@@ -33,6 +39,11 @@ export function buildSurgeConf(endpoints: SubscriptionEndpoint[]): string {
       const sec = e.securityLayer ?? 'default';
       // Surge cannot do REALITY; only emit xray endpoints over real TLS.
       if (sec === 'default') continue;
+      // ...and of the transports, only WebSocket has a spelling here (`ws=true`
+      // + `ws-path=`). The rest were emitted as a plain-TLS line carrying no
+      // hint of the transport at all - the same silent dead entry, in the one
+      // branch where Surge does emit.
+      if (cannotCarryTransport(e, SURGE_TRANSPORTS)) continue;
       const tls = sec === 'tls';
       const ws = e.network === 'ws';
       if (e.subprotocol === 'trojan') {

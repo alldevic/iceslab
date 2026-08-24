@@ -1,4 +1,5 @@
 import {
+  cannotCarryTransport,
   cannotCarryVlessEncryption,
   type SubscriptionEndpoint,
 } from '../subscription.formats.js';
@@ -13,6 +14,9 @@ import {
  * and VLESS Vision uses `vless-flow=`. QX has no hysteria2/wireguard, so those
  * endpoints are skipped.
  */
+/** RAW and WebSocket. See `cannotCarryTransport` for where this list comes from. */
+const QX_TRANSPORTS = ['raw', 'ws'] as const;
+
 function safeTag(name: string): string {
   return name.replace(/[,=]/g, '-').trim();
 }
@@ -27,17 +31,32 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
       // U5: QX's vless line carries `method=none` and has no field for a
       // VLESS-Encryption client string, so such an endpoint is unrepresentable.
       if (cannotCarryVlessEncryption(e)) continue;
+      // QX spells the transport through `obfs=`, and its VLESS line has values
+      // for exactly two of ours: WebSocket and none. gRPC, XHTTP, HTTPUpgrade
+      // and mKCP have no spelling here at all (official sample.conf carries
+      // `http`, `ws`, `wss`, `over-tls` and nothing else), so an endpoint on
+      // one of those used to import as a plain-TLS entry and fail every
+      // connect. Skip it instead.
+      if (cannotCarryTransport(e, QX_TRANSPORTS)) continue;
       const sec = e.securityLayer ?? 'default';
       const reality = sec === 'default';
       const tls = sec !== 'none';
       const sub = e.subprotocol ?? 'vless';
-      const tlsParts = tls ? ['obfs=over-tls', `obfs-host=${e.sni}`] : [];
+      const ws = e.network === 'ws';
+      // `wss` IS `over-tls` plus WebSocket - QX has no way to say both, and the
+      // sample.conf pairs `obfs=wss` with REALITY directly
+      // (`vless-wss-reality-01`), so REALITY needs no different spelling here.
+      const obfs = ws ? (tls ? 'obfs=wss' : 'obfs=ws') : 'obfs=over-tls';
+      const tlsParts = tls || ws ? [obfs, `obfs-host=${e.sni}`] : [];
+      if (ws) tlsParts.push(`obfs-uri=${e.path ?? '/'}`);
       const realityParts = reality
         ? [`reality-base64-pubkey=${e.publicKey}`, `reality-hex-shortid=${e.shortId}`]
         : [];
       if (sub === 'vless') {
         const p = [`vless=${e.host}:${e.port}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts];
-        if (e.flow && tls) p.push(`vless-flow=${e.flow}`);
+        // Vision rides RAW or XHTTP only; over WebSocket it is not a weaker
+        // config, it is an invalid one (see core-adapters/xray/uri.ts).
+        if (e.flow && tls && !ws) p.push(`vless-flow=${e.flow}`);
         p.push('udp-relay=true', `tag=${tag}`);
         lines.push(p.join(', '));
       } else if (sub === 'vmess') {
