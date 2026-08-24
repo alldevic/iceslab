@@ -47,3 +47,57 @@ services:
     build:
       <<: *panel-build
       target: frontend
+
+  # 3. The shop's own demo fixtures, for the iceslab half of the differential.
+  #    They live in the shop's REFERENCE compose (docker-compose.remnawave-dev.yml),
+  #    which this half does not include - so without a copy here, only the
+  #    reference stand gets an admin user and the two halves are not comparable.
+  #    Same image, same command, same file: a different seeding mechanism would
+  #    itself be a difference between the halves.
+  #
+  #    It exits non-zero at v3.6.1: the payments INSERT omits `funding_source`,
+  #    which the shop's own migration made NOT NULL. That is the last of the
+  #    file's three statements, and psql here runs without --single-transaction,
+  #    so users and subscriptions are already committed. `stand.sh seed` checks
+  #    that the admin row landed rather than trusting the exit code either way.
+  dev-seed:
+    image: postgres:17.6
+    container_name: remnawave-minishop-dev-seed
+    profiles:
+      - seed
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ./deploy/dev/seed-minishop.sql:/seed/seed-minishop.sql:ro
+    networks:
+      - remnawave-minishop
+    command: ['sh', '-ec', 'psql -v ON_ERROR_STOP=1 -f /seed/seed-minishop.sql']
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # 4. A TLS reverse proxy in front of the shop's webhook endpoint, for the one
+  #    live risk the rest of the stand structurally cannot reach: the panel signs
+  #    an HMAC over the raw body, and in production there is a proxy between the
+  #    two. Its own profile - the ordinary run does not need it.
+  webhook-tls:
+    image: nginx:1.27-alpine
+    container_name: remnawave-minishop-webhook-tls
+    profiles:
+      - tls
+    volumes:
+      - ${STAND_DIR:?stand.sh exports this}/webhook-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STAND_DIR:?stand.sh exports this}/.runtime/certs:/certs:ro
+    networks:
+      - remnawave-minishop
+    ports:
+      - '127.0.0.1:${WEBHOOK_TLS_PORT:-8444}:8443'
+    depends_on:
+      backend:
+        condition: service_healthy
