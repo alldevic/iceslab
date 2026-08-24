@@ -426,6 +426,25 @@ would report that as a facade divergence." ;;
   done <<< "$ids"
 }
 
+# The users churn-probe seeds, by the names it gives them.
+purge_churn_users() {
+  local count="${1:?}" tok i name ids id gone=0
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  for i in $(seq 1 "$count"); do
+    name="churn-probe-$(printf '%04d' "$i")"
+    ids="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/api/users?search=$name" \
+      | python3 -c 'import json,sys
+rows = json.load(sys.stdin).get("users") or []
+print("\n".join(u["id"] for u in rows if u.get("username") == sys.argv[1]))' "$name")"
+    while read -r id; do
+      [[ -n "$id" ]] || continue
+      curl -sS -o /dev/null -X DELETE -H "authorization: Bearer $tok" "$PANEL_URL/api/users/$id" \
+        && gone=$((gone + 1))
+    done <<< "$ids"
+  done
+  echo "stand: removed $gone churn-probe user(s) from the panel"
+}
+
 # The SHOP's copy of a buyer, through its own admin API.
 #
 # Purging the panel side is not enough on its own: the shop's fleet sync imports
@@ -889,13 +908,27 @@ print(d.get("id") or d["users"][0]["id"])')"
     checked="$(docker logs --since "$mark" remnawave-minishop-worker 2>&1 \
       | grep -oE 'Panel records checked: [0-9]+' | tail -1 | grep -oE '[0-9]+')"
     echo
+    verdict=0
     echo "stand: panel had $total users; one was deleted after the walk collected it"
     # The verdict is delegated because the FIRST thing it has to decide is
     # whether this run proved anything at all: a walk that fitted in one page
     # never followed a cursor, and the earlier version of this probe reported
     # success in exactly that case.
     docker logs --since "$mark" remnawave-minishop-worker 2>&1 \
-      | python3 "$HERE/churn_verdict.py" "$total" "$checked" "${CHURN_DELETE_AFTER:-4}"
+      | python3 "$HERE/churn_verdict.py" "$total" "$checked" "${CHURN_DELETE_AFTER:-4}" \
+      || verdict=$?
+    # `|| verdict=$?` and not a bare `verdict=$?`: under `set -e` a failing
+    # pipeline ends the script THERE, so the assignment would only ever run when
+    # the probe passed - and the cleanup below with it. Cleanup that happens
+    # only on success is cleanup missing exactly when a run is worth repeating.
+    # Its own 40 users, gone. They are not a stand volume - our panel never is -
+    # so without this every churn run leaves them behind, the next differential
+    # counts a different fleet, and the panel grows by 39 a run. Fifth thing
+    # this session that outlived the run that made it; the rule has not changed.
+    # After the verdict, so a failed probe can still be looked at, and best
+    # effort, so a cleanup problem cannot turn a real finding into an error.
+    purge_churn_users "$seed" || true
+    exit $verdict
     ;;
 
   webhook-probe)
