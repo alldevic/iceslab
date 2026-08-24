@@ -102,3 +102,27 @@ services:
       backend:
         condition: service_healthy
 
+  # 5. A panel with exactly one route missing, for the one capability route the
+  #    shop reaches only as a fallback. See panel-shim.conf for why this is a
+  #    proxy and not a setting: the shop decides a route is absent by OBSERVING
+  #    a 404, and nothing in its configuration can tell it to stop preferring
+  #    `/bandwidth-stats/nodes/usage`. Its own profile - the ordinary run must
+  #    keep talking to the panel directly, or every other probe would be
+  #    measuring nginx too.
+  panel-shim:
+    image: nginx:1.27-alpine
+    container_name: remnawave-minishop-panel-shim
+    profiles:
+      - shim
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ${STAND_DIR:?stand.sh exports this}/panel-shim.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - remnawave-minishop
+    # Published so the stand can check from the host what the shop will get
+    # from inside the network - same server block either way. A shim asserted
+    # only through the shop's behaviour would be diagnosed through the shop's
+    # behaviour too, which is a long way round for "is nginx forwarding".
+    ports:
+      - '127.0.0.1:${PANEL_SHIM_PORT:-8086}:8080'

@@ -58,6 +58,10 @@ compose_ref=(docker compose
 # placeholder credentials only so `docker compose config` can interpolate. Name
 # the services explicitly rather than relying on that.
 SHOP_SERVICES=(postgres redis migrate backend worker frontend)
+# Every optional profile, for teardown. Naming them one by one is how a
+# container gets left running: `down` has to cover what any `up` may have
+# started, not what this particular invocation started.
+STAND_PROFILES=(--profile seed --profile tls --profile shim)
 
 fill_token() {
   [[ -f "$TOKEN_FILE" ]] || die "no panel API token at $TOKEN_FILE
@@ -520,13 +524,66 @@ preflight_facade() {
   echo "stand: facade says $body"
 }
 
+assert_shim_hides_only_the_one_route() {
+  # The shim is a fixture, and a wrong fixture makes the run report something
+  # about the shop that is not true. Two directions, because either check alone
+  # passes on a shim broken the other way: one answering 404 to EVERYTHING
+  # satisfies the first and turns the probe into a test of a dead panel; one
+  # forwarding everything satisfies the second, leaves the preferred route
+  # answering, and the fallback is never reached - the probe would then report
+  # the wrong source without failing.
+  local shim="http://127.0.0.1:${PANEL_SHIM_PORT:-8086}/$PREFIX/api"
+  local tok body code
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+
+  body="$(curl -sS -X POST "$shim/bandwidth-stats/nodes/usage" \
+    -H "authorization: Bearer $tok" -H 'content-type: application/json' \
+    -d '{"nodesUuids":[]}' -w $'\n%{http_code}')"
+  code="${body##*$'\n'}"; body="${body%$'\n'*}"
+  # The shop's predicate, not an eyeball: a 404 alone is not enough. The body
+  # has to carry no errorCode and a message that reads like a router miss, or
+  # the shop calls it a failed request and goes on preferring the route.
+  python3 "$HERE/reads_as_missing_route.py" "$code" "$body" \
+    || die "the shim answered $code / $body, which does NOT read to the shop as a
+missing route (bot/services/panel_api_responses.py::_is_missing_endpoint_response).
+The shop would treat it as a failed request and keep preferring /nodes/usage."
+
+  # ...and the route right next to it still reaches the panel. Same prefix, same
+  # method, one path segment apart - which is also the pair a suffix match is
+  # most likely to get wrong.
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$shim/bandwidth-stats/nodes/users" \
+    -H "authorization: Bearer $tok" -H 'content-type: application/json' \
+    -d '{"nodesUuids":[]}')"
+  [[ "$code" == 200 ]] || die "the shim answered $code for /bandwidth-stats/nodes/users, which it
+is supposed to forward to the panel. A shim that hides everything proves nothing
+about the fallback."
+  echo "stand: panel-shim hides POST .../bandwidth-stats/nodes/usage and forwards the rest"
+}
+
 # Unconditional: `down`, `reset` and `half ref` all reach for compose_ref, and
 # `--env-file` on a file that is not there is a compose error, not a fallback.
 fill_ref_token
 
 case "${1:-}" in
   up-iceslab)
+    # HIDE_NODES_USAGE=1 puts panel-shim in front of the panel, which makes
+    # POST .../bandwidth-stats/nodes/usage read as a route this build does not
+    # have. Only `premium-probe` cares; everything else would be measuring nginx.
     fill_token
+    if [[ -n "${HIDE_NODES_USAGE:-}" ]]; then
+      # Route the shop through the shim instead of straight at the panel, so the
+      # preferred usage route reads as absent and the shop falls back to the one
+      # no run has ever reached. Written into the runtime env BEFORE `up`,
+      # because `env_file` is read when the container is created - the same
+      # reason CHURN_PAGING is handled here and not later.
+      #
+      # The path keeps the facade's prefix: the shim matches by suffix and
+      # forwards everything else, so this is the same URL with one route
+      # removed.
+      echo "PANEL_API_URL=http://panel-shim:8080/${PREFIX}/api" >> "$RUNTIME_ENV"
+      echo "stand: the shop will reach the panel through panel-shim, which answers"
+      echo "stand: POST .../bandwidth-stats/nodes/usage with a router miss"
+    fi
     if [[ -n "${CHURN_PAGING:-}" ]]; then
       {
         echo "PANEL_ALL_USERS_PAGE_SIZE=${CHURN_PAGE_SIZE:-5}"
@@ -535,6 +592,15 @@ case "${1:-}" in
       echo "stand: sync paging forced to ${CHURN_PAGE_SIZE:-5} users, ${CHURN_PAGE_DELAY:-1.0}s between pages"
     fi
     preflight_facade
+    if [[ -n "${HIDE_NODES_USAGE:-}" ]]; then
+      "${compose_iceslab[@]}" --profile shim up -d --wait panel-shim
+      # Prove the shim is a panel-minus-one-route before anything depends on it.
+      # Both halves of that: the hidden route answers as absent, and a route
+      # next to it still reaches the panel. Checking only the 404 would pass on
+      # a shim that answers 404 to everything, which is a different experiment
+      # entirely - and one whose failures would look like facade bugs.
+      assert_shim_hides_only_the_one_route
+    fi
     "${compose_iceslab[@]}" --profile seed up -d --wait "${SHOP_SERVICES[@]}"
     # The shop's demo fixtures, same as the reference half runs: without them
     # there is no user whose telegram_id is in ADMIN_IDS, and the admin API
@@ -594,17 +660,20 @@ case "${1:-}" in
     echo "stand: reference panel published on http://127.0.0.1:${REMNAWAVE_DEV_PANEL_PORT:-3100} (the host's 3000 is our own panel)"
     ;;
   down)
-    # `--profile seed` on the way down too: without it the exited seed container
-    # is left behind, and the next run tries to start that stale container on a
-    # network `down -v` has already removed ("network ... not found").
-    "${compose_iceslab[@]}" --profile seed down --remove-orphans || true
+    # Every profile the stand can START has to be named on the way DOWN, or its
+    # container is left behind and the next run tries to start a stale one on a
+    # network `down -v` has already removed ("network ... not found"). That was
+    # the seed job's lesson; `shim` and `tls` are the same shape, and a left-over
+    # shim is worse than a left-over seed - it still answers, so the next run
+    # silently talks to a panel with a route missing.
+    "${compose_iceslab[@]}" "${STAND_PROFILES[@]}" down --remove-orphans || true
     "${compose_ref[@]}" --profile seed down --remove-orphans || true
     ;;
   reset)
     # Volumes too. Between the two halves of a differential run this is not
     # optional: a shop database carried over from the other stand makes the
     # comparison meaningless in a way nothing announces.
-    "${compose_iceslab[@]}" --profile seed down -v --remove-orphans || true
+    "${compose_iceslab[@]}" "${STAND_PROFILES[@]}" down -v --remove-orphans || true
     "${compose_ref[@]}" --profile seed down -v --remove-orphans || true
     ;;
   check)
@@ -680,14 +749,54 @@ grants none) or for a version it will not certify."
     [[ -n "$snap" ]] || die "no premium usage snapshot in the worker log; the route answered but
 the shop did not build a snapshot from it."
     echo "stand: $snap"
-    grep -q 'source=multi_node_usage' <<<"$snap" \
-      || die "the snapshot came from '$snap' - not from /nodes/usage, so this probe
+    # WHICH route the snapshot came from is the whole point, and the trace
+    # cannot say: `/bandwidth-stats/nodes` is one label over four operations,
+    # two of them POST. The shop's own metric names the branch. Which branch is
+    # expected depends on how the stand was brought up - see below - so the
+    # probe reads that from the runtime env rather than taking it on faith from
+    # an argument somebody may not have passed.
+    if grep -q '^PANEL_API_URL=.*panel-shim' "$RUNTIME_ENV"; then
+      # The stand is up with HIDE_NODES_USAGE: the preferred route reads as
+      # absent, so the shop must have fallen back to
+      # POST /bandwidth-stats/nodes/users - the fourth capability route, and the
+      # only one no run here had ever reached.
+      want_source=multi_node_top_users
+      # Two things at once, and both matter. The fallback happening at all is
+      # the point; but the shop reaching it because it OBSERVED our 404 as a
+      # missing route is the property the whole facade rests on, and it has
+      # never been tested against a live shop - only against our transcription
+      # of its predicate. If it read our 404 as a failed request instead, the
+      # capability would stay unset, the shop would keep retrying the preferred
+      # route every tick, and the fallback below would still eventually be
+      # reached by a different path - passing the probe for the wrong reason.
+      #
+      # The window for THIS one starts at the worker's own start, not at the
+      # purchase mark the tick is measured from. `remember_panel_capability`
+      # logs only when the value CHANGES, so the line is one-shot per process:
+      # scoped to the purchase, a shop that had already learned it on an earlier
+      # tick shows nothing, and the probe would report that our 404 was
+      # misread by a shop that read it correctly. Same rule as the demotion
+      # stage below, applied to a different starting point - a one-shot is
+      # watched from before whatever can trigger it, and nothing before the
+      # worker existed could.
+      docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' remnawave-minishop-worker)" \
+        remnawave-minishop-worker 2>&1 \
+        | grep -q 'Observed Remnawave capability multi-node-usage=False' \
+        || die "the shop never recorded /nodes/usage as missing. Our 404 did not read to
+it as an absent route, so it will go on calling a route that is not there
+instead of using the fallback."
+      echo "stand: the shop observed multi-node-usage=False from our 404 and fell back"
+    else
+      want_source=multi_node_usage
+    fi
+    grep -q "source=$want_source" <<<"$snap" \
+      || die "the snapshot came from '$snap' - not from $want_source, so this probe
 did not exercise the route it exists for."
     grep -q 'complete=True' <<<"$snap" \
       || die "the shop calls the snapshot INCOMPLETE: $snap
 It asked about a set of nodes and did not get an answer for all of them, which
 is the silent half of the per-node billing path."
-    echo "stand: premium usage path exercised end to end"
+    echo "stand: premium usage path exercised end to end via $want_source"
 
     # ---- stage 2: the demotion, which is what calls the other two routes ----
     #
@@ -839,16 +948,42 @@ rejected - check the affectedRows key."
     ;;
 
   full)
-    # The differential plus the two probes that need a stand of their own.
+    # The differential plus every probe that needs a stand of its own.
     # Ordered: the differential leaves the REFERENCE half up, so the probes -
     # which test OUR facade - bring the iceslab half back first.
+    #
+    # Slow, and deliberately so. `premium-probe` used to be a command you had to
+    # remember to type, which means a command that does not get run: it is the
+    # only thing that drives a real shop into the capability routes, and it sat
+    # outside the one entry point that claims to run everything. Two full tariff
+    # ticks at five minutes each puts it near thirteen minutes per pass, and
+    # `full` runs it twice - once against the panel as it is, once through
+    # `panel-shim`, which is the only way the fourth route is reached at all.
+    # Budget roughly an hour for the whole command.
     shift
     outdir="${1:?usage: stand.sh full <outdir>}"
     "$0" differential "$outdir"
+
     echo; echo "===== signed webhook through a real TLS proxy ====="
     "$0" reset >/dev/null 2>&1 || true
     "$0" up-iceslab > "$outdir/probe-up.log" 2>&1 || { tail -20 "$outdir/probe-up.log" >&2; die "could not bring the stand back for the probes"; }
     "$0" webhook-probe
+
+    # Same stand: the premium probe cleans up after itself on both sides, and
+    # the webhook probe leaves nothing behind, so a second bring-up here would
+    # cost four minutes to prove nothing.
+    echo; echo "===== premium accounting and demotion (three capability routes) ====="
+    STAND_TRACE="$outdir/premium.trace" "$0" premium-probe "$outdir/premium-buy.log"
+
+    # And again with the preferred usage route hidden, which is the only way the
+    # shop reaches the fourth. A stand of its own because the shim is in the
+    # PATH to the panel: it has to be there before the shop's containers are
+    # created, and every other probe must NOT be talking through it.
+    echo; echo "===== the fallback route, with /nodes/usage hidden ====="
+    "$0" reset >/dev/null 2>&1 || true
+    HIDE_NODES_USAGE=1 "$0" up-iceslab > "$outdir/shim-up.log" 2>&1 \
+      || { tail -20 "$outdir/shim-up.log" >&2; die "could not bring the stand up behind panel-shim"; }
+    STAND_TRACE="$outdir/premium-fallback.trace" "$0" premium-probe "$outdir/premium-fallback-buy.log"
     ;;
 
   churn-probe)
@@ -1094,7 +1229,12 @@ usage: $(basename "$0") <command>
                re-check what up-* asserts, against a stand already up
   premium-probe [buylog]
                buy, wait for a full tariff tick, and check the shop really called
-               POST /bandwidth-stats/nodes/usage and built a COMPLETE snapshot
+               POST /bandwidth-stats/nodes/usage and built a COMPLETE snapshot,
+               then drive the demotion (bulk squads + connections drop).
+               Brought up with HIDE_NODES_USAGE=1 it expects the FALLBACK route
+               POST /bandwidth-stats/nodes/users instead, and checks the shop
+               reached it by reading our 404 as an absent route.
+               ~13 min: two full tariff ticks, five minutes apart
   seed-tariffs re-store the tariff catalogue on the half that is up (up-* does
                this already; without a catalogue the tariff and premium-override
                admin actions answer 400 and 502 without calling the panel)
@@ -1107,7 +1247,9 @@ usage: $(basename "$0") <command>
   differential <outdir>
                both halves and all three comparisons, in one command
   full <outdir>
-               the differential, then the webhook probe on a fresh iceslab half
+               everything: the differential, the webhook probe, the premium
+               probe, and the premium probe again behind panel-shim for the
+               fallback route. ~1 hour
   webhook-probe
                send a signed webhook through a real TLS nginx and check the
                shop still accepts it (needs the iceslab stand up)
