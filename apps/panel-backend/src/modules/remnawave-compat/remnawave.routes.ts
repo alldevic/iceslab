@@ -836,7 +836,17 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // overview. statusCounts keys must be UPPERCASE (native byStatus is lowercase).
   app.get('/api/system/stats', opts, async (_request, reply) => {
     const o = await getOverview();
-    const statusCounts: Record<string, number> = {};
+    // All four statuses, zeros included. Native `byStatus` only carries the
+    // statuses that occur, and the shop's admin dashboard has a tile per status:
+    // an absent key is a tile with nothing in it, on a panel where the honest
+    // answer is zero. Its current reader defaults to 0, but that is its choice
+    // to change, and "we sent nothing" is not the same claim as "there are none".
+    const statusCounts: Record<string, number> = {
+      ACTIVE: 0,
+      DISABLED: 0,
+      EXPIRED: 0,
+      LIMITED: 0,
+    };
     for (const [k, v] of Object.entries(o.users.byStatus)) statusCounts[k.toUpperCase()] = v;
     return sendResponse(reply, {
       users: { totalUsers: o.users.total, statusCounts },
@@ -847,6 +857,17 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
         neverOnline: o.users.neverOnline,
       },
       memory: { total: o.host.memory.totalBytes, used: o.host.memory.usedBytes },
+      // The shop's admin CPU tile reads `cpu.usage` (then usedPercent/percent,
+      // then cpuUsage/cpuLoad) and renders nothing at all when none of them
+      // arrives — which is what it did, because we sent none of them while the
+      // panel has had the number all along. `usage` is the sampled percentage
+      // across cores; `loadPercent` is the load-average view the native
+      // dashboard headlines, sent under its own name for anyone reading both.
+      cpu: {
+        usage: o.host.cpu.samplePercent,
+        cores: o.host.cpu.cores,
+        loadPercent: o.host.cpu.loadPercent,
+      },
       nodes: { totalOnline: o.system.onlineNodeCount, total: o.system.totalNodeCount },
       usersOnline: o.users.onlineNow,
     });
@@ -875,10 +896,37 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // makes it render "Nodes: 0/0" instead of the real count (the totalOnline
   // fallback only fires when the key is absent). Node names are already fetched.
   app.get('/api/system/stats/nodes', opts, async (_request, reply) => {
-    const [nodes, onlineByNode] = await Promise.all([
-      prisma.node.findMany({ where: { deletedAt: null }, select: { id: true, name: true, countryCode: true } }),
+    // The seven-day totals are REAL, from the same node usage history that
+    // /bandwidth-stats/nodes reads. They used to be a literal 0 per node,
+    // because the shop's node count only needs the key to be present - but the
+    // key also feeds its node-traffic table, and a row whose bytes are zero
+    // renders as an em dash. Every node reporting "—" on a panel that has been
+    // carrying traffic all week is the failure this whole exercise is about:
+    // the page draws, and says nothing true.
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000);
+    const [nodes, onlineByNode, usage] = await Promise.all([
+      // Ordered: without it Postgres returns whatever order it likes, and the
+      // shop renders the fleet list in that order - two loads of the same page
+      // showing the same nodes shuffled. It also made the stand's differential
+      // report a divergence on every run that was nothing but row order.
+      prisma.node.findMany({
+        where: { deletedAt: null },
+        select: { id: true, name: true, countryCode: true },
+        orderBy: { name: 'asc' },
+      }),
       onlineByNodeMap(),
+      prisma.nodeUsageHistory.groupBy({
+        by: ['nodeId'],
+        where: { hour: { gte: sevenDaysAgo } },
+        _sum: { downloadBytes: true, uploadBytes: true },
+      }),
     ]);
+    const bytesByNode = new Map(
+      usage.map((u) => [
+        u.nodeId,
+        Number(u._sum.downloadBytes ?? 0n) + Number(u._sum.uploadBytes ?? 0n),
+      ]),
+    );
     return sendResponse(reply, {
       nodes: nodes.map((n) => ({
         uuid: n.id,
@@ -886,7 +934,14 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
         countryCode: n.countryCode,
         usersOnline: onlineByNode.get(n.id) ?? 0,
       })),
-      lastSevenDays: nodes.map((n) => ({ nodeName: n.name, totalBytes: 0 })),
+      // One row per node, including the silent ones: the count branches on the
+      // key being present and counts distinct nodeName, so dropping a node with
+      // no traffic would undercount the fleet.
+      lastSevenDays: nodes.map((n) => ({
+        nodeName: n.name,
+        nodeUuid: n.id,
+        totalBytes: bytesByNode.get(n.id) ?? 0,
+      })),
     });
   });
 
