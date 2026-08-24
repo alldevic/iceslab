@@ -62,13 +62,57 @@ const CRON_JOBS: CronJobSpec[] = [
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────
 
+/**
+ * Which of the schedules already in Redis no longer belong to the current
+ * CRON_JOBS list, and must be removed.
+ *
+ * `jobId` does NOT make a schedule replaceable: BullMQ keys a job scheduler by
+ * name AND repeat options, so changing a pattern registers a SECOND schedule
+ * and leaves the first one running. Measured on the lab panel, which had
+ * `remnawave-expiry-notify` on both the old hourly pattern and the new
+ * ten-minute one, and `geo-rebuild` on two patterns at once - the latter while
+ * `GEO_SELF_HOST=false` meant the code was not registering it at all. A filter
+ * in the code loses to state in Redis.
+ *
+ * Mostly that is extra load, and for the expiry scan specifically it is
+ * harmless (the dedup makes an extra tick free). It stops being harmless the
+ * moment a pattern is turned DOWN because something was too frequent, or a job
+ * is deleted from the list: the old schedule keeps firing either way, and in
+ * the second case at a handler that no longer exists.
+ *
+ * Pure, so it can be tested without touching a queue - and the queue in
+ * question is shared with a running panel, which is not a thing to write tests
+ * against.
+ */
+export function staleScheduleIds(
+  existing: readonly { key?: string; name?: string; pattern?: string | null }[],
+  desired: readonly CronJobSpec[],
+): string[] {
+  const wanted = new Set(desired.map((j) => `${j.name}\u0000${j.pattern}`));
+  return existing
+    .filter((s) => s.key && !wanted.has(`${s.name ?? ''}\u0000${s.pattern ?? ''}`))
+    .map((s) => s.key as string);
+}
+
 export async function registerCronJobs(): Promise<void> {
   // The geo refresh only makes sense when self-hosting is on (otherwise there is
-  // no build to refresh and nothing to push). The worker case self-gates too, so
-  // a schedule left in Redis from a prior GEO_SELF_HOST=true run is harmless.
+  // no build to refresh and nothing to push).
   const jobs = config.GEO_SELF_HOST
     ? CRON_JOBS
     : CRON_JOBS.filter((j) => j.name !== 'geo-rebuild');
+
+  // Drop whatever is scheduled and no longer wanted BEFORE adding, so a pattern
+  // change replaces rather than accumulates. This is also what makes the
+  // geo-rebuild filter above mean anything: without it, a schedule left from a
+  // prior GEO_SELF_HOST=true run keeps firing regardless of the setting.
+  const stale = staleScheduleIds(await cronTasksQueue.getJobSchedulers(0, 1000), jobs);
+  for (const id of stale) {
+    await cronTasksQueue.removeJobScheduler(id);
+  }
+  if (stale.length > 0) {
+    getLogger().info(`[scheduler] removed ${stale.length} stale schedule(s)`);
+  }
+
   for (const job of jobs) {
     await cronTasksQueue.add(
       job.name,
