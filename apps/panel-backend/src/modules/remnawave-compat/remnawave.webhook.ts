@@ -30,13 +30,39 @@ export function isRemnaWebhookConfigured(): boolean {
 }
 
 /**
+ * Every event name this facade is allowed to send.
+ *
+ * The shop's dispatcher acts only on the names in its own ACTIONABLE_EVENTS set
+ * and DROPS anything else without a word (panel_webhook_payloads.py: "elif
+ * event_name not in ACTIONABLE_EVENTS"). So a typo, or a name invented here
+ * that the shop never learned, is a webhook the panel delivers, the shop
+ * answers 200 to, and nobody acts on - a paid renewal that never fires with a
+ * successful delivery in our log.
+ *
+ * Declaring the names as a type is what makes that unrepresentable: the stage
+ * template below is checked against this union at compile time, and
+ * remnawave.contract.test.ts checks the union against the shop's captured set.
+ */
+export type RemnaWebhookEvent =
+  | `user.expires_in_${'72' | '48' | '24'}_hours`
+  | 'user.expired';
+
+/** The same names as a value, for the test that compares them to the shop's. */
+export const REMNAWAVE_EMITTED_EVENTS: readonly RemnaWebhookEvent[] = [
+  'user.expires_in_72_hours',
+  'user.expires_in_48_hours',
+  'user.expires_in_24_hours',
+  'user.expired',
+];
+
+/**
  * Build the exact JSON string the minishop parses: `{name, payload:{user}, meta}`.
  * telegramId is coerced BigInt→Number (a bare JSON.stringify throws on bigint;
  * Telegram ids are within JS safe-integer range — same as mapUserToRemna). The
  * returned string is signed AS-IS so the signed bytes equal the sent bytes.
  */
 export function buildRemnaWebhookBody(
-  name: string,
+  name: RemnaWebhookEvent,
   user: RemnaWebhookUser,
   meta: Record<string, unknown> = {},
 ): string {
@@ -61,7 +87,7 @@ export function buildRemnaWebhookBody(
  * minishop's `hmac.new(secret, raw_body, sha256)`.
  */
 export async function deliverRemnaWebhook(
-  name: string,
+  name: RemnaWebhookEvent,
   user: RemnaWebhookUser,
   meta: Record<string, unknown> = {},
 ): Promise<boolean> {
@@ -95,7 +121,7 @@ export async function deliverRemnaWebhook(
  * natural retry point). No-ops when unconfigured; never throws into the caller.
  */
 export function emitRemnaWebhook(
-  name: string,
+  name: RemnaWebhookEvent,
   user: RemnaWebhookUser,
   meta: Record<string, unknown> = {},
 ): void {

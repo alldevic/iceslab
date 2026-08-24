@@ -1,0 +1,1042 @@
+{
+  "source": {
+    "repo": "git@gitlab.com:3252a8/remnawave-minishop.git",
+    "describe": "v3.6.1",
+    "commit": "34c266cfb416f36d26bfd0e12c3ace1c9645f453",
+    "committed": "2026-08-18"
+  },
+  "operations": [
+    {
+      "operation": "system.metadata",
+      "method": "GET",
+      "path": "/system/metadata",
+      "log_label": "/system/metadata",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable version probe; failures are not treated as a capability result.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "users.stream",
+      "method": "GET",
+      "path": "/users/stream",
+      "log_label": "/users/stream",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "3.x is the canonical cursor stream and supports lookup filters; a 2.8 stream may expose UUID users or ignore the new filters, so Core validates results.",
+      "coverage": [
+        "unit",
+        "live-read",
+        "upgrade"
+      ]
+    },
+    {
+      "operation": "users.list",
+      "method": "GET",
+      "path": "/users",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Legacy offset pagination used when the stream is absent or UUID-based.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "users.get",
+      "method": "GET",
+      "path": "/users/{userRef}",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": true,
+      "compatibility_note": "{userRef} is a UUID in 2.8.1 and a numeric id in 3.x.",
+      "coverage": [
+        "unit",
+        "live-read",
+        "upgrade"
+      ]
+    },
+    {
+      "operation": "users.lookup.telegram",
+      "method": "GET",
+      "path": "/users/by-telegram-id/{telegramId}",
+      "log_label": "/users/by-telegram-id",
+      "generations": [
+        "rw2-uuid-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "3.x uses /users/stream?telegramId=... instead.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "users.lookup.username",
+      "method": "GET",
+      "path": "/users/by-username/{username}",
+      "log_label": "/users/by-username",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "The username lookup route remains stable through 3.2.3; 3.1+ reports an absent user as 404/A063.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "users.lookup.email",
+      "method": "GET",
+      "path": "/users/by-email/{email}",
+      "log_label": "/users/by-email",
+      "generations": [
+        "rw2-uuid-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "3.x uses /users/stream?email=... instead.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "users.create",
+      "method": "POST",
+      "path": "/users",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        201
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": false,
+      "empty_success_body": false,
+      "identity_sensitive": true,
+      "compatibility_note": "Core never sends a caller-provided user UUID; 3.x returns numeric id.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.update",
+      "method": "PATCH",
+      "path": "/users",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "Selector field is uuid in 2.8.1 and integer id in 3.x.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.bulk-update-squads",
+      "method": "POST",
+      "path": "/users/bulk/update-squads",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "Exact-state squad update, chunked at 500 users. 2.8.1 selects UUIDs with uuids and returns affectedRows; 3.x selects numeric userIds and returns 204. An empty target state uses per-user PATCH because 3.0.0 returns A088/500.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.status",
+      "method": "POST",
+      "path": "/users/{userRef}/actions/{enable|disable}",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "Path identity follows the UUID/numeric-id generation.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.connections.drop-v2",
+      "method": "POST",
+      "path": "/ip-control/drop-connections",
+      "log_label": "/ip-control",
+      "generations": [
+        "rw2-uuid-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "2.8 payload selects userUuids.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.connections.drop-v3",
+      "method": "POST",
+      "path": "/connections/drop",
+      "log_label": "/connections",
+      "generations": [
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "3.x payload selects numeric userIds.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.delete",
+      "method": "DELETE",
+      "path": "/users/{userRef}",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "404 for a missing entity is idempotent success; route absence is distinct.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.revoke",
+      "method": "POST",
+      "path": "/users/{userRef}/actions/revoke",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "Path identity follows the UUID/numeric-id generation.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "users.reset-traffic",
+      "method": "POST",
+      "path": "/users/{userRef}/actions/reset-traffic",
+      "log_label": "/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "Path identity follows the UUID/numeric-id generation.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "subscription.config.resolved",
+      "method": "GET",
+      "path": "/subscriptions/subpage-config/{shortUuid}",
+      "log_label": "/subscriptions/subpage-config",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "GET intentionally carries requestHeaders in a JSON body as required upstream.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "subscription-page-config.list",
+      "method": "GET",
+      "path": "/subscription-page-configs",
+      "log_label": "/subscription-page-configs",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "subscription-page-config.get",
+      "method": "GET",
+      "path": "/subscription-page-configs/{uuid}",
+      "log_label": "/subscription-page-configs",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "external-squads.get",
+      "method": "GET",
+      "path": "/external-squads/{uuid}",
+      "log_label": "/external-squads",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "hwid.devices.get",
+      "method": "GET",
+      "path": "/hwid/devices/{userRef}",
+      "log_label": "/hwid/devices",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": true,
+      "compatibility_note": "Path userRef is UUID in 2.8.1 and numeric id in 3.x.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "hwid.devices.delete",
+      "method": "POST",
+      "path": "/hwid/devices/delete",
+      "log_label": "/hwid/devices/delete",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "Payload selector is userUuid in 2.8.1 and userId in 3.x.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "hwid.devices.stats",
+      "method": "GET",
+      "path": "/hwid/devices/stats",
+      "log_label": "/hwid/devices/stats",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "hwid.devices.top-users",
+      "method": "GET",
+      "path": "/hwid/devices/top-users",
+      "log_label": "/hwid/devices/top-users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "nodes.restart",
+      "method": "POST",
+      "path": "/nodes/{uuid}/actions/restart",
+      "log_label": "/nodes",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": false,
+      "compatibility_note": "Node identifiers remain UUIDs in 3.x.",
+      "coverage": [
+        "unit"
+      ]
+    },
+    {
+      "operation": "nodes.restart-all",
+      "method": "POST",
+      "path": "/nodes/actions/restart-all",
+      "log_label": "/nodes",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": false,
+      "compatibility_note": "Not run in live CI because it disrupts every registered node.",
+      "coverage": [
+        "unit"
+      ]
+    },
+    {
+      "operation": "nodes.list",
+      "method": "GET",
+      "path": "/nodes",
+      "log_label": "/nodes",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "nodes.stats",
+      "method": "GET",
+      "path": "/system/stats/nodes",
+      "log_label": "/system/stats/nodes",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "system.stats",
+      "method": "GET",
+      "path": "/system/stats",
+      "log_label": "/system/stats",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "system.stats.bandwidth",
+      "method": "GET",
+      "path": "/system/stats/bandwidth",
+      "log_label": "/system/stats/bandwidth",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "bandwidth.nodes",
+      "method": "GET",
+      "path": "/bandwidth-stats/nodes",
+      "log_label": "/bandwidth-stats/nodes",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "bandwidth.users",
+      "method": "GET",
+      "path": "/bandwidth-stats/users/{userRef}",
+      "log_label": "/bandwidth-stats/users",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": true,
+      "compatibility_note": "Path userRef is UUID in 2.8.1 and numeric id in 3.x.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "bandwidth.node-users",
+      "method": "GET",
+      "path": "/bandwidth-stats/nodes/{nodeUuid}/users",
+      "log_label": "/bandwidth-stats/nodes",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "bandwidth.nodes-users",
+      "method": "POST",
+      "path": "/bandwidth-stats/nodes/users",
+      "log_label": "/bandwidth-stats/nodes",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "2.8.1-compatible aggregate top-users request for a set of nodes; Core detects topUsersLimit saturation before treating missing users as zero.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "bandwidth.nodes-usage",
+      "method": "POST",
+      "path": "/bandwidth-stats/nodes/usage",
+      "log_label": "/bandwidth-stats/nodes",
+      "generations": [
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "3.x returns numeric user ids and per-node totals for all requested nodes. Usage snapshots are refreshed no faster than the upstream aggregation cadence.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "internal-squads.list",
+      "method": "GET",
+      "path": "/internal-squads",
+      "log_label": "/internal-squads",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "internal-squads.get",
+      "method": "GET",
+      "path": "/internal-squads/{uuid}",
+      "log_label": "/internal-squads",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "internal-squads.nodes",
+      "method": "GET",
+      "path": "/internal-squads/{uuid}/{accessible-nodes|nodes}",
+      "log_label": "/internal-squads",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Core tries both upstream route spellings and validates response shape.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    },
+    {
+      "operation": "internal-squads.add-users",
+      "method": "POST",
+      "path": "/internal-squads/{uuid}/bulk-actions/add-many-users",
+      "log_label": "/internal-squads",
+      "generations": [
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "3.x targeted numeric-id bulk, chunked at 1000. In 2.8.1 the superficially similar add-users route targets every user, so Core PATCHes requested users.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "internal-squads.remove-users",
+      "method": "DELETE",
+      "path": "/internal-squads/{uuid}/bulk-actions/remove-many-users",
+      "log_label": "/internal-squads",
+      "generations": [
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200,
+        202,
+        204
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": true,
+      "idempotent": true,
+      "empty_success_body": true,
+      "identity_sensitive": true,
+      "compatibility_note": "3.x targeted numeric-id bulk, chunked at 1000; 2.8.1 uses per-user PATCH.",
+      "coverage": [
+        "unit",
+        "live-write"
+      ]
+    },
+    {
+      "operation": "hosts.list",
+      "method": "GET",
+      "path": "/hosts",
+      "log_label": "/hosts",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "success_statuses": [
+        200
+      ],
+      "response_shape": "JSON envelope with response",
+      "mutation": false,
+      "idempotent": true,
+      "empty_success_body": false,
+      "identity_sensitive": false,
+      "compatibility_note": "Stable across the certified API generations.",
+      "coverage": [
+        "unit",
+        "live-read"
+      ]
+    }
+  ],
+  "webhooks": [
+    {
+      "event": "user.expires_in_72_hours / 48_hours / 24_hours",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "identity": "user.uuid in 2.8.1; user.id normalized to the internal uuid alias in 3.x",
+      "behavior": "Subscription expiry notification and optional auto-renew processing.",
+      "coverage": [
+        "unit"
+      ]
+    },
+    {
+      "event": "user.expiration",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "identity": "user object plus meta.expirationHours",
+      "behavior": "Compatibility event mapped to before/after-expiration notification stages.",
+      "coverage": [
+        "unit"
+      ]
+    },
+    {
+      "event": "user.expired / user.expired_24_hours_ago",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "identity": "normalized user identity",
+      "behavior": "Expired subscription notification with stale-subscription suppression.",
+      "coverage": [
+        "unit"
+      ]
+    },
+    {
+      "event": "torrent_blocker.report",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "identity": "typed torrent-blocker payload; user identity is resolved independently",
+      "behavior": "Typed security notification; invalid or oversized payloads are rejected.",
+      "coverage": [
+        "unit"
+      ]
+    },
+    {
+      "event": "other events (for example user.modified)",
+      "generations": [
+        "rw2-uuid-user-id",
+        "rw3-numeric-user-id"
+      ],
+      "identity": "normalized user identity when a user object is present",
+      "behavior": "Emitted to the Core/plugin event bus but ignored for lifecycle notifications.",
+      "coverage": [
+        "unit"
+      ]
+    }
+  ],
+  "actionableEvents": [
+    "user.expiration",
+    "user.expired",
+    "user.expired_24_hours_ago",
+    "user.expires_in_24_hours",
+    "user.expires_in_48_hours",
+    "user.expires_in_72_hours"
+  ]
+}
