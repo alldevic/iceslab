@@ -58,6 +58,24 @@ function parseTelegramId(raw: string): bigint | null {
  *  fall away. */
 const NO_SUCH_ID = -1n;
 
+/**
+ * Read a `/users/stream` cursor this panel issued: `k1.<numericId>`.
+ * Returns null for anything else, including the bare numeric offsets older
+ * builds handed out - the caller then falls back to offset paging rather than
+ * dropping a walk that is already in progress. (The `k1.` prefix is what tells
+ * the two apart; a bare number is an offset by definition of the old format.)
+ */
+function parseStreamCursor(raw: string | undefined): { numericId: bigint } | null {
+  if (!raw) return null;
+  const m = /^k1\.(\d+)$/.exec(raw);
+  if (!m) return null;
+  try {
+    return { numericId: BigInt(m[1]!) };
+  } catch {
+    return null;
+  }
+}
+
 // "Online now" window — the same 3 min the dashboard uses, so the facade's
 // per-node counts agree with the panel's global "online now".
 const ONLINE_NOW_WINDOW_MS = 3 * 60 * 1000;
@@ -450,7 +468,21 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // Static children (stream / by-*) are registered as their own paths; find-my-way
   // prefers them over the `:uuid` param at the same depth.
 
-  // GET /api/users/stream — cursor pagination (cursor = numeric offset).
+  // GET /api/users/stream — cursor pagination, and the cursor is a real KEYSET
+  // cursor rather than an offset in disguise.
+  //
+  // This is the ONLY way the shop enumerates a 3.x panel: `legacy_users_api_
+  // allowed` is false for RW3_NUMERIC, so a failing stream is not retried
+  // against /users, it is abandoned. And what the shop does with the result is
+  // decide who still exists - a user absent from the walk is
+  // PANEL_USER_NOT_FOUND, is_active=False, notifications off. With an offset
+  // cursor, one row deleted ahead of the cursor between two pages shifts the
+  // tail up by one and exactly one user is never returned, so a paid
+  // subscription dies because somebody else was removed while the sync ran. The
+  // cursor therefore names the last row seen - its `numericId`, which is the
+  // sort key - and the next page is "strictly after that row", which nothing
+  // before it can move. The shop treats the value as opaque and only guards
+  // against repeats, so the format is ours to choose.
   //
   // FILTERS ARE NOT OPTIONAL HERE. In 3.x the stream replaces the by-telegram-id
   // and by-email lookup routes, and the client has no fallback for it: once it
@@ -466,7 +498,11 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       email?: string;
     };
     const size = Math.min(Math.max(parseInt(q.size ?? '100', 10) || 100, 1), 500);
-    const offset = Math.max(parseInt(q.cursor ?? '0', 10) || 0, 0);
+    // A cursor this panel issued is `k1.<numericId>`. Anything else is read as
+    // the old numeric offset - a sync that started before a deploy is holding
+    // one, and failing it would abandon that walk entirely.
+    const keyset = parseStreamCursor(q.cursor);
+    const offset = keyset ? 0 : Math.max(parseInt(q.cursor ?? '0', 10) || 0, 0);
     const page = Math.floor(offset / size) + 1;
     // An unparseable telegramId is pinned to a value no row can hold rather than
     // dropped: dropping it would widen the query to EVERY user and the client
@@ -478,16 +514,19 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       limit: size,
       ...(telegramId !== undefined ? { telegramId } : {}),
       ...(q.email !== undefined ? { email: q.email } : {}),
-      // Pin the order explicitly: the shop walks these pages to build a
-      // full picture of the panel, so the sort must be stable and identical
-      // across both pagination routes. (Upstream made sort/order required
-      // when it added server-side sorting; this keeps the previous
-      // newest-first ordering the facade has always emitted.)
-      sort: 'createdAt',
+      // Newest first, by the numeric handle: the sequence is monotonic, so this
+      // is creation order, and being a single unique column it is a key the
+      // cursor can name without rounding. The offset route below still sorts by
+      // createdAt - the two need not agree, because no walk mixes them (for a
+      // 3.x panel the shop never falls back to the offset route at all), and
+      // each is internally consistent, which is the property that matters.
+      sort: 'numericId',
       order: 'desc',
+      ...(keyset ? { after: keyset } : {}),
     });
     const ctx = await mapCtx();
-    const nextCursor = users.length < size ? null : String(offset + size);
+    const last = users[users.length - 1];
+    const nextCursor = users.length < size || !last ? null : `k1.${last.numericId}`;
     return sendResponse(reply, {
       users: users.map((u) => mapUserToRemna(u, ctx)),
       total,

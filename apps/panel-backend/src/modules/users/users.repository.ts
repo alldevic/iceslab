@@ -6,7 +6,7 @@ export type UserWithTraffic = User & {
   groupMembers: { groupId: string }[];
 };
 
-export type UserSort = 'username' | 'createdAt' | 'expireAt' | 'traffic';
+export type UserSort = 'username' | 'createdAt' | 'expireAt' | 'traffic' | 'numericId';
 
 export interface ListParams {
   page: number;
@@ -29,6 +29,28 @@ export interface ListParams {
   email?: string;
   sort?: UserSort;
   order?: 'asc' | 'desc';
+  /**
+   * KEYSET cursor: return only the rows that sort strictly after this
+   * `numericId`, instead of skipping a count of rows. Honoured for
+   * `sort: 'numericId'` only.
+   *
+   * OFFSET paging is not safe for a caller walking every page to decide who
+   * still exists: a row DELETED ahead of the cursor between two pages shifts the
+   * whole tail by one, so exactly one user is never returned - and the shop
+   * reads a user missing from the walk as deleted from the panel and deactivates
+   * a paid subscription. A keyset cursor names the last row seen, so nothing
+   * before it can move the window.
+   *
+   * `numericId` and not `createdAt`, even though creation order is what the walk
+   * wants: `createdAt` is `timestamptz(6)` and a JS Date holds milliseconds, so
+   * a cursor built from a row read through Prisma is the row's timestamp with
+   * its microseconds cut off. Two rows created in the same millisecond would
+   * then straddle the boundary, and the one on the wrong side of the id
+   * tiebreak would be dropped - the very failure this is here to prevent, in a
+   * form that only shows up under concurrent inserts. The numeric handle is a
+   * unique monotonic sequence: same order, exactly representable.
+   */
+  after?: { numericId: bigint };
 }
 
 /** Sentinels accepted by `routingPreset` alongside a concrete preset id. */
@@ -63,6 +85,10 @@ function orderClause(
       return [{ expireAt: { sort: order, nulls: 'last' } }, tiebreaker];
     case 'createdAt':
       return [{ createdAt: order }, tiebreaker];
+    // Unique and monotonic, so it needs no tiebreaker - and, being a single
+    // unique column, it is the only sort here a keyset cursor can name exactly.
+    case 'numericId':
+      return [{ numericId: order }];
     case 'username':
     default:
       return [{ username: order }, tiebreaker];
@@ -185,14 +211,31 @@ export async function list(params: ListParams): Promise<{
       : {}),
   };
 
+  // The keyset predicate mirrors `orderClause('numericId', order)` exactly, so
+  // "strictly after the cursor row" is the same relation the ORDER BY imposes.
+  // Any other sort falls back to OFFSET: the callers that use them are pages of
+  // a UI, where a shifted row is a cosmetic surprise rather than a subscriber
+  // presumed deleted.
+  const keyset =
+    params.after && params.sort === 'numericId'
+      ? params.order === 'asc'
+        ? { numericId: { gt: params.after.numericId } }
+        : { numericId: { lt: params.after.numericId } }
+      : null;
+  const effectiveWhere: Prisma.UserWhereInput = keyset ? { AND: [where, keyset] } : where;
+
   const [users, total] = await Promise.all([
     prisma.user.findMany({
-      where,
+      where: effectiveWhere,
       include: { traffic: true, groupMembers: { select: { groupId: true } } },
       orderBy: orderClause(params.sort ?? 'username', params.order ?? 'asc'),
-      skip: (params.page - 1) * params.limit,
+      // With a keyset cursor the window IS the predicate; skipping on top of it
+      // would drop a page's worth of rows on every page but the first.
+      ...(keyset ? {} : { skip: (params.page - 1) * params.limit }),
       take: params.limit,
     }),
+    // `total` stays the count of the whole filtered set, not of what is left
+    // after the cursor: it is what the shop shows as "users on the panel".
     prisma.user.count({ where }),
   ]);
 

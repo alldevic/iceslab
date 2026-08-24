@@ -3,6 +3,7 @@ import { generateUserCredentials, generateSubscriptionToken } from '../../lib/cr
 import { eventBus } from '../../lib/event-bus.js';
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import * as repo from './users.repository.js';
+import type { UserSort } from './users.repository.js';
 import type {
   CreateUserInput,
   UpdateUserInput,
@@ -182,9 +183,19 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
 export interface InternalUserFilters {
   telegramId?: bigint;
   email?: string;
+  /** Keyset cursor; see `ListParams.after` in the repository. */
+  after?: { numericId: bigint };
 }
 
-export async function listUsers(query: ListUsersQuery & InternalUserFilters): Promise<{
+/**
+ * `sort` is widened past the public schema's enum on purpose: the
+ * Remnawave-compat stream pages by `numericId`, which is not something the
+ * native list route offers (nor should - it is an internal handle), but is the
+ * only column a keyset cursor can name exactly. See `ListParams.after`.
+ */
+export async function listUsers(
+  query: Omit<ListUsersQuery, 'sort'> & { sort?: UserSort } & InternalUserFilters,
+): Promise<{
   users: PublicUserDto[];
   total: number;
   page: number;
