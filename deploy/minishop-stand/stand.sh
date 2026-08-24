@@ -14,6 +14,7 @@ TOKEN_FILE="${PANEL_TOKEN_FILE:-/var/tmp/iceslab-vmlab/minishop-panel-token}"
 PANEL_URL="${PANEL_URL:-http://127.0.0.1:3000}"
 PREFIX="${REMNAWAVE_COMPAT_PREFIX:-rw}"
 RUNTIME_ENV="$HERE/.runtime/iceslab.env"
+RUNTIME_REF_ENV="$HERE/.runtime/remnawave-ref.env"
 # The shop's compose is read with --project-directory pointed at ITS checkout,
 # so every relative path in our override would resolve there. Absolute, via the
 # environment, is the only way our files stay ours.
@@ -48,7 +49,7 @@ compose_ref=(docker compose
   -f "$SHOP/docker-compose-dev.yml"
   -f "$SHOP/docker-compose.remnawave-dev.yml"
   -f "$HERE/data-volume.override.yml"
-  --env-file "$HERE/remnawave-ref.env")
+  --env-file "$RUNTIME_REF_ENV")
 
 # newt is a tunnel client the stand has no use for; the env files carry
 # placeholder credentials only so `docker compose config` can interpolate. Name
@@ -72,6 +73,34 @@ Mint one and save it:
       -e "s|^APP_ENV_FILE=.*|APP_ENV_FILE=$RUNTIME_ENV|" \
       "$HERE/iceslab.env" > "$RUNTIME_ENV"
   chmod 600 "$RUNTIME_ENV"
+}
+
+# The reference half's env, with the panel token the shop's own dev fixture
+# seeds - because the shop's reference override sets PANEL_API_KEY on the
+# BACKEND ONLY.
+#
+# The worker inherits nothing but `env_file`, so on the reference half it ran
+# with an empty key and got 401 on every call it ever made. That is the whole of
+# `panel_sync: failed` on that half, and downstream of it: a seeded user the
+# shop cannot read (`traffic_strategy_lock_reason: panel_unavailable`), a
+# subscription with no URL, and a `GET /users` count that has nothing to do with
+# ours. Half of the reference was answering the shop unauthenticated, and the
+# differential was comparing our working half against it.
+#
+# Taken from the shop's compose, not pasted here: it is that file's default for
+# REMNAWAVE_DEV_API_TOKEN, and a copy would be a second place to be wrong.
+fill_ref_token() {
+  local compose="$SHOP/docker-compose.remnawave-dev.yml" tok
+  [[ -f "$compose" ]] || die "no $compose - cannot learn the reference panel's token"
+  tok="$(sed -n 's/.*PANEL_API_KEY: *${REMNAWAVE_DEV_API_TOKEN:-\([^}]*\)}.*/\1/p' "$compose" | head -1)"
+  [[ -n "$tok" ]] || die "no REMNAWAVE_DEV_API_TOKEN default in $compose
+Without it the shop's worker talks to the reference panel unauthenticated and
+every sync on that half fails - which the differential then reports as though it
+were something about our facade."
+  mkdir -p "$HERE/.runtime"
+  sed -e "s|^PANEL_API_KEY=.*|PANEL_API_KEY=$tok|" \
+      -e "s|^APP_ENV_FILE=.*|APP_ENV_FILE=$RUNTIME_REF_ENV|" \
+      "$HERE/remnawave-ref.env" > "$RUNTIME_REF_ENV"
 }
 
 # A self-signed cert for the webhook TLS front. Regenerated when missing, never
@@ -127,7 +156,7 @@ assert_admin_seeded() {
   local which="$1" env_file admin_id out
   case "$which" in
     iceslab) env_file="$RUNTIME_ENV"; set -- "${compose_iceslab[@]}" ;;
-    ref)     env_file="$HERE/remnawave-ref.env"; set -- "${compose_ref[@]}" ;;
+    ref)     env_file="$RUNTIME_REF_ENV"; set -- "${compose_ref[@]}" ;;
     *) die "assert_admin_seeded: unknown stand $which" ;;
   esac
   admin_id="$(sed -n 's/^ADMIN_IDS=//p' "$env_file" | tail -1 | cut -d, -f1 | tr -d '[:space:]')"
@@ -142,6 +171,97 @@ will compare two forbidden responses."
   echo "stand: admin seeded -> $out"
 }
 
+# The squads the tariff template names, created on OUR panel if absent.
+#
+# Only this half needs it. The reference stand's own seed (deploy/dev/
+# seed-remnawave.sql, "match the public development tariff fixture") inserts
+# `MiniShop Standard` and `MiniShop Premium` with fixed uuids, so the reference
+# panel arrives with them already - and if a later release stops doing that,
+# seed_tariffs.py refuses by name rather than storing a catalogue that points
+# nowhere.
+#
+# The names come from the template, not from a second list here: a catalogue
+# naming a squad this never creates would fail at seed time, and one creating a
+# squad no tariff names would be litter on a panel the stand does not own.
+ensure_panel_squads() {
+  local tok names name code
+  tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  names="$(python3 "$HERE/squad_names.py" "$HERE/tariffs.template.json")" \
+    || die "could not read the squad names out of tariffs.template.json"
+  [[ -n "$names" ]] || die "tariffs.template.json names no squad, so no tariff can move one"
+  while read -r name; do
+    [[ -n "$name" ]] || continue
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      -H "authorization: Bearer $tok" -H 'content-type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$name")" \
+      "$PANEL_URL/api/squads")"
+    case "$code" in
+      201) echo "stand: created panel squad '$name'" ;;
+      409) echo "stand: panel squad '$name' already there" ;;
+      *)   die "could not create the panel squad '$name': HTTP $code
+The tariff catalogue names it, and without it seed_tariffs.py refuses - which is
+correct, but the fix belongs here." ;;
+    esac
+  done <<< "$names"
+}
+
+# The tariff catalogue itself, through the shop's own admin API. Both halves,
+# same code, resolved against whichever panel the shop is pointed at.
+seed_tariffs() {
+  python3 "$HERE/seed_tariffs.py" \
+    || die "the tariff catalogue was not configured; the two admin actions that
+reach the panel through a tariff would answer 400 and 502 on both halves, and
+the differential would compare two refusals."
+}
+
+# Every address the stand's own runs put on OUR panel.
+#
+# The buyer, plus the shop's demo users: its admin walkthrough ends in
+# `POST /admin/sync`, and that sync CREATES a panel user for each seeded shop
+# user that has none. On the reference half those users come from
+# seed-remnawave.sql and go away with the volume; on ours they stay, because our
+# panel is not a stand volume - so the NEXT run finds them, the shop rebinds the
+# seeded subscription from the uuid its own fixture hardcodes to the real panel
+# user, and the admin page for that user renders differently on the two halves.
+# Ten divergences, none of them the facade's.
+#
+# Read out of the shop's own seed rather than listed here: a copy of the list
+# would go stale exactly when the shop adds a fixture, and the run after that
+# would be the one that looks broken.
+stand_owned_emails() {
+  local seed="$SHOP/deploy/dev/seed-minishop.sql" found
+  [[ -f "$seed" ]] || die "no $seed - cannot tell which panel users this stand left behind"
+  found="$(grep -oE "'[A-Za-z0-9._%+-]+@example\\.com'" "$seed" | tr -d "'" | sort -u)"
+  [[ -n "$found" ]] || die "$seed names no @example.com address; the purge would silently purge nothing
+and the next run would inherit this one's panel users."
+  printf '%s\n%s\n' "${STAND_BUYER:-stand-buyer@example.com}" "$found"
+}
+
+# The shop's WORKER, not just its backend, has to be able to talk to the panel.
+#
+# It is a separate container with its own environment, and the shop's reference
+# override configures only the backend - so this was false on the reference half
+# of every differential run here, silently: the backend answered every admin
+# page while the worker got 401 on everything, and the only visible trace was a
+# `panel_sync: failed` tile that looked like a property of the reference panel.
+assert_worker_authenticated() {
+  local which="$1" key
+  case "$which" in
+    iceslab) set -- "${compose_iceslab[@]}" ;;
+    ref)     set -- "${compose_ref[@]}" ;;
+    *) die "assert_worker_authenticated: unknown stand $which" ;;
+  esac
+  key="$("$@" exec -T worker python3 -c \
+    'import os; print(len(os.environ.get("PANEL_API_KEY","")))')" \
+    || die "could not read the worker's environment on the $which stand"
+  [[ "${key//[[:space:]]/}" =~ ^[0-9]+$ ]] || die "unexpected answer from the $which worker: $key"
+  (( ${key//[[:space:]]/} > 0 )) || die "the $which stand's worker has no PANEL_API_KEY.
+Every call it makes will be 401, its fleet sync will fail, and the admin pages
+downstream of that sync will differ from the other half for a reason that has
+nothing to do with the facade."
+  echo "stand: $which worker authenticated (PANEL_API_KEY ${key//[[:space:]]/} chars)"
+}
+
 # Our panel is not part of the stand's volumes, so `reset` does not touch it -
 # and the shop finds a panel user by EMAIL. A buyer left over from an earlier
 # run therefore turns the purchase into an UPDATE of an existing panel user,
@@ -149,7 +269,7 @@ will compare two forbidden responses."
 # takes a CREATE. The two halves then diverge on a trace line, and the finding
 # is the stand's, not the facade's - which is exactly the kind of false positive
 # that teaches you to stop believing the diff.
-purge_panel_buyer() {
+purge_panel_user() {
   local email="${1:?}" tok ids id code
   tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
   ids="$(curl -sS -H "authorization: Bearer $tok" \
@@ -170,6 +290,15 @@ The purchase would update it instead of creating one, and the differential
 would report that as a facade divergence." ;;
     esac
   done <<< "$ids"
+}
+
+# Every leftover, not just the buyer. Same reason, one run apart.
+purge_panel_leftovers() {
+  local email
+  while read -r email; do
+    [[ -n "$email" ]] || continue
+    purge_panel_user "$email"
+  done <<< "$(stand_owned_emails)"
 }
 
 # The shop is reachable through its own nginx, and nginx resolves its upstream
@@ -211,6 +340,10 @@ preflight_facade() {
   echo "stand: facade says $body"
 }
 
+# Unconditional: `down`, `reset` and `half ref` all reach for compose_ref, and
+# `--env-file` on a file that is not there is a compose error, not a fallback.
+fill_ref_token
+
 case "${1:-}" in
   up-iceslab)
     fill_token
@@ -230,6 +363,9 @@ case "${1:-}" in
     "${compose_iceslab[@]}" --profile seed up --no-deps dev-seed \
       || echo "stand: the shop's own demo seed exited non-zero (expected at v3.6.1, see stand.override.yml)" >&2
     assert_admin_seeded iceslab
+    assert_worker_authenticated iceslab
+    ensure_panel_squads
+    seed_tariffs
     # `restart` returns when the container is running, not when the app inside
     # it answers - the next step then gets an empty reply through the shop's
     # nginx and fails on "no verification code". `up --wait` waits for healthy.
@@ -263,6 +399,8 @@ case "${1:-}" in
     "${compose_ref[@]}" --profile seed up --no-deps dev-seed \
       || echo "stand: the shop's own demo seed failed (expected at v3.6.1, see above)" >&2
     assert_admin_seeded ref
+    assert_worker_authenticated ref
+    seed_tariffs
     # The shop cached "could not detect version" while the panel was unseeded.
     "${compose_ref[@]}" restart backend worker
     "${compose_ref[@]}" up -d --wait backend worker
@@ -289,6 +427,18 @@ case "${1:-}" in
     "${compose_iceslab[@]}" --profile seed down -v --remove-orphans || true
     "${compose_ref[@]}" --profile seed down -v --remove-orphans || true
     ;;
+  check)
+    # The preconditions `up-*` asserts, against a stand that is already up.
+    # Exists so the guards can be exercised without a twenty-minute run.
+    shift
+    which="${1:?usage: stand.sh check <iceslab|ref>}"
+    assert_admin_seeded "$which"
+    assert_worker_authenticated "$which"
+    ;;
+  seed-tariffs)
+    # Re-run the catalogue step alone, against whatever half is up.
+    seed_tariffs
+    ;;
   mark)   date -u +%Y-%m-%dT%H:%M:%SZ ;;
 
   half)
@@ -304,7 +454,7 @@ case "${1:-}" in
     mkdir -p "$outdir"
     case "$which" in
       iceslab) env_for_half="$RUNTIME_ENV" ;;
-      ref)     env_for_half="$HERE/remnawave-ref.env" ;;
+      ref)     env_for_half="$RUNTIME_REF_ENV" ;;
       *) die "half: expected iceslab or ref, got $which" ;;
     esac
     "$0" reset
@@ -313,7 +463,7 @@ case "${1:-}" in
     # false test as the last statement of the branch would end the script under
     # `set -e`.
     if [[ "$which" == iceslab ]]; then
-      purge_panel_buyer "${STAND_BUYER:-stand-buyer@example.com}"
+      purge_panel_leftovers
     fi
     "$0" "up-$which"
     STAND_ENV="$env_for_half" "$HERE/buy.sh" "${STAND_BUYER:-stand-buyer@example.com}" \
@@ -561,6 +711,11 @@ usage: $(basename "$0") <command>
                dump the shop's panel-API call trace (operation labels + status);
                the optional RFC3339 stamp (e.g. from 'mark') scopes it to one step
   mark         print a timestamp to hand to 'trace' later
+  check <iceslab|ref>
+               re-check what up-* asserts, against a stand already up
+  seed-tariffs re-store the tariff catalogue on the half that is up (up-* does
+               this already; without a catalogue the tariff and premium-override
+               admin actions answer 400 and 502 without calling the panel)
   half <iceslab|ref> <outdir>
                one half of the differential end to end: reset, bring the stand
                up, buy, walk the admin, and write both traces into <outdir>

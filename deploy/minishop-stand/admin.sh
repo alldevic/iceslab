@@ -51,9 +51,30 @@ call() { # method path [body]
 
 TMPBODY="$(mktemp)"; trap 'rm -f "$JAR" "$TMPBODY"' EXIT
 
+# Steps whose failure makes the walkthrough VACUOUS rather than merely
+# different. Both halves refusing a step compares perfectly clean - that is how
+# premium-override and tariff-switch spent a whole differential answering 502
+# and 400 without one panel call, and the diff reported nothing. A comparison
+# cannot notice what neither side did, so the noticing has to happen here.
+#
+# The list is the panel-touching mutations, all of which are known to answer 2xx
+# on both halves. Reads are not on it (a page can legitimately be broken the
+# same way on both, and `tribute-catalog` is), nor is `user-detail-gone`, whose
+# whole point is the 404.
+MUST_SUCCEED=(
+  squad-refresh squad-sync hwid-limit traffic-strategy traffic-grant extend
+  traffic-override premium-override tariff-switch sub-reissue user-delete
+)
+FAILED_REQUIRED=()
+
 record() { # name method path [body]
-  local name="$1" method="$2" path="$3" body="${4:-}" code
+  local name="$1" method="$2" path="$3" body="${4:-}" code required
   code="$(call "$method" "$path" "$body")"
+  for required in "${MUST_SUCCEED[@]}"; do
+    if [[ "$name" == "$required" && "$code" != 2* ]]; then
+      FAILED_REQUIRED+=("$name -> $code $(head -c 200 "$TMPBODY")")
+    fi
+  done
   python3 - "$name" "$method" "$path" "$code" "$TMPBODY" >> "$OUT" <<'PY'
 import json, sys
 name, method, path, code, bodyfile = sys.argv[1:6]
@@ -175,19 +196,27 @@ if [[ -n "$TARGET" ]]; then
   record hwid-limit        POST "/api/admin/users/$TARGET/hwid-device-limit" '{"hwid_device_limit":3}'
   record traffic-strategy  POST "/api/admin/users/$TARGET/traffic-strategy" '{"traffic_limit_strategy":"MONTH"}'
   record traffic-grant     POST "/api/admin/users/$TARGET/traffic-grant" '{"kind":"regular","gb":1}'
-  record extend            POST "/api/admin/users/$TARGET/extend" '{"days":7}'
+  # `tariff_key` is not optional once a catalogue holds more than one period
+  # tariff: with nothing to disambiguate, the shop answers 400 tariff_required
+  # and never reaches the panel. `standard` is the one the purchase bought - the
+  # switch to `pro` happens further down, deliberately after this.
+  record extend            POST "/api/admin/users/$TARGET/extend" '{"days":7,"tariff_key":"standard"}'
   # Reaches the panel through sync_main_traffic_limit_to_panel - a PATCH of the
   # user's traffic limit, which is the field the shop bills on.
   record traffic-override  POST "/api/admin/users/$TARGET/regular-traffic-override" '{"gb":50}'
-  # These two would reach the panel (a squad switch and a premium-squad push,
-  # the most facade-relevant writes the admin can make) but both stop earlier
-  # while the shop has no tariff catalogue: `tariff` answers 400
-  # tariffs_not_configured and `premium-override` answers 502 without making a
-  # single panel call. Recorded anyway, because they are pages an operator uses
-  # and the two halves must agree about them - but they prove nothing about the
-  # facade until a catalogue with REAL squad uuids exists on this stand.
-  record premium-override  POST "/api/admin/users/$TARGET/premium-override" '{"enabled":true}'
-  record tariff-switch     POST "/api/admin/users/$TARGET/tariff" '{"tariff_key":"standard"}'
+  # The two writes that reach the panel THROUGH A TARIFF, and the reason
+  # stand.sh seeds a catalogue before either half runs. Without one they answer
+  # 400 tariffs_not_configured and 502 without a single panel call, and the two
+  # halves compare two refusals.
+  #
+  # Order matters and is not the file's: `standard` (the tariff bought) carries
+  # the premium squad, `pro` does not. So premium-override runs while the
+  # premium squad is still on the user, and the switch to `pro` REMOVES it - the
+  # direction an add-only or status-gated implementation quietly skips. Sending
+  # the tariff the user already has would be a no-op the trace cannot tell from
+  # a working switch.
+  record premium-override  POST "/api/admin/users/$TARGET/premium-override" '{"unlimited":true}'
+  record tariff-switch     POST "/api/admin/users/$TARGET/tariff" '{"tariff_key":"pro"}'
   record sub-reissue       POST "/api/admin/users/$TARGET/subscription-reissue"
   record user-detail-after GET  "/api/admin/users/$TARGET"
   # Last, and destructive: delete_user_from_panel is a real panel call, and
@@ -201,3 +230,12 @@ fi
 record sync              POST /api/admin/sync '{}'
 
 echo "admin: wrote $(wc -l < "$OUT") step(s) to $OUT" >&2
+
+# After the file is written, so the walkthrough can still be compared by hand.
+if (( ${#FAILED_REQUIRED[@]} )); then
+  printf 'admin: a step that must reach the panel did not:\n' >&2
+  printf '  %s\n' "${FAILED_REQUIRED[@]}" >&2
+  die "these steps only work with a tariff catalogue on the shop (stand.sh
+seed-tariffs), and when they fail they fail on both halves - so the comparison
+would call the run clean while proving nothing about the facade."
+fi

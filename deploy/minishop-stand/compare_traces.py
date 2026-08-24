@@ -31,6 +31,21 @@ CONTRACT = (
 )
 
 
+# Calls the shop makes only when its own 300-second cache has expired. Whether
+# one lands inside a trace window is decided by the wall-clock gap between the
+# steps, not by anything the panel did - so a +-1 count difference on these is
+# timing. Named rather than suppressed: still reported as a divergence, with the
+# reason attached, because a count difference here CAN also mean a re-detection
+# the other half never needed.
+#
+#   /system/metadata  - panel_api_core.py `_PANEL_COMPATIBILITY_TTL_SECONDS`
+#   /internal-squads  - settings `PANEL_EXTERNAL_SQUADS_CACHE_TTL_SECONDS`
+CACHED_BEHIND_TTL = {
+    "/system/metadata": "_PANEL_COMPATIBILITY_TTL_SECONDS = 300s",
+    "/internal-squads": "PANEL_EXTERNAL_SQUADS_CACHE_TTL_SECONDS = 300s",
+}
+
+
 def load(path: str) -> list[tuple[str, str, int]]:
     rows = []
     for line in Path(path).read_text().splitlines():
@@ -110,7 +125,15 @@ def main() -> int:
         print("DIVERGENT - the shop called these a different number of times:")
         for (method, label), r, c in divergent:
             print(f"  {method} {label}: reference {r}x, candidate {c}x")
-            if c == 0:
+            if label in CACHED_BEHIND_TTL:
+                # Including the 0-vs-N case, and BEFORE the "unsupported" line:
+                # a cached call absent from one window is the ordinary shape of
+                # this, and calling it a refused capability would be a finding
+                # invented by the clock.
+                print(f"    the shop caches this ({CACHED_BEHIND_TTL[label]}), so a count")
+                print("    difference - 0 included - can be the gap between the two runs'")
+                print("    steps rather than anything the panel did")
+            elif c == 0:
                 print("    the candidate never got this call: the shop decided it was unsupported")
         print()
     if real:

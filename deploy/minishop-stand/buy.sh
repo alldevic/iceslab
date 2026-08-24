@@ -26,6 +26,12 @@ QA_SECRET="$(envval QA_PAYMENT_SECRET)"
 
 EMAIL="${1:-stand-$(date +%s)@example.com}"
 MONTHS="${MONTHS:-1}"
+# Once a tariff catalogue exists, every purchase route demands a tariff:
+# without `tariff_key` the shop answers 400 invalid_plan "Tariff is not
+# selected" and no payment is created. Sent unconditionally - the branch that
+# reads it only runs when a catalogue is configured, so an unconfigured stand
+# ignores the field rather than failing on it.
+TARIFF_KEY="${TARIFF_KEY:-standard}"
 j() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval("d"+sys.argv[1]))' "$1"; }
 CSRF=""
 # The webapp double-submits a CSRF token: a cookie plus X-CSRF-Token, compared
@@ -69,7 +75,7 @@ CSRF="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("csrf_tok
 echo "buy: session established, csrf ${CSRF:0:12}…"
 
 echo "buy: 3/5 creating a QA payment"
-PAY="$(post /api/payments "{\"method\":\"qa\",\"months\":$MONTHS}")"
+PAY="$(post /api/payments "{\"method\":\"qa\",\"months\":$MONTHS,\"tariff_key\":\"$TARIFF_KEY\"}")"
 echo "$PAY" | head -c 400; echo
 PAYMENT_ID="$(python3 -c 'import json,sys,re
 d=json.loads(sys.argv[1])
@@ -93,7 +99,7 @@ echo "buy: payment $PAYMENT_ID"
 # currency as the default currency would turn an unverified callback into a paid
 # order" - so take the price from the shop's own quote for the same months
 # rather than inventing one. GET /api/payments/{id} reports status only.
-QUOTE="$(post /api/subscription/quote "{\"months\":$MONTHS,\"method\":\"qa\"}")"
+QUOTE="$(post /api/subscription/quote "{\"months\":$MONTHS,\"method\":\"qa\",\"tariff_key\":\"$TARIFF_KEY\"}")"
 read -r AMOUNT CURRENCY <<<"$(python3 -c '
 import json,sys
 d=json.loads(sys.argv[1])
