@@ -19,4 +19,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // Test files and their helpers are never in the bundle, so the Fast Refresh
+    // rule - which is about what a module may export and still hot-reload -
+    // has nothing to say about them.
+    files: ['**/*.test.{ts,tsx}', 'src/test/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

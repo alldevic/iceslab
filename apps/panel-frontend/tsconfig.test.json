@@ -2,9 +2,13 @@
   "extends": "./tsconfig.app.json",
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
-    "types": ["vite/client", "node"],
+    "types": ["vite/client", "node", "@testing-library/jest-dom"],
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },
-  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/**/*.ts", "src/**/*.tsx"]
+  // `extends` carries tsconfig.app.json's exclude across, and exclude filters
+  // include - so without this line the test project resolves to zero files and
+  // `tsc -p tsconfig.test.json` passes by having nothing to check.
+  "exclude": [],
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

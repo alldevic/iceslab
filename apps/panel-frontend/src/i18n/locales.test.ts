@@ -86,11 +86,19 @@ function sourceFiles(dir: string): string[] {
 const SRC = join(import.meta.dirname, '..');
 
 describe('every translation the code asks for exists', () => {
-  // Only literal keys can be checked. `t(\`x.${y}\`)` is invisible here by
-  // construction, so the count is asserted too: if dynamic keys start
-  // spreading, this test says so instead of quietly covering less.
+  // Only literal keys can be checked. A key built at runtime - `t(\`x.${y}\`)`
+  // or `t(someVariable)` - is invisible here by construction, so the count is
+  // asserted too: if dynamic keys start spreading, this test says so instead of
+  // quietly covering less.
+  //
+  // The second pattern deliberately catches the plain-identifier form as well.
+  // It used to match backticks only, which meant a component that moved its
+  // messages into a rules module and called `t(key)` dropped those keys out of
+  // the scan without moving the counter - covering less while still looking
+  // green. Anything it counts needs a test of its own; lib/pq-pairs.test.ts is
+  // the pattern.
   const literal = /\bt\(\s*'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)'/g;
-  const dynamic = /\bt\(\s*`/g;
+  const dynamic = /\bt\(\s*[^'\s)]/g;
 
   const used = new Map<string, string>();
   let dynamicCalls = 0;
@@ -121,6 +129,9 @@ describe('every translation the code asks for exists', () => {
   });
 
   it('records how many keys are built dynamically and so go unchecked', () => {
-    expect(dynamicCalls).toBeLessThanOrEqual(40);
+    // 43 today. Widening the pattern to the identifier form added three that
+    // the old backtick-only scan never saw; the ceiling moved with it rather
+    // than the pattern being narrowed back to keep the number.
+    expect(dynamicCalls).toBeLessThanOrEqual(45);
   });
 });

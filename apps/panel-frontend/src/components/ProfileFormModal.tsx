@@ -51,7 +51,18 @@ import {
 import { RecipePicker } from './RecipePicker';
 import { RecipeExportModal } from './RecipeExportModal';
 import { resolveRecipeApply, validateXrayConfig, RECIPE_COMMON_FIELDS } from '../lib/recipes';
+import { PQ_FIELDS, pqPairError } from '../lib/pq-pairs';
 import { protocolLabel } from '../lib/protocols';
+
+/**
+ * Which tab of the Advanced block holds each validated field, so a refused save
+ * can put that field on screen. Only fields with a rule need an entry; today
+ * that is the four U5 pair fields, and a rule added to another tab without an
+ * entry here goes back to refusing the save silently.
+ */
+const ADV_TAB_OF_FIELD: Record<string, string> = Object.fromEntries(
+  PQ_FIELDS.map((field) => [field, 'pq']),
+);
 
 // Xray stream transports. The whole stack already handles all six (Zod schema,
 // node config.go renderer, client URI builder) - this is just the operator-
@@ -539,6 +550,11 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
   const mode: Mode = isEdit ? 'edit' : 'create';
   const [exportOpen, exportCtl] = useDisclosure(false);
   const [advOpen, advCtl] = useDisclosure(false);
+  /**
+   * The Advanced block's tab is controlled, not defaulted, because a refused
+   * save has to be able to move it - see `revealRefusal` below.
+   */
+  const [advTab, setAdvTab] = useState<string | null>('reality');
 
   /**
    * U5 - post-quantum key material comes from the xray binary, which lives on
@@ -593,29 +609,19 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
         }
         return null;
       },
-      // U5 - both halves or neither. Mirrors the backend superRefine so the
-      // error lands on the field that is missing instead of arriving as a
-      // notification with no idea which box to fill.
-      xrayMldsa65Verify: (v, values) =>
-        values.protocol === 'xray' && values.xraySecurity === 'reality' &&
-        values.xrayMldsa65Seed.trim() && !v.trim()
-          ? t('profiles.form.cfg.pqNeedsVerify')
-          : null,
-      xrayMldsa65Seed: (v, values) =>
-        values.protocol === 'xray' && values.xraySecurity === 'reality' &&
-        values.xrayMldsa65Verify.trim() && !v.trim()
-          ? t('profiles.form.cfg.pqNeedsSeed')
-          : null,
-      xrayVlessEncryption: (v, values) =>
-        values.protocol === 'xray' && values.xraySubprotocol === 'vless' &&
-        values.xrayVlessDecryption.trim() && !v.trim()
-          ? t('profiles.form.cfg.pqNeedsEncryption')
-          : null,
-      xrayVlessDecryption: (v, values) =>
-        values.protocol === 'xray' && values.xraySubprotocol === 'vless' &&
-        values.xrayVlessEncryption.trim() && !v.trim()
-          ? t('profiles.form.cfg.pqNeedsDecryption')
-          : null,
+      // U5 - both halves or neither. The rules live in lib/pq-pairs so they can
+      // be tested without a form; here they only get translated. Spread from
+      // PQ_FIELDS rather than written out, so a fifth rule cannot be added to
+      // the module and silently go unwired.
+      ...Object.fromEntries(
+        PQ_FIELDS.map((field) => [
+          field,
+          (_v: string, values: FormValues) => {
+            const key = pqPairError(field, values);
+            return key ? t(key) : null;
+          },
+        ]),
+      ),
     },
   });
 
@@ -721,6 +727,24 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
         });
       }
     }
+  }
+
+  /**
+   * A refused save has to be legible, and inside this form it is not by
+   * default: every rule other than `name` lives on a field in the Advanced
+   * block, which starts collapsed and shows one tab at a time. Mantine puts an
+   * inline `display: none` on the inactive Tabs.Panel and the shut Collapse, so
+   * the message that explains the refusal is mounted and unreadable - the Save
+   * button appears to do nothing at all.
+   *
+   * So on a refusal, take the operator to the first field that complained.
+   * Mantine hands the error map to the second argument of `form.onSubmit`.
+   */
+  function revealRefusal(errors: Record<string, React.ReactNode>) {
+    const hidden = Object.keys(errors).find((field) => field in ADV_TAB_OF_FIELD);
+    if (!hidden) return;
+    advCtl.open();
+    setAdvTab(ADV_TAB_OF_FIELD[hidden]);
   }
 
   async function handleSubmit(values: FormValues) {
@@ -951,7 +975,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
       }
       size="lg"
     >
-      <form id="profile-form" onSubmit={form.onSubmit(handleSubmit)}>
+      <form id="profile-form" onSubmit={form.onSubmit(handleSubmit, revealRefusal)}>
         <Stack>
           {/* Which binary runs this profile, then which protocol that binary
               speaks. Two questions in the order they are actually answered,
@@ -1475,7 +1499,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                 </Group>
               </UnstyledButton>
               <Collapse in={advOpen}>
-              <Tabs defaultValue="reality" variant="outline">
+              <Tabs value={advTab} onChange={setAdvTab} variant="outline">
                 <Tabs.List>
                   <Tabs.Tab value="reality">{t('profiles.form.cfg.advRealityTab')}</Tabs.Tab>
                   <Tabs.Tab value="tls">{t('profiles.form.cfg.advTlsTab')}</Tabs.Tab>
