@@ -431,22 +431,81 @@ would report that as a facade divergence." ;;
 }
 
 # The users churn-probe seeds, by the names it gives them.
+#
+# ONE listing, not one search per user. The panel rate-limits every route to 100
+# requests per minute per IP, and this runs straight after the probe has created
+# forty users and driven a full fleet sync - so the tail of a per-user loop lands
+# past the limit. It did: the searches that fell past it answered
+# `{"error":"RATE_LIMITED"}`, matched nobody, deleted nothing and said nothing,
+# leaving twelve of forty behind while the probe reported success. Those get
+# imported by the shop's fleet sync on the NEXT run and surface as a differential
+# finding that has nothing to do with the facade.
+#
+# Reports failure by RETURN CODE, never by `die`: the call site wants to keep the
+# probe's own verdict, and `exit` inside a function ends the whole script, so a
+# `die` here would overwrite a refusal with a 1 - and `|| true` at the call site
+# cannot catch it either, because `|| true` does not catch `exit`.
 purge_churn_users() {
-  local count="${1:?}" tok i name ids id gone=0
+  local tok ids id code gone=0 round
   tok="$(tr -d '[:space:]' < "$TOKEN_FILE")"
-  for i in $(seq 1 "$count"); do
-    name="churn-probe-$(printf '%04d' "$i")"
-    ids="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/api/users?search=$name" \
-      | python3 -c 'import json,sys
-rows = json.load(sys.stdin).get("users") or []
-print("\n".join(u["id"] for u in rows if u.get("username") == sys.argv[1]))' "$name")"
+
+  # Rounds, because the deletes themselves can reach the limit on a big fixture.
+  # Each round re-lists, so a delete lost to a 429 is retried rather than
+  # assumed done.
+  for round in 1 2 3; do
+    ids="$(churn_ids "$tok")" || return 1
+    [[ -n "$ids" ]] || break
     while read -r id; do
       [[ -n "$id" ]] || continue
-      curl -sS -o /dev/null -X DELETE -H "authorization: Bearer $tok" "$PANEL_URL/api/users/$id" \
-        && gone=$((gone + 1))
+      code="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+        -H "authorization: Bearer $tok" "$PANEL_URL/api/users/$id")"
+      case "$code" in
+        2*) gone=$((gone + 1)) ;;
+        429) sleep 20 ;;
+        # The previous version counted curl's EXIT CODE, which is zero whether
+        # the panel answered 204 or 429, so "removed N" meant nothing at all.
+        *) echo "stand: could not remove churn-probe user $id: HTTP $code" >&2; return 1 ;;
+      esac
     done <<< "$ids"
   done
-  echo "stand: removed $gone churn-probe user(s) from the panel"
+
+  # Check, do not announce. Every version of this cleanup so far printed a
+  # number it had not verified, and twice now the fixture stayed on the panel
+  # while the probe said it had tidied up.
+  ids="$(churn_ids "$tok")" || return 1
+  if [[ -n "$ids" ]]; then
+    echo "stand: $(grep -c . <<<"$ids") churn-probe user(s) are STILL on the panel after cleanup.
+The shop's fleet sync imports them on the next run, and the differential then
+reports them as a facade divergence." >&2
+    return 1
+  fi
+  echo "stand: removed $gone churn-probe user(s) from the panel; none left"
+}
+
+# Panel ids of every churn-probe user, in one request.
+#
+# Retries past the rate limit rather than returning an empty list: throttled and
+# finished look identical from here, and that confusion is exactly what let the
+# leftovers through. Signals failure by return code - a `die` would be swallowed,
+# because this runs inside a command substitution and that is a subshell.
+churn_ids() {
+  local tok="${1:?}" body attempt
+  for attempt in 1 2 3; do
+    body="$(curl -sS -H "authorization: Bearer $tok" "$PANEL_URL/api/users?size=1000")"
+    if [[ "$body" == *RATE_LIMITED* ]]; then
+      sleep 20
+      continue
+    fi
+    python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(0)
+for u in (d.get("users") or []):
+    if str(u.get("username") or "").startswith("churn-probe-") and u.get("id"):
+        print(u["id"])' <<< "$body"
+    return 0
+  done
+  echo "stand: the panel kept answering RATE_LIMITED while listing churn-probe users" >&2
+  return 1
 }
 
 # The SHOP's copy of a buyer, through its own admin API.
@@ -1070,10 +1129,15 @@ print(d.get("id") or d["users"][0]["id"])')"
     # so without this every churn run leaves them behind, the next differential
     # counts a different fleet, and the panel grows by 39 a run. Fifth thing
     # this session that outlived the run that made it; the rule has not changed.
-    # After the verdict, so a failed probe can still be looked at, and best
-    # effort, so a cleanup problem cannot turn a real finding into an error.
-    purge_churn_users "$seed" || true
-    exit $verdict
+    # After the verdict, so a failed probe can still be looked at. NOT best
+    # effort any more: a cleanup that quietly failed is how twelve of forty
+    # users stayed on the panel while the probe reported success, and the next
+    # differential inherited them. The probe's own verdict still wins - a
+    # refusal must not be downgraded to a plain failure by the tidying - but a
+    # clean probe with dirty cleanup is not a passing run.
+    purge_churn_users || cleanup=1
+    [[ $verdict -ne 0 ]] && exit $verdict
+    exit ${cleanup:-0}
     ;;
 
   webhook-probe)
