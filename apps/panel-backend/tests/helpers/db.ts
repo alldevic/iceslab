@@ -29,6 +29,16 @@ const TABLES = [
   'profiles',
   'inbounds',
   'nodes',
+  // Nothing references `regions`, so truncating `nodes` does not reach it the
+  // way CASCADE reaches hosts, cascade_* and the rest. Measured by counting
+  // rows after a full suite run: `regions` and the snapshot below were the only
+  // two tables still holding data.
+  'regions',
+  // No FK at all (keyed by node/user uuid on purpose), so CASCADE never touches
+  // it: 710 rows had accumulated across one suite run. Cumulative counters are
+  // deltaed against this table, so a leftover row is a wrong traffic figure for
+  // whichever test happens to reuse the pair.
+  'node_user_traffic_snapshot',
   'api_tokens',
   'keygen_ca',
   'admin_users',
