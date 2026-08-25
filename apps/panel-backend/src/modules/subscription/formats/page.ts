@@ -11,6 +11,13 @@
 // interpolated from admin/user input is HTML-escaped (esc).
 
 import type { ProtocolName } from '@iceslab/shared';
+import {
+  APPS,
+  PLATFORM_LABEL,
+  PLATFORM_ORDER,
+  deeplinkHref,
+  type PlatformId,
+} from './client-catalog.js';
 
 export interface SubscriptionPageData {
   brandTitle: string;
@@ -72,16 +79,6 @@ function fmtBytes(n: number): string {
 
 // ───── Platforms ─────
 
-type PlatformId =
-  | 'ios'
-  | 'android'
-  | 'windows'
-  | 'macos'
-  | 'linux'
-  | 'androidtv'
-  | 'appletv'
-  | 'router';
-
 // 16x16 stroke icons (currentColor), inline so the page stays asset-free.
 const PLATFORM_ICONS: Record<PlatformId, string> = {
   ios: '<path d="M11.6 8.3c0-1.5 1.2-2.2 1.3-2.3-.7-1-1.8-1.2-2.2-1.2-.9-.1-1.8.6-2.3.6s-1.2-.6-2-.6c-1 0-2 .6-2.5 1.6-1.1 1.9-.3 4.6.8 6.1.5.7 1.1 1.5 1.9 1.5.8 0 1-.5 2-.5s1.2.5 2 .5 1.3-.7 1.8-1.4c.6-.8.8-1.6.8-1.6s-1.4-.6-1.4-2.2Z"/><path d="M10.1 3.9c.4-.5.7-1.2.6-1.9-.6 0-1.3.4-1.7.9-.4.4-.7 1.1-.6 1.8.6 0 1.3-.3 1.7-.8Z"/>',
@@ -101,218 +98,8 @@ const PLATFORM_ICONS: Record<PlatformId, string> = {
     '<rect x="2" y="8" width="12" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M5 10.5h.01M7 10.5h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M11 11.5v-1M8 3.5v4.5M5.7 5.2A3 3 0 0 1 8 4.2a3 3 0 0 1 2.3 1M4.2 3.6A5 5 0 0 1 8 2a5 5 0 0 1 3.8 1.6" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>',
 };
 
-const PLATFORM_ORDER: PlatformId[] = [
-  'ios',
-  'android',
-  'windows',
-  'macos',
-  'linux',
-  'androidtv',
-  'appletv',
-  'router',
-];
 
-// Display labels. Most are proper nouns (same in both languages); only Router
-// differs, handled in L below via routerLabel.
-const PLATFORM_LABEL: Record<PlatformId, string> = {
-  ios: 'iOS',
-  android: 'Android',
-  windows: 'Windows',
-  macos: 'macOS',
-  linux: 'Linux',
-  androidtv: 'Android TV',
-  appletv: 'Apple TV',
-  router: '',
-};
 
-// ───── Apps ─────
-//
-// Curated, protocol-accurate. An app shows on a platform tab only when that
-// platform is in `platforms` AND it speaks at least one of the subscription's
-// protocols. AmneziaWG obfuscation (Jc/S/H/I) needs an AWG-aware client, so the
-// xray/ss subscription clients are NOT listed for amneziawg, and vice versa.
-
-type AppAction =
-  | { kind: 'deeplink'; scheme: 'hiddify' | 'streisand' | 'v2rayng' | 'clash' | 'singbox' | 'shadowrocket' }
-  | { kind: 'awg-vpn' } // scan the AmneziaVPN vpn:// QR below
-  | { kind: 'awg-conf' } // scan the AmneziaWG .conf QR below
-  | { kind: 'wg-conf' } // scan the plain WireGuard .conf QR below
-  | { kind: 'download' } // grab the per-node .conf below
-  | { kind: 'manual' }; // paste the subscription link
-
-interface AppDef {
-  name: string;
-  platforms: PlatformId[];
-  protocols: ProtocolName[];
-  action: AppAction;
-  recommended?: boolean;
-}
-
-const APPS: AppDef[] = [
-  // Universal subscription clients (xray / shadowsocks / hysteria via the link).
-  {
-    name: 'Hiddify',
-    platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv'],
-    protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'deeplink', scheme: 'hiddify' },
-    recommended: true,
-  },
-  {
-    name: 'sing-box',
-    platforms: ['ios', 'macos', 'windows', 'linux', 'android'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'deeplink', scheme: 'singbox' },
-  },
-  {
-    name: 'Streisand',
-    platforms: ['ios', 'macos', 'appletv'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'deeplink', scheme: 'streisand' },
-    recommended: true,
-  },
-  {
-    name: 'Shadowrocket',
-    platforms: ['ios', 'appletv'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'deeplink', scheme: 'shadowrocket' },
-  },
-  {
-    name: 'v2rayNG',
-    platforms: ['android', 'androidtv'],
-    protocols: ['xray', 'shadowsocks'],
-    action: { kind: 'deeplink', scheme: 'v2rayng' },
-    recommended: true,
-  },
-  {
-    name: 'NekoBox',
-    platforms: ['android'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'manual' },
-  },
-  {
-    name: 'v2rayN',
-    platforms: ['windows'],
-    protocols: ['xray', 'shadowsocks'],
-    action: { kind: 'manual' },
-  },
-  {
-    name: 'Nekoray',
-    platforms: ['windows', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'manual' },
-  },
-  {
-    name: 'Clash Verge',
-    platforms: ['windows', 'macos', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'deeplink', scheme: 'clash' },
-  },
-  {
-    name: 'FlClash',
-    platforms: ['android', 'windows', 'macos', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'deeplink', scheme: 'clash' },
-  },
-  {
-    // INCY (incy-app.com). Cross-platform client; imports our subscription via
-    // its "add server from URL / QR". One-tap import needs its incy://crypt1
-    // deep link (AES-GCM payload from @incy/link-encoder); wire that up once the
-    // package is installed (see deeplinkHref). Until then: import via the link.
-    name: 'INCY',
-    platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'manual' },
-  },
-  // AmneziaWG-specific.
-  {
-    name: 'AmneziaVPN',
-    platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv'],
-    protocols: ['amneziawg'],
-    action: { kind: 'awg-vpn' },
-    recommended: true,
-  },
-  {
-    name: 'AmneziaWG',
-    platforms: ['ios', 'android'],
-    protocols: ['amneziawg'],
-    action: { kind: 'awg-conf' },
-  },
-  {
-    name: 'wg-quick / awg',
-    platforms: ['linux', 'router'],
-    protocols: ['amneziawg'],
-    action: { kind: 'download' },
-  },
-  {
-    name: 'Keenetic',
-    platforms: ['router'],
-    protocols: ['amneziawg'],
-    action: { kind: 'download' },
-  },
-  {
-    name: 'OpenWrt',
-    platforms: ['router'],
-    protocols: ['amneziawg', 'xray'],
-    action: { kind: 'manual' },
-  },
-  // Plain WireGuard. Deliberately a separate list from AmneziaWG: an AWG
-  // config's Jc/S/H directives make these clients refuse the file outright,
-  // and an AWG-aware client is exactly what this protocol exists to avoid
-  // needing.
-  {
-    name: 'WireGuard',
-    platforms: ['ios', 'android'],
-    protocols: ['wireguard'],
-    action: { kind: 'wg-conf' },
-    recommended: true,
-  },
-  {
-    name: 'WireGuard',
-    platforms: ['windows', 'macos', 'linux'],
-    protocols: ['wireguard'],
-    action: { kind: 'download' },
-    recommended: true,
-  },
-  {
-    name: 'WireSock',
-    platforms: ['windows'],
-    protocols: ['wireguard'],
-    action: { kind: 'download' },
-  },
-  {
-    name: 'wg-quick',
-    platforms: ['linux', 'router'],
-    protocols: ['wireguard'],
-    action: { kind: 'download' },
-  },
-  {
-    name: 'Keenetic',
-    platforms: ['router'],
-    protocols: ['wireguard'],
-    action: { kind: 'download' },
-  },
-];
-
-function deeplinkHref(
-  scheme: Extract<AppAction, { kind: 'deeplink' }>['scheme'],
-  subUrl: string,
-): string {
-  const enc = encodeURIComponent(subUrl);
-  switch (scheme) {
-    case 'hiddify':
-      return `hiddify://import/${subUrl}`;
-    case 'streisand':
-      return `streisand://import/${subUrl}`;
-    case 'v2rayng':
-      return `v2rayng://install-sub?url=${enc}`;
-    case 'clash':
-      return `clash://install-config?url=${enc}`;
-    case 'singbox':
-      return `sing-box://import-remote-profile?url=${enc}`;
-    case 'shadowrocket':
-      return `sub://${Buffer.from(subUrl, 'utf8').toString('base64')}`;
-  }
-}
 
 interface Labels {
   subtitle: string;
