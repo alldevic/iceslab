@@ -114,6 +114,50 @@ ACCEPTED_DIVERGENCE: dict[str, dict[str, str]] = {
 }
 
 
+# Reasons that hold only while some OTHER field carries data.
+#
+# `panel.nodes_bandwidth.series` is accepted because the shop reads it only as a
+# fallback when `topNodes` is empty - "and we always fill `topNodes`". True, and
+# until now untested: the walkthrough's window has no node traffic at all, so
+# `topNodes` comes back empty on BOTH halves and the claim the acceptance rides
+# on is never exercised. Emptying ours changed nothing about the report.
+#
+# That is the third time on this stand that a comparison has answered
+# confidently about something neither side did. The first two were fixed by
+# sharpening the fixture; this one names the dependency instead, so the report
+# says which of its own conclusions the run did not earn.
+#
+# Deliberately NOT a hard divergence. In a window with genuinely no node
+# traffic an empty `topNodes` is the truth, and failing there would be a false
+# alarm on every pass. What is wrong is only the silence.
+CONDITIONAL_ACCEPTANCE: dict[tuple[str, str], tuple[str, str]] = {
+    ("stats", "panel.nodes_bandwidth.series"): (
+        "panel.nodes_bandwidth.topNodes",
+        "the shop falls back to `series` exactly when `topNodes` is empty",
+    ),
+}
+
+
+def value_at(body: object, dotted: str) -> object:
+    """The value at a dotted path, or None when any step of it is missing."""
+    node = body
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def carries_data(body: object, dotted: str) -> bool:
+    """Whether the path holds something a reader could draw."""
+    value = value_at(body, dotted)
+    if value is None:
+        return False
+    if isinstance(value, (list, dict, str)):
+        return len(value) > 0
+    return True
+
+
 def accepted_reason(step: str, line: str) -> tuple[str, str] | None:
     """The (path, reason) this divergence is known by, or None if it is news.
 
@@ -388,6 +432,19 @@ def compare(
     # goes red because a fixture had no node traffic is a gate that gets muted.
     # The direction that matters is guarded the other way round - anything NOT
     # in the table is still a divergence.
+    # An acceptance whose reason depends on data this run did not produce was
+    # not tested by it. Said out loud, because the alternative is a report that
+    # counts an untested assumption among its agreements.
+    for (step, path), (needs, why) in CONDITIONAL_ACCEPTANCE.items():
+        if (step, path) not in matched:
+            continue
+        if not carries_data(cand.get(step, {}).get("body"), needs):
+            soft.append(
+                f"{step}: `{path}` was accepted on the grounds that `{needs}` is filled "
+                f"({why}), but `{needs}` is EMPTY for us in this run - the acceptance "
+                "was not exercised, so this report does not stand behind it"
+            )
+
     for step, paths in ACCEPTED_DIVERGENCE.items():
         # Only for steps this walkthrough actually compared. A run that never
         # visited the page cannot say whether its entries still hold, and
@@ -588,6 +645,34 @@ def selftest() -> int:
     accept_checks.append((
         "an accepted entry that stopped being true is reported stale",
         any("`panel.system.uptime` matched nothing" in line for line in soft),
+    ))
+
+    # 4 and 5. A conditional acceptance says when the run did not earn it.
+    #
+    # Both directions, because either alone is worthless: with only the empty
+    # case this passes against a comparator that complains unconditionally, and
+    # with only the filled case it passes against one that never complains at
+    # all. `series` must be accepted quietly when `topNodes` carries rows, and
+    # must be flagged as unexercised when it does not.
+    ref_series = {"panel": {"nodes_bandwidth": {"series": [{"n": 1}]}}}
+
+    _hard, soft, known = walk(
+        ref_series,
+        {"panel": {"nodes_bandwidth": {"topNodes": [{"nodeName": "n1", "total": 5}]}}},
+    )
+    accept_checks.append((
+        "a conditional acceptance is silent when its condition holds",
+        bool(known) and not any("was not exercised" in line for line in soft),
+    ))
+
+    _hard, soft, known = walk(ref_series, {"panel": {"nodes_bandwidth": {"topNodes": []}}})
+    accept_checks.append((
+        "a conditional acceptance says so when the run did not exercise it",
+        bool(known)
+        and any(
+            "`panel.nodes_bandwidth.series`" in line and "was not exercised" in line
+            for line in soft
+        ),
     ))
 
     for name, ok in accept_checks:
