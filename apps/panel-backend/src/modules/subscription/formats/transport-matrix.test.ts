@@ -146,8 +146,13 @@ function matrix(): Record<Network, Record<string, Verdict>> {
             : 'dropped',
       loon: verdictFrom(buildLoonConf(one), n, {
         entryMarker: '= VLESS,',
-        slot: (t) => `transport:${t}`,
-        tcpName: 'transport:tcp',
+        // `=`, not `:`. This table read our own output through the separator
+        // the builder used, so while both were wrong together the cells looked
+        // plausible - the one shape a characterisation test cannot notice about
+        // itself. Loon's manual, Loon's own example configs and sub-store all
+        // write `transport=ws`.
+        slot: (t) => `transport=${t}`,
+        tcpName: 'transport=tcp',
       }),
       // Surge and QuantumultX have no single transport slot to template over -
       // Surge spells ws as `ws=true`, QX folds it into `obfs=`. Both are matched
@@ -191,8 +196,8 @@ describe('subscription formats against xray stream transports', () => {
 transport   xrayjson    clash       singbox     loon        surge       quantumultx
 raw         carried     carried     carried     carried     omitted     carried
 xhttp       carried     carried     omitted     omitted     omitted     omitted
-ws          carried     carried     carried     partial     omitted     carried
-grpc        carried     carried     carried     partial     omitted     omitted
+ws          carried     carried     carried     carried     omitted     carried
+grpc        carried     carried     carried     omitted     omitted     omitted
 httpupgrade carried     carried     carried     omitted     omitted     omitted
 kcp         carried     carried     omitted     omitted     omitted     omitted
 `);
@@ -228,7 +233,7 @@ kcp         carried     carried     omitted     omitted     omitted     omitted
     expect(buildSurgeConf([endpoint('ws', 'tls')])).toContain('ws=true');
   });
 
-  it('the partial cells are Loon, and they are Loon\'s grammar problem', () => {
+  it('nothing is left half-emitted', () => {
     const rows = matrix();
     const partial: string[] = [];
     for (const n of NETWORKS) {
@@ -236,15 +241,14 @@ kcp         carried     carried     omitted     omitted     omitted     omitted
         if (verdict === 'partial') partial.push(`${fmt}:${n}`);
       }
     }
-    // Loon names the transport and never emits `path` or `host` at all, so a
-    // WebSocket endpoint on anything but `/` connects to nothing. Not fixed
-    // here on purpose: Loon's official example writes parameters with `=`
-    // (`transport=ws,path=/,over-tls=true`) where this builder writes `:`, and
-    // `loon.ts` already flags its whole grammar as unverified and alpha.
-    // Adding a `path:` in a separator we have upstream evidence is wrong would
-    // be motion, not a fix. Verifying the format is its own piece of work; this
-    // list is the reason it is worth doing.
-    expect(partial.sort()).toEqual(['loon:grpc', 'loon:ws']);
+    // This used to read `['loon:grpc', 'loon:ws']`, with a note saying the fix
+    // was blocked on verifying Loon's grammar - that adding a `path:` in a
+    // separator we had upstream evidence was wrong would be motion, not a fix.
+    // The grammar has since been verified against three sources that agree, and
+    // both cells moved for different reasons: `ws` now carries its `path=` and
+    // `host=`, and `grpc` is declined outright, because none of the three gives
+    // Loon a spelling for it.
+    expect(partial.sort()).toEqual([]);
   });
 
   it('Vision rides RAW and XHTTP only, in every format that emits it', () => {

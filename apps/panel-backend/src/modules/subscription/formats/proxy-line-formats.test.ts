@@ -86,20 +86,77 @@ describe('buildQuantumultXConf (incl REALITY, verified syntax)', () => {
   });
 });
 
-describe('buildLoonConf (best-effort, incl REALITY)', () => {
-  it('emits a VLESS REALITY line', () => {
-    const out = buildLoonConf([vlessReality]);
-    expect(out).toContain('eu-3 = VLESS,n3.example.com,443,"uuid-1"');
-    expect(out).toContain('over-tls:true');
-    expect(out).toContain('tls-name:www.cloudflare.com');
-    expect(out).toContain('flow:xtls-rprx-vision');
-    expect(out).toContain('public-key:PUBKEY');
-    expect(out).toContain('short-id:SHORT');
+/**
+ * Loon's grammar, checked against three sources that agree: Loon's manual
+ * (`LoonManual/docs/cn/node.md`), Loon's own examples (`LoonExampleConfig`) and
+ * sub-store's Loon producer.
+ *
+ * These assertions are on WHOLE LINES rather than on fragments, and that is the
+ * point of the rewrite. The version before this one checked six substrings, all
+ * six in the `key:value` form that is not Loon's grammar anywhere - so it agreed
+ * with the builder, exactly and only because both were wrong. A fragment check
+ * can confirm a separator it supplied itself; a whole line cannot.
+ */
+describe('buildLoonConf, against the verified grammar', () => {
+  it('writes a VLESS REALITY line the way all three sources spell it', () => {
+    // `sni=` and not `tls-name=`: sub-store emits `tls-name` only on the
+    // non-REALITY branch, and the old builder emitted both.
+    expect(buildLoonConf([vlessReality]).trim()).toBe(
+      'eu-3 = VLESS,n3.example.com,443,"uuid-1",transport=tcp,over-tls=true,' +
+        'flow=xtls-rprx-vision,sni=www.cloudflare.com,public-key="PUBKEY",short-id=SHORT',
+    );
   });
+
+  it('gives a ws endpoint the path and host it needs to arrive anywhere', () => {
+    // The old builder emitted neither, ever. A ws line without them dials `/`
+    // at a server listening on `/dl` - an import that looks clean and connects
+    // to nothing, which is what `loon:ws` meant by `partial` in the matrix.
+    const out = buildLoonConf([
+      { ...vlessReality, network: 'ws', path: '/dl', hostHeader: 'cdn.example.com' },
+    ]).trim();
+    expect(out).toContain('transport=ws,path=/dl,host=cdn.example.com');
+    // Vision does not survive the move off raw, and must not be claimed here.
+    expect(out).not.toContain('flow=');
+  });
+
+  it('declines grpc rather than naming a transport Loon cannot speak', () => {
+    // Not in Loon's manual, not in either example config, and sub-store throws
+    // `network grpc is unsupported` instead of degrading it.
+    expect(buildLoonConf([{ ...vlessReality, network: 'grpc', serviceName: 'gsvc' }])).toBe('');
+  });
+
+  it('names a plain TLS endpoint with tls-name, and claims no REALITY keys', () => {
+    const out = buildLoonConf([trojanTls]).trim();
+    expect(out).toContain('tls-name=www.cloudflare.com');
+    expect(out).not.toContain('public-key');
+    expect(out).not.toContain('sni=');
+  });
+
   it('emits a Shadowsocks line', () => {
     expect(buildLoonConf([ss])).toContain(
       'eu-1 = Shadowsocks,n.example.com,8388,2022-blake3-aes-128-gcm,"ss-pass"',
     );
+  });
+
+  it('writes every keyed parameter with =, on every line it produces', () => {
+    // The blanket check. The defect was not any one key, it was the separator,
+    // so this walks whatever the builder emits rather than a list of keys
+    // someone remembered to update - a key added later in `:` form lands here
+    // without anybody thinking to add a case for it.
+    const out = buildLoonConf([
+      vlessReality,
+      trojanTls,
+      { ...vlessReality, nodeName: 'ws-1', network: 'ws', path: '/dl' },
+      { ...vlessReality, nodeName: 'plain', securityLayer: 'none' },
+      ss,
+    ]);
+    expect(out).not.toBe('');
+    for (const line of out.trim().split('\n')) {
+      // Drop the `name = TYPE,host,port,...` head; what follows is key=value.
+      const params = line.split(',').slice(1);
+      const colonKeyed = params.filter((x) => /^[a-z-]+:/.test(x.trim()));
+      expect(colonKeyed, `colon-keyed parameter in: ${line}`).toEqual([]);
+    }
   });
 });
 
