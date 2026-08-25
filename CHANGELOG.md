@@ -7,6 +7,31 @@ All notable changes to Iceslab are documented here. Format loosely follows
 
 ### Added
 
+- **Plain WireGuard as an inbound.** Until now the only wg-family protocol was
+  AmneziaWG, and it cannot serve a stock WireGuard client by construction: its
+  magic headers H1-H4 must differ from WireGuard's 1..4, and both the panel
+  schema and the node validator enforce that. So a subscriber had to install an
+  AmneziaWG-aware app, which is a real barrier where the official WireGuard app
+  is the one people already have.
+
+  `wireguard` is now its own protocol end to end: profile form, node installer
+  (`--protocol wireguard`), and the `.conf` the subscription hands out. It is
+  the same adapter as AmneziaWG in plain mode — same peer management, stats and
+  reload path — driven through `wg` / `wg-quick`, on its own interface, subnet
+  and port, so one node can serve both tunnels at once. Users keep their single
+  WireGuard keypair and receive one address per subnet.
+
+  The config carries no obfuscation fields at all rather than zeroed ones, in
+  the schema and on the wire alike. That is not tidiness: `wg-quick` aborts the
+  whole interface on the first key it doesn't recognise, so a single stray
+  `Jc =` would make the file unusable for exactly the clients this protocol
+  exists to serve. Pushing an obfuscated config at a plain interface is a loud
+  error, never a silent downgrade.
+
+  What it costs is stated in the form: the handshake is recognisable as
+  WireGuard, so on an ISP that throttles or blocks it this profile will not
+  work, and there is nothing to tune — that is what AmneziaWG is for.
+
 - **An Auto line in the subscription.** A cascade can now offer one extra entry
   that names no country: the client hands the choice to the cascade entry, which
   routes it through whichever direction it measures as fastest, per connection.

@@ -6,7 +6,7 @@
 
 English · [Русский](./README.ru.md)
 
-Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru, and a sing-box engine for TUIC / AnyTLS / ShadowTLS: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
+Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG and plain WireGuard kernel modules, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru, and a sing-box engine for TUIC / AnyTLS / ShadowTLS: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
 
 ## Why Iceslab
 
@@ -113,6 +113,20 @@ A few things that catch people:
 - Pick a port below 9999. RU mobile carriers DPI-drop outbound UDP/443, and 51820 is the WireGuard default that gets specifically targeted. 1234 or 51280 are fine.
 - Client compatibility: AmneziaVPN ≥ 4.8.12.9 or Hiddify Next ≥ 2.4. There's an upstream bug ([amnezia-client#2582](https://github.com/amnezia-vpn/amnezia-client/issues/2582)) where non-zero S3/S4 silently drops traffic; presets default to `S3=0 S4=0`.
 
+#### WireGuard
+
+```bash
+bash <(curl -fsSL .../install-iceslab-node.sh) --panel-url ... --bootstrap ... --protocol wireguard
+```
+
+Plain upstream WireGuard, for people whose clients are the stock ones: the official WireGuard apps, WireSock, kernel `wg-quick`. No DKMS build — the module has been in-tree since Linux 5.6, so the bootstrap only installs `wireguard-tools`. Same ufw treatment as AmneziaWG (UDP 443 + 1234, forward policy, `ip_forward`).
+
+Pick this only where WireGuard passes: the handshake is plainly recognisable, and there is nothing to tune — the protocol has no obfuscation, which is exactly why AmneziaWG exists. The panel offers no knobs beyond a subnet and a server keypair for the same reason.
+
+One node can serve both: they get separate interfaces (`wg0` / `awg0`), separate subnets (default `10.77.77.0/24` vs `10.66.66.0/24`) and separate ports. Users keep one WireGuard keypair and get one address per subnet.
+
+Egress is always direct (MASQUERADE out of the node's WAN). The node's egress features — zapret2 DPI-desync and Cloudflare WARP — are xray-plane: zapret2 desyncs what enters its SOCKS frontend, and WARP is an xray `wireguard` outbound, so both need an xray routing rule to steer traffic into them. A wg interface forwards packets in the kernel, past xray entirely, and has nowhere to put such a rule. This applies to AmneziaWG equally; it is worth knowing before putting a wg profile on a node whose whole reason for existing is its egress.
+
 #### NaiveProxy / Shadowsocks 2022 / MTProto / Mieru
 
 ```bash
@@ -168,6 +182,7 @@ It opens a menu that explains each action (deploy, backend/frontend-only deploy,
 | Hysteria 2 | `hysteria server` from apernet/hysteria, with auth-callback, Brutal CC, Salamander obfs, port-hopping | native |
 | Xray | `xray run` with VLESS / VMess / Trojan; security REALITY, own-cert TLS or none; transports raw / ws / gRPC / xhttp / httpupgrade / kcp; Vision flow | native |
 | AmneziaWG | amnezia-vpn DKMS kernel module + `awg-quick` | native |
+| WireGuard | in-tree kernel module + `wg-quick` (no obfuscation) | native |
 | NaiveProxy | Caddy fork (`klzgrad/forwardproxy@naive` via xcaddy) | native |
 | Shadowsocks 2022 | xray-core inbound with `2022-blake3-*` ciphers | reuses xray binary |
 | MTProto | `9seconds/mtg` Fake-TLS, per-inbound secret derived from (id, domain) | native |
@@ -217,7 +232,7 @@ One link per user: `https://panel.example.com/sub/<token>`. The same URL serves 
 | `singbox` | `?format=singbox` or UA | sing-box, Hiddify |
 | `xrayjson` | `?format=xrayjson` or UA | Xray-JSON importers |
 | `json` | `?format=json` | API integrations |
-| `wgconf` | `?format=wgconf` | AmneziaWG / wg-quick `.conf` |
+| `wgconf` | `?format=wgconf` | AmneziaWG / WireGuard `.conf` (`&proto=` picks the flavour) |
 | HTML page | browser | landing page with QR + per-format links |
 
 User-Agent auto-detection is admin-editable (Subscription Response Rules page). Useful query params: `?topN=N` caps the list to the best nodes by region + load, `?bundle=url-test|balancer` picks the auto-failover flavor, `?routing=` overrides the routing preset per request.
