@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import { Prisma } from '../../generated/prisma/client.js';
 import { eventBus } from '../../lib/event-bus.js';
 import { prisma } from '../../prisma.js';
@@ -265,11 +266,32 @@ export async function updateProfile(
     }
     // After parse, so schema defaults are filled in first and only then the
     // fields belonging to other transports are dropped.
-    data.config = (
+    const nextConfig =
       existing.protocol === 'xray'
         ? stripInapplicableTransportFields(parsed as Record<string, unknown>)
-        : parsed
-    ) as never;
+        : parsed;
+    data.config = nextConfig as never;
+
+    // The third door into a bad deploy. `parsed` above proves the profile is
+    // valid ON ITS OWN; every binding deploys it merged with that binding's
+    // overrides, and the merge is what xray sees. Flipping a REALITY profile's
+    // transport to raw is fine standalone and still lands a node in a restart
+    // loop if a binding overrides `network` to ws. The engine/config guard
+    // right below already reasons this way - on the pair the profile ENDS UP
+    // with, not on what one request happened to carry; this is the same
+    // reasoning across the profile/binding seam.
+    const bindings = await prisma.profileNodeBinding.findMany({
+      where: { profileId: id },
+      include: { node: { select: { name: true } } },
+    });
+    for (const b of bindings) {
+      assertNoNewConfigViolations(
+        existing.protocol,
+        { profileConfig: existing.config, overrides: b.overrides },
+        { profileConfig: nextConfig, overrides: b.overrides },
+        `Profile "${existing.name}" on node "${b.node.name}"`,
+      );
+    }
   }
 
   // The engine and the config can move in separate requests, so the guard has
@@ -330,6 +352,15 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
   });
   if (dupBinding) throw new NodeAlreadyBoundError(input.profileId, input.nodeId);
 
+  // The overrides arrive here having met no schema at all. Judge the merge they
+  // produce - that is what the sync queue ships to the node.
+  assertNoNewConfigViolations(
+    profile.protocol,
+    { profileConfig: profile.config, overrides: null },
+    { profileConfig: profile.config, overrides: input.overrides ?? null },
+    `Binding profile "${profile.name}" to node "${node.name}"`,
+  );
+
   const created = await prisma.profileNodeBinding.create({
     data: {
       profileId: input.profileId,
@@ -376,8 +407,23 @@ export async function updateBinding(
   id: string,
   input: UpdateBindingInput,
 ): Promise<PublicBindingDto> {
-  const existing = await prisma.profileNodeBinding.findUnique({ where: { id } });
+  const existing = await prisma.profileNodeBinding.findUnique({
+    where: { id },
+    include: {
+      profile: { select: { name: true, protocol: true, config: true } },
+      node: { select: { name: true } },
+    },
+  });
   if (!existing) throw new BindingNotFoundError(id);
+
+  if (input.overrides !== undefined) {
+    assertNoNewConfigViolations(
+      existing.profile.protocol,
+      { profileConfig: existing.profile.config, overrides: existing.overrides },
+      { profileConfig: existing.profile.config, overrides: input.overrides },
+      `Binding "${existing.profile.name}" on node "${existing.node.name}"`,
+    );
+  }
 
   if (input.port !== undefined && input.port !== existing.port) {
     const portConflict = await prisma.profileNodeBinding.findUnique({
@@ -443,5 +489,78 @@ export function resolveBindingConfig(
   const base = (profileConfig ?? {}) as Record<string, unknown>;
   const ov = (overrides ?? {}) as Record<string, unknown>;
   return { ...base, ...ov };
+}
+
+/**
+ * Fingerprint of a schema violation: the field it lands on and the kind of
+ * failure, without the offending value. Two configs that break the same rule on
+ * the same field share a fingerprint even when the messages name different
+ * values ("a ws inbound" vs "a kcp inbound"). Maps fingerprint -> message, so
+ * the caller can report the ones that are new.
+ */
+function issueFingerprints(schema: z.ZodType, config: unknown): Map<string, string> {
+  const res = schema.safeParse(config);
+  const out = new Map<string, string>();
+  if (res.success) return out;
+  for (const i of res.error.issues) {
+    const path = i.path.map(String).join('.') || '(root)';
+    out.set(`${path} ${i.code}`, `${path}: ${i.message}`);
+  }
+  return out;
+}
+
+export class InvalidBindingConfigError extends Error {
+  constructor(public readonly issues: string[], subject: string) {
+    super(`${subject} would deploy a config its protocol refuses: ${issues.join('; ')}`);
+    this.name = 'InvalidBindingConfigError';
+  }
+}
+
+/**
+ * Gate the config a binding will actually DEPLOY - `profile.config` merged with
+ * `binding.overrides` - against the protocol's own schema.
+ *
+ * Every rule that schema carries (REALITY's three transports, the
+ * VLESS-Encryption halves, the post-quantum pairs) ran on `Profile.config`
+ * alone, at profile-save time. `overrides` never met a schema at all:
+ * `CreateBindingSchema` types it `z.record(z.string(), z.unknown())` and the
+ * service cast it straight into Prisma. So
+ *
+ *   POST /api/bindings {profileId: <a REALITY profile>, overrides: {"network":"ws"}}
+ *
+ * answered 201, and the merged config - which is what reaches the node - was
+ * one xray refuses to load, with the crash loop that costs every other inbound
+ * on that node. The doc comment on the field said "Validated by the protocol's
+ * config schema (partial)". Nothing anywhere did that. The hole was never
+ * specific to the REALITY rule: it let past any rule the schema has or gains.
+ *
+ * Hence the check is on the MERGE, not on the overrides alone. Overrides are
+ * partial by design (`acmeDomain`, `serverPsk`, a per-node key) and half a
+ * config cannot be judged: `security` can sit in the profile while `network`
+ * arrives from the binding, and only the two together say whether xray starts.
+ *
+ * What it promises, exactly: not "the deployed config is valid" but *this
+ * request introduces no violation that was not already there*. A profile stored
+ * before a rule existed is already broken, and stays bindable, renameable and
+ * fixable - what it cannot do is acquire a NEW broken field. A gate that simply
+ * demanded validity would trap precisely the operator digging out, since every
+ * profile saved before the REALITY transport check landed is invalid through no
+ * act of theirs. Fingerprints are (path, code), so trading one refused
+ * transport for another on an already-refused field reads as "still broken",
+ * not as "made worse".
+ */
+export function assertNoNewConfigViolations(
+  protocol: string,
+  before: { profileConfig: unknown; overrides: unknown },
+  after: { profileConfig: unknown; overrides: unknown },
+  subject: string,
+): void {
+  const schema = PROTOCOL_CONFIG_SCHEMAS[protocol as keyof typeof PROTOCOL_CONFIG_SCHEMAS];
+  if (!schema) return; // unknown protocol: nothing to judge it with
+  const post = issueFingerprints(schema, resolveBindingConfig(after.profileConfig, after.overrides));
+  if (post.size === 0) return;
+  const pre = issueFingerprints(schema, resolveBindingConfig(before.profileConfig, before.overrides));
+  const fresh = [...post].filter(([k]) => !pre.has(k)).map(([, msg]) => msg);
+  if (fresh.length > 0) throw new InvalidBindingConfigError(fresh, subject);
 }
 

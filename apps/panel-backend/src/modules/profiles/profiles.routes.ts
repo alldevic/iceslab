@@ -128,6 +128,11 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof svc.ProfileNameTakenError) {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
       }
+      if (err instanceof svc.InvalidBindingConfigError) {
+        return reply
+          .code(400)
+          .send({ error: 'INVALID_CONFIG', message: err.message, issues: err.issues });
+      }
       throw err;
     }
   });
@@ -161,6 +166,11 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
         err instanceof svc.NodeAlreadyBoundError
       ) {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+      }
+      if (err instanceof svc.InvalidBindingConfigError) {
+        return reply
+          .code(400)
+          .send({ error: 'INVALID_CONFIG', message: err.message, issues: err.issues });
       }
       throw err;
     }
@@ -204,6 +214,11 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       }
       if (err instanceof svc.PortInUseError) {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+      }
+      if (err instanceof svc.InvalidBindingConfigError) {
+        return reply
+          .code(400)
+          .send({ error: 'INVALID_CONFIG', message: err.message, issues: err.issues });
       }
       throw err;
     }

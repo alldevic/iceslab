@@ -40,6 +40,7 @@ import {
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
 import { withVlessRouteTag } from './formats/xrayjson.js';
+import { resolveBindingConfig } from '../profiles/profiles.service.js';
 
 // ───── Domain errors ─────
 
@@ -694,10 +695,10 @@ export async function generateSubscription(
 
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
-    // Resolve deployable config: profile.config + binding.overrides.
-    const baseConfig = (b.profile.config ?? {}) as Record<string, unknown>;
-    const ovr = (b.overrides ?? {}) as Record<string, unknown>;
-    const cfgMerged = { ...baseConfig, ...ovr };
+    // Resolve deployable config: profile.config + binding.overrides. Same
+    // canonical merge the sync queue ships and the write gate parses - see
+    // resolveBindingConfig.
+    const cfgMerged = resolveBindingConfig(b.profile.config, b.overrides);
 
     // Synthetic "ib" handle so the per-protocol branches below stay close
     // to the previous shape (less churn in the giant switch).

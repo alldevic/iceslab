@@ -14,6 +14,7 @@ import { getCascadeFragmentsForNode } from '../cascades/cascade.service.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/credentials.js';
 import { applyEgressForNode } from '../egress/egress.push.js';
 import { getLogger } from '../../lib/logger.js';
+import { resolveBindingConfig } from '../profiles/profiles.service.js';
 
 /**
  * The FQDN to publish in a node's hysteria `acme.domains`, or null to leave the
@@ -174,9 +175,14 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   const inbounds = bindings.map((b) => {
     // Shallow merge: per-binding overrides win over profile.config. Used for
     // ACME domain, AmneziaWG private key, Shadowsocks server PSK, etc.
-    const baseConfig = (b.profile.config ?? {}) as Record<string, unknown>;
-    const overrides = (b.overrides ?? {}) as Record<string, unknown>;
-    let config = { ...baseConfig, ...overrides } as InboundDto['config'];
+    //
+    // Through resolveBindingConfig rather than a third hand-rolled spread: its
+    // doc comment has always claimed this queue as a caller, and it was not one
+    // - the merge lived here and in subscription.service as separate copies.
+    // assertNoNewConfigViolations gates writes by parsing what THIS function
+    // returns, so a copy that drifts from it turns the gate into a check on a
+    // config nothing deploys.
+    let config = resolveBindingConfig(b.profile.config, b.overrides) as InboundDto['config'];
 
     // Slice 41: mtproto secret derived from (binding.id, domain). Both
     // the wire push (here) and subscription generator key on binding.id so
