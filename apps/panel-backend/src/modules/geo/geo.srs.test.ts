@@ -38,6 +38,12 @@ describe('sing-box source mapping', () => {
 });
 
 // Opt-in: SINGBOX_BIN=/path/to/sing-box compiles a real .srs. Skipped when unset.
+//
+// It had never run on the lab host until 2026-08-26. The binary now sits at
+// /var/tmp/iceslab-vmlab/sing-box (1.13.19); README.lab has the full command.
+// Verified able to fail first: writing `version: 99` into the rule-set source
+// turns this red, so a green run means sing-box compiled what we generated
+// rather than the check quietly doing nothing.
 describe('compileSrs (opt-in on SINGBOX_BIN)', () => {
   const bin = process.env.SINGBOX_BIN;
   it.runIf(bin)('compiles a category to non-empty .srs bytes', async () => {

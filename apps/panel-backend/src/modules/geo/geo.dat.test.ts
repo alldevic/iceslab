@@ -61,6 +61,12 @@ describe('geoip .dat codec', () => {
 
 // Opt-in check against real upstream data: GEO_REAL_GEOSITE=/tmp/geosite.dat ...
 // (download runetfreedom/SagerNet .dat first). Skipped when the env is unset.
+//
+// It had never run here until 2026-08-26. The file now sits at
+// /var/tmp/iceslab-vmlab/geosite.dat, taken from the SAME release the geo module
+// itself mirrors, and parses to 1543 categories / 3.15M domains — a real
+// exercise of the codec rather than the handful of fixture entries above.
+// Verified able to fail: breaking the parser's field tag turns this red.
 describe('real .dat (opt-in)', () => {
   const gs = process.env.GEO_REAL_GEOSITE;
   it.runIf(gs)('parses a real geosite.dat with 1000+ categories', () => {
