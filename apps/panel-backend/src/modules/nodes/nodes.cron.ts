@@ -384,7 +384,7 @@ async function checkOne(node: {
  */
 export function statusFromHealth(res: {
   status: string;
-  cores: { name: string; running: boolean; provisioned?: boolean }[];
+  cores: { name: string; running: boolean; provisioned?: boolean; lastError?: string }[];
 }): { status: 'online' | 'degraded'; message: string | null } {
   if (res.status === 'ok') {
     return { status: 'online', message: null };
@@ -403,9 +403,15 @@ export function statusFromHealth(res: {
     // A core with `provisioned: false` was never configured, so it is idle by
     // design, not down. Absent means an agent older than the field: read as
     // configured, which is how this behaved before.
-    const down = res.cores
-      .filter((c) => !c.running && c.provisioned !== false)
-      .map((c) => c.name);
+    // Name the core AND, when the agent tells us, why it is down. `not running:
+    // xray` is true and useless: the reason sat in the node's journal, on a
+    // machine the operator has to go find, and nothing tied the crash to the
+    // profile they had just saved. Watched live - a listen port already taken
+    // gave sixteen crashes and a message that stopped at the core's name.
+    const downCores = res.cores.filter((c) => !c.running && c.provisioned !== false);
+    const down = downCores.map((c) =>
+      c.lastError ? `${c.name} (${c.lastError})` : c.name,
+    );
     // The node is reachable and its cores are not. Until 2026-08-15 this stayed
     // `online` and said so only in the message, so an operator's node list
     // showed a green card while the cascade entry behind it served nobody: the

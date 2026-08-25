@@ -1420,6 +1420,18 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	return nil
 }
 
+// LastFailure implements core.FailureReporter: xray's own last words, which is
+// the piece the panel was missing when it could only say "not running: xray".
+func (a *Adapter) LastFailure() string {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if proc == nil {
+		return ""
+	}
+	return proc.LastLine()
+}
+
 // startupGrace is how long a freshly spawned core gets to prove it stayed up.
 // Short enough not to slow an ordinary apply, longer than the time an xray that
 // rejects its config takes to exit (it dies before it finishes parsing), and

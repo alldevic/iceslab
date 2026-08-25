@@ -7,6 +7,7 @@
 package subprocess
 
 import (
+	"strings"
 	"context"
 	"errors"
 	"fmt"
@@ -152,6 +153,10 @@ type Subprocess struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	exited  chan struct{} // closed by the watcher goroutine on Wait() return
+	// Last line the core printed on stdout or stderr, and its own lock: the log
+	// writers run on the reader goroutines, not under the main mutex.
+	lastLineMu sync.Mutex
+	lastLine   string
 	exitErr error         // set by watcher before closing `exited`; read under mu
 	// N9 - restart-on-crash bookkeeping (all under mu).
 	ctx          context.Context // Start ctx, reused so a respawn stays ctx-bound
@@ -195,8 +200,12 @@ func (s *Subprocess) Start(ctx context.Context) error {
 // kills it).
 func (s *Subprocess) spawnLocked(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, s.cfg.Binary, s.cfg.Args...)
-	cmd.Stdout = newLogWriter(s.cfg.Logger, slog.LevelInfo, s.cfg.Name)
-	cmd.Stderr = newLogWriter(s.cfg.Logger, slog.LevelError, s.cfg.Name)
+	// Both streams are tapped, not just stderr: xray prints the reason it could
+	// not start ("Failed to start: ... bind: address already in use") on STDOUT,
+	// so a tap on stderr alone would keep nothing for exactly the case worth
+	// keeping.
+	cmd.Stdout = newTappedLogWriter(s.cfg.Logger, slog.LevelInfo, s.cfg.Name, s.recordLastLine)
+	cmd.Stderr = newTappedLogWriter(s.cfg.Logger, slog.LevelError, s.cfg.Name, s.recordLastLine)
 	// Extra env (e.g. XRAY_LOCATION_ASSET) on top of the inherited environment.
 	if len(s.cfg.Env) > 0 {
 		cmd.Env = append(os.Environ(), s.cfg.Env...)
@@ -511,6 +520,35 @@ func (s *Subprocess) Stop(_ context.Context) error {
 // Running reports whether the process has been started and has not exited.
 // Safe to call concurrently with Stop / crash, the watcher goroutine is
 // the single source of truth for "exited."
+// maxLastLine caps what we keep of a core's last words. The panel truncates the
+// status message it builds from this to 200 characters, and a reason cut off
+// mid-sentence still reads like an explanation while being none.
+const maxLastLine = 160
+
+// recordLastLine keeps the most recent line the core printed on either stream.
+func (s *Subprocess) recordLastLine(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if len(line) > maxLastLine {
+		line = line[:maxLastLine]
+	}
+	s.lastLineMu.Lock()
+	s.lastLine = line
+	s.lastLineMu.Unlock()
+}
+
+// LastLine returns the last thing the core printed, or "" if it printed
+// nothing. When the process is down this is its reason for being down; when it
+// is up it is ordinary chatter, so callers should only surface it for a core
+// they already know is not running.
+func (s *Subprocess) LastLine() string {
+	s.lastLineMu.Lock()
+	defer s.lastLineMu.Unlock()
+	return s.lastLine
+}
+
 func (s *Subprocess) Running() bool {
 	s.mu.Lock()
 	exited := s.exited
@@ -533,10 +571,18 @@ func newLogWriter(logger *slog.Logger, level slog.Level, source string) io.Write
 	return &logWriter{logger: logger, level: level, source: source}
 }
 
+// newTappedLogWriter is newLogWriter plus a sink that sees every completed line.
+// Used to keep the core's last words: when a core dies, what it printed just
+// before is the reason, and it is otherwise only in the node's journal.
+func newTappedLogWriter(logger *slog.Logger, level slog.Level, source string, tap func(string)) io.Writer {
+	return &logWriter{logger: logger, level: level, source: source, tap: tap}
+}
+
 type logWriter struct {
 	logger *slog.Logger
 	level  slog.Level
 	source string
+	tap    func(string)
 	mu     sync.Mutex
 	buf    []byte
 }
@@ -553,6 +599,9 @@ func (w *logWriter) Write(p []byte) (int, error) {
 		line := string(w.buf[:idx])
 		w.buf = w.buf[idx+1:]
 		w.logger.Log(context.Background(), w.level, line, "source", w.source)
+		if w.tap != nil {
+			w.tap(line)
+		}
 	}
 	return len(p), nil
 }

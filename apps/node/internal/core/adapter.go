@@ -189,6 +189,24 @@ type KeyGenerator interface {
 // it simply report an empty version. The panel persists this per node so it can
 // gate features that need a minimum core version (e.g. cascade exit selection
 // via vlessRoute needs xray >= 25.9.5).
+// FailureReporter is implemented by adapters that can say WHY their core is
+// down, not merely that it is.
+//
+// Before this the panel showed `degraded`, `not running: xray` and a crash
+// counter - all true, none of them the reason. The reason was in the node's
+// journal, on a machine the operator has to go find, and nothing connected the
+// crash to the profile they had just saved. Watched live: a config with a
+// listen port already taken produced sixteen crashes and a status message that
+// named the core and stopped there.
+//
+// Only meaningful for a core the caller already knows is not running - a live
+// core's last line is ordinary chatter.
+type FailureReporter interface {
+	// LastFailure returns the last thing the core printed, or "" when it
+	// printed nothing (or the adapter supervises no process).
+	LastFailure() string
+}
+
 type Versioner interface {
 	// CoreVersion returns the core binary version string, or "" if unknown
 	// (config-only mode, binary missing, or the version query failed). It must

@@ -254,6 +254,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				provisioned := p.Provisioned()
 				cs.Provisioned = &provisioned
 			}
+			// Why it is down, when it is down. Deliberately not sent for a
+			// healthy core: its last line is ordinary output, and a status
+			// message quoting it would read as a fault that is not there.
+			if !cs.Running {
+				if f, ok := adapter.(core.FailureReporter); ok {
+					cs.LastError = f.LastFailure()
+				}
+			}
 			// Restart tally, same optional-interface pattern. Without it a
 			// memory-watchdog restart is invisible: the core bounces, users
 			// see drops, and this endpoint keeps saying "running: true".

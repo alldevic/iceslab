@@ -260,6 +260,11 @@ type CoreStatus struct {
 	// field, which is NOT the same as false. A panel reading absent must assume
 	// configured, the behaviour that predates it.
 	Provisioned *bool `json:"provisioned,omitempty"`
+	// LastError is the last line the core printed, sent only for a core that is
+	// NOT running - it is that core's reason for being down. Absent when the
+	// core is up, printed nothing, or the agent predates this field, which the
+	// panel treats alike: it simply has no reason to add.
+	LastError string `json:"lastError,omitempty"`
 }
 
 // EgressTuneDto (F3) is the DPI-bypass strategy this node found for itself and

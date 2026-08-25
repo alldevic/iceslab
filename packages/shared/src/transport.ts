@@ -645,6 +645,11 @@ export interface CoreStatus {
    *  distinction a healthy node reported `degraded` forever (every node of the
    *  field fleet did), so the status stopped changing when something broke. */
   provisioned?: boolean;
+  /** The last line this core printed, sent only when it is NOT running - that
+   *  line is its reason for being down. Absent when the core is up, when it
+   *  printed nothing, or when the agent predates the field; all three mean the
+   *  same thing to a reader, which is that there is no reason to show. */
+  lastError?: string;
 }
 
 export interface HealthcheckResponse {
