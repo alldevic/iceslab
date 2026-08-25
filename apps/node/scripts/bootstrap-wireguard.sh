@@ -63,9 +63,20 @@ chmod 700 /etc/wireguard
 SYSCTL_CONF=/etc/sysctl.d/99-wg.conf
 if [[ ! -f "$SYSCTL_CONF" ]]; then
   log "Enabling IP forwarding"
+  # The directory is not guaranteed: a minimal Debian root (a container image,
+  # a debootstrap install) has no /etc/sysctl.d until something creates it, and
+  # `set -e` turned the failed redirect into an abort BEFORE the summary - the
+  # script looked like it had simply produced no output. Caught on debian:13.
+  mkdir -p "$(dirname "$SYSCTL_CONF")"
   echo "net.ipv4.ip_forward=1" > "$SYSCTL_CONF"
   echo "net.ipv6.conf.all.forwarding=1" >> "$SYSCTL_CONF"
-  sysctl --system >/dev/null
+  # procps ships `sysctl`; if it is absent the file still applies at next boot,
+  # which is worth a warning rather than an abort.
+  if command -v sysctl >/dev/null; then
+    sysctl --system >/dev/null
+  else
+    warn "sysctl not found; ip_forward is written but applies only after reboot"
+  fi
 fi
 
 # ───── 6. Summary ─────
