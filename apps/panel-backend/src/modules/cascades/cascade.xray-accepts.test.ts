@@ -18,6 +18,22 @@ import { buildTopologyFragmentsForNode } from './cascade.config.js';
  * Skipped when no xray binary is around, so a laptop without one still runs the
  * suite. Point XRAY_BIN at a binary (or install one at the usual path) to have
  * it actually run; CI should do exactly that.
+ *
+ * It had never run on the lab host until 2026-08-26 — eight tests, silently
+ * skipped for as long as they have existed, which is the quietest way for a
+ * check to be worth nothing. The binary now sits at
+ * `/var/tmp/iceslab-vmlab/xray` (26.3.27, copied off the fleet's own node):
+ *
+ *     XRAY_BIN=/var/tmp/iceslab-vmlab/xray corepack pnpm test
+ *
+ * Confirmed the check can fail before trusting it: `xray -test` exits 23 with
+ * the parse error on a bad config and 0 with "Configuration OK." on a good one,
+ * and reintroducing the E10 defect (vlessRoute as an array) turns these red
+ * with xray's own words — "invalid port: [1,257] > json: cannot unmarshal array
+ * into Go value of type uint32", the port-list parser this file was written
+ * about. Two mutations were tried and a structural test caught both as well, so
+ * today these eight are the second opinion rather than the only one; what they
+ * uniquely cover is everything xray rejects that nobody thought to assert.
  */
 const XRAY_BIN =
   process.env.XRAY_BIN ??
