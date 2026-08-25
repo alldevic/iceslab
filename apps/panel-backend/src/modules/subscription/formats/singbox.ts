@@ -1,6 +1,7 @@
 import type { RoutingPresetId } from '@iceslab/shared';
 import {
   cannotCarryTransport,
+  emitsVisionFlow,
   cannotCarryVlessEncryption,
   type SubscriptionEndpoint,
 } from '../subscription.formats.js';
@@ -343,7 +344,7 @@ export function buildSingboxJson(
                 type: 'vless',
                 uuid: e.uuid,
                 // Vision flow needs a TLS-like layer (reality or tls), not none.
-                ...(useTls && e.flow ? { flow: e.flow } : {}),
+                ...(emitsVisionFlow(e) ? { flow: e.flow } : {}),
               };
 
       outbounds.push({

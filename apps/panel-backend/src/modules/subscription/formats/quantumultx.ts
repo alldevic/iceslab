@@ -1,5 +1,6 @@
 import {
   cannotCarryTransport,
+  emitsVisionFlow,
   cannotCarryVlessEncryption,
   type SubscriptionEndpoint,
 } from '../subscription.formats.js';
@@ -54,9 +55,7 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
         : [];
       if (sub === 'vless') {
         const p = [`vless=${e.host}:${e.port}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts];
-        // Vision rides RAW or XHTTP only; over WebSocket it is not a weaker
-        // config, it is an invalid one (see core-adapters/xray/uri.ts).
-        if (e.flow && tls && !ws) p.push(`vless-flow=${e.flow}`);
+        if (emitsVisionFlow(e)) p.push(`vless-flow=${e.flow}`);
         p.push('udp-relay=true', `tag=${tag}`);
         lines.push(p.join(', '));
       } else if (sub === 'vmess') {

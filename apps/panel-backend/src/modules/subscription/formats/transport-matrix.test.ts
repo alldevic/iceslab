@@ -49,7 +49,10 @@ type Network = (typeof NETWORKS)[number];
  */
 type Verdict = 'carried' | 'degraded' | 'dropped' | 'omitted';
 
-function endpoint(network: Network, over: 'reality' | 'tls' = 'reality'): SubscriptionEndpoint {
+function endpoint(
+  network: Network,
+  over: 'reality' | 'tls' | 'none' = 'reality',
+): SubscriptionEndpoint {
   return {
     protocol: 'xray',
     nodeName: 'eu-1',
@@ -65,6 +68,7 @@ function endpoint(network: Network, over: 'reality' | 'tls' = 'reality'): Subscr
     path: '/dl',
     serviceName: 'gsvc',
     ...(over === 'tls' ? { securityLayer: 'tls' as const, subprotocol: 'trojan' as const } : {}),
+    ...(over === 'none' ? { securityLayer: 'none' as const } : {}),
     uri: `vless://u@n1.example.com:443?type=${network}`,
   } as SubscriptionEndpoint;
 }
@@ -195,6 +199,57 @@ kcp         carried     carried     omitted     omitted     omitted     omitted
     );
     expect(emitted).toEqual(['raw', 'ws']);
     expect(buildSurgeConf([endpoint('ws', 'tls')])).toContain('ws=true');
+  });
+
+  it('Vision rides RAW and XHTTP only, in every format that emits it', () => {
+    // `xtls-rprx-vision` splices the TLS record layer, so it only works when the
+    // stream IS the TLS stream: RAW and XHTTP. Over ws/grpc/httpupgrade/kcp it
+    // is not a weaker config, it is one the core refuses.
+    //
+    // Reachable by DEFAULT, not in a corner: `flow` defaults to
+    // `xtls-rprx-vision` and the inbound schema says outright that the panel
+    // "doesn't enforce this at write time, the operator must align flow +
+    // network themselves". `core-adapters/xray/uri.ts` has always got it right,
+    // which is why the plain URI list is fine and only the rich formats were not.
+    const emitters = (n: Network): string[] => {
+      const one = [endpoint(n)];
+      const seen: string[] = [];
+      const has = (name: string, out: string) => {
+        if (out.includes('xtls-rprx-vision')) seen.push(name);
+      };
+      has('xrayjson', buildXrayJson(one));
+      has('clash', buildClashYaml(one));
+      has('singbox', buildSingboxJson(one));
+      has('loon', buildLoonConf(one));
+      has('quantumultx', buildQuantumultXConf(one));
+      return seen;
+    };
+
+    // Where Vision belongs, every format that emits the endpoint carries it.
+    expect(emitters('raw')).toEqual(['xrayjson', 'clash', 'singbox', 'loon', 'quantumultx']);
+    // xhttp: only the two that still emit an xhttp endpoint at all.
+    expect(emitters('xhttp')).toEqual(['xrayjson', 'clash']);
+    // ...and nowhere else, in any format, ever.
+    expect(emitters('ws')).toEqual([]);
+    expect(emitters('grpc')).toEqual([]);
+    expect(emitters('httpupgrade')).toEqual([]);
+    expect(emitters('kcp')).toEqual([]);
+
+    // The other half of the rule, and it needs its own case: Vision also wants a
+    // TLS-like layer, so RAW with `securityLayer: none` must carry no flow
+    // either. That half was spelled out in four separate formats and asserted in
+    // none of them - deleting it from all four passed the whole module's suite.
+    // Centralising the rule made that a ONE-line edit, so it gets a test.
+    const bare = [endpoint('raw', 'none')];
+    for (const out of [
+      buildXrayJson(bare),
+      buildClashYaml(bare),
+      buildSingboxJson(bare),
+      buildLoonConf(bare),
+      buildQuantumultXConf(bare),
+    ]) {
+      expect(out).not.toContain('xtls-rprx-vision');
+    }
   });
 
   it('a fleet the format cannot carry degrades to an empty config, not a broken one', () => {

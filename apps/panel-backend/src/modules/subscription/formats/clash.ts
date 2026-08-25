@@ -1,5 +1,5 @@
 import type { RoutingPresetId } from '@iceslab/shared';
-import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
  * Clash YAML subscription formatter (targets Clash Meta / Mihomo, covers
@@ -316,7 +316,7 @@ export function buildClashYaml(
         block.push(`    servername: ${yamlString(e.sni)}`);
       }
       // Vision flow needs a TLS-like layer (reality or tls), not plain none.
-      if (sub === 'vless' && useTls && e.flow) {
+      if (sub === 'vless' && emitsVisionFlow(e)) {
         block.push(`    flow: ${yamlString(e.flow)}`);
       }
       // U5: Clash Meta carries the client half of VLESS-Encryption on the

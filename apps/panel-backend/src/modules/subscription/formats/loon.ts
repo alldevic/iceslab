@@ -1,5 +1,6 @@
 import {
   cannotCarryTransport,
+  emitsVisionFlow,
   cannotCarryVlessEncryption,
   type SubscriptionEndpoint,
 } from '../subscription.formats.js';
@@ -49,7 +50,7 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
       if (sub === 'vless') {
         const p = [`${name} = VLESS,${e.host},${e.port},"${e.uuid}"`, `transport:${net}`];
         if (tls) p.push('over-tls:true', `tls-name:${e.sni}`);
-        if (e.flow) p.push(`flow:${e.flow}`);
+        if (emitsVisionFlow(e)) p.push(`flow:${e.flow}`);
         if (reality) p.push(`public-key:${e.publicKey}`, `short-id:${e.shortId}`);
         lines.push(p.join(','));
       } else if (sub === 'vmess') {

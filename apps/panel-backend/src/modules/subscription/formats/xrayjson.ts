@@ -1,5 +1,5 @@
 import type { RoutingPresetId } from '@iceslab/shared';
-import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
  * Xray-core client JSON subscription formatter.
@@ -219,7 +219,7 @@ function buildProxyOutbound(
             {
               id: e.uuid,
               encryption: e.vlessEncryption || 'none',
-              ...(useTls && e.flow ? { flow: e.flow } : {}),
+              ...(emitsVisionFlow(e) ? { flow: e.flow } : {}),
             },
           ],
         },

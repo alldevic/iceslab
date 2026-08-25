@@ -77,6 +77,33 @@ export function cannotCarryVlessEncryption(e: SubscriptionEndpoint): boolean {
 }
 
 /**
+ * Should this endpoint's Vision flow be emitted?
+ *
+ * `xtls-rprx-vision` splices the TLS record layer, so it only works when the
+ * stream IS the TLS stream: RAW and XHTTP. Over ws/grpc/httpupgrade/kcp it is
+ * not a weaker configuration but an invalid one, and the core refuses it - so a
+ * subscription carrying that pair is a config the client will not load.
+ *
+ * This is reachable by DEFAULT rather than in a corner. `flow` defaults to
+ * `xtls-rprx-vision`, and the inbound schema says outright that the panel
+ * "doesn't enforce this at write time, the operator must align flow + network
+ * themselves" (inbounds.schemas.ts). An operator who moves an inbound to `ws`
+ * and does not think about `flow` produces exactly this.
+ *
+ * `core-adapters/xray/uri.ts` has always applied the rule, which is why the
+ * plain URI list every client gets by default was never affected and only the
+ * rich formats were. Here so that the rule lives in ONE place: it was written
+ * out five times, four of them checking only for TLS and forgetting the
+ * transport, and the fifth (Loon) not even checking for TLS.
+ */
+export function emitsVisionFlow(e: SubscriptionEndpoint): boolean {
+  if (e.protocol !== 'xray' || !e.flow) return false;
+  if ((e.securityLayer ?? 'default') === 'none') return false;
+  const network = e.network ?? 'raw';
+  return network === 'raw' || network === 'xhttp';
+}
+
+/**
  * Can this format carry the endpoint's stream transport at all?
  *
  * The same trade as `cannotCarryVlessEncryption`, one layer down. A client that
