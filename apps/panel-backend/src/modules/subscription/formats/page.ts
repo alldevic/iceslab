@@ -54,6 +54,12 @@ export interface SubscriptionPageData {
     nodeName: string;
     confQrSvg?: string;
   }>;
+  /** One entry per MTProto node. No QR and no file: the `t.me/proxy` link is
+   *  the entire setup, and Telegram holds one proxy at a time. */
+  mtprotoNodes?: Array<{
+    nodeName: string;
+    tmeUri: string;
+  }>;
 }
 
 function esc(s: string): string {
@@ -117,6 +123,7 @@ interface Labels {
   setup: string;
   pickPlatform: string;
   recommended: string;
+  getApp: string;
   open: string;
   download: string;
   scanAction: string;
@@ -150,6 +157,7 @@ const L: Record<'ru' | 'en', Labels> = {
     setup: 'Set up',
     pickPlatform: 'Pick your device, then open or import in an app below.',
     recommended: 'recommended',
+    getApp: 'Get it',
     open: 'Open',
     download: 'Config',
     scanAction: 'Scan QR',
@@ -186,6 +194,7 @@ const L: Record<'ru' | 'en', Labels> = {
     setup: 'Установка',
     pickPlatform: 'Выберите устройство и откройте или импортируйте в приложении ниже.',
     recommended: 'рекомендуем',
+    getApp: 'Скачать',
     open: 'Открыть',
     download: 'Конфиг',
     scanAction: 'Скан QR',
@@ -219,15 +228,18 @@ function renderApps(
   subUrl: string,
   hasAwg: boolean,
   t: Labels,
+  mtprotoNodes: Array<{ nodeName: string; tmeUri: string }> = [],
 ): string {
   // appsForPlatform already drops an app whose import channel this buyer's
   // protocols do not feed. `hasAwg` (really: are there tunnel files at all) is
   // the second, narrower gate — the protocol can be present while no node
   // produced a file for it, and a card pointing at an empty download is the
   // thing this page exists to avoid.
-  const apps = appsForPlatform(platform, userProtocols).filter(
-    (a) => a.action.kind === 'deeplink' || a.action.kind === 'manual' || hasAwg,
-  );
+  const apps = appsForPlatform(platform, userProtocols).filter((a) => {
+    // An endpoint-link app needs the endpoint's own link to exist.
+    if (a.action.kind === 'endpoint-link') return mtprotoNodes.length > 0;
+    return a.action.kind === 'deeplink' || a.action.kind === 'manual' || hasAwg;
+  });
   if (apps.length === 0) {
     return `<div class="empty">${esc(t.noApps)}</div>`;
   }
@@ -247,6 +259,18 @@ function renderApps(
         case 'download':
           action = `<a class="act" href="#downloads">${esc(t.download)}</a>`;
           break;
+        // Nothing to install and nothing to import: the link IS the setup, and
+        // there is one per node because Telegram holds one proxy at a time.
+        case 'endpoint-link':
+          action = mtprotoNodes
+            .map(
+              (n) =>
+                `<a class="act primary" href="${esc(n.tmeUri)}">${esc(
+                  mtprotoNodes.length > 1 ? n.nodeName : t.open,
+                )}</a>`,
+            )
+            .join('');
+          break;
         case 'manual':
         default:
           action = `<a class="act" href="#sublink">${esc(t.linkAction)}</a>`;
@@ -255,7 +279,12 @@ function renderApps(
       const rec = a.recommended
         ? `<span class="rec">${esc(t.recommended)}</span>`
         : '';
-      return `<div class="app"><span class="ava">${initial}</span><span class="aname">${esc(a.name)}${rec}</span>${action}</div>`;
+      // "Get it" sits before the import action, for the buyer who does not have
+      // the app yet. Only for the apps whose download link has been checked.
+      const install = a.install?.[platform]
+        ? `<a class="act" href="${esc(a.install[platform] as string)}" rel="noopener noreferrer" target="_blank">${esc(t.getApp)}</a>`
+        : '';
+      return `<div class="app"><span class="ava">${initial}</span><span class="aname">${esc(a.name)}${rec}</span>${install}${action}</div>`;
     })
     .join('');
 }
@@ -297,8 +326,12 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   ];
 
   // Platform tabs: hide a tab entirely if it has no app for this subscription.
+  const mtprotoNodes = data.mtprotoNodes ?? [];
   const platforms = PLATFORM_ORDER.filter(
-    (p) => renderApps(p, data.protocols, data.subUrl, hasWgFiles, t).indexOf('class="app"') !== -1,
+    (p) =>
+      renderApps(p, data.protocols, data.subUrl, hasWgFiles, t, mtprotoNodes).indexOf(
+        'class="app"',
+      ) !== -1,
   );
   const tabsHtml = platforms
     .map(
@@ -309,7 +342,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const panelsHtml = platforms
     .map(
       (p, i) =>
-        `<div class="panel${i === 0 ? ' on' : ''}" data-p="${p}" role="tabpanel">${renderApps(p, data.protocols, data.subUrl, hasWgFiles, t)}</div>`,
+        `<div class="panel${i === 0 ? ' on' : ''}" data-p="${p}" role="tabpanel">${renderApps(p, data.protocols, data.subUrl, hasWgFiles, t, mtprotoNodes)}</div>`,
     )
     .join('');
 

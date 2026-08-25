@@ -89,6 +89,8 @@ export interface SubpageConfigInput {
   awgNodes: ReadonlyArray<{ nodeName: string; vpnKey?: string }>;
   /** One entry per plain-WireGuard node. */
   wgNodes: ReadonlyArray<{ nodeName: string }>;
+  /** One entry per MTProto node, with the `t.me/proxy` link Telegram imports. */
+  mtprotoNodes: ReadonlyArray<{ nodeName: string; tmeUri: string }>;
   branding: { title: string; logoUrl: string; supportUrl: string };
 }
 
@@ -165,8 +167,37 @@ function fileUrl(subUrl: string, format: string, proto: string, nodeName: string
  * AmneziaWG client with no AmneziaWG node behind it, say. The caller drops such
  * an app, because an app card with no blocks fails validation.
  */
+/**
+ * The "get the app" block, when there is a checked link for this platform.
+ *
+ * Absent for most of the catalogue on purpose (see InstallLinks): an install
+ * page that names the app and links nowhere is thinner than the shop's own
+ * guide, but a page that links to the wrong or a dead download is worse.
+ */
+function installBlock(app: AppDef, platform: PlatformId): SubpageBlock | null {
+  const url = app.install?.[platform];
+  if (!url) return null;
+  return {
+    svgIconKey: 'DownloadIcon',
+    svgIconColor: 'violet',
+    title: t('Install the app', 'Установите приложение'),
+    description: t(
+      `Open the page and install ${app.name}, then come back here.`,
+      `Откройте страницу, установите ${app.name} и вернитесь сюда.`,
+    ),
+    buttons: [
+      {
+        type: 'external',
+        link: url,
+        text: t('Get the app', 'Скачать приложение'),
+        svgIconKey: 'ExternalLink',
+      },
+    ],
+  };
+}
+
 function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
-  const { subUrl, awgNodes, wgNodes } = input;
+  const { subUrl, awgNodes, wgNodes, mtprotoNodes } = input;
 
   switch (app.action.kind) {
     case 'deeplink':
@@ -241,6 +272,34 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
       ];
     }
 
+    // MTProto: nothing to install and nothing to import. Telegram turns the
+    // link into a "connect to this proxy" prompt, so the whole guide is the
+    // link itself — one per node, because Telegram holds one proxy at a time.
+    case 'endpoint-link': {
+      if (mtprotoNodes.length === 0) return [];
+      const many = mtprotoNodes.length > 1;
+      return [
+        {
+          svgIconKey: 'ShieldPlus',
+          svgIconColor: 'sky',
+          title: t('Connect the proxy', 'Подключите прокси'),
+          description: t(
+            'Tap the button — Telegram will offer to connect to the proxy. Nothing to install.',
+            'Нажмите кнопку — Telegram предложит подключиться к прокси. Устанавливать ничего не нужно.',
+          ),
+          buttons: mtprotoNodes.map((n) => ({
+            type: 'external' as const,
+            link: n.tmeUri,
+            text: t(
+              `Connect${nodeSuffix(n.nodeName, many)}`,
+              `Подключить${nodeSuffix(n.nodeName, many)}`,
+            ),
+            svgIconKey: 'Plus',
+          })),
+        },
+      ];
+    }
+
     // Both flavours hand out a wg-quick .conf; `proto=` pins which one, so a
     // node serving both tunnels still yields two distinct files.
     case 'awg-conf':
@@ -296,6 +355,9 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
     for (const app of appsForPlatform(ours, input.protocols)) {
       const blocks = blocksFor(app, input);
       if (blocks.length === 0) continue;
+      // Install first, import second — that is the order a person does it in.
+      const install = installBlock(app, ours);
+      if (install) blocks.unshift(install);
       const icon = APP_ICON_KEY[app.name];
       apps.push({
         name: app.name,

@@ -58,7 +58,28 @@ export type AppAction =
   | { kind: 'awg-conf' } // scan the AmneziaWG .conf QR below
   | { kind: 'wg-conf' } // scan the plain WireGuard .conf QR below
   | { kind: 'download' } // grab the per-node .conf below
+  | { kind: 'endpoint-link' } // open this node's own link (mtproto: t.me/proxy)
   | { kind: 'manual' }; // paste the subscription link
+
+/**
+ * Where to GET the app, per platform. Optional and deliberately sparse.
+ *
+ * Every URL here was opened and checked before being written down, because a
+ * store link is the one thing on an install page that can send a buyer to the
+ * wrong software. Two rules follow from that and explain the gaps:
+ *
+ *  - **No version-pinned links.** The shop's own default guide ships direct
+ *    GitHub release URLs (Clash Verge v2.x .deb, `v2rayNG_2.0.9.apk`). Copied
+ *    here they would be a stale download the day upstream tags a release.
+ *  - **No inherited links.** The shop's `sing-box` entry points at App Store id
+ *    6673731168, which answers 404 — the app is gone, and the official sing-box
+ *    Apple client is currently off the App Store entirely (SagerNet's clients
+ *    are in review limbo). So sing-box gets no link rather than a dead one.
+ *
+ * An app with nothing here is named but not linked, which is the honest state:
+ * the buyer knows what to install and finds it themselves.
+ */
+export type InstallLinks = Partial<Record<PlatformId, string>>;
 
 export interface AppDef {
   name: string;
@@ -66,6 +87,8 @@ export interface AppDef {
   protocols: ProtocolName[];
   action: AppAction;
   recommended?: boolean;
+  /** Verified download destinations, per platform. See InstallLinks. */
+  install?: InstallLinks;
 }
 
 export const APPS: AppDef[] = [
@@ -89,12 +112,19 @@ export const APPS: AppDef[] = [
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'streisand' },
     recommended: true,
+    // Checked 2026-08-26: "Streisand" by ARCADIA ODYSSEY INC.
+    install: { ios: 'https://apps.apple.com/app/id6450534064' },
   },
   {
     name: 'Shadowrocket',
     platforms: ['ios', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'shadowrocket' },
+    // Checked 2026-08-26: "Shadowrocket" by Shadow Launch Technology Limited.
+    install: {
+      ios: 'https://apps.apple.com/app/id932747118',
+      appletv: 'https://apps.apple.com/app/id932747118',
+    },
   },
   {
     name: 'v2rayNG',
@@ -150,6 +180,17 @@ export const APPS: AppDef[] = [
     protocols: ['amneziawg'],
     action: { kind: 'awg-vpn' },
     recommended: true,
+    // From amnezia.org/en/downloads, the project's own page (checked
+    // 2026-08-26); the store listing is "AmneziaVPN" by Privacy Technologies.
+    // Desktop builds are direct files off that page, so the page itself is the
+    // stable destination rather than a versioned artefact.
+    install: {
+      ios: 'https://apps.apple.com/app/id1600529900',
+      android: 'https://play.google.com/store/apps/details?id=org.amnezia.vpn',
+      windows: 'https://amnezia.org/en/downloads',
+      macos: 'https://amnezia.org/en/downloads',
+      linux: 'https://amnezia.org/en/downloads',
+    },
   },
   {
     name: 'AmneziaWG',
@@ -185,6 +226,12 @@ export const APPS: AppDef[] = [
     protocols: ['wireguard'],
     action: { kind: 'wg-conf' },
     recommended: true,
+    // wireguard.com/install is the project's own list (checked 2026-08-26); the
+    // iOS listing is "WireGuard" by WireGuard Development Team / WireGuard LLC.
+    install: {
+      ios: 'https://apps.apple.com/app/id1441195209',
+      android: 'https://play.google.com/store/apps/details?id=com.wireguard.android',
+    },
   },
   {
     name: 'WireGuard',
@@ -192,6 +239,13 @@ export const APPS: AppDef[] = [
     protocols: ['wireguard'],
     action: { kind: 'download' },
     recommended: true,
+    // Same source. Linux is per-distro package commands there, so the page is
+    // the destination; macOS is its own App Store listing.
+    install: {
+      windows: 'https://www.wireguard.com/install/',
+      macos: 'https://apps.apple.com/app/id1451685025',
+      linux: 'https://www.wireguard.com/install/',
+    },
   },
   {
     name: 'WireSock',
@@ -210,6 +264,17 @@ export const APPS: AppDef[] = [
     platforms: ['router'],
     protocols: ['wireguard'],
     action: { kind: 'download' },
+  },
+  // MTProto. The client is Telegram itself — there is no third-party app to
+  // install and nothing to import: the `t.me/proxy` link IS the whole setup,
+  // and Telegram turns it into a "connect to this proxy" prompt. One link per
+  // node, because Telegram holds one proxy at a time.
+  {
+    name: 'Telegram',
+    platforms: ['ios', 'android', 'windows', 'macos', 'linux'],
+    protocols: ['mtproto'],
+    action: { kind: 'endpoint-link' },
+    recommended: true,
   },
 ];
 
@@ -278,7 +343,7 @@ export const PROTOCOL_DELIVERY: Record<ProtocolName, Delivery> = {
   // (and AmneziaVPN additionally takes the ?format=amneziavpn key).
   amneziawg: 'per-node-file',
   wireguard: 'per-node-file',
-  // Telegram is the client, and it imports one tg://proxy | t.me/proxy link.
+  // Telegram is the client, and it imports one t.me/proxy link per node.
   mtproto: 'per-endpoint-link',
   // Reachable in the subscription builder but not in the product: a squad holds
   // PROFILES, and `POST /api/profiles` rejects shadowtls (the discriminator
@@ -302,6 +367,9 @@ function deliveryNeededBy(action: AppAction): Delivery {
     case 'wg-conf':
     case 'download':
       return 'per-node-file';
+    // One link per node, handed over as-is.
+    case 'endpoint-link':
+      return 'per-endpoint-link';
   }
 }
 

@@ -21,6 +21,7 @@ function input(over: Partial<SubpageConfigInput> = {}): SubpageConfigInput {
     protocols: ['xray'],
     awgNodes: [],
     wgNodes: [],
+    mtprotoNodes: [],
     branding: BRANDING,
     ...over,
   };
@@ -175,10 +176,68 @@ describe('buildSubpageConfig', () => {
     expect(missing).toEqual([]);
   });
 
+  it('gives an mtproto buyer the one thing Telegram takes: the t.me link', () => {
+    const doc = buildSubpageConfig(
+      input({
+        protocols: ['mtproto'],
+        mtprotoNodes: [{ nodeName: 'nl-1', tmeUri: 'https://t.me/proxy?server=a&port=1&secret=ee' }],
+      }),
+    )!;
+    const names = new Set(Object.values(appNames(doc)).flat());
+    expect(names).toEqual(new Set(['Telegram']));
+
+    const buttons = allButtons(doc);
+    expect(buttons).toHaveLength(5); // ios, android, windows, macos, linux
+    for (const b of buttons) {
+      // `external`, not `copyButton`: the shop OPENS anything that is not a
+      // copyButton, and an opened t.me link is what Telegram turns into a
+      // "connect to this proxy" prompt.
+      expect(b.type).toBe('external');
+      expect(b.link).toBe('https://t.me/proxy?server=a&port=1&secret=ee');
+    }
+    // Nothing points at our subscription: no proxy client reads mtproto out of
+    // it, and Telegram would make nothing of the URL.
+    expect(buttons.some((b) => b.link.includes('/sub/'))).toBe(false);
+  });
+
+  it('offers an install link only where one has been checked, and install before import', () => {
+    const doc = buildSubpageConfig(
+      input({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'nl-1', vpnKey: 'vpn://K' }] }),
+    )!;
+    const amnezia = doc.platforms.ios.apps.find((a) => a.name === 'AmneziaVPN')!;
+    // Install first: that is the order a person does it in.
+    expect(amnezia.blocks[0].buttons[0].link).toBe('https://apps.apple.com/app/id1600529900');
+    expect(amnezia.blocks[1].buttons[0].link).toBe('vpn://K');
+
+    // AmneziaWG has no checked link, so it is named and not linked — never
+    // linked to a guess.
+    const awgApp = doc.platforms.ios.apps.find((a) => a.name === 'AmneziaWG')!;
+    expect(awgApp.blocks).toHaveLength(1);
+    expect(awgApp.blocks[0].buttons.every((b) => b.link.includes('format=wgconf'))).toBe(true);
+  });
+
+  it('links no app anywhere to a store page that is gone', () => {
+    // The shop's own guide points sing-box at App Store id 6673731168, which
+    // answers 404 (checked 2026-08-26), and the official Apple client is off
+    // the store entirely. Inheriting that link would send buyers nowhere — and
+    // the guard has to hold for EVERY app, not just the one that tempted us:
+    // the whole risk of a curated link table is a wrong entry in any row.
+    const doc = buildSubpageConfig(
+      input({
+        protocols: ['xray', 'shadowsocks', 'hysteria', 'amneziawg', 'wireguard'],
+        awgNodes: [{ nodeName: 'nl-1', vpnKey: 'vpn://K' }],
+        wgNodes: [{ nodeName: 'de-2' }],
+      }),
+    )!;
+    expect(allButtons(doc).filter((b) => b.link.includes('6673731168'))).toEqual([]);
+    // sing-box specifically: named, and given no install block at all.
+    const singbox = doc.platforms.ios.apps.find((a) => a.name === 'sing-box')!;
+    expect(singbox.blocks).toHaveLength(1);
+  });
+
   it('returns null when there is nothing to say, so the shop keeps its own guide', () => {
     expect(buildSubpageConfig(input({ protocols: [] }))).toBeNull();
-    // mtproto has a link but no client in the catalogue: Telegram is the client
-    // and the catalogue does not list it yet.
-    expect(buildSubpageConfig(input({ protocols: ['mtproto'] }))).toBeNull();
+    // The protocol is there but no endpoint produced a link — nothing to offer.
+    expect(buildSubpageConfig(input({ protocols: ['mtproto'], mtprotoNodes: [] }))).toBeNull();
   });
 });
