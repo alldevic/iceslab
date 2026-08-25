@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -6,6 +6,7 @@ import { closeRedis } from '../../lib/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { invalidateSrrCache } from '../srr/srr.service.js';
+import { registerBindingsCacheBust } from './subscription.bindings-cache.js';
 
 let app: FastifyInstance;
 let token: string;
@@ -123,6 +124,13 @@ async function createXrayInbound(nodeId: string, port = 8443): Promise<string> {
   return createBinding(profileId, nodeId, port);
 }
 
+// The binding cache is busted by domain events, and the subscription only sees
+// an admin's edit because something subscribed to them. `buildApp()` does not —
+// `index.ts` does, once, at boot. Without this the whole file runs against a
+// cache nothing invalidates, and a test that edits a host and re-reads /sub is
+// silently reading the pre-edit world.
+beforeAll(() => registerBindingsCacheBust());
+
 beforeEach(async () => {
   app = await buildApp();
   await cleanDatabase();
@@ -202,6 +210,71 @@ describe('GET /sub/:token (JSON format)', () => {
     expect(body.endpoints[0].protocol).toBe('hysteria');
     expect(body.endpoints[0].nodeName).toBe('eu-1');
     expect(body.endpoints[0].uri).toMatch(/^hysteria2:\/\//);
+  });
+
+  it('drops a tunnel download the wgconf format would refuse to serve', async () => {
+    // The cards on the install page all lead to `?format=wgconf`, but the page
+    // is rendered for a request whose resolved format is `plain` (that is what
+    // a browser gets). Filtering the node list by the resolved format instead
+    // of by `wgconf` left the button on the page and the download empty —
+    // measured on the lab: 341 bytes before the host was switched off for
+    // wgconf, 0 after, the button unmoved.
+    const nodeId = await createNode('awg-gated', '10.0.0.21');
+    const profileId = await createProfile(
+      'amneziawg',
+      {
+        subnet: '10.88.0.0/24',
+        serverPrivateKey: 'aP8lgNU9c2vTGSvljeH1JO1qfCWQ6LwdVT92/RBO/FA=',
+        serverPublicKey: 'BQ6TIcR/TaTqtY4slJvnVj0I95pkC3z7t4HA54i8qVA=',
+        obfuscation: {},
+      },
+      'awggated',
+    );
+    const bindingId = await createBinding(profileId, nodeId, 51821);
+    const user = await createUser('awggated');
+
+    const page = async () =>
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/sub/${user.subscriptionToken}`,
+          headers: { accept: 'text/html' },
+        })
+      ).body;
+
+    // Control: with the host untouched the card is there AND the link works.
+    const before = await page();
+    expect(before).toContain('format=wgconf');
+    const href = /format=wgconf[^"']*/.exec(before)?.[0] ?? '';
+    const dl = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?${href}`,
+    });
+    expect(dl.body).toContain('[Interface]');
+
+    // Switch the host off for wgconf only — nothing else changes.
+    const hostsRes = await app.inject({
+      method: 'GET',
+      url: `/api/hosts?bindingId=${bindingId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const hostId = JSON.parse(hostsRes.body).hosts[0].id as string;
+    const upd = await app.inject({
+      method: 'PUT',
+      url: `/api/hosts/${hostId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { disableForFormats: ['wgconf'] },
+    });
+    expect(upd.statusCode).toBe(200);
+
+    // The download the page would offer now serves nothing …
+    const empty = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?${href}`,
+    });
+    expect(empty.body).toBe('');
+    // … so the page must not offer it.
+    expect(await page()).not.toContain('format=wgconf');
   });
 
   it('names the per-node config files for an endpoint that has no share-link', async () => {

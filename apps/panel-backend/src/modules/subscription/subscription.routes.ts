@@ -527,7 +527,18 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         //
         // The node walk itself lives in collectWgNodes so the shop's install
         // screen offers the same servers, in the same order, as this page.
-        const awgNodes = collectWgNodes(filtered, 'amneziawg').map((n) => ({
+        //
+        // Filtered by `wgconf`, NOT by `format`. `format` here is whatever the
+        // request resolved to, and for a browser that is `plain` — a different
+        // question from the one these cards answer. Every one of them leads to
+        // `?format=wgconf`, so a host the admin switched off for wgconf must
+        // drop out; filtering by `plain` instead left the download button on the
+        // page and the download itself empty (measured 2026-08-26: 341 bytes
+        // before the switch, 0 after, button unmoved).
+        const wgVisible = result.endpoints.filter(
+          (e) => !(e.disableForFormats ?? []).includes('wgconf'),
+        );
+        const awgNodes = collectWgNodes(wgVisible, 'amneziawg').map((n) => ({
           nodeName: n.nodeName,
           confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
           vpnQrSvg: n.vpnKey ? qrSvg(n.vpnKey, 'L') : undefined,
@@ -535,7 +546,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // enough to be unreliable on screen, so paste-the-key is the robust path.
           vpnKey: n.vpnKey ?? undefined,
         }));
-        const wgNodes = collectWgNodes(filtered, 'wireguard').map((n) => ({
+        const wgNodes = collectWgNodes(wgVisible, 'wireguard').map((n) => ({
           nodeName: n.nodeName,
           confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
         }));
