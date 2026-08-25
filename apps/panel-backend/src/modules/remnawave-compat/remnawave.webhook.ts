@@ -45,7 +45,8 @@ export function isRemnaWebhookConfigured(): boolean {
  */
 export type RemnaWebhookEvent =
   | `user.expires_in_${'72' | '48' | '24'}_hours`
-  | 'user.expired';
+  | 'user.expired'
+  | 'user_hwid_devices.added';
 
 /** The same names as a value, for the test that compares them to the shop's. */
 export const REMNAWAVE_EMITTED_EVENTS: readonly RemnaWebhookEvent[] = [
@@ -53,6 +54,32 @@ export const REMNAWAVE_EMITTED_EVENTS: readonly RemnaWebhookEvent[] = [
   'user.expires_in_48_hours',
   'user.expires_in_24_hours',
   'user.expired',
+  'user_hwid_devices.added',
+];
+
+/**
+ * Events we send that the PINNED shop release does not act on.
+ *
+ * `user_hwid_devices.added` is real upstream - Remnawave 3.2.3 emits it, and a
+ * dev minishop handles it on its own branch above the ACTIONABLE_EVENTS gate,
+ * notifying the user that a new device appeared and offering a device top-up
+ * when the limit is reached. The pinned v3.6.1 has no such branch and no
+ * `hwid_device_webhook.py` at all, so against that release the delivery is a
+ * 200 and a debug line.
+ *
+ * That is the exact shape the contract gate exists to prevent, so it is listed
+ * rather than waved through, and the cost is stated: a shop on the pinned
+ * release does not show a "new device connected" notice. No money rides on it -
+ * unlike `user.expires_in_24_hours`, which is the auto-renew charge and is why
+ * the gate is strict in the first place.
+ *
+ * The list expires by itself: `remnawave.contract.test.ts` asserts every entry
+ * is genuinely absent from the capture, so the moment the pin moves to a shop
+ * that handles the event, the test fails and says to delete the entry. An
+ * exception that cannot go stale is the only kind worth having.
+ */
+export const EVENTS_AHEAD_OF_PINNED_SHOP: readonly RemnaWebhookEvent[] = [
+  'user_hwid_devices.added',
 ];
 
 /**
@@ -86,6 +113,7 @@ export function buildRemnaWebhookBody(
   name: RemnaWebhookEvent,
   user: RemnaWebhookUser,
   meta: Record<string, unknown> = {},
+  payloadExtra: Record<string, unknown> = {},
 ): string {
   return escapeNonAscii(JSON.stringify({
     name,
@@ -96,6 +124,13 @@ export function buildRemnaWebhookBody(
         email: user.email ?? null,
         expireAt: user.expireAt ? user.expireAt.toISOString() : null,
       },
+      // Some events carry a subject BESIDE the user, and it has to sit here
+      // rather than in `meta`: the shop reads `payload` as its event_data and
+      // looks for the subject among that object's own keys, so anything in
+      // `meta` (a sibling of `payload`, not a member) is invisible to it.
+      // Remnawave itself builds `data: { user, hwidUserDevice }` - same shape,
+      // same key - so matching it is what makes the facade a facade.
+      ...payloadExtra,
     },
     meta,
   }));
@@ -111,12 +146,13 @@ export async function deliverRemnaWebhook(
   name: RemnaWebhookEvent,
   user: RemnaWebhookUser,
   meta: Record<string, unknown> = {},
+  payloadExtra: Record<string, unknown> = {},
 ): Promise<boolean> {
   const url = config.REMNAWAVE_COMPAT_WEBHOOK_URL;
   const secret = config.REMNAWAVE_COMPAT_WEBHOOK_SECRET;
   if (!config.REMNAWAVE_COMPAT_ENABLED || !url || !secret) return false;
 
-  const body = buildRemnaWebhookBody(name, user, meta);
+  const body = buildRemnaWebhookBody(name, user, meta, payloadExtra);
   const signature = createHmac('sha256', secret).update(body).digest('hex');
 
   try {
@@ -205,6 +241,7 @@ export function emitRemnaWebhookForUser(
   name: RemnaWebhookEvent,
   userId: string,
   meta: Record<string, unknown> = {},
+  payloadExtra: Record<string, unknown> = {},
 ): void {
   if (!isRemnaWebhookConfigured()) return;
   void withWebhookSlot(async () => {
@@ -214,7 +251,7 @@ export function emitRemnaWebhookForUser(
         select: { id: true, telegramId: true, email: true, expireAt: true },
       });
       if (!row) return; // raced a hard delete
-      await deliverRemnaWebhook(name, row, meta);
+      await deliverRemnaWebhook(name, row, meta, payloadExtra);
     } catch (err: unknown) {
       getLogger().warn({ err, event: name, userId }, '[remnawave-webhook] could not load the user to notify about');
     }

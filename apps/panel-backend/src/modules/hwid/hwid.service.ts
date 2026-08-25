@@ -1,5 +1,6 @@
 import { prisma } from '../../prisma.js';
 import { config } from '../../config.js';
+import { emitRemnaWebhookForUser } from '../remnawave-compat/remnawave.webhook.js';
 
 /**
  * Pick the effective ceiling on how many distinct device rows we're willing
@@ -127,7 +128,7 @@ export async function enforceHwid(
   // the disk fills. Above the cap we skip the insert (audit-only for unlimited
   // users -> `allowed`; a real per-user limit -> `denied` so the client sees 403).
   const ceiling = effectiveDeviceCeiling(limit, config.HWID_MAX_DEVICES_PER_USER);
-  return prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
     const current = await tx.hwidUserDevice.count({ where: { userId } });
 
@@ -136,18 +137,67 @@ export async function enforceHwid(
       // count and denies (403 upstream); the unlimited audit path just stops
       // growing the table and still lets the client through.
       if (limit === null) {
-        return { status: 'allowed' as const, active: 0, limit: null };
+        return { result: { status: 'allowed' as const, active: 0, limit: null }, created: null };
       }
-      return { status: 'denied' as const, active: current, limit };
+      return { result: { status: 'denied' as const, active: current, limit }, created: null };
     }
 
-    await tx.hwidUserDevice.create({ data: { userId, hwid, ...presentMeta(meta) } });
+    const created = await tx.hwidUserDevice.create({
+      data: { userId, hwid, ...presentMeta(meta) },
+    });
     return {
-      status: 'allowed' as const,
-      active: limit === null ? 0 : current + 1,
-      limit,
+      result: {
+        status: 'allowed' as const,
+        active: limit === null ? 0 : current + 1,
+        limit,
+      },
+      created,
     };
   });
+
+  // Remnawave emits `user_hwid_devices.added` when a device row is created, and
+  // a minishop that knows the event tells the user a new device appeared -
+  // offering a device top-up when they are at their limit. Emitted only on a
+  // genuine insert: the `existing` fast path above is a lastSeenAt touch, and
+  // announcing "new device" on every request from a device the user has always
+  // had is worse than saying nothing.
+  //
+  // AFTER the transaction, deliberately. The insert runs while a per-user
+  // advisory lock is held, and that lock lives until the transaction ends, so a
+  // POST to the shop from inside it would hold up every other device check for
+  // that user for the length of an HTTP round trip to a third party.
+  //
+  // Fire-and-forget through the shared emitter, which no-ops when the facade is
+  // off, resolves the user inside the send semaphore, and never throws: this is
+  // a notification, and a device must still be admitted when the shop is down.
+  if (outcome.created) {
+    emitRemnaWebhookForUser(
+      'user_hwid_devices.added',
+      userId,
+      {},
+      {
+        // The key Remnawave itself uses (`data: { user, hwidUserDevice }`), and
+        // one of the three the shop looks for. `userAgent` and `requestIp` are
+        // on the row and deliberately not sent - the shop's own extractor drops
+        // them as unsafe, so shipping them would only widen where they travel.
+        hwidUserDevice: {
+          hwid: outcome.created.hwid,
+          platform: outcome.created.platform,
+          osVersion: outcome.created.osVersion,
+          deviceModel: outcome.created.deviceModel,
+          // Our column is `firstSeenAt`; Remnawave's entity calls it `createdAt`,
+          // and the name is load-bearing rather than cosmetic. The shop hashes
+          // `hwid + createdAt` into its dedupe fingerprint precisely so that a
+          // device removed and later reconnected - same HWID, new row - reads as
+          // a new event instead of a duplicate delivery to swallow. Sent under
+          // the wrong name it would be absent, every event for one HWID would
+          // share a fingerprint, and the second connection would go unannounced.
+          createdAt: outcome.created.firstSeenAt.toISOString(),
+        },
+      },
+    );
+  }
+  return outcome.result;
 }
 
 /**
