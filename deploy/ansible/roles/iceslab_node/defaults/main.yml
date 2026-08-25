@@ -81,6 +81,24 @@ iceslab_node_agent_port: 1337
 # repository, next to the role - so the role and the script it runs are always
 # the same version. Override to point at a script staged elsewhere.
 iceslab_installer_src: "{{ role_path }}/../../../../scripts/install-iceslab-node.sh"
+
+# WHICH agent source the installer builds from.
+#
+# The installer takes these from the environment and defaults to
+# `https://github.com/icecompany-tech/iceslab.git` at `v0.2.0` - UPSTREAM. This
+# role passed neither, so every node it provisioned ran the unforked agent,
+# whatever the fork had added. Not theory: n-lab-3 in the lab was found on
+# `7cb5ea9 Release v0.2.0`, and the panel answered a keygen request with
+# "agent predates /generateKeys" - a fork feature the panel offers, the node
+# cannot serve, and nothing in between said why.
+#
+# Left EMPTY by default, which keeps the installer's own defaults and so keeps
+# this role's behaviour unchanged. A fork has to set them, and the task below
+# prints what it is about to install so the choice is visible in the play
+# output rather than discovered weeks later on a node missing an endpoint.
+iceslab_node_repo: ""
+iceslab_node_ref: ""
+
 iceslab_panel_url: ""
 iceslab_bootstrap_token: ""
 iceslab_node_protocol: xray
