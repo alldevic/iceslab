@@ -82,6 +82,12 @@ ACCEPTED_DIVERGENCE: dict[str, dict[str, str]] = {
         # None of these is in it. Sending them would be inventing numbers to
         # quiet this report, which is the same trade already refused for
         # `activeInboundsCount` - an empty column is honester than a wrong one.
+        # Only visible since the halves got node traffic (seed_node_traffic.py):
+        # while both `topNodes` lists were empty there was nothing to compare.
+        # Remnawave derives it from the node uuid — its last six hex digits,
+        # checked against a real pair — and `parseNodesBandwidthTop` reads only
+        # total/uuid/name/usersOnline. Nothing in the shop consumes a colour.
+        "panel.nodes_bandwidth.topNodes[].color": "no reader anywhere in the shop's frontend",
         "panel.bandwidth.bandwidthCalendarMonth.difference": "shop reads only `current` from a bandwidth pair",
         "panel.bandwidth.bandwidthCurrentYear.difference": "shop reads only `current` from a bandwidth pair",
         "panel.bandwidth.bandwidthLast30Days.difference": "shop reads only `current` from a bandwidth pair",

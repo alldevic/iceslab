@@ -1019,6 +1019,10 @@ rejected - check the affectedRows key."
       purge_panel_leftovers
     fi
     "$0" "up-$which"
+    # Node traffic, so the walkthrough compares two FILLED `topNodes` lists.
+    # Without it both halves report an empty one, and the acceptance that rides
+    # on "we always fill topNodes" is never exercised — see seed_node_traffic.py.
+    python3 "$HERE/seed_node_traffic.py" "$which"
     STAND_ENV="$env_for_half" "$HERE/buy.sh" "${STAND_BUYER:-stand-buyer@example.com}" \
       > "$outdir/$which-buy.log" 2>&1 \
       || { tail -20 "$outdir/$which-buy.log" >&2; die "the purchase failed on the $which stand"; }
