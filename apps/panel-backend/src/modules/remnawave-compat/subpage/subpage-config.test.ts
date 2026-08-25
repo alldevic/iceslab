@@ -235,6 +235,24 @@ describe('buildSubpageConfig', () => {
     expect(singbox.blocks).toHaveLength(1);
   });
 
+  it('offers a mieru buyer the mihomo clients, and only those', () => {
+    // The chain is ours end to end: their deep link points the app at the
+    // subscription, the seeded UA rule resolves that family to the clash
+    // format, and our clash builder emits `type: mieru`.
+    const doc = buildSubpageConfig(input({ protocols: ['mieru'] }))!;
+    const names = new Set(Object.values(appNames(doc)).flat());
+    expect(names).toEqual(new Set(['Clash Verge', 'FlClash']));
+    // sing-box and v2rayNG resolve to formats that carry no mieru entry.
+    expect(names).not.toContain('sing-box');
+    expect(names).not.toContain('v2rayNG');
+  });
+
+  it('names no client for naive, because no client in the catalogue works for it', () => {
+    // clash refuses naive on purpose and sing-box has no naive outbound, so the
+    // apps that could speak it resolve to a format that drops the endpoint.
+    expect(buildSubpageConfig(input({ protocols: ['naive'] }))).toBeNull();
+  });
+
   it('returns null when there is nothing to say, so the shop keeps its own guide', () => {
     expect(buildSubpageConfig(input({ protocols: [] }))).toBeNull();
     // The protocol is there but no endpoint produced a link — nothing to offer.

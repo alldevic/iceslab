@@ -151,16 +151,21 @@ export const APPS: AppDef[] = [
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },
   },
+  // The mihomo-cored clients, and the only ones listed for `mieru`: our clash
+  // builder emits it as `type: mieru`, and the seeded UA rule points this
+  // family at the clash format, so the chain from their deep link to a working
+  // entry is ours end to end. The other formats that carry mieru (surge, loon,
+  // quantumultx) have no client in this catalogue at all.
   {
     name: 'Clash Verge',
     platforms: ['windows', 'macos', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
   },
   {
     name: 'FlClash',
     platforms: ['android', 'windows', 'macos', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
   },
   {
@@ -335,6 +340,13 @@ export const PROTOCOL_DELIVERY: Record<ProtocolName, Delivery> = {
   hysteria: 'subscription',
   xray: 'subscription',
   shadowsocks: 'subscription',
+  // Delivered in the subscription, but ONLY by `plain`: clash refuses it on
+  // purpose ("Clash Meta's experimental naive support diverges per fork") and
+  // sing-box has no naive outbound at all. So the catalogue names no client for
+  // it — the ones that speak naive (the naiveproxy CLI, the Neko family) either
+  // are not an app a guide can send someone to, or resolve to a format that
+  // drops the endpoint. Naming one anyway would be the promise this table
+  // exists to avoid.
   naive: 'subscription',
   mieru: 'subscription',
   tuic: 'subscription',
