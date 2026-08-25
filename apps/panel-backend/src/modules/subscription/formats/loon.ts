@@ -63,7 +63,7 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
         lines.push(p.join(','));
       }
     }
-    // naive / mtproto / mieru / amneziawg -> skip (Loon unsupported)
+    // naive / mtproto / mieru / amneziawg / wireguard -> skip (Loon unsupported)
   }
   return lines.length ? lines.join('\n') + '\n' : '';
 }

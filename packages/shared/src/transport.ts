@@ -13,6 +13,7 @@ export type ProtocolName =
   | 'hysteria'
   | 'xray'
   | 'amneziawg'
+  | 'wireguard'
   | 'naive'
   | 'shadowsocks'
   | 'mtproto'
@@ -39,6 +40,14 @@ export interface ProtocolCredentials {
    * straight into the [Peer] AllowedIPs field as `<ip>/32`.
    */
   amneziawgAllowedIp?: string;
+  /** Upstream WireGuard: the same per-user keypair as AmneziaWG (one WG
+   *  identity per user), sent under its own name so a node serving one
+   *  flavour infers nothing about the other. */
+  wireguardPublicKey?: string;
+  /** IP allocated inside the *WireGuard* inbound's subnet. A node bound to
+   *  both flavours gets two addresses for one user; they differ, and crossing
+   *  them puts a peer on an interface whose subnet doesn't contain it. */
+  wireguardAllowedIp?: string;
   /** TUIC v5 (sing-box engine): per-user UUID + password. */
   tuicUuid?: string;
   tuicPassword?: string;

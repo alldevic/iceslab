@@ -92,6 +92,7 @@ const ProtocolSchema = z.enum([
   'xray',
   'hysteria',
   'amneziawg',
+  'wireguard',
   'naive',
   'shadowsocks',
   'mtproto',

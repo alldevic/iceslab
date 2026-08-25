@@ -245,6 +245,15 @@ export function resolveHostFields(protocol: string, config: unknown): HostFieldM
         ),
       };
 
+    case 'wireguard':
+      return {
+        ...universalMap(),
+        ...unsupported(
+          TLS_AND_TRANSPORT,
+          'WireGuard hands out a wg-quick config, there is no TLS layer to override',
+        ),
+      };
+
     default:
       // Unknown protocol: expose only what is protocol-agnostic rather than
       // guessing. Better a thin form than one promising controls that do

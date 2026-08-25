@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ShadowsocksConfigSchema, XrayConfigSchema } from './inbounds.schemas.js';
+import {
+  ShadowsocksConfigSchema,
+  WireguardConfigSchema,
+  XrayConfigSchema,
+} from './inbounds.schemas.js';
 
 // U5 post-quantum fields. Two pairs, each half useless without the other:
 //   - `realityMldsa65Seed` / `realityMldsa65Verify`
@@ -259,5 +263,36 @@ describe('ShadowsocksConfigSchema abusePolicy (U4)', () => {
         abusePolicy: { blockSmtp: 'no' },
       }),
     ).toThrow();
+  });
+});
+
+describe('WireguardConfigSchema', () => {
+  const base = {
+    subnet: '10.77.77.0/24',
+    serverPrivateKey: 'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFsGm3Uk=',
+    serverPublicKey: 'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+  };
+
+  it('takes a subnet and a server keypair', () => {
+    expect(WireguardConfigSchema.safeParse(base).success).toBe(true);
+  });
+
+  it('has no obfuscation member at all, and drops one that is offered', () => {
+    // Not tidiness. Zod strips unknown keys, so an obfuscation block pushed at
+    // a wireguard profile would vanish silently and the operator would believe
+    // the tunnel is obfuscated when it is plain. The pairing that makes this
+    // safe is on the node: amneziawg/config.go rejects a non-zero Jc/S/H on a
+    // plain interface instead of rendering it away. Either half alone would
+    // leave the lie in place.
+    const parsed = WireguardConfigSchema.parse({
+      ...base,
+      obfuscation: { jc: 4, jmin: 64, jmax: 128, s1: 32, s2: 56, s3: 0, s4: 0, h1: 1, h2: 2, h3: 3, h4: 4 },
+    });
+    expect(parsed).not.toHaveProperty('obfuscation');
+  });
+
+  it('refuses a subnet that is not CIDR, and a missing key', () => {
+    expect(WireguardConfigSchema.safeParse({ ...base, subnet: '10.77.77.0' }).success).toBe(false);
+    expect(WireguardConfigSchema.safeParse({ ...base, serverPrivateKey: '' }).success).toBe(false);
   });
 });

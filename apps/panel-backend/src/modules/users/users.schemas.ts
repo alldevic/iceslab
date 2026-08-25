@@ -12,6 +12,7 @@ export const ProtocolName = z.enum([
   'hysteria',
   'xray',
   'amneziawg',
+  'wireguard',
   'naive',
   'shadowsocks',
   'mtproto',
@@ -92,7 +93,7 @@ export const CreateUserSchema = z.object({
   // ['hysteria'] which silently hid newer protocols from new users).
   enabledProtocols: z
     .array(ProtocolName)
-    .default(['hysteria', 'xray', 'amneziawg', 'naive', 'shadowsocks', 'mtproto', 'mieru']),
+    .default(['hysteria', 'xray', 'amneziawg', 'wireguard', 'naive', 'shadowsocks', 'mtproto', 'mieru']),
 });
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 

@@ -17,10 +17,13 @@ import {
  *   - xray trojan+REALITY (slice 24c part 3a)
  *   - shadowsocks (SS2022 + legacy AEAD) (slice 24d)
  *
- * AmneziaWG/Naive are NOT emitted: AmneziaWG users get the wg-quick `.conf`
- * format; Naive users get the `naive+https` URI directly. Adding them here
- * would require sing-box's `wireguard` outbound (which lacks the AmneziaWG
- * obfuscation params) or a `naive` outbound that doesn't exist upstream.
+ * AmneziaWG/WireGuard/Naive are NOT emitted: both wg flavours get the wg-quick
+ * `.conf` format; Naive users get the `naive+https` URI directly. AmneziaWG
+ * has no representation here at all (sing-box's `wireguard` outbound lacks the
+ * obfuscation params) and `naive` doesn't exist upstream. Plain WireGuard
+ * *could* be emitted, but sing-box moved it from `outbounds` to `endpoints` in
+ * 1.11, so one shape or the other breaks silently depending on the client's
+ * version, whereas the `.conf` every WireGuard app already imports does not.
  *
  * Output shape - minimal valid sing-box config:
  *   - `log`: standard

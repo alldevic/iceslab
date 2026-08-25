@@ -177,6 +177,13 @@ interface AmneziawgInboundConfig {
   obfuscation: AmneziawgObfuscation;
 }
 
+/** Upstream WireGuard: an AmneziaWG inbound minus every obfuscation knob. */
+interface WireguardInboundConfig {
+  subnet: string;
+  serverPrivateKey: string;
+  serverPublicKey: string;
+}
+
 interface NaiveInboundConfig {
   hostname: string;
   tlsEmail: string;
@@ -970,6 +977,24 @@ export async function generateSubscription(
         i4: cfg.obfuscation.i4 ?? '',
         i5: cfg.obfuscation.i5 ?? '',
         // No standardised URI format for AmneziaWG; clients fetch ?format=wgconf.
+        uri: '',
+      });
+    } else if (ib.protocol === 'wireguard' && user.amneziawgPrivateKey) {
+      const cfg = ib.config as unknown as WireguardInboundConfig;
+      // The user's single WireGuard keypair serves both flavours, but the peer
+      // IP is allocated per profile, so a user on both an AmneziaWG and a
+      // WireGuard profile holds two addresses, one per subnet.
+      const peer = await allocatePeer(ib.profileId, user.id, cfg.subnet);
+      endpoints.push({
+        protocol: 'wireguard',
+        nodeName,
+        host,
+        port,
+        ...hostMeta,
+        privateKey: user.amneziawgPrivateKey,
+        allowedIp: `${peer.ip}/32`,
+        serverPublicKey: cfg.serverPublicKey,
+        // WireGuard has no share-link scheme either; clients fetch ?format=wgconf.
         uri: '',
       });
     } else if (ib.protocol === 'mtproto') {

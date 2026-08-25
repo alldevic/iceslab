@@ -136,8 +136,8 @@ describe('appendSingboxFlag (--with-singbox install flag)', () => {
     }
   });
 
-  it('skips native protocols with no sing-box engine (awg/naive/mtproto/mieru)', () => {
-    for (const protocol of ['amneziawg', 'naive', 'mtproto', 'mieru']) {
+  it('skips native protocols with no sing-box engine (awg/wg/naive/mtproto/mieru)', () => {
+    for (const protocol of ['amneziawg', 'wireguard', 'naive', 'mtproto', 'mieru']) {
       const before = baseLines().join('\n');
       const lines = baseLines();
       appendSingboxFlag(lines, true, protocol);

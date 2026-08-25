@@ -1,65 +1,92 @@
 import { buildAmneziawgClientConfig } from '../../../core-adapters/amneziawg/index.js';
+import { buildWireguardClientConfig } from '../../../core-adapters/wireguard/index.js';
 import type {
   SubscriptionEndpoint,
   AmneziawgSubscriptionEndpoint,
+  WireguardSubscriptionEndpoint,
 } from '../subscription.formats.js';
 
+/** The two wg-quick-shaped protocols this format can emit. */
+export type WgFlavour = 'amneziawg' | 'wireguard';
+
+type WgEndpoint = AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint;
+
+function isWgEndpoint(e: SubscriptionEndpoint): e is WgEndpoint {
+  return e.protocol === 'amneziawg' || e.protocol === 'wireguard';
+}
+
 /**
- * wg-quick / awg-quick `.conf` subscription formatter (AmneziaWG-only).
+ * wg-quick / awg-quick `.conf` subscription formatter.
  *
- * Targets the AmneziaVPN-app, the AmneziaWG mobile clients, and stock
- * `wg-quick` for users on AmneziaWG-aware kernels. Output is the textual
- * `[Interface]` + `[Peer]` blob produced by `buildAmneziawgClientConfig`.
+ * Targets the AmneziaVPN-app and the AmneziaWG mobile clients for
+ * `amneziawg` endpoints, and stock WireGuard (official apps, WireSock,
+ * kernel `wg-quick`) for `wireguard` ones. The two produce different text:
+ * an AmneziaWG config carries the Jc/S/H obfuscation directives, and a
+ * stock WireGuard parser aborts on the first one it meets, so the flavour
+ * decides the builder rather than adding optional lines to one blob.
  *
  * Limitations:
- *   - **Single node per file.** wg-quick is one [Interface] per file; a client
- *     can't merge several AmneziaWG tunnels into one config. A user with more
- *     than one AmneziaWG node therefore needs one link per node: pass
- *     `nodeName` to pick which endpoint to emit. Without it (the legacy
- *     whole-subscription link) we emit the first AmneziaWG endpoint, so every
- *     per-node link MUST carry `?node=` or they all resolve to the same node.
- *   - **AmneziaWG-only.** hysteria/xray/naive endpoints are skipped silently.
+ *   - **Single tunnel per file.** wg-quick is one [Interface] per file; a
+ *     client can't merge several tunnels into one config. A user with more
+ *     than one wg node therefore needs one link per node: pass `nodeName` to
+ *     pick which endpoint to emit. Without it (the legacy whole-subscription
+ *     link) we emit the first wg endpoint, so every per-node link MUST carry
+ *     `?node=` or they all resolve to the same node.
+ *   - **wg-family only.** hysteria/xray/naive endpoints are skipped silently.
  *     The client picked this format because their app speaks wg-quick; other
  *     protocols don't translate to it.
  *
- * Returns an empty string when no matching AmneziaWG endpoint is available, the
- * route handler turns that into a 204-style empty body, telling the client
- * "no AmneziaWG inbound configured for you".
+ * `flavour` disambiguates a node that serves both protocols (each is its own
+ * tunnel with its own subnet and port); omitted, the first match wins.
+ *
+ * Returns an empty string when no matching endpoint is available, the route
+ * handler turns that into a 204-style empty body, telling the client "no
+ * wg inbound configured for you".
  */
 export function buildWgQuickConf(
   endpoints: SubscriptionEndpoint[],
   nodeName?: string,
+  flavour?: WgFlavour,
 ): string {
-  const awgEndpoints = endpoints.filter(
-    (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
-  );
+  let candidates = endpoints.filter(isWgEndpoint);
+  if (flavour) {
+    candidates = candidates.filter((e) => e.protocol === flavour);
+  }
   // nodeName selects which node's tunnel; absent = first (legacy whole-sub link).
-  const awg = nodeName
-    ? awgEndpoints.find((e) => e.nodeName === nodeName)
-    : awgEndpoints[0];
-  if (!awg) return '';
+  const wg = nodeName ? candidates.find((e) => e.nodeName === nodeName) : candidates[0];
+  if (!wg) return '';
+
+  if (wg.protocol === 'wireguard') {
+    return buildWireguardClientConfig({
+      privateKey: wg.privateKey,
+      allowedIp: wg.allowedIp,
+      serverPublicKey: wg.serverPublicKey,
+      host: wg.host,
+      port: wg.port,
+    });
+  }
 
   return buildAmneziawgClientConfig({
-    privateKey: awg.privateKey,
-    allowedIp: awg.allowedIp,
-    serverPublicKey: awg.serverPublicKey,
-    host: awg.host,
-    port: awg.port,
-    jc: awg.jc,
-    jmin: awg.jmin,
-    jmax: awg.jmax,
-    s1: awg.s1,
-    s2: awg.s2,
-    s3: awg.s3,
-    s4: awg.s4,
-    h1: awg.h1,
-    h2: awg.h2,
-    h3: awg.h3,
-    h4: awg.h4,
-    i1: awg.i1,
-    i2: awg.i2,
-    i3: awg.i3,
-    i4: awg.i4,
-    i5: awg.i5,
+    privateKey: wg.privateKey,
+    allowedIp: wg.allowedIp,
+    serverPublicKey: wg.serverPublicKey,
+    host: wg.host,
+    port: wg.port,
+    jc: wg.jc,
+    jmin: wg.jmin,
+    jmax: wg.jmax,
+    s1: wg.s1,
+    s2: wg.s2,
+    s3: wg.s3,
+    s4: wg.s4,
+    h1: wg.h1,
+    h2: wg.h2,
+    h3: wg.h3,
+    h4: wg.h4,
+    i1: wg.i1,
+    i2: wg.i2,
+    i3: wg.i3,
+    i4: wg.i4,
+    i5: wg.i5,
   });
 }

@@ -143,9 +143,9 @@ export function cannotCarryTransport(
  * every mainstream client (NekoRay, Hiddify, v2rayN, ...).
  */
 export function encodePlainList(uris: string[]): string {
-  // Filter empty URIs: amneziawg endpoints don't have a URL form, so they
+  // Filter empty URIs: neither wg flavour has a URL form, so those endpoints
   // contribute nothing to the universal plain-list body. Clients that want
-  // AmneziaWG fetch with `?format=wgconf`.
+  // AmneziaWG or WireGuard fetch with `?format=wgconf`.
   const nonEmpty = uris.filter((u) => u.length > 0);
   return Buffer.from(nonEmpty.join('\n'), 'utf8').toString('base64');
 }
@@ -292,6 +292,21 @@ export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase 
   i5: string;
 }
 
+/**
+ * Upstream WireGuard. Carries no obfuscation fields at all — not zeroed ones —
+ * so no formatter can accidentally emit an AmneziaWG directive into a config
+ * a stock WireGuard client has to parse.
+ */
+export interface WireguardSubscriptionEndpoint extends SubscriptionEndpointBase {
+  protocol: 'wireguard';
+  /** User's WireGuard private key (the same keypair AmneziaWG uses). */
+  privateKey: string;
+  /** IP allocated to this user inside the inbound's subnet, CIDR /32 form. */
+  allowedIp: string;
+  /** Server's WireGuard public key (the inbound's interface PublicKey). */
+  serverPublicKey: string;
+}
+
 export interface NaiveSubscriptionEndpoint extends SubscriptionEndpointBase {
   protocol: 'naive';
   username: string;
@@ -364,6 +379,7 @@ export type SubscriptionEndpoint =
   | HysteriaSubscriptionEndpoint
   | XraySubscriptionEndpoint
   | AmneziawgSubscriptionEndpoint
+  | WireguardSubscriptionEndpoint
   | NaiveSubscriptionEndpoint
   | ShadowsocksSubscriptionEndpoint
   | MtprotoSubscriptionEndpoint

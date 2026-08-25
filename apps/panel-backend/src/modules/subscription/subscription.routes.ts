@@ -120,6 +120,11 @@ const QuerySchema = z.object({
   // each pinned with `?node=<node name>`. Matched against the endpoint's
   // nodeName (unique among active nodes). Omitted = first AWG endpoint.
   node: z.string().min(1).max(64).optional(),
+  // Flavour selector for wgconf. A node can serve an AmneziaWG tunnel and a
+  // plain WireGuard one at once (separate interfaces, subnets and ports), and
+  // they render to different files, so `?node=` alone is ambiguous there.
+  // Omitted = first wg-family endpoint, whichever flavour.
+  proto: z.enum(['amneziawg', 'wireguard']).optional(),
   // Human landing-page language override. The page renders an in-page RU/EN
   // selector that links here; it wins over the panel default and the
   // Accept-Language guess. Only meaningful for the HTML page.
@@ -497,11 +502,14 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // AmneziaVPN app) instead of only the first node's. ecl 'L' keeps the long
         // payloads scannable.
         const awgSeen = new Set<string>();
+        // Same idea for plain WireGuard, minus the vpn:// key: stock WireGuard
+        // clients import the .conf (or its QR) and nothing else.
+        const wgSeen = new Set<string>();
         const awgNodes = filtered
           .filter((e) => e.protocol === 'amneziawg')
           .filter((e) => !awgSeen.has(e.nodeName) && !!awgSeen.add(e.nodeName))
           .map((e) => {
-            const conf = buildWgQuickConf(filtered, e.nodeName);
+            const conf = buildWgQuickConf(filtered, e.nodeName, 'amneziawg');
             const vpn = buildAwgVpnLink(filtered, e.nodeName);
             return {
               nodeName: e.nodeName,
@@ -510,6 +518,16 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               // Raw vpn:// key for a copy button: the AmneziaVPN key QR is dense
               // enough to be unreliable on screen, so paste-the-key is the robust path.
               vpnKey: vpn || undefined,
+            };
+          });
+        const wgNodes = filtered
+          .filter((e) => e.protocol === 'wireguard')
+          .filter((e) => !wgSeen.has(e.nodeName) && !!wgSeen.add(e.nodeName))
+          .map((e) => {
+            const conf = buildWgQuickConf(filtered, e.nodeName, 'wireguard');
+            return {
+              nodeName: e.nodeName,
+              confQrSvg: conf ? qrSvg(conf, 'L') : undefined,
             };
           });
         return reply.type('text/html; charset=utf-8').send(
@@ -528,6 +546,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             protocols,
             subUrlQrSvg: qrSvg(subUrl),
             awgNodes,
+            wgNodes,
           }),
         );
       }
@@ -641,11 +660,14 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // AmneziaWG / wg-quick / Hiddify file-pickers filter by *.conf, so an
           // extensionless name fails the picker on Windows / macOS.
           const nodePart = query.node ? `-${sanitizeFilename(query.node)}` : '';
-          const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}.conf`;
+          // The flavour goes in the filename too: a node serving both tunnels
+          // would otherwise produce two files with the same name.
+          const protoPart = query.proto === 'wireguard' ? '-wg' : query.proto ? '-awg' : '';
+          const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}${protoPart}.conf`;
           return reply
             .type('text/plain; charset=utf-8')
             .header('Content-Disposition', `attachment; filename="${fname}"`)
-            .send(buildWgQuickConf(filtered, query.node));
+            .send(buildWgQuickConf(filtered, query.node, query.proto));
         }
         case 'amneziavpn': {
           // AmneziaVPN-app "vpn://" connection key (base64 blob the flagship

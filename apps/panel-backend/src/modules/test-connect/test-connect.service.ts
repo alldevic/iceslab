@@ -90,7 +90,7 @@ export function realityDestNote(
 const TLS_PROTOCOLS = new Set(['xray', 'naive']);
 // UDP-based: TCP probe doesn't actually validate the protocol, but it does
 // check the route + firewall. Admin gets a yellow note pointing this out.
-const UDP_PROTOCOLS = new Set(['hysteria', 'amneziawg', 'mieru']);
+const UDP_PROTOCOLS = new Set(['hysteria', 'amneziawg', 'wireguard', 'mieru']);
 
 /**
  * Probe a single (binding, host) target. Returns within `PROBE_TIMEOUT_MS`

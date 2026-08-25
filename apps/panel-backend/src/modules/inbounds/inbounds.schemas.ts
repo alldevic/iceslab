@@ -521,6 +521,25 @@ export const AmneziawgConfigSchema = z
     }
   });
 
+/**
+ * Upstream WireGuard: the same interface the AmneziaWG adapter manages, minus
+ * every obfuscation knob. There is deliberately no `obfuscation` member, and
+ * not an all-zero one: WireGuard's magic headers are fixed at 1..4 and its
+ * handshake carries no junk, so anything configurable here would be a field
+ * the node can only ignore. That also keeps the two protocols honestly
+ * distinct in the UI - a "WireGuard" inbound is plainly detectable as
+ * WireGuard, which is the whole point of offering it (native clients, no
+ * AmneziaWG-aware app required).
+ */
+export const WireguardConfigSchema = z.object({
+  /** Subnet handed to peers, e.g. "10.77.77.0/24". Keep it clear of the
+   *  AmneziaWG profile's subnet when a node serves both. */
+  subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/),
+  serverPrivateKey: z.string().min(1).max(128),
+  /** Public key paired with privateKey, emitted in the client config. */
+  serverPublicKey: z.string().min(1).max(128),
+});
+
 export const NaiveConfigSchema = z.object({
   hostname: z
     .string()
@@ -660,6 +679,7 @@ export const InboundConfigByProtocol = z.discriminatedUnion('protocol', [
   z.object({ protocol: z.literal('hysteria'), config: HysteriaConfigSchema }),
   z.object({ protocol: z.literal('xray'), config: XrayConfigSchema }),
   z.object({ protocol: z.literal('amneziawg'), config: AmneziawgConfigSchema }),
+  z.object({ protocol: z.literal('wireguard'), config: WireguardConfigSchema }),
   z.object({ protocol: z.literal('naive'), config: NaiveConfigSchema }),
   z.object({ protocol: z.literal('shadowsocks'), config: ShadowsocksConfigSchema }),
   z.object({ protocol: z.literal('mtproto'), config: MtprotoConfigSchema }),
@@ -720,6 +740,7 @@ export const PROTOCOL_CONFIG_SCHEMAS = {
   hysteria: HysteriaConfigSchema,
   xray: XrayConfigSchema,
   amneziawg: AmneziawgConfigSchema,
+  wireguard: WireguardConfigSchema,
   naive: NaiveConfigSchema,
   shadowsocks: ShadowsocksConfigSchema,
   mtproto: MtprotoConfigSchema,
@@ -731,7 +752,7 @@ export const PROTOCOL_CONFIG_SCHEMAS = {
 
 export const ListInboundsQuerySchema = z.object({
   nodeId: z.uuid().optional(),
-  protocol: z.enum(['hysteria', 'xray', 'amneziawg', 'naive', 'shadowsocks', 'mtproto', 'mieru', 'tuic', 'anytls', 'shadowtls']).optional(),
+  protocol: z.enum(['hysteria', 'xray', 'amneziawg', 'wireguard', 'naive', 'shadowsocks', 'mtproto', 'mieru', 'tuic', 'anytls', 'shadowtls']).optional(),
 });
 export type ListInboundsQuery = z.infer<typeof ListInboundsQuerySchema>;
 

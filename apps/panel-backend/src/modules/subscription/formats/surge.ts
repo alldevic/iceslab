@@ -61,7 +61,7 @@ export function buildSurgeConf(endpoints: SubscriptionEndpoint[]): string {
       }
       // subprotocol 'vless' -> skip (Surge unsupported)
     }
-    // naive / mtproto / mieru / amneziawg -> skip (Surge unsupported)
+    // naive / mtproto / mieru / amneziawg / wireguard -> skip (Surge unsupported)
   }
   return lines.length ? lines.join('\n') + '\n' : '';
 }

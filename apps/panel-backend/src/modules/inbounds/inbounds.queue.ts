@@ -208,13 +208,13 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
       } as InboundDto['config'];
     }
 
-    // AmneziaWG: inject the binding-level port into the protocol config so
-    // the agent binds the awg-quick interface to the port the admin set
-    // (typical 443 for stealth) instead of WireGuard's default 51820.
+    // AmneziaWG / WireGuard: inject the binding-level port into the protocol
+    // config so the agent binds the wg-quick interface to the port the admin
+    // set (typical 443 for stealth) instead of WireGuard's default 51820.
     // Without this, the wgconf subscription advertises Endpoint=:443 but
     // the server actually listens on 51820, handshake never completes.
     // Caught live awg-VPS cycle #6 2026-05-12.
-    if (b.profile.protocol === 'amneziawg') {
+    if (b.profile.protocol === 'amneziawg' || b.profile.protocol === 'wireguard') {
       config = {
         ...(config as Record<string, unknown>),
         listenPort: b.port,
@@ -484,31 +484,38 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // an up-to-date client list. addUser is idempotent on the node side.
   if (inbounds.length === 0) return;
 
-  // Find the AmneziaWG profile bound to this node (at most one, single
-  // awg-quick interface per host). When present, every active user with
-  // AWG creds needs an allocated IP inside the profile's subnet pushed
-  // alongside the public key, without it the node-agent silently
-  // skips the peer (AmneziaWGAllowedIP=="" → no-op AddUser). Caught
-  // live cycle #6 2026-05-12: addUser ok was logged but `awg show`
-  // showed zero peers because IP was empty on the wire.
+  // Find the wg-family profiles bound to this node (at most one per flavour,
+  // one interface each per host). When present, every active user with WG
+  // creds needs an allocated IP inside that profile's subnet pushed alongside
+  // the public key, without it the node-agent silently skips the peer
+  // (AllowedIP=="" → no-op AddUser). Caught live cycle #6 2026-05-12: addUser
+  // ok was logged but `awg show` showed zero peers because IP was empty on
+  // the wire.
+  //
+  // The two flavours are resolved SEPARATELY because they carry separate
+  // subnets: a node bound to both hands the same user two different addresses,
+  // and crossing them puts a peer on an interface whose subnet doesn't
+  // contain it.
   //
   // Keyed on profileId (NOT binding.id) so a user gets the same IP on
   // every node a profile is bound to, matches the subscription /
   // wgconf path which also keys on profileId.
-  const awgBinding = inbounds.find((i) => i.protocol === 'amneziawg');
-  let awgProfileId: string | null = null;
-  let awgSubnet: string | null = null;
-  if (awgBinding) {
+  async function resolveWgProfile(
+    protocol: 'amneziawg' | 'wireguard',
+  ): Promise<{ profileId: string; subnet: string } | null> {
+    const bound = inbounds.find((i) => i.protocol === protocol);
+    if (!bound) return null;
     const binding = await prisma.profileNodeBinding.findUnique({
-      where: { id: awgBinding.id },
+      where: { id: bound.id },
       select: { profileId: true, profile: { select: { config: true } } },
     });
-    if (binding) {
-      awgProfileId = binding.profileId;
-      const pcfg = (binding.profile.config ?? {}) as { subnet?: string };
-      awgSubnet = pcfg.subnet ?? '10.66.66.0/24';
-    }
+    if (!binding) return null;
+    const pcfg = (binding.profile.config ?? {}) as { subnet?: string };
+    return { profileId: binding.profileId, subnet: pcfg.subnet ?? '10.66.66.0/24' };
   }
+
+  const awgProfile = await resolveWgProfile('amneziawg');
+  const wgProfile = await resolveWgProfile('wireguard');
 
   const users = await fetchActiveUsers();
   getLogger().info(
@@ -520,41 +527,51 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // bounded-parallel chunks. Pre-wave a 1000-user install did 1000 serial
   // mTLS round-trips (~50ms each) = ~50s of worker time blocked per node
   // push, which compounds when multiple nodes need re-push at once.
-  const awgIpByUser = new Map<string, string>();
-  if (awgProfileId && awgSubnet) {
-    const awgUsers = users.filter((u) => u.amneziawgPublicKey);
+  async function allocateIps(
+    profile: { profileId: string; subnet: string } | null,
+  ): Promise<Map<string, string>> {
+    const ipByUser = new Map<string, string>();
+    if (!profile) return ipByUser;
+    const { profileId, subnet } = profile;
+    // Both flavours draw on the user's single WireGuard keypair, so the same
+    // credential decides who needs an allocation.
+    const wgUsers = users.filter((u) => u.amneziawgPublicKey);
     // B7 - one bulk allocation for the whole set instead of N serial
     // allocatePeer round-trips. Stragglers (race loss / contention) fall back
     // to the robust per-user allocator below.
     const bulk = await preallocatePeers(
-      awgProfileId,
-      awgUsers.map((u) => u.id),
-      awgSubnet,
+      profileId,
+      wgUsers.map((u) => u.id),
+      subnet,
     ).catch((err) => {
       const detail = err instanceof Error ? err.message : String(err);
       getLogger().info(
-        `[worker:inbound-sync] bulk preallocatePeers on profile ${awgProfileId} FAILED, per-user fallback: ${detail}`,
+        `[worker:inbound-sync] bulk preallocatePeers on profile ${profileId} FAILED, per-user fallback: ${detail}`,
       );
       return new Map<string, string>();
     });
-    for (const u of awgUsers) {
+    for (const u of wgUsers) {
       let ip = bulk.get(u.id);
       if (!ip) {
         try {
-          ip = (await allocatePeer(awgProfileId, u.id, awgSubnet)).ip;
+          ip = (await allocatePeer(profileId, u.id, subnet)).ip;
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           getLogger().info(
-            `[worker:inbound-sync] allocatePeer ${u.username} on profile ${awgProfileId} FAILED: ${detail}`,
+            `[worker:inbound-sync] allocatePeer ${u.username} on profile ${profileId} FAILED: ${detail}`,
           );
-          // Fall through, addUser will silently skip the AWG portion on the
-          // node side, other protocols still work for this user.
+          // Fall through, addUser will silently skip this protocol's portion
+          // on the node side, other protocols still work for this user.
           continue;
         }
       }
-      awgIpByUser.set(u.id, ip);
+      ipByUser.set(u.id, ip);
     }
+    return ipByUser;
   }
+
+  const awgIpByUser = await allocateIps(awgProfile);
+  const wgIpByUser = await allocateIps(wgProfile);
 
   // Chunked parallel fanout. 25 is a balance between throughput and not
   // hammering the node-agent's HTTP server (default Node http.Agent
@@ -575,6 +592,9 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
             hysteriaPassword: u.hysteriaPassword,
             amneziawgPublicKey: u.amneziawgPublicKey,
             amneziawgAllowedIp: awgIpByUser.get(u.id),
+            // Same key, its own subnet's address (see resolveWgProfile above).
+            wireguardPublicKey: u.amneziawgPublicKey,
+            wireguardAllowedIp: wgIpByUser.get(u.id),
             naivePassword: u.naivePassword,
             tuicUuid: u.xrayUuid,
             tuicPassword: deriveTuicPassword(u.xrayUuid),

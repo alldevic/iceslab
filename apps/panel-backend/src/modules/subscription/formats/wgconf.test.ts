@@ -24,6 +24,17 @@ const awgEp: SubscriptionEndpoint = {
   uri: '',
 };
 
+const wgEp: SubscriptionEndpoint = {
+  protocol: 'wireguard',
+  nodeName: 'eu-1',
+  host: 'n1.example.com',
+  port: 51821,
+  privateKey: 'cliPriv64',
+  allowedIp: '10.77.77.42/32',
+  serverPublicKey: 'wgSrvPub64',
+  uri: '',
+};
+
 const hysteriaEp: SubscriptionEndpoint = {
   protocol: 'hysteria',
   nodeName: 'eu-1',
@@ -96,5 +107,42 @@ describe('buildWgQuickConf', () => {
 
   it('output is byte-deterministic for the same input', () => {
     expect(buildWgQuickConf([awgEp])).toBe(buildWgQuickConf([awgEp]));
+  });
+
+  it('emits a plain config for a wireguard endpoint', () => {
+    const out = buildWgQuickConf([wgEp]);
+    expect(out).toContain('[Interface]');
+    expect(out).toContain('PrivateKey = cliPriv64');
+    expect(out).toContain('Address = 10.77.77.42/32');
+    expect(out).toContain('PublicKey = wgSrvPub64');
+    expect(out).toContain('Endpoint = n1.example.com:51821');
+  });
+
+  // The reason plain WireGuard is a separate protocol at all: stock clients
+  // abort on the first key they don't know, so a single leaked Jc/S/H line
+  // makes the file unusable for exactly the apps this format targets.
+  it('emits no AmneziaWG directive for a wireguard endpoint', () => {
+    const out = buildWgQuickConf([wgEp]);
+    for (const key of ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4', 'I1']) {
+      expect(out).not.toContain(`${key} = `);
+    }
+  });
+
+  it('serves a wireguard-only subscription without a node hint', () => {
+    expect(buildWgQuickConf([hysteriaEp, wgEp])).toContain('Address = 10.77.77.42/32');
+  });
+
+  // One node can carry both tunnels (separate interfaces, subnets and ports),
+  // so ?node= alone is ambiguous and the flavour has to be pinnable.
+  it('picks the flavour when a node serves both', () => {
+    const both = [awgEp, wgEp];
+    expect(buildWgQuickConf(both, 'eu-1', 'wireguard')).toContain('Address = 10.77.77.42/32');
+    expect(buildWgQuickConf(both, 'eu-1', 'amneziawg')).toContain('Address = 10.0.0.42/32');
+    expect(buildWgQuickConf(both, 'eu-1', 'amneziawg')).toContain('Jc = 4');
+  });
+
+  it('returns empty when the requested flavour is absent', () => {
+    expect(buildWgQuickConf([awgEp], undefined, 'wireguard')).toBe('');
+    expect(buildWgQuickConf([wgEp], undefined, 'amneziawg')).toBe('');
   });
 });

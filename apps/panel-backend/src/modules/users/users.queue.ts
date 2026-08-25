@@ -141,6 +141,10 @@ export async function buildAddUserRequest(userId: string): Promise<AddUserPayloa
         naivePassword: user.naivePassword,
         xrayUuid: user.xrayUuid,
         amneziawgPublicKey: user.amneziawgPublicKey,
+        // One WG keypair, both flavours. The per-profile tunnel IPs are
+        // attached by the inbound-sync push, which is where the bound profiles
+        // (and hence the subnets) are known.
+        wireguardPublicKey: user.amneziawgPublicKey,
         tuicUuid: user.xrayUuid,
         tuicPassword: deriveTuicPassword(user.xrayUuid),
         anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
@@ -269,6 +273,7 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
               naivePassword: u.naivePassword,
               xrayUuid: u.xrayUuid,
               amneziawgPublicKey: u.amneziawgPublicKey,
+              wireguardPublicKey: u.amneziawgPublicKey,
               tuicUuid: u.xrayUuid,
               tuicPassword: deriveTuicPassword(u.xrayUuid),
               anytlsPassword: deriveAnytlsPassword(u.xrayUuid),

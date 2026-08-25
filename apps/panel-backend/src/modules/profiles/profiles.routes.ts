@@ -20,7 +20,9 @@ import * as svc from './profiles.service.js';
 import { generatePqKeys, NoKeygenNodeError, PQ_KEY_KINDS } from './pq-keys.js';
 
 const KeypairQuery = z.object({
-  protocol: z.enum(['xray', 'amneziawg']).default('amneziawg'),
+  // wireguard shares AmneziaWG's key format (standard base64) and so the same
+  // generator; only REALITY needs the base64url alphabet.
+  protocol: z.enum(['xray', 'amneziawg', 'wireguard']).default('amneziawg'),
 });
 
 /** U5 keygen: which material, and optionally which node should mint it. */

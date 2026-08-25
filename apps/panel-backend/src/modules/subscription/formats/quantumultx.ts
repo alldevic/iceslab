@@ -66,7 +66,7 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
         lines.push(p.join(', '));
       }
     }
-    // hysteria / naive / mtproto / mieru / amneziawg -> skip (QX unsupported)
+    // hysteria / naive / mtproto / mieru / amneziawg / wireguard -> skip (QX unsupported)
   }
   return lines.length ? lines.join('\n') + '\n' : '';
 }

@@ -72,6 +72,7 @@ describe('resolveHostFields', () => {
     ['mtproto', {}],
     ['mieru', {}],
     ['amneziawg', {}],
+    ['wireguard', {}],
   ])('%s: every TLS/transport override is dead and says why', (protocol, cfg) => {
     const f = resolveHostFields(protocol, cfg);
     for (const name of [

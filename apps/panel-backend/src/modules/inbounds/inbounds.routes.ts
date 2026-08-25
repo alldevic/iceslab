@@ -4,7 +4,9 @@ import { requireAuth } from '../auth/auth.hook.js';
 import { generateWireguardKeyPair, generateRealityKeyPair } from '../../lib/credentials.js';
 
 const KeypairQuery = z.object({
-  protocol: z.enum(['xray', 'amneziawg']).default('amneziawg'),
+  // wireguard shares AmneziaWG's key format (standard base64), so it maps to
+  // the same generator; only REALITY needs the base64url alphabet.
+  protocol: z.enum(['xray', 'amneziawg', 'wireguard']).default('amneziawg'),
 });
 
 import {

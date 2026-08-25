@@ -11,9 +11,10 @@ import { emitsVisionFlow, type SubscriptionEndpoint } from '../subscription.form
  *   - xray (Trojan+REALITY) → `type: trojan` with `reality-opts` (slice 24c part 3a)
  *   - shadowsocks           → `type: ss` with cipher + password (slice 24d)
  *   - mieru                 → `type: mieru`, TCP transport
- *   - amneziawg / naive are NOT emitted: classic Clash has no native support
- *     and Clash Meta's experimental wireguard/naive support diverges per
- *     fork. AmneziaWG users get the wg-quick `.conf` format; Naive users
+ *   - amneziawg / wireguard / naive are NOT emitted: classic Clash has no
+ *     native support and Clash Meta's experimental wireguard/naive support
+ *     diverges per fork. Both wg flavours are served by the wg-quick `.conf`
+ *     format instead, which their own clients import natively; Naive users
  *     get the naive+https URI directly.
  *
  * The output is hand-emitted YAML (no js-yaml dep): the schema is fixed and

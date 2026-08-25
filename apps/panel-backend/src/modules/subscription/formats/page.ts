@@ -40,6 +40,13 @@ export interface SubscriptionPageData {
      *  unreliable on screen, so paste-the-key is the robust import path). */
     vpnKey?: string;
   }>;
+  /** One entry per plain-WireGuard node. Only one QR each: stock WireGuard has
+   *  no vpn:// key form, the .conf (which its apps scan directly) is the whole
+   *  import path. */
+  wgNodes?: Array<{
+    nodeName: string;
+    confQrSvg?: string;
+  }>;
 }
 
 function esc(s: string): string {
@@ -129,6 +136,7 @@ type AppAction =
   | { kind: 'deeplink'; scheme: 'hiddify' | 'streisand' | 'v2rayng' | 'clash' | 'singbox' | 'shadowrocket' }
   | { kind: 'awg-vpn' } // scan the AmneziaVPN vpn:// QR below
   | { kind: 'awg-conf' } // scan the AmneziaWG .conf QR below
+  | { kind: 'wg-conf' } // scan the plain WireGuard .conf QR below
   | { kind: 'download' } // grab the per-node .conf below
   | { kind: 'manual' }; // paste the subscription link
 
@@ -247,6 +255,42 @@ const APPS: AppDef[] = [
     protocols: ['amneziawg', 'xray'],
     action: { kind: 'manual' },
   },
+  // Plain WireGuard. Deliberately a separate list from AmneziaWG: an AWG
+  // config's Jc/S/H directives make these clients refuse the file outright,
+  // and an AWG-aware client is exactly what this protocol exists to avoid
+  // needing.
+  {
+    name: 'WireGuard',
+    platforms: ['ios', 'android'],
+    protocols: ['wireguard'],
+    action: { kind: 'wg-conf' },
+    recommended: true,
+  },
+  {
+    name: 'WireGuard',
+    platforms: ['windows', 'macos', 'linux'],
+    protocols: ['wireguard'],
+    action: { kind: 'download' },
+    recommended: true,
+  },
+  {
+    name: 'WireSock',
+    platforms: ['windows'],
+    protocols: ['wireguard'],
+    action: { kind: 'download' },
+  },
+  {
+    name: 'wg-quick',
+    platforms: ['linux', 'router'],
+    protocols: ['wireguard'],
+    action: { kind: 'download' },
+  },
+  {
+    name: 'Keenetic',
+    platforms: ['router'],
+    protocols: ['wireguard'],
+    action: { kind: 'download' },
+  },
 ];
 
 function deeplinkHref(
@@ -296,6 +340,7 @@ interface Labels {
   downloadTitle: string;
   downloadHint: string;
   awgConf: string;
+  wgConf: string;
   support: string;
   routerLabel: string;
   statusValues: Record<string, string>;
@@ -328,6 +373,7 @@ const L: Record<'ru' | 'en', Labels> = {
     downloadTitle: 'Download config',
     downloadHint: 'Direct config files for apps that import from a file.',
     awgConf: 'AmneziaWG (.conf)',
+    wgConf: 'WireGuard (.conf)',
     support: 'Support',
     routerLabel: 'Router',
     statusValues: {
@@ -363,6 +409,7 @@ const L: Record<'ru' | 'en', Labels> = {
     downloadTitle: 'Скачать конфиг',
     downloadHint: 'Готовые файлы конфигурации для приложений, импортирующих из файла.',
     awgConf: 'AmneziaWG (.conf)',
+    wgConf: 'WireGuard (.conf)',
     support: 'Поддержка',
     routerLabel: 'Роутер',
     statusValues: {
@@ -406,6 +453,7 @@ function renderApps(
           break;
         case 'awg-vpn':
         case 'awg-conf':
+        case 'wg-conf':
           action = `<a class="act" href="#scan">${esc(t.scanAction)}</a>`;
           break;
         case 'download':
@@ -445,6 +493,12 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const awgNodes = data.awgNodes ?? [];
   const multiAwg = awgNodes.length > 1;
   const hasAwg = awgNodes.length > 0;
+  const wgNodes = data.wgNodes ?? [];
+  const multiWg = wgNodes.length > 1;
+  // Gates the file-based app cards (scan / download): both flavours hand out a
+  // .conf, and which protocol a card belongs to is already decided by its
+  // `protocols` list.
+  const hasWgFiles = hasAwg || wgNodes.length > 0;
 
   const proxyDownloads: { label: string; fmt: string }[] = [
     { label: 'Clash', fmt: 'clash' },
@@ -456,7 +510,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
 
   // Platform tabs: hide a tab entirely if it has no app for this subscription.
   const platforms = PLATFORM_ORDER.filter(
-    (p) => renderApps(p, data.protocols, data.subUrl, hasAwg, t).indexOf('class="app"') !== -1,
+    (p) => renderApps(p, data.protocols, data.subUrl, hasWgFiles, t).indexOf('class="app"') !== -1,
   );
   const tabsHtml = platforms
     .map(
@@ -467,17 +521,23 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const panelsHtml = platforms
     .map(
       (p, i) =>
-        `<div class="panel${i === 0 ? ' on' : ''}" data-p="${p}" role="tabpanel">${renderApps(p, data.protocols, data.subUrl, hasAwg, t)}</div>`,
+        `<div class="panel${i === 0 ? ' on' : ''}" data-p="${p}" role="tabpanel">${renderApps(p, data.protocols, data.subUrl, hasWgFiles, t)}</div>`,
     )
     .join('');
 
-  // Per-node AWG .conf downloads + the proxy formats.
+  // Per-node .conf downloads + the proxy formats. `proto=` pins the flavour so
+  // a node serving both tunnels still yields two distinct files.
   const awgDownloadBtns = awgNodes.map((n) => {
     const label = multiAwg ? `${esc(t.awgConf)} · ${esc(n.nodeName)}` : esc(t.awgConf);
-    return `<a class="dl" href="${esc(data.subUrl)}?format=wgconf&node=${encodeURIComponent(n.nodeName)}">${label}</a>`;
+    return `<a class="dl" href="${esc(data.subUrl)}?format=wgconf&proto=amneziawg&node=${encodeURIComponent(n.nodeName)}">${label}</a>`;
+  });
+  const wgDownloadBtns = wgNodes.map((n) => {
+    const label = multiWg ? `${esc(t.wgConf)} · ${esc(n.nodeName)}` : esc(t.wgConf);
+    return `<a class="dl" href="${esc(data.subUrl)}?format=wgconf&proto=wireguard&node=${encodeURIComponent(n.nodeName)}">${label}</a>`;
   });
   const downloadBtns = [
     ...awgDownloadBtns,
+    ...wgDownloadBtns,
     ...proxyDownloads.map(
       (d) => `<a class="dl" href="${esc(data.subUrl)}?format=${d.fmt}">${esc(d.label)}</a>`,
     ),
@@ -491,7 +551,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // subscription QR is just another selectable target. Every QR SVG is embedded
   // once; the inline script shows/hides by (target, app). All SVG is trusted
   // (server-generated), so embedded raw, never escaped.
-  const hasProxy = data.protocols.some((p) => p !== 'amneziawg');
+  const hasProxy = data.protocols.some((p) => p !== 'amneziawg' && p !== 'wireguard');
   const showSub = !!data.subUrlQrSvg && hasProxy;
 
   interface ImportTarget {
@@ -505,6 +565,8 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // than one AmneziaWG server.
   for (const n of awgNodes)
     targets.push({ id: `awg:${n.nodeName}`, label: multiAwg ? `AmneziaWG · ${n.nodeName}` : 'AmneziaWG' });
+  for (const n of wgNodes)
+    targets.push({ id: `wg:${n.nodeName}`, label: multiWg ? `WireGuard · ${n.nodeName}` : 'WireGuard' });
 
   const figures: string[] = [];
   if (showSub) {
@@ -529,6 +591,15 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
         `<figure class="qrf" data-target="awg:${esc(n.nodeName)}" data-app="conf"><div class="qbx">${n.confQrSvg}</div><figcaption>AmneziaWG</figcaption></figure>`,
       );
     }
+  });
+  // No data-app on the WireGuard figures: there is a single import path, and
+  // the widget's script only consults data-app for `awg:` targets.
+  wgNodes.forEach((n, ni) => {
+    if (!n.confQrSvg) return;
+    const on = !showSub && !hasAwg && ni === 0 ? ' on' : '';
+    figures.push(
+      `<figure class="qrf${on}" data-target="wg:${esc(n.nodeName)}"><div class="qbx">${n.confQrSvg}</div><figcaption>WireGuard</figcaption></figure>`,
+    );
   });
 
   const targetSel =

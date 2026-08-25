@@ -10,9 +10,10 @@ const inbound = (protocol: string, port: number): InboundDto =>
   ({ id: protocol, name: protocol, protocol, port, config: {} }) as unknown as InboundDto;
 
 describe('protosForProtocol (G4)', () => {
-  it('udp for hysteria/amneziawg, tcp+udp for shadowsocks/mieru, tcp otherwise', () => {
+  it('udp for hysteria/amneziawg/wireguard, tcp+udp for shadowsocks/mieru, tcp otherwise', () => {
     expect(protosForProtocol('hysteria')).toEqual(['udp']);
     expect(protosForProtocol('amneziawg')).toEqual(['udp']);
+    expect(protosForProtocol('wireguard')).toEqual(['udp']);
     expect(protosForProtocol('shadowsocks')).toEqual(['tcp', 'udp']);
     expect(protosForProtocol('mieru')).toEqual(['tcp', 'udp']);
     expect(protosForProtocol('xray')).toEqual(['tcp']);

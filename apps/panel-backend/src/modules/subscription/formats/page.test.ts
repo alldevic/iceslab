@@ -35,7 +35,7 @@ describe('buildSubscriptionPage', () => {
       base({ protocols: ['hysteria', 'amneziawg'], awgNodes: [{ nodeName: 'awg' }] }),
     );
     // .conf download is pinned to the node with &node=.
-    expect(withAwg).toContain('format=wgconf&node=awg');
+    expect(withAwg).toContain('format=wgconf&proto=amneziawg&node=awg');
   });
 
   it('multi-node: a server selector + one QR per (node, app), not a stacked tower', () => {
@@ -63,7 +63,41 @@ describe('buildSubscriptionPage', () => {
     expect(html).toContain('data-target="awg:awg-de" data-app="vpn"');
     expect(html).toContain('data-target="awg:awg-de" data-app="conf"');
     // per-node .conf download still offered in the downloads card.
-    expect(html).toContain('format=wgconf&node=awg-de');
+    expect(html).toContain('format=wgconf&proto=amneziawg&node=awg-de');
+  });
+
+  it('gives a plain WireGuard node its own download and QR target', () => {
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['wireguard'],
+        wgNodes: [{ nodeName: 'wg-nl', confQrSvg: '<svg id="wg-nl"></svg>' }],
+      }),
+    );
+    expect(html).toContain('format=wgconf&proto=wireguard&node=wg-nl');
+    expect(html).toContain('data-target="wg:wg-nl"');
+    expect(html).toContain('<svg id="wg-nl"></svg>');
+    // No AmneziaVPN/AmneziaWG toggle: plain WireGuard has one import path, and
+    // the widget's script only consults data-app for `awg:` targets.
+    expect(html).not.toContain('class="segs appsel"');
+    // The AmneziaWG client list must not leak into a plain-WireGuard sub
+    // (those apps can't parse a config without the obfuscation directives).
+    expect(html).not.toContain('class="aname">AmneziaVPN');
+    expect(html).toContain('class="aname">WireGuard');
+  });
+
+  it('keeps the two flavours apart when a subscription carries both', () => {
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['amneziawg', 'wireguard'],
+        awgNodes: [{ nodeName: 'n1', confQrSvg: '<svg id="awg"></svg>' }],
+        wgNodes: [{ nodeName: 'n1', confQrSvg: '<svg id="wg"></svg>' }],
+      }),
+    );
+    // Same node name, two targets and two downloads: the flavour disambiguates.
+    expect(html).toContain('data-target="awg:n1"');
+    expect(html).toContain('data-target="wg:n1"');
+    expect(html).toContain('format=wgconf&proto=amneziawg&node=n1');
+    expect(html).toContain('format=wgconf&proto=wireguard&node=n1');
   });
 
   it('always offers the generic proxy format downloads', () => {
