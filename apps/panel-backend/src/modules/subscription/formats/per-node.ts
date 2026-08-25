@@ -48,6 +48,10 @@ export function collectWgNodes(
     .filter((e) => !seen.has(e.nodeName) && !!seen.add(e.nodeName))
     .map((e) => {
       const conf = buildWgQuickConf(endpoints, e.nodeName, flavour);
+      // The flavour check states intent and changes nothing: buildAwgVpnLink
+      // filters to `amneziawg` itself, so a WireGuard node gets '' either way.
+      // Kept as the readable half of that fact, not as a guard anything leans
+      // on — removing it cannot alter a single output.
       const vpn = flavour === 'amneziawg' ? buildAwgVpnLink(endpoints, e.nodeName) : '';
       return {
         nodeName: e.nodeName,
