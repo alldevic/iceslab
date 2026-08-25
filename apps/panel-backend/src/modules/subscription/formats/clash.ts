@@ -366,6 +366,25 @@ export function buildClashYaml(
           block.push(...opts);
         }
       }
+      // XHTTP carries its path the same way the others do, and Mihomo is one of
+      // only two cores that work against today's s1 (VLESS+XHTTP+REALITY) - so
+      // this block is not an exotic branch, it is the production one. Without it
+      // the proxy said `network: xhttp` and nothing else: a client dialling the
+      // default path at a server listening on another, which connects to
+      // nothing and reports no reason.
+      //
+      // `xhttp-opts` with `path`/`host`/`mode`, per the Mihomo transport docs.
+      // `mode` is `auto` to match what `xrayjson.ts` already sends the other
+      // working core; the operator's configured `xhttpMode` reaches neither
+      // format today (see the note in the docs).
+      if (network === 'xhttp') {
+        const opts: string[] = [];
+        if (e.path) opts.push(`      path: ${yamlString(e.path)}`);
+        if (e.hostHeader) opts.push(`      host: ${yamlString(e.hostHeader)}`);
+        opts.push(`      mode: ${yamlString('auto')}`);
+        block.push(`    xhttp-opts:`);
+        block.push(...opts);
+      }
       if (network === 'grpc' && e.serviceName) {
         block.push(`    grpc-opts:`);
         block.push(`      grpc-service-name: ${yamlString(e.serviceName)}`);

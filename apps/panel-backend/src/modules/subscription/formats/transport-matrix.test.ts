@@ -47,7 +47,24 @@ type Network = (typeof NETWORKS)[number];
  * For `raw` there is nothing to carry, so having no transport block IS the
  * correct rendering and counts as `carried`.
  */
-type Verdict = 'carried' | 'degraded' | 'dropped' | 'omitted';
+type Verdict = 'carried' | 'partial' | 'degraded' | 'dropped' | 'omitted';
+
+/**
+ * What a transport needs BESIDES its name, and the value our fixture gives it.
+ *
+ * Naming the transport is not carrying it. A `ws` entry with no path dials `/`
+ * at a server listening on `/dl` and connects to nothing - the same silent dead
+ * entry as a missing transport, one field further in. The first version of this
+ * table asked only whether the NAME appeared and called that `carried`, which is
+ * how `clash:xhttp` (no options block at all) and `loon:ws` (no path, ever) sat
+ * in a green column.
+ */
+const REQUIRES: Partial<Record<Network, string>> = {
+  ws: '/dl',
+  xhttp: '/dl',
+  httpupgrade: '/dl',
+  grpc: 'gsvc',
+};
 
 function endpoint(
   network: Network,
@@ -85,7 +102,10 @@ function verdictFrom(
   // `xhttp` tomorrow would read as `dropped` and stay on the broken list - the
   // table would go on accusing a renderer that had been fixed, which is the one
   // way a characterisation test can be worse than no test.
-  if (out.includes(opts.slot(network))) return 'carried';
+  if (out.includes(opts.slot(network))) {
+    const needed = REQUIRES[network];
+    return !needed || out.includes(needed) ? 'carried' : 'partial';
+  }
   if (network === 'raw') return 'carried';
   if (opts.tcpName && out.includes(opts.tcpName)) return 'degraded';
   return 'dropped';
@@ -101,9 +121,11 @@ function matrix(): Record<Network, Record<string, Verdict>> {
 
     rows[n] = {
       xrayjson:
-        stream.network === n && (n === 'raw' || Object.keys(stream).some((k) => k.startsWith(n)))
-          ? 'carried'
-          : 'degraded',
+        stream.network !== n || !(n === 'raw' || Object.keys(stream).some((k) => k.startsWith(n)))
+          ? 'degraded'
+          : !REQUIRES[n] || JSON.stringify(stream).includes(REQUIRES[n] as string)
+            ? 'carried'
+            : 'partial',
       clash: verdictFrom(buildClashYaml(one), n, {
         entryMarker: 'type: vless',
         slot: (t) => `network: ${t}`,
@@ -114,9 +136,11 @@ function matrix(): Record<Network, Record<string, Verdict>> {
       singbox: !vless
         ? 'omitted'
         : vless.transport
-          ? vless.transport.type === n
-            ? 'carried'
-            : 'degraded'
+          ? vless.transport.type !== n
+            ? 'degraded'
+            : !REQUIRES[n] || JSON.stringify(vless.transport).includes(REQUIRES[n] as string)
+              ? 'carried'
+              : 'partial'
           : n === 'raw'
             ? 'carried'
             : 'dropped',
@@ -159,7 +183,7 @@ function render(): string {
 describe('subscription formats against xray stream transports', () => {
   it('the table, exactly as it stands today', () => {
     // No `degraded` and no `dropped` anywhere: every cell either carries the
-    // transport or declines the endpoint. `omitted` is not a shrug - it is the
+    // transport, declines the endpoint, or is a named `partial` (see below). `omitted` is not a shrug - it is the
     // client having no spelling for that transport at all, established per
     // client in `cannotCarryTransport`, and the alternative was an entry that
     // imports cleanly and never connects.
@@ -167,8 +191,8 @@ describe('subscription formats against xray stream transports', () => {
 transport   xrayjson    clash       singbox     loon        surge       quantumultx
 raw         carried     carried     carried     carried     omitted     carried
 xhttp       carried     carried     omitted     omitted     omitted     omitted
-ws          carried     carried     carried     carried     omitted     carried
-grpc        carried     carried     carried     carried     omitted     omitted
+ws          carried     carried     carried     partial     omitted     carried
+grpc        carried     carried     carried     partial     omitted     omitted
 httpupgrade carried     carried     carried     omitted     omitted     omitted
 kcp         carried     carried     omitted     omitted     omitted     omitted
 `);
@@ -181,6 +205,9 @@ kcp         carried     carried     omitted     omitted     omitted     omitted
       for (const [fmt, verdict] of Object.entries(rows[n])) {
         if (verdict === 'degraded' || verdict === 'dropped') broken.push(`${fmt}:${n}`);
       }
+      // `partial` is tracked separately below: the endpoint IS emitted and the
+      // transport IS named, so it is not the same failure as handing over an
+      // entry for a transport the client cannot speak at all.
     }
     // Empty, and it has to stay empty. This is the assertion that would catch
     // the defect coming back: a format that starts emitting an endpoint whose
@@ -199,6 +226,25 @@ kcp         carried     carried     omitted     omitted     omitted     omitted
     );
     expect(emitted).toEqual(['raw', 'ws']);
     expect(buildSurgeConf([endpoint('ws', 'tls')])).toContain('ws=true');
+  });
+
+  it('the partial cells are Loon, and they are Loon\'s grammar problem', () => {
+    const rows = matrix();
+    const partial: string[] = [];
+    for (const n of NETWORKS) {
+      for (const [fmt, verdict] of Object.entries(rows[n])) {
+        if (verdict === 'partial') partial.push(`${fmt}:${n}`);
+      }
+    }
+    // Loon names the transport and never emits `path` or `host` at all, so a
+    // WebSocket endpoint on anything but `/` connects to nothing. Not fixed
+    // here on purpose: Loon's official example writes parameters with `=`
+    // (`transport=ws,path=/,over-tls=true`) where this builder writes `:`, and
+    // `loon.ts` already flags its whole grammar as unverified and alpha.
+    // Adding a `path:` in a separator we have upstream evidence is wrong would
+    // be motion, not a fix. Verifying the format is its own piece of work; this
+    // list is the reason it is worth doing.
+    expect(partial.sort()).toEqual(['loon:grpc', 'loon:ws']);
   });
 
   it('Vision rides RAW and XHTTP only, in every format that emits it', () => {
