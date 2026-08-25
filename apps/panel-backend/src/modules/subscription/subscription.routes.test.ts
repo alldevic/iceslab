@@ -344,6 +344,48 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
     expect(res.body).toBe('');
   });
 
+  // The wg path end to end: a profile saved through the API, bound to a node,
+  // and the .conf a WireGuard client would import coming back out. Proven
+  // against a real interface in the node's live test; this is the half of the
+  // loop that lives here - that the panel produces the file at all, and that it
+  // is the plain flavour rather than the obfuscated one.
+  it('serves a plain wg-quick conf for a wireguard profile', async () => {
+    const user = await createUser('alice');
+    const nodeId = await createNode('eu-1', '10.0.0.1:8443');
+    const profileId = await createProfile(
+      'wireguard',
+      {
+        subnet: '10.77.77.0/24',
+        serverPrivateKey: 'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFsGm3Uk=',
+        serverPublicKey: 'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      },
+      'plain',
+    );
+    await createBinding(profileId, nodeId, 51821);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?format=wgconf&proto=wireguard`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    expect(res.body).toContain('[Interface]');
+    expect(res.body).toContain('[Peer]');
+    expect(res.body).toContain('PublicKey = BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');
+    // The endpoint is the binding's port, not WireGuard's 51820 default: the
+    // config advertising a port the server does not listen on is the failure
+    // this pairing exists to prevent.
+    expect(res.body).toContain('Endpoint = 10.0.0.1:51821');
+    // An address out of the profile's own subnet, allocated to this user.
+    expect(res.body).toMatch(/Address = 10\.77\.77\.\d+\/32/);
+    // And nothing a stock client would refuse to parse. `wg setconf` answers
+    // `Line unrecognized: 'Jc=4'` and wg-quick then deletes the device, so one
+    // leaked directive costs the whole tunnel.
+    for (const key of ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4', 'I1']) {
+      expect(res.body).not.toContain(`${key} = `);
+    }
+  });
+
   it('rejects unknown ?format value with 400', async () => {
     const user = await createUser('alice');
     const res = await app.inject({

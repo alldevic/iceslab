@@ -3,9 +3,10 @@
  *
  * Deliberately separate from the AmneziaWG builder next door rather than a
  * flag on it: the difference is not "some optional lines", it is which
- * parsers accept the output. `wg-quick`, the official WireGuard apps and
- * WireSock abort on the first key they don't know, so a single stray `Jc =`
- * makes the file unusable — exactly the clients this format exists for.
+ * parsers accept the output. Fed an AmneziaWG config, stock wireguard-tools
+ * (1.0.20210914) answers `Line unrecognized: 'Jc=4'`, `wg setconf` exits 1 and
+ * `wg-quick up` deletes the device it had just made - so a single stray `Jc =`
+ * costs the whole tunnel, for exactly the clients this format exists for.
  *
  * Output is a plain text blob; WireGuard has no URL form. Subscription
  * generators wrap it in their preferred container (raw .conf file, QR).

@@ -319,10 +319,12 @@ func renderConfig(inbound InboundConfig, peers []Peer) (string, error) {
 	fmt.Fprintf(&b, "PrivateKey = %s\n", cfg.PrivateKey)
 	fmt.Fprintf(&b, "ListenPort = %d\n", cfg.ListenPort)
 	fmt.Fprintf(&b, "Address = %s\n", cfg.Address)
-	// Plain WireGuard stops here: wg-quick rejects the whole config file with
-	// "unrecognized key" the moment it meets Jc/S1/H1, so an AWG-shaped
-	// [Interface] block is not merely redundant on a vanilla interface, it
-	// prevents the interface from coming up at all.
+	// Plain WireGuard stops here. Measured on wireguard-tools 1.0.20210914
+	// against a config from our own AmneziaWG builder: `wg setconf` answers
+	// `Line unrecognized: 'Jc=4'` / `Configuration parsing error` and exits 1,
+	// and `wg-quick up` follows that with `ip link delete dev <iface>`. So an
+	// AWG-shaped [Interface] block is not merely redundant on a vanilla
+	// interface - it stops the interface coming up at all.
 	if !cfg.Plain {
 		renderObfuscation(&b, cfg)
 	}

@@ -21,8 +21,9 @@ function isWgEndpoint(e: SubscriptionEndpoint): e is WgEndpoint {
  * Targets the AmneziaVPN-app and the AmneziaWG mobile clients for
  * `amneziawg` endpoints, and stock WireGuard (official apps, WireSock,
  * kernel `wg-quick`) for `wireguard` ones. The two produce different text:
- * an AmneziaWG config carries the Jc/S/H obfuscation directives, and a
- * stock WireGuard parser aborts on the first one it meets, so the flavour
+ * an AmneziaWG config carries the Jc/S/H obfuscation directives, and stock
+ * wireguard-tools refuses the file outright when it meets one (`Line
+ * unrecognized: 'Jc=4'`, then wg-quick deletes the device), so the flavour
  * decides the builder rather than adding optional lines to one blob.
  *
  * Limitations:
