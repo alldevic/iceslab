@@ -1261,6 +1261,21 @@ print(d.get("id") or d["users"][0]["id"])')"
     exec python3 "$HERE/compare_admin.py" "$1" "$2"
     ;;
 
+  subpage)
+    # The install document the panel emits, through the SHOP'S validator.
+    #
+    # Belongs here rather than in the backend suite for the reason the whole
+    # third tier exists: a check that only consults our own opinion of the
+    # contract cannot see the shop deciding our document is unusable. It fails
+    # ALL-OR-NOTHING and silently, so from the panel side a discarded document
+    # and an accepted one look identical.
+    #
+    # Needs the shop CHECKOUT (not the stand) and a live panel.
+    shift
+    [[ $# -ge 1 ]] || die "usage: stand.sh subpage <subscription-token> [<subscription-token> ...]"
+    MINISHOP_DIR="$SHOP" exec python3 "$HERE/subpage_validate.py" "$@"
+    ;;
+
   selftest)
     # The comparators, against walkthroughs whose answer is known. Needs no
     # stand and no docker, so there is no excuse for skipping it: a comparator
