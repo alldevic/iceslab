@@ -532,7 +532,18 @@ func (s *Subprocess) recordLastLine(line string) {
 		return
 	}
 	if len(line) > maxLastLine {
-		line = line[:maxLastLine]
+		// Keep the TAIL, not the head. Both conventions that produce these lines
+		// put the root cause last: xray nests with " > " and Go wraps with ": ",
+		// so the front of a long failure is the outermost context and the end is
+		// what actually went wrong. Measured on the real thing - the panel first
+		// showed
+		//   not running: xray (Failed to start: app/proxyman/inbound: failed to
+		//   listen TCP on 8443 > transport/internet: failed to listen on
+		//   address: 0.0.0.0:8443 > transport/internet/tcp: fa)
+		// which stops one clause before "bind: address already in use", the only
+		// part an operator needs. The leading ellipsis is deliberate: a cut-off
+		// line that reads like a whole sentence is worse than an obvious stub.
+		line = "..." + line[len(line)-maxLastLine:]
 	}
 	s.lastLineMu.Lock()
 	s.lastLine = line
