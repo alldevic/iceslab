@@ -209,9 +209,28 @@ function qualify(prefix: string, values: string[] | undefined): string[] {
  * dead. A geosite/domain-only policy keeps the default, so it stays
  * byte-identical to a node without one.
  *
- * CAVEAT, still unvalidated on a live node: IPOnDemand resolves through the
+ * Measured on xray 26.3.27 rather than reasoned about, with the controls that
+ * make the answer mean anything - one socks inbound, sniffing on, an ip rule
+ * over 127.0.0.0/8 and two freedom outbounds to tell the decision apart:
+ *
+ *   default      + catch-all below the ip rule   -> direct   ip rule DEAD
+ *   IPOnDemand   + catch-all below the ip rule   -> byIP     ip rule fires
+ *   default      + NO catch-all                  >> byIP     second pass happens
+ *   IPIfNonMatch + catch-all                     -> direct   same as default
+ *
+ * The arrow is xray's own: `->` is a first-pass decision, `>>` one taken after
+ * resolving the name. The third row is what makes the first mean something -
+ * without it "the ip rule did not fire" could as easily be a broken fixture.
+ *
+ * And every one of the four FETCHED successfully. That is why this is worth a
+ * comment: nothing fails, the traffic simply leaves through the wrong egress,
+ * so the only symptom is a split that quietly does not split.
+ *
+ * CAVEAT, and this half is still unvalidated: IPOnDemand resolves through the
  * NODE's DNS, which can answer differently than the client's resolver for CDN
- * and geo-DNS names, so a geoip match is approximate.
+ * and geo-DNS names, so a geoip match is approximate. The measurement above
+ * pinned the name to an address on purpose, which is exactly the case that
+ * cannot show this.
  */
 export function policyNeedsIpResolution(policy: EgressPolicy | undefined): boolean {
   return (policy ?? []).some((r) => Boolean(r.geoip?.length || r.ip?.length));
