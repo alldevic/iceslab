@@ -1391,8 +1391,54 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	// spurious full restart (dropping every live session) on an unchanged config.
 	a.regenFailed = false
 	a.mu.Unlock()
+
+	// A spawn is not a start.
+	//
+	// `xray run -test` builds the instance but never binds anything, so a config
+	// it approves can still die the moment it runs for real - a listen port
+	// already taken is the everyday case and is invisible to the test. The line
+	// below used to go out regardless. Watched live on 2026-08-24: xray exited
+	// 23 seventeen times in one minute, and every cycle wrote "xray (re)started"
+	// and (from the server) "addUser ok" at INFO, so the journal read like a
+	// healthy node while nothing was listening.
+	//
+	// The supervisor restarts a crashed core after a 2s backoff, which is what
+	// makes this window meaningful: a core that died on spawn is still down when
+	// we look, and one that is up has genuinely survived rather than been
+	// declared alive. Returning the error matters as much as the log - the
+	// deferred handler above turns it into regenFailed, so an identical config
+	// pushed again still retries instead of being skipped as unchanged, and
+	// ApplyInbound reports the failure to the panel rather than a green ack.
+	if !aliveAfter(ctx, proc, startupGrace) {
+		a.logger.Error(
+			"xray exited right after starting; what it printed is in the lines above",
+			"grace", startupGrace, "users", len(clients),
+		)
+		return fmt.Errorf("xray exited within %s of starting", startupGrace)
+	}
 	a.logger.Info("xray (re)started", "users", len(clients))
 	return nil
+}
+
+// startupGrace is how long a freshly spawned core gets to prove it stayed up.
+// Short enough not to slow an ordinary apply, longer than the time an xray that
+// rejects its config takes to exit (it dies before it finishes parsing), and
+// well under the supervisor's 2s restart backoff so a crashed core has not yet
+// been replaced by a second doomed one.
+const startupGrace = 400 * time.Millisecond
+
+// aliveAfter reports whether the process is still running once the grace has
+// passed. A cancelled context ends the wait early and asks the same question:
+// the caller is shutting down, and claiming a successful start on the way out
+// would be the same lie in a quieter place.
+func aliveAfter(ctx context.Context, proc *subprocess.Subprocess, grace time.Duration) bool {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+	return proc.Running()
 }
 
 // testXrayConfig runs `xray run -test` on a candidate config in a throwaway
