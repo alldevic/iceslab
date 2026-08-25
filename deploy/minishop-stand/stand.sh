@@ -382,6 +382,53 @@ and the next run would inherit this one's panel users."
 # of every differential run here, silently: the backend answered every admin
 # page while the worker got 401 on everything, and the only visible trace was a
 # `panel_sync: failed` tile that looked like a property of the reference panel.
+# Wait until the shop's worker stops talking, so the admin walk is measured
+# against a quiet stand.
+#
+# The trace window used to open on a bare `sleep 1`. The worker syncs the fleet
+# on its own schedule, and a round landing inside that window puts calls in the
+# trace that the walk never made: two differentials run back to back counted 34
+# and 41, with `iceslab-buy.trace` identical between them - so the extra calls
+# were additional, not leaked from the purchase.
+#
+# That left idempotence holding as a property of the GATE and not of the run:
+# the comparison passed because it compares multisets per step, not because the
+# two runs did the same thing.
+#
+# Idleness is read as "the worker has written nothing for N consecutive
+# seconds", not as a particular log line. A marker would tie this to one
+# release's wording, and the shop is a dependency we do not control - the point
+# is only that nothing is in flight.
+wait_for_worker_idle() {
+  local which="$1" quiet="${2:-4}" timeout="${3:-90}"
+  local container="remnawave-minishop-worker"
+  local waited=0 stable=0 prev="" now
+  while (( waited < timeout )); do
+    # `|| true`: docker logs exits non-zero for a container that is restarting,
+    # and under `set -e` that would kill the run for a transient state we are
+    # about to wait out anyway.
+    now="$(docker logs --tail 5 "$container" 2>&1 | md5sum || true)"
+    if [[ "$now" == "$prev" ]]; then
+      stable=$(( stable + 1 ))
+      (( stable >= quiet )) && {
+        echo "stand: $which worker idle after ${waited}s"
+        return 0
+      }
+    else
+      stable=0
+    fi
+    prev="$now"
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  # Not fatal. A worker that never goes quiet is worth saying out loud, but it
+  # is not a reason to throw away a run that is otherwise fine - the trace will
+  # simply carry the same noise it always did, and now it says so.
+  echo "stand: WARNING - $which worker still talking after ${timeout}s; the admin" >&2
+  echo "       trace may carry background sync calls the walk did not make" >&2
+  return 0
+}
+
 assert_worker_authenticated() {
   local which="$1" key
   case "$which" in
@@ -976,6 +1023,8 @@ rejected - check the affectedRows key."
       > "$outdir/$which-buy.log" 2>&1 \
       || { tail -20 "$outdir/$which-buy.log" >&2; die "the purchase failed on the $which stand"; }
     "$0" trace "$outdir/$which-buy.trace"
+    # Open the window on a quiet stand: see wait_for_worker_idle.
+    wait_for_worker_idle "$which"
     mark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; sleep 1
     STAND_ENV="$env_for_half" "$HERE/admin.sh" "$outdir/$which-admin.jsonl" \
       "${STAND_BUYER:-stand-buyer@example.com}" 2>&1 | tee "$outdir/$which-admin.log"
