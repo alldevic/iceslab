@@ -125,11 +125,50 @@ export function generateLinkCreds(linkProtocols: LinkProtocol[]): LinkCred[] {
  * because a bad choice here is invisible until traffic gets blocked, and the
  * operator has no way to evaluate it.
  */
+/**
+ * A REALITY identity for one RECEIVING node, plus a fresh shortId per link.
+ *
+ * The split is forced by xray: several links land on ONE inbound (the port is
+ * shared per receiving step, so N directions cost N secrets and one port), and
+ * an inbound carries exactly one `privateKey`. A keypair minted per LINK cannot
+ * be served - the inbound would decrypt for one dialler and reject its
+ * siblings. `shortIds` IS a list, so the per-link secret lives there.
+ *
+ * Keyed on the receiving node rather than shared fleet-wide: a compromised node
+ * then impersonates only itself, which is the property the per-link version was
+ * reaching for and could not have.
+ */
+function realityForReceiver(
+  cache: Map<string, { privateKey: string; publicKey: string }>,
+  toNodeId: string,
+): NonNullable<VlessLinkCred['reality']> {
+  let pair = cache.get(toNodeId);
+  if (!pair) {
+    pair = generateRealityKeyPair();
+    cache.set(toNodeId, pair);
+  }
+  return realityWith(pair);
+}
+
+/**
+ * A standalone REALITY identity, for the v3 chain/balancer shapes.
+ *
+ * Safe there for a reason worth stating rather than assuming: those topologies
+ * give every receiving hop exactly ONE incoming link (a chain links hop i to
+ * hop i+1, a balancer links the entry to each exit), so one keypair per link
+ * and one per inbound are the same thing. Only the v4 topology puts several
+ * links on one inbound, and that path goes through realityForReceiver.
+ */
 function newLinkReality(): NonNullable<VlessLinkCred['reality']> {
-  const { privateKey, publicKey } = generateRealityKeyPair();
+  return realityWith(generateRealityKeyPair());
+}
+
+function realityWith(pair: {
+  privateKey: string;
+  publicKey: string;
+}): NonNullable<VlessLinkCred['reality']> {
   return {
-    privateKey,
-    publicKey,
+    ...pair,
     // shortId is a hex string of even length, up to 16 bytes; 8 is what the
     // panel already uses for user-facing inbounds.
     shortId: randomBytes(8).toString('hex'),
@@ -138,7 +177,21 @@ function newLinkReality(): NonNullable<VlessLinkCred['reality']> {
   };
 }
 
-const LINK_CAMOUFLAGE_SNI = 'www.microsoft.com';
+/**
+ * The site an inter-hop handshake is camouflaged as, and dialled through.
+ *
+ * NOT www.microsoft.com, which is what this was. Measured on xray 26.3.27: its
+ * REALITY server authenticates the client, then runs out of relayed handshake
+ * before the target's 8273-byte certificate chain is through, and logs
+ * `handshake did not complete successfully`. Deterministic - three failures out
+ * of three, interleaved with two successes out of two on cloudflare.
+ *
+ * `www.cloudflare.com` completes, as do dl.google.com, addons.mozilla.org,
+ * www.apple.com and www.lovelive-anime.jp. Fixed rather than configurable for
+ * now because a bad choice here is invisible until traffic gets blocked, and
+ * the operator has no way to evaluate one.
+ */
+const LINK_CAMOUFLAGE_SNI = 'www.cloudflare.com';
 
 /** One node-to-node leg of a v4 cascade, carrying traffic for ONE direction. */
 export interface TopologyLink {
@@ -174,6 +227,10 @@ export function generateTopologyLinks(
   directions: { tag: number; nodeIds: string[] }[],
 ): TopologyLink[] {
   const links: TopologyLink[] = [];
+  // One REALITY identity per receiving node, reused by every link into it -
+  // see realityForReceiver. Lives here so it spans both loops below: a node can
+  // only receive at one step, but the two loops are what produce those links.
+  const receiverIdentity = new Map<string, { privateKey: string; publicKey: string }>();
   const emit = (
     from: string,
     to: string,
@@ -190,7 +247,12 @@ export function generateTopologyLinks(
             psk: randomBytes(32).toString('base64'),
             method: SS_LINK_METHOD,
           }
-        : { protocol: 'vless', port, uuid: randomUUID(), reality: newLinkReality() };
+        : {
+            protocol: 'vless',
+            port,
+            uuid: randomUUID(),
+            reality: realityForReceiver(receiverIdentity, to),
+          };
     links.push({ fromNodeId: from, toNodeId: to, directionTag, protocol, cred });
   };
 
@@ -222,10 +284,22 @@ export function generateTopologyLinks(
 
 /** Serialise a link cred to the plain JSON persisted in CascadeHop.linkConfig
  *  (a typed LinkCred lacks the index signature Prisma's Json input needs). */
-export function serializeLinkCred(cred: LinkCred): Record<string, string | number> {
-  return cred.protocol === 'shadowsocks'
-    ? { protocol: 'shadowsocks', port: cred.port, psk: cred.psk, method: cred.method }
-    : { protocol: 'vless', port: cred.port, uuid: cred.uuid };
+export function serializeLinkCred(
+  cred: LinkCred,
+): Record<string, string | number | Record<string, string>> {
+  if (cred.protocol === 'shadowsocks') {
+    return { protocol: 'shadowsocks', port: cred.port, psk: cred.psk, method: cred.method };
+  }
+  // The reality block travels. It used to be dropped here, which made the whole
+  // camouflage dead code: generated, commented at length, and gone by the time
+  // anything read it back - `parseLinkCred` has always accepted it and never
+  // once received one.
+  return {
+    protocol: 'vless',
+    port: cred.port,
+    uuid: cred.uuid,
+    ...(cred.reality ? { reality: { ...cred.reality } } : {}),
+  };
 }
 
 /** Parse a persisted linkConfig back into a LinkCred, or null if malformed. A
@@ -842,21 +916,56 @@ function multiClientLinkInbound(links: TopologyLinkRow[]): Record<string, unknow
       },
     };
   }
+  const vless = links.filter((l) => l.cred.protocol === 'vless');
+  // The receiving half of the camouflage. Rendered from the FIRST cred's
+  // identity because every link into one node shares it by construction (see
+  // realityForReceiver) - the port is shared per receiving step and an inbound
+  // carries exactly one privateKey.
+  //
+  // `shortIds` is the list that keeps the links distinguishable: xray accepts
+  // several, and each dialler presents its own.
+  //
+  // This used to be hardcoded to `security: 'none'` with no flow, while
+  // vlessLinkOutbound rendered REALITY+Vision from the same cred. Both ends
+  // agreed only because the reality block never survived persistence; the
+  // moment it did, the receiver would have answered TLS bytes as a plain VLESS
+  // header - `proxy/vless/encoding: invalid request version`, measured.
+  const reality = (first as VlessLinkCred).reality;
+  const shortIds = [
+    ...new Set(
+      vless
+        .map((l) => (l.cred as VlessLinkCred).reality?.shortId)
+        .filter((id): id is string => !!id),
+    ),
+  ];
   return {
     tag: LINK_IN_TAG,
     port: first.port,
     listen: '0.0.0.0',
     protocol: 'vless',
     settings: {
-      clients: links
-        .filter((l) => l.cred.protocol === 'vless')
-        .map((l) => ({
-          id: (l.cred as VlessLinkCred).uuid,
-          email: linkClientEmail(l.directionTag, l.fromNodeId),
-        })),
+      clients: vless.map((l) => ({
+        id: (l.cred as VlessLinkCred).uuid,
+        email: linkClientEmail(l.directionTag, l.fromNodeId),
+        // Vision is negotiated per USER: a client that sends a flow the account
+        // does not name is rejected, and so is one that sends none when it
+        // does. Both halves come from the same condition for that reason.
+        ...(reality ? { flow: 'xtls-rprx-vision' } : {}),
+      })),
       decryption: 'none',
     },
-    streamSettings: { network: 'raw', security: 'none' },
+    streamSettings: reality
+      ? {
+          network: 'raw',
+          security: 'reality',
+          realitySettings: {
+            dest: reality.dest,
+            serverNames: [reality.serverName],
+            privateKey: reality.privateKey,
+            shortIds,
+          },
+        }
+      : { network: 'raw', security: 'none' },
   };
 }
 

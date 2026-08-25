@@ -97,6 +97,9 @@ describe('the two ends of an inter-hop link', () => {
     expect(ends.receiverSecurity, 'the dialer and the receiver speak different protocols').toBe(
       ends.dialerSecurity,
     );
+    // And which layer, not just that they match: agreeing on `none` would
+    // satisfy the line above while the camouflage had quietly gone dead again.
+    expect(ends.dialerSecurity, 'the inter-hop leg lost its camouflage').toBe('reality');
   });
 
   it('agree on the flow, because VLESS negotiates it per user', () => {
@@ -106,21 +109,66 @@ describe('the two ends of an inter-hop link', () => {
     // dropped both halves at once.
     const ends = endsOfALink(storedCred());
     expect(ends.receiverFlow).toBe(ends.dialerFlow);
+    expect(ends.dialerFlow, 'Vision stopped being negotiated on the leg').toBe('xtls-rprx-vision');
   });
 
-  it('records that the camouflage is minted and then dropped on save', () => {
-    // Characterisation, not approval. When this starts failing it means the
-    // reality block now survives persistence - at which point the receiver and
-    // the one-key-per-inbound question must already have been dealt with, and
-    // the two assertions above are what will say whether they were.
+  it('carries the camouflage through persistence', () => {
+    // This case used to record the opposite - that the block was minted and
+    // then dropped on save - and said it would start failing the day somebody
+    // made it survive. That day is this commit, and the two assertions above
+    // are what checked the job was finished rather than half done.
     const [fresh] = generateTopologyLinks([{ nodeIds: [ENTRY] }], [{ tag: 1, nodeIds: [EXIT] }]);
-    expect(
-      (fresh!.cred as { reality?: unknown }).reality,
-      'generateTopologyLinks stopped minting the camouflage it documents',
-    ).toBeDefined();
-    expect(
-      Object.keys(serializeLinkCred(fresh!.cred)).sort(),
-      'the persisted cred changed shape',
-    ).toEqual(['port', 'protocol', 'uuid']);
+    const stored = serializeLinkCred(fresh!.cred);
+    expect(Object.keys(stored).sort()).toEqual(['port', 'protocol', 'reality', 'uuid']);
+
+    const back = parseLinkCred(stored) as { reality?: Record<string, string> } | null;
+    expect(back?.reality?.privateKey, 'the reality block did not survive the round trip').toBeTruthy();
+    expect(back?.reality?.publicKey).toBe(
+      (fresh!.cred as { reality?: Record<string, string> }).reality?.publicKey,
+    );
+  });
+
+  it('gives every link into one node the SAME keypair, and its own shortId', () => {
+    // The constraint that makes a receiving inbound possible at all: it carries
+    // exactly one `privateKey`, while the port is shared per receiving step, so
+    // N directions land on one inbound. A keypair per LINK - which is what this
+    // minted before - could never have been served: the inbound would decrypt
+    // for one dialler and reject its siblings.
+    //
+    // `shortIds` is a list, so that is where the per-link secret goes.
+    const links = generateTopologyLinks(
+      [{ nodeIds: [ENTRY] }],
+      [
+        { tag: 1, nodeIds: [EXIT] },
+        { tag: 2, nodeIds: [EXIT] },
+      ],
+    ).filter((l) => l.toNodeId === EXIT);
+    expect(links.length, 'the fixture produced no sibling links to compare').toBeGreaterThan(1);
+
+    const reality = (l: (typeof links)[number]) =>
+      (l.cred as { reality?: Record<string, string> }).reality!;
+    const keys = new Set(links.map((l) => reality(l).privateKey));
+    expect(keys.size, 'sibling links into one node cannot share an inbound').toBe(1);
+    const shortIds = new Set(links.map((l) => reality(l).shortId));
+    expect(shortIds.size, 'the per-link secret collapsed into one').toBe(links.length);
+  });
+
+  it('gives DIFFERENT receiving nodes different keypairs', () => {
+    // The control for the case above. Sharing one identity fleet-wide would
+    // satisfy it just as well, and would mean a single compromised node can
+    // impersonate every hop.
+    const OTHER = N(4);
+    const links = generateTopologyLinks(
+      [{ nodeIds: [ENTRY] }],
+      [
+        { tag: 1, nodeIds: [EXIT] },
+        { tag: 2, nodeIds: [OTHER] },
+      ],
+    );
+    const keyFor = (node: string) =>
+      (
+        links.find((l) => l.toNodeId === node)!.cred as { reality?: Record<string, string> }
+      ).reality!.privateKey;
+    expect(keyFor(EXIT)).not.toBe(keyFor(OTHER));
   });
 });
