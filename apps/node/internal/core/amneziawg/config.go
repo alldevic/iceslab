@@ -79,6 +79,14 @@ type InboundConfig struct {
 	// (panel-backend amneziawg.service) is handing out from.
 	Address string
 
+	// Plain renders an upstream-WireGuard interface instead of an AmneziaWG
+	// one: every AWG-only directive below (Jc/Jmin/Jmax, S1-S4, H1-H4, I1-I5)
+	// is omitted, because wg-quick's INI parser aborts on a key it doesn't
+	// know, and validate() drops the H1-H4 rules, whose entire purpose is
+	// keeping an AWG interface distinguishable from vanilla WG. Set from
+	// Config.Protocol at construction, never from the panel wire.
+	Plain bool
+
 	// Junk parameters: currently interface-fixed in MVP.
 	Jc   int // junk packet count
 	Jmin int // junk packet size min
@@ -233,6 +241,38 @@ func (c *InboundConfig) validate() error {
 	if err := validateWGKey(c.PrivateKey); err != nil {
 		return fmt.Errorf("PrivateKey: %w", err)
 	}
+	if c.Plain {
+		// Vanilla WireGuard: none of the obfuscation knobs exist on the wire,
+		// so a non-zero one here means a caller mapped an AWG config onto a
+		// plain interface. Fail loudly rather than render a config that
+		// silently drops the obfuscation the operator thinks they configured.
+		for _, f := range []struct {
+			name string
+			val  int
+		}{{"Jc", c.Jc}, {"Jmin", c.Jmin}, {"Jmax", c.Jmax},
+			{"S1", c.S1}, {"S2", c.S2}, {"S3", c.S3}, {"S4", c.S4}} {
+			if f.val != 0 {
+				return fmt.Errorf("%s=%d set on a plain WireGuard interface (obfuscation is AmneziaWG-only)", f.name, f.val)
+			}
+		}
+		for _, f := range []struct {
+			name string
+			val  uint32
+		}{{"H1", c.H1}, {"H2", c.H2}, {"H3", c.H3}, {"H4", c.H4}} {
+			if f.val != 0 {
+				return fmt.Errorf("%s=%d set on a plain WireGuard interface (magic headers are AmneziaWG-only)", f.name, f.val)
+			}
+		}
+		for _, f := range []struct {
+			name string
+			val  string
+		}{{"I1", c.I1}, {"I2", c.I2}, {"I3", c.I3}, {"I4", c.I4}, {"I5", c.I5}} {
+			if f.val != "" {
+				return fmt.Errorf("%s set on a plain WireGuard interface (mimicry packets are AmneziaWG-only)", f.name)
+			}
+		}
+		return nil
+	}
 	for _, h := range []struct {
 		name string
 		val  uint32
@@ -279,23 +319,12 @@ func renderConfig(inbound InboundConfig, peers []Peer) (string, error) {
 	fmt.Fprintf(&b, "PrivateKey = %s\n", cfg.PrivateKey)
 	fmt.Fprintf(&b, "ListenPort = %d\n", cfg.ListenPort)
 	fmt.Fprintf(&b, "Address = %s\n", cfg.Address)
-	fmt.Fprintf(&b, "Jc = %d\n", cfg.Jc)
-	fmt.Fprintf(&b, "Jmin = %d\n", cfg.Jmin)
-	fmt.Fprintf(&b, "Jmax = %d\n", cfg.Jmax)
-	fmt.Fprintf(&b, "S1 = %d\n", cfg.S1)
-	fmt.Fprintf(&b, "S2 = %d\n", cfg.S2)
-	fmt.Fprintf(&b, "S3 = %d\n", cfg.S3)
-	fmt.Fprintf(&b, "S4 = %d\n", cfg.S4)
-	fmt.Fprintf(&b, "H1 = %d\n", cfg.H1)
-	fmt.Fprintf(&b, "H2 = %d\n", cfg.H2)
-	fmt.Fprintf(&b, "H3 = %d\n", cfg.H3)
-	fmt.Fprintf(&b, "H4 = %d\n", cfg.H4)
-	// I1-I5 are emitted only when non-empty, empty strings mean "no
-	// mimicry packet for this slot", and awg-quick rejects empty hex.
-	for i, val := range []string{cfg.I1, cfg.I2, cfg.I3, cfg.I4, cfg.I5} {
-		if val != "" {
-			fmt.Fprintf(&b, "I%d = %s\n", i+1, val)
-		}
+	// Plain WireGuard stops here: wg-quick rejects the whole config file with
+	// "unrecognized key" the moment it meets Jc/S1/H1, so an AWG-shaped
+	// [Interface] block is not merely redundant on a vanilla interface, it
+	// prevents the interface from coming up at all.
+	if !cfg.Plain {
+		renderObfuscation(&b, cfg)
 	}
 	// awg-quick evaluates PostUp/PostDown as a shell command, so anything
 	// we render here runs as root on every interface bounce. PostUp/Down
@@ -337,6 +366,30 @@ func renderConfig(inbound InboundConfig, peers []Peer) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+// renderObfuscation writes the AmneziaWG-only part of the [Interface] block.
+// Split out of renderConfig so the plain-WireGuard path can skip it wholesale
+// rather than emitting zeroes, which wg-quick would refuse to parse.
+func renderObfuscation(b *strings.Builder, cfg InboundConfig) {
+	fmt.Fprintf(b, "Jc = %d\n", cfg.Jc)
+	fmt.Fprintf(b, "Jmin = %d\n", cfg.Jmin)
+	fmt.Fprintf(b, "Jmax = %d\n", cfg.Jmax)
+	fmt.Fprintf(b, "S1 = %d\n", cfg.S1)
+	fmt.Fprintf(b, "S2 = %d\n", cfg.S2)
+	fmt.Fprintf(b, "S3 = %d\n", cfg.S3)
+	fmt.Fprintf(b, "S4 = %d\n", cfg.S4)
+	fmt.Fprintf(b, "H1 = %d\n", cfg.H1)
+	fmt.Fprintf(b, "H2 = %d\n", cfg.H2)
+	fmt.Fprintf(b, "H3 = %d\n", cfg.H3)
+	fmt.Fprintf(b, "H4 = %d\n", cfg.H4)
+	// I1-I5 are emitted only when non-empty, empty strings mean "no
+	// mimicry packet for this slot", and awg-quick rejects empty hex.
+	for i, val := range []string{cfg.I1, cfg.I2, cfg.I3, cfg.I4, cfg.I5} {
+		if val != "" {
+			fmt.Fprintf(b, "I%d = %s\n", i+1, val)
+		}
+	}
 }
 
 // writeConfig atomically writes the awg config to disk via the shared

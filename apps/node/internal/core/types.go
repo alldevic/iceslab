@@ -15,6 +15,11 @@ type User struct {
 	NaivePassword      string
 	AmneziaWGPublicKey string
 	AmneziaWGAllowedIP string
+	// Plain WireGuard reuses the same user keypair as AmneziaWG but gets its
+	// own allocated tunnel IP, because the two inbounds carry separate
+	// subnets. A node bound to both profiles receives both addresses.
+	WireguardPublicKey string
+	WireguardAllowedIP string
 	TuicUUID           string
 	TuicPassword       string
 	AnytlsPassword     string

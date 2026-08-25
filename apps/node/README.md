@@ -75,6 +75,16 @@ sudo bash apps/node/scripts/bootstrap-amneziawg.sh
 
 Installs the upstream PPA (Ubuntu/Debian only), pulls `amneziawg`, `amneziawg-tools`, `amneziawg-dkms`, then verifies the kernel module loads. On DKMS failure (ARM containers, custom kernels) the script prints the userspace `amneziawg-go` fallback path; throughput drops from kernel-native (~92 Mbps) to userspace (~33 Mbps) but the inbound still works.
 
+### WireGuard
+
+Plain upstream WireGuard, driven by the same adapter in `internal/core/amneziawg` with `Protocol: "wireguard"`: identical peer management, stats and reload path, no obfuscation directives rendered, `wg` / `wg-quick` instead of `awg` / `awg-quick`, `/etc/wireguard/wg0.conf` instead of `/etc/amnezia/amneziawg/awg0.conf`.
+
+```bash
+sudo bash apps/node/scripts/bootstrap-wireguard.sh
+```
+
+Just `wireguard-tools` plus `/etc/wireguard` and `ip_forward` — the kernel module is in-tree since 5.6, so there is no DKMS build and no reboot. The agent registers the adapter whenever `wg` is on the host and leaves it dormant until the panel pushes a `wireguard` inbound, so an AmneziaWG node (whose bootstrap installs `wireguard-tools` anyway) can serve both later without reinstalling.
+
 ## Build
 
 ```bash

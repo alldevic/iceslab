@@ -277,6 +277,27 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		logger.Info("amneziawg adapter registered", "bin", awgBinPath)
 	}
 
+	// Upstream WireGuard, served by the same adapter in plain mode. Probe is
+	// `wg` on $PATH; on any modern kernel (in-tree since 5.6) installing
+	// wireguard-tools is the whole dependency, no DKMS build like AWG needs.
+	// A node may run both: separate interface, config path and UDP port, so
+	// the two never collide.
+	wgBinPath := getenv("WIREGUARD_BIN", "/usr/bin/wg")
+	wgQuickBinPath := getenv("WIREGUARD_QUICK_BIN", "/usr/bin/wg-quick")
+	if _, err := os.Stat(wgBinPath); err == nil {
+		wgCfg := amneziawg.Config{
+			Protocol:     amneziawg.NameWireguard,
+			AwgBin:       wgBinPath,
+			AwgQuickBin:  wgQuickBinPath,
+			SystemctlBin: getenv("SYSTEMCTL_BIN", "/usr/bin/systemctl"),
+			Inbound: amneziawg.InboundConfig{
+				Interface: getenv("WIREGUARD_INTERFACE", "wg0"),
+			},
+		}
+		adapters = append(adapters, amneziawg.New(wgCfg, logger))
+		logger.Info("wireguard adapter registered", "bin", wgBinPath)
+	}
+
 	// Slice 20: NaiveProxy via Caddy + klzgrad/forwardproxy@naive plugin.
 	// bootstrap-naive.sh builds a custom Caddy at /usr/local/bin/caddy-naive
 	// (the upstream `caddy` package would lack the forward_proxy module).

@@ -11,6 +11,7 @@ const (
 	ProtocolHysteria    ProtocolName = "hysteria"
 	ProtocolXray        ProtocolName = "xray"
 	ProtocolAmneziaWG   ProtocolName = "amneziawg"
+	ProtocolWireguard   ProtocolName = "wireguard"
 	ProtocolNaive       ProtocolName = "naive"
 	ProtocolShadowsocks ProtocolName = "shadowsocks"
 	ProtocolTuic        ProtocolName = "tuic"
@@ -53,6 +54,13 @@ type ProtocolCredentials struct {
 	// the peer block as `<ip>/32`. Only present when the user has access to
 	// an amneziawg inbound.
 	AmneziaWGAllowedIP string `json:"amneziawgAllowedIp,omitempty"`
+	// WireguardPublicKey is the same key as AmneziaWGPublicKey (one WG keypair
+	// per user), sent under its own name so a node can serve one flavour
+	// without inferring anything about the other. WireguardAllowedIP is
+	// allocated from the plain-WireGuard profile's own subnet and therefore
+	// differs from AmneziaWGAllowedIP.
+	WireguardPublicKey string `json:"wireguardPublicKey,omitempty"`
+	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
 	// TUIC (sing-box engine): per-user UUID + password. Both required for a
 	// TUIC v5 client to authenticate. Only present when the user has access
 	// to a tuic inbound.

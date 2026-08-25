@@ -16,12 +16,58 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
 
-const Name = "amneziawg"
+const (
+	// Name is the AmneziaWG protocol, the package's original and default mode.
+	Name = "amneziawg"
+	// NameWireguard is upstream WireGuard: the same interface lifecycle driven
+	// through `wg` / `wg-quick`, with no obfuscation directives rendered, so
+	// stock WireGuard clients (the official apps, WireSock, kernel wg) can
+	// complete a handshake. AmneziaWG deliberately cannot serve them: its
+	// magic headers H1-H4 must differ from WireGuard's 1..4.
+	NameWireguard = "wireguard"
+)
+
+// defaultInterface is the device name a flavour claims when the installer
+// didn't pin one. Distinct per flavour so a node running both never has two
+// adapters fighting over one device.
+func defaultInterface(protocol string) string {
+	if protocol == NameWireguard {
+		return "wg0"
+	}
+	return "awg0"
+}
+
+// defaultConfigPath mirrors where each flavour's tooling looks by default:
+// wg-quick reads /etc/wireguard/<iface>.conf, awg-quick /etc/amnezia/amneziawg.
+func defaultConfigPath(protocol, iface string) string {
+	if protocol == NameWireguard {
+		return fmt.Sprintf("/etc/wireguard/%s.conf", iface)
+	}
+	return fmt.Sprintf("/etc/amnezia/amneziawg/%s.conf", iface)
+}
+
+// unitName is the systemd unit that owns the interface, used for the restart
+// fallback when syncconf fails.
+func (a *Adapter) unitName(iface string) string {
+	if a.plain() {
+		return "wg-quick@" + iface
+	}
+	return "awg-quick@" + iface
+}
 
 const defaultSyncTimeout = 10 * time.Second
 
 // Config is the per-instance settings for an AmneziaWGAdapter.
 type Config struct {
+	// Protocol selects which member of the wg-quick family this instance
+	// serves: "amneziawg" (default) or "wireguard". The two share every line
+	// of peer management, stats and reload logic and differ only in the
+	// obfuscation block of the rendered config, the CLI names, and the
+	// systemd unit, so one adapter serves both, the way the sing-box adapter
+	// serves tuic/anytls/shadowtls. A node running both gets two instances,
+	// each on its own interface, config path and UDP port.
+	Protocol string
+
 	// Inbound is the static interface settings (keys, ports, obfuscation).
 	// Slice 23 will move these into the inbounds table per node.
 	Inbound InboundConfig
@@ -30,7 +76,8 @@ type Config struct {
 	// from. Default "/etc/amnezia/amneziawg/<iface>.conf".
 	ConfigPath string
 
-	// AwgBin / AwgQuickBin / SystemctlBin are CLI paths. When AwgQuickBin is
+	// AwgBin / AwgQuickBin / SystemctlBin are CLI paths (`wg` / `wg-quick`
+	// when Protocol is "wireguard"). When AwgQuickBin is
 	// empty the adapter runs in **config-only mode**: it writes the config
 	// file but never invokes any CLI. That mode is what tests and dev
 	// environments without amneziawg installed use.
@@ -85,11 +132,19 @@ type peerCounters struct {
 }
 
 func New(cfg Config, logger *slog.Logger) *Adapter {
+	if cfg.Protocol == "" {
+		cfg.Protocol = Name
+	}
+	plain := cfg.Protocol == NameWireguard
+	// The renderer keys off the inbound, not the adapter, so stamp the mode
+	// here: every later path (Start, ApplyInbound) rebuilds InboundConfig from
+	// the wire and must inherit it.
+	cfg.Inbound.Plain = plain
+	if cfg.Inbound.Interface == "" {
+		cfg.Inbound.Interface = defaultInterface(cfg.Protocol)
+	}
 	if cfg.ConfigPath == "" {
-		cfg.ConfigPath = fmt.Sprintf("/etc/amnezia/amneziawg/%s.conf", cfg.Inbound.Interface)
-		if cfg.Inbound.Interface == "" {
-			cfg.ConfigPath = "/etc/amnezia/amneziawg/awg0.conf"
-		}
+		cfg.ConfigPath = defaultConfigPath(cfg.Protocol, cfg.Inbound.Interface)
 	}
 	if cfg.SyncTimeout == 0 {
 		cfg.SyncTimeout = defaultSyncTimeout
@@ -111,10 +166,15 @@ func realRunCmd(ctx context.Context, name string, args ...string) ([]byte, error
 	return out, err
 }
 
-func (a *Adapter) Name() string { return Name }
+func (a *Adapter) Name() string { return a.cfg.Protocol }
 
-// Engine reports the native proxy core (amneziawg has no alternate engine).
-func (a *Adapter) Engine() string { return "amneziawg" }
+// Engine reports the native proxy core (neither wg flavour has an alternate
+// engine, so the engine name is the protocol name).
+func (a *Adapter) Engine() string { return a.cfg.Protocol }
+
+// plain reports whether this instance serves upstream WireGuard rather than
+// AmneziaWG. Derived from Protocol so the two can never disagree.
+func (a *Adapter) plain() bool { return a.cfg.Protocol == NameWireguard }
 
 // Start writes the initial (no-peer) config and brings the awg interface up.
 // In config-only mode (AwgQuickBin == "") it just writes the config.
@@ -145,8 +205,8 @@ func (a *Adapter) Start(ctx context.Context) error {
 	if a.cfg.Inbound.PrivateKey == "" {
 		iface := a.cfg.Inbound.Interface
 		a.mu.Unlock()
-		a.logger.Info("amneziawg adapter deferred, awaiting first ApplyInbound from panel",
-			"interface", iface)
+		a.logger.Info("adapter deferred, awaiting first ApplyInbound from panel",
+			"core", a.cfg.Protocol, "interface", iface)
 		return nil
 	}
 	inbound := a.cfg.Inbound
@@ -169,7 +229,8 @@ func (a *Adapter) Start(ctx context.Context) error {
 	}
 
 	a.setStarted(true)
-	a.logger.Info("amneziawg adapter started",
+	a.logger.Info("adapter started",
+		"core", a.cfg.Protocol,
 		"interface", inbound.Interface,
 		"managed", managed)
 	return nil
@@ -207,12 +268,19 @@ func (a *Adapter) setStarted(v bool) {
 // AddUser registers / updates a peer. No-op for users without amneziawg
 // credentials. Idempotent.
 func (a *Adapter) AddUser(user core.User) error {
-	if user.AmneziaWGPublicKey == "" || user.AmneziaWGAllowedIP == "" {
+	// Both flavours use the user's single WireGuard keypair, but each has its
+	// own subnet and therefore its own allocated IP: a node serving both
+	// profiles receives two addresses per user and must not cross them.
+	pubKey, allowedIP := user.AmneziaWGPublicKey, user.AmneziaWGAllowedIP
+	if a.plain() {
+		pubKey, allowedIP = user.WireguardPublicKey, user.WireguardAllowedIP
+	}
+	if pubKey == "" || allowedIP == "" {
 		return nil
 	}
 	desired := Peer{
-		PublicKey: user.AmneziaWGPublicKey,
-		AllowedIP: ensureCIDR(user.AmneziaWGAllowedIP),
+		PublicKey: pubKey,
+		AllowedIP: ensureCIDR(allowedIP),
 	}
 
 	a.mu.Lock()
@@ -281,7 +349,7 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	a.mu.Unlock()
 
 	if iface == "" {
-		iface = "awg0"
+		iface = defaultInterface(a.cfg.Protocol)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -453,7 +521,7 @@ func (a *Adapter) probeHealth(iface string) bool {
 func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	var wire inboundCfgWire
 	if err := json.Unmarshal(rawCfg, &wire); err != nil {
-		return fmt.Errorf("amneziawg ApplyInbound: parse cfg: %w", err)
+		return fmt.Errorf("%s ApplyInbound: parse cfg: %w", a.cfg.Protocol, err)
 	}
 
 	// AWG#10 - hold restartMu across the whole apply so a concurrent AddUser
@@ -473,8 +541,12 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	newInbound, err := wire.toInboundConfig(a.cfg.Inbound.Interface, listenPort)
 	if err != nil {
 		a.mu.Unlock()
-		return fmt.Errorf("amneziawg ApplyInbound: %w", err)
+		return fmt.Errorf("%s ApplyInbound: %w", a.cfg.Protocol, err)
 	}
+	// Render mode is adapter identity, not wire content: a plain instance stays
+	// plain even if a malformed push carried an obfuscation block (validate()
+	// then rejects it rather than silently dropping it).
+	newInbound.Plain = a.plain()
 	// Preserve install-time PostUp/PostDown and Interface defaults, those
 	// aren't in the panel wire. Interface name is install-time identity; if
 	// the wire expressed a new one it'd be a separate diffRestart anyway.
@@ -485,13 +557,13 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	switch kind {
 	case diffNone:
 		a.mu.Unlock()
-		a.logger.Info("amneziawg ApplyInbound: config unchanged, skipping")
+		a.logger.Info("ApplyInbound: config unchanged, skipping", "core", a.cfg.Protocol)
 		return nil
 	case diffSubnet:
 		if len(a.peers) > 0 {
 			n := len(a.peers)
 			a.mu.Unlock()
-			return fmt.Errorf("amneziawg ApplyInbound: subnet change rejected, %d peer(s) already allocated; drain peers before changing subnet", n)
+			return fmt.Errorf("%s ApplyInbound: subnet change rejected, %d peer(s) already allocated; drain peers before changing subnet", a.cfg.Protocol, n)
 		}
 		// No peers: subnet change is safe and only needs a full restart to
 		// re-attach the new IP to the interface.
@@ -499,27 +571,27 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		inbound := a.cfg.Inbound
 		peers := sortedPeers(a.peers)
 		a.mu.Unlock()
-		a.logger.Info("amneziawg ApplyInbound: subnet change with no peers, restarting interface",
-			"address", newInbound.Address)
+		a.logger.Info("ApplyInbound: subnet change with no peers, restarting interface",
+			"core", a.cfg.Protocol, "address", newInbound.Address)
 		return a.restartInterfaceFrom(context.Background(), inbound, peers)
 	case diffSyncconf:
 		a.cfg.Inbound = newInbound
 		inbound := a.cfg.Inbound
 		peers := sortedPeers(a.peers)
 		a.mu.Unlock()
-		a.logger.Info("amneziawg ApplyInbound: syncconf-eligible change", "iface", newInbound.Interface)
+		a.logger.Info("ApplyInbound: syncconf-eligible change", "core", a.cfg.Protocol, "iface", newInbound.Interface)
 		return a.syncFromSnapshot(context.Background(), inbound, peers)
 	case diffRestart:
 		a.cfg.Inbound = newInbound
 		inbound := a.cfg.Inbound
 		peers := sortedPeers(a.peers)
 		a.mu.Unlock()
-		a.logger.Info("amneziawg ApplyInbound: interface-level change, full restart",
-			"iface", newInbound.Interface)
+		a.logger.Info("ApplyInbound: interface-level change, full restart",
+			"core", a.cfg.Protocol, "iface", newInbound.Interface)
 		return a.restartInterfaceFrom(context.Background(), inbound, peers)
 	default:
 		a.mu.Unlock()
-		return fmt.Errorf("amneziawg ApplyInbound: unknown diffKind %d", kind)
+		return fmt.Errorf("%s ApplyInbound: unknown diffKind %d", a.cfg.Protocol, kind)
 	}
 }
 
@@ -536,7 +608,7 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 		return err
 	}
 	if a.cfg.AwgQuickBin == "" {
-		a.logger.Info("amneziawg restart skipped (config-only mode)")
+		a.logger.Info("restart skipped (config-only mode)", "core", a.cfg.Protocol)
 		a.setStarted(true)
 		return nil
 	}
@@ -555,7 +627,7 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 	// a ready adapter after the first ApplyInbound on a freshly-bootstrapped
 	// node (Start() returned early because PrivateKey was empty).
 	a.setStarted(true)
-	a.logger.Info("amneziawg interface bounced", "iface", inbound.Interface)
+	a.logger.Info("interface bounced", "core", a.cfg.Protocol, "iface", inbound.Interface)
 	return nil
 }
 
@@ -585,7 +657,7 @@ func (a *Adapter) syncFromSnapshot(ctx context.Context, inbound InboundConfig, p
 	}
 
 	if a.cfg.AwgQuickBin == "" {
-		a.logger.Info("amneziawg config written (config-only mode)", "peers", len(peers))
+		a.logger.Info("config written (config-only mode)", "core", a.cfg.Protocol, "peers", len(peers))
 		return nil
 	}
 
@@ -593,7 +665,7 @@ func (a *Adapter) syncFromSnapshot(ctx context.Context, inbound InboundConfig, p
 		a.logger.Warn("awg syncconf failed; falling back to systemctl restart", "err", err)
 		return a.restartViaSystemctl(ctx, inbound.Interface)
 	}
-	a.logger.Info("amneziawg synced", "peers", len(peers))
+	a.logger.Info("synced", "core", a.cfg.Protocol, "peers", len(peers))
 	return nil
 }
 
@@ -633,7 +705,7 @@ func (a *Adapter) restartViaSystemctl(parent context.Context, iface string) erro
 	}
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
-	unit := "awg-quick@" + iface
+	unit := a.unitName(iface)
 	out, err := a.cfg.runCmd(ctx, a.cfg.SystemctlBin, "restart", unit)
 	if err != nil {
 		return fmt.Errorf("systemctl restart %s: %w (%s)", unit, err, strings.TrimSpace(string(out)))
@@ -644,7 +716,7 @@ func (a *Adapter) restartViaSystemctl(parent context.Context, iface string) erro
 func (a *Adapter) writeConfigSnapshot(inbound InboundConfig, peers []Peer) error {
 	blob, err := renderConfig(inbound, peers)
 	if err != nil {
-		return fmt.Errorf("render amneziawg config: %w", err)
+		return fmt.Errorf("render %s config: %w", a.cfg.Protocol, err)
 	}
 	return writeConfig(a.cfg.ConfigPath, blob)
 }
