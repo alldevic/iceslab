@@ -99,6 +99,16 @@ export const APPS: AppDef[] = [
     protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'hiddify' },
     recommended: true,
+    // From hiddify.com, the project's own page (checked 2026-08-26). Desktop
+    // builds live on GitHub releases, so the project page is the destination
+    // rather than a versioned asset.
+    install: {
+      ios: 'https://apps.apple.com/app/id6596777532',
+      android: 'https://play.google.com/store/apps/details?id=app.hiddify.com',
+      windows: 'https://hiddify.com/',
+      macos: 'https://hiddify.com/',
+      linux: 'https://hiddify.com/',
+    },
   },
   {
     name: 'sing-box',
@@ -132,25 +142,40 @@ export const APPS: AppDef[] = [
     protocols: ['xray', 'shadowsocks'],
     action: { kind: 'deeplink', scheme: 'v2rayng' },
     recommended: true,
+    // 2dust/v2rayNG, the upstream repository (checked 2026-08-26). `/latest`
+    // rather than a tag: the shop's own guide pins `v2rayNG_2.0.9.apk`, which
+    // is two majors behind by now.
+    install: {
+      android: 'https://github.com/2dust/v2rayNG/releases/latest',
+      androidtv: 'https://github.com/2dust/v2rayNG/releases/latest',
+    },
   },
   {
     name: 'NekoBox',
     platforms: ['android'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },
+    // MatsuriDayo/NekoBoxForAndroid (checked 2026-08-26). Alive but quiet —
+    // upstream calls its own maintenance "relatively minimal" and the last
+    // release is from early 2024. Listed after the actively developed clients
+    // on the same tab, never as the recommended one.
+    install: { android: 'https://github.com/MatsuriDayo/NekoBoxForAndroid/releases/latest' },
   },
   {
     name: 'v2rayN',
     platforms: ['windows'],
     protocols: ['xray', 'shadowsocks'],
     action: { kind: 'manual' },
+    // 2dust/v2rayN (checked 2026-08-26).
+    install: { windows: 'https://github.com/2dust/v2rayN/releases/latest' },
   },
-  {
-    name: 'Nekoray',
-    platforms: ['windows', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
-    action: { kind: 'manual' },
-  },
+  // Nekoray was here and is gone (2026-08-26): MatsuriDayo/nekoray was ARCHIVED
+  // by its owner on 2025-03-17 and is read-only, its own release notes call it
+  // "a Windows/Linux endpoint node debugging tool", discourage ordinary users
+  // and point them at Clash Verge Rev — which this catalogue already offers on
+  // both of Nekoray's platforms, with the same protocols. Nothing was lost by
+  // dropping it, and offering an abandoned tool its authors steer people away
+  // from is the opposite of what this table is for.
   // The mihomo-cored clients, and the only ones listed for `mieru`: our clash
   // builder emits it as `type: mieru`, and the seeded UA rule points this
   // family at the clash format, so the chain from their deep link to a working
@@ -161,12 +186,26 @@ export const APPS: AppDef[] = [
     platforms: ['windows', 'macos', 'linux'],
     protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
+    // clash-verge-rev/clash-verge-rev (checked 2026-08-26). `/latest` rather
+    // than the pinned .deb/.rpm/.exe URLs the shop's guide carries.
+    install: {
+      windows: 'https://github.com/clash-verge-rev/clash-verge-rev/releases/latest',
+      macos: 'https://github.com/clash-verge-rev/clash-verge-rev/releases/latest',
+      linux: 'https://github.com/clash-verge-rev/clash-verge-rev/releases/latest',
+    },
   },
   {
     name: 'FlClash',
     platforms: ['android', 'windows', 'macos', 'linux'],
     protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
+    // chen08209/FlClash (checked 2026-08-26); one release covers all four.
+    install: {
+      android: 'https://github.com/chen08209/FlClash/releases/latest',
+      windows: 'https://github.com/chen08209/FlClash/releases/latest',
+      macos: 'https://github.com/chen08209/FlClash/releases/latest',
+      linux: 'https://github.com/chen08209/FlClash/releases/latest',
+    },
   },
   {
     // INCY (incy-app.com). Cross-platform client; imports our subscription via

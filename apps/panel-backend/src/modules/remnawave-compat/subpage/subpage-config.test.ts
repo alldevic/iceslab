@@ -253,6 +253,17 @@ describe('buildSubpageConfig', () => {
     expect(buildSubpageConfig(input({ protocols: ['naive'] }))).toBeNull();
   });
 
+  it('keeps every platform a buyer could be on covered by a maintained client', () => {
+    // Nekoray was dropped as archived-upstream; this is the check that dropping
+    // it took nothing away. Every platform a proxy buyer can be on still has at
+    // least one client, and none of them is Nekoray.
+    const doc = buildSubpageConfig(input({ protocols: ['xray', 'shadowsocks', 'hysteria'] }))!;
+    for (const key of ['ios', 'android', 'windows', 'macos', 'linux']) {
+      expect(doc.platforms[key]?.apps.length, `${key} has no client at all`).toBeGreaterThan(0);
+    }
+    expect(new Set(Object.values(appNames(doc)).flat())).not.toContain('Nekoray');
+  });
+
   it('returns null when there is nothing to say, so the shop keeps its own guide', () => {
     expect(buildSubpageConfig(input({ protocols: [] }))).toBeNull();
     // The protocol is there but no endpoint produced a link — nothing to offer.
