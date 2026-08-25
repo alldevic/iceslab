@@ -9,6 +9,7 @@
 #        hysteria     -> installs official hysteria via get.hy2.sh
 #        xray         -> installs official xray via XTLS install-script
 #        amneziawg    -> runs apps/node/scripts/bootstrap-amneziawg.sh
+#        wireguard    -> runs apps/node/scripts/bootstrap-wireguard.sh
 #        naive        -> runs apps/node/scripts/bootstrap-naive.sh (xcaddy + plugin)
 #        shadowsocks  -> reuses xray-core (SS2022 multi-user runs inside xray)
 #        mtproto      -> runs apps/node/scripts/bootstrap-mtg.sh (9seconds/mtg)
@@ -552,11 +553,12 @@ pattern: resource isolation, simpler firewall):
   8) TUIC          QUIC proxy via sing-box engine (UDP, TUIC v5, self-signed TLS)
   9) AnyTLS        TLS proxy via sing-box engine (TCP, password-only, self-signed)
  10) ShadowTLS     TLS-camouflage wrapper via sing-box (fronts a whitelisted site)
+ 11) WireGuard     Plain WireGuard for stock clients (no obfuscation, in-tree module)
 
 EOF
   local choice
   while true; do
-    read -rp "Select [1-10]: " choice </dev/tty || fail "no /dev/tty; pass --protocol explicitly"
+    read -rp "Select [1-11]: " choice </dev/tty || fail "no /dev/tty; pass --protocol explicitly"
     case "$choice" in
       1) PROTOCOL=xray;        break ;;
       2) PROTOCOL=hysteria;    break ;;
@@ -568,7 +570,8 @@ EOF
       8) PROTOCOL=tuic;        break ;;
       9) PROTOCOL=anytls;      break ;;
       10) PROTOCOL=shadowtls;  break ;;
-      *) echo "  → invalid choice '$choice'; enter 1-10." ;;
+      11) PROTOCOL=wireguard;  break ;;
+      *) echo "  → invalid choice '$choice'; enter 1-11." ;;
     esac
   done
   log "Selected protocol: $PROTOCOL"
@@ -648,15 +651,15 @@ if [[ $EXISTING_INSTALL -eq 1 ]]; then
 fi
 
 case "$PROTOCOL" in
-  hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls) ;;
+  hysteria|xray|amneziawg|wireguard|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls) ;;
   "")
     if [[ -e /dev/tty ]]; then
       prompt_protocol
     else
-      fail "Pass --protocol hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls (no /dev/tty for interactive menu)"
+      fail "Pass --protocol hysteria|xray|amneziawg|wireguard|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls (no /dev/tty for interactive menu)"
     fi
     ;;
-  *)  fail "Unknown protocol: $PROTOCOL (valid: hysteria|xray|amneziawg|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls)" ;;
+  *)  fail "Unknown protocol: $PROTOCOL (valid: hysteria|xray|amneziawg|wireguard|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls)" ;;
 esac
 
 step "Prerequisites"
@@ -879,6 +882,12 @@ case "$PROTOCOL" in
     PROTO_BINARY=""
     PROTO_CONFIG=""
     ;;
+  wireguard)
+    log "Chaining bootstrap-wireguard.sh"
+    bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-wireguard.sh"
+    PROTO_BINARY=""
+    PROTO_CONFIG=""
+    ;;
   naive)
     log "Chaining bootstrap-naive.sh"
     bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-naive.sh"
@@ -961,7 +970,7 @@ mkdir -p "$ENV_DIR"
 # explicit ReadWritePaths. ReadWritePaths can't create directories, only
 # permit writes inside existing ones, so we pre-create every per-protocol
 # config dir here, even if the protocol isn't installed on this node.
-mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/caddy /etc/mtg /etc/mita /etc/sing-box
+mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/wireguard /etc/caddy /etc/mtg /etc/mita /etc/sing-box
 ENV_FILE="$ENV_DIR/env"
 
 # Honour --payload only if the env file doesn't exist OR the user passed one.
@@ -1253,6 +1262,22 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
       fi
       ufw default allow routed           >/dev/null 2>&1 || true
       ;;
+    wireguard)
+      # Same reasoning as AmneziaWG above: pre-open two low UDP ports the
+      # admin can pick between in the panel, and leave 51820 shut - it is the
+      # well-known WireGuard default and the first thing DPI looks for. Plain
+      # WireGuard needs it even more than AmneziaWG does, since its handshake
+      # carries no obfuscation to hide behind.
+      ufw allow 443/udp                  >/dev/null 2>&1 || true
+      ufw allow 1234/udp                 >/dev/null 2>&1 || true
+      # Routed VPN: packets enter on wg0 and must FORWARD to the WAN, which
+      # ufw's DEFAULT_FORWARD_POLICY=DROP would silently prevent - the client
+      # would show "Connected" with no traffic passing.
+      if [[ -f /etc/default/ufw ]]; then
+        sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+      fi
+      ufw default allow routed           >/dev/null 2>&1 || true
+      ;;
     naive)
       ufw allow 443/tcp                  >/dev/null 2>&1 || true
       ufw allow 80/tcp                   >/dev/null 2>&1 || true  # Caddy ACME
@@ -1379,7 +1404,7 @@ ProtectHome=true
 # geopkg.Ensure fails EROFS on every asset, so self-hosted geo silently never
 # installs (node falls back to bundled DBs and any ext: rule fails its restart
 # precondition). The seed mkdir/cp happens at install time (still writable then).
-ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/var/lib/iceslab-node -/run -/etc/iptables -/etc/ufw
+ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/wireguard -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/var/lib/iceslab-node -/run -/etc/iptables -/etc/ufw
 PrivateTmp=true
 
 # Journald log limits; without these a node running for months can balloon
