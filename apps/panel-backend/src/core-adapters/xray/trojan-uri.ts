@@ -31,6 +31,9 @@ export interface TrojanRealityUriOpts {
   path?: string;
   hostHeader?: string;
   serviceName?: string;
+  /** XHTTP framing, emitted as `mode=` when it is not the client default.
+   *  See VlessRealityUriOpts.xhttpMode for the source and the reason. */
+  xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
   /** Slice 30.1: per-host overrides. See VlessRealityUriOpts for semantics. */
   alpn?: string[];
   allowInsecure?: boolean;
@@ -77,6 +80,12 @@ export function buildTrojanRealityUri(opts: TrojanRealityUriOpts): string {
   if (network === 'ws' || network === 'xhttp' || network === 'httpupgrade') {
     if (opts.path) params.set('path', opts.path);
     if (opts.hostHeader) params.set('host', opts.hostHeader);
+  }
+  // Same key and same reason as the VLESS link: v2rayN builds and parses the
+  // transport query for Trojan through the shared BaseFmt helpers, so a Trojan
+  // share link carries `mode=` for xhttp exactly as a VLESS one does.
+  if (network === 'xhttp' && opts.xhttpMode && opts.xhttpMode !== 'auto') {
+    params.set('mode', opts.xhttpMode);
   }
   if (network === 'grpc' && opts.serviceName) {
     params.set('serviceName', opts.serviceName);

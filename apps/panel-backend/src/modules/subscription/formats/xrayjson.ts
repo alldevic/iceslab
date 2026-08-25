@@ -260,10 +260,17 @@ function buildProxyOutbound(
       ...(e.hostHeader ? { host: e.hostHeader } : {}),
     };
   } else if (network === 'xhttp') {
+    // `mode` was pinned to 'auto' here regardless of what the operator chose,
+    // and the node renders their choice on the server. That pairing is not a
+    // cosmetic mismatch: xray's xhttp server rejects a request whose framing its
+    // configured mode disallows (splithttp/hub.go -> HTTP 400), and an `auto`
+    // client picks stream-one under REALITY and packet-up without it
+    // (splithttp/dialer.go). A REALITY node set to packet-up therefore refused
+    // every client this format produced.
     streamSettings.xhttpSettings = {
       ...(e.path ? { path: e.path } : {}),
       ...(e.hostHeader ? { host: e.hostHeader } : {}),
-      mode: 'auto',
+      mode: e.xhttpMode ?? 'auto',
     };
   } else if (network === 'grpc') {
     streamSettings.grpcSettings = { serviceName: e.serviceName ?? '' };

@@ -23,6 +23,8 @@ export interface VmessUriOpts {
   path?: string;
   hostHeader?: string;
   serviceName?: string;
+  /** XHTTP framing. Rides the vmess JSON's `type` field - see the emitter. */
+  xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
   sni?: string;
   fingerprint?: string;
   alpn?: string[];
@@ -59,6 +61,15 @@ export function buildVmessUri(opts: VmessUriOpts): string {
   if (network === 'ws' || network === 'httpupgrade' || network === 'xhttp') {
     if (opts.path) obj.path = opts.path;
     if (opts.hostHeader) obj.host = opts.hostHeader;
+  }
+  // The vmess JSON has no field of its own for the xhttp framing: v2rayN reuses
+  // `type` - normally the header-obfuscation type - and reads it straight back
+  // into XhttpMode (Fmt/VmessFmt.cs, both directions). Which also means the
+  // literal 'none' this object defaults to was being read as a mode named
+  // "none" by any client following that mapping, so xhttp gets a real value
+  // here even when it is 'auto'.
+  if (network === 'xhttp') {
+    obj.type = opts.xhttpMode ?? 'auto';
   }
   // gRPC serviceName lives in `path` in the v2rayN vmess format.
   if (network === 'grpc' && opts.serviceName) {

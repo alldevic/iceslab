@@ -375,14 +375,15 @@ export function buildClashYaml(
       // nothing and reports no reason.
       //
       // `xhttp-opts` with `path`/`host`/`mode`, per the Mihomo transport docs.
-      // `mode` is `auto` to match what `xrayjson.ts` already sends the other
-      // working core; the operator's configured `xhttpMode` reaches neither
-      // format today (see the note in the docs).
+      // `mode` now carries the operator's choice rather than a pinned 'auto':
+      // Mihomo's `XHTTPOptions.Mode` (adapter/outbound/vless.go) is a real
+      // parsed field that reaches its xhttp client, and a client framing the
+      // server's mode disallows is answered 400 rather than tolerated.
       if (network === 'xhttp') {
         const opts: string[] = [];
         if (e.path) opts.push(`      path: ${yamlString(e.path)}`);
         if (e.hostHeader) opts.push(`      host: ${yamlString(e.hostHeader)}`);
-        opts.push(`      mode: ${yamlString('auto')}`);
+        opts.push(`      mode: ${yamlString(e.xhttpMode ?? 'auto')}`);
         block.push(`    xhttp-opts:`);
         block.push(...opts);
       }

@@ -147,6 +147,13 @@ interface XrayInboundConfig {
   path?: string;
   host?: string;
   serviceName?: string;
+  /** XHTTP framing. Absent from this local view until now, which is most of why
+   *  it never reached a client: the shared `XrayInboundConfig` has carried
+   *  `xhttpMode` since B3 and the node renders it, but the subscription side
+   *  reads the config through this narrower shadow and simply could not see it.
+   *  Client and server disagreeing on the framing is an outage - see
+   *  XraySubscriptionEndpoint.xhttpMode. */
+  xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
 }
 
 interface AmneziawgObfuscation {
@@ -877,6 +884,7 @@ export async function generateSubscription(
           path: xrayPath,
           hostHeader: xrayHostHeader,
           serviceName: cfg.serviceName,
+          xhttpMode: cfg.xhttpMode,
           name: nodeName,
           alpn: hostAlpn,
           allowInsecure: hostAllowInsecure,
@@ -895,6 +903,7 @@ export async function generateSubscription(
           path: xrayPath,
           hostHeader: xrayHostHeader,
           serviceName: cfg.serviceName,
+          xhttpMode: cfg.xhttpMode,
           sni,
           fingerprint,
           alpn: hostAlpn,
@@ -914,6 +923,7 @@ export async function generateSubscription(
           path: xrayPath,
           hostHeader: xrayHostHeader,
           serviceName: cfg.serviceName,
+          xhttpMode: cfg.xhttpMode,
           name: nodeName,
           alpn: hostAlpn,
           allowInsecure: hostAllowInsecure,
@@ -939,6 +949,7 @@ export async function generateSubscription(
         path: xrayPath,
         hostHeader: xrayHostHeader,
         serviceName: cfg.serviceName,
+        xhttpMode: cfg.xhttpMode,
         subprotocol,
         realityMldsa65Verify: mldsa65Verify,
         vlessEncryption,

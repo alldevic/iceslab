@@ -242,6 +242,16 @@ export interface XraySubscriptionEndpoint extends SubscriptionEndpointBase {
   path?: string;
   hostHeader?: string;
   serviceName?: string;
+  /**
+   * XHTTP packet framing, when `network` is xhttp. Carried to the CLIENT, not
+   * just configured on the node: xray's server refuses a request whose framing
+   * its own `mode` does not allow (`transport/internet/splithttp/hub.go` answers
+   * 400 with "packet-up mode is not allowed" and siblings), and a client left on
+   * `auto` picks its framing from whether REALITY is in use
+   * (`dialer.go`: REALITY -> stream-one, otherwise packet-up). So the two ends
+   * disagreeing is an outage, not a wasted option - see the emitters.
+   */
+  xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
   /** Slice 24c part 3: controls URI scheme (`vless://` vs `trojan://`)
    *  and downstream singbox/clash outbound type. */
   subprotocol?: 'vless' | 'trojan' | 'vmess';

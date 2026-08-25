@@ -42,6 +42,16 @@ export interface VlessRealityUriOpts {
   hostHeader?: string;
   /** gRPC serviceName. Required when network=grpc. */
   serviceName?: string;
+  /**
+   * XHTTP framing, emitted as `mode=` when it is not the client default.
+   * Sourced, not guessed: v2rayN's share-link handler writes exactly this key
+   * inside the xhttp branch and reads it back into `XhttpMode`
+   * (ServiceLib/Handler/Fmt/BaseFmt.cs), and accepts the same four values we
+   * do. `auto` is left off - it is what both v2rayN and xray-core assume for an
+   * absent mode, so omitting it keeps every link we emit today byte-identical
+   * and moves only the ones that were actually broken.
+   */
+  xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
   /** Slice 30.1: per-host overrides emitted into the URI. */
   /** ALPN list (e.g. ['h2','http/1.1']). Joined by comma into `alpn` param. */
   alpn?: string[];
@@ -125,6 +135,13 @@ export function buildVlessRealityUri(opts: VlessRealityUriOpts): string {
   if (network === 'ws' || network === 'xhttp' || network === 'httpupgrade') {
     if (opts.path) params.set('path', opts.path);
     if (opts.hostHeader) params.set('host', opts.hostHeader);
+  }
+  // The framing has to travel with the link: xray's xhttp server answers 400 to
+  // a request whose mode it does not allow, and a client with no `mode` picks
+  // one from whether REALITY is in play. `mode` is scoped to xhttp here because
+  // the same key means the gRPC gun/multi mode on a grpc link.
+  if (network === 'xhttp' && opts.xhttpMode && opts.xhttpMode !== 'auto') {
+    params.set('mode', opts.xhttpMode);
   }
   if (network === 'grpc' && opts.serviceName) {
     params.set('serviceName', opts.serviceName);
