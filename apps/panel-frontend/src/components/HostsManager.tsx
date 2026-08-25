@@ -39,9 +39,9 @@ import {
   type UpdateHostInput,
 } from '../lib/api';
 
-// AmneziaWG can't multi-host meaningfully - pubkey-pinned UDP single endpoint.
-// Hide the manager entirely for that protocol.
-const PROTOCOLS_WITHOUT_HOSTS: ReadonlySet<ProtocolName> = new Set(['amneziawg']);
+// Neither wg flavour can multi-host meaningfully - pubkey-pinned UDP single
+// endpoint. Hide the manager entirely for those protocols.
+const PROTOCOLS_WITHOUT_HOSTS: ReadonlySet<ProtocolName> = new Set(['amneziawg', 'wireguard']);
 
 const FINGERPRINT_OPTIONS: { value: Fingerprint; label: string }[] = [
   { value: 'chrome', label: 'Chrome' },

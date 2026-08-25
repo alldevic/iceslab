@@ -78,6 +78,7 @@ const PROTOCOL_OPTIONS: { value: NodeProtocol; label: string }[] = [
   { value: 'xray', label: 'Xray' },
   { value: 'hysteria', label: 'Hysteria 2' },
   { value: 'amneziawg', label: 'AmneziaWG' },
+  { value: 'wireguard', label: 'WireGuard' },
   { value: 'naive', label: 'NaiveProxy' },
   { value: 'shadowsocks', label: 'Shadowsocks 2022' },
   { value: 'mtproto', label: 'MTProto (Telegram-only)' },

@@ -2387,6 +2387,15 @@ export default {
       'Pick a port on the next step ("Deploy to nodes"). Recommendation: ≤ 9999, e.g. 443 or 1234. Don\'t use 51820 - well-known WG-default, ISPs throttle it.',
     awgImportant3:
       'Migrating from AmneziaWG 1.0 - you need to regenerate all peer keys; old keys won\'t work.',
+    wgImportantTitle: 'What you should know about plain WireGuard:',
+    wgImportant1:
+      'Any stock client works - the official WireGuard apps, WireSock, kernel wg-quick. No AmneziaWG-aware app needed.',
+    wgImportant2:
+      'The handshake is recognisable as WireGuard. Where DPI blocks or throttles WireGuard, use AmneziaWG instead - this protocol has no obfuscation by design.',
+    wgImportant3:
+      'Pick a port on the next step ("Deploy to nodes"). Don\'t use 51820 - well-known WG-default, ISPs throttle it. On a node that also serves AmneziaWG, the two need different ports and different subnets.',
+    wgImportant4:
+      'Egress is always direct. The node\'s zapret2 and WARP egress are xray-side and a kernel wg tunnel routes past xray, so a wg profile on such a node does not use them (same for AmneziaWG).',
     deployHintAwgPort: 'For AmneziaWG: ≤ 9999, e.g. 443 or 1234. Don\'t use 51820.',
     nodeMismatchTooltip:
       'Node provisioned for "{{nodeProtocol}}" - binary "{{profileProtocol}}" is not installed. Binding will be created, but clients won\'t connect until you re-run install-node with --protocol {{profileProtocol}}.',

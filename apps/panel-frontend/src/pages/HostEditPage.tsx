@@ -228,6 +228,8 @@ export function HostEditPage() {
           n.coreVersion !== null &&
           profile.protocol === 'amneziawg' &&
           !n.coreVersion.toLowerCase().includes('awg');
+        // Plain WireGuard has no such probe: `wg` ships with the kernel and the
+        // node reports no version string for it, so there is nothing to compare.
         const taken = takenPort.get(n.id);
         return {
           node: n,

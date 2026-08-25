@@ -65,6 +65,7 @@ const PROTOCOL_ACCENT: Record<string, string> = {
   hysteria: CYAN,
   xray: VIOLET,
   amneziawg: MOSS,
+  wireguard: MOSS,
   naive: AMBER,
   shadowsocks: PINK,
   mtproto: CYAN2,
@@ -75,6 +76,7 @@ const PROTOCOL_LABELS: Record<string, string> = {
   hysteria: 'Hysteria 2',
   xray: 'Xray REALITY',
   amneziawg: 'AmneziaWG',
+  wireguard: 'WireGuard',
   naive: 'NaiveProxy',
   shadowsocks: 'Shadowsocks',
   mtproto: 'MTProto',
@@ -490,6 +492,10 @@ function protocolFacts(profile: Profile): { label: string; value: string }[] {
         { label: 'subnet', value: pick('subnet', 'address') ?? '-' },
         { label: 'jc', value: pick('jc') ?? '-' },
       ];
+    // No obfuscation row for plain WireGuard: it has none, and showing "jc: -"
+    // would read as "not configured yet" rather than "not a thing here".
+    case 'wireguard':
+      return [{ label: 'subnet', value: pick('subnet', 'address') ?? '-' }];
     default:
       return [
         { label: 'port', value: pick('port') ?? '-' },

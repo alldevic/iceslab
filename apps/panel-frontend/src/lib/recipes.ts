@@ -335,6 +335,28 @@ export const RECIPES: Recipe[] = [
     }),
   },
 
+  // ───── WireGuard (1) ─────
+  {
+    id: 'wg-default',
+    protocol: 'wireguard',
+    emoji: '🧩',
+    name: 'WireGuard (plain)',
+    description: 'Штатный WireGuard, любой стоковый клиент',
+    details:
+      'Чистый WireGuard без обфускации. Подключается любым штатным клиентом (официальные приложения WireGuard, WireSock, ядерный wg-quick) - AmneziaWG-совместимое приложение не нужно. Хендшейк опознаётся DPI как WireGuard, поэтому там, где провайдер режет WG, бери AmneziaWG. Настраивать нечего: подсеть и ключи сервера.',
+    dpiResistance: 1,
+    speed: 5,
+    apply: {
+      // Clear of the AmneziaWG default: one node can serve both tunnels, and
+      // two interfaces on one subnet would collide.
+      wgSubnet: '10.77.77.0/24',
+    },
+    notes: [
+      'Обфускации нет by design: на ISP, который режет WireGuard, этот профиль не заработает - там нужен AmneziaWG',
+      'Порт задаётся на шаге «Развернуть на нодах». 51820 не бери - известный WG-default, его режут',
+    ],
+  },
+
   // ───── Naive (1) ─────
   {
     id: 'naive-default',

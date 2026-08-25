@@ -15,7 +15,7 @@ export interface ProtocolOption {
 
 // Display order is intentional (xray first as the flagship). When sing-box
 // lands as an engine it goes right after xray:
-//   xray, sing-box, hysteria, amneziawg, naive, shadowsocks, mtproto, mieru
+//   xray, sing-box, hysteria, amneziawg, wireguard, naive, shadowsocks, mtproto, mieru
 export const PROTOCOL_OPTIONS: ProtocolOption[] = [
   { value: 'xray', label: 'Xray' },
   { value: 'tuic', label: 'TUIC (sing-box)' },
@@ -23,6 +23,7 @@ export const PROTOCOL_OPTIONS: ProtocolOption[] = [
   { value: 'shadowtls', label: 'ShadowTLS (sing-box)' },
   { value: 'hysteria', label: 'Hysteria 2' },
   { value: 'amneziawg', label: 'AmneziaWG' },
+  { value: 'wireguard', label: 'WireGuard' },
   { value: 'naive', label: 'NaiveProxy' },
   { value: 'shadowsocks', label: 'Shadowsocks 2022' },
   { value: 'mtproto', label: 'MTProto (Telegram-only, mtg)' },
@@ -39,6 +40,7 @@ const COMPACT: Record<string, string> = {
   anytls: 'AnyTLS',
   shadowtls: 'ShadowTLS',
   amneziawg: 'AmneziaWG',
+  wireguard: 'WireGuard',
   naive: 'NaiveProxy',
   shadowsocks: 'Shadowsocks',
   mtproto: 'MTProto',

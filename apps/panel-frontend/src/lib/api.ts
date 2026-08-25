@@ -364,6 +364,7 @@ export type ProtocolName =
   | 'hysteria'
   | 'xray'
   | 'amneziawg'
+  | 'wireguard'
   | 'naive'
   | 'shadowsocks'
   | 'mtproto'
@@ -570,6 +571,7 @@ export type NodeProtocol =
   | 'xray'
   | 'hysteria'
   | 'amneziawg'
+  | 'wireguard'
   | 'naive'
   | 'shadowsocks'
   | 'mtproto'
@@ -1084,11 +1086,12 @@ export interface KeypairResponse {
   publicKey: string;
 }
 
-/** Generate a fresh x25519 keypair for REALITY / AmneziaWG inbound.
- *  Same crypto, different alphabet: `xray` returns base64url (REALITY
- *  validator rejects standard base64), `amneziawg` returns standard base64. */
+/** Generate a fresh x25519 keypair for a REALITY / AmneziaWG / WireGuard
+ *  inbound. Same crypto, different alphabet: `xray` returns base64url (the
+ *  REALITY validator rejects standard base64), the wg flavours return standard
+ *  base64, which is what `wg genkey` emits. */
 export async function generateInboundKeypair(
-  protocol: 'xray' | 'amneziawg' = 'amneziawg',
+  protocol: 'xray' | 'amneziawg' | 'wireguard' = 'amneziawg',
 ): Promise<KeypairResponse> {
   const { data } = await api.post<KeypairResponse>(
     `/api/profiles/generate-keypair?protocol=${protocol}`,

@@ -210,7 +210,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
         <NumberInput
           label={t('profiles.deploy.port')}
           description={
-            profile?.protocol === 'amneziawg'
+            profile?.protocol === 'amneziawg' || profile?.protocol === 'wireguard'
               ? t('profileForm.deployHintAwgPort')
               : t('profiles.deploy.portAutoHint')
           }

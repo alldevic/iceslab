@@ -110,6 +110,7 @@ const PROFILE_KINDS: ProfileKind[] = [
   { key: 'hysteria', protocol: 'hysteria', engine: 'native', label: 'Hysteria 2 (native)' },
   { key: 'shadowsocks', protocol: 'shadowsocks', engine: 'native', label: 'Shadowsocks 2022 (native)' },
   { key: 'amneziawg', protocol: 'amneziawg', engine: 'native', label: 'AmneziaWG' },
+  { key: 'wireguard', protocol: 'wireguard', engine: 'native', label: 'WireGuard' },
   { key: 'naive', protocol: 'naive', engine: 'native', label: 'NaiveProxy' },
   { key: 'mtproto', protocol: 'mtproto', engine: 'native', label: 'MTProto (Telegram-only, mtg)' },
   { key: 'mieru', protocol: 'mieru', engine: 'native', label: 'Mieru (stealth proxy)' },
@@ -208,6 +209,13 @@ interface FormValues {
   xrayMldsa65Verify: string;
   xrayVlessDecryption: string;
   xrayVlessEncryption: string;
+
+  // WireGuard (plain). Separate fields from the AmneziaWG ones so switching
+  // protocol in the form never carries an obfuscated profile's keys into a
+  // plain one, or the reverse.
+  wgSubnet: string;
+  wgServerPriv: string;
+  wgServerPub: string;
 
   // AmneziaWG
   awgSubnet: string;
@@ -364,6 +372,12 @@ function defaults(profile: Profile | null): FormValues {
     xrayVlessDecryption: '',
     xrayVlessEncryption: '',
 
+    // Clear of the AmneziaWG default: a node can serve both tunnels, and two
+    // interfaces on one subnet would collide.
+    wgSubnet: '10.77.77.0/24',
+    wgServerPriv: '',
+    wgServerPub: '',
+
     awgSubnet: '10.66.66.0/24',
     awgServerPriv: '',
     awgServerPub: '',
@@ -457,6 +471,13 @@ function defaults(profile: Profile | null): FormValues {
         xrayMldsa65Verify: (cfg.realityMldsa65Verify as string) ?? '',
         xrayVlessDecryption: (cfg.vlessDecryption as string) ?? '',
         xrayVlessEncryption: (cfg.vlessEncryption as string) ?? '',
+      };
+    case 'wireguard':
+      return {
+        ...base,
+        wgSubnet: (cfg.subnet as string) ?? base.wgSubnet,
+        wgServerPriv: (cfg.serverPrivateKey as string) ?? '',
+        wgServerPub: (cfg.serverPublicKey as string) ?? '',
       };
     case 'amneziawg': {
       const obf = (cfg.obfuscation as Record<string, number | string> | undefined) ?? {};
@@ -662,7 +683,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
   }, [form.values.xraySubprotocol]);
 
   const keypairMutation = useMutation({
-    mutationFn: (protocol: 'xray' | 'amneziawg') => generateInboundKeypair(protocol),
+    mutationFn: (protocol: 'xray' | 'amneziawg' | 'wireguard') => generateInboundKeypair(protocol),
     onError: (err) =>
       notifications.show({
         color: 'red',
@@ -681,6 +702,14 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
     const kp = await keypairMutation.mutateAsync('amneziawg');
     form.setValues({ ...form.values, awgServerPriv: kp.privateKey, awgServerPub: kp.publicKey });
     notifications.show({ color: 'green', message: 'AmneziaWG server keypair generated' });
+  }
+
+  async function generateWgKeys() {
+    // Same generator as AmneziaWG: one curve25519 pair in standard base64,
+    // which is what `wg genkey` produces.
+    const kp = await keypairMutation.mutateAsync('wireguard');
+    form.setValues({ ...form.values, wgServerPriv: kp.privateKey, wgServerPub: kp.publicKey });
+    notifications.show({ color: 'green', message: 'WireGuard server keypair generated' });
   }
 
   function applyAwgPreset(preset: 'tspu' | 'mobile' | 'custom') {
@@ -837,6 +866,13 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
           ...(values.xraySubprotocol === 'vless' && values.xrayVlessEncryption.trim()
             ? { vlessEncryption: values.xrayVlessEncryption.trim() }
             : {}),
+        };
+        break;
+      case 'wireguard':
+        config = {
+          subnet: values.wgSubnet,
+          serverPrivateKey: values.wgServerPriv,
+          serverPublicKey: values.wgServerPub,
         };
         break;
       case 'amneziawg':
@@ -1787,6 +1823,65 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
             </Stack>
           )}
 
+          {form.values.protocol === 'wireguard' && (
+            <Stack>
+              {/* The whole config: a subnet and a server keypair. Everything
+                  else an AmneziaWG profile carries (Jc/Jmin/Jmax, S1-S4,
+                  H1-H4, I1-I5) is an AmneziaWG extension the wg protocol has
+                  no field for, so there is nothing here to tune. */}
+              <Alert color="blue" variant="light" p="xs">
+                <Text size="xs" component="div">
+                  <strong>{t('profileForm.wgImportantTitle')}</strong>
+                  <ul style={{ margin: '4px 0 0 16px', paddingLeft: 0 }}>
+                    <li>{t('profileForm.wgImportant1')}</li>
+                    <li>{t('profileForm.wgImportant2')}</li>
+                    <li>{t('profileForm.wgImportant3')}</li>
+                    <li>{t('profileForm.wgImportant4')}</li>
+                  </ul>
+                </Text>
+              </Alert>
+              <Group align="flex-start" wrap="nowrap" gap="md">
+                <TextInput
+                  w={220}
+                  label={t('profiles.form.cfg.awgSubnetLabel')}
+                  placeholder="10.77.77.0/24"
+                  description={
+                    isEdit
+                      ? t('profiles.form.cfg.awgSubnetLockedHint')
+                      : t('profiles.form.cfg.awgSubnetHint')
+                  }
+                  inputWrapperOrder={['label', 'input', 'description', 'error']}
+                  required
+                  {...form.getInputProps('wgSubnet')}
+                />
+                <Group flex={1} align="end" wrap="nowrap" gap="xs">
+                  <PasswordInput
+                    flex={1}
+                    label={t('profiles.form.cfg.awgServerPrivLabel')}
+                    required
+                    {...form.getInputProps('wgServerPriv')}
+                  />
+                  <Button
+                    leftSection={<IconKey size={14} />}
+                    variant="light"
+                    loading={keypairMutation.isPending}
+                    onClick={generateWgKeys}
+                    type="button"
+                  >
+                    {t('profiles.form.cfg.generate')}
+                  </Button>
+                </Group>
+                <TextInput
+                  flex={1}
+                  label={t('profiles.form.cfg.awgServerPubLabel')}
+                  placeholder={t('profiles.form.cfg.awgServerPubPlaceholder')}
+                  required
+                  {...form.getInputProps('wgServerPub')}
+                />
+              </Group>
+            </Stack>
+          )}
+
           {form.values.protocol === 'amneziawg' && (
             <Stack>
               {/* AmneziaWG-specific gotchas in one place. Per upstream
@@ -2535,6 +2630,7 @@ const PROTOCOL_TILE_HINT: Record<string, string> = {
   hysteria: 'QUIC, Brutal CC, port hopping',
   shadowsocks: 'blake3 ciphers, minimal overhead',
   amneziawg: 'WireGuard with obfuscation',
+  wireguard: 'Plain WireGuard, native clients',
   naive: 'Chromium TLS, Caddy fork',
   mtproto: 'Telegram only, no per-user stats',
   mieru: 'Stealth proxy, no handshake',
@@ -2552,6 +2648,7 @@ const PROTOCOL_TILE_LABEL: Record<string, string> = {
   hysteria: 'Hysteria 2',
   shadowsocks: 'Shadowsocks 2022',
   amneziawg: 'AmneziaWG',
+  wireguard: 'WireGuard',
   naive: 'NaiveProxy',
   mtproto: 'MTProto',
   mieru: 'Mieru',
@@ -2621,6 +2718,7 @@ const PROTOCOL_ACCENT: Record<string, string> = {
   shadowsocks: '#F5A3B8',
   hysteria: '#7DD3FC',
   amneziawg: '#A7D8B9',
+  wireguard: '#8FCBAA',
   naive: '#F5B14C',
   mtproto: '#67E8F9',
   mieru: '#C78BFA',
@@ -2635,6 +2733,7 @@ const PROTOCOL_TILE_NOTE: Record<string, string> = {
   hysteria: 'own process, own port',
   shadowsocks: 'multi-user, per-user keys',
   amneziawg: 'kernel module, no userspace proc',
+  wireguard: 'detectable as WireGuard by DPI',
   naive: 'Caddy fork, no per-user stats',
   mtproto: 'Telegram only, no per-user stats',
   mieru: 'no handshake to fingerprint',

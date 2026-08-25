@@ -48,6 +48,7 @@ const PROTOCOL_COLORS: Record<string, string> = {
   hysteria: 'blue',
   xray: 'violet',
   amneziawg: 'teal',
+  wireguard: 'teal',
   naive: 'orange',
   shadowsocks: 'pink',
   mtproto: 'cyan',
