@@ -182,7 +182,11 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
     // assertNoNewConfigViolations gates writes by parsing what THIS function
     // returns, so a copy that drifts from it turns the gate into a check on a
     // config nothing deploys.
-    let config = resolveBindingConfig(b.profile.config, b.overrides) as InboundDto['config'];
+    let config = resolveBindingConfig(
+      b.profile.config,
+      b.overrides,
+      b.profile.protocol,
+    ) as InboundDto['config'];
 
     // Slice 41: mtproto secret derived from (binding.id, domain). Both
     // the wire push (here) and subscription generator key on binding.id so

@@ -705,7 +705,7 @@ export async function generateSubscription(
     // Resolve deployable config: profile.config + binding.overrides. Same
     // canonical merge the sync queue ships and the write gate parses - see
     // resolveBindingConfig.
-    const cfgMerged = resolveBindingConfig(b.profile.config, b.overrides);
+    const cfgMerged = resolveBindingConfig(b.profile.config, b.overrides, b.profile.protocol);
 
     // Synthetic "ib" handle so the per-protocol branches below stay close
     // to the previous shape (less churn in the giant switch).

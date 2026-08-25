@@ -481,14 +481,38 @@ export async function deleteBinding(id: string): Promise<void> {
  * Shallow merge is intentional, overrides should mention specific top-level
  * fields (`acmeDomain`, `serverPsk`, etc.). Deep merge would silently mask
  * partial-array edits which is rarely what admins mean.
+ *
+ * For xray the merge is then swept by `stripInapplicableTransportFields`, the
+ * same normaliser a profile goes through when it is SAVED. It has to happen
+ * here too, because `network` is one of the things an override may change and
+ * the merge is shallow: a REALITY+raw profile carrying Vision, bound with
+ * `overrides: {network: 'grpc'}`, produced a node config on gRPC that still
+ * demanded Vision.
+ *
+ * That is not a wasted option, it is an outage, and it was measured rather than
+ * reasoned about - xray 26.3.27, real client dialling a real node:
+ *
+ *   raw  + Vision both ends       traffic flows
+ *   grpc + no flow both ends      traffic flows
+ *   grpc + Vision both ends       no traffic, the gRPC tunnel dies
+ *   grpc + Vision on the SERVER   no traffic: "account <uuid> is rejected since
+ *                                 the client flow is empty. Note that the pure
+ *                                 TLS proxy has certain TLS in TLS characters."
+ *
+ * The last line is the one this fixes, and it is the pairing the panel actually
+ * produces: `core-adapters/xray/uri.ts` has always dropped `flow` for gRPC, so
+ * the client half is empty by construction and only the server half was wrong.
+ * It closes the open question left in docs/remnawave-compat.md §24.
  */
 export function resolveBindingConfig(
   profileConfig: unknown,
   overrides: unknown,
+  protocol?: string,
 ): Record<string, unknown> {
   const base = (profileConfig ?? {}) as Record<string, unknown>;
   const ov = (overrides ?? {}) as Record<string, unknown>;
-  return { ...base, ...ov };
+  const merged = { ...base, ...ov };
+  return protocol === 'xray' ? stripInapplicableTransportFields(merged) : merged;
 }
 
 /**
@@ -557,9 +581,9 @@ export function assertNoNewConfigViolations(
 ): void {
   const schema = PROTOCOL_CONFIG_SCHEMAS[protocol as keyof typeof PROTOCOL_CONFIG_SCHEMAS];
   if (!schema) return; // unknown protocol: nothing to judge it with
-  const post = issueFingerprints(schema, resolveBindingConfig(after.profileConfig, after.overrides));
+  const post = issueFingerprints(schema, resolveBindingConfig(after.profileConfig, after.overrides, protocol));
   if (post.size === 0) return;
-  const pre = issueFingerprints(schema, resolveBindingConfig(before.profileConfig, before.overrides));
+  const pre = issueFingerprints(schema, resolveBindingConfig(before.profileConfig, before.overrides, protocol));
   const fresh = [...post].filter(([k]) => !pre.has(k)).map(([, msg]) => msg);
   if (fresh.length > 0) throw new InvalidBindingConfigError(fresh, subject);
 }
