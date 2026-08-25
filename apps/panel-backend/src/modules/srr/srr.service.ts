@@ -75,7 +75,7 @@ export async function matchFormatForUserAgent(
  * inline flag prefix and pass the flags through to RegExp's second arg.
  * Unknown / unsupported flags (like `x`/`u` extras) are silently dropped.
  */
-function compileRule(pattern: string): RegExp {
+export function compileRule(pattern: string): RegExp {
   const m = pattern.match(/^\(\?([imsux]+)\)([\s\S]*)$/);
   if (m) {
     const flags = m[1]!.replace(/[^ims]/g, '');
