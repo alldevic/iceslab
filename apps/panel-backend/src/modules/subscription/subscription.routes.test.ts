@@ -212,6 +212,67 @@ describe('GET /sub/:token (JSON format)', () => {
     expect(body.endpoints[0].uri).toMatch(/^hysteria2:\/\//);
   });
 
+  it('the install page drops a client whose format renders nothing for this fleet', async () => {
+    // XHTTP-only fleet. `transport-matrix.test.ts` records sing-box as
+    // `omitted` for that transport, so every sing-box-cored client would hand
+    // the buyer an empty config while looking like it worked.
+    //
+    // Asserted through the ROUTE, not through buildSubscriptionPage: the check
+    // lives in a value the route computes and passes, and a route that stopped
+    // passing it would leave every unit test green — which is exactly how the
+    // wgconf download bug below survived.
+    // A BARE node: `createNode` also attaches a Hysteria binding, and sing-box
+    // carries Hysteria happily — with it in the fleet the format is usable and
+    // the assertion below would be measuring the helper, not the gate.
+    const nodeRes = await app.inject({
+      method: 'POST',
+      url: '/api/nodes',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'xhttp-node', address: '10.0.0.22' },
+    });
+    expect(nodeRes.statusCode).toBe(201);
+    const nodeId = JSON.parse(nodeRes.body).id as string;
+    const profileId = await createProfile(
+      'xray',
+      {
+        network: 'xhttp',
+        path: '/dl',
+        realityDest: 'www.cloudflare.com:443',
+        realityServerNames: ['www.cloudflare.com'],
+        realityShortIds: ['abc123'],
+        realityPrivateKey: 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE',
+        realityPublicKey: 'gy3mpcZB8YXumik_KSTiYG1AqYqxJnD5Ac99zJ370jQ',
+      },
+      'xhttponly',
+    );
+    await createBinding(profileId, nodeId, 9443);
+    const user = await createUser('xhttponly');
+
+    const page = (
+      await app.inject({
+        method: 'GET',
+        url: `/sub/${user.subscriptionToken}`,
+        headers: { accept: 'text/html' },
+      })
+    ).body;
+    // The app CARDS, not the whole document: these names also appear in the
+    // page's static hint text ("scan with Hiddify, v2rayNG, ...") and in the
+    // per-format download buttons, so a plain substring search answers a
+    // different question than the one being asked.
+    const offered = new Set(
+      [...page.matchAll(/class="aname">([^<]*)</g)].map((m) => m[1] as string),
+    );
+
+    // Control first: the page IS offering clients to this buyer, so the
+    // absences below mean something.
+    expect(offered).toContain('v2rayNG'); // xrayjson carries xhttp
+    expect(offered).toContain('Shadowrocket'); // plain carries it too
+
+    expect(offered, 'sing-box renders no server for xhttp').not.toContain('sing-box');
+    expect(offered, 'Hiddify runs the sing-box core').not.toContain('Hiddify');
+    expect(offered, 'NekoBox runs it too').not.toContain('NekoBox');
+  });
+
   it('drops a tunnel download the wgconf format would refuse to serve', async () => {
     // The cards on the install page all lead to `?format=wgconf`, but the page
     // is rendered for a request whose resolved format is `plain` (that is what

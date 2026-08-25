@@ -88,6 +88,10 @@ ACCEPTED_DIVERGENCE: dict[str, dict[str, str]] = {
         # checked against a real pair — and `parseNodesBandwidthTop` reads only
         # total/uuid/name/usersOnline. Nothing in the shop consumes a colour.
         "panel.nodes_bandwidth.topNodes[].color": "no reader anywhere in the shop's frontend",
+        # Same shape, same check: `aggregatePanelNodeRows` keys rows on
+        # nodeUuid/uuid/nodeName/name and sums bytes, and `panelRowLabel` falls
+        # back through the name fields to a uuid stub. Neither looks at a date.
+        "panel.nodes.lastSevenDays[].date": "no reader anywhere in the shop's frontend",
         "panel.bandwidth.bandwidthCalendarMonth.difference": "shop reads only `current` from a bandwidth pair",
         "panel.bandwidth.bandwidthCurrentYear.difference": "shop reads only `current` from a bandwidth pair",
         "panel.bandwidth.bandwidthLast30Days.difference": "shop reads only `current` from a bandwidth pair",
