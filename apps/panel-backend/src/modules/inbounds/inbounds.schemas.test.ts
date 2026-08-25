@@ -266,6 +266,52 @@ describe('ShadowsocksConfigSchema abusePolicy (U4)', () => {
   });
 });
 
+describe('REALITY carries only the transports xray will load', () => {
+  // Measured on xray 26.3.27, on a live node:
+  //   raw + Vision -> loads    xhttp + Vision -> loads    grpc + Vision -> loads
+  //   ws  -> `infra/conf: REALITY only supports RAW, XHTTP and gRPC for now.`
+  //   kcp -> the same
+  //
+  // And what saving it did before this check existed: bound to a node, the
+  // agent wrote the config, xray exited 23, and the agent logged
+  // `xray (re)started` on the way into a restart loop - 17 crashes in a minute.
+  // The panel does go `degraded` with `not running: xray`, so it is not silent;
+  // but the reason never leaves the node's journal, and xray is one process per
+  // node, so every other inbound on it goes down too.
+  const KEY = 'YAT-bEESM0kh2iD3ujUlW1SQ-HeGjigNdYRs8B5ZSEE';
+  const reality = (network: string) => ({
+    realityPrivateKey: KEY,
+    security: 'reality' as const,
+    network,
+  });
+
+  it('accepts raw, xhttp and grpc', () => {
+    for (const n of ['raw', 'xhttp', 'grpc']) {
+      expect(XrayConfigSchema.safeParse(reality(n)).success, n).toBe(true);
+    }
+  });
+
+  it('refuses ws, httpupgrade and kcp, and says why', () => {
+    for (const n of ['ws', 'httpupgrade', 'kcp']) {
+      const r = XrayConfigSchema.safeParse(reality(n));
+      expect(r.success, n).toBe(false);
+      if (!r.success) {
+        expect(JSON.stringify(r.error.issues)).toContain('REALITY carries only');
+      }
+    }
+  });
+
+  it('leaves non-REALITY security alone', () => {
+    // Plain TLS over WebSocket is a perfectly good inbound; only REALITY is
+    // restricted, and refusing more than xray does would take working
+    // configurations away.
+    expect(
+      XrayConfigSchema.safeParse({ realityPrivateKey: KEY, security: 'tls', network: 'ws' })
+        .success,
+    ).toBe(true);
+  });
+});
+
 describe('WireguardConfigSchema', () => {
   const base = {
     subnet: '10.77.77.0/24',

@@ -26,6 +26,25 @@ const FIELDS_BY_NETWORK: Record<string, readonly string[]> = {
   grpc: ['serviceName', 'grpcMultiMode'],
 };
 
+/**
+ * `flow` is not owned by a transport, but its VALIDITY is decided by one, so it
+ * belongs to the same sweep: Vision splices the TLS record layer and works only
+ * where the stream is the TLS stream (RAW and XHTTP).
+ *
+ * It survived a transport switch until now, and `flow` DEFAULTS to
+ * `xtls-rprx-vision` - so moving an inbound to gRPC and not thinking about flow
+ * left a server account demanding Vision while every client link the panel
+ * emits answers without it. `core-adapters/xray/uri.ts` has always dropped it
+ * for gRPC, so the default subscription format was already mismatched; the
+ * node's own adapter records the resulting handshake failure, "client flow is
+ * empty", from an earlier version of the same bug.
+ *
+ * gRPC is the case that matters: xray REFUSES a REALITY inbound on ws/kcp
+ * outright (see `REALITY_TRANSPORTS` in inbounds.schemas.ts), so those never
+ * ran to be mismatched. `grpc + Vision` loads happily and then rejects clients.
+ */
+const NETWORKS_CARRYING_VISION = new Set(['raw', 'xhttp']);
+
 /** Every field owned by some transport, i.e. the set we are allowed to drop. */
 const ALL_TRANSPORT_FIELDS = [...new Set(Object.values(FIELDS_BY_NETWORK).flat())];
 
@@ -41,8 +60,14 @@ export function stripInapplicableTransportFields<T extends Record<string, unknow
   const network = typeof config.network === 'string' ? config.network : 'raw';
   const keep = new Set(FIELDS_BY_NETWORK[network] ?? []);
   const drop = ALL_TRANSPORT_FIELDS.filter((f) => !keep.has(f) && f in config);
-  if (drop.length === 0) return config;
+  // Blanked rather than deleted: '' is the canonical "no flow" wire value the
+  // schema already accepts, and the field is not optional the way the transport
+  // settings are.
+  const blankFlow =
+    !NETWORKS_CARRYING_VISION.has(network) && !!config.flow && config.flow !== '';
+  if (drop.length === 0 && !blankFlow) return config;
   const out = { ...config };
   for (const f of drop) delete out[f];
+  if (blankFlow) (out as Record<string, unknown>).flow = '';
   return out;
 }

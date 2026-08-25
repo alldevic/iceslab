@@ -134,6 +134,12 @@ const RealityKeySchema = z
   )
   .default('');
 
+/**
+ * The transports REALITY can carry, per xray itself:
+ * `infra/conf: REALITY only supports RAW, XHTTP and gRPC for now.`
+ */
+const REALITY_TRANSPORTS = new Set(['raw', 'xhttp', 'grpc']);
+
 export const XrayConfigSchema = z.object({
   /**
    * Stream security. 'reality' (default) or 'none' (plain transport, e.g.
@@ -373,6 +379,32 @@ export const XrayConfigSchema = z.object({
   .superRefine((cfg, ctx) => {
     const issue = (path: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [path], message });
+
+    // REALITY carries only three transports, and xray refuses the config
+    // outright for the rest - measured on 26.3.27, not inferred:
+    //   raw   + Vision  -> loads      grpc + Vision -> loads
+    //   xhttp + Vision  -> loads      ws / kcp      -> `infra/conf: REALITY
+    //                                  only supports RAW, XHTTP and gRPC for now.`
+    //
+    // Refused at save because of what saving it did. Bound to a live node, the
+    // agent wrote the config, xray exited 23, and the agent logged
+    // `xray (re)started` and `addUser ok` at INFO on the way into a restart
+    // loop - 17 crashes in the minute it took to look. The panel does notice
+    // (`degraded`, `not running: xray`, a crash counter), so this is not a
+    // silent failure; but the reason stays in the node's journal, nothing ties
+    // it back to the profile just saved, and xray is ONE process per node, so
+    // every other inbound on that node goes down with it.
+    //
+    // The constraint was already known here - `panel-frontend/src/lib/recipes.ts`
+    // names REALITY+ws as its canonical example of a combo that "looks fine in
+    // the form, dies on `xray run`". Recipes steered around it; the form let it
+    // through. This is the same check, where it cannot be walked past.
+    if (cfg.security === 'reality' && !REALITY_TRANSPORTS.has(cfg.network)) {
+      issue(
+        'network',
+        `REALITY carries only ${[...REALITY_TRANSPORTS].join(', ')}: xray refuses to load a ${cfg.network} inbound with REALITY and the node's core restart-loops, taking every other inbound on it down too`,
+      );
+    }
 
     // The asymmetry between the two pairs is the point. A missing client half
     // of VLESS-Encryption breaks every connection to the profile the moment it

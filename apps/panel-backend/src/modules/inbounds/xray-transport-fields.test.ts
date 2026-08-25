@@ -95,3 +95,38 @@ describe('stripInapplicableTransportFields', () => {
     expect(stripInapplicableTransportFields(cfg)).toBe(cfg);
   });
 });
+
+describe('Vision does not survive a transport switch', () => {
+  // Measured against xray 26.3.27 on a live node, not inferred: `grpc + Vision`
+  // LOADS, and then rejects clients ("client flow is empty") because every link
+  // the panel emits drops the flow for gRPC. `ws`/`kcp` never get that far -
+  // xray refuses a REALITY inbound on them outright - which is why gRPC is the
+  // case this rule is actually for.
+  it('blanks flow when the transport cannot carry Vision', () => {
+    expect(stripInapplicableTransportFields({ network: 'grpc', flow: 'xtls-rprx-vision' }).flow).toBe('');
+    expect(stripInapplicableTransportFields({ network: 'ws', flow: 'xtls-rprx-vision' }).flow).toBe('');
+    expect(stripInapplicableTransportFields({ network: 'kcp', flow: 'xtls-rprx-vision' }).flow).toBe('');
+    expect(
+      stripInapplicableTransportFields({ network: 'httpupgrade', flow: 'xtls-rprx-vision' }).flow,
+    ).toBe('');
+  });
+
+  it('keeps it where Vision belongs', () => {
+    expect(stripInapplicableTransportFields({ network: 'raw', flow: 'xtls-rprx-vision' }).flow).toBe(
+      'xtls-rprx-vision',
+    );
+    expect(
+      stripInapplicableTransportFields({ network: 'xhttp', flow: 'xtls-rprx-vision' }).flow,
+    ).toBe('xtls-rprx-vision');
+  });
+
+  it('still returns the same object when there is nothing to change', () => {
+    // The identity guarantee this file already made, now that `flow` can also
+    // trigger a rewrite: an unchanged profile must keep its stored JSON
+    // byte-stable, or every save churns the row.
+    const untouched = { network: 'grpc', serviceName: 'svc', flow: '' };
+    expect(stripInapplicableTransportFields(untouched)).toBe(untouched);
+    const alsoUntouched = { network: 'raw', flow: 'xtls-rprx-vision' };
+    expect(stripInapplicableTransportFields(alsoUntouched)).toBe(alsoUntouched);
+  });
+});
