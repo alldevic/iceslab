@@ -264,6 +264,35 @@ describe('buildSubpageConfig', () => {
     expect(new Set(Object.values(appNames(doc)).flat())).not.toContain('Nekoray');
   });
 
+  it('does not offer a client whose format renders nothing for this fleet', () => {
+    // An XHTTP-only fleet: `transport-matrix.test.ts` records sing-box as
+    // `omitted` for that transport, so every sing-box-cored client hands the
+    // buyer an empty config while looking like it worked.
+    const usable = new Set<'plain' | 'clash' | 'xrayjson' | 'singbox'>([
+      'plain',
+      'clash',
+      'xrayjson',
+    ]);
+    const doc = buildSubpageConfig(input({ protocols: ['xray'], usableFormats: usable }))!;
+    const names = new Set(Object.values(appNames(doc)).flat());
+
+    expect(names).not.toContain('sing-box');
+    expect(names).not.toContain('Hiddify');
+    expect(names).not.toContain('NekoBox');
+    // The clients whose formats DO carry it stay, or the buyer is left with
+    // nothing at all — which is the failure, not the fix.
+    expect(names).toContain('Clash Verge');
+    expect(names).toContain('v2rayNG');
+    expect(names).toContain('Shadowrocket');
+  });
+
+  it('leaves the catalogue alone when no format check was supplied', () => {
+    // A caller with no endpoints in hand must not have its list quietly
+    // narrowed on a guess.
+    const names = new Set(Object.values(appNames(buildSubpageConfig(input())!)).flat());
+    expect(names).toContain('Hiddify');
+  });
+
   it('returns null when there is nothing to say, so the shop keeps its own guide', () => {
     expect(buildSubpageConfig(input({ protocols: [] }))).toBeNull();
     // The protocol is there but no endpoint produced a link — nothing to offer.

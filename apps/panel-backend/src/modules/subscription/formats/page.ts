@@ -11,6 +11,7 @@
 // interpolated from admin/user input is HTML-escaped (esc).
 
 import type { ProtocolName } from '@iceslab/shared';
+import type { ClientFormat } from './format-usable.js';
 import {
   PLATFORM_LABEL,
   PLATFORM_ORDER,
@@ -60,6 +61,8 @@ export interface SubscriptionPageData {
     nodeName: string;
     tmeUri: string;
   }>;
+  /** Formats that render at least one server for this buyer. */
+  usableFormats?: ReadonlySet<ClientFormat>;
 }
 
 function esc(s: string): string {
@@ -229,13 +232,14 @@ function renderApps(
   hasAwg: boolean,
   t: Labels,
   mtprotoNodes: Array<{ nodeName: string; tmeUri: string }> = [],
+  usable?: ReadonlySet<ClientFormat>,
 ): string {
   // appsForPlatform already drops an app whose import channel this buyer's
   // protocols do not feed. `hasAwg` (really: are there tunnel files at all) is
   // the second, narrower gate — the protocol can be present while no node
   // produced a file for it, and a card pointing at an empty download is the
   // thing this page exists to avoid.
-  const apps = appsForPlatform(platform, userProtocols).filter((a) => {
+  const apps = appsForPlatform(platform, userProtocols, usable).filter((a) => {
     // An endpoint-link app needs the endpoint's own link to exist.
     if (a.action.kind === 'endpoint-link') return mtprotoNodes.length > 0;
     return a.action.kind === 'deeplink' || a.action.kind === 'manual' || hasAwg;
@@ -329,9 +333,9 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const mtprotoNodes = data.mtprotoNodes ?? [];
   const platforms = PLATFORM_ORDER.filter(
     (p) =>
-      renderApps(p, data.protocols, data.subUrl, hasWgFiles, t, mtprotoNodes).indexOf(
-        'class="app"',
-      ) !== -1,
+      renderApps(
+        p, data.protocols, data.subUrl, hasWgFiles, t, mtprotoNodes, data.usableFormats,
+      ).indexOf('class="app"') !== -1,
   );
   const tabsHtml = platforms
     .map(
@@ -342,7 +346,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const panelsHtml = platforms
     .map(
       (p, i) =>
-        `<div class="panel${i === 0 ? ' on' : ''}" data-p="${p}" role="tabpanel">${renderApps(p, data.protocols, data.subUrl, hasWgFiles, t, mtprotoNodes)}</div>`,
+        `<div class="panel${i === 0 ? ' on' : ''}" data-p="${p}" role="tabpanel">${renderApps(p, data.protocols, data.subUrl, hasWgFiles, t, mtprotoNodes, data.usableFormats)}</div>`,
     )
     .join('');
 

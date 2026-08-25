@@ -6,6 +6,7 @@ import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson, type CustomGeoRef } from './formats/singbox.js';
 import { buildWgQuickConf } from './formats/wgconf.js';
 import { collectMtprotoNodes, collectWgNodes, tunnelConfigUrls } from './formats/per-node.js';
+import { usableFormats } from './formats/format-usable.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildOutlineJson } from './formats/outline.js';
@@ -570,6 +571,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             // Not format-gated: the t.me link is built from the endpoint and
             // fetches nothing back from us.
             mtprotoNodes: collectMtprotoNodes(result.endpoints),
+            usableFormats: usableFormats(result.endpoints),
           }),
         );
       }

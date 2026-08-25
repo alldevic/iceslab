@@ -40,6 +40,7 @@ import {
   type AppDef,
   type PlatformId,
 } from '../../subscription/formats/client-catalog.js';
+import type { ClientFormat } from '../../subscription/formats/format-usable.js';
 import { BASE_TRANSLATIONS, SUBPAGE_LOCALES, SVG_LIBRARY } from './chrome.js';
 
 /** A string in every locale the document declares. The shop's
@@ -92,6 +93,9 @@ export interface SubpageConfigInput {
   /** One entry per MTProto node, with the `t.me/proxy` link Telegram imports. */
   mtprotoNodes: ReadonlyArray<{ nodeName: string; tmeUri: string }>;
   branding: { title: string; logoUrl: string; supportUrl: string };
+  /** Formats that render at least one server for this buyer. A client whose
+   *  format is not here would import an empty config. */
+  usableFormats?: ReadonlySet<ClientFormat>;
 }
 
 // Our platform ids vs the shop's. `router` has no counterpart in the shop's
@@ -352,7 +356,7 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
     if (!shopKey) continue;
 
     const apps: SubpageApp[] = [];
-    for (const app of appsForPlatform(ours, input.protocols)) {
+    for (const app of appsForPlatform(ours, input.protocols, input.usableFormats)) {
       const blocks = blocksFor(app, input);
       if (blocks.length === 0) continue;
       // Install first, import second — that is the order a person does it in.

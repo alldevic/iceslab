@@ -16,6 +16,7 @@
 // vice versa.
 
 import type { ProtocolName } from '@iceslab/shared';
+import type { ClientFormat } from './format-usable.js';
 
 export type PlatformId =
   | 'ios'
@@ -89,12 +90,28 @@ export interface AppDef {
   recommended?: boolean;
   /** Verified download destinations, per platform. See InstallLinks. */
   install?: InstallLinks;
+  /**
+   * The core this client speaks, and so the format it fetches from `/sub`.
+   *
+   * Declared so the catalogue can drop an app whose format renders NOTHING for
+   * this buyer. On an XHTTP-only fleet sing-box emits no server at all, so
+   * every sing-box-cored client hands back an empty config while looking like
+   * it worked — the same "working client aimed at nothing" the delivery rule
+   * above exists to prevent, one level down.
+   *
+   * It mirrors the seeded User-Agent rule for that client, and in that
+   * direction: the rule points Hiddify at `singbox` BECAUSE Hiddify runs
+   * sing-box. Omitted for clients that fetch no subscription format at all
+   * (the tunnel apps, Telegram) and for ones whose choice is not ours to state.
+   */
+  format?: ClientFormat;
 }
 
 export const APPS: AppDef[] = [
   // Universal subscription clients (xray / shadowsocks / hysteria via the link).
   {
     name: 'Hiddify',
+    format: 'singbox',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv'],
     protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'hiddify' },
@@ -112,12 +129,14 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'sing-box',
+    format: 'singbox',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'singbox' },
   },
   {
     name: 'Streisand',
+    format: 'plain',
     platforms: ['ios', 'macos', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'streisand' },
@@ -127,6 +146,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'Shadowrocket',
+    format: 'plain',
     platforms: ['ios', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'shadowrocket' },
@@ -138,6 +158,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'v2rayNG',
+    format: 'xrayjson',
     platforms: ['android', 'androidtv'],
     protocols: ['xray', 'shadowsocks'],
     action: { kind: 'deeplink', scheme: 'v2rayng' },
@@ -152,6 +173,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'NekoBox',
+    format: 'singbox',
     platforms: ['android'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },
@@ -163,6 +185,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'v2rayN',
+    format: 'xrayjson',
     platforms: ['windows'],
     protocols: ['xray', 'shadowsocks'],
     action: { kind: 'manual' },
@@ -183,6 +206,7 @@ export const APPS: AppDef[] = [
   // quantumultx) have no client in this catalogue at all.
   {
     name: 'Clash Verge',
+    format: 'clash',
     platforms: ['windows', 'macos', 'linux'],
     protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
@@ -196,6 +220,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'FlClash',
+    format: 'clash',
     platforms: ['android', 'windows', 'macos', 'linux'],
     protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
     action: { kind: 'deeplink', scheme: 'clash' },
@@ -446,11 +471,19 @@ function deliveryNeededBy(action: AppAction): Delivery {
 export function appsForPlatform(
   platform: PlatformId,
   protocols: readonly ProtocolName[],
+  /** Formats that render at least one server for this buyer (see
+   *  `usableFormats`). Omit to skip the check — callers that have no endpoints
+   *  to hand, such as a catalogue listing, should not start guessing. */
+  usableFormats?: ReadonlySet<ClientFormat>,
 ): AppDef[] {
   const present = new Set(protocols);
   return APPS.filter((a) => {
     if (!a.platforms.includes(platform)) return false;
     const needed = deliveryNeededBy(a.action);
-    return a.protocols.some((p) => present.has(p) && PROTOCOL_DELIVERY[p] === needed);
+    if (!a.protocols.some((p) => present.has(p) && PROTOCOL_DELIVERY[p] === needed)) return false;
+    // Speaking the protocol and being reachable by its channel is still not
+    // enough: the format this client fetches has to render something.
+    if (usableFormats && a.format && !usableFormats.has(a.format)) return false;
+    return true;
   });
 }

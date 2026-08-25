@@ -10,6 +10,7 @@ import { config, subscriptionOrigin } from '../../../config.js';
 import { getLogger } from '../../../lib/logger.js';
 import * as service from '../../subscription/subscription.service.js';
 import { collectMtprotoNodes, collectWgNodes } from '../../subscription/formats/per-node.js';
+import { usableFormats } from '../../subscription/formats/format-usable.js';
 import { getSubscriptionSettings } from '../../settings/settings.service.js';
 import { buildSubpageConfig, type SubpageConfig } from './subpage-config.js';
 
@@ -71,6 +72,9 @@ export async function subpageConfigForToken(token: string): Promise<SubpageConfi
     // Not format-gated: the t.me link is built from the endpoint itself and
     // fetches nothing back from us, so no `disableForFormats` bears on it.
     mtprotoNodes: collectMtprotoNodes(result.endpoints),
+    // Rendered, not assumed: a client whose format produces no server for this
+    // buyer's transports must not be recommended to them.
+    usableFormats: usableFormats(result.endpoints),
     branding: {
       title,
       // brandingSettings is validated by the shop and rendered by nothing —
