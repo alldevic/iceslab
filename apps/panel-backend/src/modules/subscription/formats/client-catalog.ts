@@ -133,6 +133,21 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'macos', 'windows', 'linux', 'android'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'deeplink', scheme: 'singbox' },
+    // From sing-box.sagernet.org/clients/* (checked 2026-08-26).
+    //
+    // No iOS entry, and that is the finding rather than an omission: the
+    // project's own page still links App Store id 6673731168, and that listing
+    // answers 404. Its own words — "We are temporarily unable to update
+    // sing-box apps on the App Store because the reviewer mistakenly found that
+    // we violated the rules" — with TestFlight restricted to sponsors. There is
+    // nowhere to send an iPhone buyer, so we send them nowhere rather than to a
+    // dead page.
+    install: {
+      android: 'https://play.google.com/store/apps/details?id=io.nekohasekai.sfa',
+      macos: 'https://github.com/SagerNet/sing-box/releases',
+      windows: 'https://github.com/SagerNet/sing-box/releases',
+      linux: 'https://github.com/SagerNet/sing-box/releases',
+    },
   },
   {
     name: 'Streisand',
@@ -241,6 +256,17 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },
+    // From incy-app.com, the project's own page (checked 2026-08-26); the store
+    // listing is "incy" by LLC ITDEV. The desktop and TV builds live in the
+    // GitHub organisation the site points at, so that repository is the
+    // destination rather than a versioned artefact.
+    install: {
+      ios: 'https://apps.apple.com/app/id6756943388',
+      android: 'https://play.google.com/store/apps/details?id=llc.itdev.incy',
+      macos: 'https://github.com/INCY-DEV/incy-platforms',
+      windows: 'https://github.com/INCY-DEV/incy-platforms',
+      linux: 'https://github.com/INCY-DEV/incy-platforms',
+    },
   },
   // AmneziaWG-specific.
   {
@@ -272,7 +298,18 @@ export const APPS: AppDef[] = [
     platforms: ['linux', 'router'],
     protocols: ['amneziawg'],
     action: { kind: 'download' },
+    // amnezia-vpn/amneziawg-tools, upstream for `awg(8)` and `awg-quick(8)`
+    // (checked 2026-08-26, not archived). Only the Linux tab gets it: `router`
+    // is not a platform the shop's document can express at all, and a router
+    // owner is not "installing an app".
+    install: { linux: 'https://github.com/amnezia-vpn/amneziawg-tools' },
   },
+  // Keenetic and OpenWrt stay UNLINKED on purpose, and it is not an omission:
+  // they are router firmware, not an app anyone downloads to connect. The buyer
+  // already owns the router; what they need is its own documentation for
+  // importing a tunnel, which differs by model and firmware version and is not
+  // a "get the app" link. Both are also `router`-only, a platform the shop's
+  // document cannot express, so only our own page lists them at all.
   {
     name: 'Keenetic',
     platforms: ['router'],
@@ -321,12 +358,20 @@ export const APPS: AppDef[] = [
     platforms: ['windows'],
     protocols: ['wireguard'],
     action: { kind: 'download' },
+    // wiresock.net, the vendor's own download page (checked 2026-08-26):
+    // "WireSock Secure Connect", free for personal, educational and non-profit
+    // use, with a PRO licence for commercial. The page, not one of its three
+    // architecture-specific installers — the buyer picks their own.
+    install: { windows: 'https://www.wiresock.net/wiresock-secure-connect/download' },
   },
   {
     name: 'wg-quick',
     platforms: ['linux', 'router'],
     protocols: ['wireguard'],
     action: { kind: 'download' },
+    // wireguard.com/install lists the per-distribution package commands; there
+    // is no single file to fetch, so the page is the destination.
+    install: { linux: 'https://www.wireguard.com/install/' },
   },
   {
     name: 'Keenetic',
