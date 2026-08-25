@@ -305,13 +305,77 @@ describe('the webhook events this facade sends', () => {
    * with a working saved card and a green log on both sides.
    */
   it('every event the facade can send is one the shop acts on', async () => {
-    const { REMNAWAVE_EMITTED_EVENTS } = await import('./remnawave.webhook.js');
-    const actionable = (contract as { actionableEvents: string[] }).actionableEvents;
+    const { REMNAWAVE_EMITTED_EVENTS, EVENTS_AHEAD_OF_PINNED_SHOP } = await import(
+      './remnawave.webhook.js'
+    );
+    const { actionableEvents: actionable, preGateEvents: preGate } = contract as {
+      actionableEvents: string[];
+      preGateEvents: string[];
+    };
     expect(actionable.length, 'the captured set is empty - the refresh script read nothing')
       .toBeGreaterThan(0);
+
+    // ACTIONABLE_EVENTS is not the whole truth about what the shop handles, and
+    // reading it as if it were was a modelling error in this very assertion.
+    // The dispatcher branches on some events ABOVE that gate and returns before
+    // reaching it - the torrent-blocker event has always been one, and it has
+    // never been in ACTIONABLE_EVENTS. So "acts on" is the union, and the
+    // capture now reads both (see _pre_gate_events in the refresh script).
+    expect(preGate.length, 'the capture read no pre-gate events - the walk found no dispatcher')
+      .toBeGreaterThan(0);
+    const handled = new Set([...actionable, ...preGate]);
+
+    // The union needs exercising, and the emitted list cannot do it: every event
+    // we send today is either actionable or excused below, so `handled` could
+    // collapse back to `actionable` unnoticed. (It did - the first version of
+    // this block compared the two SETS instead of asking the predicate, and a
+    // mutation that removed preGate from the union walked straight through.)
+    //
+    // So the assertion is on the predicate the gate actually uses, applied to
+    // the events that distinguish the two models: ones the shop demonstrably
+    // handles above the gate and that ACTIONABLE_EVENTS does not contain. A
+    // facade emitting one of those must pass, and that has to hold before we
+    // emit one rather than after.
+    const preGateOnly = preGate.filter((e) => !actionable.includes(e));
+    expect(
+      preGateOnly.length,
+      'no pre-gate event is outside ACTIONABLE_EVENTS - then reading only that set ' +
+        'would model the shop correctly, and this union is describing nothing',
+    ).toBeGreaterThan(0);
+    expect(
+      preGateOnly.filter((e) => !handled.has(e)),
+      'the gate does not accept events the shop handles above ACTIONABLE_EVENTS',
+    ).toEqual([]);
+
     for (const event of REMNAWAVE_EMITTED_EVENTS) {
-      expect(actionable, `the shop would silently drop: ${event}`).toContain(event);
+      if (EVENTS_AHEAD_OF_PINNED_SHOP.includes(event)) continue;
+      expect([...handled], `the shop would silently drop: ${event}`).toContain(event);
     }
+  });
+
+  it('the ahead-of-the-pin list cannot go stale', async () => {
+    const { EVENTS_AHEAD_OF_PINNED_SHOP: AHEAD_OF_PIN } = await import(
+      './remnawave.webhook.js'
+    );
+    // The exception list is only tolerable while it expires by itself. Every
+    // entry claims the PINNED shop does not handle the event; if that stops
+    // being true - the pin moves to a release that grew the branch - the claim
+    // is false and the entry has to go, or it sits there authorising an event
+    // nobody rechecked.
+    //
+    // Which makes this the assertion that keeps the gate honest: without it,
+    // anything at all could be parked on the list and never looked at again,
+    // and the gate above would wave it through forever.
+    const { actionableEvents: actionable, preGateEvents: preGate } = contract as {
+      actionableEvents: string[];
+      preGateEvents: string[];
+    };
+    const handled = new Set([...actionable, ...preGate]);
+    const stale = AHEAD_OF_PIN.filter((event) => handled.has(event));
+    expect(
+      stale,
+      'the pinned shop now handles these - drop them from EVENTS_AHEAD_OF_PINNED_SHOP',
+    ).toEqual([]);
   });
 
   it('the shop still acts on the stage the auto-renew charge hangs on', async () => {

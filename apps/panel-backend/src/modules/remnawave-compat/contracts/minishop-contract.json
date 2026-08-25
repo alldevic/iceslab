@@ -1038,5 +1038,8 @@
     "user.expires_in_24_hours",
     "user.expires_in_48_hours",
     "user.expires_in_72_hours"
+  ],
+  "preGateEvents": [
+    "torrent_blocker.report"
   ]
 }
