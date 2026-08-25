@@ -204,6 +204,50 @@ describe('GET /sub/:token (JSON format)', () => {
     expect(body.endpoints[0].uri).toMatch(/^hysteria2:\/\//);
   });
 
+  it('names the per-node config files for an endpoint that has no share-link', async () => {
+    // A WireGuard flavour has no client URI to give, so `plain` is empty for a
+    // buyer holding only that (measured on the lab: 0 bytes). `json` is the
+    // format that describes a subscription rather than feeding a proxy client,
+    // so it says where the files are instead.
+    const nodeId = await createNode('awg-node', '10.0.0.20');
+    const profileId = await createProfile(
+      'amneziawg',
+      {
+        subnet: '10.77.0.0/24',
+        serverPrivateKey: 'aP8lgNU9c2vTGSvljeH1JO1qfCWQ6LwdVT92/RBO/FA=',
+        serverPublicKey: 'BQ6TIcR/TaTqtY4slJvnVj0I95pkC3z7t4HA54i8qVA=',
+        obfuscation: {},
+      },
+      'awgjson',
+    );
+    await createBinding(profileId, nodeId, 51820);
+    const user = await createUser('awgjson');
+
+    const res = await app.inject({ method: 'GET', url: `/sub/${user.subscriptionToken}?format=json` });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+
+    const awg = body.endpoints.find((e: { protocol: string }) => e.protocol === 'amneziawg');
+    expect(awg, 'the amneziawg endpoint is in the subscription at all').toBeDefined();
+    // The reason the field exists: this endpoint genuinely has no share-link.
+    expect(awg.uri).toBe('');
+    expect(awg.configUrls.wgconf).toContain('format=wgconf&proto=amneziawg&node=');
+    expect(awg.configUrls.amneziavpn).toContain('format=amneziavpn&node=');
+
+    // Control: an endpoint that DOES carry a link is left alone.
+    const hy = body.endpoints.find((e: { protocol: string }) => e.protocol === 'hysteria');
+    expect(hy.uri).not.toBe('');
+    expect(hy.configUrls).toBeUndefined();
+
+    // And the URL it names actually serves the file — a well-formatted string
+    // pointing at nothing would pass every assertion above.
+    const named = new URL(awg.configUrls.wgconf);
+    const dl = await app.inject({ method: 'GET', url: `${named.pathname}${named.search}` });
+    expect(dl.statusCode).toBe(200);
+    expect(dl.body).toContain('[Interface]');
+    expect(dl.body).toContain('BQ6TIcR/TaTqtY4slJvnVj0I95pkC3z7t4HA54i8qVA=');
+  });
+
   it('returns JSON when Accept: application/json', async () => {
     const user = await createUser('alice');
 

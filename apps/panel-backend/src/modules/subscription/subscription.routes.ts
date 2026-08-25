@@ -5,7 +5,7 @@ import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson, type CustomGeoRef } from './formats/singbox.js';
 import { buildWgQuickConf } from './formats/wgconf.js';
-import { collectWgNodes } from './formats/wg-nodes.js';
+import { collectWgNodes, tunnelConfigUrls } from './formats/wg-nodes.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildOutlineJson } from './formats/outline.js';
@@ -620,10 +620,20 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       const geo = selfHostedGeo();
 
       switch (format) {
-        case 'json':
-          return reply
-            .type('application/json')
-            .send({ ...result.json, endpoints: filtered });
+        case 'json': {
+          // An endpoint with no share-link (both WireGuard flavours) carries
+          // `uri: ''`, which tells a reader nothing about how to connect. Name
+          // the per-node files it does have instead — the same URLs the install
+          // surfaces put behind their download buttons.
+          const subUrl = `${subscriptionOrigin()}${config.SUBSCRIPTION_PATH_PREFIX}/${params.token}`;
+          return reply.type('application/json').send({
+            ...result.json,
+            endpoints: filtered.map((e) => {
+              const configUrls = tunnelConfigUrls(e, subUrl);
+              return configUrls ? { ...e, configUrls } : e;
+            }),
+          });
+        }
         case 'clash':
           return reply
             .type('text/yaml; charset=utf-8')
