@@ -382,6 +382,57 @@ async function checkOne(node: {
  * What a reachable node's answer means. Pure, so the rule can be read and
  * tested without a transport.
  */
+/** Node status messages are capped at this; the column holds no more. */
+const STATUS_MESSAGE_LIMIT = 200;
+
+/**
+ * The "not running" message, built so that every down core is NAMED.
+ *
+ * The obvious version — join the `name (reason)` pairs and cut the result to
+ * the limit — loses whole cores. Two down cores exceed it (each reason is up to
+ * 163 characters by the agent's own cap), so the second one is cut mid-word and
+ * its reason vanishes entirely. Watched on the composed string: xray's reason
+ * survived and hysteria's stopped one clause before "no such file or
+ * directory", which is the only part that says what to do.
+ *
+ * So the names come first and are never sacrificed — an operator who cannot see
+ * that hysteria is down as well has been told something false-by-omission —
+ * and what remains of the budget is split evenly between the reasons.
+ *
+ * Each reason is trimmed from the FRONT, matching what the agent does and for
+ * the same reason: xray nests with " > " and Go wraps with ": ", so the root
+ * cause is at the end. A leading ellipsis marks the cut, because a clipped line
+ * that reads like a whole sentence is worse than an obvious stub.
+ */
+export function composeDownMessage(
+  cores: { name: string; lastError?: string }[],
+): string {
+  const head = 'not running: ';
+  const bare = `${head}${cores.map((c) => c.name).join(', ')}`;
+  if (bare.length >= STATUS_MESSAGE_LIMIT) return bare.slice(0, STATUS_MESSAGE_LIMIT);
+
+  const annotated = cores.filter((c) => c.lastError);
+  if (annotated.length === 0) return bare;
+
+  // ` (…)` costs 3 characters per annotated core on top of the bare list.
+  const budget = STATUS_MESSAGE_LIMIT - bare.length - annotated.length * 3;
+  const per = Math.floor(budget / annotated.length);
+  // Below this a reason is a fragment that explains nothing while looking like
+  // it might. Names alone are the more honest message.
+  if (per < 24) return bare;
+
+  return `${head}${cores
+    .map((c) => {
+      const reason = c.lastError;
+      if (!reason) return c.name;
+      if (reason.length <= per) return `${c.name} (${reason})`;
+      // Strip any ellipsis the agent already added before adding our own.
+      const tail = reason.replace(/^\.+/, '').slice(-(per - 3));
+      return `${c.name} (...${tail})`;
+    })
+    .join(', ')}`;
+}
+
 export function statusFromHealth(res: {
   status: string;
   cores: { name: string; running: boolean; provisioned?: boolean; lastError?: string }[];
@@ -409,9 +460,6 @@ export function statusFromHealth(res: {
     // profile they had just saved. Watched live - a listen port already taken
     // gave sixteen crashes and a message that stopped at the core's name.
     const downCores = res.cores.filter((c) => !c.running && c.provisioned !== false);
-    const down = downCores.map((c) =>
-      c.lastError ? `${c.name} (${c.lastError})` : c.name,
-    );
     // The node is reachable and its cores are not. Until 2026-08-15 this stayed
     // `online` and said so only in the message, so an operator's node list
     // showed a green card while the cascade entry behind it served nobody: the
@@ -423,8 +471,8 @@ export function statusFromHealth(res: {
     // endpoints out of every subscriber's client.
     return {
       status: 'degraded',
-      message: down.length
-        ? `not running: ${down.join(', ')}`.slice(0, 200)
+      message: downCores.length
+        ? composeDownMessage(downCores)
         : // No core reports itself down, yet the agent called the node degraded.
           // Keep the payload here: this is the case where the detail is not
           // something we can name in advance.
