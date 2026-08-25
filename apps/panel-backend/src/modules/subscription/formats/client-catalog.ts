@@ -288,17 +288,50 @@ export const PROTOCOL_DELIVERY: Record<ProtocolName, Delivery> = {
   shadowtls: 'subscription',
 };
 
+/** What an app's import path needs to be handed for it to work at all. */
+function deliveryNeededBy(action: AppAction): Delivery {
+  switch (action.kind) {
+    // Both hand the app the subscription URL and nothing else.
+    case 'deeplink':
+    case 'manual':
+      return 'subscription';
+    // Scan a QR of a .conf, scan the vpn:// key, download the .conf — all three
+    // are the panel handing over one node's file.
+    case 'awg-vpn':
+    case 'awg-conf':
+    case 'wg-conf':
+    case 'download':
+      return 'per-node-file';
+  }
+}
+
 /**
  * The apps a buyer on `platform` can actually use, given the protocols their
  * subscription really contains. Shared by both install surfaces so neither can
  * promise a client the other one knows is wrong.
+ *
+ * Speaking the protocol is NOT enough — the app has to be reachable by the
+ * channel that protocol is delivered over. Hiddify speaks AmneziaWG and imports
+ * a wg-quick file, but the entry below offers it as a subscription deep link;
+ * handing an AmneziaWG-only buyer `hiddify://import/<sub>` points a working
+ * client at a subscription that is empty for them (measured: 0 bytes). So an
+ * app whose action takes the subscription URL is listed only when the buyer
+ * holds a protocol that actually rides in the subscription, and a file-based
+ * app only when they hold one that produces files.
+ *
+ * The consequence to know about: an AmneziaWG-only buyer is not offered
+ * Hiddify at all, though Hiddify could import their .conf. Teaching one app two
+ * delivery paths is a catalogue change that needs checking against the client,
+ * not a guess to make here.
  */
 export function appsForPlatform(
   platform: PlatformId,
   protocols: readonly ProtocolName[],
 ): AppDef[] {
   const present = new Set(protocols);
-  return APPS.filter(
-    (a) => a.platforms.includes(platform) && a.protocols.some((p) => present.has(p)),
-  );
+  return APPS.filter((a) => {
+    if (!a.platforms.includes(platform)) return false;
+    const needed = deliveryNeededBy(a.action);
+    return a.protocols.some((p) => present.has(p) && PROTOCOL_DELIVERY[p] === needed);
+  });
 }

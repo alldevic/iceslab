@@ -12,9 +12,9 @@
 
 import type { ProtocolName } from '@iceslab/shared';
 import {
-  APPS,
   PLATFORM_LABEL,
   PLATFORM_ORDER,
+  appsForPlatform,
   deeplinkHref,
   type PlatformId,
 } from './client-catalog.js';
@@ -220,12 +220,13 @@ function renderApps(
   hasAwg: boolean,
   t: Labels,
 ): string {
-  const protoSet = new Set(userProtocols);
-  const apps = APPS.filter(
-    (a) =>
-      a.platforms.includes(platform) &&
-      a.protocols.some((p) => protoSet.has(p)) &&
-      (a.action.kind === 'deeplink' || a.action.kind === 'manual' ? true : hasAwg),
+  // appsForPlatform already drops an app whose import channel this buyer's
+  // protocols do not feed. `hasAwg` (really: are there tunnel files at all) is
+  // the second, narrower gate — the protocol can be present while no node
+  // produced a file for it, and a card pointing at an empty download is the
+  // thing this page exists to avoid.
+  const apps = appsForPlatform(platform, userProtocols).filter(
+    (a) => a.action.kind === 'deeplink' || a.action.kind === 'manual' || hasAwg,
   );
   if (apps.length === 0) {
     return `<div class="empty">${esc(t.noApps)}</div>`;

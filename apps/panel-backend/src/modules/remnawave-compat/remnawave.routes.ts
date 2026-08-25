@@ -26,6 +26,7 @@ import { parseUserRef, resolveUserId, resolveUserRef } from './remnawave.identit
 import { NodeTransport } from '../nodes/nodes.transport.js';
 import { nodeUsersQueue, buildAddUserRequest } from '../users/users.queue.js';
 import { getLogger } from '../../lib/logger.js';
+import { subpageConfigForToken } from './subpage/subpage.service.js';
 
 // Same include the users repository uses, so mapUserToPublic sees traffic +
 // group membership for the facade's direct lookups (by-telegram-id/email/username).
@@ -837,11 +838,27 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     },
   );
 
-  // Subscription page config — display-only; the minishop MiniApp renders from
-  // `subscriptionUrl`, so these are cosmetic.
-  app.get('/api/subscriptions/subpage-config/:shortUuid', opts, async (_request, reply) =>
-    sendResponse(reply, {}),
-  );
+  // Subscription page config — the ONLY channel through which what this panel
+  // knows reaches the person who bought a subscription.
+  //
+  // (It was commented here as "display-only … cosmetic". It is neither: the
+  // MiniApp's install screen renders from this document, and answering `{}`
+  // makes the shop fall back to its own bundled one, which lists no WireGuard
+  // client at all. An AmneziaWG-only buyer was shown three clients that cannot
+  // read their config.)
+  //
+  // The shop asks THIS route first, by the subscription's short uuid — which is
+  // our subscription token — so the answer can be specific to one buyer. See
+  // subpage/subpage-config.ts for what the shop does with it.
+  app.get('/api/subscriptions/subpage-config/:shortUuid', opts, async (request, reply) => {
+    const { shortUuid } = request.params as { shortUuid: string };
+    const doc = await subpageConfigForToken(shortUuid);
+    // `null` = nothing to say about this subscription (unknown token, revoked,
+    // expired, no endpoints). Answer as this route always did and let the shop
+    // render its generic document; an empty or half-built v1 would be rejected
+    // by its validator and land the buyer in the same place, noisily.
+    return sendResponse(reply, doc ?? {});
+  });
   app.get('/api/subscription-page-configs', opts, async (_request, reply) => sendResponse(reply, {}));
   app.get('/api/subscription-page-configs/:uuid', opts, async (_request, reply) =>
     sendResponse(reply, {}),

@@ -5,6 +5,7 @@ import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson, type CustomGeoRef } from './formats/singbox.js';
 import { buildWgQuickConf } from './formats/wgconf.js';
+import { collectWgNodes } from './formats/wg-nodes.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildOutlineJson } from './formats/outline.js';
@@ -517,40 +518,27 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         const settings = await getSubscriptionSettings();
         const subUrl = `${subscriptionOrigin()}${config.SUBSCRIPTION_PATH_PREFIX}/${params.token}`;
         const protocols = [...new Set(result.endpoints.map((e) => e.protocol))];
-        // One QR pair per AmneziaWG node (deduped by node name). wg-quick / vpn://
-        // are single-tunnel-per-key, so a user with several AWG servers gets each
+        // One QR pair per AmneziaWG node. wg-quick / vpn:// are
+        // single-tunnel-per-key, so a user with several AWG servers gets each
         // server's own labelled QR (.conf for the AmneziaWG app, vpn:// for the
-        // AmneziaVPN app) instead of only the first node's. ecl 'L' keeps the long
-        // payloads scannable.
-        const awgSeen = new Set<string>();
-        // Same idea for plain WireGuard, minus the vpn:// key: stock WireGuard
-        // clients import the .conf (or its QR) and nothing else.
-        const wgSeen = new Set<string>();
-        const awgNodes = filtered
-          .filter((e) => e.protocol === 'amneziawg')
-          .filter((e) => !awgSeen.has(e.nodeName) && !!awgSeen.add(e.nodeName))
-          .map((e) => {
-            const conf = buildWgQuickConf(filtered, e.nodeName, 'amneziawg');
-            const vpn = buildAwgVpnLink(filtered, e.nodeName);
-            return {
-              nodeName: e.nodeName,
-              confQrSvg: conf ? qrSvg(conf, 'L') : undefined,
-              vpnQrSvg: vpn ? qrSvg(vpn, 'L') : undefined,
-              // Raw vpn:// key for a copy button: the AmneziaVPN key QR is dense
-              // enough to be unreliable on screen, so paste-the-key is the robust path.
-              vpnKey: vpn || undefined,
-            };
-          });
-        const wgNodes = filtered
-          .filter((e) => e.protocol === 'wireguard')
-          .filter((e) => !wgSeen.has(e.nodeName) && !!wgSeen.add(e.nodeName))
-          .map((e) => {
-            const conf = buildWgQuickConf(filtered, e.nodeName, 'wireguard');
-            return {
-              nodeName: e.nodeName,
-              confQrSvg: conf ? qrSvg(conf, 'L') : undefined,
-            };
-          });
+        // AmneziaVPN app) instead of only the first node's. ecl 'L' keeps the
+        // long payloads scannable. Plain WireGuard gets the same minus the
+        // vpn:// key: its clients import the .conf (or its QR) and nothing else.
+        //
+        // The node walk itself lives in collectWgNodes so the shop's install
+        // screen offers the same servers, in the same order, as this page.
+        const awgNodes = collectWgNodes(filtered, 'amneziawg').map((n) => ({
+          nodeName: n.nodeName,
+          confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
+          vpnQrSvg: n.vpnKey ? qrSvg(n.vpnKey, 'L') : undefined,
+          // Raw vpn:// key for a copy button: the AmneziaVPN key QR is dense
+          // enough to be unreliable on screen, so paste-the-key is the robust path.
+          vpnKey: n.vpnKey ?? undefined,
+        }));
+        const wgNodes = collectWgNodes(filtered, 'wireguard').map((n) => ({
+          nodeName: n.nodeName,
+          confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
+        }));
         return reply.type('text/html; charset=utf-8').send(
           buildSubscriptionPage({
             brandTitle: settings.profileTitle ?? settings.brandName ?? 'Iceslab',

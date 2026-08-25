@@ -38,6 +38,26 @@ describe('buildSubscriptionPage', () => {
     expect(withAwg).toContain('format=wgconf&proto=amneziawg&node=awg');
   });
 
+  it('does not offer a subscription-import client to a tunnel-only buyer', () => {
+    // Hiddify speaks AmneziaWG and is listed for it, but the catalogue offers
+    // it as `hiddify://import/<subscription>` — and an AmneziaWG-only
+    // subscription is empty (measured on the lab: 0 bytes from ?format=plain).
+    // A working client aimed at nothing is the failure this page exists to
+    // avoid, so it must not appear.
+    const tunnelOnly = buildSubscriptionPage(
+      base({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'awg' }] }),
+    );
+    expect(tunnelOnly).not.toContain('Hiddify');
+    expect(tunnelOnly).toContain('AmneziaVPN');
+
+    // The same buyer with a proxy protocol as well SHOULD see it: then the
+    // subscription link it imports has something in it.
+    const both = buildSubscriptionPage(
+      base({ protocols: ['amneziawg', 'xray'], awgNodes: [{ nodeName: 'awg' }] }),
+    );
+    expect(both).toContain('Hiddify');
+  });
+
   it('multi-node: a server selector + one QR per (node, app), not a stacked tower', () => {
     const html = buildSubscriptionPage(
       base({
