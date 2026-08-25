@@ -96,6 +96,19 @@ export interface RequestContext {
    *  is treated as "country unknown" and the ranker falls back to
    *  utilization-only ordering. */
   cfCountry?: string;
+  /**
+   * Whether this call is a CLIENT fetching its subscription, and so belongs in
+   * `subscription_request_history`. Defaults to true.
+   *
+   * False for callers that build a subscription to look at it rather than to
+   * hand it over — the shop asking what to draw on its install screen. Those
+   * rows carry no IP and no User-Agent, and the insights dashboard counts
+   * exactly this table: distinct users in a window, the requests-per-hour
+   * histogram, and the by-client-family split (where a null UA becomes its own
+   * bucket). Recording them makes the panel's own analytics report traffic that
+   * no client generated.
+   */
+  audit?: boolean;
 }
 
 export interface SubscriptionResult {
@@ -1188,16 +1201,18 @@ export async function generateSubscription(
     } // host-row loop
   }
 
-  try {
-    await prisma.subscriptionRequestHistory.create({
-      data: {
-        userId: user.id,
-        requestIp: ctx.ip ?? null,
-        userAgent: ctx.userAgent ?? null,
-      },
-    });
-  } catch {
-    // Audit failure must not block the subscription response.
+  if (ctx.audit !== false) {
+    try {
+      await prisma.subscriptionRequestHistory.create({
+        data: {
+          userId: user.id,
+          requestIp: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+        },
+      });
+    } catch {
+      // Audit failure must not block the subscription response.
+    }
   }
 
   // Bug #7: all three structured formatters derive their outbound tag as

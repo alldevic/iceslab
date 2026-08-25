@@ -26,7 +26,13 @@ const logger = getLogger();
 export async function subpageConfigForToken(token: string): Promise<SubpageConfig | null> {
   let result: Awaited<ReturnType<typeof service.generateSubscription>>;
   try {
-    result = await service.generateSubscription(token);
+    // `audit: false` — this is the shop asking what to DRAW, not a client
+    // fetching its config. Recorded, it lands in subscription_request_history
+    // with no IP and no User-Agent and inflates the insights dashboard's
+    // distinct-user count, hour histogram and client-family split with traffic
+    // no client generated. Measured before the flag existed: three guide
+    // fetches, three rows.
+    result = await service.generateSubscription(token, { audit: false });
   } catch (err) {
     if (
       err instanceof service.SubscriptionNotFoundError ||
