@@ -80,6 +80,20 @@ const XRAY_TRANSPORTS: {
   { value: 'kcp', label: 'mKCP', hint: 'UDP-based, resilient on lossy links. Do not share a UDP port with Hysteria/AWG.' },
 ];
 
+// The three transports REALITY can carry. Measured on xray 26.3.27, not
+// inferred: ws / httpupgrade / kcp do not merely misbehave, xray refuses the
+// whole config with `infra/conf: REALITY only supports RAW, XHTTP and gRPC for
+// now.` and the node's core restart-loops, taking every other inbound on that
+// node down with it.
+//
+// The panel has known this since v0.1.0 - `profiles.form.cfg.realityNetworkDesc`
+// has spelled the rule out in both locales that whole time and no .tsx ever
+// read it, so the form neither said it nor enforced it. The backend schema
+// started refusing the combination at save; that turns a config the operator
+// was invited to build into an error at the end. Here it is a shape the form
+// will not make.
+const REALITY_TRANSPORTS = ['raw', 'xhttp', 'grpc'];
+
 // Vision flow is only valid on raw/xhttp; other transports reject it.
 const FLOW_COMPATIBLE_TRANSPORTS = ['raw', 'xhttp'];
 // path + host header apply to these transports (same URI param names).
@@ -670,6 +684,24 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.values.xrayNetwork]);
+
+  useEffect(() => {
+    // Turning REALITY on over ws / httpupgrade / kcp: snap the transport back
+    // to raw rather than leave a pair the save will refuse. The pills for those
+    // three go disabled below, so this covers the other order of clicks - the
+    // operator picks the transport first and reaches for REALITY after.
+    //
+    // Same move as clearing `xrayFlow` above and as forcing security off REALITY
+    // for VMess right here: when two controls cannot both hold their value, the
+    // one just clicked wins and the other yields visibly.
+    if (
+      form.values.xraySecurity === 'reality' &&
+      !REALITY_TRANSPORTS.includes(form.values.xrayNetwork)
+    ) {
+      form.setFieldValue('xrayNetwork', 'raw');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.values.xraySecurity]);
 
   useEffect(() => {
     // VMess share links can't carry REALITY; force a non-reality security.
@@ -1306,17 +1338,35 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   <StepLabel>{t('profiles.form.cfg.stepTransport')}</StepLabel>
                   <Group gap={8}>
                     {/* What each transport actually is stays on hover: the
-                        artboard keeps this row to pills alone. */}
-                    {XRAY_TRANSPORTS.map((tr) => (
-                      <PillChip
-                        key={tr.value}
-                        label={tr.label}
-                        title={tr.hint}
-                        active={form.values.xrayNetwork === tr.value}
-                        onClick={() => form.setFieldValue('xrayNetwork', tr.value)}
-                      />
-                    ))}
+                        artboard keeps this row to pills alone. The exception is
+                        the REALITY rule, which is not a preference but a config
+                        xray will not load - so it goes in the open, under the
+                        row, whenever it is in force. */}
+                    {XRAY_TRANSPORTS.map((tr) => {
+                      const blockedByReality =
+                        form.values.xraySecurity === 'reality' &&
+                        !REALITY_TRANSPORTS.includes(tr.value);
+                      return (
+                        <PillChip
+                          key={tr.value}
+                          label={tr.label}
+                          title={
+                            blockedByReality
+                              ? t('profiles.form.cfg.realityNetworkDesc')
+                              : tr.hint
+                          }
+                          disabled={blockedByReality}
+                          active={form.values.xrayNetwork === tr.value}
+                          onClick={() => form.setFieldValue('xrayNetwork', tr.value)}
+                        />
+                      );
+                    })}
                   </Group>
+                  {form.values.xraySecurity === 'reality' && (
+                    <Text size="xs" c="dimmed">
+                      {t('profiles.form.cfg.realityNetworkDesc')}
+                    </Text>
+                  )}
                 </Stack>
 
                 <Stack gap={8} style={{ flex: 1.2, minWidth: 0 }}>
