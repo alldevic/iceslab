@@ -92,10 +92,10 @@ iceslab_installer_src: "{{ role_path }}/../../../../scripts/install-iceslab-node
 # "agent predates /generateKeys" - a fork feature the panel offers, the node
 # cannot serve, and nothing in between said why.
 #
-# Left EMPTY by default, which keeps the installer's own defaults and so keeps
-# this role's behaviour unchanged. A fork has to set them, and the task below
-# prints what it is about to install so the choice is visible in the play
-# output rather than discovered weeks later on a node missing an endpoint.
+# Left EMPTY here and REQUIRED by the agent task: an unset value is a decision
+# nobody made, so the play stops and asks rather than quietly installing
+# upstream. A printed warning was the first attempt and put the burden on
+# somebody reading play output that scrolls past.
 iceslab_node_repo: ""
 iceslab_node_ref: ""
 

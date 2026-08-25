@@ -11,7 +11,7 @@ pinned, post-quantum-capable xray plus BBR.
 | `system` | on | base packages + BBR sysctl (the agent's `direct` outbound uses `tcpCongestion=bbr`) |
 | `xray` | on | pinned xray (`iceslab_xray_version`, ≥26.x → ML-DSA-65 / ML-KEM-768 keygen) + geodata; downloads with retry (GitHub's release CDN is flaky from some hosts) |
 | `zapret2` | **off** (`iceslab_zapret2_enabled`) | B2 ss-zapret2 docker stack |
-| `agent` | **off** (needs `iceslab_panel_url` + `iceslab_bootstrap_token`) | node-agent via the bootstrap-token installer |
+| `agent` | **off** (needs `iceslab_panel_url` + `iceslab_bootstrap_token`, and `iceslab_node_repo` + `iceslab_node_ref`) | node-agent via the bootstrap-token installer |
 
 ## Usage
 
@@ -21,7 +21,15 @@ cp inventory.example.ini inventory.ini   # fill in your nodes (key auth only)
 ansible-playbook site.yml                # base: xray + BBR
 # add fork features per host via inventory/host_vars:
 #   iceslab_zapret2_enabled=true   iceslab_panel_url=…  iceslab_bootstrap_token=…
+#   iceslab_node_repo=…            iceslab_node_ref=…
 ```
+
+Installing the agent needs `iceslab_node_repo` + `iceslab_node_ref` as well, and
+the play refuses to run without them. The installer takes its source from the
+environment and defaults to UPSTREAM `github.com/icecompany-tech/iceslab` at
+`v0.2.0`; a fork that leaves them unset provisions nodes running an agent
+without any of its own features, and finds out weeks later when a panel call
+answers 404 on a node that is otherwise healthy.
 
 Run a subset with tags: `--tags xray`, `--tags zapret2`, `--tags system`.
 

@@ -22,21 +22,33 @@
     dest: /usr/local/sbin/install-iceslab-node.sh
     mode: "0755"
 
-# Say which agent is about to be built, before building it.
+# Refuse to guess which agent to install.
 #
-# The installer's default source is UPSTREAM at a release tag. A fork that
-# forgets to set `iceslab_node_repo`/`iceslab_node_ref` gets a node running
-# somebody else's agent, and every fork-only endpoint the panel calls then
-# answers 404 on a node that is otherwise healthy. That failure is silent in
-# both directions - the play is green and the node is up - so the only cheap
-# defence is saying it out loud at the moment of the decision.
-- name: Report which agent source will be installed
-  ansible.builtin.debug:
-    msg: >-
-      node-agent source:
-      {{ iceslab_node_repo | default('', true) | ternary(iceslab_node_repo, 'installer default (UPSTREAM github.com/icecompany-tech/iceslab)') }}
-      @
-      {{ iceslab_node_ref | default('', true) | ternary(iceslab_node_ref, 'installer default (v0.2.0)') }}
+# The installer's own default source is UPSTREAM at a release tag, and it has no
+# flags - only environment. A fork that forgets these two variables gets a node
+# running somebody else's agent, and every fork-only endpoint the panel calls
+# then answers 404 on a node that is otherwise healthy. Silent in both
+# directions: the play is green, the node is up, and the gap only surfaces weeks
+# later as "agent predates /generateKeys" - which is exactly how it surfaced
+# here, on a node this role had provisioned.
+#
+# A printed warning was the first version of this and it was not enough: it puts
+# the burden on somebody reading play output that scrolls past. An unset value
+# is a decision nobody made, so the play stops and asks for one.
+- name: Refuse to install an agent from an unnamed source
+  ansible.builtin.assert:
+    that:
+      - iceslab_node_repo | length > 0
+      - iceslab_node_ref | length > 0
+    fail_msg: >-
+      iceslab_node_repo and iceslab_node_ref must both be set to install the
+      node-agent. Left unset the installer builds UPSTREAM
+      github.com/icecompany-tech/iceslab at v0.2.0, which carries none of this
+      fork's node-side features - the panel would offer them and the node would
+      answer 404. Set both in your inventory, e.g.
+      iceslab_node_repo = git://10.0.2.2/iceslab
+      iceslab_node_ref  = feat/fork-integration
+    success_msg: "node-agent source: {{ iceslab_node_repo }} @ {{ iceslab_node_ref }}"
 
 - name: Run the iceslab-node installer (bootstrap flow)
   ansible.builtin.command:
@@ -51,15 +63,11 @@
       {% if iceslab_ssh_allowlist | length > 0 %}--ssh-allowlist {{ iceslab_ssh_allowlist | join(',') | quote }}{% endif %}
     creates: /etc/iceslab-node/env
   # The installer reads these from the environment and has no flags for them,
-  # so this is the only way the role can choose what it deploys. Omitted keys
-  # would still shadow the installer's defaults with an empty string, hence the
-  # dict comprehension rather than two plain entries.
-  environment: >-
-    {{
-      {}
-      | combine({'ICESLAB_NODE_REPO': iceslab_node_repo} if iceslab_node_repo | length > 0 else {})
-      | combine({'ICESLAB_NODE_REF': iceslab_node_ref} if iceslab_node_ref | length > 0 else {})
-    }}
+  # so this is the only way the role can choose what it deploys. Unconditional
+  # because the assert above guarantees both are set.
+  environment:
+    ICESLAB_NODE_REPO: "{{ iceslab_node_repo }}"
+    ICESLAB_NODE_REF: "{{ iceslab_node_ref }}"
 
 # Confirm the agent is actually serving before the play calls itself done.
 #
