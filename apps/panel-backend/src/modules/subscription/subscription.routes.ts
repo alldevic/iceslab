@@ -492,6 +492,27 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // Wave-14 #6: browser navigation → human-readable landing page instead
       // of the base64 `plain` dump. Uses the same generated data; emits no
       // config, just links + copy + per-format download buttons.
+      // A person, not a client. Where they belong is a product decision: this
+      // panel is an internal tool that happens to sit in the external
+      // perimeter, and the human side of the product is the shop. So when the
+      // operator has named a portal, a browser goes there and only the CLIENT
+      // keeps talking to us.
+      //
+      // Before the page, because the page is what we are replacing. After the
+      // `?format=` check inside wantsHtmlPage, because an explicit format is
+      // someone asking for a config on purpose - including our own admin UI
+      // and every debugging curl - and redirecting that would break the thing
+      // the redirect is meant to leave alone.
+      //
+      // 302, not 301: which surface serves people is an operational choice, and
+      // a permanent redirect is cached by browsers past the point where the
+      // operator can change their mind.
+      if (
+        config.CLIENT_PORTAL_URL &&
+        wantsHtmlPage(query, (request.headers.accept ?? '').toString())
+      ) {
+        return reply.redirect(config.CLIENT_PORTAL_URL, 302);
+      }
       if (wantsHtmlPage(query, (request.headers.accept ?? '').toString())) {
         const settings = await getSubscriptionSettings();
         const subUrl = `${subscriptionOrigin()}${config.SUBSCRIPTION_PATH_PREFIX}/${params.token}`;

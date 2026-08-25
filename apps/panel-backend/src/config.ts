@@ -61,6 +61,33 @@ export const ConfigSchema = z.object({
     .transform((v) => (v && v.trim() !== '' ? v : undefined))
     .pipe(z.url().optional()),
 
+  /**
+   * Where a PERSON belongs when they open a subscription link in a browser.
+   *
+   * The subscription URL is handed to a buyer, and it is fetched by two very
+   * different things: their VPN client, which needs the config, and sometimes
+   * the buyer themselves, who taps it and gets our install page. This panel is
+   * an internal tool that happens to sit in the external perimeter - the human
+   * side of the product is the shop - so when this is set, a browser is sent
+   * there instead of being shown panel UI.
+   *
+   * Unset (the default) keeps the install page exactly as it was: an operator
+   * who has no shop, or has not split the surfaces, must not lose the only
+   * place their buyers get AmneziaWG QR pairs. Empty is read as unset for the
+   * same reason SUBSCRIPTION_PUBLIC_URL is: compose passes `${VAR:-}` for
+   * optional settings, and an empty string through `.url()` refuses the boot.
+   *
+   * The token is deliberately NOT appended. It is the subscription credential,
+   * the destination is another origin, and a credential in a redirect target
+   * lands in that origin's logs and Referer headers. The shop identifies its
+   * own visitors; it does not need ours.
+   */
+  CLIENT_PORTAL_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? v : undefined))
+    .pipe(z.url().optional()),
+
   // G6 - self-hosted geo distribution. When true, subscription formats point
   // their geo databases at this panel's public /geo/<token>/ path (a mirror of
   // the enabled source .dat + composed custom categories) instead of the

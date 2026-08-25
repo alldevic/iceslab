@@ -145,6 +145,12 @@ services:
       # incoming panel's links live at the root of a separate host.
       SUBSCRIPTION_PUBLIC_URL: ${SUBSCRIPTION_PUBLIC_URL:-}
       SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
+      # Where a PERSON goes when they open a subscription link in a browser.
+      # Set it to the shop and the panel stops showing its own install page to
+      # buyers; unset keeps that page, which is the only place a buyer gets
+      # AmneziaWG QR pairs. Do not set it before the shop can render the
+      # connection page for THIS fleet.
+      CLIENT_PORTAL_URL: ${CLIENT_PORTAL_URL:-}
       # Safety ceiling on device rows per user, and the login-alert toggle.
       HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
       TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}
