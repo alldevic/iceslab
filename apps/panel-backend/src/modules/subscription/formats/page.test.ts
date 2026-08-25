@@ -58,6 +58,25 @@ describe('buildSubscriptionPage', () => {
     expect(both).toContain('Hiddify');
   });
 
+  it('sends an mtproto buyer to Telegram itself, not to the subscription link', () => {
+    // Telegram is the client: nothing to install, nothing to import, and the
+    // subscription link means nothing to it. Before the endpoint-link channel
+    // existed this app fell through to the "paste the subscription" branch.
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['mtproto'],
+        mtprotoNodes: [{ nodeName: 'nl-1', tmeUri: 'https://t.me/proxy?server=a&port=1&secret=ee' }],
+      }),
+    );
+    expect(html).toContain('Telegram');
+    expect(html).toContain('https://t.me/proxy?server=a&amp;port=1&amp;secret=ee');
+    expect(html).not.toContain('href="#sublink">');
+
+    // The protocol without a link for it is nothing to offer.
+    const noLink = buildSubscriptionPage(base({ protocols: ['mtproto'] }));
+    expect(noLink).not.toContain('Telegram');
+  });
+
   it('multi-node: a server selector + one QR per (node, app), not a stacked tower', () => {
     const html = buildSubscriptionPage(
       base({

@@ -1,16 +1,22 @@
-// The per-node tunnel list, shared by every surface that has to show it.
+// Config artefacts that exist once per NODE, shared by every surface that shows
+// them.
 //
-// WireGuard and AmneziaWG are single-tunnel-per-file: one .conf (and, for
-// AmneziaWG, one AmneziaVPN `vpn://` key) per NODE, not one per subscription. So
-// every surface that offers them has to walk the endpoints, dedupe by node in
-// the order the subscription lists them, and render each node's artefacts.
+// Some protocols cannot be handed over as one subscription. WireGuard and
+// AmneziaWG are single-tunnel-per-file: one .conf (and, for AmneziaWG, one
+// AmneziaVPN `vpn://` key) per node. MTProto is one `t.me/proxy` link per node,
+// because Telegram is the client and it imports one proxy at a time. Either way
+// the surface has to walk the endpoints, dedupe by node in the order the
+// subscription lists them, and render each node's own artefact.
 //
 // That walk used to live inline in `subscription.routes.ts`, where only our own
 // HTML page could reach it. The shop's install screen needs the identical list —
 // same nodes, same order, same keys — or a buyer following the shop's screen and
 // a buyer following ours are handed different servers.
 
-import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import type {
+  MtprotoSubscriptionEndpoint,
+  SubscriptionEndpoint,
+} from '../subscription.formats.js';
 import { buildWgQuickConf } from './wgconf.js';
 import { buildAwgVpnLink } from './amneziavpn.js';
 
@@ -81,4 +87,29 @@ export function tunnelConfigUrls(
     return { wgconf: `${subUrl}?format=wgconf&proto=wireguard&node=${node}` };
   }
   return undefined;
+}
+
+
+export interface MtprotoNode {
+  nodeName: string;
+  /** `https://t.me/proxy?server=…&port=…&secret=…` — the link Telegram itself
+   *  turns into a "connect to this proxy" prompt. */
+  tmeUri: string;
+}
+
+/**
+ * One entry per node serving MTProto, in subscription order.
+ *
+ * The `t.me` form rather than `tg://proxy`: the shop's MiniApp routes an http(s)
+ * button through `openLink` and only reaches `openTelegramLink` on a `tg://`
+ * value it then passes verbatim — and `openTelegramLink` is documented to take a
+ * t.me URL. A browser handles `t.me` too, so one link serves both surfaces.
+ */
+export function collectMtprotoNodes(endpoints: SubscriptionEndpoint[]): MtprotoNode[] {
+  const seen = new Set<string>();
+  return endpoints
+    .filter((e): e is MtprotoSubscriptionEndpoint => e.protocol === 'mtproto')
+    .filter((e) => !seen.has(e.nodeName) && !!seen.add(e.nodeName))
+    .filter((e) => !!e.tmeUri)
+    .map((e) => ({ nodeName: e.nodeName, tmeUri: e.tmeUri }));
 }

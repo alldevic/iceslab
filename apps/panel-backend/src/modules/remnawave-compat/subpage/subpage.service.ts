@@ -9,7 +9,7 @@
 import { config, subscriptionOrigin } from '../../../config.js';
 import { getLogger } from '../../../lib/logger.js';
 import * as service from '../../subscription/subscription.service.js';
-import { collectWgNodes } from '../../subscription/formats/wg-nodes.js';
+import { collectMtprotoNodes, collectWgNodes } from '../../subscription/formats/per-node.js';
 import { getSubscriptionSettings } from '../../settings/settings.service.js';
 import { buildSubpageConfig, type SubpageConfig } from './subpage-config.js';
 
@@ -62,6 +62,9 @@ export async function subpageConfigForToken(token: string): Promise<SubpageConfi
       vpnKey: n.vpnKey ?? undefined,
     })),
     wgNodes: collectWgNodes(wgEndpoints, 'wireguard').map((n) => ({ nodeName: n.nodeName })),
+    // Not format-gated: the t.me link is built from the endpoint itself and
+    // fetches nothing back from us, so no `disableForFormats` bears on it.
+    mtprotoNodes: collectMtprotoNodes(result.endpoints),
     branding: {
       title,
       // brandingSettings is validated by the shop and rendered by nothing —
@@ -76,8 +79,8 @@ export async function subpageConfigForToken(token: string): Promise<SubpageConfi
 
   if (!doc) {
     // Reached when the buyer holds protocols the catalogue has no client for on
-    // any platform — mtproto today. Worth a line: it means somebody is selling
-    // access this panel cannot tell anyone how to use.
+    // any platform. Worth a line: it means somebody is selling access this
+    // panel cannot tell anyone how to use.
     logger.warn(
       { protocols },
       'subpage-config: no client in the catalogue for this subscription, shop falls back to its own guide',
