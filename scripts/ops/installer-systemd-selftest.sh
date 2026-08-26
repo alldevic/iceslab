@@ -143,9 +143,17 @@ PAYLOAD="$(head -c 6000 /dev/zero | tr '\0' 'A')"
 
 INSTALL_LOG=/opt/install.log
 run_installer() {
+    # Each argument is re-quoted before it goes into `bash -c`: a value with a
+    # space in it (--ssh-allowlist "a, b") is otherwise split by the inner shell
+    # and the installer refuses the fragment as an unknown flag. Caught by this
+    # harness reporting nine failures that were all one quoting bug.
+    local quoted=""
+    local a
+    for a in "$@"; do quoted+=" $(printf '%q' "$a")"; done
     docker exec \
         -e "PATH=/opt/ice-stub/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-        "$CONTAINER" bash -c "bash /opt/install-iceslab-node.sh $* >>${INSTALL_LOG} 2>&1"
+        -e "SSH_CONNECTION=${FAKE_SSH_CONNECTION:-}" \
+        "$CONTAINER" bash -c "bash /opt/install-iceslab-node.sh${quoted} >>${INSTALL_LOG} 2>&1"
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -410,6 +418,127 @@ if [[ "$(dex systemctl is-active iceslab-node 2>&1)" == "active" ]]; then
     ok "and left the running node alone"
 else
     bad "the refused install took the node down anyway: $(dex systemctl is-active iceslab-node 2>&1)"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  6. The hardening flags, whose bodies nothing had ever run
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Their PARSING is covered in installer-selftest.sh (every value-taking flag
+# eats its value; --help and the parser name the same flags). What each one then
+# DOES is executable body in the middle of the script, reachable only by running
+# it — which is what this harness is for.
+note "--with-singbox, --fail2ban, --ssh-allowlist, --harden-ufw"
+
+# The operator's own fail2ban config, put here first. --uninstall used to delete
+# a file it never wrote; the same question is worth asking of an install.
+dex bash -c 'install -d -m 755 /etc/fail2ban/jail.d && echo "# operator" > /etc/fail2ban/jail.d/zz-operator.local'
+
+dex bash -c ": > ${INSTALL_LOG}"
+dex bash -c ': > /opt/ice-stub/log/ufw.log'
+# An SSH session from an address deliberately OUTSIDE the allowlist: that is the
+# only state in which the lockout guard fires.
+FAKE_SSH_CONNECTION="198.51.100.4 51000 203.0.113.10 22" \
+run_installer --protocol xray --payload "$PAYLOAD" --panel-ip 203.0.113.7 --port 1337 \
+    --reset --with-singbox --fail2ban --harden-ufw --ssh-allowlist "192.0.2.0/24, 192.0.2.9"
+RC=$?
+LOG="$(dex cat "$INSTALL_LOG")"
+if [[ "$RC" == "0" ]] && grep -q 'Iceslab node-agent is up' <<<"$LOG"; then
+    ok "an install with every hardening flag on finishes"
+else
+    bad "the hardened install exited $RC:
+$(sed 's/^/      /' <<<"$LOG" | tail -30)"
+fi
+
+# ───── --with-singbox ─────
+ENVFILE="$(dex cat /etc/iceslab-node/env 2>/dev/null)"
+if grep -q '^SINGBOX_BINARY=/usr/local/bin/sing-box$' <<<"$ENVFILE"; then
+    ok "--with-singbox wrote the engine env, so the agent registers the sing-box adapters"
+else
+    bad "no SINGBOX_BINARY in the env file; the binary would be installed and never used"
+fi
+if grep -q '^XRAY_BINARY=' <<<"$ENVFILE"; then
+    ok "and the primary protocol's env is still there beside it"
+else
+    bad "the sing-box env replaced the primary protocol's instead of adding to it"
+fi
+# The auto-wiring exists because sing-box ships no stats CLI: without it every
+# sing-box user's counters stay at zero and nothing says why.
+if grep -q '^SINGBOX_STATS_BIN=' <<<"$ENVFILE"; then
+    ok "and per-user stats were auto-wired to the xray binary present on this node"
+else
+    bad "SINGBOX_STATS_BIN was not auto-wired though xray is installed; sing-box counters stay at zero"
+fi
+
+# ───── --fail2ban ─────
+if dex test -f /etc/fail2ban/filter.d/iceslab-hysteria.conf; then
+    ok "--fail2ban installed the agent's own filter"
+else
+    bad "no /etc/fail2ban/filter.d/iceslab-hysteria.conf"
+fi
+JAIL="$(dex cat /etc/fail2ban/jail.d/iceslab.local 2>/dev/null)"
+if grep -q '^\[sshd\]' <<<"$JAIL" && grep -q '^\[iceslab-hysteria\]' <<<"$JAIL"; then
+    ok "and both jails, in jail.d rather than over the distro's jail.conf"
+else
+    bad "the jail file is missing or has neither jail:
+$(sed 's/^/      /' <<<"${JAIL:-<absent>}")"
+fi
+# The filter is what turns a log line into a ban. An expression that matches
+# nothing bans nobody, and fail2ban still reports the jail as active.
+FILTER="$(dex cat /etc/fail2ban/filter.d/iceslab-hysteria.conf 2>/dev/null)"
+if grep -q 'hysteria auth rejected' <<<"$FILTER" && grep -q '<HOST>' <<<"$FILTER"; then
+    ok "and the filter matches the agent's own reject line and captures the address"
+else
+    bad "the filter does not name the line it is supposed to match:
+$(sed 's/^/      /' <<<"${FILTER:-<absent>}")"
+fi
+if [[ "$(dex cat /etc/fail2ban/jail.d/zz-operator.local 2>&1)" == "# operator" ]]; then
+    ok "and the operator's own jail file was left alone"
+else
+    bad "the install overwrote or removed a jail file the operator put there"
+fi
+
+# ───── --ssh-allowlist + --harden-ufw ─────
+UFW="$(dex cat /opt/ice-stub/log/ufw.log 2>/dev/null)"
+if grep -q 'ufw limit from 192.0.2.0/24 to any port 22 proto tcp' <<<"$UFW" \
+   && grep -q 'ufw limit from 192.0.2.9 to any port 22 proto tcp' <<<"$UFW"; then
+    ok "every allowlisted address got a rate-limited SSH rule, spaces in the list and all"
+else
+    bad "the comma-list was not applied per address:
+$(sed 's/^/      /' <<<"$UFW")"
+fi
+if grep -qE '^ufw (allow|limit) 22/tcp$' <<<"$UFW"; then
+    bad "SSH was ALSO left open to the world despite --ssh-allowlist"
+else
+    ok "and 22/tcp was not left world-open beside it"
+fi
+# The lockout guard. It exists so `ufw --force enable` cannot cut the session
+# the operator is running the installer from, and it can only fire when
+# SSH_CONNECTION is set — which is the normal case for `bash <(curl ...)` over
+# SSH and NOT the case in most test harnesses.
+if grep -q 'ufw allow from 198.51.100.4 to any port 22 proto tcp' <<<"$UFW"; then
+    ok "the session's own address was allowed, so enabling ufw cannot lock the operator out"
+else
+    bad "the lockout guard did not fire for an SSH source outside the allowlist:
+$(sed 's/^/      /' <<<"$UFW")"
+fi
+if grep -q 'is NOT in --ssh-allowlist' <<<"$LOG"; then
+    ok "and it said so, so the extra /32 is not a silent hole"
+else
+    bad "the lockout guard added a rule and did not warn about it"
+fi
+# The control: without an SSH session there is nothing to protect, and the guard
+# must not invent a rule for an empty address.
+if grep -qE 'ufw allow from +to any port 22' <<<"$UFW"; then
+    bad "a rule was written for an empty source address"
+else
+    ok "and it wrote no rule for an empty source"
+fi
+
+if [[ "$(dex systemctl is-active iceslab-node 2>&1)" == "active" ]]; then
+    ok "the node is running after the hardened install"
+else
+    bad "after the hardened install the unit is $(dex systemctl is-active iceslab-node 2>&1)"
 fi
 
 printf '\n'

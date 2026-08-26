@@ -916,6 +916,35 @@ else
     bad "created for the unit to write, and absent from ReadWritePaths — the agent will get EROFS there:${missing}"
 fi
 
+# ───── --with-singbox: one condition, written twice ─────
+#
+# `--with-singbox` puts the sing-box engine on a node whose primary protocol is
+# something else, and it is decided in two places 190 lines apart: once to chain
+# bootstrap-singbox.sh (installs the binary) and once to append SINGBOX_* to the
+# env file (makes the agent register the adapters). Both carry the same
+# three-way exclusion for the protocols that ARE sing-box and have installed it
+# already.
+#
+# Drift either way is silent and total. Binary without env: the adapters never
+# register, so every engine=singbox inbound the panel pushes is refused by a
+# node that has the core sitting on disk. Env without binary: the adapters
+# register pointing at a path with nothing at it, and the first inbound fails to
+# spawn — on a node that reports healthy until then.
+note "--with-singbox is decided the same way in both places"
+mapfile -t singbox_conds < <(grep -nE '^\s*if \[ "\$\{WITH_SINGBOX:-0\}" = "1" \]' "$NODE_INSTALLER")
+if [[ "${#singbox_conds[@]}" -ge 2 ]]; then
+    ok "both copies of the condition were found (lines $(printf '%s ' "${singbox_conds[@]%%:*}"))"
+else
+    bad "found ${#singbox_conds[@]} copies of the --with-singbox condition, expected 2; the shape changed and this comparison is empty"
+fi
+uniq_conds=$(printf '%s\n' "${singbox_conds[@]#*:}" | sed 's/^[[:space:]]*//' | sort -u | wc -l)
+if [[ "${#singbox_conds[@]}" -ge 2 && "$uniq_conds" -eq 1 ]]; then
+    ok "and they are the same condition, so the binary and the env agree on when to appear"
+elif [[ "${#singbox_conds[@]}" -ge 2 ]]; then
+    bad "the two copies differ, so a node can get the sing-box binary without the env that registers it (or the reverse):
+$(printf '        %s\n' "${singbox_conds[@]}")"
+fi
+
 echo
 if [[ $FAIL -eq 0 ]]; then
     printf '\033[1;32m%d/%d check(s) passed\033[0m\n' "$PASS" "$((PASS + FAIL))"
