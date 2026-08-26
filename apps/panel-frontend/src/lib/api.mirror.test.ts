@@ -78,6 +78,7 @@ export interface Sample {
   nested?: { inner: string; deeper: { x: number } };
   union: 'a' | 'b' | 'c';
   list: Array<{ k: string }>;
+  generic: Record<string, unknown> | null;
   fn: (arg: string) => void;
   multi: {
     across: string;
@@ -98,6 +99,11 @@ export interface Other {
       'nested',
       'union',
       'list',
+      // Angle brackets are not tracked, so the comma inside Record<> ends the
+      // member early. Harmless — the NAME is read off the front of the segment
+      // and the tail matches nothing — and pinned here so it stays a known
+      // limit rather than a surprise in the next type that has one.
+      'generic',
       'fn',
       'multi',
       'last',
