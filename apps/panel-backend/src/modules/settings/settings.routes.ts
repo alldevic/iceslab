@@ -115,7 +115,15 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         await prisma.appSetting.upsert({
           where: { key },
           create: { key, value: jsonValue, isPublic: PUBLIC_KEYS.has(key) },
-          update: { value: jsonValue },
+          // isPublic on BOTH branches. It used to be set only on create, which
+          // made the comment above PUBLIC_KEYS true exactly once per install:
+          // the visibility a row was born with was the visibility it kept, and
+          // editing the set changed nothing for any panel that had already
+          // written the key. Both directions cost something — a key taken out
+          // of the set because it leaked kept leaking after the fix shipped,
+          // and a key put in never became readable by the unauthenticated SPA
+          // that needed it.
+          update: { value: jsonValue, isPublic: PUBLIC_KEYS.has(key) },
         });
       }
       // B5 - bust the /sub settings cache so admin changes take effect now.

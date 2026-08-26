@@ -152,3 +152,74 @@ describe('the admin door stays locked', () => {
     expect(res.statusCode, 'a poll interval of zero would make every client hammer /sub').toBe(400);
   });
 });
+
+/**
+ * And the half that decides which door a key goes through, on a panel that has
+ * already been running.
+ *
+ * `isPublic` is written only in the `create` branch of the upsert. The comment
+ * above PUBLIC_KEYS says "future keys land in the same table; flip `isPublic`
+ * per key", which reads as though editing that set were enough — and it is,
+ * exactly once, on an install where the row does not exist yet. For every panel
+ * that has already written the key, the visibility it was born with is the
+ * visibility it keeps, and no amount of editing the code changes it.
+ *
+ * Both directions cost something real. A key taken OUT of PUBLIC_KEYS because
+ * it turned out to leak keeps leaking on every existing install after the fix
+ * ships. A key put IN never becomes readable, so the unauthenticated SPA that
+ * needs it silently renders without it.
+ */
+describe('a setting that already exists follows the code, not the row it was born as', () => {
+  it('stops serving a key that is no longer public', async () => {
+    // An install from before the key was made private: the row exists and is
+    // marked public. `brandName` is the only public key today, so any other key
+    // standing in that state is one the code says must not be served.
+    await prisma.appSetting.create({
+      data: { key: 'subscriptionSupportUrl', value: 'https://old.example.com', isPublic: true },
+    });
+
+    // The operator saves settings, which is the only moment the panel has to
+    // reconcile the row with the code.
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      headers: auth(),
+      payload: { subscriptionSupportUrl: 'https://support.example.com' },
+    });
+    expect(put.statusCode).toBe(200);
+
+    const pub = await app.inject({ method: 'GET', url: '/api/settings/public' });
+    const body = JSON.parse(pub.body);
+    // The control: the write did land, so this is about visibility and not
+    // about a PUT that quietly did nothing.
+    const all = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/settings', headers: auth() })).body,
+    );
+    expect(all.subscriptionSupportUrl).toBe('https://support.example.com');
+
+    expect(
+      body,
+      'an operator support URL is served to anyone who asks, on every panel that wrote the key before it was made private',
+    ).not.toHaveProperty('subscriptionSupportUrl');
+  });
+
+  it('starts serving a key that has become public', async () => {
+    // The mirror: an install predating brandName being public. The SPA reads it
+    // before anyone has logged in, so a row stuck private renders the panel
+    // unbranded with nothing to explain it.
+    await prisma.appSetting.create({
+      data: { key: 'brandName', value: 'Old Brand', isPublic: false },
+    });
+
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      headers: auth(),
+      payload: { brandName: 'New Brand' },
+    });
+    expect(put.statusCode).toBe(200);
+
+    const body = JSON.parse((await app.inject({ method: 'GET', url: '/api/settings/public' })).body);
+    expect(body.brandName).toBe('New Brand');
+  });
+});
