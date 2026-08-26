@@ -183,8 +183,29 @@ export function HostEditPage() {
     'securityLayer',
   ]);
 
+  /**
+   * The seed waits for the two lists it derives from, and then stops looking at
+   * them.
+   *
+   * `bindings` and `nodes` are separate queries and can land after `hosts`, so
+   * country/port/profile/node would be seeded from nothing on the first pass.
+   * That is why this used to depend on `bindings.length` and `nodes.length` -
+   * but a length says "the data changed", not "the data arrived", so every
+   * later change re-ran the whole seed on top of whatever was on screen and
+   * cleared `dirty` behind it, leaving nothing to warn anyone.
+   *
+   * The reachable case is the one the save's own error handler builds: a 404
+   * for a node or profile that went away invalidates `nodes` and `bindings`
+   * deliberately, because refetching is the fix - and the refetch reset the
+   * form it was recovering. `isFetched` is the honest form of the same wait:
+   * it flips once, on settle, and stays put whether the fetch succeeded or
+   * failed. SquadEditPage, which seeds the same way, already keys on the
+   * record alone.
+   */
+  const seedInputsSettled = bindingsQuery.isFetched && nodesQuery.isFetched;
+
   useEffect(() => {
-    if (!host) return;
+    if (!host || !seedInputsSettled) return;
     const binding = bindings.find((b) => b.id === host.bindingId);
     const node = binding ? nodes.find((n) => n.id === binding.nodeId) : undefined;
     setName(host.remark);
@@ -203,7 +224,8 @@ export function HostEditPage() {
     setSecurityLayer(host.securityLayer);
     setDisabledFormats(host.disableForFormats);
     setDirty(false);
-  }, [host?.id, host?.updatedAt, bindings.length, nodes.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host?.id, host?.updatedAt, seedInputsSettled]);
 
   /**
    * Every node, annotated with why it can or cannot take this host: wrong core,
