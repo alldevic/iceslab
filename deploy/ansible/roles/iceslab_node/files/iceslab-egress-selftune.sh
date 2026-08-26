@@ -35,6 +35,16 @@ else
     log "scanning $d ..."
     out="$(docker exec "$CONTAINER" blockcheckw scan -d "$d" --auto --top "$TOP" \
             --no-conflict-cleanup --timeout 120 2>/dev/null || true)"
+    # A domain that answered nothing contributes nothing. Appending its empty
+    # slot anyway left the separator behind, and the emptiness check below then
+    # looked at "\n===REPORT-SEP===\n" and called it content - so a container
+    # that was down did not leave the last report in place, it replaced it with
+    # a file of separators. The agent reads that as an unusable report, drops
+    # the tune and quietly goes back to the untuned strategy.
+    if [ -z "${out//[[:space:]]/}" ]; then
+      log "  $d: no output from blockcheckw"
+      continue
+    fi
     reports+="$out"$'\n'"$SEP"$'\n'
   done
 fi
