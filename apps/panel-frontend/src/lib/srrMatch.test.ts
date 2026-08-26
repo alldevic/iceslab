@@ -12,6 +12,8 @@
 // - so the rule looks correct and the subscriber's app silently receives a
 // format it cannot read.
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SrrRule, SubscriptionFormat } from './api';
 import { compilePattern, matchRule, matchingRules, patternCompiles, shadowedBy } from './srrMatch';
@@ -202,5 +204,36 @@ describe('warning that a draft rule is already shadowed', () => {
     expect(
       shadowedBy(many, { uaPattern: 'Happ', priority: 999, enabled: true }, 'Happ/2.0')?.id,
     ).toBe('first');
+  });
+});
+
+/**
+ * The two halves of the delivery matcher, compared where they are declared.
+ *
+ * `srrMatch.ts` says of itself that it is "a deliberate mirror of
+ * srr.service.ts on the backend: same order, same skip of disabled rules and of
+ * patterns that do not compile, same inline-flag handling, same User-Agent
+ * truncation". The cases above prove the matching; this proves the one constant
+ * both files declare separately, and the drift it would cause is quiet: a
+ * browser that truncated the UA at a different length names a different rule
+ * than the server applies, so the operator's test answers one thing and the
+ * client gets another.
+ */
+describe('the truncation the two matchers share', () => {
+  const HERE = import.meta.dirname;
+  const FRONT = readFileSync(join(HERE, 'srrMatch.ts'), 'utf8');
+  const BACK = readFileSync(
+    join(HERE, '..', '..', '..', 'panel-backend', 'src', 'modules', 'srr', 'srr.service.ts'),
+    'utf8',
+  );
+
+  function uaCap(src: string, where: string): number {
+    const m = src.match(/const UA_MAX_LENGTH = (\d+);/);
+    expect(m, `UA_MAX_LENGTH not found in ${where}`).not.toBeNull();
+    return Number(m![1]);
+  }
+
+  it('is the same length on both sides', () => {
+    expect(uaCap(FRONT, 'srrMatch.ts')).toBe(uaCap(BACK, 'srr.service.ts'));
   });
 });
