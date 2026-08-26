@@ -142,4 +142,29 @@ describe('the webhook registry', () => {
       ].sort(),
     );
   });
+
+  // Registering twice attaches a second listener to every event, and the bus
+  // calls both: one user creation leaves the panel as two identical webhook
+  // deliveries. A receiver that counts anything doubles it, and nothing looks
+  // wrong from here — both deliveries are genuine.
+  //
+  // There is one call site today (index.ts), so this pins a guard rather than
+  // a bug. It is worth pinning because the plausible refactor is moving that
+  // call into `buildApp()`, which the suite invokes once per case: the panel
+  // would still work, and the first symptom would be somebody's numbers being
+  // off, weeks later.
+  it('stays at one listener per event however often it is called', async () => {
+    registerWebhookEventHandlers();
+    registerWebhookEventHandlers();
+    registerWebhookEventHandlers();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (eventBus as any).emit('user.created', {});
+    await settle();
+
+    expect(
+      emitted.filter((e) => e === 'user.created'),
+      'one event left the panel more than once',
+    ).toEqual(['user.created']);
+  });
 });

@@ -19,7 +19,23 @@ function forward<K extends keyof DomainEventMap>(event: K): void {
   eventBus.on(event, (payload) => emitWebhook(event, payload));
 }
 
+/**
+ * Subscribing twice would attach a SECOND listener to every event above, and
+ * the bus calls both: one user creation becomes two webhook deliveries. A
+ * receiver that counts — a billing bot, a provisioning hook — then doubles
+ * every number it keeps, and nothing on this side looks wrong, because both
+ * deliveries are genuine.
+ *
+ * Today there is exactly one call, from `index.ts`. The guard is here because
+ * the plausible refactor is moving that call into `buildApp()`, which the test
+ * suite invokes per case; the failure would first appear as a receiver's
+ * numbers being off, long after the change.
+ */
+let registered = false;
+
 export function registerWebhookEventHandlers(): void {
+  if (registered) return;
+  registered = true;
   forward('user.created');
   forward('user.updated');
   forward('user.status-changed');
