@@ -1122,8 +1122,16 @@ EOF
       fi
       ;;
     naive)
+      # CADDY_NAIVE_BIN, not NAIVE_BINARY: the agent reads the former
+      # (main.go, `getenv("CADDY_NAIVE_BIN", ...)`), and so does
+      # bootstrap-naive.sh, which is what decides where the binary lands.
+      # The pair was half-renamed — NAIVE_CONFIG still matches, the binary key
+      # did not — so this line wrote a key nobody read. Harmless while the
+      # built path happened to equal the agent's default; a node whose
+      # CADDY_NAIVE_BIN put caddy anywhere else got an agent looking in the
+      # wrong place, with the right path sitting unread in the same file.
       cat >> "$ENV_FILE" <<EOF
-NAIVE_BINARY=${PROTO_BINARY}
+CADDY_NAIVE_BIN=${PROTO_BINARY}
 NAIVE_CONFIG=${PROTO_CONFIG}
 EOF
       ;;
