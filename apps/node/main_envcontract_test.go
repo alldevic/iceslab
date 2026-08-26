@@ -58,6 +58,20 @@ func repoPath(t *testing.T, rel string) string {
 var envKeysWritten = regexp.MustCompile(`(?s)cat >>? "\$ENV_FILE" <<'?EOF'?\n(.*?)\nEOF`)
 var envKeyLine = regexp.MustCompile(`(?m)^([A-Z][A-Z0-9_]{2,})=`)
 var envKeyEcho = regexp.MustCompile(`echo "([A-Z][A-Z0-9_]{2,})=[^"]*"\s*>>\s*"\$ENV_FILE"`)
+
+// ...and the same echo inside a brace group that redirects once at the end:
+//
+//	{
+//	  echo "HYSTERIA_STATS_LISTEN=127.0.0.1:9999"
+//	  echo "HYSTERIA_STATS_SECRET=${HYSTERIA_STATS_SECRET}"
+//	} >> "$ENV_FILE"
+//
+// Missed by the pattern above, because those echos carry no redirect of their
+// own. Found by asking the opposite question — which variables the agent reads
+// that nothing appears to set — and seeing two that plainly are set. A parser
+// that quietly covers less than it claims is the failure this whole file exists
+// to prevent, so the count assertion below is what holds it.
+var envKeyBraceGroup = regexp.MustCompile(`(?s)\{\n(.*?)\n\s*\} >>\s*"\$ENV_FILE"`)
 var goEnvRead = regexp.MustCompile(`(?:os\.Getenv|getenv|getenvInt)\("([A-Z][A-Z0-9_]{2,})"`)
 
 // Keys the installer writes that the agent knowingly does not read yet, each
@@ -82,11 +96,27 @@ func TestEveryKeyTheInstallerWritesIsOneTheAgentReads(t *testing.T) {
 	for _, k := range envKeyEcho.FindAllStringSubmatch(string(installer), -1) {
 		written[k[1]] = true
 	}
+	for _, block := range envKeyBraceGroup.FindAllStringSubmatch(string(installer), -1) {
+		for _, k := range regexp.MustCompile(`echo "([A-Z][A-Z0-9_]{2,})=`).FindAllStringSubmatch(block[1], -1) {
+			written[k[1]] = true
+		}
+	}
 	// Control: the extraction has to find the file's own shape. NODE_PAYLOAD is
 	// the first line of the first heredoc and the whole point of the file.
-	if !written["NODE_PAYLOAD"] || len(written) < 20 {
-		t.Fatalf("parsed only %d keys out of the installer's env file and NODE_PAYLOAD=%v; "+
-			"the heredocs were reshaped and this comparison is empty", len(written), written["NODE_PAYLOAD"])
+	// Control: the extraction has to find the file's own shape, in all three
+	// forms it is written in. NODE_PAYLOAD is the first line of the first
+	// heredoc; HYSTERIA_SERVICE_UNIT is a bare appended echo; and
+	// HYSTERIA_STATS_SECRET only exists inside the brace group — it was invisible
+	// to this test until the brace-group pattern was added.
+	for _, shape := range []string{"NODE_PAYLOAD", "HYSTERIA_SERVICE_UNIT", "HYSTERIA_STATS_SECRET"} {
+		if !written[shape] {
+			t.Fatalf("%s was not parsed out of the installer's env file; one of the three ways "+
+				"keys are written there is no longer covered and this comparison is partial", shape)
+		}
+	}
+	if len(written) < 20 {
+		t.Fatalf("parsed only %d keys out of the installer's env file; the heredocs were reshaped",
+			len(written))
 	}
 
 	read := map[string]bool{}
