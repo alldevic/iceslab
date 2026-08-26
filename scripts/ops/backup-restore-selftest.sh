@@ -24,6 +24,12 @@
 # Requires docker. Runs nothing against a live deployment - it refuses to start
 # if containers with the production names already exist, and docker itself would
 # refuse to create duplicates even if this check were removed.
+#
+# Run it on a machine that is not saturated. It drives a real Postgres init and
+# a real Redis BGSAVE against the backup script's own 30-second budget, so a
+# host busy running the panel suite at the same time can time those out. That
+# budget is a deliberate production guard and is not weakened here to suit a
+# test.
 
 set -euo pipefail
 
@@ -106,11 +112,23 @@ DC=(docker compose -f compose.yml --env-file env)
 note "bringing up a throwaway stack"
 "${DC[@]}" up -d >/dev/null 2>&1
 
-for _ in $(seq 1 60); do
-    if docker exec iceslab-prod-postgres pg_isready -U iceslab -d iceslab >/dev/null 2>&1; then break; fi
+# Over TCP, not the unix socket. The postgres image runs a TEMPORARY server on
+# the socket during initdb and then shuts it down to start the real one, so a
+# socket-based pg_isready reports ready during a window where the next query
+# gets "the database system is shutting down". The temporary server never binds
+# TCP, so asking there waits for the real one. Reproduced 2026-08-26 by running
+# this self-test while the panel suite loaded the machine.
+for _ in $(seq 1 90); do
+    if docker exec iceslab-prod-postgres pg_isready -h 127.0.0.1 -U iceslab -d iceslab >/dev/null 2>&1; then
+        # And one real query, because ready-to-accept is not the same as
+        # ready-to-answer on a busy host.
+        if docker exec iceslab-prod-postgres psql -U iceslab -d iceslab -tAc 'SELECT 1' >/dev/null 2>&1; then
+            break
+        fi
+    fi
     sleep 1
 done
-docker exec iceslab-prod-postgres pg_isready -U iceslab -d iceslab >/dev/null
+docker exec iceslab-prod-postgres psql -U iceslab -d iceslab -tAc 'SELECT 1' >/dev/null
 for _ in $(seq 1 30); do
     if [[ "$(docker exec iceslab-prod-redis redis-cli PING 2>/dev/null)" == "PONG" ]]; then break; fi
     sleep 1
@@ -230,6 +248,23 @@ fi
 
 # ───── 4. Encrypted archive ─────
 note "backup + restore (AES-256)"
+# Wait for the previous BGSAVE to finish before asking for another. Redis
+# refuses a second one while the first is in flight ("Background save already in
+# progress"), and the backup script then watches LASTSAVE for 30s and gives up
+# with "backup would be stale". Seen while this self-test ran against a machine
+# saturated by the panel suite; it is a property of this harness, not of the
+# backup, whose 30-second budget is deliberate.
+wait_for_quiet_redis() {
+    for _ in $(seq 1 60); do
+        if docker exec iceslab-prod-redis redis-cli INFO persistence 2>/dev/null \
+             | grep -q 'rdb_bgsave_in_progress:0'; then
+            return 0
+        fi
+        sleep 1
+    done
+}
+wait_for_quiet_redis
+
 psql -q -c "INSERT INTO subscribers (name, bytes) VALUES ('encrypted-round-trip', 777);" >/dev/null
 redis SET selftest:enc "encrypted-value" >/dev/null
 "${SCRIPT_DIR}/iceslab-backup.sh" --compose-file compose.yml --env-file env \
