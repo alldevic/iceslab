@@ -875,6 +875,47 @@ else
     bad "the ansible role dials :${ansible_port} and the installer binds :${shell_port}"
 fi
 
+# ───── The two halves of one sandbox decision ─────
+#
+# The installer pre-creates every per-protocol config directory, and its own
+# comment says why: "ReadWritePaths can't create directories, only permit writes
+# inside existing ones". So the mkdir list and the unit's ReadWritePaths list
+# are one decision written twice, and the copies are 300 lines apart.
+#
+# They had diverged. /etc/sing-box was created and not listed, so on every TUIC,
+# AnyTLS and ShadowTLS node — and every engine=singbox inbound anywhere — the
+# agent's config write died on "read-only file system" while the node still
+# reported healthy, because the agent was up and only the core was unconfigured.
+# Found 2026-08-27 by asking a running unit what it could write
+# (installer-systemd-selftest.sh); this is the same question asked of the source,
+# so the next divergence does not need a container to be caught.
+note "config dirs the unit must be able to write"
+mkdir_line=$(grep -E '^mkdir -p /etc/xray ' "$NODE_INSTALLER" | head -1)
+rwp_line=$(grep -E '^ReadWritePaths=' "$NODE_INSTALLER" | head -1)
+if [[ -n "$mkdir_line" && -n "$rwp_line" ]]; then
+    ok "both lists were found in the installer"
+else
+    bad "could not read one of the two lists (mkdir='${mkdir_line}' rwp='${rwp_line}')"
+fi
+# The control: an extraction that silently stopped matching would make the
+# comparison below vacuously true, and this is exactly the shape that hid the
+# defect in the first place.
+if [[ "$(grep -oc '/etc/' <<<"$mkdir_line")" != "0" ]] && grep -q '/etc/iceslab-node' <<<"$rwp_line"; then
+    ok "and both name the paths this compares"
+else
+    bad "one of the two lists came back without paths in it"
+fi
+missing=""
+for d in $(grep -oE '/etc/[a-z0-9/-]+' <<<"$mkdir_line"); do
+    grep -qE -- "-${d}( |$)" <<<"$rwp_line" || missing="${missing}
+        ${d}"
+done
+if [[ -z "$missing" ]]; then
+    ok "every config dir the installer creates is one the unit may write"
+else
+    bad "created for the unit to write, and absent from ReadWritePaths — the agent will get EROFS there:${missing}"
+fi
+
 echo
 if [[ $FAIL -eq 0 ]]; then
     printf '\033[1;32m%d/%d check(s) passed\033[0m\n' "$PASS" "$((PASS + FAIL))"

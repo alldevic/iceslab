@@ -1457,13 +1457,22 @@ ProtectHome=true
 # dropped, so the entry node can't reach the exit and it shows dead in the
 # observatory/balancer. Invisible on a single-node install (ports already open).
 # Caught live on a production node after fresh install.
+# /etc/sing-box holds every sing-box config the agent renders (config.json for
+# TUIC, anytls.json, shadowtls.json, xray.json, hy2.json, ss.json) plus the
+# cert/key pair they share. The installer pre-creates the directory two steps
+# up, for the usual reason, and this entry is what makes it writable: without it
+# ApplyInbound dies on "read-only file system" for EVERY sing-box protocol —
+# TUIC, AnyTLS, ShadowTLS and every engine=singbox inbound — while the node
+# reports healthy, because the agent is up and only the core is unconfigured.
+# Found 2026-08-27 by asking the running unit what it could write, which is the
+# same shape as the zapret2 directory the ansible role has to add by drop-in.
 # /var/lib/iceslab-node is the managed geo-asset dir (XRAY_GEO_DIR): the agent
 # downloads panel-pushed geosite/geoip/ext .dat there and atomically swaps them
 # in. Without it in this list, ProtectSystem=strict makes the dir read-only and
 # geopkg.Ensure fails EROFS on every asset, so self-hosted geo silently never
 # installs (node falls back to bundled DBs and any ext: rule fails its restart
 # precondition). The seed mkdir/cp happens at install time (still writable then).
-ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/wireguard -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/var/lib/iceslab-node -/run -/etc/iptables -/etc/ufw
+ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/sing-box -/etc/amnezia/amneziawg -/etc/wireguard -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/var/lib/iceslab-node -/run -/etc/iptables -/etc/ufw
 PrivateTmp=true
 
 # Journald log limits; without these a node running for months can balloon
