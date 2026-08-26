@@ -171,13 +171,25 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
   );
 
-  app.get('/health', async () => {
+  // 503 when a dependency is down, not 200-with-a-sad-body. Measured
+  // 2026-08-26: this used to answer 200 in every case, and the compose
+  // healthcheck below only looks at `r.ok` - so a backend whose database was
+  // gone stayed `healthy` forever, `depends_on: service_healthy` let the
+  // frontend start against it, and nothing watching container health saw a
+  // thing. The endpoint reported `degraded` to a reader that did not exist.
+  //
+  // The installer's wait loop greps the body for `"status":"ok"` and is
+  // unaffected: on a 503 `wget -qO-` prints nothing, the grep misses, and the
+  // loop keeps waiting - which is what it should do while a dependency is
+  // still coming up.
+  app.get('/health', async (_request, reply) => {
     const [dbOk, redisOk] = await Promise.all([pingDatabase(), pingRedis()]);
-    return {
-      status: dbOk && redisOk ? 'ok' : 'degraded',
+    const healthy = dbOk && redisOk;
+    return reply.code(healthy ? 200 : 503).send({
+      status: healthy ? 'ok' : 'degraded',
       db: dbOk ? 'ok' : 'down',
       redis: redisOk ? 'ok' : 'down',
-    };
+    });
   });
 
   // Compress JSON responses ≥1 KB. Dashboard overview is the obvious target,

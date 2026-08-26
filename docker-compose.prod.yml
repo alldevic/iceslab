@@ -203,8 +203,11 @@ services:
     healthcheck:
       # Without this the frontend's `depends_on: backend` only waits for
       # container-start, not /health, operators see "API offline" flashes
-      # on first boot. Backend's own /health pings Postgres+Redis and returns
-      # {"status":"ok"}. (Note: /healthz is the node-agent endpoint, not panel.)
+      # on first boot. Backend's own /health pings Postgres+Redis and answers
+      # 503 when either is down, so `r.ok` below is what makes a backend with a
+      # dead database report unhealthy. Until 2026-08-26 /health answered 200 in
+      # every case and this check could only ever catch "not answering at all".
+      # (Note: /healthz is the node-agent endpoint, not panel.)
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       # interval was 5s, that's 12 health pings/min just for liveness,
       # each one pings Postgres + Redis. On small VPS the load isn't

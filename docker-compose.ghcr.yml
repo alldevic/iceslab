@@ -119,6 +119,10 @@ services:
       - "3000"
     restart: unless-stopped
     healthcheck:
+      # /health answers 503 when Postgres or Redis is down, so `r.ok` is what
+      # makes a backend with a dead dependency report unhealthy. Until
+      # 2026-08-26 it answered 200 in every case and this could only catch
+      # "not answering at all". Mirrors docker-compose.prod.yml.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 3s
