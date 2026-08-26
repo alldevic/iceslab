@@ -14,6 +14,8 @@ const (
 	ProtocolWireguard   ProtocolName = "wireguard"
 	ProtocolNaive       ProtocolName = "naive"
 	ProtocolShadowsocks ProtocolName = "shadowsocks"
+	ProtocolMTProto     ProtocolName = "mtproto"
+	ProtocolMieru       ProtocolName = "mieru"
 	ProtocolTuic        ProtocolName = "tuic"
 	ProtocolAnytls      ProtocolName = "anytls"
 	ProtocolShadowtls   ProtocolName = "shadowtls"

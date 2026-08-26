@@ -213,3 +213,26 @@ type Versioner interface {
 	// be goroutine-safe and cheap to call repeatedly (implementations cache).
 	CoreVersion() string
 }
+
+// AdapterKey is how a (protocol, engine) pair is written as one string. The
+// dispatcher and the deletion reconciler both key on the pair, and they must
+// key on it the same way or an adapter would be handed the keep-list of a
+// different one.
+func AdapterKey(protocol, engine string) string { return protocol + "|" + engine }
+
+// MatchAdapter picks the adapter that serves a (protocol, engine) pair, or nil.
+//
+// This is THE dispatch rule for a pushed inbound, so it lives here rather than
+// inline in the handler: an inbound whose pair no adapter claims is not an
+// error anywhere, it is a warning line and a config that was persisted but
+// never applied. The node looks healthy and serves nothing for that protocol,
+// which is how amneziawg (cycle #6) and naive (cycle #8) each shipped an
+// adapter nobody could reach.
+func MatchAdapter(adapters []CoreAdapter, protocol, engine string) CoreAdapter {
+	for _, a := range adapters {
+		if a.Name() == protocol && a.Engine() == engine {
+			return a
+		}
+	}
+	return nil
+}

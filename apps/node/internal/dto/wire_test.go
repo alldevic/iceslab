@@ -183,3 +183,68 @@ func parseTypescriptInterfaces(t *testing.T) map[string][]string {
 	}
 	return out
 }
+
+// The unions, which the struct comparison above does not reach.
+//
+// `ProtocolName` says in its own comment that it mirrors the union in
+// transport.ts, and it had stopped: mtproto and mieru were protocols the panel
+// could save and this file had no constant for. Nothing broke, because the
+// dispatcher compares strings and NativeEngine falls through to the protocol's
+// own name — which is exactly why it went unnoticed, and exactly the kind of
+// gap that stops being harmless the first time a protocol needs a native engine
+// that is not called after itself.
+func tsUnion(t *testing.T, name string) []string {
+	t.Helper()
+	src, err := os.ReadFile(tsRelPath)
+	if err != nil {
+		t.Fatalf("read transport.ts: %v", err)
+	}
+	i := strings.Index(string(src), "export type "+name+" =")
+	if i < 0 {
+		t.Fatalf("union %s was renamed or moved in transport.ts", name)
+	}
+	body := string(src)[i:]
+	body = body[:strings.Index(body, ";")]
+	var out []string
+	for _, m := range regexp.MustCompile(`'([a-z0-9]+)'`).FindAllStringSubmatch(body, -1) {
+		out = append(out, m[1])
+	}
+	sort.Strings(out)
+	return out
+}
+
+// goConsts reads the values of a const block of the given Go type out of this
+// package's source, rather than listing them here — a list written twice is the
+// thing being tested.
+func goConsts(t *testing.T, typeName string) []string {
+	t.Helper()
+	src, err := os.ReadFile("dto.go")
+	if err != nil {
+		t.Fatalf("read dto.go: %v", err)
+	}
+	re := regexp.MustCompile(`(?m)^\s*\w+\s+` + typeName + `\s*=\s*"([a-z0-9]+)"`)
+	var out []string
+	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+		out = append(out, m[1])
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestTheProtocolAndEngineUnionsMatchTheSharedTypescript(t *testing.T) {
+	for _, u := range []string{"ProtocolName", "EngineName"} {
+		ts := tsUnion(t, u)
+		// Control: an empty parse on either side would make the comparison of
+		// two empty sets pass.
+		if len(ts) < 3 {
+			t.Fatalf("%s parsed out of transport.ts as %v; the union's shape changed", u, ts)
+		}
+		got := goConsts(t, u)
+		if len(got) < 3 {
+			t.Fatalf("%s parsed out of dto.go as %v; the const block's shape changed", u, got)
+		}
+		if !reflect.DeepEqual(ts, got) {
+			t.Errorf("%s disagrees between the two languages:\n  transport.ts: %v\n  dto.go:       %v", u, ts, got)
+		}
+	}
+}

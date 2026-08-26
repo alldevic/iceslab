@@ -480,13 +480,7 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		// the native core. Empty engine resolves to the protocol's native core,
 		// so pre-engine-choice inbounds keep matching their original adapter.
 		wantEngine := ib.ResolvedEngine()
-		var matched core.CoreAdapter
-		for _, adapter := range s.cfg.Adapters {
-			if adapter.Name() == string(ib.Protocol) && adapter.Engine() == string(wantEngine) {
-				matched = adapter
-				break
-			}
-		}
+		matched := core.MatchAdapter(s.cfg.Adapters, string(ib.Protocol), string(wantEngine))
 		if matched == nil {
 			s.logger.Warn("applyInbounds: no adapter for protocol/engine, config persisted but not applied live",
 				"protocol", ib.Protocol, "engine", wantEngine)
@@ -515,7 +509,7 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 	// and skipping it would leave a deleted inbound serving forever.
 	keepByProtocol := make(map[string][]string, len(req.Inbounds))
 	for _, ib := range req.Inbounds {
-		key := string(ib.Protocol) + "|" + string(ib.ResolvedEngine())
+		key := core.AdapterKey(string(ib.Protocol), string(ib.ResolvedEngine()))
 		keepByProtocol[key] = append(keepByProtocol[key], ib.ID)
 	}
 	for _, adapter := range s.cfg.Adapters {
@@ -523,7 +517,7 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		key := adapter.Name() + "|" + adapter.Engine()
+		key := core.AdapterKey(adapter.Name(), adapter.Engine())
 		if err := rec.RetainInbounds(keepByProtocol[key]); err != nil {
 			// Not fatal for the request: the inbounds that DID apply are live,
 			// and reporting this as a total failure would make the panel retry
