@@ -61,15 +61,28 @@ done
 # Caddy lives outside Docker: it's a host-side systemd unit set up by
 # install-iceslab.sh. Route its logs through journalctl instead of
 # `docker compose logs`.
+#
+# The unit is checked for BEFORE reading it, because journalctl does not fail
+# on a unit that does not exist: `journalctl -u never-installed` prints
+# "-- No entries --" and exits 0. The `|| log_warn` this used to rely on could
+# therefore never fire in the case it named, and a bare-IP install produced an
+# empty caddy block with no explanation — indistinguishable from a caddy that
+# is installed, working and quiet, which is the state an operator reading logs
+# is usually trying to rule out.
 caddy_logs() {
     local follow_flag=""
     if [[ $FOLLOW -eq 1 ]]; then follow_flag="-f"; fi
-    if command -v journalctl >/dev/null 2>&1; then
-        journalctl -u caddy $follow_flag --no-pager -n "$TAIL_N" 2>/dev/null \
-            || log_warn "caddy systemd unit not found (bare-IP install), skipping"
-    else
+    if ! command -v journalctl >/dev/null 2>&1; then
         log_warn "journalctl not available, can't read caddy logs"
+        return 0
     fi
+    if command -v systemctl >/dev/null 2>&1 &&
+        ! systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+        log_warn "no caddy systemd unit on this host (bare-IP install has none), skipping"
+        return 0
+    fi
+    journalctl -u caddy $follow_flag --no-pager -n "$TAIL_N" \
+        || log_warn "reading the caddy journal failed (permissions? try sudo)"
 }
 
 if [[ "$SERVICE" == "caddy" ]]; then
@@ -89,12 +102,23 @@ fi
 
 # All-services mode: one block per service. Grouped output is easier to
 # skim than the interleaved default.
+#
+# "not running" is asked of `ps -q`, not inferred from the exit code of `logs`:
+# compose answers 0 with an empty body for a service that is declared and has
+# no container, so the `|| log_warn` this used to rely on could not fire for
+# the case it named either. An empty block then reads the same as a service
+# that is up and has printed nothing — and a backend that is not running is
+# the single most likely reason someone opened this script.
 for s in backend frontend postgres redis; do
     printf '\n%b═══════════════════════════════════════════════════════════%b\n' "$C_INFO" "$C_RST"
     printf '%b  %s%b %b(last %s lines)%b\n' "$C_INFO" "$s" "$C_RST" "$C_DIM" "$TAIL_N" "$C_RST"
     printf '%b═══════════════════════════════════════════════════════════%b\n' "$C_INFO" "$C_RST"
+    if [[ -z "$("${DC[@]}" ps -q "$s" 2>/dev/null)" ]]; then
+        log_warn "service '$s' has no container running"
+        continue
+    fi
     "${DC[@]}" logs --tail="$TAIL_N" "$s" 2>/dev/null \
-        || log_warn "service '$s' not running"
+        || log_warn "reading '$s' logs failed"
 done
 
 # Caddy block last so an all-services tail still covers TLS issues.
