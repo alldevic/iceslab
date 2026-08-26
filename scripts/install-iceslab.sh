@@ -248,18 +248,35 @@ if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
   read -r ACME_DEFAULT_EMAIL </dev/tty || ACME_DEFAULT_EMAIL=""
 
   if [[ -n "$ACME_DEFAULT_EMAIL" ]]; then
-    # ASCII-only on purpose, and this has to stay in step with what the panel
-    # accepts. The old check was `[^@[:space:]]+@...`, which happily took a
-    # Cyrillic character: caught live 2026-08-10, an operator whose keyboard
-    # layout had not switched yet typed one Russian letter into the address.
-    # The installer accepted it, wrote it to .env.production, and the panel then
-    # refused to boot on it eleven minutes later, at step 9 of 9, reported as
-    # "container is unhealthy". Reject it here, where the operator can just
-    # retype it.
-    if [[ ! "$ACME_DEFAULT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    # ASCII-only, and it has to stay in step with what the panel accepts. The
+    # original check was `[^@[:space:]]+@...`, which happily took a Cyrillic
+    # character: caught live 2026-08-10, an operator whose keyboard layout had
+    # not switched yet typed one Russian letter into the address. The installer
+    # accepted it, wrote it to .env.production, and the panel refused to boot on
+    # it eleven minutes later, at step 9 of 9, reported as "container is
+    # unhealthy". Reject it here, where the operator can just retype it.
+    #
+    # Two things that fix got wrong, both found 2026-08-27 by comparing this
+    # against the panel's own z.email() over a corpus:
+    #
+    #   * "ASCII-only" was not true. `[[ =~ ]]` matches by COLLATION, so under
+    #     any UTF-8 locale `A-Za-z` covers the accented latin letters —
+    #     `üser@example.com` passed here and the panel refuses it. Cyrillic was
+    #     rejected only because it collates outside the latin range, so the fix
+    #     covered the one keyboard it was written for and no other. Matching
+    #     under LC_ALL=C makes the range mean bytes, which is what was meant.
+    #   * dots were unconstrained: `a..b@x.com`, `.a@x.com`, `a.@x.com` and
+    #     `a@-example.com` all passed here and are all refused by the panel.
+    #
+    # The rule this must satisfy is one-directional. Anything this accepts, the
+    # panel must accept, or the operator loses the install eleven minutes later;
+    # the reverse only costs a retype at the prompt. config.installer.test.ts
+    # runs this exact expression, out of this file, against the panel's schema.
+    ACME_EMAIL_RE='^[A-Za-z0-9_%+-]+(\.[A-Za-z0-9_%+-]+)*@([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$'
+    if ! LC_ALL=C grep -qE "$ACME_EMAIL_RE" <<<"$ACME_DEFAULT_EMAIL"; then
       printf '\033[1;31m"%s" не похож на email. Установка прервана.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
-      printf '\033[1;33mПроверь раскладку: одна русская буква в адресе выглядит\n' >&2
-      printf 'как латинская, но панель такой адрес не примет.\033[0m\n' >&2
+      printf '\033[1;33mПроверь раскладку: русская или любая буква с диакритикой\n' >&2
+      printf 'выглядит как латинская, но панель такой адрес не примет.\033[0m\n' >&2
       exit 1
     fi
     if [[ "$ACME_DEFAULT_EMAIL" =~ @(example\.com|example\.net|example\.org)$ ]]; then

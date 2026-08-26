@@ -18,6 +18,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -116,5 +118,129 @@ describe('the installer writes an env file this schema accepts', () => {
   // installer's.
   it('waits for the health body the endpoint actually emits', () => {
     expect(installerSource()).toContain(`'"status":"ok"'`);
+  });
+});
+
+/**
+ * The ACME email, validated twice.
+ *
+ * `install-iceslab.sh` asks for it at a prompt and checks it with a bash
+ * regular expression; the panel checks the same value with `z.email()` when it
+ * boots. The two are one decision written in two languages, and the comment in
+ * the installer is what holds them together — a comment that also records the
+ * scar: on 2026-08-10 an operator typed one Cyrillic letter, the installer took
+ * it, and the panel refused to boot on it eleven minutes later at step 9 of 9,
+ * reported as "container is unhealthy".
+ *
+ * The rule is one-directional and that is the point. Anything the installer
+ * accepts the panel MUST accept, or the operator loses the install at the far
+ * end of a ten-minute build. The reverse — the installer stricter than the
+ * panel — costs a retype at a prompt, so it is reported here rather than
+ * failed.
+ *
+ * The expression is not copied. It is read out of the script and run by bash,
+ * under the same LC_ALL the script sets, because the first fix was wrong about
+ * exactly that: `[[ =~ ]]` matches by collation, so under a UTF-8 locale
+ * `A-Za-z` covers accented latin and `üser@example.com` passed. Cyrillic was
+ * rejected only because it collates outside the latin range — the fix covered
+ * the one keyboard it was written for.
+ */
+describe('the ACME email is validated the same way twice', () => {
+  const CORPUS = [
+    'admin@company.com',
+    'a+tag@company.com',
+    'a@b.co',
+    'admin@sub.company.co.uk',
+    'A@COMPANY.COM',
+    "o'brien@company.com",
+    'аdmin@company.com', // Cyrillic а
+    'üser@company.com',
+    'admin@примép.com',
+    'a@localhost',
+    'a@company.c',
+    'a b@company.com',
+    'a..b@company.com',
+    'a@company..com',
+    'a@-company.com',
+    '.a@company.com',
+    'a.@company.com',
+    'a@company.com.',
+    'a@1.2.3.4',
+    '',
+  ];
+
+  function installerRegex(): string {
+    const src = installerSource();
+    const m = src.match(/^\s*ACME_EMAIL_RE='(.+)'$/m);
+    expect(m, 'ACME_EMAIL_RE was renamed or moved in install-iceslab.sh').not.toBeNull();
+    return m![1]!;
+  }
+
+  function installerAccepts(re: string, value: string): boolean {
+    // Run by bash, from the script's own text, under the script's own locale
+    // setting. A JS reimplementation of an ERE would be a third opinion.
+    const r = spawnSync(
+      'bash',
+      ['-c', 'LC_ALL=C grep -qE "$1" <<<"$2"', '_', re, value],
+      { stdio: 'ignore' },
+    );
+    return r.status === 0;
+  }
+
+  const panelAccepts = (v: string) => z.email().safeParse(v).success;
+
+  it('accepts nothing the panel will refuse', () => {
+    const re = installerRegex();
+
+    // Control: the corpus has to contain addresses the installer does accept,
+    // or "accepts nothing bad" is true of a check that accepts nothing at all.
+    const accepted = CORPUS.filter((v) => installerAccepts(re, v));
+    expect(accepted.length, 'the installer accepted none of the corpus').toBeGreaterThan(3);
+
+    const wouldStrandTheOperator = accepted.filter((v) => !panelAccepts(v));
+    expect(
+      wouldStrandTheOperator,
+      'the installer writes these into .env.production and the panel then refuses to boot on them',
+    ).toEqual([]);
+  });
+
+  it('does the matching under LC_ALL=C, which is what makes A-Za-z mean ASCII', () => {
+    // The case above runs the regex under LC_ALL=C because the script does. If
+    // the script stopped doing that, the case above would keep passing and the
+    // installer would go back to accepting accented latin — so the locale is
+    // asserted at the script, and then demonstrated to be load-bearing.
+    const src = installerSource();
+    const check = src
+      .split('\n')
+      .find((l) => l.includes('ACME_EMAIL_RE') && l.includes('grep'));
+    expect(check, 'the ACME email check no longer uses the extracted expression').toBeDefined();
+    expect(check, 'without LC_ALL=C the character ranges match by collation, not by byte').toContain(
+      'LC_ALL=C',
+    );
+
+    // And here is what that buys, measured rather than asserted from memory:
+    // the same expression, the same input, the collating locale.
+    const re = installerRegex();
+    const underCollation = spawnSync(
+      'bash',
+      ['-c', 'LC_ALL=en_US.UTF-8 grep -qE "$1" <<<"$2"', '_', re, 'üser@company.com'],
+      { stdio: 'ignore' },
+    );
+    const underBytes = installerAccepts(re, 'üser@company.com');
+    expect(underBytes, 'an accented latin local part must be refused').toBe(false);
+    if (underCollation.status === 0) {
+      // The locale really is the only thing standing between this address and
+      // .env.production. If a future libc stops collating it that way this
+      // branch simply does not run; the assertion above is the one that matters.
+      expect(panelAccepts('üser@company.com')).toBe(false);
+    }
+  });
+
+  it('is stricter than the panel only in ways worth naming', () => {
+    const re = installerRegex();
+    // Not a failure: refusing at the prompt costs a retype, not an install. It
+    // is asserted so the list cannot grow silently.
+    const refusedButValid = CORPUS.filter((v) => v !== '' && panelAccepts(v) && !installerAccepts(re, v));
+    expect(refusedButValid).toEqual(["o'brien@company.com"]);
   });
 });
