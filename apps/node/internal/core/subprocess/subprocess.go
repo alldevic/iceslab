@@ -7,7 +7,6 @@
 package subprocess
 
 import (
-	"strings"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -150,14 +150,14 @@ type Config struct {
 type Subprocess struct {
 	cfg Config
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	exited  chan struct{} // closed by the watcher goroutine on Wait() return
+	mu     sync.Mutex
+	cmd    *exec.Cmd
+	exited chan struct{} // closed by the watcher goroutine on Wait() return
 	// Last line the core printed on stdout or stderr, and its own lock: the log
 	// writers run on the reader goroutines, not under the main mutex.
 	lastLineMu sync.Mutex
 	lastLine   string
-	exitErr error         // set by watcher before closing `exited`; read under mu
+	exitErr    error // set by watcher before closing `exited`; read under mu
 	// N9 - restart-on-crash bookkeeping (all under mu).
 	ctx          context.Context // Start ctx, reused so a respawn stays ctx-bound
 	stopping     bool            // set by Stop so the watcher won't respawn
@@ -578,13 +578,15 @@ func (s *Subprocess) Running() bool {
 
 // ───── log-line writer (moved from hysteria/adapter.go) ─────
 
-func newLogWriter(logger *slog.Logger, level slog.Level, source string) io.Writer {
-	return &logWriter{logger: logger, level: level, source: source}
-}
-
-// newTappedLogWriter is newLogWriter plus a sink that sees every completed line.
-// Used to keep the core's last words: when a core dies, what it printed just
+// newTappedLogWriter builds the writer both of a core's pipes get: it splits
+// the stream into lines, logs each one, and hands it to a sink. The sink is
+// what keeps the core's last words — when a core dies, what it printed just
 // before is the reason, and it is otherwise only in the node's journal.
+//
+// There used to be a plain newLogWriter beside this, without the tap. Nothing
+// called it: Start wires BOTH stdout and stderr through the tapped one, which
+// is the whole point of having a tap. An unexported function with no callers
+// does not fail to compile, so it sat there reading as an alternative.
 func newTappedLogWriter(logger *slog.Logger, level slog.Level, source string, tap func(string)) io.Writer {
 	return &logWriter{logger: logger, level: level, source: source, tap: tap}
 }
