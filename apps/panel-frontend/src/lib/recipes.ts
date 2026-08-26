@@ -575,8 +575,21 @@ export function downloadRecipeJson(recipe: Recipe): void {
 
 // ───── Live validator ─────
 //
-// Returns warnings/errors for the current form state. Errors block save
-// (returned as `level: 'error'`); warnings just inform.
+// Returns issues for the current form state, rendered by ProfileFormModal as
+// coloured alerts under the xray section. Nothing here blocks the save button
+// — an `error` is the loudest colour, not a gate — so a false one costs the
+// operator a working configuration they were told not to use.
+
+/**
+ * The transports REALITY can carry, and the ones that carry Vision. Both are
+ * decided on the backend too — `REALITY_TRANSPORTS` in inbounds.schemas.ts
+ * refuses the save, `NETWORKS_CARRYING_VISION` in xray-transport-fields.ts
+ * blanks the flow — and both were measured against xray 26.3.27 rather than
+ * reasoned about. `recipes.validate.test.ts` reads those two files and checks
+ * these sets still say the same thing.
+ */
+const REALITY_TRANSPORTS = new Set(['raw', 'xhttp', 'grpc']);
+const NETWORKS_CARRYING_VISION = new Set(['raw', 'xhttp']);
 
 export interface ValidationIssue {
   level: 'error' | 'warning' | 'info';
@@ -599,7 +612,7 @@ export function validateXrayConfig(values: {
   // Hard error: REALITY only works with raw/xhttp/grpc.
   // Form already filters dropdown to these 3, but defensive, paste/import
   // could carry an invalid value.
-  if (!['raw', 'xhttp', 'grpc'].includes(values.xrayNetwork)) {
+  if (!REALITY_TRANSPORTS.has(values.xrayNetwork)) {
     issues.push({
       level: 'error',
       field: 'xrayNetwork',
@@ -608,12 +621,24 @@ export function validateXrayConfig(values: {
     });
   }
 
-  // Hard error: Vision requires raw.
-  if (values.xrayFlow === 'xtls-rprx-vision' && values.xrayNetwork !== 'raw') {
+  // Vision rides raw and xhttp; on anything else the panel blanks `flow` when
+  // it saves. Which transports those are is not a matter of opinion — it was
+  // measured on xray 26.3.27 and is written down on the backend side, in
+  // `NETWORKS_CARRYING_VISION` (modules/inbounds/xray-transport-fields.ts).
+  // gRPC is the case that costs: it LOADS with Vision and then rejects every
+  // client with "the client flow is empty".
+  //
+  // This said `!== 'raw'` until 2026-08-26, so an operator building the
+  // xhttp + Vision profile the backend deliberately preserves was shown a red
+  // "incompatible, set Network = raw" and had no way to tell it was wrong.
+  if (
+    values.xrayFlow === 'xtls-rprx-vision' &&
+    !NETWORKS_CARRYING_VISION.has(values.xrayNetwork)
+  ) {
     issues.push({
       level: 'error',
       field: 'xrayFlow',
-      key: 'validation.xray.visionRequiresRaw',
+      key: 'validation.xray.visionNeedsRawOrXhttp',
       args: { network: values.xrayNetwork },
     });
   }

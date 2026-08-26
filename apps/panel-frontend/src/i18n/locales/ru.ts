@@ -2270,8 +2270,8 @@ export default {
     xray: {
       networkInvalid:
         'xray-core отвергнет config: REALITY поддерживает только raw / xhttp / grpc, не «{{network}}».',
-      visionRequiresRaw:
-        'Vision flow несовместим с {{network}}. Поставь Flow = «(none)» или Network = «raw».',
+      visionNeedsRawOrXhttp:
+        'Vision flow работает только на raw и xhttp; на {{network}} панель снимет его при сохранении. Поставь Flow = «(none)» или Network = «raw» / «xhttp».',
       trojanIgnoresFlow:
         'Trojan не использует flow, поле будет проигнорировано на клиенте.',
       rawWithoutVisionSlow:
