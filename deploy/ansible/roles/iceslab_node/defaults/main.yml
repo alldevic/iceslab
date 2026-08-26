@@ -52,6 +52,10 @@ iceslab_node_env_file: /etc/iceslab-node/env
 # the node owns one line of it. Independent of iceslab_zapret2_enabled.
 iceslab_zapret2_selftune: false
 iceslab_zapret2_tune_path: /var/lib/iceslab-node/egress-tune.json
+# Container blockcheckw runs in. Empty = ask compose in iceslab_zapret2_dir what
+# it brought up, which is right for the stock ss-zapret2 layout. Set it only for
+# a stack this role did not create.
+iceslab_zapret2_container: ""
 iceslab_selftune_domains: "rutracker.org"
 iceslab_selftune_oncalendar: "*-*-* 04:00:00"
 

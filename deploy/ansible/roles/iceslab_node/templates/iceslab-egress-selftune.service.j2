@@ -6,7 +6,11 @@ Wants=docker.service
 
 [Service]
 Type=oneshot
+# ZAPRET2_DIR is what the script asks compose about when no container name is
+# given; ZAPRET2_CONTAINER short-circuits that for a stack laid out some other
+# way. Empty is a valid value for the second one and means "ask compose".
 Environment=ZAPRET2_DIR={{ iceslab_zapret2_dir }}
+Environment=ZAPRET2_CONTAINER={{ iceslab_zapret2_container }}
 Environment=ZAPRET2_TUNE_PATH={{ iceslab_zapret2_tune_path }}
 Environment=SELFTUNE_DOMAINS={{ iceslab_selftune_domains }}
 ExecStart=/usr/local/bin/iceslab-egress-selftune.sh

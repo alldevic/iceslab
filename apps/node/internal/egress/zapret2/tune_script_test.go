@@ -80,6 +80,14 @@ func stubDocker(t *testing.T, reports map[string]string) (binDir, argvLog string
 	}
 	script := `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "` + argvLog + `"
+# The stack is asked what it brought up. $FAKE_COMPOSE_ID empty = compose knows
+# of nothing here, which is what a wrong directory or a down stack looks like.
+case "$*" in
+    *'compose --project-directory'*' ps -q'*)
+        [[ -n "${FAKE_COMPOSE_ID:-}" ]] && printf '%s\n' "$FAKE_COMPOSE_ID"
+        exit 0
+        ;;
+esac
 case "$* " in
 ` + cases.String() + `    *) exit 1 ;;
 esac
@@ -173,6 +181,78 @@ func TestSelftuneScriptWritesWhatThisPackageParses(t *testing.T) {
 			t.Errorf("the script left %s behind next to the report", e.Name())
 		}
 	}
+}
+
+// Which container blockcheckw is asked for.
+//
+// The name used to be hard-coded with a ZAPRET2_CONTAINER override nothing ever
+// set: the systemd unit passed ZAPRET2_DIR, which the script did not read, and
+// the name it did read was never passed. A stack whose container is called
+// something else scanned nothing on every tick, and a wrong name looks exactly
+// like a container that is down — so the resolution is now three-way and says
+// which of the three answered.
+func TestSelftuneScriptResolvesTheContainerItScansIn(t *testing.T) {
+	const wantArgs = "--payload=tls_client_hello --lua-desync=split2"
+	report := reportFor("rutracker.org", wantArgs)
+
+	t.Run("an explicit name wins", func(t *testing.T) {
+		binDir, argvLog := stubDocker(t, map[string]string{"rutracker.org": report})
+		dir := t.TempDir()
+		out := runSelftune(t, binDir, filepath.Join(dir, "tune.json"),
+			"SELFTUNE_DOMAINS=rutracker.org",
+			"ZAPRET2_CONTAINER=named-by-the-operator",
+			"ZAPRET2_DIR="+dir,
+			"FAKE_COMPOSE_ID=compose-would-have-said-this")
+		argv, _ := os.ReadFile(argvLog)
+		if !strings.Contains(string(argv), "exec named-by-the-operator blockcheckw") {
+			t.Errorf("the explicit container was not the one scanned; argv was:\n%s", argv)
+		}
+		if strings.Contains(string(argv), "ps -q") {
+			t.Errorf("compose was asked even though a name was given:\n%s", argv)
+		}
+		if !strings.Contains(out, "ZAPRET2_CONTAINER") {
+			t.Errorf("the run did not say where the container name came from:\n%s", out)
+		}
+	})
+
+	t.Run("otherwise compose is asked what it brought up", func(t *testing.T) {
+		binDir, argvLog := stubDocker(t, map[string]string{"rutracker.org": report})
+		dir := t.TempDir()
+		out := runSelftune(t, binDir, filepath.Join(dir, "tune.json"),
+			"SELFTUNE_DOMAINS=rutracker.org",
+			"ZAPRET2_DIR="+dir,
+			"FAKE_COMPOSE_ID=c0ffee1234")
+		argv, _ := os.ReadFile(argvLog)
+		// The point of asking: no name is assumed, so a renamed service still
+		// gets scanned.
+		if !strings.Contains(string(argv), "exec c0ffee1234 blockcheckw") {
+			t.Errorf("the id compose named was not the one scanned; argv was:\n%s", argv)
+		}
+		if !strings.Contains(string(argv), "--project-directory "+dir) {
+			t.Errorf("compose was not asked about the configured stack directory:\n%s", argv)
+		}
+		if !strings.Contains(out, "compose in "+dir) {
+			t.Errorf("the run did not say the name came from compose:\n%s", out)
+		}
+	})
+
+	t.Run("and the built-in name is the last resort, named as such", func(t *testing.T) {
+		// No override and compose knows of nothing: a wrong directory, or a
+		// stack that is not up. The scan still runs against the upstream
+		// default, which is the old behaviour — but the operator is told that
+		// is what happened, because "scan produced nothing" means something
+		// different here than it does after compose answered.
+		binDir, argvLog := stubDocker(t, map[string]string{"rutracker.org": report})
+		out := runSelftune(t, binDir, filepath.Join(t.TempDir(), "tune.json"),
+			"SELFTUNE_DOMAINS=rutracker.org")
+		argv, _ := os.ReadFile(argvLog)
+		if !strings.Contains(string(argv), "exec zapret2-proxy blockcheckw") {
+			t.Errorf("the fallback name was not used; argv was:\n%s", argv)
+		}
+		if !strings.Contains(out, "built-in default") {
+			t.Errorf("the fallback was used without saying so:\n%s", out)
+		}
+	})
 }
 
 func TestSelftuneScriptKeepsTheLastReportWhenAScanProducesNothing(t *testing.T) {
