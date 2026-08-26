@@ -433,9 +433,10 @@ export function NodeFormModal({ opened, onClose, node, onSubmit, loading }: Prop
               <NumberInput
                 label={t('nodes.form.multiplier')}
                 description={t('nodes.form.multiplierDesc')}
-                min={0.1}
+                min={1}
                 max={10}
-                step={0.1}
+                step={1}
+                allowDecimal={false}
                 allowNegative={false}
                 {...form.getInputProps('consumptionMultiplier')}
               />

@@ -734,9 +734,11 @@ export function NodeEditModal({
                 <NumberInput
                   label={t('nodes.edit.paramsMultiplier')}
                   description={t('nodes.edit.paramsMultiplierDesc')}
-                  min={0.1}
+                  min={1}
                   max={10}
-                  step={0.1}
+                  step={1}
+                  allowDecimal={false}
+                  allowNegative={false}
                   {...form.getInputProps('consumptionMultiplier')}
                 />
               </Group>

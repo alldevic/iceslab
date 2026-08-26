@@ -562,11 +562,10 @@ export function NodeEditPage() {
                     style={{ flex: 1, minWidth: 0 }}
                     label={t('nodeEdit.multiplier')}
                     description={t('nodeEdit.multiplierDesc')}
-                    min={0.1}
+                    min={1}
                     max={10}
-                    step={0.1}
-                    decimalScale={1}
-                    fixedDecimalScale
+                    step={1}
+                    allowDecimal={false}
                     allowNegative={false}
                     {...form.getInputProps('consumptionMultiplier')}
                   />
