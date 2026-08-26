@@ -11,6 +11,10 @@ func TestRenderConfig_MinimalValid(t *testing.T) {
 		ACMEEmail:        "admin@example.com",
 		AuthCallbackHost: "127.0.0.1",
 		AuthCallbackPort: 9000,
+		// The random-suffixed shape New() generates. A fixture with an empty
+		// path models a config the adapter cannot produce, and renderConfig
+		// now refuses it rather than silently emitting the canonical /auth.
+		AuthCallbackPath: "/auth/deadbeefdeadbeefdeadbeefdeadbeef",
 		ListenPort:       443,
 	}
 	blob, err := renderConfig(cfg, InboundConfig{})
@@ -28,7 +32,7 @@ acme:
 auth:
   type: http
   http:
-    url: http://127.0.0.1:9000/auth
+    url: http://127.0.0.1:9000/auth/deadbeefdeadbeefdeadbeefdeadbeef
 
 ignoreClientBandwidth: true
 `
@@ -39,9 +43,10 @@ ignoreClientBandwidth: true
 
 func TestRenderConfig_WithObfsAndMasquerade(t *testing.T) {
 	cfg := Config{
-		Hostname:   "hy2.example.com",
-		ACMEEmail:  "a@b.io",
-		ListenPort: 8443,
+		Hostname:         "hy2.example.com",
+		ACMEEmail:        "a@b.io",
+		ListenPort:       8443,
+		AuthCallbackPath: "/auth/deadbeef",
 	}
 	inbound := InboundConfig{
 		ObfsPassword:  "salt-pw",
@@ -66,7 +71,7 @@ func TestRenderConfig_WithObfsAndMasquerade(t *testing.T) {
 }
 
 func TestRenderConfig_WithBrutalBandwidth(t *testing.T) {
-	cfg := Config{Hostname: "h", ACMEEmail: "e@x"}
+	cfg := Config{Hostname: "h", ACMEEmail: "e@x", AuthCallbackPath: "/auth/deadbeef"}
 	blob, err := renderConfig(cfg, InboundConfig{
 		BrutalUpMbps:   100,
 		BrutalDownMbps: 200,
@@ -99,7 +104,7 @@ func TestRenderConfig_RequiresACMEEmail(t *testing.T) {
 // '#') because they can break out of the scalar value and inject top-level
 // YAML, e.g., disabling cert validation in acme: or swapping auth: source.
 func TestRenderConfig_RejectsInjectedObfsAndMasquerade(t *testing.T) {
-	baseCfg := Config{Hostname: "h", ACMEEmail: "a@b", ListenPort: 443}
+	baseCfg := Config{Hostname: "h", ACMEEmail: "a@b", ListenPort: 443, AuthCallbackPath: "/auth/deadbeef"}
 	cases := []struct {
 		name    string
 		obfs    string
@@ -128,8 +133,11 @@ func TestRenderConfig_RejectsInjectedObfsAndMasquerade(t *testing.T) {
 }
 
 func TestRenderConfig_DefaultPortAndAuth(t *testing.T) {
-	// ListenPort=0, AuthCallbackHost="", AuthCallbackPort=0 → defaults applied
-	cfg := Config{Hostname: "h", ACMEEmail: "e@x"}
+	// ListenPort=0, AuthCallbackHost="", AuthCallbackPort=0 → defaults applied.
+	// The PATH gets no default: it is the shared secret, New() generates it,
+	// and this used to assert the canonical "/auth" — i.e. it pinned the one
+	// URL the auth-callback design requires to return 404.
+	cfg := Config{Hostname: "h", ACMEEmail: "e@x", AuthCallbackPath: "/auth/deadbeef"}
 	blob, err := renderConfig(cfg, InboundConfig{})
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
@@ -138,8 +146,21 @@ func TestRenderConfig_DefaultPortAndAuth(t *testing.T) {
 	if !strings.Contains(got, "listen: :443") {
 		t.Errorf("default ListenPort 443 not applied: %s", got)
 	}
-	if !strings.Contains(got, "url: http://127.0.0.1:9000/auth") {
-		t.Errorf("default auth callback not applied: %s", got)
+	if !strings.Contains(got, "url: http://127.0.0.1:9000/auth/deadbeef") {
+		t.Errorf("default auth host/port not applied, or the path was not carried through: %s", got)
+	}
+}
+
+func TestRenderConfig_RefusesAnEmptyAuthPath(t *testing.T) {
+	// The state is unreachable through New; rendering anyway would emit the
+	// canonical /auth and silently reject every client. See the comment in
+	// renderConfig.
+	_, err := renderConfig(Config{Hostname: "h", ACMEEmail: "e@x"}, InboundConfig{})
+	if err == nil {
+		t.Fatal("renderConfig accepted an empty AuthCallbackPath")
+	}
+	if !strings.Contains(err.Error(), "AuthCallbackPath") {
+		t.Errorf("error should name the field, got %v", err)
 	}
 }
 
@@ -177,7 +198,7 @@ func TestInboundCfgWireUnmarshal(t *testing.T) {
 // without re-onboarding it. That address is what clients dial and validate, so
 // the certificate has to be issued for it and not for the install-time name.
 func TestRenderConfig_PushedHostnameOverridesInstallTime(t *testing.T) {
-	cfg := Config{Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
+	cfg := Config{Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443, AuthCallbackPath: "/auth/deadbeef"}
 
 	blob, err := renderConfig(cfg, InboundConfig{Hostname: "moved.example.com"})
 	if err != nil {
@@ -195,7 +216,7 @@ func TestRenderConfig_PushedHostnameOverridesInstallTime(t *testing.T) {
 func TestRenderConfig_FallsBackToInstallTimeHostname(t *testing.T) {
 	// A panel too old to send one, or a node whose address is an IP no CA will
 	// issue for. Either way the node keeps the certificate it already has.
-	cfg := Config{Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
+	cfg := Config{Hostname: "install.example.com", ACMEEmail: "a@b.io", ListenPort: 443, AuthCallbackPath: "/auth/deadbeef"}
 
 	blob, err := renderConfig(cfg, InboundConfig{})
 	if err != nil {
@@ -209,7 +230,7 @@ func TestRenderConfig_FallsBackToInstallTimeHostname(t *testing.T) {
 func TestRenderConfig_RejectsInjectedHostname(t *testing.T) {
 	// acme.domains is a bare YAML scalar, so a newline would let a pushed value
 	// append arbitrary top-level keys to the config.
-	cfg := Config{Hostname: "hy2.example.com", ACMEEmail: "a@b.io", ListenPort: 443}
+	cfg := Config{Hostname: "hy2.example.com", ACMEEmail: "a@b.io", ListenPort: 443, AuthCallbackPath: "/auth/deadbeef"}
 
 	if _, err := renderConfig(cfg, InboundConfig{Hostname: "evil.example.com\nlisten: :1"}); err == nil {
 		t.Fatal("expected an error for a newline in the pushed hostname")

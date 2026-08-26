@@ -159,9 +159,20 @@ func renderConfig(adapterCfg Config, inbound InboundConfig) ([]byte, error) {
 	if authPort == 0 {
 		authPort = 9000
 	}
+	// No fallback here, deliberately. The path is a shared secret: New()
+	// substitutes "/auth/<random hex>" when it is empty, and the mux serves
+	// exactly that. This function used to substitute the CANONICAL "/auth"
+	// instead — the same decision written twice, with the two copies
+	// disagreeing. Reaching that branch would write into config.yaml the one
+	// URL the design requires to 404, so hysteria would post every client's
+	// credentials to a path the mux does not serve: every connection refused,
+	// while the callback is up and the unit is active and therefore the node
+	// reports healthy. Nothing in production can produce an empty path (the
+	// adapter is only ever built by New), so an empty one here means the
+	// invariant broke and the honest answer is to refuse to render.
 	authPath := adapterCfg.AuthCallbackPath
 	if authPath == "" {
-		authPath = "/auth"
+		return nil, fmt.Errorf("hysteria render: AuthCallbackPath is empty; New() fills it, so this config never went through it")
 	}
 
 	var b bytes.Buffer
