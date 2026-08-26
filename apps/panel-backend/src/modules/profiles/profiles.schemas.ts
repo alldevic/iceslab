@@ -27,6 +27,10 @@ const PublicHostSchema = z
     'Must be a valid hostname or IPv4',
   );
 
+// Every protocol a profile can be. Must stay the shared ProtocolName union —
+// see profiles.protocols.test.ts, which reads both sides rather than trusting
+// this list: it had drifted, and the three sing-box-only protocols were
+// missing from here and from the union below while the form offered all three.
 export const ProtocolEnum = z.enum([
   'hysteria',
   'xray',
