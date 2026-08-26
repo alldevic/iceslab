@@ -104,11 +104,18 @@ step_done
 
 # ───── Step 2: redis BGSAVE + copy ─────
 step 2 "redis BGSAVE → ${STAGE}/redis.rdb"
-docker exec "$REDIS_CONTAINER" redis-cli BGSAVE >/dev/null
-# BGSAVE is async; wait for LASTSAVE to advance. This loop used to give up
-# after 30s and copy whatever rdb was on disk, shipping a stale snapshot.
-# Now it fails loudly instead.
+# BGSAVE is async; wait for LASTSAVE to advance. This loop used to give up after
+# 30s and copy whatever rdb was on disk, shipping a stale snapshot. Now it fails
+# loudly instead.
+#
+# The baseline has to be read BEFORE the save is asked for. Reading it after
+# meant that on a small dataset - where BGSAVE finishes between the two
+# commands - the "previous" value already included the save, nothing could ever
+# advance, and the backup aborted with "backup would be stale" every time. A
+# guard against a stale snapshot that instead prevents any snapshot at all.
+# Found 2026-08-26 by backup-restore-selftest.sh.
 prev_lastsave="$(docker exec "$REDIS_CONTAINER" redis-cli LASTSAVE)"
+docker exec "$REDIS_CONTAINER" redis-cli BGSAVE >/dev/null
 bgsave_ok=0
 for _ in $(seq 1 30); do
     sleep 1

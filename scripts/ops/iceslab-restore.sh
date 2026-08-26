@@ -156,9 +156,52 @@ step 4 "restore redis snapshot"
 # Copy into the stopped container. `docker cp` to a running redis with AOF
 # active produces a corrupt rdb on next start.
 docker cp "${STAGE}/redis.rdb" "${REDIS_CONTAINER}:/data/dump.rdb"
-# AOF is the source of truth in our config (--appendonly yes), so it
-# overrides the rdb on startup. Flush it so the restored rdb takes effect.
-docker exec "$REDIS_CONTAINER" sh -c 'rm -f /data/appendonlydir/*.aof || true' 2>/dev/null || true
+# Loading a copied dump.rdb into an AOF-enabled Redis takes three things, and
+# the previous version of this step did none of them. Found 2026-08-26 by
+# backup-restore-selftest.sh, which restored a known dataset and read the
+# result back out of Redis.
+#
+#  1. `docker exec` cannot be used here at all: redis was stopped one line
+#     above, and exec against a stopped container fails with "container is not
+#     running". The old `docker exec ... 2>/dev/null || true` therefore never
+#     ran. A throwaway container on the same volume works with the service down.
+#
+#  2. The WHOLE appendonlydir has to go, not just its *.aof files. Redis 7 keeps
+#     a base snapshot (appendonly.aof.N.base.rdb) and a manifest in there, and
+#     while the manifest is present Redis loads from it and never reads
+#     /data/dump.rdb - it came back with the PRE-restore dataset and said so:
+#     "DB loaded from base file appendonly.aof.1.base.rdb".
+#
+#  3. Even with the AOF gone, a Redis started with `--appendonly yes` does NOT
+#     fall back to the rdb: it starts EMPTY and writes a fresh AOF over it. The
+#     documented conversion is to load the rdb with appendonly OFF and then turn
+#     it on, which rewrites the AOF from the loaded dataset. That is what the
+#     throwaway instance below does; the real service then starts against an AOF
+#     that already holds the restored data.
+#
+# `docker cp` also lands the file as the HOST uid with mode 600, and the
+# throwaway container would otherwise leave an AOF directory owned by root that
+# the redis user cannot write to - hence the `chown -R` at the end. (A chown of
+# the copied rdb BEFORE the conversion is not needed and was removed after
+# measuring: the throwaway instance runs as root and reads it regardless.)
+#
+# Not silenced: a failure here would leave the restore looking successful and
+# the dataset empty, which is exactly how this went unnoticed.
+"${DC[@]}" run --rm --no-deps --entrypoint sh redis -c '
+    set -e
+    rm -rf /data/appendonlydir
+    redis-server --appendonly no --daemonize yes --dir /data --dbfilename dump.rdb
+    for _ in $(seq 1 30); do redis-cli PING 2>/dev/null | grep -q PONG && break; sleep 1; done
+    redis-cli PING | grep -q PONG
+    redis-cli CONFIG SET appendonly yes >/dev/null
+    for _ in $(seq 1 60); do
+        redis-cli INFO persistence | grep -q "aof_rewrite_in_progress:0" && break
+        sleep 1
+    done
+    redis-cli SHUTDOWN NOSAVE 2>/dev/null || true
+    sleep 1
+    chown -R redis:redis /data
+' >/dev/null
 "${DC[@]}" start redis
 step_done
 
