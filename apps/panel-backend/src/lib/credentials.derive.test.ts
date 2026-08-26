@@ -132,6 +132,23 @@ describe('the three passwords the panel derives for itself', () => {
     }
   });
 
+  // The VALUE, not just its shape. Everything above still passes when the salt
+  // changes - the result stays deterministic, distinct, url-safe and
+  // uuid-dependent - and that was measured: the whole suite stayed green with
+  // `deriveTuicPassword`'s salt changed.
+  //
+  // Rotation is not free even though both consumers are on this side. The node
+  // keeps the password it was last pushed, while the subscription serves the
+  // new one immediately, so between a deploy and the next inbound push every
+  // client that refetches gets a credential the node does not accept. Same
+  // reasoning as the shadowsocks vectors: this makes rotating them a deliberate
+  // act rather than a side effect of editing a string.
+  it('is the value it has always been', () => {
+    expect(deriveTuicPassword(UUID_A)).toBe('f3CHWYGSxJ3LUlDQf-i6mn--7kN7zEoiCmhSo3znsgM');
+    expect(deriveAnytlsPassword(UUID_A)).toBe('ZrsEClvRM-vBFEUe9ba9N1XZLdneVz2-KKAWkoQP5tg');
+    expect(deriveShadowtlsPassword(UUID_A)).toBe('yz6GmlBpwFMEnyeUKR2xRwo1ZykxCdS0y2-7oqSb1rc');
+  });
+
   // The uuid is the only input. A derivation that silently ignored it would
   // hand every user on the panel the same password - and would still look
   // deterministic and url-safe in every check above.
