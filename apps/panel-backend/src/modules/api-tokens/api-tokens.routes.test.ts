@@ -191,4 +191,38 @@ describe('DELETE /api/api-tokens/:id', () => {
     });
     expect(after.statusCode).toBe(401);
   });
+
+  it('leaves every other token working', async () => {
+    // The revoke reads correctly and nothing observed its SCOPE. Widened to
+    // every row it still answers 204, so the admin who pressed Revoke on one
+    // bot sees success while every integration — the storefront included —
+    // loses access at the same instant.
+    const mint = async (name: string) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/api-tokens',
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { name },
+      });
+      return JSON.parse(res.body) as { id: string; token: string };
+    };
+    const doomed = await mint('doomed');
+    const keeper = await mint('keeper');
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/api/api-tokens/${doomed.id}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(del.statusCode).toBe(204);
+
+    // Asked at the door the integration itself knocks on, not in the table:
+    // a row that survives but no longer authenticates is the same outage.
+    const after = await app.inject({
+      method: 'GET',
+      url: '/api/users',
+      headers: { authorization: `Bearer ${keeper.token}` },
+    });
+    expect(after.statusCode, 'revoking one token took the other down with it').toBe(200);
+  });
 });

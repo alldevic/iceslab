@@ -129,4 +129,32 @@ describe('DELETE /api/route-policies/:id', () => {
     const list = await app.inject({ method: 'GET', url: '/api/route-policies', headers: auth() });
     expect(JSON.parse(list.body).policies).toHaveLength(0);
   });
+
+  it('removes only the one named', async () => {
+    // The delete reads correctly and nothing observed its SCOPE. Widened to
+    // every row it still answers 204 and the freed-band test above still
+    // passes, because that one deletes the only policy it cares about. Two
+    // policies is the smallest fixture in which scope is visible at all.
+    const doomed = JSON.parse((await create({ name: 'Doomed', blockDomains: ['a.example'] })).body);
+    const kept = JSON.parse((await create({ name: 'Kept', directDomains: ['geosite:ru'] })).body);
+
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/route-policies/${doomed.id}`,
+          headers: auth(),
+        })
+      ).statusCode,
+    ).toBe(204);
+
+    const list = JSON.parse(
+      (await app.inject({ method: 'GET', url: '/api/route-policies', headers: auth() })).body,
+    );
+    expect(list.policies.map((p: { id: string }) => p.id)).toEqual([kept.id]);
+    // Band and rules survive intact: a policy that came back empty would push
+    // an ad-split that blocks nothing, which reads as "still there" in the UI.
+    expect(list.policies[0].directDomains).toEqual(['geosite:ru']);
+    expect(list.policies[0].ordinal).toBe(kept.ordinal);
+  });
 });
