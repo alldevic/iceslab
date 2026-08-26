@@ -664,6 +664,75 @@ $(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | sed 's/^/      /')"
     fi
 done
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  The contracts the installers hold with files they never read
+# ═════════════════════════════════════════════════════════════════════════════
+note "cross-file contracts"
+
+# The pre-pull. `install-iceslab.sh` pulls base images before building so the
+# build stages do not compete for bandwidth, and its own comment records what
+# happens when a tag drifts: "we once had node:22-alpine vs the Dockerfile's
+# 22.22-alpine, and golang:1.23 vs 1.22: both dead pulls". A dead pull is not
+# an error — docker fetches an image nobody builds with, the build then pulls
+# the real one anyway, and the only symptom is the slow first run the pre-pull
+# exists to prevent.
+prepulled=$(grep -oE '^docker pull [a-z0-9./-]+:[A-Za-z0-9._-]+' "$PANEL_INSTALLER" | awk '{print $3}' | sort -u)
+if [[ -n "$prepulled" ]]; then
+    ok "the installer pre-pulls $(printf '%s\n' "$prepulled" | grep -c .) base image(s)"
+else
+    bad "no `docker pull` lines found in ${PANEL_INSTALLER}; this contract is not being checked"
+fi
+
+# What the build and the stack actually use: ARG defaults in the three
+# Dockerfiles, plus the images docker-compose.prod.yml names outright.
+declared="$(
+    {
+        for df in apps/panel-backend/Dockerfile apps/panel-frontend/Dockerfile apps/node/Dockerfile; do
+            # `ARG NODE_VERSION=22.22-alpine` + `FROM node:${NODE_VERSION}` ->
+            # node:22.22-alpine. Read as a pair so a renamed ARG cannot pass by
+            # matching nothing.
+            while read -r arg val; do
+                img=$(grep -oE "^FROM [a-z0-9./_-]+:\\\$\{${arg}\}" "${REPO_ROOT}/${df}" | head -1 | sed 's/^FROM //')
+                [[ -n "$img" ]] && printf '%s\n' "${img%%:*}:${val}"
+            done < <(grep -oE '^ARG [A-Z_]+=[A-Za-z0-9._-]+' "${REPO_ROOT}/${df}" | sed 's/^ARG //' | tr '=' ' ')
+        done
+        grep -oE '^\s*image: [a-z0-9./-]+:[A-Za-z0-9._-]+' "${REPO_ROOT}/docker-compose.prod.yml" \
+            | awk '{print $2}' | grep -v '^iceslab-'
+    } | sort -u
+)"
+if [[ -n "$declared" ]]; then
+    ok "the Dockerfiles and compose declare $(printf '%s\n' "$declared" | grep -c .) base image(s)"
+else
+    bad "nothing parsed out of the Dockerfiles or compose; the comparison below would be empty"
+fi
+
+dead=$(comm -23 <(printf '%s\n' "$prepulled") <(printf '%s\n' "$declared") | tr '\n' ' ')
+if [[ -z "${dead// /}" ]]; then
+    ok "every pre-pulled tag is one something actually builds or runs"
+else
+    bad "the installer pre-pulls tags nothing uses (dead pulls, the exact failure its comment describes):${dead}
+      declared: $(printf '%s ' $declared)"
+fi
+
+# The node agent's mTLS port is written down three times: the installer's
+# NODE_PORT default, the ansible role's iceslab_node_agent_port (whose comment
+# says it must match, and whose health check dials it), and DEFAULT_NODE_PORT in
+# the panel's three node screens. The frontend side is compared in
+# nodeProtocols.mirror.test.ts; this is the deployment side.
+shell_port=$(grep -E '^NODE_PORT=' "$NODE_INSTALLER" | head -1 | grep -oE ':-[0-9]+' | grep -oE '[0-9]+')
+ansible_port=$(grep -oE '^iceslab_node_agent_port: [0-9]+' \
+    "${REPO_ROOT}/deploy/ansible/roles/iceslab_node/defaults/main.yml" | grep -oE '[0-9]+$')
+if [[ -n "$shell_port" && -n "$ansible_port" ]]; then
+    ok "both the installer ($shell_port) and the ansible role ($ansible_port) name a port"
+else
+    bad "could not read the port from one of the two sides (installer='$shell_port' ansible='$ansible_port')"
+fi
+if [[ "$shell_port" == "$ansible_port" ]]; then
+    ok "and they are the same port, so the role's health check dials what the installer bound"
+else
+    bad "the ansible role dials :${ansible_port} and the installer binds :${shell_port}"
+fi
+
 echo
 if [[ $FAIL -eq 0 ]]; then
     printf '\033[1;32m%d/%d check(s) passed\033[0m\n' "$PASS" "$((PASS + FAIL))"
