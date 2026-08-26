@@ -1021,7 +1021,13 @@ model CascadeLink {
   fromNode Node    @relation("CascadeLinkFrom", fields: [fromNodeId], references: [id], onDelete: Restrict)
   toNode   Node    @relation("CascadeLinkTo", fields: [toNodeId], references: [id], onDelete: Restrict)
 
-  @@unique([cascadeId, fromNodeId, toNodeId, directionTag])
+  // `map:` pins the index to the name the migration actually created
+  // (20260807000000_cascades_v4). Prisma's implicit name for these four columns
+  // is longer and different, so without this the schema and every deployed
+  // database disagree about the name - `migrate diff` reports a rename, and a
+  // future `migrate dev` would generate one against production. Found by
+  // running that diff for the first time, 2026-08-26.
+  @@unique([cascadeId, fromNodeId, toNodeId, directionTag], map: "cascade_links_cascade_id_from_to_direction_key")
   @@index([fromNodeId])
   @@index([toNodeId])
   @@map("cascade_links")

@@ -11,6 +11,7 @@
     "prestart": "node ./node_modules/prisma/build/index.js migrate deploy",
     "start": "node --env-file=../../.env dist/index.js",
     "db:migrate": "node ./node_modules/prisma/build/index.js migrate deploy",
+    "db:drift": "node ./node_modules/prisma/build/index.js migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma",
     "stress:users": "tsx scripts/stress-users.ts",
     "reset:admin": "tsx scripts/reset-admin.ts",
     "typecheck": "tsc --noEmit",
