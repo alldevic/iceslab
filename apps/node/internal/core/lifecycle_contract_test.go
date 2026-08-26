@@ -8,13 +8,23 @@ import (
 	"path/filepath"
 	"testing"
 
+	"encoding/json"
+	"net"
+	"sort"
+	"strings"
+
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/amneziawg"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mieru"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtproto"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/naive"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/shadowsocks"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/xray"
 )
 
-// The lifecycle every adapter promises, asked of three of them at once.
+// The lifecycle every adapter promises, asked of all eight at once.
 //
 // `Provisioned`, `Start`, `Stop` and `Healthy` are four separate answers to one
 // question — is this core able to serve — and each adapter writes them out
@@ -28,14 +38,43 @@ import (
 // there, which is the mode these run in — so the contract is exercised on the
 // real code with no mtg, no xray and no mita on the machine.
 //
-// The one place the three legitimately differ is Healthy, and the difference is
-// structural rather than drift: mtproto and shadowsocks own a subprocess and
-// ask whether it is running; mita owns its own lifecycle under systemd, so the
-// mieru adapter has no process to ask about and reports whether the config it
-// rendered was accepted. That is the honest maximum for it, and stating it here
-// is what stops the difference from looking like one of them being wrong.
+// It used to ask three (mtproto, shadowsocks, mieru). Five adapters stood
+// outside it, and one of them had drifted: sing-box set `started = true` before
+// knowing whether it had an inbound and did not implement `core.Provisionable`,
+// so a registered-but-unconfigured sing-box reached /healthz as
+// `running: true` with no `provisioned` field — "configured and serving", when
+// neither was true. That is precisely the distinction Provisionable exists to
+// make, and the family that had opted out of it is the newest one: TUIC,
+// AnyTLS, ShadowTLS and every engine=singbox inbound.
+//
+// Where the eight legitimately differ, the difference is structural and is
+// stated per case rather than left to look like drift:
+//
+//   - Healthy: mtproto, shadowsocks, naive, xray and sing-box own a subprocess
+//     and ask whether it runs; mita owns its own lifecycle under systemd, so
+//     mieru has no process to ask about and reports whether the config it
+//     rendered was accepted; amneziawg asks the kernel about its interface.
+//   - hysteria does not render on Start at all. Its Start brings up the local
+//     auth-callback listener, and the config is written by ApplyInbound, so it
+//     takes part in the two cases that are about health and not about a file.
+//     Its own half is covered in core/hysteria/lifecycle_test.go.
+//   - sing-box takes its inbound from ApplyInbound rather than from Config, so
+//     its "ready" build pushes one.
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// freePort reserves an ephemeral port and hands back the number. hysteria's
+// Start binds its auth callback for real, and its Config reads 0 as "not set"
+// and substitutes 9000 — which would collide with a developer's running agent.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
 
 // adapterCase is one adapter in two configurations: unprovisioned (Start must
 // defer) and provisioned (Start must render).
@@ -46,9 +85,27 @@ type adapterCase struct {
 	build func(t *testing.T, ready bool) (core.CoreAdapter, string)
 	// provisionable adapters also implement core.Provisionable.
 	provisionable bool
+	// rendersOnStart is true for every adapter whose Start writes its config
+	// when there is one to write. Only hysteria sets it false, and the field is
+	// declared inverted (`skipRender`) nowhere on purpose: a new adapter that
+	// forgets to set anything is compared like the other seven, which is the
+	// safe default for a contract.
+	rendersOnStart bool
 }
 
 func cases() []adapterCase {
+	out := casesRaw()
+	for i := range out {
+		// Default to "renders", so an adapter added without thinking about it is
+		// held to the same promise as the rest. hysteria opts out explicitly.
+		if out[i].name != "hysteria" {
+			out[i].rendersOnStart = true
+		}
+	}
+	return out
+}
+
+func casesRaw() []adapterCase {
 	return []adapterCase{
 		{
 			name:          "mtproto",
@@ -73,6 +130,86 @@ func cases() []adapterCase {
 					in.Method = "2022-blake3-aes-256-gcm"
 				}
 				return shadowsocks.New(shadowsocks.Config{ConfigPath: cfgPath, Inbound: in}, quiet()), cfgPath
+			},
+		},
+		{
+			name:          "amneziawg",
+			provisionable: true,
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "awg0.conf")
+				in := amneziawg.InboundConfig{
+					Interface: "awg0", ListenPort: 51820, Address: "10.66.66.1/24",
+					Jc: 4, Jmin: 40, Jmax: 70,
+					S1: 72, S2: 56, S3: 32, S4: 16,
+					H1: 100, H2: 200, H3: 300, H4: 400,
+				}
+				if ready {
+					in.PrivateKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+				}
+				// AwgQuickBin empty → unmanaged, no CLI is invoked.
+				return amneziawg.New(amneziawg.Config{
+					Protocol: "amneziawg", ConfigPath: cfgPath, Inbound: in,
+				}, quiet()), cfgPath
+			},
+		},
+		{
+			name:          "naive",
+			provisionable: true,
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "Caddyfile")
+				in := naive.InboundConfig{TLSEmail: "ops@example.com"}
+				if ready {
+					in.Hostname = "n1.example.com"
+				}
+				// CaddyBin empty → no subprocess.
+				return naive.New(naive.Config{CaddyfilePath: cfgPath, Inbound: in}, quiet()), cfgPath
+			},
+		},
+		{
+			name:          "xray",
+			provisionable: true,
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "config.json")
+				in := xray.InboundConfig{
+					RealityDest:        "www.cloudflare.com:443",
+					RealityServerNames: []string{"www.cloudflare.com"},
+					RealityShortIDs:    []string{"abc123"},
+				}
+				if ready {
+					in.RealityPrivateKey = "fake-private-key-for-testing"
+				}
+				// BinaryPath empty → config-only, no preflight and no spawn.
+				return xray.New(xray.Config{ConfigPath: cfgPath, Inbound: in}, quiet()), cfgPath
+			},
+		},
+		{
+			name:          "singbox",
+			provisionable: true,
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "config.json")
+				a := singbox.New(singbox.Config{Protocol: "tuic", ConfigPath: cfgPath}, quiet())
+				if ready {
+					// Unlike the others, this adapter's inbound arrives through
+					// ApplyInbound rather than through Config.
+					if err := a.ApplyInbound(8443, json.RawMessage(`{}`)); err != nil {
+						t.Fatalf("singbox ApplyInbound: %v", err)
+					}
+				}
+				return a, cfgPath
+			},
+		},
+		{
+			name: "hysteria",
+			// No Provisionable and no render on Start: Start brings up the auth
+			// callback, ApplyInbound writes the config. Both are covered in
+			// core/hysteria/lifecycle_test.go; here it answers the two questions
+			// every adapter answers.
+			rendersOnStart: false,
+			build: func(t *testing.T, _ bool) (core.CoreAdapter, string) {
+				return hysteria.New(hysteria.Config{
+					AuthCallbackHost: "127.0.0.1",
+					AuthCallbackPort: freePort(t),
+				}, quiet()), ""
 			},
 		},
 		{
@@ -110,17 +247,22 @@ func TestStartRendersAndThenReportsHealthy(t *testing.T) {
 				t.Fatalf("Start: %v", err)
 			}
 			// The control: "healthy" has to mean something happened. In
-			// config-only mode the observable thing is the rendered file.
-			st, err := os.Stat(cfgPath)
-			if err != nil {
-				t.Fatalf("Start reported success and wrote no config at %s: %v", cfgPath, err)
-			}
-			if st.Size() == 0 {
-				t.Fatalf("the config at %s is empty", cfgPath)
+			// config-only mode the observable thing is the rendered file — for
+			// every adapter but hysteria, whose Start brings up a listener and
+			// whose config is written by ApplyInbound instead.
+			if c.rendersOnStart {
+				st, err := os.Stat(cfgPath)
+				if err != nil {
+					t.Fatalf("Start reported success and wrote no config at %s: %v", cfgPath, err)
+				}
+				if st.Size() == 0 {
+					t.Fatalf("the config at %s is empty", cfgPath)
+				}
 			}
 			if !a.Healthy() {
-				t.Error("rendered its config and still reports unhealthy")
+				t.Error("started with everything it needs and still reports unhealthy")
 			}
+			t.Cleanup(func() { _ = a.Stop(context.Background()) })
 		})
 	}
 }
@@ -143,6 +285,11 @@ func TestStopMakesAnAdapterUnhealthyAgain(t *testing.T) {
 			}
 			if a.Healthy() {
 				t.Error("still healthy after Stop")
+			}
+			// Twice, because the agent's shutdown path calls Stop for every
+			// adapter regardless of what already happened to it.
+			if err := a.Stop(context.Background()); err != nil {
+				t.Errorf("second Stop: %v", err)
 			}
 		})
 	}
@@ -170,11 +317,15 @@ func TestAnUnprovisionedAdapterDefersInsteadOfFailing(t *testing.T) {
 				t.Fatalf("Start on an unprovisioned adapter must defer, not fail: %v", err)
 			}
 			if a.Healthy() {
-				t.Error("deferred and still reports healthy")
+				t.Error("deferred and still reports healthy: a green card over a protocol serving nobody")
+			}
+			if p.Provisioned() {
+				t.Error("Start deferred and Provisioned says yes; the two must read the same condition")
 			}
 			if _, err := os.Stat(cfgPath); err == nil {
 				t.Error("wrote a config it had nothing to render")
 			}
+			t.Cleanup(func() { _ = a.Stop(context.Background()) })
 		})
 	}
 }
@@ -193,5 +344,84 @@ func TestProvisionedFlipsWithTheFieldItNames(t *testing.T) {
 				t.Error("a fully configured adapter reports itself unprovisioned")
 			}
 		})
+	}
+}
+
+// The control on the list itself.
+//
+// This file compared three adapters while eight existed, and the five outside
+// it included the one that had drifted. Nothing said so: a contract test that
+// covers a third of its subject reads exactly like one that covers all of it.
+// So the list is checked against the packages on disk, mechanically — an
+// adapter is any sibling package that declares `func (a *Adapter) Start(`, which
+// is the method this file is about.
+func TestEveryAdapterIsInTheContract(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the core package dir: %v", err)
+	}
+
+	var onDisk []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(e.Name())
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if !strings.HasSuffix(f.Name(), ".go") || strings.HasSuffix(f.Name(), "_test.go") {
+				continue
+			}
+			src, err := os.ReadFile(filepath.Join(e.Name(), f.Name()))
+			if err != nil {
+				continue
+			}
+			if strings.Contains(string(src), "func (a *Adapter) Start(") {
+				onDisk = append(onDisk, e.Name())
+				break
+			}
+		}
+	}
+	sort.Strings(onDisk)
+
+	// The control's own control: an empty scan would make the comparison below
+	// vacuous, and "found nothing on disk" is also what a moved package or a
+	// renamed method looks like.
+	if len(onDisk) < 5 {
+		t.Fatalf("only %d adapter packages found (%v); the scan stopped matching and this comparison is empty",
+			len(onDisk), onDisk)
+	}
+
+	covered := map[string]bool{}
+	for _, c := range cases() {
+		covered[c.name] = true
+	}
+	var missing []string
+	for _, name := range onDisk {
+		if !covered[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("these adapters implement the lifecycle and are not compared against it: %v\n"+
+			"      Add a case to casesRaw(). An adapter outside this file is one whose Start, Stop,\n"+
+			"      Healthy and Provisioned agree with nothing.", missing)
+	}
+
+	// And the other direction: a case whose package is gone would keep passing
+	// forever against a fixture nobody ships.
+	for name := range covered {
+		found := false
+		for _, d := range onDisk {
+			if d == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("case %q has no adapter package behind it any more", name)
+		}
 	}
 }

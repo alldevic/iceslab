@@ -61,6 +61,12 @@ func TestAddUserNoCredsNoop(t *testing.T) {
 }
 
 func TestHealthyConfigOnly(t *testing.T) {
+	// This case used to build an adapter with NOTHING configured, start it, and
+	// assert healthy — pinning the claim that a sing-box nobody has pushed an
+	// inbound to is serving. On a real node that reached /healthz as
+	// `running: true` with no `provisioned` field, which the panel reads as
+	// "configured and running": neither was true, no config existed and no
+	// process had been spawned. Health now needs something to serve.
 	a := testAdapter()
 	if a.Healthy() {
 		t.Error("Healthy() before Start should be false")
@@ -68,8 +74,38 @@ func TestHealthyConfigOnly(t *testing.T) {
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	if a.Healthy() {
+		t.Error("Healthy() after Start with no inbound: nothing was rendered and nothing runs")
+	}
+
+	// With an inbound pushed, config-only mode renders and reports healthy,
+	// which is what the other seven adapters mean by the same words.
+	if err := a.ApplyInbound(8443, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
 	if !a.Healthy() {
-		t.Error("Healthy() after Start (config-only) should be true")
+		t.Error("Healthy() after an inbound was pushed should be true")
+	}
+}
+
+// Provisioned must be the SAME condition Start uses to defer, or /healthz
+// cannot tell "nobody configured this yet" from "configured and dead".
+func TestProvisionedTracksTheInbound(t *testing.T) {
+	a := testAdapter()
+	if a.Provisioned() {
+		t.Error("provisioned before any inbound was pushed")
+	}
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if a.Provisioned() {
+		t.Error("Start alone made it provisioned; Start deferred and rendered nothing")
+	}
+	if err := a.ApplyInbound(8443, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
+	if !a.Provisioned() {
+		t.Error("an inbound was pushed and it still reports unprovisioned")
 	}
 }
 

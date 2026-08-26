@@ -22,6 +22,12 @@ func TestStop_TurnsTheAdapterUnhealthyAndIsIdempotent(t *testing.T) {
 	if err := a.AddUser(core.User{UserID: "u1", TuicUUID: "uuid1", TuicPassword: "pw1"}); err != nil {
 		t.Fatalf("AddUser: %v", err)
 	}
+	// The inbound is what gives Start something to do. The first version of this
+	// case omitted it and still asserted healthy — it was modelling the defect
+	// (an adapter reporting health with nothing pushed) rather than the rule.
+	if err := a.ApplyInbound(8443, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -52,6 +58,7 @@ func TestStop_TurnsTheAdapterUnhealthyAndIsIdempotent(t *testing.T) {
 func TestStop_KeepsTheUserSet(t *testing.T) {
 	a := testAdapter()
 	_ = a.AddUser(core.User{UserID: "u1", TuicUUID: "uuid1", TuicPassword: "pw1"})
+	_ = a.ApplyInbound(8443, json.RawMessage(`{}`))
 	_ = a.Start(context.Background())
 	_ = a.Stop(context.Background())
 

@@ -229,13 +229,36 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 // Healthy: agent must be started; if a TUIC inbound is configured and a binary
 // is set, the subprocess must be running. Before any inbound is applied (or in
 // config-only mode) the agent itself is up, so report healthy.
+// Provisioned reports whether the panel has pushed an inbound for this
+// protocol yet.
+//
+// It is the SAME condition Start uses to decide whether to defer, which is what
+// the interface requires — and the reason this adapter needed it. Sing-box is
+// registered for every protocol the node might serve, so on a fresh node most
+// of its adapters sit idle by design. Without this, /healthz reported them as
+// `running: true` with no `provisioned` field, i.e. "configured and serving",
+// which is neither: no config had been rendered and no process spawned. That
+// is the exact distinction core.Provisionable was introduced to make, and this
+// adapter — the newest family, TUIC/AnyTLS/ShadowTLS and every engine=singbox
+// inbound — was the only one of the eight opted out of it.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inbound.ListenPort != 0
+}
+
 func (a *Adapter) Healthy() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.started {
 		return false
 	}
-	if a.cfg.BinaryPath == "" || a.inbound.ListenPort == 0 {
+	// Deferred: Start was called, nothing was pushed, nothing runs. Saying yes
+	// here is a green card over a protocol that serves nobody.
+	if a.inbound.ListenPort == 0 {
+		return false
+	}
+	if a.cfg.BinaryPath == "" {
 		return true
 	}
 	return a.proc != nil && a.proc.Running()
@@ -323,7 +346,9 @@ func (a *Adapter) regenerateAndRestart() error {
 	}
 	a.mu.Unlock()
 
-	if binPath == "" || inbound.ListenPort == 0 {
+	// Nothing pushed yet: there is no inbound to render. Distinct from the
+	// binary being absent, which is checked AFTER the render below.
+	if inbound.ListenPort == 0 {
 		return nil
 	}
 	if ctx == nil {
@@ -349,11 +374,34 @@ func (a *Adapter) regenerateAndRestart() error {
 	if err != nil {
 		return fmt.Errorf("singbox: render config: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		return fmt.Errorf("singbox: mkdir config dir: %w", err)
+	// No path configured: accept the inbound in memory and write nothing, the
+	// same contract xray's regenerateAndRestart states for an empty cfgPath.
+	// Reachable only now that the render happens before the binary check —
+	// before that, an adapter with no binary returned earlier than this.
+	if cfgPath != "" {
+		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+			return fmt.Errorf("singbox: mkdir config dir: %w", err)
+		}
+		if err := os.WriteFile(cfgPath, blob, 0o600); err != nil {
+			return fmt.Errorf("singbox: write %s: %w", cfgPath, err)
+		}
 	}
-	if err := os.WriteFile(cfgPath, blob, 0o600); err != nil {
-		return fmt.Errorf("singbox: write %s: %w", cfgPath, err)
+
+	// Config-only mode, the same one xray, naive, amneziawg, mtproto,
+	// shadowsocks and mieru have: with no binary there is nothing to spawn, and
+	// the rendered config is the whole observable result. This used to be
+	// checked BEFORE the render, so sing-box was the one adapter of the eight
+	// that produced nothing at all without a binary — which is why it could not
+	// take part in the lifecycle contract the other seven are compared by.
+	if binPath == "" {
+		// Deliberately does NOT touch `started`: that word means "Start was
+		// called and did not defer", and this function is also reached from
+		// ApplyInbound. Setting it here would make an adapter that has only
+		// ever been handed an inbound report itself healthy without ever
+		// having been started.
+		a.logger.Info("singbox config written (config-only mode)",
+			"protocol", a.protocol, "path", cfgPath, "users", len(users))
+		return nil
 	}
 
 	// Stop the old subprocess (IO under restartMu, mu released) then spawn anew.
