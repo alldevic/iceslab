@@ -189,20 +189,26 @@ func (a *Adapter) plain() bool { return a.cfg.Protocol == NameWireguard }
 // restartInterfaceLocked which writes the config + awg-quick up and flips
 // `started` to true. Caught live cycle #6 2026-05-12 on awg-VPS.
 // Provisioned implements core.Provisionable: without a server key the interface
-// cannot come up at all. Same condition Start defers on, kept as one expression
-// so the two cannot drift apart.
+// cannot come up at all. Same condition Start defers on — and now literally the
+// same expression: it used to be written out twice, once here and once inline
+// in Start, under a comment claiming they could not drift. What that costs if
+// they do is a node whose /healthz reports an adapter as provisioned while
+// Start silently deferred it, or the reverse.
 func (a *Adapter) Provisioned() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.cfg.Inbound.PrivateKey != ""
+	return a.provisionedLocked()
 }
+
+// provisionedLocked is the condition itself. Callers hold a.mu.
+func (a *Adapter) provisionedLocked() bool { return a.cfg.Inbound.PrivateKey != "" }
 
 func (a *Adapter) Start(ctx context.Context) error {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
 
 	a.mu.Lock()
-	if a.cfg.Inbound.PrivateKey == "" {
+	if !a.provisionedLocked() {
 		iface := a.cfg.Inbound.Interface
 		a.mu.Unlock()
 		a.logger.Info("adapter deferred, awaiting first ApplyInbound from panel",
