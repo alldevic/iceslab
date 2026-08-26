@@ -1,0 +1,18 @@
+{
+  "note": "Which transport protocol(s) ufw must allow for an inbound of each protocol. Decided TWICE in this repository, in two languages: the node opens the ports (apps/node/internal/server/server.go, protoForInbound, via ensureFirewallFromStore) and the panel decides which allowed ports are EXPECTED (apps/panel-backend/src/modules/nodes/nodes.exposure.ts, protosForProtocol) when it reports probe exposure. Until 2026-08-26 the agreement was held by a comment on the panel side saying it mirrors server.go. A divergence is quiet in both directions: a proto the node opens and the panel does not expect is reported to the operator as a stray port on a clean node, and a proto the panel expects but the node never opens hides a real one. These vectors are the contract - both sides have a test that reads this file, so a change on either side reddens on that side.",
+  "rule": "hysteria/amneziawg/wireguard/tuic ride UDP (QUIC or WireGuard); shadowsocks and mieru listen on both; everything else is TCP.",
+  "coverage": "Every member of ProtocolName (packages/shared/src/transport.ts) must appear exactly once. The panel-side test checks that, so a protocol added to one switch and not the other cannot pass by being absent here.",
+  "vectors": [
+    { "protocol": "hysteria", "protos": ["udp"] },
+    { "protocol": "xray", "protos": ["tcp"] },
+    { "protocol": "amneziawg", "protos": ["udp"] },
+    { "protocol": "wireguard", "protos": ["udp"] },
+    { "protocol": "naive", "protos": ["tcp"] },
+    { "protocol": "shadowsocks", "protos": ["tcp", "udp"] },
+    { "protocol": "mtproto", "protos": ["tcp"] },
+    { "protocol": "mieru", "protos": ["tcp", "udp"] },
+    { "protocol": "tuic", "protos": ["udp"] },
+    { "protocol": "anytls", "protos": ["tcp"] },
+    { "protocol": "shadowtls", "protos": ["tcp"] }
+  ]
+}

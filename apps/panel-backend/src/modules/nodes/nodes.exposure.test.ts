@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { InboundDto, UfwPortDto } from '@iceslab/shared';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { InboundDto, ProtocolName, UfwPortDto } from '@iceslab/shared';
+import { PROTOCOL_CONFIG_SCHEMAS } from '../inbounds/inbounds.schemas.js';
 import {
   protosForProtocol,
   buildExpectedPortSet,
@@ -63,5 +66,67 @@ describe('computePortExposure (G4)', () => {
       { port: 80, proto: 'tcp' },
     ];
     expect(computePortExposure(clean, expected)).toEqual([]);
+  });
+});
+
+/**
+ * The other half of this decision lives in Go: the node opens the ports
+ * (`protoForInbound` in internal/server/server.go) while this file decides
+ * which allowed ports are EXPECTED. The comment above `protosForProtocol` has
+ * always said it mirrors server.go, and a comment is not a check.
+ *
+ * A divergence is quiet in both directions: a proto the node opens and this
+ * side does not expect is reported to the operator as a stray port on a clean
+ * node — the exact noise the exposure feature exists to remove — and a proto
+ * this side expects but the node never opens hides a real one.
+ *
+ * The vectors are shared and the Go side reads the same file, so a change on
+ * either side reddens on that side.
+ */
+describe('the ufw proto contract with the node agent', () => {
+  const VECTORS = join(
+    import.meta.dirname,
+    '..',
+    '..',
+    '..',
+    '..',
+    '..',
+    'packages',
+    'shared',
+    'testdata',
+    'inbound-proto-vectors.json',
+  );
+  const doc = JSON.parse(readFileSync(VECTORS, 'utf8')) as {
+    vectors: { protocol: string; protos: ('tcp' | 'udp')[] }[];
+  };
+
+  it('the fixture is there and shaped like a fixture', () => {
+    // The control: an empty or reshaped file would make the case below pass by
+    // having nothing to compare, which is how a mirror test dies quietly.
+    expect(doc.vectors.length).toBeGreaterThanOrEqual(11);
+    for (const v of doc.vectors) {
+      expect(v.protos.length, `${v.protocol} lists no proto`).toBeGreaterThan(0);
+    }
+  });
+
+  it('answers what the node opens, for every vector', () => {
+    for (const v of doc.vectors) {
+      expect([...protosForProtocol(v.protocol)].sort(), v.protocol).toEqual([...v.protos].sort());
+    }
+  });
+
+  // The registry above is the live list of protocols the panel accepts, and
+  // this line is what keeps it equal to the ProtocolName union the node shares:
+  // a member added to the type with no schema fails the typecheck here rather
+  // than silently shrinking what the case below considers "every protocol".
+  const _schemasCoverTheUnion: Record<ProtocolName, unknown> = PROTOCOL_CONFIG_SCHEMAS;
+  void _schemasCoverTheUnion;
+
+  it('covers every protocol the system knows', () => {
+    // Without this a protocol added to one switch and not the other would pass
+    // simply by being absent from the fixture, which is the failure the
+    // fixture exists to prevent.
+    const listed = doc.vectors.map((v) => v.protocol).sort();
+    expect(listed).toEqual(Object.keys(PROTOCOL_CONFIG_SCHEMAS).sort());
   });
 });
