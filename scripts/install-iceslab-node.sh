@@ -192,18 +192,18 @@ banner() {
   printf '\n'
 }
 
-[[ $EUID -eq 0 ]] || fail "Must run as root (sudo bash $0)"
-
-banner
-
 # ───── Concurrency + apt lock hygiene ─────
 # Same protections as install-iceslab.sh: flock against concurrent runs,
 # wait on apt locks via DPkg::Lock::Timeout, stale-lock cleanup for the
 # orphan-apt-process case. See install-iceslab.sh for the rationale.
-exec 9>/var/run/iceslab-node-install.lock || fail "cannot open install lockfile"
-if ! flock -n 9; then
-  fail "another install-iceslab-node.sh is already running. Wait, or remove /var/run/iceslab-node-install.lock if you're sure it crashed."
-fi
+#
+# Definitions only here. Nothing between `set -euo pipefail` and the argument
+# parser may touch the machine: `--help` and `--uninstall` both reach an exit
+# without installing anything, and this block used to run above them, so both
+# demanded root, took the install lock, deleted this host's apt locks and ran
+# `dpkg --configure -a` before reading their own arguments. The uninstall
+# fast-path is placed first precisely so it costs nothing; apt surgery on the
+# way there is the same mistake as spending the bootstrap token.
 
 APT_OPTS=(-o "DPkg::Lock::Timeout=300" -o "Dpkg::Options::=--force-confold" -o "Dpkg::Options::=--force-confdef")
 APT_ENV=(env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none)
@@ -233,7 +233,6 @@ cleanup_stale_apt_locks() {
   # Finish any packages an interrupted apt left half-configured. No-op when clean.
   dpkg --configure -a >/dev/null 2>&1 || true
 }
-cleanup_stale_apt_locks
 
 ICESLAB_NODE_DIR=${ICESLAB_NODE_DIR:-/opt/iceslab-node}
 ICESLAB_NODE_REPO=${ICESLAB_NODE_REPO:-https://github.com/icecompany-tech/iceslab.git}
@@ -498,9 +497,23 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# ───── -0. Everything that touches the machine starts here ─────
+# Above this line the script has only defined things and read its arguments,
+# so `--help` and an unknown flag cost nothing on any host, root or not.
+[[ $EUID -eq 0 ]] || fail "Must run as root (sudo bash $0)"
+
+banner
+
+exec 9>/var/run/iceslab-node-install.lock || fail "cannot open install lockfile"
+if ! flock -n 9; then
+  fail "another install-iceslab-node.sh is already running. Wait, or remove /var/run/iceslab-node-install.lock if you're sure it crashed."
+fi
+
 # ───── -1. Uninstall fast-path ─────
 # Run BEFORE bootstrap-token redemption, otherwise `--uninstall` would
-# pointlessly consume a one-shot bootstrap token.
+# pointlessly consume a one-shot bootstrap token. Also before the apt-lock
+# hygiene below: a box with nothing installed should come out of `--uninstall`
+# exactly as it went in.
 if [[ $UNINSTALL -eq 1 ]]; then
   if [[ -f /etc/iceslab-node/env || -x /usr/local/bin/iceslab-node ]]; then
     log "Uninstalling previous iceslab-node"
@@ -511,6 +524,8 @@ if [[ $UNINSTALL -eq 1 ]]; then
   fi
   exit 0
 fi
+
+cleanup_stale_apt_locks
 
 # If both --panel-url and --bootstrap given, redeem the bootstrap token to
 # fetch the full payload from panel over HTTP. This is the recommended flow:
