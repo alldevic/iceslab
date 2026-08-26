@@ -30,20 +30,23 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
 
 /**
- * Keys the panel declares but does NOT consume: they are read by the node agent
- * (`apps/node/main.go`) and its installer, and only linger in the panel schema
- * for historical reasons. Passing them to the panel container would be noise.
+ * Keys the panel declares but does NOT consume, and which therefore have no
+ * business reaching the panel container.
  *
- * Anything else missing from compose is a bug, not an entry for this list.
+ * It is EMPTY, and that is the point. It used to hold the six pre-profile
+ * `XRAY_*` keys, excused here as "read by the node agent, not by us" — which
+ * was half true and hid the other half: nothing on EITHER side read them any
+ * more, the values having moved onto the profile and the binding. Excusing a
+ * key from this test kept the schema entry alive for another four months.
+ * Removing them from the schema outright (2026-08-27, operator's call) is what
+ * actually emptied the list.
+ *
+ * So an entry here is a claim about the CURRENT split, not a place to park a
+ * key that turned out to do nothing. The case below expires any entry whose
+ * subject the schema no longer declares, and `config.unread.test.ts` catches
+ * the other direction: declared, and read by nobody at all.
  */
-const NOT_PANEL_SETTINGS = new Set([
-  'XRAY_PUBLIC_PORT',
-  'XRAY_REALITY_SNI',
-  'XRAY_REALITY_PUBLIC_KEY',
-  'XRAY_REALITY_SHORT_ID',
-  'XRAY_FINGERPRINT',
-  'XRAY_FLOW',
-]);
+const NOT_PANEL_SETTINGS = new Set<string>([]);
 
 function schemaKeys(): string[] {
   const src = readFileSync(resolve(repoRoot, 'apps/panel-backend/src/config.ts'), 'utf8');
@@ -79,5 +82,14 @@ describe('docker-compose.prod.yml passes every panel setting through', () => {
     expect(composeEnvKeys().size).toBeGreaterThan(20);
     expect(schemaKeys()).toContain('WEBHOOK_URLS');
     expect(composeEnvKeys()).toContain('DATABASE_URL');
+  });
+
+  // An excuse must not outlive its subject: a NOT_PANEL_SETTINGS entry for a
+  // key the schema stopped declaring silences nothing and reads as though the
+  // split still existed.
+  it('keeps no exemption for a key the schema no longer declares', () => {
+    const declared = new Set(schemaKeys());
+    const gone = [...NOT_PANEL_SETTINGS].filter((k) => !declared.has(k));
+    expect(gone.sort(), 'exempted from the passthrough check, but no longer declared at all').toEqual([]);
   });
 });

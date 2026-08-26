@@ -170,9 +170,9 @@ describe('GET /sub/:token (default text/plain)', () => {
     }
     // Host extracted from node.address; the client-facing port comes from the
     // BINDING, independent of the control-plane port baked into nodes.address.
-    // (This used to say "forced to HYSTERIA_PUBLIC_PORT". Nothing reads that
-    // env var any more — see config.unread.test.ts — and 443 here is the
-    // fixture's binding port, not a panel-wide default.)
+    // (This used to say "forced to HYSTERIA_PUBLIC_PORT". That env var no
+    // longer exists — nothing read it, so it was dropped from the schema —
+    // and 443 here is the fixture's binding port, not a panel-wide default.)
     expect(lines[0]).toContain('10.0.0.1:443');
     expect(lines[0]).toContain('eu-1');
   });

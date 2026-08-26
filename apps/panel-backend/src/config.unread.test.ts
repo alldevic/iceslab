@@ -22,31 +22,32 @@ import { fileURLToPath } from 'node:url';
  * against the ones the agent READS; this is the same slice pointed at the
  * panel's own half.
  *
- * Seven are on the exception list below, each pre-profile legacy: the values
- * they name now live per-profile, on the inbound config a binding carries.
- * The list is meant to shrink and never to grow quietly, and it is asserted in
- * both directions so an excuse cannot outlive its subject.
+ * The exception list below is EMPTY, and keeping it that way is the whole
+ * value. It held seven pre-profile keys — `XRAY_FLOW`, `XRAY_FINGERPRINT`,
+ * `XRAY_PUBLIC_PORT`, the three `XRAY_REALITY_*` and `HYSTERIA_PUBLIC_PORT` —
+ * whose values had moved onto the profile and the binding. Naming them here
+ * stopped the dead surface from growing while the removal was an outstanding
+ * product call; on 2026-08-27 the operator made it, and they are gone from the
+ * schema, from both `.env*.example`, from `.devcontainer/post-create.sh` and
+ * from both compose files.
+ *
+ * With nothing excused, every declared key must now be a key something reads,
+ * and it is asserted in both directions so an excuse cannot outlive its
+ * subject.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONFIG = join(HERE, 'config.ts');
 
 /**
- * Declared and read by nothing, with the reason. Removing them is an
- * operator-facing surface change and therefore a product call; naming them
- * here is what stops the surface growing while that call is outstanding.
+ * Declared and read by nothing, with the reason.
+ *
+ * Removing a key is an operator-facing surface change and therefore a product
+ * call; naming it here is what stops the surface growing while that call is
+ * outstanding. An entry is a WAITING ROOM, not a verdict — the seven that sat
+ * here were removed, not kept.
  */
-const KNOWN_UNREAD: Record<string, string> = {
-  XRAY_FLOW: 'pre-profile default; flow now lives on the profile config',
-  XRAY_FINGERPRINT: 'pre-profile default; fingerprint now lives on the profile config',
-  XRAY_PUBLIC_PORT: 'pre-binding default; the client-facing port now comes from the binding',
-  XRAY_REALITY_SNI: 'pre-profile default; realityServerNames now lives on the profile config',
-  XRAY_REALITY_PUBLIC_KEY: 'pre-profile default; the REALITY pair now lives on the profile config',
-  XRAY_REALITY_SHORT_ID: 'pre-profile default; realityShortIds now lives on the profile config',
-  HYSTERIA_PUBLIC_PORT:
-    'pre-binding default; the hysteria2 link port now comes from the binding, ' +
-    'though a comment in subscription.routes.test.ts still claimed otherwise',
-};
+const KNOWN_UNREAD: Record<string, string> = {};
 
 /** Top-level keys of the zod object in config.ts. */
 function declaredKeys(): string[] {

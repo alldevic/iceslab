@@ -27,24 +27,6 @@ export const ConfigSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
-  // Public Hysteria UDP port advertised in subscription URIs. Different from
-  // the panel↔node control-plane port stored in `nodes.address`. Slice 23
-  // (inbounds CRUD) will replace this with per-inbound config.
-  HYSTERIA_PUBLIC_PORT: z.coerce.number().int().min(1).max(65535).default(443),
-
-  // Public Xray VLESS+REALITY port advertised in subscription URIs.
-  XRAY_PUBLIC_PORT: z.coerce.number().int().min(1).max(65535).default(443),
-
-  // REALITY parameters mirror what's set on every node-agent's xray inbound.
-  // All three must be present for the panel to emit `vless://` endpoints; any
-  // missing → user's enabledProtocols=['xray'] yields no endpoints. Slice 23
-  // moves these into the inbounds table per node.
-  XRAY_REALITY_PUBLIC_KEY: z.string().optional(),
-  XRAY_REALITY_SHORT_ID: z.string().regex(/^[0-9a-fA-F]{0,16}$/, 'hex up to 16 chars').optional(),
-  XRAY_REALITY_SNI: z.string().optional(),
-  XRAY_FLOW: z.string().default('xtls-rprx-vision'),
-  XRAY_FINGERPRINT: z.string().default('chrome'),
-
   // Comma-separated list of frontend origins allowed to call the API.
   // Default covers the Vite dev server.
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
