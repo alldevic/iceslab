@@ -1807,6 +1807,8 @@ export default {
     profileTitleHint: 'Subscription name inside the client. Empty falls back to the brand name.',
     interval: 'Update interval (hours)',
     intervalHint: 'How often the client re-pulls on its own.',
+    entryPool: 'Entry pool',
+    entryPoolHint: 'Most nodes one profile hands out per subscription. 0 = all of them.',
     supportUrl: 'Support URL',
     supportUrlHint: 'Clickable link on the profile detail page in the client.',
     announce: 'Announce template',

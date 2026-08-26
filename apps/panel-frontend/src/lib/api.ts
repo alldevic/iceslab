@@ -2183,6 +2183,10 @@ export interface AdminSettings extends PublicSettings {
   subscriptionSupportUrl?: string | null;
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
+  /** Entry-pool cap: how many nodes at most a single profile hands out in one
+   *  subscription. 0 = every node the subscriber is entitled to, which is the
+   *  default. */
+  subscriptionEntryPoolSize?: number;
   /** TLS-fragment - split the ClientHello in the Xray JSON format so SNI-DPI
    *  cannot match the handshake. Xray JSON only. */
   subscriptionTlsFragment?: boolean;
@@ -2203,6 +2207,7 @@ export interface UpdateSettingsInput {
   subscriptionSupportUrl?: string | null;
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
+  subscriptionEntryPoolSize?: number;
   subscriptionTlsFragment?: boolean;
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   subscriptionCustomDomainLists?: {

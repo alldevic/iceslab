@@ -17,10 +17,12 @@ import { interfaceFields } from '../test/declarations';
  * without ever saying so.
  *
  * The reverse direction is the question this fork keeps forgetting to ask:
- * what does the backend read that nobody can set? `subscriptionEntryPoolSize`
- * is live — subscription.service.ts caps each profile's node list with it — and
- * there is no control anywhere in the panel that sends it. An operator can only
- * change it by writing the row by hand.
+ * what does the backend read that nobody can set? It found one.
+ * `subscriptionEntryPoolSize` was live — subscription.service.ts caps each
+ * profile's node list with it — and no control anywhere in the panel sent it,
+ * so an operator could only change it by writing the row by hand. It has a
+ * field on the metadata page now, which is why the exception list below is
+ * empty.
  *
  * Read off both sources rather than exercised, in the same instrument as
  * api.mirror.test.ts: the declarations ARE the contract, and there is no
@@ -40,12 +42,7 @@ const BACK = join(
  * resolution is somebody's decision; it does not say the gap is fine. The list
  * is asserted in both directions below so an excuse cannot outlive its subject.
  */
-const KNOWN_ONE_SIDED: Record<string, string> = {
-  subscriptionEntryPoolSize:
-    'backend-only: read by subscription.service.ts to cap each profile\'s node ' +
-    'list, with no control in the panel that can set it. Adding one is an ' +
-    'operator-facing surface change and therefore a product call.',
-};
+const KNOWN_ONE_SIDED: Record<string, string> = {};
 
 /** Top-level keys of the zod object literal `UpsertInput` in settings.routes.ts. */
 function zodKeys(src: string): string[] {

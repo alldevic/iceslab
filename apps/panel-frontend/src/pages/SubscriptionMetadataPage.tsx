@@ -59,6 +59,7 @@ interface Draft {
   supportUrl: string;
   announce: string;
   preset: RoutingPresetId;
+  entryPoolSize: number | '';
   tlsFragment: boolean;
 }
 
@@ -93,6 +94,8 @@ export function SubscriptionMetadataPage() {
         subscriptionSupportUrl: draft.supportUrl.trim() || null,
         subscriptionAnnounceTemplate: draft.announce.trim() || null,
         subscriptionRoutingPreset: draft.preset,
+        subscriptionEntryPoolSize:
+          typeof draft.entryPoolSize === 'number' ? draft.entryPoolSize : 0,
         subscriptionTlsFragment: draft.tlsFragment,
       });
     },
@@ -252,6 +255,18 @@ export function SubscriptionMetadataPage() {
                 />
                 <Hint>{t('metadata.intervalHint')}</Hint>
               </Stack>
+              <Stack gap={6} style={{ width: 220, flexShrink: 0 }}>
+                <FieldLabel>{t('metadata.entryPool')}</FieldLabel>
+                <NumberInput
+                  min={0}
+                  max={64}
+                  allowDecimal={false}
+                  allowNegative={false}
+                  value={draft.entryPoolSize}
+                  onChange={(v) => patch({ entryPoolSize: typeof v === 'number' ? v : '' })}
+                />
+                <Hint>{t('metadata.entryPoolHint')}</Hint>
+              </Stack>
               <Stack gap={6} style={{ flex: 1, minWidth: 0 }}>
                 <FieldLabel>{t('metadata.supportUrl')}</FieldLabel>
                 <TextInput
@@ -388,6 +403,7 @@ function toDraft(s: AdminSettings): Draft {
     supportUrl: s.subscriptionSupportUrl ?? '',
     announce: s.subscriptionAnnounceTemplate ?? '',
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',
+    entryPoolSize: s.subscriptionEntryPoolSize ?? 0,
     tlsFragment: s.subscriptionTlsFragment ?? false,
   };
 }
