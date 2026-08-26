@@ -158,14 +158,25 @@ APT_ENV=(env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none)
 cleanup_stale_apt_locks() {
   local lock_holder
   # A lock file that exists but has no process holding it (fuser empty) is stale.
-  for lockfile in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do
-    [[ -e "$lockfile" ]] || continue
-    lock_holder=$(fuser "$lockfile" 2>/dev/null || true)
-    if [[ -z "$lock_holder" ]]; then
-      log "stale apt lock detected at $lockfile (no process holds it), removing"
-      rm -f "$lockfile"
-    fi
-  done
+  #
+  # Only when there is a fuser to ask. It ships in psmisc, neither installer
+  # installs it, and a minbase/cloud Debian image can be without it — and there
+  # an empty answer means "no such tool", which this code cannot tell apart
+  # from "no such holder". The result was that on exactly those hosts all four
+  # locks were removed unconditionally, including one a running apt was holding,
+  # which is two dpkg processes on one package database.
+  if command -v fuser >/dev/null 2>&1; then
+    for lockfile in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do
+      [[ -e "$lockfile" ]] || continue
+      lock_holder=$(fuser "$lockfile" 2>/dev/null || true)
+      if [[ -z "$lock_holder" ]]; then
+        log "stale apt lock detected at $lockfile (no process holds it), removing"
+        rm -f "$lockfile"
+      fi
+    done
+  else
+    warn "fuser (psmisc) is not installed: a stale apt lock cannot be told from a held one, leaving all of them in place"
+  fi
   # Finish any packages an interrupted apt left half-configured. No-op when clean.
   dpkg --configure -a >/dev/null 2>&1 || true
 }
