@@ -13,11 +13,14 @@ import { usersRoutes } from './modules/users/users.routes.js';
 import { nodesRoutes } from './modules/nodes/nodes.routes.js';
 import { subscriptionRoutes } from './modules/subscription/subscription.routes.js';
 import { srrRoutes } from './modules/srr/srr.routes.js';
-// Slice 27: `inboundsRoutes` retired. The new /api/profiles + /api/bindings
-// pair from `profilesRoutes` replaces it. The inbounds module file is kept
-// in the tree for now because its config schemas are reused by profiles, but
-// no routes are mounted.
-// import { inboundsRoutes } from './modules/inbounds/inbounds.routes.js';
+// Slice 27: `inboundsRoutes` retired, and with it `inbounds.service.ts` — the
+// new /api/profiles + /api/bindings pair from `profilesRoutes` replaces both.
+// Both files were deleted on 2026-08-26 once measured to be unreachable: the
+// routes were mounted nowhere, nothing outside the module called the service,
+// and the node's inbound set has come from ProfileNodeBinding rows since the
+// same slice. What survives in `modules/inbounds/` is live and named for what
+// it does: `inbounds.schemas.ts` (the per-protocol config schemas, reused by
+// profiles) and `inbounds.queue.ts` / `inbounds.events.ts` (the push pipeline).
 import { squadsRoutes } from './modules/squads/squads.routes.js';
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes.js';
 import { profilesRoutes } from './modules/profiles/profiles.routes.js';
