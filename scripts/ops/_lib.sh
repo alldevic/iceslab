@@ -108,10 +108,19 @@ retry() {
     shift
     local attempt=1 rc=0
     while (( attempt <= max )); do
+        # The status has to be captured INSIDE the else. In bash an `if` whose
+        # condition fails and which has no else returns 0, so a `rc=$?` placed
+        # after the block captured 0 and this function returned SUCCESS after
+        # exhausting every attempt - the exact opposite of the contract above.
+        # Every `docker compose build` in the deploy scripts is wrapped in
+        # retry, so a build that failed all three times let the deploy walk on
+        # to migrate + restart with the old images and report success. Caught
+        # 2026-08-26 by lib-selftest.sh.
         if "$@"; then
             return 0
+        else
+            rc=$?
         fi
-        rc=$?
         if (( attempt < max )); then
             log_warn "attempt ${attempt}/${max} failed (exit ${rc}); retry in $((attempt * 5))s"
             sleep $(( attempt * 5 ))
