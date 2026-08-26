@@ -43,7 +43,6 @@ describe('appendHardeningFlags (install-command generation)', () => {
     appendHardeningFlags(lines2, {
       ufwLockdown: false,
       fail2ban: false,
-      realisticFallback: false,
       sshAllowlist: [],
     });
     expect(lines2.join('\n')).toBe(before);
@@ -54,13 +53,11 @@ describe('appendHardeningFlags (install-command generation)', () => {
     appendHardeningFlags(lines, {
       ufwLockdown: true,
       fail2ban: true,
-      realisticFallback: true,
       sshAllowlist: ['203.0.113.4', '10.0.0.0/8'],
     });
     const out = lines.join('\n');
     expect(out).toContain('--harden-ufw');
     expect(out).toContain('--fail2ban');
-    expect(out).toContain('--realistic-fallback');
     expect(out).toContain('--ssh-allowlist 203.0.113.4,10.0.0.0/8');
   });
 
@@ -70,7 +67,6 @@ describe('appendHardeningFlags (install-command generation)', () => {
     const out = lines.join('\n');
     expect(out).toContain('--fail2ban');
     expect(out).not.toContain('--harden-ufw');
-    expect(out).not.toContain('--realistic-fallback');
     expect(out).not.toContain('--ssh-allowlist');
   });
 
@@ -159,10 +155,18 @@ describe('HardeningSchema (validation contract)', () => {
     const parsed = HardeningSchema.parse({
       ufwLockdown: true,
       fail2ban: false,
-      realisticFallback: true,
       sshAllowlist: ['203.0.113.4', '10.0.0.0/8'],
     });
-    expect(parsed).toMatchObject({ ufwLockdown: true, realisticFallback: true });
+    expect(parsed).toMatchObject({ ufwLockdown: true, fail2ban: false });
+  });
+
+  it('refuses the retired realisticFallback key, and the editor drops it', () => {
+    // The toggle was removed because nothing on the node read it. The schema is
+    // strict, so a node hardened before that still carrying the key in its blob
+    // would become unsaveable — which is why both node editors delete it on the
+    // way out (NodeFormModal/NodeEditModal buildHardening). This states the
+    // sharp edge that makes that deletion load-bearing rather than tidying.
+    expect(() => HardeningSchema.parse({ realisticFallback: true })).toThrow();
   });
 
   it('accepts null / undefined (no hardening)', () => {

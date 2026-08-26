@@ -79,8 +79,6 @@
 #   --harden-ufw            rate-limit SSH (ufw limit) + tighten the firewall
 #   --fail2ban              install + enable fail2ban with an sshd jail
 #   --ssh-allowlist <csv>   lock 22/tcp to these IP/CIDRs only (comma-list)
-#   --realistic-fallback    record REALISTIC_FALLBACK=1 in the node env so the
-#                           agent serves a real-looking fallback on probe
 #   --panel-ip <ip|cidr>    allow only this address (or comma-list) to reach
 #                           the agent's mTLS port. Without it the port is open
 #                           to the whole internet: mTLS turns everyone away,
@@ -348,12 +346,13 @@ PANEL_IP=""
 #                          IPs that brute-force SSH; raises probe/scan cost).
 #   --ssh-allowlist <csv>: comma-list of IP/CIDR; locks 22/tcp to these only
 #                          instead of world-open. Mirrors the --panel-ip loop.
-#   --realistic-fallback : record REALISTIC_FALLBACK=1 into the node env so the
-#                          agent serves a real-looking fallback site on probe
-#                          instead of a bare reset (active-probe resistance).
 HARDEN_UFW=0
 FAIL2BAN=0
-REALISTIC_FALLBACK=0
+# `--realistic-fallback` used to live here. It set REALISTIC_FALLBACK=1 in the
+# agent's env and no adapter ever read it, so the panel showed active-probe
+# resistance as enabled on a node that behaved identically. The feature exists
+# and works per PROFILE, as `realityFallbackUpstream` on a self-steal REALITY
+# inbound. Removed 2026-08-27; the panel no longer emits the flag.
 SSH_ALLOWLIST=""   # comma-list of IP/CIDR; empty = keep world-open 22/tcp
 
 # Hysteria 2 server config (only used with --protocol hysteria). When DOMAIN
@@ -511,7 +510,6 @@ while [[ $# -gt 0 ]]; do
     # Zashchita (hardening): see the HARDEN_UFW/FAIL2BAN block above.
     --harden-ufw)         HARDEN_UFW=1; shift ;;
     --fail2ban)           FAIL2BAN=1; shift ;;
-    --realistic-fallback) REALISTIC_FALLBACK=1; shift ;;
     --ssh-allowlist)      SSH_ALLOWLIST="$2"; shift 2 ;;
     # Install the sing-box engine on top of the primary protocol, so this node
     # can also serve engine=singbox inbounds (vless/vmess/trojan/ss/hy2).
@@ -1043,14 +1041,6 @@ NODE_PAYLOAD=${PAYLOAD}
 NODE_HOST=${NODE_HOST}
 NODE_PORT=${NODE_PORT}
 EOF
-  # Zashchita (hardening): record realistic-fallback intent for the agent.
-  # The agent reads REALISTIC_FALLBACK when generating the REALITY/Caddy
-  # fallback so an active probe hits a real-looking site instead of a bare
-  # reset. The flag is recorded here; the protocol-specific fallback wiring is
-  # the agent's job (it already owns config generation). Default 0 = off.
-  if [[ "$REALISTIC_FALLBACK" == "1" ]]; then
-    echo "REALISTIC_FALLBACK=1" >> "$ENV_FILE"
-  fi
   case "$PROTOCOL" in
     hysteria)
       cat >> "$ENV_FILE" <<EOF

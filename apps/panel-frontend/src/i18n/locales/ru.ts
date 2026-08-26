@@ -870,8 +870,6 @@ export default {
       hardeningUfwDesc: 'Лимит на SSH и ужесточение firewall сверх дефолтных allow по протоколу. Тормозит сканеры портов и брутфорс SSH.',
       hardeningFail2ban: 'fail2ban (SSH-jail)',
       hardeningFail2banDesc: 'Ставит fail2ban и банит IP после серии неудачных входов по SSH. Удорожает перебор паролей.',
-      hardeningRealisticFallback: 'Реалистичный fallback',
-      hardeningRealisticFallbackDesc: 'На активную пробу отдаёт настоящий сайт вместо голого reset, нода выглядит как обычный веб-хост. Работает в паре с Доменом.',
       hardeningSshAllowlist: 'SSH-allowlist (IP / CIDR)',
       hardeningSshAllowlistDesc: 'Запереть SSH (22/tcp) только на эти IP или CIDR. Пусто = SSH открыт для всех. Добавь свой админ-IP перед включением.',
       profilesAlert:

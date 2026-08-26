@@ -210,7 +210,6 @@ describe('node hardening (Zashchita) → install command', () => {
         hardening: {
           ufwLockdown: true,
           fail2ban: true,
-          realisticFallback: true,
           sshAllowlist: ['203.0.113.4', '10.0.0.0/8'],
         },
       },
@@ -221,14 +220,12 @@ describe('node hardening (Zashchita) → install command', () => {
     expect(body.hardening).toMatchObject({
       ufwLockdown: true,
       fail2ban: true,
-      realisticFallback: true,
       sshAllowlist: ['203.0.113.4', '10.0.0.0/8'],
     });
     // Generated install command carries each flag.
     const cmd: string = body.bootstrap.command;
     expect(cmd).toContain('--harden-ufw');
     expect(cmd).toContain('--fail2ban');
-    expect(cmd).toContain('--realistic-fallback');
     expect(cmd).toContain('--ssh-allowlist 203.0.113.4,10.0.0.0/8');
   });
 
@@ -245,7 +242,6 @@ describe('node hardening (Zashchita) → install command', () => {
     const cmd: string = body.bootstrap.command;
     expect(cmd).not.toContain('--harden-ufw');
     expect(cmd).not.toContain('--fail2ban');
-    expect(cmd).not.toContain('--realistic-fallback');
     expect(cmd).not.toContain('--ssh-allowlist');
   });
 
@@ -275,11 +271,11 @@ describe('node hardening (Zashchita) → install command', () => {
     // The bootstrap token differs between the two, but the hardening tail must
     // be byte-identical (both renderers share appendHardeningFlags). Compare
     // just the hardening flag lines. Helper emits a fixed order: ufwLockdown,
-    // fail2ban, realisticFallback, sshAllowlist.
+    // fail2ban, sshAllowlist.
     const hardeningLines = (s: string) =>
       s
         .split('\n')
-        .filter((l) => /--harden-ufw|--fail2ban|--realistic-fallback|--ssh-allowlist/.test(l))
+        .filter((l) => /--harden-ufw|--fail2ban|--ssh-allowlist/.test(l))
         .map((l) => l.trim());
     expect(hardeningLines(createCmd)).toEqual([
       '--harden-ufw \\',

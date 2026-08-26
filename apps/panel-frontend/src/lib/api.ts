@@ -586,7 +586,6 @@ export type NodeProtocol =
 export interface NodeHardening {
   ufwLockdown?: boolean;
   fail2ban?: boolean;
-  realisticFallback?: boolean;
   sshAllowlist?: string[];
   // Not wizard toggles: other subsystems keep their per-node config in the same
   // blob. A node update REPLACES hardening, so the form must send these back as

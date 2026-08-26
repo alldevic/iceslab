@@ -44,7 +44,16 @@ export const HardeningSchema = z
   .object({
     ufwLockdown: z.boolean().optional(),
     fail2ban: z.boolean().optional(),
-    realisticFallback: z.boolean().optional(),
+    // `realisticFallback` used to sit here. It rendered --realistic-fallback,
+    // which the installer recorded as REALISTIC_FALLBACK=1, which no adapter
+    // ever read: a probe-resistance toggle the panel showed as enabled on a
+    // node that behaved identically. The feature itself DOES exist and works —
+    // per profile, as `realityFallbackUpstream` on a self-steal REALITY
+    // inbound, which is where the node's local TLS fallback takes its target
+    // from. Two controls under one name, one of them dead, is worse than one
+    // control; removed 2026-08-27 by the user's decision. An old node's
+    // hardening blob may still carry the key: it is simply ignored now, and
+    // the editor round-trips unknown keys untouched.
     sshAllowlist: z.array(SshAllowEntrySchema).max(16).optional(),
     // F2 — cold-pool / hotswap diversity labels (migration-free). `asn`/`provider`
     // drive spare selection (avoid burning a neighbouring subnet); `burned` marks
@@ -82,7 +91,7 @@ export type HardeningInput = z.infer<typeof HardeningSchema>;
  */
 export type HardeningFlags = Pick<
   NonNullable<HardeningInput>,
-  'ufwLockdown' | 'fail2ban' | 'realisticFallback' | 'sshAllowlist'
+  'ufwLockdown' | 'fail2ban' | 'sshAllowlist'
 >;
 
 // Slice 27: keep parity with the inbound/profile protocol enum in

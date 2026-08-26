@@ -159,9 +159,6 @@ export function appendHardeningFlags(
   if (hardening.ufwLockdown) flags.push('--harden-ufw');
   // fail2ban: install + enable fail2ban with an sshd jail.
   if (hardening.fail2ban) flags.push('--fail2ban');
-  // realisticFallback: REALITY/Caddy fallback serves a real-looking site
-  // instead of a bare reset, raising active-probe cost.
-  if (hardening.realisticFallback) flags.push('--realistic-fallback');
   // sshAllowlist: comma-joined IP/CIDR list -> ufw locks 22/tcp to these only.
   if (hardening.sshAllowlist && hardening.sshAllowlist.length > 0) {
     flags.push(`--ssh-allowlist ${hardening.sshAllowlist.join(',')}`);

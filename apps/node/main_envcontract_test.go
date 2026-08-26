@@ -48,8 +48,12 @@ func repoPath(t *testing.T, rel string) string {
 //
 // Two were found this way when the check was first written. NAIVE_BINARY was a
 // half-finished rename — the agent had moved to CADDY_NAIVE_BIN and
-// NAIVE_CONFIG still matched, so nothing looked wrong. REALISTIC_FALLBACK is
-// worse and is not a naming slip; see the exception below.
+// NAIVE_CONFIG still matched, so nothing looked wrong. REALISTIC_FALLBACK was
+// not a naming slip at all: it was a probe-resistance toggle the panel showed
+// as enabled on a node where nothing read it, while the feature itself worked
+// per profile under `realityFallbackUpstream`. Two controls under one name,
+// one dead — the toggle and the flag were removed instead of excused, so the
+// exception list below is empty and meant to stay that way.
 
 var envKeysWritten = regexp.MustCompile(`(?s)cat >>? "\$ENV_FILE" <<'?EOF'?\n(.*?)\nEOF`)
 var envKeyLine = regexp.MustCompile(`(?m)^([A-Z][A-Z0-9_]{2,})=`)
@@ -58,14 +62,10 @@ var goEnvRead = regexp.MustCompile(`(?:os\.Getenv|getenv|getenvInt)\("([A-Z][A-Z
 
 // Keys the installer writes that the agent knowingly does not read yet, each
 // with the reason. An entry here is a promise the panel makes and the node does
-// not keep, so the list is meant to shrink and never to grow quietly.
-var knownUnread = map[string]string{
-	"REALISTIC_FALLBACK": "the panel's Zashchita wizard offers a 'Realistic fallback' toggle, " +
-		"the backend turns it into --realistic-fallback, and the installer records it here — " +
-		"but no adapter reads it, so an operator who switches it on gets a node that behaves " +
-		"identically and a panel that shows it as enabled. Implementing it (what site to serve " +
-		"on an active probe) is a product decision; see docs/open-questions.md",
-}
+// not keep, so the list is meant to shrink and never to grow quietly. Empty is
+// the correct state; the one entry it ever held was removed by deleting the
+// toggle rather than by explaining it.
+var knownUnread = map[string]string{}
 
 func TestEveryKeyTheInstallerWritesIsOneTheAgentReads(t *testing.T) {
 	installer, err := os.ReadFile(repoPath(t, "scripts/install-iceslab-node.sh"))
@@ -125,6 +125,19 @@ func TestEveryKeyTheInstallerWritesIsOneTheAgentReads(t *testing.T) {
 	if len(staleException) > 0 {
 		t.Errorf("these are listed as knowingly unread but the agent does read them now; drop them from knownUnread: %s",
 			strings.Join(staleException, ", "))
+	}
+	// ...and an excuse for a key the installer no longer writes at all is just
+	// as stale, and would sit here silently: nothing above ever looks at it.
+	var forgotten []string
+	for k := range knownUnread {
+		if !written[k] {
+			forgotten = append(forgotten, k)
+		}
+	}
+	sort.Strings(forgotten)
+	if len(forgotten) > 0 {
+		t.Errorf("knownUnread excuses keys the installer does not write any more; drop them: %s",
+			strings.Join(forgotten, ", "))
 	}
 }
 

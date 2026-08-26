@@ -95,7 +95,6 @@ interface FormValues {
   singboxEngine: boolean;
   hardenUfw: boolean;
   hardenFail2ban: boolean;
-  hardenRealisticFallback: boolean;
   hardenSshAllowlist: string[];
 }
 
@@ -173,7 +172,6 @@ export function NodeCreatePage() {
       singboxEngine: false,
       hardenUfw: false,
       hardenFail2ban: false,
-      hardenRealisticFallback: false,
       hardenSshAllowlist: [],
     },
     validateInputOnBlur: true,
@@ -791,12 +789,6 @@ export function NodeCreatePage() {
                 title={t('nodes.form.hardeningFail2ban')}
                 hint={t('nodes.form.hardeningFail2banDesc')}
               />
-              <ToggleRow
-                checked={form.values.hardenRealisticFallback}
-                onChange={(v) => form.setFieldValue('hardenRealisticFallback', v)}
-                title={t('nodes.form.hardeningRealisticFallback')}
-                hint={t('nodes.form.hardeningRealisticFallbackDesc')}
-              />
 
               <Stack gap={6}>
                 <FieldLabel>{t('nodes.form.hardeningSshAllowlist')}</FieldLabel>
@@ -1271,14 +1263,12 @@ const STEPS = [
 function buildHardening(v: {
   hardenUfw: boolean;
   hardenFail2ban: boolean;
-  hardenRealisticFallback: boolean;
   hardenSshAllowlist: string[];
 }): NodeHardening | null {
   const allow = v.hardenSshAllowlist.map((s) => s.trim()).filter(Boolean);
   const h: NodeHardening = {};
   if (v.hardenUfw) h.ufwLockdown = true;
   if (v.hardenFail2ban) h.fail2ban = true;
-  if (v.hardenRealisticFallback) h.realisticFallback = true;
   if (allow.length > 0) h.sshAllowlist = allow;
   return Object.keys(h).length > 0 ? h : null;
 }
@@ -1332,13 +1322,12 @@ function profileMeta(p: Profile): string {
 
 /** Which hardening switches are on, as one line for the summary table. */
 function hardeningSummary(
-  v: { hardenUfw: boolean; hardenFail2ban: boolean; hardenRealisticFallback: boolean; hardenSshAllowlist: string[] },
+  v: { hardenUfw: boolean; hardenFail2ban: boolean; hardenSshAllowlist: string[] },
   t: (k: string) => string,
 ): string {
   const on: string[] = [];
   if (v.hardenUfw) on.push('ufw');
   if (v.hardenFail2ban) on.push('fail2ban');
-  if (v.hardenRealisticFallback) on.push('fallback');
   if (v.hardenSshAllowlist.length > 0) on.push(`ssh-allowlist(${v.hardenSshAllowlist.length})`);
   return on.length > 0 ? on.join(', ') : t('nodeCreate.sumHardeningNone');
 }

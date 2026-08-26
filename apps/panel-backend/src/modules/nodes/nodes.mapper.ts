@@ -7,7 +7,6 @@ import type { NodeCoreRestarts, NodeEgressTune } from '@iceslab/shared';
 export interface HardeningDto {
   ufwLockdown?: boolean;
   fail2ban?: boolean;
-  realisticFallback?: boolean;
   sshAllowlist?: string[];
   // The keys below are not wizard toggles, but they live in the same blob and
   // an update REPLACES it, so they have to be visible for the editor to send

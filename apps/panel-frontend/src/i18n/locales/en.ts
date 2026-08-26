@@ -809,8 +809,6 @@ export default {
       hardeningUfwDesc: 'Rate-limit SSH and tighten the firewall beyond the default per-protocol allows. Slows port scanners and SSH brute-force.',
       hardeningFail2ban: 'fail2ban (SSH jail)',
       hardeningFail2banDesc: 'Install fail2ban and ban IPs after repeated SSH auth failures. Raises the cost of credential-stuffing probes.',
-      hardeningRealisticFallback: 'Realistic fallback',
-      hardeningRealisticFallbackDesc: 'Serve a real-looking site on an active probe instead of a bare reset, so the node looks like an ordinary web host. Pairs with Domain.',
       hardeningSshAllowlist: 'SSH allowlist (IP / CIDR)',
       hardeningSshAllowlistDesc: 'Lock SSH (22/tcp) to these IPs or CIDRs only. Empty = SSH stays open to everyone. Add your admin IP before enabling.',
       profilesAlert:

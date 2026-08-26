@@ -91,7 +91,6 @@ interface FormValues {
   // recombined into a NodeHardening blob (or null) via buildHardening on submit.
   hardenUfw: boolean;
   hardenFail2ban: boolean;
-  hardenRealisticFallback: boolean;
   hardenSshAllowlist: string[];
   // Engine-choice: also install the sing-box engine (--with-singbox). Only
   // meaningful for shared native protocols (xray/hysteria/shadowsocks).
@@ -113,7 +112,6 @@ function buildHardening(
   v: {
     hardenUfw: boolean;
     hardenFail2ban: boolean;
-    hardenRealisticFallback: boolean;
     hardenSshAllowlist: string[];
   },
   existing?: NodeHardening | null,
@@ -124,11 +122,14 @@ function buildHardening(
   // remove the key, not leave the old value standing.
   delete h.ufwLockdown;
   delete h.fail2ban;
-  delete h.realisticFallback;
   delete h.sshAllowlist;
+  // A node hardened before 2026-08-27 may still carry `realisticFallback` in
+  // its stored blob. The wizard no longer offers it and the schema is strict,
+  // so sending it back would make that node unsaveable; dropping it here
+  // retires the key the next time anyone saves.
+  delete (h as { realisticFallback?: boolean }).realisticFallback;
   if (v.hardenUfw) h.ufwLockdown = true;
   if (v.hardenFail2ban) h.fail2ban = true;
-  if (v.hardenRealisticFallback) h.realisticFallback = true;
   if (allow.length > 0) h.sshAllowlist = allow;
   return Object.keys(h).length > 0 ? h : null;
 }
@@ -160,7 +161,6 @@ function defaults(node: Node | null): FormValues {
     domain: node?.domain ?? '',
     hardenUfw: node?.hardening?.ufwLockdown ?? false,
     hardenFail2ban: node?.hardening?.fail2ban ?? false,
-    hardenRealisticFallback: node?.hardening?.realisticFallback ?? false,
     hardenSshAllowlist: node?.hardening?.sshAllowlist ?? [],
     singboxEngine: node?.singboxEngine ?? false,
   };
@@ -590,11 +590,6 @@ function HardeningSection({
           label={t('nodes.form.hardeningFail2ban')}
           description={t('nodes.form.hardeningFail2banDesc')}
           {...form.getInputProps('hardenFail2ban', { type: 'checkbox' })}
-        />
-        <Switch
-          label={t('nodes.form.hardeningRealisticFallback')}
-          description={t('nodes.form.hardeningRealisticFallbackDesc')}
-          {...form.getInputProps('hardenRealisticFallback', { type: 'checkbox' })}
         />
         <TagsInput
           label={t('nodes.form.hardeningSshAllowlist')}

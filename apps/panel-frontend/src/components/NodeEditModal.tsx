@@ -116,7 +116,6 @@ interface FormValues {
   // G (Zashchita) - probe-resistance toggles, flattened into form state.
   hardenUfw: boolean;
   hardenFail2ban: boolean;
-  hardenRealisticFallback: boolean;
   hardenSshAllowlist: string[];
   // B2a - the zapret2 desync channel on this node. `zapret2Present` remembers
   // whether the node ever had it: a node that never did stays byte-identical
@@ -209,11 +208,14 @@ function buildHardening(v: FormValues, existing?: NodeHardening | null): NodeHar
   // has to remove the key, not leave the old value standing.
   delete h.ufwLockdown;
   delete h.fail2ban;
-  delete h.realisticFallback;
   delete h.sshAllowlist;
+  // A node hardened before 2026-08-27 may still carry `realisticFallback` in
+  // its stored blob. The wizard no longer offers it and the schema is strict,
+  // so sending it back would make that node unsaveable; dropping it here
+  // retires the key the next time anyone saves.
+  delete (h as { realisticFallback?: boolean }).realisticFallback;
   if (v.hardenUfw) h.ufwLockdown = true;
   if (v.hardenFail2ban) h.fail2ban = true;
-  if (v.hardenRealisticFallback) h.realisticFallback = true;
   if (allow.length > 0) h.sshAllowlist = allow;
 
   // B2a: a node that never ran the channel keeps no key, so it is never
@@ -287,7 +289,6 @@ export function NodeEditModal({
       domain: node?.domain ?? '',
       hardenUfw: node?.hardening?.ufwLockdown ?? false,
       hardenFail2ban: node?.hardening?.fail2ban ?? false,
-      hardenRealisticFallback: node?.hardening?.realisticFallback ?? false,
       hardenSshAllowlist: node?.hardening?.sshAllowlist ?? [],
       zapret2Present: node?.hardening?.zapret2 != null,
       zapret2Enabled: node?.hardening?.zapret2?.enabled ?? false,
@@ -315,7 +316,6 @@ export function NodeEditModal({
         domain: node.domain ?? '',
         hardenUfw: node.hardening?.ufwLockdown ?? false,
         hardenFail2ban: node.hardening?.fail2ban ?? false,
-        hardenRealisticFallback: node.hardening?.realisticFallback ?? false,
         hardenSshAllowlist: node.hardening?.sshAllowlist ?? [],
         zapret2Present: node.hardening?.zapret2 != null,
         zapret2Enabled: node.hardening?.zapret2?.enabled ?? false,
@@ -797,13 +797,6 @@ export function NodeEditModal({
                     label={t('nodes.form.hardeningFail2ban')}
                     description={t('nodes.form.hardeningFail2banDesc')}
                     {...form.getInputProps('hardenFail2ban', { type: 'checkbox' })}
-                  />
-                  <Switch
-                    label={t('nodes.form.hardeningRealisticFallback')}
-                    description={t('nodes.form.hardeningRealisticFallbackDesc')}
-                    {...form.getInputProps('hardenRealisticFallback', {
-                      type: 'checkbox',
-                    })}
                   />
                   <TagsInput
                     label={t('nodes.form.hardeningSshAllowlist')}
