@@ -352,3 +352,54 @@ describe('POST /connections/drop', () => {
     // DNS failure. The point is the repair, not the latency.
   }, 30_000);
 });
+
+/**
+ * "Re-push every active node" is the button an operator reaches for when the
+ * fleet is wrong and they do not know which node it is. Measured before
+ * writing: the fan-out replaced with `Promise.all([])` — every node counted,
+ * none pushed — and the full 1693-test suite stayed green. The route answers
+ * `{restarted: N}` either way, and N is read off the query, not off what was
+ * done, so the reply is the same sentence whether or not anything happened.
+ *
+ * Observed at the dirty flag, because that is the thing that makes a push
+ * happen: BullMQ rejects a duplicate jobId while one is active, so the flag is
+ * what the running worker re-reads at the end of its cycle. A job queued
+ * without it is a push that can still be swallowed.
+ */
+describe('POST /nodes/actions/restart-all', () => {
+  it('flags every active node for a re-push, and skips the disabled one', async () => {
+    const { redis } = await import('../../lib/redis.js');
+    const { inboundDirtyKey, inboundSyncQueue } = await import('../inbounds/inbounds.queue.js');
+    const a = await mkNode();
+    const b = await mkNode();
+    const off = await mkNode();
+    await prisma.node.update({ where: { id: off }, data: { status: 'disabled' } });
+    // Only our own three keys, by full name. The test Redis is shared, so a
+    // prefix-glob cleanup here would reach a live panel's queue.
+    await redis.del(inboundDirtyKey(a), inboundDirtyKey(b), inboundDirtyKey(off));
+
+    const res = await post('nodes/actions/restart-all');
+    expect(res.statusCode).toBe(200);
+
+    expect(await redis.get(inboundDirtyKey(a))).toBe('1');
+    expect(await redis.get(inboundDirtyKey(b))).toBe('1');
+    expect(
+      await redis.get(inboundDirtyKey(off)),
+      'a disabled node was told to re-push; its agent is not there to answer',
+    ).toBeNull();
+
+    // The job the flag rides with, keyed per node so back-to-back requests
+    // coalesce into one push rather than N restarts.
+    expect(await inboundSyncQueue.getJob(`apply-${a}`)).toBeTruthy();
+
+    // The count is the operator's only feedback, so it has to be the number of
+    // nodes actually flagged and not, say, every row in the table.
+    const active = await prisma.node.count({ where: { deletedAt: null, status: { not: 'disabled' } } });
+    expect((res.json().response as { restarted: number }).restarted).toBe(active);
+
+    for (const id of [a, b, off]) {
+      await redis.del(inboundDirtyKey(id));
+      await (await inboundSyncQueue.getJob(`apply-${id}`))?.remove().catch(() => undefined);
+    }
+  });
+});

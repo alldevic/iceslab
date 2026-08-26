@@ -257,3 +257,76 @@ describe('subscription contents follow hosts', () => {
     expect(names[0]).toContain('CDN');
   });
 });
+
+/**
+ * Priority decides which endpoint the client tries FIRST, and reorder is the
+ * only way an operator sets it. Measured before writing: `priority: i` in
+ * `reorderHosts` widened to `priority: 0` — every host on the same rank, so
+ * the order the operator dragged them into is thrown away — and the full
+ * 1681-test suite stayed green. Nothing anywhere observed what the reorder
+ * did, only that it answered 200.
+ *
+ * Asked here rather than in the table, because the priority column is not the
+ * product: the order of the lines in the subscription body is.
+ */
+describe('reordering hosts', () => {
+  it('changes the order the client reads them in', async () => {
+    const { profile, node, host, user } = await seed();
+    const second = JSON.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/hosts',
+          headers: auth(),
+          payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' },
+        })
+      ).body,
+    );
+    const before = await serverNames(user.subscriptionToken);
+    expect(before).toEqual(['Direct', 'CDN']);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/hosts/reorder',
+      headers: auth(),
+      payload: { hostIds: [second.id, host.id] },
+    });
+    expect(res.statusCode).toBe(200);
+    // The response is the operator's confirmation, so it has to carry the new
+    // order too — a 200 listing them as they were is a reorder that did not
+    // happen, reported as one that did.
+    expect(JSON.parse(res.body).hosts.map((h: { remark: string }) => h.remark)).toEqual([
+      'CDN',
+      'Direct',
+    ]);
+
+    expect(
+      await serverNames(user.subscriptionToken),
+      'the client would still try them in the old order',
+    ).toEqual(['CDN', 'Direct']);
+  });
+
+  it('refuses the whole list when one id is not a host, changing nothing', async () => {
+    // Partially applying a reorder would leave two hosts sharing a rank, which
+    // is the same collapsed order the mutation above produced.
+    const { profile, node, host, user } = await seed();
+    const second = JSON.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/hosts',
+          headers: auth(),
+          payload: { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' },
+        })
+      ).body,
+    );
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/hosts/reorder',
+      headers: auth(),
+      payload: { hostIds: [second.id, '00000000-0000-4000-8000-0000000000ff', host.id] },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(await serverNames(user.subscriptionToken)).toEqual(['Direct', 'CDN']);
+  });
+});
