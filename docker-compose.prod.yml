@@ -90,6 +90,9 @@ services:
       APP_HOST: 0.0.0.0
       APP_PORT: "3000"
       DATABASE_URL: ${DATABASE_URL}
+      # Connection-pool ceiling. Validated in config.ts (1..200); the cron
+      # fan-out can otherwise exhaust postgres on a small box.
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
       REDIS_URL: ${REDIS_URL}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}

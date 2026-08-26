@@ -10,6 +10,17 @@ export const ConfigSchema = z.object({
   APP_HOST: z.string().default('0.0.0.0'),
 
   DATABASE_URL: z.url(),
+  // Connection-pool ceiling. Read raw off process.env until 2026-08-27, which
+  // made it the one setting in this panel with no validation behind it — and
+  // the consequence was not a bad default. `Number(x) || 10` catches NaN and
+  // catches 0, and lets a NEGATIVE through: node-postgres then creates clients
+  // while `clients.length < max`, which is never, so every pool.connect()
+  // waits forever and does not even honour connectionTimeoutMillis. A typo'd
+  // value did not crash the panel or log anything; it turned it into a process
+  // that answers nothing, /health included, because pingDatabase() queries.
+  // Bounded here like every other number, where a bad value stops the boot and
+  // names itself.
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(200).default(10),
   REDIS_URL: z.url(),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_EXPIRES_IN: z.string().default('24h'),
