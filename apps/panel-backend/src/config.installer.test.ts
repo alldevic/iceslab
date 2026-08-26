@@ -244,3 +244,46 @@ describe('the ACME email is validated the same way twice', () => {
     expect(refusedButValid).toEqual(["o'brien@company.com"]);
   });
 });
+
+/**
+ * And the reverse direction of the same contract.
+ *
+ * The check at the top of this file asks whether every key `config.ts` REQUIRES
+ * is one the installer writes — the direction that stops a fresh panel from
+ * booting. This asks the other one: whether every key the installer writes is a
+ * key something reads. A key nobody reads is a setting the operator can put in
+ * `.env.production` and watch do nothing, which is how NAIVE_BINARY sat in the
+ * node's env file with the path to caddy in it (see
+ * apps/node/main_envcontract_test.go, the same slice pointed at the other
+ * half of the deployment).
+ *
+ * Two readers count: the backend's own schema, and `docker-compose.prod.yml`,
+ * which consumes a handful of them (the postgres credentials, the frontend's
+ * published address) without the app ever seeing them.
+ */
+describe('the installer writes no key nobody reads', () => {
+  it('every generated key reaches the schema or compose', () => {
+    const written = [...templateKeys()];
+    expect(written.length, 'the heredoc parsed to almost nothing').toBeGreaterThan(10);
+
+    const config = readFileSync(CONFIG, 'utf8');
+    const compose = readFileSync(
+      resolve(HERE, '../../../docker-compose.prod.yml'),
+      'utf8',
+    );
+    // The schema declares its keys as object properties; compose interpolates
+    // them as ${KEY} or ${KEY:-default}.
+    const inSchema = new Set(
+      [...config.matchAll(/^\s{2}([A-Z][A-Z0-9_]{2,}):/gm)].map((m) => m[1]!),
+    );
+    expect(inSchema.size, 'no keys parsed out of config.ts').toBeGreaterThan(20);
+
+    const orphans = written.filter(
+      (k) => !inSchema.has(k) && !compose.includes('${' + k),
+    );
+    expect(
+      orphans,
+      'install-iceslab.sh writes these into .env.production and neither the panel nor compose reads them',
+    ).toEqual([]);
+  });
+});
