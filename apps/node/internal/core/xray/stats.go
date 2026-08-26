@@ -209,7 +209,21 @@ func parseInboundStatName(name string) (tag, direction string, ok bool) {
 // parseInt64String parses xray's stringified int64 stat values. xray emits
 // them as JSON strings deliberately to dodge the 53-bit float precision
 // limit at the protocol boundary.
+//
+// An EMPTY value is rejected rather than read as zero, and that is the whole
+// point of the first line. Until 2026-08-26 a digitless string returned
+// (0, nil) here while the sing-box copy of this function rejected it, so the
+// same wire value meant "the counter reads zero" on one core and "no reading"
+// on the other. These counters are CUMULATIVE and the panel derives deltas
+// from its own snapshot: "no reading" skips the entry and leaves the snapshot
+// where it was, so the next poll re-derives the same delta, whereas "reads
+// zero" is what a RESTARTED core looks like and makes the delta logic guess.
+// The two are reconciled on the stricter reading, which is the one that
+// cannot invent traffic.
 func parseInt64String(s string) (int64, error) {
+	if len(s) == 0 {
+		return 0, fmt.Errorf("empty stat value")
+	}
 	var n int64
 	for i := 0; i < len(s); i++ {
 		c := s[i]
