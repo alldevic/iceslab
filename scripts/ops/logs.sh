@@ -46,7 +46,18 @@ for arg in "$@"; do
         db|postgres|pg)     SERVICE="postgres" ;;
         redis|cache)        SERVICE="redis" ;;
         -f|--follow|tail)   FOLLOW=1 ;;
-        --tail=*)           TAIL_N="${arg#--tail=}" ;;
+        --tail=*)
+            TAIL_N="${arg#--tail=}"
+            # Checked here rather than left to docker: an unknown FLAG exits 2
+            # with a sentence naming it, so an unusable VALUE for a known flag
+            # should not instead reach compose and come back as its error text
+            # about a node the operator was not asking about. `all` is docker's
+            # own word for "no limit" and is passed through.
+            if [[ "$TAIL_N" != "all" && ! "$TAIL_N" =~ ^[0-9]+$ ]]; then
+                log_err "--tail= wants a number of lines or 'all', got: ${TAIL_N:-(empty)}"
+                exit 2
+            fi
+            ;;
         -h|--help)
             sed -n '2,20p' "$0" | sed 's/^# \?//'
             exit 0

@@ -54,6 +54,9 @@ mkdir -p "$BIN"
 # too, and inferring liveness from it is the defect.
 cat > "${BIN}/docker" <<'STUB'
 #!/usr/bin/env bash
+# argv goes to a file as well as the answer to stdout: the cases that ask
+# "did the flag reach compose" have nowhere else to read it from.
+[[ -n "${FAKE_DOCKER_LOG:-}" ]] && printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 svc="${@: -1}"
 case "$*" in
     *' ps -q '*)
@@ -100,12 +103,15 @@ for tool in bash dirname basename sed grep cat; do
 done
 
 OUT="${WORK}/out.txt"
+LOG="${WORK}/docker.log"
 run_logs() {
+    : > "$LOG"
     (
         cd "$ROOT"
         PATH="${USE_PATH:-${BIN}:${PATH}}" \
         FAKE_RUNNING="${RUNNING:-}" \
         FAKE_CADDY_UNIT="${CADDY_UNIT:-0}" \
+        FAKE_DOCKER_LOG="$LOG" \
         bash "${SCRIPT_DIR}/logs.sh" "$@" >"$OUT" 2>&1
     )
     echo $?
@@ -206,6 +212,42 @@ if grep -q 'LOGLINE from backend' "$OUT" && ! grep -q 'LOGLINE from redis' "$OUT
 else
     bad "'be' did not narrow to the backend:
 $(sed 's/^/      /' "$OUT")"
+fi
+
+# An unknown FLAG exits 2 naming itself; an unusable VALUE for a known flag used
+# to go straight through to compose, which answers with its own error text about
+# something the operator was not asking about.
+for bad_tail in "--tail=abc" "--tail=" "--tail=-5"; do
+    rc="$(RUNNING="backend" run_logs "$bad_tail")"
+    if [[ "$rc" == "2" ]] && grep -q 'wants a number of lines' "$OUT"; then
+        ok "$bad_tail is refused here, with the reason"
+    else
+        bad "$bad_tail exited $rc and said:
+$(sed 's/^/      /' "$OUT")"
+    fi
+done
+
+# ...and the values that ARE usable must still pass, or the check above just
+# broke the flag. `all` is docker's own word for "no limit".
+for good_tail in "--tail=500" "--tail=all"; do
+    rc="$(RUNNING="backend frontend postgres redis" CADDY_UNIT=1 run_logs "$good_tail")"
+    want="${good_tail#--tail=}"
+    if [[ "$rc" == "0" ]] && grep -q -- "--tail=$want" "$LOG"; then
+        ok "$good_tail reaches compose unchanged"
+    else
+        bad "$good_tail exited $rc; docker calls were:
+$(sed 's/^/      /' "$LOG")"
+    fi
+done
+
+# Follow mode is what an operator watching an incident actually runs, and the
+# only thing that makes it follow is the flag reaching compose.
+RUNNING="backend frontend postgres redis" CADDY_UNIT=1 run_logs be -f >/dev/null
+if grep -qE 'logs .*-f( |$)' "$LOG"; then
+    ok "-f is passed through to compose"
+else
+    bad "-f never reached compose; docker calls were:
+$(sed 's/^/      /' "$LOG")"
 fi
 
 echo
