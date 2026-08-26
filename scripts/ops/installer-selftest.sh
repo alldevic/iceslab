@@ -665,6 +665,148 @@ $(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | sed 's/^/      /')"
 done
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  do_uninstall: what it removes, and what it must not
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Fifty lines of `rm -f` and `rm -rf` that no test has ever read, and the branch
+# the harness above refuses to let anywhere near this host. Both directions
+# matter and only one of them is obvious: it has to remove what this installer
+# put down, AND it has to leave alone what it did not. The second is the one
+# that bites, because an uninstall that takes a neighbouring subsystem's config
+# with it is discovered later, by whatever stopped working.
+#
+# Run inside `unshare -rm` with tmpfs over every path it touches, so the real
+# function runs against real files and this machine's /etc is untouchable.
+note "do_uninstall"
+
+if ! unshare -rm true 2>/dev/null; then
+    bad "no user+mount namespaces; do_uninstall cannot be isolated and is NOT being skipped silently"
+else
+
+UNINST_OUT="${WORK}/uninstall-out.txt"
+SURVIVORS="${WORK}/uninstall-survivors.txt"
+
+cat > "${BIN}/ufw" <<'STUB'
+#!/usr/bin/env bash
+printf 'ufw %s\n' "$*" >> "${FAKE_UFW_LOG:-/dev/null}"
+[[ "$1" == "status" ]] && echo "1337/tcp                   ALLOW       Anywhere"
+exit 0
+STUB
+chmod +x "${BIN}/ufw"
+
+run_do_uninstall() {
+    : > "$SURVIVORS"
+    {
+        grep -E '^(log|warn|fail)\(\) +\{.*\}$' "$NODE_INSTALLER"
+        sed -n '/^do_uninstall()/,/^}/p' "$NODE_INSTALLER"
+    } > "${WORK}/uninstall.sh"
+    grep -q 'Removing binary' "${WORK}/uninstall.sh" \
+        || { bad "could not cut do_uninstall out of the installer"; return; }
+
+    unshare -rm bash -c '
+        set -uo pipefail
+        # tmpfs goes over /etc and /usr/local, not over their subdirectories:
+        # half of those do not exist on a machine with no node installed, and a
+        # userns root cannot mkdir inside the real /etc to create them. The
+        # first version of this did exactly that, mounted nothing, and the
+        # control below caught it reporting on the real /etc of this machine.
+        mount -t tmpfs tmpfs /etc || exit 90
+        mount -t tmpfs tmpfs /usr/local || exit 90
+        mkdir -p /etc/systemd/system/iceslab-node.service.d /etc/iceslab-node \
+                 /etc/hysteria /etc/xray /etc/fail2ban/jail.d /etc/fail2ban/filter.d \
+                 /usr/local/bin
+
+        # ── what this installer put down ──
+        : > /etc/systemd/system/iceslab-node.service
+        : > /etc/systemd/system/iceslab-node.service.d/override.conf
+        : > /etc/systemd/system/hysteria.service
+        : > /etc/systemd/system/iceslab-hyhop.service
+        : > /etc/hysteria/config.yaml
+        : > /etc/xray/config.json
+        : > /usr/local/bin/iceslab-node
+        : > /usr/local/bin/iceslab-hyhop
+        : > /etc/iceslab-node/env
+        : > /etc/fail2ban/jail.d/iceslab.local
+        : > /etc/fail2ban/filter.d/iceslab-hysteria.conf
+        checkout=/tmp/iceslab-node-src; mkdir -p "$checkout"; : > "$checkout/go.mod"
+
+        # ── what it did NOT, and must not touch ──
+        : > /etc/systemd/system/nginx.service
+        : > /etc/xray/keys.json
+        : > /etc/fail2ban/jail.local
+        : > /etc/fail2ban/jail.d/sshd-custom.local
+        : > /usr/local/bin/some-other-tool
+
+        export PATH="$1:$PATH"
+        export FAKE_UFW_LOG="$2"
+        ICESLAB_NODE_DIR="$checkout"
+        NODE_PORT=1337
+        # shellcheck source=/dev/null
+        source "$3"
+        do_uninstall
+
+        for f in /etc/systemd/system/iceslab-node.service \
+                 /etc/systemd/system/iceslab-node.service.d \
+                 /etc/systemd/system/hysteria.service \
+                 /etc/systemd/system/iceslab-hyhop.service \
+                 /etc/hysteria/config.yaml /etc/xray/config.json \
+                 /usr/local/bin/iceslab-node /usr/local/bin/iceslab-hyhop \
+                 /etc/iceslab-node /etc/fail2ban/jail.d/iceslab.local \
+                 /etc/fail2ban/filter.d/iceslab-hysteria.conf "$checkout" \
+                 /etc/systemd/system/nginx.service /etc/xray/keys.json \
+                 /etc/fail2ban/jail.local /etc/fail2ban/jail.d/sshd-custom.local \
+                 /usr/local/bin/some-other-tool; do
+            [[ -e "$f" ]] && printf "%s\n" "$f"
+        done > "$4"
+        exit 0
+    ' _ "$BIN" "${WORK}/ufw.log" "${WORK}/uninstall.sh" "$SURVIVORS" >"$UNINST_OUT" 2>&1
+}
+
+run_do_uninstall
+
+# Control first: the run has to have happened at all. Its own log lines are the
+# cheapest proof, and without them "everything was removed" is also true of a
+# function that never ran.
+if grep -q 'Removing binary' "$UNINST_OUT" && grep -q 'Removing env directory' "$UNINST_OUT"; then
+    ok "do_uninstall ran against a tmpfs copy of every path it touches"
+else
+    bad "do_uninstall produced no output; every case below is vacuous:
+$(sed 's/^/      /' "$UNINST_OUT")"
+fi
+
+ours_left=$(grep -E 'iceslab|hysteria/config|xray/config|iceslab-node-src' "$SURVIVORS" | tr '\n' ' ')
+if [[ -z "${ours_left// /}" ]]; then
+    ok "everything this installer put down is gone"
+else
+    bad "an uninstall left our own files behind, so a reinstall finds them in place:${ours_left}"
+fi
+
+# The direction that bites. `/etc/fail2ban/jail.local` is fail2ban's own
+# documented place for local configuration — where an operator's sshd or nginx
+# jail lives — and this installer has never written it: the removal and the
+# namespaced `jail.d/iceslab.local` it actually writes were added in the same
+# commit. The comment two lines above the removal says the opposite intent,
+# "leave the fail2ban package installed, it may protect other services".
+for f in /etc/fail2ban/jail.local /etc/fail2ban/jail.d/sshd-custom.local \
+         /etc/systemd/system/nginx.service /etc/xray/keys.json \
+         /usr/local/bin/some-other-tool; do
+    if grep -qxF "$f" "$SURVIVORS"; then
+        ok "left $f alone"
+    else
+        bad "$f was removed and this installer never wrote it"
+    fi
+done
+
+if grep -q "delete allow 1337/tcp" "${WORK}/ufw.log" 2>/dev/null; then
+    ok "and withdrew the ufw rule it opened for the agent port"
+else
+    bad "the ufw allow for the agent port was left open; calls were:
+$(sed 's/^/      /' "${WORK}/ufw.log" 2>/dev/null)"
+fi
+
+fi   # namespaces available
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  The contracts the installers hold with files they never read
 # ═════════════════════════════════════════════════════════════════════════════
 note "cross-file contracts"

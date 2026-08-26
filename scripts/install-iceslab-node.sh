@@ -432,12 +432,18 @@ do_uninstall() {
   log "Removing env directory (/etc/iceslab-node)"
   rm -rf /etc/iceslab-node
 
-  # fail2ban: remove only our jail/filter (leave the fail2ban package
-  # installed, it may protect other services). jail.local is the legacy
-  # path written by older versions of this script.
+  # fail2ban: remove only our jail/filter, and leave the package installed —
+  # it may protect other services.
+  #
+  # `/etc/fail2ban/jail.local` used to be on this list, described as "the legacy
+  # path written by older versions of this script". No version ever wrote it:
+  # the removal and the namespaced `jail.d/iceslab.local` this script actually
+  # writes were added in the same commit (4593f2a). What that path really is is
+  # fail2ban's own documented place for local configuration — where an
+  # operator's sshd or nginx jail lives — so uninstalling the node agent
+  # deleted the protection the comment one line up promises to leave alone.
   rm -f /etc/fail2ban/jail.d/iceslab.local \
-        /etc/fail2ban/filter.d/iceslab-hysteria.conf \
-        /etc/fail2ban/jail.local
+        /etc/fail2ban/filter.d/iceslab-hysteria.conf
   systemctl reload fail2ban 2>/dev/null || true
 
   log "Removing source checkout ($ICESLAB_NODE_DIR)"
