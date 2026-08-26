@@ -1,0 +1,46 @@
+{
+  "note": "The AmneziaWG obfuscation block of the awg-quick [Interface] section, rendered TWICE in this repository, in two languages, for the two ends of the same tunnel: the node writes the SERVER config (apps/node/internal/core/amneziawg/config.go, renderObfuscation) and the panel writes the CLIENT .conf handed to the buyer (apps/panel-backend/src/core-adapters/amneziawg/wgconf.ts, buildAmneziawgClientConfig). Both read the same pushed values, so the NUMBERS agree by construction; what does not agree by construction is which keys each side emits and how it spells them. The AmneziaWG handshake hashes these parameters in, so a mismatch does not warn, does not log and does not fail a healthcheck — the tunnel simply never decrypts, for every user of that inbound. Measured 2026-08-26: the server side was observed by nothing at all (renaming Jmin, dropping I1-I5 and dropping S3/S4 all passed the whole Go suite in silence) and the client side missed H3. These vectors are the contract: both sides have a test that reads this file.",
+  "asymmetry": "S3/S4 are the one deliberate difference and the reason this file lists the two sides separately rather than one expected block. The server emits them always; the client omits them when zero, because the AmneziaVPN iOS network extension (checked on 4.8.19) cannot parse those keys at all — even at 0 — and aborts with ParseError 9. Omitting them leaves a 1.x-shaped config every client accepts, and a real 2.0 setup still gets them. Changing this is a product decision about which clients keep working, not a tidy-up.",
+  "vectors": [
+    {
+      "name": "1.x-shaped: S3/S4 zero, no mimicry packets",
+      "params": {
+        "jc": 4, "jmin": 40, "jmax": 70,
+        "s1": 15, "s2": 17, "s3": 0, "s4": 0,
+        "h1": 1735328531, "h2": 762972161, "h3": 1284793643, "h4": 1284793644,
+        "i1": "", "i2": "", "i3": "", "i4": "", "i5": ""
+      },
+      "server": [
+        "Jc = 4", "Jmin = 40", "Jmax = 70",
+        "S1 = 15", "S2 = 17", "S3 = 0", "S4 = 0",
+        "H1 = 1735328531", "H2 = 762972161", "H3 = 1284793643", "H4 = 1284793644"
+      ],
+      "client": [
+        "Jc = 4", "Jmin = 40", "Jmax = 70",
+        "S1 = 15", "S2 = 17",
+        "H1 = 1735328531", "H2 = 762972161", "H3 = 1284793643", "H4 = 1284793644"
+      ]
+    },
+    {
+      "name": "2.0: S3/S4 set and three mimicry slots used",
+      "params": {
+        "jc": 3, "jmin": 50, "jmax": 1000,
+        "s1": 30, "s2": 40, "s3": 22, "s4": 16,
+        "h1": 1000000001, "h2": 1000000002, "h3": 1000000003, "h4": 1000000004,
+        "i1": "b0aabbccdd", "i2": "b1aabbccdd", "i3": "", "i4": "b3aabbccdd", "i5": ""
+      },
+      "server": [
+        "Jc = 3", "Jmin = 50", "Jmax = 1000",
+        "S1 = 30", "S2 = 40", "S3 = 22", "S4 = 16",
+        "H1 = 1000000001", "H2 = 1000000002", "H3 = 1000000003", "H4 = 1000000004",
+        "I1 = b0aabbccdd", "I2 = b1aabbccdd", "I4 = b3aabbccdd"
+      ],
+      "client": [
+        "Jc = 3", "Jmin = 50", "Jmax = 1000",
+        "S1 = 30", "S2 = 40", "S3 = 22", "S4 = 16",
+        "H1 = 1000000001", "H2 = 1000000002", "H3 = 1000000003", "H4 = 1000000004",
+        "I1 = b0aabbccdd", "I2 = b1aabbccdd", "I4 = b3aabbccdd"
+      ]
+    }
+  ]
+}
