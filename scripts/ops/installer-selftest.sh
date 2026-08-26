@@ -552,6 +552,31 @@ else
     bad "these flags left their value on the command line:${missed}"
 fi
 
+# ───── --help and the parser must name the same flags ─────
+#
+# `--help` prints the script's own header comments, so the usage text and the
+# code are two copies of one list with nothing linking them. Both directions
+# matter and they fail differently: a flag documented and not parsed is an
+# operator following our instructions into `Unknown arg`, and a flag parsed and
+# not documented is a control nobody knows exists — which is what --panel-ip
+# was, the flag that keeps the agent's mTLS port off the open internet.
+HELP_END=$(grep -n '^set -euo pipefail' "$NODE_INSTALLER" | head -1 | cut -d: -f1)
+DOC_FLAGS=$(sed -n "1,$((HELP_END - 1))p" "$NODE_INSTALLER" | grep -oE '\-\-[a-z][a-z0-9-]+' | sort -u)
+PARSED_FLAGS=$(sed -n '/^while \[\[ \$# -gt 0 \]\]; do/,/^done$/p' "$NODE_INSTALLER" \
+    | grep -oE '^\s+(-h\|)?--[a-z0-9-]+\)' | grep -oE '\-\-[a-z0-9-]+' | sort -u)
+undocumented=$(comm -13 <(printf '%s\n' "$DOC_FLAGS") <(printf '%s\n' "$PARSED_FLAGS") | tr '\n' ' ')
+unparsed=$(comm -23 <(printf '%s\n' "$DOC_FLAGS") <(printf '%s\n' "$PARSED_FLAGS") | tr '\n' ' ')
+if [[ -z "${unparsed// /}" ]]; then
+    ok "every flag --help offers is one the parser accepts"
+else
+    bad "--help documents flags the parser rejects: ${unparsed}"
+fi
+if [[ -z "${undocumented// /}" ]]; then
+    ok "and every flag the parser accepts is one --help mentions"
+else
+    bad "the parser accepts flags --help never mentions: ${undocumented}"
+fi
+
 # ───── resolve_payload / resolve_bootstrap ─────
 #
 # Both exist to keep a secret off the command line and to survive a careless

@@ -81,10 +81,31 @@
 #   --ssh-allowlist <csv>   lock 22/tcp to these IP/CIDRs only (comma-list)
 #   --realistic-fallback    record REALISTIC_FALLBACK=1 in the node env so the
 #                           agent serves a real-looking fallback on probe
+#   --panel-ip <ip|cidr>    allow only this address (or comma-list) to reach
+#                           the agent's mTLS port. Without it the port is open
+#                           to the whole internet: mTLS turns everyone away,
+#                           but the handshakes still cost CPU and the cert SAN
+#                           announces what this box is. Give it the panel's IP.
 # Example:
 #   bash <(curl -fsSL .../install-iceslab-node.sh) \
 #     --panel-url https://panel.example.com --bootstrap bs_xxx --protocol xray \
 #     --harden-ufw --fail2ban --ssh-allowlist 203.0.113.4,10.0.0.0/8
+#
+# === OTHER FLAGS ===
+#
+#   --port <n>              port the agent listens on (default 1337). Existing
+#                           nodes bootstrapped before 2026-05-21 are on 8443;
+#                           they are not migrated automatically.
+#   --with-singbox          also install the sing-box engine, so this node can
+#                           serve engine=singbox inbounds (vless/vmess/trojan/
+#                           ss/hy2) alongside its primary protocol.
+#   --xray-reality-public-key <key>
+#                           the public half of the REALITY pair. Only the
+#                           private key is needed to serve; this is recorded so
+#                           the node can report the pair back.
+#   --reset                 wipe a previous install before this one
+#   --uninstall             wipe a previous install and exit, installing nothing
+#   -h, --help              print this header and exit
 #
 # Alternative flows (file-based, for air-gapped or self-hosted gist setups):
 #   bash <(curl -fsSL .../install-iceslab-node.sh) --protocol xray --payload-file /tmp/payload.b64
@@ -249,8 +270,14 @@ ICESLAB_NODE_REF=${ICESLAB_NODE_REF:-v0.2.0}
 # Pinning: fetch the installer from a specific tag/commit, optionally
 # verify a sha256, then run. Operators who want full supply-chain
 # hardening set the *_SHA env var; default is tag-pin only (still better
-# than `main`). To bump: pick a new tag, run the installer once with
-# --dry-pin to print the sha, paste it back here.
+# than `main`). To bump: pick a new tag or commit, then read the sum the
+# same way pinned_fetch will:
+#
+#   curl --proto '=https' --max-redirs 0 -fsSL <url> | sha256sum
+#
+# and paste it back here. (This used to say "run the installer once with
+# --dry-pin"; there has never been such a flag, so the one documented way to
+# obtain a pin was a command that answers `Unknown arg`.)
 # Hysteria: apernet/hysteria releases the server/client under the `app/v*`
 # tag prefix (their `v*` tags are for the legacy hysteria-v1 lineage and
 # do NOT have the server install script). Bump to a later app/* tag as
