@@ -47,7 +47,7 @@ git_quiet() { git -c advice.detachedHead=false -c init.defaultBranch=main "$@" >
 
 # ───── The throwaway project root ─────
 #
-# A bare-ish origin plus a clone, the same shape lib-selftest.sh uses, because
+# An origin plus a clone, the same shape lib-selftest.sh uses, because
 # `git_sync_to_ref` runs for real: it is step 1 of all three scripts and a
 # stubbed git would test the stub.
 ORIGIN="${WORK}/origin"
