@@ -22,6 +22,10 @@ export default async function globalSetup() {
         `e2e needs the panel up: ${what} at ${url} is not answering (${String(err)}).\n` +
           `Start the lab's dev servers (README.lab: panel-backend on :3000, panel-frontend on :5173) ` +
           `or point E2E_BASE_URL / E2E_API_URL somewhere else.`,
+        // The symptom message names the cause, but only as text. Attaching it
+        // keeps the stack, which is the difference between "not answering" and
+        // "not answering because DNS/TLS/ECONNREFUSED".
+        { cause: err },
       );
     }
   }

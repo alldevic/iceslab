@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Menu, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
@@ -71,7 +71,20 @@ export const ACTION_TONE: Record<RouteAction, string> = {
 const ACTIONS: RouteAction[] = ['block', 'direct', 'warp', 'proxy'];
 
 /** A draft rule carries a key so reordering does not remount its input. */
-interface DraftRule extends RouteRule {}
+type DraftRule = RouteRule;
+
+/**
+ * Source of those keys.
+ *
+ * Module-level rather than a `useRef`: minting them means READING and bumping
+ * the counter during render, which a ref may not be used for — the value would
+ * be wrong on a re-render React discards. The numbers only ever become React
+ * `key` props, which need to be unique among siblings and nothing more, so one
+ * counter for the module is both correct and simpler than threading a seed
+ * through state.
+ */
+let keySeq = 0;
+const mintKey = (): string => `r${keySeq++}`;
 
 export function RoutePolicyEditor({
   policy,
@@ -84,9 +97,8 @@ export function RoutePolicyEditor({
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const nextKey = useRef(0);
 
-  const initial = useMemo(() => toRules(policy, () => `r${nextKey.current++}`), [policy]);
+  const initial = useMemo(() => toRules(policy, mintKey), [policy]);
   const [name, setName] = useState(policy.name);
   const [rules, setRules] = useState<DraftRule[]>(initial);
   const [loadedFor, setLoadedFor] = useState(policy.id);
@@ -96,7 +108,7 @@ export function RoutePolicyEditor({
   if (loadedFor !== policy.id) {
     setLoadedFor(policy.id);
     setName(policy.name);
-    setRules(toRules(policy, () => `r${nextKey.current++}`));
+    setRules(toRules(policy, mintKey));
     setDragging(null);
   }
 
@@ -151,7 +163,7 @@ export function RoutePolicyEditor({
   function addRule() {
     setRules((prev) => [
       ...prev,
-      { id: `r${nextKey.current++}`, match: [], action: 'direct', note: '' },
+      { id: mintKey(), match: [], action: 'direct', note: '' },
     ]);
   }
   function removeRule(i: number) {

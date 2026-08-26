@@ -193,22 +193,25 @@ export function NodeEditPage() {
   const metrics = dashNode?.metrics ?? null;
 
   // A node sits in at most one cascade; the hop's position names its role.
+  // Written as find-then-derive rather than loop-and-return-early: a `return`
+  // out of a loop is memoization the React compiler cannot preserve, so this
+  // useMemo was silently not one.
   const cascade = useMemo(() => {
-    for (const c of cascadesQuery.data?.cascades ?? []) {
-      const idx = c.hops.findIndex((h) => h.nodeId === id);
-      if (idx === -1) continue;
-      const role = idx === 0 ? 'entry' : idx === c.hops.length - 1 ? 'exit' : 'transit';
-      // What this node feeds is a set of DIRECTIONS, named by the country a
-      // client picks, not the next machine in a list. The node under a
-      // direction can be swapped without any of this changing.
-      const exits = c.mode === 'balancer' ? c.hops.slice(1) : c.hops.slice(-1);
-      const directions = exits
-        .map((h) => fleetQuery.data?.nodes.find((n) => n.id === h.nodeId)?.countryCode)
-        .filter((code): code is string => Boolean(code))
-        .map((code) => code.toUpperCase());
-      return { cascade: c, role, directions: role === 'exit' ? [] : directions };
-    }
-    return null;
+    const hit = (cascadesQuery.data?.cascades ?? []).find((c) =>
+      c.hops.some((h) => h.nodeId === id),
+    );
+    if (!hit) return null;
+    const idx = hit.hops.findIndex((h) => h.nodeId === id);
+    const role = idx === 0 ? 'entry' : idx === hit.hops.length - 1 ? 'exit' : 'transit';
+    // What this node feeds is a set of DIRECTIONS, named by the country a
+    // client picks, not the next machine in a list. The node under a
+    // direction can be swapped without any of this changing.
+    const exits = hit.mode === 'balancer' ? hit.hops.slice(1) : hit.hops.slice(-1);
+    const directions = exits
+      .map((h) => fleetQuery.data?.nodes.find((n) => n.id === h.nodeId)?.countryCode)
+      .filter((code): code is string => Boolean(code))
+      .map((code) => code.toUpperCase());
+    return { cascade: hit, role, directions: role === 'exit' ? [] : directions };
   }, [cascadesQuery.data, fleetQuery.data, id]);
 
   // Route profiles exist only where the panel builds them: the entry of an

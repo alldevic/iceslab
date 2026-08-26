@@ -35,6 +35,29 @@ export default defineConfig([
       // Decision by the user, 2026-08-27. `rules-of-hooks` stays an error.
       'react-hooks/set-state-in-effect': 'warn',
       'react-hooks/purity': 'warn',
+
+      // Fast Refresh ergonomics, not correctness: the rule fires when a module
+      // exports a component AND something else, which makes hot-reload replace
+      // the whole module instead of just the component. Twenty-one sites, every
+      // one of them a constant or a helper deliberately kept next to the single
+      // screen that uses it — the alternative is twenty-one one-symbol files.
+      // Nothing an operator or a user can observe stands behind any of them.
+      //
+      // Warning rather than off, for the same reason as the two above: it must
+      // keep speaking up on new code. Decision by the user, 2026-08-27.
+      'react-refresh/only-export-components': 'warn',
+    },
+  },
+  {
+    // Playwright specs and fixtures. `use` is Playwright's fixture callback,
+    // not React's `use` hook, and a fixture named `page` is not a component —
+    // rules-of-hooks reads the pair as a hook called from a plain function and
+    // is wrong about both halves. None of this ships in the bundle either.
+    files: ['e2e/**/*.{ts,tsx}'],
+    extends: [reactHooks.configs.flat.recommended],
+    rules: {
+      'react-hooks/rules-of-hooks': 'off',
+      'react-refresh/only-export-components': 'off',
     },
   },
   {

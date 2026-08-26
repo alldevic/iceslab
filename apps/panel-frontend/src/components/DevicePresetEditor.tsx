@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
@@ -65,6 +65,18 @@ export function blankPreset(): RoutingPreset {
   return { id: NEW_PRESET_ID, name: '', builtIn: false, rules: [] };
 }
 
+/**
+ * Source of the local ids a draft rule carries so reordering does not remount
+ * its input.
+ *
+ * Module-level rather than a `useRef`: minting one means READING and bumping
+ * the counter during render, which a ref may not be used for — the value would
+ * be wrong on a render React discards. The numbers only ever become React `key`
+ * props, which need to be unique among siblings and nothing more.
+ */
+let keySeq = 0;
+const mintKey = (): string => `d${keySeq++}`;
+
 export function DevicePresetEditor({
   preset,
   isDefault,
@@ -79,10 +91,9 @@ export function DevicePresetEditor({
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const nextKey = useRef(0);
 
   const initial = useMemo(
-    () => preset.rules.map((r) => ({ ...r, id: r.id || `d${nextKey.current++}` })),
+    () => preset.rules.map((r) => ({ ...r, id: r.id || mintKey() })),
     [preset],
   );
   const [name, setName] = useState(preset.name);
@@ -93,7 +104,7 @@ export function DevicePresetEditor({
   if (loadedFor !== preset.id) {
     setLoadedFor(preset.id);
     setName(preset.name);
-    setRules(preset.rules.map((r) => ({ ...r, id: r.id || `d${nextKey.current++}` })));
+    setRules(preset.rules.map((r) => ({ ...r, id: r.id || mintKey() })));
     setDragging(null);
   }
 
@@ -138,7 +149,7 @@ export function DevicePresetEditor({
     setRules((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
   function addRule() {
-    setRules((prev) => [...prev, { id: `d${nextKey.current++}`, match: [], action: 'direct', note: '' }]);
+    setRules((prev) => [...prev, { id: mintKey(), match: [], action: 'direct', note: '' }]);
   }
   function removeRule(i: number) {
     setRules((prev) => prev.filter((_, j) => j !== i));
