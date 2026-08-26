@@ -105,6 +105,14 @@ if [[ -n "${FAKE_DOCKER_FAIL:-}" ]]; then
         $FAKE_DOCKER_FAIL) exit 17 ;;
     esac
 fi
+case "$*" in
+    # `ps -q <service>` yields the container id the health wait then inspects.
+    *' ps -q '*) echo "fake-container-id" ;;
+    # The health wait's own question. $FAKE_HEALTH is what makes the "a
+    # backend that never comes up" case possible: a real one cannot be asked
+    # to fail on demand either.
+    'inspect '*) echo "${FAKE_HEALTH:-healthy}" ;;
+esac
 # `compose exec -T postgres pg_isready` decides the wait loop; answer yes so
 # the cases below are not each paying 30 seconds for it.
 exit 0
@@ -131,6 +139,7 @@ run_deploy() {
         PATH="${BIN}:${PATH}" \
         FAKE_DOCKER_LOG="$LOG" \
         FAKE_DOCKER_FAIL="${FAIL_GLOB:-}" \
+        FAKE_HEALTH="${HEALTH:-healthy}" \
         bash "${SCRIPT_DIR}/${script}" "$@" >"${LOG}.out" 2>&1
     )
     echo $?
@@ -322,6 +331,53 @@ if [[ ! -s "${WORK}/stray.log" ]]; then
     ok "and touched no docker"
 else
     bad "it ran: $(cat "${WORK}/stray.log")"
+fi
+
+# ───── The deploy has to be over before it says so ─────
+#
+# Every script here ends by announcing the commit it is "now serving". Until
+# 2026-08-26 nothing checked that anything was serving it: step 5 printed `ps`
+# and a log tail, nobody read either, and a backend crash-looping on a bad
+# migration produced exactly the same final line as one that came up. The
+# operator's next signal was a user complaining.
+note "an unhealthy service is not a completed deploy"
+for pair in "deploy.sh:backend" "deploy-backend.sh:backend" "deploy-frontend.sh:frontend"; do
+    script="${pair%%:*}"
+    svc="${pair##*:}"
+    # A budget-length wait would cost minutes across three scripts; `exited` is
+    # the crash-loop's own state and fails on the first look, which is the
+    # behaviour worth pinning anyway — a dead container should not cost the
+    # operator a two-minute wait to be told so.
+    rc="$(HEALTH=exited run_deploy "$script")"
+    saw_calls "$script" || continue
+    if [[ "$rc" == "0" ]]; then
+        bad "$script reported success with $svc down"
+    else
+        ok "$script exits $rc when $svc never comes up"
+    fi
+    if grep -q 'deploy complete' "${LOG}.out"; then
+        bad "$script still printed 'deploy complete'"
+    else
+        ok "$script does not announce a commit it is not serving"
+    fi
+done
+
+# The control: the same wait must not reject a service that IS up, or every
+# deploy on the fleet starts failing and the check gets removed again.
+rc="$(HEALTH=healthy run_deploy deploy.sh)"
+if [[ "$rc" == "0" ]] && grep -q 'deploy complete' "${LOG}.out"; then
+    ok "a healthy backend still completes the deploy"
+else
+    bad "a healthy backend was reported as a failed deploy (exit $rc)"
+fi
+# A service with no healthcheck reports its plain state, and `running` is the
+# most that can be known about it. Rejecting that would block every
+# frontend-only deploy.
+rc="$(HEALTH=running run_deploy deploy-frontend.sh)"
+if [[ "$rc" == "0" ]]; then
+    ok "a container with no healthcheck passes on 'running'"
+else
+    bad "a running container with no healthcheck was rejected (exit $rc)"
 fi
 
 echo

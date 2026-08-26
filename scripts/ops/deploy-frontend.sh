@@ -67,9 +67,22 @@ else
 fi
 step_done
 
-# ───── Step 3: status ─────
-step 3 "status"
+# ───── Step 3: verify + status ─────
+step 3 "verify + status"
 "${DC[@]}" ps frontend
+echo
+# This service declares no healthcheck, so `running` is the most that can be
+# known — which is still more than the printed table was proving. A bad
+# nginx.conf makes the container exit on start and `restart: unless-stopped`
+# turns that into a loop, and until 2026-08-26 that ended this script with
+# "frontend deploy complete, now serving <sha>".
+if wait_container_healthy "$("${DC[@]}" ps -q frontend 2>/dev/null || true)" 60; then
+    log_ok "frontend is up"
+else
+    log_err "frontend did not come up; this deploy is NOT complete"
+    "${DC[@]}" logs --tail=40 frontend || true
+    exit 1
+fi
 step_done
 
 echo

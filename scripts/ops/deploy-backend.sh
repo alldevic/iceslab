@@ -85,14 +85,23 @@ done
 "${DC[@]}" rm -fsv migrate >/dev/null 2>&1 || true
 step_done
 
-# ───── Step 4: restart backend + status ─────
-step 4 "restart backend + status"
+# ───── Step 4: restart backend + verify ─────
+step 4 "restart backend + verify"
 "${DC[@]}" up -d --build backend
 echo
 "${DC[@]}" ps backend
 echo
 log_info "backend tail (last 40 lines):"
 "${DC[@]}" logs --tail=40 backend || true
+echo
+# See deploy.sh step 5: a printed log tail is not a check, and the final line
+# of this script claims the new commit is being served.
+if wait_container_healthy "$("${DC[@]}" ps -q backend 2>/dev/null || true)"; then
+    log_ok "backend is healthy"
+else
+    log_err "backend did not come up; this deploy is NOT complete"
+    exit 1
+fi
 step_done
 
 echo

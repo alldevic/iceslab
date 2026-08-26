@@ -132,6 +132,50 @@ retry() {
     return "$rc"
 }
 
+# wait_container_healthy <container-id-or-name> [budget-seconds]
+#
+# Block until the container reports docker-health `healthy`, and say so when it
+# never does. Returns 0 healthy (or running with no healthcheck declared),
+# 1 otherwise.
+#
+# Why a deploy needs this: until now the last thing every deploy script did was
+# print `ps` and a log tail and then announce "deploy complete, now serving
+# <sha>". Nothing read either. A backend that crash-loops on a bad migration or
+# a missing env var produced exactly the same final line as one that came up,
+# and the operator's next signal was a user complaining. The panel's own
+# healthcheck pings Postgres and Redis and answers 503 when either is down
+# (honest since 2026-08-26), so there IS something to ask; this asks it.
+#
+# `restarting` is not treated as failure on sight — a container can pass
+# through it — but it never becomes healthy either, so the budget ends the wait.
+# The compose healthcheck is 30s start_period + 4 x 15s, so the default budget
+# is set above the ~90s it takes to reach `unhealthy` on its own.
+wait_container_healthy() {
+    local cid="${1:-}" budget="${2:-150}" waited=0 status
+    if [[ -z "$cid" ]]; then
+        log_err "no container is running for that service"
+        return 1
+    fi
+    while (( waited < budget )); do
+        status="$(docker inspect \
+            --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+            "$cid" 2>/dev/null)" || status="missing"
+        case "$status" in
+            # No healthcheck declared: `running` is the most this can know.
+            healthy|running) return 0 ;;
+            starting|restarting|created) ;;
+            *)
+                log_err "container is ${status}"
+                return 1
+                ;;
+        esac
+        sleep 3
+        waited=$(( waited + 3 ))
+    done
+    log_err "still ${status:-unknown} after ${budget}s"
+    return 1
+}
+
 # ───── Error context ─────
 # Without an ERR trap, `set -e` aborts on the failing command but the
 # operator only sees the line that exited, with no idea which command.

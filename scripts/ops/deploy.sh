@@ -117,12 +117,29 @@ step 4 "restart all services"
 "${DC[@]}" up -d --build
 step_done
 
-# ───── Step 5: status + backend tail ─────
-step 5 "status + backend tail"
+# ───── Step 5: verify + status ─────
+#
+# Printing `ps` and a log tail is not verification: nothing reads either, and
+# until 2026-08-26 a backend that crash-looped on a bad migration ended this
+# script with the same "deploy complete, now serving <sha>" as one that came
+# up. The compose healthcheck asks /health, which pings Postgres and Redis and
+# answers 503 when either is down, so the answer exists — it just was not being
+# waited for.
+step 5 "verify + status"
 "${DC[@]}" ps
 echo
 log_info "backend tail (last 30 lines):"
 "${DC[@]}" logs --tail=30 backend || true
+echo
+if wait_container_healthy "$("${DC[@]}" ps -q backend 2>/dev/null || true)"; then
+    log_ok "backend is healthy"
+else
+    log_err "backend did not come up; this deploy is NOT complete"
+    log_err "  the tail above is where the reason usually is. Nothing was rolled"
+    log_err "  back: the previous image was replaced, so the way out is a fix"
+    log_err "  forward, or ICESLAB_REF=<previous tag> ./scripts/ops/deploy.sh"
+    exit 1
+fi
 step_done
 
 # ───── Optional cleanup ─────
