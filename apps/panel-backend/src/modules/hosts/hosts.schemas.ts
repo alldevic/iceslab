@@ -1,20 +1,10 @@
 import { z } from 'zod';
+import { FormatEnum } from '../subscription/subscription.format-names.js';
 
-// Format names accepted in `disableForFormats[]`. Mirrors the union in
-// subscription.routes.ts (?format=...). Keep in sync.
-const FormatEnum = z.enum([
-  'plain',
-  'clash',
-  'singbox',
-  'xrayjson',
-  'xkeen',
-  'wgconf',
-  'mieru-json',
-  'outline',
-  'surge',
-  'quantumultx',
-  'loon',
-]);
+// Format names accepted in `disableForFormats[]`. The gate compares this value
+// to `?format=`, so it is the SAME list, imported rather than restated — the
+// comment that used to say "keep in sync" here was keeping two lists that had
+// already drifted in both directions.
 
 const SecurityLayerEnum = z.enum(['default', 'tls', 'none']);
 

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { FormatEnum, type Format } from './subscription.format-names.js';
 import { ROUTING_PRESET_IDS, type RoutingPresetId } from '@iceslab/shared';
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
@@ -86,11 +87,6 @@ const TokenParamSchema = z.object({
   token: z.string().min(8).max(128),
 });
 
-const FormatEnum = z.enum([
-  'plain', 'json', 'clash', 'singbox', 'wgconf', 'amneziavpn', 'xrayjson', 'xrayjson-array',
-  'xkeen', 'outline', 'surge', 'quantumultx', 'loon',
-]);
-type Format = z.infer<typeof FormatEnum>;
 
 const QuerySchema = z.object({
   format: FormatEnum.optional(),

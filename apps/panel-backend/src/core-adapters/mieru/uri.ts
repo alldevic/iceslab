@@ -7,8 +7,12 @@
  *
  * What we ship:
  *   1. `buildMieruProfileJson(...)`: emits the JSON that mieru clients
- *      import via "Add profile from file/clipboard". Subscription endpoint
- *      `/sub/<token>?format=mieru-json` returns this.
+ *      import via "Add profile from file/clipboard". NOT SERVED: the
+ *      `?format=mieru-json` endpoint this line used to promise was never
+ *      wired, nothing calls this builder outside its own test, and the name
+ *      survived only in the host gate's format list, where it hid a host from
+ *      nothing. Either serve it or delete it; leaving the claim here is what
+ *      let the stale name spread.
  *   2. `buildMieruUri(...)`: pseudo-URI for the plain-format subscription
  *      list. Form: `mieru://<password>@<host>:<port>?mtu=1400#<name>`. Not
  *      a real protocol scheme but matches our other URI shapes for client
