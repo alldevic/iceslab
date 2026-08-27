@@ -874,6 +874,41 @@ export interface PortExposureResult {
   note?: string;
 }
 
+/**
+ * What a node's cores are running, against what the panel pinned.
+ *
+ * A live probe of the node, not a column: the panel stores one core version per
+ * node (xray's, historically) and a per-core column is a schema change that has
+ * not been made. `reachable: false` is a real answer and carries the reason.
+ */
+export interface NodeCore {
+  /** The protocol as the agent names it: xray, tuic, shadowsocks, ... */
+  protocol: string;
+  /** The artefact behind it (tuic -> sing-box), or null when the panel pins
+   *  none — amneziawg, wireguard and naive are built or come from apt. */
+  core: string | null;
+  running: boolean;
+  /** Null when the agent predates the field, which is not the same as false. */
+  provisioned: boolean | null;
+  /** Null when the adapter cannot report one. */
+  version: string | null;
+  /** What this panel would install. Null when it pins nothing for that core. */
+  pinned: string | null;
+  /** True only when BOTH numbers are known and differ. */
+  drift: boolean;
+}
+
+export interface NodeCoresResponse {
+  reachable: boolean;
+  reason?: string;
+  cores: NodeCore[];
+}
+
+export async function listNodeCores(id: string): Promise<NodeCoresResponse> {
+  const { data } = await api.get<NodeCoresResponse>(`/api/nodes/${id}/cores`);
+  return data;
+}
+
 export async function getNodeExposure(id: string): Promise<PortExposureResult> {
   const { data } = await api.get<PortExposureResult>(`/api/nodes/${id}/exposure`);
   return data;

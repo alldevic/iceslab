@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   CORE_ARCHES,
   CORE_BINARIES,
   CORE_NAMES,
+  PROTOCOL_CORE,
   coreAssetUrl,
   type CoreArch,
   type CoreName,
@@ -109,5 +112,34 @@ describe('across the whole manifest', () => {
       Object.entries(core.assets).map(([arch, a]) => `${name}-${arch}:${a.file}`),
     );
     expect(new Set(files).size).toBe(files.length);
+  });
+});
+
+describe('the protocol → core map', () => {
+  it('names a core this manifest pins, or names nothing', () => {
+    const bad = Object.entries(PROTOCOL_CORE)
+      .filter(([, core]) => core !== null && !(core in CORE_BINARIES))
+      .map(([proto, core]) => `${proto} -> ${core}`);
+    expect(bad, 'a protocol pointed at a core the manifest does not carry').toEqual([]);
+  });
+
+  it('is the same map the node installer fetches by', () => {
+    // The installer's `case "$PROTOCOL"` is where this decision is executed;
+    // this file is where it is READ. Two copies would drift, and the panel's is
+    // the one an operator reads, so the shell is checked against it: every core
+    // name the installer asks the panel for has to be one the manifest pins,
+    // and a typo there would 404 on every install of that protocol.
+    const installer = readFileSync(
+      join(import.meta.dirname, '..', '..', '..', '..', 'scripts', 'install-iceslab-node.sh'),
+      'utf8',
+    );
+    const asked = [...installer.matchAll(/panel_core_fetch\s+([a-z-]+)\s/g)].map((m) => m[1]!);
+    // The control: a scan that found nothing would make the comparison below
+    // true of any installer at all.
+    expect(new Set(asked).size, 'no panel_core_fetch call sites found').toBeGreaterThan(2);
+    expect(
+      [...new Set(asked)].filter((c) => !(c in CORE_BINARIES)).sort(),
+      'the installer asks the panel for a core the manifest does not pin',
+    ).toEqual([]);
   });
 });

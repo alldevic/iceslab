@@ -18,6 +18,7 @@ import {
   listNodes,
   listProfiles,
   listRegions,
+  listNodeCores,
   listRoutePolicies,
   listSquads,
   refreshNodeBootstrap,
@@ -599,6 +600,9 @@ export function NodeEditPage() {
                   />
                 </Box>
               </Stack>
+
+              {/* What the node runs, against what the panel would install. */}
+              <CoresPanel nodeId={id!} />
 
               {/* Egress: three ways out, exactly one of them true at a time. */}
               <Box
@@ -1701,6 +1705,98 @@ function ExposureNote({
 }
 
 /** One way out of the node. The selected row lifts on a faint cyan wash. */
+/**
+ * The versions running on this node, beside the versions the panel carries.
+ *
+ * Live, not stored: the panel keeps ONE core version per node — xray's, from
+ * when xray was the only adapter that reported one — and a column per core is
+ * a schema change that has not been made. A stale table read as current would
+ * be worse than a probe that admits it could not reach the node, so this says
+ * which of the two it is.
+ */
+function CoresPanel({ nodeId }: { nodeId: string }) {
+  const { t } = useTranslation();
+  const query = useQuery({
+    queryKey: ['node', nodeId, 'cores'],
+    queryFn: () => listNodeCores(nodeId),
+    // The node is polled for status every 30s anyway; this is the same
+    // question asked on demand, so it does not need its own interval.
+    staleTime: 30_000,
+  });
+  const data = query.data;
+  if (!data) return null;
+
+  return (
+    <Box
+      style={{
+        borderRadius: 10,
+        backgroundColor: CARD,
+        border: `1px solid ${HAIRLINE}`,
+        overflow: 'hidden',
+      }}
+    >
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 20px 16px' }}>
+        <Caption>{t('nodeEdit.coresTitle')}</Caption>
+        <Box style={{ flex: 1 }} />
+        <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>
+          {t('nodeEdit.coresHint')}
+        </Text>
+      </Box>
+
+      {!data.reachable && (
+        <Box style={{ padding: '0 20px 18px' }}>
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: AMBER }}>
+            {t('nodeEdit.coresUnreachable')}
+          </Text>
+          <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST, marginTop: 4 }}>
+            {data.reason}
+          </Text>
+        </Box>
+      )}
+
+      {data.reachable && data.cores.length === 0 && (
+        <Box style={{ padding: '0 20px 18px' }}>
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>
+            {t('nodeEdit.coresEmpty')}
+          </Text>
+        </Box>
+      )}
+
+      {data.cores.map((c) => (
+        <Box
+          key={c.protocol}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '12px 20px',
+            borderTop: `1px solid ${HAIRLINE}`,
+          }}
+        >
+          <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: SNOW, minWidth: 110 }}>
+            {c.protocol}
+            {c.core && c.core !== c.protocol ? ` · ${c.core}` : ''}
+          </Text>
+          <Text style={{ fontFamily: MONO, fontSize: 11, color: c.running ? MOSS : DIM }}>
+            {c.running ? t('nodeEdit.coresRunning') : t('nodeEdit.coresStopped')}
+          </Text>
+          <Box style={{ flex: 1 }} />
+          <Text style={{ fontFamily: MONO, fontSize: 12, color: c.drift ? AMBER : SNOW }}>
+            {c.version ?? t('nodeEdit.coresVersionUnknown')}
+          </Text>
+          <Text style={{ fontFamily: DISPLAY, fontSize: 11, color: c.drift ? AMBER : FAINT }}>
+            {c.pinned
+              ? c.drift
+                ? `${t('nodeEdit.coresDrift')} · ${t('nodeEdit.coresPinned', { version: c.pinned })}`
+                : t('nodeEdit.coresPinned', { version: c.pinned })
+              : t('nodeEdit.coresNotPinned')}
+          </Text>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
 function EgressRow({
   selected,
   disabled,

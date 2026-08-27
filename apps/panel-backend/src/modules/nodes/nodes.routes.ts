@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { CORE_BINARIES, PROTOCOL_CORE } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
 import { config } from '../../config.js';
 import {
@@ -15,6 +16,8 @@ import { appendHardeningFlags, appendSingboxFlag } from './nodes.service.js';
 import { checkNodePortExposure } from './nodes.exposure.js';
 import * as bootstrap from './bootstrap.service.js';
 import { getPanelPublicIp } from './panel-ip.js';
+import * as nodesRepo from './nodes.repository.js';
+import { NodeTransport } from './nodes.transport.js';
 
 /**
  * Derive the panel URL the admin is currently using to talk to the API.
@@ -225,6 +228,61 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/nodes/:id/exposure', auth, async (request, reply) => {
     const params = NodeIdParamSchema.parse(request.params);
     return reply.send(await checkNodePortExposure(params.id));
+  });
+
+  /**
+   * What this node's cores actually run, against what the panel pinned.
+   *
+   * Asked LIVE rather than read from a column, and that is the honest shape:
+   * the panel persists ONE core version per node (`nodes.core_version`, xray's,
+   * because until 2026-08-28 xray was the only adapter that reported one).
+   * Storing a version per core is a schema change and has not been done — the
+   * same note `coreRestarts` carries about holding a single object.
+   *
+   * So this is a probe, and it says so: an unreachable node answers with the
+   * reason instead of a stale table an operator would read as current.
+   */
+  app.get('/api/nodes/:id/cores', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    const node = await nodesRepo.findActiveById(params.id);
+    if (!node) return reply.code(404).send({ error: 'NOT_FOUND' });
+
+    let health;
+    try {
+      health = await new NodeTransport(node).healthcheck();
+    } catch (err) {
+      // A node that cannot be reached is not a node running nothing, and the
+      // difference is the whole reason to name it here.
+      return reply.send({
+        reachable: false,
+        reason: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200),
+        cores: [],
+      });
+    }
+
+    const cores = health.cores.map((core) => {
+      const pinnedName = PROTOCOL_CORE[core.name] ?? null;
+      const pinned = pinnedName ? CORE_BINARIES[pinnedName].version : null;
+      return {
+        protocol: core.name,
+        /** The artefact behind it, e.g. tuic -> sing-box. Null when the panel
+         *  pins none: amneziawg, wireguard and naive are built or come from
+         *  apt. */
+        core: pinnedName,
+        running: core.running,
+        // Absent means "the agent predates the field", which is not false.
+        provisioned: core.provisioned ?? null,
+        /** Empty when the adapter cannot report one — a pre-2026-08 agent, or
+         *  a core with no binary of its own. */
+        version: core.version || null,
+        pinned,
+        /** Only ever true when BOTH numbers are known. An unknown version is a
+         *  question, not a mismatch, and showing it as drift would send an
+         *  operator to fix a node that is fine. */
+        drift: Boolean(core.version && pinned && core.version !== pinned),
+      };
+    });
+    return reply.send({ reachable: true, cores });
   });
 
   app.put('/api/nodes/:id', auth, async (request, reply) => {

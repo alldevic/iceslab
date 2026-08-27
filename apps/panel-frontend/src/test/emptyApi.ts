@@ -88,6 +88,15 @@ export const EMPTY_API: Record<string, unknown> = {
   getNodeExposure: { checked: false },
   getCascadeStatus: { done: true, hops: [] },
   getProfileHostFields: { fields: {} },
+  // Unreachable, not "answered with nothing": on a panel where nothing has been
+  // set up there is no node to answer, and the two are different states the
+  // screen renders differently. This one also exercises the branch that carries
+  // a reason.
+  listNodeCores: {
+    reachable: false,
+    reason: 'connect ECONNREFUSED',
+    cores: [],
+  },
 
   // ───── the two aggregates, which are all shape and no rows ─────
   getDashboardOverview: {

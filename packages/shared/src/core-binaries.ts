@@ -181,3 +181,32 @@ export function coreAssetUrl(name: CoreName, arch: CoreArch): string | null {
   if (!asset) return null;
   return core.urlTemplate.replace('{version}', core.version).replace('{file}', asset.file);
 }
+
+/**
+ * Which pinned core actually runs a protocol.
+ *
+ * The node installer knows this — it is the `case "$PROTOCOL"` that decides
+ * which artefact to fetch — and the panel needs the same answer to say "this
+ * node runs sing-box 1.13.19, the panel carries 1.13.19". Written down once
+ * rather than twice, because the two would drift and the panel's copy is the
+ * one an operator reads.
+ *
+ * `null` means no artefact this panel pins: amneziawg drives the kernel module
+ * and awg-quick, wireguard comes from apt, and naive's Caddy is compiled on the
+ * node by xcaddy. Those are absences with reasons, not gaps.
+ */
+export const PROTOCOL_CORE: Record<string, CoreName | null> = {
+  xray: 'xray',
+  // SS2022 multi-user runs inside xray-core, so it reports xray's version.
+  shadowsocks: 'xray',
+  hysteria: 'hysteria',
+  mtproto: 'mtg',
+  mieru: 'mita',
+  tuic: 'sing-box',
+  anytls: 'sing-box',
+  shadowtls: 'sing-box',
+  amneziawg: null,
+  wireguard: null,
+  naive: null,
+};
+
