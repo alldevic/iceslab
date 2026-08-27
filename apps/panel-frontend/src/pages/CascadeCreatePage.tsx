@@ -1,3 +1,4 @@
+import { countCascadeLinks } from '@iceslab/shared';
 import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -218,7 +219,15 @@ export function CascadeCreatePage() {
   // tag exists and waits for a node, and clients are simply not offered it.
   const directionsFilled = directions.every((d) => Boolean(d.countryCode));
   const duplicate = new Set(allIds).size !== allIds.length;
-  const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
+  // The API's own arithmetic, from `shared`, not a second formula that agrees
+  // with it on the shapes someone happened to try. Every adjacent pair of steps
+  // multiplies, and the last step multiplies against each direction's pool — so
+  // transits count and a direction of four nodes is four links, neither of
+  // which the local version did.
+  const links = countCascadeLinks(
+    pools.map((p) => ({ nodeIds: p.nodeIds })),
+    directions.map((d) => ({ nodeIds: d.nodeIds })),
+  );
   const overLinks = links > MAX_LINKS;
 
   const valid =

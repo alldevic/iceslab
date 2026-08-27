@@ -1,3 +1,4 @@
+import { countCascadeLinks } from '@iceslab/shared';
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { countryFlag } from '../lib/countries';
@@ -263,7 +264,15 @@ export function CascadeEditPage() {
   // rather than the save button going dead for the whole form.
   const directionsFilled = directions.every((d) => Boolean(d.countryCode));
   const duplicate = new Set(allIds).size !== allIds.length;
-  const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
+  // The API's own arithmetic, from `shared`, not a second formula that agrees
+  // with it on the shapes someone happened to try. Every adjacent pair of steps
+  // multiplies, and the last step multiplies against each direction's pool — so
+  // transits count and a direction of four nodes is four links, neither of
+  // which the local version did.
+  const links = countCascadeLinks(
+    pools.map((p) => ({ nodeIds: p.nodeIds })),
+    directions.map((d) => ({ nodeIds: d.nodeIds })),
+  );
 
   // A protocol column is a free string in the database and older rows can hold
   // a value the API no longer accepts (the demo seed writes `vless`). Such a

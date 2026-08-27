@@ -1,3 +1,4 @@
+import { MAX_CASCADE_LINKS } from '@iceslab/shared';
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -268,9 +269,19 @@ export function NodeSelect({
 
 export const MAX_POSITIONS = MAX_HOPS;
 
-/** Entries multiplied by directions, each pair being one link with its own
- *  credentials. Mirrors the backend ceiling. */
-export const MAX_LINKS = 64;
+/**
+ * The ceiling AND the arithmetic, both from `shared`, both the API's own.
+ *
+ * This used to be a local `64` with a comment saying it mirrored the backend
+ * ceiling — and it did. What was not mirrored was the COUNT: the two cascade
+ * pages computed `entries × (number of directions)`, which ignores transits
+ * altogether and treats a direction holding four nodes as one. The API counts
+ * every adjacent pair of steps pairwise. Eight entries, eight transits and two
+ * directions of eight is 16 by the old arithmetic and 192 by the API's, so the
+ * form's gate passed a shape the save refused and the number it showed the
+ * operator was not the number.
+ */
+export const MAX_LINKS = MAX_CASCADE_LINKS;
 
 export interface PositionDraft {
   key: number;
