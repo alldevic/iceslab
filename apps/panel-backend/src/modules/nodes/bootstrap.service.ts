@@ -100,8 +100,10 @@ function buildSans(address: string): { type: 'dns' | 'ip'; value: string }[] {
 }
 
 /**
- * Background-cleanup helper. Not wired to a cron yet, periodically delete
- * tokens past their TTL. Slice 24+ may schedule this every hour.
+ * Background cleanup: drop tokens past their TTL and tokens already redeemed.
+ * Called from `pruneHistory` (modules/maintenance/retention.cron.ts), which is
+ * the nightly retention job - the comment here said "not wired to a cron yet"
+ * for as long as it has been wired to one.
  */
 export async function purgeExpiredBootstrapTokens(): Promise<number> {
   const result = await prisma.nodeBootstrapToken.deleteMany({

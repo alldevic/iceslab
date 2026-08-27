@@ -41,7 +41,6 @@ async function trackAgentStart(nodeId: string, startTime: string): Promise<void>
   if (!/^[A-Za-z0-9_-]+$/.test(startTime)) return;
   const key = `${AGENT_START_KEY_PREFIX}${nodeId}${AGENT_START_KEY_SUFFIX}`;
   const previous = await redis.get(key);
-  await redis.set(key, startTime, 'EX', AGENT_START_TTL_SECONDS);
   if (previous && previous !== startTime) {
     // Agent restarted (in-memory user map wiped). Re-push inbounds + users.
     // Bug #3 fix (was `apply-${nodeId}-restart-${startTime}`): use the SAME
@@ -52,7 +51,12 @@ async function trackAgentStart(nodeId: string, startTime: string): Promise<void>
     // one host. Set the dirty flag BEFORE enqueuing (same pattern as
     // inbounds.events.ts) so if a push is already active for this node, the
     // worker re-enqueues at end instead of silently dropping this resync.
-    await redis.set(inboundDirtyKey(nodeId), '1').catch(() => null);
+    //
+    // Not `.catch(() => null)`: this flag is what stops the worker dropping the
+    // resync when a push is already running for the node, so failing to set it
+    // is failing to resync. Everything here throws up to the caller's
+    // catch-and-log, which is the same as "not handled yet".
+    await redis.set(inboundDirtyKey(nodeId), '1');
     await inboundSyncQueue.add(
       'applyNodeInbounds',
       { nodeId },
@@ -62,6 +66,16 @@ async function trackAgentStart(nodeId: string, startTime: string): Promise<void>
       `[heartbeat] node=${nodeId} agent restart detected (prev=${previous} new=${startTime}), enqueued applyInbounds`,
     );
   }
+  // The marker is written LAST, and that ordering is the whole point of it.
+  // Written first, it says "this start-time has been seen" while the resync it
+  // stands for may never have been enqueued - and the next heartbeat then reads
+  // `previous === startTime` and stays quiet forever. The agent restarted, its
+  // in-memory user map is empty, the panel recorded that it noticed, and
+  // nothing re-pushes until an admin toggles a profile by hand. Written last,
+  // a failure leaves the OLD value and the next heartbeat sixty seconds later
+  // tries again; the enqueue is idempotent (one `apply-<nodeId>` jobId), so a
+  // retry costs nothing.
+  await redis.set(key, startTime, 'EX', AGENT_START_TTL_SECONDS);
 }
 
 /**

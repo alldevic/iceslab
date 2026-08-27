@@ -20,7 +20,7 @@
 // So each test below states which of the four answers is expected AND that the
 // other three are not.
 
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { buildApp } from '../../app.js';
@@ -31,6 +31,22 @@ import { inboundSyncQueue, inboundDirtyKey } from '../inbounds/inbounds.queue.js
 import { signHeartbeatToken } from './heartbeat-token.js';
 
 const URL = '/api/internal/nodes/me/status';
+
+/** Poll an assertion until it holds or the deadline passes. The route fires the
+ *  restart-detect without awaiting it, so nothing here can be read straight
+ *  after the response. */
+async function waitFor(check: () => void, timeoutMs = 1500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      check();
+      return;
+    } catch (err) {
+      if (Date.now() >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+}
 
 let app: FastifyInstance;
 let seq = 0;
@@ -205,6 +221,25 @@ describe('agent restart is detected from the start-time header', () => {
   // happened yet rather than because nothing will.
   const SETTLE_MS = 1500;
 
+  // Why a failure here can be the machine rather than the code.
+  //
+  // Every case below reads the job out of the REAL `inbound-sync` queue, and
+  // that queue lives in the Redis named by .env.test - which on a developer's
+  // box is the same Redis a locally running panel uses. That panel runs the
+  // worker, so it consumes and removes the job this file enqueued, and
+  // `getJob` then answers `null`: identical to "the route never enqueued it".
+  // Two hours were spent on that once. So it is asked outright, first, in a
+  // case that names the cause instead of leaving it to look like a defect.
+  it('runs against a queue nobody else is consuming', async () => {
+    const workers = await inboundSyncQueue.getWorkers();
+    expect(
+      workers.map((w) => w.name),
+      'something else is running the inbound-sync worker on this Redis - almost always a panel ' +
+        'still up on :3000. It eats the job the cases below look for, and they will read that ' +
+        'as "the route did not enqueue". Stop the panel, or point REDIS_URL somewhere else.',
+    ).toEqual([]);
+  });
+
   async function queuedResync(nodeId: string) {
     const deadline = Date.now() + SETTLE_MS;
     for (;;) {
@@ -274,6 +309,47 @@ describe('agent restart is detected from the start-time header', () => {
         `${bad} was written into Redis under the node's key`,
       ).toBeNull();
     }
+  });
+
+  // What the stored value MEANS, and the only case that tells the two possible
+  // meanings apart. "This start-time has been seen" and "the resync for this
+  // start-time was enqueued" are the same sentence until the enqueue fails -
+  // and then the first one is a lie that never expires, because the next
+  // heartbeat reads `previous === startTime` and stays quiet. The agent
+  // restarted, its user map is empty, and nothing re-pushes until an admin
+  // toggles a profile by hand.
+  //
+  // The trigger is narrow (BullMQ refusing a job while the app's own Redis
+  // client still answers - a panel shutting down, a queue already closed, an
+  // OOM that the small SET survives). The cost is not: it is permanent, silent
+  // and per node.
+  it('does not record a start-time whose resync could not be enqueued', async () => {
+    const node = await makeNode();
+    await poll(node.token, { 'x-agent-start-time': '1747000000000000000' });
+
+    const add = vi
+      .spyOn(inboundSyncQueue, 'add')
+      .mockRejectedValueOnce(new Error('queue is closed'));
+    const res = await poll(node.token, { 'x-agent-start-time': '1747999999999999999' });
+    // The heartbeat itself must still succeed: the resync is fire-and-forget
+    // precisely so a Redis hiccup does not take a node's liveness with it.
+    expect(res.statusCode).toBe(200);
+
+    // The control: the enqueue has to have been attempted, or the assertion
+    // below is about a code path that never ran.
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
+    add.mockRestore();
+
+    expect(
+      await redis.get(`node:${node.id}:agentStartTime`),
+      'the marker was advanced for a resync that never got queued; the next heartbeat will stay quiet forever',
+    ).toBe('1747000000000000000');
+
+    // And the other half - the next heartbeat, with the same value the failed
+    // one carried, still resyncs.
+    await poll(node.token, { 'x-agent-start-time': '1747999999999999999' });
+    expect(await queuedResync(node.id), 'the retry a minute later must resync').toBeTruthy();
+    expect(await redis.get(`node:${node.id}:agentStartTime`)).toBe('1747999999999999999');
   });
 
   // A heartbeat with no header at all is an older agent. It must keep working.
