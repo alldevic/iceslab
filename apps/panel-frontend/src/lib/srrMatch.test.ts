@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SrrRule, SubscriptionFormat } from './api';
 import { compilePattern, matchRule, matchingRules, patternCompiles, shadowedBy } from './srrMatch';
+import { UA_MAX_LENGTH } from '@iceslab/shared';
 
 let seq = 0;
 function rule(over: Partial<SrrRule> = {}): SrrRule {
@@ -227,13 +228,36 @@ describe('the truncation the two matchers share', () => {
     'utf8',
   );
 
-  function uaCap(src: string, where: string): number {
-    const m = src.match(/const UA_MAX_LENGTH = (\d+);/);
-    expect(m, `UA_MAX_LENGTH not found in ${where}`).not.toBeNull();
-    return Number(m![1]);
-  }
+  it('is the same length on both sides, because it is the same constant', () => {
+    // This case used to read `const UA_MAX_LENGTH = 256;` out of each file, and
+    // that is how it caught the change below: neither file declares it any
+    // more. Three copies of the pattern rules — the cap, the inline-flag split
+    // and the ReDoS heuristic — moved to `shared` on 2026-08-28, after the
+    // browser half turned out to have the first two and not the third, and to
+    // be running operator-typed patterns on every keystroke without it.
+    expect(UA_MAX_LENGTH).toBe(256);
+    for (const [src, where] of [
+      [FRONT, 'srrMatch.ts'],
+      [BACK, 'srr.service.ts'],
+    ] as const) {
+      expect(src, `${where} declares its own UA cap again`).not.toMatch(
+        /const UA_MAX_LENGTH = \d+;/,
+      );
+      expect(src, `${where} does not take the cap from shared`).toContain('UA_MAX_LENGTH');
+      expect(src).toContain("from '@iceslab/shared'");
+    }
+  });
 
-  it('is the same length on both sides', () => {
-    expect(uaCap(FRONT, 'srrMatch.ts')).toBe(uaCap(BACK, 'srr.service.ts'));
+  it('and neither side carries its own copy of the inline-flag split', () => {
+    // The regex that separates `(?i)` from the body. It was written out three
+    // times, and each copy's comment said it mirrored one of the others.
+    for (const [src, where] of [
+      [FRONT, 'srrMatch.ts'],
+      [BACK, 'srr.service.ts'],
+    ] as const) {
+      expect(src, `${where} still splits inline flags itself`).not.toMatch(
+        /\(\\\?\(\[imsux\]\+\)\\\)/,
+      );
+    }
   });
 });

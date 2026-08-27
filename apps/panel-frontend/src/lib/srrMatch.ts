@@ -1,3 +1,5 @@
+import { UA_MAX_LENGTH, compileUaPattern, uaPatternIsSafe } from '@iceslab/shared';
+
 import type { SrrRule, SubscriptionFormat } from './api';
 
 /**
@@ -14,26 +16,41 @@ import type { SrrRule, SubscriptionFormat } from './api';
  * create page answer the same question about a rule that does not exist yet.
  */
 
-/** Matches the backend's UA_MAX_LENGTH. */
-const UA_MAX_LENGTH = 256;
-
 /**
- * ECMAScript has no inline flag syntax, but operators paste patterns from
- * grep / PCRE / Python, so `(?i)foo` is split into flags plus body exactly the
- * way the server's compileRule does. Unsupported flags are dropped.
+ * Compile a pattern for use HERE, in the operator's browser — or refuse.
+ *
+ * Refusing is the part that was missing. The API rejects a pattern with a
+ * nested quantifier at save time, because V8 backtracks and `(a+)+` is
+ * exponential on a short crafted input; its comment says the UA-length cap does
+ * not defang that. All of it is equally true of this side, which ran the
+ * pattern the operator was still typing against a 256-character sample on every
+ * keystroke, with no guard: the tab froze before the save that would have been
+ * refused.
+ *
+ * Both questions now come from `shared`, so the rule is one rule. And the check
+ * is applied to STORED rules too, not just to the one being edited: patterns
+ * saved before the API check existed were never re-validated, so the database
+ * is not a source of safe patterns.
  */
 export function compilePattern(pattern: string): RegExp | null {
-  const m = pattern.match(/^\(\?([imsux]+)\)([\s\S]*)$/);
-  try {
-    return m ? new RegExp(m[2]!, m[1]!.replace(/[^ims]/g, '')) : new RegExp(pattern);
-  } catch {
-    return null;
-  }
+  if (!uaPatternIsSafe(pattern)) return null;
+  return compileUaPattern(pattern);
 }
 
 /** Does this pattern compile at all? The save would be refused otherwise. */
 export function patternCompiles(pattern: string): boolean {
   return pattern.length > 0 && compilePattern(pattern) !== null;
+}
+
+/**
+ * Why a pattern was refused, for a form that has to say something better than
+ * "invalid": the two reasons need different fixes.
+ */
+export function patternProblem(pattern: string): 'invalid' | 'redos' | null {
+  if (pattern.length === 0) return null;
+  if (compileUaPattern(pattern) === null) return 'invalid';
+  if (!uaPatternIsSafe(pattern)) return 'redos';
+  return null;
 }
 
 export interface MatchResult {

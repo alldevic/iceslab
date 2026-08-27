@@ -2270,6 +2270,8 @@ export default {
     fieldPattern: 'User-Agent regex',
     fieldPatternHint: '(?i) at the front means case-insensitive. Tested against the whole header.',
     patternInvalid: 'This is not a regex the panel can compile, so it would be refused on save.',
+    patternRedos:
+      'This nests one quantifier inside another (like (a+)+). V8 backtracks, so a short crafted User-Agent makes it run for a very long time — on the public subscription path, and in this tab. Simplify it.',
     fieldEnabled: 'Enabled',
     fieldEnabledHint: 'A disabled rule is skipped entirely and blocks nothing below it.',
     whatTitle: 'What it serves',

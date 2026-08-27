@@ -13,7 +13,7 @@ import {
   type SubscriptionFormat,
 } from '../lib/api';
 import { CASCADE_AWARE_FORMATS, SRR_FORMATS, formatTone } from '../lib/srrFormats';
-import { compilePattern, patternCompiles, shadowedBy } from '../lib/srrMatch';
+import { compilePattern, patternCompiles, shadowedBy, patternProblem } from '../lib/srrMatch';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { BarButton, BoltIcon, FormatChip, InfoIcon, TickIcon, WarnIcon, isCatchAll } from './SrrPage';
 
@@ -99,6 +99,10 @@ export function SrrRulePage() {
 
   const priority = typeof draft.priority === 'number' ? draft.priority : 100;
   const patternOk = patternCompiles(draft.uaPattern);
+  // Why it was refused, not just that it was. `patternCompiles` is false for
+  // both a broken pattern and a dangerous one, and the second is the one the
+  // API names specifically.
+  const patternIssue = patternProblem(draft.uaPattern);
   const valid = draft.name.trim().length > 0 && patternOk;
 
   // A stored rule can hold a format this panel no longer offers, so keep it in
@@ -295,9 +299,13 @@ export function SrrRulePage() {
                 onChange={(e) => patch({ uaPattern: e.currentTarget.value })}
                 styles={{ input: { fontFamily: MONO, fontSize: 13 } }}
               />
-              {draft.uaPattern.length > 0 && !patternOk ? (
+              {patternIssue ? (
                 <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED }}>
-                  {t('delivery.patternInvalid')}
+                  {/* Two refusals with two different fixes. "Invalid" on a
+                      pattern that compiles perfectly well and merely nests a
+                      quantifier sends the operator hunting for a typo that is
+                      not there. */}
+                  {t(patternIssue === 'redos' ? 'delivery.patternRedos' : 'delivery.patternInvalid')}
                 </Text>
               ) : (
                 <Hint>{t('delivery.fieldPatternHint')}</Hint>
