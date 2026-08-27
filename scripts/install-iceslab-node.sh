@@ -102,10 +102,6 @@
 #   --with-singbox          also install the sing-box engine, so this node can
 #                           serve engine=singbox inbounds (vless/vmess/trojan/
 #                           ss/hy2) alongside its primary protocol.
-#   --xray-reality-public-key <key>
-#                           the public half of the REALITY pair. Only the
-#                           private key is needed to serve; this is recorded so
-#                           the node can report the pair back.
 #   --reset                 wipe a previous install before this one
 #   --uninstall             wipe a previous install and exit, installing nothing
 #   -h, --help              print this header and exit
@@ -391,7 +387,13 @@ HY_PORT_RANGE="20000-50000"
 # Without these flags the Xray adapter stays disabled until the admin edits
 # the env file manually (panel will auto-push these later).
 XR_PRIVATE_KEY=""
-XR_PUBLIC_KEY=""
+# There is no XR_PUBLIC_KEY. `--xray-reality-public-key` existed here for
+# months, was written into no file and read by no line, and got a --help
+# paragraph in 2026-08-27's pass over "parsed but undocumented" that promised
+# the node "records" it. Nothing recorded anything. A REALITY server needs the
+# private half only; the public half is a client-side parameter the panel
+# already holds, because the panel is what generated the pair. Removed rather
+# than wired, on the same grounds as the seven dead config.ts keys.
 XR_SHORT_IDS=""
 XR_SERVER_NAMES="www.cloudflare.com"
 XR_DEST="www.cloudflare.com:443"
@@ -535,7 +537,6 @@ while [[ $# -gt 0 ]]; do
     --hysteria-port-range)     HY_PORT_RANGE="$2"; shift 2 ;;
     # Xray REALITY: pre-fill env so the adapter starts immediately
     --xray-reality-private-key)  XR_PRIVATE_KEY="$2"; shift 2 ;;
-    --xray-reality-public-key)   XR_PUBLIC_KEY="$2"; shift 2 ;;
     --xray-reality-short-ids)    XR_SHORT_IDS="$2"; shift 2 ;;
     --xray-reality-server-names) XR_SERVER_NAMES="$2"; shift 2 ;;
     --xray-reality-dest)         XR_DEST="$2"; shift 2 ;;

@@ -407,6 +407,39 @@ done
 
 fi   # namespaces available
 
+# ───── Every flag's value must reach something ─────
+#
+# The two directions above are about NAMES: --help and the parser hold the same
+# list. Neither says the value goes anywhere. `--xray-reality-public-key` passed
+# both for months — parsed into XR_PUBLIC_KEY, and XR_PUBLIC_KEY was read by no
+# line in the file. The pass that closed the name gap gave it a --help paragraph
+# saying the node "records" it, which made the mirror green and the promise
+# false: an operator handing the installer their public key watched it go
+# nowhere. So the third question is asked here, of the variable rather than the
+# flag, and comments are stripped first — a variable mentioned only in prose
+# about itself is exactly the shape being looked for.
+note "what the flags do with their values"
+PARSER_BLOCK=$(sed -n '/^while \[\[ \$# -gt 0 \]\]; do/,/^done$/p' "$NODE_INSTALLER")
+FLAG_VARS=$(grep -oE '^\s+--[a-z0-9-]+\)\s+[A-Z_]+=' <<<"$PARSER_BLOCK" \
+    | grep -oE '[A-Z_]+=' | tr -d '=' | sort -u)
+var_count=$(printf '%s\n' "$FLAG_VARS" | grep -c .)
+if [[ "$var_count" -ge 15 ]] && grep -qx 'PROTOCOL' <<<"$FLAG_VARS"; then
+    ok "read $var_count variables the flags assign to"
+else
+    bad "only $var_count flag variables parsed out (PROTOCOL among them: $(grep -qx PROTOCOL <<<"$FLAG_VARS" && echo yes || echo no)); this case is nearly empty"
+fi
+# Everything except the parser arm that assigns it, with comments removed.
+BODY_NO_COMMENTS=$(grep -v '^\s*#' "$NODE_INSTALLER" | grep -vE '^\s+--[a-z0-9-]+\)\s+[A-Z_]+=')
+unread=""
+for v in $FLAG_VARS; do
+    grep -qE "\\\$\{?${v}\b" <<<"$BODY_NO_COMMENTS" || unread="${unread} ${v}"
+done
+if [[ -z "${unread// /}" ]]; then
+    ok "and every one of them is read somewhere outside the parser"
+else
+    bad "these flags accept a value the script then never reads:${unread}"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  install-iceslab-node.sh: the prologue, run for real
 # ═════════════════════════════════════════════════════════════════════════════
