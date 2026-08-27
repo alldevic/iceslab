@@ -861,18 +861,39 @@ note "cross-file contracts"
 # an error — docker fetches an image nobody builds with, the build then pulls
 # the real one anyway, and the only symptom is the slow first run the pre-pull
 # exists to prevent.
+#
+# "Nobody builds with" has to mean THIS installer's build, not the repository's.
+# The first version of this case read all three Dockerfiles, the agent's
+# included, and therefore accepted `golang:1.22-alpine` — an image every panel
+# host downloaded on every install and no build on that host ever opened,
+# because the only thing that builds the Go agent is CI. The set below is read
+# out of docker-compose.prod.yml, which is the file the installer's own
+# `docker compose build` is pointed at.
 prepulled=$(grep -oE '^docker pull [a-z0-9./-]+:[A-Za-z0-9._-]+' "$PANEL_INSTALLER" | awk '{print $3}' | sort -u)
 if [[ -n "$prepulled" ]]; then
     ok "the installer pre-pulls $(printf '%s\n' "$prepulled" | grep -c .) base image(s)"
 else
-    bad "no `docker pull` lines found in ${PANEL_INSTALLER}; this contract is not being checked"
+    bad "no \`docker pull\` lines found in ${PANEL_INSTALLER}; this contract is not being checked"
 fi
 
-# What the build and the stack actually use: ARG defaults in the three
-# Dockerfiles, plus the images docker-compose.prod.yml names outright.
+BUILT_DOCKERFILES=$(grep -oE '^\s*dockerfile: [A-Za-z0-9./_-]+' "${REPO_ROOT}/docker-compose.prod.yml" \
+    | awk '{print $2}' | sort -u)
+unreadable=""
+for df in $BUILT_DOCKERFILES; do
+    [[ -r "${REPO_ROOT}/${df}" ]] || unreadable="${unreadable} ${df}"
+done
+if [[ "$(printf '%s\n' "$BUILT_DOCKERFILES" | grep -c .)" -ge 2 && -z "$unreadable" ]]; then
+    ok "the prod compose names $(printf '%s\n' "$BUILT_DOCKERFILES" | grep -c .) Dockerfile(s), all readable"
+else
+    bad "the Dockerfiles read out of docker-compose.prod.yml are not a set this can compare against (unreadable:${unreadable:- none}):
+$(printf '        %s\n' $BUILT_DOCKERFILES)"
+fi
+
+# What that build and the stack actually use: ARG defaults in the Dockerfiles
+# compose builds, plus the images compose names outright.
 declared="$(
     {
-        for df in apps/panel-backend/Dockerfile apps/panel-frontend/Dockerfile apps/node/Dockerfile; do
+        for df in $BUILT_DOCKERFILES; do
             # `ARG NODE_VERSION=22.22-alpine` + `FROM node:${NODE_VERSION}` ->
             # node:22.22-alpine. Read as a pair so a renamed ARG cannot pass by
             # matching nothing.
@@ -886,17 +907,27 @@ declared="$(
     } | sort -u
 )"
 if [[ -n "$declared" ]]; then
-    ok "the Dockerfiles and compose declare $(printf '%s\n' "$declared" | grep -c .) base image(s)"
+    ok "they and compose declare $(printf '%s\n' "$declared" | grep -c .) base image(s)"
 else
     bad "nothing parsed out of the Dockerfiles or compose; the comparison below would be empty"
 fi
 
 dead=$(comm -23 <(printf '%s\n' "$prepulled") <(printf '%s\n' "$declared") | tr '\n' ' ')
 if [[ -z "${dead// /}" ]]; then
-    ok "every pre-pulled tag is one something actually builds or runs"
+    ok "every pre-pulled tag is one this host's build or stack actually opens"
 else
-    bad "the installer pre-pulls tags nothing uses (dead pulls, the exact failure its comment describes):${dead}
+    bad "the installer pre-pulls tags nothing on the panel host uses (dead pulls, the exact failure its comment describes):${dead}
       declared: $(printf '%s ' $declared)"
+fi
+
+# The other direction, which is the one the pre-pull exists for: an image the
+# build needs and nobody warmed is fetched mid-build, serially, which is the
+# silent first-run delay this step was added to remove.
+cold=$(comm -13 <(printf '%s\n' "$prepulled") <(printf '%s\n' "$declared") | tr '\n' ' ')
+if [[ -z "${cold// /}" ]]; then
+    ok "and every base image the build needs is pre-pulled"
+else
+    bad "these base images are built with and never pre-pulled:${cold}"
 fi
 
 # The node agent's mTLS port is written down three times: the installer's

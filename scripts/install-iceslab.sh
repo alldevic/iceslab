@@ -631,12 +631,17 @@ step "Pre-pull base images"
 # Tags MUST match the Dockerfile ARGs / compose images, else the pre-pull
 # caches an image the build never uses (we once had node:22-alpine vs the
 # Dockerfile's 22.22-alpine, and golang:1.23 vs 1.22: both dead pulls).
-log "Caching postgres:16-alpine, redis:7-alpine, nginx:1.27-alpine, node:22.22-alpine, golang:1.22-alpine"
+# golang:1.22-alpine was a third one, and it survived longer because it is a
+# real tag of a real Dockerfile: apps/node's. Nothing on a panel host builds
+# the Go agent — docker-compose.prod.yml builds the backend and the frontend
+# and nothing else — so every install spent a base-image download on a build
+# that never happens. The set below is exactly what that compose file opens;
+# installer-selftest.sh reads both sides and compares them.
+log "Caching postgres:16-alpine, redis:7-alpine, nginx:1.27-alpine, node:22.22-alpine"
 docker pull postgres:16-alpine >/dev/null 2>&1 &
 docker pull redis:7-alpine >/dev/null 2>&1 &
 docker pull nginx:1.27-alpine >/dev/null 2>&1 &
 docker pull node:22.22-alpine >/dev/null 2>&1 &
-docker pull golang:1.22-alpine >/dev/null 2>&1 &
 wait
 ok "base images cached locally"
 
