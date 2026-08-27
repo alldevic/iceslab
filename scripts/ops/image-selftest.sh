@@ -24,6 +24,11 @@
 #   * the panel installer's own health probe, run inside a real backend
 #     container against a real Postgres and Redis. The probe names a binary and
 #     a URL and greps for a string, and all three live in the other artefact.
+#   * the frontend container, RUNNING, for which public paths it forwards to the
+#     backend and which its SPA fallback swallows. nginx routes by prefix,
+#     regex and modifier, and the fallback answers every unmatched path with
+#     index.html and HTTP 200 — so a missing route is invisible in the config
+#     and invisible in the status code, and only a request finds it.
 #   * docker-compose.prod.yml, for who publishes a port. A published port is
 #     DNAT'd in nat/PREROUTING before ufw's filter chains run, so `ufw deny` on
 #     it does nothing — measured on a VM in §46.16. Postgres and Redis publish
@@ -49,6 +54,9 @@ NET="iceslab-imgtest-$$"
 PG="iceslab-imgtest-pg-$$"
 RD="iceslab-imgtest-redis-$$"
 BE="iceslab-imgtest-backend-$$"
+FE="iceslab-imgtest-frontend-$$"
+MB="iceslab-imgtest-marker-$$"
+FE_PORT=18099
 PGPASS=imgtest
 DBURL="postgres://iceslab:${PGPASS}@${PG}:5432/iceslab"
 
@@ -67,7 +75,7 @@ if ! command -v docker >/dev/null || ! docker info >/dev/null 2>&1; then
 fi
 
 cleanup() {
-    docker rm -f "$BE" "$PG" "$RD" >/dev/null 2>&1 || true
+    docker rm -f "$BE" "$PG" "$RD" "$FE" "$MB" >/dev/null 2>&1 || true
     docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -619,19 +627,98 @@ else
     bad "the frontend image carries env files:
 $(feq 'find / -name ".env*" -not -path "/proc/*" -not -path "*/node_modules/*" 2>/dev/null' | sed 's/^/      /')"
 fi
-# The nginx layer proxies /api, /sub and /health to the backend; a bundle that
-# shipped without that config is a panel whose UI loads and whose every request
-# 404s.
-NGINX_CONF="$(feq 'cat /etc/nginx/conf.d/default.conf 2>/dev/null')"
-missing_loc=""
-for loc in /api /sub /health; do
-    grep -qE "location [^{]*${loc}" <<<"$NGINX_CONF" || missing_loc="${missing_loc} ${loc}"
+# ───── Which public paths actually reach the backend ─────
+#
+# This used to grep the config file for `location /api`, and that check could
+# not have failed on any of the three paths it turned out to be missing. A
+# `location` is not routing: nginx picks by prefix, by regex, and by modifier,
+# and the SPA fallback at the bottom answers EVERY unmatched path with
+# index.html and HTTP 200. So a public backend path nobody wrote a location for
+# does not 404 — it hands a subscriber's client, a node, or the storefront a
+# page of HTML while saying OK.
+#
+# So the container is started and asked. The upstream is a marker that echoes
+# the path it was given, because the question is "did this request leave the
+# frontend", and a real backend's 401 is a worse answer to it than a string
+# that says BACKEND.
+note "the frontend image's routing, asked of a running container"
+MARKER_CONF="$(mktemp)"
+cat > "$MARKER_CONF" <<'MARKEREOF'
+server {
+    listen 3000 default_server;
+    location / { default_type text/plain; return 200 "IMGTEST-BACKEND $request_uri\n"; }
+}
+MARKEREOF
+docker run -d --name "$MB" --network "$NET" --network-alias backend \
+    -v "$MARKER_CONF":/etc/nginx/conf.d/default.conf:ro nginx:1.27-alpine >/dev/null 2>&1
+# Non-default prefixes on purpose. The defaults would pass on a config that
+# hardcodes `/sub` and `rw`, which is the config this replaced: an operator who
+# sets SUBSCRIPTION_PATH_PREFIX to mask the panel's signature, or moves the
+# facade off `rw`, gets the SPA on every subscription and every storefront call.
+docker run -d --name "$FE" --network "$NET" -p "127.0.0.1:${FE_PORT}:80" \
+    -e ICESLAB_SUB_PREFIX=/v -e ICESLAB_COMPAT_PREFIX=shop \
+    "$FRONTEND_IMG" >/dev/null 2>&1
+fe_up=""
+for _ in $(seq 1 40); do
+    curl -sf -o /dev/null "http://127.0.0.1:${FE_PORT}/" && { fe_up=1; break; }
+    sleep 0.5
 done
-if [[ -n "$NGINX_CONF" && -z "$missing_loc" ]]; then
-    ok "and its nginx config proxies /api, /sub and /health to the backend"
+if [[ -n "$fe_up" ]]; then
+    ok "the frontend container starts and serves the SPA on :80"
 else
-    bad "the frontend's nginx config is missing location(s):${missing_loc:- (config not readable)}"
+    bad "the frontend container never answered on 127.0.0.1:${FE_PORT}; the routing cases below cannot mean anything"
 fi
+
+fetch() { curl -s --max-time 10 "http://127.0.0.1:${FE_PORT}$1"; }
+# The control for every case in this block: an unrouted path must reach the SPA,
+# not the marker. Without it a frontend that forwarded EVERYTHING would pass the
+# whole list below while breaking client-side routing.
+if [[ "$(fetch /users)" == *"IMGTEST-BACKEND"* ]]; then
+    bad "an SPA route (/users) is being proxied to the backend; the fallback is what makes client-side routing work"
+else
+    ok "and an SPA route still falls back to index.html, so 'reaches the backend' below means something"
+fi
+
+proxied=""
+unproxied=""
+# Every path the backend answers on that a browser, a subscriber's client, a
+# node or the storefront asks for through this origin. `/v` and `/shop` are the
+# non-default prefixes this container was started with.
+for path in /api/auth/status /health /admin/queues /v/sometoken \
+            /geo/sometoken/geosite.dat /shop/api/sub/sometoken /shop/api/users; do
+    if [[ "$(fetch "$path")" == *"IMGTEST-BACKEND"* ]]; then
+        proxied="${proxied} ${path}"
+    else
+        unproxied="${unproxied} ${path}"
+    fi
+done
+if [[ -z "$unproxied" ]]; then
+    ok "every public backend path reaches the backend:${proxied}"
+else
+    bad "these public backend paths are answered by the SPA fallback (HTTP 200, HTML) instead of the backend:${unproxied}"
+fi
+
+# ───── The response headers, on the document they are for ─────
+#
+# nginx does not merge `add_header`: a location that declares one of its own
+# drops every header inherited from the server block. Three locations here
+# declare their own, so the set is included from one snippet — and this asks
+# the running container whether that worked, on the paths that matter. The
+# report-only CSP was, before this, sent on the API's JSON and on no HTML at
+# all, which is a policy that can only ever report that everything is fine.
+hdr_missing=""
+for path in / /index.html /users; do
+    h="$(curl -s --max-time 10 -D - -o /dev/null "http://127.0.0.1:${FE_PORT}${path}")"
+    for header in Content-Security-Policy-Report-Only X-Frame-Options X-Content-Type-Options Referrer-Policy; do
+        grep -qi "^${header}:" <<<"$h" || hdr_missing="${hdr_missing} ${path}:${header}"
+    done
+done
+if [[ -z "$hdr_missing" ]]; then
+    ok "and every security header, CSP included, ships on / and on the SPA routes that rewrite to index.html"
+else
+    bad "headers missing from the document they apply to:${hdr_missing}"
+fi
+rm -f "$MARKER_CONF"
 
 printf '\n'
 if [[ "$FAIL" -eq 0 ]]; then

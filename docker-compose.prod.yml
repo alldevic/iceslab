@@ -237,6 +237,13 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     image: iceslab-frontend:latest
     container_name: iceslab-prod-frontend
+    environment:
+      # The two backend paths this proxy cannot guess. They must track the
+      # backend's own SUBSCRIPTION_PATH_PREFIX / REMNAWAVE_COMPAT_PREFIX above:
+      # a mismatch does not error, it serves index.html with HTTP 200 to a
+      # subscriber's client or to the storefront.
+      ICESLAB_SUB_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
+      ICESLAB_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
     mem_limit: 96m
     depends_on:
       backend:

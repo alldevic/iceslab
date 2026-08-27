@@ -2,8 +2,32 @@
 #
 # Two responsibilities:
 #   1. Serve the Vite-built SPA with client-side-routing fallback.
-#   2. Reverse-proxy `/api`, `/sub`, `/health` to the backend service so the
-#      browser sees a single origin (no CORS).
+#   2. Reverse-proxy the backend's PUBLIC paths so the browser, a subscriber's
+#      client and the storefront all see a single origin (no CORS).
+#
+# This is a TEMPLATE, rendered by the nginx image's own entrypoint
+# (`/etc/nginx/templates/*.template` → `/etc/nginx/conf.d/`) because two of
+# those paths are operator-configurable on the backend and a hardcoded
+# `location` cannot follow them:
+#
+#   ICESLAB_SUB_PREFIX     = the backend's SUBSCRIPTION_PATH_PREFIX (`/sub`),
+#                            which an operator changes to mask the panel's
+#                            signature in user links (`/v`, `/get`).
+#   ICESLAB_COMPAT_PREFIX  = the backend's REMNAWAVE_COMPAT_PREFIX (`rw`),
+#                            where the storefront facade is mounted.
+#
+# `NGINX_ENVSUBST_FILTER=^ICESLAB_` (set in the Dockerfile) is what keeps the
+# substitution to those two: without it envsubst would also eat `$host`,
+# `$uri`, `$backend` and every other nginx variable in this file whose name
+# happens to exist in the environment.
+#
+# Every location that forwards is here because the backend answers there and
+# NOTHING ELSE DOES. The SPA fallback at the bottom is a catch-all that returns
+# index.html with HTTP 200 for any path, so a public backend path missing from
+# this list does not 404 — it silently serves HTML to a client expecting a
+# subscription, a geo database or a JSON API. That failure is invisible from
+# the backend side, which is why `image-selftest.sh` starts this container and
+# asks it, rather than reading this file.
 #
 # The upstream `backend` resolves via Docker Compose's service DNS, that
 # means this image is opinionated for our compose topology. If you front
@@ -36,8 +60,8 @@ server {
     # ───── Security headers ─────
     # Defence-in-depth for the admin panel. `always` sends them on error
     # responses too. nginx does NOT merge add_header into child locations that
-    # declare their own add_header, so the two cache locations below re-state
-    # these.
+    # declare their own add_header, so the two cache locations below include
+    # the same snippet rather than re-typing the list.
     #
     # I9 - CSP ships in REPORT-ONLY mode: it does NOT block anything, only logs
     # violations to the browser console, so an operator can confirm the policy
@@ -48,10 +72,7 @@ server {
     # /api proxy) - widen it if the SPA ever calls an external host directly.
     set $csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'";
     server_tokens off;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Content-Security-Policy-Report-Only $csp always;
+    include /etc/nginx/snippets/security-headers.conf;
 
     # The variable in proxy_pass is what activates the runtime resolver
     # path. With a static upstream{} block (the previous setup), nginx
@@ -87,12 +108,49 @@ server {
         proxy_read_timeout 10s;
     }
 
-    location /sub/ {
+    # The subscription a buyer's client polls. `^~` so the regex static-asset
+    # location below can never win on a path that happens to end in a known
+    # extension — this location serves the backend's HTML subscription page as
+    # well as the config formats.
+    location ^~ ${ICESLAB_SUB_PREFIX}/ {
         proxy_pass http://$backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Self-hosted geo distribution (GEO_SELF_HOST). Subscriptions and node
+    # configs point their geo databases at PUBLIC_URL/geo/<token>/<name>, so
+    # without this the artefact request lands on the SPA fallback and a client
+    # parses index.html as a .dat. `^~` is required here rather than tidy:
+    # artefact names carry extensions.
+    location ^~ /geo/ {
+        proxy_pass http://$backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # A geo artefact is tens of MB off the backend's heap; the default 60s
+        # is for an API call, not for a mirror download over a slow link.
+        proxy_read_timeout 300s;
+    }
+
+    # The Remnawave-compat facade (REMNAWAVE_COMPAT_ENABLED). The storefront is
+    # documented to point PANEL_API_URL at `https://<panel-host>/<prefix>/api`
+    # — this host — and the buyer's client fetches the fallback subscription
+    # link at `/<prefix>/api/sub/<token>`. Forwarded whether or not the facade
+    # is switched on: with it off the backend answers 404, which is the truth,
+    # while the SPA fallback answers 200 with HTML, which is not.
+    location ^~ /${ICESLAB_COMPAT_PREFIX}/ {
+        proxy_pass http://$backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
     }
 
     location = /health {
@@ -128,10 +186,9 @@ server {
     location ~* \.(?:js|css|woff2?|ttf|eot|svg|ico|png|jpg|jpeg|gif|webp)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
-        # Re-stated: this location's own add_header drops the server-level ones.
-        add_header X-Frame-Options "SAMEORIGIN" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        # Re-included, not re-typed: this location's own add_header drops every
+        # header inherited from the server block, all of them, always.
+        include /etc/nginx/snippets/security-headers.conf;
         access_log off;
         try_files $uri =404;
     }
@@ -140,10 +197,11 @@ server {
     location = /index.html {
         expires -1;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
-        # Re-stated: this location's own add_header drops the server-level ones.
-        add_header X-Frame-Options "SAMEORIGIN" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        # This is the location that made the duplication worth removing: it is
+        # where `/` and every SPA route land (try_files rewrites to
+        # /index.html), so a header missing here is a header the browser never
+        # sees on the document it applies to.
+        include /etc/nginx/snippets/security-headers.conf;
     }
 
     # SPA fallback: client-side routes resolve to index.html.

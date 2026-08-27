@@ -275,9 +275,18 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
 
   // G6 - PUBLIC distribution. Nodes fetch the mirror + custom .dat here; clients
   // fetch geo databases referenced by their subscription. Unauthenticated (geo
-  // data is public; the threat is scanners/DDoS, not leakage - mitigated by the
-  // capability prefix + reverse-proxy cache, per geo-svc). The prefix is a
+  // data is public; the threat is scanners/DDoS, not leakage). The prefix is a
   // deterministic token; a wrong one is a 404 (no oracle).
+  //
+  // The second half of that mitigation - a reverse-proxy cache in front - does
+  // NOT exist in the bundled deploy: it is deferred in
+  // docs/geo-svc-prod-checklist.md until the client base grows. So today the
+  // only ceiling on this route is the app-wide 100/min/IP, and one answer is
+  // the whole source mirror (70 MB on the 2026-08-28 lab build). No per-route
+  // rate limit is written here on purpose: a number low enough to bound that
+  // egress is also low enough to cut off a CGNAT of real clients the hour
+  // after a rebuild, so the cache is the fix and this comment is the record
+  // that it is still owed.
   // Constant-time capability check (hash both sides to a fixed length first,
   // since timingSafeEqual needs equal-sized inputs).
   const digest = (s: string): Buffer => createHash('sha256').update(s).digest();
