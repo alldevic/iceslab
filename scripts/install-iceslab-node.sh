@@ -5,15 +5,17 @@
 #   1. Verifies Go + git (installs them on Ubuntu/Debian if missing)
 #   2. Clones repo into $ICESLAB_NODE_DIR (default /opt/iceslab-node)
 #   3. Builds the static node-agent binary -> /usr/local/bin/iceslab-node
-#   4. (per --protocol) chains the protocol-specific bootstrap:
-#        hysteria     -> installs official hysteria via get.hy2.sh
-#        xray         -> installs official xray via XTLS install-script
+#   4. (per --protocol) installs the core. Cores the PANEL carries come from
+#      the panel, pinned and sha256-verified (see packages/shared/src/
+#      core-binaries.ts); the rest are built or come from apt:
+#        xray         -> from the panel (binary + geoip.dat/geosite.dat)
+#        shadowsocks  -> the same xray (SS2022 runs inside xray-core)
+#        hysteria     -> from the panel
+#        mtproto      -> from the panel, installed by bootstrap-mtg.sh
+#        mieru        -> from the panel, installed by bootstrap-mieru.sh
 #        amneziawg    -> runs apps/node/scripts/bootstrap-amneziawg.sh
 #        wireguard    -> runs apps/node/scripts/bootstrap-wireguard.sh
 #        naive        -> runs apps/node/scripts/bootstrap-naive.sh (xcaddy + plugin)
-#        shadowsocks  -> reuses xray-core (SS2022 multi-user runs inside xray)
-#        mtproto      -> runs apps/node/scripts/bootstrap-mtg.sh (9seconds/mtg)
-#        mieru        -> runs apps/node/scripts/bootstrap-mieru.sh (enfein/mieru)
 #   5. Drops a systemd unit at /etc/systemd/system/iceslab-node.service
 #   6. Writes /etc/iceslab-node/env with NODE_PAYLOAD + protocol env
 #   7. Enables + starts the service, waits for /healthz
@@ -258,41 +260,24 @@ ICESLAB_NODE_DIR=${ICESLAB_NODE_DIR:-/opt/iceslab-node}
 ICESLAB_NODE_REPO=${ICESLAB_NODE_REPO:-https://github.com/icecompany-tech/iceslab.git}
 ICESLAB_NODE_REF=${ICESLAB_NODE_REF:-v0.2.0}
 
-# ───── Third-party installer pinning (supply-chain) ─────
+# ───── Third-party fetching (supply-chain) ─────
 #
-# Hysteria and Xray installers previously ran as `bash <(curl get.hy2.sh)`
-# and `XTLS/Xray-install/raw/main/...`, both unpinned, executing whatever
-# the upstream `main`/HTTP host serves at the moment of install. A
-# compromise of either upstream (or a DNS hijack on the box) gave the
-# attacker root.
+# History, because the shape of it explains what is left. Hysteria and Xray
+# were installed by running upstream INSTALLER SCRIPTS — `bash <(curl
+# get.hy2.sh)` and `XTLS/Xray-install/raw/main/...` — unpinned, executing
+# whatever those hosts served at that moment, as root. Pinning the scripts by
+# tag or commit (`pinned_fetch`, below) closed that, with an optional sha256 on
+# top. What it never covered was the BINARY those scripts then downloaded, and
+# that binary is the thing that ends up serving traffic.
 #
-# Pinning: fetch the installer from a specific tag/commit, optionally
-# verify a sha256, then run. Operators who want full supply-chain
-# hardening set the *_SHA env var; default is tag-pin only (still better
-# than `main`). To bump: pick a new tag or commit, then read the sum the
-# same way pinned_fetch will:
+# Since 2026-08-28 the cores come from the panel instead: pinned by version and
+# sha256 in packages/shared/src/core-binaries.ts, checksum-verified when the
+# panel image was built, and fetched over the same TLS and the same bearer this
+# node already uses for its heartbeat. `panel_core_fetch` is that path and
+# there is deliberately no fallback to upstream.
 #
-#   curl --proto '=https' --max-redirs 0 -fsSL <url> | sha256sum
-#
-# and paste it back here. (This used to say "run the installer once with
-# --dry-pin"; there has never been such a flag, so the one documented way to
-# obtain a pin was a command that answers `Unknown arg`.)
-# Hysteria: apernet/hysteria releases the server/client under the `app/v*`
-# tag prefix (their `v*` tags are for the legacy hysteria-v1 lineage and
-# do NOT have the server install script). Bump to a later app/* tag as
-# upstream releases.
-HYSTERIA_INSTALLER_REF=${HYSTERIA_INSTALLER_REF:-app/v2.9.1}
-HYSTERIA_INSTALLER_SHA=${HYSTERIA_INSTALLER_SHA:-}
-HYSTERIA_VERSION=${HYSTERIA_VERSION:-}   # passed as --version to the script; empty = installer default
-
-# Xray-install: XTLS/Xray-install publishes no tags/releases, only a
-# `main` branch. We pin to a specific commit SHA so a hostile commit to
-# main doesn't auto-deploy. Bump by reading `git rev-parse main` on the
-# upstream repo and updating both this default and SECURITY.md. The
-# `pinned_fetch` SHA-256 knob (XRAY_INSTALLER_SHA) is the second line of
-# defence; production operators should set it.
-XRAY_INSTALLER_REF=${XRAY_INSTALLER_REF:-e741a4f56d368afbb9e5be3361b40c4552d3710d}
-XRAY_INSTALLER_SHA=${XRAY_INSTALLER_SHA:-}
+# `pinned_fetch` stays for what is still fetched from upstream — nothing in the
+# core path today, and it is the right helper for the next thing that is.
 
 # pinned_fetch <url> <out-path> [<expected-sha256>]
 # Fetches a URL over HTTPS with no redirects, optionally verifying the
@@ -980,60 +965,155 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/iceslab-node
 chmod +x /usr/local/bin/iceslab-node
 ok "built /usr/local/bin/iceslab-node ($(stat -c %s /usr/local/bin/iceslab-node) bytes)"
 
+# ───── Cores come from the panel, not from GitHub ─────
+#
+# Until 2026-08-28 this node fetched its proxy core straight from upstream:
+# "latest" resolved through api.github.com, installed unverified, on the
+# machine that also holds this node's mTLS key — and over a path a node behind
+# a censoring ISP may not have at all. The panel now carries the cores, pinned
+# by version and sha256 and checksum-verified when its image was built, and a
+# node takes them from the panel it already trusts using the bearer its own
+# bootstrap payload carries.
+#
+# There is deliberately NO fallback to GitHub. A panel that does not carry the
+# architecture refuses by name, and this script stops: a fleet where some nodes
+# quietly got their binaries from somewhere else is the state this replaces.
+
+# The panel address and the agent bearer both live in the payload, so this
+# works for the bootstrap-token flow and for a hand-delivered --payload alike.
+# Read with grep rather than a JSON parser because `jq` is not a dependency of
+# this installer and adding one for two fields would be the more fragile trade.
+payload_field() {
+  printf '%s' "$PAYLOAD" | base64 -d 2>/dev/null \
+    | grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+    | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/'
+}
+
+CORE_ARCH=""
+case "$(dpkg --print-architecture 2>/dev/null || uname -m)" in
+  amd64|x86_64)   CORE_ARCH=amd64 ;;
+  arm64|aarch64)  CORE_ARCH=arm64 ;;
+  armhf|armv7l)   CORE_ARCH=armv7 ;;
+esac
+
+# Fetch one pinned artefact from the panel into $2, byte-identical to what
+# upstream published. The panel states the pinned sha256 in a header and this
+# verifies against it, so a truncated transfer or a proxy that rewrites bodies
+# stops here rather than being installed.
+panel_core_fetch() {
+  local core="$1" dest="$2"
+  local base bearer url hdr code sha_want sha_got
+  base="$(payload_field panelUrl)"
+  bearer="$(payload_field heartbeatToken)"
+  [[ -n "$base"   ]] || fail "core fetch: the payload carries no panelUrl, so this node cannot ask the panel for ${core}"
+  [[ -n "$bearer" ]] || fail "core fetch: the payload carries no heartbeatToken (issued by a panel older than the core store); re-issue the bootstrap token"
+  [[ -n "$CORE_ARCH" ]] || fail "core fetch: unsupported architecture $(uname -m)"
+
+  url="${base%/}/api/internal/cores/${core}/${CORE_ARCH}"
+  hdr="$(mktemp)"
+  log "Fetching ${core} (${CORE_ARCH}) from the panel"
+  code="$(curl --proto '=https' --max-redirs 0 -sS -D "$hdr" -o "$dest" -w '%{http_code}' \
+    -H "Authorization: Bearer ${bearer}" "$url" 2>/dev/null)" || code=000
+  case "$code" in
+    200) ;;
+    000) rm -f "$hdr"; fail "core fetch: cannot reach the panel at ${base} for ${core}" ;;
+    401) rm -f "$hdr"; fail "core fetch: the panel refused this node's bearer; the bootstrap payload may predate the node record" ;;
+    404) rm -f "$hdr"
+         # The panel's own sentence names the way out (rebuild with a wider
+         # CORE_ARCHES, or install on an architecture it carries).
+         fail "core fetch: $(grep -o '"message"[^}]*' "$dest" | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/' || echo "the panel carries no ${core} for ${CORE_ARCH}")" ;;
+    *)   rm -f "$hdr"; fail "core fetch: the panel answered ${code} for ${core}/${CORE_ARCH}" ;;
+  esac
+  sha_want="$(tr -d '\r' < "$hdr" | grep -i '^x-iceslab-sha256:' | awk '{print $2}')"
+  rm -f "$hdr"
+  [[ -n "$sha_want" ]] || fail "core fetch: the panel did not state a sha256 for ${core}; refusing to install unverified bytes"
+  sha_got="$(sha256sum "$dest" | awk '{print $1}')"
+  if [[ "$sha_got" != "$sha_want" ]]; then
+    rm -f "$dest"
+    fail "core fetch: ${core} arrived with sha256 ${sha_got}, the panel pinned ${sha_want}"
+  fi
+  log "  verified ${core} ${CORE_ARCH} (sha256 ${sha_want:0:12}…)"
+}
+
+# xray, and therefore also Shadowsocks 2022, which runs inside xray-core. One
+# function because it is one decision: the two protocol branches below carried
+# the same twenty lines twice, comment for comment, which is how they came to
+# differ only in the log line.
+#
+# This replaces XTLS/Xray-install. That script was fetched pinned by commit
+# (`pinned_fetch`) but the BINARY it then downloaded was chosen and verified by
+# nobody here. What it gave us beyond the binary was geodata and a systemd unit
+# — and the unit is disabled three lines later because the agent supervises
+# xray itself, while the geodata ships inside the same release zip the panel
+# now carries: geoip.dat and geosite.dat sit next to the executable in it.
+install_xray_from_panel() {
+  if command -v xray >/dev/null; then
+    log "xray already present: $(xray version | head -1)"
+  else
+    local zip dir
+    zip="$(mktemp)"; dir="$(mktemp -d)"
+    panel_core_fetch xray "$zip"
+    unzip -oq "$zip" -d "$dir" || { rm -rf "$zip" "$dir"; fail "xray: the panel's artefact is not a readable zip"; }
+    [[ -f "$dir/xray" ]] || { rm -rf "$zip" "$dir"; fail "xray: no executable inside the artefact"; }
+    install -m 0755 "$dir/xray" /usr/local/bin/xray
+    # Same location XTLS/Xray-install used, which is also xray's own default
+    # for XRAY_LOCATION_ASSET. The agent overrides it per cascade when the
+    # panel pushes custom geo; without that override this is where xray looks.
+    install -d -m 0755 /usr/local/share/xray
+    for dat in geoip.dat geosite.dat; do
+      [[ -f "$dir/$dat" ]] && install -m 0644 "$dir/$dat" "/usr/local/share/xray/$dat"
+    done
+    rm -rf "$zip" "$dir"
+    log "installed xray $(/usr/local/bin/xray version | head -1)"
+  fi
+  # Older installs (and any hand-run of the XTLS script) leave a unit that
+  # fights the agent for the same config and port.
+  systemctl stop xray.service  >/dev/null 2>&1 || true
+  systemctl disable xray.service >/dev/null 2>&1 || true
+  PROTO_BINARY=$(command -v xray)
+  PROTO_CONFIG=/usr/local/etc/xray/config.json
+  # The agent cannot create this later: ProtectSystem=strict plus a
+  # ReadWritePaths entry opens an existing path, it does not make one. Without
+  # it every config push dies on `mkdir ...: read-only file system` and the node
+  # reports "degraded: not running: xray" while looking installed.
+  mkdir -p "$(dirname "$PROTO_CONFIG")"
+}
+
+# sing-box, for TUIC / AnyTLS / ShadowTLS and for --with-singbox. Four call
+# sites wrote the same two lines; the only thing that differed between them was
+# the log line and the config path, which is how three of them came to be
+# copies of the fourth.
+install_singbox_from_panel() {
+  local why="$1" tgz
+  log "Chaining bootstrap-singbox.sh (${why})"
+  tgz="$(mktemp)"
+  panel_core_fetch sing-box "$tgz"
+  ICESLAB_CORE_ARTEFACT="$tgz" \
+    bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-singbox.sh"
+  rm -f "$tgz"
+}
+
 step "Protocol bootstrap (${PROTOCOL})"
 case "$PROTOCOL" in
   hysteria)
-    if ! command -v hysteria >/dev/null; then
-      log "Installing hysteria via pinned apernet/hysteria@$HYSTERIA_INSTALLER_REF"
-      HY_TMP=$(mktemp)
-      pinned_fetch \
-        "https://raw.githubusercontent.com/apernet/hysteria/${HYSTERIA_INSTALLER_REF}/scripts/install_server.sh" \
-        "$HY_TMP" \
-        "$HYSTERIA_INSTALLER_SHA"
-      if [[ -n "$HYSTERIA_VERSION" ]]; then
-        bash "$HY_TMP" --version "$HYSTERIA_VERSION"
-      else
-        bash "$HY_TMP"
-      fi
-      rm -f "$HY_TMP"
-    else
+    # Was: fetch apernet's install_server.sh (commit-pinned) and let it choose
+    # and download a binary nobody here verified. Everything else that script
+    # did we undo three steps later anyway — its unit is disabled below,
+    # because this installer writes its own hysteria.service.
+    if command -v hysteria >/dev/null; then
       log "hysteria already present: $(hysteria version | head -1)"
+    else
+      HY_TMP="$(mktemp)"
+      panel_core_fetch hysteria "$HY_TMP"
+      install -m 0755 "$HY_TMP" /usr/local/bin/hysteria
+      rm -f "$HY_TMP"
+      log "installed hysteria $(/usr/local/bin/hysteria version 2>/dev/null | head -1)"
     fi
     PROTO_BINARY=$(command -v hysteria)
     PROTO_CONFIG=/etc/hysteria/config.yaml
     ;;
   xray)
-    if ! command -v xray >/dev/null; then
-      log "Installing xray via pinned XTLS/Xray-install@$XRAY_INSTALLER_REF"
-      XR_TMP=$(mktemp)
-      pinned_fetch \
-        "https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALLER_REF}/install-release.sh" \
-        "$XR_TMP" \
-        "$XRAY_INSTALLER_SHA"
-      # XTLS/Xray-install's install-release.sh takes the operation as its
-      # first positional arg ('install', 'install-geodata', 'remove', etc).
-      # An earlier copy of this line had `@ install`; the stray `@` made
-      # the installer print "unknown option -- -" and abort. Pass the
-      # operation directly.
-      bash "$XR_TMP" install
-      rm -f "$XR_TMP"
-    else
-      log "xray already present: $(xray version | head -1)"
-    fi
-    # XTLS installer creates its own xray.service that conflicts with our
-    # node-agent's subprocess management. Disable it: iceslab-node owns xray.
-    systemctl stop xray.service  >/dev/null 2>&1 || true
-    systemctl disable xray.service >/dev/null 2>&1 || true
-    log "XTLS xray.service disabled; iceslab-node manages xray directly"
-    PROTO_BINARY=$(command -v xray)
-    PROTO_CONFIG=/usr/local/etc/xray/config.json
-    # The XTLS bootstrap creates this directory, but it is skipped when xray is
-    # already installed (e.g. the ansible role put the pinned binary there
-    # first). The agent cannot create it later: ProtectSystem=strict + a
-    # ReadWritePaths entry opens an existing path, it does not make one. Without
-    # it every config push dies on `mkdir ...: read-only file system` and the
-    # node reports "degraded: not running: xray" while looking installed.
-    mkdir -p "$(dirname "$PROTO_CONFIG")"
+    install_xray_from_panel
     ;;
   amneziawg)
     log "Chaining bootstrap-amneziawg.sh"
@@ -1054,60 +1134,47 @@ case "$PROTOCOL" in
     PROTO_CONFIG=/etc/caddy/Caddyfile
     ;;
   shadowsocks)
-    # SS2022 multi-user runs inside xray-core. No separate binary.
-    # Reuse the xray install path; the SS adapter on the node-agent shells out
-    # to its own xray-api inbound on 127.0.0.1:8081 (one above the VLESS
-    # adapter's :8080 to avoid collision when both adapters live on one node).
-    if ! command -v xray >/dev/null; then
-      log "Installing xray (SS2022 runs inside xray-core) via pinned XTLS/Xray-install@$XRAY_INSTALLER_REF"
-      XR_TMP=$(mktemp)
-      pinned_fetch \
-        "https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALLER_REF}/install-release.sh" \
-        "$XR_TMP" \
-        "$XRAY_INSTALLER_SHA"
-      # XTLS/Xray-install's install-release.sh takes the operation as its
-      # first positional arg ('install', 'install-geodata', 'remove', etc).
-      # An earlier copy of this line had `@ install`; the stray `@` made
-      # the installer print "unknown option -- -" and abort. Pass the
-      # operation directly.
-      bash "$XR_TMP" install
-      rm -f "$XR_TMP"
-    else
-      log "xray already present: $(xray version | head -1)"
-    fi
-    systemctl stop xray.service  >/dev/null 2>&1 || true
-    systemctl disable xray.service >/dev/null 2>&1 || true
-    log "XTLS xray.service disabled; iceslab-node manages xray directly"
-    PROTO_BINARY=$(command -v xray)
+    # SS2022 multi-user runs inside xray-core, so this is the xray install with
+    # a different config path. The SS adapter shells out to its own xray-api
+    # inbound on 127.0.0.1:8081 (one above the VLESS adapter's :8080, so both
+    # can live on one node).
+    install_xray_from_panel
     PROTO_CONFIG=/etc/xray/shadowsocks.json
     ;;
   mtproto)
     log "Chaining bootstrap-mtg.sh"
-    bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-mtg.sh"
+    MTG_TMP="$(mktemp)"
+    panel_core_fetch mtg "$MTG_TMP"
+    # ICESLAB_CORE_ARTEFACT: the bootstrap installs THIS file instead of
+    # resolving "latest" and downloading it unverified.
+    ICESLAB_CORE_ARTEFACT="$MTG_TMP" \
+      bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-mtg.sh"
+    rm -f "$MTG_TMP"
     PROTO_BINARY=/usr/local/bin/mtg
     PROTO_CONFIG=/etc/mtg/config.toml
     ;;
   mieru)
     log "Chaining bootstrap-mieru.sh"
-    bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-mieru.sh"
+    MITA_TMP="$(mktemp)"
+    panel_core_fetch mita "$MITA_TMP"
+    ICESLAB_CORE_ARTEFACT="$MITA_TMP" \
+      bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-mieru.sh"
+    rm -f "$MITA_TMP"
     PROTO_BINARY=/usr/local/bin/mita
     PROTO_CONFIG=/etc/mita/server.json
     ;;
   tuic)
-    log "Chaining bootstrap-singbox.sh (TUIC via sing-box engine)"
-    bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-singbox.sh"
+    install_singbox_from_panel "TUIC via sing-box engine"
     PROTO_BINARY=/usr/local/bin/sing-box
     PROTO_CONFIG=/etc/sing-box/config.json
     ;;
   anytls)
-    log "Chaining bootstrap-singbox.sh (AnyTLS via sing-box engine)"
-    bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-singbox.sh"
+    install_singbox_from_panel "AnyTLS via sing-box engine"
     PROTO_BINARY=/usr/local/bin/sing-box
     PROTO_CONFIG=/etc/sing-box/anytls.json
     ;;
   shadowtls)
-    log "Chaining bootstrap-singbox.sh (ShadowTLS via sing-box engine)"
-    bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-singbox.sh"
+    install_singbox_from_panel "ShadowTLS via sing-box engine"
     PROTO_BINARY=/usr/local/bin/sing-box
     PROTO_CONFIG=/etc/sing-box/shadowtls.json
     ;;
@@ -1117,8 +1184,7 @@ esac
 # protocol so an xray/hysteria/shadowsocks node can also serve engine=singbox
 # inbounds. No-op when the primary IS a sing-box protocol (already installed).
 if [ "${WITH_SINGBOX:-0}" = "1" ] && [ "$PROTOCOL" != "tuic" ] && [ "$PROTOCOL" != "anytls" ] && [ "$PROTOCOL" != "shadowtls" ]; then
-  log "Chaining bootstrap-singbox.sh (--with-singbox: engine-choice enabled)"
-  bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-singbox.sh"
+  install_singbox_from_panel "--with-singbox: engine-choice enabled"
 fi
 
 step "Environment file (/etc/iceslab-node/env)"

@@ -78,6 +78,21 @@ FUNCS="${WORK}/funcs.sh"
     sed -n '/^pinned_fetch()/,/^}/p' "$NODE_INSTALLER"
 } > "$FUNCS"
 
+CORE_FUNCS="${WORK}/core-funcs.sh"
+{
+    printf 'log()  { :; }\n'
+    printf 'warn() { :; }\n'
+    printf 'fail() { printf "FAIL: %%s\\n" "$*" >&2; exit 1; }\n'
+    sed -n '/^payload_field()/,/^}/p' "$NODE_INSTALLER"
+    sed -n '/^panel_core_fetch()/,/^}/p' "$NODE_INSTALLER"
+} > "$CORE_FUNCS"
+
+if grep -q '^panel_core_fetch()' "$CORE_FUNCS" && grep -q 'sha256sum' "$CORE_FUNCS"; then
+    ok "panel_core_fetch's real body was extracted from the installer"
+else
+    bad "could not cut panel_core_fetch out of ${NODE_INSTALLER}; every case below would be vacuous"
+fi
+
 if grep -q '^pinned_fetch()' "$FUNCS" && grep -q 'sha256sum' "$FUNCS"; then
     ok "pinned_fetch's real body was extracted from the installer"
 else
@@ -717,7 +732,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
     -keyout "$BS_KEY" -out "$BS_CERT" >/dev/null 2>&1
 
 cat > "${WORK}/panel-stub.py" <<'PYEOF'
-import http.server, ssl, sys, textwrap
+import hashlib, http.server, ssl, sys, textwrap
 
 cert, key, reqlog, portfile = sys.argv[1:5]
 PAYLOAD = "A" * 6000
@@ -731,6 +746,20 @@ class Panel(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(reqlog, "a") as f:
             f.write(self.path + "\n")
+        # Two core downloads: one whose sha256 header matches the body and one
+        # whose does not. The second is the case that matters — the installer
+        # must refuse it and leave nothing on disk.
+        if self.path.startswith("/api/internal/cores/"):
+            body = b"pretend this is a proxy core\n"
+            good = hashlib.sha256(body).hexdigest()
+            honest = "honest" in self.path
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Iceslab-Sha256", good if honest else "0" * 64)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path in ("/api/internal/bootstrap/good-token",
                          "/api/internal/bootstrap/token-from-a-file"):
             # Line-wrapped, the way base64 comes out of most tools, plus a
@@ -912,6 +941,36 @@ if [[ "$(cat "$BS_LOG")" == "/api/internal/bootstrap/token-from-a-file" ]] \
 else
     bad "--bootstrap-file asked the panel for: $(cat "$BS_LOG")
 $(sed 's/^/      /' "$BS_OUT" | tail -20)"
+fi
+
+# ───── The core download, against the same real server ─────
+#
+# The sha256 check is the whole security property of moving the download to the
+# panel: a node must install the bytes the panel pinned or nothing at all. So it
+# is exercised against a server that really answers, in both directions, and the
+# refusing case is asked what it LEFT BEHIND as well as what it returned — an
+# unverified binary at the destination path is exactly the artefact this is for.
+CORE_DEST="${WORK}/fetched-core"
+core_fetch() {  # <path-suffix>
+    rm -f "$CORE_DEST"
+    PAYLOAD="$(printf '%s' "{\"panelUrl\":\"https://127.0.0.1:${BS_PORT}\",\"heartbeatToken\":\"tok\"}" | base64 -w0)" \
+    CORE_ARCH="$1" \
+    CURL_CA_BUNDLE="$BS_CERT" \
+    bash -c 'source "$1"; panel_core_fetch xray "$2"' _ "$CORE_FUNCS" "$CORE_DEST" 2>&1
+}
+
+OUT="$(core_fetch honest || true)"
+if [[ -f "$CORE_DEST" ]] && [[ "$(cat "$CORE_DEST")" == "pretend this is a proxy core" ]]; then
+    ok "a core whose sha256 matches the panel's header is written to disk"
+else
+    bad "the honest download did not land: ${OUT}"
+fi
+
+OUT="$(core_fetch amd64 || true)"
+if [[ ! -f "$CORE_DEST" ]] && grep -q 'sha256' <<<"$OUT"; then
+    ok "and one whose sha256 does NOT match is refused, with nothing left at the destination"
+else
+    bad "the mismatching download left $(ls -la "$CORE_DEST" 2>/dev/null || echo 'nothing') and said: ${OUT}"
 fi
 
 # ───── 404, 410, 418, 000: four codes, four different things to do ─────
@@ -1608,6 +1667,61 @@ fi
 # A flag the role passes and the parser does not know makes every
 # ansible-managed install die on "Unknown arg"; the reverse leaves a capability
 # reachable by hand and not by the role.
+# ═════════════════════════════════════════════════════════════════════════════
+#  Cores come from the panel, and the refusal path is the point
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# `panel_core_fetch` is the function that replaced "download the core from
+# GitHub and install it". Everything it has to get right is a refusal: no
+# panelUrl in the payload, no bearer, a panel that answers 404 for an
+# architecture it was not built with, and — the one that matters most — bytes
+# whose sha256 does not match what the panel pinned. None of those may end with
+# a binary on disk.
+#
+# Cut out of the installer the same way `pinned_fetch` is, so the body under
+# test is the shipped one.
+note "panel_core_fetch"
+
+# A payload is base64 of the JSON the panel mints. These build one by hand so
+# the cases can leave a field out.
+mk_payload() {
+    printf '%s' "$1" | base64 -w0
+}
+FULL_PAYLOAD="$(mk_payload '{"nodeCertPem":"x","heartbeatToken":"tok-abc","panelUrl":"https://panel.example"}')"
+
+OUT="$(PAYLOAD="$(mk_payload '{"nodeCertPem":"x"}')" CORE_ARCH=amd64 bash -c '
+    source "$1"; panel_core_fetch xray /tmp/no-such-dest' _ "$CORE_FUNCS" 2>&1 || true)"
+if grep -q 'no panelUrl' <<<"$OUT"; then
+    ok "a payload with no panelUrl refuses and says which field is missing"
+else
+    bad "a payload with no panelUrl said: ${OUT}"
+fi
+
+OUT="$(PAYLOAD="$(mk_payload '{"panelUrl":"https://panel.example"}')" CORE_ARCH=amd64 bash -c '
+    source "$1"; panel_core_fetch xray /tmp/no-such-dest' _ "$CORE_FUNCS" 2>&1 || true)"
+if grep -q 'heartbeatToken' <<<"$OUT"; then
+    ok "and a payload with no bearer names that instead"
+else
+    bad "a payload with no heartbeatToken said: ${OUT}"
+fi
+
+OUT="$(PAYLOAD="$FULL_PAYLOAD" CORE_ARCH="" bash -c '
+    source "$1"; panel_core_fetch xray /tmp/no-such-dest' _ "$CORE_FUNCS" 2>&1 || true)"
+if grep -q 'unsupported architecture' <<<"$OUT"; then
+    ok "and an architecture this script cannot name refuses before any request"
+else
+    bad "an unmapped architecture said: ${OUT}"
+fi
+
+# The two fields are read out of a real base64 payload, so a change to the
+# reader is caught here rather than on a node.
+OUT="$(PAYLOAD="$FULL_PAYLOAD" bash -c 'source "$1"; payload_field heartbeatToken' _ "$CORE_FUNCS")"
+if [[ "$OUT" == "tok-abc" ]]; then
+    ok "payload_field reads a value out of the base64 payload"
+else
+    bad "payload_field returned [${OUT}], expected tok-abc"
+fi
+
 note "the ansible role passes only flags the installer knows"
 ROLE_TASK="${REPO_ROOT}/deploy/ansible/roles/iceslab_node/tasks/agent.yml"
 if [[ -r "$ROLE_TASK" ]]; then

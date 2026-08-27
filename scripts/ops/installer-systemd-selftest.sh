@@ -41,6 +41,10 @@
 # kept anyway, because `--uninstall` and `--reset` both call do_uninstall.
 #
 # Needs: docker, --privileged, cgroup v2. ~2 minutes, ~150 MB image (cached).
+# `zip`/`unzip` are in the image because apt is STUBBED inside the run: the
+# installer's own `apt-get install unzip` does nothing here, and the xray path
+# now unpacks a zip the panel served. Putting them in the image is what lets
+# that path run for real instead of being routed around.
 #
 # Usage:
 #   ./scripts/ops/installer-systemd-selftest.sh
@@ -92,6 +96,7 @@ FROM debian:13
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends systemd systemd-sysv procps iproute2 \
+                                              zip unzip \
  && apt-get clean && rm -rf /var/lib/apt/lists/* \
  && rm -f /lib/systemd/system/multi-user.target.wants/* \
           /etc/systemd/system/*.wants/* \
@@ -137,9 +142,15 @@ if ! dex bash /opt/stubs.sh >/dev/null 2>&1; then
     exit 2
 fi
 
-# A payload long enough not to trip the installer's own "suspiciously short"
-# warning; its contents are opaque to the installer.
-PAYLOAD="$(head -c 6000 /dev/zero | tr '\0' 'A')"
+# A payload of the shape the panel actually mints: base64 of the JSON, long
+# enough not to trip the installer's own "suspiciously short" warning, and
+# carrying the two fields the core download reads out of it. It used to be six
+# thousand 'A's, which was fine while the payload was opaque to the installer —
+# since the cores come from the panel it is not: `panel_core_fetch` reads
+# panelUrl and heartbeatToken out of it and refuses, correctly, when they are
+# not there.
+PAYLOAD="$(printf '{"nodeCertPem":"%s","nodeKeyPem":"x","caCertPem":"x","panelUrl":"https://panel.invalid","heartbeatToken":"stub-token"}' \
+    "$(head -c 5000 /dev/zero | tr '\0' 'A')" | base64 -w0)"
 
 INSTALL_LOG=/opt/install.log
 run_installer() {
@@ -427,8 +438,16 @@ dex bash -c ": > ${INSTALL_LOG}"
 run_installer --protocol tuic --payload "$PAYLOAD"
 RC=$?
 LOG="$(dex cat "$INSTALL_LOG")"
-if [[ "$RC" != "0" ]] && grep -qE 'Aborted by user|Previous install detected' <<<"$LOG"; then
-    ok "a second install without --reset refuses, and names the flag that would work"
+# Asserted on the DETECTION and on the way out, not on one sentence: the
+# refusal text legitimately split in two on 2026-08-28 (a prompt that could not
+# be READ is a different outcome from a user who typed "n", and saying "Aborted
+# by user" about a non-interactive session sent the last reader looking for a
+# user who was never asked). Matching the flags is what this case is actually
+# about.
+if [[ "$RC" != "0" ]] \
+   && grep -q 'Detected previous iceslab-node install' <<<"$LOG" \
+   && grep -q -- '--reset' <<<"$LOG" && grep -q -- '--uninstall' <<<"$LOG"; then
+    ok "a second install without --reset refuses, and names the flags that would work"
 else
     bad "a second install without --reset exited $RC:
 $(sed 's/^/      /' <<<"$LOG" | tail -20)"

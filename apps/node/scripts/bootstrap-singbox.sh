@@ -25,6 +25,7 @@ SINGBOX_VERSION="${SINGBOX_VERSION:-}"
 
 log()  { printf '[bootstrap-singbox] %s\n' "$*"; }
 fail() { printf '[bootstrap-singbox] ERROR: %s\n' "$*" >&2; exit 1; }
+warn() { printf '[bootstrap-singbox] WARN: %s\n' "$*" >&2; }
 
 command -v curl    >/dev/null 2>&1 || fail "curl is required"
 command -v openssl >/dev/null 2>&1 || fail "openssl is required"
@@ -38,23 +39,34 @@ case "$(uname -m)" in
   *) fail "unsupported arch: $(uname -m)" ;;
 esac
 
-# ───── resolve version ─────
-if [[ -z "$SINGBOX_VERSION" ]]; then
-  log "resolving latest stable sing-box release"
-  SINGBOX_VERSION="$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest \
-    | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
-  [[ -n "$SINGBOX_VERSION" ]] || fail "could not resolve latest version (set SINGBOX_VERSION)"
-fi
-VER="${SINGBOX_VERSION#v}"
-log "installing sing-box v${VER} (${ARCH})"
-
-# ───── download + install binary ─────
+# ───── the artefact ─────
+#
+# ICESLAB_CORE_ARTEFACT is the tarball the node installer already fetched from
+# the panel and verified against the sha256 pinned in
+# packages/shared/src/core-binaries.ts. Without it this falls back to GitHub
+# "latest", unverified — kept for a hand-run on a node with no panel, and it
+# says so rather than looking like the verified path.
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-TARBALL="sing-box-${VER}-linux-${ARCH}.tar.gz"
-URL="https://github.com/SagerNet/sing-box/releases/download/v${VER}/${TARBALL}"
-log "downloading ${URL}"
-curl -fsSL "$URL" -o "$TMP/sb.tar.gz" || fail "download failed: $URL"
+
+if [[ -n "${ICESLAB_CORE_ARTEFACT:-}" ]]; then
+  [[ -f "$ICESLAB_CORE_ARTEFACT" ]] || fail "ICESLAB_CORE_ARTEFACT is set to $ICESLAB_CORE_ARTEFACT, which is not a file"
+  cp "$ICESLAB_CORE_ARTEFACT" "$TMP/sb.tar.gz"
+  log "Using the panel-verified sing-box artefact"
+else
+  warn "no panel artefact given: falling back to GitHub 'latest', UNVERIFIED"
+  if [[ -z "$SINGBOX_VERSION" ]]; then
+    log "resolving latest stable sing-box release"
+    SINGBOX_VERSION="$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest \
+      | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+    [[ -n "$SINGBOX_VERSION" ]] || fail "could not resolve latest version (set SINGBOX_VERSION)"
+  fi
+  VER="${SINGBOX_VERSION#v}"
+  URL="https://github.com/SagerNet/sing-box/releases/download/v${VER}/sing-box-${VER}-linux-${ARCH}.tar.gz"
+  log "downloading ${URL}"
+  curl -fsSL "$URL" -o "$TMP/sb.tar.gz" || fail "download failed: $URL"
+fi
+
 tar -xzf "$TMP/sb.tar.gz" -C "$TMP"
 BIN="$(find "$TMP" -type f -name sing-box | head -n1)"
 [[ -n "$BIN" ]] || fail "sing-box binary not found in tarball"

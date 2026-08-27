@@ -125,27 +125,59 @@ printf 'ufw %s\n' "$*" >> /opt/ice-stub/log/ufw.log
 exit 0
 STUB
 
-# curl is reached twice: pinned_fetch downloading the XTLS installer (only on
-# --protocol xray/shadowsocks), and the public-IP lookup at the end. The body it
-# writes is a stand-in for XTLS/Xray-install: enough to leave an `xray` on PATH,
-# because the installer reads `command -v xray` straight afterwards and
-# `set -e` would abort on an empty one. No SHA is pinned by default, so
-# pinned_fetch warns that it did not verify and proceeds, which is the real
-# unpinned behaviour.
+# curl is reached for two things now: fetching a proxy core FROM THE PANEL
+# (`panel_core_fetch`, every protocol whose core the panel carries) and the
+# public-IP lookup at the end.
+#
+# The core branch has to behave like the panel does, because the installer
+# checks what it got: bytes to `-o`, a `x-iceslab-sha256` header into the `-D`
+# dump that MATCHES those bytes, and the status code on stdout for `-w`. A stub
+# that skipped the header would make the installer refuse — correctly — and the
+# harness would look like a defect in the installer.
 cat > "${STUB_BIN}/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> /opt/ice-stub/log/curl.log
-out=""; prev=""
-for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+out=""; dump=""; url=""; prev=""
+for a in "$@"; do
+    [[ "$prev" == "-o" ]] && out="$a"
+    [[ "$prev" == "-D" ]] && dump="$a"
+    [[ "$a" == http*://* ]] && url="$a"
+    prev="$a"
+done
+
+if [[ "$url" == */api/internal/cores/* ]]; then
+    core="${url##*/api/internal/cores/}"; core="${core%%/*}"
+    case "$core" in
+      xray)
+        # A zip the installer can unzip, carrying the three files the real
+        # release carries. Built here rather than checked in so the harness
+        # needs no fixture binary.
+        tmp="$(mktemp -d)"
+        printf '#!/bin/sh\nexit 0\n' > "$tmp/xray"; chmod +x "$tmp/xray"
+        : > "$tmp/geoip.dat"; : > "$tmp/geosite.dat"
+        (cd "$tmp" && zip -q -r /tmp/core.zip xray geoip.dat geosite.dat) 2>/dev/null \
+          || (cd "$tmp" && tar -cf /tmp/core.zip .)
+        cp /tmp/core.zip "$out"; rm -rf "$tmp" ;;
+      sing-box|mtg)
+        tmp="$(mktemp -d)"
+        printf '#!/bin/sh\nexit 0\n' > "$tmp/$core"; chmod +x "$tmp/$core"
+        tar -czf "$out" -C "$tmp" "$core"; rm -rf "$tmp" ;;
+      *)
+        printf '#!/bin/sh\nexit 0\n' > "$out"; chmod +x "$out" ;;
+    esac
+    if [[ -n "$dump" ]]; then
+        {
+          printf 'HTTP/1.1 200 OK\r\n'
+          printf 'x-iceslab-sha256: %s\r\n' "$(sha256sum "$out" | awk '{print $1}')"
+          printf 'x-iceslab-core-version: 0.0.0-stub\r\n\r\n'
+        } > "$dump"
+    fi
+    printf '200'
+    exit 0
+fi
+
 if [[ -n "$out" ]]; then
-    cat > "$out" <<'XTLS'
-#!/usr/bin/env bash
-# stand-in for XTLS/Xray-install install-release.sh
-install -d /usr/local/bin /usr/local/etc/xray /usr/local/share/xray
-printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/xray
-chmod +x /usr/local/bin/xray
-exit 0
-XTLS
+    : > "$out"
 fi
 echo "203.0.113.9"
 exit 0

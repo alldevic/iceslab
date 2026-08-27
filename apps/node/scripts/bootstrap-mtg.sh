@@ -34,25 +34,36 @@ case "$ARCH" in
 esac
 log "Detected arch: $ARCH → $MTG_ARCH"
 
-# ───── 3. Resolve latest release tag ─────
-log "Resolving latest mtg release..."
-LATEST_TAG=$(curl -fsSL https://api.github.com/repos/9seconds/mtg/releases/latest \
-  | grep '"tag_name"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
-
-if [[ -z "$LATEST_TAG" ]]; then
-  fail "Could not resolve latest mtg release tag from GitHub API"
-fi
-log "Latest release: v$LATEST_TAG"
-
-# ───── 4. Download tarball ─────
-TARBALL="mtg-${LATEST_TAG}-linux-${MTG_ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/9seconds/mtg/releases/download/v${LATEST_TAG}/${TARBALL}"
-log "Downloading $DOWNLOAD_URL"
-
+# ───── 3. The artefact ─────
+#
+# ICESLAB_CORE_ARTEFACT is a tarball the node installer already fetched from
+# the panel and verified against the sha256 pinned in
+# packages/shared/src/core-binaries.ts. That is the normal path now.
+#
+# Without it this script falls back to resolving "latest" from the GitHub API
+# and installing whatever comes back, unverified — which is what every install
+# did before 2026-08-28 and is kept only so this script still works when run by
+# hand on a node with no panel. It says so out loud rather than looking the
+# same as the verified path.
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMPDIR/$TARBALL"
+if [[ -n "${ICESLAB_CORE_ARTEFACT:-}" ]]; then
+  [[ -f "$ICESLAB_CORE_ARTEFACT" ]] || fail "ICESLAB_CORE_ARTEFACT is set to $ICESLAB_CORE_ARTEFACT, which is not a file"
+  TARBALL="mtg.tar.gz"
+  cp "$ICESLAB_CORE_ARTEFACT" "$TMPDIR/$TARBALL"
+  log "Using the panel-verified mtg artefact"
+else
+  warn "no panel artefact given: falling back to GitHub 'latest', UNVERIFIED"
+  log "Resolving latest mtg release..."
+  LATEST_TAG=$(curl -fsSL https://api.github.com/repos/9seconds/mtg/releases/latest \
+    | grep '"tag_name"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+  [[ -n "$LATEST_TAG" ]] || fail "Could not resolve latest mtg release tag from GitHub API"
+  TARBALL="mtg-${LATEST_TAG}-linux-${MTG_ARCH}.tar.gz"
+  log "Downloading https://github.com/9seconds/mtg/releases/download/v${LATEST_TAG}/${TARBALL}"
+  curl -fsSL --progress-bar "https://github.com/9seconds/mtg/releases/download/v${LATEST_TAG}/${TARBALL}" -o "$TMPDIR/$TARBALL"
+fi
+
 tar -xzf "$TMPDIR/$TARBALL" -C "$TMPDIR"
 
 # Find the mtg binary inside the extracted tree (release layout has changed).

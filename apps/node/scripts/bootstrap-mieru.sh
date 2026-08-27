@@ -35,25 +35,30 @@ case "$ARCH" in
 esac
 log "Detected arch: $ARCH → $M_ARCH"
 
-# ───── 3. Resolve latest release ─────
-log "Resolving latest mieru release..."
-LATEST_TAG=$(curl -fsSL https://api.github.com/repos/enfein/mieru/releases/latest \
-  | grep '"tag_name"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
-
-if [[ -z "$LATEST_TAG" ]]; then
-  fail "Could not resolve latest mieru release tag from GitHub API"
-fi
-log "Latest release: v$LATEST_TAG"
-
-# ───── 4. Download .deb (mita ships as Debian package) ─────
-DEB="mita_${LATEST_TAG}_${M_ARCH}.deb"
-DOWNLOAD_URL="https://github.com/enfein/mieru/releases/download/v${LATEST_TAG}/${DEB}"
-
+# ───── 3. The artefact ─────
+#
+# ICESLAB_CORE_ARTEFACT is a .deb the node installer already fetched from the
+# panel and verified against the pinned sha256. Without it this falls back to
+# GitHub "latest", unverified — kept for a hand-run on a node with no panel,
+# and it says so.
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-log "Downloading $DOWNLOAD_URL"
-curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMPDIR/$DEB"
+if [[ -n "${ICESLAB_CORE_ARTEFACT:-}" ]]; then
+  [[ -f "$ICESLAB_CORE_ARTEFACT" ]] || fail "ICESLAB_CORE_ARTEFACT is set to $ICESLAB_CORE_ARTEFACT, which is not a file"
+  DEB="mita.deb"
+  cp "$ICESLAB_CORE_ARTEFACT" "$TMPDIR/$DEB"
+  log "Using the panel-verified mita artefact"
+else
+  warn "no panel artefact given: falling back to GitHub 'latest', UNVERIFIED"
+  log "Resolving latest mieru release..."
+  LATEST_TAG=$(curl -fsSL https://api.github.com/repos/enfein/mieru/releases/latest \
+    | grep '"tag_name"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+  [[ -n "$LATEST_TAG" ]] || fail "Could not resolve latest mieru release tag from GitHub API"
+  DEB="mita_${LATEST_TAG}_${M_ARCH}.deb"
+  log "Downloading https://github.com/enfein/mieru/releases/download/v${LATEST_TAG}/${DEB}"
+  curl -fsSL --progress-bar "https://github.com/enfein/mieru/releases/download/v${LATEST_TAG}/${DEB}" -o "$TMPDIR/$DEB"
+fi
 
 # ───── 5. Install via dpkg ─────
 log "Installing $DEB via dpkg..."
