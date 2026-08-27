@@ -224,7 +224,12 @@ export async function lookupClientCountry(
   void config; // referenced for future MaxMind toggle
 
   const cacheKey = `${GEOIP_CACHE_PREFIX}${ip}`;
-  const cached = await redis.get(cacheKey);
+  // A cache, and it is treated as one: the answer below is derivable from the
+  // request's own headers, so an unreachable Redis costs a lookup, not a
+  // subscription. Before the client was made fail-fast these two calls could
+  // not throw — they hung — and every client fetching its subscription hung
+  // with them.
+  const cached = await redis.get(cacheKey).catch(() => null);
   if (cached !== null) {
     return cached === '_' ? null : cached;
   }
@@ -232,6 +237,6 @@ export async function lookupClientCountry(
   const raw = signals.cfCountry?.trim().toUpperCase();
   const country = raw && raw !== 'XX' && /^[A-Z]{2}$/.test(raw) ? raw : null;
 
-  await redis.set(cacheKey, country ?? '_', 'EX', GEOIP_CACHE_TTL_SEC);
+  await redis.set(cacheKey, country ?? '_', 'EX', GEOIP_CACHE_TTL_SEC).catch(() => null);
   return country;
 }

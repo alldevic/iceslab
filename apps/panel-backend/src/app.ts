@@ -242,6 +242,16 @@ export async function buildApp(): Promise<FastifyInstance> {
     // global limit (429 RATE_LIMITED in registerAdmin). Keep tests on the
     // per-instance in-memory store.
     ...(config.NODE_ENV === 'test' ? {} : { redis }),
+    // A store error must not decide whether the panel answers. Without this the
+    // plugin rethrows whatever the store threw, from an onRequest hook, for
+    // EVERY route — so an unreachable Redis turned rate limiting from a
+    // protection into a single point of failure for the whole API. It used not
+    // to throw at all, because the shared client queued the command forever and
+    // the request simply hung; the fix for that (a fail-fast client, see
+    // lib/redis.ts) is what makes this line necessary and is why they landed
+    // together. The trade is stated plainly: while Redis is down the limits are
+    // not enforced, and the client's own 'error' log says so.
+    skipOnError: true,
   });
 
   await app.register(fastifyCookie);

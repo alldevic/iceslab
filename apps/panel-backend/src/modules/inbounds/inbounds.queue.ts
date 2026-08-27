@@ -4,7 +4,7 @@ import type { ApplyInboundsRequest, InboundDto, ProtocolName } from '@iceslab/sh
 import { coerceEgressPolicy, compileEgressPolicy } from '../egress/egress.policy.js';
 import { zapret2SocksPortFor } from '../egress/egress.zapret2.js';
 import { hostFromAddress } from '../subscription/subscription.formats.js';
-import { redis } from '../../lib/redis.js';
+import { redis, queueRedis } from '../../lib/redis.js';
 import { prisma } from '../../prisma.js';
 import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
@@ -68,7 +68,7 @@ export function inboundDirtyKey(nodeId: string): string {
 }
 
 export const inboundSyncQueue = new Queue<ApplyNodeInboundsJobData>(QUEUE_NAME, {
-  connection: redis,
+  connection: queueRedis,
   defaultJobOptions: {
     // Two retries (exponential 1 s / 2 s). Inbound config push is idempotent
     // by design so retrying is always safe; we stop sooner than addUser
@@ -659,7 +659,7 @@ export function startInboundSyncWorker(): Worker<ApplyNodeInboundsJobData> {
       }
     },
     {
-      connection: redis,
+      connection: queueRedis,
       // One node at a time per worker, applyInbounds restarts the protocol
       // server, parallel restarts on the same node would race. Different
       // nodes can still go in parallel because they're distinct job IDs.

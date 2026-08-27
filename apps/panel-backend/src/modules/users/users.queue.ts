@@ -1,6 +1,6 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import type { AddUserRequest, RemoveUserRequest } from '@iceslab/shared';
-import { redis } from '../../lib/redis.js';
+import { queueRedis } from '../../lib/redis.js';
 import { prisma } from '../../prisma.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/credentials.js';
@@ -27,7 +27,7 @@ export type NodeUserJobData = AddUserJobData | RemoveUserJobData | BackfillNodeJ
 const QUEUE_NAME = 'node-users';
 
 export const nodeUsersQueue = new Queue<NodeUserJobData>(QUEUE_NAME, {
-  connection: redis,
+  connection: queueRedis,
   defaultJobOptions: {
     attempts: 3,
     backoff: { type: 'exponential', delay: 1000 },     // 1s, 2s, 4s
@@ -343,7 +343,7 @@ export function startNodeUsersWorker(): Worker<NodeUserJobData> {
       }
     },
     {
-      connection: redis,
+      connection: queueRedis,
       concurrency: 5,
     },
   );

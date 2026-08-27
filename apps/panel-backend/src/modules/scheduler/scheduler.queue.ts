@@ -1,5 +1,5 @@
 import { Queue, Worker, type Job } from 'bullmq';
-import { redis } from '../../lib/redis.js';
+import { queueRedis } from '../../lib/redis.js';
 import {
   resetTrafficForStrategy,
   resetTrafficRolling,
@@ -22,7 +22,7 @@ const QUEUE_NAME = 'cron-tasks';
 
 // Cron-задачи без полезной нагрузки, имя джоба сам себе данные.
 export const cronTasksQueue = new Queue(QUEUE_NAME, {
-  connection: redis,
+  connection: queueRedis,
   defaultJobOptions: {
     removeOnComplete: { age: 3600, count: 100 },
     removeOnFail: { age: 86400 },
@@ -227,7 +227,7 @@ export function startCronTasksWorker(): Worker {
       }
     },
     {
-      connection: redis,
+      connection: queueRedis,
       concurrency: 1, // cron-задачи строго последовательно
     },
   );

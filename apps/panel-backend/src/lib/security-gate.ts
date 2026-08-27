@@ -106,10 +106,29 @@ function cacheSet(ip: string, hit: boolean, ttlMs: number): void {
   blacklistCache.set(ip, { hit, expiresAt: Date.now() + ttlMs });
 }
 
+/**
+ * These two are the FIRST thing that happens to every request that reaches the
+ * panel, so what they do when Redis is unreachable decides whether the panel
+ * answers at all.
+ *
+ * Until 2026-08-27 the answer was: it does not. The shared client queued
+ * commands instead of rejecting them, so `redis.exists` below never settled and
+ * every request — /health included — stopped inside this hook, forever, with
+ * nothing logged. Measured on the built image: Postgres down gave a 503 in
+ * three seconds, Redis down gave no reply in sixty.
+ *
+ * With a fail-fast client the same call throws, and an unhandled throw here is
+ * the same outage with a 500 in front of it. So the denylist is treated as what
+ * it is: an unavailable denylist denies nobody. The in-process cache above
+ * still holds whatever was seen recently, so an IP banned moments ago stays
+ * banned through a short outage, and the client logs the reason.
+ */
 async function isBlacklisted(ip: string): Promise<boolean> {
   const cached = cacheGet(ip);
   if (cached !== null) return cached;
-  const hit = (await redis.exists(BLACKLIST_KEY(ip))) === 1;
+  const exists = await redis.exists(BLACKLIST_KEY(ip)).catch(() => null);
+  if (exists === null) return false;
+  const hit = exists === 1;
   cacheSet(ip, hit, hit ? config.HONEYPOT_BLACKLIST_TTL_SEC * 1000 : NEG_CACHE_TTL_MS);
   return hit;
 }
@@ -117,15 +136,13 @@ async function isBlacklisted(ip: string): Promise<boolean> {
 async function blacklist(ip: string): Promise<boolean> {
   // SET NX so we can detect the "first hit", that's the one we alert on.
   // Returns 'OK' on insert, null when key already exists.
-  const ok = await redis.set(
-    BLACKLIST_KEY(ip),
-    '1',
-    'EX',
-    config.HONEYPOT_BLACKLIST_TTL_SEC,
-    'NX',
-  );
+  const ok = await redis
+    .set(BLACKLIST_KEY(ip), '1', 'EX', config.HONEYPOT_BLACKLIST_TTL_SEC, 'NX')
+    .catch(() => null);
   // B8 - reflect the entry locally so the very next request from this IP is
-  // blocked without waiting for its negative cache entry to expire.
+  // blocked without waiting for its negative cache entry to expire. Done even
+  // when the write failed: this instance saw the honeypot hit and can act on
+  // it, whether or not the shared ban survives.
   cacheSet(ip, true, config.HONEYPOT_BLACKLIST_TTL_SEC * 1000);
   return ok === 'OK';
 }

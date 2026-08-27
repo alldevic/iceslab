@@ -670,9 +670,17 @@ if ! docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" up -d; the
   printf '\n' >&2
   fail "docker compose up failed, see the backend log above"
 fi
+# `timeout 10` around the probe, and `-T 5` inside it. Neither is paranoia: on
+# 2026-08-27 a backend whose Redis was unreachable answered /health with nothing
+# at all — not a 503, no reply — because every request queued inside an onRequest
+# hook holding a Redis command that could never fail. This loop has no clock of
+# its own, so it did not wait 60 seconds and warn; it stopped, and the install
+# sat on "[9/9] Launch stack + health check" with no further output. The panel
+# side is fixed (apps/panel-backend/src/lib/redis.ts), and a health probe that
+# can hang is still a probe that must not.
 for i in $(seq 1 60); do
-  if docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
-       wget -qO- http://127.0.0.1:3000/health 2>/dev/null | grep -q '"status":"ok"'; then
+  if timeout 10 docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
+       wget -T 5 -qO- http://127.0.0.1:3000/health 2>/dev/null | grep -q '"status":"ok"'; then
     ok "backend healthy in ${i}s"
     break
   fi
