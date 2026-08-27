@@ -318,21 +318,119 @@ if [[ -n "$PROBE_CMD" ]]; then
     fi
 fi
 
-# ───── The panel with its Redis taken away ─────
+# ═════════════════════════════════════════════════════════════════════════════
+#  Six routes, with Redis and without it
+# ═════════════════════════════════════════════════════════════════════════════
 #
-# Two things at once, and the second is why this is here at all.
+# /health was the one that got measured on 2026-08-27, and the fix was made for
+# the whole application: the client no longer queues commands that can never
+# fail. But "the panel answers" was checked on one route, and the routes reach
+# Redis in different places — the rate limiter's Lua eval and the security
+# gate's blacklist read run ahead of everything, the login lockout counters run
+# inside the handler, /sub has its own per-IP counter, and the honeypot writes.
 #
-# The probe must stop saying ok — without that, "it said ok" is also true of a
-# probe that says ok to anything. And it must get an ANSWER: on 2026-08-27 it
-# did not. The one Redis client was built with the options BullMQ requires
-# (`maxRetriesPerRequest: null`), which queue a command issued on a down
-# connection instead of rejecting it, so the awaits in the rate limiter and the
-# security gate — both onRequest hooks, both ahead of every route — never
-# settled. Postgres stopped gave a 503 in three seconds; Redis stopped gave no
-# reply in sixty, with nothing logged. The installer's launch loop has no clock
-# of its own, so the install stopped there rather than warning.
+# So the same question is asked of each, twice: with Redis up, because "it
+# answered 500" means nothing unless the route answers something else when the
+# dependency is there; and with Redis down, where the property that matters is
+# not the status but that there IS one. A request that hangs is the defect this
+# section exists for, and it is invisible to any check that only reads a status.
+#
+# The probe runs `node` inside the backend image — it is the same runtime the
+# server is, it reports the status rather than a wget exit code, and it is
+# bounded from outside as well.
+note "the routes, with Redis up"
+
+# probe_route <method> <path> [json-body] -> "<status>" | "ERR ..." | "TIMEOUT"
+probe_route() {
+    local method="$1" path="$2" body="${3:-}"
+    local js="const o={method:'${method}'};"
+    if [[ -n "$body" ]]; then
+        js+="o.headers={'content-type':'application/json'};o.body=${body};"
+    fi
+    js+="fetch('http://127.0.0.1:3000${path}',o).then(r=>console.log(r.status)).catch(e=>console.log('ERR '+e.message));"
+    timeout 25 docker exec "$BE" node -e "$js" 2>/dev/null || echo TIMEOUT
+}
+
+BAD_LOGIN="JSON.stringify({username:'no-such-admin',password:'no-such-password'})"
+
+# path | method | body | status with Redis | status without | what it touches
+ROUTES=(
+    "/health|GET||200|503|pingRedis, after both onRequest hooks"
+    "/api/auth/status|GET||200|200|nothing of its own: the two hooks and no more"
+    "/api/auth/login|POST|${BAD_LOGIN}|401|500|the login lockout counters"
+    "/api/users|GET||401|401|the hooks, ahead of the auth check"
+    "/sub/no-such-token|GET||404|404|its own per-IP counter (SET NX + INCR)"
+    "/wp-admin/|GET||404|404|the honeypot blacklist WRITE"
+)
+
+up_fail=""
+for row in "${ROUTES[@]}"; do
+    IFS='|' read -r rpath rmethod rbody rup _rdown _why <<<"$row"
+    got="$(probe_route "$rmethod" "$rpath" "$rbody")"
+    [[ "$got" == "$rup" ]] || up_fail="${up_fail}
+        ${rmethod} ${rpath}: got ${got}, want ${rup}"
+done
+if [[ -z "$up_fail" ]]; then
+    ok "all ${#ROUTES[@]} routes answer what they should while Redis is up"
+else
+    bad "with Redis UP these already disagree, so the down cases below mean nothing:${up_fail}"
+fi
+
+note "the same six with Redis stopped"
 docker stop "$RD" >/dev/null 2>&1
 sleep 2
+
+hung=""
+wrong=""
+slowest=0
+slowest_route=""
+timings=""
+for row in "${ROUTES[@]}"; do
+    IFS='|' read -r rpath rmethod rbody _rup rdown why <<<"$row"
+    t0="$(date +%s%N)"
+    got="$(probe_route "$rmethod" "$rpath" "$rbody")"
+    took_ms="$(( ($(date +%s%N) - t0) / 1000000 ))"
+    took="$(( took_ms / 1000 ))"
+    timings="${timings}
+        ${rmethod} ${rpath} -> ${got} in ${took_ms}ms"
+    if [[ "$took_ms" -gt "$slowest" ]]; then slowest="$took_ms"; slowest_route="${rmethod} ${rpath}"; fi
+    case "$got" in
+        TIMEOUT|ERR*) hung="${hung}
+        ${rmethod} ${rpath} (${why}): ${got} after ${took}s" ;;
+        "$rdown") ;;
+        *) wrong="${wrong}
+        ${rmethod} ${rpath} (${why}): ${got} in ${took}s, want ${rdown}" ;;
+    esac
+done
+# The property this whole section is for. A hang is not a slow answer: before
+# the fix these requests never returned at all, and nothing was logged.
+if [[ -z "$hung" ]]; then
+    ok "every one of them still ANSWERS with Redis gone (slowest ${slowest_route}, ${slowest}ms):${timings}"
+else
+    bad "these did not answer at all — the request is waiting on a Redis command that cannot fail:${hung}"
+fi
+if [[ -z "$wrong" ]]; then
+    ok "and each answers what a panel with no Redis should answer"
+else
+    bad "the status with Redis down is not the intended one:${wrong}"
+fi
+# And answers PROMPTLY. `commandTimeout` bounds each command independently, so
+# a route that touches Redis N times used to pay N timeouts in a row: with a 2s
+# timeout, /sub answered in 13.5 seconds — correct, and long after any client
+# had given up. The offline queue is turned off once the client has been ready
+# (lib/redis.ts), which makes "not writable" an immediate answer; this is the
+# number that says so. The bound is loose on purpose: it is here to catch
+# timeouts stacking again, not to measure a container's mood.
+if [[ "$slowest" -lt 3000 ]]; then
+    ok "and answers promptly rather than paying one timeout per Redis call"
+else
+    bad "the slowest was ${slowest_route} at ${slowest}ms: this is what N sequential command timeouts looks like"
+fi
+
+# ───── The /health probe the installer runs, with Redis gone ─────
+#
+# The route matrix above says every route answers. This says what the
+# installer's own probe makes of it, because that is the reply step 9 reads.
 DOWN_START="$(date +%s)"
 REPLY_DOWN="$(probe)"
 DOWN_TOOK="$(( $(date +%s) - DOWN_START ))"

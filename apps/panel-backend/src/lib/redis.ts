@@ -45,14 +45,39 @@ export const queueRedis = new Redis(config.REDIS_URL, {
 export const redis = new Redis(config.REDIS_URL, {
   maxRetriesPerRequest: 1,
   enableReadyCheck: false,
-  // The offline queue STAYS ON, and `commandTimeout` is what makes that safe.
-  // ioredis arms the command's timer in `sendCommand`, above the writable
-  // check, so a queued command is bounded exactly like a sent one. Turning the
-  // queue off instead rejects everything issued in the second between `new
-  // Redis()` and 'ready', which is a different bug in the same family: the app
-  // waits for readiness before it serves, but nothing else does.
+  // On for now; turned off below the moment this client has been ready once.
+  // Both halves are needed and they cover different windows. See the comment
+  // on the listener.
+  enableOfflineQueue: true,
   commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
   lazyConnect: false,
+});
+
+/**
+ * The offline queue is a boot-time convenience, not a runtime one.
+ *
+ * Between `new Redis()` and the first 'ready' the socket is not writable yet,
+ * and with the queue off every command issued in that window is rejected —
+ * which is a real bug in the same family as the one this file is about: the
+ * server waits for readiness before it serves, but importing modules and tests
+ * do not. So the queue absorbs that second.
+ *
+ * After that it only costs. `commandTimeout` bounds each command
+ * INDEPENDENTLY, so a route that touches Redis N times pays N timeouts in a
+ * row while Redis is down. Measured on the built image with Redis stopped and a
+ * 2s timeout: /api/users answered in 2.1s, POST /api/auth/login in 5.5s, and
+ * `GET /sub/<token>` — the route the customer's client polls — in **13.5s**.
+ * Every one of those is a correct answer arriving long after any client has
+ * given up, and behind a reverse proxy it is a gateway timeout rather than the
+ * 503 the panel meant to send.
+ *
+ * Once the client has connected once, "not writable" means Redis is gone, and
+ * the honest answer is immediate. ioredis reads `options.enableOfflineQueue` in
+ * `sendCommand` on every call, so flipping it here takes effect at once and
+ * needs no wrapper around twenty-odd call sites.
+ */
+redis.once('ready', () => {
+  redis.options.enableOfflineQueue = false;
 });
 
 // An ioredis client emits 'error' on every failed reconnect attempt, and an
