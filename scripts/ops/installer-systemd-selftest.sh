@@ -399,6 +399,26 @@ else
     bad "/usr/local/etc/xray was not created; every config push dies on read-only"
 fi
 
+# ───── An xray node with no REALITY pre-seed ─────
+#
+# The else half of the flag body: with no key to seed from, the env file gets
+# the commented placeholders and the adapter waits for a panel push. What must
+# NOT happen is a half-written block — a live XRAY_PORT or SNI beside no key
+# reads to anyone grepping the file as a configured node.
+XRAYENV="$(dex cat /etc/iceslab-node/env 2>/dev/null)"
+if grep -q '^# XRAY_REALITY_PRIVATE_KEY=$' <<<"$XRAYENV"; then
+    ok "an xray install with no pre-seed flags leaves the REALITY keys commented out"
+else
+    bad "no commented REALITY placeholder in the env file:
+$(grep -i reality <<<"$XRAYENV" | sed 's/^/      /')"
+fi
+if grep -qE '^XRAY_(REALITY_|PORT)' <<<"$XRAYENV"; then
+    bad "part of the REALITY block was written live with no private key to seed it:
+$(grep -E '^XRAY_' <<<"$XRAYENV" | sed 's/^/      /')"
+else
+    ok "and writes no live half of the block beside them"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  5. An existing install with neither --reset nor a terminal
 # ═════════════════════════════════════════════════════════════════════════════
@@ -441,7 +461,10 @@ dex bash -c ': > /opt/ice-stub/log/ufw.log'
 FAKE_SSH_CONNECTION="198.51.100.4 51000 203.0.113.10 22" \
 run_installer --protocol xray --payload "$PAYLOAD" --panel-ip 203.0.113.7 --port 1337 \
     --reset --with-singbox --fail2ban --harden-ufw --ssh-allowlist "192.0.2.0/24, 192.0.2.9" \
-    --ssh-port 2222
+    --ssh-port 2222 \
+    --xray-reality-private-key sI_p9bg7cyPRIVATE --xray-reality-short-ids abc123,def456 \
+    --xray-reality-server-names www.example.com --xray-reality-dest www.example.com:443 \
+    --xray-port 8443
 RC=$?
 LOG="$(dex cat "$INSTALL_LOG")"
 if [[ "$RC" == "0" ]] && grep -q 'Iceslab node-agent is up' <<<"$LOG"; then
@@ -469,6 +492,35 @@ if grep -q '^SINGBOX_STATS_BIN=' <<<"$ENVFILE"; then
     ok "and per-user stats were auto-wired to the xray binary present on this node"
 else
     bad "SINGBOX_STATS_BIN was not auto-wired though xray is installed; sing-box counters stay at zero"
+fi
+
+# ───── The Xray REALITY pre-seed, all five flags ─────
+#
+# The point of the pre-seed is a node that serves REALITY the moment it boots,
+# instead of waiting for the panel to push an inbound. It is one `cat >>` inside
+# one branch, and until now the only thing that had ever run it was a live
+# install nobody read afterwards. Every value is distinct from its default here,
+# so a flag that silently kept the default cannot pass.
+for want in \
+    'XRAY_REALITY_PRIVATE_KEY=sI_p9bg7cyPRIVATE' \
+    'XRAY_REALITY_SHORT_IDS=abc123,def456' \
+    'XRAY_REALITY_SERVER_NAMES=www.example.com' \
+    'XRAY_REALITY_DEST=www.example.com:443' \
+    'XRAY_PORT=8443'
+do
+    if grep -qxF "$want" <<<"$ENVFILE"; then
+        ok "the pre-seed wrote ${want%%=*}"
+    else
+        bad "${want} is not in the env file:
+$(grep '^XRAY' <<<"$ENVFILE" | sed 's/^/      /')"
+    fi
+done
+# And it said so. A pre-seed that happened silently is one the operator cannot
+# tell from the deferred-key flow, which is the other outcome of the same flag.
+if grep -q 'Xray REALITY env populated (port=8443, sni=www.example.com)' <<<"$LOG"; then
+    ok "and reported the port and SNI it seeded"
+else
+    bad "the pre-seed was not announced"
 fi
 
 # ───── --fail2ban ─────
@@ -626,6 +678,48 @@ if [[ "$(dex systemctl is-active iceslab-node 2>&1)" == "active" ]]; then
     ok "the node is running after the hardened install"
 else
     bad "after the hardened install the unit is $(dex systemctl is-active iceslab-node 2>&1)"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  7. A pre-seed with the private key and nothing else
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# One decision — "is there enough here to serve REALITY on boot" — written in
+# two repositories' worth of code. The agent's copy, buildXrayConfig() in
+# apps/node/main.go, asks about XRAY_REALITY_PRIVATE_KEY and nothing else; an
+# empty shortIds list is a REALITY client sending an empty shortId, which is
+# valid. The installer's copy also demanded short-ids, so this exact command
+# wrote the commented placeholders instead and said nothing, and the operator
+# got a node whose adapter sits waiting for a panel push.
+note "a pre-seed with the private key alone"
+dex bash -c ": > ${INSTALL_LOG}"
+run_installer --protocol xray --payload "$PAYLOAD" --port 1337 --reset \
+    --xray-reality-private-key onlyTheKey
+RC=$?
+LOG="$(dex cat "$INSTALL_LOG")"
+ENVFILE="$(dex cat /etc/iceslab-node/env 2>/dev/null)"
+if [[ "$RC" == "0" ]] && grep -q 'Iceslab node-agent is up' <<<"$LOG"; then
+    ok "the install finishes with only the private key given"
+else
+    bad "it exited $RC:
+$(sed 's/^/      /' <<<"$LOG" | tail -20)"
+fi
+if grep -qxF 'XRAY_REALITY_PRIVATE_KEY=onlyTheKey' <<<"$ENVFILE"; then
+    ok "and the key reaches the env file, the way the agent's own rule reads it"
+else
+    bad "the private key alone did not pre-seed anything:
+$(grep -E '^#? ?XRAY' <<<"$ENVFILE" | sed 's/^/      /')"
+fi
+if grep -qxF 'XRAY_REALITY_SHORT_IDS=' <<<"$ENVFILE"; then
+    ok "with an empty short-id list beside it rather than a missing key"
+else
+    bad "the short-id line is not there empty:
+$(grep -E '^XRAY' <<<"$ENVFILE" | sed 's/^/      /')"
+fi
+if [[ "$(dex systemctl is-active iceslab-node 2>&1)" == "active" ]]; then
+    ok "and the node is running"
+else
+    bad "the unit is $(dex systemctl is-active iceslab-node 2>&1)"
 fi
 
 printf '\n'

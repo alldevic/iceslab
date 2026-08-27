@@ -398,6 +398,10 @@ XR_SHORT_IDS=""
 XR_SERVER_NAMES="www.cloudflare.com"
 XR_DEST="www.cloudflare.com:443"
 XR_PORT="443"
+# Which of the five were actually passed. Four of them carry a non-empty
+# default, so "was it given" cannot be read off the value, and the refusal
+# below has to name the flag the operator typed.
+XR_FLAGS_GIVEN=""
 
 # Resolve a payload value: if it starts with "@", treat the rest as a path
 # and read the file content. Otherwise return as-is. Mirrors curl's `-d @file`
@@ -536,11 +540,11 @@ while [[ $# -gt 0 ]]; do
     # stays untouched).
     --hysteria-port-range)     HY_PORT_RANGE="$2"; shift 2 ;;
     # Xray REALITY: pre-fill env so the adapter starts immediately
-    --xray-reality-private-key)  XR_PRIVATE_KEY="$2"; shift 2 ;;
-    --xray-reality-short-ids)    XR_SHORT_IDS="$2"; shift 2 ;;
-    --xray-reality-server-names) XR_SERVER_NAMES="$2"; shift 2 ;;
-    --xray-reality-dest)         XR_DEST="$2"; shift 2 ;;
-    --xray-port)                 XR_PORT="$2"; shift 2 ;;
+    --xray-reality-private-key)  XR_PRIVATE_KEY="$2"; XR_FLAGS_GIVEN="${XR_FLAGS_GIVEN} $1"; shift 2 ;;
+    --xray-reality-short-ids)    XR_SHORT_IDS="$2"; XR_FLAGS_GIVEN="${XR_FLAGS_GIVEN} $1"; shift 2 ;;
+    --xray-reality-server-names) XR_SERVER_NAMES="$2"; XR_FLAGS_GIVEN="${XR_FLAGS_GIVEN} $1"; shift 2 ;;
+    --xray-reality-dest)         XR_DEST="$2"; XR_FLAGS_GIVEN="${XR_FLAGS_GIVEN} $1"; shift 2 ;;
+    --xray-port)                 XR_PORT="$2"; XR_FLAGS_GIVEN="${XR_FLAGS_GIVEN} $1"; shift 2 ;;
     # Re-installation flow on a VPS that already hosts a previous agent:
     #   --reset      : wipe prior state silently before installing
     #   --uninstall  : wipe prior state and exit (no install)
@@ -774,6 +778,25 @@ case "$PROTOCOL" in
     ;;
   *)  fail "Unknown protocol: $PROTOCOL (valid: hysteria|xray|amneziawg|wireguard|naive|shadowsocks|mtproto|mieru|tuic|anytls|shadowtls)" ;;
 esac
+
+# The Xray REALITY pre-seed flags reach exactly one place: the env block the
+# `xray` branch writes, and only when a private key is there to pre-seed with.
+# Passed anywhere else they were read, stored and dropped without a word, and
+# the install went on to report success — the same shape as the
+# --xray-reality-public-key that took a value and recorded it nowhere. An
+# operator who typed one of these meant the node to serve REALITY on boot;
+# saying so now costs a re-run of a command they still have in their scrollback,
+# and saying nothing costs whatever time passes before someone notices the
+# adapter never started. Checked here: the protocol is settled, and nothing has
+# been installed yet.
+if [[ -n "$XR_FLAGS_GIVEN" ]]; then
+  if [[ "$PROTOCOL" != "xray" ]]; then
+    fail "--protocol $PROTOCOL ignores${XR_FLAGS_GIVEN}: the REALITY pre-seed is written only by the xray branch. Drop the flag(s) or pass --protocol xray."
+  fi
+  if [[ -z "$XR_PRIVATE_KEY" ]]; then
+    fail "${XR_FLAGS_GIVEN# } needs --xray-reality-private-key: without it the agent starts no REALITY inbound and the rest of the pre-seed is never written."
+  fi
+fi
 
 step "Prerequisites"
 . /etc/os-release
@@ -1151,7 +1174,15 @@ EOF
       mkdir -p /var/lib/iceslab-node/geo
       cp -n /usr/local/share/xray/geosite.dat /var/lib/iceslab-node/geo/ 2>/dev/null || true
       cp -n /usr/local/share/xray/geoip.dat /var/lib/iceslab-node/geo/ 2>/dev/null || true
-      if [[ -n "$XR_PRIVATE_KEY" && -n "$XR_SHORT_IDS" ]]; then
+      # The agent's rule, and the only one that decides anything:
+      # buildXrayConfig() in apps/node/main.go returns "no REALITY" when
+      # XRAY_REALITY_PRIVATE_KEY is empty and asks about nothing else —
+      # shortIds may legitimately be empty, which is a REALITY client sending
+      # an empty shortId. This copy used to demand XR_SHORT_IDS as well, so
+      # `--xray-reality-private-key K` alone wrote the commented placeholders
+      # instead, said nothing, and left the operator with a node whose xray
+      # adapter waits for a panel push it may never get.
+      if [[ -n "$XR_PRIVATE_KEY" ]]; then
         cat >> "$ENV_FILE" <<EOF
 XRAY_REALITY_PRIVATE_KEY=${XR_PRIVATE_KEY}
 XRAY_REALITY_SHORT_IDS=${XR_SHORT_IDS}

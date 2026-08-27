@@ -1345,6 +1345,46 @@ else
     bad "--uninstall was refused over an install-only flag (rc=$INST_RC)"
 fi
 
+# ───── The Xray REALITY pre-seed flags, where they cannot take effect ─────
+#
+# All five reach one place: the env block the `xray` branch writes, and only
+# when a private key is there to pre-seed with. Given to any other protocol, or
+# without the key, they used to be read, stored and dropped in silence while the
+# install went on to report success — the same shape as --xray-reality-public-
+# key, which took a value and recorded it nowhere. The refusal happens after the
+# protocol is settled and before anything is installed.
+note "the Xray REALITY pre-seed flags"
+run_installer --protocol hysteria --xray-port 8443 --payload "$PAYLOAD"
+if [[ "$INST_RC" != "0" ]] && grep -q -- '--protocol hysteria ignores' "$INST_OUT" \
+   && grep -q -- '--xray-port' "$INST_OUT"; then
+    ok "a pre-seed flag under a non-xray protocol is refused, and the flag is named"
+else
+    bad "--xray-port under --protocol hysteria exited $INST_RC:
+$(sed 's/^/      /' "$INST_OUT" | head -6)"
+fi
+run_installer --protocol xray --xray-reality-short-ids abc123 --payload "$PAYLOAD"
+if [[ "$INST_RC" != "0" ]] && grep -q 'needs --xray-reality-private-key' "$INST_OUT"; then
+    ok "and so is the rest of the pre-seed with no private key to seed from"
+else
+    bad "--xray-reality-short-ids without a private key exited $INST_RC:
+$(sed 's/^/      /' "$INST_OUT" | head -6)"
+fi
+# The control, in both directions: a refusal of everything is not a check, and
+# it must not fire on the two installs that are actually correct.
+run_installer --protocol xray --xray-reality-private-key K --xray-port 8443 --payload "$PAYLOAD"
+if grep -qE 'ignores|needs --xray-reality-private-key' "$INST_OUT"; then
+    bad "a private key plus a port was refused too, so the cases above prove nothing:
+$(sed 's/^/      /' "$INST_OUT" | head -6)"
+else
+    ok "a private key with the rest of the pre-seed gets through"
+fi
+run_installer --protocol hysteria --payload "$PAYLOAD"
+if grep -qE 'ignores|needs --xray-reality-private-key' "$INST_OUT"; then
+    bad "a hysteria install with no pre-seed flags at all was refused over them"
+else
+    ok "and an install that passes none of them is never asked about them"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  install-iceslab.sh: the mode-derived values on a re-run
 # ═════════════════════════════════════════════════════════════════════════════
