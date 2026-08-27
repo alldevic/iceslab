@@ -336,6 +336,79 @@ else
     ok "a missing archive is refused"
 fi
 
+# ───── 6. A backup that dies halfway ─────
+#
+# `set -e` and the ERR trap end the run loudly, but the message scrolls past and
+# the FILE outlives it. Under the final name — `iceslab-backup-<ts>.tar.gz` —
+# a truncated archive has nothing about it to say it is not a backup, and a
+# rotation glob would keep it and drop a good one. Same shape as a download that
+# fails and is left on disk.
+#
+# The failure is injected with a `tar` on PATH that writes a plausible amount
+# and then exits 1. The script cannot tell that from a disk filling up, which is
+# the case this stands in for: the real one needs a tmpfs and root, and what is
+# under test is what the script LEAVES, not what made it stop.
+note "a backup that fails partway"
+STUBBIN="${WORK}/stubbin"
+mkdir -p "$STUBBIN"
+cat > "${STUBBIN}/tar" <<'STUB'
+#!/usr/bin/env bash
+# Write into whatever -f names, then die. Mimics ENOSPC mid-archive.
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == "-czf" || "$prev" == "-f" ]] && out="$a"; prev="$a"; done
+[[ -n "$out" && "$out" != "-" ]] && head -c 4096 /dev/zero > "$out"
+echo "tar: write error: No space left on device" >&2
+exit 1
+STUB
+chmod +x "${STUBBIN}/tar"
+
+FAILDIR="${WORK}/backups-failed"
+mkdir -p "$FAILDIR"
+if PATH="${STUBBIN}:${PATH}" "${SCRIPT_DIR}/iceslab-backup.sh" \
+        --compose-file compose.yml --env-file env --out "$FAILDIR" >/dev/null 2>&1; then
+    bad "a backup whose tar failed reported success"
+else
+    ok "a backup whose tar failed exits non-zero"
+fi
+LEFT="$(ls -1 "$FAILDIR" 2>/dev/null | tr '\n' ' ')"
+if [[ -z "${LEFT// /}" ]]; then
+    ok "and leaves nothing behind — no truncated archive under the final name, no .part"
+else
+    bad "the failed backup left: ${LEFT}"
+fi
+# The control: the same invocation without the stub must produce an archive, or
+# "nothing was left" is also true of a script that never got to step 4.
+if "${SCRIPT_DIR}/iceslab-backup.sh" --compose-file compose.yml --env-file env \
+        --out "$FAILDIR" >/dev/null 2>&1 \
+   && ls -1 "$FAILDIR"/iceslab-backup-*.tar.gz >/dev/null 2>&1; then
+    ok "and the same command without the stub does produce one"
+else
+    bad "the unstubbed backup produced nothing either; the case above proves nothing"
+fi
+
+# ───── 7. What the run leaves in TMPDIR ─────
+#
+# The staging directory holds postgres.sql, redis.rdb and a copy of
+# .env.production in the clear, and an EXIT trap removes it. That trap has been
+# lost twice: once to `_lib`'s own handler and once, nearly, to the part-file
+# cleanup added above — `trap ... EXIT` REPLACES, it does not stack, and nothing
+# had ever checked the directory was gone.
+note "the staging directory"
+TMPPROBE="${WORK}/tmpprobe"
+mkdir -p "$TMPPROBE"
+if TMPDIR="$TMPPROBE" "${SCRIPT_DIR}/iceslab-backup.sh" \
+        --compose-file compose.yml --env-file env --out "$FAILDIR" >/dev/null 2>&1; then
+    ok "a backup with its own TMPDIR completes"
+else
+    bad "the backup failed when given its own TMPDIR"
+fi
+STRAY="$(find "$TMPPROBE" -mindepth 1 2>/dev/null | tr '\n' ' ')"
+if [[ -z "${STRAY// /}" ]]; then
+    ok "and leaves no dump, rdb or env copy behind in it"
+else
+    bad "the staging directory survived the run: ${STRAY}"
+fi
+
 echo
 if [[ $FAIL -eq 0 ]]; then
     printf '\033[1;32m%d/%d check(s) passed\033[0m\n' "$PASS" "$((PASS + FAIL))"

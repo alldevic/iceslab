@@ -154,18 +154,43 @@ step_done
 # ───── Step 4: tar + optional encryption ─────
 ARCHIVE="${OUT_DIR}/iceslab-backup-${TS}.tar.gz"
 
+# The archive is written under a `.part` name and renamed only after the last
+# byte is in. A backup that failed halfway — the disk filled, the pipe broke,
+# the operator hit ^C — otherwise leaves a truncated file under the FINAL name,
+# and there is nothing about that name to say it is not a backup. `set -e` and
+# the ERR trap end the run loudly, but the file outlives the message; the next
+# person to look in this directory sees a plausible archive with a plausible
+# timestamp. Same shape as a fetch that fails and leaves the download.
+#
+# The property is about the FINAL name only: `iceslab-backup-<ts>.tar.gz` and
+# its `.enc` never exist incomplete. The `.part` beside them does, for as long
+# as the run takes, and it is removed on exit — so a rotation glob wants
+# `iceslab-backup-*.tar.gz` and `*.tar.gz.enc`, not `*.tar.gz*`, which would
+# match the part file of a backup still being written.
+#
+# The trap has to carry the staging cleanup with it. `trap ... EXIT` REPLACES
+# the handler installed above, and that one is what removes $STAGE — the
+# directory holding postgres.sql, redis.rdb and a copy of .env.production in the
+# clear. Installing a second EXIT trap for the part file alone would have left
+# all three on disk after every backup.
+BACKUP_PART=""
+trap 'rm -f "${BACKUP_PART:-}"; rm -rf "$STAGE"' EXIT
+
 if [[ -n "$PASSWORD" ]]; then
     step 4 "tar + AES-256-CBC encrypt → ${ARCHIVE}.enc"
     ENCRYPTED="${ARCHIVE}.enc"
+    BACKUP_PART="${ENCRYPTED}.part"
     # 0600 before openssl writes a byte, not after it wrote them all: the file
     # is the whole database. `-out` opens O_CREAT|O_TRUNC and keeps the mode of
-    # a file already there.
-    install -m 0600 /dev/null "$ENCRYPTED"
+    # a file already there, and `mv` carries the mode to the final name.
+    install -m 0600 /dev/null "$BACKUP_PART"
     tar -C "$STAGE" -czf - postgres.sql redis.rdb env manifest.json \
         | openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
                        -pass "pass:${PASSWORD}" \
-                       -out "$ENCRYPTED"
-    chmod 600 "$ENCRYPTED"
+                       -out "$BACKUP_PART"
+    chmod 600 "$BACKUP_PART"
+    mv "$BACKUP_PART" "$ENCRYPTED"
+    BACKUP_PART=""
     SIZE="$(du -h "$ENCRYPTED" | cut -f1)"
     step_done
     echo
@@ -174,9 +199,12 @@ else
     step 4 "tar → ${ARCHIVE}"
     # Same, and it matters more here: unencrypted, this archive holds
     # .env.production and every subscription token in the database.
-    install -m 0600 /dev/null "$ARCHIVE"
-    tar -C "$STAGE" -czf "$ARCHIVE" postgres.sql redis.rdb env manifest.json
-    chmod 600 "$ARCHIVE"
+    BACKUP_PART="${ARCHIVE}.part"
+    install -m 0600 /dev/null "$BACKUP_PART"
+    tar -C "$STAGE" -czf "$BACKUP_PART" postgres.sql redis.rdb env manifest.json
+    chmod 600 "$BACKUP_PART"
+    mv "$BACKUP_PART" "$ARCHIVE"
+    BACKUP_PART=""
     SIZE="$(du -h "$ARCHIVE" | cut -f1)"
     step_done
     echo
