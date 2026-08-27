@@ -179,12 +179,18 @@ export function NodeEditPage() {
     },
   });
 
-  // Seed the form once the node lands, without clobbering edits in flight.
-  const [seeded, setSeeded] = useState(false);
-  if (node && !seeded) {
+  // Seed the form when the node lands, without clobbering edits in flight -
+  // once per NODE, not once per mount. `/nodes/:id` is one route and React
+  // Router does not remount when only the parameter changes, so a bare boolean
+  // leaves the previous node's name, address, protocol, country, multiplier and
+  // user cap on screen under the new node's heading, and Save writes them onto
+  // the new machine. Keyed on the id the way SquadEditPage, CascadeEditPage,
+  // SrrRulePage, RoutePolicyEditor and DevicePresetEditor all key theirs.
+  const [seededId, setSeededId] = useState<string | null>(null);
+  if (node && seededId !== node.id) {
     form.setValues(defaults(node));
     form.resetDirty(defaults(node));
-    setSeeded(true);
+    setSeededId(node.id);
   }
 
   usePageMeta([node?.name ?? '']);
