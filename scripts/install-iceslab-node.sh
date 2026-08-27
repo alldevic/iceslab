@@ -438,6 +438,29 @@ do_uninstall() {
   rm -f /usr/local/bin/iceslab-hyhop
   systemctl daemon-reload || true
 
+  # Protocol ports this installer opened. Left behind, they accumulate: a node
+  # re-installed from xray to hysteria kept `443/tcp ALLOW Anywhere` for a core
+  # that is no longer there, and the next protocol added its own on top.
+  # Observed on a live guest 2026-08-27. Unlike the leftover SSH rule this does
+  # not pretend to be a restriction, but it does leave a port open with nothing
+  # listening on it.
+  #
+  # Only the WORLD-OPEN form this script writes is deleted (`ufw allow
+  # <port>/<proto>`, no `from`). An operator's own address-scoped rule for the
+  # same port is a different rule and ufw does not match it here, so it stays.
+  # The union across protocols is small and fixed: 443/tcp+udp (xray, hysteria,
+  # naive, shadowsocks, mtproto, mieru, wireguard, amneziawg), 80/tcp (ACME for
+  # hysteria and naive), 1234/udp (the low-port alternative for the two WG
+  # variants). NODE_PORT is removed further down; it has its own rule.
+  if command -v ufw >/dev/null; then
+    for _rule in 443/tcp 443/udp 80/tcp 1234/udp; do
+      if ufw status | grep -qE "^${_rule//\//\\/}[[:space:]]+ALLOW[[:space:]]+Anywhere"; then
+        log "Removing UFW allow rule for ${_rule} (opened for the protocol being removed)"
+        ufw --force delete allow "$_rule" >/dev/null 2>&1 || true
+      fi
+    done
+  fi
+
   log "Removing binary"
   rm -f /usr/local/bin/iceslab-node
 

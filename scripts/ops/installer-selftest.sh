@@ -689,7 +689,10 @@ SURVIVORS="${WORK}/uninstall-survivors.txt"
 cat > "${BIN}/ufw" <<'STUB'
 #!/usr/bin/env bash
 printf 'ufw %s\n' "$*" >> "${FAKE_UFW_LOG:-/dev/null}"
-[[ "$1" == "status" ]] && echo "1337/tcp                   ALLOW       Anywhere"
+# `status` is what do_uninstall reads to decide which rules exist. Configurable
+# so a case can put a realistic set of leftovers in front of it — including an
+# address-scoped rule, which is a DIFFERENT rule and must survive.
+[[ "$1" == "status" ]] && printf '%s\n' "${FAKE_UFW_STATUS:-1337/tcp                   ALLOW       Anywhere}"
 exit 0
 STUB
 chmod +x "${BIN}/ufw"
@@ -763,6 +766,46 @@ run_do_uninstall() {
 }
 
 run_do_uninstall
+
+# ───── Protocol ports left open by the install being removed ─────
+#
+# They accumulate: a node re-installed from xray to hysteria kept
+# `443/tcp ALLOW Anywhere` for a core that is no longer there, and the next
+# protocol added its own on top. Observed on a live KVM guest 2026-08-27.
+#
+# The rule an operator scoped to an address is a DIFFERENT ufw rule and must
+# survive — which is why the removal only issues the world-open form.
+UFW_LEFTOVERS="1337/tcp                   ALLOW       Anywhere
+443/tcp                    ALLOW       Anywhere
+443/udp                    ALLOW       Anywhere
+80/tcp                     ALLOW       Anywhere
+443/tcp                    ALLOW       203.0.113.9"
+: > "${WORK}/ufw.log"
+FAKE_UFW_STATUS="$UFW_LEFTOVERS" run_do_uninstall
+
+for _p in 443/tcp 443/udp 80/tcp; do
+    if grep -qF -- "ufw --force delete allow ${_p}" "${WORK}/ufw.log"; then
+        ok "uninstall removes the ${_p} rule it had opened for the protocol"
+    else
+        bad "left ${_p} open with nothing listening on it:
+$(sed 's/^/      /' "${WORK}/ufw.log")"
+    fi
+done
+# The guard that makes the three above mean something: a port ufw does NOT
+# report is not deleted blindly. Without the status check this would fire.
+if grep -qF -- "ufw --force delete allow 1234/udp" "${WORK}/ufw.log"; then
+    bad "deleted a 1234/udp rule that ufw never reported: the removal is not reading the current state"
+else
+    ok "and touches no port ufw did not report as open"
+fi
+# `ufw delete allow 443/tcp` names the world-open rule only; the scoped one is
+# a separate rule with its own number. Asserted on the argv because the stub
+# has no rule table of its own.
+if grep -qE -- "ufw --force delete allow 443/tcp from|203\.0\.113\.9" "${WORK}/ufw.log"; then
+    bad "the removal reached for an operator's address-scoped rule"
+else
+    ok "and never names an operator's address-scoped rule"
+fi
 
 # Control first: the run has to have happened at all. Its own log lines are the
 # cheapest proof, and without them "everything was removed" is also true of a

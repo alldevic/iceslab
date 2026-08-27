@@ -405,6 +405,14 @@ model Region {
   @@map("regions")
 }
 
+// LEGACY, kept deliberately (operator's call 2026-08-27). Superseded by Profile
+// + ProfileNodeBinding in slice 27: there is no /api/inbounds route, no service,
+// and `prisma.inbound` is queried nowhere. The bus events and the frontend
+// client that used to sit on top were removed the same day. The rows are kept
+// because dropping columns on a live panel is irreversible and the gain is
+// tidiness; `config.dead-models.test.ts` is what stops code growing back onto
+// them unnoticed. The push pipeline that still carries the name reads
+// profileNodeBinding — only the word "inbound" is legacy there.
 model Inbound {
   id        String   @id @default(uuid()) @db.Uuid
   nodeId    String   @map("node_id") @db.Uuid
@@ -532,11 +540,17 @@ model User {
   // only to the per-request ?routing= query.
   routingPreset String? @map("routing_preset") @db.VarChar(32)
 
-  // Slice 27.5: sticky-affinity hint for subscription generator.
-  // NULL = no preference (current behaviour). When set, the generator
-  // may bias the URL ordering toward this node so the client's url-test
-  // group settles on it first. Soft hint: not enforcement, the user's
-  // squad ACL still gates access to the node's profiles.
+  // Slice 27.5: sticky-affinity hint for the subscription generator — RESERVED,
+  // and reserved is all it is. Measured 2026-08-27: nothing reads this column
+  // and nothing writes it, so it is NULL on every row of every panel. The
+  // paragraph that used to stand here described what a generator "may" do with
+  // it, which reads as behaviour and is not.
+  //
+  // Kept by the operator's call rather than dropped: a nullable column costs
+  // nothing, and the idea (bias the URL order so a client's url-test group
+  // settles on one node) is still wanted. Implementing it starts with the two
+  // questions the original note never answered — who sets the value, and what
+  // happens when that node is unreachable.
   preferredNodeId String? @map("preferred_node_id") @db.Uuid
 
   // Metadata (admin-facing)
