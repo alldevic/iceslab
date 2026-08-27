@@ -425,3 +425,71 @@ func TestEveryAdapterIsInTheContract(t *testing.T) {
 		}
 	}
 }
+
+// Owning a process means being able to say why it died.
+//
+// `core.FailureReporter` is optional, and optional is how five of the six
+// subprocess-owning adapters came to implement nothing. The panel has printed
+// reasons since composeDownMessage landed — `not running: xray (...bind:
+// address already in use)` — and for every core but xray it printed the name
+// alone, which §45 had already called out as true and useless. Nothing said so:
+// an absent optional interface looks exactly like a core that had nothing to
+// report.
+//
+// So the question is asked of the packages: an adapter that holds a
+// *subprocess.Subprocess has a last line to hand over, and must.
+func TestEveryAdapterThatOwnsAProcessSaysWhyItDied(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the core package dir: %v", err)
+	}
+
+	owners := map[string]bool{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(e.Name())
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if !strings.HasSuffix(f.Name(), ".go") || strings.HasSuffix(f.Name(), "_test.go") {
+				continue
+			}
+			src, err := os.ReadFile(filepath.Join(e.Name(), f.Name()))
+			if err != nil {
+				continue
+			}
+			if strings.Contains(string(src), "*subprocess.Subprocess") {
+				owners[e.Name()] = true
+				break
+			}
+		}
+	}
+
+	// The control: an empty scan would make the loop below iterate over nothing
+	// and pass, which is the shape that let this sit unnoticed.
+	if len(owners) < 4 {
+		t.Fatalf("only %d adapters found holding a subprocess (%v); the scan stopped matching",
+			len(owners), owners)
+	}
+
+	var silent []string
+	for _, c := range cases() {
+		if !owners[c.name] {
+			continue
+		}
+		a, _ := c.build(t, true)
+		t.Cleanup(func() { _ = a.Stop(context.Background()) })
+		if _, ok := a.(core.FailureReporter); !ok {
+			silent = append(silent, c.name)
+		}
+	}
+	sort.Strings(silent)
+	if len(silent) > 0 {
+		t.Errorf("these adapters own a process and cannot say why it died: %v\n"+
+			"      The panel prints `not running: <core> (<reason>)`; without FailureReporter the\n"+
+			"      operator gets the name and has to go find the node's journal themselves.", silent)
+	}
+}

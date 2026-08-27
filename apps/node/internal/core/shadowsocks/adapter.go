@@ -446,6 +446,26 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	}, nil
 }
 
+// LastFailure returns what the shadowsocks core printed just before it stopped, or "" when
+// this adapter owns no process to ask.
+//
+// It is what lets the panel say `not running: shadowsocks (...bind: address already
+// in use)` instead of `not running: shadowsocks`. The second is true and useless:
+// the reason is in the node's journal, on a machine the operator has to go
+// find, and nothing ties it to the change they just saved. The panel has
+// printed reasons since composeDownMessage landed; xray was the only core
+// supplying one, so five of the six subprocess-owning adapters gave the
+// operator a name and nothing else.
+func (a *Adapter) LastFailure() string {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if proc == nil {
+		return ""
+	}
+	return proc.LastLine()
+}
+
 func (a *Adapter) Healthy() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

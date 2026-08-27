@@ -229,6 +229,26 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 // Healthy: agent must be started; if a TUIC inbound is configured and a binary
 // is set, the subprocess must be running. Before any inbound is applied (or in
 // config-only mode) the agent itself is up, so report healthy.
+// LastFailure returns what sing-box printed just before it stopped, or "" when
+// this adapter owns no process to ask.
+//
+// It is what lets the panel say `not running: tuic (...bind: address already
+// in use)` instead of `not running: tuic`. The second is true and useless:
+// the reason is in the node's journal, on a machine the operator has to go
+// find, and nothing ties it to the change they just saved. The panel has
+// printed reasons since composeDownMessage landed; xray was the only core
+// supplying one, so five of the six subprocess-owning adapters gave the
+// operator a name and nothing else.
+func (a *Adapter) LastFailure() string {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if proc == nil {
+		return ""
+	}
+	return proc.LastLine()
+}
+
 // Provisioned reports whether the panel has pushed an inbound for this
 // protocol yet.
 //

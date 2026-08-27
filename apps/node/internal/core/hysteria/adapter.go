@@ -412,6 +412,30 @@ func fetchTrafficStats(client HTTPClient, listen, secret string) (map[string]tra
 // unitProbeTTL caps how often Healthy() shells out to `systemctl is-active`.
 const unitProbeTTL = 20 * time.Second
 
+// LastFailure returns what the hysteria server printed just before it stopped, or "" when
+// this adapter owns no process to ask.
+//
+// It is what lets the panel say `not running: hysteria (...bind: address already
+// in use)` instead of `not running: hysteria`. The second is true and useless:
+// the reason is in the node's journal, on a machine the operator has to go
+// find, and nothing ties it to the change they just saved. The panel has
+// printed reasons since composeDownMessage landed; xray was the only core
+// supplying one, so five of the six subprocess-owning adapters gave the
+// operator a name and nothing else.
+//
+// Under systemd (ServiceUnit set) Start deliberately spawns nothing, so a.proc
+// is nil BY DESIGN and "" is the honest answer: that core's dying words are in
+// the hysteria unit's journal, not in ours.
+func (a *Adapter) LastFailure() string {
+	a.mu.RLock()
+	proc := a.proc
+	a.mu.RUnlock()
+	if proc == nil {
+		return ""
+	}
+	return proc.LastLine()
+}
+
 // Healthy reports whether the adapter is ready to serve traffic.
 // In callback-only mode (no BinaryPath), only the auth-callback server
 // must be up. With a binary configured, hysteria itself must also be up, and
