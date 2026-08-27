@@ -12,7 +12,7 @@ import { nodesGauge, usersGauge } from './metrics.js';
  */
 const REFRESH_INTERVAL_MS = 30_000;
 
-async function refreshOnce(): Promise<void> {
+export async function refreshOnce(): Promise<void> {
   // Reset before set: a previously-seen status that no longer has any
   // rows would otherwise stay at its last value forever.
   nodesGauge.reset();
@@ -27,8 +27,16 @@ async function refreshOnce(): Promise<void> {
     nodesGauge.set({ status: row.status }, row._count._all);
   }
 
+  // `deletedAt: null` for the same reason the node query ten lines up has it,
+  // and it was missing here: deletion is SOFT, and a soft-deleted user keeps
+  // whatever `status` it had, so without the filter `iceslab_users{status=...}`
+  // counts every user ever deleted, forever, under the status they were deleted
+  // in. The panel's own dashboard filters (dashboard.service.ts), so the two
+  // surfaces answered "how many users are there" differently - and the one an
+  // operator alerts on was the wrong one.
   const userStatuses = await prisma.user.groupBy({
     by: ['status'],
+    where: { deletedAt: null },
     _count: { _all: true },
   });
   for (const row of userStatuses) {

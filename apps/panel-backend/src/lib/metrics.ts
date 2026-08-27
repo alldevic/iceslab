@@ -83,7 +83,7 @@ export const geoBlockDenials = new Counter({
 
 // Live gauges: refreshed by a 30s loop in scheduler.queue so they're
 // always close-to-current without paying the DB cost on every /metrics
-// scrape. See scheduler/metrics-refresh.ts for the loop.
+// scrape. See lib/metrics-refresh.ts for the loop.
 export const nodesGauge = new Gauge({
   name: 'iceslab_nodes',
   help: 'Number of nodes by status',
