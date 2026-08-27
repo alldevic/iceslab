@@ -24,6 +24,7 @@ import type { Node } from '../lib/api';
  */
 
 const findNode = vi.fn();
+const registerNodeWarp = vi.fn();
 
 const EMPTY_LIST = { nodes: [], total: 0, page: 1, limit: 100 };
 
@@ -32,6 +33,7 @@ vi.mock('../lib/api', async (importOriginal) => {
   return {
     ...actual,
     findNode: (...a: unknown[]) => findNode(...a),
+    registerNodeWarp: (...a: unknown[]) => registerNodeWarp(...a),
     listNodes: vi.fn(async () => EMPTY_LIST),
     listRegions: vi.fn(async () => ({ regions: [] })),
     listCascades: vi.fn(async () => ({ cascades: [] })),
@@ -166,5 +168,49 @@ describe('NodeEditPage seeding', () => {
     );
 
     expect((await field(/^Name/)).value).toBe('ams-1-edge');
+  });
+});
+
+/**
+ * The egress selector, and the key it reads from.
+ *
+ * This page is the only one that reads a node through the SINGULAR
+ * `['node', id]` query; everything else in the app lists through `['nodes']`.
+ * Three of its four mutations invalidate both. The WARP toggle invalidated only
+ * `['nodes']`, which does not match `['node', id]` at all - prefixes are
+ * compared element by element, and 'node' is not 'nodes'. So the row the
+ * operator just clicked kept drawing from `node.warpEnabled` as it was before
+ * the call, and stayed unselected until they left the page or refocused the
+ * window. The call itself had succeeded; only the screen disagreed.
+ */
+describe('NodeEditPage egress', () => {
+  it('re-reads the node it draws from after turning WARP on', async () => {
+    findNode.mockResolvedValue({ ...FIRST, warpEnabled: false });
+    registerNodeWarp.mockImplementation(async () => {
+      // The server has flipped it; from here on the node reads back as WARP-on.
+      findNode.mockResolvedValue({ ...FIRST, warpEnabled: true });
+      return { ...FIRST, warpEnabled: true };
+    });
+
+    const { user, queryClient } = renderAt(`/nodes/${FIRST.id}`);
+    // The control: the egress block has to be on screen, or the click below
+    // lands on nothing and the assertion is about a render that never happened.
+    const row = await screen.findByText('Cloudflare WARP');
+    await waitFor(() =>
+      expect(queryClient.getQueryData<Node>(['node', FIRST.id])?.warpEnabled).toBe(false),
+    );
+
+    await user.click(row);
+    await waitFor(() => expect(registerNodeWarp).toHaveBeenCalledWith(FIRST.id));
+
+    // What the page renders from. Read off the cache rather than off the pixel:
+    // the row is a plain div with no role and no aria state, so the cache entry
+    // is the closest thing to the value the selector actually consults.
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryData<Node>(['node', FIRST.id])?.warpEnabled,
+        'the node this page draws from was never re-read, so the selector still shows Direct',
+      ).toBe(true),
+    );
   });
 });

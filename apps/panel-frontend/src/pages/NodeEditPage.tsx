@@ -284,7 +284,15 @@ export function NodeEditPage() {
 
   const warpMutation = useMutation({
     mutationFn: (on: boolean) => (on ? registerNodeWarp(id!) : disableNodeWarp(id!)),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['nodes'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['nodes'] });
+      // `['node', id]` too, and it was the one missing. This page draws the
+      // egress selector from `node.warpEnabled`, and that node comes from the
+      // SINGULAR key - which `['nodes']` does not match, prefixes being matched
+      // element by element. Without this the row the operator just clicked
+      // stays unselected until they leave the page or refocus the window.
+      qc.invalidateQueries({ queryKey: ['node', id] });
+    },
     onError: (err) =>
       notifications.show({
         color: 'red',
@@ -435,7 +443,7 @@ export function NodeEditPage() {
                 onConfirm: async () => {
                   await deleteNode(node.id);
                   qc.invalidateQueries({ queryKey: ['nodes'] });
-      qc.invalidateQueries({ queryKey: ['node', id] });
+                  qc.invalidateQueries({ queryKey: ['node', id] });
                   navigate('/nodes');
                 },
               })
