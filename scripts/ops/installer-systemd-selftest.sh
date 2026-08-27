@@ -680,6 +680,50 @@ else
     bad "after the hardened install the unit is $(dex systemctl is-active iceslab-node 2>&1)"
 fi
 
+# ───── What a full install leaves readable ─────
+#
+# The file modes were fixed at the source on 2026-08-27 (create 0600, do not
+# chmod afterwards), and installer-selftest.sh checks that every `chmod 600`
+# has an `install -m 0600` in front of it. That is the SOURCE half. This is the
+# other one: after eight steps, two protocol bootstraps and a hardening pass,
+# what is actually on disk.
+#
+# It is asked as a sweep rather than as a list of paths, because the list is
+# what goes stale: a protocol bootstrap added later writes wherever it likes.
+# The exceptions are named individually and each says why it is public.
+note "no secret is left world-readable after a full install"
+READABLE="$(dex bash -c '
+    for d in /etc/iceslab-node /etc/xray /usr/local/etc/xray /etc/sing-box /etc/hysteria \
+             /etc/caddy /etc/mtg /etc/mita /etc/wireguard /etc/amnezia/amneziawg; do
+        [ -d "$d" ] || continue
+        find "$d" -type f -perm /044 -printf "%m %p\n" 2>/dev/null
+    done' 2>/dev/null)"
+# The control names a case rather than counting things: the file that must be
+# in the swept set is the one holding the node's mTLS payload, and it must be
+# 0600 when found. A sweep that finds nothing is also a sweep that looked
+# nowhere, and a count would not tell the two apart.
+ENVMODE="$(dex stat -c %a /etc/iceslab-node/env 2>&1 | tr -d '\r')"
+if [[ "$ENVMODE" == "600" ]]; then
+    ok "the sweep's own target is there and private: /etc/iceslab-node/env is 0600"
+else
+    bad "/etc/iceslab-node/env is '${ENVMODE}'; the sweep below is not looking where the install writes"
+fi
+# Two exceptions, each for its own reason and each named rather than filtered
+# by a wildcard:
+#   * `cert.pem` is a certificate. It goes to every client that connects, and
+#     sing-box's bootstrap chmods it 644 deliberately.
+#   * `operators-note.txt` is planted by THIS harness, two sections above, as a
+#     stranger's file that `--reset` must leave alone. Its mode is the
+#     operator's business.
+# Anything else appearing here is a finding, not a new entry for this list.
+UNEXPECTED="$(grep -vE '/(cert|fullchain|chain)\.pem$|/operators-note\.txt$' <<<"$READABLE" | grep -v '^$')"
+if [[ -z "$UNEXPECTED" ]]; then
+    ok "and nothing else under the config dirs is readable beyond root"
+else
+    bad "these are readable beyond root after a plain install:
+$(sed 's/^/      /' <<<"$UNEXPECTED")"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  7. A pre-seed with the private key and nothing else
 # ═════════════════════════════════════════════════════════════════════════════
