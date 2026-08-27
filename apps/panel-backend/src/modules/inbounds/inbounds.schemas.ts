@@ -506,13 +506,40 @@ const ObfuscationSchema = z.object({
   i5: z.string().regex(/^[0-9a-fA-FxX<> rt]*$/).max(256).default(''),
 });
 
+/**
+ * A WireGuard key, as the NODE defines one.
+ *
+ * `validateWGKey` in apps/node/internal/core/amneziawg/config.go: 44 base64
+ * characters decoding to exactly 32 bytes. Its comment explains what the
+ * whitelist is for, and it is not tidiness — a pre-wave panel pushed the public
+ * key into an awg-quick INI with `fmt.Fprintf` and no validation, so a `\n` in
+ * the value closed `[Peer]` and opened `[Interface]` with a `PostUp=sh -c ...`
+ * of the sender's choosing: root on every interface bring-up.
+ *
+ * The panel accepted `z.string().min(1).max(128)` — a newline, a quote, a
+ * semicolon, anything under 128 characters. The node held, which is why this is
+ * defence in depth rather than a hole; what the panel lost was the OTHER half:
+ * a mistyped key was stored, pushed, and refused by the node, and the operator
+ * saw "config push failed" instead of a message on the field.
+ *
+ * Written as a regex rather than a decode-and-measure because 32 bytes is
+ * exactly 43 base64 characters plus one `=`, and because the alphabet is the
+ * guard: it cannot express a newline or a shell metacharacter.
+ */
+const WgKeySchema = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9+/]{43}=$/,
+    'WireGuard key must be 44 base64 characters (a 32-byte key), as `wg genkey` emits',
+  );
+
 export const AmneziawgConfigSchema = z
   .object({
     /** Subnet handed to peers, e.g. "10.0.0.0/24". */
     subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/),
-    serverPrivateKey: z.string().min(1).max(128),
+    serverPrivateKey: WgKeySchema,
     /** Public key paired with privateKey, emitted in client config. */
-    serverPublicKey: z.string().min(1).max(128),
+    serverPublicKey: WgKeySchema,
     obfuscation: ObfuscationSchema,
   })
   // Mirror the constraints the node's config.go validate() enforces at deploy
@@ -542,6 +569,19 @@ export const AmneziawgConfigSchema = z
         }
       }
     }
+    // Jmin <= Jmax. The node refuses the inverted pair at deploy time
+    // ("Jmin (%d) must be <= Jmax (%d)"), and this mirror existed for every
+    // other rule in its validate() except this one — so the one shape an
+    // operator can reach with two steppers was the one that saved cleanly and
+    // failed at the push, which is the outcome the comment above says this
+    // block exists to prevent.
+    if (obfuscation.jmin > obfuscation.jmax) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `Jmin (${obfuscation.jmin}) must be <= Jmax (${obfuscation.jmax})`,
+        path: ['obfuscation', 'jmax'],
+      });
+    }
     // s1 + 56 must NOT equal s2: that recreates the vanilla WireGuard handshake
     // packet length and makes the flow DPI-detectable.
     if (obfuscation.s1 + 56 === obfuscation.s2) {
@@ -567,9 +607,9 @@ export const WireguardConfigSchema = z.object({
   /** Subnet handed to peers, e.g. "10.77.77.0/24". Keep it clear of the
    *  AmneziaWG profile's subnet when a node serves both. */
   subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/),
-  serverPrivateKey: z.string().min(1).max(128),
+  serverPrivateKey: WgKeySchema,
   /** Public key paired with privateKey, emitted in the client config. */
-  serverPublicKey: z.string().min(1).max(128),
+  serverPublicKey: WgKeySchema,
 });
 
 export const NaiveConfigSchema = z.object({

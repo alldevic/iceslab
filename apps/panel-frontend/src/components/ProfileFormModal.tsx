@@ -52,6 +52,7 @@ import { RecipePicker } from './RecipePicker';
 import { RecipeExportModal } from './RecipeExportModal';
 import { resolveRecipeApply, validateXrayConfig, RECIPE_COMMON_FIELDS } from '../lib/recipes';
 import { PQ_FIELDS, pqPairError } from '../lib/pq-pairs';
+import { AWG_FIELDS, awgFieldError } from '../lib/awgRules';
 import { protocolLabel } from '../lib/protocols';
 
 /**
@@ -309,6 +310,25 @@ interface FormValues {
 // S1 and S2 stay non-zero - they were in AmneziaWG since v1.5, the
 // bug only affects the v2.0-added S3+S4 fields. Junk-packet (Jc)
 // obfuscation also remains active.
+/**
+ * The magic headers, and they are NOT part of the presets on purpose: a preset
+ * is a disguise profile, these four are identity markers that only have to be
+ * >4 and different from each other.
+ *
+ * They are here because they must have a value. The fields started empty and
+ * the submit read them as `numOr(values.awgH1, 0)`, so creating an AmneziaWG
+ * profile without opening the obfuscation block and typing four numbers by hand
+ * built `h1..h4 = 0` — which the API refuses with ten issues at once (four
+ * "expected >= 5" and six "must be pairwise distinct", since all four zeros are
+ * equal) and which the node refuses too ("H1 is required ... non-zero,
+ * distinct from 1..4"). Measured against the real schema on 2026-08-27: the
+ * default state of this form could not be saved at all.
+ *
+ * The values are the schema's own defaults, and `awgRules.mirror.test.ts` keeps
+ * the two lists equal.
+ */
+const AWG_HEADER_DEFAULTS = { h1: 100, h2: 200, h3: 300, h4: 400 };
+
 const TSPU_PRESET = { jc: 4, jmin: 64, jmax: 128, s1: 32, s2: 56, s3: 0, s4: 0 };
 const MOBILE_PRESET = { jc: 3, jmin: 64, jmax: 100, s1: 32, s2: 56, s3: 0, s4: 0 };
 
@@ -403,10 +423,10 @@ function defaults(profile: Profile | null): FormValues {
     awgS2: TSPU_PRESET.s2,
     awgS3: TSPU_PRESET.s3,
     awgS4: TSPU_PRESET.s4,
-    awgH1: '',
-    awgH2: '',
-    awgH3: '',
-    awgH4: '',
+    awgH1: AWG_HEADER_DEFAULTS.h1,
+    awgH2: AWG_HEADER_DEFAULTS.h2,
+    awgH3: AWG_HEADER_DEFAULTS.h3,
+    awgH4: AWG_HEADER_DEFAULTS.h4,
     awgI1: '',
     awgI2: '',
     awgI3: '',
@@ -653,6 +673,20 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
           field,
           (_v: string, values: FormValues) => {
             const key = pqPairError(field, values);
+            return key ? t(key) : null;
+          },
+        ]),
+      ),
+      // The AmneziaWG obfuscation rules, same shape and same reason. The node
+      // refuses these at deploy time and the panel schema mirrors it "so the
+      // operator gets a clear form error instead of a confusing `config push
+      // failed` after save" — its words. Without this the chain stopped one
+      // link short of that sentence.
+      ...Object.fromEntries(
+        AWG_FIELDS.map((field) => [
+          field,
+          (_v: unknown, values: FormValues) => {
+            const key = awgFieldError(field, values);
             return key ? t(key) : null;
           },
         ]),
@@ -920,10 +954,13 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
             s2: numOr(values.awgS2, 56),
             s3: numOr(values.awgS3, 32),
             s4: numOr(values.awgS4, 16),
-            h1: numOr(values.awgH1, 0),
-            h2: numOr(values.awgH2, 0),
-            h3: numOr(values.awgH3, 0),
-            h4: numOr(values.awgH4, 0),
+            // Fall back to the same four the form seeds, not to 0: an operator
+            // who clears a header field means "the default", and 0 is a value
+            // both the API and the node refuse.
+            h1: numOr(values.awgH1, AWG_HEADER_DEFAULTS.h1),
+            h2: numOr(values.awgH2, AWG_HEADER_DEFAULTS.h2),
+            h3: numOr(values.awgH3, AWG_HEADER_DEFAULTS.h3),
+            h4: numOr(values.awgH4, AWG_HEADER_DEFAULTS.h4),
             // I1-I5: optional v2.0 mimicry signature packets (hex).
             // Empty disables that slot. Trimmed defensively to avoid
             // accidental whitespace breaking awg-quick parser.

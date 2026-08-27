@@ -1213,6 +1213,11 @@ export default {
         awgServerPubPlaceholder: 'derived after generate',
         awgPresetLabel: 'Obfuscation preset',
         awgKeepZero: 'keep 0',
+        awgJminOverJmax: 'Jmin must not exceed Jmax; the node refuses the inverted range.',
+        awgS1PlusHandshake:
+            'S1 + 56 equals S2, which recreates the plain WireGuard handshake length and makes the flow detectable.',
+        awgHDuplicate: 'H1-H4 must all differ; a repeated value collapses two packet types onto one marker.',
+        awgKeyShape: 'Not a WireGuard key: expected 44 base64 characters, as `wg genkey` emits.',
         awgS1Desc: 'must differ',
         awgJDesc: 'pairwise-unique',
         awgHDesc: '> 4 and unique',

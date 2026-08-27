@@ -4,6 +4,7 @@ import {
   WireguardConfigSchema,
   XrayConfigSchema,
 } from './inbounds.schemas.js';
+import { generateWireguardKeyPair } from '../../lib/credentials.js';
 
 // U5 post-quantum fields. Two pairs, each half useless without the other:
 //   - `realityMldsa65Seed` / `realityMldsa65Verify`
@@ -340,5 +341,42 @@ describe('WireguardConfigSchema', () => {
   it('refuses a subnet that is not CIDR, and a missing key', () => {
     expect(WireguardConfigSchema.safeParse({ ...base, subnet: '10.77.77.0' }).success).toBe(false);
     expect(WireguardConfigSchema.safeParse({ ...base, serverPrivateKey: '' }).success).toBe(false);
+  });
+
+  it('refuses anything that is not a 32-byte base64 key', () => {
+    // The node's validateWGKey is what this mirrors, and its comment records
+    // why the ALPHABET is the guard rather than the length: a newline in a
+    // pushed public key closed `[Peer]` and opened `[Interface]` with a PostUp
+    // of the sender's choosing. The panel used to take
+    // `z.string().min(1).max(128)`, so every one of these was stored, pushed,
+    // and refused by the node with "config push failed" as the only thing the
+    // operator saw.
+    for (const bad of [
+      'too-short',
+      'A'.repeat(44), // right length, no padding: 33 bytes, not 32
+      'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFsGm3U=', // 43 chars
+      'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFs\nGm3Uk=',
+      'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFsGm3Uk=; rm -rf /',
+    ]) {
+      expect(
+        WireguardConfigSchema.safeParse({ ...base, serverPublicKey: bad }).success,
+        `accepted ${JSON.stringify(bad)}`,
+      ).toBe(false);
+    }
+  });
+
+  it("takes what this panel's own generator emits", () => {
+    // The contract nobody was holding: `/api/profiles/generate-keypair` is the
+    // button beside the field, and a validator the generator cannot satisfy
+    // would make the happy path the broken one.
+    const pair = generateWireguardKeyPair();
+    expect(
+      WireguardConfigSchema.safeParse({
+        ...base,
+        serverPrivateKey: pair.privateKey,
+        serverPublicKey: pair.publicKey,
+      }).success,
+      `the generator emitted ${pair.publicKey}`,
+    ).toBe(true);
   });
 });

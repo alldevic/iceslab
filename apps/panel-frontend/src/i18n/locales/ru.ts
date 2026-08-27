@@ -1276,6 +1276,11 @@ export default {
         awgServerPubPlaceholder: 'появится после генерации',
         awgPresetLabel: 'Пресет обфускации',
         awgKeepZero: 'держать 0',
+        awgJminOverJmax: 'Jmin не может быть больше Jmax — нода отвергнет перевёрнутый диапазон.',
+        awgS1PlusHandshake:
+            'S1 + 56 равно S2: это воспроизводит длину обычного WireGuard-рукопожатия и делает поток заметным для DPI.',
+        awgHDuplicate: 'H1-H4 должны различаться: повторённое значение схлопывает два типа пакетов в один маркер.',
+        awgKeyShape: 'Это не ключ WireGuard: нужно 44 символа base64, как выдаёт `wg genkey`.',
         awgS1Desc: 'должен отличаться',
         awgJDesc: 'попарно уникален',
         awgHDesc: '> 4 и уникальны',
