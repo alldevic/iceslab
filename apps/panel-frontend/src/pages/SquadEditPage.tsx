@@ -762,7 +762,8 @@ export function SquadEditPage() {
                   placeholder={t('squadEdit.hwidPlaceholder')}
                   value={hwidLimit}
                   disabled={isAll}
-                  min={0}
+                  min={1}
+                  allowDecimal={false}
                   onChange={(v) => {
                     setHwidLimit(typeof v === 'number' ? v : '');
                     setDirty(true);

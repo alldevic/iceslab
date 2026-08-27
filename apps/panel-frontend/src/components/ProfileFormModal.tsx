@@ -1284,11 +1284,15 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                 <NumberInput
                   label={t('profiles.form.cfg.brutalUpLabel')}
                   min={1}
+                  max={10000}
+                  allowDecimal={false}
                   {...form.getInputProps('hyBrutalUp')}
                 />
                 <NumberInput
                   label={t('profiles.form.cfg.brutalDownLabel')}
                   min={1}
+                  max={10000}
+                  allowDecimal={false}
                   {...form.getInputProps('hyBrutalDown')}
                 />
               </Group>
@@ -1299,6 +1303,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   placeholder="20000"
                   min={1024}
                   max={65535}
+                  allowDecimal={false}
                   {...form.getInputProps('hyPortHopStart')}
                 />
                 <NumberInput
@@ -1307,6 +1312,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   placeholder="50000"
                   min={1024}
                   max={65535}
+                  allowDecimal={false}
                   {...form.getInputProps('hyPortHopEnd')}
                 />
               </Group>
@@ -1668,6 +1674,8 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                           description={t('profiles.form.cfg.realityMaxTimeDiffDesc')}
                           placeholder="0"
                           min={0}
+                          max={600000}
+                          allowDecimal={false}
                           {...form.getInputProps('xrayRealityMaxTimeDiff')}
                         />
                       </Group>
@@ -1682,6 +1690,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                           description={t('profiles.form.cfg.realityLimitFallbackUploadDesc')}
                           placeholder="0"
                           min={0}
+                          allowDecimal={false}
                           {...form.getInputProps('xrayRealityLimitFallbackUpload')}
                         />
                         <NumberInput
@@ -1689,6 +1698,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                           description={t('profiles.form.cfg.realityLimitFallbackDownloadDesc')}
                           placeholder="0"
                           min={0}
+                          allowDecimal={false}
                           {...form.getInputProps('xrayRealityLimitFallbackDownload')}
                         />
                       </Group>
@@ -2013,13 +2023,43 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                 />
               </Group>
               <Group grow>
-                <NumberInput label="Jc" min={0} {...form.getInputProps('awgJc')} />
-                <NumberInput label="Jmin" min={0} {...form.getInputProps('awgJmin')} />
-                <NumberInput label="Jmax" min={0} {...form.getInputProps('awgJmax')} />
+                <NumberInput
+                  label="Jc"
+                  min={0}
+                  max={10}
+                  allowDecimal={false}
+                  {...form.getInputProps('awgJc')}
+                />
+                <NumberInput
+                  label="Jmin"
+                  min={64}
+                  max={1024}
+                  allowDecimal={false}
+                  {...form.getInputProps('awgJmin')}
+                />
+                <NumberInput
+                  label="Jmax"
+                  min={64}
+                  max={1024}
+                  allowDecimal={false}
+                  {...form.getInputProps('awgJmax')}
+                />
               </Group>
               <Group grow>
-                <NumberInput label="S1" min={0} {...form.getInputProps('awgS1')} />
-                <NumberInput label="S2" min={0} {...form.getInputProps('awgS2')} />
+                <NumberInput
+                  label="S1"
+                  min={0}
+                  max={64}
+                  allowDecimal={false}
+                  {...form.getInputProps('awgS1')}
+                />
+                <NumberInput
+                  label="S2"
+                  min={0}
+                  max={64}
+                  allowDecimal={false}
+                  {...form.getInputProps('awgS2')}
+                />
                 {/* S3/S4 stay 0 until AmneziaVPN ships the fix for #2582: a
                     non-zero value there drops traffic on 4.8.15.x clients. */}
                 <NumberInput
@@ -2027,6 +2067,8 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   description={t('profiles.form.cfg.awgKeepZero')}
                   inputWrapperOrder={['label', 'input', 'description', 'error']}
                   min={0}
+                  max={64}
+                  allowDecimal={false}
                   {...form.getInputProps('awgS3')}
                 />
                 <NumberInput
@@ -2034,6 +2076,8 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   description={t('profiles.form.cfg.awgKeepZero')}
                   inputWrapperOrder={['label', 'input', 'description', 'error']}
                   min={0}
+                  max={32}
+                  allowDecimal={false}
                   {...form.getInputProps('awgS4')}
                 />
               </Group>
@@ -2044,6 +2088,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   description="magic header byte"
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH1')}
                 />
                 <NumberInput
@@ -2052,6 +2097,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   description={t('profiles.form.cfg.awgS1Desc')}
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH2')}
                 />
                 <NumberInput
@@ -2060,6 +2106,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   description={t('profiles.form.cfg.awgJDesc')}
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH3')}
                 />
                 <NumberInput
@@ -2068,6 +2115,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   description={t('profiles.form.cfg.awgHDesc')}
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH4')}
                 />
                 <Button
@@ -2209,6 +2257,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                 placeholder="1400"
                 min={576}
                 max={1500}
+                allowDecimal={false}
                 {...form.getInputProps('mieruMtu')}
               />
             </Stack>

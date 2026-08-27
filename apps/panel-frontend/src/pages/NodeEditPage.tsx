@@ -577,7 +577,8 @@ export function NodeEditPage() {
                     style={{ flex: 1, minWidth: 0 }}
                     label={t('nodeEdit.maxUsers')}
                     description={t('nodeEdit.maxUsersDesc')}
-                    min={0}
+                    min={1}
+                    max={100000}
                     allowDecimal={false}
                     allowNegative={false}
                     {...form.getInputProps('maxUsers')}

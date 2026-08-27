@@ -678,7 +678,8 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
                       <NumberInput
                         style={{ width: 150 }}
                         label={t('userDrawer.hwidLimit')}
-                        min={0}
+                        min={1}
+                        allowDecimal={false}
                         placeholder="3"
                         {...form.getInputProps('hwidDeviceLimit')}
                       />
@@ -710,6 +711,7 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
                         style={{ width: 150 }}
                         label={t('userDrawer.trafficGb')}
                         min={0}
+                        allowDecimal={false}
                         placeholder="∞"
                         {...form.getInputProps('trafficLimitGb')}
                       />
@@ -727,7 +729,8 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
                         <NumberInput
                           style={{ width: 130 }}
                           label={t('userDrawer.expireDays')}
-                          min={0}
+                          min={1}
+                          allowDecimal={false}
                           placeholder="∞"
                           {...form.getInputProps('expireDays')}
                         />

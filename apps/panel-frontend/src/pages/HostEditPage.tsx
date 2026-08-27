@@ -525,6 +525,7 @@ export function HostEditPage() {
                   value={port}
                   min={1}
                   max={65535}
+                  allowDecimal={false}
                   error={portConflictMsg ? true : undefined}
                   onChange={(v) => {
                     setPort(typeof v === 'number' ? v : '');

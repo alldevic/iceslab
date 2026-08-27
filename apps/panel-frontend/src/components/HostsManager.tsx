@@ -516,6 +516,7 @@ function HostFormModal({
               placeholder={t('hostsManager.portPlaceholder')}
               min={1}
               max={65535}
+              allowDecimal={false}
               {...form.getInputProps('portOverride')}
             />
           </Group>

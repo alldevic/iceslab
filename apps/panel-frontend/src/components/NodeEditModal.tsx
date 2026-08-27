@@ -1267,6 +1267,7 @@ export function NodeEditModal({
                                 w={72}
                                 min={1}
                                 max={65535}
+                                allowDecimal={false}
                                 hideControls
                                 error={conflict}
                                 value={portDrafts[binding.id] ?? binding.port}
