@@ -75,6 +75,60 @@ RUN pnpm exec tsc
 RUN pnpm exec tsc -p /repo/packages/shared/tsconfig.json \
       --outDir /repo/packages/shared/src --declaration false
 
+# ───── Proxy-core binaries, from the pinned manifest ─────
+#
+# The panel carries the cores and the nodes take them from it. Before this, a
+# node fetched its core straight from GitHub — "latest" resolved through
+# api.github.com, installed unverified — which put the bytes that terminate
+# subscriber traffic, on the machine that holds the node's mTLS key, on a host
+# nobody in this system authenticates and a path a censored node may not have.
+# The trust question is answered once, here, by whoever builds or pulls this
+# image.
+#
+# The manifest is `packages/shared/src/core-binaries.ts`, and it is READ rather
+# than copied: the step above compiled shared to .js siblings, so node can
+# import the same declaration the panel and the mirror tests use. Nothing about
+# a version or a checksum is written twice.
+#
+# Artefacts are kept BYTE-IDENTICAL to what upstream published, archive and
+# all, so one sha256 means the same thing at panel build, on this disk, and on
+# the node after it downloads.
+#
+# CORE_ARCHES defaults to the two architectures VPS fleets actually run.
+# Building with "amd64 arm64 armv7" adds ~65 MB and the third architecture;
+# a node whose arch this image does not carry is refused BY NAME rather than
+# quietly sent back to GitHub.
+ARG CORE_ARCHES="amd64 arm64"
+RUN --mount=type=cache,id=cores,target=/var/cache/cores \
+    set -eu; \
+    ARCHES="$CORE_ARCHES" node --input-type=module -e " \
+      const { CORE_BINARIES, coreAssetUrl } = await import('/repo/packages/shared/src/core-binaries.js'); \
+      const arches = process.env.ARCHES.split(' ').filter(Boolean); \
+      for (const [name, core] of Object.entries(CORE_BINARIES)) \
+        for (const arch of arches) { \
+          const a = core.assets[arch]; \
+          if (!a) continue; \
+          console.log([name, arch, a.file, a.sha256, coreAssetUrl(name, arch)].join('\t')); \
+        } \
+    " > /tmp/cores.tsv; \
+    mkdir -p /repo/cores; \
+    while IFS="$(printf '\t')" read -r name arch file sha url; do \
+      [ -n "$name" ] || continue; \
+      cached="/var/cache/cores/${sha}"; \
+      if [ ! -f "$cached" ]; then \
+        echo "fetching ${name} ${arch} <- ${url}"; \
+        wget -qO "$cached.part" "$url" || { echo "download failed: $url" >&2; exit 1; }; \
+        mv "$cached.part" "$cached"; \
+      fi; \
+      echo "${sha}  ${cached}" | sha256sum -c - >/dev/null || { \
+        echo "sha256 mismatch for ${name} ${arch} (${file}): upstream moved or the pin is stale" >&2; \
+        rm -f "$cached"; exit 1; \
+      }; \
+      install -m 0644 "$cached" "/repo/cores/${name}-${arch}"; \
+      echo "  ok ${name}-${arch} ($(stat -c%s "/repo/cores/${name}-${arch}") bytes)"; \
+    done < /tmp/cores.tsv; \
+    ls -1 /repo/cores | wc -l
+
 # Strip dev deps so only production node_modules remain.
 WORKDIR /repo
 RUN --mount=type=cache,id=pnpm,target=/root/.pnpm-store \
@@ -135,34 +189,29 @@ WORKDIR /app
 # Copy the trimmed workspace from the builder.
 COPY --from=builder /repo /app
 
-# Bundle sing-box so the geo builder can compile per-category .srs rule-sets
-# (SINGBOX_BIN, G6). Optional feature - if the download is ever a problem, drop
-# this block and leave SINGBOX_BIN unset: the sing-box subscription format then
-# keeps its external SagerNet URLs (graceful degrade). TARGETARCH is amd64/arm64
-# under buildx; plain `docker build` leaves it empty -> amd64. busybox wget (no
-# curl in alpine); it follows the GitHub 302 to the release CDN.
-# Pinned to a per-arch sha256: a silently re-pointed tag or a tampered CDN
-# response fails the build instead of shipping an unexpected binary. BUMPING
-# SINGBOX_VERSION REQUIRES updating both checksums (get them from the release, or
-# the build's sha256sum -c will fail) - see docs/geo-svc-prod-checklist.md.
-ARG SINGBOX_VERSION=1.11.4
-ARG SINGBOX_SHA256_AMD64=0bb762ef286b36c2016d9107fc1f089be7a75f6d579b33f067d31e696c05927e
-ARG SINGBOX_SHA256_ARM64=4e687359db42b6a28ef93f9cd2cb9549c4b0079cc7e49bc5f6ecbf98257a2507
+# The geo builder compiles per-category .srs rule-sets with sing-box (SINGBOX_BIN,
+# G6), and the binary it needs is one the image already carries for the nodes.
+# It used to be downloaded again here, pinned to 1.11.4 while the manifest
+# pinned another version for the fleet: two sing-box versions in one repository,
+# each with its own checksum to bump, and nothing holding them together. Now
+# there is one.
+#
+# Optional feature: if a build ever cannot carry cores, drop this block and
+# leave SINGBOX_BIN unset — the sing-box subscription format then keeps its
+# external SagerNet URLs (graceful degrade). TARGETARCH is amd64/arm64 under
+# buildx; plain `docker build` leaves it empty -> amd64.
 ARG TARGETARCH
 RUN set -eux; \
     arch="${TARGETARCH:-amd64}"; \
-    case "$arch" in \
-      amd64) sha="$SINGBOX_SHA256_AMD64" ;; \
-      arm64) sha="$SINGBOX_SHA256_ARM64" ;; \
-      *) echo "unsupported TARGETARCH: $arch" >&2; exit 1 ;; \
-    esac; \
-    d="sing-box-${SINGBOX_VERSION}-linux-${arch}"; \
-    wget -qO /tmp/sb.tgz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${d}.tar.gz"; \
-    echo "${sha}  /tmp/sb.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/sb.tgz -C /tmp; \
-    install -m 0755 "/tmp/${d}/sing-box" /usr/local/bin/sing-box; \
-    rm -rf /tmp/sb.tgz "/tmp/${d}"; \
-    /usr/local/bin/sing-box version
+    src="/app/cores/sing-box-${arch}"; \
+    if [ -f "$src" ]; then \
+      tar -xzf "$src" -C /tmp; \
+      install -m 0755 "$(find /tmp -type f -name sing-box | head -n1)" /usr/local/bin/sing-box; \
+      rm -rf /tmp/sing-box-*; \
+      /usr/local/bin/sing-box version; \
+    else \
+      echo "no sing-box for ${arch} in this image; geo .srs compilation stays off" >&2; \
+    fi
 ENV SINGBOX_BIN=/usr/local/bin/sing-box
 
 WORKDIR /app/apps/panel-backend

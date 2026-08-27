@@ -151,6 +151,72 @@ else
     bad "packages/shared/src is missing index.ts (${SHARED_TS:-no}) or index.js (${SHARED_JS:-no}); the backend cannot import @iceslab/shared"
 fi
 
+# ───── The cores the panel carries for its fleet ─────
+#
+# Nodes used to fetch their proxy core straight from GitHub — "latest" resolved
+# through api.github.com and installed unverified. Now the panel carries them,
+# pinned by version and sha256 in packages/shared/src/core-binaries.ts, and the
+# build fails rather than shipping an unexpected binary.
+#
+# Asked of the IMAGE, and asked by recomputing: the build already verified what
+# it downloaded, so re-reading the build log would only prove the log. What is
+# unknown here is whether what the image CARRIES is still those bytes — a
+# later COPY, a prune, a cache mount reused across a bumped pin.
+note "the proxy cores the image carries"
+CORES_EXPECTED="$(docker run --rm --entrypoint node "$BACKEND_IMG" --input-type=module -e '
+  const { CORE_BINARIES } = await import("/app/packages/shared/src/core-binaries.js");
+  for (const [name, core] of Object.entries(CORE_BINARIES))
+    for (const [arch, a] of Object.entries(core.assets))
+      console.log(`${name}-${arch} ${a.sha256}`);
+' 2>/dev/null)"
+if [[ "$(wc -l <<<"$CORES_EXPECTED")" -gt 5 ]]; then
+    ok "the image can read its own pinned manifest ($(wc -l <<<"$CORES_EXPECTED") artefacts declared)"
+else
+    bad "could not read the core manifest out of the image; every case below would be empty:
+$(sed 's/^/      /' <<<"$CORES_EXPECTED")"
+fi
+
+CORES_ACTUAL="$(beq 'cd /app/cores 2>/dev/null && sha256sum * 2>/dev/null | while read -r sha f; do echo "$f $sha"; done')"
+CARRIED="$(wc -l <<<"$CORES_ACTUAL")"
+if [[ -n "$CORES_ACTUAL" && "$CARRIED" -gt 5 ]]; then
+    ok "and it carries ${CARRIED} of them under /app/cores"
+else
+    bad "/app/cores holds nothing the fleet could install from"
+fi
+
+# Every file carried has to be one the manifest declares, with the sha the
+# manifest declares. The other direction is deliberately NOT asserted: the
+# build takes CORE_ARCHES, so an image may legitimately carry fewer
+# architectures than the manifest knows about.
+MISMATCH=""
+while read -r f sha; do
+    [[ -n "$f" ]] || continue
+    want="$(grep -m1 "^${f} " <<<"$CORES_EXPECTED" | awk '{print $2}')"
+    if [[ -z "$want" ]]; then
+        MISMATCH="${MISMATCH}
+      ${f}: carried but not declared in the manifest"
+    elif [[ "$want" != "$sha" ]]; then
+        MISMATCH="${MISMATCH}
+      ${f}: carries ${sha}, manifest pins ${want}"
+    fi
+done <<<"$CORES_ACTUAL"
+if [[ -z "$MISMATCH" ]]; then
+    ok "and every one of them hashes to the sha256 the manifest pins"
+else
+    bad "the image carries bytes the manifest does not describe:${MISMATCH}"
+fi
+
+# The panel's own sing-box comes out of that same set now. It used to be a
+# second download pinned to a different version, which is one artefact and two
+# numbers to bump; and it has to RUN here, on alpine, which is why the manifest
+# pins the statically linked musl build rather than the plain one.
+SB_VER="$(beq '/usr/local/bin/sing-box version 2>/dev/null | head -1')"
+if grep -q 'sing-box version' <<<"$SB_VER"; then
+    ok "the geo builder's sing-box runs in this image (${SB_VER})"
+else
+    bad "sing-box does not run in the image: ${SB_VER:-no output}. The plain linux-amd64 build is glibc-linked and exits 127 on alpine; the manifest must pin the -musl artefact"
+fi
+
 # ───── Who it runs as ─────
 #
 # The long-lived backend runs unprivileged; the migrate one-shot overrides back

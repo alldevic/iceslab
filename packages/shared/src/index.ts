@@ -1,3 +1,4 @@
+export * from './core-binaries.js';
 export * from './transport.js';
 export * from './routing.js';
 export * from './recipes.js';
