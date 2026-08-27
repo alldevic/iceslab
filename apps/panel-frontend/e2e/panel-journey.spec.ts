@@ -142,6 +142,15 @@ test('a new user gets a subscription that actually serves a config', async ({ pa
   const listed = await request.get(`${BACKEND}/api/users?limit=100`, {
     headers: { authorization: `Bearer ${token}` },
   });
+  // Say what the panel answered before reading a field off it. Without this the
+  // failure is `Cannot read properties of undefined (reading 'find')`, which
+  // names neither the request nor the reason — and the reason here is usually
+  // 429: the browser's own traffic and this request share an IP and the same
+  // 100-per-minute bucket.
+  expect(
+    listed.status(),
+    `GET /api/users answered ${listed.status()}: ${(await listed.text()).slice(0, 200)}`,
+  ).toBe(200);
   const created = ((await listed.json()).users as { username: string; subscriptionToken: string }[])
     .find((u) => u.username === userName);
   expect(created, 'the user the drawer said it created').toBeDefined();
