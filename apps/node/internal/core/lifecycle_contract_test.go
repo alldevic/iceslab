@@ -438,12 +438,15 @@ func TestEveryAdapterIsInTheContract(t *testing.T) {
 //
 // So the question is asked of the packages: an adapter that holds a
 // *subprocess.Subprocess has a last line to hand over, and must.
-func TestEveryAdapterThatOwnsAProcessSaysWhyItDied(t *testing.T) {
+// subprocessOwners is the set of adapter packages that hold a
+// *subprocess.Subprocess, read off the source rather than listed here so a new
+// adapter is covered without anyone remembering to add it.
+func subprocessOwners(t *testing.T) map[string]bool {
+	t.Helper()
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read the core package dir: %v", err)
 	}
-
 	owners := map[string]bool{}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -467,6 +470,11 @@ func TestEveryAdapterThatOwnsAProcessSaysWhyItDied(t *testing.T) {
 			}
 		}
 	}
+	return owners
+}
+
+func TestEveryAdapterThatOwnsAProcessSaysWhyItDied(t *testing.T) {
+	owners := subprocessOwners(t)
 
 	// The control: an empty scan would make the loop below iterate over nothing
 	// and pass, which is the shape that let this sit unnoticed.
@@ -491,5 +499,83 @@ func TestEveryAdapterThatOwnsAProcessSaysWhyItDied(t *testing.T) {
 		t.Errorf("these adapters own a process and cannot say why it died: %v\n"+
 			"      The panel prints `not running: <core> (<reason>)`; without FailureReporter the\n"+
 			"      operator gets the name and has to go find the node's journal themselves.", silent)
+	}
+}
+
+// Owning a process also means counting how often it was restarted.
+//
+// The supervisor restarts a crashed core for ALL six adapters — every one sets
+// MaxRestarts — and told exactly one of them it had done so: `OnRestart` was
+// wired by xray and by nobody else. A restart that SUCCEEDS is the case that
+// matters, because the core comes back, the node stays online, the status alert
+// never fires, and every live connection was dropped in silence. The panel has
+// an alert for it (`nodes.cron.ts`, "Core restarted") that five cores could
+// never trigger.
+func TestEveryAdapterThatOwnsAProcessCountsItsRestarts(t *testing.T) {
+	owners := subprocessOwners(t)
+	if len(owners) < 4 {
+		t.Fatalf("only %d adapters found holding a subprocess (%v); the scan stopped matching",
+			len(owners), owners)
+	}
+
+	var silent []string
+	for _, c := range cases() {
+		if !owners[c.name] {
+			continue
+		}
+		a, _ := c.build(t, true)
+		t.Cleanup(func() { _ = a.Stop(context.Background()) })
+		if _, ok := a.(core.RestartReporter); !ok {
+			silent = append(silent, c.name)
+		}
+	}
+	sort.Strings(silent)
+	if len(silent) > 0 {
+		t.Errorf("these adapters own a process the supervisor restarts and report no tally: %v", silent)
+	}
+}
+
+// And the wiring behind it, asked of the source: a tally the supervisor never
+// feeds stays at zero forever, and zero is indistinguishable from a core that
+// simply has not crashed. Every subprocess.Config literal must name OnRestart.
+func TestEverySupervisedCoreSubscribesToItsOwnRestarts(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the core package dir: %v", err)
+	}
+	found, missing := 0, []string(nil)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		files, _ := os.ReadDir(e.Name())
+		for _, f := range files {
+			if !strings.HasSuffix(f.Name(), ".go") || strings.HasSuffix(f.Name(), "_test.go") {
+				continue
+			}
+			src, err := os.ReadFile(filepath.Join(e.Name(), f.Name()))
+			if err != nil {
+				continue
+			}
+			body := string(src)
+			at := strings.Index(body, "subprocess.New(subprocess.Config{")
+			if at < 0 {
+				continue
+			}
+			found++
+			end := strings.Index(body[at:], "})")
+			if end < 0 || !strings.Contains(body[at:at+end], "OnRestart:") {
+				missing = append(missing, e.Name()+"/"+f.Name())
+			}
+		}
+	}
+	// The control: no literals found means the constructor was renamed and this
+	// comparison is empty, which is how the gap survived in the first place.
+	if found < 4 {
+		t.Fatalf("only %d subprocess.Config literals found; the scan stopped matching", found)
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("these spawn a supervised core and never hear that it restarted: %v", missing)
 	}
 }

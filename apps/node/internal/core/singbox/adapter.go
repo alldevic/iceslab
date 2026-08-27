@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
@@ -69,6 +70,17 @@ type Adapter struct {
 	inbound InboundConfig
 	proc    *subprocess.Subprocess
 
+	// Restart tally, fed by the supervisor through OnRestart. The panel alerts
+	// on growth: a restart that SUCCEEDS drops every live connection and leaves
+	// the node online, so without a count nothing anywhere says it happened.
+	restartsCrash     int
+	restartsMemory    int
+	lastRestartAt     time.Time
+	lastRestartReason string
+	// countingSince: when this adapter started tallying (agent start). Without
+	// it "3 restarts" could mean this morning or six months ago.
+	countingSince time.Time
+
 	// restartMu serializes regenerateAndRestart so concurrent user/inbound
 	// changes can't race the subprocess swap. Never held together with mu
 	// across IO.
@@ -83,10 +95,11 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.Protocol = Name
 	}
 	return &Adapter{
-		cfg:      cfg,
-		protocol: cfg.Protocol,
-		logger:   logger,
-		users:    make(map[string]userEntry),
+		cfg:           cfg,
+		protocol:      cfg.Protocol,
+		logger:        logger,
+		users:         make(map[string]userEntry),
+		countingSince: time.Now(),
 	}
 }
 
@@ -229,6 +242,45 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 // Healthy: agent must be started; if a TUIC inbound is configured and a binary
 // is set, the subprocess must be running. Before any inbound is applied (or in
 // config-only mode) the agent itself is up, so report healthy.
+
+// recordRestart accumulates what the supervisor did. Called from the subprocess
+// watcher goroutine with no subprocess lock held, so taking a.mu here keeps the
+// existing a.mu -> subprocess.mu ordering intact.
+func (a *Adapter) recordRestart(ev subprocess.RestartEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ev.Reason == subprocess.RestartReasonMemory {
+		a.restartsMemory++
+	} else {
+		a.restartsCrash++
+	}
+	a.lastRestartAt = ev.At
+	a.lastRestartReason = string(ev.Reason)
+}
+
+// RestartStats implements the optional core.RestartReporter so /healthz can
+// carry the tally. MemoryLimitBytes stays 0: this adapter arms no memory
+// watchdog, so Memory can only ever be 0 and saying "ceiling 0" is the honest
+// report of a watchdog that is off.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	st := core.RestartStats{
+		Crash:      a.restartsCrash,
+		Memory:     a.restartsMemory,
+		LastAt:     a.lastRestartAt,
+		LastReason: a.lastRestartReason,
+		SinceAt:    a.countingSince,
+	}
+	proc := a.proc
+	a.mu.Unlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock and there is no
+	// reason to hold both.
+	if proc != nil {
+		st.RSSBytes = proc.RSSBytes()
+	}
+	return st
+}
+
 // LastFailure returns what sing-box printed just before it stopped, or "" when
 // this adapter owns no process to ask.
 //
@@ -435,6 +487,10 @@ func (a *Adapter) regenerateAndRestart() error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
+		// Without this the supervisor restarts the core and nobody counts it:
+		// the node comes back online, every live connection was dropped, and
+		// the panel has nothing to alert on.
+		OnRestart: a.recordRestart,
 	})
 	if err := proc.Start(ctx); err != nil {
 		return fmt.Errorf("singbox: start subprocess: %w", err)

@@ -123,6 +123,17 @@ type Adapter struct {
 	callbackSrv *http.Server
 	proc        *subprocess.Subprocess // hysteria subprocess; nil when BinaryPath is empty
 
+	// Restart tally, fed by the supervisor through OnRestart. The panel alerts
+	// on growth: a restart that SUCCEEDS drops every live connection and leaves
+	// the node online, so without a count nothing anywhere says it happened.
+	restartsCrash     int
+	restartsMemory    int
+	lastRestartAt     time.Time
+	lastRestartReason string
+	// countingSince: when this adapter started tallying (agent start). Without
+	// it "3 restarts" could mean this morning or six months ago.
+	countingSince time.Time
+
 	// Cached `systemctl is-active` probe for systemd mode (guarded by mu).
 	// Healthy() serves unitHealthy and refreshes it in the background once
 	// older than unitProbeTTL, so the health path never forks systemctl inline
@@ -152,9 +163,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.RunCmd = defaultRunCmd
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]userEntry),
+		cfg:           cfg,
+		logger:        logger,
+		users:         make(map[string]userEntry),
+		countingSince: time.Now(),
 	}
 }
 
@@ -257,6 +269,10 @@ func (a *Adapter) Start(ctx context.Context) error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
+		// Without this the supervisor restarts the core and nobody counts it:
+		// the node comes back online, every live connection was dropped, and
+		// the panel has nothing to alert on.
+		OnRestart: a.recordRestart,
 	})
 	if err := proc.Start(ctx); err != nil {
 		// Best-effort: tear down the auth callback we just started.
@@ -411,6 +427,44 @@ func fetchTrafficStats(client HTTPClient, listen, secret string) (map[string]tra
 
 // unitProbeTTL caps how often Healthy() shells out to `systemctl is-active`.
 const unitProbeTTL = 20 * time.Second
+
+// recordRestart accumulates what the supervisor did. Called from the subprocess
+// watcher goroutine with no subprocess lock held, so taking a.mu here keeps the
+// existing a.mu -> subprocess.mu ordering intact.
+func (a *Adapter) recordRestart(ev subprocess.RestartEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ev.Reason == subprocess.RestartReasonMemory {
+		a.restartsMemory++
+	} else {
+		a.restartsCrash++
+	}
+	a.lastRestartAt = ev.At
+	a.lastRestartReason = string(ev.Reason)
+}
+
+// RestartStats implements the optional core.RestartReporter so /healthz can
+// carry the tally. MemoryLimitBytes stays 0: this adapter arms no memory
+// watchdog, so Memory can only ever be 0 and saying "ceiling 0" is the honest
+// report of a watchdog that is off.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	st := core.RestartStats{
+		Crash:      a.restartsCrash,
+		Memory:     a.restartsMemory,
+		LastAt:     a.lastRestartAt,
+		LastReason: a.lastRestartReason,
+		SinceAt:    a.countingSince,
+	}
+	proc := a.proc
+	a.mu.Unlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock and there is no
+	// reason to hold both.
+	if proc != nil {
+		st.RSSBytes = proc.RSSBytes()
+	}
+	return st
+}
 
 // LastFailure returns what the hysteria server printed just before it stopped, or "" when
 // this adapter owns no process to ask.
