@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
 )
@@ -454,7 +455,15 @@ func (a *Adapter) regenerateAndRestart() error {
 		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 			return fmt.Errorf("singbox: mkdir config dir: %w", err)
 		}
-		if err := os.WriteFile(cfgPath, blob, 0o600); err != nil {
+		// Through atomicfile, like the other seven adapters. `os.WriteFile`
+		// truncates the destination and then fills it, so sing-box reloading
+		// during that window reads half a JSON document — and a write that dies
+		// partway leaves that half under the final name with the working config
+		// already gone, which is the state the agent cannot recover from on the
+		// next boot. This adapter serves TUIC, AnyTLS, ShadowTLS and every
+		// engine=singbox inbound, so it was the newest family that had opted
+		// out of the oldest guarantee.
+		if err := atomicfile.Write(cfgPath, blob, 0o600); err != nil {
 			return fmt.Errorf("singbox: write %s: %w", cfgPath, err)
 		}
 	}
