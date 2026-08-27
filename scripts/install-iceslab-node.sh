@@ -616,6 +616,59 @@ fi
 
 cleanup_stale_apt_locks
 
+# ───── The existing-install decision, taken BEFORE the token is spent ─────
+#
+# Detect a prior installation. The env file is the canonical marker: if it's
+# there, the agent has at least been bootstrapped against some panel before.
+# Re-using it against a different (or freshly-rebuilt) panel is the top source
+# of "panel can't reach node" support tickets, because the old server cert
+# won't validate against the new panel CA.
+#
+# This used to sit below, after redemption, and every one of its three exits
+# aborted an install that had already consumed the one-shot token. The operator
+# then re-ran the same copy-pasted command with --reset and got "Bootstrap token
+# already consumed or expired: issue a fresh one in the panel UI" - which reads
+# as an expiry, not as "your last attempt spent it". Watched happen on a VM,
+# 2026-08-28. The --uninstall fast-path above already carries this exact reason
+# in its own comment; it was the only one of the two that had it.
+#
+# The wipe stays where it was (step 0 below): it is destructive and has no
+# business running before the panel has even answered. Only the decision moves.
+EXISTING_INSTALL=0
+if [[ -f /etc/iceslab-node/env || -x /usr/local/bin/iceslab-node ]]; then
+  EXISTING_INSTALL=1
+fi
+
+if [[ $EXISTING_INSTALL -eq 1 && $RESET -eq 0 ]]; then
+  if [[ -e /dev/tty ]]; then
+    warn "Detected previous iceslab-node install on this VPS."
+    warn "Re-installing against a different panel without wiping state will"
+    warn "cause mTLS verification to fail (old server cert vs new panel CA)."
+    # `read -rp "..." ans </dev/tty` silently lost the keypress in the
+    # `bash <(curl ...)` process-substitution flow: the prompt printed but
+    # the read returned empty, hitting the `*` branch with "Aborted by user"
+    # even when `y` was typed. Splitting the prompt print from the read fixes
+    # it, so read has /dev/tty as a clean terminal handle without the
+    # prompt-print racing the input side.
+    printf '\033[1;33mWipe previous installation and continue? [y/N]:\033[0m '
+    # `-e /dev/tty` is true over a non-interactive ssh (the device node is
+    # there) and the open still fails, so the read failing is a DIFFERENT
+    # outcome from a human typing "n" - and saying "Aborted by user" about a
+    # session where nobody was asked sent the last reader looking for the user.
+    if ! read -r ans </dev/tty; then
+      fail "Could not read the answer from /dev/tty (not an interactive session). Pass --reset to overwrite or --uninstall to remove."
+    fi
+    case "${ans,,}" in
+      y|yes) ;;
+      *)     fail "Aborted by user. Pass --reset to skip this prompt, or --uninstall to remove without re-installing." ;;
+    esac
+  else
+    fail "Previous install detected and no /dev/tty for prompt. Pass --reset to overwrite or --uninstall to remove."
+  fi
+elif [[ $EXISTING_INSTALL -eq 1 ]]; then
+  log "--reset given: wiping previous installation"
+fi
+
 # If both --panel-url and --bootstrap given, redeem the bootstrap token to
 # fetch the full payload from panel over HTTP. This is the recommended flow:
 # it sidesteps the 4 KB TTY paste limit because the long payload travels
@@ -730,41 +783,11 @@ EOF
 }
 
 # ───── 0. Existing-install handling ─────
-# Detect a prior installation. The env file is the canonical marker: if
-# it's there, the agent has at least been bootstrapped against some panel
-# before. Re-using it against a different (or freshly-rebuilt) panel is the
-# top source of "panel can't reach node" support tickets, because the old
-# server cert won't validate against the new panel CA.
-EXISTING_INSTALL=0
-if [[ -f /etc/iceslab-node/env || -x /usr/local/bin/iceslab-node ]]; then
-  EXISTING_INSTALL=1
-fi
-
+# The wipe itself, at the point it has always been: after the payload is in
+# hand, before anything is written. The DECISION to wipe is taken much
+# earlier - see the gate above the bootstrap redemption and why it is there.
 if [[ $EXISTING_INSTALL -eq 1 ]]; then
-  if [[ $RESET -eq 1 ]]; then
-    log "--reset given: wiping previous installation"
-    do_uninstall
-  elif [[ -e /dev/tty ]]; then
-    warn "Detected previous iceslab-node install on this VPS."
-    warn "Re-installing against a different panel without wiping state will"
-    warn "cause mTLS verification to fail (old server cert vs new panel CA)."
-    # `read -rp "..." ans </dev/tty` silently lost the keypress in the
-    # `bash <(curl ...)` process-substitution flow: the prompt printed but
-    # the read returned empty, hitting the `*` branch with "Aborted by user"
-    # even when `y` was typed. Splitting the prompt print from the read fixes
-    # it, so read has /dev/tty as a clean terminal handle without the
-    # prompt-print racing the input side.
-    printf '\033[1;33mWipe previous installation and continue? [y/N]:\033[0m '
-    if ! read -r ans </dev/tty; then
-      ans=""
-    fi
-    case "${ans,,}" in
-      y|yes) do_uninstall ;;
-      *)     fail "Aborted by user. Pass --reset to skip this prompt, or --uninstall to remove without re-installing." ;;
-    esac
-  else
-    fail "Previous install detected and no /dev/tty for prompt. Pass --reset to overwrite or --uninstall to remove."
-  fi
+  do_uninstall
 fi
 
 case "$PROTOCOL" in

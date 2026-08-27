@@ -795,6 +795,20 @@ BS_RC=0
 # curl's trust store, and a session of its own so the protocol menu cannot read
 # a terminal.
 redeem() {
+    _redeem 0 "$@"
+}
+
+# The same run on a box that already has an agent. The marker is
+# /usr/local/bin/iceslab-node, and the tmpfs over /usr/local/bin is what keeps
+# the pretence inside the namespace — nothing the installer needs before the
+# redemption lives there (curl, mktemp and bash are in /usr/bin, and the stubs
+# come first on PATH), so hiding it costs nothing.
+redeem_with_prior_install() {
+    _redeem 1 "$@"
+}
+
+_redeem() {
+    local prior="$1"; shift
     unshare -rm bash -c '
         set -uo pipefail
         mount -t tmpfs tmpfs /var/run || exit 90
@@ -803,12 +817,17 @@ redeem() {
             mount -t tmpfs tmpfs "$d" || exit 90
         done
         mkdir -p /var/lib/apt/lists /var/cache/apt/archives
+        if [[ "$5" == "1" ]]; then
+            mount -t tmpfs tmpfs /usr/local/bin || exit 90
+            printf "#!/bin/sh\nexit 0\n" > /usr/local/bin/iceslab-node
+            chmod 0755 /usr/local/bin/iceslab-node
+        fi
         export PATH="$1:$PATH"
         export CURL_CA_BUNDLE="$2"
         export FAKE_DPKG_LOG="$3" FAKE_FUSER_HOLDER=""
-        installer="$4"; shift 4
+        installer="$4"; shift 5
         setsid --wait bash "$installer" "$@"
-    ' _ "$BIN_REAL" "$BS_CERT" "${WORK}/dpkg.log" "$NODE_INSTALLER" "$@" >"$BS_OUT" 2>&1
+    ' _ "$BIN_REAL" "$BS_CERT" "${WORK}/dpkg.log" "$NODE_INSTALLER" "$prior" "$@" >"$BS_OUT" 2>&1
     BS_RC=$?
 }
 
@@ -835,6 +854,46 @@ if [[ "$(cat "$BS_LOG")" == "/api/internal/bootstrap/good-token" ]]; then
 else
     bad "the panel saw these requests instead:
 $(sed 's/^/      /' "$BS_LOG")"
+fi
+
+# ───── ...and not asked at all when the run is going to refuse anyway ─────
+#
+# A bootstrap token is one-shot. The `--uninstall` fast-path is placed above the
+# redemption for exactly that reason and says so in its own comment — but the
+# OTHER thing that refuses to install, the previous-install gate, sat BELOW it
+# and burned the token on all three of its exits. The operator then re-ran the
+# same copy-pasted command with --reset and was told "Bootstrap token already
+# consumed or expired: issue a fresh one in the panel UI", which reads as an
+# expiry rather than as "your last attempt spent it".
+#
+# Watched on a VM, 2026-08-28, with the real panel: abort, then a 410 on the
+# retry. The A/B is one difference — the case above and this one send the same
+# token to the same server, and only this box has an agent on it.
+: > "$BS_LOG"
+redeem_with_prior_install --panel-url "https://127.0.0.1:${BS_PORT}" --bootstrap good-token
+if [[ "$BS_RC" != "0" ]] && [[ ! -s "$BS_LOG" ]]; then
+    ok "a run that refuses because an agent is already installed spends no token: the panel is never called"
+else
+    bad "the refusal exited $BS_RC and the panel saw:
+$(sed 's/^/      /' "$BS_LOG")
+$(sed 's/^/      /' "$BS_OUT" | tail -20)"
+fi
+# The refusal has to be the one we mean, not some other failure that happens to
+# come first — and it has to hand the operator the two flags that get past it.
+if grep -q -- '--reset' "$BS_OUT" && grep -q -- '--uninstall' "$BS_OUT"; then
+    ok "and it names --reset and --uninstall rather than just stopping"
+else
+    bad "the refusal did not name the way out:
+$(sed 's/^/      /' "$BS_OUT" | tail -20)"
+fi
+# `-e /dev/tty` is true in this session and opening it still fails, so the read
+# fails rather than returning what a human typed. Saying "Aborted by user" there
+# sent the last reader looking for a user who was never asked.
+if grep -q 'Could not read the answer from /dev/tty' "$BS_OUT"; then
+    ok "and it says the prompt could not be READ, rather than blaming a user who was never asked"
+else
+    bad "the message about the unreadable prompt is not the one expected:
+$(sed 's/^/      /' "$BS_OUT" | tail -20)"
 fi
 
 # ───── --bootstrap-file: the same redemption, no token in argv ─────
