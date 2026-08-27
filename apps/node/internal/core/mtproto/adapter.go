@@ -163,10 +163,10 @@ func (a *Adapter) RemoveUser(userID string) error {
 // inboundCfgWire mirrors `MtprotoInboundCfg` in shared/transport.ts.
 type inboundCfgWire struct {
 	Domain string `json:"domain"`
-	// Secret is computed by the panel from the inbound ID + domain
-	// (DeriveSecret) and pushed here. The agent doesn't re-derive, it
-	// trusts the panel's value, so panel and agent stay in sync even if
-	// derivation logic ever changes.
+	// Secret is computed by the panel from the binding ID + domain and
+	// pushed here. The agent doesn't re-derive — it cannot, nothing on this
+	// wire carries the binding ID — it trusts the panel's value and checks
+	// its shape, so the two stay in sync even if the derivation changes.
 	Secret string `json:"secret"`
 }
 

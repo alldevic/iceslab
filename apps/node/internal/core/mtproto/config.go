@@ -28,8 +28,6 @@
 package mtproto
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -44,8 +42,21 @@ type InboundConfig struct {
 	// Domain is the masquerade target for Fake-TLS handshake.
 	Domain string
 
-	// Secret is the single mtg secret in mtg's hex format
-	// `ee<32-byte-secret-hex><domain-hex>`. Derive via DeriveSecret().
+	// Secret is the single mtg secret in mtg's hex format:
+	// `ee` + 32 hex chars (a 16-BYTE secret) + the domain, hex-encoded.
+	//
+	// Derived by the PANEL, from (binding id, domain), and pushed here. The
+	// agent used to carry its own copy of that derivation; it was called by
+	// nothing, could not have been called (this struct has no binding id and
+	// neither does ApplyInbound), and the panel's comment claimed the agent
+	// re-derived "for verification". Removed 2026-08-27, so there is one
+	// implementation and nothing for it to drift against. What the agent does
+	// check is the SHAPE, below — the prefix and a strict hex alphabet — and
+	// that is a real guard, because this value is printed straight into TOML.
+	//
+	// The 16-byte length is spec-mandated: the Telegram client, mobile and
+	// desktop, rejects longer secrets with "Invalid proxy link" /
+	// "Некорректная ссылка на прокси". Caught live 2026-05-13 on an iPhone.
 	Secret string
 
 	// ListenPort is the public TCP port mtg binds to. Default 443.
@@ -88,8 +99,8 @@ func (c *InboundConfig) validate() error {
 	// double-quotes, a stray `"` (or anything TOML treats as escape)
 	// would break out of the string and let a hostile/buggy panel push
 	// inject arbitrary TOML directives (swap bind-to to loopback, point
-	// stats to attacker-controlled, etc). DeriveSecret produces pure hex
-	// so the strict alphabet [0-9a-f] is the right whitelist here.
+	// stats to attacker-controlled, etc). The panel's derivation produces
+	// pure hex, so the strict alphabet [0-9a-f] is the right whitelist here.
 	for _, ch := range c.Secret {
 		isHex := (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
 		if !isHex {
@@ -97,24 +108,6 @@ func (c *InboundConfig) validate() error {
 		}
 	}
 	return nil
-}
-
-// DeriveSecret produces the per-inbound mtg secret deterministically.
-//
-// Format (Fake-TLS): `ee<16-byte-secret-hex><hex-encoded-domain>`
-//
-// The 16-byte length is spec-mandated, the Telegram client (mobile + desktop)
-// rejects longer secrets with "Invalid proxy link" / "Некорректная ссылка на
-// прокси". Same length upstream `mtg generate-secret` emits. Caught live
-// 2026-05-13 on iPhone.
-//
-// We pass `seed = inboundId` so each inbound gets a unique secret without
-// any extra credential storage. Same (inboundId, domain) → same secret;
-// domain change rotates the secret tail; deleting and recreating the
-// inbound rotates the head. Both panel and agent compute the same value.
-func DeriveSecret(inboundID, domain string) string {
-	h := sha256.Sum256([]byte(inboundID + ":" + domain))
-	return "ee" + hex.EncodeToString(h[:16]) + hex.EncodeToString([]byte(domain))
 }
 
 // renderConfig produces the mtg TOML config. Schema verified against

@@ -11,6 +11,22 @@ describe('mtprotoSecret (single-secret-per-inbound model)', () => {
     expect(s.endsWith(domainHex)).toBe(true);
   });
 
+  it('produces this exact value, and changing it logs every Telegram user out', () => {
+    // The shape assertions above survive a change to what is HASHED. This one
+    // does not, and that is the point: the secret is not stored anywhere, it is
+    // re-derived on every push and on every subscription render, so altering
+    // the seed silently rotates the secret of every live MTProto inbound and
+    // every client link stops working at once, with no migration and nothing
+    // logged.
+    //
+    // The value was measured against the agent's own copy of this derivation
+    // on 2026-08-27, byte for byte, immediately before that copy was deleted.
+    // It is the last artefact of the two halves having agreed.
+    expect(mtprotoSecret('inbound-uuid-1', 'www.cloudflare.com')).toBe(
+      'ee54e6e6e43821be8cf4b61978f5144b017777772e636c6f7564666c6172652e636f6d',
+    );
+  });
+
   it('is deterministic for same (inboundId, domain)', () => {
     const a = mtprotoSecret('inbound-1', 'www.example.com');
     const b = mtprotoSecret('inbound-1', 'www.example.com');

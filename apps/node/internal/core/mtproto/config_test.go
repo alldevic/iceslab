@@ -1,45 +1,21 @@
 package mtproto
 
 import (
+	"encoding/hex"
 	"strings"
 	"testing"
 )
 
-func TestDeriveSecret_DeterministicAndShape(t *testing.T) {
-	inboundID := "inbound-uuid-1"
-	domain := "www.cloudflare.com"
-
-	a := DeriveSecret(inboundID, domain)
-	b := DeriveSecret(inboundID, domain)
-	if a != b {
-		t.Errorf("DeriveSecret should be deterministic: %q vs %q", a, b)
-	}
-	if !strings.HasPrefix(a, "ee") {
-		t.Errorf("Secret must start with `ee` (Fake-TLS marker): %q", a)
-	}
-	// `ee` (2) + 16-byte secret hex (32) + domain hex (len(domain)*2)
-	expectedLen := 2 + 32 + len(domain)*2
-	if len(a) != expectedLen {
-		t.Errorf("Secret length: got %d want %d", len(a), expectedLen)
-	}
-}
-
-func TestDeriveSecret_DomainChangeRotates(t *testing.T) {
-	a := DeriveSecret("inbound-1", "www.cloudflare.com")
-	b := DeriveSecret("inbound-1", "www.google.com")
-	if a == b {
-		t.Errorf("Domain change MUST rotate the secret")
-	}
-	// Both head AND tail differ, head because the seed `inboundID:domain`
-	// includes the domain, tail because the domain hex is appended.
-}
-
-func TestDeriveSecret_DifferentInboundsDifferentSecrets(t *testing.T) {
-	a := DeriveSecret("inbound-1", "www.cloudflare.com")
-	b := DeriveSecret("inbound-2", "www.cloudflare.com")
-	if a == b {
-		t.Errorf("Different inbound IDs must produce different secrets")
-	}
+// validSecret builds a secret shaped the way the panel's derivation shapes
+// them: `ee` + 32 hex chars (a 16-byte secret) + the domain, hex-encoded.
+//
+// Deliberately NOT the panel's formula. The agent had a copy of that
+// derivation, exported and called by nothing; it was removed 2026-08-27 so
+// there is one implementation and nothing for it to drift against. What these
+// fixtures need is a well-SHAPED secret, which is exactly what the agent
+// checks, and the domain tail varies with the domain the way a real one does.
+func validSecret(domain string) string {
+	return "ee" + strings.Repeat("ab", 16) + hex.EncodeToString([]byte(domain))
 }
 
 func TestInboundValidation(t *testing.T) {
@@ -58,7 +34,7 @@ func TestInboundValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := InboundConfig{
 				Domain: "www.cloudflare.com",
-				Secret: DeriveSecret("inbound-1", "www.cloudflare.com"),
+				Secret: validSecret("www.cloudflare.com"),
 			}
 			tc.mut(&cfg)
 			if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -87,7 +63,7 @@ func TestRenderConfig_TomlShape_MatchesUpstream(t *testing.T) {
 	// `secrets = [...]` arrays); stats are nested in `[stats.prometheus]`,
 	// NOT a flat `stats-bind-to` key.
 	domain := "www.cloudflare.com"
-	secret := DeriveSecret("inbound-1", domain)
+	secret := validSecret(domain)
 	cfg := InboundConfig{
 		Domain: domain, Secret: secret, ListenPort: 443, StatsPort: 3129,
 	}
