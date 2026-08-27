@@ -574,6 +574,54 @@ else
     bad "the session/flag port mismatch was not warned about"
 fi
 
+# ───── The world-open SSH rule a previous install left behind ─────
+#
+# Found on a real VM, and only there: this harness stubs ufw and starts from a
+# clean slate, so it never had a leftover rule to trip over. A node installed
+# once WITHOUT --ssh-allowlist carries `22/tcp ALLOW IN Anywhere`; ufw matches in
+# order and the first match wins, so the allowlist rules added afterwards
+# restrict nothing. The operator reads `ufw status`, sees their allowlist rule,
+# and believes SSH is locked down. do_uninstall does not remove it either — it
+# deletes the agent's own port and nothing else — so --reset does not clear it.
+# This scenario passes --ssh-port 2222, so that is the port the removal names.
+if grep -qE '^ufw --force delete (allow|limit) 2222/tcp$' <<<"$UFW"; then
+    ok "a world-open SSH rule from an earlier install is removed, so the allowlist can bite"
+else
+    bad "nothing removes a leftover blanket SSH rule; --ssh-allowlist would restrict nothing on a re-install:
+$(sed 's/^/      /' <<<"$UFW")"
+fi
+# Order matters: the narrow rules must already exist when the blanket one goes,
+# or there is a moment with no SSH rule at all.
+if [[ "$(grep -n 'ufw allow from 198.51.100.4' <<<"$UFW" | head -1 | cut -d: -f1)" \
+      -lt "$(grep -n 'ufw --force delete allow 2222/tcp' <<<"$UFW" | head -1 | cut -d: -f1)" ]]; then
+    ok "and only after the session's own rule is in place"
+else
+    bad "the blanket rule was removed before the replacement rules existed"
+fi
+
+# ───── …and NOT removed when we cannot see where the operator is ─────
+note "an install with no SSH_CONNECTION in the environment"
+dex bash -c ": > ${INSTALL_LOG}"
+dex bash -c ': > /opt/ice-stub/log/ufw.log'
+FAKE_SSH_CONNECTION="" \
+run_installer --protocol xray --payload "$PAYLOAD" --panel-ip 203.0.113.7 --port 1337 \
+    --reset --ssh-allowlist "192.0.2.0/24"
+RC=$?
+LOG="$(dex cat "$INSTALL_LOG")"
+UFW2="$(dex cat /opt/ice-stub/log/ufw.log 2>/dev/null)"
+if [[ "$RC" != "0" ]]; then
+    bad "a console install (no SSH_CONNECTION) failed outright: rc=$RC"
+elif grep -qE '^ufw --force delete (allow|limit) 22/tcp$' <<<"$UFW2"; then
+    bad "removed the only rule keeping a console operator in, on a guess about where they are"
+else
+    ok "leaves the blanket rule alone when the session's source is unknown"
+fi
+if grep -q 'does NOT restrict SSH while' <<<"$LOG"; then
+    ok "and says so, rather than leaving the operator believing the allowlist bit"
+else
+    bad "skipped the removal silently; the operator is told SSH is restricted when it is not"
+fi
+
 if [[ "$(dex systemctl is-active iceslab-node 2>&1)" == "active" ]]; then
     ok "the node is running after the hardened install"
 else

@@ -1309,6 +1309,38 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
         ufw allow "${_CUR_SSH_PORT}/tcp" >/dev/null 2>&1 || true
       fi
     fi
+    # Drop any world-open SSH rule a PREVIOUS install left behind.
+    #
+    # ufw matches in order and the first match wins, so a `22/tcp ALLOW IN
+    # Anywhere` sitting at position 1 answers every packet and the allowlist
+    # rules added above — which land after it — restrict nothing at all. An
+    # operator who installs once without --ssh-allowlist and re-installs with
+    # it reads `ufw status`, sees their allowlist rule present, and believes SSH
+    # is locked down. It is not. do_uninstall does not remove these either: it
+    # deletes the agent's own port and nothing else, so --reset does not clear
+    # them.
+    #
+    # Deleted AFTER the narrow rules are in place, never before: that way there
+    # is no moment in which SSH has no rule at all.
+    #
+    # And only when we KNOW where this session comes from. Without
+    # SSH_CONNECTION — a console or serial install, or a wrapper that dropped
+    # the environment — the guard above allowed nothing, so the blanket rule is
+    # the only thing keeping the operator in, and removing it on a guess locks
+    # them out of the box. Caught exactly that way while testing this: a forged
+    # SSH_CONNECTION made the guard allow an address that was not the client's,
+    # the blanket rule went, and the session died. Say so instead of guessing.
+    if [[ -n "$_CUR_SSH_IP" ]]; then
+      ufw --force delete allow "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
+      ufw --force delete limit "${SSH_PORT}/tcp" >/dev/null 2>&1 || true
+    else
+      warn "no SSH_CONNECTION in the environment, so this session's source is unknown."
+      warn "Leaving any world-open ${SSH_PORT}/tcp rule from a previous install in place:"
+      warn "removing it could lock you out. --ssh-allowlist does NOT restrict SSH while"
+      warn "that rule exists (ufw matches in order). Remove it yourself once you are sure:"
+      warn "  ufw status numbered   # find the '${SSH_PORT}/tcp ALLOW IN Anywhere' line"
+      warn "  ufw --force delete allow ${SSH_PORT}/tcp"
+    fi
   elif [[ "$HARDEN_UFW" == "1" ]]; then
     # No allowlist but hardening on: keep 22/tcp world-reachable but rate-limit
     # it so password/key brute-force probes get throttled (ufw limit = max 6
