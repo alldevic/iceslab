@@ -34,9 +34,12 @@
 # harness that never downloaded anything, so the first case proves the stub
 # writes and the last-resort assertions read a real write.
 #
-# Needs bash, coreutils. No docker, no network, no systemd. Nothing here runs
-# the installer's executable body, and in particular never `do_uninstall`,
-# which stops units and removes /etc/xray on whatever host it is on.
+# Needs bash, coreutils, and — for the bootstrap-redemption cases only —
+# python3, openssl and setsid, to stand up a throwaway HTTPS panel on loopback.
+# No docker, no systemd, and nothing that leaves this machine. `do_uninstall`
+# stops units and removes /etc/xray on whatever host it is on, so it is run only
+# inside `unshare -rm`, and the harness refuses to start on a host that has a
+# node installed.
 #
 # Usage:
 #   ./scripts/ops/installer-selftest.sh
@@ -647,6 +650,263 @@ if ! bash -c 'source "$1"; resolve_bootstrap "$2"' _ "$RES" "${WORK}/no-such-fil
 else
     bad "a missing bootstrap file was accepted"
 fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Redeeming a bootstrap token, against a panel that answers
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The recommended way to install a node is `--panel-url X --bootstrap TOK`: the
+# installer GETs the token and the panel hands back the mTLS payload. Forty
+# lines, five outcomes, each with its own message — and not one of them had ever
+# run. The cases above cover the flag PARSING and the file-reading helper; what
+# happens after is executable body in the middle of the script.
+#
+# The five are not interchangeable, and the operator has nothing but the message
+# to act on: 404 means the token is wrong or purged (re-read the command), 410
+# means it was already spent (issue a new one in the panel), 000 means the box
+# cannot reach the panel at all (URL, TLS, firewall), anything else means look
+# at the panel's log. Getting one of those wrong sends the operator to the wrong
+# place with a node that is not installed. The block also carries a repaired
+# bug in its comment — `curl -f` made "410" arrive as "410000" and fall through
+# to the catch-all — which is precisely a code-to-message mapping that only a
+# real reply can check.
+#
+# So the panel is real here: a throwaway HTTPS server on loopback with a
+# self-signed cert, and curl is the REAL curl, pointed at that cert through
+# CURL_CA_BUNDLE. Nothing else would exercise `--proto =https`, `--max-redirs 0`
+# or the http_code parsing; a stubbed curl would only be asking the harness what
+# it had just been told.
+#
+# The installer is run with no --protocol and in its own session, so that the
+# first thing after the redemption block — the interactive protocol menu — has
+# no /dev/tty to read from and stops the run there. That is the whole point: the
+# redemption happens, and nothing after it does.
+note "bootstrap token redemption"
+
+BS_LOG="${WORK}/panel-requests.log"
+BS_PORT_FILE="${WORK}/panel-port"
+BS_CERT="${WORK}/panel-cert.pem"
+BS_KEY="${WORK}/panel-key.pem"
+BS_PID=""
+
+# Real curl, everything else still stubbed: cleanup_stale_apt_locks runs before
+# the redemption and wants fuser/dpkg, and those must stay fake.
+BIN_REAL="${WORK}/bin-real"
+mkdir -p "$BIN_REAL"
+for f in "$BIN"/*; do
+    [[ "$(basename "$f")" == "curl" ]] && continue
+    ln -sf "$f" "${BIN_REAL}/$(basename "$f")"
+done
+
+bs_stop() { [[ -n "$BS_PID" ]] && kill "$BS_PID" 2>/dev/null; BS_PID=""; }
+trap 'bs_stop; rm -rf "$WORK"' EXIT
+
+if ! command -v python3 >/dev/null; then
+    bad "python3 is missing, so the panel stub cannot be started; the redemption cases are NOT being skipped silently"
+elif ! command -v openssl >/dev/null; then
+    bad "openssl is missing, so no cert can be made for the panel stub; the redemption cases are NOT being skipped silently"
+elif ! command -v setsid >/dev/null; then
+    bad "setsid is missing; without a session of its own the installer would hang on the protocol menu. NOT skipping silently"
+else
+
+# IP:127.0.0.1 rather than DNS:localhost on purpose. `localhost` resolves to ::1
+# first on this machine, the stub binds v4, and the run would fail for a reason
+# that has nothing to do with the installer.
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+    -subj '/CN=iceslab-panel-stub' -addext 'subjectAltName=IP:127.0.0.1' \
+    -keyout "$BS_KEY" -out "$BS_CERT" >/dev/null 2>&1
+
+cat > "${WORK}/panel-stub.py" <<'PYEOF'
+import http.server, ssl, sys, textwrap
+
+cert, key, reqlog, portfile = sys.argv[1:5]
+PAYLOAD = "A" * 6000
+
+class Panel(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        with open(reqlog, "a") as f:
+            f.write(self.path + "\n")
+        if self.path in ("/api/internal/bootstrap/good-token",
+                         "/api/internal/bootstrap/token-from-a-file"):
+            # Line-wrapped, the way base64 comes out of most tools, plus a
+            # trailing newline. A trailing newline alone would prove nothing:
+            # `$(...)` eats those on its own. The wrapping is what the
+            # installer's `tr -d` is for, and a payload that reaches the env
+            # file with newlines still in it is a node that never starts.
+            body = (textwrap.fill(PAYLOAD, 76) + "\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/api/internal/bootstrap/moved-token":
+            # What --max-redirs 0 exists for: a panel URL under someone else's
+            # control bouncing the redemption at a host of their choosing.
+            self.send_response(302)
+            self.send_header("Location", "/api/internal/bootstrap/good-token")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path == "/api/internal/bootstrap/unknown-token":
+            self.send_error(404)
+        elif self.path == "/api/internal/bootstrap/spent-token":
+            self.send_error(410)
+        else:
+            self.send_error(418)
+
+srv = http.server.HTTPServer(("127.0.0.1", 0), Panel)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(cert, key)
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+with open(portfile, "w") as f:
+    f.write(str(srv.server_address[1]))
+srv.serve_forever()
+PYEOF
+
+: > "$BS_LOG"
+rm -f "$BS_PORT_FILE"
+python3 "${WORK}/panel-stub.py" "$BS_CERT" "$BS_KEY" "$BS_LOG" "$BS_PORT_FILE" >/dev/null 2>&1 &
+BS_PID=$!
+for _ in $(seq 1 50); do
+    [[ -s "$BS_PORT_FILE" ]] && break
+    sleep 0.1
+done
+BS_PORT="$(cat "$BS_PORT_FILE" 2>/dev/null || true)"
+
+# The harness's own control, and it has to be a real redemption-shaped request:
+# a stub that answers nothing would make every "the installer failed" case below
+# pass for the wrong reason.
+if [[ -n "$BS_PORT" ]] \
+   && curl --cacert "$BS_CERT" -sS -o /dev/null -w '%{http_code}' \
+        "https://127.0.0.1:${BS_PORT}/api/internal/bootstrap/good-token" 2>/dev/null \
+      | grep -q '^200$'; then
+    ok "a panel stub is answering 200 on https://127.0.0.1:${BS_PORT}"
+else
+    bad "the panel stub never came up (port='${BS_PORT}'); the redemption cases would all pass for the wrong reason"
+fi
+
+BS_OUT="${WORK}/bootstrap-out.txt"
+BS_RC=0
+# Same isolation as run_installer, with real curl on PATH, the stub's cert as
+# curl's trust store, and a session of its own so the protocol menu cannot read
+# a terminal.
+redeem() {
+    unshare -rm bash -c '
+        set -uo pipefail
+        mount -t tmpfs tmpfs /var/run || exit 90
+        for d in /var/lib/dpkg /var/lib/apt /var/cache/apt; do
+            mkdir -p "$d" 2>/dev/null || true
+            mount -t tmpfs tmpfs "$d" || exit 90
+        done
+        mkdir -p /var/lib/apt/lists /var/cache/apt/archives
+        export PATH="$1:$PATH"
+        export CURL_CA_BUNDLE="$2"
+        export FAKE_DPKG_LOG="$3" FAKE_FUSER_HOLDER=""
+        installer="$4"; shift 4
+        setsid --wait bash "$installer" "$@"
+    ' _ "$BIN_REAL" "$BS_CERT" "${WORK}/dpkg.log" "$NODE_INSTALLER" "$@" >"$BS_OUT" 2>&1
+    BS_RC=$?
+}
+
+# ───── 200: the payload comes back and the run continues past the block ─────
+: > "$BS_LOG"
+redeem --panel-url "https://127.0.0.1:${BS_PORT}" --bootstrap good-token
+if grep -q 'Bootstrap successful: fetched 6000 bytes of payload' "$BS_OUT"; then
+    ok "a valid token is exchanged for the payload, and the line breaks the panel wrapped it in are stripped"
+else
+    bad "the redemption did not report a 6000-byte payload:
+$(sed 's/^/      /' "$BS_OUT" | tail -20)"
+fi
+# Where the run stopped is the other half: past the redemption, at the first
+# thing that needs an operator. If it had stopped earlier the case above would
+# be about something else.
+if [[ "$BS_RC" != "0" ]] && grep -q 'no /dev/tty; pass --protocol explicitly' "$BS_OUT"; then
+    ok "and the run went on to the next step rather than ending at the redemption"
+else
+    bad "the run ended somewhere unexpected (rc=$BS_RC):
+$(sed 's/^/      /' "$BS_OUT" | tail -20)"
+fi
+if [[ "$(cat "$BS_LOG")" == "/api/internal/bootstrap/good-token" ]]; then
+    ok "the panel was asked for exactly that token, at the documented path"
+else
+    bad "the panel saw these requests instead:
+$(sed 's/^/      /' "$BS_LOG")"
+fi
+
+# ───── --bootstrap-file: the same redemption, no token in argv ─────
+#
+# The flag exists because `--bootstrap tok` leaves the token in
+# /proc/<pid>/cmdline for the length of the install, and within its 15-minute
+# TTL that is a full mTLS keypair for this node to any local process. The
+# observable is that the panel was asked for the token although the command
+# line only ever held a path.
+: > "$BS_LOG"
+printf 'token-from-a-file\n' > "${WORK}/bs-token"
+redeem --panel-url "https://127.0.0.1:${BS_PORT}" --bootstrap-file "${WORK}/bs-token"
+if [[ "$(cat "$BS_LOG")" == "/api/internal/bootstrap/token-from-a-file" ]] \
+   && grep -q 'Bootstrap successful' "$BS_OUT"; then
+    ok "--bootstrap-file redeems the token it read, and the token never appears on the command line"
+else
+    bad "--bootstrap-file asked the panel for: $(cat "$BS_LOG")
+$(sed 's/^/      /' "$BS_OUT" | tail -20)"
+fi
+
+# ───── 404, 410, 418, 000: four codes, four different things to do ─────
+# A failed redemption must also STOP the install rather than carry on with an
+# empty payload, so each case asks for both: the right message, and a run that
+# never reached the protocol menu the 200 case does reach.
+bs_case() {
+    local token="$1" want_msg="$2" label="$3" url="${4:-https://127.0.0.1:${BS_PORT}}"
+    : > "$BS_LOG"
+    redeem --panel-url "$url" --bootstrap "$token"
+    if [[ "$BS_RC" != "0" ]] && grep -qF "$want_msg" "$BS_OUT" \
+       && ! grep -q 'pass --protocol explicitly' "$BS_OUT"; then
+        ok "$label"
+    else
+        bad "${label} — exited $BS_RC and said:
+$(sed 's/^/      /' "$BS_OUT" | tail -12)"
+    fi
+}
+
+bs_case unknown-token 'Bootstrap token not found' \
+    "404 says the token is unknown and points at typo-or-purged"
+bs_case spent-token 'already consumed or expired' \
+    "410 says the token was spent and to issue a fresh one"
+bs_case teapot-token 'Unexpected HTTP 418' \
+    "an unexpected code is reported with the code itself, not swallowed"
+bs_case moved-token 'Unexpected HTTP 302' \
+    "a 302 is refused rather than followed: a hostile --panel-url cannot bounce the keypair handoff"
+bs_case any-token 'Cannot reach panel' \
+    "an unreachable panel is told apart from an answering one" "https://127.0.0.1:1"
+
+# ───── The guards around the request itself ─────
+: > "$BS_LOG"
+redeem --panel-url "http://127.0.0.1:${BS_PORT}" --bootstrap good-token
+if [[ "$BS_RC" != "0" ]] && grep -q 'must start with https://' "$BS_OUT" && [[ ! -s "$BS_LOG" ]]; then
+    ok "a plain-http panel URL is refused before anything is sent"
+else
+    bad "an http:// panel URL exited $BS_RC, and the panel saw: $(cat "$BS_LOG")
+$(sed 's/^/      /' "$BS_OUT" | tail -12)"
+fi
+for half in "--panel-url https://127.0.0.1:${BS_PORT}" "--bootstrap good-token"; do
+    : > "$BS_LOG"
+    # shellcheck disable=SC2086
+    redeem $half
+    if [[ "$BS_RC" != "0" ]] && grep -q 'must be passed TOGETHER' "$BS_OUT"; then
+        ok "'${half%% *}' alone is refused by name"
+    else
+        bad "'${half%% *}' alone exited $BS_RC:
+$(sed 's/^/      /' "$BS_OUT" | tail -12)"
+    fi
+done
+
+bs_stop
+fi   # bootstrap redemption cases
+
 
 fi   # prologue cases
 
