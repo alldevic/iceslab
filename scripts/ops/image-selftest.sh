@@ -166,17 +166,24 @@ docker network create "$NET" >/dev/null 2>&1
 docker run -d --name "$PG" --network "$NET" \
     -e POSTGRES_USER=iceslab -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB=iceslab \
     postgres:16-alpine >/dev/null 2>&1
-pg_ready=""
-for _ in $(seq 1 60); do
-    docker exec "$PG" pg_isready -U iceslab -d iceslab >/dev/null 2>&1 && { pg_ready=1; break; }
-    sleep 1
-done
 psql_q() { docker exec "$PG" psql -U iceslab -d iceslab -tAc "$1" 2>/dev/null | tr -d '\r'; }
 
+# Waited on with a QUERY, not with pg_isready. The official image starts a
+# temporary server to run its init scripts and then restarts it, so pg_isready
+# answers yes to a socket that is about to go away — and the case below then
+# reads an empty string where it wanted a row count and says the fresh database
+# "already has  tables". That was this harness's own control catching this
+# harness, on the first run after the wait was written.
+pg_ready=""
+for _ in $(seq 1 60); do
+    [[ "$(psql_q 'select 1')" == "1" ]] && { pg_ready=1; break; }
+    sleep 1
+done
+
 if [[ -n "$pg_ready" ]]; then
-    ok "a throwaway postgres:16-alpine is accepting connections"
+    ok "a throwaway postgres:16-alpine answers a query"
 else
-    bad "the throwaway postgres never came up; the migration cases cannot run"
+    bad "the throwaway postgres never answered a query; the migration cases cannot run"
 fi
 
 BEFORE="$(psql_q "select count(*) from information_schema.tables where table_schema='public'")"
