@@ -10,9 +10,6 @@
  */
 export const ALL_SQUAD_ID = '00000000-0000-0000-0000-000000000001';
 
-/** Display name shown in panel UI; matches the seeded row's `name` column. */
-export const ALL_SQUAD_NAME = 'All';
-
 /**
  * Stable, well-known UUID for the remnawave-compat "no access" squad — a group
  * with NO profiles, so its members get an empty subscription. The facade maps a

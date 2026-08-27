@@ -83,7 +83,15 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // POST /api/srr/test: evaluate a UA against the current rule set
+  // POST /api/srr/test: evaluate a UA against the current rule set.
+  //
+  // No caller in the panel, deliberately. The screen matches locally instead,
+  // because it needs more than this route returns — see lib/srrMatch.ts, whose
+  // comment says so. What remains here is the answer from the rules the SERVER
+  // actually stores, which is the one an operator wants when the screen and the
+  // fleet disagree: `curl -H "authorization: Bearer ..." -d '{"userAgent":"..."}'`.
+  // The frontend's client function for it was removed 2026-08-27; the route is
+  // kept and tested.
   app.post('/api/srr/test', auth, async (request, reply) => {
     const input = TestSrrSchema.parse(request.body);
     const matched = await matchFormatForUserAgent(input.userAgent);

@@ -912,12 +912,6 @@ export interface UpdateSrrInput {
   enabled?: boolean;
 }
 
-export interface TestSrrResponse {
-  /** null when no rule matched. */
-  format: SubscriptionFormat | null;
-  userAgent: string;
-}
-
 export async function listSrrRules(): Promise<{ rules: SrrRule[] }> {
   const { data } = await api.get<{ rules: SrrRule[] }>('/api/srr');
   return data;
@@ -1096,11 +1090,6 @@ export async function generatePqKeys(
   nodeId?: string,
 ): Promise<PqKeys> {
   const { data } = await api.post<PqKeys>('/api/profiles/generate-pq-keys', { kind, nodeId });
-  return data;
-}
-
-export async function testSrrRule(userAgent: string): Promise<TestSrrResponse> {
-  const { data } = await api.post<TestSrrResponse>('/api/srr/test', { userAgent });
   return data;
 }
 
@@ -1542,15 +1531,6 @@ export interface CreateCascadeV4Input {
   positions: CascadePositionInput[];
   directions: CascadeDirectionInput[];
 }
-
-/**
- * Storage moved to positions and directions on 2026-08-04, so the two shapes
- * the screens used to block, a pool of several nodes on one step and transits
- * combined with several directions, are now ordinary saves. What remains is a
- * cap on the total number of node-to-node links, which the forms still count
- * themselves because pools multiply it.
- */
-export const CASCADE_V4_WRITES_LIVE = true;
 
 export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input>;
 

@@ -80,10 +80,6 @@ export const ROLE_TONE: Record<HopRole, string> = {
 
 /** A chain is one fixed path, a balancer is a choice, and the panel colours
  *  them apart wherever a mode is named. */
-export const MODE_TONE: Record<CascadeMode, string> = {
-  chain: CYAN,
-  balancer: VIOLET,
-};
 
 /** One hop of the draft, before it becomes a CascadeHopInput. */
 export interface HopDraft {
@@ -128,150 +124,6 @@ export function statusTone(status: string): string {
 }
 
 /* ───── Hop editor ──────────────────────────────────────────────────────── */
-
-export function HopRow({
-  role,
-  node,
-  nodes,
-  claimedBy,
-  usedElsewhere,
-  onPickNode,
-  entryProtocol,
-  onEntryProtocol,
-  linkProtocol,
-  linkLabel,
-  onLinkProtocol,
-  subscriptionLabel,
-  canUp,
-  canDown,
-  canDelete,
-  onUp,
-  onDown,
-  onDelete,
-}: {
-  role: HopRole;
-  node: Node | null;
-  nodes: Node[];
-  claimedBy: Map<string, string>;
-  usedElsewhere: string[];
-  onPickNode: (id: string) => void;
-  entryProtocol: CascadeProtocol | null;
-  onEntryProtocol: (v: CascadeProtocol) => void;
-  linkProtocol: CascadeProtocol | null;
-  linkLabel: string;
-  onLinkProtocol: (v: CascadeProtocol) => void;
-  /** Edit mode only: what a subscriber will see this exit called. Replaces the
-   *  inert "egress direct" slot, which says nothing a live cascade needs. */
-  subscriptionLabel?: string | null;
-  canUp: boolean;
-  canDown: boolean;
-  canDelete: boolean;
-  onUp: () => void;
-  onDown: () => void;
-  onDelete: () => void;
-}) {
-  const { t } = useTranslation();
-  const tone = ROLE_TONE[role];
-
-  return (
-    <Box
-      className="cascade-hop"
-      style={{
-        padding: 14,
-        borderRadius: 10,
-        backgroundColor: WELL,
-        border: `1px solid ${HAIRLINE}`,
-        borderLeft: `3px solid ${tone}`,
-      }}
-    >
-      <Box
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          height: 36,
-          paddingInline: 10,
-          borderRadius: 8,
-          flexShrink: 0,
-          backgroundColor: `${tone}14`,
-          border: `1px solid ${tone}2E`,
-        }}
-      >
-        <Text
-          style={{
-            fontFamily: MONO,
-            fontSize: 10,
-            letterSpacing: '0.1em',
-            lineHeight: '12px',
-            textTransform: 'uppercase',
-            color: tone,
-          }}
-        >
-          {t(`cascades.role.${role}`)}
-        </Text>
-      </Box>
-
-      <Stack gap={6} className="cascade-hop-node">
-        <FieldLabel>{t('cascadeCreate.node')}</FieldLabel>
-        <NodeSelect
-          value={node?.id ?? null}
-          nodes={nodes}
-          claimedBy={claimedBy}
-          usedElsewhere={usedElsewhere}
-          // The entry is the hop whose core version decides whether per-exit
-          // auth works at all, so that is what its field reports.
-          meta={role === 'entry' ? 'core' : 'status'}
-          onChange={onPickNode}
-        />
-      </Stack>
-
-      <Stack gap={6} className="cascade-hop-field">
-        <FieldLabel muted={entryProtocol === null}>{t('cascadeCreate.entryProtocol')}</FieldLabel>
-        {entryProtocol === null ? (
-          <InertField>{t('cascadeCreate.notApplicable')}</InertField>
-        ) : (
-          <Select
-            data={protocolOptions(entryProtocol)}
-            value={entryProtocol}
-            allowDeselect={false}
-            error={!isKnownProtocol(entryProtocol)}
-            onChange={(v) => v && onEntryProtocol(v as CascadeProtocol)}
-          />
-        )}
-      </Stack>
-
-      <Stack gap={6} className="cascade-hop-field">
-        <FieldLabel muted={linkProtocol === null && !subscriptionLabel}>
-          {linkProtocol === null && subscriptionLabel ? t('cascadeEdit.subLabel') : linkLabel}
-        </FieldLabel>
-        {linkProtocol !== null ? (
-          <Select
-            data={protocolOptions(linkProtocol)}
-            value={linkProtocol}
-            allowDeselect={false}
-            error={!isKnownProtocol(linkProtocol)}
-            onChange={(v) => v && onLinkProtocol(v as CascadeProtocol)}
-          />
-        ) : subscriptionLabel ? (
-          <ReadonlyField>{subscriptionLabel}</ReadonlyField>
-        ) : (
-          <InertField>{t('cascadeCreate.egressDirect')}</InertField>
-        )}
-      </Stack>
-
-      <Box style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-        <IconButton disabled={!canUp} onClick={onUp} title={t('cascadeCreate.moveUp')}>
-          <MoveIcon size={15} color={canUp ? MIST : DIM} up />
-        </IconButton>
-        <IconButton disabled={!canDown} onClick={onDown} title={t('cascadeCreate.moveDown')}>
-          <MoveIcon size={15} color={canDown ? MIST : DIM} />
-        </IconButton>
-        <IconButton disabled={!canDelete} onClick={onDelete} title={t('common.delete')}>
-          <TrashIcon size={15} color={canDelete ? RED : DIM} />
-        </IconButton>
-      </Box>
-    </Box>
-  );
-}
 
 /**
  * The node picker. Beyond the name it carries the two facts that decide whether
@@ -1653,46 +1505,6 @@ export function IconButton({
       }}
     >
       {children}
-    </UnstyledButton>
-  );
-}
-
-/** The dashed row that grows the chain. */
-export function AddHopButton({
-  label,
-  left,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  left: string;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <UnstyledButton
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        height: 44,
-        width: '100%',
-        borderRadius: 10,
-        backgroundColor: WELL,
-        border: `1px dashed ${EDGE}`,
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-      }}
-    >
-      <PlusIcon size={14} color={CYAN} />
-      <Text style={{ fontFamily: DISPLAY, fontSize: 13, fontWeight: 500, lineHeight: '17px', color: SNOW }}>
-        {label}
-      </Text>
-      <Text style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: FAINT }}>{left}</Text>
     </UnstyledButton>
   );
 }
