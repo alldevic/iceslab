@@ -117,6 +117,40 @@ else
     bad "a .git directory is in the image"
 fi
 
+# The sources. Not a secret and not a size problem (6.5 MB against 474 MB of
+# node_modules) - the point is that `node dist/index.js` cannot reach a line of
+# it, so every one of those files is something an operator can host, patch and
+# be confused by without any of it changing what runs. Asked of the image
+# rather than of the Dockerfile: a COPY that takes a whole directory grows what
+# it ships every time the directory grows, and nothing links that to this
+# question.
+BE_SRC="$(beq 'find /app/apps/panel-backend/src -type f 2>/dev/null | wc -l')"
+if [[ "${BE_SRC:-0}" == "0" ]]; then
+    ok "the backend's own src/ is not in the image (dist/ is what CMD runs)"
+else
+    bad "apps/panel-backend/src is in the image: ${BE_SRC} files"
+fi
+TESTFILES="$(beq 'find /app/apps /app/packages -name "*.test.ts" -o -name "vitest.config.ts" 2>/dev/null' | head -20)"
+if [[ -z "$TESTFILES" ]]; then
+    ok "and neither is the test suite, nor the vitest config that names it"
+else
+    bad "the image carries test files:
+$(sed 's/^/      /' <<<"$TESTFILES")"
+fi
+
+# The control on both cases above, and the reason the prune is a list and not
+# `rm -rf */src`: @iceslab/shared's package entry IS its TypeScript source, so
+# its src/ has to survive with the .js siblings the builder emits beside it.
+# Without this, an over-eager prune passes the two cases above by deleting the
+# program, and the failure only shows up when a container is started.
+SHARED_TS="$(beq 'test -f /app/packages/shared/src/index.ts && echo yes')"
+SHARED_JS="$(beq 'test -f /app/packages/shared/src/index.js && echo yes')"
+if [[ "$SHARED_TS" == "yes" && "$SHARED_JS" == "yes" ]]; then
+    ok "packages/shared/src still holds index.ts and the emitted index.js beside it"
+else
+    bad "packages/shared/src is missing index.ts (${SHARED_TS:-no}) or index.js (${SHARED_JS:-no}); the backend cannot import @iceslab/shared"
+fi
+
 # ───── Who it runs as ─────
 #
 # The long-lived backend runs unprivileged; the migrate one-shot overrides back

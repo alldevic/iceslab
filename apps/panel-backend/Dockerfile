@@ -80,6 +80,39 @@ WORKDIR /repo
 RUN --mount=type=cache,id=pnpm,target=/root/.pnpm-store \
     pnpm install --frozen-lockfile --prod --prefer-offline --filter "@iceslab/panel-backend..."
 
+# Strip the sources too. The runtime stage copies /repo wholesale, so whatever
+# survives this line is what an operator ends up hosting on their VPS: before
+# it, the backend image carried all 421 .ts of apps/panel-backend/src (188 of
+# them tests), the tests/ helpers, vitest.config.ts and a copy of this
+# Dockerfile. None of it is reachable from `node dist/index.js` - tsc emitted
+# every one of those files, including src/generated/prisma, into dist/ - and
+# none of it is secret (image-selftest.sh asks the built image about that
+# separately). It is simply not the operator's to run, patch or grep.
+#
+# What must NOT go:
+#   * packages/shared/src - its package entry IS src/index.ts, and the builder
+#     emits the .js siblings next to the .ts precisely so plain node resolves
+#     them. Deleting the directory deletes the program.
+#   * prisma/ and prisma.config.ts - `docker compose run --rm migrate` runs
+#     `pnpm exec prisma migrate deploy` out of this same image and reads both.
+#   * the workspace manifests at /repo - that same pnpm invocation needs them.
+#
+# tsconfig.json goes with the rest: nothing in the runtime image compiles, and
+# the migrate one-shot's TS entry (prisma.config.ts) is loaded by Prisma's own
+# loader, which does not consult it. That claim is checked, not asserted - the
+# migrate cases in scripts/ops/image-selftest.sh run against this image.
+RUN rm -rf \
+      /repo/apps/panel-backend/src \
+      /repo/apps/panel-backend/tests \
+      /repo/apps/panel-backend/scripts \
+      /repo/apps/panel-backend/vitest.config.ts \
+      /repo/apps/panel-backend/tsconfig.json \
+      /repo/apps/panel-backend/Dockerfile \
+      /repo/apps/panel-backend/README.md \
+      /repo/packages/shared/tsconfig.json \
+      /repo/packages/shared/testdata \
+      /repo/packages/shared/README.md
+
 # ───── Runtime stage ─────
 FROM node:${NODE_VERSION} AS runtime
 # NODE_OPTIONS heap cap: without it, Node's auto-sizing on small-RAM containers
