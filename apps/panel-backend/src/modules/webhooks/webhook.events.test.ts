@@ -112,8 +112,9 @@ describe('the webhook registry', () => {
       'user.status-changed is how a receiver hears about an expiry or a hit limit',
     ).toContain('user.status-changed');
 
-    for (const plumbing of ['inbound.created', 'inbound.updated', 'inbound.deleted',
-      'binding.created', 'binding.updated', 'binding.deleted']) {
+    // inbound.* was here until 2026-08-27, when it was removed from the bus
+    // entirely: nothing emitted it. binding.* is the live equivalent.
+    for (const plumbing of ['binding.created', 'binding.updated', 'binding.deleted']) {
       expect(
         emitted,
         `${plumbing} fires on every config push, several per node: it is node-agent ` +

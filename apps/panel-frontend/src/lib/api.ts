@@ -1022,63 +1022,14 @@ export type InboundConfig =
   | MtprotoInboundConfig
   | MieruInboundConfig;
 
-export interface Inbound {
-  id: string;
-  nodeId: string;
-  protocol: ProtocolName;
-  name: string;
-  port: number;
-  /** Override of the public host emitted in client URIs. NULL → fall back
-   *  to `node.address`. Slice 25, separates control-plane endpoint from
-   *  client-facing FQDN. */
-  publicHost: string | null;
-  /** Override of the public port. NULL → use `port`. */
-  publicPort: number | null;
-  config: InboundConfig;
-  enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CreateInboundInput {
-  nodeId: string;
-  protocol: ProtocolName;
-  name: string;
-  port: number;
-  enabled?: boolean;
-  publicHost?: string;
-  publicPort?: number;
-  config: InboundConfig;
-}
-
-export interface UpdateInboundInput {
-  name?: string;
-  port?: number;
-  enabled?: boolean;
-  /** `null` clears the override, `undefined` keeps the current value. */
-  publicHost?: string | null;
-  publicPort?: number | null;
-  config?: InboundConfig;
-}
-
-export async function listInbounds(): Promise<{ inbounds: Inbound[] }> {
-  const { data } = await api.get<{ inbounds: Inbound[] }>('/api/inbounds');
-  return data;
-}
-
-export async function createInbound(input: CreateInboundInput): Promise<Inbound> {
-  const { data } = await api.post<Inbound>('/api/inbounds', input);
-  return data;
-}
-
-export async function updateInbound(id: string, input: UpdateInboundInput): Promise<Inbound> {
-  const { data } = await api.put<Inbound>(`/api/inbounds/${id}`, input);
-  return data;
-}
-
-export async function deleteInbound(id: string): Promise<void> {
-  await api.delete(`/api/inbounds/${id}`);
-}
+/*
+ * The `/api/inbounds` client used to live here: an `Inbound` type, its two input
+ * shapes, and list/create/update/delete. Removed 2026-08-27 because the whole
+ * surface was dead on BOTH sides — the backend registers no /api/inbounds route
+ * and never queries prisma.inbound, and no screen in this app called any of the
+ * four functions. Superseded by Profile + Binding (slice 27); the push pipeline
+ * that still carries the name reads profileNodeBinding.
+ */
 
 export interface KeypairResponse {
   privateKey: string;

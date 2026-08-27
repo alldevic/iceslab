@@ -466,8 +466,16 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 
 	// Dispatch each inbound to the matching adapter by protocol name. Adapters
 	// that don't recognise the protocol return nil (defensive no-op contract).
-	// Slice 24b: Xray has a real reconfig impl; the others are stubs that
-	// log and rely on the persisted inbounds.json for next-restart pickup.
+	//
+	// This used to say the non-xray adapters "rely on the persisted
+	// inbounds.json for next-restart pickup". There is no such pickup and there
+	// never was: inbounds.json is read in exactly one place, ensureFirewallFromStore
+	// on boot, and only to re-open ufw ports. No adapter is handed its inbound
+	// back at startup. What actually restores a restarted agent is the PANEL:
+	// the heartbeat carries X-Agent-Start-Time, and a value that differs from
+	// the stored one makes the panel enqueue applyNodeInbounds
+	// (heartbeat.routes.ts). That is the mechanism to keep working — this file
+	// persists for the firewall, not for replay.
 	applied := 0
 	failed := 0
 	for _, ib := range req.Inbounds {
