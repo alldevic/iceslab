@@ -22,6 +22,11 @@ const RETENTION_DAYS = {
   // subscription_events is append-only (one row per admin action / status flip).
   // Growth is slow but unbounded (review M7). 180d matches nodeUserUsage audit
   // headroom while keeping the table from filling a 2 GB VPS disk over years.
+  //
+  // That sentence was a plan until 2026-08-27: nothing wrote the table, so this
+  // window governed nothing and the cron logged "deleted 0 sub-event rows" for
+  // years. users.events.ts appends a row per user.* domain event now, so the
+  // growth this number was chosen for is real.
   subscriptionEvents: 180,
 } as const;
 
