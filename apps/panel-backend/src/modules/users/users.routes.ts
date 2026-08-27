@@ -116,6 +116,13 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/users/bulk - one action, many users. Declared before
   // /api/users/:id so "bulk" is not read as an id.
   //
+  // No caller in the panel, and that is not an oversight: the UI has no
+  // multi-select on the users table, and this is the shape an operator wants
+  // from a script — "extend these two hundred ids by thirty days" — which is
+  // also why the response is a per-id report rather than a status code. Said
+  // here so a sweep for one-sided surfaces does not reopen it; the behaviour is
+  // covered in users.bulk.routes.test.ts.
+  //
   // Always 200, even when some users failed: the response body is the report.
   // A blanket 4xx would tell the caller nothing about WHICH of two hundred ids
   // went wrong, and rolling the whole batch back over three stale ids would be

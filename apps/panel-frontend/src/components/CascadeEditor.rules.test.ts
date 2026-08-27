@@ -192,3 +192,41 @@ describe('a protocol the database holds and the API would refuse', () => {
     expect(protocolOptions(null).length).toBe(LINK_PROTOCOL_VALUES.length);
   });
 });
+
+describe('which protocols may choose an engine', () => {
+  // The last unpaired list in the profile form. `ENGINE_CHOICE_PROTOCOLS` is
+  // what the form lets an operator pick a sing-box variant for, and
+  // `ENGINE_OPTIONS` is what the API accepts a non-null engine for. They agree
+  // today and nothing said so.
+  //
+  // The two failures are different and only one is loud. A protocol the API
+  // allows and the form does not offer is a feature nobody can reach; a
+  // protocol the form offers and the API does not allow is a save refused with
+  // `engine "singbox" is not valid for protocol "..."`, which is the shape this
+  // repository has already hit once in this very form.
+  const PROFILES = join(
+    import.meta.dirname,
+    '..', '..', '..', 'panel-backend', 'src', 'modules', 'profiles', 'profiles.schemas.ts',
+  );
+  const FORM = join(import.meta.dirname, 'ProfileFormModal.tsx');
+
+  function stripComments(src: string): string {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+  }
+
+  it('is the same set on both sides', () => {
+    const back = stripComments(readFileSync(PROFILES, 'utf8'));
+    const at = back.indexOf('const ENGINE_OPTIONS');
+    expect(at, 'ENGINE_OPTIONS was renamed or moved').toBeGreaterThan(-1);
+    const body = back.slice(at, back.indexOf('};', at));
+    const apiSide = [...body.matchAll(/^\s*([a-z]+):\s*\[/gm)].map((m) => m[1]!).sort();
+    expect(apiSide.length, 'the map parsed to almost nothing').toBeGreaterThan(1);
+
+    const form = stripComments(readFileSync(FORM, 'utf8'));
+    const m = /const ENGINE_CHOICE_PROTOCOLS = \[([^\]]*)\]/.exec(form);
+    expect(m, 'ENGINE_CHOICE_PROTOCOLS was renamed or moved').not.toBeNull();
+    const formSide = [...m![1]!.matchAll(/'([a-z]+)'/g)].map((x) => x[1]!).sort();
+
+    expect(formSide, 'the form and the API disagree on who may choose an engine').toEqual(apiSide);
+  });
+});
