@@ -181,6 +181,12 @@ services:
       GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
       GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
       SINGBOX_BIN: ${SINGBOX_BIN:-}
+      # Where the image put the proxy cores it carries for this fleet. The
+      # default is correct for an image built from this repo; override only if
+      # you mount them somewhere else. A path with nothing in it is not an
+      # error - the download route answers NOT_CARRIED, the same answer an
+      # image built for fewer architectures gives.
+      CORES_DIR: ${CORES_DIR:-/app/cores}
       # Remnawave-compat facade. Off unless ENABLED is true, so the default
       # deployment is byte-identical to upstream. PREFIX decides where the
       # facade mounts (/<prefix>/api/*), and the shop is pointed at that URL.

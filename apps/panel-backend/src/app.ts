@@ -36,6 +36,7 @@ import { bullBoardRoutes } from './modules/admin/bull-board.routes.js';
 import { systemRoutes } from './modules/system/system.routes.js';
 import { recipesRoutes } from './modules/recipes/recipes.routes.js';
 import { geoRoutes } from './modules/geo/geo.routes.js';
+import { coreRoutes } from './modules/cores/cores.routes.js';
 import { remnawaveCompatRoutes } from './modules/remnawave-compat/remnawave.routes.js';
 import { registerSecurityGate } from './lib/security-gate.js';
 import { registry as metricsRegistry, httpRequestDuration, routeLabel } from './lib/metrics.js';
@@ -276,6 +277,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     await registerSecurityGate(app);
   }
 
+  await app.register(coreRoutes);
   await app.register(authRoutes);
   await app.register(usersRoutes);
   await app.register(nodesRoutes);

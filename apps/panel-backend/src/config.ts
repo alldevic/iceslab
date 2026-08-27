@@ -106,6 +106,14 @@ export const ConfigSchema = z.object({
   // sing-box subscription format would otherwise fetch from SagerNet's GitHub.
   // Unset = no .srs generation (sing-box format keeps the external URLs).
   SINGBOX_BIN: z.string().optional(),
+  /**
+   * Where the panel keeps the proxy-core artefacts it hands to nodes. The
+   * image puts them here at build time (see apps/panel-backend/Dockerfile);
+   * a dev panel run from a checkout has no such directory, and the download
+   * route then answers NOT_CARRIED, which is the same answer an image built
+   * without that architecture gives.
+   */
+  CORES_DIR: z.string().default('/app/cores'),
 
   // Path prefix where the subscription endpoint is mounted. Default
   // `/sub` matches the historical default. Operators with concerns

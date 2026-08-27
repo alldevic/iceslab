@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '../../prisma.js';
-import { verifyHeartbeatToken } from './heartbeat-token.js';
+import { verifyAgentBearer } from './agent-auth.js';
 import { config } from '../../config.js';
 import { redis } from '../../lib/redis.js';
 import { inboundSyncQueue, inboundDirtyKey } from '../inbounds/inbounds.queue.js';
@@ -110,23 +110,13 @@ export async function heartbeatRoutes(app: FastifyInstance): Promise<void> {
       },
     },
   }, async (request, reply) => {
-    const auth = request.headers.authorization;
-    if (!auth || !auth.startsWith('Bearer ')) {
+    // Both node-facing surfaces ask this the same way; see agent-auth.ts for
+    // why it is one function. The two error codes stay here because they are
+    // this route's wire contract with the agent.
+    if (!request.headers.authorization?.startsWith('Bearer ')) {
       return reply.code(401).send({ error: 'MISSING_BEARER' });
     }
-    const token = auth.slice('Bearer '.length).trim();
-
-    const verified = await verifyHeartbeatToken(token, async (nodeId) => {
-      // Only fetch the secret column; we don't need the rest of the row
-      // for verification. Soft-deleted rows DO get their secret returned
-      // because we want valid-token-but-deleted to return 410, not 401.
-      const row = await prisma.node.findUnique({
-        where: { id: nodeId },
-        select: { heartbeatSecret: true },
-      });
-      return row ? Buffer.from(row.heartbeatSecret as Uint8Array) : null;
-    });
-
+    const verified = await verifyAgentBearer(request);
     if (!verified) {
       return reply.code(401).send({ error: 'INVALID_TOKEN' });
     }
