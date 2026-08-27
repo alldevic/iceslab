@@ -36,33 +36,55 @@ case "$ARCH" in
 esac
 log "Detected arch: $ARCH → $HY_ARCH"
 
-# ───── 3. Resolve latest release tag ─────
-log "Resolving latest Hysteria 2 release..."
-LATEST_TAG=$(curl -fsSL https://api.github.com/repos/apernet/hysteria/releases/latest \
-  | grep '"tag_name"' | grep -oP '"app/v[\d.]+"' | tr -d '"' | sed 's|app/||')
-
-if [[ -z "$LATEST_TAG" ]]; then
-  fail "Could not resolve latest Hysteria 2 release tag from GitHub API"
-fi
-log "Latest release: $LATEST_TAG"
-
-# ───── 4. Download ─────
-DOWNLOAD_URL="https://github.com/apernet/hysteria/releases/download/app%2F${LATEST_TAG}/hysteria-linux-${HY_ARCH}"
-log "Downloading from $DOWNLOAD_URL"
-
+# ───── 3. The artefact ─────
+#
+# ICESLAB_CORE_ARTEFACT is the binary the node installer already fetched from
+# the panel and verified against the sha256 pinned in
+# packages/shared/src/core-binaries.ts. That is the normal path now.
+#
+# This script was the one of four core bootstraps that never learned it —
+# bootstrap-{singbox,mtg,mieru}.sh all take the artefact and say so, and
+# nothing explained why hysteria did not. Today the installer does not chain
+# this script at all (it installs the panel's binary itself), so nothing was
+# reaching GitHub in a real install; what was left was a hand-run tool that
+# behaved differently from its three siblings for no stated reason, and an
+# operator passing the artefact to it would have watched it ignored.
+#
+# Without the artefact it falls back to resolving "latest" from the GitHub API
+# and installing whatever comes back, unverified — kept so this still works by
+# hand on a node with no panel, and it says so out loud.
 TMP=$(mktemp)
-curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP"
+
+if [[ -n "${ICESLAB_CORE_ARTEFACT:-}" ]]; then
+  [[ -f "$ICESLAB_CORE_ARTEFACT" ]] || fail "ICESLAB_CORE_ARTEFACT is set to $ICESLAB_CORE_ARTEFACT, which is not a file"
+  cp "$ICESLAB_CORE_ARTEFACT" "$TMP"
+  log "Using the panel-verified hysteria artefact"
+else
+  warn "no panel artefact given: falling back to GitHub 'latest', UNVERIFIED"
+  log "Resolving latest Hysteria 2 release..."
+  LATEST_TAG=$(curl -fsSL https://api.github.com/repos/apernet/hysteria/releases/latest \
+    | grep '"tag_name"' | grep -oP '"app/v[\d.]+"' | tr -d '"' | sed 's|app/||')
+
+  if [[ -z "$LATEST_TAG" ]]; then
+    fail "Could not resolve latest Hysteria 2 release tag from GitHub API"
+  fi
+  log "Latest release: $LATEST_TAG"
+
+  DOWNLOAD_URL="https://github.com/apernet/hysteria/releases/download/app%2F${LATEST_TAG}/hysteria-linux-${HY_ARCH}"
+  log "Downloading from $DOWNLOAD_URL"
+  curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP"
+fi
 chmod +x "$TMP"
 
-# ───── 5. Smoke-test ─────
+# ───── 4. Smoke-test ─────
 VERSION=$("$TMP" version 2>&1 | grep -oP 'v[\d.]+' | head -1 || echo "unknown")
 log "Downloaded hysteria $VERSION, OK"
 
-# ───── 6. Install ─────
+# ───── 5. Install ─────
 mv "$TMP" "$INSTALL_PATH"
 log "Installed to $INSTALL_PATH"
 
-# ───── 7. Summary ─────
+# ───── 6. Summary ─────
 echo
 log "Hysteria 2 is ready."
 echo "    Binary:  $INSTALL_PATH"

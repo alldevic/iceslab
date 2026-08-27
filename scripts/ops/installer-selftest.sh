@@ -24,9 +24,12 @@
 #     MITM-via-302 — and the only place they are observable is the argv curl
 #     was given.
 #
-# The function is not copied here: its real text is cut out of the installer
-# (`sed -n '/^pinned_fetch()/,/^}/p'`) and sourced, together with the real
-# `log`/`warn`/`fail`, so `fail`'s exit 1 is the real one. `curl` is a stub on
+# The function is not copied here: its real text is cut out of
+# apps/node/scripts/lib-pinned-fetch.sh (`sed -n '/^pinned_fetch()/,/^}/p'`)
+# and sourced, together with the real `log`/`warn`/`fail` from the installer,
+# so `fail`'s exit 1 is the real one. It lived inside the installer until
+# 2026-08-28, unused, while bootstrap-naive.sh fetched a Go toolchain with a
+# bare curl; the library is where the caller is now. `curl` is a stub on
 # PATH. Same instrument as deploy-selftest.sh (stub `docker`) and
 # logs-selftest.sh (stubs `docker`/`systemctl`/`journalctl`).
 #
@@ -50,6 +53,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 NODE_INSTALLER="${REPO_ROOT}/scripts/install-iceslab-node.sh"
 PANEL_INSTALLER="${REPO_ROOT}/scripts/install-iceslab.sh"
+FETCH_LIB="${REPO_ROOT}/apps/node/scripts/lib-pinned-fetch.sh"
+NAIVE_BOOTSTRAP="${REPO_ROOT}/apps/node/scripts/bootstrap-naive.sh"
+AWG_BOOTSTRAP="${REPO_ROOT}/apps/node/scripts/bootstrap-amneziawg.sh"
 
 PASS=0
 FAIL=0
@@ -57,8 +63,8 @@ ok()   { printf '  \033[1;32mok\033[0m    %s\n' "$1"; PASS=$((PASS + 1)); }
 bad()  { printf '  \033[1;31mFAIL\033[0m  %s\n' "$1"; FAIL=$((FAIL + 1)); }
 note() { printf '\033[1;36m[installer-selftest]\033[0m %s\n' "$1"; }
 
-for f in "$NODE_INSTALLER" "$PANEL_INSTALLER"; do
-    [[ -r "$f" ]] || { printf 'installer not readable: %s\n' "$f" >&2; exit 2; }
+for f in "$NODE_INSTALLER" "$PANEL_INSTALLER" "$FETCH_LIB" "$NAIVE_BOOTSTRAP" "$AWG_BOOTSTRAP"; do
+    [[ -r "$f" ]] || { printf 'not readable: %s\n' "$f" >&2; exit 2; }
 done
 
 WORK="$(mktemp -d)"
@@ -75,7 +81,8 @@ FUNCS="${WORK}/funcs.sh"
     # log/warn/fail are one-liners; grabbing them by shape rather than by line
     # number survives edits above them.
     grep -E '^(log|warn|fail)\(\) +\{.*\}$' "$NODE_INSTALLER"
-    sed -n '/^pinned_fetch()/,/^}/p' "$NODE_INSTALLER"
+    sed -n '/^pinned_fetch()/,/^}/p' "$FETCH_LIB"
+    sed -n '/^pinned_clone()/,/^}/p' "$FETCH_LIB"
 } > "$FUNCS"
 
 CORE_FUNCS="${WORK}/core-funcs.sh"
@@ -94,9 +101,9 @@ else
 fi
 
 if grep -q '^pinned_fetch()' "$FUNCS" && grep -q 'sha256sum' "$FUNCS"; then
-    ok "pinned_fetch's real body was extracted from the installer"
+    ok "pinned_fetch's real body was extracted from the shared library"
 else
-    bad "could not cut pinned_fetch out of ${NODE_INSTALLER}; every case below would be vacuous"
+    bad "could not cut pinned_fetch out of ${FETCH_LIB}; every case below would be vacuous"
     printf '\033[1;31maborting\033[0m\n'
     exit 1
 fi
@@ -280,6 +287,117 @@ if [[ "$RC" != "0" ]] && grep -q 'download failed' "$OUT"; then
 else
     bad "a failed download exited $RC and said:
 $(sed 's/^/      /' "$OUT")"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  pinned_clone: the same guarantee, in git's shape
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# A sha256 pins a tarball. Nothing pinned a `git clone --depth 1 --branch
+# v1.0.20260611`: a tag is a mutable pointer, and the two AmneziaWG repos it
+# points at are compiled into a KERNEL MODULE and loaded as root. So the clone
+# is checked against the commit the tag resolved to when the pin was taken.
+#
+# Run against a real local repository, not a stub `git`: the thing being asked
+# is what `git clone --branch <tag>` followed by `rev-parse HEAD` actually
+# produces, and a stub would only replay what this harness believes about that.
+note "pinned_clone"
+UPSTREAM="${WORK}/upstream"
+CLONE_OUT="${WORK}/clone-out"
+git init -q --bare "$UPSTREAM"
+SEED="${WORK}/seed"
+git init -q "$SEED"
+git -C "$SEED" -c user.email=t@t -c user.name=t commit -q --allow-empty -m first
+git -C "$SEED" tag v1.0.0
+git -C "$SEED" -c user.email=t@t -c user.name=t commit -q --allow-empty -m second
+git -C "$SEED" push -q "$UPSTREAM" HEAD:refs/heads/main --tags
+PINNED_COMMIT="$(git -C "$SEED" rev-parse v1.0.0)"
+
+run_pinned_clone() {
+    (
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "$FUNCS"
+        pinned_clone "$UPSTREAM" "$1" "$2" "${WORK}/cloned"
+    ) >"$CLONE_OUT" 2>&1
+    RC=$?
+}
+
+run_pinned_clone v1.0.0 "$PINNED_COMMIT"
+if [[ "$RC" == "0" ]] && [[ -d "${WORK}/cloned/.git" ]]; then
+    ok "a tag that is still the pinned commit clones and exits 0"
+else
+    bad "the happy path exited $RC:
+$(sed 's/^/      /' "$CLONE_OUT")"
+fi
+if grep -q "$PINNED_COMMIT" "$CLONE_OUT"; then
+    ok "and it says which commit it verified, so a log shows what was built"
+else
+    bad "it verified silently; the operator cannot tell a checked pin from an unchecked one"
+fi
+
+# The case the pin exists for: upstream moves the tag onto a different commit.
+git -C "$SEED" tag -f v1.0.0 HEAD >/dev/null 2>&1
+git -C "$SEED" push -q --force "$UPSTREAM" refs/tags/v1.0.0
+MOVED_COMMIT="$(git -C "$SEED" rev-parse v1.0.0)"
+if [[ "$MOVED_COMMIT" != "$PINNED_COMMIT" ]]; then
+    ok "the harness really moved the tag ($PINNED_COMMIT -> $MOVED_COMMIT)"
+else
+    bad "the tag did not move; the refusal case below would pass on any implementation"
+fi
+run_pinned_clone v1.0.0 "$PINNED_COMMIT"
+if [[ "$RC" != "0" ]] && grep -q 'tag was moved upstream' "$CLONE_OUT"; then
+    ok "a moved tag is refused, and the message says the tag moved rather than blaming the network"
+else
+    bad "a moved tag exited $RC and said:
+$(sed 's/^/      /' "$CLONE_OUT")"
+fi
+if [[ ! -e "${WORK}/cloned" ]]; then
+    ok "and the rejected checkout is removed, so a rerun cannot build from it"
+else
+    bad "the refused clone was left at ${WORK}/cloned; the next run finds it already there"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  And somebody calls it
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# This is the case the whole library is here for. `pinned_fetch` sat in the
+# installer with BOTH call sites removed while bootstrap-naive.sh downloaded a
+# Go toolchain twenty lines away with a bare `curl -fsSL` — a guard that exists,
+# is tested, and guards nothing. A helper with no callers is indistinguishable
+# from a deleted one, so the callers are asserted.
+note "the bootstraps that fetch from upstream use it"
+# The pattern is a SOURCING line, not the string anywhere in the file: the
+# `# shellcheck source=lib-pinned-fetch.sh` directive right above it mentions
+# the same name, so a looser grep stayed green when the `.` line itself was
+# taken out. Found by mutating exactly that.
+sources_lib() { grep -qE '^[[:space:]]*(\.|source)[[:space:]].*lib-pinned-fetch\.sh' "$1"; }
+uses_lib=""
+for b in "$NAIVE_BOOTSTRAP" "$AWG_BOOTSTRAP"; do
+    sources_lib "$b" || uses_lib="${uses_lib} $(basename "$b"):no-source"
+    grep -qE '^\s*pinned_(fetch|clone) ' "$b" || uses_lib="${uses_lib} $(basename "$b"):no-call"
+done
+if [[ -z "$uses_lib" ]]; then
+    ok "bootstrap-naive.sh and bootstrap-amneziawg.sh both source the library and call it"
+else
+    bad "the pinned-fetch library is not reaching its callers:${uses_lib}"
+fi
+# The control on that grep: it must be able to say no. Any OTHER script in that
+# directory that reaches a third-party host without the library is named here.
+unguarded=""
+for b in "${REPO_ROOT}"/apps/node/scripts/bootstrap-*.sh; do
+    grep -qE '(curl|wget|git clone) ' "$b" || continue
+    sources_lib "$b" && continue
+    # The core bootstraps take a panel-verified artefact and say so when they
+    # fall back; that is the other half of the same decision, not a gap.
+    grep -q 'ICESLAB_CORE_ARTEFACT' "$b" && continue
+    unguarded="${unguarded} $(basename "$b")"
+done
+if [[ -z "$unguarded" ]]; then
+    ok "and no other bootstrap downloads from a third party without one of the two"
+else
+    bad "these bootstraps fetch from upstream with neither the pinned-fetch library nor a panel artefact:${unguarded}"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════

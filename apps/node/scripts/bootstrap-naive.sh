@@ -16,8 +16,29 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || fail "Must be run as root (sudo bash $0)"
 
+# shellcheck source=lib-pinned-fetch.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-pinned-fetch.sh"
+
 CADDY_NAIVE_BIN=${CADDY_NAIVE_BIN:-/usr/local/bin/caddy-naive}
 GO_VERSION=${GO_VERSION:-1.23.4}
+
+# sha256 of the Go tarballs for GO_VERSION, from https://go.dev/dl/?mode=json.
+# This is the one thing on a node that is still downloaded from a third party:
+# the panel carries proxy cores, not a build toolchain, and xcaddy cannot
+# compile Caddy without one. So it is pinned the same way the cores are.
+#
+# Overriding GO_VERSION therefore drops the sha (the map below only knows this
+# one), and the fetch then says out loud that it verified nothing — the same
+# wording bootstrap-{singbox,mtg,mieru}.sh use for their hand-run fallback.
+# Bump both together.
+GO_SHA256_amd64=6924efde5de86fe277676e929dc9917d466efa02fb934197bc2eba35d5680971
+GO_SHA256_arm64=16e5017863a7f6071363782b1b8042eb12c6ca4f4cd71528b2123f0a1275b13e
+GO_PINNED_VERSION=1.23.4
+
+# Pinned rather than @latest. `go install ...@<version>` is verified against
+# the Go checksum database; `@latest` is a moving target that is whatever
+# upstream tagged this morning, compiled and run as root at build time.
+XCADDY_VERSION=${XCADDY_VERSION:-v0.4.7}
 
 # ───── 1. Distro check ─────
 if [[ ! -r /etc/os-release ]]; then
@@ -57,7 +78,17 @@ if $NEED_GO; then
   esac
   TARBALL="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
   TMPDL=$(mktemp -d)
-  curl -fsSL "https://go.dev/dl/${TARBALL}" -o "${TMPDL}/${TARBALL}"
+  GO_SHA=""
+  if [[ "$GO_VERSION" == "$GO_PINNED_VERSION" ]]; then
+    eval "GO_SHA=\${GO_SHA256_${GO_ARCH}:-}"
+  else
+    warn "GO_VERSION=$GO_VERSION is not the pinned $GO_PINNED_VERSION; the tarball will be fetched UNVERIFIED"
+  fi
+  # dl.google.com, not go.dev/dl: the latter answers 302 and pinned_fetch
+  # refuses to follow a redirect, which is the whole point of it — a redirect
+  # is a second host getting to choose what lands in /usr/local/go. Measured
+  # 2026-08-28: go.dev/dl/<tarball> -> 302, dl.google.com/go/<tarball> -> 200.
+  pinned_fetch "https://dl.google.com/go/${TARBALL}" "${TMPDL}/${TARBALL}" "$GO_SHA"
   rm -rf /usr/local/go
   tar -C /usr/local -xzf "${TMPDL}/${TARBALL}"
   rm -rf "$TMPDL"
@@ -66,8 +97,8 @@ export PATH=/usr/local/go/bin:$PATH
 
 # ───── 4. xcaddy ─────
 if ! command -v xcaddy >/dev/null; then
-  log "Installing xcaddy"
-  GOBIN=/usr/local/bin go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+  log "Installing xcaddy ${XCADDY_VERSION}"
+  GOBIN=/usr/local/bin go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
 fi
 log "xcaddy: $(xcaddy version 2>&1 | head -1 || echo present)"
 

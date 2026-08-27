@@ -15,6 +15,9 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || fail "Must be run as root (sudo bash $0)"
 
+# shellcheck source=lib-pinned-fetch.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-pinned-fetch.sh"
+
 # ───── 1. Distro check ─────
 [[ -r /etc/os-release ]] || fail "Cannot read /etc/os-release; unsupported distro"
 . /etc/os-release
@@ -43,6 +46,11 @@ AWG_MODULE_REPO=https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
 # us. This tag is v2.0-capable and carries the use-after-free fixes (it is well
 # past v1.0.20260329). Bump deliberately after smoke-testing a newer tag.
 AWG_MODULE_TAG=v1.0.20260611
+# The commit that tag points at, checked after the clone. A tag is a mutable
+# pointer — `git clone --branch v1.0.20260611` brings back whatever it points
+# at TODAY, and this repo is compiled into a kernel module and loaded as root.
+# Resolved against the upstream tag on 2026-08-28 and confirmed by cloning it.
+AWG_MODULE_COMMIT=2a6e1a02ac024f54a23e18f894a279b7f870b8fb
 AWG_MODULE_DIR=/usr/src/amneziawg-src
 
 if lsmod | grep -q '^amneziawg\b'; then
@@ -50,9 +58,9 @@ if lsmod | grep -q '^amneziawg\b'; then
 else
   log "Installing amneziawg kernel module via DKMS from $AWG_MODULE_REPO"
 
-  # Fresh shallow clone pinned to a tagged release (see AWG_MODULE_TAG above).
-  rm -rf "$AWG_MODULE_DIR"
-  git clone --depth 1 --branch "$AWG_MODULE_TAG" "$AWG_MODULE_REPO" "$AWG_MODULE_DIR"
+  # Fresh shallow clone pinned to a tagged release AND to the commit that tag
+  # resolved to when the pin was taken (see AWG_MODULE_COMMIT above).
+  pinned_clone "$AWG_MODULE_REPO" "$AWG_MODULE_TAG" "$AWG_MODULE_COMMIT" "$AWG_MODULE_DIR"
 
   # dkms.conf may be at root or one level deep
   DKMS_CONF=$(find "$AWG_MODULE_DIR" -maxdepth 2 -name 'dkms.conf' | head -1)
@@ -90,6 +98,8 @@ fi
 AWG_TOOLS_REPO=https://github.com/amnezia-vpn/amneziawg-tools.git
 # Pinned for the same reproducibility reason as the kernel module above.
 AWG_TOOLS_TAG=v1.0.20260618
+# Same reasoning as AWG_MODULE_COMMIT: taken and confirmed by clone 2026-08-28.
+AWG_TOOLS_COMMIT=4cdc357c68b39a0d1e19417b7f03d604c1e1b4cf
 AWG_TOOLS_DIR=/usr/src/amneziawg-tools-build
 
 if command -v awg >/dev/null && command -v awg-quick >/dev/null; then
@@ -97,8 +107,7 @@ if command -v awg >/dev/null && command -v awg-quick >/dev/null; then
 else
   log "Building amneziawg-tools from $AWG_TOOLS_REPO"
 
-  rm -rf "$AWG_TOOLS_DIR"
-  git clone --depth 1 --branch "$AWG_TOOLS_TAG" "$AWG_TOOLS_REPO" "$AWG_TOOLS_DIR"
+  pinned_clone "$AWG_TOOLS_REPO" "$AWG_TOOLS_TAG" "$AWG_TOOLS_COMMIT" "$AWG_TOOLS_DIR"
 
   make -C "$AWG_TOOLS_DIR/src" -j"$(nproc)"
   make -C "$AWG_TOOLS_DIR/src" install

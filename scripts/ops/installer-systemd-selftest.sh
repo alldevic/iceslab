@@ -5,7 +5,8 @@
 #
 # installer-selftest.sh covers everything reachable without one: argument
 # parsing, the `--uninstall` fast path, `resolve_*`, `cleanup_stale_apt_locks`,
-# `pinned_fetch`, and `do_uninstall` inside `unshare -rm`. What it cannot reach
+# `pinned_fetch` (now in apps/node/scripts/lib-pinned-fetch.sh), and
+# `do_uninstall` inside `unshare -rm`. What it cannot reach
 # is the second half of the install — the systemd unit, `enable`, `restart`, the
 # readiness wait, the sysctl and journald drop-ins, the firewall decisions — and
 # that is where the installer stops writing files and starts making claims about

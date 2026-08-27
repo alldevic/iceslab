@@ -276,30 +276,15 @@ ICESLAB_NODE_REF=${ICESLAB_NODE_REF:-v0.2.0}
 # node already uses for its heartbeat. `panel_core_fetch` is that path and
 # there is deliberately no fallback to upstream.
 #
-# `pinned_fetch` stays for what is still fetched from upstream — nothing in the
-# core path today, and it is the right helper for the next thing that is.
-
-# pinned_fetch <url> <out-path> [<expected-sha256>]
-# Fetches a URL over HTTPS with no redirects, optionally verifying the
-# sha256. --proto =https blocks accidental http:// downgrade; --max-redirs 0
-# closes the MITM-via-302 vector. Refuses to write if sha mismatches.
-pinned_fetch() {
-  local url="$1" out="$2" expect_sha="${3:-}"
-  curl --proto '=https' --max-redirs 0 -fsSL "$url" -o "$out" || {
-    fail "pinned_fetch: download failed: $url"
-  }
-  if [[ -n "$expect_sha" ]]; then
-    local actual_sha
-    actual_sha=$(sha256sum "$out" | awk '{print $1}')
-    if [[ "$actual_sha" != "$expect_sha" ]]; then
-      rm -f "$out"
-      fail "pinned_fetch: sha256 mismatch for $url (expected $expect_sha, got $actual_sha): upstream tampered or you need to bump the pin"
-    fi
-    log "pinned_fetch: sha256 verified for $(basename "$out")"
-  else
-    log "pinned_fetch: $(basename "$out") fetched (tag-pinned, sha256 NOT verified; set the *_SHA env to harden)"
-  fi
-}
+# `pinned_fetch` used to live here, unused: both of its call sites went away
+# with the upstream installer scripts, and it stayed as "the right helper for
+# the next thing". Meanwhile the script that DID still download from a third
+# party — bootstrap-naive.sh, fetching a Go toolchain — did it with a bare
+# `curl -fsSL`. Two spellings of one decision, one of them dead and one of them
+# unguarded, is the shape this fork keeps finding, so the helper moved to where
+# the caller is: apps/node/scripts/lib-pinned-fetch.sh, sourced by the
+# bootstraps. This installer needs nothing from it — everything it fetches
+# comes from the panel, through `panel_core_fetch` below.
 NODE_HOST=${NODE_HOST:-0.0.0.0}
 # Default moved to 1337 (2026-05-21). The old 8443 is the canonical
 # HTTPS-alt port and the first thing every bot probes after 443. 1337
