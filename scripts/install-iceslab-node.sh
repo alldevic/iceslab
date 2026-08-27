@@ -78,7 +78,12 @@
 # wizard; all default off (a node without them installs identically):
 #   --harden-ufw            rate-limit SSH (ufw limit) + tighten the firewall
 #   --fail2ban              install + enable fail2ban with an sshd jail
-#   --ssh-allowlist <csv>   lock 22/tcp to these IP/CIDRs only (comma-list)
+#   --ssh-allowlist <csv>   lock SSH to these IP/CIDRs only (comma-list)
+#   --ssh-port <port>       the port sshd listens on, default 22. Every SSH
+#                           rule this script writes — the allowlist, the
+#                           rate-limit, the lockout guard and the fail2ban
+#                           jail — uses it. Get it wrong and ufw opens a port
+#                           sshd is not on, so pass it if you moved sshd.
 #   --panel-ip <ip|cidr>    allow only this address (or comma-list) to reach
 #                           the agent's mTLS port. Without it the port is open
 #                           to the whole internet: mTLS turns everyone away,
@@ -344,8 +349,14 @@ PANEL_IP=""
 #                          beyond the default per-protocol allows.
 #   --fail2ban           : install + enable fail2ban with an sshd jail (bans
 #                          IPs that brute-force SSH; raises probe/scan cost).
-#   --ssh-allowlist <csv>: comma-list of IP/CIDR; locks 22/tcp to these only
-#                          instead of world-open. Mirrors the --panel-ip loop.
+#   --ssh-allowlist <csv>: comma-list of IP/CIDR; locks the SSH port to these
+#                          only instead of world-open. Mirrors the --panel-ip loop.
+#   --ssh-port <port>    : the port sshd listens on (default 22). Threaded
+#                          through every SSH rule AND the fail2ban jail, which
+#                          is the whole point: they used to disagree. The jail
+#                          read a $SSH_PORT nothing set while the firewall
+#                          hard-coded 22, so an operator who moved sshd got a
+#                          jail on the new port and a firewall on the old one.
 HARDEN_UFW=0
 FAIL2BAN=0
 # `--realistic-fallback` used to live here. It set REALISTIC_FALLBACK=1 in the
@@ -353,7 +364,8 @@ FAIL2BAN=0
 # resistance as enabled on a node that behaved identically. The feature exists
 # and works per PROFILE, as `realityFallbackUpstream` on a self-steal REALITY
 # inbound. Removed 2026-08-27; the panel no longer emits the flag.
-SSH_ALLOWLIST=""   # comma-list of IP/CIDR; empty = keep world-open 22/tcp
+SSH_ALLOWLIST=""   # comma-list of IP/CIDR; empty = keep the SSH port world-open
+SSH_PORT="${SSH_PORT:-22}"   # sshd's port; every SSH rule below is written for it
 
 # Hysteria 2 server config (only used with --protocol hysteria). When DOMAIN
 # is given, the script writes /etc/hysteria/config.yaml + a hysteria systemd
@@ -517,6 +529,7 @@ while [[ $# -gt 0 ]]; do
     --harden-ufw)         HARDEN_UFW=1; shift ;;
     --fail2ban)           FAIL2BAN=1; shift ;;
     --ssh-allowlist)      SSH_ALLOWLIST="$2"; shift 2 ;;
+    --ssh-port)           SSH_PORT="$2"; shift 2 ;;
     # Install the sing-box engine on top of the primary protocol, so this node
     # can also serve engine=singbox inbounds (vless/vmess/trojan/ss/hy2).
     --with-singbox)       WITH_SINGBOX=1; shift ;;
@@ -529,6 +542,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ───── -0. Everything that touches the machine starts here ─────
+# --ssh-port decides which port every SSH firewall rule opens AND which port
+# the fail2ban jail watches. A value that is not a port produces `ufw allow
+# from <ip> to any port 2222x proto tcp`, which ufw refuses silently (every one
+# of those calls ends in `|| true`), and then `ufw --force enable` comes up with
+# no SSH rule at all. Checked here, where it still costs nothing.
+# Skipped for --uninstall: nothing it does touches a firewall rule or a jail,
+# and refusing to uninstall over an install-only flag is the same shape as the
+# apt surgery --uninstall used to perform on its way to doing nothing.
+if [[ $UNINSTALL -eq 0 ]]; then
+  case "$SSH_PORT" in
+    ''|*[!0-9]*) fail "--ssh-port must be a number (got: $SSH_PORT)" ;;
+  esac
+  if [[ "$SSH_PORT" -lt 1 || "$SSH_PORT" -gt 65535 ]]; then
+    fail "--ssh-port out of range 1..65535 (got: $SSH_PORT)"
+  fi
+fi
+
 # Above this line the script has only defined things and read its arguments,
 # so `--help` and an unknown flag cost nothing on any host, root or not.
 [[ $EUID -eq 0 ]] || fail "Must run as root (sudo bash $0)"
@@ -1234,19 +1264,19 @@ step "Firewall (ufw)"
 if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
   log "ufw: SSH + panel-mTLS:$NODE_PORT + protocol-specific"
   # SSH FIRST (the lockout-safety rule above). Zashchita: when an
-  # --ssh-allowlist is given, lock 22/tcp to those IP/CIDRs only (mirror of
+  # --ssh-allowlist is given, lock the SSH port to those IP/CIDRs only (mirror of
   # the --panel-ip loop below) instead of world-open. --harden-ufw additionally
   # rate-limits SSH (`ufw limit`) to slow brute-force scanners. The two compose:
   # allowlisted hosts still get rate-limited if both flags are set.
   if [[ -n "$SSH_ALLOWLIST" ]]; then
-    log "Restricting SSH 22/tcp to SSH_ALLOWLIST=$SSH_ALLOWLIST (comma-list)"
+    log "Restricting SSH ${SSH_PORT}/tcp to SSH_ALLOWLIST=$SSH_ALLOWLIST (comma-list)"
     IFS=',' read -ra _SSH_IPS <<< "$SSH_ALLOWLIST"
     for ip in "${_SSH_IPS[@]}"; do
       [[ -z "${ip// /}" ]] && continue
       if [[ "$HARDEN_UFW" == "1" ]]; then
-        ufw limit from "${ip// /}" to any port 22 proto tcp >/dev/null 2>&1 || true
+        ufw limit from "${ip// /}" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
       else
-        ufw allow from "${ip// /}" to any port 22 proto tcp >/dev/null 2>&1 || true
+        ufw allow from "${ip// /}" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
       fi
     done
     unset _SSH_IPS
@@ -1256,21 +1286,52 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
     # be removed later. (A CIDR in the list already covering it just makes this
     # a harmless extra /32 rule.)
     _CUR_SSH_IP="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $1}')"
+    # SSH_CONNECTION is "client-ip client-port server-ip SERVER-PORT", so the
+    # port this session actually arrived on is known here. It is the only
+    # evidence available about where sshd really listens, and it is worth more
+    # than the flag: a wrong --ssh-port plus `ufw --force enable` is the one
+    # combination that ends the operator's access to the box.
+    _CUR_SSH_PORT="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
     _AL_NOSPACE="${SSH_ALLOWLIST// /}"
     if [[ -n "$_CUR_SSH_IP" && ",${_AL_NOSPACE}," != *",${_CUR_SSH_IP},"* ]]; then
       warn "current SSH IP ${_CUR_SSH_IP} is NOT in --ssh-allowlist; allowing it to"
       warn "avoid locking out this session. Remove later if unintended:"
-      warn "  ufw delete allow from ${_CUR_SSH_IP} to any port 22 proto tcp"
-      ufw allow from "${_CUR_SSH_IP}" to any port 22 proto tcp >/dev/null 2>&1 || true
+      warn "  ufw delete allow from ${_CUR_SSH_IP} to any port ${SSH_PORT} proto tcp"
+      ufw allow from "${_CUR_SSH_IP}" to any port "$SSH_PORT" proto tcp >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$_CUR_SSH_PORT" && "$_CUR_SSH_PORT" != "$SSH_PORT" ]]; then
+      warn "this session arrived on port ${_CUR_SSH_PORT}, not the ${SSH_PORT} passed as --ssh-port."
+      warn "Allowing ${_CUR_SSH_PORT} as well so enabling ufw cannot end this session."
+      warn "Check --ssh-port: every other SSH rule and the fail2ban jail used ${SSH_PORT}."
+      if [[ -n "$_CUR_SSH_IP" ]]; then
+        ufw allow from "${_CUR_SSH_IP}" to any port "$_CUR_SSH_PORT" proto tcp >/dev/null 2>&1 || true
+      else
+        ufw allow "${_CUR_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+      fi
     fi
   elif [[ "$HARDEN_UFW" == "1" ]]; then
     # No allowlist but hardening on: keep 22/tcp world-reachable but rate-limit
     # it so password/key brute-force probes get throttled (ufw limit = max 6
     # connections per 30s per source).
-    log "Hardening SSH: rate-limiting 22/tcp (ufw limit)"
-    ufw limit 22/tcp                     >/dev/null 2>&1 || true
+    log "Hardening SSH: rate-limiting ${SSH_PORT}/tcp (ufw limit)"
+    ufw limit "${SSH_PORT}/tcp"          >/dev/null 2>&1 || true
   else
-    ufw allow 22/tcp                     >/dev/null 2>&1 || true
+    ufw allow "${SSH_PORT}/tcp"          >/dev/null 2>&1 || true
+  fi
+  # Same evidence as the lockout guard above, for the two branches that have NO
+  # allowlist: a session on a port no rule covers is cut when ufw comes up.
+  #
+  # `-z "$SSH_ALLOWLIST"` is load-bearing. Without it this ran in the allowlist
+  # branch too and opened the session's port to the WORLD — undoing the one
+  # thing --ssh-allowlist is for, on the run that asked for it. The allowlist
+  # branch has its own, address-scoped version above.
+  if [[ -z "$SSH_ALLOWLIST" ]]; then
+    _CUR_SSH_PORT="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
+    if [[ -n "$_CUR_SSH_PORT" && "$_CUR_SSH_PORT" != "$SSH_PORT" ]]; then
+      warn "this session arrived on port ${_CUR_SSH_PORT}, not the ${SSH_PORT} passed as --ssh-port;"
+      warn "allowing it too so enabling ufw cannot end this session."
+      ufw allow "${_CUR_SSH_PORT}/tcp"     >/dev/null 2>&1 || true
+    fi
   fi
   # Restrict mTLS port to the panel's IP if --panel-ip given, otherwise
   # (--panel-ip not set) fall back to world-open with a loud warn.
@@ -1407,7 +1468,7 @@ maxretry = 5
 
 [sshd]
 enabled  = true
-port     = ${SSH_PORT:-22}
+port     = ${SSH_PORT}
 
 [iceslab-hysteria]
 enabled  = true

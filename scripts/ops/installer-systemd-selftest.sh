@@ -440,7 +440,8 @@ dex bash -c ': > /opt/ice-stub/log/ufw.log'
 # only state in which the lockout guard fires.
 FAKE_SSH_CONNECTION="198.51.100.4 51000 203.0.113.10 22" \
 run_installer --protocol xray --payload "$PAYLOAD" --panel-ip 203.0.113.7 --port 1337 \
-    --reset --with-singbox --fail2ban --harden-ufw --ssh-allowlist "192.0.2.0/24, 192.0.2.9"
+    --reset --with-singbox --fail2ban --harden-ufw --ssh-allowlist "192.0.2.0/24, 192.0.2.9" \
+    --ssh-port 2222
 RC=$?
 LOG="$(dex cat "$INSTALL_LOG")"
 if [[ "$RC" == "0" ]] && grep -q 'Iceslab node-agent is up' <<<"$LOG"; then
@@ -500,8 +501,8 @@ fi
 
 # ───── --ssh-allowlist + --harden-ufw ─────
 UFW="$(dex cat /opt/ice-stub/log/ufw.log 2>/dev/null)"
-if grep -q 'ufw limit from 192.0.2.0/24 to any port 22 proto tcp' <<<"$UFW" \
-   && grep -q 'ufw limit from 192.0.2.9 to any port 22 proto tcp' <<<"$UFW"; then
+if grep -q 'ufw limit from 192.0.2.0/24 to any port 2222 proto tcp' <<<"$UFW" \
+   && grep -q 'ufw limit from 192.0.2.9 to any port 2222 proto tcp' <<<"$UFW"; then
     ok "every allowlisted address got a rate-limited SSH rule, spaces in the list and all"
 else
     bad "the comma-list was not applied per address:
@@ -516,7 +517,7 @@ fi
 # the operator is running the installer from, and it can only fire when
 # SSH_CONNECTION is set — which is the normal case for `bash <(curl ...)` over
 # SSH and NOT the case in most test harnesses.
-if grep -q 'ufw allow from 198.51.100.4 to any port 22 proto tcp' <<<"$UFW"; then
+if grep -q 'ufw allow from 198.51.100.4 to any port 2222 proto tcp' <<<"$UFW"; then
     ok "the session's own address was allowed, so enabling ufw cannot lock the operator out"
 else
     bad "the lockout guard did not fire for an SSH source outside the allowlist:
@@ -533,6 +534,44 @@ if grep -qE 'ufw allow from +to any port 22' <<<"$UFW"; then
     bad "a rule was written for an empty source address"
 else
     ok "and it wrote no rule for an empty source"
+fi
+
+# ───── --ssh-port, on both sides of the decision it makes ─────
+#
+# It used to be `$SSH_PORT` read in exactly one place — the fail2ban jail — and
+# set nowhere in the repository, while every firewall rule hard-coded 22. An
+# operator who found the variable got a jail on their port and a firewall on the
+# old one. It is a flag now, and the point is that both sides move together.
+if grep -q '^port     = 2222$' <<<"$JAIL"; then
+    ok "the fail2ban jail watches the port that was passed"
+else
+    bad "the jail is not on --ssh-port 2222:
+$(sed 's/^/      /' <<<"${JAIL:-<absent>}")"
+fi
+# The allowlist rules must all have moved to the new port. The lockout guard's
+# own rule for the session's real port is the ONE thing still allowed on 22, and
+# it is asserted separately below — so this looks only at the allowlisted
+# addresses, not at every mention of 22.
+if grep -E '^ufw (allow|limit) from 192\.0\.2\.' <<<"$UFW" | grep -q 'port 22 '; then
+    bad "an allowlisted address is still pinned to 22 after --ssh-port 2222:
+$(sed 's/^/      /' <<<"$UFW")"
+else
+    ok "and no allowlisted address was left behind on 22"
+fi
+# The evidence the flag cannot override: SSH_CONNECTION's fourth field is the
+# port this session actually arrived on. A wrong --ssh-port plus `ufw --force
+# enable` is the one combination that ends the operator's access to the box, so
+# the real port is allowed too and the mismatch is said out loud.
+if grep -q 'ufw allow from 198.51.100.4 to any port 22 proto tcp' <<<"$UFW"; then
+    ok "the port this session actually arrived on was allowed as well"
+else
+    bad "--ssh-port 2222 was taken on trust while the session was on 22; enabling ufw would cut it:
+$(sed 's/^/      /' <<<"$UFW")"
+fi
+if grep -q 'this session arrived on port 22' <<<"$LOG"; then
+    ok "and the disagreement was reported rather than papered over"
+else
+    bad "the session/flag port mismatch was not warned about"
 fi
 
 if [[ "$(dex systemctl is-active iceslab-node 2>&1)" == "active" ]]; then

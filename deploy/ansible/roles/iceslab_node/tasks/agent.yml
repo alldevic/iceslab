@@ -61,6 +61,7 @@
       {% if iceslab_harden_ufw | bool %}--harden-ufw{% endif %}
       {% if iceslab_fail2ban | bool %}--fail2ban{% endif %}
       {% if iceslab_ssh_allowlist | length > 0 %}--ssh-allowlist {{ iceslab_ssh_allowlist | join(',') | quote }}{% endif %}
+      {% if iceslab_ssh_port | int != 22 %}--ssh-port {{ iceslab_ssh_port | int }}{% endif %}
     creates: /etc/iceslab-node/env
   # The installer reads these from the environment and has no flags for them,
   # so this is the only way the role can choose what it deploys. Unconditional

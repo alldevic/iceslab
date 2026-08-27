@@ -945,6 +945,71 @@ elif [[ "${#singbox_conds[@]}" -ge 2 ]]; then
 $(printf '        %s\n' "${singbox_conds[@]}")"
 fi
 
+# ───── --ssh-port is checked before anything opens a firewall ─────
+#
+# It decides which port every SSH rule opens AND which port the fail2ban jail
+# watches. A value that is not a port makes ufw refuse each rule silently (every
+# one of those calls ends in `|| true`) and then `ufw --force enable` comes up
+# with no SSH rule at all — the one outcome the whole SSH-first ordering exists
+# to prevent. So it is refused by name, early, on any host.
+note "--ssh-port"
+for bad_port in "twenty-two" "0" "65536" "22 "; do
+    run_installer --ssh-port "$bad_port" --protocol xray --payload "$PAYLOAD"
+    if [[ "$INST_RC" != "0" ]] && grep -q -- '--ssh-port' "$INST_OUT"; then
+        ok "refuses --ssh-port '${bad_port}' and names the flag"
+    else
+        bad "--ssh-port '${bad_port}' was accepted (rc=$INST_RC):
+$(sed 's/^/      /' "$INST_OUT" | head -5)"
+    fi
+done
+# The control: a refusal of everything is not a check. A real port must get
+# past this and fail later, on something else entirely.
+run_installer --ssh-port 2222 --protocol xray --payload "$PAYLOAD"
+if grep -q -- '--ssh-port' "$INST_OUT"; then
+    bad "a valid --ssh-port was refused too, so the case above proves nothing"
+else
+    ok "and lets a real port through"
+fi
+# An install-only flag must not stand between the operator and --uninstall.
+run_installer --ssh-port "not-a-port" --uninstall
+if [[ "$INST_RC" == "0" ]] && grep -q 'Nothing to uninstall' "$INST_OUT"; then
+    ok "and does not block --uninstall, which writes no firewall rule"
+else
+    bad "--uninstall was refused over an install-only flag (rc=$INST_RC)"
+fi
+
+# ───── The ansible role's "one-to-one" claim, checked ─────
+#
+# The role's defaults say its knobs "mirror install-iceslab-node.sh's own flags
+# one-to-one: the role runs that script rather than reimplementing it". That is
+# a claim about the OTHER artefact, and this repo has been bitten by exactly
+# that shape before — a comment naming a flag (`--dry-pin`) that never existed.
+# A flag the role passes and the parser does not know makes every
+# ansible-managed install die on "Unknown arg"; the reverse leaves a capability
+# reachable by hand and not by the role.
+note "the ansible role passes only flags the installer knows"
+ROLE_TASK="${REPO_ROOT}/deploy/ansible/roles/iceslab_node/tasks/agent.yml"
+if [[ -r "$ROLE_TASK" ]]; then
+    mapfile -t role_flags < <(grep -oE -- '--[a-z][a-z0-9-]+' "$ROLE_TASK" | tr -d ' ' | sort -u)
+    mapfile -t parser_flags < <(grep -oE '^[[:space:]]+--[a-z][a-z0-9-]+\)' "$NODE_INSTALLER" | tr -d ' )' | sort -u)
+    if [[ "${#role_flags[@]}" -ge 4 && "${#parser_flags[@]}" -ge 10 ]]; then
+        ok "read ${#role_flags[@]} flag(s) from the role and ${#parser_flags[@]} from the parser"
+    else
+        bad "one of the two extractions came back nearly empty (role=${#role_flags[@]} parser=${#parser_flags[@]}); this comparison would be vacuous"
+    fi
+    unknown=""
+    for f in "${role_flags[@]}"; do
+        printf '%s\n' "${parser_flags[@]}" | grep -qx -- "$f" || unknown="${unknown} ${f}"
+    done
+    if [[ -z "$unknown" ]]; then
+        ok "every flag the role passes is one the installer parses"
+    else
+        bad "the role passes flags the installer would refuse by name:${unknown}"
+    fi
+else
+    bad "the ansible role's agent.yml is not readable; the one-to-one claim cannot be checked"
+fi
+
 echo
 if [[ $FAIL -eq 0 ]]; then
     printf '\033[1;32m%d/%d check(s) passed\033[0m\n' "$PASS" "$((PASS + FAIL))"

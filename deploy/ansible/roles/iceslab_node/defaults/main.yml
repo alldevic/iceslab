@@ -67,13 +67,18 @@ iceslab_selftune_oncalendar: "*-*-* 04:00:00"
 #                     core (needed for tuic/anytls/shadowtls and engine choice)
 #   harden_ufw      → --harden-ufw, rate-limit SSH and tighten the firewall
 #   fail2ban        → --fail2ban
-#   ssh_allowlist   → --ssh-allowlist, the only IPs that may reach 22/tcp.
+#   ssh_allowlist   → --ssh-allowlist, the only IPs that may reach the SSH port.
 #                     EMPTY MEANS NO RESTRICTION: setting it to a list you are
 #                     not currently connecting from locks you out of the box.
+#   ssh_port        → --ssh-port, the port sshd listens on. Every SSH firewall
+#                     rule the installer writes AND the fail2ban jail use it, so
+#                     a host with sshd moved off 22 needs it set here or the
+#                     firewall opens a port nothing is listening on.
 iceslab_singbox_engine: false
 iceslab_harden_ufw: false
 iceslab_fail2ban: false
 iceslab_ssh_allowlist: []
+iceslab_ssh_port: 22
 
 # The agent's mTLS port. Must match what the installer uses (its own default is
 # 1337); the health check below dials it.
