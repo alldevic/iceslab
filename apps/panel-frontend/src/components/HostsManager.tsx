@@ -507,12 +507,12 @@ function HostFormModal({
 
           <Group grow>
             <TextInput
-              label="Address override"
-              placeholder="cdn.example.com - оставь пустым чтобы использовать node.address"
+              label={t('hostsManager.addressOverrideLabel')}
+              placeholder={t('hostsManager.addressOverridePlaceholder')}
               {...form.getInputProps('addressOverride')}
             />
             <NumberInput
-              label="Port override"
+              label={t('hostsManager.portOverrideLabel')}
               placeholder={t('hostsManager.portPlaceholder')}
               min={1}
               max={65535}
@@ -525,33 +525,36 @@ function HostFormModal({
             <>
               <Group grow>
                 <TextInput
-                  label="SNI override"
+                  label={t('hostsManager.sniOverrideLabel')}
                   placeholder={t('hostsManager.sniPlaceholder')}
                   {...form.getInputProps('sniOverride')}
                 />
                 <Select
-                  label="Fingerprint"
-                  data={[{ value: '', label: '- по умолчанию -' }, ...FINGERPRINT_OPTIONS]}
+                  label={t('hostsManager.fingerprintLabel')}
+                  data={[
+                    { value: '', label: t('hostsManager.fingerprintDefault') },
+                    ...FINGERPRINT_OPTIONS,
+                  ]}
                   {...form.getInputProps('fingerprintOverride')}
                 />
               </Group>
               {supportsPath && (
                 <Group grow>
                   <TextInput
-                    label="Path override"
-                    placeholder="/path для ws/xhttp"
+                    label={t('hostsManager.pathOverrideLabel')}
+                    placeholder={t('hostsManager.pathOverridePlaceholder')}
                     {...form.getInputProps('pathOverride')}
                   />
                   <TextInput
-                    label="Host header"
+                    label={t('hostsManager.hostHeaderLabel')}
                     placeholder="cdn.example.com"
                     {...form.getInputProps('hostHeaderOverride')}
                   />
                 </Group>
               )}
               <MultiSelect
-                label="ALPN"
-                description="emit в URI формат когда доступен (slice 30.1)"
+                label={t('hostsManager.alpnLabel')}
+                description={t('hostsManager.alpnDesc')}
                 data={['h2', 'http/1.1', 'h3']}
                 searchable
                 clearable
@@ -562,17 +565,17 @@ function HostFormModal({
 
           <Group grow>
             <Select
-              label="Security layer"
-              description="default = REALITY/TLS адаптера; tls = поверх TLS на CDN"
+              label={t('hostsManager.securityLayerLabel')}
+              description={t('hostsManager.securityLayerDesc')}
               data={[
-                { value: 'default', label: 'default (адаптер сам решает)' },
+                { value: 'default', label: t('hostsManager.securityLayerDefault') },
                 { value: 'tls', label: 'tls (CDN-front)' },
                 { value: 'none', label: 'none (plain)' },
               ]}
               {...form.getInputProps('securityLayer')}
             />
             <Switch
-              label="Allow insecure cert"
+              label={t('hostsManager.allowInsecureLabel')}
               description="?allowInsecure=1"
               mt="lg"
               {...form.getInputProps('allowInsecure', { type: 'checkbox' })}
@@ -581,7 +584,7 @@ function HostFormModal({
 
           <MultiSelect
             label={t('hostsManager.disableForFormatsLabel')}
-            description="host пропускается при выдаче этих форматов подписки"
+            description={t('hostsManager.disableForFormatsDesc')}
             data={FORMAT_OPTIONS}
             searchable
             clearable
@@ -590,7 +593,7 @@ function HostFormModal({
 
           <Group justify="flex-end" mt="md">
             <Button variant="subtle" onClick={onClose}>
-              Отмена
+              {t('hostsManager.cancel')}
             </Button>
             <Button type="submit" loading={loading}>
               {host ? t('hostsManager.submitSave') : t('hostsManager.submitCreate')}

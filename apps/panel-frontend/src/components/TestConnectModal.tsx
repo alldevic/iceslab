@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Badge,
@@ -40,6 +41,7 @@ interface Props {
  * container - same network path the subscription generator runs from.
  */
 export function TestConnectModal({ profile, onClose }: Props) {
+  const { t } = useTranslation();
   const [results, setResults] = useState<TestConnectResult[] | null>(null);
 
   const mutation = useMutation({
@@ -66,7 +68,7 @@ export function TestConnectModal({ profile, onClose }: Props) {
             <IconBolt size={16} />
           </ThemeIcon>
           <Stack gap={0}>
-            <Text fw={600}>Test connect</Text>
+            <Text fw={600}>{t('testConnect.title')}</Text>
             <Text size="xs" c="dimmed">
               {profile?.name}
             </Text>
@@ -77,14 +79,12 @@ export function TestConnectModal({ profile, onClose }: Props) {
     >
       <Stack gap="sm">
         <Alert color="blue" variant="light" icon={<IconShieldLock size={14} />}>
-          Probe runs from panel container's network. Validates DNS / firewall
-          / TLS handshake - but NOT end-user reachability (their ISP may
-          still block).
+          {t('testConnect.caveat')}
         </Alert>
 
         {mutation.isPending && (
           <Text size="sm" c="dimmed" ta="center" py="xl">
-            Probing all bindings × hosts…
+            {t('testConnect.probing')}
           </Text>
         )}
 
@@ -92,13 +92,13 @@ export function TestConnectModal({ profile, onClose }: Props) {
           <Alert color="red" variant="light">
             {mutation.error instanceof Error
               ? mutation.error.message
-              : 'Probe failed'}
+              : t('testConnect.failed')}
           </Alert>
         )}
 
         {results && results.length === 0 && (
           <Text size="sm" c="dimmed" ta="center" py="xl">
-            У этого профиля нет включённых bindings - нечего проверять.
+            {t('testConnect.noBindings')}
           </Text>
         )}
 
@@ -122,10 +122,10 @@ export function TestConnectModal({ profile, onClose }: Props) {
               }
             }}
           >
-            Re-run
+            {t('testConnect.rerun')}
           </Button>
           <Button variant="subtle" onClick={onClose}>
-            Закрыть
+            {t('common.close')}
           </Button>
         </Group>
       </Stack>
@@ -134,6 +134,7 @@ export function TestConnectModal({ profile, onClose }: Props) {
 }
 
 function ResultRow({ result }: { result: TestConnectResult }) {
+  const { t } = useTranslation();
   const okColor = result.ok ? 'teal' : 'red';
   const Icon = result.ok ? IconCircleCheck : IconCircleX;
   return (
@@ -166,17 +167,17 @@ function ResultRow({ result }: { result: TestConnectResult }) {
               {result.endpoint}:{result.port}
             </Code>
             {result.sni && (
-              <Tooltip label="TLS SNI we sent">
+              <Tooltip label={t('testConnect.sniTooltip')}>
                 <Code style={{ fontSize: 11 }}>SNI={result.sni}</Code>
               </Tooltip>
             )}
             {result.certCn && (
-              <Tooltip label="Peer cert subject CN - for REALITY this should be the masquerade target, not your domain">
+              <Tooltip label={t('testConnect.certTooltip')}>
                 <Code style={{ fontSize: 11 }}>cert={result.certCn}</Code>
               </Tooltip>
             )}
             {result.tlsVersion && (
-              <Tooltip label="Negotiated TLS version - REALITY needs the dest to speak TLSv1.3">
+              <Tooltip label={t('testConnect.tlsTooltip')}>
                 <Code
                   style={{ fontSize: 11 }}
                   c={result.tlsVersion !== 'TLSv1.3' && result.kind === 'dest' ? 'red' : undefined}

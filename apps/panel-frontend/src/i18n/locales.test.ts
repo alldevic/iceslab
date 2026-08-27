@@ -135,3 +135,71 @@ describe('every translation the code asks for exists', () => {
     expect(dynamicCalls).toBeLessThanOrEqual(45);
   });
 });
+
+/**
+ * Prose that never became a key.
+ *
+ * Everything above compares the two locale files, or checks that a key the code
+ * asks for exists. Neither can see a string the code never asked for: a literal
+ * typed straight into JSX renders as-is in both languages, and it is invisible
+ * to key parity because it has no key.
+ *
+ * Found by mounting the components for the first time (2026-08-28):
+ * TestConnectModal was entirely untranslated — nine strings, one of them a
+ * Russian "Закрыть" button an English operator read — and HostsManager's host
+ * form carried ten more, one of which shipped the internal words "slice 30.1"
+ * as a field description.
+ *
+ * Cyrillic is the half of this that a machine can find without judgement: an
+ * English literal is at least the right language for one of the two audiences,
+ * a Russian one in a file with no `t()` around it is not. The other half — 130
+ * literal `label=` / `placeholder=` / `description=` props across the app — is
+ * a measurement, not a rule, and is left to a decision rather than asserted
+ * here.
+ *
+ * Read off the SOURCE rather than off a render, because a render only reaches
+ * the branches it happens to take: the mount sweep in
+ * `components/components.empty.test.tsx` asks the same question of what is on
+ * screen and would not have seen the host form, which opens on a click.
+ */
+describe('prose that never became a key', () => {
+  const SCAN = ['pages', 'components'].map((d) => join(import.meta.dirname, '..', d));
+
+  /** Comments hold Russian all over this codebase and are none of this test's
+   *  business. Stripped first — the same rule every source-level mirror here
+   *  follows, and the one that keeps a check from agreeing with prose ABOUT the
+   *  code instead of the code. JSX comments are `{/* ... *\/}`, so the block
+   *  form covers them and the leftover braces carry no Cyrillic. */
+  const stripComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  /** A language names itself in its own language, or its switcher is unusable. */
+  const ALLOWED = new Set(['Русский']);
+
+  function offenders(): string[] {
+    const out: string[] = [];
+    for (const dir of SCAN) {
+      for (const file of readdirSync(dir)) {
+        if (!file.endsWith('.tsx') || file.includes('.test.')) continue;
+        const src = stripComments(readFileSync(join(dir, file), 'utf8'));
+        for (const m of src.matchAll(/[А-Яа-яЁё][^'"`\n<>{}]*/g)) {
+          const text = m[0].trim();
+          if (text.length > 1 && !ALLOWED.has(text)) out.push(`${file}: ${text}`);
+        }
+      }
+    }
+    return out;
+  }
+
+  it('scans the screens at all', () => {
+    // The control: an empty scan would make the assertion below vacuous, and
+    // "found nothing" is also what a moved directory looks like.
+    const files = SCAN.flatMap((d) => readdirSync(d)).filter((f) => f.endsWith('.tsx'));
+    expect(files.length).toBeGreaterThan(30);
+  });
+
+  it('no screen renders Russian text the operator cannot switch away from', () => {
+    expect(offenders()).toEqual([]);
+  });
+});
+
