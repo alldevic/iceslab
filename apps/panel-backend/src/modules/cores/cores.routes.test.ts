@@ -170,3 +170,50 @@ describe('what it refuses, and whether it says why', () => {
     }
   });
 });
+
+describe('how often it may be asked', () => {
+  /**
+   * The reason this route needed a ceiling of its own: it answers with a FILE.
+   * Under the app-wide 100/min a single bearer pulls ~2 GB of xray a minute,
+   * and the two routes next to it in this family (bootstrap redeem, heartbeat)
+   * both already had one — this one was written without and shipped that way.
+   *
+   * Asked by exhausting the bucket, not by reading the route options: a
+   * `config.rateLimit` block can be present and still not apply (wrong plugin
+   * scope, wrong option name), and only the built app knows which.
+   */
+  const limit = 20; // config.RATE_LIMIT_CORE_PER_MIN default; asserted below.
+
+  it('stops a caller who keeps downloading, and stops well below the global 100/min', async () => {
+    const codes: number[] = [];
+    for (let i = 0; i < limit + 1; i += 1) {
+      codes.push((await get('/api/internal/cores/xray/amd64', bearer())).statusCode);
+    }
+    expect(codes.slice(0, limit)).toEqual(Array(limit).fill(200));
+    expect(codes[limit]).toBe(429);
+    // The control. If the route had no ceiling of its own this would still
+    // eventually 429 — at 100, the global one — so the number is the assertion.
+    expect(limit).toBeLessThan(100);
+  });
+
+  it('applies the same ceiling to the listing beside it', async () => {
+    let last = 0;
+    for (let i = 0; i < limit + 1; i += 1) {
+      last = (await get('/api/internal/cores', bearer())).statusCode;
+    }
+    expect(last).toBe(429);
+  });
+
+  it('counts the two routes separately, so a listing does not spend a download', async () => {
+    for (let i = 0; i < limit; i += 1) await get('/api/internal/cores', bearer());
+    const res = await get('/api/internal/cores/xray/amd64', bearer());
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('advertises the ceiling it enforces, and it is the configured one', async () => {
+    const { config } = await import('../../config.js');
+    const res = await get('/api/internal/cores/xray/amd64', bearer());
+    expect(config.RATE_LIMIT_CORE_PER_MIN).toBe(limit);
+    expect(res.headers['x-ratelimit-limit']).toBe(String(limit));
+  });
+});

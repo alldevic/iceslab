@@ -30,6 +30,20 @@ import { verifyAgentBearer } from '../nodes/agent-auth.js';
 export async function coreRoutes(app: FastifyInstance): Promise<void> {
   const dir = config.CORES_DIR;
 
+  /**
+   * Both node-facing routes here, not just the one that hurts.
+   *
+   * The download hands back a file — ~21 MB for xray — so under the global
+   * 100/min it costs the panel two gigabytes a minute per caller, and a valid
+   * bearer is not a scarce thing: every node in the fleet holds one, and a
+   * leaked one stays valid until the node is deleted. The listing is cheap by
+   * comparison, but it does the same per-request bearer verification (a DB
+   * roundtrip) and is asked by the same caller in the same install, so it gets
+   * the same ceiling rather than being the next route in this family whose
+   * guard someone has to notice is missing.
+   */
+  const rateLimit = { max: config.RATE_LIMIT_CORE_PER_MIN, timeWindow: '1 minute' };
+
   /** The pinned artefact for a (name, arch), or null when the pair is unknown. */
   function pinned(name: string, arch: string) {
     if (!(name in CORE_BINARIES)) return null;
@@ -46,7 +60,7 @@ export async function coreRoutes(app: FastifyInstance): Promise<void> {
    * name — "this panel carries no hysteria for armv7" is an answer an operator
    * can act on, and it beats a download that 404s three steps later.
    */
-  app.get('/api/internal/cores', async (request, reply) => {
+  app.get('/api/internal/cores', { config: { rateLimit } }, async (request, reply) => {
     if (!(await verifyAgentBearer(request))) {
       return reply.code(401).send({ error: 'INVALID_TOKEN' });
     }
@@ -76,6 +90,7 @@ export async function coreRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { name: string; arch: string } }>(
     '/api/internal/cores/:name/:arch',
+    { config: { rateLimit } },
     async (request, reply) => {
       if (!(await verifyAgentBearer(request))) {
         return reply.code(401).send({ error: 'INVALID_TOKEN' });

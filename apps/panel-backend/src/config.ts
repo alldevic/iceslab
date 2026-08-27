@@ -155,6 +155,14 @@ export const ConfigSchema = z.object({
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
   RATE_LIMIT_BOOTSTRAP_PER_MIN: z.coerce.number().int().min(1).default(10),
   RATE_LIMIT_HEARTBEAT_PER_MIN: z.coerce.number().int().min(1).default(120),
+  // The node-facing core artefacts. Every other route in this family already
+  // had its own ceiling; this one is the reason the family needs them at all,
+  // because one request is ~21 MB of xray off the disk and the global 100/min
+  // therefore lets a single caller pull ~2 GB a minute. An install asks for the
+  // list once and downloads at most one artefact per protocol (five exist), so
+  // 20/min/IP covers a full install plus retries and still caps the flood at
+  // ~400 MB/min.
+  RATE_LIMIT_CORE_PER_MIN: z.coerce.number().int().min(1).default(20),
 
   // Absolute ceiling on distinct HWID device rows recorded per user, applied
   // even to users with no per-user/squad device limit (the common case, where
