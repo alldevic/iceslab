@@ -11,6 +11,7 @@ import {
   carriesLinkAt,
   toHopInputs,
 } from './CascadeEditor';
+import { MAX_CASCADE_LINKS } from '@iceslab/shared';
 
 /**
  * The decisions inside the cascade editor, and the three ceilings it says it
@@ -25,7 +26,9 @@ import {
  * Alongside them, three constants whose comments say they mirror the backend
  * and which nothing compared: MAX_HOPS against MAX_CASCADE_HOPS, MAX_LINKS
  * against MAX_CASCADE_LINKS, and the seven link protocols against
- * CascadeProtocol. That contract has already been wrong once in this repo, in
+ * CascadeProtocol. MAX_LINKS stopped being a mirror on 2026-08-27 and became
+ * the same symbol, because mirroring the ceiling had left the two sides
+ * counting links by two different formulas (§49.3). That contract has already been wrong once in this repo, in
  * the direction that costs most: the profile form offered three protocols the
  * API had no branch for, and nothing said so until a save failed.
  */
@@ -60,8 +63,21 @@ describe('the ceilings the editor says it mirrors', () => {
     expect(MAX_HOPS).toBe(backendNumber('MAX_CASCADE_HOPS'));
   });
 
-  it('allows exactly as many links as the API stores', () => {
-    expect(MAX_LINKS).toBe(backendNumber('MAX_CASCADE_LINKS'));
+  it('allows exactly as many links as the API stores, because it is the same symbol', () => {
+    // This used to read the number out of cascade.schemas.ts, and that is how
+    // it caught the change below: MAX_CASCADE_LINKS is no longer declared
+    // there, it is re-exported from `shared`. Mirroring a number was never the
+    // hard part — the two sides also needed the same ARITHMETIC, and they had
+    // two (§49.3), so the counter and the ceiling both moved to shared. There
+    // is nothing left to compare: this asserts they are one value.
+    expect(MAX_LINKS).toBe(MAX_CASCADE_LINKS);
+    // And that the API side really takes it from there rather than keeping a
+    // second declaration that happens to say 64.
+    const schemas = readFileSync(SCHEMAS, 'utf8');
+    expect(schemas, 'the schema declares its own cap again').not.toMatch(
+      /^export const MAX_CASCADE_LINKS = \d+;/m,
+    );
+    expect(schemas).toContain("import { MAX_CASCADE_LINKS } from '@iceslab/shared'");
   });
 
   it('offers exactly the protocols a cascade link may speak', () => {
