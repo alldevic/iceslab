@@ -57,9 +57,10 @@ type Config struct {
 }
 
 type Adapter struct {
-	cfg      Config
-	protocol string
-	logger   *slog.Logger
+	coreVersion core.CachedVersion
+	cfg         Config
+	protocol    string
+	logger      *slog.Logger
 
 	// mu protects in-memory state (users, inbound, proc, started, ctx). Held
 	// ONLY for fast ops. The slow render + subprocess Stop/Start runs under
@@ -723,4 +724,29 @@ func (w shadowtlsWire) toInboundConfig(port int) (InboundConfig, error) {
 		Method:             method,
 		ServerPSK:          w.SsPassword,
 	}, nil
+}
+
+// CoreVersion implements core.Versioner: what the panel shows next to the
+// version it pinned for this node, so drift between the two is visible instead
+// of being something an operator has to ssh in to find out.
+//
+// sing-box answers `sing-box version <x.y.z>`.
+// Empty in config-only mode (no binary) and when the query fails.
+func (a *Adapter) CoreVersion() string {
+	return a.coreVersion.Get(func() string {
+		a.mu.Lock()
+		bin, run := a.cfg.BinaryPath, a.cfg.RunCmd
+		a.mu.Unlock()
+		if bin == "" || run == nil {
+			return ""
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := run(ctx, bin, "version")
+		if err != nil {
+			a.logger.Warn("sing-box version query failed", "err", err)
+			return ""
+		}
+		return core.ParseSemverish(out)
+	})
 }

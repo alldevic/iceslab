@@ -54,8 +54,9 @@ type RunCmdFunc func(ctx context.Context, name string, args ...string) ([]byte, 
 // so AddUser/RemoveUser are no-ops. The adapter just tracks which user
 // IDs are "associated with this inbound" for GetStats book-keeping.
 type Adapter struct {
-	cfg    Config
-	logger *slog.Logger
+	coreVersion core.CachedVersion
+	cfg         Config
+	logger      *slog.Logger
 
 	// mu protects in-memory state; held only for fast ops. The slow render +
 	// subprocess Stop/Start runs under restartMu so Healthy()/GetStats don't
@@ -455,4 +456,29 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	a.mu.Unlock()
 	a.logger.Info("mtproto (mtg) (re)started", "domain", inbound.Domain)
 	return nil
+}
+
+// CoreVersion implements core.Versioner: what the panel shows next to the
+// version it pinned for this node, so drift between the two is visible instead
+// of being something an operator has to ssh in to find out.
+//
+// mtg takes `--version`, not `version`, and answers `<x.y.z> (go...)`.
+// Empty in config-only mode (no binary) and when the query fails.
+func (a *Adapter) CoreVersion() string {
+	return a.coreVersion.Get(func() string {
+		a.mu.Lock()
+		bin, run := a.cfg.BinaryPath, a.cfg.RunCmd
+		a.mu.Unlock()
+		if bin == "" || run == nil {
+			return ""
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := run(ctx, bin, "--version")
+		if err != nil {
+			a.logger.Warn("mtg version query failed", "err", err)
+			return ""
+		}
+		return core.ParseSemverish(out)
+	})
 }

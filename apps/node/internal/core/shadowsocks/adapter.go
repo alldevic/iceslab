@@ -43,8 +43,9 @@ type Config struct {
 type RunCmdFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 type Adapter struct {
-	cfg    Config
-	logger *slog.Logger
+	coreVersion core.CachedVersion
+	cfg         Config
+	logger      *slog.Logger
 
 	// mu protects in-memory state; held only for fast ops. The slow
 	// render + subprocess Stop/Start runs under restartMu so Healthy()/
@@ -599,4 +600,29 @@ func sortedClients(in map[string]ssClient) []ssClient {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
 	return out
+}
+
+// CoreVersion implements core.Versioner: what the panel shows next to the
+// version it pinned for this node, so drift between the two is visible instead
+// of being something an operator has to ssh in to find out.
+//
+// This adapter runs the xray binary (SS2022 lives inside xray-core), so the version it reports is xray's.
+// Empty in config-only mode (no binary) and when the query fails.
+func (a *Adapter) CoreVersion() string {
+	return a.coreVersion.Get(func() string {
+		a.mu.Lock()
+		bin, run := a.cfg.BinaryPath, a.cfg.RunCmd
+		a.mu.Unlock()
+		if bin == "" || run == nil {
+			return ""
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := run(ctx, bin, "version")
+		if err != nil {
+			a.logger.Warn("xray version query failed", "err", err)
+			return ""
+		}
+		return core.ParseSemverish(out)
+	})
 }

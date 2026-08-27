@@ -84,6 +84,10 @@ type Config struct {
 	// Tests inject a fake to assert which commands fire without spawning anything.
 	RunCmd RunCmdFunc
 
+	// RunOutput is the injectable runner for `hysteria version`; nil defaults
+	// to os/exec. Tests inject a fake so the query runs without a binary.
+	RunOutput RunOutputFunc
+
 	// TrafficStatsListen is the `host:port` where hysteria-server's traffic
 	// API listens (e.g. "127.0.0.1:9999"). When set, renderConfig emits a
 	// `trafficStats:` block in /etc/hysteria/config.yaml and GetStats polls
@@ -112,9 +116,15 @@ type HTTPClient interface {
 // shells out via os/exec; tests pass a recorder fake.
 type RunCmdFunc func(ctx context.Context, name string, args ...string) error
 
+// RunOutputFunc is the same idea for a command whose OUTPUT is the answer.
+// RunCmdFunc cannot serve here: it drives `systemctl`, where only the exit
+// status matters, and it discards stdout.
+type RunOutputFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
+
 type Adapter struct {
-	cfg    Config
-	logger *slog.Logger
+	coreVersion core.CachedVersion
+	cfg         Config
+	logger      *slog.Logger
 
 	mu      sync.RWMutex
 	users   map[string]userEntry // key: HysteriaPassword
@@ -161,6 +171,11 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 	}
 	if cfg.RunCmd == nil {
 		cfg.RunCmd = defaultRunCmd
+	}
+	if cfg.RunOutput == nil {
+		cfg.RunOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, name, args...).CombinedOutput()
+		}
 	}
 	return &Adapter{
 		cfg:           cfg,
@@ -639,4 +654,29 @@ func (a *Adapter) LookupByPassword(password string) (userID string, ok bool) {
 		return "", false
 	}
 	return entry.UserID, true
+}
+
+// CoreVersion implements core.Versioner: what the panel shows next to the
+// version it pinned for this node, so drift between the two is visible instead
+// of being something an operator has to ssh in to find out.
+//
+// hysteria prints an ASCII banner first and then `Version:\tv<x.y.z>`; the first triple in it is the version.
+// Empty in config-only mode (no binary) and when the query fails.
+func (a *Adapter) CoreVersion() string {
+	return a.coreVersion.Get(func() string {
+		a.mu.Lock()
+		bin, run := a.cfg.BinaryPath, a.cfg.RunOutput
+		a.mu.Unlock()
+		if bin == "" || run == nil {
+			return ""
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := run(ctx, bin, "version")
+		if err != nil {
+			a.logger.Warn("hysteria version query failed", "err", err)
+			return ""
+		}
+		return core.ParseSemverish(out)
+	})
 }
