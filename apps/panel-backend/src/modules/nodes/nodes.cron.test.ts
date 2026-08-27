@@ -268,6 +268,49 @@ describe('pollNodeStatuses: what it writes', () => {
   });
 });
 
+describe('pollNodeStatuses: which core\'s restart tally it keeps', () => {
+  // One tally per node, and until 2026-08-27 only xray ever sent one, so the
+  // pick could be "xray, else the first that reports". Every subprocess-owning
+  // adapter reports now, and the old rule would hide a sing-box bouncing every
+  // minute behind a quiet xray — or, on a node with neither, pick by adapter
+  // registration order.
+  function coreWith(name: string, crash: number): HealthcheckResponse['cores'][number] {
+    return {
+      name: name as HealthcheckResponse['cores'][number]['name'],
+      running: true,
+      restarts: {
+        core: name,
+        crash,
+        memory: 0,
+        sinceAt: '2026-08-27T00:00:00.000Z',
+      } as HealthcheckResponse['cores'][number]['restarts'],
+    };
+  }
+
+  it('keeps the core that is actually restarting, not the alphabetically lucky one', async () => {
+    const node = await makeNode({ status: 'online' });
+    health.set(node.address, ok([coreWith('xray', 0), coreWith('tuic', 4)]));
+
+    await pollNodeStatuses();
+
+    const row = await prisma.node.findUnique({ where: { id: node.id } });
+    const tally = row!.coreRestarts as { core: string; total: number } | null;
+    expect(tally, 'no tally was stored at all').not.toBeNull();
+    expect(tally!.core, 'a quiet xray hid a core that restarted four times').toBe('tuic');
+    expect(tally!.total).toBe(4);
+  });
+
+  it('breaks a tie toward xray, so a fleet of quiet nodes reads the same way', async () => {
+    const node = await makeNode({ status: 'online' });
+    health.set(node.address, ok([coreWith('tuic', 2), coreWith('xray', 2)]));
+
+    await pollNodeStatuses();
+
+    const row = await prisma.node.findUnique({ where: { id: node.id } });
+    expect((row!.coreRestarts as { core: string }).core).toBe('xray');
+  });
+});
+
 describe('pollNodeStatuses: whom it tells', () => {
   it('emits node.status-changed once, only on the tick that moved', async () => {
     const node = await makeNode({ status: 'unknown' });

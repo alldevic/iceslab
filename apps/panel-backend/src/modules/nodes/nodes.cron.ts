@@ -329,13 +329,32 @@ async function checkOne(node: {
     // agents and non-xray nodes omit it, leaving coreVersion undefined).
     const xrayCore = res.cores.find((c) => c.name === 'xray');
     const coreVersion = xrayCore?.version || undefined;
-    // Restart tally: prefer xray (the only core that arms the watchdog today),
-    // but fall back to whichever core reported one. The agent contract allows
-    // any subprocess-backed core to report, so hard-coding xray would leave the
-    // field empty on a node whose other core started reporting.
-    // ⚠ Single tally by design: when a second core actually arms a watchdog,
-    // this becomes a list and `core` inside the object is what disambiguates.
-    const restartCore = xrayCore?.restarts ? xrayCore : res.cores.find((c) => c.restarts);
+    // Restart tally, still ONE per node. What changed 2026-08-27 is that the
+    // "second core reports" case the old comment called hypothetical became the
+    // normal one: every subprocess-owning adapter reports now, not just xray.
+    //
+    // So the pick can no longer be "xray, else the first that reports" — on a
+    // node running xray and sing-box that hides a sing-box bouncing every
+    // minute behind a quiet xray, and on a node with neither it picks by
+    // adapter-registration order, which means nothing to anybody.
+    //
+    // Take the core with the MOST restarts, breaking ties toward xray. A tally
+    // exists to be alerted on, and the core that is actually restarting is the
+    // one worth showing; a quiet core's zeros carry nothing that a missing
+    // tally does not.
+    //
+    // ⚠ Still one: the column holds a single object and `core` inside it says
+    // whose numbers these are. A node with two cores bouncing at once shows the
+    // worse one. Making it a list is a schema change and has not been done.
+    const restartCore = [...res.cores]
+      .filter((c) => c.restarts)
+      .sort((a, b) => {
+        const byTotal = (b.restarts!.crash + b.restarts!.memory) - (a.restarts!.crash + a.restarts!.memory);
+        if (byTotal !== 0) return byTotal;
+        if (a.name === 'xray') return -1;
+        if (b.name === 'xray') return 1;
+        return a.name.localeCompare(b.name);
+      })[0];
     // 2026-08-04: restart tally, stamped with the observation time so the card
     // can show how fresh it is. `total` is recomputed rather than trusted, so a
     // malformed agent response can't produce a tally that contradicts itself.
