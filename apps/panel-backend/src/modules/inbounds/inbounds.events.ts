@@ -19,7 +19,26 @@ import { redis } from '../../lib/redis.js';
  * The job ID is per-node so multiple back-to-back inbound mutations on the
  * same node coalesce into one push instead of triggering N restarts.
  */
+/**
+ * One subscription per process. The bus has `on` and no `off`, so a second call
+ * adds a SECOND handler for every event here and both keep firing forever.
+ *
+ * Today there is exactly one call, from `index.ts`. The guard is here because
+ * the plausible refactor is moving that call into `buildApp()`, which the test
+ * suite invokes per case — and because the same guard already exists in
+ * webhook.events.ts for exactly this reason, on one registrar out of five. A
+ * decision applied to one of five places is the shape this repository keeps
+ * finding; this closes the other four.
+ *
+ * Doubled here means two inbound pushes per edit. The job ID is per-node so the
+ * queue coalesces them, which is precisely why this would go unnoticed rather
+ * than show up as visible breakage.
+ */
+let registered = false;
+
 export function registerInboundEventHandlers(): void {
+  if (registered) return;
+  registered = true;
   const enqueue = (nodeId: string, reason: string): void => {
     console.log(`[event] ${reason}: enqueue applyInbounds for node ${nodeId}`);
     // Set a dirty flag BEFORE enqueuing. If a worker is already mid-push

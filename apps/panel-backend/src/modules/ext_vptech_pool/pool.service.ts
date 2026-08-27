@@ -308,8 +308,17 @@ async function carryEgressPolicy(burnedId: string, spareId: string): Promise<voi
  * Subscribe the hotswap controller to node.anomaly. No-op unless
  * EXT_VPTECH_POOL_ENABLED. The controller instance persists (debounce state).
  */
+let poolHandlersRegistered = false;
+
 export function registerPoolEventHandlers(runner: AnsibleRunner = defaultAnsibleRunner): void {
   if (!config.EXT_VPTECH_POOL_ENABLED) return;
+  // After the flag, not before it: the guard marks "this process subscribed",
+  // and a call made while the pool was disabled must not consume that. The bus
+  // has no `off`, so a second subscription would give every `node.anomaly` two
+  // hotswap controllers — two ansible runs racing to repoint the same burned
+  // node onto two different spares.
+  if (poolHandlersRegistered) return;
+  poolHandlersRegistered = true;
 
   const controller = new HotswapController(
     { ...DEFAULT_HOTSWAP_CONFIG, enabled: true },

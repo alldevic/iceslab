@@ -5,14 +5,6 @@ import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/logger.js';
 
 /**
- * Register all user-related event handlers.
- * Called once at app bootstrap.
- *
- * Handlers translate domain events into background jobs (BullMQ).
- * The actual node sync happens in workers (slice 9 will implement
- * the mTLS calls). For now workers are mock log-only.
- */
-/**
  * Append one row to the subscription audit trail.
  *
  * The table, the dashboard query that reads it and the panel card that renders
@@ -58,7 +50,31 @@ async function recordUserEvent(
   }
 }
 
+/**
+ * Register all user-related event handlers, once per process.
+ *
+ * The handlers translate domain events into background jobs (BullMQ); the node
+ * sync itself happens in the workers.
+ *
+ * The bus has `on` and no `off`, so a second call adds a SECOND handler for
+ * every event here and both keep firing forever.
+ *
+ * Today there is exactly one call, from `index.ts`. The guard is here because
+ * the plausible refactor is moving that call into `buildApp()`, which the test
+ * suite invokes per case — and because the same guard already exists in
+ * webhook.events.ts for exactly this reason, on one registrar out of five. A
+ * decision applied to one of five places is the shape this repository keeps
+ * finding; this closes the other four.
+ *
+ * The doubled work here is visible and wrong twice over: two `addUser` jobs per
+ * created user, and two rows in `subscription_events` for one thing that
+ * happened — the audit trail is what the dashboard feed reads.
+ */
+let registered = false;
+
 export function registerUserEventHandlers(): void {
+  if (registered) return;
+  registered = true;
   eventBus.on('user.created', async ({ userId, username }) => {
     console.log(`[event] user.created - ${username} (${userId})`);
     // Recorded BEFORE the sync work. The event is a fact by the time it is

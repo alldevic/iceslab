@@ -108,6 +108,21 @@ class DomainEventBus {
     this.emitter.emit(event, payload);
   }
 
+  /**
+   * How many handlers are subscribed to one event.
+   *
+   * There is no `off` on this bus and there is deliberately none: every
+   * subscription here lasts for the life of the process. That makes "subscribed
+   * twice" a state with no way out and no symptom — both copies fire, both
+   * deliveries are genuine, and `setMaxListeners(50)` above means node will not
+   * even warn until the fiftieth. This is the only way to ask about it without
+   * emitting an event and watching the side effects, which for these handlers
+   * means writing rows and enqueuing jobs.
+   */
+  listenerCount<K extends keyof DomainEventMap>(event: K): number {
+    return this.emitter.listenerCount(String(event));
+  }
+
   on<K extends keyof DomainEventMap>(event: K, handler: EventHandler<K>): void {
     this.emitter.on(event, (payload: DomainEventMap[K]) => {
       void Promise.resolve()
