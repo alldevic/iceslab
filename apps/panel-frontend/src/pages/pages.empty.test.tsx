@@ -1,8 +1,8 @@
-import { Component, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Route, Routes } from 'react-router-dom';
 import { cleanup, renderWithProviders, waitFor } from '../test/render';
 import { EMPTY_API, emptyApiModule } from '../test/emptyApi';
+import { Boundary, caught, cyrillicIn, resetCaught, visibleText } from '../test/screens';
 
 /**
  * Every page of the panel, on a deployment where nothing has been created yet.
@@ -30,34 +30,9 @@ vi.mock('../lib/api', async (importOriginal) =>
   emptyApiModule(await importOriginal<Record<string, unknown>>()),
 );
 
-let caught: Error | null = null;
-
-/** React reports a render error to the nearest boundary and then unmounts the
- *  tree. Without one here the throw surfaces as an unhandled rejection AFTER
- *  the case has already passed — which is how the first version of this file
- *  reported seventeen green pages while one of them was crashing. */
-class Boundary extends Component<{ children: ReactNode }> {
-  componentDidCatch(err: Error) {
-    caught = err;
-  }
-  render() {
-    return this.props.children;
-  }
-}
-
-/**
- * The text a reader sees. Mantine injects its whole theme as a <style> inside
- * the container and its 20 KB of CSS count toward `textContent`, so without
- * stripping it "the page rendered something" is true of a page that rendered
- * nothing. Stripped on a CLONE: this runs inside `waitFor`, which retries, and
- * removing nodes from the live tree makes the second attempt throw
- * `NotFoundError` at React instead of reporting the assertion.
- */
-function visibleText(root: HTMLElement): string {
-  const clone = root.cloneNode(true) as HTMLElement;
-  for (const style of Array.from(clone.querySelectorAll('style'))) style.remove();
-  return clone.textContent ?? '';
-}
+/** Language names are written in their own language on purpose; the switcher
+ *  would be unusable otherwise. */
+const ALLOWED_CYRILLIC = ['Русский'];
 
 interface Page {
   name: string;
@@ -136,7 +111,7 @@ afterEach(() => {
 
 describe('a panel with nothing in it', () => {
   it.each(PAGES)('$name renders its empty state', async ({ name, path, at, shows }) => {
-    caught = null;
+    resetCaught();
     const mod = (await import(`./${name}`)) as Record<string, React.ComponentType>;
     const El = mod[name]!;
 
@@ -153,6 +128,12 @@ describe('a panel with nothing in it', () => {
       expect(caught, `${name} threw during render`).toBeNull();
       expect(visibleText(container)).toContain(shows);
     });
+
+    // The same mount, asked the other question it can answer for free.
+    expect(
+      cyrillicIn(visibleText(container)).filter((s) => !ALLOWED_CYRILLIC.includes(s)),
+      `${name} renders Russian text with the UI in English: it never went through t()`,
+    ).toEqual([]);
   });
 
   // The control on all seventeen: they have to have ASKED for the data whose
