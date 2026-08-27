@@ -478,10 +478,72 @@ if [[ -n "${ICESLAB_REF_SHA:-}" ]]; then
 fi
 cd "$ICESLAB_DIR"
 
+# Reconcile the values in an existing .env.production that are derived from the
+# MODE rather than from secrets. Split out as a function so the selftest can cut
+# it out and run it (same instrument as pinned_fetch / do_uninstall); the rest
+# of this step is executable body and cannot be reached any other way.
+reconcile_mode_values() {
+  local ENV_FILE="$1" PANEL_DOMAIN="$2" FRONTEND_PORT="$3"
+    # Three values in that file are derived from the MODE, not from secrets, and
+  # a re-run is exactly how the mode changes. The installer's own closing
+  # message tells the operator to do it: "Plain HTTP on :8080, fine for
+  # testing, NOT for production. For TLS: re-run with PANEL_DOMAIN=...".
+  #
+  # Follow that advice and, until this block existed, nothing moved:
+  #
+  #   FRONTEND_BIND stayed 0.0.0.0, so the SPA kept answering plain HTTP to the
+  #   whole internet alongside the new TLS site. ufw cannot take that back —
+  #   docker publishes through nat/PREROUTING, which runs before ufw's filter
+  #   chains. Verified on a live guest: `ufw deny 8080/tcp` and the page still
+  #   returned 200. FRONTEND_BIND is the only thing that closes it.
+  #
+  #   PUBLIC_URL and CORS_ORIGIN stayed http://<bare-ip>:8080, so every node
+  #   bootstrap command, every subscription link and the panelUrl baked into
+  #   node payloads kept pointing at plain HTTP on a raw address.
+  #
+  # Only values this script itself wrote in bare-IP mode are corrected — the
+  # exact `http://<host>:<FRONTEND_PORT>` shape — so an operator's own custom
+  # origin is left alone. An explicit environment override always wins.
+  if [[ -n "$PANEL_DOMAIN" ]]; then
+    _bare_shape="^http://[^/]+:${FRONTEND_PORT}\$"
+
+    for _k in PUBLIC_URL CORS_ORIGIN; do
+      _cur="$(sed -n "s/^${_k}=//p" "$ENV_FILE" | head -1)"
+      _explicit=""
+      [[ "$_k" == "PUBLIC_URL"  ]] && _explicit="${PUBLIC_URL:-}"
+      [[ "$_k" == "CORS_ORIGIN" ]] && _explicit="${CORS_ORIGIN:-}"
+      _want="${_explicit:-https://${PANEL_DOMAIN}}"
+      if [[ "$_cur" != "$_want" && ( -n "$_explicit" || "$_cur" =~ $_bare_shape ) ]]; then
+        sed -i "s|^${_k}=.*|${_k}=${_want}|" "$ENV_FILE"
+        log "${_k}: ${_cur} → ${_want} (domain mode)"
+      fi
+    done
+
+    _bind_cur="$(sed -n 's/^FRONTEND_BIND=//p' "$ENV_FILE" | head -1)"
+    _bind_want="${FRONTEND_BIND:-127.0.0.1}"
+    if [[ "$_bind_cur" == "0.0.0.0" && "$_bind_want" != "0.0.0.0" ]]; then
+      sed -i "s|^FRONTEND_BIND=.*|FRONTEND_BIND=${_bind_want}|" "$ENV_FILE"
+      warn "FRONTEND_BIND was 0.0.0.0 from a bare-IP install: the SPA port was open to"
+      warn "the internet in plain HTTP, and ufw cannot close a docker-published port."
+      warn "Set to ${_bind_want}; Caddy reaches it from this same machine."
+      warn "Pass FRONTEND_BIND=0.0.0.0 explicitly if you really want it published."
+    fi
+  elif grep -q '^FRONTEND_BIND=127\.0\.0\.1$' "$ENV_FILE"; then
+    # The other direction is not fixed automatically: opening a port is never
+    # something this script should do on an inference.
+    warn "FRONTEND_BIND is 127.0.0.1 from a domain-mode install and no PANEL_DOMAIN"
+    warn "was given, so the SPA will not be reachable directly on :${FRONTEND_PORT}."
+    warn "Set FRONTEND_BIND=0.0.0.0 in ${ENV_FILE} if that is what you want."
+  fi
+}
+
 step "Configuration (.env.production)"
 ENV_FILE="$ICESLAB_DIR/.env.production"
 if [[ -f "$ENV_FILE" ]]; then
   ok ".env.production already exists, keeping current secrets"
+
+  reconcile_mode_values "$ENV_FILE" "$PANEL_DOMAIN" "$FRONTEND_PORT"
+
 else
   log "Generating with fresh secrets (openssl rand -hex)"
   "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y openssl >/dev/null 2>&1 || true

@@ -978,6 +978,114 @@ else
     bad "--uninstall was refused over an install-only flag (rc=$INST_RC)"
 fi
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  install-iceslab.sh: the mode-derived values on a re-run
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The panel installer's closing message tells the operator how to get TLS:
+# "re-run with PANEL_DOMAIN=...". Doing exactly that used to change nothing in
+# an existing .env.production, because the whole file is kept ("already exists,
+# keeping current secrets") — and three of its values are derived from the MODE,
+# not from secrets.
+#
+# Found by running the installer twice on a live KVM guest:
+#   - FRONTEND_BIND stayed 0.0.0.0, so the SPA answered plain HTTP to the whole
+#     internet beside the new TLS site. Measured on that guest: `ufw deny
+#     8080/tcp` and the page still returned 200 — docker publishes through
+#     nat/PREROUTING, which runs before ufw's filter chains, so the firewall has
+#     no say. After the fix the socket moved to 127.0.0.1 and the same request
+#     got nothing.
+#   - PUBLIC_URL and CORS_ORIGIN stayed http://<bare-ip>:8080, so every node
+#     bootstrap command, every subscription link and the panelUrl baked into
+#     node payloads kept pointing at plain HTTP on a raw address.
+#
+# The real function is cut out and run here, the same instrument as pinned_fetch
+# and do_uninstall.
+note "install-iceslab.sh: mode-derived values on a re-run"
+RECON="${WORK}/reconcile.sh"
+{
+    grep -E '^(log|warn|fail)\(\) +\{.*\}$' "$PANEL_INSTALLER"
+    sed -n '/^reconcile_mode_values()/,/^}/p' "$PANEL_INSTALLER"
+} > "$RECON"
+if grep -q '^reconcile_mode_values()' "$RECON" && grep -q 'FRONTEND_BIND' "$RECON"; then
+    ok "reconcile_mode_values was cut out of the panel installer"
+else
+    bad "could not cut reconcile_mode_values out of ${PANEL_INSTALLER}; the cases below would be vacuous"
+fi
+
+run_reconcile() {  # $1 = domain (may be empty), rest = env lines
+    local domain="$1"; shift
+    printf '%s\n' "$@" > "${WORK}/envfile"
+    ( set +u
+      # shellcheck disable=SC1090
+      source "$RECON"
+      PUBLIC_URL="${OVERRIDE_PUBLIC_URL:-}" CORS_ORIGIN="${OVERRIDE_CORS:-}" \
+      FRONTEND_BIND="${OVERRIDE_BIND:-}" \
+        reconcile_mode_values "${WORK}/envfile" "$domain" 8080
+    ) > "${WORK}/recon.out" 2>&1
+}
+
+BARE=(
+  'PUBLIC_URL=http://203.0.113.9:8080'
+  'CORS_ORIGIN=http://203.0.113.9:8080'
+  'FRONTEND_BIND=0.0.0.0'
+  'JWT_SECRET=keep-me'
+)
+
+run_reconcile "panel.example.com" "${BARE[@]}"
+if grep -q '^FRONTEND_BIND=127.0.0.1$' "${WORK}/envfile"; then
+    ok "switching to domain mode closes the SPA port ufw cannot close"
+else
+    bad "FRONTEND_BIND was left at $(sed -n 's/^FRONTEND_BIND=//p' "${WORK}/envfile"): the panel stays on the internet in plain HTTP"
+fi
+if grep -q '^PUBLIC_URL=https://panel.example.com$' "${WORK}/envfile" \
+   && grep -q '^CORS_ORIGIN=https://panel.example.com$' "${WORK}/envfile"; then
+    ok "and the URLs the panel hands out follow the mode"
+else
+    bad "PUBLIC_URL/CORS_ORIGIN still point at the bare IP:
+$(sed 's/^/      /' "${WORK}/envfile")"
+fi
+if grep -q '^JWT_SECRET=keep-me$' "${WORK}/envfile"; then
+    ok "and the secrets are untouched, which is the whole reason the file is kept"
+else
+    bad "the reconciliation rewrote a secret"
+fi
+if grep -q 'ufw cannot close' "${WORK}/recon.out"; then
+    ok "and it says why, rather than moving an operator's value in silence"
+else
+    bad "changed FRONTEND_BIND without explaining it"
+fi
+
+# An operator's own origin is not ours to correct: only the exact shape this
+# script writes in bare-IP mode is.
+run_reconcile "panel.example.com" 'PUBLIC_URL=https://vpn.corp.example/panel' 'CORS_ORIGIN=https://vpn.corp.example' 'FRONTEND_BIND=127.0.0.1'
+if grep -q '^PUBLIC_URL=https://vpn.corp.example/panel$' "${WORK}/envfile"; then
+    ok "a custom PUBLIC_URL is left alone"
+else
+    bad "overwrote an operator's own PUBLIC_URL"
+fi
+
+# An explicit environment value wins over the derived one.
+OVERRIDE_PUBLIC_URL="https://alt.example.com" run_reconcile "panel.example.com" "${BARE[@]}"
+if grep -q '^PUBLIC_URL=https://alt.example.com$' "${WORK}/envfile"; then
+    ok "an explicit PUBLIC_URL beats the domain-derived one"
+else
+    bad "ignored an explicit PUBLIC_URL"
+fi
+
+# The other direction must never OPEN a port on an inference.
+run_reconcile "" 'PUBLIC_URL=https://panel.example.com' 'CORS_ORIGIN=https://panel.example.com' 'FRONTEND_BIND=127.0.0.1'
+if grep -q '^FRONTEND_BIND=127.0.0.1$' "${WORK}/envfile"; then
+    ok "dropping the domain does NOT publish the SPA port by itself"
+else
+    bad "opened the SPA port to the world on an inference"
+fi
+if grep -q 'will not be reachable directly' "${WORK}/recon.out"; then
+    ok "and says the SPA is now unreachable, which is the surprising half"
+else
+    bad "left the operator to discover the unreachable SPA themselves"
+fi
+
 # ───── The ansible role's "one-to-one" claim, checked ─────
 #
 # The role's defaults say its knobs "mirror install-iceslab-node.sh's own flags
