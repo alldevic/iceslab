@@ -1119,6 +1119,11 @@ if [[ -n "$PAYLOAD" || ! -f "$ENV_FILE" ]]; then
     fi
   fi
   log "Writing $ENV_FILE"
+  # 0600 before the first byte, not after the last. `cat >` takes root's umask
+  # (0022 on Debian), and the very first line of this heredoc is the node's
+  # mTLS payload. The `chmod 600` further down stays for the file an older
+  # install left behind.
+  install -m 0600 /dev/null "$ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 NODE_PAYLOAD=${PAYLOAD}
 NODE_HOST=${NODE_HOST}
@@ -1681,6 +1686,9 @@ if [[ "$PROTOCOL" == "hysteria" && -n "$HY_DOMAIN" && -n "$HY_EMAIL" ]]; then
   fi
   if [[ $SHOULD_WRITE_CFG -eq 1 ]]; then
     log "Writing Hysteria 2 server config at $HY_CONFIG (domain=$HY_DOMAIN)"
+    # 0600 first: the block below carries the obfs password and the traffic-API
+    # secret, and a bare redirect would create the file 0644 for the duration.
+    install -m 0600 /dev/null "$HY_CONFIG"
     {
       cat <<EOF
 listen: :443

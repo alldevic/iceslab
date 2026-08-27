@@ -1242,6 +1242,53 @@ else
     bad "the ansible role dials :${ansible_port} and the installer binds :${shell_port}"
 fi
 
+# ───── A secret file is 0600 from its first byte, not from its last ─────
+#
+# `chmod 600 "$FILE"` reads as "this file is private". It is, eventually. A bare
+# `cat > "$FILE"` creates it with root's umask, which is 0022 on Debian, so the
+# file exists at 0644 for as long as the write takes — and these writes are not
+# instant: the panel's heredoc runs `openssl rand` and `date` inside itself, and
+# the backup one is a `tar | openssl enc` of the whole database.
+#
+# Measured rather than argued, in a debian:13 container: `cat > f` leaves 644;
+# `install -m 0600 /dev/null f` and then the same redirect leaves 600, because
+# the redirect truncates and keeps the mode of a file that is already there.
+#
+# The chmod stays, and is not redundant: it is what narrows a file some earlier
+# install left at 0644. So the rule asked here is that BOTH are present.
+note "secret files are created private"
+mode_missing=""
+mode_checked=0
+for f in "$PANEL_INSTALLER" "$NODE_INSTALLER" \
+         "${REPO_ROOT}/scripts/ops/iceslab-backup.sh" \
+         "${REPO_ROOT}/apps/node/scripts/bootstrap-singbox.sh"
+do
+    [[ -r "$f" ]] || { mode_missing="${mode_missing} (unreadable: ${f})"; continue; }
+    # The list of secret paths is READ from the chmods themselves, so a file
+    # added later is covered without anyone remembering this case exists.
+    while read -r target; do
+        [[ -n "$target" ]] || continue
+        # /swapfile holds zeroes at creation time; it is chmodded for the same
+        # reason but there is nothing to read out of it in the window.
+        [[ "$target" == "/swapfile" ]] && continue
+        mode_checked=$((mode_checked + 1))
+        grep -qF "install -m 0600 /dev/null ${target}" "$f" \
+            || mode_missing="${mode_missing}
+        $(basename "$f"): ${target}"
+    done < <(grep -oE '^\s*chmod 0?600 ("?\$?[A-Za-z_{}/.-]+"?)' "$f" \
+             | grep -oE '("?\$?[A-Za-z_{}/.-]+"?)$')
+done
+if [[ "$mode_checked" -ge 5 ]]; then
+    ok "found $mode_checked secret file(s) the installers chmod to 600"
+else
+    bad "only $mode_checked chmod-600 targets parsed out; this case is nearly empty"
+fi
+if [[ -z "${mode_missing// /}" ]]; then
+    ok "and every one of them is created 0600 before anything is written into it"
+else
+    bad "these are written first and narrowed afterwards, so they exist world-readable in between:${mode_missing}"
+fi
+
 # ───── The two halves of one sandbox decision ─────
 #
 # The installer pre-creates every per-protocol config directory, and its own

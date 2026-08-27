@@ -67,6 +67,12 @@ if [[ -f "$SINGBOX_DIR/cert.pem" && -f "$SINGBOX_DIR/key.pem" ]]; then
   log "TLS cert already present, keeping it"
 else
   log "generating self-signed cert CN=${SINGBOX_SNI} (10y, EC P-256)"
+  # The key file is created 0600 before openssl writes into it: `-out` opens
+  # O_CREAT|O_TRUNC, so it keeps the mode of a file that is already there.
+  # Without this the private key exists world-readable from the moment openssl
+  # creates it until the chmod below, which is a window on a box that may well
+  # have other local users.
+  install -m 0600 /dev/null "$SINGBOX_DIR/key.pem"
   openssl ecparam -genkey -name prime256v1 -out "$SINGBOX_DIR/key.pem"
   openssl req -new -x509 -days 3650 -key "$SINGBOX_DIR/key.pem" \
     -out "$SINGBOX_DIR/cert.pem" -subj "/CN=${SINGBOX_SNI}" \
