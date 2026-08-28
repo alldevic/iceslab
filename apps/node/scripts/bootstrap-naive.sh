@@ -22,7 +22,7 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-apt.sh"
 
 CADDY_NAIVE_BIN=${CADDY_NAIVE_BIN:-/usr/local/bin/caddy-naive}
-GO_VERSION=${GO_VERSION:-1.23.4}
+GO_VERSION=${GO_VERSION:-1.27.0}
 
 # sha256 of the Go tarballs for GO_VERSION, from https://go.dev/dl/?mode=json.
 # This is the one thing on a node that is still downloaded from a third party:
@@ -33,9 +33,22 @@ GO_VERSION=${GO_VERSION:-1.23.4}
 # one), and the fetch then says out loud that it verified nothing — the same
 # wording bootstrap-{singbox,mtg,mieru}.sh use for their hand-run fallback.
 # Bump both together.
-GO_SHA256_amd64=6924efde5de86fe277676e929dc9917d466efa02fb934197bc2eba35d5680971
-GO_SHA256_arm64=16e5017863a7f6071363782b1b8042eb12c6ca4f4cd71528b2123f0a1275b13e
-GO_PINNED_VERSION=1.23.4
+#
+# The pin has to be new enough to BUILD, not merely to run `go`. Measured on a
+# Debian 13 guest 2026-08-28 with the old 1.23.4 pin: xcaddy printed
+#
+#   go: github.com/caddyserver/caddy/v2@v2.11.4 requires go >= 1.25.1;
+#       switching to go1.26.7
+#   go: downloading go1.26.7 (linux/amd64)
+#   go: downloading go1.25.1 (linux/amd64)
+#
+# — the toolchain we verified by sha256 fetched two more and handed the compile
+# to one of them. The build worked, but the pin decided nothing, and a node
+# paid for ~160 MB of downloads it did not need. A version that already clears
+# Caddy's floor makes the pinned toolchain the one that does the work.
+GO_SHA256_amd64=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685
+GO_SHA256_arm64=51798d2c42d0e1c6ed7fd9f48728b4193abac9e8aad6dbac2fe96a81f5909bda
+GO_PINNED_VERSION=1.27.0
 
 # Pinned rather than @latest. `go install ...@<version>` is verified against
 # the Go checksum database; `@latest` is a moving target that is whatever
@@ -62,11 +75,16 @@ apt_get install -y \
 # ───── 3. Go toolchain ─────
 # Ubuntu's apt go can lag the Caddy/xcaddy minimum, so install the upstream
 # tarball in /usr/local/go regardless of what apt has.
+#
+# The floor is the pinned version itself, not a separate number. It used to be
+# 1.22, which let a host's own Go 1.23 satisfy the check and then hand the
+# compile to a toolchain Go downloaded for itself — the second half of the
+# measurement above. One number, and it is the one whose bytes we verified.
 NEED_GO=true
 if command -v go >/dev/null; then
   CUR=$(go version | awk '{print $3}' | sed 's/^go//')
-  if [[ "$(printf '%s\n' "1.22" "$CUR" | sort -V | head -1)" == "1.22" ]]; then
-    log "Go $CUR already meets >= 1.22"
+  if [[ "$(printf '%s\n' "$GO_PINNED_VERSION" "$CUR" | sort -V | head -1)" == "$GO_PINNED_VERSION" ]]; then
+    log "Go $CUR already meets >= $GO_PINNED_VERSION"
     NEED_GO=false
   fi
 fi
