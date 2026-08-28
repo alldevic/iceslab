@@ -2,9 +2,10 @@ import { assertFetchableUrl } from '../recipes/recipes.ssrf.js';
 
 /**
  * Fetch an upstream geo .dat. https-only + SSRF-guarded (assertFetchableUrl),
- * size-capped, timed out. geo .dat files are tens of MB (runetfreedom geoip.dat
- * ~20MB), so the cap is high; a content-length over it is rejected before the
- * body is read. Redirects are followed manually (GitHub release URLs 302 to the
+ * size-capped, and bounded by a STALL timeout rather than a deadline on the
+ * whole transfer - see STALL_MS. geo .dat files are tens of MB (runetfreedom
+ * geoip.dat ~19MB, geosite.dat ~74MB), so the cap is high; a content-length
+ * over it is rejected before the body is read. Redirects are followed manually (GitHub release URLs 302 to the
  * CDN) with the SSRF guard re-run on EVERY hop - undici is told
  * `redirect: 'manual'` so it cannot silently follow a 3xx into a private / cloud
  * metadata host; each Location is resolved and re-validated before the next
@@ -31,7 +32,35 @@ export type DatFetcher = (
 ) => Promise<ConditionalDat>;
 
 const MAX_DAT_BYTES = 128 * 1024 * 1024;
-const TIMEOUT_MS = 30_000;
+
+/**
+ * How long a transfer may go with NOTHING arriving, not how long it may take.
+ *
+ * This was a deadline on the whole request-plus-body, and it made the feature's
+ * bigger database impossible to ingest. Measured 2026-08-28 from this machine:
+ *
+ *   geoip.dat    18 671 837 bytes   6.6 s   -> fits
+ *   geosite.dat  73 703 302 bytes  41.9 s   -> aborted at 30 s
+ *
+ * The cap next to it allows 128 MB, so the deadline demanded a sustained
+ * ~34 Mbit/s from a CDN - for a panel whose whole point is serving nodes on
+ * censored, slow links. What the operator got was `"error": "This operation was
+ * aborted"` in sourceErrors, empty artifacts, and the sha256 of the empty
+ * string, on two separate days.
+ *
+ * A stall timeout is the right shape: it still kills a hung connection in 30 s,
+ * and a slow-but-moving one finishes. STALL_MS also covers connect + headers,
+ * where no bytes have arrived yet by definition.
+ */
+const STALL_MS = 30_000;
+
+/**
+ * And an outer bound, because a stall timeout alone is not one: a hostile
+ * server dripping a byte every 29 s would hold the connection until the size
+ * cap, which at that rate is longer than the heat death of the panel. Fifteen
+ * minutes is ~40x the slowest real download measured above.
+ */
+const MAX_TOTAL_MS = 15 * 60_000;
 const MAX_REDIRECTS = 5;
 
 export const fetchDat: DatFetcher = async (startUrl, cond) => {
@@ -43,7 +72,14 @@ export const fetchDat: DatFetcher = async (startUrl, cond) => {
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     assertFetchableUrl(url); // re-validate the start URL and every redirect hop
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    // Reset on every chunk (see the stream loop below), so the budget is
+    // "silence", not "duration". Named so an abort says which one fired.
+    let stallTimer = setTimeout(() => controller.abort(new Error('stalled')), STALL_MS);
+    const totalTimer = setTimeout(() => controller.abort(new Error('too slow')), MAX_TOTAL_MS);
+    const resetStall = (): void => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => controller.abort(new Error('stalled')), STALL_MS);
+    };
     try {
       const res = await fetch(url, { redirect: 'manual', headers, signal: controller.signal });
 
@@ -80,6 +116,8 @@ export const fetchDat: DatFetcher = async (startUrl, cond) => {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        // Bytes arrived: the connection is not stalled, whatever the clock says.
+        resetStall();
         total += value.length;
         if (total > MAX_DAT_BYTES) {
           await reader.cancel();
@@ -95,7 +133,8 @@ export const fetchDat: DatFetcher = async (startUrl, cond) => {
       }
       return { status: 200, bytes: out, etag, lastModified };
     } finally {
-      clearTimeout(timer);
+      clearTimeout(stallTimer);
+      clearTimeout(totalTimer);
     }
   }
   throw new Error(`geo fetch ${startUrl}: too many redirects`);
