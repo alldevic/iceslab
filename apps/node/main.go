@@ -160,8 +160,25 @@ func main() {
 }
 
 func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
-	adapters := []core.CoreAdapter{
-		hysteria.New(hysteria.Config{
+	adapters := []core.CoreAdapter{}
+
+	// Registered only when this node actually runs hysteria, like every other
+	// adapter below asks whether its core is present. It used to be the one
+	// unconditional entry in this list, with no comment saying why — and the
+	// consequence was visible from the panel: on a node installed with
+	// --protocol tuic (or mieru, or mtproto), GET /api/nodes/:id/cores reported
+	// hysteria as `running: true, version: null`, because Healthy() for this
+	// adapter is its auth-callback server, which comes up whether or not a
+	// hysteria binary exists. A green card over a protocol the node cannot
+	// serve, and a drift check comparing a pinned version against nothing,
+	// forever. Measured on a real VM, 2026-08-28.
+	//
+	// Two ways a node runs hysteria and both count: as a child process
+	// (HYSTERIA_BINARY) or as a systemd unit this installer wrote
+	// (HYSTERIA_SERVICE_UNIT). The installer sets both together; an operator
+	// who hand-manages the unit has only the second.
+	if os.Getenv("HYSTERIA_BINARY") != "" || os.Getenv("HYSTERIA_SERVICE_UNIT") != "" {
+		adapters = append(adapters, hysteria.New(hysteria.Config{
 			AuthCallbackHost:   getenv("HYSTERIA_AUTH_HOST", "127.0.0.1"),
 			AuthCallbackPort:   getenvInt("HYSTERIA_AUTH_PORT", defaultAuthCallbackPort),
 			BinaryPath:         os.Getenv("HYSTERIA_BINARY"),
@@ -172,7 +189,7 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 			ServiceUnit:        os.Getenv("HYSTERIA_SERVICE_UNIT"),
 			TrafficStatsListen: getenv("HYSTERIA_STATS_LISTEN", "127.0.0.1:9999"),
 			TrafficStatsSecret: os.Getenv("HYSTERIA_STATS_SECRET"),
-		}, logger),
+		}, logger))
 	}
 
 	// Xray adapter is always registered when XRAY_BINARY is set so that

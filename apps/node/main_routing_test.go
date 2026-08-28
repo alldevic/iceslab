@@ -206,11 +206,50 @@ func TestABareNodeRegistersOnlyWhatItHas(t *testing.T) {
 
 	adapters := buildAdapters(silentLogger())
 	got := adapterKeys(adapters)
-	// hysteria is registered unconditionally: its adapter runs the auth
-	// callback server, which the panel needs even before a binary is installed.
-	want := []string{core.AdapterKey("hysteria", "hysteria")}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("a node with no cores installed registered %v, want %v", got, want)
+	// Nothing. hysteria used to be here, registered unconditionally, and this
+	// test said why: "its adapter runs the auth callback server, which the
+	// panel needs even before a binary is installed." That reason does not
+	// survive being looked at — the callback exists for hysteria-server to
+	// authenticate users against, and without a hysteria binary there is no
+	// hysteria-server to call it. What it produced instead was measured from
+	// the panel on a real VM (2026-08-28): a node installed with --protocol
+	// tuic reported `hysteria running: true, version: null` in
+	// GET /api/nodes/:id/cores, because Healthy() for that adapter IS the
+	// callback server. A green card over a protocol the node cannot serve.
+	if len(got) != 0 {
+		t.Errorf("a node with no cores installed registered %v, want nothing", got)
+	}
+}
+
+func TestHysteriaIsRegisteredForEitherWayItRuns(t *testing.T) {
+	// The control on the case above: gating it must not make it unreachable.
+	// A node runs hysteria as a child process (HYSTERIA_BINARY) or as the
+	// systemd unit the installer wrote (HYSTERIA_SERVICE_UNIT), and the
+	// installer sets both together — but an operator hand-managing the unit
+	// has only the second, so both have to count.
+	for _, tc := range []struct{ name, key, value string }{
+		{"as a child process", "HYSTERIA_BINARY", "/usr/local/bin/hysteria"},
+		{"as a systemd unit", "HYSTERIA_SERVICE_UNIT", "hysteria"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range []string{
+				"XRAY_BINARY", "MTG_BINARY", "MITA_BINARY", "SINGBOX_BINARY",
+				"HYSTERIA_BINARY", "HYSTERIA_SERVICE_UNIT",
+			} {
+				t.Setenv(k, "")
+			}
+			missing := filepath.Join(t.TempDir(), "not-installed")
+			for _, k := range []string{"AMNEZIAWG_BIN", "WIREGUARD_BIN", "CADDY_NAIVE_BIN"} {
+				t.Setenv(k, missing)
+			}
+			t.Setenv(tc.key, tc.value)
+
+			got := adapterKeys(buildAdapters(silentLogger()))
+			want := []string{core.AdapterKey("hysteria", "hysteria")}
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("with %s set the node registered %v, want %v", tc.key, got, want)
+			}
+		})
 	}
 }
 
