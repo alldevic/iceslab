@@ -203,6 +203,37 @@ on_error() {
 }
 trap 'on_error $LINENO "$BASH_COMMAND"' ERR
 
+# "Re-run with the same flags" is true of every flag but one.
+#
+# A bootstrap token is one-shot and is redeemed near the top of this script,
+# while the steps that actually fail come much later - a protocol bootstrap is
+# step 4 of 8. By the time an operator reads any failure, the token in their
+# scrollback is spent, and the re-run they are being asked for dies on
+# "Bootstrap token already consumed or expired: issue a fresh one in the panel
+# UI" - which reads as an expiry rather than as "your last attempt spent it".
+# Measured twice on 2026-08-28 while installing amneziawg on a real guest.
+#
+# This is an EXIT trap, not another line in on_error, because the two ways this
+# script stops are different: on_error runs on the ERR trap, and `fail` calls
+# `exit 1` directly, which never trips ERR. `fail` is where most refusals go.
+# There is no other EXIT trap here, and there must not be a second one: an
+# EXIT trap REPLACES, it does not add.
+#
+# BOOTSTRAP_REDEEMED is set only after a 200, so a run that stops BEFORE
+# redemption prints nothing extra - correct, since its token is still good.
+on_exit() {
+  local code=$?
+  [[ "$code" -eq 0 ]] && return 0
+  [[ "${BOOTSTRAP_REDEEMED:-0}" == "1" ]] || return 0
+  printf '\n' >&2
+  printf '  NOTE: this run redeemed --bootstrap %s, and that token is\n' "${BOOTSTRAP_TOKEN:0:6}..." >&2
+  printf '  one-shot: it is spent whether the install finished or not. Re-run\n' >&2
+  printf '  with the same flags EXCEPT --bootstrap, and pass a fresh token\n' >&2
+  printf '  (panel UI > Nodes > this node > Bootstrap). Everything else the\n' >&2
+  printf '  install does is idempotent.\n' >&2
+}
+trap on_exit EXIT
+
 banner() {
   printf '\n'
   printf '\033[1;36m  ___ ___ ___ ___  _      _   ___\n'
@@ -672,6 +703,7 @@ if [[ -n "$BOOTSTRAP_TOKEN" && -n "$PANEL_URL" ]]; then
     000) rm -f "$TMP_PAYLOAD"; fail "Cannot reach panel at $PANEL_URL: check the URL, TLS cert, firewall" ;;
     *)   rm -f "$TMP_PAYLOAD"; fail "Unexpected HTTP $HTTP_CODE from panel: see panel logs" ;;
   esac
+  BOOTSTRAP_REDEEMED=1
   log "Bootstrap successful: fetched ${#PAYLOAD} bytes of payload"
 elif [[ -n "$BOOTSTRAP_TOKEN" || -n "$PANEL_URL" ]]; then
   fail "--panel-url and --bootstrap must be passed TOGETHER (got only one)"
@@ -885,36 +917,6 @@ log "Refreshing apt package list"
 log "Installing apt prereqs"
 "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y git curl ca-certificates ufw unzip
 
-# ───── 3. Go ─────
-NEED_GO=true
-if command -v go >/dev/null; then
-  CUR=$(go version | awk '{print $3}' | sed 's/^go//')
-  if [[ "$(printf '%s\n' "1.22" "$CUR" | sort -V | head -1)" == "1.22" ]]; then
-    NEED_GO=false
-  fi
-fi
-if $NEED_GO; then
-  GO_VERSION=${GO_VERSION:-1.23.4}
-  ARCH=$(dpkg --print-architecture)
-  case "$ARCH" in
-    amd64) GO_ARCH=amd64 ;;
-    arm64) GO_ARCH=arm64 ;;
-    *) fail "Unsupported arch: $ARCH" ;;
-  esac
-  log "Installing Go $GO_VERSION"
-  TMPDL=$(mktemp -d)
-  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o "${TMPDL}/go.tar.gz"
-  rm -rf /usr/local/go
-  tar -C /usr/local -xzf "${TMPDL}/go.tar.gz"
-  rm -rf "$TMPDL"
-fi
-export PATH=/usr/local/go/bin:$PATH
-
-# Persist `go` in PATH for future SSH sessions: symlink into /usr/local/bin
-# (which is on every distro's default PATH) so admins can rebuild the agent
-# manually after a `git pull` without having to re-run install-iceslab-node.sh.
-ln -sf /usr/local/go/bin/go /usr/local/bin/go
-ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
 step "Source checkout (${ICESLAB_NODE_REF})"
 if [[ ! -d "$ICESLAB_NODE_DIR/.git" ]]; then
@@ -945,6 +947,28 @@ if [[ -n "${ICESLAB_NODE_REF_SHA:-}" ]]; then
 fi
 
 step "Build node-agent (Go, static)"
+
+# The Go toolchain is installed HERE, after the checkout, and not in the
+# prereqs step where it used to live — because the checkout is what carries
+# lib-go.sh, and that file is the only place the version, the checksums and the
+# floor are written down. Nothing before this step needs a compiler.
+#
+# What it replaces: a bare `curl -fsSL https://go.dev/dl/go<ver>.linux-<arch>
+# .tar.gz`, no sha256, `-L` following the 302 that go.dev answers with,
+# untarred into /usr/local/go as root — and the binary it then produced is the
+# agent that runs as root on this node and holds its mTLS key. §54 pinned the
+# OTHER Go download, in bootstrap-naive.sh, and left this one; the two also
+# disagreed about which version to install.
+# shellcheck source=../apps/node/scripts/lib-go.sh
+. "$ICESLAB_NODE_DIR/apps/node/scripts/lib-go.sh"
+install_go
+export PATH=/usr/local/go/bin:$PATH
+# Persist `go` in PATH for future SSH sessions: symlink into /usr/local/bin
+# (which is on every distro's default PATH) so admins can rebuild the agent
+# manually after a `git pull` without having to re-run install-iceslab-node.sh.
+ln -sf /usr/local/go/bin/go /usr/local/bin/go
+ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
 cd "$ICESLAB_NODE_DIR/apps/node"
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/iceslab-node .
 chmod +x /usr/local/bin/iceslab-node

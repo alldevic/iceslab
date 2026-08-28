@@ -82,6 +82,12 @@ args=("$@")
 if [[ "${args[0]}" == "clone" ]]; then
     dir="${args[-1]}"
     mkdir -p "$dir/.git" "$dir/apps/node/scripts"
+    # The installer sources its Go library out of the checkout, so a fake
+    # checkout with no libs is a fake that cannot run the real script. The
+    # real files are copied in beside the installer by the harness.
+    for lib in lib-pinned-fetch.sh lib-apt.sh lib-go.sh; do
+        [[ -f "/opt/ice-libs/$lib" ]] && cp "/opt/ice-libs/$lib" "$dir/apps/node/scripts/$lib"
+    done
     # bootstrap-singbox.sh is what --protocol tuic chains into. The real one
     # downloads sing-box; here it just has to exist and succeed, because what
     # is under test is the eight steps around it.
@@ -104,7 +110,9 @@ cat > /usr/local/go/bin/go <<'STUB'
 #!/usr/bin/env bash
 printf 'go %s\n' "$*" >> /opt/ice-stub/log/go.log
 if [[ "${1:-}" == "version" ]]; then
-    echo "go version go1.23.4 linux/amd64"
+    # Must clear lib-go.sh's floor, or the installer would try to download a
+    # real toolchain inside a container with no network guarantee.
+    echo "go version go1.27.0 linux/amd64"
     exit 0
 fi
 if [[ "${1:-}" == "build" ]]; then

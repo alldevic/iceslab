@@ -138,6 +138,12 @@ dex() { docker exec "$CONTAINER" "$@"; }
 docker cp "$INSTALLER" "${CONTAINER}:/opt/install-iceslab-node.sh" >/dev/null
 docker exec "$CONTAINER" mkdir -p /opt/ice-stub >/dev/null
 docker cp "$STUBS" "${CONTAINER}:/opt/stubs.sh" >/dev/null
+# The installer sources apps/node/scripts/lib-go.sh out of the checkout it just
+# made, so the git stub has to produce a checkout that carries the real thing.
+docker exec "$CONTAINER" mkdir -p /opt/ice-libs >/dev/null
+for _lib in lib-pinned-fetch.sh lib-apt.sh lib-go.sh; do
+    docker cp "${REPO_ROOT}/apps/node/scripts/${_lib}" "${CONTAINER}:/opt/ice-libs/${_lib}" >/dev/null
+done
 if ! dex bash /opt/stubs.sh >/dev/null 2>&1; then
     printf 'the stub fixture failed to install; every case below would be vacuous\n' >&2
     exit 2

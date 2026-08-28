@@ -373,13 +373,19 @@ note "the bootstraps that fetch from upstream use it"
 # the same name, so a looser grep stayed green when the `.` line itself was
 # taken out. Found by mutating exactly that.
 sources_lib() { grep -qE '^[[:space:]]*(\.|source)[[:space:]].*lib-pinned-fetch\.sh' "$1"; }
+#
+# The list is "everything in this directory that reaches a third party", and it
+# moves: the Go tarball used to be fetched inside bootstrap-naive.sh and now
+# lives in lib-go.sh, which both that script and install-iceslab-node.sh use.
+# So the direct callers today are the amneziawg bootstrap (two pinned clones)
+# and that library.
 uses_lib=""
-for b in "$NAIVE_BOOTSTRAP" "$AWG_BOOTSTRAP"; do
+for b in "$AWG_BOOTSTRAP" "${REPO_ROOT}/apps/node/scripts/lib-go.sh"; do
     sources_lib "$b" || uses_lib="${uses_lib} $(basename "$b"):no-source"
     grep -qE '^\s*pinned_(fetch|clone) ' "$b" || uses_lib="${uses_lib} $(basename "$b"):no-call"
 done
 if [[ -z "$uses_lib" ]]; then
-    ok "bootstrap-naive.sh and bootstrap-amneziawg.sh both source the library and call it"
+    ok "bootstrap-amneziawg.sh and lib-go.sh both source the library and call it"
 else
     bad "the pinned-fetch library is not reaching its callers:${uses_lib}"
 fi
@@ -427,6 +433,51 @@ fi
 # and every install signed off by telling the operator to reboot and consider
 # the ~30 Mbps userspace fallback. Found by installing on a real VM and then
 # not believing the warning.
+# ═════════════════════════════════════════════════════════════════════════════
+#  Both Go toolchains come from the same pinned place
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Two things on a node need a Go: install-iceslab-node.sh compiles the agent
+# that then runs as root and holds the node's mTLS key, and bootstrap-naive.sh
+# drives xcaddy. §54 pinned the second download by sha256 and moved it off the
+# redirecting go.dev URL. The first one was still
+#
+#   curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+#
+# — no checksum, -L following the 302 to whichever host answers, untarred into
+# /usr/local/go as root — and the two also disagreed about the version.
+note "the Go toolchain is fetched the same way for both callers"
+GO_LIB="${REPO_ROOT}/apps/node/scripts/lib-go.sh"
+go_unpinned=""
+for f in "$NODE_INSTALLER" "$NAIVE_BOOTSTRAP" "$GO_LIB"; do
+    [[ -f "$f" ]] || { go_unpinned="${go_unpinned} $(basename "$f"):missing"; continue; }
+    # A Go tarball reached by anything other than pinned_fetch.
+    grep -nE '(curl|wget)[^|]*go[0-9.]+\.linux-|(curl|wget)[^|]*go\.dev/dl' "$f" \
+        | grep -qv '^[0-9]*:[[:space:]]*#' && go_unpinned="${go_unpinned} $(basename "$f"):bare-fetch"
+done
+if [[ -z "$go_unpinned" ]]; then
+    ok "no Go tarball is fetched with a bare curl/wget"
+else
+    bad "these fetch a Go toolchain without pinned_fetch:${go_unpinned}"
+fi
+if grep -q 'GO_SHA256_amd64=' "$GO_LIB" && grep -q 'pinned_fetch "https://dl.google.com/go/' "$GO_LIB"; then
+    ok "lib-go.sh carries the checksums and fetches from the host that serves the bytes"
+else
+    bad "lib-go.sh does not pin the tarball it installs"
+fi
+# And both callers reach it, rather than keeping a private copy of the version.
+go_callers=""
+for f in "$NODE_INSTALLER" "$NAIVE_BOOTSTRAP"; do
+    grep -qE '^[[:space:]]*(\.|source)[[:space:]].*lib-go\.sh' "$f" || go_callers="${go_callers} $(basename "$f"):no-source"
+    grep -qE '^[[:space:]]*install_go[[:space:]]*$' "$f" || go_callers="${go_callers} $(basename "$f"):no-call"
+    grep -qE '^[[:space:]]*GO_(VERSION|PINNED_VERSION|SHA256_)' "$f" && go_callers="${go_callers} $(basename "$f"):own-pin"
+done
+if [[ -z "$go_callers" ]]; then
+    ok "and both callers source it, call it, and keep no version of their own"
+else
+    bad "the Go library is not the single place the version lives:${go_callers}"
+fi
+
 note "the amneziawg module check reads /proc/modules, not a pipeline"
 if grep -qE '^[[:space:]]*awg_module_loaded\(\)[[:space:]]*\{[^}]*/proc/modules' "$AWG_BOOTSTRAP"; then
     ok "awg_module_loaded reads /proc/modules directly"
@@ -1075,6 +1126,23 @@ if [[ "$(cat "$BS_LOG")" == "/api/internal/bootstrap/good-token" ]]; then
 else
     bad "the panel saw these requests instead:
 $(sed 's/^/      /' "$BS_LOG")"
+fi
+
+# ───── and the failure footer knows the token is gone ─────
+#
+# The footer said "Re-run with the same flags; install is idempotent." That is
+# true of every flag but the one that matters: a bootstrap token is one-shot
+# and is redeemed near the top, while the steps that actually fail come much
+# later (a protocol bootstrap is step 4 of 8). Measured twice on 2026-08-28,
+# installing amneziawg on a real guest: the run died at step 4, the printed
+# advice was to re-run with the same flags, and doing so answers "Bootstrap
+# token already consumed or expired". The run above is exactly that shape - it
+# redeemed, then failed later - so it is the case that can see the difference.
+if grep -q 'EXCEPT --bootstrap' "$BS_OUT"; then
+    ok "a failure AFTER redemption says the token is spent instead of asking for it again"
+else
+    bad "the failure footer still asks for a re-run with the same, now-spent, token:
+$(sed 's/^/      /' "$BS_OUT" | tail -20)"
 fi
 
 # ───── ...and not asked at all when the run is going to refuse anyway ─────
