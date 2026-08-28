@@ -988,6 +988,21 @@ export function buildTopologyFragmentsForNode(
       // `[vless-in-… >> direct]` and the client still got 200. With
       // fallbackTag: `-> blocked`, and the client gets nothing. Decided
       // 2026-08-28: refuse, and tell the operator (cascade.events.ts).
+      //
+      // It costs NO startup window, which was the open worry when this landed:
+      // the observatory has measured nothing for the first probeInterval after
+      // a core restart, and the fear was that Auto would refuse for that whole
+      // minute. Measured against xray 26.3.27 on 2026-08-29, three balancers
+      // with this exact shape, first request ~2 s after start:
+      //
+      //   both members live        204
+      //   one live, one dead       204
+      //   both dead                000   (refused, and NOT leaked to direct)
+      //
+      // and the same three answers again past the first probe interval. So
+      // leastPing treats an unmeasured member as selectable rather than dead:
+      // Auto serves from the first request, and `fallbackTag` fires only when
+      // the balancer genuinely resolves to nothing.
       fallbackTag: 'blocked',
     });
     needsObservatory = true;
