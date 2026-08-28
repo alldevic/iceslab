@@ -83,12 +83,21 @@ async function checkLocked(clientIp: string, username: string): Promise<void> {
 
 async function recordFailure(clientIp: string, username: string): Promise<void> {
   const key = FAIL_KEY(clientIp, username);
+  // The TTL is established BEFORE the key can be non-zero, not after.
+  //
+  // This used to be INCR-then-EXPIRE in two round-trips, with the EXPIRE
+  // guarded by `newCount === 1`. Anything that came between them — a Redis
+  // blip, a restart, the fail-fast client refusing one command — left a
+  // counter with no expiry, and because the guard only ever fires on the FIRST
+  // increment, nothing would set one later either. The window then never
+  // resets: ten honest typos spread over a year lock a real operator out of
+  // their own panel, and `redis ttl` on that key answers -1 forever.
+  //
+  // The /sub per-IP counter (subscription.routes.ts) already had exactly this
+  // fix, with exactly this reasoning in its comment. This is the same decision
+  // in a second place, and it had not been made here.
+  await redis.set(key, '0', 'EX', config.LOGIN_LOCKOUT_WINDOW_MIN * 60, 'NX');
   const newCount = await redis.incr(key);
-  if (newCount === 1) {
-    // First failure inside the window, set short TTL so honest typos
-    // don't accumulate forever.
-    await redis.expire(key, config.LOGIN_LOCKOUT_WINDOW_MIN * 60);
-  }
   if (newCount >= config.LOGIN_LOCKOUT_FAILURES) {
     // Threshold tripped, switch to the long lockout TTL.
     await redis.expire(key, config.LOGIN_LOCKOUT_DURATION_MIN * 60);
