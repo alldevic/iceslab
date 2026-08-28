@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Provision a fresh Ubuntu/Debian VPS to run an AmneziaWG inbound.
 #
-# Installation strategy:
-#   Ubuntu 22.04 (jammy) and earlier: use ppa:amnezia/amneziawg (Launchpad)
-#   Ubuntu 24.04 (noble) and later:   PPA doesn't register for noble, so we
-#     install via DKMS from the upstream GitHub source + build awg-tools.
+# Installation strategy: DKMS from the upstream GitHub source, plus awg-tools
+# built from source. One path on every supported release. There used to be a
+# second one - ppa:amnezia/amneziawg on Ubuntu jammy and earlier - and it is
+# gone, which matters because the package that path needed outlived it below.
 #
 # Idempotent, safe to rerun.
 set -euo pipefail
@@ -30,8 +30,16 @@ log "Detected $PRETTY_NAME"
 # ───── 2. Prereqs ─────
 log "Installing apt prereqs"
 DEBIAN_FRONTEND=noninteractive apt-get update -y
+# `software-properties-common` was here for `add-apt-repository`, which only
+# the deleted PPA path ever called. Debian 13 (trixie) dropped the package
+# altogether, so the line that nothing needed was also the line that made
+# `--protocol amneziawg` impossible on a distro this installer prints as
+# supported: apt exits 100 with "Unable to locate package", `set -e` takes the
+# script down, and the failure lands in step 4 of 8 with the agent already
+# built. Measured on a trixie guest 2026-08-28 - `apt-cache stats` had 161831
+# package names and not that one.
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  software-properties-common gnupg ca-certificates curl \
+  gnupg ca-certificates curl \
   build-essential dkms git libmnl-dev pkg-config wireguard-tools
 
 KERNEL_VER=$(uname -r)
