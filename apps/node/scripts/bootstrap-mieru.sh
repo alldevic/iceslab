@@ -15,6 +15,9 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || fail "Must be run as root (sudo bash $0)"
 
+# shellcheck source=lib-apt.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-apt.sh"
+
 # Where mita ends up is decided by the .deb, not by this script: it ships
 # ./usr/bin/mita. This used to say /usr/local/bin, which nothing ever put a
 # binary in — so the smoke test below failed on a machine where mita was
@@ -72,7 +75,7 @@ fi
 log "Installing $DEB via dpkg..."
 dpkg -i "$TMPDIR/$DEB" || {
   warn "dpkg returned non-zero, running apt-get install -f to fix deps"
-  apt-get install -f -y
+  apt_get install -f -y
 }
 
 # ───── 6. Smoke-test ─────

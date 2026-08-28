@@ -18,6 +18,9 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || fail "Must be run as root (sudo bash $0)"
 
+# shellcheck source=lib-apt.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-apt.sh"
+
 # ───── 1. Distro check ─────
 [[ -r /etc/os-release ]] || fail "Cannot read /etc/os-release; unsupported distro"
 . /etc/os-release
@@ -32,8 +35,8 @@ if command -v wg >/dev/null && command -v wg-quick >/dev/null; then
   log "wireguard-tools already installed: $(wg --version 2>&1 | head -1)"
 else
   log "Installing wireguard-tools"
-  DEBIAN_FRONTEND=noninteractive apt-get update -y
-  DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools
+  apt_get update -y
+  apt_get install -y wireguard-tools
 fi
 
 command -v wg       >/dev/null || fail "wg binary not found after install"

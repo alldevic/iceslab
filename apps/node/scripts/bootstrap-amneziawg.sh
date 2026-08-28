@@ -17,6 +17,8 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # shellcheck source=lib-pinned-fetch.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-pinned-fetch.sh"
+# shellcheck source=lib-apt.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-apt.sh"
 
 # ───── 1. Distro check ─────
 [[ -r /etc/os-release ]] || fail "Cannot read /etc/os-release; unsupported distro"
@@ -29,7 +31,7 @@ log "Detected $PRETTY_NAME"
 
 # ───── 2. Prereqs ─────
 log "Installing apt prereqs"
-DEBIAN_FRONTEND=noninteractive apt-get update -y
+apt_get update -y
 # `software-properties-common` was here for `add-apt-repository`, which only
 # the deleted PPA path ever called. Debian 13 (trixie) dropped the package
 # altogether, so the line that nothing needed was also the line that made
@@ -38,13 +40,13 @@ DEBIAN_FRONTEND=noninteractive apt-get update -y
 # script down, and the failure lands in step 4 of 8 with the agent already
 # built. Measured on a trixie guest 2026-08-28 - `apt-cache stats` had 161831
 # package names and not that one.
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
+apt_get install -y \
   gnupg ca-certificates curl \
   build-essential dkms git libmnl-dev pkg-config wireguard-tools
 
 KERNEL_VER=$(uname -r)
 log "Running kernel: $KERNEL_VER"
-DEBIAN_FRONTEND=noninteractive apt-get install -y "linux-headers-${KERNEL_VER}" || \
+apt_get install -y "linux-headers-${KERNEL_VER}" || \
   warn "linux-headers-${KERNEL_VER} not found, DKMS build may fail"
 
 # ───── 3. Kernel module via DKMS ─────

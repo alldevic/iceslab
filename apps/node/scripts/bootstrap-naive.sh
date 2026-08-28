@@ -18,6 +18,8 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # shellcheck source=lib-pinned-fetch.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-pinned-fetch.sh"
+# shellcheck source=lib-apt.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-apt.sh"
 
 CADDY_NAIVE_BIN=${CADDY_NAIVE_BIN:-/usr/local/bin/caddy-naive}
 GO_VERSION=${GO_VERSION:-1.23.4}
@@ -53,8 +55,8 @@ log "Detected $PRETTY_NAME"
 
 # ───── 2. Prereqs ─────
 log "Installing apt prereqs (curl, ca-certificates, git)"
-DEBIAN_FRONTEND=noninteractive apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
+apt_get update -y
+apt_get install -y \
   curl ca-certificates git build-essential
 
 # ───── 3. Go toolchain ─────

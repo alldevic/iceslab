@@ -401,6 +401,49 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  The bootstraps wait for the apt lock, like the installers that call them
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Both installers set DPkg::Lock::Timeout=300 and say why: a cloud image runs
+# unattended-upgrades on first boot, and a bare `apt-get install` does not wait
+# for /var/lib/dpkg/lock-frontend, it exits 100. The protocol bootstraps run as
+# a fresh `bash <file>`, so the installer's array does not reach them, and four
+# of them had no options at all.
+#
+# Measured 2026-08-28 on a Debian 13 KVM guest: bootstrap-amneziawg.sh lost that
+# race and took the whole install down at step 4 of 8, with the agent already
+# built and the one-shot bootstrap token already spent.
+note "every bootstrap that uses apt waits for the lock"
+sources_apt() { grep -qE '^[[:space:]]*(\.|source)[[:space:]].*lib-apt\.sh' "$1"; }
+apt_bare=""
+apt_users=0
+for b in "${REPO_ROOT}"/apps/node/scripts/bootstrap-*.sh; do
+    # A call, not the word: two of these scripts name apt-get inside an operator
+    # message ("To upgrade, 'apt-get remove mita' and rerun").
+    if grep -qE '^[[:space:]]*(DEBIAN_FRONTEND=[^[:space:]]+[[:space:]]+)?apt-get[[:space:]]' "$b"; then
+        apt_bare="${apt_bare} $(basename "$b"):bare-call"
+        continue
+    fi
+    grep -qE '^[[:space:]]*apt_get[[:space:]]' "$b" || continue
+    apt_users=$((apt_users + 1))
+    sources_apt "$b" || apt_bare="${apt_bare} $(basename "$b"):no-source"
+done
+if [[ -z "$apt_bare" && "$apt_users" -ge 4 ]]; then
+    ok "${apt_users} bootstrap(s) install packages, all of them through lib-apt.sh"
+elif [[ -n "$apt_bare" ]]; then
+    bad "these bootstraps call apt-get without the lock timeout:${apt_bare}"
+else
+    bad "only ${apt_users} bootstrap(s) were seen using apt_get; the check found nothing to check"
+fi
+# And the wrapper is the thing that carries the option, not a name that agrees.
+APT_LIB="${REPO_ROOT}/apps/node/scripts/lib-apt.sh"
+if grep -q 'DPkg::Lock::Timeout=300' "$APT_LIB"; then
+    ok "and lib-apt.sh carries the same 300s lock timeout the installers use"
+else
+    bad "lib-apt.sh does not set DPkg::Lock::Timeout, so sourcing it changes nothing"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  The apt-lock decision, made twice
 # ═════════════════════════════════════════════════════════════════════════════
 #
