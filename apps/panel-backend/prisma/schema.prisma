@@ -642,6 +642,20 @@ model SubscriptionEvent {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([eventType])
+  // The nightly retention sweep deletes by AGE alone, and no index above leads
+  // with the age column - a composite keyed on the user cannot serve it. In the
+  // steady state the sweep is highly selective (one day out of the retention
+  // window), which is exactly where an index pays. Measured on 1M rows with
+  // ~11k over the horizon: 110 ms seq scan -> 4.6 ms bitmap index scan.
+  //
+  // Worth stating what does NOT need it: the FIRST sweep of a long-unpruned
+  // table deletes a quarter of it, and there the planner is right to seq-scan
+  // (measured: 235 ms, and an index would not have been used). The index is for
+  // every night after that one.
+  // See retention.cron.ts and node_usage_history, which already had a leading
+  // `hour` index - added for the dashboard, and the only one of the four that
+  // happened to serve the sweep too.
+  @@index([createdAt])
   @@map("subscription_events")
 }
 
@@ -729,6 +743,20 @@ model SubscriptionRequestHistory {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, requestedAt(sort: Desc)])
+  // The nightly retention sweep deletes by AGE alone, and no index above leads
+  // with the age column - a composite keyed on the user cannot serve it. In the
+  // steady state the sweep is highly selective (one day out of the retention
+  // window), which is exactly where an index pays. Measured on 1M rows with
+  // ~11k over the horizon: 110 ms seq scan -> 4.6 ms bitmap index scan.
+  //
+  // Worth stating what does NOT need it: the FIRST sweep of a long-unpruned
+  // table deletes a quarter of it, and there the planner is right to seq-scan
+  // (measured: 235 ms, and an index would not have been used). The index is for
+  // every night after that one.
+  // See retention.cron.ts and node_usage_history, which already had a leading
+  // `hour` index - added for the dashboard, and the only one of the four that
+  // happened to serve the sweep too.
+  @@index([requestedAt])
   @@map("subscription_request_history")
 }
 
@@ -744,6 +772,20 @@ model NodeUserUsageHistory {
 
   @@id([nodeId, date, userId])
   @@index([userId, date(sort: Desc)])
+  // The nightly retention sweep deletes by AGE alone, and no index above leads
+  // with the age column - a composite keyed on the user cannot serve it. In the
+  // steady state the sweep is highly selective (one day out of the retention
+  // window), which is exactly where an index pays. Measured on 1M rows with
+  // ~11k over the horizon: 110 ms seq scan -> 4.6 ms bitmap index scan.
+  //
+  // Worth stating what does NOT need it: the FIRST sweep of a long-unpruned
+  // table deletes a quarter of it, and there the planner is right to seq-scan
+  // (measured: 235 ms, and an index would not have been used). The index is for
+  // every night after that one.
+  // See retention.cron.ts and node_usage_history, which already had a leading
+  // `hour` index - added for the dashboard, and the only one of the four that
+  // happened to serve the sweep too.
+  @@index([date])
   @@map("node_user_usage_history")
 }
 
