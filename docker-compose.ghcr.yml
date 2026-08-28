@@ -94,7 +94,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGIN: ${CORS_ORIGIN}
       PUBLIC_URL: ${PUBLIC_URL}
-      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
+      # Proxies in front of the backend; 1 = the frontend nginx this file
+      # starts, +1 per proxy you put in front of it. See docker-compose.prod.yml.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       PANEL_PUBLIC_IP: ${PANEL_PUBLIC_IP:-}
       RATE_LIMIT_SUB_PER_MIN: ${RATE_LIMIT_SUB_PER_MIN:-30}
       RATE_LIMIT_BOOTSTRAP_PER_MIN: ${RATE_LIMIT_BOOTSTRAP_PER_MIN:-10}

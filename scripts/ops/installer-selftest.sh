@@ -1695,9 +1695,11 @@ note "install-iceslab.sh: mode-derived values on a re-run"
 RECON="${WORK}/reconcile.sh"
 {
     grep -E '^(log|warn|fail)\(\) +\{.*\}$' "$PANEL_INSTALLER"
+    sed -n '/^trust_proxy_hops_for_mode()/,/^}/p' "$PANEL_INSTALLER"
     sed -n '/^reconcile_mode_values()/,/^}/p' "$PANEL_INSTALLER"
 } > "$RECON"
-if grep -q '^reconcile_mode_values()' "$RECON" && grep -q 'FRONTEND_BIND' "$RECON"; then
+if grep -q '^reconcile_mode_values()' "$RECON" && grep -q 'FRONTEND_BIND' "$RECON" \
+   && grep -q '^trust_proxy_hops_for_mode()' "$RECON"; then
     ok "reconcile_mode_values was cut out of the panel installer"
 else
     bad "could not cut reconcile_mode_values out of ${PANEL_INSTALLER}; the cases below would be vacuous"
@@ -1719,6 +1721,7 @@ BARE=(
   'PUBLIC_URL=http://203.0.113.9:8080'
   'CORS_ORIGIN=http://203.0.113.9:8080'
   'FRONTEND_BIND=0.0.0.0'
+  'TRUST_PROXY_HOPS=1'
   'JWT_SECRET=keep-me'
 )
 
@@ -1744,6 +1747,59 @@ if grep -q 'ufw cannot close' "${WORK}/recon.out"; then
     ok "and it says why, rather than moving an operator's value in silence"
 else
     bad "changed FRONTEND_BIND without explaining it"
+fi
+
+# ───── The hop count is a mode-derived value too ─────
+#
+# It says how many proxies stand between the browser and the backend, and it
+# decides whose address the per-IP rate limits, the per-(IP+username) login
+# lockout and the honeypot blacklist key on. Until 2026-08-28 the installer
+# wrote a constant 2 in both modes.
+#
+# MEASURED that day with the real images and a real Caddy, by reading the
+# lockout key `auth:fail:<ip>:<user>` out of Redis:
+#   nginx only,       hops=2 -> the client's own X-Forwarded-For was believed;
+#                              ten logins with a rotating header answered 401
+#                              ten times, never the 5/min 429.
+#   nginx only,       hops=1 -> the real client address.
+#   Caddy -> nginx,   hops=2 -> the real client address.
+#   Caddy -> nginx,   hops=1 -> Caddy's own address (everyone shares a bucket).
+if grep -q '^TRUST_PROXY_HOPS=2$' "${WORK}/envfile"; then
+    ok "adding a domain adds the Caddy hop to the trusted count"
+else
+    bad "TRUST_PROXY_HOPS stayed $(sed -n 's/^TRUST_PROXY_HOPS=//p' "${WORK}/envfile"): with Caddy in front the panel now blames the proxy for every request"
+fi
+
+# ...and dropping the domain has to take it back, or the panel keeps trusting
+# a header that nothing in front of it sets any more.
+run_reconcile "" 'PUBLIC_URL=https://panel.example.com' 'CORS_ORIGIN=https://panel.example.com' 'FRONTEND_BIND=127.0.0.1' 'TRUST_PROXY_HOPS=2'
+if grep -q '^TRUST_PROXY_HOPS=1$' "${WORK}/envfile"; then
+    ok "dropping the domain drops the Caddy hop with it"
+else
+    bad "TRUST_PROXY_HOPS stayed 2 with no Caddy in front: any client can forge X-Forwarded-For and dodge the login rate limit"
+fi
+if grep -q 'X-Forwarded-For' "${WORK}/recon.out"; then
+    ok "and it names what was being trusted, not just the number"
+else
+    bad "lowered TRUST_PROXY_HOPS in silence"
+fi
+
+# An operator running their own edge in front owns that number. Only the value
+# this script would itself have written for the other mode is corrected.
+run_reconcile "panel.example.com" 'PUBLIC_URL=https://panel.example.com' 'CORS_ORIGIN=https://panel.example.com' 'FRONTEND_BIND=127.0.0.1' 'TRUST_PROXY_HOPS=3'
+if grep -q '^TRUST_PROXY_HOPS=3$' "${WORK}/envfile"; then
+    ok "a Cloudflare-sized hop count is left alone"
+else
+    bad "overwrote an operator's own TRUST_PROXY_HOPS"
+fi
+
+# And the value the generator writes has to agree with the one reconcile wants,
+# or a fresh install and a re-run disagree about the same host.
+GEN_BARE="$(sed -n '/^# ───── security & alerts ─────/,/^TRUST_PROXY_HOPS=/p' "$PANEL_INSTALLER" | tail -1)"
+if [[ "$GEN_BARE" == 'TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS_VAL}' ]]; then
+    ok "the generated .env.production takes the hop count from the same function"
+else
+    bad "the generator writes a literal hop count (${GEN_BARE}), so it cannot follow the mode"
 fi
 
 # An operator's own origin is not ours to correct: only the exact shape this

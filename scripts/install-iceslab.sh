@@ -478,13 +478,61 @@ if [[ -n "${ICESLAB_REF_SHA:-}" ]]; then
 fi
 cd "$ICESLAB_DIR"
 
+# How many proxies stand in front of the backend, for a given mode.
+#
+# MEASURED 2026-08-28 with the real images (frontend nginx + backend) and a real
+# Caddy, by asking the panel whose IP it thinks it is talking to (the login
+# lockout key `auth:fail:<ip>:<user>` in Redis names it out loud):
+#
+#   client -> nginx -> backend            hops=1 -> real client   hops=2 -> the
+#                                                                  client's own
+#                                                                  X-Forwarded-For
+#   client -> Caddy -> nginx -> backend   hops=2 -> real client   hops=1 -> Caddy
+#
+# So the frontend container's nginx is always one hop and Caddy is the second.
+# Writing a constant 2 (which this script did until 2026-08-28) is correct in
+# domain mode and one too many in bare-IP mode, where there is no Caddy: there
+# the panel believed a header any client can set. Measured consequence of that:
+# ten POSTs to /api/auth/login with a rotating X-Forwarded-For all answered 401,
+# never 429 - the 5/min per-IP limit and the per-(IP+username) lockout were both
+# bypassed by one header.
+#
+# Add one for every extra edge (Cloudflare, a corporate LB) in front of Caddy.
+trust_proxy_hops_for_mode() {
+  if [[ -n "${1:-}" ]]; then echo 2; else echo 1; fi
+}
+
 # Reconcile the values in an existing .env.production that are derived from the
 # MODE rather than from secrets. Split out as a function so the selftest can cut
 # it out and run it (same instrument as pinned_fetch / do_uninstall); the rest
 # of this step is executable body and cannot be reached any other way.
 reconcile_mode_values() {
   local ENV_FILE="$1" PANEL_DOMAIN="$2" FRONTEND_PORT="$3"
-    # Three values in that file are derived from the MODE, not from secrets, and
+
+  # The proxy chain changes with the mode, so the hop count has to move with it
+  # - in BOTH directions, which is why this sits above the domain-mode branch.
+  # Only the value this script itself would have written for the OTHER mode is
+  # corrected, the same rule the URLs below follow: an operator who put their
+  # own edge in front (Cloudflare, a corporate LB) has a number we must not
+  # touch. Leaving a stale 2 behind after a domain-mode install is dropped back
+  # to bare IP means the panel trusts a header any client can set.
+  _hops_cur="$(sed -n 's/^TRUST_PROXY_HOPS=//p' "$ENV_FILE" | head -1)"
+  _hops_want="$(trust_proxy_hops_for_mode "$PANEL_DOMAIN")"
+  if [[ -n "$PANEL_DOMAIN" ]]; then _hops_other="$(trust_proxy_hops_for_mode "")"
+  else                                _hops_other="$(trust_proxy_hops_for_mode "other.example")"; fi
+  if [[ "$_hops_cur" == "$_hops_other" && "$_hops_cur" != "$_hops_want" ]]; then
+    sed -i "s|^TRUST_PROXY_HOPS=.*|TRUST_PROXY_HOPS=${_hops_want}|" "$ENV_FILE"
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+      log "TRUST_PROXY_HOPS: ${_hops_cur} → ${_hops_want} (Caddy joined the chain)"
+    else
+      warn "TRUST_PROXY_HOPS was ${_hops_cur} from a domain-mode install, but there is"
+      warn "no Caddy in front any more: the panel would have believed a client's own"
+      warn "X-Forwarded-For, and per-IP rate limits and login lockout key on that."
+      warn "Set to ${_hops_want}; raise it by one per extra edge you run in front."
+    fi
+  fi
+
+  # The other values derived from the MODE rather than from secrets, and
   # a re-run is exactly how the mode changes. The installer's own closing
   # message tells the operator to do it: "Plain HTTP on :8080, fine for
   # testing, NOT for production. For TLS: re-run with PANEL_DOMAIN=...".
@@ -567,6 +615,10 @@ else
   if [[ -z "${FRONTEND_BIND:-}" ]]; then
     if [[ -n "$PANEL_DOMAIN" ]]; then FRONTEND_BIND=127.0.0.1; else FRONTEND_BIND=0.0.0.0; fi
   fi
+  # How many proxies stand between the browser and the backend. This value is
+  # derived from the MODE, exactly like FRONTEND_BIND above, and it was written
+  # as a constant 2 until 2026-08-28.
+  TRUST_PROXY_HOPS_VAL="$(trust_proxy_hops_for_mode "$PANEL_DOMAIN")"
   # Created 0600 BEFORE anything is written into it. A bare `cat >` uses
   # root's umask, which on Debian is 0022, so the file exists world-readable
   # for as long as the heredoc takes to run — and this heredoc contains
@@ -598,9 +650,12 @@ FRONTEND_PORT=${FRONTEND_PORT}
 FRONTEND_BIND=${FRONTEND_BIND}
 
 # ───── security & alerts ─────
-# TRUST_PROXY_HOPS: 2 = Cloudflare + Caddy (default deploy). Lower if
-# you don't run CF in front. Higher = attackers can spoof X-Forwarded-For.
-TRUST_PROXY_HOPS=2
+# TRUST_PROXY_HOPS counts the proxies in front of the backend. The frontend
+# container's own nginx is ALWAYS one of them; Caddy (domain mode) is the
+# second. Add one more for Cloudflare or any other edge you put in front.
+# Too high and any client can forge X-Forwarded-For; too low and every request
+# is attributed to the proxy.
+TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS_VAL}
 
 # Per-route rate limits + login lockout (defaults are fine for small panel).
 RATE_LIMIT_SUB_PER_MIN=30

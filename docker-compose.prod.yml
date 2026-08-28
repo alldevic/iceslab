@@ -103,7 +103,14 @@ services:
       # rate limits, X-Forwarded-For trust hops, and node-install IP
       # auto-injection don't reach the running container even when set
       # in .env.production.
-      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
+      # Counts the proxies in front of the backend. The default is 1 because
+      # that is what THIS file puts there: the frontend container's nginx, and
+      # nothing else. Every proxy you add in front of it (Caddy, Cloudflare,
+      # a corporate LB) is +1, and install-iceslab.sh writes 2 when it sets
+      # Caddy up. Too high is a security bug - measured 2026-08-28: with 2 and
+      # no Caddy, ten logins with a rotating X-Forwarded-For all answered 401
+      # instead of 429, and the lockout counter keyed on the forged address.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       PANEL_PUBLIC_IP: ${PANEL_PUBLIC_IP:-}
       RATE_LIMIT_SUB_PER_MIN: ${RATE_LIMIT_SUB_PER_MIN:-30}
       RATE_LIMIT_BOOTSTRAP_PER_MIN: ${RATE_LIMIT_BOOTSTRAP_PER_MIN:-10}

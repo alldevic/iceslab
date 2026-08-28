@@ -57,9 +57,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     logger: { level: config.LOG_LEVEL },
     // X-Forwarded-For trust hops, gated by env. Zero (default) ignores
     // the header entirely so dev / single-host runs aren't spoofable.
-    // Production behind Caddy + Cloudflare uses TRUST_PROXY_HOPS=2.
+    // The count is every proxy in front, and the frontend container's own
+    // nginx is always one of them: a domain-mode install (Caddy -> nginx)
+    // uses 2, a bare-IP one (nginx only) uses 1, Cloudflare on top makes 3.
     // Bumping this above the real hop count is a security bug, any
-    // client can then forge X-Forwarded-For and dodge per-IP rate limits.
+    // client can then forge X-Forwarded-For and dodge per-IP rate limits -
+    // measured 2026-08-28 with the real images: at 2 with no Caddy, ten
+    // logins with a rotating header never reached the 5/min limit.
     trustProxy: config.TRUST_PROXY_HOPS,
   });
 
