@@ -56,7 +56,10 @@ RD="iceslab-imgtest-redis-$$"
 BE="iceslab-imgtest-backend-$$"
 FE="iceslab-imgtest-frontend-$$"
 MB="iceslab-imgtest-marker-$$"
+FE2="iceslab-imgtest-frontend-alt-$$"
+MB2="iceslab-imgtest-marker-alt-$$"
 FE_PORT=18099
+FE2_PORT=18098
 PGPASS=imgtest
 DBURL="postgres://iceslab:${PGPASS}@${PG}:5432/iceslab"
 
@@ -75,7 +78,7 @@ if ! command -v docker >/dev/null || ! docker info >/dev/null 2>&1; then
 fi
 
 cleanup() {
-    docker rm -f "$BE" "$PG" "$RD" "$FE" "$MB" >/dev/null 2>&1 || true
+    docker rm -f "$BE" "$PG" "$RD" "$FE" "$MB" "$FE2" "$MB2" >/dev/null 2>&1 || true
     docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -794,6 +797,55 @@ if [[ -z "$unproxied" ]]; then
 else
     bad "these public backend paths are answered by the SPA fallback (HTTP 200, HTML) instead of the backend:${unproxied}"
 fi
+
+# ───── WHERE the backend is, as an address the image takes ─────
+#
+# Everything above proves the image reaches `backend:3000`, which is the default
+# and the compose service it ships beside. That default used to be the only
+# answer: the address was written into the template, so anything fronting the
+# panel differently had to mount a whole conf over it - and the minishop stand,
+# which does exactly that, went straight to the backend instead and could not
+# have caught §54.2.
+#
+# So the same question asked of a container told a DIFFERENT address. A second
+# marker under a second alias, because pointing at the first would pass on an
+# image that ignores the variable entirely.
+# Its own body, not the first marker's. Two markers answering the same string
+# would make this case pass on an image that ignores the variable and keeps
+# proxying to `backend` - the first marker is still running under that alias and
+# would answer just as happily. Measured: with the address welded back into the
+# template this file stayed 45/45 until the two bodies differed.
+MARKER2_CONF="$(mktemp)"
+cat > "$MARKER2_CONF" <<'MARKER2EOF'
+server {
+    listen 3000 default_server;
+    location / { default_type text/plain; return 200 "IMGTEST-ELSEWHERE $request_uri\n"; }
+}
+MARKER2EOF
+docker run -d --name "$MB2" --network "$NET" --network-alias elsewhere \
+    -v "$MARKER2_CONF":/etc/nginx/conf.d/default.conf:ro nginx:1.27-alpine >/dev/null 2>&1
+docker run -d --name "$FE2" --network "$NET" -p "127.0.0.1:${FE2_PORT}:80" \
+    -e ICESLAB_BACKEND_ADDR=elsewhere:3000 \
+    "$FRONTEND_IMG" >/dev/null 2>&1
+fe2_up=""
+for _ in $(seq 1 40); do
+    curl -sf -o /dev/null "http://127.0.0.1:${FE2_PORT}/" && { fe2_up=1; break; }
+    sleep 0.5
+done
+if [[ -z "$fe2_up" ]]; then
+    bad "the frontend container with ICESLAB_BACKEND_ADDR set never answered; the case below cannot mean anything"
+else
+    alt_body="$(curl -s --max-time 10 "http://127.0.0.1:${FE2_PORT}/api/auth/status")"
+    case "$alt_body" in
+        *IMGTEST-ELSEWHERE*)
+            ok "and ICESLAB_BACKEND_ADDR moves the upstream, so the image is not welded to one topology" ;;
+        *IMGTEST-BACKEND*)
+            bad "ICESLAB_BACKEND_ADDR=elsewhere:3000 was ignored: the container still reached the default upstream, so the address is baked into the template" ;;
+        *)
+            bad "the frontend with ICESLAB_BACKEND_ADDR reached neither marker; it answered: ${alt_body}" ;;
+    esac
+fi
+docker rm -f "$FE2" "$MB2" >/dev/null 2>&1 || true
 
 # ───── The response headers, on the document they are for ─────
 #

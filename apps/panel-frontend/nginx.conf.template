@@ -77,7 +77,18 @@ server {
     # The variable in proxy_pass is what activates the runtime resolver
     # path. With a static upstream{} block (the previous setup), nginx
     # short-circuits the resolver entirely, leading to the stale-IP bug.
-    set $backend "backend:3000";
+    # Address, not a name baked into the image. It defaults to `backend:3000`,
+    # the compose service this image ships next to, so the bundled deploy
+    # renders byte-identical to before. Anything fronting the panel differently
+    # - the minishop stand, a single-host install, someone else's topology -
+    # sets ICESLAB_BACKEND_ADDR instead of mounting a whole conf over this file,
+    # which is what the header above used to have to suggest.
+    #
+    # An IP:port needs no resolution at all; a NAME is resolved through the
+    # resolver above, i.e. through docker's embedded DNS, so it has to be one
+    # that DNS answers - a compose service name, not an /etc/hosts alias like
+    # host.docker.internal (a variable proxy_pass never reads /etc/hosts).
+    set $backend "${ICESLAB_BACKEND_ADDR}";
 
     # ───── API proxy ─────
     location /api/ {

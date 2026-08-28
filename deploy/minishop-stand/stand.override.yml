@@ -126,3 +126,32 @@ services:
     # behaviour too, which is a long way round for "is nginx forwarding".
     ports:
       - '127.0.0.1:${PANEL_SHIM_PORT:-8086}:8080'
+
+  # 6. THE PANEL'S OWN FRONTEND IMAGE, in front of the facade.
+  #
+  # The shop used to be pointed straight at the backend dev process on the host
+  # (`http://host.docker.internal:3000/rw/api`). That skips the one thing a real
+  # deploy puts in the path: this nginx. §54.2 is what the skip costs — the SPA
+  # fallback answered `/rw/api/*` with index.html and a 200, on the very prefix
+  # the shop is documented to use, and this stand could not have noticed because
+  # no request of its ever went through nginx.
+  #
+  # `ICESLAB_BACKEND_ADDR` is an ADDRESS, not a name: a variable `proxy_pass`
+  # resolves through docker's embedded DNS and never reads /etc/hosts, so the
+  # `host.docker.internal` alias would not resolve. stand.sh puts the gateway's
+  # IP here.
+  panel-front:
+    image: iceslab-frontend:stand
+    container_name: remnawave-minishop-panel-front
+    build:
+      context: ${ICESLAB_REPO:?stand.sh exports this}
+      dockerfile: apps/panel-frontend/Dockerfile
+    environment:
+      ICESLAB_BACKEND_ADDR: ${ICESLAB_BACKEND_ADDR:?stand.sh exports this}
+      ICESLAB_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
+    networks:
+      - remnawave-minishop
+    # Published for the same reason panel-shim is: "did nginx forward it" is a
+    # question to ask nginx, not to infer from the shop's behaviour.
+    ports:
+      - '127.0.0.1:${PANEL_FRONT_PORT:-8087}:80'

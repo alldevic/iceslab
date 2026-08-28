@@ -19,6 +19,17 @@ RUNTIME_REF_ENV="$HERE/.runtime/remnawave-ref.env"
 # so every relative path in our override would resolve there. Absolute, via the
 # environment, is the only way our files stay ours.
 export STAND_DIR="$HERE"
+# The panel repo, for building the panel's own frontend image, and the address
+# that image must proxy to. `host.docker.internal` cannot be used: nginx's
+# variable `proxy_pass` resolves through docker's embedded DNS and never reads
+# /etc/hosts, so the alias would not resolve. The gateway's IP does not need
+# resolving at all.
+export ICESLAB_REPO="${ICESLAB_REPO:-$(cd "$HERE/../.." && pwd)}"
+iceslab_gateway_ip() {
+  docker network inspect bridge \
+    --format '{{ (index .IPAM.Config 0).Gateway }}' 2>/dev/null || echo 172.17.0.1
+}
+export ICESLAB_BACKEND_ADDR="${ICESLAB_BACKEND_ADDR:-$(iceslab_gateway_ip):3000}"
 
 die() { echo "stand: $*" >&2; exit 1; }
 # A run that never reached the code under test. Distinct from die() on purpose:
@@ -58,6 +69,10 @@ compose_ref=(docker compose
 # placeholder credentials only so `docker compose config` can interpolate. Name
 # the services explicitly rather than relying on that.
 SHOP_SERVICES=(postgres redis migrate backend worker frontend)
+# The panel's own frontend image, brought up alongside the shop so the shop
+# reaches the facade the way a real deploy does — through nginx. See item 6 in
+# stand.override.yml: without it this stand could not have caught §54.2.
+STAND_SERVICES=(panel-front)
 # Every optional profile, for teardown. Naming them one by one is how a
 # container gets left running: `down` has to cover what any `up` may have
 # started, not what this particular invocation started.
@@ -630,6 +645,43 @@ preflight_facade() {
   echo "stand: facade says $body"
 }
 
+assert_front_proxies_the_facade() {
+  # The frontend image is a fixture too, and a wrong one makes every probe after
+  # it report something about the shop that is not true. Two directions, because
+  # either check alone passes on an nginx broken the other way: one that
+  # forwards nothing satisfies the second, and one whose SPA fallback swallows
+  # the API satisfies the first — which is precisely §54.2, an index.html served
+  # with a 200 on the prefix the shop is documented to use.
+  local front="http://127.0.0.1:${PANEL_FRONT_PORT:-8087}"
+  local code ctype
+
+  # 1. The facade reaches the panel and answers as the panel, not as the SPA.
+  #    401 is the right answer to an unauthenticated call; what must NOT come
+  #    back is 200 text/html.
+  read -r code ctype < <(curl -sS -o /dev/null \
+    -w '%{http_code} %{content_type}\n' "$front/$PREFIX/api/users")
+  case "$code" in
+    401|403) ;;
+    *) die "the frontend image answered $code ($ctype) on /$PREFIX/api/users.
+A 200 text/html here is the SPA fallback eating the facade (see §54.2); anything
+else means nginx is not reaching the panel on $ICESLAB_BACKEND_ADDR." ;;
+  esac
+  case "$ctype" in
+    *html*) die "the frontend image answered $code but with $ctype on
+/$PREFIX/api/users: that is index.html, i.e. the SPA fallback, which is the
+exact shape §54.2 had." ;;
+  esac
+
+  # 2. ...and it is still a single-page app for everything else, or the fixture
+  #    is an nginx that proxies the whole world and proves nothing about which
+  #    prefixes it forwards.
+  read -r code ctype < <(curl -sS -o /dev/null \
+    -w '%{http_code} %{content_type}\n' "$front/nodes")
+  [[ "$code" == 200 && "$ctype" == *html* ]] \
+    || die "the frontend image answered $code ($ctype) on /nodes, so it is not
+serving the SPA at all and check 1 above proved nothing."
+}
+
 assert_shim_hides_only_the_one_route() {
   # The shim is a fixture, and a wrong fixture makes the run report something
   # about the shop that is not true. Two directions, because either check alone
@@ -698,6 +750,21 @@ case "${1:-}" in
       echo "stand: sync paging forced to ${CHURN_PAGE_SIZE:-5} users, ${CHURN_PAGE_DELAY:-1.0}s between pages"
     fi
     preflight_facade
+    if [[ -z "${HIDE_NODES_USAGE:-}" ]]; then
+      # The ordinary run reaches the facade through the panel's OWN frontend
+      # image, because that is what stands in front of it in a real deploy.
+      # Pointing the shop straight at the backend is what made §54.2 invisible
+      # here: the SPA fallback answered `/rw/api/*` with index.html and a 200,
+      # on the prefix the shop is documented to use, and no request of this
+      # stand's ever went through nginx to see it.
+      #
+      # Written into the runtime env BEFORE `up`, for the same reason the shim
+      # line below is: `env_file` is read when the container is created.
+      echo "PANEL_API_URL=http://panel-front/${PREFIX}/api" >> "$RUNTIME_ENV"
+      "${compose_iceslab[@]}" up -d --wait "${STAND_SERVICES[@]}"
+      assert_front_proxies_the_facade
+      echo "stand: the shop will reach the panel through its own frontend image"
+    fi
     if [[ -n "${HIDE_NODES_USAGE:-}" ]]; then
       "${compose_iceslab[@]}" --profile shim up -d --wait panel-shim
       # Prove the shim is a panel-minus-one-route before anything depends on it.

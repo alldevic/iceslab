@@ -66,7 +66,8 @@ COPY apps/panel-frontend/nginx.conf.template /etc/nginx/templates/default.conf.t
 # Not a template: it holds no operator-configurable value, and it is a plain
 # include so the header set exists in exactly one place.
 COPY apps/panel-frontend/security-headers.conf /etc/nginx/snippets/security-headers.conf
-ENV ICESLAB_SUB_PREFIX=/sub \
+ENV ICESLAB_BACKEND_ADDR=backend:3000 \
+    ICESLAB_SUB_PREFIX=/sub \
     ICESLAB_COMPAT_PREFIX=rw \
     NGINX_ENVSUBST_FILTER=^ICESLAB_
 EXPOSE 80
