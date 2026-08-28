@@ -55,12 +55,34 @@ AWG_MODULE_REPO=https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
 # a guard against an upstream master change silently breaking provisioning under
 # us. This tag is v2.0-capable and carries the use-after-free fixes (it is well
 # past v1.0.20260329). Bump deliberately after smoke-testing a newer tag.
-AWG_MODULE_TAG=v1.0.20260611
+#
+# THE TAG IS SHARED WITH THE TOOLS, and that is the whole point of AWG_TAG.
+# The two used to be pinned separately — module v1.0.20260611, tools
+# v1.0.20260618 — and the uapi between those two releases does not agree.
+# Measured on a real node 2026-08-29, with the panel's own config file saying
+# H1=100 H2=200 H3=300 H4=400:
+#
+#   module v1.0.20260611 + tools v1.0.20260618
+#     awg showconf -> H1 = 1, H2 = 2, H3 = 3158067, H4 = 3158068
+#   module v3.1.20260812 + tools v3.1.20260812
+#     awg showconf -> H1 = 100, H2 = 200, H3 = 300, H4 = 400
+#
+# 3158067 is the bytes of the string "300" read as a little-endian integer, and
+# 3158068 is "400" — the value crossed the boundary as text and was stored raw.
+# H1 and H2 were worse than mangled: 1 and 2 are WireGuard's own message types
+# for handshake initiation and response, which is exactly the marker H1-H4 exist
+# to replace. The panel showed the obfuscation as configured, the node reported
+# healthy, and the first two packets of every handshake were plain WireGuard.
+#
+# So one tag, resolved in both repos, and the self-test refuses a file where the
+# two clones can drift apart again.
+AWG_TAG=v3.1.20260812
+AWG_MODULE_TAG=$AWG_TAG
 # The commit that tag points at, checked after the clone. A tag is a mutable
-# pointer — `git clone --branch v1.0.20260611` brings back whatever it points
-# at TODAY, and this repo is compiled into a kernel module and loaded as root.
-# Resolved against the upstream tag on 2026-08-28 and confirmed by cloning it.
-AWG_MODULE_COMMIT=2a6e1a02ac024f54a23e18f894a279b7f870b8fb
+# pointer — `git clone --branch <tag>` brings back whatever it points at TODAY,
+# and this repo is compiled into a kernel module and loaded as root.
+# Resolved against the upstream tag on 2026-08-29 and confirmed by cloning it.
+AWG_MODULE_COMMIT=46803204e7ec3b068199cd671143bec661d3fe21
 AWG_MODULE_DIR=/usr/src/amneziawg-src
 
 # Is the module in the running kernel?
@@ -126,9 +148,11 @@ fi
 # ───── 4. AWG userspace tools ─────
 AWG_TOOLS_REPO=https://github.com/amnezia-vpn/amneziawg-tools.git
 # Pinned for the same reproducibility reason as the kernel module above.
-AWG_TOOLS_TAG=v1.0.20260618
-# Same reasoning as AWG_MODULE_COMMIT: taken and confirmed by clone 2026-08-28.
-AWG_TOOLS_COMMIT=4cdc357c68b39a0d1e19417b7f03d604c1e1b4cf
+# Same release as the module, deliberately: see AWG_TAG above for what the two
+# disagreeing cost.
+AWG_TOOLS_TAG=$AWG_TAG
+# Same reasoning as AWG_MODULE_COMMIT: taken and confirmed by clone 2026-08-29.
+AWG_TOOLS_COMMIT=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 AWG_TOOLS_DIR=/usr/src/amneziawg-tools-build
 
 if command -v awg >/dev/null && command -v awg-quick >/dev/null; then

@@ -486,6 +486,42 @@ else
     bad "the Go library is not the single place the version lives:${go_callers}"
 fi
 
+# ───── The two halves of AmneziaWG come from ONE release ─────
+#
+# The kernel module and the userspace tools are separate repos, and their uapi
+# only agrees within a release. Pinned apart — module v1.0.20260611, tools
+# v1.0.20260618 — the H1-H4 obfuscation headers did not survive the crossing.
+# Measured on a real node 2026-08-29 against the panel's own config file
+# (H1=100 H2=200 H3=300 H4=400):
+#
+#   mismatched pair -> H1 = 1, H2 = 2, H3 = 3158067, H4 = 3158068
+#   matched pair    -> H1 = 100, H2 = 200, H3 = 300, H4 = 400
+#
+# 3158067 is the bytes of "300" read as an integer; H1=1 and H2=2 are
+# WireGuard's own handshake message types, i.e. precisely the marker the feature
+# exists to replace. Nothing anywhere said so: the panel showed the obfuscation
+# as configured and the node reported healthy.
+note "the amneziawg module and tools are pinned to ONE release"
+awg_mod_tag="$(grep -E '^AWG_MODULE_TAG=' "$AWG_BOOTSTRAP" | head -1 | cut -d= -f2-)"
+awg_tools_tag="$(grep -E '^AWG_TOOLS_TAG=' "$AWG_BOOTSTRAP" | head -1 | cut -d= -f2-)"
+if [[ -n "$awg_mod_tag" && "$awg_mod_tag" == "$awg_tools_tag" ]]; then
+    ok "the module and the tools take their tag from the same variable ($awg_mod_tag)"
+else
+    bad "the amneziawg module is pinned to '${awg_mod_tag}' and the tools to '${awg_tools_tag}'.
+Two literals here can drift a release apart, and when they do the H1-H4 headers
+the operator configured are not the ones on the wire."
+fi
+# ...and the two commits are not the same string, which would mean one of the
+# two clones is being checked against the other repo's history.
+awg_mod_sha="$(grep -E '^AWG_MODULE_COMMIT=' "$AWG_BOOTSTRAP" | head -1 | cut -d= -f2-)"
+awg_tools_sha="$(grep -E '^AWG_TOOLS_COMMIT=' "$AWG_BOOTSTRAP" | head -1 | cut -d= -f2-)"
+if [[ -n "$awg_mod_sha" && -n "$awg_tools_sha" && "$awg_mod_sha" != "$awg_tools_sha" ]]; then
+    ok "and each repo is checked against its own commit for that tag"
+else
+    bad "the two pinned commits are '${awg_mod_sha}' and '${awg_tools_sha}': one tag, but a commit
+belongs to one repo, and the same sha cannot be right for both."
+fi
+
 note "the amneziawg module check reads /proc/modules, not a pipeline"
 if grep -qE '^[[:space:]]*awg_module_loaded\(\)[[:space:]]*\{[^}]*/proc/modules' "$AWG_BOOTSTRAP"; then
     ok "awg_module_loaded reads /proc/modules directly"
