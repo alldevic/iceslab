@@ -578,6 +578,60 @@ describe('withVlessRouteTag', () => {
   });
 });
 
+describe('every xray format renders a cascade line pinned to its exit', () => {
+  const entryEp: SubscriptionEndpoint = {
+    ...xrayEp,
+    nodeName: 'ru-entry',
+    cascadeExits: [
+      { label: 'de-exit', tag: 1 },
+      { label: 'nl-exit', tag: 2 },
+    ],
+  };
+  const vlessUsers = (cfg: any): string[] =>
+    cfg.outbounds
+      .filter((o: any) => o.protocol === 'vless')
+      .map((o: any) => o.settings.vnext[0].users[0].id);
+
+  /**
+   * What those two UUID bytes buy, measured on a two-VM chain 2026-08-28:
+   * a client built from the SINGLE-config xrayjson answered 200 and the exit
+   * node logged ZERO connections — the traffic egressed at the entry, with the
+   * subscriber's line saying the exit's name. The same client with the tagged
+   * UUID, same second, put 15 connections on the exit.
+   *
+   * The array format and the plain/base64 URIs already tagged it. The single
+   * config did not, and v2rayNG — the client this panel marks `recommended`
+   * for Android — asks for exactly that one. xkeen is the same builder with
+   * `forRouter`, so a Keenetic household went out of the entry too.
+   */
+  it('single config: one outbound per exit, each pinned by its tag', () => {
+    const cfg = parse(buildXrayJson([entryEp]));
+    expect(vlessUsers(cfg)).toEqual([
+      '11111111-2222-0001-4444-555555555555',
+      '11111111-2222-0002-4444-555555555555',
+    ]);
+  });
+
+  it('and names them by exit, so two lines off one entry are tellable apart', () => {
+    const cfg = parse(buildXrayJson([entryEp]));
+    const tags = cfg.outbounds.filter((o: any) => o.protocol === 'vless').map((o: any) => o.tag);
+    expect(tags).toEqual(['de-exit-xray', 'nl-exit-xray']);
+  });
+
+  it('xkeen (the same builder, forRouter) is pinned too', () => {
+    const cfg = parse(buildXrayJson([entryEp], { forRouter: true }));
+    expect(vlessUsers(cfg)).toEqual([
+      '11111111-2222-0001-4444-555555555555',
+      '11111111-2222-0002-4444-555555555555',
+    ]);
+  });
+
+  it('an endpoint with no exits is untouched by the expansion', () => {
+    const cfg = parse(buildXrayJson([xrayEp]));
+    expect(vlessUsers(cfg)).toEqual([xrayEp.protocol === 'xray' ? xrayEp.uuid : '']);
+  });
+});
+
 describe('buildXrayJsonArray A4 profile expansion', () => {
   const entryEp: SubscriptionEndpoint = {
     ...xrayEp,

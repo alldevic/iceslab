@@ -336,6 +336,7 @@ export function buildXrayJson(
   endpoints: SubscriptionEndpoint[],
   opts: XrayJsonBuildOpts = {},
 ): string {
+  endpoints = expandCascadeExits(endpoints);
   const xrayEps = endpoints.filter((e) => e.protocol === 'xray');
   const proxyTags: string[] = [];
   const bundle = opts.bundle ?? 'flat';
@@ -460,6 +461,42 @@ export function buildXrayJson(
   };
   if (observatory) config.observatory = observatory;
   return JSON.stringify(config, null, 2) + '\n';
+}
+
+/**
+ * Expand every cascade-entry endpoint into one endpoint per exit, with the exit
+ * tag already written into the UUID and the exit's label as the display name.
+ * Endpoints with no exits come back untouched.
+ *
+ * One place, because the rule has to hold for every format that renders an xray
+ * server, and it did not. A cascade entry is offered to the subscriber as a
+ * LINE PER WAY OUT, and what makes a line mean its exit is those two UUID bytes
+ * - without them the client authenticates as the same user, the entry has no
+ * `vlessRoute` to match, and the traffic egresses at the ENTRY. Measured on a
+ * two-VM chain 2026-08-28: the untagged UUID answered 200 while the exit node
+ * logged ZERO connections; the tagged one, same client, same second, put 15 on
+ * the exit. Nothing anywhere reports the difference — the subscriber simply
+ * gets the entry's country while the line says the exit's.
+ *
+ * `expandEndpointUris` (plain/base64) and `buildXrayJsonArray` did this; the
+ * single-config `buildXrayJson` and `xkeen` did not, and v2rayNG - the client
+ * this panel marks `recommended` for Android - asks for the single config.
+ */
+export function expandCascadeExits(
+  endpoints: SubscriptionEndpoint[],
+): SubscriptionEndpoint[] {
+  return endpoints.flatMap((e) => {
+    if (e.protocol !== 'xray' || !e.cascadeExits || e.cascadeExits.length === 0) return [e];
+    // The label is already unique across the subscription, made so once for
+    // every format rather than guessed per format (see disambiguateCascadeLabels
+    // in subscription.service).
+    return e.cascadeExits.map((profile) => ({
+      ...e,
+      uuid: withVlessRouteTag(e.uuid, profile.tag),
+      nodeName: profile.label,
+      cascadeExits: undefined,
+    }));
+  });
 }
 
 /** A4: overwrite UUID bytes 7-8 (the 3rd hyphen-group) with a big-endian uint16
@@ -590,16 +627,6 @@ export function buildXrayJsonArray(
   // A4: an xray endpoint fronting a balancer cascade expands into one config per
   // exit (tag in UUID bytes 7-8), each labelled by its exit. Everything else
   // (hy2, or an xray endpoint with no exits) stays a single config as before.
-  const configs = supported.flatMap((e) => {
-    if (e.protocol === 'xray' && e.cascadeExits && e.cascadeExits.length > 0) {
-      return e.cascadeExits.map((profile) =>
-        // The label is already unique across the subscription, made so once for
-        // every format rather than guessed per format (see
-        // disambiguateCascadeLabels in subscription.service).
-        makeConfig({ ...e, uuid: withVlessRouteTag(e.uuid, profile.tag) }, profile.label),
-      );
-    }
-    return [makeConfig(e, e.nodeName)];
-  });
+  const configs = expandCascadeExits(supported).map((e) => makeConfig(e, e.nodeName));
   return JSON.stringify(configs, null, 2) + '\n';
 }
