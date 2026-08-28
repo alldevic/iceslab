@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { CORE_BINARIES, PROTOCOL_CORE } from '@iceslab/shared';
+import { CORE_BINARIES, ENGINE_CORE, PROTOCOL_CORE } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
 import { config } from '../../config.js';
 import {
@@ -261,7 +261,19 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const cores = health.cores.map((core) => {
-      const pinnedName = PROTOCOL_CORE[core.name] ?? null;
+      // Which artefact to compare against is decided by the ENGINE the node
+      // says is serving this protocol, not by the protocol's native core. A
+      // node with sing-box installed registers an adapter per protocol — xray
+      // and hysteria among them — all of them rendered by sing-box, and
+      // pinning them to xray's and hysteria's versions reported drift on a
+      // node that is fine. Which is exactly what the `drift` comment below
+      // says must not happen.
+      //
+      // `engine` is absent on an agent older than the field; falling back to
+      // PROTOCOL_CORE keeps that node reading the way it did before.
+      const pinnedName = (core.engine ? ENGINE_CORE[core.engine] : undefined)
+        ?? PROTOCOL_CORE[core.name]
+        ?? null;
       const pinned = pinnedName ? CORE_BINARIES[pinnedName].version : null;
       return {
         protocol: core.name,
@@ -269,6 +281,10 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
          *  pins none: amneziawg, wireguard and naive are built or come from
          *  apt. */
         core: pinnedName,
+        /** What the node said renders it, verbatim. Two rows with the same
+         *  protocol and different engines are two adapters, and an operator
+         *  reading "xray, sing-box" should see that rather than infer it. */
+        engine: core.engine ?? null,
         running: core.running,
         // Absent means "the agent predates the field", which is not false.
         provisioned: core.provisioned ?? null,

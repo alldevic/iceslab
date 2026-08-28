@@ -149,6 +149,52 @@ describe('what must not be flattened', () => {
     expect(body.cores).toEqual([]);
   });
 
+  /**
+   * The pin is chosen by the ENGINE the node names, not by the protocol.
+   *
+   * Measured on a real VM, 2026-08-28: a node installed with --protocol tuic
+   * reported `xray running:false version:1.13.19 pinned:26.3.27 drift:true`.
+   * Nothing was wrong with that node. The sing-box engine registers one
+   * adapter per protocol it can render — xray and hysteria among them — so the
+   * node truthfully reported a protocol called `xray` whose core is sing-box,
+   * and the panel compared sing-box's version against xray's pin. The `drift`
+   * field's own comment says an operator must not be sent to fix a node that
+   * is fine, which is precisely what this did.
+   */
+  it('pins an xray-family protocol served by sing-box to sing-box, not to xray', async () => {
+    healthz([
+      { name: 'xray', engine: 'singbox', running: false, version: CORE_BINARIES['sing-box'].version },
+    ]);
+    const { cores } = (await ask()).json() as {
+      cores: { protocol: string; core: string; engine: string; pinned: string; drift: boolean }[];
+    };
+    expect(cores[0]!.protocol).toBe('xray');
+    expect(cores[0]!.engine).toBe('singbox');
+    expect(cores[0]!.core).toBe('sing-box');
+    expect(cores[0]!.pinned).toBe(CORE_BINARIES['sing-box'].version);
+    expect(cores[0]!.drift, 'a node running exactly what the panel pins is not drifting').toBe(false);
+  });
+
+  it('still finds real drift when the engine is named', async () => {
+    // The control: reading the engine must not turn the comparison off.
+    healthz([{ name: 'tuic', engine: 'singbox', running: true, version: '0.0.1' }]);
+    const { cores } = (await ask()).json() as { cores: { pinned: string; drift: boolean }[] };
+    expect(cores[0]!.pinned).toBe(CORE_BINARIES['sing-box'].version);
+    expect(cores[0]!.drift).toBe(true);
+  });
+
+  it('falls back to the protocol when the agent is too old to name an engine', async () => {
+    // An agent that predates the field sends no `engine`, and must keep
+    // reading exactly as it did before.
+    healthz([{ name: 'xray', running: true, version: CORE_BINARIES.xray.version }]);
+    const { cores } = (await ask()).json() as {
+      cores: { core: string; engine: string | null; pinned: string; drift: boolean }[];
+    };
+    expect(cores[0]!.engine).toBeNull();
+    expect(cores[0]!.core).toBe('xray');
+    expect(cores[0]!.drift).toBe(false);
+  });
+
   it('404s a node that is not there', async () => {
     const res = await app.inject({
       method: 'GET',

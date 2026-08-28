@@ -195,6 +195,31 @@ export function coreAssetUrl(name: CoreName, arch: CoreArch): string | null {
  * and awg-quick, wireguard comes from apt, and naive's Caddy is compiled on the
  * node by xcaddy. Those are absences with reasons, not gaps.
  */
+/**
+ * The artefact behind an ENGINE, as the node names it in `CoreStatus.engine`.
+ *
+ * Separate from PROTOCOL_CORE because the two answer different questions.
+ * PROTOCOL_CORE says which core a protocol runs on NATIVELY; this says which
+ * core is running it on a given node, which the node alone knows — the
+ * sing-box engine registers an adapter for `xray` and for `hysteria` too, and
+ * pinning those to xray's and hysteria's versions is how a healthy node came
+ * to report drift.
+ *
+ * Engine names are the strings `core.CoreAdapter.Engine()` returns on the
+ * agent. `amneziawg`/`wireguard`/`naive` map to null for the same reason they
+ * do below: the panel carries no artefact for them.
+ */
+export const ENGINE_CORE: Record<string, CoreName | null> = {
+  xray: 'xray',
+  singbox: 'sing-box',
+  hysteria: 'hysteria',
+  mtproto: 'mtg',
+  mieru: 'mita',
+  naive: null,
+  amneziawg: null,
+  wireguard: null,
+};
+
 export const PROTOCOL_CORE: Record<string, CoreName | null> = {
   xray: 'xray',
   // SS2022 multi-user runs inside xray-core, so it reports xray's version.

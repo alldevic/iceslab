@@ -241,8 +241,19 @@ type CoreRestartsDto struct {
 }
 
 type CoreStatus struct {
-	Name    ProtocolName `json:"name"`
-	Running bool         `json:"running"`
+	Name ProtocolName `json:"name"`
+	// Engine is the core that actually renders this protocol on THIS node, and
+	// it is not derivable from Name: the sing-box engine registers an adapter
+	// per protocol, so a node can carry `xray` served by sing-box alongside
+	// `xray` served by xray-core. The agent has always routed inbounds by the
+	// PAIR (Name, Engine) — see core.Adapter's own comment — and reported only
+	// half of it, leaving the panel to guess the other half from the protocol.
+	// It guessed the native core, so on any node with sing-box installed it
+	// compared sing-box's version against xray's pin and reported drift on a
+	// node that is fine. Optional/omitempty: absent means an agent older than
+	// this field, and the panel falls back to the guess it used to make.
+	Engine  string `json:"engine,omitempty"`
+	Running bool   `json:"running"`
 	// Restarts is present only for cores that supervise a real process. See
 	// CoreRestartsDto: absent means "this agent/core doesn't report", which is
 	// NOT the same as zero.

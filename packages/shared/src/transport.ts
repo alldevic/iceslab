@@ -627,6 +627,15 @@ export interface NodeCoreRestarts extends CoreRestarts {
 
 export interface CoreStatus {
   name: ProtocolName;
+  /** The core that actually renders this protocol ON THIS NODE, which is not
+   *  derivable from `name`: the sing-box engine registers an adapter per
+   *  protocol, so one node can report `xray` served by sing-box beside `xray`
+   *  served by xray-core. The agent has always dispatched inbounds on the PAIR
+   *  (name, engine) and sent only the first half, which left the panel to
+   *  assume the protocol's native core — and therefore to compare sing-box's
+   *  version against xray's pin on every node with sing-box installed.
+   *  Absent = an agent older than the field. */
+  engine?: string;
   running: boolean;
   /** See CoreRestarts. Absent = this core/agent doesn't report it. */
   restarts?: CoreRestarts;

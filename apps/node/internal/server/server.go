@@ -239,7 +239,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		go func(i int, adapter core.CoreAdapter) {
 			defer wg.Done()
 			cs := dto.CoreStatus{
-				Name:    dto.ProtocolName(adapter.Name()),
+				Name: dto.ProtocolName(adapter.Name()),
+				// The other half of this adapter's identity. Dispatch already
+				// matches on both (core.Adapter routes by Name AND Engine);
+				// until now only Name left the node.
+				Engine:  adapter.Engine(),
 				Running: adapter.Healthy(),
 			}
 			// T7: surface the core version when the adapter can report it, so
