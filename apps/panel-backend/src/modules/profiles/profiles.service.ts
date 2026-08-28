@@ -7,9 +7,7 @@ import {
   PROTOCOL_CONFIG_SCHEMAS,
 } from '../inbounds/inbounds.schemas.js';
 import { ensureDefaultHost } from '../hosts/hosts.service.js';
-import {
-  generateSsServerPsk,
-} from './ss-helpers.js';
+import { normalizeProfileConfigForSave } from './profile-config.js';
 import { engineValidForProtocol, fieldsUnsupportedByEngine } from './profiles.schemas.js';
 import { stripInapplicableTransportFields } from '../inbounds/xray-transport-fields.js';
 import type {
@@ -141,37 +139,7 @@ export async function createProfile(input: CreateProfileInput): Promise<PublicPr
   const existing = await prisma.profile.findUnique({ where: { name: input.name } });
   if (existing) throw new ProfileNameTakenError(input.name);
 
-  // Slice 24d: auto-fill SS2022 server PSK if admin omitted it.
-  let configToStore: Record<string, unknown> = input.config as Record<string, unknown>;
-  if (input.protocol === 'shadowsocks') {
-    const ss = configToStore as { method: string; serverPsk?: string };
-    if (!ss.serverPsk) {
-      configToStore = { ...ss, serverPsk: generateSsServerPsk(ss.method) };
-    }
-  }
-  /**
-   * ShadowTLS: fill in the inner shadowsocks server key the same way.
-   *
-   * It is optional in the schema because the operator is not meant to invent
-   * it, and the node refuses an inbound without one ("shadowtls ssPassword
-   * (inner shadowsocks key) is required"). The autofill existed only on the
-   * per-node inbound path, which is not how anything deploys any more: it goes
-   * through Profile -> ProfileNodeBinding. So a ShadowTLS profile created
-   * through the API arrived at the node with no key and was rejected there,
-   * one layer away from the operator who could act on it (A-029).
-   */
-  if (input.protocol === 'shadowtls') {
-    const st = configToStore as { ssMethod: string; ssPassword?: string };
-    if (!st.ssPassword) {
-      configToStore = { ...st, ssPassword: generateSsServerPsk(st.ssMethod) };
-    }
-  }
-  // Keep only the transport settings this profile's transport uses, so a field
-  // typed for a transport that was later switched away cannot come back to life
-  // when the operator switches back. See stripInapplicableTransportFields.
-  if (input.protocol === 'xray') {
-    configToStore = stripInapplicableTransportFields(configToStore);
-  }
+  const configToStore = normalizeProfileConfigForSave(input.protocol, input.config);
 
   const created = await prisma.$transaction(async (tx) => {
     const p = await tx.profile.create({
@@ -242,34 +210,15 @@ export async function updateProfile(
   }
 
   if (input.config !== undefined) {
-    const schema = PROTOCOL_CONFIG_SCHEMAS[
-      existing.protocol as keyof typeof PROTOCOL_CONFIG_SCHEMAS
-    ];
-    if (!schema) throw new Error(`Unknown protocol ${existing.protocol}`);
-    const parsed = schema.parse(input.config);
-    /**
-     * ShadowTLS keeps its inner key across an edit.
-     *
-     * `ssPassword` is optional in the schema and no form field fills it, so a
-     * save from the profile screen sends a config without it. A plain overwrite
-     * would drop the key the node is running, and the next push would be
-     * refused - an unrelated edit (renaming the camouflage domain) silently
-     * breaking the inbound. Same shape as the squad-save incident of
-     * 2026-07-31: never let a payload that cannot express a field erase it.
-     */
-    if (existing.protocol === 'shadowtls') {
-      const incoming = parsed as { ssMethod: string; ssPassword?: string };
-      if (!incoming.ssPassword) {
-        const stored = (existing.config ?? {}) as { ssPassword?: string };
-        incoming.ssPassword = stored.ssPassword ?? generateSsServerPsk(incoming.ssMethod);
-      }
-    }
-    // After parse, so schema defaults are filled in first and only then the
-    // fields belonging to other transports are dropped.
-    const nextConfig =
-      existing.protocol === 'xray'
-        ? stripInapplicableTransportFields(parsed as Record<string, unknown>)
-        : parsed;
+    // Same pipeline as create, and `existing.config` is what makes an omission
+    // not a deletion: the update REPLACES config, and the only editor of a
+    // profile rebuilds it from the controls it renders - which cannot include a
+    // secret it must not show.
+    const nextConfig = normalizeProfileConfigForSave(
+      existing.protocol,
+      input.config,
+      existing.config,
+    );
     data.config = nextConfig as never;
 
     // The third door into a bad deploy. `parsed` above proves the profile is
