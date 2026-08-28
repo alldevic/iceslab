@@ -54,6 +54,17 @@ describe('a job that failed', () => {
     expect(logs[0]).toContain('relation "users" does not exist');
   });
 
+  // BullMQ writes `attempts: 0` for a queue that declares none — which is
+  // cron-tasks, the queue this whole file exists for. The first line it wrote
+  // on the lab panel read "1/0 attempt(s)".
+  it('reads 1/1 for a queue that declares no attempts, not 1/0', () => {
+    const w = fakeWorker();
+    observeWorker(w, 'cron-tasks');
+    w.emit('failed', { name: 'prune-history', attemptsMade: 1, opts: { attempts: 0 } }, new Error('x'));
+    expect(logs[0]).toContain('1/1');
+    expect(logs[0]).not.toContain('1/0');
+  });
+
   it('is counted, so a job failing every night is visible as a rate', async () => {
     const w = fakeWorker();
     observeWorker(w, 'cron-tasks');

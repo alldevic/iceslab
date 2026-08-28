@@ -33,7 +33,11 @@ import { queueJobFailures } from './metrics.js';
 export function observeWorker(worker: Worker, queue: string): Worker {
   worker.on('failed', (job: Job | undefined, err: Error) => {
     const name = job?.name ?? 'unknown';
-    const attempts = job ? `${job.attemptsMade}/${job.opts?.attempts ?? 1}` : '?';
+    // `|| 1`, not `?? 1`: BullMQ writes `attempts: 0` when a queue declares
+    // none, and "1/0 attempt(s)" is what that printed. Measured on the lab
+    // panel the first night this listener existed — cron-tasks is exactly the
+    // queue with no `attempts`, so it was the first line it ever wrote.
+    const attempts = job ? `${job.attemptsMade}/${job.opts?.attempts || 1}` : '?';
     queueJobFailures.inc({ queue, job: name });
     getLogger().error(
       `[worker:${queue}] job ${name} FAILED after ${attempts} attempt(s): ${err?.message ?? err}`,
