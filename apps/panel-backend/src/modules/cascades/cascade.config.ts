@@ -95,12 +95,77 @@ export function normalizeLinkProtocol(p: string | null | undefined): LinkProtoco
   return p === 'shadowsocks' ? 'shadowsocks' : 'vless';
 }
 
+/**
+ * A leg's identity across a save: its two ends and the direction it carries.
+ *
+ * Everything else about a leg is derived - the listen port from the receiving
+ * step - so this is what decides whether a stored credential still belongs to
+ * anything. Direction tags themselves already survive a save (writeTopologyV4
+ * matches an incoming direction to a stored one by its pool), which is the same
+ * reasoning one level up: an identity a live client is authenticating with
+ * cannot be re-minted because an unrelated field was edited.
+ */
+export function linkLegKey(fromNodeId: string, toNodeId: string, directionTag: number): string {
+  return `${fromNodeId}|${toNodeId}|${directionTag}`;
+}
+
+/** A leg as the cascade currently has it stored, for carrying across a save. */
+export interface StoredLink {
+  fromNodeId: string;
+  toNodeId: string;
+  directionTag: number;
+  cred: LinkCred;
+}
+
+function byLeg(previous: StoredLink[] | undefined): Map<string, LinkCred> {
+  return new Map(
+    (previous ?? []).map((l) => [linkLegKey(l.fromNodeId, l.toNodeId, l.directionTag), l.cred]),
+  );
+}
+
+/**
+ * Reuse a stored credential for a leg that still exists, at whatever port the
+ * new topology puts it on.
+ *
+ * Returns null when there is nothing to carry, or when the leg changed
+ * protocol - a vless cred and an SS2022 cred share no material, so that leg is
+ * genuinely new.
+ *
+ * The port travels with the topology rather than with the secret: inserting a
+ * position ahead of a leg moves which step it listens on, and that is a config
+ * change both ends get in the same push, not an identity change.
+ */
+function carryLinkCred(
+  prev: LinkCred | undefined,
+  protocol: LinkProtocol,
+  port: number,
+): LinkCred | null {
+  if (!prev || prev.protocol !== protocol) return null;
+  return prev.protocol === 'shadowsocks'
+    ? { protocol: 'shadowsocks', port, psk: prev.psk, method: prev.method }
+    : { protocol: 'vless', port, uuid: prev.uuid, reality: prev.reality };
+}
+
 /** Pre-generate link creds for the N-1 inter-hop links of an N-hop cascade,
  *  one per link in order. `linkProtocols[i]` is the protocol of the link from
- *  hop[i] to hop[i+1] (the originating hop's linkProtocol). */
-export function generateLinkCreds(linkProtocols: LinkProtocol[]): LinkCred[] {
+ *  hop[i] to hop[i+1] (the originating hop's linkProtocol).
+ *
+ *  `previous` carries the credential of a leg that still exists, keyed by
+ *  linkLegKey; `legs[i]` names the two ends of link i. Both absent = mint
+ *  everything, which is what create does. */
+export function generateLinkCreds(
+  linkProtocols: LinkProtocol[],
+  legs?: { fromNodeId: string; toNodeId: string }[],
+  previous?: StoredLink[],
+): LinkCred[] {
+  const stored = byLeg(previous);
   return linkProtocols.map((proto, i) => {
     const port = LINK_PORT_BASE + i;
+    const leg = legs?.[i];
+    const kept = leg
+      ? carryLinkCred(stored.get(linkLegKey(leg.fromNodeId, leg.toNodeId, 0)), proto, port)
+      : null;
+    if (kept) return kept;
     if (proto === 'shadowsocks') {
       return {
         protocol: 'shadowsocks',
@@ -225,12 +290,25 @@ export interface TopologyLink {
 export function generateTopologyLinks(
   positions: { nodeIds: string[]; linkProtocol?: string | null }[],
   directions: { tag: number; nodeIds: string[] }[],
+  previous?: StoredLink[],
 ): TopologyLink[] {
   const links: TopologyLink[] = [];
+  const stored = byLeg(previous);
   // One REALITY identity per receiving node, reused by every link into it -
   // see realityForReceiver. Lives here so it spans both loops below: a node can
   // only receive at one step, but the two loops are what produce those links.
   const receiverIdentity = new Map<string, { privateKey: string; publicKey: string }>();
+  // Seed it from what the cascade already had, or a save that adds ONE leg into
+  // a node would mint that node a second identity and break the invariant the
+  // per-receiver cache exists for: one inbound, one keypair.
+  for (const l of previous ?? []) {
+    if (l.cred.protocol !== 'vless' || !l.cred.reality) continue;
+    if (receiverIdentity.has(l.toNodeId)) continue;
+    receiverIdentity.set(l.toNodeId, {
+      privateKey: l.cred.reality.privateKey,
+      publicKey: l.cred.reality.publicKey,
+    });
+  }
   const emit = (
     from: string,
     to: string,
@@ -240,7 +318,8 @@ export function generateTopologyLinks(
   ): void => {
     const port = LINK_PORT_BASE + step;
     const cred: LinkCred =
-      protocol === 'shadowsocks'
+      carryLinkCred(stored.get(linkLegKey(from, to, directionTag)), protocol, port) ??
+      (protocol === 'shadowsocks'
         ? {
             protocol: 'shadowsocks',
             port,
@@ -252,7 +331,7 @@ export function generateTopologyLinks(
             port,
             uuid: randomUUID(),
             reality: realityForReceiver(receiverIdentity, to),
-          };
+          });
     links.push({ fromNodeId: from, toNodeId: to, directionTag, protocol, cred });
   };
 

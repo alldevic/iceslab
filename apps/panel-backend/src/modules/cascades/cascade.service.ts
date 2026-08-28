@@ -31,6 +31,7 @@ import {
   generateTopologyLinks,
   normalizeLinkProtocol,
   parseLinkCred,
+  type StoredLink,
   routeTag,
   serializeLinkCred,
   type CascadeConfigHopInput,
@@ -1061,6 +1062,28 @@ async function writeTopologyV4(
     }
   }
 
+  // Read the legs BEFORE dropping them: a leg that survives this save keeps its
+  // credentials. Rebuilding the rows is how the topology is written (they are
+  // interdependent), but re-MINTING what a live link authenticates with is a
+  // different thing, and it was happening on every save - a rename rotated the
+  // uuid, the REALITY keypair and the shortId of every leg, measured against
+  // the live panel with a byte-identical topology. Each hop then gets the new
+  // secret in its own push, so the chain is down between them, and a hop whose
+  // push fails is cut off with nothing saying so. The push path had this right
+  // already ("regenerating uuids/ports per push would tear down every live
+  // link"); the save path is where it was missing.
+  const previousLinks: StoredLink[] = (
+    await tx.cascadeLink.findMany({
+      where: { cascadeId },
+      select: { fromNodeId: true, toNodeId: true, directionTag: true, config: true },
+    })
+  ).flatMap((l) => {
+    const cred = parseLinkCred(l.config);
+    return cred
+      ? [{ fromNodeId: l.fromNodeId, toNodeId: l.toNodeId, directionTag: l.directionTag, cred }]
+      : [];
+  });
+
   await tx.cascadeLink.deleteMany({ where: { cascadeId } });
   await tx.cascadePosition.deleteMany({ where: { cascadeId } });
   await tx.cascadeDirection.deleteMany({ where: { cascadeId } });
@@ -1096,7 +1119,7 @@ async function writeTopologyV4(
     });
   }
 
-  const links = generateTopologyLinks(positions, resolved);
+  const links = generateTopologyLinks(positions, resolved, previousLinks);
   if (links.length > 0) {
     await tx.cascadeLink.createMany({
       data: links.map((l) => ({
@@ -1311,6 +1334,35 @@ export function cascadeMemberNodeIds(c: {
   ];
 }
 
+/**
+ * The legs a hop-shaped cascade currently has, as (from, to, cred) triples.
+ *
+ * The stored cred lives on the ORIGINATING hop, and which hop that is depends
+ * on the shape: a chain's hop i originates the leg to hop i+1, a balancer's
+ * entry originates the leg to each exit. Reading it here rather than at the
+ * call site keeps that pairing in one place.
+ */
+async function storedHopLinks(cascadeId: string, mode: string): Promise<StoredLink[]> {
+  const rows = await prisma.cascadeHop.findMany({
+    where: { cascadeId },
+    select: { nodeId: true, position: true, linkConfig: true },
+    orderBy: { position: 'asc' },
+  });
+  const out: StoredLink[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const cred = parseLinkCred(rows[i]!.linkConfig);
+    if (!cred) continue;
+    // Mirrors credIdx() in updateCascade, from the other side: a balancer keeps
+    // the cred for leg (entry -> hop i) ON hop i, a chain keeps the cred for
+    // leg (hop i -> hop i+1) on hop i.
+    const from = mode === 'balancer' ? rows[0] : rows[i];
+    const to = mode === 'balancer' ? rows[i] : rows[i + 1];
+    if (!from || !to || from === to) continue;
+    out.push({ fromNodeId: from.nodeId, toNodeId: to.nodeId, directionTag: 0, cred });
+  }
+  return out;
+}
+
 export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<CascadeDto> {
   const existing = await prisma.cascade.findUnique({
     where: { id },
@@ -1351,11 +1403,26 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
       : existing.hops.find((h) => h.position === 0)?.nodeId;
     if (entryNodeId) await assertBalancerEntrySupportsVlessRoute(entryNodeId);
   }
+  // Same reasoning as writeTopologyV4: a leg that survives the save keeps its
+  // credentials. The legacy shapes have no directions, so a leg is just its two
+  // ends (tag 0), and both shapes agree on which pair each cred belongs to -
+  // a chain links hop i to hop i+1, a balancer links the entry to each exit.
+  const previousHopLinks: StoredLink[] = hops ? await storedHopLinks(id, existing.mode) : [];
+  const legs = hops
+    ? (isBalancer
+        ? hops.slice(1).map((h) => ({ fromNodeId: hops[0]!.nodeId, toNodeId: h.nodeId }))
+        : hops.slice(0, hops.length - 1).map((h, i) => ({
+            fromNodeId: h.nodeId,
+            toNodeId: hops[i + 1]!.nodeId,
+          })))
+    : [];
   const creds = hops
     ? generateLinkCreds(
         isBalancer
           ? hops.slice(1).map(() => normalizeLinkProtocol(hops[0]!.linkProtocol))
           : hops.slice(0, hops.length - 1).map((h) => normalizeLinkProtocol(h.linkProtocol)),
+        legs,
+        previousHopLinks,
       )
     : [];
   // Cred index for hop `idx` (of `n` total), or -1 if it carries no link cred.
