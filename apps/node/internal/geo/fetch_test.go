@@ -142,3 +142,67 @@ func TestHTTPFetch_PermanentFailureDoesNotRetry(t *testing.T) {
 		t.Errorf("404 should not retry, got %d attempts", got)
 	}
 }
+
+// A transfer that is slow but MOVING must finish, and one that goes silent must
+// not. The budget is silence, not duration.
+//
+// This replaced a per-attempt deadline on dial + transfer, which made the bigger
+// geo database impossible to pull: measured 2026-08-28 against the real
+// upstream, geoip.dat is 18 671 837 bytes and geosite.dat is 73 703 302, and the
+// latter needed a sustained ~20 Mbit/s to land inside the old 30 s.
+func TestHTTPFetchOnce_SlowButMovingFinishes(t *testing.T) {
+	prev := stallTimeout
+	stallTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { stallTimeout = prev })
+
+	// Six writes 100 ms apart: 600 ms in total, four times the per-attempt
+	// budget, with never more than 100 ms of silence.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher, _ := w.(http.Flusher)
+		for i := 0; i < 6; i++ {
+			time.Sleep(100 * time.Millisecond)
+			_, _ = w.Write([]byte{byte(i)})
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	b, _, err := httpFetchOnce(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("a transfer that never went quiet was aborted: %v", err)
+	}
+	if len(b) != 6 {
+		t.Errorf("got %d bytes, want 6", len(b))
+	}
+}
+
+func TestHTTPFetchOnce_SilentMidTransferAborts(t *testing.T) {
+	prev := stallTimeout
+	stallTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { stallTimeout = prev })
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte{1})
+		if flusher != nil {
+			flusher.Flush()
+		}
+		select { // one byte, then nothing at all
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	start := time.Now()
+	if _, _, err := httpFetchOnce(context.Background(), srv.URL); err == nil {
+		t.Fatal("a connection that went silent mid-body was not aborted")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("took %v; the stall timer should have fired at ~%v", elapsed, stallTimeout)
+	}
+}
