@@ -88,7 +88,13 @@ log "Created /etc/mtg (mode 0700; node-agent will populate config.toml on ApplyI
 echo
 log "mtg is ready."
 echo "    Binary:  $INSTALL_PATH"
-echo "    Version: $LATEST_TAG"
+# From the binary, not from $LATEST_TAG: that variable is only assigned on the
+# GitHub fallback path, so on the normal (panel artefact) path this line was an
+# unbound variable under `set -u`. mtg had already been installed and
+# smoke-tested three lines up; the script then exited 1 and took the whole node
+# install with it. bootstrap-hysteria.sh reads its version off the binary and
+# never had the problem.
+echo "    Version: $("$INSTALL_PATH" --version 2>&1 | head -1 || echo unknown)"
 echo
 echo "Set the following in /etc/iceslab-node/env then restart node-agent:"
 echo "    MTG_BINARY=$INSTALL_PATH"

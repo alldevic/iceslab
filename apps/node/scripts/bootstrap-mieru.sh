@@ -15,13 +15,21 @@ fail() { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || fail "Must be run as root (sudo bash $0)"
 
-INSTALL_DIR=/usr/local/bin
+# Where mita ends up is decided by the .deb, not by this script: it ships
+# ./usr/bin/mita. This used to say /usr/local/bin, which nothing ever put a
+# binary in — so the smoke test below failed on a machine where mita was
+# installed and working, `--protocol mieru` could not complete an install at
+# all, and the path this script prints (and the installer copies into
+# MITA_BINARY) pointed at nothing. Found by installing on a real VM; a stub
+# that answers `mita version` from anywhere cannot see it.
+mita_path() { command -v mita 2>/dev/null || true; }
 
 # ───── 1. Already installed? ─────
-if [[ -x "$INSTALL_DIR/mita" ]]; then
-  CURRENT=$("$INSTALL_DIR/mita" version 2>&1 | head -1 || echo "unknown")
-  log "mita already installed: $CURRENT (skipping download)"
-  log "To upgrade, remove $INSTALL_DIR/mita and rerun."
+EXISTING="$(mita_path)"
+if [[ -n "$EXISTING" ]]; then
+  CURRENT=$("$EXISTING" version 2>&1 | head -1 || echo "unknown")
+  log "mita already installed at $EXISTING: $CURRENT (skipping download)"
+  log "To upgrade, 'apt-get remove mita' and rerun."
   exit 0
 fi
 
@@ -68,8 +76,10 @@ dpkg -i "$TMPDIR/$DEB" || {
 }
 
 # ───── 6. Smoke-test ─────
-"$INSTALL_DIR/mita" version >/dev/null 2>&1 || fail "smoke test failed"
-log "Smoke-test passed"
+INSTALL_PATH="$(mita_path)"
+[[ -n "$INSTALL_PATH" ]] || fail "dpkg reported success but no mita is on PATH; the package layout changed"
+MITA_VERSION="$("$INSTALL_PATH" version 2>&1 | head -1 || echo unknown)"
+log "Smoke-test passed: $INSTALL_PATH ($MITA_VERSION)"
 
 # ───── 7. Make /etc/mita writable by node-agent ─────
 mkdir -p /etc/mita
@@ -79,11 +89,15 @@ log "Created /etc/mita (mode 0700; node-agent will populate server.yaml on Apply
 # ───── 8. Summary ─────
 echo
 log "mita is ready."
-echo "    Binary:  $INSTALL_DIR/mita"
-echo "    Version: $LATEST_TAG"
+echo "    Binary:  $INSTALL_PATH"
+# From the binary, not from $LATEST_TAG: that variable is only assigned on the
+# GitHub fallback path, so on the normal (panel artefact) path this line was an
+# unbound variable under `set -u` — the script failed AFTER installing mita
+# correctly, and the installer reported the whole node install as failed.
+echo "    Version: $MITA_VERSION"
 echo
 echo "Set the following in /etc/iceslab-node/env then restart node-agent:"
-echo "    MITA_BINARY=$INSTALL_DIR/mita"
+echo "    MITA_BINARY=$INSTALL_PATH"
 echo "    MITA_CONFIG=/etc/mita/server.json"
 echo "    MITA_PORT=2012"
 echo "    MITA_MTU=1400        # min 1280; drop to 1280 on PPPoE / odd VPN paths"

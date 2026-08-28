@@ -1145,7 +1145,11 @@ case "$PROTOCOL" in
     ICESLAB_CORE_ARTEFACT="$MITA_TMP" \
       bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-mieru.sh"
     rm -f "$MITA_TMP"
-    PROTO_BINARY=/usr/local/bin/mita
+    # Asked, not assumed: the .deb decides where mita lands (/usr/bin/mita),
+    # and this line used to name /usr/local/bin — so even past the bootstrap's
+    # smoke test the unit would have been written with a MITA_BINARY that does
+    # not exist, and the agent registers the adapter on a non-empty value.
+    PROTO_BINARY="$(command -v mita 2>/dev/null || echo /usr/bin/mita)"
     PROTO_CONFIG=/etc/mita/server.json
     ;;
   tuic)
