@@ -808,6 +808,58 @@ export function buildTopologyFragmentsForNode(
     );
   }
 
+  // ── Pass 2b: the ad-split policies, ABOVE the direction rules.
+  //
+  // A policy band is offered to the subscriber as a second line per exit
+  // ("DE · Без рекламы", tag = routeTag(ordinal, exit)), and the direction rule
+  // below already carries that band so the line reaches the right exit. What
+  // was missing is the policy DOING anything: without these rules the entry
+  // routes the tagged client to its exit and applies no block or direct list at
+  // all.
+  //
+  // Measured on a three-node stand 2026-08-28: through the plain line and
+  // through "· Без рекламы" from the same subscription, `doubleclick.net`
+  // answered 301 both times, and `category-ads-all` appeared ZERO times in the
+  // entry's config. The subscriber picks an ad-blocking profile, gets a working
+  // tunnel to the right country, and no ad blocking.
+  //
+  // buildCascadeConfigs (the legacy hop builder) has carried these rules since
+  // 2026-07-30, and its comment there records this exact failure being fixed
+  // once already - "an operator could define a policy, grant it to a squad,
+  // watch the panel report success, and get no rules on the node at all". The
+  // v4 builder that actually feeds nodes never got them.
+  //
+  // Per (policy, direction), not per policy: a v4 cascade can have several
+  // exits, and the band's tag differs per exit. Ordering matters twice - above
+  // the direction rules so the block wins before traffic enters the link, and
+  // block before direct so an operator who lists a domain in both gets the
+  // safer half.
+  if (isEntry) {
+    for (const p of input.policies ?? []) {
+      const bandTags = [...dirTargets.keys()]
+        .sort((a, b) => a - b)
+        .map((directionTag) => routeTag(p.ordinal, directionTag - 1))
+        .join(',');
+      if (!bandTags) continue;
+      if (p.blockDomains.length) {
+        routingRules.push({
+          type: 'field',
+          vlessRoute: bandTags,
+          domain: p.blockDomains,
+          outboundTag: 'blocked',
+        });
+      }
+      if (p.directDomains.length) {
+        routingRules.push({
+          type: 'field',
+          vlessRoute: bandTags,
+          domain: p.directDomains,
+          outboundTag: DIRECT_TAG,
+        });
+      }
+    }
+  }
+
   // ── Pass 3: the direction rules themselves.
   for (const [directionTag, target] of dirTargets) {
     routingRules.push({
