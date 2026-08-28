@@ -41,7 +41,7 @@ vi.mock('../lib/api', async (importOriginal) => {
 import { NodeEditModal } from './NodeEditModal';
 import { NodeEditPage } from '../pages/NodeEditPage';
 
-const updateNode = vi.fn(async (_id: string, _input: unknown) => ({}));
+const updateNode = vi.fn<(id: string, input: unknown) => Promise<object>>(async () => ({}));
 
 describe('the node editor can take a node out of service and put it back', () => {
   it('a disabled node opens with the switch off, and turning it on sends active', async () => {
