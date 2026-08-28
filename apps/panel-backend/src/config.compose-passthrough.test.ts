@@ -93,3 +93,86 @@ describe('docker-compose.prod.yml passes every panel setting through', () => {
     expect(gone.sort(), 'exempted from the passthrough check, but no longer declared at all').toEqual([]);
   });
 });
+
+/**
+ * The other direction of the same failure: a setting the panel reads and that
+ * something ELSE in the deployment has to be told about.
+ *
+ * Two of the backend's public paths are operator-configurable, and the proxy in
+ * front of the panel has to serve them at the same spelling. That makes the
+ * prefix a decision written in four places — the schema, both compose files and
+ * the frontend Dockerfile's defaults — and nothing compared them. A mismatch
+ * does not error: the frontend's SPA fallback answers index.html with HTTP 200,
+ * so a subscriber's client and the storefront get a page of HTML while every
+ * status code says fine. That is exactly how the missing locations went
+ * unnoticed in the first place (§54).
+ *
+ * So the copies are bound to the schema here. The compose lines must default to
+ * the schema's default AND must be fed from the backend's own variable, because
+ * `ICESLAB_SUB_PREFIX: /sub` would look right while ignoring the operator.
+ */
+describe('the proxy in front is told the paths the backend serves', () => {
+  /** `NAME: z.…default('X')` — the default the panel itself falls back to. */
+  function schemaDefault(key: string): string {
+    const src = readFileSync(resolve(repoRoot, 'apps/panel-backend/src/config.ts'), 'utf8');
+    const entry = new RegExp(`^ {2}${key}:\\s*z[\\s\\S]*?\\n {2}[A-Z_]+:`, 'm').exec(src);
+    const block = entry ? entry[0] : '';
+    const def = /\.default\('([^']*)'\)/.exec(block);
+    if (!def) throw new Error(`no .default('…') found for ${key}; the mirror cannot be checked`);
+    return def[1]!;
+  }
+
+  const PREFIXES = [
+    { env: 'ICESLAB_SUB_PREFIX', backend: 'SUBSCRIPTION_PATH_PREFIX' },
+    { env: 'ICESLAB_COMPAT_PREFIX', backend: 'REMNAWAVE_COMPAT_PREFIX' },
+  ];
+  const COMPOSE_FILES = ['docker-compose.prod.yml', 'docker-compose.ghcr.yml'];
+
+  it.each(COMPOSE_FILES)('%s feeds both prefixes from the backend variable, at the schema default', (file) => {
+    const src = readFileSync(resolve(repoRoot, file), 'utf8');
+    for (const { env, backend } of PREFIXES) {
+      const line = new RegExp(`^\\s+${env}:\\s*\\$\\{${backend}:-(.*)\\}\\s*$`, 'm').exec(src);
+      expect(
+        line,
+        `${file} must pass ${env} to the frontend from \${${backend}:-…}. Without ` +
+          `it the proxy keeps serving the old path and the SPA fallback answers ` +
+          `the subscriber with index.html and HTTP 200.`,
+      ).not.toBeNull();
+      expect(line![1], `${file}: ${env} defaults to a different value than the panel does`).toBe(
+        schemaDefault(backend),
+      );
+    }
+  });
+
+  it('the frontend image ships the same defaults, for a run with no compose at all', () => {
+    const dockerfile = readFileSync(resolve(repoRoot, 'apps/panel-frontend/Dockerfile'), 'utf8');
+    for (const { env, backend } of PREFIXES) {
+      const line = new RegExp(`${env}=(\\S+)`).exec(dockerfile);
+      expect(line, `apps/panel-frontend/Dockerfile declares no ${env}`).not.toBeNull();
+      expect(line![1], `the image's ${env} default disagrees with the panel's ${backend}`).toBe(
+        schemaDefault(backend),
+      );
+    }
+  });
+
+  /**
+   * And the template has to actually USE them. A rendered config that hardcodes
+   * `/sub` would satisfy every case above: the value would arrive in the
+   * container's environment and be ignored, which is the same outcome as never
+   * passing it.
+   */
+  it('the nginx template routes by the variables rather than by a hardcoded path', () => {
+    const tpl = readFileSync(resolve(repoRoot, 'apps/panel-frontend/nginx.conf.template'), 'utf8');
+    for (const { env } of PREFIXES) {
+      expect(tpl, `nginx.conf.template has no location built from \${${env}}`).toMatch(
+        new RegExp(`location[^\\n]*\\$\\{${env}\\}`),
+      );
+    }
+    // The filter is what keeps envsubst off $host/$uri/$backend; without it the
+    // rendered config loses every nginx variable whose name exists in the env.
+    expect(
+      readFileSync(resolve(repoRoot, 'apps/panel-frontend/Dockerfile'), 'utf8'),
+      'NGINX_ENVSUBST_FILTER is missing; envsubst would eat the nginx variables too',
+    ).toMatch(/NGINX_ENVSUBST_FILTER=\^ICESLAB_/);
+  });
+});
