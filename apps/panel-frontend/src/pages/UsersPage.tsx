@@ -496,10 +496,28 @@ export function UsersPage() {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
+  /**
+   * Every write to a user refreshes BOTH views of the users table.
+   *
+   * `['user-tags']` populates the tag filter and the drawer's tag
+   * autocomplete, it is cached for five minutes, and until now nothing
+   * invalidated it — anywhere in the app. So an operator who created a user
+   * with a new tag could not then filter by it, and the tag of the last user
+   * carrying it stayed in the list, offering a filter that matches nobody.
+   *
+   * It is done for all six mutations rather than only the three that can carry
+   * a tag, because "which mutation touches the tag column" is a question to get
+   * wrong later, and the endpoint behind it is one SELECT DISTINCT.
+   */
+  const invalidateUsers = () => {
+    qc.invalidateQueries({ queryKey: ['users'] });
+    qc.invalidateQueries({ queryKey: ['user-tags'] });
+  };
+
   const createMutation = useMutation({
     mutationFn: createUser,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      invalidateUsers();
       notifications.show({ color: 'green', message: t('users.notify.created') });
     },
     onError: (err) =>
@@ -513,7 +531,7 @@ export function UsersPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateUserInput }) => updateUser(id, input),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      invalidateUsers();
       notifications.show({ color: 'green', message: t('users.notify.updated') });
     },
     onError: (err) =>
@@ -527,7 +545,7 @@ export function UsersPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteUser,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      invalidateUsers();
       notifications.show({ color: 'green', message: t('users.notify.deleted') });
     },
     onError: (err) =>
@@ -541,7 +559,7 @@ export function UsersPage() {
   const revokeMutation = useMutation({
     mutationFn: revokeUserSubscription,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      invalidateUsers();
       notifications.show({ color: 'green', message: t('users.notify.revoked') });
     },
     onError: (err) =>
@@ -554,7 +572,7 @@ export function UsersPage() {
   const rotateMutation = useMutation({
     mutationFn: rotateUserSubscription,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      invalidateUsers();
       notifications.show({ color: 'green', message: t('users.notify.rotated') });
     },
     onError: (err) =>
@@ -567,7 +585,7 @@ export function UsersPage() {
   const resetTrafficMutation = useMutation({
     mutationFn: resetUserTraffic,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      invalidateUsers();
       notifications.show({ color: 'green', message: t('users.notify.trafficReset') });
     },
     onError: (err) =>
@@ -739,7 +757,7 @@ export function UsersPage() {
           icon={<IconRefresh size={16} />}
           title={t('common.refresh')}
           loading={usersQuery.isFetching}
-          onClick={() => qc.invalidateQueries({ queryKey: ['users'] })}
+          onClick={invalidateUsers}
         />
         <ToolbarButton
           icon={<IconPlus size={14} stroke={2.4} />}
