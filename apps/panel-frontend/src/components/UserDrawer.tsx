@@ -119,7 +119,6 @@ interface FormValues {
   trafficLimitGb: number | '';
   trafficLimitStrategy: TrafficLimitStrategy;
   expireDays: number | '';
-  status: 'active' | 'disabled';
   description: string;
   tag: string;
   email: string;
@@ -139,7 +138,6 @@ function defaultValues(user: User | null): FormValues {
     // limited/expired are cron-managed and rejected by UpdateUserSchema, so an
     // edit can only set active or disabled. Saving a limited user reactivates
     // them; the review cron re-limits if they are still over quota.
-    status: user?.status === 'disabled' ? 'disabled' : 'active',
     description: user?.description ?? '',
     tag: user?.tag ?? '',
     email: user?.email ?? '',
@@ -325,7 +323,17 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
   async function handleSubmit(values: FormValues) {
     if (isEdit) {
       const input: UpdateUserInput = {
-        status: values.status,
+        // `status` is deliberately NOT here. This drawer draws no control for
+        // it, and it used to send `user.status === 'disabled' ? 'disabled' :
+        // 'active'` — which reads back as `active` for a user the cron had put
+        // in `expired` or `limited`. So editing a lapsed subscriber's
+        // description handed them their access back: the API takes `active`,
+        // the fleet gets an addUser for them, and `review-find-expired` puts it
+        // right again on its next 30-second tick. Nobody asked for any of it.
+        //
+        // The panel has no disable-a-user control at all; that transition comes
+        // from the shop through the Remnawave-compat facade. A field no control
+        // draws is a field this form has nothing to say about.
         trafficLimitGb: values.trafficLimitGb === '' ? null : Number(values.trafficLimitGb) || null,
         trafficLimitStrategy: values.trafficLimitStrategy,
         description: values.description || null,

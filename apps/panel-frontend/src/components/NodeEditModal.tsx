@@ -332,8 +332,17 @@ export function NodeEditModal({
         egressRules: egressRulesToForm(node.hardening?.egressPolicy),
       });
     }
+    // Keyed on the id, not on the node OBJECT. A background refetch of the same
+    // data hands down a new object, and this effect then re-seeded the form
+    // over whatever the operator was typing — measured by re-rendering with an
+    // equal-but-new node: "ams-1-edge" read back as "ams-1".
+    //
+    // Latent rather than live today: NodesPage holds the node being edited in
+    // `useState`, so the prop identity is stable while the modal is open. It is
+    // one line, the page behind /nodes/:id keys on the id for exactly this
+    // reason (§51), and one of two is how this kind of thing survives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opened, node]);
+  }, [opened, node?.id]);
 
   // B2b - what other nodes found for themselves, so this one can start on a
   // strategy known to work on its network instead of on the generic preset

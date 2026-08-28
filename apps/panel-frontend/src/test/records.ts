@@ -139,7 +139,13 @@ export function aUser(over: Partial<User> = {}): User {
     trafficLimitBytes: null,
     trafficUsedBytes: 0,
     lifetimeTrafficBytes: 0,
-    trafficLimitStrategy: 'NO_RESET' as User['trafficLimitStrategy'],
+    // Lowercase, as the API returns it and as `TrafficLimitStrategy` declares
+    // it. It was `'NO_RESET' as User['trafficLimitStrategy']`, and the cast is
+    // what let it through: every screen mounted with this fixture was reading a
+    // shape no response has, and the edit-form round-trip is where that came
+    // out - the drawer sent the fixture's value straight back and the API's own
+    // schema refused it.
+    trafficLimitStrategy: 'no_reset',
     lastTrafficResetAt: null,
     lastOnlineAt: null,
     subscriptionToken: 'tok-buyer',

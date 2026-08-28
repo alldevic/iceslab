@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -127,9 +127,23 @@ export function SquadFormModal({
     },
   });
 
-  if (opened && squad && form.values.name !== squad.name) {
-    form.setValues(defaultValues(squad));
-  }
+  // Seed once per RECORD, keyed on its id.
+  //
+  // It used to be keyed on `form.values.name !== squad.name`, which is a value
+  // the operator edits: typing one character into Name made the condition true,
+  // the next render re-seeded the whole form from the record, and the character
+  // was gone. Measured — a paste of "renamed-squad" read back as the original
+  // name, so a squad could not be renamed here at all, and any other field
+  // changed in the same session was reset along with it.
+  //
+  // The id alone is what SquadEditPage, CascadeEditPage, SrrRulePage and
+  // NodeEditPage all key on, and for the reason spelled out in
+  // NodeEditPage.seed.test.tsx: a key that also reads `updatedAt` throws away an
+  // edit in progress the moment another admin touches the same record.
+  useEffect(() => {
+    if (opened) form.setValues(defaultValues(squad));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened, squad?.id]);
 
   // Group profiles by protocol so admin can quickly toggle whole protocol
   // families. Search filters at the profile level.
