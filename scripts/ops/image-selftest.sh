@@ -84,9 +84,18 @@ trap cleanup EXIT
 #  The images, built the way the installer builds them
 # ═════════════════════════════════════════════════════════════════════════════
 note "building (cached after the first run)"
+# CORE_ARCHES defaults to what compose builds, so the default run measures the
+# image an operator actually gets. Set it to add the third architecture:
+#   CORE_ARCHES="amd64 arm64 armv7" ./scripts/ops/image-selftest.sh
+# which is worth doing after any change to the manifest — armv7 is where its
+# two holes were (hysteria publishes no -armv7 asset under that name, mieru
+# ships armv7 only as a tarball while the node installs a .deb), and until
+# 2026-08-28 nobody had ever built it.
+BUILD_ARGS=()
+[[ -n "${CORE_ARCHES:-}" ]] && BUILD_ARGS+=(--build-arg "CORE_ARCHES=${CORE_ARCHES}")
 for spec in "apps/panel-backend/Dockerfile ${BACKEND_IMG}" "apps/panel-frontend/Dockerfile ${FRONTEND_IMG}"; do
     set -- $spec
-    if ! (cd "$REPO_ROOT" && docker build -q -f "$1" -t "$2" . >/dev/null 2>&1); then
+    if ! (cd "$REPO_ROOT" && docker build -q "${BUILD_ARGS[@]}" -f "$1" -t "$2" . >/dev/null 2>&1); then
         printf 'could not build %s from %s. The `# syntax=` line is fetched from\n' "$2" "$1" >&2
         printf 'Docker Hub, so a failure here can be the network; NOT skipping silently\n' >&2
         exit 2
@@ -214,6 +223,92 @@ else
     bad "the image carries bytes the manifest does not describe:${MISMATCH}"
 fi
 
+# ───── ...and each is the architecture it is filed under ─────
+#
+# The sha256 above proves the bytes are the bytes the manifest names. It says
+# NOTHING about whether the manifest names them correctly: `assets.armv7` is a
+# hand-written mapping from an architecture to an upstream filename, and a
+# filename copied from the row above pins a real artefact with a real sha that
+# every check in this file accepts. The node then downloads it, verifies the
+# sha, installs it, and the process dies with "Exec format error" on a machine
+# the panel just told was provisioned.
+#
+# So the artefact is opened and its ELF e_machine read. Done inside the image
+# because that is where the artefacts are, with the tools the image has: it has
+# unzip, tar and unxz but no `ar`, so the .deb is walked by hand — its member
+# layout is fixed, and skipping it would leave exactly the core whose armv7
+# packaging was the odd one out.
+ARCH_SCRIPT="$(mktemp)"
+cat > "$ARCH_SCRIPT" <<'ARCHEOF'
+set -u
+cd /app/cores 2>/dev/null || exit 0
+work=$(mktemp -d)
+for f in *; do
+  arch=${f##*-}
+  case "$arch" in
+    amd64) want=003e; wname="x86-64" ;;
+    arm64) want=00b7; wname="ARM aarch64" ;;
+    armv7) want=0028; wname="ARM 32-bit" ;;
+    *) echo "SKIP $f unknown-arch-suffix"; continue ;;
+  esac
+  magic=$(od -An -tx1 -N4 "$f" | tr -d ' \n')
+  rm -rf "$work"/u; mkdir -p "$work"/u
+  case "$magic" in
+    504b0304) unzip -qo "$f" -d "$work"/u 2>/dev/null ;;
+    1f8b*)    tar -xzf "$f" -C "$work"/u 2>/dev/null ;;
+    7f454c46) cp "$f" "$work"/u/bin ;;
+    213c6172)
+      # ar: 8-byte magic, then 60-byte member headers (size = decimal ascii at
+      # offset 48), data padded to an even length. We want data.tar.*.
+      off=8
+      while :; do
+        name=$(dd if="$f" bs=1 skip=$off count=16 2>/dev/null | tr -d ' ')
+        [ -n "$name" ] || break
+        size=$(dd if="$f" bs=1 skip=$((off + 48)) count=10 2>/dev/null | tr -d ' ')
+        case "$size" in ''|*[!0-9]*) break ;; esac
+        case "$name" in
+          data.tar.xz|data.tar.xz/)
+            dd if="$f" bs=1 skip=$((off + 60)) count="$size" 2>/dev/null \
+              | unxz 2>/dev/null | tar -x -C "$work"/u 2>/dev/null
+            break ;;
+          data.tar.gz|data.tar.gz/)
+            dd if="$f" bs=1 skip=$((off + 60)) count="$size" 2>/dev/null \
+              | tar -xz -C "$work"/u 2>/dev/null
+            break ;;
+        esac
+        off=$((off + 60 + size + size % 2))
+      done ;;
+    *) echo "SKIP $f unknown-container-$magic"; continue ;;
+  esac
+  elf=""
+  for c in $(find "$work"/u -type f -size +1000k 2>/dev/null); do
+    [ "$(od -An -tx1 -N4 "$c" | tr -d ' \n')" = "7f454c46" ] || continue
+    elf="$c"; break
+  done
+  if [ -z "$elf" ]; then echo "NOELF $f"; continue; fi
+  got=$(od -An -tx1 -j18 -N2 "$elf" | tr -d ' \n')
+  got="${got#??}${got%??}"
+  if [ "$got" = "$want" ]; then
+    echo "OK $f $wname"
+  else
+    echo "WRONG $f filed as $arch but its ELF says e_machine=0x$got, not 0x$want ($wname)"
+  fi
+done
+rm -rf "$work"
+ARCHEOF
+ARCH_OUT="$(docker run --rm --entrypoint sh -v "$ARCH_SCRIPT":/tmp/archcheck.sh:ro "$BACKEND_IMG" /tmp/archcheck.sh 2>/dev/null)"
+rm -f "$ARCH_SCRIPT"
+ARCH_OK="$(grep -c '^OK '    <<<"$ARCH_OUT")"
+ARCH_BAD="$(grep -cE '^(WRONG|NOELF|SKIP) ' <<<"$ARCH_OUT")"
+# The control: an unpacker that quietly extracted nothing would report zero of
+# everything, and "no WRONG lines" would then be true of an empty run.
+if [[ "$ARCH_OK" -eq "$CARRIED" && "$ARCH_BAD" -eq 0 ]]; then
+    ok "and every one of the ${ARCH_OK} was opened and holds an ELF of the architecture it is filed under"
+else
+    bad "the carried artefacts do not all match the architecture they are filed under (${ARCH_OK} ok of ${CARRIED} carried):
+$(grep -vE '^OK ' <<<"$ARCH_OUT" | sed 's/^/      /')"
+fi
+
 # The panel's own sing-box comes out of that same set now. It used to be a
 # second download pinned to a different version, which is one artefact and two
 # numbers to bump; and it has to RUN here, on alpine, which is why the manifest
@@ -274,14 +369,16 @@ docker network create "$NET" >/dev/null 2>&1
 docker run -d --name "$PG" --network "$NET" \
     -e POSTGRES_USER=iceslab -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB=iceslab \
     postgres:16-alpine >/dev/null 2>&1
-psql_q() { docker exec "$PG" psql -U iceslab -d iceslab -tAc "$1" 2>/dev/null | tr -d '\r'; }
-
-# Waited on with a QUERY, not with pg_isready. The official image starts a
-# temporary server to run its init scripts and then restarts it, so pg_isready
-# answers yes to a socket that is about to go away — and the case below then
-# reads an empty string where it wanted a row count and says the fresh database
-# "already has  tables". That was this harness's own control catching this
-# harness, on the first run after the wait was written.
+# Over TCP, not over the unix socket, and that is the whole point. The official
+# image starts a TEMPORARY server to run its init scripts and restarts it after;
+# that server listens on the socket only (`listen_addresses=''`). So pg_isready
+# says yes to it, and so does `psql -U iceslab` — the wait passes, the server
+# goes away, and the next query reads an empty string where it wanted a row
+# count, which is how this harness reported that a fresh database "already has
+#  tables" (note the missing number) on a loaded machine. TCP is refused until
+# the real server is up, and it is also how everything else here reaches this
+# database, so it is the readiness that matters.
+psql_q() { docker exec -e PGPASSWORD="$PGPASS" "$PG" psql -h 127.0.0.1 -U iceslab -d iceslab -tAc "$1" 2>/dev/null | tr -d '\r'; }
 pg_ready=""
 for _ in $(seq 1 60); do
     [[ "$(psql_q 'select 1')" == "1" ]] && { pg_ready=1; break; }
