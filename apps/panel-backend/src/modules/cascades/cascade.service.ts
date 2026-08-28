@@ -1227,7 +1227,22 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
       if (topology) {
         await writeTopologyV4(tx, created.id, topology.positions, topology.directions);
       }
-      return created;
+      // Re-read, the way updateCascade does. `created` was captured BEFORE the
+      // topology write, so returning it answers the create with `positions: []`,
+      // `directions: []` and a stale `nextDirectionTag` - a body that disagrees
+      // with a GET of the same cascade issued a millisecond later. Measured
+      // 2026-08-28 against the running panel: POST said `directions: []` and
+      // `nextDirectionTag: 1` where the GET said one direction with `tag: 1` and
+      // `nextDirectionTag: 2`.
+      //
+      // The tag is the part that matters. It is minted here and nowhere else,
+      // it travels inside the user's UUID, and squad ACL cuts access by it - so
+      // the create response was hiding the one value a client could not compute
+      // for itself. There is no extra round trip in the common case either:
+      // without a v4 topology `created` is already current.
+      return topology
+        ? tx.cascade.findUniqueOrThrow({ where: { id: created.id }, include: hopInclude })
+        : created;
     });
     // Push the chaining fragments to every hop now, not on some later unrelated
     // edit. inbounds.events re-syncs each node's inbound set, where
