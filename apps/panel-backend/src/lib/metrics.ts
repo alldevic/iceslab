@@ -64,6 +64,19 @@ export const inboundSyncJobs = new Counter({
   registers: [registry],
 });
 
+// Background-job failures, by queue and job name. The counter exists because
+// the answer to "did last night's cron run" was previously only in a Bull-board
+// page nobody opens: a `review-find-expired` that throws every night looks
+// exactly like one that succeeds with nothing to do. Job names are a fixed
+// list written in this repo, and queues number three, so the label space is
+// bounded.
+export const queueJobFailures = new Counter({
+  name: 'iceslab_queue_job_failures_total',
+  help: 'Background jobs that failed after their final attempt',
+  labelNames: ['queue', 'job'] as const,
+  registers: [registry],
+});
+
 // Honey-route hits: separately tracks the security-gate trap firings
 // to graph scanner activity over time. Doesn't replace the Telegram
 // first-hit alert; gives a long-window view.

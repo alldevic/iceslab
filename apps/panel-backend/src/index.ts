@@ -11,6 +11,7 @@ import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.
 import { registerPoolEventHandlers } from './modules/ext_vptech_pool/pool.service.js';
 import { registerRemnawaveWebhookEmitter } from './modules/remnawave-compat/remnawave.webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
+import { observeWorker } from './lib/queue-observability.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
 import { startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
 import {
@@ -60,9 +61,13 @@ async function start() {
     registerRemnawaveWebhookEmitter();
     // B6 - invalidate the /sub binding cache on profile/binding/node changes.
     registerBindingsCacheBust();
-    nodeUsersWorker = startNodeUsersWorker();
-    inboundSyncWorker = startInboundSyncWorker();
-    cronTasksWorker = startCronTasksWorker();
+    // Every worker is wrapped, not just the ones whose handlers happen to log.
+    // See lib/queue-observability.ts: cron-tasks announced its successes and
+    // said nothing at all when a job threw, which is how a nightly
+    // review-find-expired failing forever would have looked.
+    nodeUsersWorker = observeWorker(startNodeUsersWorker(), 'node-users');
+    inboundSyncWorker = observeWorker(startInboundSyncWorker(), 'inbound-sync');
+    cronTasksWorker = observeWorker(startCronTasksWorker(), 'cron-tasks');
 
     app = await buildApp();
     // Route background-job logs (crons, queue workers, event-bus) through the
