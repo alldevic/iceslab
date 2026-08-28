@@ -413,6 +413,37 @@ fi
 # Measured 2026-08-28 on a Debian 13 KVM guest: bootstrap-amneziawg.sh lost that
 # race and took the whole install down at step 4 of 8, with the agent already
 # built and the one-shot bootstrap token already spent.
+# ═════════════════════════════════════════════════════════════════════════════
+#  A guard that can only ever answer "no"
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# `lsmod | grep -q PATTERN` under `set -o pipefail` returns 141, not 0, EXACTLY
+# WHEN IT MATCHES: grep -q exits on the first hit, lsmod dies of SIGPIPE partway
+# through its ~100 lines, and pipefail hands back the producer's status.
+# Measured on a Debian 13 guest with the module loaded: PIPESTATUS=(141 0).
+#
+# bootstrap-amneziawg.sh asked that question twice, so it could never see its
+# own module: every re-run tore down a working DKMS build and made it again,
+# and every install signed off by telling the operator to reboot and consider
+# the ~30 Mbps userspace fallback. Found by installing on a real VM and then
+# not believing the warning.
+note "the amneziawg module check reads /proc/modules, not a pipeline"
+if grep -qE '^[[:space:]]*awg_module_loaded\(\)[[:space:]]*\{[^}]*/proc/modules' "$AWG_BOOTSTRAP"; then
+    ok "awg_module_loaded reads /proc/modules directly"
+else
+    bad "bootstrap-amneziawg.sh has no /proc/modules check; a pipeline into grep -q cannot answer this under pipefail"
+fi
+lsmod_pipes=""
+for b in "${REPO_ROOT}"/scripts/*.sh "${REPO_ROOT}"/scripts/ops/*.sh "${REPO_ROOT}"/apps/node/scripts/*.sh; do
+    grep -qE '^[[:space:]]*set[[:space:]]+-[a-z]*o?[[:space:]]*pipefail|set -o pipefail' "$b" || continue
+    grep -qE '^[^#]*lsmod[[:space:]]*\|[[:space:]]*grep' "$b" && lsmod_pipes="${lsmod_pipes} $(basename "$b")"
+done
+if [[ -z "$lsmod_pipes" ]]; then
+    ok "and no pipefail script asks lsmod through a pipe into grep"
+else
+    bad "these pipe lsmod into grep under pipefail, which lies when it matches:${lsmod_pipes}"
+fi
+
 note "every bootstrap that uses apt waits for the lock"
 sources_apt() { grep -qE '^[[:space:]]*(\.|source)[[:space:]].*lib-apt\.sh' "$1"; }
 apt_bare=""

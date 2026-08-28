@@ -63,7 +63,26 @@ AWG_MODULE_TAG=v1.0.20260611
 AWG_MODULE_COMMIT=2a6e1a02ac024f54a23e18f894a279b7f870b8fb
 AWG_MODULE_DIR=/usr/src/amneziawg-src
 
-if lsmod | grep -q '^amneziawg\b'; then
+# Is the module in the running kernel?
+#
+# Read /proc/modules directly instead of `lsmod | grep -q`. Under this script's
+# `set -o pipefail` that pipeline returns 141, not 0, EXACTLY WHEN IT MATCHES:
+# `grep -q` exits on the first hit, `lsmod` is still writing its ~100 lines and
+# dies of SIGPIPE, and pipefail hands back the producer's status. Measured on a
+# Debian 13 guest with the module loaded:
+#
+#   set -o pipefail; lsmod | grep -q '^amneziawg\b'   -> 141, PIPESTATUS=(141 0)
+#   without pipefail, the same pipeline               -> 0
+#
+# So both guards below could only ever answer "not loaded". The consequences
+# were not cosmetic: every re-run tore down a working DKMS module and rebuilt
+# it, and every install ended by telling the operator their kernel-mode node
+# was broken - "Try rebooting, then 'modprobe amneziawg'" - and offering the
+# ~30 Mbps userspace fallback instead. Both untrue, on a node whose module was
+# loaded and working.
+awg_module_loaded() { grep -q '^amneziawg ' /proc/modules; }
+
+if awg_module_loaded; then
   log "amneziawg kernel module already loaded, skipping module install"
 else
   log "Installing amneziawg kernel module via DKMS from $AWG_MODULE_REPO"
@@ -131,7 +150,7 @@ command -v awg     >/dev/null || fail "awg binary not found after install"
 command -v awg-quick >/dev/null || fail "awg-quick binary not found after install"
 
 DKMS_OK=true
-if ! lsmod | grep -q '^amneziawg\b'; then
+if ! awg_module_loaded; then
   warn "amneziawg module not loaded, DKMS build may have failed or reboot needed"
   DKMS_OK=false
 fi
