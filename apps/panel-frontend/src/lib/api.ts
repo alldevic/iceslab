@@ -796,6 +796,9 @@ export interface UpdateNodeInput {
   domain?: string | null;
   hardening?: NodeHardening | null;
   singboxEngine?: boolean;
+  /** The operator's half of `status`. The poller owns online/degraded/
+   *  unreachable and the API refuses those here. */
+  status?: 'active' | 'disabled';
 }
 
 export async function listNodes(params?: {

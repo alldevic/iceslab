@@ -139,6 +139,21 @@ export const UpdateNodeSchema = z.object({
   domain: DomainSchema,
   hardening: HardeningSchema,
   singboxEngine: z.boolean().optional(),
+  /**
+   * The half of `status` an operator owns. `online` / `degraded` /
+   * `unreachable` / `unknown` are the status poller's answer about the machine
+   * and are not settable here, the same split `UpdateUserSchema` already makes
+   * for a user's status.
+   *
+   * It was not settable at all until 2026-08-29, and `disabled` is written by
+   * the F2 pool the moment a node is retired. That made it a door in one
+   * direction: a disabled node is out of every subscription
+   * (`status: { not: 'disabled' }`), out of the status poller and answered
+   * `disabled` on its heartbeat, with no way back except SQL. Worse than
+   * refused - zod strips unknown keys, so `PUT /api/nodes/:id {"status":
+   * "active"}` answered 200 and changed nothing.
+   */
+  status: z.enum(['active', 'disabled']).optional(),
 });
 export type UpdateNodeInput = z.infer<typeof UpdateNodeSchema>;
 

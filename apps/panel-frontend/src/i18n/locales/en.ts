@@ -634,6 +634,9 @@ export default {
     footerHint: 'TAB NEXT FIELD · ESC CANCEL',
   },
   nodeEdit: {
+    inService: 'In service',
+    inServiceDesc:
+      'Off takes the node out of every subscription and stops the status poller. The agent keeps running; nothing is uninstalled.',
     coresTitle: 'Cores on this node',
     coresHint: 'asked live; the panel compares with what it carries',
     coresUnreachable: 'The node did not answer, so what it runs is unknown:',
@@ -836,6 +839,11 @@ export default {
     },
     edit: {
       params: 'Parameters',
+      inService: 'In service',
+      inServiceDesc:
+        'Off takes the node out of every subscription and stops the status poller. The agent keeps running; nothing is uninstalled.',
+      inServiceOffWarning:
+        'This node is out of service: no subscription hands it out and its status is no longer polled.',
       system: 'System',
       bindings: 'Bindings',
       bindingsCount: 'Bindings ({{count}})',

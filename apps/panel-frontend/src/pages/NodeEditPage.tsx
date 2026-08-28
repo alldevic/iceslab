@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Box, NumberInput, Select, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { Box, NumberInput, Select, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
@@ -95,6 +95,9 @@ interface FormValues {
   regionId: string;
   consumptionMultiplier: number | '';
   maxUsers: number | '';
+  /** `status` is two things: the poller's verdict about the machine, and the
+   *  operator's decision to keep it in service. This is the second one. */
+  inService: boolean;
 }
 
 function splitAddress(address: string): { host: string; port: number } {
@@ -118,6 +121,7 @@ function defaults(node: Node | null): FormValues {
     regionId: node?.regionId ?? '',
     consumptionMultiplier: node ? Number(node.consumptionMultiplier) : 1,
     maxUsers: node?.maxUsers ?? '',
+    inService: node?.status !== 'disabled',
   };
 }
 
@@ -267,6 +271,9 @@ export function NodeEditPage() {
         consumptionMultiplier:
           form.values.consumptionMultiplier === '' ? 1 : Number(form.values.consumptionMultiplier),
         maxUsers: form.values.maxUsers === '' ? null : Number(form.values.maxUsers),
+        // Only the operator's half of `status`; the poller owns the rest, and
+        // the API refuses any other value.
+        status: form.values.inService ? 'active' : 'disabled',
       });
     },
     onSuccess: () => {
@@ -599,6 +606,14 @@ export function NodeEditPage() {
                     {...form.getInputProps('maxUsers')}
                   />
                 </Box>
+                {/* Taking a node out of service and putting it back. The F2 pool
+                    writes `disabled` when it retires a node and neither node
+                    editor ever wrote it back, so the only way out was SQL. */}
+                <Switch
+                  label={t('nodeEdit.inService')}
+                  description={t('nodeEdit.inServiceDesc')}
+                  {...form.getInputProps('inService', { type: 'checkbox' })}
+                />
               </Stack>
 
               {/* What the node runs, against what the panel would install. */}

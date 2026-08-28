@@ -100,6 +100,9 @@ const NODE_PROTOCOL_SELECT_DATA = [
 const DEFAULT_NODE_PORT = 1337;
 
 interface FormValues {
+  /** `status` is two things: the poller's verdict about the machine, and the
+   *  operator's decision to keep it in service. This is the second one. */
+  inService: boolean;
   name: string;
   // host + port - split for clearer UX (Remnawave-style). Recombined
   // into `host:port` on submit.
@@ -287,6 +290,7 @@ export function NodeEditModal({
       regionId: node?.regionId ?? '',
       maxUsers: node?.maxUsers ?? '',
       domain: node?.domain ?? '',
+      inService: node?.status !== 'disabled',
       hardenUfw: node?.hardening?.ufwLockdown ?? false,
       hardenFail2ban: node?.hardening?.fail2ban ?? false,
       hardenSshAllowlist: node?.hardening?.sshAllowlist ?? [],
@@ -314,6 +318,7 @@ export function NodeEditModal({
         regionId: node.regionId ?? '',
         maxUsers: node.maxUsers ?? '',
         domain: node.domain ?? '',
+        inService: node.status !== 'disabled',
         hardenUfw: node.hardening?.ufwLockdown ?? false,
         hardenFail2ban: node.hardening?.fail2ban ?? false,
         hardenSshAllowlist: node.hardening?.sshAllowlist ?? [],
@@ -555,6 +560,9 @@ export function NodeEditModal({
         form.values.maxUsers === '' ? null : Number(form.values.maxUsers),
       domain: form.values.domain.trim() || null,
       hardening: buildHardening(form.values, node?.hardening),
+      // Only the operator's half of `status`; the poller owns the rest, and the
+      // API refuses any other value.
+      status: form.values.inService ? 'active' : 'disabled',
     });
   }
 
@@ -771,6 +779,15 @@ export function NodeEditModal({
                 description={t('nodes.form.domainDesc')}
                 placeholder="des-01.example.com"
                 {...form.getInputProps('domain')}
+              />
+
+              {/* Taking a node out of service and putting it back. The F2 pool
+                  writes `disabled` when it retires a node and nothing here ever
+                  wrote it back, so the only way out was SQL. */}
+              <Switch
+                label={t('nodes.edit.inService')}
+                description={t('nodes.edit.inServiceDesc')}
+                {...form.getInputProps('inService', { type: 'checkbox' })}
               />
 
               {/* G (Zashchita) - probe-resistance toggles. Mirrors the create

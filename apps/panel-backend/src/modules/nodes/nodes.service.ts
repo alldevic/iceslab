@@ -340,6 +340,16 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
       (input.hardening as Prisma.InputJsonValue | null) ?? Prisma.JsonNull;
   }
   if (input.singboxEngine !== undefined) data.singboxEngine = input.singboxEngine;
+  // Taking a node out of service and putting it back. `active` is what the
+  // poller then refines into online/degraded/unreachable on its next tick, and
+  // what the F2 hotswap sets when it promotes a spare.
+  const statusChanged = input.status !== undefined && input.status !== existing.status;
+  if (statusChanged) {
+    data.status = input.status;
+    data.lastStatusChange = new Date();
+    data.lastStatusMessage =
+      input.status === 'disabled' ? 'disabled by an operator' : 're-enabled by an operator';
+  }
 
   // Three fields feed the config we push to the agent, so editing any of them
   // has to re-push it. Detect them before the write, otherwise the live node
@@ -358,6 +368,10 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
     input.domain !== undefined && input.domain !== existing.domain;
   const addressChanged =
     input.address !== undefined && input.address !== existing.address;
+  // A node that was disabled got no config while it was out - bindings and
+  // profiles could have moved under it - so putting it back in service pushes,
+  // exactly as the pool's promote does for a spare.
+  const cameBack = statusChanged && input.status === 'active';
   const egressChanged =
     input.hardening !== undefined &&
     EGRESS_HARDENING_KEYS.some(
@@ -370,7 +384,7 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
 
   const updated = await repo.updateById(id, data);
 
-  if (domainChanged || addressChanged || egressChanged) {
+  if (domainChanged || addressChanged || egressChanged || cameBack) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });
   }
   // Read caches hold the node row as the subscription renders it, so any edit
