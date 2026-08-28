@@ -140,6 +140,41 @@ export async function getGeoArtifact(name: string): Promise<GeoArtifact | null> 
   return collectArtifacts(c.result).find((a) => a.name === name) ?? null;
 }
 
+/**
+ * The serve path for a client that bounds SILENCE rather than duration.
+ *
+ * `getGeoArtifact` builds lazily on a cold cache, and a build is silent from
+ * end to end: no headers, no bytes, nothing to reset a stall timer with.
+ * Measured 2026-08-29 against the lab panel and its real source — 34.3 s to the
+ * first byte cold, 4.8 ms warm. The node's fetcher cancels an attempt that goes
+ * 30 s with NOTHING arriving, so a cold panel is not slow to it, it is dead:
+ * three attempts, all cancelled, ~93 s — and `geopkg.Ensure` calls the fetcher
+ * synchronously under the xray adapter's `restartMu`, so that is 93 s in which
+ * no config applies and no user goes live on that node.
+ *
+ * So the public route asks THIS instead: it answers only from a build that has
+ * already happened, and the caller says "not yet, ask again" rather than
+ * holding a connection open through one.
+ */
+export function isGeoBuildReady(): boolean {
+  return cached !== null;
+}
+
+/** Artifact from the build already in the cache; null when nothing is built
+ *  yet OR when the name is unknown - `isGeoBuildReady` tells those apart. */
+export function getBuiltGeoArtifact(name: string): GeoArtifact | null {
+  if (!cached) return null;
+  return collectArtifacts(cached.result).find((a) => a.name === name) ?? null;
+}
+
+/** Start the lazy build without waiting for it, so the "ask again" the public
+ *  route hands back is one that will be answerable. Single-flight, so a cold
+ *  fleet asking at once still shares ONE build. */
+export function startGeoBuild(onError: (err: unknown) => void = () => {}): void {
+  if (cached || inflight) return;
+  void buildShared().catch(onError);
+}
+
 /** A composed custom category's domains (xray matcher strings), for inlining
  *  into a subscription. null if not built or unknown. Case-insensitive. */
 export function getCategoryDomains(name: string): string[] | null {

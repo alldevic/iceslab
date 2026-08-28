@@ -29,7 +29,10 @@ import {
 import { assertFetchableUrl } from '../recipes/recipes.ssrf.js';
 import {
   getGeoArtifact,
+  getBuiltGeoArtifact,
   getGeoBuildMeta,
+  isGeoBuildReady,
+  startGeoBuild,
   GeoBuildAllSourcesFailed,
 } from './geo.registry.js';
 import { rebuildGeoAndRepush } from './geo.cron.js';
@@ -239,13 +242,13 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
   // the request rate itself; ETag revalidation bounds staleness after it lapses.
   const GEO_CACHE_CONTROL = 'public, max-age=3600';
 
-  // Serve a built artifact by name (custom .dat + the full source mirror).
-  async function serveArtifact(
+  /** Serve a built artifact by name (custom .dat + the full source mirror). */
+  function respond(
     req: FastifyRequest,
     reply: FastifyReply,
     name: string,
-  ): Promise<FastifyReply> {
-    const artifact = await getGeoArtifact(name);
+    artifact: { sha256: string; bytes: Uint8Array } | null,
+  ): FastifyReply {
     if (!artifact) return reply.code(404).send({ error: 'NOT_FOUND' });
     const etag = `"${artifact.sha256}"`;
     // Conditional GET: if the client already holds this exact build, answer 304.
@@ -267,10 +270,12 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
       .send(body);
   }
 
-  // Admin download (verify / inspect). ETag = sha256.
+  // Admin download (verify / inspect). ETag = sha256. This one DOES wait for a
+  // cold build: the caller is a person who clicked Download and expects the
+  // file, not a fetcher with a stall timer.
   app.get('/api/geo/artifacts/:name', auth, async (req, reply) => {
     const { name } = z.object({ name: ArtifactName }).parse(req.params);
-    return serveArtifact(req, reply, name);
+    return respond(req, reply, name, await getGeoArtifact(name));
   });
 
   // G6 - PUBLIC distribution. Nodes fetch the mirror + custom .dat here; clients
@@ -295,6 +300,21 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success || !timingSafeEqual(digest(parsed.data.token), digest(geoArtifactToken()))) {
       return reply.code(404).send({ error: 'NOT_FOUND' });
     }
-    return serveArtifact(req, reply, parsed.data.name);
+    // Never block a fetcher on a build. A cold build is 34 s of complete
+    // silence (measured), the node cancels an attempt after 30 s with nothing
+    // arriving, and it holds the adapter's restart lock while it waits - so
+    // waiting here costs that node every config apply and every live user
+    // update for ~93 s and still ends in failure. Answer "not yet, ask again",
+    // which its fetcher retries as a transient (>= 500), and start the build
+    // the next ask will be served from.
+    if (!isGeoBuildReady()) {
+      startGeoBuild((err) => req.log.warn({ err }, 'geo lazy build failed'));
+      return reply
+        .code(503)
+        .header('Retry-After', '60')
+        .header('Cache-Control', 'no-store')
+        .send({ error: 'NOT_BUILT', message: 'geo build not ready yet, retry shortly' });
+    }
+    return respond(req, reply, parsed.data.name, getBuiltGeoArtifact(parsed.data.name));
   });
 }

@@ -100,6 +100,45 @@ describe('public geo distribution (/geo/:token/:name)', () => {
     const res = await app.inject({ method: 'GET', url: `/geo/${geoArtifactToken()}/secrets.dat` });
     expect(res.statusCode).toBe(404);
   });
+
+  /**
+   * A cold cache used to build lazily WHILE holding the connection, and a build
+   * is silent end to end - no headers, no bytes. Measured against the lab panel
+   * and its real source on 2026-08-29: 34.3 s to the first byte cold, 4.8 ms
+   * warm. The node cancels an attempt that goes 30 s with nothing arriving, and
+   * calls the fetcher under the xray adapter's restart lock, so waiting here
+   * cost that node every config apply and every live user update for ~93 s and
+   * still ended in failure.
+   */
+  it('answers a retryable 503 instead of holding the connection through a cold build', async () => {
+    // No build, and the one configured source is under the reserved `.invalid`
+    // TLD: the background build this kicks off dies on NXDOMAIN instead of
+    // reaching for the network, and a route that WAITED for it would fail the
+    // test by timing out rather than by asserting.
+    await addSource({ name: 'dead', geositeUrl: 'https://geo-src.invalid/gs.dat' });
+    invalidateGeoBuild();
+    const res = await app.inject({ method: 'GET', url: `/geo/${geoArtifactToken()}/geosite.dat` });
+    // 503, not 404: the artifact is not missing, it is not built yet, and the
+    // node's fetcher retries a 5xx and gives up on a 4xx.
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['retry-after']).toBe('60');
+    expect(res.headers['cache-control']).toContain('no-store');
+  });
+
+  it('serves normally once a build exists, and still 404s an unknown name', async () => {
+    // The other side of the same branch: "not built" must not swallow "no such
+    // artifact" once there IS a build.
+    await seed();
+    expect(
+      (await app.inject({ method: 'GET', url: `/geo/${geoArtifactToken()}/geo-custom.dat` }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: 'GET', url: `/geo/${geoArtifactToken()}/secrets.dat` }))
+        .statusCode,
+    ).toBe(404);
+  });
+
 });
 
 describe('admin geo routes require auth', () => {
