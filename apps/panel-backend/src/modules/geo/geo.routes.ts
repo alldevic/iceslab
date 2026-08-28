@@ -287,11 +287,18 @@ export async function geoRoutes(app: FastifyInstance): Promise<void> {
   // NOT exist in the bundled deploy: it is deferred in
   // docs/geo-svc-prod-checklist.md until the client base grows. So today the
   // only ceiling on this route is the app-wide 100/min/IP, and one answer is
-  // the whole source mirror (70 MB on the 2026-08-28 lab build). No per-route
-  // rate limit is written here on purpose: a number low enough to bound that
-  // egress is also low enough to cut off a CGNAT of real clients the hour
-  // after a rebuild, so the cache is the fix and this comment is the record
-  // that it is still owed.
+  // the whole source mirror (73 703 302 bytes on the 2026-08-29 lab build).
+  //
+  // Both halves of that measured on 2026-08-29 rather than reasoned about: 130
+  // requests in a row answered 79 x 200 and 51 x 429, so the global limiter
+  // does cover this route; and a warm body leaves in 14 ms over loopback, so
+  // the panel is not the bottleneck, the link is. The ceiling is therefore
+  // exactly 100 x 70 MB = about 7 GB/min from one address.
+  //
+  // No per-route rate limit is written here on purpose: a number low enough to
+  // bound that egress is also low enough to cut off a CGNAT of real clients the
+  // hour after a rebuild, so the cache is the fix and this comment is the
+  // record that it is still owed.
   // Constant-time capability check (hash both sides to a fixed length first,
   // since timingSafeEqual needs equal-sized inputs).
   const digest = (s: string): Buffer => createHash('sha256').update(s).digest();

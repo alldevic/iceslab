@@ -34,14 +34,14 @@ vi.mock('../lib/api', async (importOriginal) => {
     listRoutePolicies: vi.fn(async () => ({ policies: [] })),
     getDashboardOverview: vi.fn(async () => ({ nodes: [], users: [] })),
     findNode: vi.fn(async () => ({ ...aNode(), id: 'node-1', status: 'disabled' })),
-    updateNode: (...a: unknown[]) => updateNode(...a),
+    updateNode: (id: string, input: unknown) => updateNode(id, input),
   };
 });
 
 import { NodeEditModal } from './NodeEditModal';
 import { NodeEditPage } from '../pages/NodeEditPage';
 
-const updateNode = vi.fn(async () => ({}));
+const updateNode = vi.fn(async (_id: string, _input: unknown) => ({}));
 
 describe('the node editor can take a node out of service and put it back', () => {
   it('a disabled node opens with the switch off, and turning it on sends active', async () => {
