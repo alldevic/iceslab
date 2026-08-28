@@ -288,6 +288,14 @@ else
     bad "a failed download exited $RC and said:
 $(sed 's/^/      /' "$OUT")"
 fi
+# ...and leaves nothing behind, the same way the sha-mismatch case does. `-o`
+# truncates the destination before the transfer, so a connection that dies
+# mid-body leaves a short file under the artefact's name.
+if [[ ! -e "$PAYLOAD" ]]; then
+    ok "and the half-transferred file is REMOVED, not left under the artefact's name"
+else
+    bad "a failed download left $(wc -c <"$PAYLOAD") bytes at $PAYLOAD"
+fi
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  pinned_clone: the same guarantee, in git's shape

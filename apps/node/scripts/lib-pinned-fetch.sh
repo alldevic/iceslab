@@ -33,6 +33,13 @@
 pinned_fetch() {
   local url="$1" out="$2" expect_sha="${3:-}"
   curl --proto '=https' --max-redirs 0 -fsSL "$url" -o "$out" || {
+    # Remove what curl left behind. `-o` creates and truncates the destination
+    # before the transfer, so a connection that dies mid-body leaves a SHORT
+    # file under the name the caller asked for - and nothing about that name
+    # says it is not the artefact. The sha-mismatch branch below has always
+    # cleaned up after itself; this is the same decision on the neighbouring
+    # failure, which had been left to the caller.
+    rm -f "$out"
     fail "pinned_fetch: download failed: $url"
   }
   if [[ -n "$expect_sha" ]]; then
