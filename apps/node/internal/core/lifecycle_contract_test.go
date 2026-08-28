@@ -213,6 +213,16 @@ func casesRaw() []adapterCase {
 			},
 		},
 		{
+			// Not Provisionable, and unlike every other adapter here that is a
+			// statement about mieru rather than an omission. What makes the
+			// others deferrable is a field the PANEL pushes and the node
+			// cannot invent: mtproto waits for a domain, xray for an inbound.
+			// mieru's config is rendered entirely from the agent's own
+			// environment — MITA_PORT defaults to 2012, MTU to 1400 — so there
+			// is no state in which it is registered and missing something. The
+			// case below (TestTheProvisionableFlagMatchesTheAdapter) is what
+			// keeps that from silently going stale: the day mieru grows a
+			// `Provisioned`, this table has to say so.
 			name: "mieru",
 			build: func(t *testing.T, _ bool) (core.CoreAdapter, string) {
 				cfgPath := filepath.Join(t.TempDir(), "server.json")
@@ -327,6 +337,45 @@ func TestAnUnprovisionedAdapterDefersInsteadOfFailing(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = a.Stop(context.Background()) })
 		})
+	}
+}
+
+// The `provisionable` column is a claim about each adapter, and until now it
+// was only checked in one direction: an adapter declared provisionable must
+// implement the interface (TestAnUnprovisionedAdapterDefersInsteadOfFailing
+// fails loudly if it does not). The other direction was open, and it is the one
+// that goes wrong quietly — an adapter that GAINS `Provisioned` while its row
+// still says false is skipped by both provisioning cases, and skipping looks
+// exactly like passing.
+//
+// That is not hypothetical bookkeeping: two of this file's rows carry an
+// exclusion, and one of them (hysteria) explains itself while the other (mieru)
+// did not. An unexplained exclusion is the shape this fork keeps finding, so
+// the explanation is now checkable rather than prose.
+func TestTheProvisionableFlagMatchesTheAdapter(t *testing.T) {
+	seen := 0
+	for _, c := range cases() {
+		t.Run(c.name, func(t *testing.T) {
+			a, _ := c.build(t, true)
+			t.Cleanup(func() { _ = a.Stop(context.Background()) })
+			_, implements := a.(core.Provisionable)
+			if implements {
+				seen++
+			}
+			if implements && !c.provisionable {
+				t.Errorf("%s implements core.Provisionable and its row says provisionable:false, "+
+					"so both provisioning cases skip it silently. Set the flag.", c.name)
+			}
+			if !implements && c.provisionable {
+				t.Errorf("%s is declared provisionable and does not implement core.Provisionable", c.name)
+			}
+		})
+	}
+	// The control: if `build` ever stopped returning adapters that implement
+	// the interface at all, every comparison above would agree with an empty
+	// world.
+	if seen == 0 {
+		t.Error("no adapter in the contract implements core.Provisionable; the comparison above is vacuous")
 	}
 }
 
