@@ -48,6 +48,20 @@ const twoDirections = {
 const autoRule = (cfg: ReturnType<typeof buildTopologyFragmentsForNode>) =>
   cfg!.routingRules.find((r) => 'balancerTag' in r && r.balancerTag === 'bal-auto');
 
+/** Every rule that speaks for the Auto tags: the balancer one and the refusal
+ *  right behind it. Both carry the same vlessRoute list, so a check about
+ *  DIRECTION tags has to skip them both. */
+const autoRules = (cfg: ReturnType<typeof buildTopologyFragmentsForNode>) => {
+  const auto = new Set(String(autoRule(cfg)!.vlessRoute).split(','));
+  return cfg!.routingRules.filter(
+    (r) =>
+      'vlessRoute' in r &&
+      String(r.vlessRoute)
+        .split(',')
+        .every((t) => auto.has(t)),
+  );
+};
+
 describe('the Auto tag reaches a balancer at the entry', () => {
   it('routes it, instead of letting it fall through to the entry country', () => {
     const cfg = buildTopologyFragmentsForNode(ENTRY, { ...twoDirections, auto: true })!;
@@ -80,8 +94,9 @@ describe('the Auto tag reaches a balancer at the entry', () => {
   it('does not collide with a direction tag', () => {
     const cfg = buildTopologyFragmentsForNode(ENTRY, { ...twoDirections, auto: true })!;
     const auto = new Set(String(autoRule(cfg)!.vlessRoute).split(','));
+    const mine = new Set(autoRules(cfg));
     for (const rule of cfg.routingRules) {
-      if (!('vlessRoute' in rule) || rule === autoRule(cfg)) continue;
+      if (!('vlessRoute' in rule) || mine.has(rule)) continue;
       for (const tag of String(rule.vlessRoute).split(',')) {
         expect(auto.has(tag), `tag ${tag} means both a direction and Auto`).toBe(false);
       }
@@ -92,6 +107,29 @@ describe('the Auto tag reaches a balancer at the entry', () => {
     // exactly one value, and that value would have sent a user out through an
     // exit they did not pick, so the policy bound gave up its last ordinal.
     expect(routeTag(MAX_DIRECTION_ORDINAL, 255)).toBeLessThan(autoRouteTag(MAX_DIRECTION_ORDINAL));
+  });
+
+  /**
+   * With nothing alive behind it, the Auto line must refuse - not leave from
+   * the entry's own country. Measured on a two-VM chain 2026-08-28: before
+   * this, Auto answered 200 with the entry's IP while every named direction
+   * refused with 000, and nothing anywhere reported the difference.
+   *
+   * `fallbackTag` and not a rule behind the balancer: a `balancerTag` rule that
+   * resolves to nothing does NOT fall through to the next rule. That was tried
+   * first and measured doing nothing - the entry still logged `>> direct`.
+   */
+  it('refuses the Auto tag when the balancer has nothing alive, instead of egressing at the entry', () => {
+    const cfg = buildTopologyFragmentsForNode(ENTRY, { ...twoDirections, auto: true })!;
+    const bal = cfg.balancers?.find((b) => b.tag === 'bal-auto');
+    expect(bal, 'no Auto balancer').toBeDefined();
+    expect(
+      bal!.fallbackTag,
+      'without a fallback the Auto line egresses at the entry when every exit is down',
+    ).toBe('blocked');
+    // And exactly one rule speaks for the Auto tags: a second one behind the
+    // balancer would be dead weight, since xray never reaches it.
+    expect(autoRules(cfg).length).toBe(1);
   });
 
   it('gives each policy its own Auto tag', () => {

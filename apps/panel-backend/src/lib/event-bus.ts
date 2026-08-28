@@ -85,6 +85,14 @@ export interface DomainEventMap {
   // hotswap policy subscribe. Emitted at most once per outage (re-arms after
   // recovery). severity 'critical' = near-total drop.
   'node.anomaly':         { nodeId: string; severity: 'warning' | 'critical'; bytesThisPoll: number; expectedBaseline: number; activeUsers: number; droppedUsers: number };
+  // A cascade has (or no longer has) at least one exit that can carry traffic.
+  // `live: 0` is the state where the entry has nowhere to send a subscriber:
+  // named direction lines refuse, and since 2026-08-28 the Auto line refuses
+  // too instead of quietly egressing at the entry. The panel used to say
+  // nothing at all about that, which is what made the silent version possible
+  // to miss. Edge-triggered off node liveness, so it fires on the flip, not
+  // every poll.
+  'cascade.exits-changed': { cascadeId: string; cascadeName: string; live: number; total: number };
 }
 
 type EventHandler<K extends keyof DomainEventMap> = (

@@ -60,6 +60,9 @@ const FORWARDED = [
   'node.status-changed',
   'node.deleted',
   'node.anomaly',
+  // A cascade losing its last usable exit. The entry refuses in that state, so
+  // without this a receiver learns about the outage from the subscribers.
+  'cascade.exits-changed',
   'profile.created',
   'profile.updated',
   'profile.deleted',

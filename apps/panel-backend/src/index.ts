@@ -11,6 +11,7 @@ import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.
 import { registerPoolEventHandlers } from './modules/ext_vptech_pool/pool.service.js';
 import { registerRemnawaveWebhookEmitter } from './modules/remnawave-compat/remnawave.webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
+import { registerCascadeEventHandlers } from './modules/cascades/cascade.events.js';
 import { observeWorker } from './lib/queue-observability.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
 import { startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
@@ -53,6 +54,7 @@ async function start() {
     registerUserEventHandlers();
     registerNodeEventHandlers();
     registerInboundEventHandlers();
+    registerCascadeEventHandlers();
     registerWebhookEventHandlers();
     // F2 - cold-pool hotswap (no-op unless EXT_VPTECH_POOL_ENABLED).
     registerPoolEventHandlers();

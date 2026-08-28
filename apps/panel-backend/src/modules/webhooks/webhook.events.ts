@@ -50,6 +50,10 @@ export function registerWebhookEventHandlers(): void {
   // its traffic and its active users both collapse (censored, or silently
   // broken). See stats.anomaly.ts for why that is read as one signal.
   forward('node.anomaly');
+  // A cascade losing its last usable exit (or getting one back). The entry
+  // refuses traffic in that state, so an operator who is not watching finds out
+  // from their subscribers.
+  forward('cascade.exits-changed');
   forward('profile.created');
   forward('profile.updated');
   forward('profile.deleted');

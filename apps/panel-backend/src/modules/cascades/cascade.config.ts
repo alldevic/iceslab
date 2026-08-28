@@ -841,6 +841,23 @@ export function buildTopologyFragmentsForNode(
       tag: AUTO_BALANCER_TAG,
       selector: [LINK_OUT_TAG],
       strategy: { type: 'leastPing' },
+      // Where the Auto line goes when the balancer has NOTHING alive. Without
+      // it, that connection lands on the default outbound - `direct` - and the
+      // subscriber who picked "fastest exit" silently leaves from the ENTRY's
+      // country, which is the one thing a cascade exists to prevent. Every
+      // NAMED direction already refused in that state, because its rule pins
+      // one outbound and a dead outbound is a failed connection; Auto was the
+      // only line that failed open. Measured on a two-VM chain 2026-08-28.
+      //
+      // It has to be `fallbackTag` and not a rule behind this one: a
+      // `balancerTag` rule that resolves to nothing does NOT fall through to
+      // the next rule. Measured, after trying exactly that and watching it do
+      // nothing - with `{vlessRoute: 65535, outboundTag: blocked}` sitting
+      // directly after the balancer rule, the entry still logged
+      // `[vless-in-… >> direct]` and the client still got 200. With
+      // fallbackTag: `-> blocked`, and the client gets nothing. Decided
+      // 2026-08-28: refuse, and tell the operator (cascade.events.ts).
+      fallbackTag: 'blocked',
     });
     needsObservatory = true;
     const autoTags = [autoRouteTag(0)];
