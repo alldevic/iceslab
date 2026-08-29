@@ -6,11 +6,11 @@
 
 [English](./README.md) · Русский
 
-Self-hosted панель для прокси, которая запускает настоящий апстрим-бинарник каждого протокола вместо того чтобы оборачивать всё через Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru: каждый это реальный бинарь проекта, под управлением Go node-agent через общий интерфейс `CoreAdapter`.
+Self-hosted панель для прокси, которая запускает настоящий апстрим-бинарник каждого протокола вместо того чтобы оборачивать всё через Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru плюс движок sing-box, на который можно переключить общие протоколы: каждый это реальный бинарь проекта, под управлением Go node-agent через общий интерфейс `CoreAdapter`.
 
 ## Зачем Iceslab
 
-- 7 протоколов, реальные бинарники - без реализации по принципу наименьшего общего знаменателя.
+- 7 протоколов на своих апстрим-бинарниках плюс второй движок (sing-box), на который можно переключить общие протоколы - без реализации по принципу наименьшего общего знаменателя.
 - Пуш по mTLS - панель отправляет конфиг агентам, они применяют и отчитываются. Никакого SSH на ноды.
 - Сделано для враждебных сетей - REALITY self-steal, многохоповые каскады, DPI-aware рецепты настройки, пресеты маршрутизации.
 - Одна ссылка-подписка на пользователя - отключение, лимит или отзыв без вмешательства в слой протокола. Любой формат клиента из одной ссылки (clash, sing-box, xray-json, wireguard, base64).
@@ -19,22 +19,22 @@ Self-hosted панель для прокси, которая запускает 
 
 ## Скриншоты
 
-[![Панель оператора](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png)
+[![Панель оператора](docs/image/dashboard.png)](docs/image/dashboard.png)
 
 <sub>Обзор оператора - флот, трафик, пользователи и живая телеметрия хоста, обновление каждые 10 секунд.</sub>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/node-cards.png" alt="Флот нод"><br><sub>Мульти-нода флот с живыми CPU / RAM / диск, доставка по mTLS.</sub></td>
-    <td width="50%"><img src="docs/screenshots/profiles-settings.png" alt="Профили протоколов"><br><sub>Управляемая настройка протоколов с учётом DPI. Ручная правка всегда доступна.</sub></td>
+    <td width="50%"><img src="docs/image/node-cards.png" alt="Флот нод"><br><sub>Мульти-нода флот с живыми CPU / RAM / диск, доставка по mTLS.</sub></td>
+    <td width="50%"><img src="docs/image/profiles-settings.png" alt="Профили протоколов"><br><sub>Управляемая настройка протоколов с учётом DPI. Ручная правка всегда доступна.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/users.png" alt="Пользователи"><br><sub>Одна ссылка-подписка на пользователя. Отключение, лимит или отзыв без вмешательства в слой протокола.</sub></td>
-    <td width="50%"><img src="docs/screenshots/cascade.png" alt="Каскады"><br><sub>Многохоповые каскады: цепочка нод от входа к выходу для слоистой маршрутизации.</sub></td>
+    <td width="50%"><img src="docs/image/users.png" alt="Пользователи"><br><sub>Одна ссылка-подписка на пользователя. Отключение, лимит или отзыв без вмешательства в слой протокола.</sub></td>
+    <td width="50%"><img src="docs/image/cascade.png" alt="Каскады"><br><sub>Многохоповые каскады: цепочка нод от входа к выходу для слоистой маршрутизации.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/squads.png" alt="Сквады"><br><sub>Сквады это срезы доступа: какие инбаунды видит пользователь в своей подписке.</sub></td>
-    <td width="50%"><img src="docs/screenshots/login.png" alt="Консоль оператора Iceslab"><br><sub>Одна панель. Все протоколы. Нативные ядра. mTLS-агенты.</sub></td>
+    <td width="50%"><img src="docs/image/squads.png" alt="Сквады"><br><sub>Сквады это срезы доступа: какие инбаунды видит пользователь в своей подписке.</sub></td>
+    <td width="50%"><img src="docs/image/login.png" alt="Консоль оператора Iceslab"><br><sub>Одна панель. Все протоколы. Нативные ядра. mTLS-агенты.</sub></td>
   </tr>
 </table>
 
@@ -172,6 +172,39 @@ bash scripts/iceslab.sh
 | Shadowsocks 2022 | xray-core inbound с `2022-blake3-*` шифрами | reuses xray binary |
 | MTProto | `9seconds/mtg` Fake-TLS, per-inbound secret из (id, domain) | native |
 | Mieru | `enfein/mieru` (`mita apply config` + reload) | native |
+
+### Выбор движка
+
+Большинство протоколов рендерит одно ядро, но VLESS, VMess, Trojan, Shadowsocks и
+Hysteria 2 умеет отдавать и xray, и sing-box. У профиля есть поле `engine`: не
+задано - протокол обслуживает его родное ядро, задано `singbox` - тот же профиль
+рендерит sing-box.
+
+Движок должен стоять на ноде до того, как профиль его выберет: ставится флагом
+`--with-singbox`, так же как `--protocol` ставит родное ядро.
+
+```bash
+bash <(curl -fsSL .../install-iceslab-node.sh) --panel-url ... --bootstrap ... --protocol xray --with-singbox
+```
+
+**TUIC, AnyTLS и ShadowTLS пока не раскатываются.** На ноде адаптер sing-box несёт
+все три, схемы конфигов инбаундов есть, форматы подписки их умеют, а вот API
+профилей нет: `ProtocolEnum` по-прежнему знает семь протоколов, поэтому создание
+профиля с этими тремя отклоняется. Панель при этом всё равно предлагает их в
+выборе протокола, и это известный дефект. Пока он не закрыт, считать три протокола
+работой в процессе, а не выпущенной фичей.
+
+**Статус в поле.** Движок sing-box зелёный в коде и юнит-тестах, но пока не
+подтверждён на живой линии; то же касается WARP-egress ниже. Протокол здесь
+считается готовым, когда он несёт настоящий трафик через настоящую сеть, а не
+когда он собрался.
+
+### WARP-egress
+
+Нода может выпускать трафик через Cloudflare WARP вместо собственного IP: панель
+регистрирует для ноды WARP-устройство и добавляет wireguard-outbound в её
+xray-конфиг. Переключатель на ноду, клиент менять не нужно. Полезно там, где
+блокируют именно адрес ноды.
 
 ## Подписки
 

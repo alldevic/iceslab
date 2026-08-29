@@ -795,7 +795,7 @@ model AppSetting {
 // A cascade is an ordered chain of nodes: entry -> [transit...] -> exit. Clients
 // connect to the ENTRY node's user-facing inbound; traffic is proxy-chained
 // (terminate-at-each-hop, so the entry can split-route) hop to hop to the EXIT,
-// which egresses direct. See docs/ROADMAP.md "C. Каскады" for the full design.
+// which egresses direct. See docs/plan/ROADMAP.md "C. Каскады" for the full design.
 //
 // C1 = this data model. Config generation (C2) and node-agent outbound-chaining
 // (C3) build on it. The protocol enums below are stored as free strings (the

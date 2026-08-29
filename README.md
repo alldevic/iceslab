@@ -6,11 +6,11 @@
 
 English · [Русский](./README.ru.md)
 
-Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
+Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru, plus a sing-box engine the shared protocols can be switched to: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
 
 ## Why Iceslab
 
-- 7 protocols, real binaries - no lowest-common-denominator reimplementation.
+- 7 protocols on their own upstream binaries, plus a second engine (sing-box) any of the shared protocols can be switched to - no lowest-common-denominator reimplementation.
 - Push over mTLS - the panel pushes config to agents, they apply and report back. No SSH into nodes.
 - Built for hostile networks - REALITY self-steal, multi-hop cascades, DPI-aware setup recipes, routing presets.
 - One subscription URL per user - disable, revoke, or cap traffic without touching the protocol layer. Every client format from one link (clash, sing-box, xray-json, wireguard, base64).
@@ -19,22 +19,22 @@ Self-hosted proxy management panel that runs the real upstream binary for each p
 
 ## Screenshots
 
-[![Operator dashboard](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png)
+[![Operator dashboard](docs/image/dashboard.png)](docs/image/dashboard.png)
 
 <sub>Operator overview - fleet, traffic, users and live host telemetry, refreshed every 10s.</sub>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/node-cards.png" alt="Node fleet"><br><sub>Multi-node fleet with live CPU / RAM / disk, pushed over mTLS.</sub></td>
-    <td width="50%"><img src="docs/screenshots/profiles-settings.png" alt="Protocol profiles"><br><sub>Guided, DPI-aware protocol setup. Manual edits always available.</sub></td>
+    <td width="50%"><img src="docs/image/node-cards.png" alt="Node fleet"><br><sub>Multi-node fleet with live CPU / RAM / disk, pushed over mTLS.</sub></td>
+    <td width="50%"><img src="docs/image/profiles-settings.png" alt="Protocol profiles"><br><sub>Guided, DPI-aware protocol setup. Manual edits always available.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/users.png" alt="Users"><br><sub>One subscription URL per user. Disable, revoke or cap traffic without touching the protocol layer.</sub></td>
-    <td width="50%"><img src="docs/screenshots/cascade.png" alt="Cascades"><br><sub>Multi-hop cascades: chain nodes entry to exit for layered routing.</sub></td>
+    <td width="50%"><img src="docs/image/users.png" alt="Users"><br><sub>One subscription URL per user. Disable, revoke or cap traffic without touching the protocol layer.</sub></td>
+    <td width="50%"><img src="docs/image/cascade.png" alt="Cascades"><br><sub>Multi-hop cascades: chain nodes entry to exit for layered routing.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/squads.png" alt="Squads"><br><sub>Squads are access slices: which inbounds each user sees in their subscription.</sub></td>
-    <td width="50%"><img src="docs/screenshots/login.png" alt="Iceslab operator console"><br><sub>One panel. Every protocol. Native cores. mTLS agents.</sub></td>
+    <td width="50%"><img src="docs/image/squads.png" alt="Squads"><br><sub>Squads are access slices: which inbounds each user sees in their subscription.</sub></td>
+    <td width="50%"><img src="docs/image/login.png" alt="Iceslab operator console"><br><sub>One panel. Every protocol. Native cores. mTLS agents.</sub></td>
   </tr>
 </table>
 
@@ -172,6 +172,39 @@ It opens a menu that explains each action (deploy, backend/frontend-only deploy,
 | Shadowsocks 2022 | xray-core inbound with `2022-blake3-*` ciphers | reuses xray binary |
 | MTProto | `9seconds/mtg` Fake-TLS, per-inbound secret derived from (id, domain) | native |
 | Mieru | `enfein/mieru` (`mita apply config` + reload) | native |
+
+### Engine choice
+
+Most protocols are rendered by one core, but VLESS, VMess, Trojan, Shadowsocks and
+Hysteria 2 can be served by either xray or sing-box. The profile carries an `engine`
+field: leave it unset and the protocol's native core handles it, set it to `singbox`
+and the same profile is rendered by sing-box instead.
+
+The engine has to be on the node before a profile can pick it: install with
+`--with-singbox`, the same way `--protocol` installs a native core.
+
+```bash
+bash <(curl -fsSL .../install-iceslab-node.sh) --panel-url ... --bootstrap ... --protocol xray --with-singbox
+```
+
+**TUIC, AnyTLS and ShadowTLS are not deployable yet.** The node-side sing-box
+adapter carries all three, the inbound config schemas exist, and the subscription
+formats know how to render them, but the profile API does not: `ProtocolEnum` still
+lists seven protocols, so creating a profile for these three is rejected. The panel
+UI offers them in the protocol picker regardless, which is a known defect. Until
+that is closed, treat the three as in progress, not as shipped.
+
+**Field status.** The sing-box engine is green in code and unit tests but not yet
+confirmed on a live line, and neither is WARP egress below. This project marks a
+protocol as done when it carries real traffic through a real network, not when it
+compiles.
+
+### WARP egress
+
+A node can send its traffic out through Cloudflare WARP instead of its own IP: the
+panel registers a WARP device for the node and renders a wireguard outbound on the
+node's xray config. Per-node toggle, no client-side change. Useful where the node's
+own address is what services block.
 
 ## Subscriptions
 

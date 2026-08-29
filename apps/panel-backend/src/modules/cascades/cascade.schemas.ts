@@ -31,7 +31,7 @@ export const MAX_CASCADE_LINKS = 64;
 
 // The full 7-core protocol set. Stored as free strings on the hop; the
 // node-agent realises each entry/link cell native-first (xray entry ->
-// vless/ss2022/wg links), bridges later. See docs/ROADMAP.md "C. Каскады".
+// vless/ss2022/wg links), bridges later. See docs/plan/ROADMAP.md "C. Каскады".
 export const CascadeProtocol = z.enum([
   'xray',
   'hysteria',
