@@ -1239,6 +1239,19 @@ const OBSERVATORY_PROBE_URL = 'https://www.gstatic.com/generate_204';
  * one request per exit per entry per minute, which is noise next to user traffic.
  * Below ~30s the measurement starts reporting network jitter rather than the
  * state of the exit.
+ *
+ * That leastPing picks between two LIVE exits by this measurement — as opposed
+ * to merely skipping a dead one, which is all any earlier run had shown — was
+ * measured on 2026-08-29 on three real VMs: one entry, and a direction whose
+ * pool held both exits, so `bal-d1` carried two members. 150 ms of netem was
+ * put on one exit's interface, a real client drove ten requests through the
+ * entry, and the exits' own `cascade-link-in` byte counters were read:
+ *
+ *   exit B slowed   exit A +123 803 bytes   exit B      +0 bytes
+ *   exit A slowed   exit A       +0 bytes   exit B +121 953 bytes
+ *
+ * The second row is the control: without it "A always wins" would also fit an
+ * entry that simply takes the first member of the selector.
  */
 const OBSERVATORY_PROBE_INTERVAL = '1m';
 
