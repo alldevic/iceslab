@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { Prisma } from '../../generated/prisma/client.js';
 import { issueNodeCert, encodeNodePayload } from '../keygen/keygen.service.js';
 import { eventBus } from '../../lib/event-bus.js';
+import { acmeHostnameFor } from '../inbounds/inbounds.queue.js';
 import { prisma } from '../../prisma.js';
 import * as repo from './nodes.repository.js';
 import { getPanelPublicIp } from './panel-ip.js';
@@ -224,7 +225,15 @@ async function renderBootstrapCommand(
   // wait for the panel's applyInbound payload. Domain, email,
   // masquerade etc. live on the Profile, no install-time flags exist
   // for them in install-iceslab-node.sh, so don't emit any here.
-  const acmeDomain = nodeAddress?.split(':')[0] ?? '';
+  // The name has to be one a public CA can issue for, and `acmeHostnameFor` is
+  // where that rule already lives: null for an IP literal and for a
+  // single-label name, with the reason spelled out there. This renderer used
+  // `address.split(':')[0]`, so a node registered by IP — every node before
+  // somebody points DNS at it — got `--hysteria-domain <the IP>` and hysteria
+  // exited with "does not qualify for a public certificate" while the installer
+  // printed success. Two renderers, one guard: this one and the twin in
+  // nodes.routes.ts.
+  const acmeDomain = acmeHostnameFor(nodeAddress);
   const acmeEmail = (process.env.ACME_DEFAULT_EMAIL ?? '').trim();
   if (protocol === 'hysteria' && acmeDomain) {
     lines[lines.length - 1] += ' \\';
@@ -234,6 +243,11 @@ async function renderBootstrapCommand(
     } else {
       lines.push('  --hysteria-email admin@example.com  # set ACME_DEFAULT_EMAIL env to inject automatically');
     }
+  } else if (protocol === 'hysteria') {
+    lines.push(
+      `  # hysteria needs a public FQDN for its certificate, and ${(nodeAddress ?? '').split(':')[0]} is not one.`,
+    );
+    lines.push('  # Point a name at this node, set it as the node address, and re-issue this command.');
   }
 
   // G - node hardening flags. Shared helper keeps this byte-identical with

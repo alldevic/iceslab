@@ -583,6 +583,36 @@ if [[ $UNINSTALL -eq 0 ]]; then
   case "$SSH_PORT" in
     ''|*[!0-9]*) fail "--ssh-port must be a number (got: $SSH_PORT)" ;;
   esac
+
+# A hysteria ACME name a public CA will never issue for, refused from the FLAGS
+# alone — before the one-time bootstrap token is spent, and before anything is
+# installed. Same rule and same reason as `acmeHostnameFor` in the panel
+# (inbounds.queue.ts): an IP literal is not served by Let's Encrypt, and a
+# single-label name cannot be publicly resolvable.
+#
+# It arrives as a real value, not as a typo. The panel renders its own install
+# command with `--hysteria-domain <the node's address host>`, and a node
+# registered by IP — every node before somebody points DNS at it — puts the IP
+# there. Measured on a Debian 13 guest 2026-08-29 from that very command:
+#
+#   FATAL failed to load server config  {"error": "invalid config:
+#     acme.domains: 127.0.0.1: obtaining certificate: [127.0.0.1] Obtain:
+#     subject '127.0.0.1' does not qualify for a public certificate"}
+#   hysteria.service: Failed with result 'exit-code'.
+#
+# ...while this installer printed its success banner, because its last step asks
+# about the AGENT. The same shape had happened once before through the other
+# door: the `your.domain.net` placeholder from get.hy2.sh.
+if [[ "$PROTOCOL" == "hysteria" && -n "$HY_DOMAIN" ]]; then
+  if [[ "$HY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$HY_DOMAIN" == *:* || "$HY_DOMAIN" != *.* ]]; then
+    fail "--hysteria-domain ${HY_DOMAIN} is not a name a public CA can issue for (an IP literal, or a single-label name).
+Hysteria would start, fail to obtain its certificate and exit. Point a public
+FQDN at this node, set it as the node's address in the panel, and re-issue the
+install command; or leave both hysteria flags off and write
+/etc/hysteria/config.yaml by hand."
+  fi
+fi
+
   if [[ "$SSH_PORT" -lt 1 || "$SSH_PORT" -gt 65535 ]]; then
     fail "--ssh-port out of range 1..65535 (got: $SSH_PORT)"
   fi
@@ -1893,40 +1923,56 @@ EOF
   systemctl restart hysteria.service
   log "Hysteria 2 started; first run will obtain the LE certificate via HTTP-01"
 
-  # ───── Hysteria port-hopping (iptables REDIRECT) ─────
-  # We install a tiny up/down helper + systemd unit that owns a single
-  # NAT-PREROUTING rule redirecting `udp --dport START:END → :443`. The
-  # unit is `Type=oneshot RemainAfterExit=yes` with ExecStart=up and
-  # ExecStop=down so `systemctl stop` cleanly tears the rule down. The
-  # rule is also restored on every boot (WantedBy=multi-user.target).
-  #
-  # We only install when:
-  #   1. PROTOCOL=hysteria   (port-hopping is hysteria-specific)
-  #   2. HY_PORT_RANGE is non-empty (admin can pass "" to opt out)
-  #   3. iptables is present on the system
-  if [[ -n "$HY_PORT_RANGE" ]] && command -v iptables >/dev/null 2>&1; then
-    # Validate format BEFORE we substitute the value into the generated
-    # helper script: the script runs as root and a careless typo (or a
-    # tampered upstream install pipeline) would otherwise get baked in
-    # verbatim. Format: `START-END` where both are 1024..65535 and END>START.
-    if ! [[ "$HY_PORT_RANGE" =~ ^([0-9]{4,5})-([0-9]{4,5})$ ]]; then
-      fail "--hysteria-port-range must be START-END (1024..65535), got: $HY_PORT_RANGE"
-    fi
-    HY_PR_START="${BASH_REMATCH[1]}"
-    HY_PR_END="${BASH_REMATCH[2]}"
-    if (( HY_PR_START < 1024 || HY_PR_END > 65535 || HY_PR_END <= HY_PR_START )); then
-      fail "--hysteria-port-range out of bounds: $HY_PORT_RANGE (need 1024<start<end<=65535)"
-    fi
-    # iptables takes the range as `START:END` (colon). The flag we accept
-    # is `START-END` (hyphen) so it matches the URI form admins see.
-    HY_RANGE_IPT="${HY_PR_START}:${HY_PR_END}"
-    HY_LISTEN_PORT=443
-    HYHOP_BIN=/usr/local/bin/iceslab-hyhop
-    HYHOP_UNIT=/etc/systemd/system/iceslab-hyhop.service
+elif [[ "$PROTOCOL" == "hysteria" ]]; then
+  warn "Hysteria server NOT auto-configured; pass --hysteria-domain <fqdn> --hysteria-email <addr> next time"
+  warn "Or manually write /etc/hysteria/config.yaml + systemd unit (see Hysteria 2 upstream docs at v2.hysteria.network)"
+fi
 
-    log "Installing port-hopping iptables redirect: udp ${HY_PORT_RANGE} → ${HY_LISTEN_PORT}"
+# ───── Hysteria port-hopping (iptables REDIRECT) ─────
+#
+# OUTSIDE the ACME gate above, deliberately. This block used to sit inside
+# `PROTOCOL == hysteria && HY_DOMAIN && HY_EMAIL`, and it depends on neither:
+# it is a UDP port range redirected to the listen port, and has nothing to do
+# with certificates. A node installed without the two ACME flags therefore got
+# no redirect at all, while the panel went on handing every client an `mport=`
+# range to rotate through — ports where nothing was listening.
+# We install a tiny up/down helper + systemd unit that owns a single
+# NAT-PREROUTING rule redirecting `udp --dport START:END → :443`. The
+# unit is `Type=oneshot RemainAfterExit=yes` with ExecStart=up and
+# ExecStop=down so `systemctl stop` cleanly tears the rule down. The
+# rule is also restored on every boot (WantedBy=multi-user.target).
+#
+# We only install when:
+#   1. PROTOCOL=hysteria   (port-hopping is hysteria-specific)
+#   2. HY_PORT_RANGE is non-empty (admin can pass "" to opt out)
+#   3. iptables is present on the system
+#
+# Condition 1 is spelled out here now. It used to be carried by the enclosing
+# ACME gate, and moving out from under that gate is exactly how such a check
+# goes missing — an xray node would otherwise get a hysteria redirect.
+if [[ "$PROTOCOL" == "hysteria" && -n "$HY_PORT_RANGE" ]] && command -v iptables >/dev/null 2>&1; then
+  # Validate format BEFORE we substitute the value into the generated
+  # helper script: the script runs as root and a careless typo (or a
+  # tampered upstream install pipeline) would otherwise get baked in
+  # verbatim. Format: `START-END` where both are 1024..65535 and END>START.
+  if ! [[ "$HY_PORT_RANGE" =~ ^([0-9]{4,5})-([0-9]{4,5})$ ]]; then
+    fail "--hysteria-port-range must be START-END (1024..65535), got: $HY_PORT_RANGE"
+  fi
+  HY_PR_START="${BASH_REMATCH[1]}"
+  HY_PR_END="${BASH_REMATCH[2]}"
+  if (( HY_PR_START < 1024 || HY_PR_END > 65535 || HY_PR_END <= HY_PR_START )); then
+    fail "--hysteria-port-range out of bounds: $HY_PORT_RANGE (need 1024<start<end<=65535)"
+  fi
+  # iptables takes the range as `START:END` (colon). The flag we accept
+  # is `START-END` (hyphen) so it matches the URI form admins see.
+  HY_RANGE_IPT="${HY_PR_START}:${HY_PR_END}"
+  HY_LISTEN_PORT=443
+  HYHOP_BIN=/usr/local/bin/iceslab-hyhop
+  HYHOP_UNIT=/etc/systemd/system/iceslab-hyhop.service
 
-    cat > "$HYHOP_BIN" <<EOF
+  log "Installing port-hopping iptables redirect: udp ${HY_PORT_RANGE} → ${HY_LISTEN_PORT}"
+
+  cat > "$HYHOP_BIN" <<EOF
 #!/usr/bin/env bash
 # Iceslab Hysteria 2 port-hopping helper. Managed by systemd unit
 # iceslab-hyhop.service, do not edit by hand. To change the range,
@@ -1935,30 +1981,30 @@ set -euo pipefail
 RANGE_IPT='${HY_RANGE_IPT}'
 LISTEN_PORT=${HY_LISTEN_PORT}
 case "\${1:-}" in
-  up)
-    iptables -t nat -C PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null \\
-      || iptables -t nat -A PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT"
-    if command -v ip6tables >/dev/null 2>&1; then
-      ip6tables -t nat -C PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null \\
-        || ip6tables -t nat -A PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" \\
-        || true
-    fi
-    ;;
-  down)
-    iptables -t nat -D PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null || true
-    if command -v ip6tables >/dev/null 2>&1; then
-      ip6tables -t nat -D PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null || true
-    fi
-    ;;
-  *)
-    echo "usage: \$0 up|down" >&2
-    exit 64
-    ;;
+up)
+  iptables -t nat -C PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null \\
+    || iptables -t nat -A PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT"
+  if command -v ip6tables >/dev/null 2>&1; then
+    ip6tables -t nat -C PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null \\
+      || ip6tables -t nat -A PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" \\
+      || true
+  fi
+  ;;
+down)
+  iptables -t nat -D PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null || true
+  if command -v ip6tables >/dev/null 2>&1; then
+    ip6tables -t nat -D PREROUTING -p udp --dport "\$RANGE_IPT" -j REDIRECT --to-ports "\$LISTEN_PORT" 2>/dev/null || true
+  fi
+  ;;
+*)
+  echo "usage: \$0 up|down" >&2
+  exit 64
+  ;;
 esac
 EOF
-    chmod 755 "$HYHOP_BIN"
+  chmod 755 "$HYHOP_BIN"
 
-    cat > "$HYHOP_UNIT" <<EOF
+  cat > "$HYHOP_UNIT" <<EOF
 [Unit]
 Description=Iceslab Hysteria 2 port-hopping (UDP ${HY_PORT_RANGE} → :${HY_LISTEN_PORT})
 After=network-online.target hysteria.service
@@ -1974,17 +2020,13 @@ ExecStop=${HYHOP_BIN} down
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable iceslab-hyhop.service >/dev/null 2>&1 || true
-    systemctl restart iceslab-hyhop.service
-    log "Port-hopping active. Profile-side range MUST be a subset of ${HY_PORT_RANGE}."
-  else
-    [[ -z "$HY_PORT_RANGE" ]] && log "Port-hopping disabled by --hysteria-port-range ''"
-    command -v iptables >/dev/null 2>&1 || warn "iptables not installed; skipping port-hopping setup"
-  fi
+  systemctl daemon-reload
+  systemctl enable iceslab-hyhop.service >/dev/null 2>&1 || true
+  systemctl restart iceslab-hyhop.service
+  log "Port-hopping active. Profile-side range MUST be a subset of ${HY_PORT_RANGE}."
 elif [[ "$PROTOCOL" == "hysteria" ]]; then
-  warn "Hysteria server NOT auto-configured; pass --hysteria-domain <fqdn> --hysteria-email <addr> next time"
-  warn "Or manually write /etc/hysteria/config.yaml + systemd unit (see Hysteria 2 upstream docs at v2.hysteria.network)"
+  [[ -z "$HY_PORT_RANGE" ]] && log "Port-hopping disabled by --hysteria-port-range ''"
+  command -v iptables >/dev/null 2>&1 || warn "iptables not installed; skipping port-hopping setup"
 fi
 
 step "Wait for node-agent ready"

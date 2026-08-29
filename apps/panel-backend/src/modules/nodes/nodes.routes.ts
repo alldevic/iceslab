@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { CORE_BINARIES, ENGINE_CORE, PROTOCOL_CORE } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
+import { acmeHostnameFor } from '../inbounds/inbounds.queue.js';
 import { config } from '../../config.js';
 import {
   CreateNodeSchema,
@@ -61,8 +62,20 @@ async function renderRefreshBootstrapCommand(
   } else {
     lines.push('  --panel-ip YOUR_PANEL_PUBLIC_IP  # auto-detect failed, replace with panel IP');
   }
-  // Auto-inject ACME flags for protocols that need a real cert.
-  const acmeDomain = nodeAddress.split(':')[0] ?? '';
+  // The name the command carries has to be one a public CA can issue for, and
+  // `acmeHostnameFor` is where that rule already lives — it returns null for an
+  // IP literal and for a single-label name, with the reason spelled out. This
+  // renderer used `address.split(':')[0]` instead, so a node registered by IP
+  // (which is every node before somebody points DNS at it) got
+  // `--hysteria-domain <the IP>`. Measured on a real node from this very
+  // command: hysteria wrote `acme.domains: [127.0.0.1]`, exited with "subject
+  // '127.0.0.1' does not qualify for a public certificate", and never served
+  // anything — while the installer printed its success banner, because its last
+  // step asks about the agent.
+  //
+  // Two renderers, one guard: this one and renderBootstrapCommand in
+  // nodes.service.ts.
+  const acmeDomain = acmeHostnameFor(nodeAddress);
   const acmeEmail = (process.env.ACME_DEFAULT_EMAIL ?? '').trim();
   if (protocol === 'hysteria' && acmeDomain) {
     lines[lines.length - 1] += ' \\';
@@ -72,6 +85,13 @@ async function renderRefreshBootstrapCommand(
         ? `  --hysteria-email ${acmeEmail}`
         : '  --hysteria-email admin@example.com  # set ACME_DEFAULT_EMAIL env to inject automatically',
     );
+  } else if (protocol === 'hysteria') {
+    // Say it in the command, where the operator is looking. Silence here reads
+    // as "nothing else to do", and hysteria would simply never come up.
+    lines.push(
+      `  # hysteria needs a public FQDN for its certificate, and ${nodeAddress.split(':')[0]} is not one.`,
+    );
+    lines.push('  # Point a name at this node, set it as the node address, and re-issue this command.');
   }
   // Naive / SS2022 / MTProto / Mieru: no install-time flags. Profile-side
   // config flows over mTLS from panel via applyInbound after bootstrap.

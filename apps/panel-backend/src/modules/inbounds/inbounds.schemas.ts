@@ -56,13 +56,48 @@ export const HysteriaConfigSchema = z.object({
    * otherwise the redirect won't catch the rotating ports.
    *
    * Both fields must be set together (or both empty) and `end > start`.
-   * Cross-field validation lives in `inbounds.service.ts` rather than as
-   * a schema-level `.refine()` so this stays a plain `ZodObject` and can
-   * participate in the InboundConfigByProtocol discriminated union.
+   * That used to be enforced in `inbounds.service.ts`, and the sentence
+   * outlived the file: slice 27 removed the inbound routes and their service
+   * with them, so from then until 2026-08-29 nothing checked it. Measured
+   * against the live panel, all three accepted with a 201:
+   *
+   *   {start: 50000, end: 20000}   an inverted range
+   *   {start: 30000}               half a pair
+   *   {start: 1100, end: 1200}     a range no node redirects
+   *
+   * Half a pair is the quiet one: `buildHysteriaUri` emits `mport=` only when
+   * BOTH are numbers, so the operator turns port-hopping on, the panel says
+   * 201, and every client link goes out without it.
+   *
+   * Refined here rather than in a service, because a service is a place a
+   * request can arrive without passing through. This is the same superRefine
+   * the xray and AmneziaWG schemas below already carry, and it is safe for the
+   * reason stated there: the discriminated unions key off the top-level
+   * `protocol` literal, not off this `config` member.
    */
   portHoppingStart: z.number().int().min(1024).max(65535).optional(),
   portHoppingEnd: z.number().int().min(1024).max(65535).optional(),
-});
+})
+  .superRefine((cfg, ctx) => {
+    const start = cfg.portHoppingStart;
+    const end = cfg.portHoppingEnd;
+    if ((start === undefined) !== (end === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [start === undefined ? 'portHoppingStart' : 'portHoppingEnd'],
+        message:
+          'port-hopping needs both ends of the range: with only one, the client link carries no mport= at all and the feature is silently off',
+      });
+      return;
+    }
+    if (start !== undefined && end !== undefined && end <= start) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['portHoppingEnd'],
+        message: `port-hopping range must end above where it starts (got ${start}-${end})`,
+      });
+    }
+  });
 
 /**
  * Which half of an `xray vlessenc` pair a string is, read off xray's own

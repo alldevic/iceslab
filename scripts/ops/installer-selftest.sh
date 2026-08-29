@@ -501,6 +501,49 @@ fi
 # WireGuard's own handshake message types, i.e. precisely the marker the feature
 # exists to replace. Nothing anywhere said so: the panel showed the obfuscation
 # as configured and the node reported healthy.
+# ───── The hysteria ACME name, and when the installer refuses it ─────
+#
+# The panel renders its own install command with `--hysteria-domain <the node's
+# address host>`, so a node registered by IP gets the IP. Measured on a Debian
+# 13 guest from that very command: hysteria wrote `acme.domains: [127.0.0.1]`,
+# exited with "subject '127.0.0.1' does not qualify for a public certificate",
+# and never served anything — while this installer printed its success banner,
+# because its last step asks about the AGENT.
+#
+# Two things are asserted, and the ORDER is the second one: a refusal decidable
+# from the flags alone must happen before the one-time bootstrap token is spent
+# (§56.7 is the same lesson from the other end).
+note "an ACME name no CA can issue for is refused, before the token is spent"
+hy_check_line="$(grep -n 'is not a name a public CA can issue for' "$NODE_INSTALLER" | head -1 | cut -d: -f1)"
+hy_redeem_line="$(grep -n 'Redeeming bootstrap token' "$NODE_INSTALLER" | head -1 | cut -d: -f1)"
+if [[ -n "$hy_check_line" && -n "$hy_redeem_line" ]]; then
+    ok "the installer refuses an unusable --hysteria-domain"
+    if (( hy_check_line < hy_redeem_line )); then
+        ok "and it refuses BEFORE redeeming the one-time bootstrap token"
+    else
+        bad "the refusal is at line ${hy_check_line}, the token is redeemed at ${hy_redeem_line}:
+an operator who pasted the panel's own command would burn the token and then be told the name is unusable."
+    fi
+else
+    bad "no --hysteria-domain sanity check in the installer: an IP literal reaches hysteria's acme.domains,
+and hysteria exits with 'does not qualify for a public certificate' while this script prints success."
+fi
+
+# ...and port-hopping does not depend on the ACME flags it used to sit behind.
+note "port-hopping is not gated on the ACME flags"
+hyhop_line="$(grep -n 'Hysteria port-hopping (iptables REDIRECT)' "$NODE_INSTALLER" | head -1 | cut -d: -f1)"
+acme_gate_line="$(grep -n 'PROTOCOL" == "hysteria" && -n "$HY_DOMAIN" && -n "$HY_EMAIL"' "$NODE_INSTALLER" | head -1 | cut -d: -f1)"
+acme_gate_end="$(awk -v s="$acme_gate_line" 'NR>=s{if ($0 ~ /^fi$/) {print NR; exit}}' "$NODE_INSTALLER")"
+if [[ -z "$hyhop_line" || -z "$acme_gate_line" ]]; then
+    bad "could not locate the port-hopping block or the ACME gate; the case below would be vacuous"
+elif (( hyhop_line > acme_gate_end )); then
+    ok "the port-hopping redirect is installed outside the ACME gate"
+else
+    bad "the port-hopping redirect (line ${hyhop_line}) sits inside the ACME gate (lines ${acme_gate_line}-${acme_gate_end}).
+It is a UDP range redirected to the listen port and depends on no certificate, so a node installed
+without the two ACME flags gets no redirect while the panel hands every client an mport= to rotate through."
+fi
+
 note "the amneziawg module and tools are pinned to ONE release"
 awg_mod_tag="$(grep -E '^AWG_MODULE_TAG=' "$AWG_BOOTSTRAP" | head -1 | cut -d= -f2-)"
 awg_tools_tag="$(grep -E '^AWG_TOOLS_TAG=' "$AWG_BOOTSTRAP" | head -1 | cut -d= -f2-)"
