@@ -32,7 +32,11 @@ import { interfaceFields } from '../test/declarations';
 const FRONT = join(import.meta.dirname, 'api.ts');
 const BACK = join(
   import.meta.dirname, '..', '..', '..',
-  'panel-backend', 'src', 'modules', 'settings', 'settings.routes.ts',
+  // The schema moved out of settings.routes.ts into a module of its own on
+  // 2026-08-29 (the convention every other module already followed), so the
+  // panel-frontend round-trip door can import it without dragging prisma into
+  // the frontend test env. This mirror reads the declaration, so it follows it.
+  'panel-backend', 'src', 'modules', 'settings', 'settings.schemas.ts',
 );
 
 /**
@@ -44,10 +48,10 @@ const BACK = join(
  */
 const KNOWN_ONE_SIDED: Record<string, string> = {};
 
-/** Top-level keys of the zod object literal `UpsertInput` in settings.routes.ts. */
+/** Top-level keys of the zod object literal `UpdateSettingsSchema`. */
 function zodKeys(src: string): string[] {
-  const at = src.indexOf('const UpsertInput = z.object({');
-  if (at < 0) throw new Error('UpsertInput not found in settings.routes.ts');
+  const at = src.indexOf('export const UpdateSettingsSchema = z.object({');
+  if (at < 0) throw new Error('UpdateSettingsSchema not found in settings.schemas.ts');
   const open = src.indexOf('{', src.indexOf('z.object(', at));
   const keys: string[] = [];
   let depth = 0;
@@ -85,7 +89,7 @@ describe('the settings the panel sends are the settings the backend accepts', ()
     // The control. Either extraction returning nothing would make every
     // comparison below vacuously true.
     expect(front.length, 'UpdateSettingsInput parsed to no fields').toBeGreaterThan(5);
-    expect(back.length, 'UpsertInput parsed to no keys').toBeGreaterThan(5);
+    expect(back.length, 'UpdateSettingsSchema parsed to no keys').toBeGreaterThan(5);
     expect(front).toContain('brandName');
     expect(back).toContain('brandName');
   });
