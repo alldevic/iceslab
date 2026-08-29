@@ -148,6 +148,23 @@ export async function createProfile(input: CreateProfileInput): Promise<PublicPr
       configToStore = { ...ss, serverPsk: generateSsServerPsk(ss.method) };
     }
   }
+  /**
+   * ShadowTLS: fill in the inner shadowsocks server key the same way.
+   *
+   * It is optional in the schema because the operator is not meant to invent
+   * it, and the node refuses an inbound without one ("shadowtls ssPassword
+   * (inner shadowsocks key) is required"). The autofill existed only on the
+   * per-node inbound path, which is not how anything deploys any more: it goes
+   * through Profile -> ProfileNodeBinding. So a ShadowTLS profile created
+   * through the API arrived at the node with no key and was rejected there,
+   * one layer away from the operator who could act on it (A-029).
+   */
+  if (input.protocol === 'shadowtls') {
+    const st = configToStore as { ssMethod: string; ssPassword?: string };
+    if (!st.ssPassword) {
+      configToStore = { ...st, ssPassword: generateSsServerPsk(st.ssMethod) };
+    }
+  }
   // Keep only the transport settings this profile's transport uses, so a field
   // typed for a transport that was later switched away cannot come back to life
   // when the operator switches back. See stripInapplicableTransportFields.
@@ -229,6 +246,23 @@ export async function updateProfile(
     ];
     if (!schema) throw new Error(`Unknown protocol ${existing.protocol}`);
     const parsed = schema.parse(input.config);
+    /**
+     * ShadowTLS keeps its inner key across an edit.
+     *
+     * `ssPassword` is optional in the schema and no form field fills it, so a
+     * save from the profile screen sends a config without it. A plain overwrite
+     * would drop the key the node is running, and the next push would be
+     * refused - an unrelated edit (renaming the camouflage domain) silently
+     * breaking the inbound. Same shape as the squad-save incident of
+     * 2026-07-31: never let a payload that cannot express a field erase it.
+     */
+    if (existing.protocol === 'shadowtls') {
+      const incoming = parsed as { ssMethod: string; ssPassword?: string };
+      if (!incoming.ssPassword) {
+        const stored = (existing.config ?? {}) as { ssPassword?: string };
+        incoming.ssPassword = stored.ssPassword ?? generateSsServerPsk(incoming.ssMethod);
+      }
+    }
     // After parse, so schema defaults are filled in first and only then the
     // fields belonging to other transports are dropped.
     data.config = (

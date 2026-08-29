@@ -35,6 +35,14 @@ export const ProtocolEnum = z.enum([
   'shadowsocks',
   'mtproto',
   'mieru',
+  // sing-box-only trio. Everything else about them already existed - the node
+  // adapter, the inbound config schemas, credential fan-out, share links, and
+  // the profile form that offers all three - but a profile could not be saved,
+  // and deployment goes only through ProfileNodeBinding -> Profile. So they
+  // were unreachable for an operator and untestable in the field (audit A-029).
+  'tuic',
+  'anytls',
+  'shadowtls',
 ]);
 
 // Engine-choice (EC5): which proxy core serves a profile. null = native.
@@ -47,6 +55,14 @@ const ENGINE_OPTIONS: Record<string, readonly string[]> = {
   xray: ['xray', 'singbox'],
   shadowsocks: ['xray', 'singbox'],
   hysteria: ['hysteria', 'singbox'],
+  // sing-box is not one option among several for these three, it is the only
+  // core that speaks them. Listing it anyway is what lets an operator SAY so:
+  // without an entry here the protocol saves only with a null engine, and a
+  // form that sends `engine: 'singbox'` is refused with a message about an
+  // invalid engine, which reads as "this protocol is broken".
+  tuic: ['singbox'],
+  anytls: ['singbox'],
+  shadowtls: ['singbox'],
 };
 
 /** A null/undefined engine (native) is always valid; a set engine must be one
@@ -70,6 +86,9 @@ const ProfileConfigByProtocol = z.discriminatedUnion('protocol', [
   z.object({ protocol: z.literal('shadowsocks'), config: PROTOCOL_CONFIG_SCHEMAS.shadowsocks }),
   z.object({ protocol: z.literal('mtproto'),     config: PROTOCOL_CONFIG_SCHEMAS.mtproto }),
   z.object({ protocol: z.literal('mieru'),       config: PROTOCOL_CONFIG_SCHEMAS.mieru }),
+  z.object({ protocol: z.literal('tuic'),        config: PROTOCOL_CONFIG_SCHEMAS.tuic }),
+  z.object({ protocol: z.literal('anytls'),      config: PROTOCOL_CONFIG_SCHEMAS.anytls }),
+  z.object({ protocol: z.literal('shadowtls'),   config: PROTOCOL_CONFIG_SCHEMAS.shadowtls }),
 ]);
 
 const ProfileBaseFields = z.object({
