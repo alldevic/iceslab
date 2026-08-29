@@ -6,11 +6,11 @@
 
 English · [Русский](./README.ru.md)
 
-Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru, plus a sing-box engine the shared protocols can be switched to: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
+Self-hosted proxy management panel that runs the real upstream binary for each protocol instead of wrapping everything through Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru, and a sing-box engine for TUIC / AnyTLS / ShadowTLS: each one is the actual project binary, managed by a Go node-agent under a unified `CoreAdapter` interface.
 
 ## Why Iceslab
 
-- 7 protocols on their own upstream binaries, plus a second engine (sing-box) any of the shared protocols can be switched to - no lowest-common-denominator reimplementation.
+- 7 protocols on their own upstream binaries, plus a sing-box engine that adds TUIC, AnyTLS and ShadowTLS - no lowest-common-denominator reimplementation.
 - Push over mTLS - the panel pushes config to agents, they apply and report back. No SSH into nodes.
 - Built for hostile networks - REALITY self-steal, multi-hop cascades, DPI-aware setup recipes, routing presets.
 - One subscription URL per user - disable, revoke, or cap traffic without touching the protocol layer. Every client format from one link (clash, sing-box, xray-json, wireguard, base64).
@@ -172,6 +172,7 @@ It opens a menu that explains each action (deploy, backend/frontend-only deploy,
 | Shadowsocks 2022 | xray-core inbound with `2022-blake3-*` ciphers | reuses xray binary |
 | MTProto | `9seconds/mtg` Fake-TLS, per-inbound secret derived from (id, domain) | native |
 | Mieru | `enfein/mieru` (`mita apply config` + reload) | native |
+| TUIC / AnyTLS / ShadowTLS | `sing-box` server, installed with `--with-singbox` | sing-box engine |
 
 ### Engine choice
 
@@ -187,12 +188,11 @@ The engine has to be on the node before a profile can pick it: install with
 bash <(curl -fsSL .../install-iceslab-node.sh) --panel-url ... --bootstrap ... --protocol xray --with-singbox
 ```
 
-**TUIC, AnyTLS and ShadowTLS are not deployable yet.** The node-side sing-box
-adapter carries all three, the inbound config schemas exist, and the subscription
-formats know how to render them, but the profile API does not: `ProtocolEnum` still
-lists seven protocols, so creating a profile for these three is rejected. The panel
-UI offers them in the protocol picker regardless, which is a known defect. Until
-that is closed, treat the three as in progress, not as shipped.
+**TUIC, AnyTLS and ShadowTLS** are served only by this engine, and a profile for
+them carries no `engine` of its own: leaving it unset resolves to sing-box, and
+setting `singbox` explicitly is accepted too. ShadowTLS has no share-link form,
+it reaches clients through the full-config subscription formats (sing-box,
+clash), not through a `://` URI.
 
 **Field status.** The sing-box engine is green in code and unit tests but not yet
 confirmed on a live line, and neither is WARP egress below. This project marks a

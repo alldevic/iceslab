@@ -6,11 +6,11 @@
 
 [English](./README.md) · Русский
 
-Self-hosted панель для прокси, которая запускает настоящий апстрим-бинарник каждого протокола вместо того чтобы оборачивать всё через Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru плюс движок sing-box, на который можно переключить общие протоколы: каждый это реальный бинарь проекта, под управлением Go node-agent через общий интерфейс `CoreAdapter`.
+Self-hosted панель для прокси, которая запускает настоящий апстрим-бинарник каждого протокола вместо того чтобы оборачивать всё через Xray-core. Hysteria 2, Xray (VLESS / VMess / Trojan + REALITY), AmneziaWG kernel module, NaiveProxy (Caddy fork), Shadowsocks 2022, MTProto, Mieru и движок sing-box для TUIC / AnyTLS / ShadowTLS: каждый это реальный бинарь проекта, под управлением Go node-agent через общий интерфейс `CoreAdapter`.
 
 ## Зачем Iceslab
 
-- 7 протоколов на своих апстрим-бинарниках плюс второй движок (sing-box), на который можно переключить общие протоколы - без реализации по принципу наименьшего общего знаменателя.
+- 7 протоколов на своих апстрим-бинарниках плюс движок sing-box, добавляющий TUIC, AnyTLS и ShadowTLS - без реализации по принципу наименьшего общего знаменателя.
 - Пуш по mTLS - панель отправляет конфиг агентам, они применяют и отчитываются. Никакого SSH на ноды.
 - Сделано для враждебных сетей - REALITY self-steal, многохоповые каскады, DPI-aware рецепты настройки, пресеты маршрутизации.
 - Одна ссылка-подписка на пользователя - отключение, лимит или отзыв без вмешательства в слой протокола. Любой формат клиента из одной ссылки (clash, sing-box, xray-json, wireguard, base64).
@@ -172,6 +172,7 @@ bash scripts/iceslab.sh
 | Shadowsocks 2022 | xray-core inbound с `2022-blake3-*` шифрами | reuses xray binary |
 | MTProto | `9seconds/mtg` Fake-TLS, per-inbound secret из (id, domain) | native |
 | Mieru | `enfein/mieru` (`mita apply config` + reload) | native |
+| TUIC / AnyTLS / ShadowTLS | сервер `sing-box`, ставится флагом `--with-singbox` | движок sing-box |
 
 ### Выбор движка
 
@@ -187,12 +188,10 @@ Hysteria 2 умеет отдавать и xray, и sing-box. У профиля �
 bash <(curl -fsSL .../install-iceslab-node.sh) --panel-url ... --bootstrap ... --protocol xray --with-singbox
 ```
 
-**TUIC, AnyTLS и ShadowTLS пока не раскатываются.** На ноде адаптер sing-box несёт
-все три, схемы конфигов инбаундов есть, форматы подписки их умеют, а вот API
-профилей нет: `ProtocolEnum` по-прежнему знает семь протоколов, поэтому создание
-профиля с этими тремя отклоняется. Панель при этом всё равно предлагает их в
-выборе протокола, и это известный дефект. Пока он не закрыт, считать три протокола
-работой в процессе, а не выпущенной фичей.
+**TUIC, AnyTLS и ShadowTLS** обслуживает только этот движок, и своего `engine`
+профиль для них не несёт: пустое значение резолвится в sing-box, явное `singbox`
+тоже принимается. У ShadowTLS нет формы share-link: до клиента он доезжает
+полными форматами подписки (sing-box, clash), а не ссылкой `://`.
 
 **Статус в поле.** Движок sing-box зелёный в коде и юнит-тестах, но пока не
 подтверждён на живой линии; то же касается WARP-egress ниже. Протокол здесь
