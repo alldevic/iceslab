@@ -183,11 +183,17 @@ fi
 # unknown here is whether what the image CARRIES is still those bytes — a
 # later COPY, a prune, a cache mount reused across a bumped pin.
 note "the proxy cores the image carries"
+# A core the image COMPILES has no published sum to pin - see CoreSourceBuild -
+# so the manifest holds null and the build writes the sum of what it produced
+# into a `.sha256` sidecar, which is what the panel then states to the node.
+# Printed as BUILT here and checked against that sidecar below, which is the
+# property the node actually depends on: the panel vouches for the bytes it
+# holds.
 CORES_EXPECTED="$(docker run --rm --entrypoint node "$BACKEND_IMG" --input-type=module -e '
   const { CORE_BINARIES } = await import("/app/packages/shared/src/core-binaries.js");
   for (const [name, core] of Object.entries(CORE_BINARIES))
     for (const [arch, a] of Object.entries(core.assets))
-      console.log(`${name}-${arch} ${a.sha256}`);
+      console.log(`${name}-${arch} ${core.source ? "BUILT" : a.sha256}`);
 ' 2>/dev/null)"
 if [[ "$(wc -l <<<"$CORES_EXPECTED")" -gt 5 ]]; then
     ok "the image can read its own pinned manifest ($(wc -l <<<"$CORES_EXPECTED") artefacts declared)"
@@ -209,21 +215,59 @@ fi
 # build takes CORE_ARCHES, so an image may legitimately carry fewer
 # architectures than the manifest knows about.
 MISMATCH=""
+SIDECARS=0
 while read -r f sha; do
     [[ -n "$f" ]] || continue
+    # The sidecars are checked below, against the artefact they describe.
+    if [[ "$f" == *.sha256 ]]; then
+        SIDECARS=$((SIDECARS + 1))
+        continue
+    fi
     want="$(grep -m1 "^${f} " <<<"$CORES_EXPECTED" | awk '{print $2}')"
     if [[ -z "$want" ]]; then
         MISMATCH="${MISMATCH}
       ${f}: carried but not declared in the manifest"
+    elif [[ "$want" == "BUILT" ]]; then
+        # Built here: the file the panel serves has to be the file the panel
+        # vouches for. Without the sidecar the download route 500s by design,
+        # and with a STALE one the node refuses the bytes - either way the
+        # failure lands on an operator installing a node, so it is caught here.
+        got="$(beq "cat /app/cores/${f}.sha256 2>/dev/null" | tr -d ' \r\n')"
+        if [[ -z "$got" ]]; then
+            MISMATCH="${MISMATCH}
+      ${f}: built from source but carries no ${f}.sha256; the panel could not state a sum and the download would 500"
+        elif [[ "$got" != "$sha" ]]; then
+            MISMATCH="${MISMATCH}
+      ${f}: holds ${sha}, its sidecar says ${got}; every node would refuse the download"
+        fi
     elif [[ "$want" != "$sha" ]]; then
         MISMATCH="${MISMATCH}
       ${f}: carries ${sha}, manifest pins ${want}"
     fi
 done <<<"$CORES_ACTUAL"
 if [[ -z "$MISMATCH" ]]; then
-    ok "and every one of them hashes to the sha256 the manifest pins"
+    ok "and every one of them hashes to the sha256 the panel would state (${SIDECARS} built, by sidecar)"
 else
     bad "the image carries bytes the manifest does not describe:${MISMATCH}"
+fi
+
+# The control for the case above: with no sidecars at all it degenerates into
+# the downloaded-core check, and the built core would be unverified with nothing
+# saying so.
+if [[ "$SIDECARS" -gt 0 ]]; then
+    ok "the built core carries its sha256 beside it (${SIDECARS} sidecar(s))"
+else
+    bad "no *.sha256 sidecar under /app/cores; the panel cannot vouch for a core it built"
+fi
+
+# The tag the whole source build exists for. An image that quietly went back to
+# the published binary serves a sing-box that exits 1 on every config this panel
+# writes, and every check above would still pass.
+SB_TAGS="$(beq '/usr/local/bin/sing-box version 2>/dev/null | grep -m1 ^Tags:')"
+if grep -q 'with_v2ray_api' <<<"$SB_TAGS"; then
+    ok "the sing-box it carries is built with with_v2ray_api"
+else
+    bad "the sing-box in this image lacks with_v2ray_api, so it would refuse to start on this panel's configs: ${SB_TAGS:-no Tags line}"
 fi
 
 # ───── ...and each is the architecture it is filed under ─────
@@ -247,6 +291,11 @@ set -u
 cd /app/cores 2>/dev/null || exit 0
 work=$(mktemp -d)
 for f in *; do
+  # The sums beside a compiled core are metadata, not artefacts; they are
+  # checked against the file they describe further up. Skipped by NAME rather
+  # than falling into "unknown architecture", which would report a missing
+  # e_machine on a text file as if a core were mis-filed.
+  case "$f" in *.sha256) continue ;; esac
   arch=${f##*-}
   case "$arch" in
     amd64) want=003e; wname="x86-64" ;;
@@ -305,22 +354,28 @@ ARCH_OK="$(grep -c '^OK '    <<<"$ARCH_OUT")"
 ARCH_BAD="$(grep -cE '^(WRONG|NOELF|SKIP) ' <<<"$ARCH_OUT")"
 # The control: an unpacker that quietly extracted nothing would report zero of
 # everything, and "no WRONG lines" would then be true of an empty run.
-if [[ "$ARCH_OK" -eq "$CARRIED" && "$ARCH_BAD" -eq 0 ]]; then
+# CARRIED counts every file under /app/cores; the sums beside a compiled core
+# are metadata and have no architecture, so the artefacts are what this compares
+# against. Counting them would fail this case for the exact reason the sidecars
+# were added.
+ARTEFACTS=$((CARRIED - SIDECARS))
+if [[ "$ARCH_OK" -eq "$ARTEFACTS" && "$ARCH_BAD" -eq 0 ]]; then
     ok "and every one of the ${ARCH_OK} was opened and holds an ELF of the architecture it is filed under"
 else
-    bad "the carried artefacts do not all match the architecture they are filed under (${ARCH_OK} ok of ${CARRIED} carried):
+    bad "the carried artefacts do not all match the architecture they are filed under (${ARCH_OK} ok of ${ARTEFACTS} artefacts, ${SIDECARS} sidecars):
 $(grep -vE '^OK ' <<<"$ARCH_OUT" | sed 's/^/      /')"
 fi
 
 # The panel's own sing-box comes out of that same set now. It used to be a
 # second download pinned to a different version, which is one artefact and two
-# numbers to bump; and it has to RUN here, on alpine, which is why the manifest
-# pins the statically linked musl build rather than the plain one.
+# numbers to bump; and it has to RUN here, on alpine, while the nodes run it on
+# Debian - which is why the build is CGO-less and its tag set omits
+# with_naive_outbound, the one that forces a dynamically linked binary.
 SB_VER="$(beq '/usr/local/bin/sing-box version 2>/dev/null | head -1')"
 if grep -q 'sing-box version' <<<"$SB_VER"; then
     ok "the geo builder's sing-box runs in this image (${SB_VER})"
 else
-    bad "sing-box does not run in the image: ${SB_VER:-no output}. The plain linux-amd64 build is glibc-linked and exits 127 on alpine; the manifest must pin the -musl artefact"
+    bad "sing-box does not run in the image: ${SB_VER:-no output}. A dynamically linked build has an ELF interpreter alpine does not have and exits 127; the build must stay static (see scripts/build-singbox.sh)"
 fi
 
 # ───── Who it runs as ─────
