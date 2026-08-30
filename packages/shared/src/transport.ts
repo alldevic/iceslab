@@ -668,6 +668,20 @@ export interface HealthcheckResponse {
    *  Absent on a node that never scanned, whose scan found nothing, or that
    *  runs a pre-F3 agent. */
   egressTune?: EgressTune;
+  /** The Hysteria 2 port-hopping range this node actually REDIRECTS, read by
+   *  the agent out of its own nat table. Chosen at install time, so the panel
+   *  had no way to know it and accepted any range on a profile - including one
+   *  the node does not catch, which is a client honestly rotating its
+   *  destination port across ports nobody is listening on. Absent = no rule, no
+   *  iptables, or an agent older than the field, and the panel gates on none of
+   *  the three. Mirrors the Go PortHopDto json tags exactly (wire-sync). */
+  portHopping?: PortHopping;
+}
+
+/** An inclusive UDP port range, as a node reports what it redirects. */
+export interface PortHopping {
+  start: number;
+  end: number;
 }
 
 /**

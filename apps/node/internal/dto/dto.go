@@ -295,11 +295,35 @@ type EgressTuneDto struct {
 	Working  int     `json:"working"`
 }
 
+// PortHopDto is the Hysteria 2 port-hopping range THIS node actually
+// redirects, read from its nat table rather than from the unit that writes it.
+//
+// It exists because the panel had no way to know the number. The range is
+// chosen at install time (`--hysteria-port-range`), so the panel accepted any
+// range on a profile - including one this node does not catch, which is a
+// client honestly rotating its destination port across ports nobody listens on.
+// Nothing reports that; the tunnel just fails on some connections. A rule
+// guessing the number panel-side would instead refuse a node deliberately
+// installed with a different one, so the node says what it does - the way §55
+// made it say which ENGINE runs a core.
+//
+// Absent means "not reported": no rule, no iptables, or a query that failed.
+// Those are three states, and none of them is a promise the panel can gate on,
+// so all three are sent as nothing rather than as a range.
+type PortHopDto struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
 type HealthcheckResponse struct {
 	Status string       `json:"status"`
 	Cores  []CoreStatus `json:"cores"`
 	// F3: the self-tuned egress strategy, when this node runs one.
 	EgressTune *EgressTuneDto `json:"egressTune,omitempty"`
+	// The UDP range this node redirects to its Hysteria listener. Absent on a
+	// node with no such rule and on an agent older than this field, which the
+	// panel treats alike.
+	PortHopping *PortHopDto `json:"portHopping,omitempty"`
 }
 
 // ───── GET /metrics ─────

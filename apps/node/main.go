@@ -111,6 +111,12 @@ func main() {
 		Adapters:          adapters,
 		InboundsStorePath: getenv("NODE_INBOUNDS_STORE", defaultInboundsStorePath),
 		Egress:            egressMgr,
+		// The Hysteria listener a port-hopping REDIRECT has to point at for
+		// this node to claim the range as its own. 443 is the constant
+		// install-iceslab-node.sh writes into the iceslab-hyhop unit; the env
+		// exists so a node installed differently can say so rather than
+		// reporting somebody else's UDP redirect as its hopping range.
+		HysteriaListenPort: getenvInt("HYSTERIA_HOP_LISTEN_PORT", 443),
 	})
 	if err != nil {
 		logger.Error("build server", "err", err)

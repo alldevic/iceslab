@@ -231,7 +231,11 @@ export async function updateProfile(
     // reasoning across the profile/binding seam.
     const bindings = await prisma.profileNodeBinding.findMany({
       where: { profileId: id },
-      include: { node: { select: { name: true } } },
+      include: {
+        node: {
+          select: { name: true, portHoppingStart: true, portHoppingEnd: true },
+        },
+      },
     });
     for (const b of bindings) {
       assertNoNewConfigViolations(
@@ -241,6 +245,16 @@ export async function updateProfile(
         `Profile "${existing.name}" on node "${b.node.name}"`,
       );
     }
+    // ...and the one thing no schema can judge, because the answer lives on the
+    // machine: whether these nodes actually redirect the ports this profile
+    // tells clients to hop across. Merged config, same as above - a binding can
+    // override the range.
+    assertPortHoppingFitsNodes(
+      existing.protocol,
+      input.name ?? existing.name,
+      nextConfig,
+      bindings.map((b) => b.node),
+    );
   }
 
   // The engine and the config can move in separate requests, so the guard has
@@ -309,6 +323,15 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
     { profileConfig: profile.config, overrides: input.overrides ?? null },
     `Binding profile "${profile.name}" to node "${node.name}"`,
   );
+  // Binding is the other direction into the same mismatch: the profile's range
+  // was fine against the nodes it had, and this adds one that does not redirect
+  // it.
+  assertPortHoppingFitsNodes(
+    profile.protocol,
+    profile.name,
+    resolveBindingConfig(profile.config, input.overrides ?? null, profile.protocol),
+    [node],
+  );
 
   const created = await prisma.profileNodeBinding.create({
     data: {
@@ -360,7 +383,7 @@ export async function updateBinding(
     where: { id },
     include: {
       profile: { select: { name: true, protocol: true, config: true } },
-      node: { select: { name: true } },
+      node: { select: { name: true, portHoppingStart: true, portHoppingEnd: true } },
     },
   });
   if (!existing) throw new BindingNotFoundError(id);
@@ -371,6 +394,14 @@ export async function updateBinding(
       { profileConfig: existing.profile.config, overrides: existing.overrides },
       { profileConfig: existing.profile.config, overrides: input.overrides },
       `Binding "${existing.profile.name}" on node "${existing.node.name}"`,
+    );
+    // The third door, and the one a check on createBinding alone would leave
+    // open: an override can move the range on a binding that already exists.
+    assertPortHoppingFitsNodes(
+      existing.profile.protocol,
+      existing.profile.name,
+      resolveBindingConfig(existing.profile.config, input.overrides, existing.profile.protocol),
+      [existing.node],
     );
   }
 
@@ -537,3 +568,79 @@ export function assertNoNewConfigViolations(
   if (fresh.length > 0) throw new InvalidBindingConfigError(fresh, subject);
 }
 
+
+/**
+ * A port-hopping range the node would not catch.
+ *
+ * Separate from InvalidBindingConfigError because it is a different KIND of
+ * refusal: nothing about the config is malformed, and the same profile is
+ * perfectly valid against a node installed with a wider range. What is wrong is
+ * the pair.
+ */
+export class PortHoppingOutsideNodeRangeError extends Error {
+  constructor(
+    public readonly profileName: string,
+    public readonly nodeName: string,
+    public readonly wanted: { start: number; end: number },
+    public readonly nodeRange: { start: number; end: number },
+  ) {
+    super(
+      `Profile "${profileName}" hops over ports ${wanted.start}-${wanted.end}, but node ` +
+        `"${nodeName}" only redirects ${nodeRange.start}-${nodeRange.end} to its Hysteria ` +
+        `listener. Clients would rotate onto ports that node is not catching. Narrow the ` +
+        `profile's range, or re-run the node installer with ` +
+        `--hysteria-port-range ${wanted.start}-${wanted.end}.`,
+    );
+    this.name = 'PortHoppingOutsideNodeRangeError';
+  }
+}
+
+/**
+ * Refuse a hysteria profile whose port-hopping range a bound node does not
+ * redirect.
+ *
+ * The range is chosen when a node is INSTALLED (`--hysteria-port-range`,
+ * default 20000-50000) and turned into an iptables REDIRECT. The panel had no
+ * way to know it, so `hysteria-port-hopping.test.ts` carried a case asserting
+ * that a range outside it saves fine, with a comment explaining that the panel
+ * cannot know better. It could not - until the node started reporting what it
+ * actually redirects, which is what made that exception stop being true. An
+ * exception should not outlive its subject.
+ *
+ * What it costs to be wrong here is invisible on both sides: the client honestly
+ * rotates its destination port across the profile's range, the ports outside the
+ * node's range reach nothing, and neither the panel nor the node logs a thing.
+ * The connection simply fails, on some attempts and not others.
+ *
+ * Gated on what the node REPORTED, never on a guess. A node that reports nothing
+ * - no rule, no iptables, an older agent - is not judged: refusing a save
+ * against a number the panel does not have would be the very failure this
+ * replaces, in the other direction.
+ */
+export function assertPortHoppingFitsNodes(
+  protocol: string,
+  profileName: string,
+  config: unknown,
+  nodes: { name: string; portHoppingStart: number | null; portHoppingEnd: number | null }[],
+): void {
+  if (protocol !== 'hysteria' || config == null || typeof config !== 'object') return;
+  const cfg = config as { portHoppingStart?: unknown; portHoppingEnd?: unknown };
+  const start = Number(cfg.portHoppingStart);
+  const end = Number(cfg.portHoppingEnd);
+  // Port-hopping off, or half a pair - the schema refuses half a pair on its
+  // own and says why, so there is nothing for this to add.
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end < start) return;
+
+  for (const node of nodes) {
+    const ns = node.portHoppingStart;
+    const ne = node.portHoppingEnd;
+    if (ns == null || ne == null) continue; // never reported: nothing to judge against
+    if (start >= ns && end <= ne) continue; // a subset, which is the whole requirement
+    throw new PortHoppingOutsideNodeRangeError(
+      profileName,
+      node.name,
+      { start, end },
+      { start: ns, end: ne },
+    );
+  }
+}

@@ -55,6 +55,8 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       coreVersion: true,
       coreRestarts: true,
       egressTune: true,
+      portHoppingStart: true,
+      portHoppingEnd: true,
     },
   });
 
@@ -96,7 +98,21 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       const storedTune = (node.egressTune as NodeEgressTune | null) ?? null;
       const tuneChanged =
         result.egressTune !== undefined && tuneWorthWriting(storedTune, result.egressTune);
-      if (statusChanged || messageChanged || versionChanged || restartsChanged || tuneChanged) {
+      // Same rule again: only when the node reported one, and only when it
+      // moved. It moves when someone re-runs the installer with a different
+      // --hysteria-port-range, which is rare and worth a write when it happens.
+      const hopChanged =
+        result.portHopping !== undefined &&
+        (result.portHopping.start !== node.portHoppingStart ||
+          result.portHopping.end !== node.portHoppingEnd);
+      if (
+        statusChanged ||
+        messageChanged ||
+        versionChanged ||
+        restartsChanged ||
+        tuneChanged ||
+        hopChanged
+      ) {
         await prisma.node.update({
           where: { id: node.id },
           data: {
@@ -112,6 +128,12 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
               : {}),
             ...(tuneChanged
               ? { egressTune: result.egressTune as unknown as Prisma.InputJsonValue }
+              : {}),
+            ...(hopChanged
+              ? {
+                  portHoppingStart: result.portHopping!.start,
+                  portHoppingEnd: result.portHopping!.end,
+                }
               : {}),
           },
         });
@@ -205,6 +227,11 @@ interface PollResult {
   // which matters because a node that stops reporting has not stopped running
   // the strategy it last found.
   egressTune?: NodeEgressTune;
+  // The port-hopping range this poll observed. Undefined follows the same rule
+  // as the three above - unreachable node, pre-2026-08-30 agent, or a node with
+  // no redirect - and means "leave the stored one alone". A node that stops
+  // reporting has not stopped redirecting.
+  portHopping?: { start: number; end: number };
 }
 
 /**
@@ -384,8 +411,16 @@ async function checkOne(node: {
     const egressTune: NodeEgressTune | undefined = res.egressTune
       ? { ...res.egressTune, observedAt: new Date().toISOString() }
       : undefined;
+    // Taken only when it is a usable range. A malformed or inverted one is the
+    // same as none: the panel refuses profile saves against this number, and a
+    // nonsense range would refuse every one of them.
+    const hop = res.portHopping;
+    const portHopping =
+      hop && hop.start > 0 && hop.end >= hop.start
+        ? { start: hop.start, end: hop.end }
+        : undefined;
     const verdict = statusFromHealth(res);
-    return { ...verdict, coreVersion, coreRestarts, egressTune };
+    return { ...verdict, coreVersion, coreRestarts, egressTune, portHopping };
   } catch (err) {
     if (err instanceof NodeRequestError) {
       return { status: 'unreachable', message: `${err.status} ${err.message}`.slice(0, 200) };

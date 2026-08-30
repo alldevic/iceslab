@@ -133,6 +133,17 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
           .code(400)
           .send({ error: 'INVALID_CONFIG', message: err.message, issues: err.issues });
       }
+      // Its own code, not INVALID_CONFIG: nothing about the config is
+      // malformed, and the same profile is fine against a node installed with a
+      // wider range. What is wrong is the PAIR, and the message names both
+      // halves plus the installer flag that would fix it from the other side.
+      if (err instanceof svc.PortHoppingOutsideNodeRangeError) {
+        return reply.code(400).send({
+          error: 'PORT_HOPPING_OUTSIDE_NODE_RANGE',
+          message: err.message,
+          nodeName: err.nodeName,
+        });
+      }
       throw err;
     }
   });
@@ -171,6 +182,17 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
         return reply
           .code(400)
           .send({ error: 'INVALID_CONFIG', message: err.message, issues: err.issues });
+      }
+      // Its own code, not INVALID_CONFIG: nothing about the config is
+      // malformed, and the same profile is fine against a node installed with a
+      // wider range. What is wrong is the PAIR, and the message names both
+      // halves plus the installer flag that would fix it from the other side.
+      if (err instanceof svc.PortHoppingOutsideNodeRangeError) {
+        return reply.code(400).send({
+          error: 'PORT_HOPPING_OUTSIDE_NODE_RANGE',
+          message: err.message,
+          nodeName: err.nodeName,
+        });
       }
       throw err;
     }
@@ -219,6 +241,17 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
         return reply
           .code(400)
           .send({ error: 'INVALID_CONFIG', message: err.message, issues: err.issues });
+      }
+      // Its own code, not INVALID_CONFIG: nothing about the config is
+      // malformed, and the same profile is fine against a node installed with a
+      // wider range. What is wrong is the PAIR, and the message names both
+      // halves plus the installer flag that would fix it from the other side.
+      if (err instanceof svc.PortHoppingOutsideNodeRangeError) {
+        return reply.code(400).send({
+          error: 'PORT_HOPPING_OUTSIDE_NODE_RANGE',
+          message: err.message,
+          nodeName: err.nodeName,
+        });
       }
       throw err;
     }

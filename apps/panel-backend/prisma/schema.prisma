@@ -310,6 +310,23 @@ model Node {
   // promote a winner into a preset. NULL = never reported, which is not the
   // same as "no strategy needed" (that is a row with working: 0).
   egressTune            Json?     @map("egress_tune")
+  // The Hysteria 2 port-hopping range this node actually REDIRECTS, as the
+  // agent reads it out of its own nat table. Two nullable ints rather than a
+  // Json blob because the panel compares them: a profile whose range is not a
+  // subset of a bound node's is refused at save time, naming the node.
+  //
+  // The range is chosen at install (`--hysteria-port-range`, default
+  // 20000-50000), so before this the panel could not know it and accepted any
+  // range - including one the node does not catch, which is a client honestly
+  // rotating its destination port across ports nobody is listening on, and
+  // nothing anywhere saying so. Guessing the number panel-side would have been
+  // worse: it would refuse a node deliberately installed with another one.
+  //
+  // NULL = not reported, which is three states the panel treats alike (no rule,
+  // no iptables, an agent older than the field) and none of which is a promise
+  // to gate a save on.
+  portHoppingStart      Int?      @map("port_hopping_start")
+  portHoppingEnd        Int?      @map("port_hopping_end")
   // Stamped when the node ACKNOWLEDGES an inbound push (applyInbounds returned
   // ok), never on a failure and never on a plain liveness tick. That makes it a
   // truthful "this node applied the config we sent" marker: comparing it with a

@@ -27,6 +27,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/firewall"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/metrics"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/porthop"
 )
 
 // protoForInbound returns the L4 protocols the given inbound listens on.
@@ -66,6 +67,13 @@ type Config struct {
 	// Egress (B2) handles /applyEgress (zapret2 desync). May be nil — then the
 	// endpoint acks with applied=false (egress not supported on this agent).
 	Egress *zapret2.Manager
+	// HysteriaListenPort is the UDP port the Hysteria inbound is served on.
+	// Only a nat REDIRECT pointing AT it is reported as this node's
+	// port-hopping range: an unrelated UDP range-redirect on the box would
+	// otherwise be handed to the panel as a promise about hysteria.
+	HysteriaListenPort int
+	// PortHopRunCmd runs `iptables`; nil shells out. Tests inject a fake.
+	PortHopRunCmd porthop.RunCmdFunc
 }
 
 type Server struct {
@@ -73,6 +81,10 @@ type Server struct {
 	logger    *slog.Logger
 	startedAt time.Time
 	collector *metrics.Collector
+
+	// The port-hopping range this node redirects, asked of the nat table once.
+	portHopOnce  sync.Once
+	portHopRange porthop.Range
 }
 
 func New(cfg Config) (*Server, error) {
@@ -328,7 +340,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, dto.HealthcheckResponse{Status: status, Cores: cores, EgressTune: tune})
+	// The UDP range this node redirects to its Hysteria listener, so the panel
+	// can refuse a profile whose range this node would not catch. Same channel
+	// and same reasoning as the egress strategy above: the poll already runs,
+	// and the node is the only one that knows.
+	//
+	// Cached: the rule is installed once, by the installer, which restarts this
+	// agent when it changes it - so re-forking iptables every 30 seconds would
+	// buy nothing. Same contract as core.CachedVersion, including that an
+	// unknown answer is cached too.
+	var hop *dto.PortHopDto
+	if r := s.portHop(); r.Known() {
+		hop = &dto.PortHopDto{Start: r.Start, End: r.End}
+	}
+	writeJSON(w, http.StatusOK, dto.HealthcheckResponse{
+		Status: status, Cores: cores, EgressTune: tune, PortHopping: hop,
+	})
+}
+
+// portHop reads this node's port-hopping range once and remembers the answer.
+func (s *Server) portHop() porthop.Range {
+	s.portHopOnce.Do(func() {
+		s.portHopRange = porthop.Read(context.Background(), s.cfg.PortHopRunCmd, s.cfg.HysteriaListenPort)
+	})
+	return s.portHopRange
 }
 
 // handleUfwPorts (G4 probe-exposure) reports the ufw-allowed inbound ports so

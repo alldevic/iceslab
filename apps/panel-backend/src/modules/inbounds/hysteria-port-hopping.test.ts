@@ -16,12 +16,23 @@
 // on, the panel answers 201, and every client link goes out without it. Nothing
 // anywhere says so — not the response, not the node, not the client.
 //
-// The THIRD is deliberately still accepted, and §60 says why: what the node
-// redirects is decided at install time by `--hysteria-port-range` (default
-// 20000-50000), the node never tells the panel which range it installed, and a
-// rule guessing that number here would refuse a node someone installed with a
-// custom one. That gap is named in the schema, measured on a real node, and
-// left as a decision rather than closed by a guess.
+// The THIRD used to be accepted here, and the reason was true when it was
+// written: what a node redirects is decided at install time by
+// `--hysteria-port-range` (default 20000-50000), the node never told the panel
+// which range it installed, and a rule guessing that number would have refused
+// a node someone installed with a custom one.
+//
+// The node reports it now (dto.PortHopDto, read out of its own nat table), so
+// the reason is gone and the exception goes with it. It does NOT come back as a
+// schema rule, because the schema still cannot know: a profile is saved against
+// whatever nodes it is bound to, and two nodes can redirect two different
+// ranges. It moved to where the pair is visible - assertPortHoppingFitsNodes,
+// covered in profiles.port-hopping.test.ts, which refuses the pair and names
+// the node.
+//
+// So this file keeps asserting that the SCHEMA takes such a range, and that is
+// not a leftover: a node that reports nothing is still not judged, and this is
+// the case that says the judging never moved into the schema.
 
 import { describe, expect, it } from 'vitest';
 import { HysteriaConfigSchema } from './inbounds.schemas.js';
@@ -64,10 +75,11 @@ describe('the hysteria port-hopping range', () => {
     expect(issues({ portHoppingStart: 30000, portHoppingEnd: 30000 })[0]).toMatch(/end above/);
   });
 
-  it('still takes a range outside what a default install redirects', () => {
-    // Named, not an oversight: see the header and §60. The node decides its
-    // redirect at install time and never reports it, so a rule here would be a
-    // guess about somebody else's machine.
+  it('takes a range the schema alone cannot judge', () => {
+    // Whether a node redirects 1100-1200 is a property of that node, and the
+    // schema is not looking at one. The refusal lives where the pair is -
+    // assertPortHoppingFitsNodes - so this asserts the schema stayed out of it.
+    // A node that has never reported a range is still not judged at all.
     expect(issues({ portHoppingStart: 1100, portHoppingEnd: 1200 })).toEqual([]);
   });
 });
