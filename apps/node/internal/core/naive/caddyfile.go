@@ -137,7 +137,23 @@ func renderCaddyfile(inbound InboundConfig, users []User) (string, error) {
 	fmt.Fprintln(&b, "{")
 	fmt.Fprintln(&b, "\tstorage file_system /etc/caddy")
 	fmt.Fprintln(&b, "}")
-	fmt.Fprintf(&b, ":%d, %s {\n", cfg.ListenPort, cfg.Hostname)
+	// Two site addresses, and the hostname carries the port in BOTH.
+	//
+	// `:<port>` is the catch-all that answers probes arriving without a
+	// matching SNI; the named one is what turns automatic HTTPS on for the
+	// hostname. A bare `naive.lab.example` means that host on Caddy's default
+	// HTTPS port - 443 - whatever port the panel actually bound. So a naive
+	// binding on any other port made Caddy listen on that port AND on 443, and
+	// nothing on either side said so: measured live 2026-08-30 with the binding
+	// moved to 8443, `ss` showed caddy on 8443, 80 and 443, while the panel,
+	// which believes the node holds only 8443, went on offering 443 as this
+	// node's next free port to the next protocol deployed on it.
+	//
+	// Asked of the binary rather than reasoned about: `caddy validate` calls
+	// `:8443, host:8443` a valid configuration, a reload drops the 443 listener,
+	// and ACME keeps working for the name (the challenge runs over :80, which
+	// the installer opens for naive precisely for that).
+	fmt.Fprintf(&b, ":%d, %s:%d {\n", cfg.ListenPort, cfg.Hostname, cfg.ListenPort)
 	fmt.Fprintf(&b, "\ttls %s\n", cfg.TLSEmail)
 	fmt.Fprintln(&b, "\troute {")
 	// forward_proxy with probe_resistance + zero basic_auth lines fails

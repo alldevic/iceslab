@@ -109,7 +109,7 @@ func TestStart_ConfigOnlyWritesCaddyfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !bytes.Contains(blob, []byte(":443, n1.example.com {")) {
+	if !bytes.Contains(blob, []byte(":443, n1.example.com:443 {")) {
 		t.Errorf("Caddyfile missing expected header: %s", blob)
 	}
 	if !a.Healthy() {
@@ -234,7 +234,13 @@ func TestApplyInbound_PortChangeRegeneratesCaddyfile(t *testing.T) {
 		t.Errorf("ListenPort not updated, got %d want 8443", a.cfg.Inbound.ListenPort)
 	}
 	blob, _ := os.ReadFile(path)
-	if !bytes.Contains(blob, []byte(":8443, n1.example.com {")) {
+	// Both halves of the site address, which is what this case used to miss: it
+	// pinned `:8443, n1.example.com {` and passed, because it checked that the
+	// FIRST address had moved and never asked what the second one meant. A bare
+	// hostname is that host on port 443, so the rendered file said "serve 8443,
+	// and also serve 443" - the port change the panel thought it had made was
+	// only half made. See caddyfile_test.go for the live measurement.
+	if !bytes.Contains(blob, []byte(":8443, n1.example.com:8443 {")) {
 		t.Errorf("Caddyfile missing :8443 header, got:\n%s", blob)
 	}
 }

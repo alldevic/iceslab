@@ -78,7 +78,7 @@ func TestRenderCaddyfileShape(t *testing.T) {
 		t.Fatalf("renderCaddyfile: %v", err)
 	}
 	for _, want := range []string{
-		":443, n1.example.com {",
+		":443, n1.example.com:443 {",
 		"tls ops@example.com",
 		"forward_proxy {",
 		"basic_auth alice secret-a",
@@ -167,5 +167,43 @@ func TestWriteCaddyfileAtomic(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Errorf("temp file lingered: %v", err)
+	}
+}
+
+// The named site address has to carry the panel's port, and this is the case
+// that says so - the shape test above renders on 443, where the bug is
+// invisible because 443 is also Caddy's default HTTPS port.
+//
+// A bare `n1.example.com` means that host on port 443, whatever port the
+// binding chose. So a naive profile bound anywhere else made Caddy listen on
+// the chosen port AND on 443, silently: measured live 2026-08-30 with the
+// binding moved to 8443 (`ss` showed caddy on 8443, 80 and 443), while the
+// panel - which believes the node holds only 8443 - answered 443 to
+// `GET /api/bindings/next-free-port` for that node, i.e. was about to hand an
+// occupied port to the next protocol deployed there.
+//
+// `caddy validate` on the real binary calls `:8443, host:8443` a valid
+// configuration, a reload drops the 443 listener, and ACME keeps running for
+// the name over :80.
+func TestNamedSiteAddressCarriesTheBoundPort(t *testing.T) {
+	in := validInbound()
+	in.ListenPort = 8443
+	out, err := renderCaddyfile(in, []User{{Username: "alice", Password: "secret-a"}})
+	if err != nil {
+		t.Fatalf("renderCaddyfile: %v", err)
+	}
+	if !strings.Contains(out, ":8443, n1.example.com:8443 {") {
+		t.Errorf("the site address does not pin the hostname to the bound port. Output:\n%s", out)
+	}
+	// The consequence, stated as the thing to avoid rather than as a string:
+	// no address in this file may resolve to Caddy's default HTTPS port when
+	// the binding did not ask for it.
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasSuffix(strings.TrimSpace(line), "{") || !strings.Contains(line, "n1.example.com") {
+			continue
+		}
+		if !strings.Contains(line, "n1.example.com:8443") {
+			t.Errorf("site address %q leaves the hostname on Caddy's default port 443", strings.TrimSpace(line))
+		}
 	}
 }
