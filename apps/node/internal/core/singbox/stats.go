@@ -28,8 +28,29 @@ type userByteCounters struct {
 //
 //	{"stat":[{"name":"user>>><userId>>>traffic>>>uplink","value":"123"}, ...]}
 //
-// sing-box's v2ray_api implements the same StatsService, so the xray CLI can
-// query it. `value` is a stringified int64 (or bare number on some forks).
+// `value` is a stringified int64 (or bare number on some forks).
+//
+// This used to say that "sing-box's v2ray_api implements the same StatsService,
+// so the xray CLI can query it". The messages are the same; the gRPC SERVICE
+// NAME is not, and gRPC dispatches on the name:
+//
+//	sing-box  v2ray.core.app.stats.command.StatsService
+//	xray      xray.app.stats.command.StatsService
+//
+// so the query came back `Unimplemented: unknown service
+// xray.app.stats.command.StatsService` against a healthy API. Nobody could have
+// noticed: until 2026-08-30 sing-box did not start at all on any node (it was
+// handed an experimental.v2ray_api block its build could not honour).
+//
+// The panel's image now COMPILES sing-box - it has to, for the build tag - and
+// renames that one string while it does, so there is one stats client for both
+// cores instead of an HTTP/2 + protobuf dialect inside an agent whose go.mod
+// has no dependencies at all. The rename is declared, and its reasoning kept,
+// in packages/shared/src/core-binaries.ts (`renameStatsService`).
+//
+// A sing-box the panel did not build is still handled, and by the layer above:
+// an upstream release carries no v2ray_api at all, so statsListenForConfig
+// renders no endpoint and this is never called.
 type sbStatsResponse struct {
 	Stat []sbStatEntry `json:"stat"`
 }

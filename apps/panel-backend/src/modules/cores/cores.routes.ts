@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CORE_ARCHES, CORE_BINARIES, type CoreArch, type CoreName } from '@iceslab/shared';
 import { config } from '../../config.js';
@@ -21,6 +21,14 @@ import { verifyAgentBearer } from '../nodes/agent-auth.js';
  * packages/shared/src/core-binaries.ts) and are byte-identical to what upstream
  * published. `X-Iceslab-Sha256` carries the pinned sum so the node can verify
  * what it received without a second request.
+ *
+ * sing-box is the exception, and the header is why it needs one: the image
+ * COMPILES it (upstream's binaries carry no `with_v2ray_api`, without which
+ * sing-box refuses to start on the config this panel writes), so there is no
+ * published sum to state. The build writes the sum of what it produced into a
+ * `.sha256` sidecar and this route states THAT. The node's side of the deal is
+ * untouched - it still compares the bytes it received against the sum the panel
+ * named - and the pin that fails a build early moved to the source tarball.
  *
  * An architecture this image does not carry is a 404 that SAYS SO. The node
  * installer stops there rather than falling back to GitHub, which is the whole
@@ -49,10 +57,26 @@ export async function coreRoutes(app: FastifyInstance): Promise<void> {
     if (!(name in CORE_BINARIES)) return null;
     if (!CORE_ARCHES.includes(arch as CoreArch)) return null;
     const core = CORE_BINARIES[name as CoreName];
-    const asset = (core.assets as Record<string, { file: string; sha256: string } | undefined>)[
-      arch
-    ];
+    const asset = (
+      core.assets as Record<string, { file: string; sha256: string | null } | undefined>
+    )[arch];
     return asset ? { core, asset } : null;
+  }
+
+  /**
+   * The sum to state for a (name, arch): the manifest pin for a downloaded
+   * core, the build's own sidecar for a compiled one.
+   *
+   * A compiled core with no sidecar is a 500, not a header left off. The node
+   * refuses to install bytes the panel did not vouch for - by design - so the
+   * failure has to name itself here rather than arrive there as a missing
+   * header the operator has to trace back across two machines.
+   */
+  async function sha256For(name: string, arch: string, manifestSum: string | null) {
+    if (manifestSum) return manifestSum;
+    const sidecar = join(dir, `${name}-${arch}.sha256`);
+    const sum = (await readFile(sidecar, 'utf8').catch(() => '')).trim().split(/\s+/)[0];
+    return /^[0-9a-f]{64}$/.test(sum ?? '') ? (sum as string) : null;
   }
 
   /**
@@ -79,7 +103,7 @@ export async function coreRoutes(app: FastifyInstance): Promise<void> {
           name,
           arch,
           version: core.version,
-          sha256: hit.asset.sha256,
+          sha256: await sha256For(name, arch, hit.asset.sha256),
           file: hit.asset.file,
           carried,
         });
@@ -118,10 +142,20 @@ export async function coreRoutes(app: FastifyInstance): Promise<void> {
             `architecture the panel carries.`,
         });
       }
+      const sum = await sha256For(name, arch, hit.asset.sha256);
+      if (!sum) {
+        return reply.code(500).send({
+          error: 'UNVERIFIABLE_CORE',
+          message:
+            `this panel carries ${name} for ${arch} but cannot state its sha256: ` +
+            `${name}-${arch}.sha256 is missing or malformed. It is written beside ` +
+            `the binary when the image compiles a core; rebuild the panel image.`,
+        });
+      }
       return reply
         .header('content-type', 'application/octet-stream')
         .header('content-length', String(size))
-        .header('x-iceslab-sha256', hit.asset.sha256)
+        .header('x-iceslab-sha256', sum)
         .header('x-iceslab-core-version', hit.core.version)
         .send(createReadStream(path));
     },

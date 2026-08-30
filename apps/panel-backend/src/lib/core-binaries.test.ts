@@ -7,6 +7,7 @@ import {
   CORE_NAMES,
   PROTOCOL_CORE,
   coreAssetUrl,
+  coreSourceUrl,
   type CoreArch,
   type CoreName,
 } from '@iceslab/shared';
@@ -25,6 +26,16 @@ import {
 
 const entries = Object.entries(CORE_BINARIES) as [CoreName, (typeof CORE_BINARIES)[CoreName]][];
 
+/**
+ * A core the image COMPILES has no published binary and therefore no published
+ * sum: its pin is the source tarball's, checked in the same `sha256sum -c` at
+ * build time, and the panel states the sum of what it built (a `.sha256`
+ * sidecar) to the node. Every rule below that is about a DOWNLOADED artefact
+ * skips those, and `describe('a core built from source')` covers them instead -
+ * an exemption without its own rules is how a whole core stops being checked.
+ */
+const isBuilt = (core: { source?: unknown }) => Boolean(core.source);
+
 describe('the manifest is populated at all', () => {
   it('names cores', () => {
     // The control: every comparison below is over this list, and an empty one
@@ -35,7 +46,11 @@ describe('the manifest is populated at all', () => {
 });
 
 describe.each(entries)('%s', (name, core) => {
-  const assets = Object.entries(core.assets) as [CoreArch, { file: string; sha256: string }][];
+  const assets = Object.entries(core.assets) as [
+    CoreArch,
+    { file: string; sha256: string | null },
+  ][];
+  const downloaded = isBuilt(core) ? [] : assets;
 
   it('is published for at least amd64', () => {
     // Every VPS fleet has amd64 in it. A core with no amd64 asset is a core no
@@ -50,6 +65,11 @@ describe.each(entries)('%s', (name, core) => {
 
   it.each(assets)('%s carries a whole asset', (arch, asset) => {
     expect(asset.file.length).toBeGreaterThan(3);
+    if (isBuilt(core)) {
+      // A published sum here would be a claim about bytes nobody published.
+      expect(asset.sha256, `${name}/${arch} is built from source, so it pins no binary`).toBeNull();
+      return;
+    }
     expect(asset.sha256, `${name}/${arch} sha256 is not 64 lowercase hex`).toMatch(
       /^[0-9a-f]{64}$/,
     );
@@ -69,7 +89,7 @@ describe.each(entries)('%s', (name, core) => {
   });
 
   it('builds an https url with both placeholders filled', () => {
-    for (const [arch] of assets) {
+    for (const [arch] of downloaded) {
       const url = coreAssetUrl(name, arch)!;
       expect(url.startsWith('https://'), `${name}/${arch} is not https`).toBe(true);
       expect(url).not.toContain('{');
@@ -82,7 +102,7 @@ describe.each(entries)('%s', (name, core) => {
     // absent architecture has to be absent, not an url that 404s. Both real
     // absences here were found exactly that way.
     for (const arch of CORE_ARCHES) {
-      if (core.assets[arch]) continue;
+      if (core.assets[arch] && !isBuilt(core)) continue;
       expect(coreAssetUrl(name, arch)).toBeNull();
     }
   });
@@ -93,9 +113,14 @@ describe('across the whole manifest', () => {
     // A pasted sum is the likeliest hand-edit error and the one a build cannot
     // catch: two architectures claiming the same bytes both verify against the
     // same download, and half the fleet gets the wrong binary.
-    const sums = entries.flatMap(([name, core]) =>
-      Object.entries(core.assets).map(([arch, a]) => ({ key: `${name}/${arch}`, sha: a.sha256 })),
-    );
+    const sums = entries
+      .filter(([, core]) => !isBuilt(core))
+      .flatMap(([name, core]) =>
+        Object.entries(core.assets).map(([arch, a]) => ({
+          key: `${name}/${arch}`,
+          sha: a.sha256 as string,
+        })),
+      );
     const seen = new Map<string, string>();
     const dupes: string[] = [];
     for (const { key, sha } of sums) {
@@ -141,5 +166,86 @@ describe('the protocol → core map', () => {
       [...new Set(asked)].filter((c) => !(c in CORE_BINARIES)).sort(),
       'the installer asks the panel for a core the manifest does not pin',
     ).toEqual([]);
+  });
+});
+
+/**
+ * A core the image compiles trades one pin for another, so it needs its own
+ * rules rather than an exemption from everyone else's. What a downloaded core
+ * gets from `sha256sum -c` on the artefact, this one gets from the same check
+ * on the SOURCE plus a toolchain that is stated in two places - the manifest
+ * and the Dockerfile's `GO_IMAGE`, because a FROM cannot read a manifest.
+ *
+ * Two places is the whole reason for the last case here. sing-box 1.13.19 does
+ * not compile under Go 1.27.0 (a dependency reaches into the standard library's
+ * experimental encoding/json/v2), so the version is NOT the node's pin, and a
+ * later bump that only touches one of the two would build a different binary or
+ * fail with a message about a dependency rather than about a pin.
+ */
+describe('a core built from source', () => {
+  const built = entries.filter(([, core]) => isBuilt(core));
+
+  it('exists at all', () => {
+    // The control: every case below is over this list.
+    expect(built.map(([n]) => n)).toEqual(['sing-box']);
+  });
+
+  it.each(built)('%s pins its source by sha256 and https', (_name, core) => {
+    const src = (core as { source: { urlTemplate: string; sha256: string; file: string } }).source;
+    expect(src.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(src.urlTemplate.startsWith('https://')).toBe(true);
+    expect(coreSourceUrl(_name)).toContain(core.version);
+    expect(coreSourceUrl(_name)).not.toContain('{');
+  });
+
+  it.each(built)('%s unpacks to a directory named for the pinned version', (_name, core) => {
+    const src = (core as { source: { unpacksTo: string } }).source;
+    expect(src.unpacksTo).toContain(core.version);
+  });
+
+  it.each(built)('%s asks for the tag that is the reason it is built', (_name, core) => {
+    const src = (core as { source: { extraTags: readonly string[]; tagsFile: string } }).source;
+    // Without it the binary is the published one again, and sing-box refuses to
+    // start on the config this panel writes.
+    expect(src.extraTags).toContain('with_v2ray_api');
+    // The base set is read from the tarball, never restated here.
+    expect(src.tagsFile.startsWith('release/')).toBe(true);
+  });
+
+  it.each(built)('%s renames a stats service to something the agent can call', (_name, core) => {
+    const r = (core as { source: { renameStatsService: { inFile: string; from: string; to: string } } })
+      .source.renameStatsService;
+    // `inFile`, not `file`: build-singbox.sh reads this manifest by line, and
+    // `file` is already a key of the source block - it matched that one and
+    // tried to patch the tarball instead of a Go file.
+    expect(r.inFile).toMatch(/\.go$/);
+    expect(r.from).not.toBe(r.to);
+    // The rename exists so ONE client serves both cores. If the target ever
+    // stops being the name xray answers to, the agent's statsquery goes back to
+    // `Unimplemented` against a perfectly healthy API - which is where this
+    // started, and which nothing else in this repo would notice.
+    expect(r.to).toBe('xray.app.stats.command.StatsService');
+    expect(r.from).toContain('StatsService');
+  });
+
+  it.each(built)('%s pins the SAME Go the image builds it with', (name, core) => {
+    const src = (core as { source: { goVersion: string } }).source;
+    const dockerfile = readFileSync(
+      join(import.meta.dirname, '..', '..', 'Dockerfile'),
+      'utf8',
+    );
+    const m = dockerfile.match(/^ARG GO_IMAGE=golang:([0-9]+\.[0-9]+\.[0-9]+)-/m);
+    expect(m, 'no `ARG GO_IMAGE=golang:x.y.z-...` in the backend Dockerfile').not.toBeNull();
+    expect(
+      m![1],
+      `the Dockerfile builds ${name} with Go ${m?.[1]} while the manifest pins ${src.goVersion}`,
+    ).toBe(src.goVersion);
+  });
+
+  it.each(built)('%s is served under a name that carries the pinned version', (_name, core) => {
+    for (const [arch, a] of Object.entries(core.assets)) {
+      expect(a.file, `${arch}`).toContain(core.version);
+      expect(a.file, `${arch}`).toContain(arch);
+    }
   });
 });

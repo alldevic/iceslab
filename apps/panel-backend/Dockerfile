@@ -13,6 +13,46 @@
 # production-grade follow-up (I4b) once we wire Renovate.
 ARG NODE_VERSION=22.22-alpine
 
+# Toolchain for the one core this image compiles (see the singbox-builder
+# stage). Declared up here because an ARG used in a FROM has to precede the
+# first FROM, which is also why the version lives in two places - the manifest
+# states it as `source.goVersion` and core-source-build.test fails when the two
+# drift.
+#
+# Deliberately NOT the node's 1.27.0 pin: sing-box 1.13.19 does not compile
+# under 1.27.0 (a dependency reaches into the standard library's experimental
+# encoding/json/v2, which 1.27 changed under it). Measured, see the manifest.
+ARG GO_IMAGE=golang:1.26.7-alpine
+# ───── sing-box, COMPILED rather than downloaded ─────
+#
+# The one core this image builds, and not by preference. Upstream's release
+# binaries are not built with `with_v2ray_api` - their own `sing-box version`
+# lists the tag set and it is not there - and sing-box does not ignore an
+# `experimental.v2ray_api` block it cannot honour, it exits 1 before opening a
+# port. Every sing-box config this panel writes carries that block, because it
+# is how per-user traffic is counted, so the published binary offers a choice
+# between a sing-box engine with no accounting and one that does not run.
+# Measured on a lab node 2026-08-30. The whole argument, and the manifest
+# parsing, live in scripts/build-singbox.sh; this stage only supplies a
+# toolchain.
+#
+# The pin does not weaken, it moves: from the sha256 of a published binary to
+# the sha256 of the published SOURCE plus the Go image below. A stale sum fails
+# this build exactly as it fails the download step. What the NODE checks is
+# unchanged - it compares the bytes it got against the sum the panel states -
+# and for these the panel states the sum written beside them here.
+FROM ${GO_IMAGE} AS singbox-builder
+ARG CORE_ARCHES="amd64 arm64"
+# binutils: build-singbox.sh asks readelf whether what it built is static, and
+# a missing readelf would make that check silently pass.
+RUN apk add --no-cache curl tar binutils
+COPY packages/shared/src/core-binaries.ts /manifest/core-binaries.ts
+COPY scripts/build-singbox.sh /usr/local/bin/build-singbox.sh
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=gobuild,target=/root/.cache/go-build \
+    sh /usr/local/bin/build-singbox.sh /manifest/core-binaries.ts /out "$CORE_ARCHES"
+
+
 # ───── Build stage ─────
 FROM node:${NODE_VERSION} AS builder
 # NODE_OPTIONS caps the V8 heap during build, without it pnpm + tsc can climb
@@ -107,7 +147,7 @@ RUN --mount=type=cache,id=cores,target=/var/cache/cores \
       for (const [name, core] of Object.entries(CORE_BINARIES)) \
         for (const arch of arches) { \
           const a = core.assets[arch]; \
-          if (!a) continue; \
+          if (!a || !a.sha256) continue; \
           console.log([name, arch, a.file, a.sha256, coreAssetUrl(name, arch)].join('\t')); \
         } \
     " > /tmp/cores.tsv; \
@@ -128,6 +168,12 @@ RUN --mount=type=cache,id=cores,target=/var/cache/cores \
       echo "  ok ${name}-${arch} ($(stat -c%s "/repo/cores/${name}-${arch}") bytes)"; \
     done < /tmp/cores.tsv; \
     ls -1 /repo/cores | wc -l
+
+# The compiled core joins the downloaded ones, sidecar sums included. Kept as a
+# separate COPY so the fetch step above stays about downloading and this stays
+# about building.
+COPY --from=singbox-builder /out/ /repo/cores/
+RUN set -eu; ls -l /repo/cores/ | sed 's/^/  /'
 
 # Strip dev deps so only production node_modules remain.
 WORKDIR /repo

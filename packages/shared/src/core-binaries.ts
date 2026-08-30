@@ -37,7 +37,88 @@ export const CORE_ARCHES: readonly CoreArch[] = ['amd64', 'arm64', 'armv7'];
 export interface CoreAsset {
   /** File name as published, which is also the name the panel serves it under. */
   file: string;
+  /**
+   * sha256 of the published artefact, checked at image build.
+   *
+   * `null` ONLY for a core the image builds from source (see `source`): there
+   * is no upstream artefact to pin, so the trust anchor moves to the source
+   * tarball's sum, and the panel states the sum of the file it actually holds
+   * (written beside the binary at build time). The node's check is unchanged
+   * either way - it compares what arrived against what the panel said.
+   */
+  sha256: string | null;
+}
+
+/**
+ * A core the panel COMPILES instead of downloading.
+ *
+ * Only sing-box, and only for one reason, measured rather than assumed: the
+ * upstream release binaries are not built with `with_v2ray_api`, and sing-box
+ * does not ignore an `experimental.v2ray_api` block it cannot honour - it
+ * exits 1 before opening a port. So every protocol the sing-box engine serves
+ * either runs with no per-user traffic accounting, or does not run at all.
+ * Compiling with the tag is what buys both.
+ *
+ * The trust story changes shape but not strength. A downloaded core is pinned
+ * by the sha256 of the artefact upstream published; a built core is pinned by
+ * the sha256 of the SOURCE upstream published plus the toolchain that compiled
+ * it, and the build fails on a stale sum exactly the same way. What the node
+ * verifies does not change at all: it checks the bytes it received against the
+ * sum the panel states in a header, and for a built core the panel states the
+ * sum of the file on its own disk.
+ */
+export interface CoreSourceBuild {
+  /** Source archive, pinned by sha256. `{version}` is substituted. */
+  urlTemplate: string;
+  file: string;
   sha256: string;
+  /** Directory the archive unpacks into. */
+  unpacksTo: string;
+  /** Go package to build. */
+  packagePath: string;
+  /**
+   * File INSIDE the tarball holding the base build tags. Read from the source
+   * rather than copied here so a version bump cannot leave a stale tag list
+   * behind: upstream owns which features its release has, and `extraTags` owns
+   * the one addition that is ours.
+   */
+  tagsFile: string;
+  /** Build tags on top of `tagsFile`. */
+  extraTags: readonly string[];
+  /**
+   * The one line of upstream source this build rewrites, and why.
+   *
+   * sing-box's v2ray_api and xray's API are the same StatsService with the same
+   * messages under two different gRPC SERVICE NAMES: sing-box registers
+   * `v2ray.core.app.stats.command.StatsService` (an explicit override in
+   * experimental/v2rayapi/stats.go's init), xray answers to
+   * `xray.app.stats.command.StatsService`. gRPC dispatches on that string, so
+   * the node-agent's stats client - the xray binary, used as a generic v2ray
+   * stats client because sing-box ships no stats CLI - gets
+   *
+   *   failed to query stats: rpc error: code = Unimplemented
+   *   desc = unknown service xray.app.stats.command.StatsService
+   *
+   * Measured on a lab node 2026-08-30, against a sing-box built WITH
+   * with_v2ray_api and serving traffic. The claim in the agent's stats.go that
+   * "sing-box's v2ray_api implements the same StatsService, so the xray CLI can
+   * query it" was never true, and could not have been noticed: until the same
+   * day, sing-box did not start at all.
+   *
+   * Renaming here rather than teaching the agent a second gRPC dialect is a
+   * deliberate trade. The alternative is an HTTP/2 + protobuf client inside an
+   * agent whose go.mod has NO dependencies at all, for the sake of one unary
+   * call to loopback. This API is loopback-only and its only caller in the
+   * world is that agent, so the name is private to this pair.
+   *
+   * The rename must be exact and it must be verified, because a silent no-op
+   * would put the failure back where it was: build-singbox.sh counts the
+   * occurrences before and after and fails the build if it did not change
+   * exactly one line.
+   */
+  renameStatsService: { inFile: string; from: string; to: string };
+  /** Toolchain pin. A different Go is a different binary. */
+  goVersion: string;
 }
 
 export interface CoreBinary {
@@ -60,6 +141,8 @@ export interface CoreBinary {
    * installs a .deb.
    */
   assets: Partial<Record<CoreArch, CoreAsset>>;
+  /** Present = the image compiles this core rather than downloading it. */
+  source?: CoreSourceBuild;
 }
 
 export const CORE_BINARIES = {
@@ -82,32 +165,82 @@ export const CORE_BINARIES = {
       },
     },
   },
+  // The one core this panel COMPILES. See CoreSourceBuild for why: the
+  // published binaries carry no `with_v2ray_api`, which is not a missing
+  // nicety but the difference between the sing-box engine having per-user
+  // traffic accounting and not running at all.
+  //
+  // The archive layout is kept identical to what upstream publishes -
+  // `sing-box-<version>-linux-<arch>/sing-box` inside a .tar.gz - so the node
+  // installs it with the same two lines it always used. What changed is who
+  // produced the bytes, not their shape.
+  //
+  // Static, and that is load-bearing rather than a preference: this panel runs
+  // on node:alpine and the nodes run Debian, so only a static build is ONE
+  // artefact both can execute. CGO_ENABLED=0 gives that directly, which is
+  // also why the `-musl` variant this used to pin is no longer relevant -
+  // measured, not assumed: the plain 1.13.19 amd64 release exits 127 on alpine
+  // (no ELF interpreter), the musl one runs on both, and a CGO-less build has
+  // no interpreter to miss.
   'sing-box': {
     upstream: 'SagerNet/sing-box',
     version: '1.13.19',
     urlTemplate: 'https://github.com/SagerNet/sing-box/releases/download/v{version}/{file}',
-    // The `-musl` variant, and that is load-bearing rather than a preference.
-    // Upstream publishes three builds per architecture: the plain one and
-    // `-glibc` are dynamically linked against glibc, and `-musl` is static.
-    // This panel runs on node:alpine and the nodes run Debian, so only the
-    // static build is ONE artefact both can execute — measured, not assumed:
-    // the plain 1.13.19 amd64 build exits 127 on alpine (no ELF interpreter),
-    // and the musl build answers `sing-box version` on alpine AND on
-    // debian:13-slim. The old runtime block got away with a plain tarball
-    // because the version it pinned, 1.11.4, still shipped statically linked.
+    source: {
+      urlTemplate: 'https://github.com/SagerNet/sing-box/archive/refs/tags/v{version}.tar.gz',
+      file: 'sing-box-1.13.19-src.tar.gz',
+      sha256: 'abc2f4805b3fd088c18a5694b51fed6f0e1d06632fae98029d6bf7bd79a1b3a2',
+      unpacksTo: 'sing-box-1.13.19',
+      packagePath: './cmd/sing-box',
+      /**
+       * Upstream's OWN default set (their Makefile's `TAGS ?=`), which is the
+       * full release set minus `with_naive_outbound`. Not an exotic
+       * combination, and the omission is what buys a static binary:
+       * with_naive_outbound pulls cronet-go, which needs CGO; upstream
+       * satisfies that in CGO-less builds with `with_purego`, and purego
+       * reaches libdl through //go:cgo_import_dynamic, so the result is
+       * DYNAMICALLY linked even at CGO_ENABLED=0 - measured, interpreter
+       * /lib/ld-musl-x86_64.so.1, which a Debian node cannot run.
+       *
+       * Static is the requirement this panel has always had here (see the note
+       * on the entry): one artefact has to execute on the alpine panel and on
+       * Debian nodes both. Nothing is lost - sing-box serves INBOUNDS on a
+       * node, and naive is a separate core with its own Caddy; sing-box's naive
+       * OUTBOUND is a client-side feature this fork never renders.
+       */
+      tagsFile: 'release/DEFAULT_BUILD_TAGS_OTHERS',
+      extraTags: ['with_v2ray_api'],
+      renameStatsService: {
+        // `inFile`, not `file`: the build script reads this manifest with a
+        // line matcher, and `file` is already a key of the source block above -
+        // it matched that one and tried to patch the tarball. Caught by the
+        // parse-only self-check.
+        inFile: 'experimental/v2rayapi/stats.go',
+        from: 'v2ray.core.app.stats.command.StatsService',
+        to: 'xray.app.stats.command.StatsService',
+      },
+      /**
+       * NOT the node's pin, and the difference is measured rather than
+       * stylistic: lib-go.sh pins 1.27.0 because caddy needs >= 1.25.1, and
+       * sing-box 1.13.19 does not COMPILE under 1.27.0 -
+       *
+       *   # github.com/go-json-experiment/json
+       *   alias.go:618:21: undefined: json.SkipFunc
+       *   alias.go:957:14: undefined: json.DiscardUnknownMembers
+       *
+       * a dependency reaching into the standard library's experimental
+       * encoding/json/v2, which 1.27 changed under it. 1.26.7 builds it clean.
+       *
+       * The Dockerfile's GO_IMAGE must carry this same version; they are two
+       * places because a FROM cannot read a manifest, and core-source-build.test
+       * fails when they drift.
+       */
+      goVersion: '1.26.7',
+    },
     assets: {
-      amd64: {
-        file: 'sing-box-1.13.19-linux-amd64-musl.tar.gz',
-        sha256: '150456f94fcf936fc2519de28d856422fb671a1ff181cd909b78f20e208fdcb8',
-      },
-      arm64: {
-        file: 'sing-box-1.13.19-linux-arm64-musl.tar.gz',
-        sha256: '5146181884310ea2381e085ef504005c81bd09f80721542127efb0a73f12cd2f',
-      },
-      armv7: {
-        file: 'sing-box-1.13.19-linux-armv7-musl.tar.gz',
-        sha256: '1fb4134b2deaa22f15cacd2156220cc6d3ba32d12fed9b0f23ad5666529b6b64',
-      },
+      amd64: { file: 'sing-box-1.13.19-linux-amd64.tar.gz', sha256: null },
+      arm64: { file: 'sing-box-1.13.19-linux-arm64.tar.gz', sha256: null },
+      armv7: { file: 'sing-box-1.13.19-linux-armv7.tar.gz', sha256: null },
     },
   },
   hysteria: {
@@ -174,12 +307,27 @@ export type CoreName = keyof typeof CORE_BINARIES;
 
 export const CORE_NAMES = Object.keys(CORE_BINARIES) as CoreName[];
 
-/** Where the panel downloaded an artefact from, for the build and for a report. */
+/**
+ * Where the panel downloaded an artefact from, for the build and for a report.
+ *
+ * `null` for an architecture upstream does not publish, AND for a core this
+ * image compiles: there is no published binary to point at, and answering with
+ * a URL that 404s would be worse than saying so. `coreSourceUrl` is the
+ * question to ask about those.
+ */
 export function coreAssetUrl(name: CoreName, arch: CoreArch): string | null {
   const core = CORE_BINARIES[name] as CoreBinary;
+  if (core.source) return null;
   const asset = core.assets[arch];
   if (!asset) return null;
   return core.urlTemplate.replace('{version}', core.version).replace('{file}', asset.file);
+}
+
+/** Where the source of a compiled core comes from; null for a downloaded one. */
+export function coreSourceUrl(name: CoreName): string | null {
+  const core = CORE_BINARIES[name] as CoreBinary;
+  if (!core.source) return null;
+  return core.source.urlTemplate.replace('{version}', core.version);
 }
 
 /**
