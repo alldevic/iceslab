@@ -613,6 +613,85 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  The option that does not cover the lock it was added for
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# DPkg::Lock::Timeout covers dpkg's locks. It does NOT cover
+# /var/lib/apt/lists/lock, the one `apt-get update` takes first - measured
+# 2026-08-30 on a Debian 13 guest with two `apt-get update` runs started 0.4 s
+# apart, the second asking for a 60 s timeout: rc=100 after 490 ms,
+# `E: Could not get lock /var/lib/apt/lists/lock`. It did not wait at all, and
+# it took the node installer down at step 1 of 8 with the one-shot bootstrap
+# token already spent - the exact boot-time race the option was added for.
+#
+# So every apt caller retries on a lock message, and this checks the loop is
+# there rather than the intention. Run for real, not grepped: a comment about
+# retrying is what the last five months of this file were about.
+note "an apt held by another process is waited for, not failed on"
+for f in "$APT_LIB" "${REPO_ROOT}/scripts/install-iceslab.sh" "${REPO_ROOT}/scripts/install-iceslab-node.sh"; do
+    if grep -q 'Could not get lock' "$f" && grep -q 'APT_LOCK_WAIT_SECS' "$f"; then
+        ok "$(basename "$f") retries apt while another process holds a lock"
+    else
+        bad "$(basename "$f") does not wait for /var/lib/apt/lists/lock; a first-boot apt-daily kills the install"
+    fi
+done
+# The loop itself, exercised: a fake apt that answers "locked" twice and then
+# succeeds must be retried to success, and a fake apt that fails for any OTHER
+# reason must come back at once rather than hanging for five minutes.
+apt_retry_probe() {
+    local mode="$1" budget="${2-20}" tmp
+    tmp=$(mktemp -d)
+    cat > "$tmp/apt-get" <<PROBE
+#!/usr/bin/env bash
+n=\$(cat "$tmp/n" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "$tmp/n"
+if [[ "$mode" == locked && \$n -lt 2 ]]; then
+  echo "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1 (apt-get)" >&2
+  exit 100
+fi
+if [[ "$mode" == other ]]; then
+  echo "E: Unable to locate package nope" >&2
+  exit 100
+fi
+exit 0
+PROBE
+    chmod +x "$tmp/apt-get"
+    (
+        PATH="$tmp:$PATH"
+        # "unset" means exactly that: the budget must default inside apt_get.
+        if [[ "$budget" == unset ]]; then unset APT_LOCK_WAIT_SECS; else APT_LOCK_WAIT_SECS="$budget"; fi
+        # shellcheck disable=SC1090
+        . "$APT_LIB"
+        apt_get install -y anything >/dev/null 2>&1
+        echo "rc=$? tries=$(cat "$tmp/n")"
+    )
+    rm -rf "$tmp"
+}
+probe_locked=$(apt_retry_probe locked)
+if [[ "$probe_locked" == "rc=0 tries=3" ]]; then
+    ok "a lock-held apt is retried until it succeeds ($probe_locked)"
+else
+    bad "the retry did not carry a lock-held apt through to success: $probe_locked"
+fi
+probe_other=$(apt_retry_probe other)
+if [[ "$probe_other" == "rc=100 tries=1" ]]; then
+    ok "and any other apt failure comes back at once, not after the lock budget ($probe_other)"
+else
+    bad "a non-lock apt failure was retried or swallowed: $probe_other"
+fi
+# ...and with no APT_LOCK_WAIT_SECS in the environment at all. The budget is
+# defaulted inside apt_get, because when it was defaulted on a line BESIDE the
+# function an unset value made `(( ... >= ))` true on the first pass and the
+# retry became a silent no-op - measured against a held lists lock, where the
+# helper came back in one second exactly like the bare apt-get it replaced.
+probe_unset=$(apt_retry_probe locked unset)
+if [[ "$probe_unset" == "rc=0 tries=3" ]]; then
+    ok "and it still retries with no APT_LOCK_WAIT_SECS set ($probe_unset)"
+else
+    bad "with APT_LOCK_WAIT_SECS unset the retry does nothing: $probe_unset"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  The apt-lock decision, made twice
 # ═════════════════════════════════════════════════════════════════════════════
 #

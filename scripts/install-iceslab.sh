@@ -141,9 +141,11 @@ banner
 #
 # 1. flock(1) on /var/run/iceslab-install.lock: refuses a second concurrent
 #    install-iceslab.sh on the same host.
-# 2. APT_OPTS sets DPkg::Lock::Timeout=300, so apt waits up to 5 min for the
-#    lock instead of failing instantly. Covers the boot-time case where
-#    Ubuntu's `unattended-upgrades` is running.
+# 2. APT_OPTS sets DPkg::Lock::Timeout=300, so apt waits up to 5 min for DPKG's
+#    lock instead of failing instantly - and apt_get() below retries for the
+#    same 5 minutes on /var/lib/apt/lists/lock, which that option does NOT
+#    cover and which `apt-get update` takes first. Between them they cover the
+#    boot-time case: a cloud image running `unattended-upgrades`/apt-daily.
 # 3. Stale-lock cleanup: if a previous apt-get died and left the lock file
 #    behind with no process holding it, remove it and run
 #    `dpkg --configure -a` to finish any half-applied state.
@@ -154,6 +156,48 @@ fi
 
 APT_OPTS=(-o "DPkg::Lock::Timeout=300" -o "Dpkg::Options::=--force-confold" -o "Dpkg::Options::=--force-confdef")
 APT_ENV=(env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none)
+
+# apt_get — every apt call in this script goes through here.
+#
+# DPkg::Lock::Timeout above is NOT the whole answer. It covers dpkg's locks; it
+# does not cover /var/lib/apt/lists/lock, the one `apt-get update` takes first.
+# Measured 2026-08-30 on a Debian 13 guest, two `apt-get update` runs started
+# 0.4 s apart, the second asking for a 60 s lock timeout: rc=100 after 490 ms,
+# `E: Could not get lock /var/lib/apt/lists/lock`. It did not wait at all - so
+# the boot-time case these options exist for, a cloud image running apt-daily on
+# first boot, could still kill an install outright at step 1. apt has no option
+# for that lock, so waiting for it is a retry loop; only a lock message is
+# retried, every other failure comes back at once.
+#
+# Same loop as apps/node/scripts/lib-apt.sh, which the protocol bootstraps
+# source. It is copied rather than shared for the reason APT_OPTS is: this
+# script runs from `curl | bash` before any checkout exists.
+: "${APT_LOCK_WAIT_SECS:=300}"
+apt_get() {
+  # The budget is defaulted HERE, not beside the function: read from an outer
+  # line it can be separated from, an unset value makes `(( ... >= ))` true on
+  # the first pass and the retry silently becomes a no-op. Measured exactly
+  # that way against a held /var/lib/apt/lists/lock.
+  local out rc started=$SECONDS budget=${APT_LOCK_WAIT_SECS:-300}
+  while :; do
+    out=$("${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" "$@" 2>&1)
+    # Taken straight off the assignment, NOT after an `if`: a false `if` with no
+    # `else` leaves $? at 0, so reading it there returned success for every
+    # failure that was not a lock.
+    rc=$?
+    if (( rc == 0 )); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    if [[ "$out" != *"Could not get lock"* && "$out" != *"Unable to lock"* ]] ||
+       (( SECONDS - started >= budget )); then
+      printf '%s\n' "$out" >&2
+      return "$rc"
+    fi
+    warn "apt is locked by another process, waiting: $(printf '%s' "$out" | grep -m1 -i 'lock' || true)"
+    sleep 5
+  done
+}
 
 cleanup_stale_apt_locks() {
   local lock_holder
@@ -344,9 +388,9 @@ fi
 # Pass DO_OS_UPGRADE=1 if you actually want it; default is now off.
 if [[ "${DO_OS_UPGRADE:-0}" == "1" ]]; then
   log "Upgrading OS packages (apt-get update + dist-upgrade)"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" dist-upgrade -y
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" autoremove -y
+  apt_get update -y
+  apt_get dist-upgrade -y
+  apt_get autoremove -y
 else
   # Even when skipping the full dist-upgrade, the apt package list still has
   # to be fresh: Ubuntu cloud images ship a stale cache from image-build day,
@@ -354,7 +398,7 @@ else
   # package" until the list is refreshed. Cheap (~3-5s), so always run it when
   # we're not doing the full upgrade.
   log "Refreshing apt package list"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
+  apt_get update -y
 fi
 
 step "Firewall (ufw)"
@@ -362,7 +406,7 @@ step "Firewall (ufw)"
 # flip the defaults to deny + enable.
 if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
   if ! command -v ufw >/dev/null; then
-    "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y ufw
+    apt_get install -y ufw
   fi
   ufw allow 22/tcp                       >/dev/null 2>&1 || true
   # 80+443 always open: needed for Caddy TLS + ACME HTTP-01 challenges
@@ -398,7 +442,7 @@ step "Docker + Compose"
 # binaries.
 if ! command -v docker >/dev/null; then
   log "Installing Docker via official apt-repo (signed-by /etc/apt/keyrings/docker.gpg)"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y ca-certificates curl gnupg
+  apt_get install -y ca-certificates curl gnupg
   install -m 0755 -d /etc/apt/keyrings
   if [[ ! -s /etc/apt/keyrings/docker.gpg ]]; then
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
@@ -409,14 +453,14 @@ if ! command -v docker >/dev/null; then
     "$(dpkg --print-architecture)" \
     "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
     > /etc/apt/sources.list.d/docker.list
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y \
+  apt_get update -y
+  apt_get install -y \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 # Compose plugin should already be installed via docker-compose-plugin above,
 # but legacy installs from get.docker.com may not have it.
 if ! docker compose version >/dev/null 2>&1; then
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y docker-compose-plugin
+  apt_get install -y docker-compose-plugin
 fi
 ok "$(docker --version | sed 's/Docker version //;s/, build.*//')"
 ok "Compose $(docker compose version --short)"
@@ -438,7 +482,7 @@ fi
 step "Source checkout (${ICESLAB_REF})"
 if [[ ! -d "$ICESLAB_DIR/.git" ]]; then
   log "Cloning $ICESLAB_REPO@$ICESLAB_REF into $ICESLAB_DIR"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y git
+  apt_get install -y git
   # Full clone (NOT --depth 1 / single-branch): a shallow single-branch clone
   # leaves origin/main and other tags unreachable, so later `deploy.sh` /
   # updates get stuck on the pinned tag with no way forward (detached-HEAD
@@ -594,7 +638,7 @@ if [[ -f "$ENV_FILE" ]]; then
 
 else
   log "Generating with fresh secrets (openssl rand -hex)"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y openssl >/dev/null 2>&1 || true
+  apt_get install -y openssl >/dev/null 2>&1 || true
   PG_PASSWORD=$(openssl rand -hex 24)
   JWT_SECRET=$(openssl rand -hex 32)
   PUBLIC_IP=$(curl -fsSL https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
@@ -760,13 +804,13 @@ done
 if [[ -n "$PANEL_DOMAIN" ]]; then
   step "Caddy + TLS for ${PANEL_DOMAIN}"
   if ! command -v caddy >/dev/null; then
-    "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+    apt_get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
       | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
       > /etc/apt/sources.list.d/caddy-stable.list
-    "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
-    "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y caddy
+    apt_get update -y
+    apt_get install -y caddy
   fi
   # Access log emitted to /var/log/caddy/access.log so fail2ban can read it
   # (next step). JSON format keeps client_ip / status / uri reliably parsable
@@ -801,7 +845,7 @@ EOF
   # can't block CF at the firewall. For CF deploys, add a CF WAF rule instead
   # (docs/SECURITY.md, TODO).
   step "fail2ban (auth brute-force + probe scanner jails)"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y fail2ban
+  apt_get install -y fail2ban
   install -d -m 0755 /etc/fail2ban/filter.d /etc/fail2ban/jail.d
   cat > /etc/fail2ban/filter.d/iceslab-auth-bf.conf <<'EOF'
 # Match 401/429 responses on /api/auth/login in Caddy's JSON access log.

@@ -246,8 +246,9 @@ banner() {
 }
 
 # ───── Concurrency + apt lock hygiene ─────
-# Same protections as install-iceslab.sh: flock against concurrent runs,
-# wait on apt locks via DPkg::Lock::Timeout, stale-lock cleanup for the
+# Same protections as install-iceslab.sh: flock against concurrent runs, wait on
+# dpkg's locks via DPkg::Lock::Timeout AND on apt's lists lock via apt_get()'s
+# retry (that option does not cover it - measured), stale-lock cleanup for the
 # orphan-apt-process case. See install-iceslab.sh for the rationale.
 #
 # Definitions only here. Nothing between `set -euo pipefail` and the argument
@@ -260,6 +261,48 @@ banner() {
 
 APT_OPTS=(-o "DPkg::Lock::Timeout=300" -o "Dpkg::Options::=--force-confold" -o "Dpkg::Options::=--force-confdef")
 APT_ENV=(env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none)
+
+# apt_get — every apt call in this script goes through here.
+#
+# DPkg::Lock::Timeout above is NOT the whole answer. It covers dpkg's locks; it
+# does not cover /var/lib/apt/lists/lock, the one `apt-get update` takes first.
+# Measured 2026-08-30 on a Debian 13 guest, two `apt-get update` runs started
+# 0.4 s apart, the second asking for a 60 s lock timeout: rc=100 after 490 ms,
+# `E: Could not get lock /var/lib/apt/lists/lock`. It did not wait at all - so
+# the boot-time case these options exist for, a cloud image running apt-daily on
+# first boot, could still kill an install outright at step 1. apt has no option
+# for that lock, so waiting for it is a retry loop; only a lock message is
+# retried, every other failure comes back at once.
+#
+# Same loop as apps/node/scripts/lib-apt.sh, which the protocol bootstraps
+# source. It is copied rather than shared for the reason APT_OPTS is: this
+# script runs from `curl | bash` before any checkout exists.
+: "${APT_LOCK_WAIT_SECS:=300}"
+apt_get() {
+  # The budget is defaulted HERE, not beside the function: read from an outer
+  # line it can be separated from, an unset value makes `(( ... >= ))` true on
+  # the first pass and the retry silently becomes a no-op. Measured exactly
+  # that way against a held /var/lib/apt/lists/lock.
+  local out rc started=$SECONDS budget=${APT_LOCK_WAIT_SECS:-300}
+  while :; do
+    out=$("${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" "$@" 2>&1)
+    # Taken straight off the assignment, NOT after an `if`: a false `if` with no
+    # `else` leaves $? at 0, so reading it there returned success for every
+    # failure that was not a lock.
+    rc=$?
+    if (( rc == 0 )); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    if [[ "$out" != *"Could not get lock"* && "$out" != *"Unable to lock"* ]] ||
+       (( SECONDS - started >= budget )); then
+      printf '%s\n' "$out" >&2
+      return "$rc"
+    fi
+    warn "apt is locked by another process, waiting: $(printf '%s' "$out" | grep -m1 -i 'lock' || true)"
+    sleep 5
+  done
+}
 
 cleanup_stale_apt_locks() {
   local lock_holder
@@ -925,9 +968,9 @@ ok "network tuning applied (rmem/wmem 16 MiB, fq + BBR)"
 # Pass DO_OS_UPGRADE=1 if you actually want it; default is now off.
 if [[ "${DO_OS_UPGRADE:-0}" == "1" ]]; then
   log "Upgrading OS packages (apt-get update + dist-upgrade)"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" dist-upgrade -y
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" autoremove -y
+  apt_get update -y
+  apt_get dist-upgrade -y
+  apt_get autoremove -y
 fi
 
 # ───── 2b. Prereqs ─────
@@ -943,9 +986,9 @@ fi
 # until the list is refreshed. Refresh is cheap (~3-5 sec on a fresh
 # VPS) so always-on is the right default.
 log "Refreshing apt package list"
-"${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
+apt_get update -y
 log "Installing apt prereqs"
-"${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y git curl ca-certificates ufw unzip
+apt_get install -y git curl ca-certificates ufw unzip
 
 
 step "Source checkout (${ICESLAB_NODE_REF})"
@@ -1661,7 +1704,7 @@ if [[ "$FAIL2BAN" == "1" ]]; then
   log "fail2ban: installing + configuring jails (sshd + hysteria-auth)"
   # Optional hardening: never abort the node install (ERR trap + set -e) just
   # because fail2ban couldn't install. Warn and press on; the agent matters more.
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y fail2ban \
+  apt_get install -y fail2ban \
     || warn "fail2ban apt install failed; continuing (fail2ban is optional, the node agent is the priority)"
 
   # Custom filter for the agent's Hysteria auth-callback rejections.
