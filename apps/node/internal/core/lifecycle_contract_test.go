@@ -233,13 +233,23 @@ func casesRaw() []adapterCase {
 			// case below (TestTheProvisionableFlagMatchesTheAdapter) is what
 			// keeps that from silently going stale: the day mieru grows a
 			// `Provisioned`, this table has to say so.
-			name: "mieru",
-			build: func(t *testing.T, _ bool) (core.CoreAdapter, string) {
+			name:          "mieru",
+			provisionable: true,
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
 				cfgPath := filepath.Join(t.TempDir(), "server.json")
-				return mieru.New(mieru.Config{
+				a := mieru.New(mieru.Config{
 					ConfigPath: cfgPath,
 					Inbound:    mieru.InboundConfig{ListenPort: 2012, MTU: 1400, LoggingLevel: "INFO"},
-				}, quiet()), cfgPath
+				}, quiet())
+				if ready {
+					// mita refuses to start a proxy with an empty user list, so
+					// "has a user" is what provisioned means here - the panel
+					// supplies it, after the agent is already up.
+					if err := a.AddUser(core.User{UserID: "u-1", Username: "alice", XrayUUID: "uuid-a"}); err != nil {
+						t.Fatalf("seed a user: %v", err)
+					}
+				}
+				return a, cfgPath
 			},
 		},
 	}

@@ -96,14 +96,40 @@ func (a *Adapter) Name() string { return Name }
 // Engine reports the native proxy core (mita; no alternate engine).
 func (a *Adapter) Engine() string { return "mieru" }
 
-// Start writes the initial config and brings mita up. We invoke
-// `mita apply config <path>` rather than spawning mita directly, mita's
-// own systemd unit owns the lifecycle. The adapter just rewrites config
-// + tells mita to reload.
+// Provisioned implements core.Provisionable: mita refuses to start a proxy with
+// an empty user list, in its own words - `start mita server proxy failed: rpc
+// error: ... no user found`. Users arrive from the panel after the agent is up,
+// so a freshly installed mieru node has none.
 //
-// In config-only mode (BinaryPath empty) Start writes the YAML and stops
+// This is the same condition Start defers on, deliberately shared so the two
+// cannot drift: an adapter whose Provisioned and Start disagree makes /healthz
+// a guess (see core.Provisionable).
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.users) > 0
+}
+
+// Start writes the initial config and brings mita's proxy up. We invoke
+// `mita apply config <path>` rather than spawning mita directly, mita's
+// own systemd unit owns the lifecycle. The adapter rewrites the config,
+// reloads it, and starts the proxy - the unit boots with that proxy IDLE.
+//
+// It must not fail on a node the panel has not populated yet: main.go treats a
+// Start error as fatal and exits, systemd restarts the agent, and the agent is
+// then never up long enough to be handed the users that would let mita start -
+// a node that can only be repaired by the thing it is refusing to run. naive
+// learned exactly this in cycle #8 (crash-loop on a missing Hostname) and
+// deferred; mieru is the same shape and had never been asked the question,
+// because until now it never ran the command that can refuse.
+//
+// In config-only mode (BinaryPath empty) Start writes the config and stops
 // there, useful for tests and for dev hosts without mita installed.
 func (a *Adapter) Start(ctx context.Context) error {
+	if !a.Provisioned() {
+		a.logger.Info("mieru adapter: no users yet, waiting for the panel's first addUser")
+		return nil
+	}
 	return a.regenerateAndReload(ctx)
 }
 
@@ -140,6 +166,11 @@ func (a *Adapter) AddUser(user core.User) error {
 	started := a.started
 	a.mu.Unlock()
 	if !started {
+		// Buffered. On a node whose Start deferred (no users yet), what ends
+		// the deferral is the panel's inbound push: ApplyInbound calls
+		// regenerateAndReload unconditionally, renders whatever users have
+		// accumulated here, and starts the proxy. A mieru node with users and
+		// no mieru inbound has nothing to serve, so idling is the right state.
 		return nil
 	}
 	return a.regenerateAndReload(context.Background())
@@ -231,6 +262,12 @@ func (a *Adapter) Healthy() bool {
 	a.mu.Lock()
 	started, bin, run := a.started, a.cfg.BinaryPath, a.cfg.RunCmd
 	a.mu.Unlock()
+	if !a.Provisioned() {
+		// Registered but not configured. Reporting this as healthy is what makes
+		// every fresh node permanently `degraded`-or-green regardless of the
+		// truth; core.Provisionable exists to keep the two apart.
+		return false
+	}
 	if bin == "" || run == nil {
 		return started
 	}
@@ -314,7 +351,7 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	// still serving them. An agent restart, or a `mita stop` from anywhere,
 	// leaves the config identical and the proxy idle - and skipping there is
 	// how a resync that exists to repair the node repairs nothing.
-	if unchanged && !a.proxyRunning(ctx) {
+	if unchanged && a.Provisioned() && !a.proxyRunning(ctx) {
 		unchanged = false
 		a.logger.Info("mieru config unchanged but mita is not serving; starting it")
 	}
@@ -345,7 +382,12 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	// binary's own help says it plainly ("reload ... WITHOUT stopping proxy
 	// service"); nobody asked it. `start` is idempotent: measured rc=0 and
 	// "mita server proxy is running" against an already-running proxy.
-	if out, err := run(ctx, binPath, "start"); err != nil {
+	if !a.Provisioned() {
+		// Config applied, proxy deliberately left idle: mita would refuse, and
+		// a hard failure here is fatal to the whole agent (main.go). The first
+		// AddUser comes back through this function and starts it.
+		a.logger.Info("mieru: config applied, waiting for the panel's first user before starting mita")
+	} else if out, err := run(ctx, binPath, "start"); err != nil {
 		return fmt.Errorf("mita start: %w (%s)", err, string(out))
 	}
 	a.invalidateStatus()

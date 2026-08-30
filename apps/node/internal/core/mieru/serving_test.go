@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
 
 // mita has TWO states, and for the whole life of this adapter only one of them
@@ -82,14 +84,19 @@ func (r *scriptedRunner) order() []string {
 	return out
 }
 
+// withRunner builds an adapter that already has a user, because mita refuses to
+// start a proxy without one and every case below is about what happens AFTER
+// that point. The empty-user case has its own test.
 func withRunner(t *testing.T, r *scriptedRunner) *Adapter {
 	t.Helper()
-	return New(Config{
+	a := New(Config{
 		BinaryPath: "/usr/bin/mita",
 		ConfigPath: filepath.Join(t.TempDir(), "server.json"),
 		Inbound:    InboundConfig{ListenPort: 2012, MTU: 1400, LoggingLevel: "INFO"},
 		RunCmd:     r.run,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a.users["u-1"] = User{Name: "alice", Password: "uuid-a"}
+	return a
 }
 
 func TestStartActuallyStartsTheProxy(t *testing.T) {
@@ -230,5 +237,115 @@ func TestStatusAnswerIsCachedButNotForever(t *testing.T) {
 	r.mu.Unlock()
 	if after != burst+1 {
 		t.Errorf("the cached status never expired: asked %d times, want %d", after, burst+1)
+	}
+}
+
+func TestStartDefersInsteadOfKillingTheAgentWithNoUsers(t *testing.T) {
+	// mita answers `no user found` and exits 1. main.go treats a Start error as
+	// fatal and calls os.Exit(1), so returning that error puts a freshly
+	// installed mieru node into a systemd restart loop - and the agent is then
+	// never up long enough to receive the users that would let mita start. The
+	// node could only be repaired by the thing it was refusing to run.
+	//
+	// Measured live 2026-08-30: the agent restarted every five seconds logging
+	// `start adapter name=mieru err="mita start: exit status 1 (... no user
+	// found)"` until the users arrived.
+	r := &scriptedRunner{status: `mita server status is "IDLE"`, failOn: "start"}
+	a := withRunner(t, r)
+	a.users = map[string]User{}
+
+	if a.Provisioned() {
+		t.Fatal("an adapter with no users called itself provisioned")
+	}
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start must defer, not fail - main.go exits the agent on this error: %v", err)
+	}
+	if r.ran("start") {
+		t.Errorf("ran `mita start` with no users, which mita refuses; ran %v", r.order())
+	}
+	if a.Healthy() {
+		t.Error("an adapter that deferred reported healthy")
+	}
+
+	// ...and what ends the deferral is the panel's inbound push, which renders
+	// whatever users have arrived in the meantime and starts the proxy. A mieru
+	// node with users and no mieru inbound has nothing to serve.
+	r.mu.Lock()
+	r.failOn, r.status = "", `mita server status is "RUNNING"`
+	r.mu.Unlock()
+	if err := a.AddUser(core.User{UserID: "u-1", Username: "alice", XrayUUID: "uuid-a"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if err := a.ApplyInbound(2012, []byte(`{"mtu":1380}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
+	if !r.ran("start") {
+		t.Errorf("the inbound push did not start the proxy; ran %v", r.order())
+	}
+	if !a.Healthy() {
+		t.Error("still unhealthy after the push that started it")
+	}
+}
+
+func TestConfigOnlyModeIsNotHealthyWithoutUsersEither(t *testing.T) {
+	// With no binary there is no mita to ask, and the fallback is this
+	// adapter's own "did my last write succeed" flag - which ApplyInbound sets
+	// even when it deliberately did NOT start the proxy, because the node had
+	// no users yet. Without the provisioning check, that state reports healthy
+	// in config-only mode and unhealthy with a binary: the same node, two
+	// answers, decided by whether mita happens to be installed.
+	a := New(Config{
+		ConfigPath: filepath.Join(t.TempDir(), "server.json"),
+		Inbound:    InboundConfig{ListenPort: 2012, MTU: 1400, LoggingLevel: "INFO"},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if err := a.ApplyInbound(2012, []byte(`{"mtu":1380}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
+	if a.Healthy() {
+		t.Error("reported healthy after applying a config with no users, which mita would refuse to serve")
+	}
+
+	// The control: with a user it does report healthy, so this is not a
+	// Healthy() that simply says no.
+	if err := a.AddUser(core.User{UserID: "u-1", Username: "alice", XrayUUID: "uuid-a"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if !a.Healthy() {
+		t.Error("still unhealthy once it had a user and a rendered config")
+	}
+}
+
+func TestAnInboundPushedBeforeAnyUserDoesNotFail(t *testing.T) {
+	// The order an operator can easily produce: install a mieru node, bind a
+	// mieru profile to it, and only then put someone in the squad. The push
+	// arrives with the user list still empty, and mita would refuse to start.
+	//
+	// Refusing back is the wrong answer: ApplyInbound's error becomes
+	// "1/1 inbounds failed to apply" in the panel, on a node whose only problem
+	// is that nobody has been given access yet. The config is applied, the
+	// proxy waits, and the first user starts it.
+	r := &scriptedRunner{status: `mita server status is "IDLE"`, failOn: "start"}
+	a := withRunner(t, r)
+	a.users = map[string]User{}
+
+	if err := a.ApplyInbound(2012, []byte(`{"mtu":1380}`)); err != nil {
+		t.Fatalf("a push to a node with no users failed: %v", err)
+	}
+	if r.ran("start") {
+		t.Errorf("ran `mita start` with no users, which mita refuses; ran %v", r.order())
+	}
+	if !r.ran("apply") {
+		t.Errorf("the config was not applied either; ran %v", r.order())
+	}
+
+	r.mu.Lock()
+	r.failOn, r.status = "", `mita server status is "RUNNING"`
+	r.mu.Unlock()
+	if err := a.AddUser(core.User{UserID: "u-1", Username: "alice", XrayUUID: "uuid-a"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if !r.ran("start") {
+		t.Errorf("the first user did not start the waiting proxy; ran %v", r.order())
 	}
 }

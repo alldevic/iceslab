@@ -150,6 +150,15 @@ func TestStart_InvokesMitaApplyAndReload(t *testing.T) {
 		Inbound:    InboundConfig{ListenPort: 2012, MTU: 1400, LoggingLevel: "INFO"},
 		RunCmd:     runner.run,
 	}, logger)
+	// A user, because Start now defers on a node that has none: mita refuses to
+	// start a proxy with an empty user list, so an adapter without one has
+	// nothing to apply yet.
+	if err := a.AddUser(core.User{UserID: "u-1", Username: "alice", XrayUUID: "uuid-a"}); err != nil {
+		t.Fatalf("seed a user: %v", err)
+	}
+	runner.mu.Lock()
+	runner.calls = nil
+	runner.mu.Unlock()
 
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
