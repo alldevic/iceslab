@@ -272,6 +272,11 @@ export function buildClashYaml(
         `    port: ${e.port}`,
         `    password: ${yamlString(e.password)}`,
       ];
+      // Same certificate as the TUIC / AnyTLS blocks below when sing-box is the
+      // engine, and the same admission. Without it mihomo refuses the handshake.
+      if (e.allowInsecure) {
+        lines.push(`    skip-cert-verify: true`);
+      }
       if (e.obfsPassword) {
         lines.push(
           `    obfs: salamander`,

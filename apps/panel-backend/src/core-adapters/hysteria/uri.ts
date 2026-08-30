@@ -2,9 +2,9 @@
  * Hysteria 2 URI builder. The wire format is consumed directly by Hiddify,
  * NekoRay, v2rayN, the upstream `hysteria` client, and IcePath-VPN.
  *
- * Slice 16: minimal builder (host:port + password + name fragment).
- * Slice 17 (inbounds CRUD) will extend with SNI / obfs / insecure / pinSHA256
- * once inbounds carry per-instance config.
+ * Slice 16: minimal builder (host:port + password + name fragment); SNI, obfs,
+ * bandwidth, port-hopping and `insecure` arrived with the config that carries
+ * them. `pinSHA256` is still not emitted by anything.
  */
 
 export interface HysteriaUriOpts {
@@ -35,6 +35,20 @@ export interface HysteriaUriOpts {
    *  fixed-port UDP throttle on RU TSPU / IR / CN ISPs. */
   portHoppingStart?: number;
   portHoppingEnd?: number;
+  /** `insecure=1`: the client must not verify the server certificate.
+   *
+   *  Required when sing-box serves this profile instead of the native hysteria
+   *  core, because that path holds the self-signed cert bootstrap-singbox.sh
+   *  generates (CN=www.bing.com) rather than an ACME one for the node's name.
+   *  Its two siblings on the very same certificate, TUIC and AnyTLS, have
+   *  emitted their own insecure flag by default since they existed; this
+   *  builder had no such parameter at all, and its header comment listed
+   *  `insecure` as deferred to a slice that shipped long ago.
+   *
+   *  Off by default, and that default is the point: the native core's cert is a
+   *  real one for the name the client dials, and turning verification off there
+   *  would discard the only thing checking it. */
+  allowInsecure?: boolean;
 }
 
 export function buildHysteriaUri(opts: HysteriaUriOpts): string {
@@ -44,6 +58,9 @@ export function buildHysteriaUri(opts: HysteriaUriOpts): string {
   // automatically), some clients want it spelled out.
   const params = new URLSearchParams();
   params.set('sni', opts.host);
+  if (opts.allowInsecure) {
+    params.set('insecure', '1');
+  }
   if (opts.obfsPassword) {
     params.set('obfs', 'salamander');
     params.set('obfs-password', opts.obfsPassword);

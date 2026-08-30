@@ -268,6 +268,11 @@ export function buildSingboxJson(
           // without it the QUIC stream multiplexer never opens proxy
           // streams even though the QUIC connection itself is fine.
           alpn: ['h3'],
+          // Set when sing-box serves the inbound: that path holds the same
+          // self-signed certificate as TUIC and AnyTLS below, and those two
+          // have always said so. See the hysteria branch of the subscription
+          // service for the measurement.
+          ...(e.allowInsecure ? { insecure: true } : {}),
         },
       });
     } else if (e.protocol === 'xray') {

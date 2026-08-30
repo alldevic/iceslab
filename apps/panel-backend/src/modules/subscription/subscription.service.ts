@@ -501,7 +501,7 @@ export async function generateSubscription(
               },
             },
             include: {
-              profile: { select: { id: true, protocol: true, config: true } },
+              profile: { select: { id: true, protocol: true, engine: true, config: true } },
               node: {
                 select: {
                   id: true,
@@ -725,6 +725,12 @@ export async function generateSubscription(
     const ib = {
       id: b.id,
       protocol: b.profile.protocol,
+      // Which core serves it. It decides what CERTIFICATE the client will meet
+      // on the other end, which is not something the protocol alone says: a
+      // hysteria profile on its native core has an ACME certificate for the
+      // node's own name, and the same profile on the sing-box engine has the
+      // self-signed one bootstrap-singbox.sh generates for CN=www.bing.com.
+      engine: b.profile.engine ?? null,
       profileId: b.profile.id,
       config: cfgMerged,
     };
@@ -793,6 +799,23 @@ export async function generateSubscription(
     };
 
     if (ib.protocol === 'hysteria') {
+      // Hysteria 2 served by sing-box terminates TLS with the self-signed
+      // certificate bootstrap-singbox.sh writes (CN=www.bing.com), the same one
+      // TUIC and AnyTLS use - and those two have emitted their insecure flag by
+      // default since they existed. This link did not, and the failure is total:
+      // measured 2026-08-30 against a sing-box hysteria2 inbound holding that
+      // cert, a client built from exactly this link answers
+      //   `cannot validate certificate for <host> because it doesn't contain
+      //    any IP SANs`
+      // and, with the SNI corrected to the cert's own name,
+      //   `certificate signed by unknown authority`.
+      // Only with verification off does the tunnel carry a request (HTTP 200).
+      // So no client could ever connect to a hysteria profile on this engine.
+      //
+      // The native hysteria core is untouched: it holds a real ACME certificate
+      // for the node's own name, which is exactly the thing worth verifying, and
+      // its links keep saying so.
+      const hysteriaAllowsInsecure = ib.engine === 'singbox' || hostMeta.allowInsecure;
       const hyCfg = ib.config as
         | {
             obfsPassword?: string;
@@ -814,6 +837,7 @@ export async function generateSubscription(
         downMbps: hyCfg?.brutalDownMbps,
         portHoppingStart: hyCfg?.portHoppingStart,
         portHoppingEnd: hyCfg?.portHoppingEnd,
+        allowInsecure: hysteriaAllowsInsecure,
         uri: buildHysteriaUri({
           password: user.hysteriaPassword,
           host,
@@ -824,6 +848,7 @@ export async function generateSubscription(
           downMbps: hyCfg?.brutalDownMbps,
           portHoppingStart: hyCfg?.portHoppingStart,
           portHoppingEnd: hyCfg?.portHoppingEnd,
+          allowInsecure: hysteriaAllowsInsecure,
         }),
       });
     } else if (ib.protocol === 'xray' && user.xrayUuid) {

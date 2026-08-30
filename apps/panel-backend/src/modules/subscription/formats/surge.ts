@@ -31,6 +31,9 @@ export function buildSurgeConf(endpoints: SubscriptionEndpoint[]): string {
       const p = [`${name} = hysteria2, ${e.host}, ${e.port}, password=${e.password}`];
       if (e.downMbps) p.push(`download-bandwidth=${e.downMbps}`);
       if (e.obfsPassword) p.push(`salamander-password=${e.obfsPassword}`);
+      // The sing-box engine serves hysteria2 with a self-signed certificate,
+      // the same spelling this file already uses for the xray branches below.
+      if (e.allowInsecure) p.push('skip-cert-verify=true');
       if (e.portHoppingStart && e.portHoppingEnd) {
         p.push(`port-hopping=${e.portHoppingStart}-${e.portHoppingEnd}`);
       }

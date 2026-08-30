@@ -71,6 +71,7 @@ async function createProfile(
   protocol: string,
   config: Record<string, unknown>,
   nameSuffix: string,
+  engine?: 'singbox',
 ): Promise<string> {
   const res = await app.inject({
     method: 'POST',
@@ -80,6 +81,7 @@ async function createProfile(
       name: `${protocol}-${nameSuffix}`,
       protocol,
       config,
+      ...(engine ? { engine } : {}),
     },
   });
   if (res.statusCode !== 201) {
@@ -754,5 +756,58 @@ describe('GET /sub/:token - audit', () => {
     });
     expect(after.length).toBe(before + 1);
     expect(after[0]!.userAgent).toBe('test-client/1.0');
+  });
+});
+
+/**
+ * Which certificate a hysteria client meets is a property of the ENGINE: the
+ * native core has an ACME certificate for the node's own name, the sing-box
+ * engine has the self-signed one bootstrap-singbox.sh writes for the TUIC and
+ * AnyTLS inbounds. The link has to say which, and the engine is only knowable
+ * here if the binding query actually selects it - which is the half a unit test
+ * on the builders cannot see.
+ *
+ * See hysteria-singbox-cert.test.ts for the measurement (no client can connect
+ * to a sing-box-served hysteria2 inbound from a link without it).
+ */
+describe('GET /sub/:token - hysteria against the engine that serves it', () => {
+  // A bare node, NOT createNode(): that helper attaches a native hysteria
+  // inbound of its own, and the point here is which engine serves the ONE
+  // hysteria endpoint the user is handed.
+  async function bareNode(name: string, address: string): Promise<string> {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/nodes',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name, address },
+    });
+    if (res.statusCode !== 201) throw new Error(`bareNode: ${res.statusCode} ${res.body}`);
+    return JSON.parse(res.body).id as string;
+  }
+
+  it('admits the self-signed cert for a sing-box-served profile', async () => {
+    const user = await createUser('sbhy');
+    const nodeId = await bareNode('sb-1', '10.0.0.9:8443');
+    const profileId = await createProfile('hysteria', {}, 'sb', 'singbox');
+    await createBinding(profileId, nodeId, 8443);
+
+    const res = await app.inject({ method: 'GET', url: `/sub/${user.subscriptionToken}` });
+    const decoded = Buffer.from(res.body, 'base64').toString('utf8');
+    const line = decoded.split('\n').find((l) => l.startsWith('hysteria2://'));
+    expect(line, `no hysteria line in: ${decoded}`).toBeDefined();
+    expect(new URL(line as string).searchParams.get('insecure')).toBe('1');
+  });
+
+  it('keeps verifying for a natively-served profile', async () => {
+    const user = await createUser('nathy');
+    const nodeId = await bareNode('nat-1', '10.0.0.10:8443');
+    const profileId = await createProfile('hysteria', {}, 'nat');
+    await createBinding(profileId, nodeId, 8443);
+
+    const res = await app.inject({ method: 'GET', url: `/sub/${user.subscriptionToken}` });
+    const decoded = Buffer.from(res.body, 'base64').toString('utf8');
+    const line = decoded.split('\n').find((l) => l.startsWith('hysteria2://'));
+    expect(line, `no hysteria line in: ${decoded}`).toBeDefined();
+    expect(new URL(line as string).searchParams.get('insecure')).toBeNull();
   });
 });
