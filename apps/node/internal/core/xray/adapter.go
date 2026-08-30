@@ -799,6 +799,7 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	// empty result.
 	out := make([]core.UserStats, 0, len(users))
 	var userIn, userOut int64
+	degraded := false
 	if len(users) > 0 {
 		counters, err := queryUserStats(ctx, run, binary, apiPort)
 		if err != nil {
@@ -806,7 +807,14 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 			// Zero-counter rows would read as a cumulative drop to 0 and re-baseline
 			// the panel's per-user snapshots, spiking each user's quota on recovery.
 			// The node total below still reports via the inbound query.
+			//
+			// Emitting nothing is not enough on its own, and saying so is what
+			// `degraded` is for: on a node whose users are also served by a
+			// second cumulative core, the panel sums the cores before comparing
+			// to its snapshot, so this core's absence is indistinguishable from
+			// a reset and costs the user the same spike on recovery.
 			a.logger.Warn("xray GetStats: user statsquery failed, skipping per-user this poll", "err", err)
+			degraded = true
 		} else {
 			for _, u := range users {
 				c := counters[u.UserID]
@@ -835,6 +843,7 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		// Non-destructive read (no -reset): Users[] and the inbound total are
 		// cumulative, so the panel computes deltas against its snapshots.
 		Cumulative: true,
+		Degraded:   degraded,
 	}, nil
 }
 

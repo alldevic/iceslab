@@ -242,8 +242,19 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 
 	counters, err := queryUserStats(context.Background(), run, bin, statsListen)
 	if err != nil {
+		// No per-user rows, the way xray already does it, and `Degraded` so the
+		// panel knows this poll is incomplete rather than zero.
+		//
+		// This used to return zero-counter rows - the exact thing xray's own
+		// soft-fail comment forbids. It billed nothing only because `zero()`
+		// leaves Cumulative false, which sends those rows down the per-poll-delta
+		// path; an accident, not a guard, and one that stopped working the moment
+		// the node ran a SECOND cumulative core: with xray also reporting, the
+		// response is cumulative, the user's summed rows drop by sing-box's whole
+		// counter, and the panel re-baselines and bills it again on recovery.
+		// Measured live: +516 083 bytes on a user with no traffic at all.
 		a.logger.Warn("singbox GetStats: statsquery failed", "err", err)
-		return zero(), nil
+		return &core.Stats{Cumulative: true, Degraded: true}, nil
 	}
 
 	out := make([]core.UserStats, 0, len(userIDs))

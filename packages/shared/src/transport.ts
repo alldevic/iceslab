@@ -559,6 +559,32 @@ export interface GetStatsResponse {
    * non-destructive read). Absent/false = legacy already-deltas semantics.
    */
   cumulative?: boolean;
+  /**
+   * True when at least one core on this node could NOT read its counters this
+   * poll, so `users[]` is INCOMPLETE - some cumulative rows are missing rather
+   * than zero.
+   *
+   * The panel sums a user's cumulative rows across cores before comparing them
+   * to its snapshot, so a missing core reads exactly like a counter reset: the
+   * sum drops, the snapshot is re-baselined to the lower value, and the next
+   * successful poll bills the difference - the absent core's ENTIRE
+   * since-core-start counter - as one poll's traffic.
+   *
+   * Measured live on a node running xray and sing-box for one user: sing-box's
+   * stats endpoint blocked for a single poll and restored with no traffic in
+   * between moved the user from 1 156 229 to 1 672 312 bytes, +516 083, exactly
+   * sing-box's cumulative. On a node up for a week that is the week, re-billed,
+   * up to the panel's 1 TiB per-poll clamp.
+   *
+   * Neither core could prevent it alone. xray already emits NO rows on a failed
+   * query rather than zero rows, precisely to avoid looking like a reset - and
+   * it does not help, because "this core said nothing" and "this core says
+   * zero" are the same thing once the panel has summed the cores together.
+   * Only the node knows the difference, so the node says it.
+   *
+   * Absent on agents older than 2026-08-30.
+   */
+  statsDegraded?: boolean;
 }
 
 // ───── GET /healthz ─────

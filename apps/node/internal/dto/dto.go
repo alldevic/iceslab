@@ -207,6 +207,14 @@ type GetStatsResponse struct {
 	// the panel must compute deltas against its stored snapshot. Absent/false
 	// keeps the legacy "already-deltas" interpretation for older agents. #5.
 	Cumulative bool `json:"cumulative,omitempty"`
+	// StatsDegraded=true means at least one core could not read its counters
+	// this poll, so Users[] is INCOMPLETE - cumulative rows are missing, not
+	// zero. The panel must not advance its per-user snapshots on such a poll:
+	// the sum of a user's rows across cores has dropped for a reason that is
+	// not a counter reset, and re-baselining to it bills the absent core's
+	// whole since-core-start counter on recovery. See core.Stats.Degraded for
+	// the measurement.
+	StatsDegraded bool `json:"statsDegraded,omitempty"`
 }
 
 // ───── GET /healthz ─────

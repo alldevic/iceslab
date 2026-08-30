@@ -155,8 +155,42 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         // ~zero and that traffic goes unbilled). When no user carries the flag
         // (legacy agent) we fall back to treating the whole list as cumulative,
         // so single-core and old-agent nodes stay byte-identical.
+        // ...unless the node says this poll is INCOMPLETE. A core that could not
+        // read its counters contributes no rows, and the sum below cannot tell
+        // that from a core whose counters reset: it just sees the user's summed
+        // cumulative drop, re-baselines the snapshot to the lower value, and
+        // bills the difference - the absent core's whole since-core-start
+        // counter - on the next successful poll. Measured live 2026-08-30 on a
+        // node running xray and sing-box for one user: one blocked poll on
+        // sing-box's stats endpoint, no traffic at all, and the user went from
+        // 1 156 229 to 1 672 312 bytes.
+        //
+        // Dropping the cumulative rows for this poll bills nothing and leaves
+        // the snapshots where they are. Nothing is lost: the reads are
+        // non-destructive, so the next poll's delta still spans the gap. The
+        // delta-core rows stay - they are per-poll values that stand on their
+        // own, and discarding them WOULD drop bytes.
+        //
+        // Only rows the node marked cumulative are held. Everything else is a
+        // per-poll delta that stands alone, and a delta core's read is
+        // DESTRUCTIVE (shadowsocks passes -reset), so discarding those rows
+        // would drop bytes the core has already forgotten. `cumulative` is
+        // omitempty on the wire, so a missing flag means "not cumulative" -
+        // which is also why an agent too old to send `statsDegraded` never
+        // reaches this branch at all.
+        if (res.statsDegraded && userList.length > 0) {
+          const kept = userList.filter((u) => !u.cumulative);
+          if (kept.length !== userList.length) {
+            getLogger().warn(
+              `[cron] node-stats-poll ${node.id} - a core could not read its counters; ` +
+                `holding ${userList.length - kept.length} cumulative row(s) and their snapshots`,
+            );
+          }
+          userList = kept;
+        }
+
         let snapshotUpserts: { userId: string; cumIn: bigint; cumOut: bigint }[] = [];
-        if (res.cumulative && userList.length > 0) {
+        if (res.cumulative && !res.statsDegraded && userList.length > 0) {
           const tagged = userList.some((u) => u.cumulative !== undefined);
           const cumulativeUsers = tagged ? userList.filter((u) => u.cumulative) : userList;
           const deltaUsers = tagged ? userList.filter((u) => !u.cumulative) : [];

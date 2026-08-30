@@ -835,6 +835,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		in         int64
 		out        int64
 		cumulative bool
+		degraded   bool
 	}
 	results := make([]statResult, len(s.cfg.Adapters))
 	var wg sync.WaitGroup
@@ -844,10 +845,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			stats, err := adapter.GetStats()
 			if err != nil {
+				// A hard error is a degraded poll too: this adapter contributed
+				// nothing, which for a user it also serves is a missing row.
 				s.logger.Error("adapter getStats failed", "core", adapter.Name(), "err", err)
+				results[i] = statResult{degraded: true}
 				return
 			}
-			res := statResult{in: stats.TotalBytesIn, out: stats.TotalBytesOut, cumulative: stats.Cumulative}
+			res := statResult{
+				in: stats.TotalBytesIn, out: stats.TotalBytesOut,
+				cumulative: stats.Cumulative, degraded: stats.Degraded,
+			}
 			for _, u := range stats.Users {
 				res.users = append(res.users, dto.UserStats{
 					UserID:   u.UserID,
@@ -867,10 +874,15 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	allUsers := []dto.UserStats{}
 	var totalIn, totalOut int64
 	var cumulative bool
+	var degraded bool
 	for _, res := range results {
 		allUsers = append(allUsers, res.users...)
 		totalIn += res.in
 		totalOut += res.out
+		// Any core that could not answer makes the whole per-user list
+		// incomplete: the panel sums a user's rows across cores, so it cannot
+		// tell WHICH core is missing, only that one is.
+		degraded = degraded || res.degraded
 		// #5 - response-level flag stays as the OR across cores so older panels
 		// still enter the snapshot-delta path. New panels read the per-user
 		// dto.UserStats.Cumulative set above, which is what makes a mixed
@@ -884,6 +896,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalBytesIn:  totalIn,
 		TotalBytesOut: totalOut,
 		Cumulative:    cumulative,
+		StatsDegraded: degraded,
 	})
 }
 

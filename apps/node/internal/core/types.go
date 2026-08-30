@@ -89,4 +89,21 @@ type Stats struct {
 	// non-destructive read; panels that don't see this flag use the legacy
 	// delta path. #5.
 	Cumulative bool
+	// Degraded reports that this adapter could NOT read its counters this poll,
+	// so Users[] is missing rows rather than reporting them as zero.
+	//
+	// It exists because "said nothing" and "said zero" are the same thing to the
+	// panel: it sums a user's cumulative rows across adapters before comparing
+	// the sum to its snapshot, so one adapter dropping out reads as a counter
+	// reset, re-baselines the snapshot low, and makes the next successful poll
+	// bill that adapter's whole since-core-start counter in one go. Measured
+	// live 2026-08-30 on a node running xray and sing-box: one blocked poll on
+	// sing-box's stats endpoint, no traffic at all, +516 083 bytes on the user -
+	// exactly sing-box's cumulative.
+	//
+	// Emitting no rows (what xray already did) does not avoid this. Only the
+	// node can tell the two apart, so the node says so and the panel leaves its
+	// snapshots alone for that poll; nothing is lost, because the read is
+	// non-destructive and the next poll's delta still covers the gap.
+	Degraded bool
 }
