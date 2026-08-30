@@ -406,3 +406,55 @@ describe('pollNodeMetrics', () => {
     await expect(pollNodeMetrics()).resolves.toEqual({ ok: 0, failed: 0 });
   });
 });
+
+/**
+ * The blast radius of one bad node.
+ *
+ * `pollNodeStatuses` was the one of the three fan-outs with no per-node guard,
+ * and the reasoning for leaving it that way was that `checkOne` swallows its
+ * own errors so nothing can throw. That covers the FETCH; the row write, the
+ * queue enqueue and the alerts all happen after it, and one of those failing
+ * rejects the whole `Promise.all` - abandoning every other node in the same
+ * tick, including writes that had not run yet.
+ *
+ * A stale status is not cosmetic: `status` decides whether a node appears in
+ * anybody's subscription, so the nodes that vanish are the ones nothing went
+ * wrong with.
+ */
+describe('one node that cannot be written does not take the tick with it', () => {
+  it('still writes the others, and still returns a count', async () => {
+    const bad = await makeNode({ status: 'unknown' });
+    const good = await makeNode({ status: 'unknown' });
+    health.set(bad.address, ok());
+    health.set(good.address, ok());
+
+    // Fail the write for exactly one node, the way a constraint violation or a
+    // dropped connection would. Not the healthcheck: that path is already
+    // guarded, and stubbing it would test the guard that exists.
+    const realUpdate = prisma.node.update.bind(prisma.node);
+    vi.spyOn(prisma.node, 'update').mockImplementation((async (args: { where: { id: string } }) => {
+      if (args.where.id === bad.id) throw new Error('write failed for this node');
+      return realUpdate(args as never);
+    }) as never);
+
+    const result = await pollNodeStatuses();
+    vi.restoreAllMocks();
+
+    // The good node's row moved, which is the whole point.
+    const after = await prisma.node.findUnique({ where: { id: good.id } });
+    expect(
+      after?.status,
+      'a healthy node was left in `unknown` because a DIFFERENT node failed to write',
+    ).toBe('online');
+
+    // And the tick still answers. Both nodes were reachable and healthy, so
+    // both count as ok - the failure was in storing the verdict, not in
+    // reaching the node, and reporting it as `down` would say the node is
+    // unreachable when it is not.
+    expect(result.ok).toBe(2);
+
+    // The bad node keeps its previous status rather than acquiring a wrong one.
+    const badAfter = await prisma.node.findUnique({ where: { id: bad.id } });
+    expect(badAfter?.status).toBe('unknown');
+  });
+});

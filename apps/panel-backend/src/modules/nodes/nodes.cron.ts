@@ -65,8 +65,39 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
   let ok = 0;
   let down = 0;
 
+  // Per-node, like pollNodeMetrics right below and the stats poll next door.
+  //
+  // It was the one of the three without a guard, and the reasoning for leaving
+  // it that way was that checkOne swallows its own errors, so nothing here can
+  // throw. That is true of the FETCH and not of the rest: the `node.update`,
+  // the queue enqueue and the Telegram calls all run after it, and a single
+  // node's write failing would reject the Promise.all and abandon every other
+  // node's status in the same tick - including the writes that had not run yet.
+  //
+  // The tick is every 30 seconds and would recover, so this is a guard on
+  // blast radius rather than on correctness. It is here because "two of three
+  // are guarded and the third has no reason written down" is the shape this
+  // fork keeps finding things in, and the reason costs one catch.
+  let errored = 0;
   await Promise.all(
     nodes.map(async (node) => {
+      try {
+        await pollOne(node);
+      } catch (err) {
+        errored++;
+        getLogger().error({ err }, `[cron] node-healthcheck-poll ${node.name} failed`);
+      }
+    }),
+  );
+  if (errored > 0) {
+    // Counted and said out loud: a node whose row could not be written keeps
+    // whatever status it had, and a summary that did not mention it would
+    // report that stale status as this tick's answer.
+    getLogger().warn(`[cron] node-healthcheck-poll - ${errored} node(s) errored`);
+  }
+  return { ok, down };
+
+  async function pollOne(node: (typeof nodes)[number]): Promise<void> {
       const result = await checkOne(node);
       // `degraded` counts with down on purpose: the agent answers, but a core
       // the operator configured is not serving anybody, and a summary that
@@ -197,10 +228,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
             (result.message ? `\nlast: ${escapeMarkdown(result.message)}` : ''),
         );
       }
-    }),
-  );
-
-  return { ok, down };
+  }
 }
 
 interface PollResult {
