@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,7 +54,19 @@ type Adapter struct {
 
 	// restartMu serializes regenerateAndReload; never held with mu across IO.
 	restartMu sync.Mutex
+
+	// statusMu guards the cached answer to `mita status`. Its own lock, not
+	// mu: the query forks, and holding the adapter's main lock across a
+	// subprocess is what makes GetStats wait behind a healthcheck.
+	statusMu      sync.Mutex
+	statusAt      time.Time
+	statusRunning bool
 }
+
+// How long a `mita status` answer is reused. Short enough that a proxy that
+// stops is reported within one panel poll, long enough that a burst of
+// healthchecks is one fork.
+const statusCacheFor = 5 * time.Second
 
 func New(cfg Config, logger *slog.Logger) *Adapter {
 	if cfg.RunCmd == nil {
@@ -68,6 +81,14 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 
 func defaultRunCmd(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// invalidateStatus drops the cached `mita status` answer, so a call that just
+// changed the proxy's state is not read back through a stale one.
+func (a *Adapter) invalidateStatus() {
+	a.statusMu.Lock()
+	a.statusAt = time.Time{}
+	a.statusMu.Unlock()
 }
 
 func (a *Adapter) Name() string { return Name }
@@ -193,10 +214,60 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	return &core.Stats{Users: users}, nil
 }
 
+// Healthy asks MITA whether its proxy service is serving, not whether this
+// adapter's last config write succeeded.
+//
+// The difference is the whole point. mita's systemd unit and mita's PROXY are
+// two states: the unit runs an RPC server that answers `apply config`, `reload`
+// and `status`, and the proxy inside it starts only on `mita start`. Both
+// `apply config` and `reload` answer rc=0 and "mita server is reloaded" while
+// the proxy is IDLE and no socket exists (measured on a live node 2026-08-30),
+// so a flag set from their success says "serving" about a core serving nobody.
+// That is exactly what it said: the panel showed `running: true, drift: false`
+// on a node where `ss` listed nothing on the inbound's port.
+//
+// Config-only mode keeps the old answer: there is no binary to ask.
 func (a *Adapter) Healthy() bool {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.started
+	started, bin, run := a.started, a.cfg.BinaryPath, a.cfg.RunCmd
+	a.mu.Unlock()
+	if bin == "" || run == nil {
+		return started
+	}
+	if !started {
+		// Nothing has been rendered yet, so there is nothing to be healthy
+		// about and no reason to fork.
+		return false
+	}
+	return a.proxyRunning(context.Background())
+}
+
+// proxyRunning is `mita status`, cached for a beat.
+//
+// /healthz asks on every panel poll and the answer costs a fork, so it is held
+// briefly - but only briefly, because the value of asking at all is that it
+// changes when the proxy stops.
+func (a *Adapter) proxyRunning(ctx context.Context) bool {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	if time.Since(a.statusAt) < statusCacheFor {
+		return a.statusRunning
+	}
+	a.mu.Lock()
+	bin, run := a.cfg.BinaryPath, a.cfg.RunCmd
+	a.mu.Unlock()
+	out, err := run(ctx, bin, "status")
+	if err != nil {
+		a.logger.Warn("mita status failed; reporting the core as not serving",
+			"err", err, "out", string(out))
+		a.statusRunning = false
+	} else {
+		// `mita server status is "RUNNING"` / `... "IDLE"`. Matched on the
+		// quoted word, which is the binary's own vocabulary.
+		a.statusRunning = strings.Contains(string(out), `"RUNNING"`)
+	}
+	a.statusAt = time.Now()
+	return a.statusRunning
 }
 
 // regenerateAndReload renders config + runs `mita apply/reload`. Bug #10:
@@ -239,6 +310,14 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	a.mu.Lock()
 	unchanged := a.started && a.renderedHash == hash
 	a.mu.Unlock()
+	// "Same bytes as last time" is only a reason to skip if the core is also
+	// still serving them. An agent restart, or a `mita stop` from anywhere,
+	// leaves the config identical and the proxy idle - and skipping there is
+	// how a resync that exists to repair the node repairs nothing.
+	if unchanged && !a.proxyRunning(ctx) {
+		unchanged = false
+		a.logger.Info("mieru config unchanged but mita is not serving; starting it")
+	}
 	if unchanged {
 		a.logger.Debug("mieru config unchanged, skipping mita apply/reload", "users", len(users))
 		return nil
@@ -256,6 +335,20 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 		a.logger.Warn("mita reload returned non-zero (often safe after apply)",
 			"err", err, "out", string(out))
 	}
+	// ...and then START it, which is the command that actually opens the port.
+	//
+	// Neither `apply config` nor `reload` does: mita boots its unit with the
+	// proxy IDLE and both answer rc=0 against an idle proxy, so for as long as
+	// this adapter existed it applied a perfect config to a core that listened
+	// on nothing - `ss` empty, `mita status` IDLE - while the agent logged
+	// "mieru (mita) reloaded" and the panel showed the core running. The
+	// binary's own help says it plainly ("reload ... WITHOUT stopping proxy
+	// service"); nobody asked it. `start` is idempotent: measured rc=0 and
+	// "mita server proxy is running" against an already-running proxy.
+	if out, err := run(ctx, binPath, "start"); err != nil {
+		return fmt.Errorf("mita start: %w (%s)", err, string(out))
+	}
+	a.invalidateStatus()
 
 	a.mu.Lock()
 	a.started = true

@@ -51,9 +51,19 @@ import (
 // stated per case rather than left to look like drift:
 //
 //   - Healthy: mtproto, shadowsocks, naive, xray and sing-box own a subprocess
-//     and ask whether it runs; mita owns its own lifecycle under systemd, so
-//     mieru has no process to ask about and reports whether the config it
-//     rendered was accepted; amneziawg asks the kernel about its interface.
+//     and ask whether it runs; amneziawg asks the kernel about its interface;
+//     mieru asks mita.
+//
+//     That last one used to read "mieru has no process to ask about and reports
+//     whether the config it rendered was accepted", and the exception outlived
+//     its subject. mita's unit and mita's PROXY are two states - `apply config`
+//     and `reload` both answer rc=0 against an IDLE proxy that has opened no
+//     socket - and mita answers the real question itself, with `mita status`.
+//     Nobody had asked it, so mieru reported a config it had written as a core
+//     that was serving, for as long as the adapter existed. Measured on a live
+//     node 2026-08-30; see core/mieru/serving_test.go. In config-only mode
+//     there is still no binary to ask, and the old answer stands - which is the
+//     mode these cases run in.
 //   - hysteria does not render on Start at all. Its Start brings up the local
 //     auth-callback listener, and the config is written by ApplyInbound, so it
 //     takes part in the two cases that are about health and not about a file.
