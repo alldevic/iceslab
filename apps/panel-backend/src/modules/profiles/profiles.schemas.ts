@@ -79,9 +79,15 @@ const ENGINE_OPTIONS: Record<string, readonly string[]> = {
  * succeeds, the node comes up healthy, and the feature the panel shows as
  * enabled is simply not there. For an anti-abuse policy that means a node
  * enforcing nothing; for post-quantum REALITY it means a profile advertised as
- * post-quantum running classical X25519. The node-agent rejects all three, and
- * this is the panel half of the same guard so the operator hears about it while
- * saving rather than after the push.
+ * post-quantum running classical X25519; for a REALITY fallback throttle it
+ * means a prober that fails auth is forwarded at full speed. The node-agent
+ * rejects every key listed here, and this is the panel half of the same guard
+ * so the operator hears about it while saving rather than after the push.
+ *
+ * WARP egress belongs to the same family and is deliberately NOT here, because
+ * it cannot be: the panel attaches it per NODE at push time, so no profile
+ * config ever carries it. Its guard is in inbounds.queue (which xray inbound is
+ * allowed to receive it) plus the node-agent.
  *
  * abusePolicy rides both the xray and the shadowsocks config, and the sing-box
  * engine serves both, so the check is keyed on the config keys rather than on
@@ -99,6 +105,21 @@ export function fieldsUnsupportedByEngine(
   if (cfg.abusePolicy != null) offending.push('abusePolicy');
   if (cfg.realityMldsa65Seed) offending.push('realityMldsa65Seed');
   if (cfg.vlessDecryption) offending.push('vlessDecryption');
+  // xray writes these three into realitySettings (`xver`,
+  // `limitFallbackUpload/Download`); sing-box's tls.reality block has no
+  // equivalent, so before this list knew them the form saved them, the panel
+  // showed them set, the push succeeded and the node held none of them.
+  // Measured on a lab node 2026-08-30 with xver=2 and both throttles set: the
+  // rendered sing-box config carried no trace of any of the three.
+  //
+  // Zero is the "off" value for all three, so only a set value is a promise.
+  if (Number(cfg.realityXver) > 0) offending.push('realityXver');
+  if (Number(cfg.realityLimitFallbackUploadBytesPerSec) > 0) {
+    offending.push('realityLimitFallbackUploadBytesPerSec');
+  }
+  if (Number(cfg.realityLimitFallbackDownloadBytesPerSec) > 0) {
+    offending.push('realityLimitFallbackDownloadBytesPerSec');
+  }
   return offending;
 }
 

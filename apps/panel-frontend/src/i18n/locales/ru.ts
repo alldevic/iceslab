@@ -1272,6 +1272,8 @@ export default {
         realityMaxTimeDiffDesc: 'Допустимый сдвиг часов, мс. 0 = без ограничения',
         // G защита от пробинга: душим неверифицированный fallback
         realityFallbackRateGroup: 'Лимит fallback (защита от пробинга)',
+        realitySingboxUnsupported:
+          'В REALITY-блоке sing-box нет ни xver, ни лимита fallback. Заданное здесь значение сохранилось бы и отображалось, а на узле не было бы ни того, ни другого, — поэтому обе стороны его отвергают. Для этого профиля нужен движок Xray.',
         realityLimitFallbackUploadLabel: 'Лимит отдачи (байт/с)',
         realityLimitFallbackUploadDesc: 'Душит отдачу неверифицированного fallback: пробер видит медленный сайт. 0 = выкл',
         realityLimitFallbackDownloadLabel: 'Лимит загрузки (байт/с)',

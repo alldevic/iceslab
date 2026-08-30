@@ -303,6 +303,21 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
     }
   }
 
+  // The three per-NODE features below (cascade, WARP, egress policy) all render
+  // as xray routing rules and outbounds, and all three ride on an xray inbound's
+  // config. Which xray inbound may carry them is one question, so it is asked
+  // once, here.
+  //
+  // `engine !== 'singbox'` is the whole point of the predicate. The sing-box
+  // renderer emits one outbound - `direct` - and no routing section at all, so
+  // an inbound served by it is not a place any of the three can land. Handing
+  // it one is either loud (the agent refuses cascade and routingFragments, and
+  // the push fails for every OTHER inbound on the node too) or silent (WARP had
+  // no guard on either side, so the panel showed a node egressing through
+  // Cloudflare while every flow left its own IP - measured 2026-08-30). Skipping
+  // it instead falls through to the "nowhere to render" branch, which says so.
+  const canRenderRouting = (i: InboundDto) => i.protocol === 'xray' && i.engine !== 'singbox';
+
   // C3 - if this node is a hop in an enabled cascade, attach its chaining
   // fragments (link-in inbound, link-out outbound, routing rules) to the node's
   // xray inbound. The node-agent merges them into the xray config and forwards
@@ -312,7 +327,7 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   if (cascade) {
     // A node runs a single xray config.json, so the first xray inbound is the
     // one (and only one) that carries the cascade.
-    const xrayInbound = inbounds.find((i) => i.protocol === 'xray');
+    const xrayInbound = inbounds.find(canRenderRouting);
     if (xrayInbound) {
       xrayInbound.config = {
         ...(xrayInbound.config as Record<string, unknown>),
@@ -320,7 +335,7 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
       } as InboundDto['config'];
     } else {
       getLogger().info(
-        `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound; cascade not applied`,
+        `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound the xray engine serves; cascade not applied`,
       );
     }
   }
@@ -331,7 +346,7 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // cascade, a node runs one xray config so the first xray inbound carries it.
   // Only the node-relevant subset is sent (NOT the panel-only token/clientId/
   // deviceId/license). Non-WARP nodes: no-op, wire stays byte-identical.
-  const warpXrayInbound = inbounds.find((i) => i.protocol === 'xray');
+  const warpXrayInbound = inbounds.find(canRenderRouting);
   if (warpXrayInbound) {
     const nodeWarp = await prisma.node.findUnique({
       where: { id: nodeId },
@@ -398,11 +413,20 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
     // the split in the panel and believe it.
     const nodeRouting = await prisma.node.findUnique({
       where: { id: nodeId },
-      select: { hardening: true },
+      select: { hardening: true, warpEnabled: true },
     });
+    // WARP is read from the same row and reported the same way. It used to be
+    // the one of the two that said nothing at all, which is how a node could
+    // show warpEnabled in the panel while its rendered config held a single
+    // `direct` outbound.
+    if (nodeRouting?.warpEnabled) {
+      getLogger().info(
+        `[inbound-sync] node ${nodeId} has WARP egress enabled but no xray inbound the xray engine serves; WARP not applied (traffic leaves the node's own address)`,
+      );
+    }
     if (coerceEgressPolicy((nodeRouting?.hardening as { egressPolicy?: unknown } | null)?.egressPolicy)) {
       getLogger().info(
-        `[inbound-sync] node ${nodeId} has an egress policy but no xray inbound; policy not applied`,
+        `[inbound-sync] node ${nodeId} has an egress policy but no xray inbound the xray engine serves; policy not applied`,
       );
     }
   }

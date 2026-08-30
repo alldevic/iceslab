@@ -1209,6 +1209,8 @@ export default {
         realityMaxTimeDiffDesc: 'Allowed clock skew, ms. 0 = no limit',
         // G probe resistance: throttle the unverified fallback path
         realityFallbackRateGroup: 'Fallback rate-limit (probe resistance)',
+        realitySingboxUnsupported:
+          'The sing-box REALITY block has no xver and no fallback rate-limit. A value set here would be saved and shown, and the node would hold neither — so both ends refuse it. Use the Xray engine for this profile.',
         realityLimitFallbackUploadLabel: 'Upload limit (bytes/sec)',
         realityLimitFallbackUploadDesc: 'Throttle unverified fallback uploads so a prober sees a slow site. 0 = off',
         realityLimitFallbackDownloadLabel: 'Download limit (bytes/sec)',

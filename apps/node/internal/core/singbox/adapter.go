@@ -574,6 +574,12 @@ type xrayFamilyWire struct {
 	RoutingFragments   json.RawMessage `json:"routingFragments"`
 	RealityMldsa65Seed string          `json:"realityMldsa65Seed"`
 	VlessDecryption    string          `json:"vlessDecryption"`
+	Warp               json.RawMessage `json:"warp"`
+	// REALITY knobs xray renders and sing-box has no equivalent for. Zero is
+	// "off" for all three, so only a set value is worth refusing.
+	RealityXver                             int `json:"realityXver"`
+	RealityLimitFallbackUploadBytesPerSec   int `json:"realityLimitFallbackUploadBytesPerSec"`
+	RealityLimitFallbackDownloadBytesPerSec int `json:"realityLimitFallbackDownloadBytesPerSec"`
 }
 
 // present reports whether a raw JSON field carries an actual object (a missing
@@ -632,6 +638,29 @@ func (w xrayFamilyWire) toInboundConfig(port int) (InboundConfig, error) {
 	}
 	if w.VlessDecryption != "" {
 		return InboundConfig{}, fmt.Errorf("VLESS-Encryption (vlessDecryption) not supported via sing-box engine (use the xray engine)")
+	}
+	// WARP egress, same shape as routingFragments above: the panel attaches it
+	// per NODE, the xray renderer turns it into a wireguard outbound plus a
+	// routing rule, and the sing-box renderer emits neither - its only outbound
+	// is `direct`. Dropping it silently leaves a node whose panel says every
+	// flow leaves through Cloudflare while every flow leaves its own IP, which
+	// is a privacy promise the operator cannot see is broken. Measured on a lab
+	// node 2026-08-30: warpEnabled true in the panel, `[{"type":"direct"}]` in
+	// the rendered config.
+	if present(w.Warp) {
+		return InboundConfig{}, fmt.Errorf("WARP egress not supported via sing-box engine (it renders no outbound but direct; use the xray engine)")
+	}
+	// xray writes these into realitySettings (`xver`, `limitFallbackUpload/
+	// Download`); sing-box's tls.reality block has no equivalent for either.
+	// Zero means off, so only a set value is a promise that would go missing:
+	// a fallback throttle that is not applied means a prober that fails REALITY
+	// auth is forwarded at full speed, which is the opposite of what the knob
+	// is for.
+	if w.RealityXver != 0 {
+		return InboundConfig{}, fmt.Errorf("realityXver not supported via sing-box engine (use the xray engine)")
+	}
+	if w.RealityLimitFallbackUploadBytesPerSec != 0 || w.RealityLimitFallbackDownloadBytesPerSec != 0 {
+		return InboundConfig{}, fmt.Errorf("REALITY fallback rate limits not supported via sing-box engine (a prober that fails auth would be forwarded unthrottled; use the xray engine)")
 	}
 	if w.RealityPrivateKey == "" {
 		return InboundConfig{}, fmt.Errorf("realityPrivateKey is required")

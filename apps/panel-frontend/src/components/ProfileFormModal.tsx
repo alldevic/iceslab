@@ -1692,6 +1692,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                         <Select
                           label={t('profiles.form.cfg.realityXverLabel')}
                           description={t('profiles.form.cfg.realityXverDesc')}
+                          disabled={form.values.engine === 'singbox'}
                           data={[
                             { value: '0', label: '0' },
                             { value: '1', label: '1' },
@@ -1721,10 +1722,19 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                       <Text size="xs" fw={500}>
                         {t('profiles.form.cfg.realityFallbackRateGroup')}
                       </Text>
+                      {/* sing-box's tls.reality block has no xver and no
+                          fallback throttle. Both ends refuse a set value now;
+                          saying so here beats a rejected save. */}
+                      {form.values.engine === 'singbox' && (
+                        <Alert color="yellow" variant="light">
+                          {t('profiles.form.cfg.realitySingboxUnsupported')}
+                        </Alert>
+                      )}
                       <Group grow align="flex-end">
                         <NumberInput
                           label={t('profiles.form.cfg.realityLimitFallbackUploadLabel')}
                           description={t('profiles.form.cfg.realityLimitFallbackUploadDesc')}
+                          disabled={form.values.engine === 'singbox'}
                           placeholder="0"
                           min={0}
                           allowDecimal={false}
@@ -1733,6 +1743,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                         <NumberInput
                           label={t('profiles.form.cfg.realityLimitFallbackDownloadLabel')}
                           description={t('profiles.form.cfg.realityLimitFallbackDownloadDesc')}
+                          disabled={form.values.engine === 'singbox'}
                           placeholder="0"
                           min={0}
                           allowDecimal={false}
