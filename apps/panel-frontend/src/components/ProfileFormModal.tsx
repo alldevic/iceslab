@@ -2303,7 +2303,11 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
               <NumberInput
                 label="MTU"
                 placeholder="1400"
-                min={576}
+                // 1280 is the floor the NODE enforces, not a taste: mita's
+                // config validate() refuses less. 576 here matched a schema
+                // that was itself wrong, so the two agreed with each other and
+                // not with the fleet.
+                min={1280}
                 max={1500}
                 allowDecimal={false}
                 {...form.getInputProps('mieruMtu')}

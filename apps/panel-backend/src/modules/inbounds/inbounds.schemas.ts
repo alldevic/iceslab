@@ -729,9 +729,19 @@ export const MtprotoConfigSchema = z.object({
  *
  * MTU is the only commonly-tuned knob. Default 1400 leaves headroom on
  * most paths; admins on PPPoE / weird VPNs may drop to 1280.
+ *
+ * The floor is 1280 because that is what the NODE enforces - mieru/config.go's
+ * validate() refuses anything below it, citing upstream's operation.md. This
+ * schema said 576, so the panel accepted 576..1279 with a 201 and the node then
+ * refused the config: the operator got "1/1 inbounds failed to apply" and no
+ * message on any field, for a value the panel had just told them was fine. The
+ * prose right above already said 1280; only the number disagreed.
+ *
+ * mieru-mtu-bounds.test.ts reads the range out of the node's source rather than
+ * restating it, so the pair cannot drift apart again in silence.
  */
 export const MieruConfigSchema = z.object({
-  mtu: z.number().int().min(576).max(1500).default(1400),
+  mtu: z.number().int().min(1280).max(1500).default(1400),
 });
 
 /**
