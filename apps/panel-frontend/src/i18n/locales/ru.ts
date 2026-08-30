@@ -505,6 +505,8 @@ export default {
     addRule: 'Добавить правило',
     dragHint: 'Перетащите, чтобы поменять порядок',
     matchPlaceholder: 'geosite:google  geoip:private',
+    matchLabel: 'Выражения совпадения',
+    noteLabel: 'Заметка к правилу',
     notePlaceholder: 'зачем это правило',
     shadowedBy: 'никогда не сработает: {{match}} уже забирает правило выше',
     hygieneMatch: 'DNS · bittorrent · порт 25 · QUIC',

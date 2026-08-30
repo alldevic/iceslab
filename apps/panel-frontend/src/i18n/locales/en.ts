@@ -456,6 +456,8 @@ export default {
     dragHint: 'Drag to reorder',
     matchPlaceholder: 'geosite:google  geoip:private',
     notePlaceholder: 'why this rule exists',
+    matchLabel: 'Match expressions',
+    noteLabel: 'Rule note',
     shadowedBy: 'never fires: {{match}} is claimed by a rule above, which takes this traffic first',
     hygieneMatch: 'DNS · bittorrent · port 25 · QUIC',
     hygieneAction: 'our way',

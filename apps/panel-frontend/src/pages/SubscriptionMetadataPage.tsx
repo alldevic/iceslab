@@ -236,6 +236,7 @@ export function SubscriptionMetadataPage() {
               <FieldLabel>{t('metadata.profileTitle')}</FieldLabel>
               <TextInput
                 placeholder={settingsQuery.data?.brandName ?? 'Iceslab'}
+                aria-label={t('metadata.profileTitle')}
                 value={draft.profileTitle}
                 onChange={(e) => patch({ profileTitle: e.currentTarget.value })}
               />
@@ -247,6 +248,7 @@ export function SubscriptionMetadataPage() {
                 <FieldLabel>{t('metadata.interval')}</FieldLabel>
                 <NumberInput
                   min={1}
+                  aria-label={t('metadata.interval')}
                   max={168}
                   allowDecimal={false}
                   allowNegative={false}
@@ -259,6 +261,7 @@ export function SubscriptionMetadataPage() {
                 <FieldLabel>{t('metadata.entryPool')}</FieldLabel>
                 <NumberInput
                   min={0}
+                  aria-label={t('metadata.entryPool')}
                   max={64}
                   allowDecimal={false}
                   allowNegative={false}
@@ -271,6 +274,7 @@ export function SubscriptionMetadataPage() {
                 <FieldLabel>{t('metadata.supportUrl')}</FieldLabel>
                 <TextInput
                   placeholder="https://t.me/your_support"
+                  aria-label={t('metadata.supportUrl')}
                   value={draft.supportUrl}
                   onChange={(e) => patch({ supportUrl: e.currentTarget.value })}
                 />
@@ -307,6 +311,7 @@ export function SubscriptionMetadataPage() {
               </Box>
               <Textarea
                 ref={announceRef}
+                aria-label={t('metadata.announce')}
                 autosize
                 minRows={2}
                 maxRows={5}
@@ -381,6 +386,7 @@ export function SubscriptionMetadataPage() {
               <Box style={{ flex: 1, minWidth: 0 }} />
               <Switch
                 checked={draft.tlsFragment}
+                aria-label={t('metadata.fragmentTitle')}
                 onChange={(e) => patch({ tlsFragment: e.currentTarget.checked })}
               />
             </Box>

@@ -194,6 +194,7 @@ export function DevicePresetEditor({
         ) : (
           <TextInput
             value={name}
+            aria-label={t('routes.presetNamePlaceholder')}
             onChange={(e) => setName(e.currentTarget.value)}
             placeholder={t('routes.presetNamePlaceholder')}
             style={{ width: 260, flexShrink: 0 }}
@@ -345,6 +346,7 @@ export function DevicePresetEditor({
               <TextInput
                 className="routes-rule-match"
                 value={rule.match.join(' ')}
+                aria-label={t('routes.matchLabel')}
                 placeholder={t('routes.matchPlaceholder')}
                 onChange={(e) => setRule(i, { match: splitMatch(e.currentTarget.value) })}
                 styles={{
@@ -405,6 +407,7 @@ export function DevicePresetEditor({
               <TextInput
                 style={{ flex: 1, minWidth: 0 }}
                 value={rule.note}
+                aria-label={t('routes.noteLabel')}
                 placeholder={t('routes.notePlaceholder')}
                 onChange={(e) => setRule(i, { note: e.currentTarget.value })}
                 styles={{
