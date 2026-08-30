@@ -58,9 +58,14 @@ type Config struct {
 
 type Adapter struct {
 	coreVersion core.CachedVersion
-	cfg         Config
-	protocol    string
-	logger      *slog.Logger
+	// statsAPI caches the one question that decides whether this node can have
+	// per-user accounting at all: was its sing-box built with with_v2ray_api.
+	// See statsListenForConfig - a config carrying a block the binary lacks
+	// does not degrade, it stops the core from starting.
+	statsAPI core.CachedVersion
+	cfg      Config
+	protocol string
+	logger   *slog.Logger
 
 	// mu protects in-memory state (users, inbound, proc, started, ctx). Held
 	// ONLY for fast ops. The slow render + subprocess Stop/Start runs under
@@ -207,6 +212,7 @@ func (a *Adapter) RemoveUser(userID string) error {
 func (a *Adapter) GetStats() (*core.Stats, error) {
 	a.mu.Lock()
 	statsListen := a.cfg.StatsListen
+	binPath := a.cfg.BinaryPath
 	bin := a.cfg.XrayStatsBin
 	run := a.cfg.RunCmd
 	userIDs := make([]string, 0, len(a.users))
@@ -214,6 +220,13 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		userIDs = append(userIDs, id)
 	}
 	a.mu.Unlock()
+
+	// Ask the same question the renderer asked: when this sing-box has no
+	// v2ray_api, the config carries no endpoint and there is nothing to query.
+	// Without this the poller dials a port nobody opened and logs a warning per
+	// adapter per tick - six adapters, twice a minute, forever - which buries
+	// the one message that actually says why (statsListenForConfig).
+	statsListen = a.statsListenForConfig(binPath, statsListen)
 
 	zero := func() *core.Stats {
 		out := make([]core.UserStats, 0, len(userIDs))
@@ -428,6 +441,10 @@ func (a *Adapter) regenerateAndRestart() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	// Ask the binary whether it can serve the stats API before rendering a
+	// config that asks it to. See statsListenForConfig.
+	statsListen = a.statsListenForConfig(binPath, statsListen)
 
 	var blob []byte
 	var err error
