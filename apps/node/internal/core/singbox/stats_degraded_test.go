@@ -24,7 +24,6 @@ import (
 // traffic at all.
 func TestFailedStatsQueryReportsNoRowsAndSaysSo(t *testing.T) {
 	a := New(Config{
-		BinaryPath:   "/usr/local/bin/sing-box",
 		XrayStatsBin: "/usr/local/bin/xray",
 		StatsListen:  "127.0.0.1:8085",
 		Protocol:     "hysteria",
@@ -35,8 +34,16 @@ func TestFailedStatsQueryReportsNoRowsAndSaysSo(t *testing.T) {
 			return []byte("failed to dial"), errors.New("exit status 1")
 		},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// An inbound, because a core with none is not "degraded", it is idle - the
+	// distinction this adapter now makes before asking anything.
+	if err := a.ApplyInbound(8443, []byte(`{}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
 	if err := a.AddUser(core.User{UserID: "u-1", Username: "alice", HysteriaPassword: "pw-a"}); err != nil {
 		t.Fatalf("AddUser: %v", err)
+	}
+	if !a.Provisioned() {
+		t.Fatal("the fixture is not in the state these cases are about")
 	}
 
 	st, err := a.GetStats()
@@ -57,7 +64,6 @@ func TestASuccessfulStatsQueryIsNotDegraded(t *testing.T) {
 	// The control: Degraded hardwired to true would make every poll bill
 	// nothing, which passes the case above just as well.
 	a := New(Config{
-		BinaryPath:   "/usr/local/bin/sing-box",
 		XrayStatsBin: "/usr/local/bin/xray",
 		StatsListen:  "127.0.0.1:8085",
 		Protocol:     "hysteria",
@@ -68,8 +74,16 @@ func TestASuccessfulStatsQueryIsNotDegraded(t *testing.T) {
 			return []byte(`{"stat":[{"name":"user>>>u-1>>>traffic>>>downlink","value":"516083"}]}`), nil
 		},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// An inbound, because a core with none is not "degraded", it is idle - the
+	// distinction this adapter now makes before asking anything.
+	if err := a.ApplyInbound(8443, []byte(`{}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
 	if err := a.AddUser(core.User{UserID: "u-1", Username: "alice", HysteriaPassword: "pw-a"}); err != nil {
 		t.Fatalf("AddUser: %v", err)
+	}
+	if !a.Provisioned() {
+		t.Fatal("the fixture is not in the state these cases are about")
 	}
 
 	st, err := a.GetStats()
@@ -84,5 +98,48 @@ func TestASuccessfulStatsQueryIsNotDegraded(t *testing.T) {
 	}
 	if !st.Cumulative {
 		t.Error("a non-destructive read must stay flagged cumulative")
+	}
+}
+
+func TestAnAdapterWithNoInboundIsIdleNotDegraded(t *testing.T) {
+	// Five of the six sing-box adapters a --with-singbox node registers never
+	// receive an inbound. Their stats endpoint is nobody's, so a dial to it
+	// fails every poll - and reporting THAT as degraded makes the flag
+	// permanently on, which held the whole node's per-user billing when it was
+	// first run on a live node. A signal that is always on carries nothing.
+	dialed := false
+	a := New(Config{
+		XrayStatsBin: "/usr/local/bin/xray",
+		StatsListen:  "127.0.0.1:8082",
+		Protocol:     "tuic",
+		RunCmd: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if len(args) > 0 && args[0] == "api" {
+				dialed = true
+				return []byte("failed to dial"), errors.New("exit status 1")
+			}
+			return nil, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := a.AddUser(core.User{UserID: "u-1", TuicUUID: "uuid1", TuicPassword: "pw1"}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if a.Provisioned() {
+		t.Fatal("the fixture was supposed to have no inbound")
+	}
+
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats: %v", err)
+	}
+	if st.Degraded {
+		t.Error("an adapter that was never given an inbound reported the poll degraded, " +
+			"which stops the panel billing every user on the node")
+	}
+	if dialed {
+		t.Error("dialled a stats endpoint for an adapter that has no inbound")
+	}
+	// The user is still reported, so the panel keeps its presence signal.
+	if len(st.Users) != 1 {
+		t.Errorf("the tracked user disappeared: %+v", st.Users)
 	}
 }

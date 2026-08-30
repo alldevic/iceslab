@@ -240,6 +240,21 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		return zero(), nil
 	}
 
+	// An adapter with no inbound has no counters to give, and asking it anyway is
+	// not a degraded poll - it is the normal state of five of the six sing-box
+	// adapters a --with-singbox node registers, only one of which usually has an
+	// inbound.
+	//
+	// xray has the same guard for the same reason. Without it here, every such
+	// node logged five "failed to dial" warnings per poll forever - and once a
+	// failed query began reporting Degraded, those five became a permanent flag
+	// that held ALL of the node's per-user billing. Caught by running the fix on
+	// a live node and watching a user's counter stop moving; the flag is only
+	// worth anything if it is off when nothing is wrong.
+	if !a.Provisioned() {
+		return zero(), nil
+	}
+
 	counters, err := queryUserStats(context.Background(), run, bin, statsListen)
 	if err != nil {
 		// No per-user rows, the way xray already does it, and `Degraded` so the

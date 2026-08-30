@@ -120,6 +120,12 @@ func TestGetStatsViaFakeRunCmd(t *testing.T) {
 			]}`), nil
 		},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// An inbound, because an adapter without one is not asked for counters at
+	// all now: five of the six sing-box adapters on a node never have one, and
+	// dialling their dead endpoint every poll was five warnings a poll forever.
+	if err := a.ApplyInbound(8443, []byte(`{}`)); err != nil {
+		t.Fatalf("ApplyInbound: %v", err)
+	}
 	if err := a.AddUser(core.User{UserID: "u1", TuicUUID: "uuid1", TuicPassword: "pw1"}); err != nil {
 		t.Fatalf("AddUser: %v", err)
 	}
