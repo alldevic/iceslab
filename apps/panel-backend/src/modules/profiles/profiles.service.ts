@@ -10,6 +10,10 @@ import { ensureDefaultHost } from '../hosts/hosts.service.js';
 import { normalizeProfileConfigForSave } from './profile-config.js';
 import { engineValidForProtocol, fieldsUnsupportedByEngine } from './profiles.schemas.js';
 import { stripInapplicableTransportFields } from '../inbounds/xray-transport-fields.js';
+import {
+  adapterKeyForProfile,
+  coreHoldsSeveralInbounds,
+} from './node-adapter-keys.js';
 import type {
   CreateBindingInput,
   CreateProfileInput,
@@ -270,6 +274,31 @@ export async function updateProfile(
     );
   }
 
+  // The third door into the single-inbound collision. Two moves reach it from
+  // here: enabling a profile that was bound while disabled, and re-pinning the
+  // engine, which relocates the profile onto a DIFFERENT node adapter that may
+  // already be taken. An edit that moves neither is not re-judged - a pair that
+  // predates this guard must stay renamable, or the only way out of a legacy
+  // collision would be to delete one side.
+  const effectiveEnabled = input.enabled !== undefined ? input.enabled : existing.enabled;
+  const engineMoved = input.engine !== undefined && input.engine !== existing.engine;
+  const enabledMoved = input.enabled === true && !existing.enabled;
+  if (effectiveEnabled && (engineMoved || enabledMoved)) {
+    const deployed = await prisma.profileNodeBinding.findMany({
+      where: { profileId: id, enabled: true },
+      include: { node: { select: { id: true, name: true } } },
+    });
+    for (const b of deployed) {
+      await assertNodeCoreFree({
+        nodeId: b.node.id,
+        nodeName: b.node.name,
+        profileName: input.name ?? existing.name,
+        protocol: existing.protocol,
+        engine: (effectiveEngine ?? null) as string | null,
+      });
+    }
+  }
+
   const updated = await prisma.profile.update({
     where: { id },
     data,
@@ -332,6 +361,18 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
     resolveBindingConfig(profile.config, input.overrides ?? null, profile.protocol),
     [node],
   );
+  // And the pair in the other dimension: not "does this port fit the node" but
+  // "is the node's core for this protocol already taken". A disabled binding
+  // cannot evict anything, so only a live one is judged.
+  if (input.enabled && profile.enabled) {
+    await assertNodeCoreFree({
+      nodeId: node.id,
+      nodeName: node.name,
+      profileName: profile.name,
+      protocol: profile.protocol,
+      engine: profile.engine,
+    });
+  }
 
   const created = await prisma.profileNodeBinding.create({
     data: {
@@ -403,6 +444,25 @@ export async function updateBinding(
       resolveBindingConfig(existing.profile.config, input.overrides, existing.profile.protocol),
       [existing.node],
     );
+  }
+
+  // Enabling a binding deploys it, so it walks into the same collision
+  // createBinding is guarded against - a check on creation alone would leave
+  // "bind it disabled, enable it later" wide open.
+  if (input.enabled === true && !existing.enabled) {
+    const owner = await prisma.profile.findUnique({
+      where: { id: existing.profileId },
+      select: { id: true, enabled: true, engine: true },
+    });
+    if (owner?.enabled) {
+      await assertNodeCoreFree({
+        nodeId: existing.nodeId,
+        nodeName: existing.node.name,
+        profileName: existing.profile.name,
+        protocol: existing.profile.protocol,
+        engine: owner.engine,
+      });
+    }
   }
 
   if (input.port !== undefined && input.port !== existing.port) {
@@ -641,6 +701,92 @@ export function assertPortHoppingFitsNodes(
       node.name,
       { start, end },
       { start: ns, end: ne },
+    );
+  }
+}
+
+export class NodeCoreAlreadyServingError extends Error {
+  constructor(
+    public readonly profileName: string,
+    public readonly nodeName: string,
+    public readonly protocol: string,
+    public readonly engine: string,
+    public readonly occupantName: string,
+    public readonly occupantPort: number,
+  ) {
+    super(
+      `Node "${nodeName}" already serves ${protocol} on port ${occupantPort} for profile ` +
+        `"${occupantName}". Its ${engine} core holds ONE inbound at a time, so deploying ` +
+        `"${profileName}" to the same node replaces that one instead of adding to it: the ` +
+        `node would listen on a single port and every link already handed out for the ` +
+        `other would reach nothing, with neither side reporting a failure. Deploy ` +
+        `"${profileName}" to a different node, or disable "${occupantName}" on this one.`,
+    );
+    this.name = 'NodeCoreAlreadyServingError';
+  }
+}
+
+/**
+ * Refuse a second live inbound on a node whose core can only hold one.
+ *
+ * The node dispatches per (protocol, engine) pair and every adapter but xray
+ * stores a single inbound: `ApplyInbound` overwrites it and restarts the core,
+ * so the second push in the list silently evicts the first. Nothing anywhere
+ * says so - `applied` counts both, the heartbeat reports the core running, and
+ * the subscription keeps emitting the evicted inbound's host, port and secret.
+ * Measured 2026-08-30 with two mtproto profiles on one node; see
+ * node-adapter-keys.ts for the numbers.
+ *
+ * "Live" is the same condition the push queue uses (`inbounds.queue.ts`):
+ * binding enabled AND profile enabled. A disabled pair is not deployed, so it
+ * cannot evict anything, and refusing it would block the very move that fixes
+ * the collision - disable one, then bind the other.
+ *
+ * Keyed on the pair rather than the protocol because that is what the node
+ * matches on: an xray profile on the native core and an xray profile pinned to
+ * sing-box are two different adapters and do not collide, while two
+ * shadowsocks profiles do even though neither mentions xray.
+ */
+export async function assertNodeCoreFree(args: {
+  nodeId: string;
+  nodeName: string;
+  profileName: string;
+  protocol: string;
+  engine: string | null;
+}): Promise<void> {
+  if (coreHoldsSeveralInbounds(args.protocol, args.engine)) return;
+  const wantKey = adapterKeyForProfile(args.protocol, args.engine);
+
+  // No "ignore myself" argument, because in every caller the subject is already
+  // outside this set, and a parameter that can never fire reads like a
+  // safeguard while being none. Two mutations of it passed green, which is what
+  // said so. Per caller:
+  //   createBinding   - the row does not exist yet, and a second binding of the
+  //                     same profile to the same node is refused above by
+  //                     NodeAlreadyBoundError, so that check must stay first.
+  //   updateBinding   - only runs on the disabled -> enabled transition, so the
+  //                     subject fails `enabled: true`.
+  //   updateProfile   - only runs when `enabled` or `engine` MOVES. On enabling,
+  //                     the profile is still disabled in the row and fails
+  //                     `profile: { enabled: true }`; on an engine change, the
+  //                     stored engine is the old one and keys differently.
+  // Adding a caller outside those shapes means adding the exclusion back, with
+  // a case that reaches it.
+  const live = await prisma.profileNodeBinding.findMany({
+    where: { nodeId: args.nodeId, enabled: true, profile: { enabled: true } },
+    include: { profile: { select: { id: true, name: true, protocol: true, engine: true } } },
+    orderBy: { port: 'asc' },
+  });
+
+  for (const b of live) {
+    if (adapterKeyForProfile(b.profile.protocol, b.profile.engine) !== wantKey) continue;
+    throw new NodeCoreAlreadyServingError(
+      args.profileName,
+      args.nodeName,
+      args.protocol,
+      args.engine || wantKey.split('|')[1],
+      b.profile.name,
+      b.port,
     );
   }
 }

@@ -517,6 +517,15 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 	// persists for the firewall, not for replay.
 	applied := 0
 	failed := 0
+	// Every adapter but xray holds ONE inbound: ApplyInbound overwrites its
+	// single stored config and restarts the core, so a second inbound for the
+	// same (protocol, engine) pair in one push evicts the first. Nothing failed,
+	// so `applied` counts both and the core reports itself running - the panel
+	// keeps handing out the evicted inbound's port and secret to clients that
+	// will never reach a listener. The panel refuses to create such a pair
+	// (assertNodeCoreFree), but a pair saved before that guard, or one arriving
+	// from anywhere else, must not be silent on the machine that drops it.
+	servedBy := make(map[string]dto.InboundDto, len(req.Inbounds))
 	for _, ib := range req.Inbounds {
 		s.logger.Info("applyInbounds received",
 			"id", ib.ID, "name", ib.Name, "protocol", ib.Protocol, "port", ib.Port)
@@ -532,6 +541,17 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 			s.logger.Warn("applyInbounds: no adapter for protocol/engine, config persisted but not applied live",
 				"protocol", ib.Protocol, "engine", wantEngine)
 			continue
+		}
+		if _, ok := matched.(core.InboundReconciler); !ok {
+			key := core.AdapterKey(string(ib.Protocol), string(wantEngine))
+			if prev, clash := servedBy[key]; clash {
+				s.logger.Warn("applyInbounds: this core holds one inbound at a time; "+
+					"the later one replaces the earlier and the earlier stops listening",
+					"core", matched.Name(), "engine", wantEngine,
+					"evictedId", prev.ID, "evictedName", prev.Name, "evictedPort", prev.Port,
+					"keptId", ib.ID, "keptName", ib.Name, "keptPort", ib.Port)
+			}
+			servedBy[key] = ib
 		}
 		if err := matched.ApplyInbound(ib.Port, ib.Config); err != nil {
 			s.logger.Error("adapter ApplyInbound failed",

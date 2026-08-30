@@ -144,6 +144,17 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
           nodeName: err.nodeName,
         });
       }
+      // Its own code, not CONFLICT: the port is free and the config is fine.
+      // What is taken is the node's CORE for this protocol, and the message
+      // names the profile already holding it plus the two ways out.
+      if (err instanceof svc.NodeCoreAlreadyServingError) {
+        return reply.code(409).send({
+          error: 'NODE_CORE_ALREADY_SERVING',
+          message: err.message,
+          nodeName: err.nodeName,
+          occupantName: err.occupantName,
+        });
+      }
       throw err;
     }
   });
@@ -192,6 +203,17 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
           error: 'PORT_HOPPING_OUTSIDE_NODE_RANGE',
           message: err.message,
           nodeName: err.nodeName,
+        });
+      }
+      // Its own code, not CONFLICT: the port is free and the config is fine.
+      // What is taken is the node's CORE for this protocol, and the message
+      // names the profile already holding it plus the two ways out.
+      if (err instanceof svc.NodeCoreAlreadyServingError) {
+        return reply.code(409).send({
+          error: 'NODE_CORE_ALREADY_SERVING',
+          message: err.message,
+          nodeName: err.nodeName,
+          occupantName: err.occupantName,
         });
       }
       throw err;
@@ -251,6 +273,17 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
           error: 'PORT_HOPPING_OUTSIDE_NODE_RANGE',
           message: err.message,
           nodeName: err.nodeName,
+        });
+      }
+      // Its own code, not CONFLICT: the port is free and the config is fine.
+      // What is taken is the node's CORE for this protocol, and the message
+      // names the profile already holding it plus the two ways out.
+      if (err instanceof svc.NodeCoreAlreadyServingError) {
+        return reply.code(409).send({
+          error: 'NODE_CORE_ALREADY_SERVING',
+          message: err.message,
+          nodeName: err.nodeName,
+          occupantName: err.occupantName,
         });
       }
       throw err;
