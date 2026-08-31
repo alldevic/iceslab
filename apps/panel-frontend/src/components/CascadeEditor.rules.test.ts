@@ -196,14 +196,21 @@ describe('a protocol the database holds and the API would refuse', () => {
 describe('which protocols may choose an engine', () => {
   // The last unpaired list in the profile form. `ENGINE_CHOICE_PROTOCOLS` is
   // what the form lets an operator pick a sing-box variant for, and
-  // `ENGINE_OPTIONS` is what the API accepts a non-null engine for. They agree
-  // today and nothing said so.
+  // `ENGINE_OPTIONS` is what the API accepts a non-null engine for.
   //
   // The two failures are different and only one is loud. A protocol the API
   // allows and the form does not offer is a feature nobody can reach; a
   // protocol the form offers and the API does not allow is a save refused with
   // `engine "singbox" is not valid for protocol "..."`, which is the shape this
   // repository has already hit once in this very form.
+  //
+  // What the sides must agree on is CHOICE, not mere acceptance. An entry with
+  // a single option - tuic, anytls and shadowtls, whose only core is sing-box -
+  // gives the operator nothing to decide; it is there so a caller that names
+  // that one core explicitly is not refused. Putting such a protocol in the
+  // form would be a select with one item. So the comparison is against the
+  // entries offering more than one core, and the single-option ones get their
+  // own case below: they must stay OUT of the form and IN the API.
   const PROFILES = join(
     import.meta.dirname,
     '..', '..', '..', 'panel-backend', 'src', 'modules', 'profiles', 'profiles.schemas.ts',
@@ -219,14 +226,32 @@ describe('which protocols may choose an engine', () => {
     const at = back.indexOf('const ENGINE_OPTIONS');
     expect(at, 'ENGINE_OPTIONS was renamed or moved').toBeGreaterThan(-1);
     const body = back.slice(at, back.indexOf('};', at));
-    const apiSide = [...body.matchAll(/^\s*([a-z]+):\s*\[/gm)].map((m) => m[1]!).sort();
-    expect(apiSide.length, 'the map parsed to almost nothing').toBeGreaterThan(1);
+    // Each entry with the cores it lists, so "may choose" can be told apart
+    // from "is accepted".
+    const entries = [...body.matchAll(/^\s*([a-z]+):\s*\[([^\]]*)\]/gm)].map((m) => ({
+      protocol: m[1]!,
+      cores: [...m[2]!.matchAll(/'([a-z-]+)'/g)].map((c) => c[1]!),
+    }));
+    expect(entries.length, 'the map parsed to almost nothing').toBeGreaterThan(1);
+
+    const withAChoice = entries.filter((e) => e.cores.length > 1).map((e) => e.protocol).sort();
+    const singleCore = entries.filter((e) => e.cores.length === 1).map((e) => e.protocol).sort();
+    expect(withAChoice.length, 'no protocol offers a choice at all').toBeGreaterThan(0);
 
     const form = stripComments(readFileSync(FORM, 'utf8'));
     const m = /const ENGINE_CHOICE_PROTOCOLS = \[([^\]]*)\]/.exec(form);
     expect(m, 'ENGINE_CHOICE_PROTOCOLS was renamed or moved').not.toBeNull();
     const formSide = [...m![1]!.matchAll(/'([a-z]+)'/g)].map((x) => x[1]!).sort();
 
-    expect(formSide, 'the form and the API disagree on who may choose an engine').toEqual(apiSide);
+    expect(
+      formSide,
+      'the form and the API disagree on who may choose an engine',
+    ).toEqual(withAChoice);
+
+    // And the other half: a single-core protocol must not be offered as a
+    // choice, but must still be accepted when a caller names that core.
+    for (const p of singleCore) {
+      expect(formSide, `${p} has one core and is offered as a choice`).not.toContain(p);
+    }
   });
 });
