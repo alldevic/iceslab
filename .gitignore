@@ -362,3 +362,9 @@ CLAUDE.local.md
 deploy/ansible/inventory.ini
 deploy/ansible/*.retry
 deploy/minishop-stand/.runtime/
+
+# Session handoff note: rewritten wholesale every session, so it produced more
+# commits than anything else in the repo (33 of them touching nothing else).
+# Kept on disk, out of git. Content lives in docs/remnawave-compat.md and
+# docs/open-questions.md, which are the durable record.
+docs/next-session-prompt.md
