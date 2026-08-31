@@ -376,3 +376,8 @@ deploy/minishop-stand/.runtime/
 docs/next-session-prompt.md
 docs/remnawave-compat.md
 docs/open-questions.md
+# The geo-svc checklist goes with them. Note it differs from the three above:
+# no commit ever touched it alone, so nothing was removed by taking it out -
+# and it is still in git on feat/geo-svc, which is pushed. Out of THIS branch,
+# not out of the project.
+docs/geo-svc-prod-checklist.md
