@@ -9,6 +9,44 @@ import type {
 /** The two wg-quick-shaped protocols this format can emit. */
 export type WgFlavour = 'amneziawg' | 'wireguard';
 
+/** Client-visible extras that are not derived from the endpoint. */
+export interface WgQuickOpts {
+  /** Resolvers for the `DNS =` line. Empty / omitted leaves the line out. */
+  dns?: string[];
+  /** Tunnel name, emitted as the leading `# Name = ...` comment. */
+  name?: string;
+}
+
+/**
+ * The one string that names a wg tunnel: the `.conf` file name (minus the
+ * suffix) AND the `# Name =` comment inside it.
+ *
+ * One function because the two MUST agree. A client picks whichever it
+ * understands — WG Tunnel reads the comment when importing from a URL and the
+ * file name when importing a file — and a buyer who imports both ways would
+ * otherwise end up with two differently-named tunnels to the same server.
+ *
+ * Sanitised to the file-name charset for the same reason: whatever this
+ * returns has to survive being a file name on Windows and macOS.
+ */
+export function wgConfName(
+  brand: string,
+  nodeName?: string,
+  flavour?: WgFlavour,
+): string {
+  // Серия недопустимых символов схлопывается в ОДИН разделитель: имя ноды несёт
+  // эмодзи флага, и посимвольная замена давала `_____s2`.
+  const clean = (s: string): string =>
+    s.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+  const parts = [clean(brand) || 'subscription'];
+  if (nodeName) {
+    const node = clean(nodeName);
+    if (node) parts.push(node);
+  }
+  if (flavour) parts.push(flavour === 'wireguard' ? 'wg' : 'awg');
+  return parts.join('-').slice(0, 64);
+}
+
 type WgEndpoint = AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint;
 
 function isWgEndpoint(e: SubscriptionEndpoint): e is WgEndpoint {
@@ -40,6 +78,15 @@ function isWgEndpoint(e: SubscriptionEndpoint): e is WgEndpoint {
  * `flavour` disambiguates a node that serves both protocols (each is its own
  * tunnel with its own subnet and port); omitted, the first match wins.
  *
+ * `opts.dns` writes the `DNS =` line. It is a panel-wide setting rather than a
+ * per-profile field because it describes the CLIENT's resolver, not the
+ * inbound: the node never sees this line. Omitting it is not neutral — with
+ * `AllowedIPs = 0.0.0.0/0` the client keeps whatever resolver its network
+ * handed it, and a LAN address like 192.168.1.1 then routes into the tunnel
+ * and dies. Handshake up, ping by IP fine, nothing resolves.
+ *
+ * `opts.name` writes the leading `# Name =` comment — see wgConfName.
+ *
  * Returns an empty string when no matching endpoint is available, the route
  * handler turns that into a 204-style empty body, telling the client "no
  * wg inbound configured for you".
@@ -48,6 +95,7 @@ export function buildWgQuickConf(
   endpoints: SubscriptionEndpoint[],
   nodeName?: string,
   flavour?: WgFlavour,
+  opts?: WgQuickOpts,
 ): string {
   let candidates = endpoints.filter(isWgEndpoint);
   if (flavour) {
@@ -64,6 +112,8 @@ export function buildWgQuickConf(
       serverPublicKey: wg.serverPublicKey,
       host: wg.host,
       port: wg.port,
+      dns: opts?.dns,
+      name: opts?.name,
     });
   }
 
@@ -89,5 +139,7 @@ export function buildWgQuickConf(
     i3: wg.i3,
     i4: wg.i4,
     i5: wg.i5,
+    dns: opts?.dns,
+    name: opts?.name,
   });
 }

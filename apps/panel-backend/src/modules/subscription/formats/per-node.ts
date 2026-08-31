@@ -17,7 +17,7 @@ import type {
   MtprotoSubscriptionEndpoint,
   SubscriptionEndpoint,
 } from '../subscription.formats.js';
-import { buildWgQuickConf } from './wgconf.js';
+import { buildWgQuickConf, wgConfName } from './wgconf.js';
 import { buildAwgVpnLink } from './amneziavpn.js';
 
 export type WgFlavour = 'amneziawg' | 'wireguard';
@@ -37,22 +37,34 @@ export interface WgNode {
  * Deduped by node NAME because that is what selects the tunnel downstream:
  * `?node=` on wgconf/amneziavpn resolves by name, so two endpoints sharing a
  * name are one downloadable file however many hosts produced them.
+ *
+ * `opts` is passed straight to the config builder. It has to be a parameter and
+ * not a lookup here: this walk feeds BOTH our own page and the shop's install
+ * screen, and a config that differs between the two by a `DNS =` line — or by
+ * the tunnel name — is a support call nobody can reproduce.
  */
 export function collectWgNodes(
   endpoints: SubscriptionEndpoint[],
   flavour: WgFlavour,
+  opts?: { dns?: string[]; brand?: string },
 ): WgNode[] {
   const seen = new Set<string>();
   return endpoints
     .filter((e) => e.protocol === flavour)
     .filter((e) => !seen.has(e.nodeName) && !!seen.add(e.nodeName))
     .map((e) => {
-      const conf = buildWgQuickConf(endpoints, e.nodeName, flavour);
+      const conf = buildWgQuickConf(endpoints, e.nodeName, flavour, {
+        dns: opts?.dns,
+        // Same name the download link's file name carries, from the same
+        // function: a QR scan and a file download must not produce two
+        // differently-named tunnels to one server.
+        name: opts?.brand ? wgConfName(opts.brand, e.nodeName, flavour) : undefined,
+      });
       // The flavour check states intent and changes nothing: buildAwgVpnLink
       // filters to `amneziawg` itself, so a WireGuard node gets '' either way.
       // Kept as the readable half of that fact, not as a guard anything leans
       // on — removing it cannot alter a single output.
-      const vpn = flavour === 'amneziawg' ? buildAwgVpnLink(endpoints, e.nodeName) : '';
+      const vpn = flavour === 'amneziawg' ? buildAwgVpnLink(endpoints, e.nodeName, opts?.dns) : '';
       return {
         nodeName: e.nodeName,
         conf: conf || null,

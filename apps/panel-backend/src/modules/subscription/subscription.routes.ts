@@ -5,7 +5,7 @@ import { ROUTING_PRESET_IDS, type RoutingPresetId } from '@iceslab/shared';
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson, type CustomGeoRef } from './formats/singbox.js';
-import { buildWgQuickConf } from './formats/wgconf.js';
+import { buildWgQuickConf, wgConfName } from './formats/wgconf.js';
 import { collectMtprotoNodes, collectWgNodes, tunnelConfigUrls } from './formats/per-node.js';
 import { usableFormats } from './formats/format-usable.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
@@ -293,7 +293,15 @@ function qrSvg(content: string, ecl: 'L' | 'M' | 'Q' | 'H' = 'M'): string | unde
 // input so paranoia is cheap; whitelist [a-zA-Z0-9._-], fold rest to
 // underscore, cap length to keep filesystem-safe.
 function sanitizeFilename(name: string): string {
-  const cleaned = name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64);
+  // Целая серия недопустимых символов схлопывается в ОДИН разделитель, а
+  // ведущие и хвостовые снимаются. Посимвольная замена превращала имя ноды с
+  // флагом (`\u{1F1F3}\u{1F1F1} s2`) в `_____s2` в имени каждого скачанного файла:
+  // один эмодзи — это несколько кодовых единиц, и каждая давала своё
+  // подчёркивание.
+  const cleaned = name
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
   return cleaned || 'subscription';
 }
 
@@ -535,7 +543,11 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         const wgVisible = result.endpoints.filter(
           (e) => !(e.disableForFormats ?? []).includes('wgconf'),
         );
-        const awgNodes = collectWgNodes(wgVisible, 'amneziawg').map((n) => ({
+        const brand = settings.profileTitle ?? settings.brandName ?? result.json.user.username;
+        const awgNodes = collectWgNodes(wgVisible, 'amneziawg', {
+          dns: settings.wgDns,
+          brand,
+        }).map((n) => ({
           nodeName: n.nodeName,
           confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
           vpnQrSvg: n.vpnKey ? qrSvg(n.vpnKey, 'L') : undefined,
@@ -543,7 +555,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // enough to be unreliable on screen, so paste-the-key is the robust path.
           vpnKey: n.vpnKey ?? undefined,
         }));
-        const wgNodes = collectWgNodes(wgVisible, 'wireguard').map((n) => ({
+        const wgNodes = collectWgNodes(wgVisible, 'wireguard', { dns: settings.wgDns, brand }).map((n) => ({
           nodeName: n.nodeName,
           confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
         }));
@@ -685,20 +697,37 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             );
         }
         case 'wgconf': {
-          // Filename = `<username>-<node>.conf` so a user with several AWG
-          // servers can tell the downloaded files apart (the browser otherwise
-          // saves test.conf, test(1).conf, ...). The .conf suffix matters: the
+          const wgSettings = await getSubscriptionSettings();
+          // Filename = `<brand>-<node>-<flavour>.conf`. The node and flavour
+          // parts keep several tunnels apart (the browser otherwise saves
+          // test.conf, test(1).conf, ...), and the `.conf` suffix matters: the
           // AmneziaWG / wg-quick / Hiddify file-pickers filter by *.conf, so an
           // extensionless name fails the picker on Windows / macOS.
-          const nodePart = query.node ? `-${sanitizeFilename(query.node)}` : '';
-          // The flavour goes in the filename too: a node serving both tunnels
-          // would otherwise produce two files with the same name.
-          const protoPart = query.proto === 'wireguard' ? '-wg' : query.proto ? '-awg' : '';
-          const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}${protoPart}.conf`;
+          //
+          // The brand leads instead of the username because THIS STRING IS THE
+          // TUNNEL NAME the buyer sees: wg-quick has no name field, so every
+          // importing client falls back to the file name — and where it can't
+          // read one, to the endpoint address. `tg_245073332` told the buyer
+          // nothing; a bare IP told them less.
+          const tunnelName = wgConfName(
+            wgSettings.profileTitle ?? wgSettings.brandName ?? result.json.user.username,
+            query.node,
+            query.proto,
+          );
           return reply
             .type('text/plain; charset=utf-8')
-            .header('Content-Disposition', `attachment; filename="${fname}"`)
-            .send(buildWgQuickConf(filtered, query.node, query.proto));
+            .header('Content-Disposition', `attachment; filename="${tunnelName}.conf"`)
+            .send(
+              buildWgQuickConf(filtered, query.node, query.proto, {
+                dns: wgSettings.wgDns,
+                // Имя дублируется внутрь файла, потому что импорт по ССЫЛКЕ
+                // заголовок Content-Disposition не читает вовсе: WG Tunnel
+                // качает тело и отдаёт его в тот же путь, что и вставку из
+                // буфера, а имя там берётся из `# Name =` либо, если его нет,
+                // из хоста в Endpoint — то есть из голого IP.
+                name: tunnelName,
+              }),
+            );
         }
         case 'amneziavpn': {
           // AmneziaVPN-app "vpn://" connection key (base64 blob the flagship
@@ -708,7 +737,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // for this user (same 204-style contract as wgconf).
           return reply
             .type('text/plain; charset=utf-8')
-            .send(buildAwgVpnLink(filtered, query.node));
+            .send(buildAwgVpnLink(filtered, query.node, (await getSubscriptionSettings()).wgDns));
         }
         case 'xrayjson': {
           const xjBundle: 'flat' | 'balancer' | undefined =

@@ -64,11 +64,16 @@ export async function subpageConfigForToken(token: string): Promise<SubpageConfi
   const doc = buildSubpageConfig({
     subUrl,
     protocols,
-    awgNodes: collectWgNodes(wgEndpoints, 'amneziawg').map((n) => ({
+    awgNodes: collectWgNodes(wgEndpoints, 'amneziawg', {
+      dns: settings.wgDns,
+      brand: title,
+    }).map((n) => ({
       nodeName: n.nodeName,
       vpnKey: n.vpnKey ?? undefined,
     })),
-    wgNodes: collectWgNodes(wgEndpoints, 'wireguard').map((n) => ({ nodeName: n.nodeName })),
+    wgNodes: collectWgNodes(wgEndpoints, 'wireguard', { dns: settings.wgDns, brand: title }).map(
+      (n) => ({ nodeName: n.nodeName }),
+    ),
     // Not format-gated: the t.me link is built from the endpoint itself and
     // fetches nothing back from us, so no `disableForFormats` bears on it.
     mtprotoNodes: collectMtprotoNodes(result.endpoints),

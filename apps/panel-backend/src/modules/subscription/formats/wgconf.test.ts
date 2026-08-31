@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildWgQuickConf } from './wgconf.js';
+import { buildWgQuickConf, wgConfName } from './wgconf.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
 
 const awgEp: SubscriptionEndpoint = {
@@ -53,6 +53,57 @@ describe('buildWgQuickConf', () => {
     expect(out).toContain('Address = 10.0.0.42/32');
     expect(out).toContain('PublicKey = srvPub64');
     expect(out).toContain('Endpoint = n1.example.com:51820');
+  });
+
+  // Полный туннель без резолвера — это не «настройка по умолчанию», а
+  // молчаливый отказ: с AllowedIPs 0.0.0.0/0 клиент остаётся на резолвере своей
+  // сети, и домашний 192.168.1.1 уезжает в туннель и умирает там. Проверяем обе
+  // ветки, потому что дефолт (строки нет) обязан остаться прежним.
+  it('writes DNS into both flavours when the panel sets resolvers', () => {
+    const dns = ['1.1.1.1', '1.0.0.1'];
+    const awg = buildWgQuickConf([awgEp], undefined, 'amneziawg', { dns });
+    const wg = buildWgQuickConf([wgEp], undefined, 'wireguard', { dns });
+    expect(awg).toContain('DNS = 1.1.1.1, 1.0.0.1');
+    expect(wg).toContain('DNS = 1.1.1.1, 1.0.0.1');
+    // Строка принадлежит [Interface], а не [Peer]: wg-quick читает её только там.
+    expect(awg.indexOf('DNS =')).toBeLessThan(awg.indexOf('[Peer]'));
+    expect(wg.indexOf('DNS =')).toBeLessThan(wg.indexOf('[Peer]'));
+  });
+
+  it('omits the DNS line when no resolvers are configured', () => {
+    expect(buildWgQuickConf([awgEp])).not.toContain('DNS');
+    expect(buildWgQuickConf([wgEp], undefined, 'wireguard', { dns: [] })).not.toContain('DNS');
+  });
+
+  // Имя туннеля живёт только в этом комментарии: у wg-quick поля имени нет, а
+  // импорт по ссылке в WG Tunnel не читает Content-Disposition и без комментария
+  // называет туннель хостом из Endpoint — то есть голым IP.
+  it('writes the tunnel name as the FIRST line, before [Interface]', () => {
+    for (const [ep, flavour] of [
+      [awgEp, 'amneziawg'],
+      [wgEp, 'wireguard'],
+    ] as const) {
+      const out = buildWgQuickConf([ep], undefined, flavour, { name: 'OneginVPN-s2' });
+      expect(out.split('\n')[0]).toBe('# Name = OneginVPN-s2');
+    }
+  });
+
+  it('omits the name comment when no name is given', () => {
+    expect(buildWgQuickConf([awgEp]).split('\n')[0]).toBe('[Interface]');
+  });
+});
+
+describe('wgConfName', () => {
+  it('collapses a run of unusable characters instead of one per code unit', () => {
+    // Имя ноды несёт эмодзи флага; посимвольная замена давала `_____s2`.
+    expect(wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'wireguard')).toBe('OneginVPN-s2-wg');
+    expect(wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'amneziawg')).toBe('OneginVPN-s2-awg');
+  });
+
+  it('falls back when the brand sanitises to nothing, and stays a legal file name', () => {
+    expect(wgConfName('\u{1F1F3}\u{1F1F1}')).toBe('subscription');
+    expect(wgConfName('OneginVPN')).toBe('OneginVPN');
+    expect(wgConfName('a'.repeat(200), 'node').length).toBeLessThanOrEqual(64);
   });
 
   it('includes the obfuscation parameters from the inbound', () => {

@@ -39,6 +39,12 @@ import { UpdateSettingsSchema } from './settings.schemas.js';
  *                                                   so SNI-based DPI cannot
  *                                                   cleanly match the handshake.
  *                                                   Default false. Xray JSON only.
+ *   - `subscriptionWgDns` (string[]): resolvers for the `DNS =` line of every
+ *                                                   wg-quick config. Empty omits
+ *                                                   the line; for a full tunnel
+ *                                                   that leaves the client on a
+ *                                                   resolver it can no longer
+ *                                                   reach.
  *
  * Future keys land in the same table; flip `isPublic` per key.
  */

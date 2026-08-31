@@ -67,6 +67,17 @@ export interface AmneziawgClientConfigOpts {
    */
   dns?: string[];
   /**
+   * Tunnel name, written as the leading `# Name = ...` comment.
+   *
+   * wg-quick has no name field, so this comment IS the naming channel: the
+   * WG Tunnel parser reads the first header comment starting with `Name` into
+   * `Config.name`, and the app prefers it over the file name and over its own
+   * fallback — which is `peers[0].host`, i.e. the bare endpoint IP. Clients
+   * that don't know the convention skip it: it is a comment, and every
+   * wg-quick parser ignores comment lines.
+   */
+  name?: string;
+  /**
    * Persistent keepalive seconds. Default 25, practical for NAT-traversal,
    * matches AmneziaVPN-app default.
    */
@@ -77,6 +88,9 @@ export function buildAmneziawgClientConfig(opts: AmneziawgClientConfigOpts): str
   const allowed = (opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0', '::/0']).join(', ');
   const lines: string[] = [];
 
+  // Первой строкой и только ей: парсер WG Tunnel читает ИМЕННО первый
+  // заголовочный комментарий, всё, что ниже, для имени уже не считается.
+  if (opts.name) lines.push(`# Name = ${opts.name}`);
   lines.push('[Interface]');
   lines.push(`PrivateKey = ${opts.privateKey}`);
   lines.push(`Address = ${opts.allowedIp}`);

@@ -43,6 +43,8 @@ export interface SubscriptionSettings {
    * surface instead of all of it. Worth having, not worth defaulting to.
    */
   entryPoolSize: number;
+  /** Resolvers for the `DNS =` line of wg-quick configs. Empty = omit the line. */
+  wgDns: string[];
 }
 
 // B5 - in-process cache for the subscription settings. `/sub/:token` is hit on
@@ -122,6 +124,14 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
   const localeRaw = asString('defaultLocale');
   const defaultLocale = localeRaw === 'ru' || localeRaw === 'en' ? localeRaw : null;
 
+  // wg-quick `DNS =`. Defensive parse for the same reason as the lists above: a
+  // hand-edited row must not be able to emit a broken config line. Non-strings
+  // and empties are dropped; an empty result omits the line entirely.
+  const wgDnsRaw = map.get('subscriptionWgDns');
+  const wgDns = Array.isArray(wgDnsRaw)
+    ? wgDnsRaw.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).slice(0, 4)
+    : [];
+
   const value: SubscriptionSettings = {
     profileTitle: asString('subscriptionProfileTitle'),
     updateIntervalHours: asInt('subscriptionUpdateIntervalHours', 24),
@@ -136,6 +146,7 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     // Negative or garbage reads as "no cap": the failure mode of a bad row must
     // be a subscriber seeing everything, never a subscriber seeing nothing.
     entryPoolSize: Math.max(0, asInt('subscriptionEntryPoolSize', 0)),
+    wgDns,
   };
   settingsCache = { value, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS };
   return value;

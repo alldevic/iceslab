@@ -12,11 +12,17 @@ import type {
  * its QR scanner and "paste key" accept. Single tunnel per key (like wgconf),
  * so `nodeName` selects which AmneziaWG node; absent = first.
  *
+ * `dns` lands in the key's `dns1`/`dns2` fields. It has to be threaded here
+ * too, not only into the .conf: on connect the AmneziaVPN daemon REBUILDS the
+ * [Interface] from the structured fields and ignores the embedded .conf text,
+ * so a DNS line present in the file alone would never reach this client.
+ *
  * Returns '' when no matching AmneziaWG endpoint exists.
  */
 export function buildAwgVpnLink(
   endpoints: SubscriptionEndpoint[],
   nodeName?: string,
+  dns?: string[],
 ): string {
   const awgEndpoints = endpoints.filter(
     (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
@@ -48,6 +54,7 @@ export function buildAwgVpnLink(
     i3: awg.i3,
     i4: awg.i4,
     i5: awg.i5,
+    dns,
     description: `AmneziaWG ${awg.nodeName}`,
   });
 }

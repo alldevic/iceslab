@@ -18,6 +18,18 @@ export const UpdateSettingsSchema = z.object({
   // TLS-fragment - split the client's outgoing ClientHello so SNI-based DPI
   // (RU TSPU / RKN) cannot cleanly match the handshake. Xray JSON format only.
   subscriptionTlsFragment: z.boolean().optional(),
+  // Resolvers written into the `DNS =` line of every wg-quick config we hand
+  // out (both flavours). Empty / null omits the line, which is the previous
+  // behaviour and NOT a safe default for a full tunnel: with
+  // `AllowedIPs = 0.0.0.0/0` the client keeps the network's own resolver, and
+  // when that resolver is a LAN address (192.168.1.1 on any home router) the
+  // query is routed INTO the tunnel and dies there. Handshake up, no names.
+  // Plain IPs only: wg-quick feeds this to resolvconf, which takes addresses.
+  subscriptionWgDns: z
+    .array(z.union([z.ipv4(), z.ipv6()]))
+    .max(4)
+    .nullable()
+    .optional(),
   // R3-b - raw custom xray routing rules (array of rule objects), or null to
   // clear. Applied to xray/xkeen subscription output ahead of the preset.
   subscriptionCustomRoutingRules: z
