@@ -24,7 +24,6 @@
       "hono": ">=4.12.25",
       "@fastify/static": ">=10.1.1",
       "react-router": ">=7.18.0 <8",
-      "deepmerge-ts": ">=8",
       "@babel/core": ">=7.29.6"
     },
     "auditConfig": {
