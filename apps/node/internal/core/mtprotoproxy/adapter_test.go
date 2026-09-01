@@ -523,4 +523,9 @@ mtprotoproxy_user_octets_to{user="u1"} 7
 	if len(st.Users) != 1 || st.Users[0].UserID != "u1" {
 		t.Errorf("users = %+v", st.Users)
 	}
+	// It still lands in the NODE totals: nobody can be billed for it, but it is
+	// real traffic, and a node mid-migration must not look quieter than it is.
+	if st.TotalBytesIn != 900+5 {
+		t.Errorf("TotalBytesIn = %d, want 905 (the legacy cohort plus u1)", st.TotalBytesIn)
+	}
 }

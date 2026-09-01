@@ -298,6 +298,14 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	}
 
 	stats := &core.Stats{Cumulative: true, Users: make([]core.UserStats, 0, len(names))}
+	// The legacy cohort has no owner, so it gets no user row — but it is real
+	// traffic on this node and belongs in the node's own totals. Leaving it out
+	// entirely would make a node mid-migration look quieter than it is, which is
+	// the one period when somebody is watching it.
+	if t := traffic[LegacyUserName]; t != nil {
+		stats.TotalBytesIn += t.BytesIn
+		stats.TotalBytesOut += t.BytesOut
+	}
 	for _, n := range names {
 		us := core.UserStats{UserID: n}
 		// A user we know about with no row in the scrape has simply not used
