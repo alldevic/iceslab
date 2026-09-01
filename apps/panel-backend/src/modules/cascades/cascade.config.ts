@@ -1018,6 +1018,41 @@ export function buildTopologyFragmentsForNode(
     });
   }
 
+  /**
+   * TERMINAL: at an entry, traffic that matched no route tag is REFUSED.
+   *
+   * This is the last rule, below every direction and below Auto, so it can only
+   * catch a client whose UUID carries no tag this entry knows - which in
+   * practice means a subscription downloaded before the exits existed, or one
+   * downloaded from a format that did not write the tag.
+   *
+   * Without it such a client falls through to `freedom` and egresses HERE. That
+   * is the one outcome a cascade exists to prevent, and it is silent from every
+   * angle: the client connects, authenticates as the right user, fetches
+   * successfully, and reports the country its subscription line claims. The
+   * operator sees a healthy node. Measured on a two-VM chain 2026-08-28: the
+   * untagged UUID answered 200 while the exit node logged ZERO connections.
+   *
+   * The same decision was already taken one rule up, for Auto: `fallbackTag:
+   * 'blocked'` rather than let a dead balancer fall to `direct`, because "wrong
+   * quietly is worse than broken loudly". This finishes the thought - Auto was
+   * only the case that had been noticed.
+   *
+   * What it changes for anyone not leaking: nothing. A user this entry has a tag
+   * for matches a rule above. The one shape that changes behaviour is a squad
+   * whose exit ACL leaves a user with no reachable direction: they were being
+   * served from the entry's country, and now they are served nothing. That is
+   * the restriction their operator set, applied rather than ignored.
+   *
+   * Note this does NOT make the failure total, because the node's own geo policy
+   * (pass 2) sits above and carries no tag condition: on a split entry, a stale
+   * client keeps reaching the domains that policy sends `direct` and loses
+   * everything else. Loud enough to act on, and it points at the tunnel.
+   */
+  if (isEntry) {
+    routingRules.push({ type: 'field', network: 'tcp,udp', outboundTag: 'blocked' });
+  }
+
   // IPOnDemand only when THIS node's policy carries an ip/geoip matcher: under
   // the default IPIfNonMatch xray resolves a sniffed domain to an IP only if no
   // rule matched the first pass, so a geoip rule would never see that pass and
