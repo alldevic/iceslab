@@ -81,12 +81,25 @@ services:
       dockerfile: apps/panel-backend/Dockerfile
     image: iceslab-backend:latest
     container_name: iceslab-prod-backend
-    # Heap is already capped at 512m via NODE_OPTIONS below; this leaves headroom
+    # Heap is capped via BACKEND_NODE_OPTIONS below; this leaves headroom
     # for non-heap RSS (native modules, buffers). If the backend is OOM-killed
     # under normal load, raise this (and consider the heap cap together).
-    mem_limit: 768m
+    #
+    # Both are .env values because GEO_SELF_HOST needs a bigger pair than either
+    # default. The geo build parses the WHOLE source geosite.dat + geoip.dat into
+    # JS objects - one per domain and per CIDR - even when no custom category is
+    # defined, because the parse is what enumerates the categories. Measured
+    # 2026-09-01 against the runetfreedom sources (3 152 362 domains + 1 234 090
+    # CIDRs) with the shipped image: 590MB heap, 762MB RSS, for the parse alone.
+    # 512m/768m therefore cannot complete a single build - and with
+    # GEO_SELF_HOST=true the boot warm-up runs one, so the panel crash-loops
+    # rather than merely failing the build. 1024m/1536m carries that source set.
+    mem_limit: ${BACKEND_MEM_LIMIT:-768m}
     environment:
       NODE_ENV: production
+      # Overrides the image's own ENV (--max-old-space-size=512), which is
+      # otherwise unreachable from compose. See mem_limit above for the sizing.
+      NODE_OPTIONS: ${BACKEND_NODE_OPTIONS:---max-old-space-size=512}
       APP_HOST: 0.0.0.0
       APP_PORT: "3000"
       DATABASE_URL: ${DATABASE_URL}
