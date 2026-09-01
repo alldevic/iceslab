@@ -410,3 +410,117 @@ func mustRead(t *testing.T, p string) []byte {
 	}
 	return b
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seamless switch off mtg.
+//
+// A tg:// link is not a subscription. The Telegram client stored a server, a
+// port and a secret, and there is nothing for it to re-fetch — so on the day mtg
+// stops, every buyer who ever added the proxy has a saved entry that either
+// still works or does not. Carrying mtg's one shared secret as an extra user is
+// what makes it still work.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The live mtg secret this deployment serves, shape and all:
+// "ee" + 16 raw bytes + hex("www.cloudflare.com").
+const liveMtgSecret = "eed06ba72cc5f27206cb632a62a7b3865c7777772e636c6f7564666c6172652e636f6d"
+const liveMtgRaw = "d06ba72cc5f27206cb632a62a7b3865c"
+const liveDomain = "www.cloudflare.com"
+
+func legacyAdapter(t *testing.T, accept bool) *Adapter {
+	t.Helper()
+	return New(Config{
+		ConfigPath: filepath.Join(t.TempDir(), "config.py"),
+		// No Domain: it arrives from the panel, which is also what makes the
+		// ApplyInbound below a real change rather than a no-op the adapter
+		// correctly skips.
+		Inbound:            InboundConfig{ListenPort: 2083},
+		AcceptLegacySecret: accept,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func TestOldMtgLinksKeepWorkingDuringMigration(t *testing.T) {
+	a := legacyAdapter(t, true)
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+liveMtgSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	users := runPy(t, mustRead(t, a.cfg.ConfigPath))["USERS"].(map[string]any)
+
+	// The raw half of mtg's secret, under the migration name. mtprotoproxy
+	// rebuilds "ee" + this + hex(TLS_DOMAIN), which is byte-for-byte the secret
+	// already saved in every buyer's Telegram.
+	if users[LegacyUserName] != liveMtgRaw {
+		t.Errorf("legacy secret missing or wrong: %v", users)
+	}
+	if users["u1"] != secretA {
+		t.Errorf("the personal secret was disturbed: %v", users)
+	}
+}
+
+func TestLegacySecretIsOffUnlessAskedFor(t *testing.T) {
+	// It keeps alive a secret everybody has and nobody owns, so it has to be a
+	// deliberate migration state rather than something a node drifts into.
+	a := legacyAdapter(t, false)
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+liveMtgSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	blob := mustRead(t, a.cfg.ConfigPath)
+	if strings.Contains(string(blob), liveMtgRaw) {
+		t.Error("the legacy secret was carried without the flag being set")
+	}
+}
+
+func TestLegacySecretForAnotherDomainIsRefused(t *testing.T) {
+	// The domain is baked into the FakeTLS secret, so a secret minted for a
+	// different one could not be accepted anyway. Carrying it would look like
+	// migration cover while providing none.
+	a := legacyAdapter(t, true)
+	other := "ee" + liveMtgRaw + "6578616d706c652e636f6d" // example.com
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+other+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(mustRead(t, a.cfg.ConfigPath)), liveMtgRaw) {
+		t.Error("a secret for another domain was carried as cover")
+	}
+}
+
+func TestLegacyUserIsNotReportedToThePanel(t *testing.T) {
+	// It is not a panel user. Handing the panel a userId it has never heard of
+	// would risk the whole stats poll for a row nobody can be billed for; the
+	// operator watches this cohort on the node's metrics endpoint instead.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `mtprotoproxy_user_octets_from{user="`+LegacyUserName+`"} 900
+mtprotoproxy_user_octets_from{user="u1"} 5
+mtprotoproxy_user_octets_to{user="u1"} 7
+`)
+	}))
+	defer srv.Close()
+
+	a := legacyAdapter(t, true)
+	a.cfg.MetricsURL = srv.URL
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+liveMtgSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range st.Users {
+		if u.UserID == LegacyUserName {
+			t.Fatal("the legacy cohort was reported to the panel as a user")
+		}
+	}
+	if len(st.Users) != 1 || st.Users[0].UserID != "u1" {
+		t.Errorf("users = %+v", st.Users)
+	}
+}

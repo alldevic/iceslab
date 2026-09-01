@@ -116,4 +116,12 @@ echo "    MTPROTOPROXY_PORT=2084          # NOT mtg's port; both engines can run
 echo "    MTPROTOPROXY_METRICS_PORT=3130  # NOT mtg's 3129, same reason"
 echo "Then: systemctl restart iceslab-node"
 echo
+echo "MIGRATING OFF mtg? A tg:// link is not a subscription — the client stored a"
+echo "secret and has nothing to re-fetch, so every buyer's saved proxy stops"
+echo "working the moment mtg does. To keep them working:"
+echo "    MTPROTOPROXY_ACCEPT_LEGACY=1"
+echo "and give this engine mtg's PORT once you stop mtg, because the saved links"
+echo "name it. Watch user=\"legacy-mtg\" on the metrics port; when it stops"
+echo "moving, everybody has a personal link — drop the flag and restart."
+echo
 echo "The inbound picks this engine with \`engine: mtprotoproxy\` on its profile."

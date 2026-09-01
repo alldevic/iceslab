@@ -272,6 +272,17 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 				MetricsPort: getenvInt("MTPROTOPROXY_METRICS_PORT", 3130),
 				Domain:      os.Getenv("MTPROTOPROXY_DOMAIN"), // empty → deferred until ApplyInbound
 			},
+			// Migration cover for a node moving off mtg. A tg:// link is not a
+			// subscription — the client stored a secret and has nothing to
+			// re-fetch — so without this every buyer's saved proxy stops working
+			// the moment mtg does. With it, the old shared secret is carried as
+			// one extra user and those links keep working while personal ones
+			// are handed out beside them.
+			//
+			// Off by default and meant to be turned back off: it keeps alive a
+			// secret everybody has and nobody owns. Watch `user="legacy-mtg"` on
+			// the metrics port; when it stops moving, drop the flag.
+			AcceptLegacySecret: os.Getenv("MTPROTOPROXY_ACCEPT_LEGACY") == "1",
 		}
 		adapters = append(adapters, mtprotoproxy.New(mppCfg, logger))
 		logger.Info("mtprotoproxy adapter registered")

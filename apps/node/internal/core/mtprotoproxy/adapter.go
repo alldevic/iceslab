@@ -39,6 +39,12 @@ type Config struct {
 
 	Inbound InboundConfig
 
+	// AcceptLegacySecret keeps the mtg-era shared secret working during a
+	// migration. OFF by default: it is a per-node migration state, not a
+	// product setting, and leaving it on past the migration keeps a secret
+	// alive that everybody has and nobody owns.
+	AcceptLegacySecret bool
+
 	RunCmd RunCmdFunc
 
 	// MetricsURL is the scrape target. Defaults to the loopback port
@@ -69,6 +75,9 @@ type Adapter struct {
 	// is what lets a no-op push skip the reload; renderConfig is deterministic
 	// precisely so this comparison means something.
 	lastRendered string
+	// legacySecret is the raw half of the mtg shared secret, when the node is
+	// migrating and the panel pushed one. Empty otherwise.
+	legacySecret string
 
 	proc *subprocess.Subprocess
 
@@ -188,10 +197,14 @@ func (a *Adapter) RemoveUser(userID string) error {
 // inboundCfgWire mirrors MtprotoInboundCfg on the panel side.
 type inboundCfgWire struct {
 	Domain string `json:"domain"`
-	// Secret is what the mtg engine needs and this one does not: here the
-	// secret belongs to the USER, not the inbound. Accepted and ignored so a
-	// node can be moved to this engine before the panel stops sending it —
-	// rejecting it would make the two sides have to be deployed together.
+	// Secret is the INBOUND-level secret, which is what the mtg engine runs on
+	// and what every buyer who ever added this proxy has saved in Telegram.
+	//
+	// This engine does not need it — here a secret belongs to a user — but it
+	// is exactly what makes the switch seamless, so with AcceptLegacySecret it
+	// is carried as one extra user (see legacyRawSecret). Without that flag it
+	// is accepted and ignored, so a node can move to this engine before the
+	// panel stops sending it.
 	Secret string `json:"secret"`
 }
 
@@ -209,12 +222,25 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	if effectivePort == 0 {
 		effectivePort = a.cfg.Inbound.ListenPort
 	}
-	unchanged := a.cfg.Inbound.Domain == wire.Domain && a.cfg.Inbound.ListenPort == effectivePort
+	legacy := ""
+	if a.cfg.AcceptLegacySecret {
+		legacy = legacyRawSecret(wire.Secret, wire.Domain)
+		if legacy == "" && wire.Secret != "" {
+			// Say so rather than migrate silently without cover: an operator who
+			// turned this on believes old links keep working.
+			a.logger.Warn("mtprotoproxy: legacy secret not usable, old mtg links will NOT work",
+				"reason", "not an ee+32hex+hex(domain) secret for this domain")
+		}
+	}
+	unchanged := a.cfg.Inbound.Domain == wire.Domain &&
+		a.cfg.Inbound.ListenPort == effectivePort &&
+		a.legacySecret == legacy
 	if unchanged {
 		a.mu.Unlock()
 		a.logger.Info("mtprotoproxy ApplyInbound: config unchanged, skipping")
 		return nil
 	}
+	a.legacySecret = legacy
 	a.cfg.Inbound.Domain = wire.Domain
 	if effectivePort != 0 {
 		a.cfg.Inbound.ListenPort = effectivePort
@@ -253,6 +279,12 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	if len(names) == 0 {
 		return &core.Stats{Cumulative: true}, nil
 	}
+	// LegacyUserName is deliberately absent from `names`: it is not a panel
+	// user, and handing the panel a userId it has never heard of would put the
+	// whole poll at risk for a row nobody can be billed for. Its traffic is
+	// still visible where an operator running a migration actually looks — the
+	// node's own metrics endpoint — and watching it fall to zero is the signal
+	// that the legacy secret can be dropped.
 
 	body, err := scrape(client, url)
 	if err != nil {
@@ -391,9 +423,15 @@ func (a *Adapter) renderAndWrite() ([]byte, bool, error) {
 	a.mu.Lock()
 	inbound := a.cfg.Inbound
 	cfgPath := a.cfg.ConfigPath
-	users := make([]User, 0, len(a.users))
+	users := make([]User, 0, len(a.users)+1)
 	for _, u := range a.users {
 		users = append(users, u)
+	}
+	// The migration cover, if this node is carrying it. No expiry and no quota:
+	// it is not somebody's plan, it is the door mtg left open, and it is closed
+	// by turning the flag off — not by letting it lapse at an arbitrary date.
+	if a.legacySecret != "" {
+		users = append(users, User{Name: LegacyUserName, Secret: a.legacySecret})
 	}
 	prev := a.lastRendered
 	a.mu.Unlock()
