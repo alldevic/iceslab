@@ -18,6 +18,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mieru"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtproto"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtprotoproxy"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/naive"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/shadowsocks"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
@@ -128,6 +129,21 @@ func casesRaw() []adapterCase {
 					in.Secret = "ee" + "00112233445566778899aabbccddeeff" + "6578616d706c652e636f6d"
 				}
 				return mtproto.New(mtproto.Config{ConfigPath: cfgPath, Inbound: in}, quiet()), cfgPath
+			},
+		},
+		{
+			// The second MTProto engine. Provisioned needs only the domain: an
+			// inbound with no users yet must still listen and refuse everyone,
+			// or the first AddUser races the process coming up.
+			name:          "mtprotoproxy",
+			provisionable: true,
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "config.py")
+				in := mtprotoproxy.InboundConfig{ListenPort: 2083, MetricsPort: 3129}
+				if ready {
+					in.Domain = "example.com"
+				}
+				return mtprotoproxy.New(mtprotoproxy.Config{ConfigPath: cfgPath, Inbound: in}, quiet()), cfgPath
 			},
 		},
 		{

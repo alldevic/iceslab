@@ -1,0 +1,302 @@
+package mtprotoproxy
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
+	"testing"
+)
+
+func newTestAdapter(t *testing.T) *Adapter {
+	t.Helper()
+	a := New(Config{
+		// No PythonPath: config-only mode, so nothing is spawned and the tests
+		// exercise the state machine rather than a subprocess.
+		ConfigPath: filepath.Join(t.TempDir(), "config.py"),
+		Inbound:    InboundConfig{Domain: "www.cloudflare.com", ListenPort: 2083},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return a
+}
+
+func TestAddUserRefusesAUserWithNoSecret(t *testing.T) {
+	// Generating one here would produce a user who exists on the node and cannot
+	// connect, because the link the buyer holds carries the panel's secret. That
+	// failure looks like a network problem and is not.
+	a := newTestAdapter(t)
+	err := a.AddUser(core.User{UserID: "u1"})
+	if err == nil {
+		t.Fatal("accepted a user with no MtprotoSecret")
+	}
+	if !strings.Contains(err.Error(), "MtprotoSecret") {
+		t.Errorf("error should name the missing field, got %v", err)
+	}
+	if len(a.users) != 0 {
+		t.Error("the rejected user was still recorded")
+	}
+}
+
+func TestAddUserRefusesAMalformedSecret(t *testing.T) {
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: "not-hex"}); err == nil {
+		t.Fatal("accepted a secret that is not 32 hex chars")
+	}
+}
+
+func TestUserSetRoundTrip(t *testing.T) {
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u2", MtprotoSecret: secretB}); err != nil {
+		t.Fatal(err)
+	}
+	blob, err := os.ReadFile(a.cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runPy(t, blob)
+	users := got["USERS"].(map[string]any)
+	if users["u1"] != secretA || users["u2"] != secretB {
+		t.Errorf("USERS on disk = %v", users)
+	}
+
+	if err := a.RemoveUser("u1"); err != nil {
+		t.Fatal(err)
+	}
+	blob, _ = os.ReadFile(a.cfg.ConfigPath)
+	users = runPy(t, blob)["USERS"].(map[string]any)
+	if _, still := users["u1"]; still {
+		t.Errorf("removed user still in USERS: %v", users)
+	}
+	if users["u2"] != secretB {
+		t.Errorf("removing one user disturbed another: %v", users)
+	}
+}
+
+func TestRepeatedPushDoesNotTriggerAReload(t *testing.T) {
+	// The panel re-pushes the same user set routinely. Treating that as a change
+	// would SIGUSR2 the process every time — the difference between a quiet
+	// proxy and one re-reading its config all day.
+	//
+	// Note what is NOT asserted: that the file is left alone. The config is
+	// rewritten every time, atomically, because skipping the write would be
+	// indistinguishable from an unsafe in-place rewrite (see the write contract
+	// in internal/core). Only the reload is skipped.
+	a := newTestAdapter(t)
+	u := core.User{UserID: "u1", MtprotoSecret: secretA}
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(a.cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := a.renderAndWrite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Error("an unchanged user set was reported as a change; the proxy would be signalled for nothing")
+	}
+	second, _ := os.ReadFile(a.cfg.ConfigPath)
+	if string(first) != string(second) {
+		t.Error("the same user set rendered differently twice")
+	}
+
+	// Removing somebody who is not there is a no-op too.
+	if err := a.RemoveUser("nobody"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAChangedUserSetIsReportedAsAChange(t *testing.T) {
+	// The mirror of the test above: if this stopped reporting true, no reload
+	// would ever fire and a new user would exist only in the file.
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.users["u2"] = User{Name: "u2", Secret: secretB}
+	a.mu.Unlock()
+	if _, changed, err := a.renderAndWrite(); err != nil || !changed {
+		t.Errorf("adding a user reported changed=%v, err=%v; want true, nil", changed, err)
+	}
+}
+
+func TestApplyInboundRequiresDomainAndIgnoresInboundSecret(t *testing.T) {
+	a := newTestAdapter(t)
+	if err := a.ApplyInbound(2083, json.RawMessage(`{}`)); err == nil {
+		t.Error("accepted an inbound with no domain")
+	}
+	// The panel still sends the mtg-shaped `secret`; on this engine the secret
+	// belongs to the user. Accepting and ignoring it is what lets a node move to
+	// this engine before the panel side changes.
+	err := a.ApplyInbound(2083, json.RawMessage(`{"domain":"example.org","secret":"eedead"}`))
+	if err != nil {
+		t.Fatalf("ApplyInbound with a legacy secret field: %v", err)
+	}
+	if a.cfg.Inbound.Domain != "example.org" {
+		t.Errorf("domain = %q", a.cfg.Inbound.Domain)
+	}
+	blob, _ := os.ReadFile(a.cfg.ConfigPath)
+	if strings.Contains(string(blob), "eedead") {
+		t.Error("the inbound-level secret leaked into the generated config")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stats
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestGetStatsAttributesTrafficPerUser(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `mtprotoproxy_user_octets_from{user="u1"} 100
+mtprotoproxy_user_octets_to{user="u1"} 200
+mtprotoproxy_user_octets_from{user="u2"} 5
+mtprotoproxy_user_octets_to{user="u2"} 7
+`)
+	}))
+	defer srv.Close()
+
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA})
+	a.AddUser(core.User{UserID: "u2", MtprotoSecret: secretB})
+
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Cumulative {
+		t.Error("counters are cumulative since process start; the panel must diff them")
+	}
+	if len(st.Users) != 2 {
+		t.Fatalf("users = %d", len(st.Users))
+	}
+	byID := map[string]int64{}
+	for _, u := range st.Users {
+		byID[u.UserID+"/in"] = u.BytesIn
+		byID[u.UserID+"/out"] = u.BytesOut
+	}
+	if byID["u1/in"] != 100 || byID["u1/out"] != 200 || byID["u2/in"] != 5 || byID["u2/out"] != 7 {
+		t.Errorf("per-user attribution wrong: %v", byID)
+	}
+	if st.TotalBytesIn != 105 || st.TotalBytesOut != 207 {
+		t.Errorf("totals = %d/%d, want 105/207", st.TotalBytesIn, st.TotalBytesOut)
+	}
+}
+
+func TestGetStatsMarksDegradedRatherThanReportingZeros(t *testing.T) {
+	// A zero is indistinguishable from "nobody used it", and the panel would
+	// bank it as a real reading. Degraded says "no reading this poll".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA})
+
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Degraded {
+		t.Error("a failed scrape must set Degraded")
+	}
+	if len(st.Users) != 0 {
+		t.Error("a failed scrape must not report user rows at all")
+	}
+}
+
+func TestKnownUserWithNoRowReportsZero(t *testing.T) {
+	// The endpoint answered and did not mention them: they have not used the
+	// proxy since it started. That is a real zero, unlike a failed scrape.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "mtprotoproxy_connects 3\n")
+	}))
+	defer srv.Close()
+
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA})
+
+	st, _ := a.GetStats()
+	if st.Degraded {
+		t.Error("a successful scrape with no rows is not degraded")
+	}
+	if len(st.Users) != 1 || st.Users[0].BytesIn != 0 {
+		t.Errorf("users = %+v", st.Users)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The crypto guard
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestRefusesToStartOnTheSlowCryptoBackend(t *testing.T) {
+	// Measured on the target node: pyaes does 0.4 MB/s against cryptography's
+	// 3777 MB/s. mtprotoproxy starts anyway and prints a suggestion, so a proxy
+	// carrying media at dial-up speed would report itself healthy.
+	failing := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("pyaes\n"), errors.New("exit status 1")
+	}
+	err := assertFastCrypto(context.Background(), failing, "python3")
+	if err == nil {
+		t.Fatal("started on the bundled pyaes backend")
+	}
+	if !strings.Contains(err.Error(), "python3-cryptography") {
+		t.Errorf("the error should say what to install, got: %v", err)
+	}
+}
+
+func TestAcceptsAFastCryptoBackend(t *testing.T) {
+	ok := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("cryptography\n"), nil
+	}
+	if err := assertFastCrypto(context.Background(), ok, "python3"); err != nil {
+		t.Fatalf("refused a working backend: %v", err)
+	}
+}
+
+func TestCryptoProbeMatchesRealPython(t *testing.T) {
+	// The probe mirrors mtprotoproxy's own selection order, so it is worth
+	// running against a real interpreter rather than only a stub: a syntax error
+	// in the probe would fail every start with a message about crypto.
+	a := newTestAdapter(t)
+	out, err := a.cfg.RunCmd(context.Background(), "python3", "-c", `
+import sys
+try:
+    import cryptography; print("cryptography"); sys.exit(0)
+except ImportError:
+    pass
+try:
+    import Crypto; print("pycryptodome"); sys.exit(0)
+except ImportError:
+    pass
+print("pyaes")
+sys.exit(1)
+`)
+	if err != nil && !strings.Contains(string(out), "pyaes") {
+		t.Fatalf("the probe itself failed rather than reporting a backend: %v (%s)", err, out)
+	}
+	got := strings.TrimSpace(string(out))
+	if got != "cryptography" && got != "pycryptodome" && got != "pyaes" {
+		t.Errorf("probe printed %q, expected one of the three backend names", got)
+	}
+}

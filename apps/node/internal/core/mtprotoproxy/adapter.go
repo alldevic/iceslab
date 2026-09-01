@@ -1,0 +1,520 @@
+package mtprotoproxy
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os/exec"
+	"sort"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
+)
+
+// Name is the protocol; Engine distinguishes this adapter from the mtg one.
+// The dispatcher matches an inbound on BOTH, so the two can be registered side
+// by side and an inbound picks with `engine: "mtprotoproxy"`.
+const (
+	Name   = "mtproto"
+	Engine = "mtprotoproxy"
+)
+
+type RunCmdFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+type Config struct {
+	// PythonPath is the interpreter. mtprotoproxy is a Python program, so the
+	// "binary" of this core is python3 plus a script path.
+	PythonPath string
+	// ScriptPath is mtprotoproxy.py.
+	ScriptPath string
+	// ConfigPath is where we write the generated config.py. It is passed as
+	// argv[1], which is the documented "launch with own config" form.
+	ConfigPath string
+
+	Inbound InboundConfig
+
+	RunCmd RunCmdFunc
+
+	// MetricsURL is the scrape target. Defaults to the loopback port
+	// renderConfig writes.
+	MetricsURL    string
+	metricsClient *http.Client
+}
+
+// Adapter implements core.CoreAdapter for MTProto over alexbers/mtprotoproxy.
+//
+// Unlike the mtg adapter, per-user state here is REAL: every user has their own
+// secret, expiry, quota and connection cap, and the set is pushed into the
+// running process with SIGUSR2 rather than a restart. That distinction is the
+// whole point — a restart drops every connection the proxy is carrying, so
+// adding one user would interrupt all of them.
+type Adapter struct {
+	coreVersion core.CachedVersion
+	cfg         Config
+	logger      *slog.Logger
+
+	// mu guards in-memory state and is held only for fast work. The slow
+	// render + subprocess work runs under restartMu so Healthy()/GetStats do
+	// not queue behind it.
+	mu      sync.Mutex
+	users   map[string]User
+	started bool
+	// lastRendered is the config bytes currently on disk. Comparing against it
+	// is what lets a no-op push skip the reload; renderConfig is deterministic
+	// precisely so this comparison means something.
+	lastRendered string
+
+	proc *subprocess.Subprocess
+
+	restartsCrash     int
+	restartsMemory    int
+	lastRestartAt     time.Time
+	lastRestartReason string
+	countingSince     time.Time
+
+	restartMu sync.Mutex
+}
+
+func New(cfg Config, logger *slog.Logger) *Adapter {
+	if cfg.RunCmd == nil {
+		cfg.RunCmd = defaultRunCmd
+	}
+	if cfg.MetricsURL == "" {
+		port := cfg.Inbound.withDefaults().MetricsPort
+		cfg.MetricsURL = fmt.Sprintf("http://127.0.0.1:%d/", port)
+	}
+	if cfg.metricsClient == nil {
+		cfg.metricsClient = &http.Client{Timeout: 2 * time.Second}
+	}
+	return &Adapter{
+		cfg:           cfg,
+		logger:        logger,
+		users:         make(map[string]User),
+		countingSince: time.Now(),
+	}
+}
+
+func defaultRunCmd(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func (a *Adapter) Name() string   { return Name }
+func (a *Adapter) Engine() string { return Engine }
+
+// Provisioned reports whether the panel has told us enough to run. Only the
+// masquerade domain is required: an inbound with no users yet must still listen
+// and refuse everyone, or the first AddUser races the process coming up.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Inbound.Domain != ""
+}
+
+func (a *Adapter) Start(ctx context.Context) error {
+	if !a.Provisioned() {
+		a.logger.Info("mtprotoproxy: domain not set, waiting for ApplyInbound from panel")
+		return nil
+	}
+	return a.regenerateAndRestart(ctx)
+}
+
+func (a *Adapter) Stop(ctx context.Context) error {
+	a.mu.Lock()
+	a.started = false
+	proc := a.proc
+	a.proc = nil
+	a.mu.Unlock()
+	if proc == nil {
+		return nil
+	}
+	return proc.Stop(ctx)
+}
+
+// AddUser registers one subscriber and reloads the running process.
+//
+// This is where this engine differs from mtg, whose AddUser is a bookkeeping
+// no-op because there is nothing per-user to add. Here the user's own secret
+// goes into USERS and the proxy is told to re-read, so revocation and counting
+// become possible at all.
+//
+// A user with no MtprotoSecret is REFUSED rather than given a generated one:
+// the secret has to be the one the panel put in the link the buyer holds, and
+// inventing one here produces a user who exists on the node and cannot connect
+// — the failure that looks like a network problem and is not.
+func (a *Adapter) AddUser(user core.User) error {
+	if user.MtprotoSecret == "" {
+		return fmt.Errorf("mtprotoproxy AddUser %s: no MtprotoSecret; the panel must issue it", user.UserID)
+	}
+	u := User{Name: user.UserID, Secret: user.MtprotoSecret}
+	if err := u.validate(); err != nil {
+		return fmt.Errorf("mtprotoproxy AddUser: %w", err)
+	}
+	a.mu.Lock()
+	prev, existed := a.users[u.Name]
+	if existed && prev == u {
+		a.mu.Unlock()
+		return nil // idempotent, and no reload for a repeat push
+	}
+	a.users[u.Name] = u
+	a.mu.Unlock()
+	return a.regenerateAndReload()
+}
+
+func (a *Adapter) RemoveUser(userID string) error {
+	a.mu.Lock()
+	if _, ok := a.users[userID]; !ok {
+		a.mu.Unlock()
+		return nil // idempotent
+	}
+	delete(a.users, userID)
+	a.mu.Unlock()
+	return a.regenerateAndReload()
+}
+
+// inboundCfgWire mirrors MtprotoInboundCfg on the panel side.
+type inboundCfgWire struct {
+	Domain string `json:"domain"`
+	// Secret is what the mtg engine needs and this one does not: here the
+	// secret belongs to the USER, not the inbound. Accepted and ignored so a
+	// node can be moved to this engine before the panel stops sending it —
+	// rejecting it would make the two sides have to be deployed together.
+	Secret string `json:"secret"`
+}
+
+func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
+	var wire inboundCfgWire
+	if err := json.Unmarshal(rawCfg, &wire); err != nil {
+		return fmt.Errorf("mtprotoproxy ApplyInbound: parse cfg: %w", err)
+	}
+	if wire.Domain == "" {
+		return fmt.Errorf("mtprotoproxy ApplyInbound: domain is required")
+	}
+
+	a.mu.Lock()
+	effectivePort := port
+	if effectivePort == 0 {
+		effectivePort = a.cfg.Inbound.ListenPort
+	}
+	unchanged := a.cfg.Inbound.Domain == wire.Domain && a.cfg.Inbound.ListenPort == effectivePort
+	if unchanged {
+		a.mu.Unlock()
+		a.logger.Info("mtprotoproxy ApplyInbound: config unchanged, skipping")
+		return nil
+	}
+	a.cfg.Inbound.Domain = wire.Domain
+	if effectivePort != 0 {
+		a.cfg.Inbound.ListenPort = effectivePort
+	}
+	newPort := a.cfg.Inbound.ListenPort
+	a.mu.Unlock()
+
+	// A domain or port change is a listener change, not a user-set change, so
+	// it needs a restart — SIGUSR2 re-reads the config but does not rebind.
+	a.logger.Info("mtprotoproxy ApplyInbound: restarting", "domain", wire.Domain, "port", newPort)
+	return a.regenerateAndRestart(context.Background())
+}
+
+// GetStats reports per-user counters, which is the reason this engine exists.
+//
+// Counters are cumulative since the process started, so Cumulative is set and
+// the panel diffs against its own snapshot. A SIGUSR2 reload does NOT reset
+// them (it re-reads config, it does not restart); a crash-restart does, and the
+// panel sees that as counters going backwards — which is what the restart tally
+// is for.
+//
+// A failed scrape sets Degraded rather than reporting zeros: zeros are
+// indistinguishable from "nobody used it", and the panel would bank them as a
+// real reading.
+func (a *Adapter) GetStats() (*core.Stats, error) {
+	a.mu.Lock()
+	names := make([]string, 0, len(a.users))
+	for n := range a.users {
+		names = append(names, n)
+	}
+	url := a.cfg.MetricsURL
+	client := a.cfg.metricsClient
+	a.mu.Unlock()
+	sort.Strings(names)
+
+	if len(names) == 0 {
+		return &core.Stats{Cumulative: true}, nil
+	}
+
+	body, err := scrape(client, url)
+	if err != nil {
+		a.logger.Warn("mtprotoproxy: metrics scrape failed", "err", err)
+		return &core.Stats{Cumulative: true, Degraded: true}, nil
+	}
+	traffic, err := parseUserMetrics(body)
+	if err != nil {
+		a.logger.Warn("mtprotoproxy: metrics parse failed", "err", err)
+		return &core.Stats{Cumulative: true, Degraded: true}, nil
+	}
+
+	stats := &core.Stats{Cumulative: true, Users: make([]core.UserStats, 0, len(names))}
+	for _, n := range names {
+		us := core.UserStats{UserID: n}
+		// A user we know about with no row in the scrape has simply not used
+		// the proxy since it started. Reporting zero is correct here, unlike
+		// the failed-scrape case above: the endpoint answered and did not
+		// mention them.
+		if t := traffic[n]; t != nil {
+			us.BytesIn, us.BytesOut = t.BytesIn, t.BytesOut
+		}
+		stats.Users = append(stats.Users, us)
+		stats.TotalBytesIn += us.BytesIn
+		stats.TotalBytesOut += us.BytesOut
+	}
+	return stats, nil
+}
+
+func scrape(client *http.Client, url string) (string, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", fmt.Errorf("read body: %w", err)
+	}
+	return string(body), nil
+}
+
+func (a *Adapter) Healthy() bool {
+	a.mu.Lock()
+	started := a.started
+	proc := a.proc
+	a.mu.Unlock()
+	if !started {
+		return false
+	}
+	if proc == nil {
+		return true // config-only mode: nothing to be unhealthy
+	}
+	return proc.Running()
+}
+
+func (a *Adapter) recordRestart(ev subprocess.RestartEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ev.Reason == subprocess.RestartReasonMemory {
+		a.restartsMemory++
+	} else {
+		a.restartsCrash++
+	}
+	a.lastRestartAt = time.Now()
+	a.lastRestartReason = string(ev.Reason)
+}
+
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := core.RestartStats{
+		Crash:      a.restartsCrash,
+		Memory:     a.restartsMemory,
+		LastAt:     a.lastRestartAt,
+		LastReason: a.lastRestartReason,
+		SinceAt:    a.countingSince,
+	}
+	if a.proc != nil {
+		st.RSSBytes = a.proc.RSSBytes()
+	}
+	return st
+}
+
+func (a *Adapter) LastFailure() string {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if proc == nil {
+		return ""
+	}
+	return proc.LastLine()
+}
+
+// regenerateAndReload rewrites config.py and asks the RUNNING process to
+// re-read it (SIGUSR2 -> init_config + ensure_users_in_user_stats). No restart,
+// so existing connections survive — which is the whole reason to prefer this
+// engine's reload over mtg's secret rotation.
+//
+// When nothing actually changed the signal is skipped. renderConfig sorts its
+// users for exactly this: without a stable byte sequence every push would look
+// like a change and reload the process for nothing.
+func (a *Adapter) regenerateAndReload() error {
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
+
+	blob, changed, err := a.renderAndWrite()
+	if err != nil {
+		return err
+	}
+	_ = blob
+	if !changed {
+		return nil
+	}
+
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if proc == nil {
+		return nil // config-only mode, or not started yet: it will be read on start
+	}
+	if err := proc.Signal(syscall.SIGUSR2); err != nil {
+		return fmt.Errorf("mtprotoproxy: reload signal: %w", err)
+	}
+	a.logger.Info("mtprotoproxy: user set reloaded without restart")
+	return nil
+}
+
+// renderAndWrite renders the current state and writes it if it differs from
+// what is already on disk. Returns whether anything changed. Caller holds
+// restartMu.
+func (a *Adapter) renderAndWrite() ([]byte, bool, error) {
+	a.mu.Lock()
+	inbound := a.cfg.Inbound
+	cfgPath := a.cfg.ConfigPath
+	users := make([]User, 0, len(a.users))
+	for _, u := range a.users {
+		users = append(users, u)
+	}
+	prev := a.lastRendered
+	a.mu.Unlock()
+
+	blob, err := renderConfig(inbound, users)
+	if err != nil {
+		return nil, false, fmt.Errorf("render mtprotoproxy config: %w", err)
+	}
+	// The file is ALWAYS written, even when the bytes are identical, and always
+	// through atomicfile: a config replaced in place can be read truncated by a
+	// core reloading at that moment, and a write that dies partway leaves a
+	// half-file under the final name. Skipping the write to save it would be
+	// indistinguishable from that unsafe rewrite, which is what the write
+	// contract in internal/core checks for — and it caught exactly this.
+	//
+	// What the comparison decides is the RELOAD, which is the expensive half:
+	// signalling on every routine re-push would have the proxy re-reading its
+	// config all day for nothing.
+	if cfgPath != "" {
+		if err := writeConfig(cfgPath, blob); err != nil {
+			return nil, false, err
+		}
+	}
+	changed := string(blob) != prev
+	a.mu.Lock()
+	a.lastRendered = string(blob)
+	a.mu.Unlock()
+	return blob, changed, nil
+}
+
+func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
+
+	if _, _, err := a.renderAndWrite(); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	python, script, cfgPath := a.cfg.PythonPath, a.cfg.ScriptPath, a.cfg.ConfigPath
+	run := a.cfg.RunCmd
+	a.mu.Unlock()
+
+	if python == "" || script == "" {
+		a.mu.Lock()
+		a.started = true
+		a.mu.Unlock()
+		a.logger.Info("mtprotoproxy config written (config-only mode)")
+		return nil
+	}
+
+	// The crypto guard. mtprotoproxy picks its AES backend at startup:
+	// cryptography, then pycryptodome, then the BUNDLED pure-Python pyaes — and
+	// on that last one it starts, serves, and prints a suggestion to the log.
+	// Measured on the target node 2026-09-02: 0.4 MB/s against 3777 MB/s with
+	// `cryptography`, four orders of magnitude. A proxy that carries media at
+	// dial-up speed while reporting itself healthy is worse than one that
+	// refuses to come up, so we refuse.
+	if err := assertFastCrypto(ctx, run, python); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	old := a.proc
+	a.mu.Unlock()
+	if old != nil {
+		_ = old.Stop(ctx)
+	}
+
+	proc := subprocess.New(subprocess.Config{
+		Name:           Name + "-" + Engine,
+		Binary:         python,
+		Args:           []string{script, cfgPath},
+		Logger:         a.logger,
+		MaxRestarts:    subprocess.DefaultMaxRestarts,
+		RestartBackoff: subprocess.DefaultRestartBackoff,
+		OnRestart:      a.recordRestart,
+	})
+	if err := proc.Start(ctx); err != nil {
+		a.mu.Lock()
+		a.proc = nil
+		a.mu.Unlock()
+		return fmt.Errorf("start mtprotoproxy: %w", err)
+	}
+	a.mu.Lock()
+	a.proc = proc
+	a.started = true
+	a.mu.Unlock()
+	a.logger.Info("mtprotoproxy (re)started", "domain", a.cfg.Inbound.Domain)
+	return nil
+}
+
+// assertFastCrypto mirrors mtprotoproxy's own backend selection order
+// (mtprotoproxy.py:391-396) and fails when it would land on the bundled pyaes.
+func assertFastCrypto(ctx context.Context, run RunCmdFunc, python string) error {
+	if run == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	const probe = `
+import sys
+try:
+    import cryptography; print("cryptography"); sys.exit(0)
+except ImportError:
+    pass
+try:
+    import Crypto; print("pycryptodome"); sys.exit(0)
+except ImportError:
+    pass
+print("pyaes")
+sys.exit(1)
+`
+	out, err := run(ctx, python, "-c", probe)
+	if err != nil {
+		return fmt.Errorf(
+			"mtprotoproxy refuses to start: no fast AES backend for %s (falls back to the bundled "+
+				"pyaes, measured at 0.4 MB/s). Install python3-cryptography. Probe said: %s",
+			python, string(out))
+	}
+	return nil
+}
+
+// CoreVersion reports the mtprotoproxy the node runs.
+//
+// It has no --version flag: upstream ships no version string at all, so there
+// is nothing to parse and nothing to compare against a pin. Reporting the
+// PYTHON version instead would be worse than reporting nothing, because the
+// panel would show a number that looks like the proxy's and is not.
+func (a *Adapter) CoreVersion() string {
+	return a.coreVersion.Get(func() string { return "" })
+}

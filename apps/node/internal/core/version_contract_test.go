@@ -249,6 +249,9 @@ func TestTheAdaptersOutsideThisContractAreNamed(t *testing.T) {
 	exempt := map[string]string{
 		"amneziawg": "drives awg-quick and the kernel module; no binary of its own to ask",
 		"naive":     "its Caddy is compiled on the node by xcaddy; the panel pins no artefact to compare against",
+		"mtprotoproxy": "upstream ships no version string at all — no --version, no __version__. " +
+			"Reporting the PYTHON version instead would be worse than reporting nothing, because " +
+			"the panel would show a number that looks like the proxy's and is not.",
 	}
 	var missing []string
 	for _, c := range cases() {

@@ -81,6 +81,15 @@ type ProtocolCredentials struct {
 	// ShadowTLS (sing-box engine): per-user password for the shadowtls v3
 	// users[] (the inner shadowsocks key is server-wide, in the inbound config).
 	ShadowtlsPassword string `json:"shadowtlsPassword,omitempty"`
+	// MTProto (mtprotoproxy engine only): the user's OWN 32-hex-char secret.
+	//
+	// The mtg engine has no use for this and never will: it is single-secret by
+	// design, and its secret is derived from the INBOUND, not the user. Present
+	// only for users on an inbound whose engine is mtprotoproxy; empty
+	// everywhere else, which is why the adapter refuses such a user rather than
+	// inventing one — a secret the panel did not issue is a secret that does not
+	// match the link the buyer holds.
+	MtprotoSecret string `json:"mtprotoSecret,omitempty"`
 }
 
 // ───── POST /addUser ─────

@@ -560,6 +560,36 @@ func (s *Subprocess) LastLine() string {
 	return s.lastLine
 }
 
+// Signal delivers a signal to the running process — and to it alone, not to
+// its process group.
+//
+// The group is what Stop terminates (setProcessGroup + a negative pid), because
+// a core that spawned helpers should take them with it. A live-reload signal is
+// the opposite case: it means something to the core and nothing to whatever
+// else happens to share the group, so it goes to the pid.
+//
+// Returns nil when there is no live process. A reload signal to a core that is
+// not running is not an error — the config it would re-read is already on disk
+// and will be read when it starts.
+func (s *Subprocess) Signal(sig os.Signal) error {
+	s.mu.Lock()
+	cmd := s.cmd
+	exited := s.exited
+	s.mu.Unlock()
+	if cmd == nil || cmd.Process == nil || exited == nil {
+		return nil
+	}
+	select {
+	case <-exited:
+		return nil
+	default:
+	}
+	if err := cmd.Process.Signal(sig); err != nil {
+		return fmt.Errorf("%s: signal %v: %w", s.cfg.Name, sig, err)
+	}
+	return nil
+}
+
 func (s *Subprocess) Running() bool {
 	s.mu.Lock()
 	exited := s.exited

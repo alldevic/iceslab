@@ -15,6 +15,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mieru"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtproto"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtprotoproxy"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/naive"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/shadowsocks"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
@@ -254,6 +255,26 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		}
 		adapters = append(adapters, mtproto.New(mtgCfg, logger))
 		logger.Info("mtproto adapter registered")
+	}
+
+	// The multi-user MTProto engine. Registered under the SAME protocol as mtg
+	// with a different Engine(), so both can be present and an inbound picks one
+	// with `engine: "mtprotoproxy"`. Independent of MTG_BINARY on purpose: a
+	// node can carry both while the fleet moves over, and can carry only this
+	// one afterwards.
+	if os.Getenv("MTPROTOPROXY_SCRIPT") != "" {
+		mppCfg := mtprotoproxy.Config{
+			PythonPath: getenv("MTPROTOPROXY_PYTHON", "/usr/bin/python3"),
+			ScriptPath: os.Getenv("MTPROTOPROXY_SCRIPT"),
+			ConfigPath: getenv("MTPROTOPROXY_CONFIG", "/etc/mtprotoproxy/config.py"),
+			Inbound: mtprotoproxy.InboundConfig{
+				ListenPort:  getenvInt("MTPROTOPROXY_PORT", 443),
+				MetricsPort: getenvInt("MTPROTOPROXY_METRICS_PORT", 3130),
+				Domain:      os.Getenv("MTPROTOPROXY_DOMAIN"), // empty → deferred until ApplyInbound
+			},
+		}
+		adapters = append(adapters, mtprotoproxy.New(mppCfg, logger))
+		logger.Info("mtprotoproxy adapter registered")
 	}
 
 	// Slice 40: Mieru via enfein/mieru's `mita` server.

@@ -417,6 +417,7 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		TuicPassword:       req.Credentials.TuicPassword,
 		AnytlsPassword:     req.Credentials.AnytlsPassword,
 		ShadowtlsPassword:  req.Credentials.ShadowtlsPassword,
+		MtprotoSecret:      req.Credentials.MtprotoSecret,
 	}
 
 	// Best-effort fanout. A failure on a dormant adapter (no ApplyInbound

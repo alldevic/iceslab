@@ -66,6 +66,21 @@ export interface ProtocolCredentials {
   /** ShadowTLS v3 (sing-box engine): per-user password for the shadowtls
    *  users[] (the inner shadowsocks key is server-wide, in the inbound config). */
   shadowtlsPassword?: string;
+  /**
+   * MTProto, `mtprotoproxy` engine ONLY: the user's own 32-hex-char secret.
+   *
+   * The `mtproto` (mtg) engine has no use for it and never will — mtg is
+   * single-secret by design and derives its one secret from the INBOUND, which
+   * is why MTProto on that engine cannot be counted or revoked per user. This
+   * field is what makes the other engine possible: the node writes it into
+   * USERS, and metrics come back labelled with the user it belongs to.
+   *
+   * Absent for users on an mtg inbound. The mtprotoproxy adapter REFUSES a user
+   * that arrives without it rather than generating one: a secret the panel did
+   * not issue does not match the link the buyer already holds, and the result
+   * is a user who exists on the node and cannot connect.
+   */
+  mtprotoSecret?: string;
 }
 
 // ───── POST /addUser ─────
