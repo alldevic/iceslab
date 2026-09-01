@@ -41,6 +41,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -313,12 +314,28 @@ func renderConfig(inbound InboundConfig, users []User) ([]byte, error) {
 		return fmt.Sprintf("%d", u.MaxConns), true
 	})
 
-	// Loopback only, and the whitelist is spelled out rather than left to the
-	// default: this endpoint names every user and their traffic.
+	// Loopback only. The BIND is the access control: a socket bound to
+	// 127.0.0.1 cannot be reached from off the host, whatever the whitelist
+	// says. The whitelist is a second gate on top of it, and it is the one that
+	// has to know something about this machine.
+	//
+	// It lists 127.0.0.1 plus every address this node itself carries, because a
+	// connection to a loopback-bound socket CAN arrive with a non-loopback
+	// source. Measured on a fleet node 2026-09-02: the WireGuard bootstrap had
+	// left `-A POSTROUTING ! -o awg0 -j MASQUERADE`, and `! -o awg0` matches
+	// every interface including `lo`, so a scrape of 127.0.0.1:3130 arrived
+	// with the node's public address. mtprotoproxy compares the source against
+	// this list and closes the connection without a byte when it misses — no
+	// error, no log line, just an endpoint that answers nothing. The engine
+	// exists for its per-user numbers, so that silence is the whole feature
+	// gone.
+	//
+	// Listing the node's own addresses gives up nothing: they are the only
+	// sources a loopback-bound socket can see.
 	fmt.Fprintf(&b, "METRICS_PORT = %d\n", cfg.MetricsPort)
 	b.WriteString("METRICS_LISTEN_ADDR_IPV4 = \"127.0.0.1\"\n")
 	b.WriteString("METRICS_LISTEN_ADDR_IPV6 = None\n")
-	b.WriteString("METRICS_WHITELIST = [\"127.0.0.1\"]\n")
+	fmt.Fprintf(&b, "METRICS_WHITELIST = [%s]\n", pyStringList(metricsWhitelist()))
 	// The links carry every user's secret. The scraper is ours and does not
 	// need them, and a metrics endpoint that hands out working proxy links is
 	// a credential store with no authentication in front of it.
@@ -355,4 +372,51 @@ func writeConfig(path string, blob []byte) error {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	return atomicfile.Write(path, blob, 0o600)
+}
+
+// metricsWhitelist is 127.0.0.1 plus every unicast address this node carries.
+// See the comment at its call site for why the node's own addresses belong
+// there. Failure to enumerate falls back to loopback alone: that is the shape
+// that works on a host which does not rewrite loopback sources, and a wrong
+// guess here is better than a wide list.
+func metricsWhitelist() []string {
+	out := []string{"127.0.0.1"}
+	seen := map[string]bool{"127.0.0.1": true}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return out
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP == nil {
+			continue
+		}
+		// IPv4 only: METRICS_LISTEN_ADDR_IPV6 is None above, so the socket
+		// cannot be reached over IPv6 and an IPv6 source is impossible. Listing
+		// them would only widen the list with addresses that can never appear —
+		// on a box with several interfaces that is a dozen link-local entries
+		// nobody can read past.
+		v4 := ipnet.IP.To4()
+		if v4 == nil {
+			continue
+		}
+		ip := v4.String()
+		if seen[ip] {
+			continue
+		}
+		seen[ip] = true
+		out = append(out, ip)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// pyStringList renders a Go slice as a Python list literal, each element
+// through %q so nothing in it can leave its string.
+func pyStringList(items []string) string {
+	parts := make([]string, 0, len(items))
+	for _, s := range items {
+		parts = append(parts, fmt.Sprintf("%q", s))
+	}
+	return strings.Join(parts, ", ")
 }

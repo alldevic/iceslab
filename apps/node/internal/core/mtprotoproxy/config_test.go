@@ -110,9 +110,29 @@ func TestPythonReadsWhatWeMeant(t *testing.T) {
 	if got["METRICS_EXPORT_LINKS"] != false {
 		t.Error("METRICS_EXPORT_LINKS must be False: those links carry every user's secret")
 	}
+	// The whitelist is loopback PLUS this machine's own IPv4 addresses. That is
+	// not belt-and-braces: a connection to a loopback-bound socket can arrive
+	// with a non-loopback source when the host masquerades its own traffic, and
+	// mtprotoproxy answers such a scrape by closing the connection without a
+	// byte. Measured on a fleet node where the WireGuard bootstrap's
+	// `! -o awg0 -j MASQUERADE` matched `lo` as well.
 	wl := got["METRICS_WHITELIST"].([]any)
-	if len(wl) != 1 || wl[0] != "127.0.0.1" {
-		t.Errorf("METRICS_WHITELIST = %v, want loopback only", wl)
+	found := false
+	for _, e := range wl {
+		s, ok := e.(string)
+		if !ok {
+			t.Fatalf("METRICS_WHITELIST holds a non-string: %v", wl)
+		}
+		if s == "127.0.0.1" {
+			found = true
+		}
+		// IPv6 can never be the source: the socket is IPv4-only above.
+		if strings.Contains(s, ":") {
+			t.Errorf("METRICS_WHITELIST has an IPv6 entry %q; the socket is IPv4-only", s)
+		}
+	}
+	if !found {
+		t.Errorf("METRICS_WHITELIST = %v, loopback itself is missing", wl)
 	}
 }
 
