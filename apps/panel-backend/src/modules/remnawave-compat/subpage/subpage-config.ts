@@ -145,6 +145,10 @@ const PLATFORM_DISPLAY: Record<string, string> = {
 // referencing a key that would fail validation and sink the document.
 const APP_ICON_KEY: Record<string, string> = {
   Hiddify: 'Hiddify',
+  // The vendored library already carried a Happ glyph while the catalogue had
+  // no Happ to hang it on; the shop drew our list without the one client most
+  // of its buyers actually run.
+  Happ: 'Happ',
   'sing-box': 'Singbox',
   Streisand: 'Streisand',
   Shadowrocket: 'Shadowrocket',

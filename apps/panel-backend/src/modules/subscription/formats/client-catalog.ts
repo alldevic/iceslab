@@ -248,6 +248,43 @@ export const APPS: AppDef[] = [
     },
   },
   {
+    // Happ (happ.info, formerly happ.su). xray-cored, with a native hysteria2
+    // core, and by a distance the most common client our own buyers arrive
+    // with — `Happ/4.3.0/Android` leads `subscription_request_history`. It was
+    // absent here while the shop's install screen came from us, so the one app
+    // most of them already run was the one we did not name.
+    //
+    // `manual`, not a deep link, on the same rule as INCY above: Happ's docs
+    // publish `happ://routing/add/{base64}` and `happ://crypto...`, but no
+    // documented scheme for adding a subscription BY URL. A guessed deep link
+    // on an install screen is the failure this file's header refuses, so the
+    // buyer pastes the link until the scheme is confirmed on a device.
+    //
+    // NOTE (2026-09-01): Happ takes `plain`, which carries no routing, so the
+    // client-side split does not reach it. Its own routing profiles do —
+    // deploy/geo/happ-routing.json in the deployment repo. Switching it to
+    // `xrayjson-array` would deliver the split but drop every non-xray
+    // endpoint (mtproto, tuic) from the buyer's subscription.
+    name: 'Happ',
+    format: 'plain',
+    platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
+    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    action: { kind: 'manual' },
+    // From happ.info, the project's own page (checked 2026-09-01, every URL
+    // opened). One App Store listing serves iOS and macOS; the TV build is a
+    // separate listing. Desktop and the Android APK live on GitHub, so the
+    // `releases/latest` page is the destination rather than a tagged asset.
+    install: {
+      ios: 'https://apps.apple.com/app/id6504287215',
+      macos: 'https://apps.apple.com/app/id6504287215',
+      android: 'https://play.google.com/store/apps/details?id=com.happproxy',
+      androidtv: 'https://play.google.com/store/apps/details?id=com.happproxy',
+      appletv: 'https://apps.apple.com/app/id6748297274',
+      windows: 'https://github.com/Happ-proxy/happ-desktop/releases/latest',
+      linux: 'https://github.com/Happ-proxy/happ-desktop/releases/latest',
+    },
+  },
+  {
     // INCY (incy-app.com). Cross-platform client; imports our subscription via
     // its "add server from URL / QR". One-tap import needs its incy://crypt1
     // deep link (AES-GCM payload from @incy/link-encoder); wire that up once the
