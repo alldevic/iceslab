@@ -42,6 +42,9 @@ export interface SubscriptionPageData {
    *  gets one labelled QR pair per server instead of just the first node's. */
   awgNodes?: Array<{
     nodeName: string;
+    /** 1-based device position: a buyer with several devices gets one tunnel
+     *  per device on every node, and they differ only by key. */
+    deviceIndex: number;
     confQrSvg?: string;
     vpnQrSvg?: string;
     /** Raw AmneziaVPN vpn:// key for a copy button (the dense key QR is
@@ -53,6 +56,7 @@ export interface SubscriptionPageData {
    *  import path. */
   wgNodes?: Array<{
     nodeName: string;
+    deviceIndex: number;
     confQrSvg?: string;
   }>;
   /** One entry per MTProto node. No QR and no file: the `t.me/proxy` link is
@@ -293,6 +297,31 @@ function renderApps(
     .join('');
 }
 
+/**
+ * Label for one tunnel chip or download button.
+ *
+ * Says only what is needed to tell the buyer's tunnels apart: the node when
+ * there are several nodes, the device when there are several devices, neither
+ * when there is one of each. A lone AmneziaWG server reads "AmneziaWG", not
+ * "AmneziaWG · London #1" — the extra words would be there to be ignored.
+ *
+ * A function declaration, not a const: it is used by the download buttons
+ * built above the QR chips, and an arrow assigned later sat in its temporal
+ * dead zone there ("Cannot access 'chipLabel' before initialization" — caught
+ * by page.test.ts, which renders the page rather than trusting the types).
+ */
+function chipLabel(
+  base: string,
+  n: { nodeName: string; deviceIndex: number },
+  manyNodes: boolean,
+  manyDevices: boolean,
+): string {
+  const parts: string[] = [];
+  if (manyNodes) parts.push(n.nodeName);
+  if (manyDevices) parts.push(`#${n.deviceIndex}`);
+  return parts.length > 0 ? `${base} · ${parts.join(' ')}` : base;
+}
+
 export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const t = L[data.lang];
   const u = data.user;
@@ -312,10 +341,12 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     u.status === 'active' ? '#A7D8B9' : u.status === 'limited' ? '#F5B14C' : '#E07A5F';
 
   const awgNodes = data.awgNodes ?? [];
-  const multiAwg = awgNodes.length > 1;
+  const multiAwg = new Set(awgNodes.map((n) => n.nodeName)).size > 1;
+  const multiAwgDevices = new Set(awgNodes.map((n) => n.deviceIndex)).size > 1;
   const hasAwg = awgNodes.length > 0;
   const wgNodes = data.wgNodes ?? [];
-  const multiWg = wgNodes.length > 1;
+  const multiWg = new Set(wgNodes.map((n) => n.nodeName)).size > 1;
+  const multiWgDevices = new Set(wgNodes.map((n) => n.deviceIndex)).size > 1;
   // Gates the file-based app cards (scan / download): both flavours hand out a
   // .conf, and which protocol a card belongs to is already decided by its
   // `protocols` list.
@@ -353,12 +384,12 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // Per-node .conf downloads + the proxy formats. `proto=` pins the flavour so
   // a node serving both tunnels still yields two distinct files.
   const awgDownloadBtns = awgNodes.map((n) => {
-    const label = multiAwg ? `${esc(t.awgConf)} · ${esc(n.nodeName)}` : esc(t.awgConf);
-    return `<a class="dl" href="${esc(data.subUrl)}?format=wgconf&proto=amneziawg&node=${encodeURIComponent(n.nodeName)}">${label}</a>`;
+    const label = esc(chipLabel(t.awgConf, n, multiAwg, multiAwgDevices));
+    return `<a class="dl" href="${esc(data.subUrl)}?format=wgconf&proto=amneziawg&node=${encodeURIComponent(n.nodeName)}&device=${n.deviceIndex}">${label}</a>`;
   });
   const wgDownloadBtns = wgNodes.map((n) => {
-    const label = multiWg ? `${esc(t.wgConf)} · ${esc(n.nodeName)}` : esc(t.wgConf);
-    return `<a class="dl" href="${esc(data.subUrl)}?format=wgconf&proto=wireguard&node=${encodeURIComponent(n.nodeName)}">${label}</a>`;
+    const label = esc(chipLabel(t.wgConf, n, multiWg, multiWgDevices));
+    return `<a class="dl" href="${esc(data.subUrl)}?format=wgconf&proto=wireguard&node=${encodeURIComponent(n.nodeName)}&device=${n.deviceIndex}">${label}</a>`;
   });
   const downloadBtns = [
     ...awgDownloadBtns,
@@ -389,9 +420,15 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // reads "AmneziaWG", not "London". Only disambiguate by node when there's more
   // than one AmneziaWG server.
   for (const n of awgNodes)
-    targets.push({ id: `awg:${n.nodeName}`, label: multiAwg ? `AmneziaWG · ${n.nodeName}` : 'AmneziaWG' });
+    targets.push({
+      id: `awg:${n.nodeName}#${n.deviceIndex}`,
+      label: chipLabel('AmneziaWG', n, multiAwg, multiAwgDevices),
+    });
   for (const n of wgNodes)
-    targets.push({ id: `wg:${n.nodeName}`, label: multiWg ? `WireGuard · ${n.nodeName}` : 'WireGuard' });
+    targets.push({
+      id: `wg:${n.nodeName}#${n.deviceIndex}`,
+      label: chipLabel('WireGuard', n, multiWg, multiWgDevices),
+    });
 
   const figures: string[] = [];
   if (showSub) {
@@ -408,12 +445,12 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
         ? `<button class="copyk" type="button" data-key="${esc(n.vpnKey)}">${esc(t.copyKey)}</button>`
         : '';
       figures.push(
-        `<figure class="qrf${vpnOn}" data-target="awg:${esc(n.nodeName)}" data-app="vpn"><div class="qbx">${n.vpnQrSvg}</div><figcaption>AmneziaVPN</figcaption>${copyBtn}</figure>`,
+        `<figure class="qrf${vpnOn}" data-target="awg:${esc(n.nodeName)}#${n.deviceIndex}" data-app="vpn"><div class="qbx">${n.vpnQrSvg}</div><figcaption>AmneziaVPN</figcaption>${copyBtn}</figure>`,
       );
     }
     if (n.confQrSvg) {
       figures.push(
-        `<figure class="qrf" data-target="awg:${esc(n.nodeName)}" data-app="conf"><div class="qbx">${n.confQrSvg}</div><figcaption>AmneziaWG</figcaption></figure>`,
+        `<figure class="qrf" data-target="awg:${esc(n.nodeName)}#${n.deviceIndex}" data-app="conf"><div class="qbx">${n.confQrSvg}</div><figcaption>AmneziaWG</figcaption></figure>`,
       );
     }
   });
@@ -423,7 +460,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     if (!n.confQrSvg) return;
     const on = !showSub && !hasAwg && ni === 0 ? ' on' : '';
     figures.push(
-      `<figure class="qrf${on}" data-target="wg:${esc(n.nodeName)}"><div class="qbx">${n.confQrSvg}</div><figcaption>WireGuard</figcaption></figure>`,
+      `<figure class="qrf${on}" data-target="wg:${esc(n.nodeName)}#${n.deviceIndex}"><div class="qbx">${n.confQrSvg}</div><figcaption>WireGuard</figcaption></figure>`,
     );
   });
 

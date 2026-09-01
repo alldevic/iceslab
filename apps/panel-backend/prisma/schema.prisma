@@ -539,6 +539,14 @@ model User {
 
   // Pre-generated credentials for all protocols
   hysteriaPassword    String @map("hysteria_password") @db.VarChar(64)
+  // The wg keypair a user held BEFORE devices existed. Still minted on create
+  // and still the seed for the user's first WgDevice, so a fresh user has a
+  // tunnel without a second write - but it is no longer what the subscription
+  // or the node push reads. Those read WgDevice, because a keypair shared by
+  // every one of a person's devices is exactly what makes devices
+  // indistinguishable (and what let a second client silently steal the peer's
+  // endpoint on 2026-08-31). Kept as the backfill source and rollback anchor;
+  // drop it once no install predates the wg_devices migration.
   amneziawgPrivateKey String @map("amneziawg_private_key") @db.VarChar(64)
   amneziawgPublicKey  String @map("amneziawg_public_key") @db.VarChar(64)
   naivePassword       String @map("naive_password") @db.VarChar(64)
@@ -595,6 +603,7 @@ model User {
   nodeUsageHistory     NodeUserUsageHistory[]
   amneziawgPeers       AmneziawgPeer[]
   hwidDevices          HwidUserDevice[]
+  wgDevices            WgDevice[]
 
   @@index([username])
   @@index([status])
@@ -718,6 +727,11 @@ model SubscriptionResponseRule {
 // IP exhaustion before mutating the awg config.
 model AmneziawgPeer {
   id        String   @id @default(uuid()) @db.Uuid
+  // Slice 51: allocation moved from the user to ONE OF THE USER'S DEVICES.
+  // `userId` stays alongside it and is not redundant: the node reports traffic
+  // per peer, so the ingest path has to collapse device -> user, and the
+  // allocator's hot SQL would otherwise need a join to answer "whose peer".
+  deviceId  String   @map("device_id") @db.Uuid
   // Slice 27: was `inboundId` pointing at `inbounds`. After profiles
   // refactor, peer allocations are scoped to the logical profile. Same user
   // gets the same WG IP across every node a given profile is bound to
@@ -727,13 +741,71 @@ model AmneziawgPeer {
   ip        String   @db.VarChar(45)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device  WgDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
 
   @@unique([profileId, ip])
-  @@unique([profileId, userId])
+  @@unique([profileId, deviceId])
   @@index([userId])
+  @@index([deviceId])
   @@map("amneziawg_peers")
+}
+
+// ───── Slice 51: one wg keypair per DEVICE ───────────────────────────────
+//
+// WireGuard tells peers apart by public key and by nothing else. One keypair
+// per user therefore makes that user's devices one peer: the panel cannot
+// count them, cannot limit them, and cannot attribute traffic to them - and
+// the server retargets its return path to whichever device handshaked last,
+// which is a live outage the moment two of them are up (measured 2026-08-31).
+//
+// A device is the unit that gets a key, an address and a config file. The
+// accounting that falls out of it is the node's own `awg show` - last
+// handshake, endpoint, rx/tx per peer - not a client-supplied header like
+// HWID, so it cannot be spoofed and the limit cannot be talked around: a
+// device with no key of its own does not connect.
+//
+// Deliberately NOT folded into HwidUserDevice. That table records what a
+// client CLAIMS about itself when it polls /sub, lazily and only for the
+// clients that send the header at all; this one issues a credential. Same
+// English word, opposite trust direction.
+model WgDevice {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String  @map("user_id") @db.Uuid
+  // Operator- or buyer-facing name ("Phone", "Router"). NULL until named; the
+  // config file falls back to the device's ordinal.
+  label  String? @db.VarChar(64)
+
+  privateKey String @map("private_key") @db.VarChar(64)
+  publicKey  String @map("public_key")  @db.VarChar(64)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Revocation keeps the row (and its traffic history) while dropping the peer
+  // from every node. Deleting instead would silently free the IP for reuse and
+  // make an old config a working config again.
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  // Per-device accounting, accumulated from the node's own per-peer counters.
+  // This is the whole point of a key per device: `awg show` reports rx/tx by
+  // public key, so once the key belongs to a device the numbers do too - no
+  // client is asked to identify itself and none can misreport.
+  //
+  // Lifetime totals, never reset: the user's quota lives on UserTraffic and is
+  // reset by its own strategy. These answer "which device is this and is it
+  // still in use", which a reset would erase.
+  bytesIn    BigInt    @default(0) @map("bytes_in")
+  bytesOut   BigInt    @default(0) @map("bytes_out")
+  // Last poll in which this device moved any bytes. NULL = never seen. A
+  // handshake without traffic does not count: the node's stats call reports
+  // counters, not handshakes.
+  lastSeenAt DateTime? @map("last_seen_at") @db.Timestamptz(6)
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  peers AmneziawgPeer[]
+
+  @@index([userId])
+  @@map("wg_devices")
 }
 
 model SubscriptionRequestHistory {

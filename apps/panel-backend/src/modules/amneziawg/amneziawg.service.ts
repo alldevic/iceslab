@@ -22,13 +22,22 @@ export class IpExhaustedError extends Error {
   }
 }
 
+/** The allocation for one DEVICE on one profile, or null. */
 export async function getPeer(
   profileId: string,
-  userId: string,
+  deviceId: string,
 ): Promise<AmneziawgPeer | null> {
   return prisma.amneziawgPeer.findUnique({
-    where: { profileId_userId: { profileId, userId } },
+    where: { profileId_deviceId: { profileId, deviceId } },
   });
+}
+
+/** Every allocation a user holds on one profile - one row per device. */
+export async function getUserPeers(
+  profileId: string,
+  userId: string,
+): Promise<AmneziawgPeer[]> {
+  return prisma.amneziawgPeer.findMany({ where: { profileId, userId } });
 }
 
 export async function listPeers(profileId: string): Promise<AmneziawgPeer[]> {
@@ -37,9 +46,15 @@ export async function listPeers(profileId: string): Promise<AmneziawgPeer[]> {
 }
 
 /**
- * Allocate a stable IP for (profile, user). Idempotent, returns the existing
+ * Allocate a stable IP for (profile, DEVICE). Idempotent, returns the existing
  * row if one is already there. Picks the lowest unused address inside the
  * subnet (skipping network, server, and broadcast).
+ *
+ * Slice 51: the key is the device, not the user. A user's devices each get
+ * their own address because they each get their own keypair - which is the
+ * only way WireGuard can tell them apart at all. `userId` is still written:
+ * the node reports traffic per peer and the ingest has to collapse it back
+ * onto a person.
  *
  * Slice 27: keyed on profile (the logical AmneziaWG inbound) instead of the
  * old per-node inbound. Same user gets the same IP across every node a profile
@@ -48,8 +63,8 @@ export async function listPeers(profileId: string): Promise<AmneziawgPeer[]> {
  *
  * Race-safe via the UNIQUE(profile_id, ip) constraint: a concurrent allocator
  * that grabs our chosen IP triggers a P2002, we re-scan and try the next free
- * slot. A concurrent allocator for the same user collapses to the existing row
- * via UNIQUE(profile_id, user_id).
+ * slot. A concurrent allocator for the same device collapses to the existing
+ * row via UNIQUE(profile_id, device_id).
  */
 /**
  * Wave-14 #14: single round-trip allocation via SQL window query.
@@ -61,11 +76,12 @@ export async function listPeers(profileId: string): Promise<AmneziawgPeer[]> {
  * Race semantics preserved: ON CONFLICT (profile_id, ip) DO NOTHING means
  * a concurrent allocator that grabbed our chosen IP between scan and
  * insert returns empty, the outer 5-attempt loop retries. UNIQUE on
- * (profile_id, user_id) means a concurrent allocator for the SAME user
+ * (profile_id, device_id) means a concurrent allocator for the SAME device
  * collapses to the existing row via the UNION ALL branch.
  */
 export async function allocatePeer(
   profileId: string,
+  deviceId: string,
   userId: string,
   subnet: string = DEFAULT_SUBNET,
 ): Promise<AmneziawgPeer> {
@@ -81,13 +97,20 @@ export async function allocatePeer(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const rows = await prisma.$queryRaw<
-      { id: string; profile_id: string; user_id: string; ip: string; created_at: Date }[]
+      {
+        id: string;
+        profile_id: string;
+        user_id: string;
+        device_id: string;
+        ip: string;
+        created_at: Date;
+      }[]
     >(Prisma.sql`
       WITH
         existing AS (
-          SELECT id, profile_id, user_id, ip, created_at
+          SELECT id, profile_id, user_id, device_id, ip, created_at
           FROM amneziawg_peers
-          WHERE profile_id = ${profileId}::uuid AND user_id = ${userId}::uuid
+          WHERE profile_id = ${profileId}::uuid AND device_id = ${deviceId}::uuid
         ),
         free AS (
           -- Bug #6: bound the candidate scan to the peer count, not the whole
@@ -114,11 +137,11 @@ export async function allocatePeer(
           LIMIT 1
         ),
         inserted AS (
-          INSERT INTO amneziawg_peers (id, profile_id, user_id, ip, created_at)
-          SELECT gen_random_uuid(), ${profileId}::uuid, ${userId}::uuid, free.ip, NOW()
+          INSERT INTO amneziawg_peers (id, profile_id, user_id, device_id, ip, created_at)
+          SELECT gen_random_uuid(), ${profileId}::uuid, ${userId}::uuid, ${deviceId}::uuid, free.ip, NOW()
           FROM free
           ON CONFLICT (profile_id, ip) DO NOTHING
-          RETURNING id, profile_id, user_id, ip, created_at
+          RETURNING id, profile_id, user_id, device_id, ip, created_at
         )
       SELECT * FROM inserted
       UNION ALL
@@ -132,6 +155,7 @@ export async function allocatePeer(
         id: r.id,
         profileId: r.profile_id,
         userId: r.user_id,
+        deviceId: r.device_id,
         ip: r.ip,
         createdAt: r.created_at,
       };
@@ -168,21 +192,22 @@ export async function releasePeer(
  * within the first `existing + needed` addresses (only `existing` are taken),
  * so the candidate scan stays O(peers) rather than materialising the whole
  * subnet. `ON CONFLICT DO NOTHING` (untargeted - covers both the (profile,ip)
- * and (profile,user) unique constraints) makes it race-safe: a row that lost a
+ * and (profile,device) unique constraints) makes it race-safe: a row that lost a
  * race is simply skipped, and the caller falls back to allocatePeer() for any
- * user still missing in the returned map.
+ * device still missing in the returned map.
  *
- * Returns the full userId -> ip map for the requested users (pre-existing peers
- * plus freshly inserted ones). Users absent from the map either lost a race or
- * the subnet is exhausted - the caller decides how to handle them.
+ * Returns the full deviceId -> ip map for the requested devices (pre-existing
+ * peers plus freshly inserted ones). Devices absent from the map either lost a
+ * race or the subnet is exhausted - the caller decides how to handle them.
  */
 export async function preallocatePeers(
   profileId: string,
-  userIds: string[],
+  devices: { deviceId: string; userId: string }[],
   subnet: string = DEFAULT_SUBNET,
 ): Promise<Map<string, string>> {
   const result = new Map<string, string>();
-  if (userIds.length === 0) return result;
+  if (devices.length === 0) return result;
+  const deviceIds = devices.map((d) => d.deviceId);
 
   const range = parseSubnet(subnet);
   const firstIp = intToIp(range.firstUsable);
@@ -191,11 +216,11 @@ export async function preallocatePeers(
   await prisma.$executeRaw(Prisma.sql`
     WITH
       needed AS (
-        SELECT u.id AS user_id, row_number() OVER (ORDER BY u.id) AS rn
-        FROM unnest(ARRAY[${Prisma.join(userIds)}]::uuid[]) AS u(id)
+        SELECT d.id AS device_id, row_number() OVER (ORDER BY d.id) AS rn
+        FROM unnest(ARRAY[${Prisma.join(deviceIds)}]::uuid[]) AS d(id)
         WHERE NOT EXISTS (
           SELECT 1 FROM amneziawg_peers p
-          WHERE p.profile_id = ${profileId}::uuid AND p.user_id = u.id
+          WHERE p.profile_id = ${profileId}::uuid AND p.device_id = d.id
         )
       ),
       cnt AS (SELECT count(*)::int AS n FROM needed),
@@ -218,16 +243,18 @@ export async function preallocatePeers(
         ORDER BY gs
         LIMIT (SELECT n FROM cnt)
       )
-    INSERT INTO amneziawg_peers (id, profile_id, user_id, ip, created_at)
-    SELECT gen_random_uuid(), ${profileId}::uuid, n.user_id, f.ip, NOW()
-    FROM needed n JOIN free f ON n.rn = f.rn
+    INSERT INTO amneziawg_peers (id, profile_id, user_id, device_id, ip, created_at)
+    SELECT gen_random_uuid(), ${profileId}::uuid, o.user_id, n.device_id, f.ip, NOW()
+    FROM needed n
+    JOIN free f ON n.rn = f.rn
+    JOIN wg_devices o ON o.id = n.device_id
     ON CONFLICT DO NOTHING
   `);
 
   const rows = await prisma.amneziawgPeer.findMany({
-    where: { profileId, userId: { in: userIds } },
-    select: { userId: true, ip: true },
+    where: { profileId, deviceId: { in: deviceIds } },
+    select: { deviceId: true, ip: true },
   });
-  for (const r of rows) result.set(r.userId, r.ip);
+  for (const r of rows) result.set(r.deviceId, r.ip);
   return result;
 }

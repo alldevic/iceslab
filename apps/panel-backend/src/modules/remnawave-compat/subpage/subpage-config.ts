@@ -87,9 +87,13 @@ export interface SubpageConfigInput {
   protocols: readonly ProtocolName[];
   /** One entry per AmneziaWG node, with its AmneziaVPN `vpn://` key when the
    *  key could be built. Mirrors the per-node QR pairs on our own page. */
-  awgNodes: ReadonlyArray<{ nodeName: string; vpnKey?: string }>;
-  /** One entry per plain-WireGuard node. */
-  wgNodes: ReadonlyArray<{ nodeName: string }>;
+  awgNodes: ReadonlyArray<{
+    nodeName: string;
+    deviceIndex: number;
+    vpnKey?: string;
+  }>;
+  /** One entry per plain-WireGuard tunnel — that is, per (node, device). */
+  wgNodes: ReadonlyArray<{ nodeName: string; deviceIndex: number }>;
   /** One entry per MTProto node, with the `t.me/proxy` link Telegram imports. */
   mtprotoNodes: ReadonlyArray<{ nodeName: string; tmeUri: string }>;
   branding: { title: string; logoUrl: string; supportUrl: string };
@@ -160,8 +164,39 @@ function nodeSuffix(nodeName: string, many: boolean): string {
   return many ? ` · ${nodeName}` : '';
 }
 
-function fileUrl(subUrl: string, format: string, proto: string, nodeName: string): string {
-  return `${subUrl}?format=${format}&proto=${proto}&node=${encodeURIComponent(nodeName)}`;
+/**
+ * Label suffix for one tunnel: the node when there are several, the device
+ * when the buyer has more than one.
+ *
+ * Both are needed and neither on its own is enough - three devices across two
+ * servers is six buttons, and a buyer looking at six identical labels cannot
+ * tell which one they have not set up yet. Device 1 goes unmarked for the same
+ * reason a single node does: most buyers have one, and a bare "· 1" only
+ * raises the question of what it counts.
+ */
+function tunnelSuffix(
+  nodeName: string,
+  deviceIndex: number,
+  manyNodes: boolean,
+  manyDevices: boolean,
+): string {
+  const parts: string[] = [];
+  if (manyNodes) parts.push(nodeName);
+  if (manyDevices) parts.push(`#${deviceIndex}`);
+  return parts.length > 0 ? ` · ${parts.join(' ')}` : '';
+}
+
+function fileUrl(
+  subUrl: string,
+  format: string,
+  proto: string,
+  nodeName: string,
+  deviceIndex: number,
+): string {
+  return (
+    `${subUrl}?format=${format}&proto=${proto}` +
+    `&node=${encodeURIComponent(nodeName)}&device=${deviceIndex}`
+  );
 }
 
 /**
@@ -253,7 +288,8 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
       if (awgNodes.length === 0) return [];
       const withKey = awgNodes.filter((n) => n.vpnKey);
       if (withKey.length === 0) return [];
-      const many = withKey.length > 1;
+      const many = new Set(withKey.map((n) => n.nodeName)).size > 1;
+      const manyDevices = new Set(withKey.map((n) => n.deviceIndex)).size > 1;
       return [
         {
           svgIconKey: 'DownloadIcon',
@@ -267,8 +303,8 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
             type: 'copyButton' as const,
             link: n.vpnKey as string,
             text: t(
-              `Copy the key${nodeSuffix(n.nodeName, many)}`,
-              `Скопировать ключ${nodeSuffix(n.nodeName, many)}`,
+              `Copy the key${tunnelSuffix(n.nodeName, n.deviceIndex, many, manyDevices)}`,
+              `Скопировать ключ${tunnelSuffix(n.nodeName, n.deviceIndex, many, manyDevices)}`,
             ),
             svgIconKey: 'Plus',
           })),
@@ -312,7 +348,8 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
       const isWg = app.protocols.includes('wireguard') && !app.protocols.includes('amneziawg');
       const nodes = isWg ? wgNodes : awgNodes;
       if (nodes.length === 0) return [];
-      const many = nodes.length > 1;
+      const many = new Set(nodes.map((n) => n.nodeName)).size > 1;
+      const manyDevices = new Set(nodes.map((n) => n.deviceIndex)).size > 1;
       const proto = isWg ? 'wireguard' : 'amneziawg';
       const label = isWg ? 'WireGuard' : 'AmneziaWG';
       return [
@@ -321,15 +358,19 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
           svgIconColor: 'emerald',
           title: t('Download the config', 'Скачайте конфигурацию'),
           description: t(
-            `Download the .conf file and import it into ${app.name}. One file per server.`,
-            `Скачайте файл .conf и импортируйте его в ${app.name}. По файлу на сервер.`,
+            manyDevices
+              ? `Download a .conf file and import it into ${app.name}. One file per device — use a different one on each.`
+              : `Download the .conf file and import it into ${app.name}. One file per server.`,
+            manyDevices
+              ? `Скачайте файл .conf и импортируйте его в ${app.name}. По файлу на устройство — на каждом свой.`
+              : `Скачайте файл .conf и импортируйте его в ${app.name}. По файлу на сервер.`,
           ),
           buttons: nodes.map((n) => ({
             type: 'external' as const,
-            link: fileUrl(subUrl, 'wgconf', proto, n.nodeName),
+            link: fileUrl(subUrl, 'wgconf', proto, n.nodeName, n.deviceIndex),
             text: t(
-              `${label} (.conf)${nodeSuffix(n.nodeName, many)}`,
-              `${label} (.conf)${nodeSuffix(n.nodeName, many)}`,
+              `${label} (.conf)${tunnelSuffix(n.nodeName, n.deviceIndex, many, manyDevices)}`,
+              `${label} (.conf)${tunnelSuffix(n.nodeName, n.deviceIndex, many, manyDevices)}`,
             ),
             svgIconKey: 'DownloadIcon',
           })),

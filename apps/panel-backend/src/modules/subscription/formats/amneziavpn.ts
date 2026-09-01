@@ -23,10 +23,21 @@ export function buildAwgVpnLink(
   endpoints: SubscriptionEndpoint[],
   nodeName?: string,
   dns?: string[],
+  device?: string,
 ): string {
-  const awgEndpoints = endpoints.filter(
+  let awgEndpoints = endpoints.filter(
     (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
   );
+  // A key is one tunnel, so it names one device. Accepts the id or the 1-based
+  // position, same as wgconf - the buyer's links carry the position. Absent =
+  // the first, which is the pre-devices behaviour and what a single-device
+  // buyer gets anyway.
+  if (device) {
+    const byIndex = Number(device);
+    awgEndpoints = awgEndpoints.filter(
+      (e) => e.deviceId === device || (Number.isInteger(byIndex) && e.deviceIndex === byIndex),
+    );
+  }
   const awg = nodeName
     ? awgEndpoints.find((e) => e.nodeName === nodeName)
     : awgEndpoints[0];
@@ -55,6 +66,6 @@ export function buildAwgVpnLink(
     i4: awg.i4,
     i5: awg.i5,
     dns,
-    description: `AmneziaWG ${awg.nodeName}`,
+    description: `AmneziaWG ${awg.nodeName}${awg.deviceIndex > 1 ? ` #${awg.deviceIndex}` : ''}`,
   });
 }

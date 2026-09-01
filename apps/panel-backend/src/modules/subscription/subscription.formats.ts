@@ -276,7 +276,17 @@ export interface XraySubscriptionEndpoint extends SubscriptionEndpointBase {
 
 export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase {
   protocol: 'amneziawg';
-  /** User's WireGuard private key. */
+  /**
+   * Which of the buyer's devices this config belongs to. Two devices on one
+   * node are two endpoints that differ ONLY here and in the key, so every
+   * surface that used to dedupe wg by node has to dedupe by (node, device)
+   * instead - otherwise the second device silently disappears from the
+   * subscription while its peer sits on the node.
+   */
+  deviceId: string;
+  /** 1-based position in the buyer's device list, stable across polls. */
+  deviceIndex: number;
+  /** This device's WireGuard private key. */
   privateKey: string;
   /** IP allocated to this user inside the inbound's subnet, CIDR /32 form. */
   allowedIp: string;
@@ -309,7 +319,11 @@ export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase 
  */
 export interface WireguardSubscriptionEndpoint extends SubscriptionEndpointBase {
   protocol: 'wireguard';
-  /** User's WireGuard private key (the same keypair AmneziaWG uses). */
+  /** Which of the buyer's devices this is - see AmneziawgSubscriptionEndpoint. */
+  deviceId: string;
+  /** 1-based position in the buyer's device list, stable across polls. */
+  deviceIndex: number;
+  /** This device's WireGuard private key (one keypair serves both flavours). */
   privateKey: string;
   /** IP allocated to this user inside the inbound's subnet, CIDR /32 form. */
   allowedIp: string;

@@ -123,6 +123,11 @@ const QuerySchema = z.object({
   // they render to different files, so `?node=` alone is ambiguous there.
   // Omitted = first wg-family endpoint, whichever flavour.
   proto: z.enum(['amneziawg', 'wireguard']).optional(),
+  // Which of the buyer's devices, by 1-based position or by device id. Every
+  // device has its own keypair, so this picks a different tunnel, not a
+  // different rendering of the same one. Omitted = the first, which is what a
+  // single-device buyer and every pre-devices link get.
+  device: z.string().min(1).max(64).optional(),
   // Human landing-page language override. The page renders an in-page RU/EN
   // selector that links here; it wins over the panel default and the
   // Accept-Language guess. Only meaningful for the HTML page.
@@ -549,6 +554,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           brand,
         }).map((n) => ({
           nodeName: n.nodeName,
+          deviceIndex: n.deviceIndex,
           confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
           vpnQrSvg: n.vpnKey ? qrSvg(n.vpnKey, 'L') : undefined,
           // Raw vpn:// key for a copy button: the AmneziaVPN key QR is dense
@@ -557,6 +563,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         }));
         const wgNodes = collectWgNodes(wgVisible, 'wireguard', { dns: settings.wgDns, brand }).map((n) => ({
           nodeName: n.nodeName,
+          deviceIndex: n.deviceIndex,
           confQrSvg: n.conf ? qrSvg(n.conf, 'L') : undefined,
         }));
         return reply.type('text/html; charset=utf-8').send(
@@ -709,10 +716,15 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // importing client falls back to the file name — and where it can't
           // read one, to the endpoint address. `tg_245073332` told the buyer
           // nothing; a bare IP told them less.
+          // The device's position rides in the name so a buyer with three
+          // tunnels to one server can tell them apart in the client list -
+          // where wg-quick gives them nothing else to go on.
+          const deviceIndex = Number(query.device);
           const tunnelName = wgConfName(
             wgSettings.profileTitle ?? wgSettings.brandName ?? result.json.user.username,
             query.node,
             query.proto,
+            Number.isInteger(deviceIndex) ? deviceIndex : undefined,
           );
           return reply
             .type('text/plain; charset=utf-8')
@@ -720,6 +732,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             .send(
               buildWgQuickConf(filtered, query.node, query.proto, {
                 dns: wgSettings.wgDns,
+                device: query.device,
                 // Имя дублируется внутрь файла, потому что импорт по ССЫЛКЕ
                 // заголовок Content-Disposition не читает вовсе: WG Tunnel
                 // качает тело и отдаёт его в тот же путь, что и вставку из
@@ -737,7 +750,14 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // for this user (same 204-style contract as wgconf).
           return reply
             .type('text/plain; charset=utf-8')
-            .send(buildAwgVpnLink(filtered, query.node, (await getSubscriptionSettings()).wgDns));
+            .send(
+              buildAwgVpnLink(
+                filtered,
+                query.node,
+                (await getSubscriptionSettings()).wgDns,
+                query.device,
+              ),
+            );
         }
         case 'xrayjson': {
           const xjBundle: 'flat' | 'balancer' | undefined =

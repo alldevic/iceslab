@@ -32,10 +32,10 @@ describe('buildSubscriptionPage', () => {
     expect(without).not.toContain('format=wgconf');
 
     const withAwg = buildSubscriptionPage(
-      base({ protocols: ['hysteria', 'amneziawg'], awgNodes: [{ nodeName: 'awg' }] }),
+      base({ protocols: ['hysteria', 'amneziawg'], awgNodes: [{ nodeName: 'awg', deviceIndex: 1 }] }),
     );
     // .conf download is pinned to the node with &node=.
-    expect(withAwg).toContain('format=wgconf&proto=amneziawg&node=awg');
+    expect(withAwg).toContain('format=wgconf&proto=amneziawg&node=awg&device=1');
   });
 
   it('does not offer a subscription-import client to a tunnel-only buyer', () => {
@@ -45,7 +45,7 @@ describe('buildSubscriptionPage', () => {
     // A working client aimed at nothing is the failure this page exists to
     // avoid, so it must not appear.
     const tunnelOnly = buildSubscriptionPage(
-      base({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'awg' }] }),
+      base({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'awg', deviceIndex: 1 }] }),
     );
     expect(tunnelOnly).not.toContain('Hiddify');
     expect(tunnelOnly).toContain('AmneziaVPN');
@@ -53,7 +53,7 @@ describe('buildSubscriptionPage', () => {
     // The same buyer with a proxy protocol as well SHOULD see it: then the
     // subscription link it imports has something in it.
     const both = buildSubscriptionPage(
-      base({ protocols: ['amneziawg', 'xray'], awgNodes: [{ nodeName: 'awg' }] }),
+      base({ protocols: ['amneziawg', 'xray'], awgNodes: [{ nodeName: 'awg', deviceIndex: 1 }] }),
     );
     expect(both).toContain('Hiddify');
   });
@@ -82,8 +82,8 @@ describe('buildSubscriptionPage', () => {
       base({
         protocols: ['amneziawg'],
         awgNodes: [
-          { nodeName: 'awg', vpnQrSvg: '<svg id="vpn-nl"></svg>', confQrSvg: '<svg id="conf-nl"></svg>' },
-          { nodeName: 'awg-de', vpnQrSvg: '<svg id="vpn-de"></svg>', confQrSvg: '<svg id="conf-de"></svg>' },
+          { nodeName: 'awg', deviceIndex: 1, vpnQrSvg: '<svg id="vpn-nl"></svg>', confQrSvg: '<svg id="conf-nl"></svg>' },
+          { nodeName: 'awg-de', deviceIndex: 1, vpnQrSvg: '<svg id="vpn-de"></svg>', confQrSvg: '<svg id="conf-de"></svg>' },
         ],
       }),
     );
@@ -93,27 +93,27 @@ describe('buildSubscriptionPage', () => {
     }
     // ...behind a per-node server selector...
     expect(html).toContain('class="segs tgsel"');
-    expect(html).toContain('data-target="awg:awg"');
-    expect(html).toContain('data-target="awg:awg-de"');
+    expect(html).toContain('data-target="awg:awg#1"');
+    expect(html).toContain('data-target="awg:awg-de#1"');
     // ...and an AmneziaVPN / AmneziaWG app toggle.
     expect(html).toContain('data-app="vpn"');
     expect(html).toContain('data-app="conf"');
     // figures are keyed by (node, app) so the script can swap them in place.
-    expect(html).toContain('data-target="awg:awg-de" data-app="vpn"');
-    expect(html).toContain('data-target="awg:awg-de" data-app="conf"');
+    expect(html).toContain('data-target="awg:awg-de#1" data-app="vpn"');
+    expect(html).toContain('data-target="awg:awg-de#1" data-app="conf"');
     // per-node .conf download still offered in the downloads card.
-    expect(html).toContain('format=wgconf&proto=amneziawg&node=awg-de');
+    expect(html).toContain('format=wgconf&proto=amneziawg&node=awg-de&device=1');
   });
 
   it('gives a plain WireGuard node its own download and QR target', () => {
     const html = buildSubscriptionPage(
       base({
         protocols: ['wireguard'],
-        wgNodes: [{ nodeName: 'wg-nl', confQrSvg: '<svg id="wg-nl"></svg>' }],
+        wgNodes: [{ nodeName: 'wg-nl', deviceIndex: 1, confQrSvg: '<svg id="wg-nl"></svg>' }],
       }),
     );
-    expect(html).toContain('format=wgconf&proto=wireguard&node=wg-nl');
-    expect(html).toContain('data-target="wg:wg-nl"');
+    expect(html).toContain('format=wgconf&proto=wireguard&node=wg-nl&device=1');
+    expect(html).toContain('data-target="wg:wg-nl#1"');
     expect(html).toContain('<svg id="wg-nl"></svg>');
     // No AmneziaVPN/AmneziaWG toggle: plain WireGuard has one import path, and
     // the widget's script only consults data-app for `awg:` targets.
@@ -124,19 +124,42 @@ describe('buildSubscriptionPage', () => {
     expect(html).toContain('class="aname">WireGuard');
   });
 
+  it('gives every DEVICE its own chip, link and QR on one node', () => {
+    // The regression this guards: everything here used to be deduped by node
+    // name alone, so a buyer's second and third tunnels collapsed into the
+    // first - peers allocated and pushed on the node, one config offered for
+    // all of them, and no error anywhere.
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['amneziawg'],
+        awgNodes: [
+          { nodeName: 'nl', deviceIndex: 1, confQrSvg: '<svg id="d1"></svg>' },
+          { nodeName: 'nl', deviceIndex: 2, confQrSvg: '<svg id="d2"></svg>' },
+        ],
+      }),
+    );
+    expect(html).toContain('data-target="awg:nl#1"');
+    expect(html).toContain('data-target="awg:nl#2"');
+    expect(html).toContain('format=wgconf&proto=amneziawg&node=nl&device=1');
+    expect(html).toContain('format=wgconf&proto=amneziawg&node=nl&device=2');
+    // One node, so the label disambiguates by device and NOT by node name.
+    expect(html).toContain('#2');
+    expect(html).not.toContain('AmneziaWG · nl #1');
+  });
+
   it('keeps the two flavours apart when a subscription carries both', () => {
     const html = buildSubscriptionPage(
       base({
         protocols: ['amneziawg', 'wireguard'],
-        awgNodes: [{ nodeName: 'n1', confQrSvg: '<svg id="awg"></svg>' }],
-        wgNodes: [{ nodeName: 'n1', confQrSvg: '<svg id="wg"></svg>' }],
+        awgNodes: [{ nodeName: 'n1', deviceIndex: 1, confQrSvg: '<svg id="awg"></svg>' }],
+        wgNodes: [{ nodeName: 'n1', deviceIndex: 1, confQrSvg: '<svg id="wg"></svg>' }],
       }),
     );
     // Same node name, two targets and two downloads: the flavour disambiguates.
-    expect(html).toContain('data-target="awg:n1"');
-    expect(html).toContain('data-target="wg:n1"');
-    expect(html).toContain('format=wgconf&proto=amneziawg&node=n1');
-    expect(html).toContain('format=wgconf&proto=wireguard&node=n1');
+    expect(html).toContain('data-target="awg:n1#1"');
+    expect(html).toContain('data-target="wg:n1#1"');
+    expect(html).toContain('format=wgconf&proto=amneziawg&node=n1&device=1');
+    expect(html).toContain('format=wgconf&proto=wireguard&node=n1&device=1');
   });
 
   it('always offers the generic proxy format downloads', () => {
@@ -214,7 +237,7 @@ describe('buildSubscriptionPage', () => {
 
   it('single AWG node: no server selector, caption is just the app name', () => {
     const html = buildSubscriptionPage(
-      base({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'awg', vpnQrSvg: '<svg id="vpn"></svg>' }] }),
+      base({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'awg', deviceIndex: 1, vpnQrSvg: '<svg id="vpn"></svg>' }] }),
     );
     expect(html).toContain('<svg id="vpn"></svg>');
     // figure caption is the app name, never a "· awg" node suffix (the node

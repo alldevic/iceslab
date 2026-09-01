@@ -7,6 +7,7 @@ import {
   computeUserDeltas,
   type StatsUserEntry,
 } from './stats.compute.js';
+import { foldDeviceStats } from '../wg-devices/wg-devices.stats.js';
 import { eventBus } from '../../lib/event-bus.js';
 import {
   evaluateNodeDrop,
@@ -129,7 +130,11 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
       try {
         const transport = new NodeTransport(node);
         const res = await transport.getStats();
-        let userList: StatsUserEntry[] = res.users ?? [];
+        // Slice 51: wg peers are keyed on the DEVICE, so this list arrives as
+        // a mix of user ids and device ids. Fold the device ones onto their
+        // owner (accumulating the device's own counters on the way) BEFORE
+        // anything else looks at it - every step below is keyed on the user.
+        let userList: StatsUserEntry[] = await foldDeviceStats(res.users ?? []);
         const rawTotal = userList.reduce(
           (acc, u) => acc + (u.bytesIn || 0) + (u.bytesOut || 0),
           0,

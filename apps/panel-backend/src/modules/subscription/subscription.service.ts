@@ -14,6 +14,7 @@ import {
 // output.
 import { subscriptionServerName } from '../../lib/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
+import { ensureDevices, resolveWgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import { getHiddenCascadeNodeIds, getRouteProfilesByEntryNode } from '../cascades/cascade.service.js';
 import { isAutoRouteTag } from '../cascades/cascade.config.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
@@ -464,7 +465,10 @@ export async function generateSubscription(
   // identical squad set, i.e. a redundant round-trip on every /sub poll.
   const memberships = await prisma.groupMember.findMany({
     where: { userId: user.id },
-    select: { groupId: true, group: { select: { routingPreset: true } } },
+    select: {
+      groupId: true,
+      group: { select: { routingPreset: true, hwidDeviceLimit: true } },
+    },
   });
   const groupIds = memberships.map((g) => g.groupId);
 
@@ -712,6 +716,27 @@ export async function generateSubscription(
     groupIds,
     entryReach,
   );
+
+  // Slice 51: the wg credential belongs to a DEVICE, so resolve it once here
+  // rather than per binding - a user on both flavours and several nodes would
+  // otherwise mint or re-read it many times over.
+  //
+  // Topped up to one lazily instead of at user creation: installs that predate
+  // wg_devices, and users whose only device was revoked, must still be able to
+  // fetch a working config. `user.amneziawgPrivateKey` is no longer read here;
+  // it seeded device #1 during the migration and is a rollback anchor now.
+  const wgProfilesPresent = bindings.some(
+    (b) => b.profile.protocol === 'amneziawg' || b.profile.protocol === 'wireguard',
+  );
+  const wgDevices = wgProfilesPresent
+    ? await ensureDevices(
+        user.id,
+        resolveWgDeviceCount(
+          user.hwidDeviceLimit,
+          memberships.map((m) => m.group.hwidDeviceLimit),
+        ),
+      )
+    : [];
 
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
@@ -996,57 +1021,67 @@ export async function generateSubscription(
         // otherwise, so the array format emits a single config as before.
         cascadeExits: balancerExits.get(b.node.id),
       });
-    } else if (ib.protocol === 'amneziawg' && user.amneziawgPrivateKey) {
+    } else if (ib.protocol === 'amneziawg' && wgDevices.length > 0) {
       const cfg = ib.config as unknown as AmneziawgInboundConfig;
       // Slice 27: peer is keyed on profileId (one allocation per logical
       // AmneziaWG profile, shared across all nodes the profile is bound to).
-      const peer = await allocatePeer(ib.profileId, user.id, cfg.subnet);
-      endpoints.push({
-        protocol: 'amneziawg',
-        nodeName,
-        host,
-        port,
-        ...hostMeta,
-        privateKey: user.amneziawgPrivateKey,
-        allowedIp: `${peer.ip}/32`,
-        serverPublicKey: cfg.serverPublicKey,
-        jc: cfg.obfuscation.jc,
-        jmin: cfg.obfuscation.jmin,
-        jmax: cfg.obfuscation.jmax,
-        s1: cfg.obfuscation.s1,
-        s2: cfg.obfuscation.s2,
-        s3: cfg.obfuscation.s3,
-        s4: cfg.obfuscation.s4,
-        h1: cfg.obfuscation.h1,
-        h2: cfg.obfuscation.h2,
-        h3: cfg.obfuscation.h3,
-        h4: cfg.obfuscation.h4,
-        i1: cfg.obfuscation.i1 ?? '',
-        i2: cfg.obfuscation.i2 ?? '',
-        i3: cfg.obfuscation.i3 ?? '',
-        i4: cfg.obfuscation.i4 ?? '',
-        i5: cfg.obfuscation.i5 ?? '',
-        // No standardised URI format for AmneziaWG; clients fetch ?format=wgconf.
-        uri: '',
-      });
-    } else if (ib.protocol === 'wireguard' && user.amneziawgPrivateKey) {
+      // Slice 51: and on the device inside it - the credential the config
+      // carries is the DEVICE's, so the address must be the device's too.
+      for (const [idx, device] of wgDevices.entries()) {
+        const peer = await allocatePeer(ib.profileId, device.id, user.id, cfg.subnet);
+        endpoints.push({
+          protocol: 'amneziawg',
+          nodeName,
+          host,
+          port,
+          ...hostMeta,
+          deviceId: device.id,
+          deviceIndex: idx + 1,
+          privateKey: device.privateKey,
+          allowedIp: `${peer.ip}/32`,
+          serverPublicKey: cfg.serverPublicKey,
+          jc: cfg.obfuscation.jc,
+          jmin: cfg.obfuscation.jmin,
+          jmax: cfg.obfuscation.jmax,
+          s1: cfg.obfuscation.s1,
+          s2: cfg.obfuscation.s2,
+          s3: cfg.obfuscation.s3,
+          s4: cfg.obfuscation.s4,
+          h1: cfg.obfuscation.h1,
+          h2: cfg.obfuscation.h2,
+          h3: cfg.obfuscation.h3,
+          h4: cfg.obfuscation.h4,
+          i1: cfg.obfuscation.i1 ?? '',
+          i2: cfg.obfuscation.i2 ?? '',
+          i3: cfg.obfuscation.i3 ?? '',
+          i4: cfg.obfuscation.i4 ?? '',
+          i5: cfg.obfuscation.i5 ?? '',
+          // No standardised URI format for AmneziaWG; clients fetch ?format=wgconf.
+          uri: '',
+        });
+      }
+    } else if (ib.protocol === 'wireguard' && wgDevices.length > 0) {
       const cfg = ib.config as unknown as WireguardInboundConfig;
-      // The user's single WireGuard keypair serves both flavours, but the peer
-      // IP is allocated per profile, so a user on both an AmneziaWG and a
+      // One device's keypair serves both flavours, but the peer IP is
+      // allocated per profile, so a device on both an AmneziaWG and a
       // WireGuard profile holds two addresses, one per subnet.
-      const peer = await allocatePeer(ib.profileId, user.id, cfg.subnet);
-      endpoints.push({
-        protocol: 'wireguard',
-        nodeName,
-        host,
-        port,
-        ...hostMeta,
-        privateKey: user.amneziawgPrivateKey,
-        allowedIp: `${peer.ip}/32`,
-        serverPublicKey: cfg.serverPublicKey,
-        // WireGuard has no share-link scheme either; clients fetch ?format=wgconf.
-        uri: '',
-      });
+      for (const [idx, device] of wgDevices.entries()) {
+        const peer = await allocatePeer(ib.profileId, device.id, user.id, cfg.subnet);
+        endpoints.push({
+          protocol: 'wireguard',
+          nodeName,
+          host,
+          port,
+          ...hostMeta,
+          deviceId: device.id,
+          deviceIndex: idx + 1,
+          privateKey: device.privateKey,
+          allowedIp: `${peer.ip}/32`,
+          serverPublicKey: cfg.serverPublicKey,
+          // WireGuard has no share-link scheme either; clients fetch ?format=wgconf.
+          uri: '',
+        });
+      }
     } else if (ib.protocol === 'mtproto') {
       // Slice 41: Telegram MTProto via 9seconds/mtg. Architectural note:
       // mtg is intentionally single-secret upstream. So every user
@@ -1248,8 +1283,19 @@ export async function generateSubscription(
   // the same node under two different protocols keeps its name (the tags
   // already differ); only a real same-name+same-protocol collision is renamed
   // ("X", "X 2", ...). First occurrence keeps the original name.
+  //
+  // Slice 51: wg endpoints are EXEMPT. None of the three formatters emits them
+  // (clash and sing-box say so in their own headers; xray-json has no wg
+  // outbound at all), so there is no tag for them to collide on - while the
+  // rename is far from harmless on their side. A buyer with three devices has
+  // three amneziawg endpoints on one node, and renaming the duplicates turned
+  // the node into "s2 2" and "s2 3" inside the download link, the file name
+  // and the `# Name` the client shows. They are told apart by device, which is
+  // what `?device=` selects on.
+  const isWgFamily = (p: string): boolean => p === 'amneziawg' || p === 'wireguard';
   const usedTags = new Set<string>();
   for (const e of endpoints) {
+    if (isWgFamily(e.protocol)) continue;
     let name = e.nodeName;
     let n = 2;
     while (usedTags.has(`${name}-${e.protocol}`)) {

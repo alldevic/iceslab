@@ -14,8 +14,10 @@
 // a buyer following ours are handed different servers.
 
 import type {
+  AmneziawgSubscriptionEndpoint,
   MtprotoSubscriptionEndpoint,
   SubscriptionEndpoint,
+  WireguardSubscriptionEndpoint,
 } from '../subscription.formats.js';
 import { buildWgQuickConf, wgConfName } from './wgconf.js';
 import { buildAwgVpnLink } from './amneziavpn.js';
@@ -24,6 +26,10 @@ export type WgFlavour = 'amneziawg' | 'wireguard';
 
 export interface WgNode {
   nodeName: string;
+  /** Which of the buyer's devices this tunnel belongs to. */
+  deviceId: string;
+  /** 1-based position, what the buyer's links and captions carry. */
+  deviceIndex: number;
   /** wg-quick config for this node, or null when it could not be built. */
   conf: string | null;
   /** AmneziaVPN `vpn://` key. AmneziaWG only — stock WireGuard has no key form,
@@ -50,23 +56,42 @@ export function collectWgNodes(
 ): WgNode[] {
   const seen = new Set<string>();
   return endpoints
-    .filter((e) => e.protocol === flavour)
-    .filter((e) => !seen.has(e.nodeName) && !!seen.add(e.nodeName))
+    .filter(
+      (e): e is AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint =>
+        e.protocol === flavour,
+    )
+    // By (node, DEVICE), not by node. Node alone is what this did before
+    // devices existed, and keeping it would collapse a buyer's second and
+    // third tunnels into the first: their peers would sit on the node,
+    // allocated and pushed, while the subscription offered one config for all
+    // of them. Two hosts producing the same (node, device) are still one file.
+    .filter((e) => {
+      const key = `${e.nodeName}::${e.deviceId}`;
+      return !seen.has(key) && !!seen.add(key);
+    })
     .map((e) => {
       const conf = buildWgQuickConf(endpoints, e.nodeName, flavour, {
         dns: opts?.dns,
+        device: e.deviceId,
         // Same name the download link's file name carries, from the same
         // function: a QR scan and a file download must not produce two
         // differently-named tunnels to one server.
-        name: opts?.brand ? wgConfName(opts.brand, e.nodeName, flavour) : undefined,
+        name: opts?.brand
+          ? wgConfName(opts.brand, e.nodeName, flavour, e.deviceIndex)
+          : undefined,
       });
       // The flavour check states intent and changes nothing: buildAwgVpnLink
       // filters to `amneziawg` itself, so a WireGuard node gets '' either way.
       // Kept as the readable half of that fact, not as a guard anything leans
       // on — removing it cannot alter a single output.
-      const vpn = flavour === 'amneziawg' ? buildAwgVpnLink(endpoints, e.nodeName, opts?.dns) : '';
+      const vpn =
+        flavour === 'amneziawg'
+          ? buildAwgVpnLink(endpoints, e.nodeName, opts?.dns, e.deviceId)
+          : '';
       return {
         nodeName: e.nodeName,
+        deviceId: e.deviceId,
+        deviceIndex: e.deviceIndex,
         conf: conf || null,
         vpnKey: vpn || null,
       };
@@ -94,13 +119,15 @@ export function tunnelConfigUrls(
   if (e.protocol === 'amneziawg') {
     return {
       // wg-quick / AmneziaWG file, and the AmneziaVPN app's own key form.
-      wgconf: `${subUrl}?format=wgconf&proto=amneziawg&node=${node}`,
-      amneziavpn: `${subUrl}?format=amneziavpn&node=${node}`,
+      wgconf: `${subUrl}?format=wgconf&proto=amneziawg&node=${node}&device=${e.deviceIndex}`,
+      amneziavpn: `${subUrl}?format=amneziavpn&node=${node}&device=${e.deviceIndex}`,
     };
   }
   if (e.protocol === 'wireguard') {
     // Stock WireGuard has no key form; the .conf is the whole import path.
-    return { wgconf: `${subUrl}?format=wgconf&proto=wireguard&node=${node}` };
+    return {
+      wgconf: `${subUrl}?format=wgconf&proto=wireguard&node=${node}&device=${e.deviceIndex}`,
+    };
   }
   return undefined;
 }

@@ -1,0 +1,200 @@
+import { generateWireguardKeyPair } from '../../lib/credentials.js';
+import { prisma } from '../../prisma.js';
+import { resolveSquadHwidLimit } from '../hwid/hwid.service.js';
+import { nodeUsersQueue } from '../users/users.queue.js';
+import type { WgDevice } from '../../generated/prisma/client.js';
+
+/**
+ * A buyer's WireGuard devices: one keypair, one address and one config file
+ * each.
+ *
+ * Why a device and not a header. WireGuard tells peers apart by public key and
+ * by nothing else, so one keypair per user IS one peer however many phones
+ * hold it - the panel cannot count them, cannot cap them, and the server
+ * retargets its return path to whichever of them handshaked last (that last
+ * one is not a theory: it took the operator's tunnel down on 2026-08-31). HWID
+ * answers a different question and answers it on trust: the client states an
+ * id when it polls /sub, only some clients state one at all, and a wg client
+ * never polls. A device here is a credential, so the count is the node's own
+ * peer list and the cap is arithmetic - a device with no key does not connect.
+ */
+
+/**
+ * Absolute ceiling on devices we will mint for one person, whatever a tariff
+ * says. Each device costs a keypair, an address in every wg profile's subnet
+ * and a peer on every node the profile is bound to, so a fat-fingered limit
+ * would be paid for on the nodes, not in the form that accepted it.
+ */
+export const MAX_WG_DEVICES = 10;
+
+/**
+ * Default when nobody has said otherwise. Devices are PRE-CUT rather than
+ * created on demand: the shop renders its install screen from the document our
+ * panel hands it, so a fixed set of "Device 1..N" links needs no button and no
+ * change to the shop - but it does need a number, and "unlimited" is not one.
+ */
+export const DEFAULT_WG_DEVICES = 3;
+
+/**
+ * How many devices this person gets.
+ *
+ * `userLimit` is their own `hwidDeviceLimit`; `squadLimits` are their squads'
+ * defaults, resolved most-permissive-wins by the same `resolveSquadHwidLimit`
+ * the HWID gate uses - one rule, so a person cannot be entitled to four
+ * devices by one reading and three by another.
+ *
+ * NULL at the end of that chain means "no policy", which for HWID means
+ * unlimited - and unlimited cannot be pre-cut, so it becomes the default
+ * rather than a refusal.
+ *
+ * BOTH the subscription and the node push have to call this with the same
+ * inputs. They ran on different answers once (push topped up to one device,
+ * subscription to three): the extra devices got a peer row and an address in
+ * the database, the node never heard of them, and the buyer downloaded a
+ * second config that handshakes with nothing.
+ */
+export function resolveWgDeviceCount(
+  userLimit: number | null,
+  squadLimits: (number | null)[] = [],
+  fallback: number = DEFAULT_WG_DEVICES,
+): number {
+  const limit = userLimit ?? resolveSquadHwidLimit(squadLimits);
+  const wanted = limit === null ? fallback : limit;
+  return Math.min(Math.max(1, Math.trunc(wanted)), MAX_WG_DEVICES);
+}
+
+/** Devices that still have access. Revoked rows stay for their history. */
+export async function listActiveDevices(userId: string): Promise<WgDevice[]> {
+  return prisma.wgDevice.findMany({
+    where: { userId, revokedAt: null },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+}
+
+export async function listDevices(userId: string): Promise<WgDevice[]> {
+  return prisma.wgDevice.findMany({ where: { userId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+}
+
+/**
+ * Devices with the addresses they hold, for the admin list.
+ *
+ * Revoked rows are included: their traffic is the reason revocation keeps the
+ * row, and an operator asking "what did that phone do before I cut it off"
+ * needs to see it. They carry no peers, so the address column is empty for
+ * them, which reads correctly.
+ */
+export async function listDevicesWithPeers(userId: string) {
+  return prisma.wgDevice.findMany({
+    where: { userId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: { peers: { select: { ip: true }, orderBy: { ip: 'asc' } } },
+  });
+}
+
+/**
+ * Bring the user up to `count` active devices, minting keypairs for the
+ * missing ones. Returns every active device, oldest first, so the caller can
+ * index them stably: device #1 keeps being device #1 across calls, which is
+ * what makes "Device 2" on the buyer's install screen mean the same tunnel
+ * tomorrow.
+ *
+ * The order is `(createdAt, id)`, and the id half is load-bearing rather than
+ * decorative. Devices minted in one `createMany` share a `created_at` to the
+ * millisecond - Postgres stamps the transaction, not the row - so ordering by
+ * the timestamp alone leaves their relative position up to the planner.
+ * Measured on production right after the first deploy: two devices, one
+ * timestamp. A buyer's "Device 2" link would then resolve to a different
+ * tunnel from one poll to the next, and the config they imported second would
+ * be the one already running on another phone - two devices under one key,
+ * which is the exact failure devices exist to prevent.
+ *
+ * Idempotent and never destructive: a `count` below what the user already has
+ * returns the existing set untouched. Taking access away is `revokeDevice`,
+ * an explicit act with an explicit audit trail - not a side effect of someone
+ * editing a tariff downwards.
+ */
+export async function ensureDevices(userId: string, count: number): Promise<WgDevice[]> {
+  const want = Math.max(1, Math.trunc(count));
+  const have = await listActiveDevices(userId);
+  if (have.length >= want) return have;
+
+  const rows = Array.from({ length: want - have.length }, () => {
+    const kp = generateWireguardKeyPair();
+    return { userId, privateKey: kp.privateKey, publicKey: kp.publicKey };
+  });
+  await prisma.wgDevice.createMany({ data: rows });
+  return listActiveDevices(userId);
+}
+
+/**
+ * `ensureDevices` for many users in two queries instead of two per user.
+ *
+ * The node push calls this for every active user on every sync, so the
+ * per-user shape was ~2N round-trips on a path the rest of this module already
+ * bulk-loads (see preallocatePeers). Returns userId -> devices, oldest first,
+ * for every user asked about.
+ */
+export async function ensureDevicesForUsers(
+  wanted: { userId: string; count: number }[],
+): Promise<Map<string, WgDevice[]>> {
+  const byUser = new Map<string, WgDevice[]>();
+  if (wanted.length === 0) return byUser;
+  const userIds = wanted.map((w) => w.userId);
+  // Per user, because the count is a per-user policy: one person's tariff
+  // gives three devices and the next one's five, and a single `count` for the
+  // batch would quietly hand somebody the wrong number.
+  const wantByUser = new Map(wanted.map((w) => [w.userId, Math.max(1, Math.trunc(w.count))]));
+
+  const existing = await prisma.wgDevice.findMany({
+    where: { userId: { in: userIds }, revokedAt: null },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+  for (const id of userIds) byUser.set(id, []);
+  for (const d of existing) byUser.get(d.userId)?.push(d);
+
+  const toCreate: { userId: string; privateKey: string; publicKey: string }[] = [];
+  for (const id of userIds) {
+    const missing = (wantByUser.get(id) ?? 1) - (byUser.get(id)?.length ?? 0);
+    for (let i = 0; i < missing; i += 1) {
+      const kp = generateWireguardKeyPair();
+      toCreate.push({ userId: id, privateKey: kp.privateKey, publicKey: kp.publicKey });
+    }
+  }
+  if (toCreate.length === 0) return byUser;
+
+  await prisma.wgDevice.createMany({ data: toCreate });
+  const refreshed = await prisma.wgDevice.findMany({
+    where: { userId: { in: userIds }, revokedAt: null },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+  for (const id of userIds) byUser.set(id, []);
+  for (const d of refreshed) byUser.get(d.userId)?.push(d);
+  return byUser;
+}
+
+/**
+ * Drop a device's access while keeping the row.
+ *
+ * Deleting instead would cascade its peers away, and freeing that IP hands it
+ * to the next device allocated - at which point the revoked config is a
+ * WORKING config again, for somebody else's tunnel. Revocation has to be a
+ * tombstone.
+ *
+ * The removal is pushed to the nodes here too, and it has to be: the agent
+ * keeps its own peer map and never re-reads ours, so a device dropped only in
+ * the database keeps working until something unrelated triggers a full
+ * re-push. `removeUser` is addressed by the id the peer was pushed under -
+ * the DEVICE id - which is exactly why devices are keyed separately from
+ * their owner: revoking one must not reach into the user's xray or hysteria
+ * access.
+ */
+export async function revokeDevice(deviceId: string): Promise<WgDevice | null> {
+  const device = await prisma.wgDevice.findUnique({ where: { id: deviceId } });
+  if (!device || device.revokedAt) return device;
+  const [updated] = await prisma.$transaction([
+    prisma.wgDevice.update({ where: { id: deviceId }, data: { revokedAt: new Date() } }),
+    prisma.amneziawgPeer.deleteMany({ where: { deviceId } }),
+  ]);
+  await nodeUsersQueue.add('removeUser', { userId: deviceId });
+  return updated;
+}

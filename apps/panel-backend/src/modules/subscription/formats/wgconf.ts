@@ -15,6 +15,14 @@ export interface WgQuickOpts {
   dns?: string[];
   /** Tunnel name, emitted as the leading `# Name = ...` comment. */
   name?: string;
+  /**
+   * Which of the buyer's devices to emit, by device id or by 1-based position.
+   *
+   * Position is what the buyer's links carry, because "Device 2" has to mean
+   * something in a URL; the id is accepted too and is the stable one, since a
+   * revocation renumbers the positions after it.
+   */
+  device?: string;
 }
 
 /**
@@ -33,6 +41,7 @@ export function wgConfName(
   brand: string,
   nodeName?: string,
   flavour?: WgFlavour,
+  deviceIndex?: number,
 ): string {
   // Серия недопустимых символов схлопывается в ОДИН разделитель: имя ноды несёт
   // эмодзи флага, и посимвольная замена давала `_____s2`.
@@ -44,6 +53,9 @@ export function wgConfName(
     if (node) parts.push(node);
   }
   if (flavour) parts.push(flavour === 'wireguard' ? 'wg' : 'awg');
+  // Device 1 goes unmarked: the buyer with a single device should not have to
+  // wonder what the trailing number means, and the great majority have one.
+  if (deviceIndex && deviceIndex > 1) parts.push(String(deviceIndex));
   return parts.join('-').slice(0, 64);
 }
 
@@ -100,6 +112,13 @@ export function buildWgQuickConf(
   let candidates = endpoints.filter(isWgEndpoint);
   if (flavour) {
     candidates = candidates.filter((e) => e.protocol === flavour);
+  }
+  if (opts?.device) {
+    const wanted = opts.device;
+    const byIndex = Number(wanted);
+    candidates = candidates.filter(
+      (e) => e.deviceId === wanted || (Number.isInteger(byIndex) && e.deviceIndex === byIndex),
+    );
   }
   // nodeName selects which node's tunnel; absent = first (legacy whole-sub link).
   const wg = nodeName ? candidates.find((e) => e.nodeName === nodeName) : candidates[0];

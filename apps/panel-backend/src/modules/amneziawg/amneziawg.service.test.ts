@@ -12,6 +12,7 @@ import {
   preallocatePeers,
   releasePeer,
 } from './amneziawg.service.js';
+import { ensureDevices } from '../wg-devices/wg-devices.service.js';
 
 // Slice 27: peer allocation is keyed on profileId (the logical AmneziaWG
 // inbound), not the per-node Inbound row. Tests now seed Profile rows.
@@ -27,7 +28,16 @@ async function createProfile(name = 'awg0'): Promise<string> {
   return profile.id;
 }
 
-async function createUser(username: string): Promise<string> {
+// Slice 51: an allocation belongs to a DEVICE, so a fixture user is not a
+// subject on its own - it needs the device that carries the keypair. Returned
+// together because every call below needs both: the device is what the address
+// is keyed on, the user is what its traffic is billed to.
+interface Subject {
+  userId: string;
+  deviceId: string;
+}
+
+async function createUser(username: string): Promise<Subject> {
   const creds = generateUserCredentials();
   const user = await prisma.user.create({
     data: {
@@ -41,7 +51,14 @@ async function createUser(username: string): Promise<string> {
       amneziawgPublicKey: creds.amneziawgPublicKey,
     },
   });
-  return user.id;
+  const [device] = await ensureDevices(user.id, 1);
+  return { userId: user.id, deviceId: device!.id };
+}
+
+/** A second device for the same person - two peers, one owner. */
+async function addDevice(subject: Subject): Promise<Subject> {
+  const devices = await ensureDevices(subject.userId, 2);
+  return { userId: subject.userId, deviceId: devices[1]!.id };
 }
 
 beforeEach(async () => {
@@ -59,8 +76,8 @@ describe('allocatePeer', () => {
     const u1 = await createUser('alice');
     const u2 = await createUser('bob');
 
-    const a = await allocatePeer(profileId, u1);
-    const b = await allocatePeer(profileId, u2);
+    const a = await allocatePeer(profileId, u1.deviceId, u1.userId);
+    const b = await allocatePeer(profileId, u2.deviceId, u2.userId);
 
     expect(a.ip).toBe('10.66.66.2');
     expect(b.ip).toBe('10.66.66.3');
@@ -70,8 +87,8 @@ describe('allocatePeer', () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
 
-    const a = await allocatePeer(profileId, u);
-    const b = await allocatePeer(profileId, u);
+    const a = await allocatePeer(profileId, u.deviceId, u.userId);
+    const b = await allocatePeer(profileId, u.deviceId, u.userId);
 
     expect(a.id).toBe(b.id);
     expect(a.ip).toBe(b.ip);
@@ -83,12 +100,12 @@ describe('allocatePeer', () => {
     const u2 = await createUser('bob');
     const u3 = await createUser('carol');
 
-    await allocatePeer(profileId, u1); // .2
-    const peer2 = await allocatePeer(profileId, u2); // .3
+    await allocatePeer(profileId, u1.deviceId, u1.userId); // .2
+    const peer2 = await allocatePeer(profileId, u2.deviceId, u2.userId); // .3
     expect(peer2.ip).toBe('10.66.66.3');
 
-    await releasePeer(profileId, u2);
-    const peer3 = await allocatePeer(profileId, u3);
+    await releasePeer(profileId, u2.userId);
+    const peer3 = await allocatePeer(profileId, u3.deviceId, u3.userId);
     expect(peer3.ip).toBe('10.66.66.3');
   });
 
@@ -97,8 +114,8 @@ describe('allocatePeer', () => {
     const p2 = await createProfile('awg-b');
     const u = await createUser('alice');
 
-    const a1 = await allocatePeer(p1, u);
-    const a2 = await allocatePeer(p2, u);
+    const a1 = await allocatePeer(p1, u.deviceId, u.userId);
+    const a2 = await allocatePeer(p2, u.deviceId, u.userId);
 
     expect(a1.ip).toBe('10.66.66.2');
     expect(a2.ip).toBe('10.66.66.2');
@@ -108,7 +125,7 @@ describe('allocatePeer', () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
 
-    const p = await allocatePeer(profileId, u, '172.16.0.0/24');
+    const p = await allocatePeer(profileId, u.deviceId, u.userId, '172.16.0.0/24');
     expect(p.ip).toBe('172.16.0.2');
   });
 
@@ -118,9 +135,9 @@ describe('allocatePeer', () => {
     const u1 = await createUser('alice');
     const u2 = await createUser('bob');
 
-    await allocatePeer(profileId, u1, '10.99.0.0/30');
+    await allocatePeer(profileId, u1.deviceId, u1.userId, '10.99.0.0/30');
     await expect(
-      allocatePeer(profileId, u2, '10.99.0.0/30'),
+      allocatePeer(profileId, u2.deviceId, u2.userId, '10.99.0.0/30'),
     ).rejects.toBeInstanceOf(IpExhaustedError);
   });
 });
@@ -129,7 +146,7 @@ describe('getPeer / listPeers / releasePeer', () => {
   it('returns null when no allocation exists', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
-    expect(await getPeer(profileId, u)).toBeNull();
+    expect(await getPeer(profileId, u.deviceId)).toBeNull();
   });
 
   it('lists peers in IP order', async () => {
@@ -138,9 +155,9 @@ describe('getPeer / listPeers / releasePeer', () => {
     const u2 = await createUser('bob');
     const u3 = await createUser('carol');
 
-    await allocatePeer(profileId, u2);
-    await allocatePeer(profileId, u1);
-    await allocatePeer(profileId, u3);
+    await allocatePeer(profileId, u2.deviceId, u2.userId);
+    await allocatePeer(profileId, u1.deviceId, u1.userId);
+    await allocatePeer(profileId, u3.deviceId, u3.userId);
 
     const peers = await listPeers(profileId);
     expect(peers.map((p) => p.ip)).toEqual(['10.66.66.2', '10.66.66.3', '10.66.66.4']);
@@ -149,7 +166,7 @@ describe('getPeer / listPeers / releasePeer', () => {
   it('release is a no-op when nothing is allocated', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
-    await expect(releasePeer(profileId, u)).resolves.toBeUndefined();
+    await expect(releasePeer(profileId, u.userId)).resolves.toBeUndefined();
   });
 });
 
@@ -173,11 +190,11 @@ describe('preallocatePeers (B7 bulk)', () => {
     const profileId = await createProfile();
     const u1 = await createUser('alice');
     const u2 = await createUser('bob');
-    const existing = await allocatePeer(profileId, u1); // takes .2
+    const existing = await allocatePeer(profileId, u1.deviceId, u1.userId); // takes .2
 
     const map = await preallocatePeers(profileId, [u1, u2]);
-    expect(map.get(u1)).toBe(existing.ip); // unchanged
-    expect(map.get(u2)).toBe('10.66.66.3'); // next free
+    expect(map.get(u1.deviceId)).toBe(existing.ip); // unchanged
+    expect(map.get(u2.deviceId)).toBe('10.66.66.3'); // next free
   });
 
   it('reuses a gap left by a release', async () => {
@@ -185,12 +202,12 @@ describe('preallocatePeers (B7 bulk)', () => {
     const u1 = await createUser('alice');
     const u2 = await createUser('bob');
     const u3 = await createUser('carol');
-    await allocatePeer(profileId, u1); // .2
-    await allocatePeer(profileId, u2); // .3
-    await releasePeer(profileId, u1); // frees .2
+    await allocatePeer(profileId, u1.deviceId, u1.userId); // .2
+    await allocatePeer(profileId, u2.deviceId, u2.userId); // .3
+    await releasePeer(profileId, u1.userId); // frees .2
 
     const map = await preallocatePeers(profileId, [u3]);
-    expect(map.get(u3)).toBe('10.66.66.2'); // lowest free reused
+    expect(map.get(u3.deviceId)).toBe('10.66.66.2'); // lowest free reused
   });
 
   it('is a no-op second call (idempotent), returning the same IPs', async () => {
@@ -201,6 +218,21 @@ describe('preallocatePeers (B7 bulk)', () => {
     expect([...second.entries()].sort()).toEqual([...first.entries()].sort());
     const all = await listPeers(profileId);
     expect(all).toHaveLength(2); // no duplicate rows
+  });
+
+  it('gives two devices of ONE person two different addresses', async () => {
+    // The reason the key moved off the user: WireGuard tells peers apart by
+    // public key, so two devices sharing one address would be one peer, and
+    // the server would send the return path to whichever handshaked last.
+    const profileId = await createProfile();
+    const first = await createUser('alice');
+    const second = await addDevice(first);
+
+    const map = await preallocatePeers(profileId, [first, second]);
+    expect(map.size).toBe(2);
+    expect(new Set(map.values()).size).toBe(2);
+    const all = await listPeers(profileId);
+    expect(all.map((p) => p.userId)).toEqual([first.userId, first.userId]);
   });
 
   it('returns an empty map for no users', async () => {

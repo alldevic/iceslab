@@ -140,11 +140,21 @@ export async function buildAddUserRequest(userId: string): Promise<AddUserPayloa
         hysteriaPassword: user.hysteriaPassword,
         naivePassword: user.naivePassword,
         xrayUuid: user.xrayUuid,
-        amneziawgPublicKey: user.amneziawgPublicKey,
-        // One WG keypair, both flavours. The per-profile tunnel IPs are
-        // attached by the inbound-sync push, which is where the bound profiles
-        // (and hence the subnets) are known.
-        wireguardPublicKey: user.amneziawgPublicKey,
+        // No wg credentials from this queue, deliberately. The node needs a
+        // public key AND an allocated address to make a peer and returns nil
+        // when either is missing - so every wg field sent from here has always
+        // been dropped on arrival while `addUser ... ok` was logged. Sending a
+        // key that cannot take effect only makes that silence look like a
+        // configuration to inspect. Slice 51 turned it from inert into wrong
+        // as well: the credential now belongs to a device, and this row's
+        // column is the pre-devices seed.
+        //
+        // wg peers come from the inbound-sync push, which is the only place
+        // that knows the bound profiles and therefore the subnets. Enabling a
+        // user does NOT restore their wg access on its own; measured
+        // 2026-08-31.
+        //
+        // wireguardPublicKey / amneziawgPublicKey: intentionally absent.
         tuicUuid: user.xrayUuid,
         tuicPassword: deriveTuicPassword(user.xrayUuid),
         anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
@@ -272,8 +282,10 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
               hysteriaPassword: u.hysteriaPassword,
               naivePassword: u.naivePassword,
               xrayUuid: u.xrayUuid,
-              amneziawgPublicKey: u.amneziawgPublicKey,
-              wireguardPublicKey: u.amneziawgPublicKey,
+              // Same as above: the node drops wg fields with no address, and
+              // the credential is the device's now. See the note in
+              // buildAddUserRequest.
+              // wireguardPublicKey / amneziawgPublicKey: intentionally absent.
               tuicUuid: u.xrayUuid,
               tuicPassword: deriveTuicPassword(u.xrayUuid),
               anytlsPassword: deriveAnytlsPassword(u.xrayUuid),

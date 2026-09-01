@@ -69,10 +69,11 @@ export async function subpageConfigForToken(token: string): Promise<SubpageConfi
       brand: title,
     }).map((n) => ({
       nodeName: n.nodeName,
+      deviceIndex: n.deviceIndex,
       vpnKey: n.vpnKey ?? undefined,
     })),
     wgNodes: collectWgNodes(wgEndpoints, 'wireguard', { dns: settings.wgDns, brand: title }).map(
-      (n) => ({ nodeName: n.nodeName }),
+      (n) => ({ nodeName: n.nodeName, deviceIndex: n.deviceIndex }),
     ),
     // Not format-gated: the t.me link is built from the endpoint itself and
     // fetches nothing back from us, so no `disableForFormats` bears on it.

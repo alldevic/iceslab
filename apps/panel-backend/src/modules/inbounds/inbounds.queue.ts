@@ -10,6 +10,7 @@ import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/metrics.js';
 import { allocatePeer, preallocatePeers } from '../amneziawg/amneziawg.service.js';
+import { ensureDevicesForUsers, resolveWgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import { getCascadeFragmentsForNode } from '../cascades/cascade.service.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/credentials.js';
 import { applyEgressForNode } from '../egress/egress.push.js';
@@ -115,6 +116,10 @@ interface ActiveUser {
   hysteriaPassword: string;
   amneziawgPublicKey: string;
   naivePassword: string;
+  /** Device policy, read here for the same reason the subscription reads it:
+   *  both provision devices and must provision the same number. */
+  hwidDeviceLimit: number | null;
+  groupMembers: { group: { hwidDeviceLimit: number | null } }[];
 }
 
 /**
@@ -149,6 +154,12 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
       hysteriaPassword: true,
       amneziawgPublicKey: true,
       naivePassword: true,
+      // Slice 51: the push provisions the SAME number of devices the
+      // subscription hands out, so both need the same inputs. When they
+      // disagreed, the extra devices existed in the database with an address
+      // and never reached the node.
+      hwidDeviceLimit: true,
+      groupMembers: { select: { group: { select: { hwidDeviceLimit: true } } } },
     },
   });
 }
@@ -561,51 +572,73 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // bounded-parallel chunks. Pre-wave a 1000-user install did 1000 serial
   // mTLS round-trips (~50ms each) = ~50s of worker time blocked per node
   // push, which compounds when multiple nodes need re-push at once.
+  // Slice 51: one peer per DEVICE, and the device is what the node keys it on.
+  //
+  // `AddUser` fans out to every adapter, but each one returns nil unless ITS
+  // credential is present (xray on XrayUUID, hysteria on HysteriaPassword,
+  // sing-box on uuid+password, and so on - checked in all eight). So a record
+  // carrying ONLY wg fields lands in the wireguard/amneziawg adapters and
+  // nowhere else. That is what lets a device be its own entry on the wire with
+  // no change to the agent: the user's non-wg record stays keyed on the user,
+  // each device gets a record keyed on the device.
+  //
+  // The split also makes revocation mean one thing. `RemoveUser(id)` reaches
+  // every adapter, so revoking a device that shared the user's id would take
+  // that user's xray and hysteria access down with it.
+  const devicesByUser = await ensureDevicesForUsers(
+    users.map((u) => ({
+      userId: u.id,
+      count: resolveWgDeviceCount(
+        u.hwidDeviceLimit,
+        u.groupMembers.map((m) => m.group.hwidDeviceLimit),
+      ),
+    })),
+  );
+  const wgPeers: { deviceId: string; userId: string; publicKey: string }[] = [];
+  for (const u of users) {
+    for (const d of devicesByUser.get(u.id) ?? []) {
+      wgPeers.push({ deviceId: d.id, userId: u.id, publicKey: d.publicKey });
+    }
+  }
+
   async function allocateIps(
     profile: { profileId: string; subnet: string } | null,
   ): Promise<Map<string, string>> {
-    const ipByUser = new Map<string, string>();
-    if (!profile) return ipByUser;
+    const ipByDevice = new Map<string, string>();
+    if (!profile) return ipByDevice;
     const { profileId, subnet } = profile;
-    // Both flavours draw on the user's single WireGuard keypair, so the same
-    // credential decides who needs an allocation.
-    const wgUsers = users.filter((u) => u.amneziawgPublicKey);
     // B7 - one bulk allocation for the whole set instead of N serial
     // allocatePeer round-trips. Stragglers (race loss / contention) fall back
-    // to the robust per-user allocator below.
-    const bulk = await preallocatePeers(
-      profileId,
-      wgUsers.map((u) => u.id),
-      subnet,
-    ).catch((err) => {
+    // to the robust per-device allocator below.
+    const bulk = await preallocatePeers(profileId, wgPeers, subnet).catch((err) => {
       const detail = err instanceof Error ? err.message : String(err);
       getLogger().info(
-        `[worker:inbound-sync] bulk preallocatePeers on profile ${profileId} FAILED, per-user fallback: ${detail}`,
+        `[worker:inbound-sync] bulk preallocatePeers on profile ${profileId} FAILED, per-device fallback: ${detail}`,
       );
       return new Map<string, string>();
     });
-    for (const u of wgUsers) {
-      let ip = bulk.get(u.id);
+    for (const peer of wgPeers) {
+      let ip = bulk.get(peer.deviceId);
       if (!ip) {
         try {
-          ip = (await allocatePeer(profileId, u.id, subnet)).ip;
+          ip = (await allocatePeer(profileId, peer.deviceId, peer.userId, subnet)).ip;
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           getLogger().info(
-            `[worker:inbound-sync] allocatePeer ${u.username} on profile ${profileId} FAILED: ${detail}`,
+            `[worker:inbound-sync] allocatePeer device ${peer.deviceId} on profile ${profileId} FAILED: ${detail}`,
           );
-          // Fall through, addUser will silently skip this protocol's portion
-          // on the node side, other protocols still work for this user.
+          // Fall through: this device gets no tunnel, the user's other
+          // protocols and other devices are unaffected.
           continue;
         }
       }
-      ipByUser.set(u.id, ip);
+      ipByDevice.set(peer.deviceId, ip);
     }
-    return ipByUser;
+    return ipByDevice;
   }
 
-  const awgIpByUser = await allocateIps(awgProfile);
-  const wgIpByUser = await allocateIps(wgProfile);
+  const awgIpByDevice = await allocateIps(awgProfile);
+  const wgIpByDevice = await allocateIps(wgProfile);
 
   // Chunked parallel fanout. 25 is a balance between throughput and not
   // hammering the node-agent's HTTP server (default Node http.Agent
@@ -613,44 +646,74 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // 25 concurrent in-flight is comfortably below typical default ulimits).
   const ADD_USER_CHUNK = 25;
   let chunkFailed = 0;
-  for (let i = 0; i < users.length; i += ADD_USER_CHUNK) {
-    const chunk = users.slice(i, i + ADD_USER_CHUNK);
-    const results = await Promise.allSettled(
-      chunk.map((u) =>
-        transport.addUser({
-          userId: u.id,
-          shortId: u.shortId,
-          username: u.username,
-          credentials: {
-            xrayUuid: u.xrayUuid,
-            hysteriaPassword: u.hysteriaPassword,
-            amneziawgPublicKey: u.amneziawgPublicKey,
-            amneziawgAllowedIp: awgIpByUser.get(u.id),
-            // Same key, its own subnet's address (see resolveWgProfile above).
-            wireguardPublicKey: u.amneziawgPublicKey,
-            wireguardAllowedIp: wgIpByUser.get(u.id),
-            naivePassword: u.naivePassword,
-            tuicUuid: u.xrayUuid,
-            tuicPassword: deriveTuicPassword(u.xrayUuid),
-            anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
-            shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
-          },
-        }),
-      ),
-    );
+
+  // Two kinds of record, one endpoint. The user's carries everything EXCEPT wg;
+  // each device's carries ONLY wg. Every adapter gates on its own credential,
+  // so each record reaches exactly the cores it is meant for - see the note
+  // above wgPeers.
+  type PushItem = { label: string; req: Parameters<typeof transport.addUser>[0] };
+  const items: PushItem[] = users.map((u) => ({
+    label: u.username,
+    req: {
+      userId: u.id,
+      shortId: u.shortId,
+      username: u.username,
+      credentials: {
+        xrayUuid: u.xrayUuid,
+        hysteriaPassword: u.hysteriaPassword,
+        naivePassword: u.naivePassword,
+        tuicUuid: u.xrayUuid,
+        tuicPassword: deriveTuicPassword(u.xrayUuid),
+        anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
+        shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
+      },
+    },
+  }));
+  const usernameById = new Map(users.map((u) => [u.id, u.username]));
+  for (const peer of wgPeers) {
+    const awgIp = awgIpByDevice.get(peer.deviceId);
+    const wgIp = wgIpByDevice.get(peer.deviceId);
+    // Nothing allocated on either profile means this node serves no wg at all,
+    // or the allocator failed for this device. Either way the record would be
+    // a no-op on arrival, so don't spend a round-trip on it.
+    if (!awgIp && !wgIp) continue;
+    items.push({
+      label: `${usernameById.get(peer.userId) ?? peer.userId}/device`,
+      req: {
+        userId: peer.deviceId,
+        // shortId and username belong to the person, not the credential; the
+        // wg adapters read neither. Kept non-empty because `mieru` gates on a
+        // blank username and an empty string there would read as a bug.
+        shortId: '',
+        username: usernameById.get(peer.userId) ?? '',
+        credentials: {
+          amneziawgPublicKey: peer.publicKey,
+          amneziawgAllowedIp: awgIp,
+          // One device key, its own subnet's address per flavour (see
+          // resolveWgProfile above).
+          wireguardPublicKey: peer.publicKey,
+          wireguardAllowedIp: wgIp,
+        },
+      },
+    });
+  }
+
+  for (let i = 0; i < items.length; i += ADD_USER_CHUNK) {
+    const chunk = items.slice(i, i + ADD_USER_CHUNK);
+    const results = await Promise.allSettled(chunk.map((it) => transport.addUser(it.req)));
     for (let j = 0; j < results.length; j++) {
       const r = results[j]!;
       if (r.status === 'rejected') {
         chunkFailed++;
         const detail = r.reason instanceof Error ? r.reason.message : String(r.reason);
         getLogger().info(
-          `[worker:inbound-sync] addUser ${chunk[j]!.username} to ${node.name} FAILED: ${detail}`,
+          `[worker:inbound-sync] addUser ${chunk[j]!.label} to ${node.name} FAILED: ${detail}`,
         );
       }
     }
   }
   getLogger().info(
-    `[worker:inbound-sync] user sync to ${node.name} done (${users.length - chunkFailed}/${users.length} ok)`,
+    `[worker:inbound-sync] user sync to ${node.name} done (${items.length - chunkFailed}/${items.length} ok, ${users.length} user(s) + ${items.length - users.length} device record(s))`,
   );
 
   // End-of-job dirty check: if an admin edit landed during the push window,
