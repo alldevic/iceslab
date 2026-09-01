@@ -107,6 +107,59 @@ export function registerInboundEventHandlers(): void {
     }
   });
 
+  // ───── wg-пиры при появлении и смене статуса пользователя ─────
+  //
+  // Очередь `node-users` шлёт `addUser` БЕЗ wg-полей, и это осознанно: пиру
+  // нужен публичный ключ И адрес из подсети инбаунда, а транспорт `addUser`
+  // несёт один ключ на флейвор — три устройства в него не помещаются. Адреса
+  // же выделяет только этот push: он один знает привязки, а значит и подсети.
+  //
+  // Из-за этого заведение пользователя и возврат его в `active` давали
+  // «`addUser … ok`» в логе и НИ ОДНОГО пира на ноде: xray-пользователь
+  // добавлялся вживую, sing-box перезапускался, а wg-доступ не появлялся,
+  // пока оператор руками не пересохранит профиль или не переключит привязку.
+  // Снаружи это ровно «wg перестал подключаться»: панель отдаёт валидный
+  // .conf с ключом, которого на ноде нет, и клиент молча не проходит
+  // handshake. Воспроизведено 2026-09-01 на пользователе `wgprobe`.
+  //
+  // Толкаем только ноды, несущие wireguard/amneziawg: applyInbounds отдаёт
+  // ноде весь набор инбаундов, и звать его на ноде без wg значило бы трогать
+  // xray и sing-box ради протокола, которого там нет.
+  const enqueueWgBearingNodes = (reason: string): void => {
+    void prisma.profileNodeBinding
+      .findMany({
+        where: {
+          enabled: true,
+          profile: { enabled: true, protocol: { in: ['wireguard', 'amneziawg'] } },
+        },
+        select: { nodeId: true },
+      })
+      .then((rows) => {
+        const seen = new Set<string>();
+        for (const r of rows) {
+          if (seen.has(r.nodeId)) continue;
+          seen.add(r.nodeId);
+          enqueue(r.nodeId, reason);
+        }
+      })
+      .catch((err: unknown) =>
+        console.error(`[event] ${reason} wg fan-out failed:`, err),
+      );
+  };
+
+  eventBus.on('user.created', ({ userId, username }) => {
+    enqueueWgBearingNodes(`user.created ${username} (${userId}) wg peers`);
+  });
+
+  // Любая смена статуса, а не только переход в `active`. Набор пиров этот
+  // push строит из `fetchActiveUsers()`, поэтому один и тот же прогон и
+  // возвращает доступ включённому, и снимает пира у выключенного. Без него
+  // выключение отзывало xray и sing-box (это делает `removeUser`), а wg-пир
+  // оставался на ноде живым до ближайшей посторонней правки инбаундов.
+  eventBus.on('user.status-changed', ({ userId, from, to }) => {
+    enqueueWgBearingNodes(`user.status-changed ${from} → ${to} (${userId}) wg peers`);
+  });
+
   // cascade.changed → re-push every node that is now or was a hop, so the xray
   // cascade fragments get injected (create/enable) or removed (disable/delete).
   // The cascade service computes the union of old+new hop nodes.
