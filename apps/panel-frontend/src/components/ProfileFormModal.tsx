@@ -950,10 +950,21 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
             jc: numOr(values.awgJc, 4),
             jmin: numOr(values.awgJmin, 64),
             jmax: numOr(values.awgJmax, 128),
-            s1: numOr(values.awgS1, 32),
-            s2: numOr(values.awgS2, 56),
-            s3: numOr(values.awgS3, 32),
-            s4: numOr(values.awgS4, 16),
+            s1: numOr(values.awgS1, TSPU_PRESET.s1),
+            s2: numOr(values.awgS2, TSPU_PRESET.s2),
+            // Тем же правилом, что и заголовки ниже: пустое поле — это то, чем
+            // форма его засеяла, а не другое число. Здесь оно разъехалось:
+            // форма стартует с TSPU_PRESET (s3=0, s4=0), а сохранение
+            // подставляло 32 и 16, то есть ВКЛЮЧАЛО набивку транспортных
+            // пакетов, которую оператор в глаза не видел.
+            //
+            // Цена расхождения не косметическая. S3/S4 добивают каждый пакет с
+            // данными, и клиент, который этих ключей не знает, собирает их без
+            // набивки: рукопожатие проходит, данные не идут ни в одну сторону,
+            // логи с обеих сторон чисты. Ровно так профиль `onegin-amneziawg`
+            // уехал в прод с s3=32/s4=16 и оставил покупателя без AmneziaWG.
+            s3: numOr(values.awgS3, TSPU_PRESET.s3),
+            s4: numOr(values.awgS4, TSPU_PRESET.s4),
             // Fall back to the same four the form seeds, not to 0: an operator
             // who clears a header field means "the default", and 0 is a value
             // both the API and the node refuse.

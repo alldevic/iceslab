@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AmneziawgConfigSchema,
   ShadowsocksConfigSchema,
   WireguardConfigSchema,
   XrayConfigSchema,
@@ -378,5 +379,49 @@ describe('WireguardConfigSchema', () => {
       }).success,
       `the generator emitted ${pair.publicKey}`,
     ).toBe(true);
+  });
+});
+
+describe('AmneziaWG obfuscation a client can actually follow', () => {
+  const base = {
+    subnet: '10.66.0.0/16',
+    serverPrivateKey: 'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFsGm3Uk=',
+    serverPublicKey: 'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+  };
+
+  // Не вкусовщина, а разница между «работает» и «подключился и молчит».
+  // S1/S2 добивают рукопожатие, S3/S4 — каждый транспортный пакет. Панель
+  // отдаёт .conf наружу, и клиент, который про эти ключи не знает, просто их
+  // не увидит: рукопожатие пройдёт, данные не пойдут ни в одну сторону, и ни
+  // один лог об этом не скажет. Измерено на живой ноде 2026-09-01 — 3/3
+  // потерянных пакета против того же сервера с S3=0/S4=0, где 3/3 дошли.
+  it('leaves the transport-packet padding off unless an operator asks', () => {
+    // `obfuscation` обязателен, поэтому «по умолчанию» — это пустой блок:
+    // ровно то, что получает вызывающий, который про S3/S4 не знает.
+    const cfg = AmneziawgConfigSchema.parse({ ...base, obfuscation: {} });
+    expect(cfg.obfuscation.s3).toBe(0);
+    expect(cfg.obfuscation.s4).toBe(0);
+  });
+
+  // Обфускация при этом остаётся: сигнатуру WireGuard снимают мусорные пакеты
+  // и подмена типа сообщения, а не набивка данных.
+  it('keeps the junk packets and the header rewrite on by default', () => {
+    const { obfuscation } = AmneziawgConfigSchema.parse({ ...base, obfuscation: {} });
+    expect(obfuscation.jc).toBeGreaterThan(0);
+    expect(obfuscation.s1).toBeGreaterThan(0);
+    expect(obfuscation.s2).toBeGreaterThan(0);
+    for (const h of [obfuscation.h1, obfuscation.h2, obfuscation.h3, obfuscation.h4]) {
+      expect(h).toBeGreaterThan(4);
+    }
+  });
+
+  // Отключены по умолчанию — не значит запрещены: нода их держит.
+  it('still takes them when an operator sets them deliberately', () => {
+    const cfg = AmneziawgConfigSchema.parse({
+      ...base,
+      obfuscation: { s3: 32, s4: 16 },
+    });
+    expect(cfg.obfuscation.s3).toBe(32);
+    expect(cfg.obfuscation.s4).toBe(16);
   });
 });

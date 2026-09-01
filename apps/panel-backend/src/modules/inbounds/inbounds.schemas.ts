@@ -517,8 +517,25 @@ const ObfuscationSchema = z.object({
   jmax: z.number().int().min(64).max(1024).default(128),
   s1: z.number().int().min(0).max(64).default(32),
   s2: z.number().int().min(0).max(64).default(56),
-  s3: z.number().int().min(0).max(64).default(32),
-  s4: z.number().int().min(0).max(32).default(16),
+  // S3/S4 по умолчанию ВЫКЛЮЧЕНЫ, хотя нода их умеет, — и это про клиента, а
+  // не про сервер. S1/S2 добивают пакеты рукопожатия, а S3/S4 — транспортные,
+  // то есть каждый пакет с данными. Панель отдаёт покупателю готовый .conf, и
+  // клиент, который эти ключи просто не знает и молча пропускает (WG Tunnel и
+  // всё семейство, читающее конфиг как обычный wg-quick), собирает
+  // транспортные пакеты без набивки. Рукопожатие при этом проходит, а данные
+  // не идут ВООБЩЕ: снаружи «подключился и не работает».
+  //
+  // Измерено на s2 2026-09-01: сервер с S3=32/S4=16 против клиента без них —
+  // handshake за 10 секунд, ping 1.1.1.1 3/3 потеряны. Тот же клиент против
+  // того же сервера с S3=0/S4=0 — 3/3 дошли. Ничего в логах ни с одной
+  // стороны.
+  //
+  // Остальная обфускация остаётся: Jc/Jmin/Jmax гонят мусорные пакеты перед
+  // рукопожатием, S1/S2 меняют его размеры, H1-H4 — тип сообщения. Сигнатуры
+  // WireGuard это снимает и без S3/S4. Оператор, который знает, что все его
+  // клиенты держат 2.0, включает их осознанно.
+  s3: z.number().int().min(0).max(64).default(0),
+  s4: z.number().int().min(0).max(32).default(0),
   // H1-H4 replace the WG message-type marker; the node's config.go validate()
   // requires each > 4, pairwise distinct, and fitting a uint32. The cross-field
   // distinctness check lives in AmneziawgConfigSchema's superRefine below.
