@@ -151,7 +151,15 @@ func (a *Adapter) AddUser(user core.User) error {
 	if user.MtprotoSecret == "" {
 		return fmt.Errorf("mtprotoproxy AddUser %s: no MtprotoSecret; the panel must issue it", user.UserID)
 	}
-	u := User{Name: user.UserID, Secret: user.MtprotoSecret}
+	u := User{
+		Name:   user.UserID,
+		Secret: user.MtprotoSecret,
+		// Backstops, not the enforcement. The panel removes an expired or
+		// over-quota user; these bound the window where it cannot reach us.
+		// MaxConns is deliberately left unset — see the note on the field.
+		ExpiresAt:  user.MtprotoExpiresAt,
+		QuotaBytes: user.MtprotoQuotaBytes,
+	}
 	if err := u.validate(); err != nil {
 		return fmt.Errorf("mtprotoproxy AddUser: %w", err)
 	}

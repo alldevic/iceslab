@@ -87,6 +87,29 @@ export interface ProtocolCredentials {
    * is a user who exists on the node and cannot connect.
    */
   mtprotoSecret?: string;
+  /**
+   * MTProto, `mtprotoproxy` engine only: the user's expiry, RFC 3339.
+   *
+   * A BACKSTOP, not the enforcement. The panel is what actually cuts an expired
+   * user off, by removing them from the pushed set; this is what keeps them cut
+   * during a window where the panel cannot reach the node. The proxy's own
+   * granularity is a DAY, so the node rounds it up — a backstop that fires
+   * early takes the channel from somebody who paid for it, and the precise cut
+   * is not its job.
+   */
+  mtprotoExpiresAt?: string;
+  /**
+   * MTProto, `mtprotoproxy` engine only: a ceiling on the bytes this user may
+   * move THROUGH THE PROXY SINCE IT LAST STARTED, both directions counted.
+   *
+   * Deliberately the user's whole traffic allowance rather than what is left of
+   * it. mtprotoproxy counts from zero at every process start and knows nothing
+   * about billing periods, so "remaining" compared against its counter would
+   * cut people who are well inside their plan. As a ceiling it never fires
+   * early and still stops a runaway; the real accounting happens in the panel
+   * off the per-user metrics.
+   */
+  mtprotoQuotaBytes?: number;
 }
 
 // ───── POST /addUser ─────

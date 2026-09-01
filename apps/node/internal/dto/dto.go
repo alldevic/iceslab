@@ -23,13 +23,19 @@ const (
 
 // EngineName identifies the proxy core that renders an inbound. Most protocols
 // have a single native core; the shared protocols can additionally be served
-// by the sing-box engine (engine-choice).
+// by the sing-box engine, and MTProto has two cores of its own (engine-choice).
 type EngineName string
 
 const (
 	EngineXray     EngineName = "xray"
 	EngineHysteria EngineName = "hysteria"
 	EngineSingbox  EngineName = "singbox"
+	// MTProto's two cores. `mtproto` is 9seconds/mtg, the native one and what
+	// NativeEngine returns; `mtprotoproxy` is alexbers/mtprotoproxy. The choice
+	// is not a rendering preference — mtg is single-secret upstream, so on it
+	// MTProto cannot be counted or revoked per user.
+	EngineMtproto      EngineName = "mtproto"
+	EngineMtprotoproxy EngineName = "mtprotoproxy"
 )
 
 // NativeEngine returns the default core for a protocol when an inbound does not
@@ -90,6 +96,13 @@ type ProtocolCredentials struct {
 	// inventing one — a secret the panel did not issue is a secret that does not
 	// match the link the buyer holds.
 	MtprotoSecret string `json:"mtprotoSecret,omitempty"`
+	// MtprotoExpiresAt (RFC 3339) and MtprotoQuotaBytes are BACKSTOPS the
+	// mtprotoproxy engine enforces on the node, for the window where the panel
+	// cannot reach it. The panel remains what actually cuts a user off. See the
+	// shared TypeScript for why the quota is the whole allowance rather than
+	// the remainder.
+	MtprotoExpiresAt  string `json:"mtprotoExpiresAt,omitempty"`
+	MtprotoQuotaBytes int64  `json:"mtprotoQuotaBytes,omitempty"`
 }
 
 // ───── POST /addUser ─────

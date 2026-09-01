@@ -118,6 +118,10 @@ interface ActiveUser {
   naivePassword: string;
   /** Device policy, read here for the same reason the subscription reads it:
    *  both provision devices and must provision the same number. */
+  /** The MTProto backstops (mtprotoproxy engine). Read here because the push
+   *  carries them; nothing else on this path uses either. */
+  expireAt: Date | null;
+  trafficLimitBytes: bigint | null;
   hwidDeviceLimit: number | null;
   groupMembers: { group: { hwidDeviceLimit: number | null } }[];
 }
@@ -154,6 +158,8 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
       hysteriaPassword: true,
       amneziawgPublicKey: true,
       naivePassword: true,
+      expireAt: true,
+      trafficLimitBytes: true,
       // Slice 51: the push provisions the SAME number of devices the
       // subscription hands out, so both need the same inputs. When they
       // disagreed, the extra devices existed in the database with an address
@@ -689,6 +695,11 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         // See buildAddUserRequest: derived, sent unconditionally, ignored by the
         // engine that has no user concept.
         mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
+        // See buildAddUserRequest for what these bound and why the quota is
+        // the whole allowance.
+        mtprotoExpiresAt: u.expireAt ? u.expireAt.toISOString() : undefined,
+        mtprotoQuotaBytes:
+          u.trafficLimitBytes !== null ? Number(u.trafficLimitBytes) : undefined,
       },
     },
   }));

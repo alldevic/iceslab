@@ -129,6 +129,9 @@ func fullyEquippedNode(t *testing.T) {
 		"WIREGUARD_QUICK_BIN": touch("wg-quick"),
 		"CADDY_NAIVE_BIN":     touch("caddy-naive"),
 		"HYSTERIA_BINARY":     touch("hysteria"),
+		// The second MTProto engine is gated on its SCRIPT, not a binary: it is
+		// Python source the node runs through python3.
+		"MTPROTOPROXY_SCRIPT": touch("mtprotoproxy.py"),
 	} {
 		t.Setenv(k, v)
 	}

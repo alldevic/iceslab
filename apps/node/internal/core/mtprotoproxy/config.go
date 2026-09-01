@@ -75,9 +75,20 @@ type User struct {
 	// (mtprotoproxy.py:1710).
 	QuotaBytes int64
 
-	// MaxConns zero means unlimited. Closest thing the proxy has to a device
-	// limit; it caps concurrent TCP connections, not devices, so a single
-	// chatty client can eat the allowance of a second one.
+	// MaxConns zero means unlimited, and the panel leaves it that way on
+	// purpose.
+	//
+	// It reads like a device limit and is not one: it caps CONCURRENT TCP
+	// connections (`curr_connects`, mtprotoproxy.py:1693), and one Telegram
+	// client holds several at once — a main DC, a media DC, more while a file
+	// is moving. So mapping a buyer's device allowance onto it 1:1 would
+	// disconnect people who are inside their plan, and no honest multiplier
+	// suggests itself: upstream documents none, and the real number depends on
+	// what the client is doing.
+	//
+	// A cap that cuts paying users is worse than no cap, so the panel sends
+	// none. The field stays supported for an operator who sets one deliberately
+	// with a number they have measured.
 	MaxConns int
 }
 

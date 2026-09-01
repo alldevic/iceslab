@@ -2,6 +2,8 @@
 // adapter (Hysteria, Xray, AmneziaWG, NaiveProxy) implements.
 package core
 
+import "time"
+
 // User is the normalized form of dto.AddUserRequest. The dispatcher copies
 // only the protocol-specific credentials each adapter cares about, the rest
 // are zero-valued and ignored.
@@ -25,14 +27,19 @@ type User struct {
 	// relies on.
 	AmneziaWGPresharedKey string
 	WireguardPresharedKey string
-	TuicUUID           string
-	TuicPassword       string
-	AnytlsPassword     string
-	ShadowtlsPassword  string
+	TuicUUID              string
+	TuicPassword          string
+	AnytlsPassword        string
+	ShadowtlsPassword     string
 	// MtprotoSecret is the user's own MTProto secret (32 hex chars). Only set
 	// for the mtprotoproxy engine; mtg derives its single secret from the
 	// inbound and ignores this.
 	MtprotoSecret string
+	// MtprotoExpiresAt is zero when the user has no expiry. MtprotoQuotaBytes
+	// is zero for unlimited. Both are backstops the mtprotoproxy engine applies
+	// locally; the panel is what actually removes an expired or over-quota user.
+	MtprotoExpiresAt  time.Time
+	MtprotoQuotaBytes int64
 }
 
 // AbusePolicy (U4) selects which built-in anti-abuse routing rules a core

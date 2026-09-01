@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"testing"
@@ -299,4 +300,113 @@ sys.exit(1)
 	if got != "cryptography" && got != "pycryptodome" && got != "pyaes" {
 		t.Errorf("probe printed %q, expected one of the three backend names", got)
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The backstops. This is what the whole engine change was for: on mtg an
+// expired, disabled or deleted buyer keeps working forever, and so does anyone
+// they forwarded the link to.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestExpiryAndQuotaReachTheConfig(t *testing.T) {
+	a := newTestAdapter(t)
+	err := a.AddUser(core.User{
+		UserID:            "u1",
+		MtprotoSecret:     secretA,
+		MtprotoExpiresAt:  time.Date(2026, 10, 4, 15, 35, 0, 0, time.UTC),
+		MtprotoQuotaBytes: 500 * 1024 * 1024 * 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := os.ReadFile(a.cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runPy(t, blob)
+
+	exp := got["USER_EXPIRATIONS"].(map[string]any)
+	// The day AFTER: mtprotoproxy cuts at 00:00 of the named date, so writing
+	// 04/10 would end a subscription that runs to 15:35 about sixteen hours
+	// early. The panel owns the precise cut.
+	if exp["u1"] != "05/10/2026" {
+		t.Errorf("USER_EXPIRATIONS[u1] = %v, want 05/10/2026", exp["u1"])
+	}
+	quota := got["USER_DATA_QUOTA"].(map[string]any)
+	if int64(quota["u1"].(float64)) != 500*1024*1024*1024 {
+		t.Errorf("USER_DATA_QUOTA[u1] = %v", quota["u1"])
+	}
+}
+
+func TestNoLimitsMeansNoKeysAtAll(t *testing.T) {
+	// A user on an unlimited plan must not acquire a quota or an expiry from
+	// a zero value: mtprotoproxy treats a present key as a limit, so a zero
+	// would read as "expired in year one" / "quota of nothing".
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := os.ReadFile(a.cfg.ConfigPath)
+	got := runPy(t, blob)
+	for _, k := range []string{"USER_EXPIRATIONS", "USER_DATA_QUOTA", "USER_MAX_TCP_CONNS"} {
+		if _, present := got[k]; present {
+			t.Errorf("%s emitted for a user with no limits: %v", k, got[k])
+		}
+	}
+}
+
+func TestConnectionCapIsNeverSetByThePush(t *testing.T) {
+	// USER_MAX_TCP_CONNS reads like a device limit and is not one: it caps
+	// CONCURRENT connections, and one Telegram client holds several. A cap that
+	// disconnects paying users is worse than no cap, so nothing on the wire
+	// carries it — an operator sets it deliberately or not at all.
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{
+		UserID:            "u1",
+		MtprotoSecret:     secretA,
+		MtprotoQuotaBytes: 1 << 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := os.ReadFile(a.cfg.ConfigPath)
+	if _, present := runPy(t, blob)["USER_MAX_TCP_CONNS"]; present {
+		t.Error("the push set a connection cap; nothing on the wire should be able to")
+	}
+}
+
+func TestChangingALimitReloads(t *testing.T) {
+	// A renewed subscription changes only the expiry. If that did not count as
+	// a change the node would keep cutting the user off at the old date.
+	a := newTestAdapter(t)
+	u := core.User{
+		UserID: "u1", MtprotoSecret: secretA,
+		MtprotoExpiresAt: time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC),
+	}
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	u.MtprotoExpiresAt = time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := a.renderAndWrite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Error("the second push did not land: the config still differs from the state")
+	}
+	got := runPy(t, mustRead(t, a.cfg.ConfigPath))
+	if got["USER_EXPIRATIONS"].(map[string]any)["u1"] != "05/11/2026" {
+		t.Errorf("expiry did not move: %v", got["USER_EXPIRATIONS"])
+	}
+}
+
+func mustRead(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

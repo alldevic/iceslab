@@ -121,6 +121,10 @@ export async function buildAddUserRequest(userId: string): Promise<AddUserPayloa
       naivePassword: true,
       xrayUuid: true,
       amneziawgPublicKey: true,
+      // The MTProto backstops travel with the user, so the push has to read
+      // them. Nothing else on this path uses either field.
+      expireAt: true,
+      trafficLimitBytes: true,
     },
   });
   if (!user) return { kind: 'not-found' };
@@ -165,6 +169,15 @@ export async function buildAddUserRequest(userId: string): Promise<AddUserPayloa
         // writes this into USERS and reports metrics labelled with the user it
         // belongs to.
         mtprotoSecret: deriveMtprotoSecret(user.xrayUuid),
+        // The two MTProto backstops. The panel is what actually cuts an
+        // expired or over-quota user off — it stops pushing them; these bound
+        // the window where it cannot reach the node. Quota is the WHOLE
+        // allowance, not the remainder: mtprotoproxy counts from zero at every
+        // process start and knows nothing about billing periods, so a
+        // remainder would cut people well inside their plan.
+        mtprotoExpiresAt: user.expireAt ? user.expireAt.toISOString() : undefined,
+        mtprotoQuotaBytes:
+          user.trafficLimitBytes !== null ? Number(user.trafficLimitBytes) : undefined,
       },
     },
   };
@@ -271,6 +284,8 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
     naivePassword: string;
     xrayUuid: string;
     amneziawgPublicKey: string;
+    expireAt: Date | null;
+    trafficLimitBytes: bigint | null;
   }
 
   // B14 - stream active users in id-ordered cursor pages instead of loading the
@@ -297,6 +312,8 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
         naivePassword: true,
         xrayUuid: true,
         amneziawgPublicKey: true,
+        expireAt: true,
+        trafficLimitBytes: true,
       },
       orderBy: { id: 'asc' },
       take: BACKFILL_PAGE,
@@ -329,6 +346,11 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
               // See buildAddUserRequest: derived, sent unconditionally, ignored by the
               // engine that has no user concept.
               mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
+              // See buildAddUserRequest for what these bound and why the quota is
+              // the whole allowance.
+              mtprotoExpiresAt: u.expireAt ? u.expireAt.toISOString() : undefined,
+              mtprotoQuotaBytes:
+                u.trafficLimitBytes !== null ? Number(u.trafficLimitBytes) : undefined,
             },
           };
           return transport.addUser(req);
