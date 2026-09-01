@@ -51,7 +51,7 @@ export const ProtocolEnum = z.enum([
 ]);
 
 // Engine-choice (EC5): which proxy core serves a profile. null = native.
-export const EngineEnum = z.enum(['xray', 'hysteria', 'singbox']);
+export const EngineEnum = z.enum(['xray', 'hysteria', 'singbox', 'mtproto', 'mtprotoproxy']);
 
 // Which engines each protocol may be served by. The shared protocols can run on
 // their native core OR sing-box; everything else has a single native core, so
@@ -68,6 +68,13 @@ const ENGINE_OPTIONS: Record<string, readonly string[]> = {
   tuic: ['singbox'],
   anytls: ['singbox'],
   shadowtls: ['singbox'],
+  // MTProto has two cores and the choice is not cosmetic. `mtproto` (mtg) is
+  // single-secret upstream: every user on the inbound shares one secret, so the
+  // channel cannot be counted, cannot be revoked for one buyer, and keeps
+  // working for anyone the link was forwarded to. `mtprotoproxy` gives each
+  // user their own secret, expiry, quota and metrics. Native stays mtg so no
+  // existing profile changes meaning.
+  mtproto: ['mtproto', 'mtprotoproxy'],
 };
 
 /**

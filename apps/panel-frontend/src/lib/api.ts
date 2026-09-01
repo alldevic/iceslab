@@ -1633,7 +1633,7 @@ export async function deleteCascade(id: string): Promise<void> {
 // template (shared across nodes), a Binding deploys it to a specific node
 // with optional per-node overrides.
 
-export type EngineName = 'xray' | 'hysteria' | 'singbox';
+export type EngineName = 'xray' | 'hysteria' | 'singbox' | 'mtproto' | 'mtprotoproxy';
 
 export interface Profile {
   id: string;

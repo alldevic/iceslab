@@ -79,7 +79,7 @@ interface Kind {
   /** Which `PROTOCOL_CONFIG_SCHEMAS` entry validates what the form builds. */
   protocol: keyof typeof PROTOCOL_CONFIG_SCHEMAS;
   /** `null` when the protocol has one core; the pinned engine otherwise. */
-  engine: 'singbox' | null;
+  engine: 'singbox' | 'mtprotoproxy' | null;
   /** The values no default could supply. Absent = the defaults are complete. */
   fill?: (user: User) => Promise<void>;
 }
@@ -110,7 +110,15 @@ const KINDS: Kind[] = [
       await type(user, /TLS contact email/i, 'ops@example.com');
     },
   },
-  { label: 'MTProto (Telegram-only, mtg)', protocol: 'mtproto', engine: null },
+  { label: 'MTProto (Telegram-only, mtg — one shared secret)', protocol: 'mtproto', engine: null },
+  // The same protocol on its other core. Worth its own row rather than trusting
+  // the mtg one: the two differ in what the form must SEND, and a form that
+  // silently sent null here would move every buyer back to the shared secret.
+  {
+    label: 'MTProto (Telegram-only, multi-user — secret per user)',
+    protocol: 'mtproto',
+    engine: 'mtprotoproxy',
+  },
   { label: 'Mieru (stealth proxy)', protocol: 'mieru', engine: null },
   {
     label: 'Xray (VLESS/VMess/Trojan)',

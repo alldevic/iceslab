@@ -128,6 +128,29 @@ export function deriveAnytlsPassword(xrayUuid: string): string {
 }
 
 /**
+ * Deterministic per-user MTProto secret: 32 hex chars = the 16 raw bytes
+ * Telegram mandates.
+ *
+ * This is the RAW secret, not the FakeTLS `ee<secret><domain-hex>` form. The
+ * node writes it into mtprotoproxy's USERS and mtprotoproxy builds the FakeTLS
+ * form itself; the subscription builds the same form for the buyer's link (see
+ * mtprotoFakeTlsSecret). Two spellings of one value, derived once here.
+ *
+ * Only meaningful on the `mtprotoproxy` engine. The mtg engine derives its
+ * single secret from the INBOUND (mtprotoSecret) because it has no user
+ * concept — which is exactly the limitation the other engine exists to remove.
+ *
+ * Same "don't grow the credential surface" approach as TUIC/AnyTLS/ShadowTLS:
+ * derived from the user's UUID, no DB column, and the node and the subscription
+ * generator arrive at the identical value independently.
+ */
+export function deriveMtprotoSecret(xrayUuid: string): string {
+  // .slice(32) on hex = 16 bytes. Telegram rejects longer secrets outright
+  // ("Invalid proxy link"), which is why the length is not a free choice.
+  return createHash('sha256').update(`${xrayUuid}:mtproto`).digest('hex').slice(0, 32);
+}
+
+/**
  * Deterministic per-user ShadowTLS password (the shadowtls v3 users[] password).
  * Arbitrary string - shadowtls does not constrain it - so we reuse the TUIC/AnyTLS
  * approach (hash the UUID, no new credential surface). The node receives the same

@@ -22,6 +22,7 @@ export {
   buildMtprotoUri,
   buildMtprotoTmeUri,
   mtprotoSecret,
+  mtprotoFakeTlsSecret,
   type MtprotoUriOpts,
 } from '../../core-adapters/mtproto/index.js';
 export {

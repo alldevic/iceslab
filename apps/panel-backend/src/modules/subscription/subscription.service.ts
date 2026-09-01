@@ -20,7 +20,7 @@ import { isAutoRouteTag } from '../cascades/cascade.config.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
-import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/credentials.js';
+import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword, deriveMtprotoSecret } from '../../lib/credentials.js';
 import {
   buildAnytlsUri,
   buildHysteriaUri,
@@ -36,6 +36,7 @@ import {
   encodePlainList,
   hostFromAddress,
   mtprotoSecret,
+  mtprotoFakeTlsSecret,
   type ShadowsocksMethod,
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
@@ -1097,13 +1098,23 @@ export async function generateSubscription(
         });
       }
     } else if (ib.protocol === 'mtproto') {
-      // Slice 41: Telegram MTProto via 9seconds/mtg. Architectural note:
-      // mtg is intentionally single-secret upstream. So every user
-      // assigned to this inbound's squad receives the SAME secret + URL.
-      // We derive once per inbound from (inboundId, domain). Domain
-      // change rotates the secret. No per-user accounting available.
+      // Two engines, and the difference is visible right here — this is the one
+      // place a buyer's MTProto link is made.
+      //
+      // mtg (native) is single-secret upstream, so every user in the squad gets
+      // the SAME secret and URL, derived once per inbound from
+      // (inboundId, domain). Nothing about it can be counted or revoked per
+      // user: a disabled, expired or deleted buyer keeps working, as does
+      // anyone they forwarded the link to.
+      //
+      // mtprotoproxy gives the user their own secret. The node writes the raw
+      // half into USERS and rebuilds this same FakeTLS string from it, so the
+      // link below and the server agree without either side being told.
       const cfg = ib.config as unknown as { domain: string };
-      const secret = mtprotoSecret(ib.id, cfg.domain);
+      const secret =
+        ib.engine === 'mtprotoproxy' && user.xrayUuid
+          ? mtprotoFakeTlsSecret(deriveMtprotoSecret(user.xrayUuid), cfg.domain)
+          : mtprotoSecret(ib.id, cfg.domain);
       endpoints.push({
         protocol: 'mtproto',
         nodeName,

@@ -12,7 +12,7 @@ import { inboundSyncJobs } from '../../lib/metrics.js';
 import { allocatePeer, preallocatePeers } from '../amneziawg/amneziawg.service.js';
 import { ensureDevicesForUsers, resolveWgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import { getCascadeFragmentsForNode } from '../cascades/cascade.service.js';
-import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/credentials.js';
+import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/credentials.js';
 import { applyEgressForNode } from '../egress/egress.push.js';
 import { getLogger } from '../../lib/logger.js';
 import { resolveBindingConfig } from '../profiles/profiles.service.js';
@@ -686,6 +686,9 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         tuicPassword: deriveTuicPassword(u.xrayUuid),
         anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
         shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
+        // See buildAddUserRequest: derived, sent unconditionally, ignored by the
+        // engine that has no user concept.
+        mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
       },
     },
   }));

@@ -25,8 +25,14 @@ export type ProtocolName =
 /** Which proxy core renders an inbound. Most protocols have a single native
  *  core; the shared protocols (vless/vmess/trojan + ss on xray-core, hy2 on
  *  hysteria) can alternatively be served by the sing-box engine. tuic/anytls
- *  are singbox-only. Omit `engine` on an inbound to use the native core. */
-export type EngineName = 'xray' | 'hysteria' | 'singbox';
+ *  are singbox-only. Omit `engine` on an inbound to use the native core.
+ *
+ *  `mtprotoproxy` is the second MTProto core (alexbers/mtprotoproxy) beside the
+ *  native mtg. It is not a rendering preference: mtg is single-secret by
+ *  design, so on it MTProto cannot be counted or revoked per user, and the
+ *  other engine is the only way to express MTProto as a tariff line rather than
+ *  a shared password. */
+export type EngineName = 'xray' | 'hysteria' | 'singbox' | 'mtproto' | 'mtprotoproxy';
 
 export interface ProtocolCredentials {
   hysteriaPassword?: string;

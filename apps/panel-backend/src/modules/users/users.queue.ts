@@ -3,7 +3,7 @@ import type { AddUserRequest, RemoveUserRequest } from '@iceslab/shared';
 import { queueRedis } from '../../lib/redis.js';
 import { prisma } from '../../prisma.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
-import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/credentials.js';
+import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/credentials.js';
 import { getLogger } from '../../lib/logger.js';
 
 // ───── Job data shapes ─────
@@ -159,6 +159,12 @@ export async function buildAddUserRequest(userId: string): Promise<AddUserPayloa
         tuicPassword: deriveTuicPassword(user.xrayUuid),
         anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
         shadowtlsPassword: deriveShadowtlsPassword(user.xrayUuid),
+        // Sent unconditionally, like its neighbours above: the value is derived,
+        // not stored, and an adapter with no use for it ignores it. The mtg engine
+        // is exactly such an adapter — it has no user concept — while mtprotoproxy
+        // writes this into USERS and reports metrics labelled with the user it
+        // belongs to.
+        mtprotoSecret: deriveMtprotoSecret(user.xrayUuid),
       },
     },
   };
@@ -320,6 +326,9 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
               tuicPassword: deriveTuicPassword(u.xrayUuid),
               anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
               shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
+              // See buildAddUserRequest: derived, sent unconditionally, ignored by the
+              // engine that has no user concept.
+              mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
             },
           };
           return transport.addUser(req);

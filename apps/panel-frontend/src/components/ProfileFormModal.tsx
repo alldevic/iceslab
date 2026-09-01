@@ -23,6 +23,7 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
+import type { EngineName } from '../lib/api';
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconAlertTriangle,
@@ -106,14 +107,25 @@ const PATH_HOST_TRANSPORTS = ['ws', 'xhttp', 'httpupgrade'];
 // "sing-box" group, and the sing-box-only protocols (TUIC / AnyTLS / ShadowTLS)
 // live in that group too. Picking an item sets both the protocol and the engine.
 
-// Protocols that can run on the sing-box engine besides their native core.
-// Mirrors the backend's ENGINE_OPTIONS; also gates the engine field in buildConfig.
-const ENGINE_CHOICE_PROTOCOLS = ['xray', 'hysteria', 'shadowsocks'];
+// Protocols with MORE THAN ONE core to choose from. Mirrors the backend's
+// ENGINE_OPTIONS, and CascadeEditor.rules.test.ts pins that the two agree.
+//
+// It used to read "protocols that can run on the sing-box engine", which was
+// true while sing-box was the only alternative core. mtproto's second core is
+// mtprotoproxy, not sing-box, so the name means what it says now: a choice
+// exists, whatever the choice is between.
+const ENGINE_CHOICE_PROTOCOLS = ['xray', 'hysteria', 'shadowsocks', 'mtproto'];
+
+// A profile's engine as the FORM models it. 'native' means "the protocol's own
+// core"; the rest name a specific one. It used to be a boolean in disguise
+// ('native' | 'singbox') — widening it is what stops a profile on a third
+// engine from being silently rewritten to native on save.
+type FormEngine = 'native' | 'singbox' | 'mtprotoproxy';
 
 interface ProfileKind {
   key: string;
   protocol: ProtocolName;
-  engine: 'native' | 'singbox';
+  engine: FormEngine;
   label: string;
 }
 
@@ -127,7 +139,17 @@ const PROFILE_KINDS: ProfileKind[] = [
   { key: 'amneziawg', protocol: 'amneziawg', engine: 'native', label: 'AmneziaWG' },
   { key: 'wireguard', protocol: 'wireguard', engine: 'native', label: 'WireGuard' },
   { key: 'naive', protocol: 'naive', engine: 'native', label: 'NaiveProxy' },
-  { key: 'mtproto', protocol: 'mtproto', engine: 'native', label: 'MTProto (Telegram-only, mtg)' },
+  { key: 'mtproto', protocol: 'mtproto', engine: 'native', label: 'MTProto (Telegram-only, mtg — one shared secret)' },
+  {
+    key: 'mtproto#mtprotoproxy',
+    protocol: 'mtproto',
+    engine: 'mtprotoproxy',
+    // Named by what it changes for the operator, not by the package: on mtg
+    // every user of the inbound shares one secret, so MTProto cannot be
+    // counted, cannot be revoked for one buyer, and keeps working for whoever
+    // the link was forwarded to.
+    label: 'MTProto (Telegram-only, multi-user — secret per user)',
+  },
   { key: 'mieru', protocol: 'mieru', engine: 'native', label: 'Mieru (stealth proxy)' },
   { key: 'xray#singbox', protocol: 'xray', engine: 'singbox', label: 'Xray (VLESS/VMess/Trojan)' },
   { key: 'hysteria#singbox', protocol: 'hysteria', engine: 'singbox', label: 'Hysteria 2' },
@@ -141,15 +163,23 @@ const PROFILE_KIND_BY_KEY = new Map(PROFILE_KINDS.map((k) => [k.key, k] as const
 
 // The Select key for a (protocol, engine) pair. Only a shared protocol on
 // sing-box gets the suffix; sing-box-only protocols key by their own name.
-function profileKindKey(protocol: string, engine: 'native' | 'singbox'): string {
-  return engine === 'singbox' && ENGINE_CHOICE_PROTOCOLS.includes(protocol)
-    ? `${protocol}#singbox`
-    : protocol;
+function profileKindKey(protocol: string, engine: FormEngine): string {
+  if (engine === 'singbox' && ENGINE_CHOICE_PROTOCOLS.includes(protocol)) {
+    return `${protocol}#singbox`;
+  }
+  // A protocol whose second core is not sing-box keys by its own engine name.
+  // Without this branch an mtprotoproxy profile matches the mtg entry, the
+  // Select shows the wrong core, and saving writes it back as mtg.
+  if (engine !== 'native' && engine !== 'singbox') return `${protocol}#${engine}`;
+  return protocol;
 }
 
 // Grouped Select data (create mode): native cores first, then a sing-box group.
 const PROFILE_PROTOCOL_GROUPED = [
-  ...PROFILE_KINDS.filter((k) => k.engine === 'native').map((k) => ({ value: k.key, label: k.label })),
+  // Everything that is not sing-box sits at the top level, including a second
+  // NATIVE core like mtprotoproxy: the sing-box group means "served by
+  // sing-box", not "not the default".
+  ...PROFILE_KINDS.filter((k) => k.engine !== 'singbox').map((k) => ({ value: k.key, label: k.label })),
   {
     group: 'sing-box',
     items: PROFILE_KINDS.filter((k) => k.engine === 'singbox').map((k) => ({
@@ -167,8 +197,9 @@ interface FormValues {
   name: string;
   description: string;
   enabled: boolean;
-  // Engine-choice: 'native' = the protocol's native core, 'singbox' = sing-box.
-  engine: 'native' | 'singbox';
+  // Engine-choice: 'native' = the protocol's native core, otherwise the core by
+  // name. See FormEngine.
+  engine: FormEngine;
 
   // Hysteria
   hyObfsPassword: string;
@@ -365,7 +396,12 @@ function defaults(profile: Profile | null): FormValues {
     name: profile?.name ?? '',
     description: profile?.description ?? '',
     enabled: profile?.enabled ?? true,
-    engine: profile?.engine === 'singbox' ? 'singbox' : 'native',
+    // Round-trips the stored engine instead of collapsing anything unknown to
+    // 'native'. It used to read `=== 'singbox' ? 'singbox' : 'native'`, which
+    // meant opening a profile on any other core and pressing Save silently
+    // moved it back to the native one — for MTProto that would take every
+    // buyer's per-user secret away at once.
+    engine: (profile?.engine as FormEngine | undefined) ?? 'native',
 
     hyObfsPassword: '',
     hyMasqueradeUrl: '',
@@ -1024,12 +1060,19 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
         break;
     }
 
-    // Engine-choice: only the shared protocols carry a non-native engine;
-    // everything else stays null (native). A 'native' selection -> null.
-    const engine: 'singbox' | null =
-      ENGINE_CHOICE_PROTOCOLS.includes(values.protocol) && values.engine === 'singbox'
-        ? 'singbox'
-        : null;
+    // Engine-choice: 'native' means the protocol's own core, which the API
+    // spells as null. Any other selection is sent by name. The sing-box case
+    // stays gated on the protocols that can actually run on it; a protocol with
+    // its own second core (mtproto -> mtprotoproxy) is not in that list and
+    // must not be filtered out by it.
+    const engine: EngineName | null =
+      values.engine === 'native'
+        ? null
+        : values.engine === 'singbox'
+          ? ENGINE_CHOICE_PROTOCOLS.includes(values.protocol)
+            ? 'singbox'
+            : null
+          : (values.engine as EngineName);
 
     if (isEdit) {
       const update: UpdateProfileInput = {
@@ -2455,7 +2498,7 @@ function EnginePicker({
   protocol,
   onPick,
 }: {
-  engine: 'native' | 'singbox';
+  engine: FormEngine;
   protocol: string;
   onPick: (kind: ProfileKind) => void;
 }) {
@@ -2809,7 +2852,7 @@ function EnginePicker({
  */
 type EngineTab = 'native' | 'xray' | 'singbox';
 
-function engineTabOf(protocol: string, engine: 'native' | 'singbox'): EngineTab {
+function engineTabOf(protocol: string, engine: FormEngine): EngineTab {
   if (engine === 'singbox') return 'singbox';
   return protocol === 'xray' || protocol === 'shadowsocks' ? 'xray' : 'native';
 }
@@ -2822,7 +2865,7 @@ const PROTOCOL_TILE_HINT: Record<string, string> = {
   amneziawg: 'WireGuard with obfuscation',
   wireguard: 'Plain WireGuard, native clients',
   naive: 'Chromium TLS, Caddy fork',
-  mtproto: 'Telegram only, no per-user stats',
+  mtproto: 'Telegram only; per-user stats on the multi-user core',
   mieru: 'Stealth proxy, no handshake',
   'xray#singbox': 'VLESS, VMess, Trojan',
   'hysteria#singbox': 'Same protocol, one less process',

@@ -90,6 +90,22 @@ export function buildMtprotoTmeUri(
  * of what it is pushed (the `ee` prefix and a strict hex alphabet, because the
  * value is printed straight into TOML) and trusts the value.
  */
+/**
+ * Wrap a RAW 32-hex-char secret into the FakeTLS form Telegram expects:
+ * `ee<secret><domain-hex>`.
+ *
+ * Two callers derive the raw half differently and share this tail. On the mtg
+ * engine it comes from the inbound (mtprotoSecret below); on mtprotoproxy it
+ * comes from the user (deriveMtprotoSecret). The wrapping is identical, and
+ * mtprotoproxy builds the very same string on its side from USERS + TLS_DOMAIN
+ * (mtprotoproxy.py:2189) — so the link the buyer holds and the secret the node
+ * knows agree without either side hearing about the other.
+ */
+export function mtprotoFakeTlsSecret(rawSecretHex: string, domain: string): string {
+  const domainHex = Buffer.from(domain, 'utf8').toString('hex');
+  return `ee${rawSecretHex}${domainHex}`;
+}
+
 export function mtprotoSecret(inboundId: string, domain: string): string {
   // FakeTLS (`ee` prefix) wire format: 1-byte prefix + 16-byte random + hex
   // of the masquerade domain. Telegram's mtproto client (mobile + desktop)
@@ -99,6 +115,5 @@ export function mtprotoSecret(inboundId: string, domain: string): string {
   const seed = `${inboundId}:${domain}`;
   const seedBytes = createHash('sha256').update(seed, 'utf8').digest().subarray(0, 16);
   const seedHex = seedBytes.toString('hex'); // 32 hex chars (16 bytes)
-  const domainHex = Buffer.from(domain, 'utf8').toString('hex');
-  return `ee${seedHex}${domainHex}`;
+  return mtprotoFakeTlsSecret(seedHex, domain);
 }
