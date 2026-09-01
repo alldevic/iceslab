@@ -157,8 +157,16 @@ func (a *Adapter) Stop(ctx context.Context) error {
 // inventing one here produces a user who exists on the node and cannot connect
 // — the failure that looks like a network problem and is not.
 func (a *Adapter) AddUser(user core.User) error {
+	// No secret means this push is not for us. The panel fans one credential
+	// blob out to EVERY adapter — a wg device push carries only wg fields, and
+	// each adapter takes what it recognises. Refusing here made the node log a
+	// warning per device per sync, for a push that was never ours to answer.
+	//
+	// The guard this replaces was aimed at a real MTProto user arriving without
+	// a secret. That cannot happen quietly: the panel derives it for every user
+	// unconditionally, and the derivation is mirrored by a test on both sides.
 	if user.MtprotoSecret == "" {
-		return fmt.Errorf("mtprotoproxy AddUser %s: no MtprotoSecret; the panel must issue it", user.UserID)
+		return nil
 	}
 	u := User{
 		Name:   user.UserID,
@@ -240,6 +248,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		a.logger.Info("mtprotoproxy ApplyInbound: config unchanged, skipping")
 		return nil
 	}
+	prevLegacy, prevDomain, prevPort := a.legacySecret, a.cfg.Inbound.Domain, a.cfg.Inbound.ListenPort
 	a.legacySecret = legacy
 	a.cfg.Inbound.Domain = wire.Domain
 	if effectivePort != 0 {
@@ -251,7 +260,19 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// A domain or port change is a listener change, not a user-set change, so
 	// it needs a restart — SIGUSR2 re-reads the config but does not rebind.
 	a.logger.Info("mtprotoproxy ApplyInbound: restarting", "domain", wire.Domain, "port", newPort)
-	return a.regenerateAndRestart(context.Background())
+	if err := a.regenerateAndRestart(context.Background()); err != nil {
+		// Put the remembered config BACK. Committing it before the work that
+		// can fail turns one failure into a permanent one: the next identical
+		// push compares equal, logs "config unchanged, skipping", and the
+		// adapter never tries again. Measured in the field 2026-09-02 — a
+		// missing ReadWritePaths entry made the first write fail, and every
+		// retry after it was skipped rather than retried.
+		a.mu.Lock()
+		a.legacySecret, a.cfg.Inbound.Domain, a.cfg.Inbound.ListenPort = prevLegacy, prevDomain, prevPort
+		a.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // GetStats reports per-user counters, which is the reason this engine exists.

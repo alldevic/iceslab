@@ -564,3 +564,59 @@ mtprotoproxy_user_octets_to{user="revoked"} 2000
 			st.TotalBytesIn, st.TotalBytesOut)
 	}
 }
+
+func TestAFailedApplyIsRetried(t *testing.T) {
+	// Committing the remembered config before the work that can fail turns one
+	// failure into a permanent one: the next identical push compares equal,
+	// logs "config unchanged, skipping", and the adapter never tries again.
+	//
+	// Not hypothetical. On the first cutover the node's systemd unit had no
+	// ReadWritePaths entry for the config directory, the write failed with
+	// "read-only file system", and every retry after it was skipped rather than
+	// retried — so the proxy stayed down after the cause was fixed.
+	dir := t.TempDir()
+	unwritable := filepath.Join(dir, "nope")
+	if err := os.Mkdir(unwritable, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unwritable, 0o700) })
+
+	a := New(Config{
+		ConfigPath: filepath.Join(unwritable, "config.py"),
+		Inbound:    InboundConfig{ListenPort: 2083},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	cfg := json.RawMessage(`{"domain":"www.cloudflare.com"}`)
+	if err := a.ApplyInbound(2083, cfg); err == nil {
+		t.Fatal("a write to a read-only directory should have failed")
+	}
+	// The state must NOT have been kept, or the retry below is a no-op.
+	if a.cfg.Inbound.Domain != "" {
+		t.Errorf("the failed apply kept its config: domain = %q", a.cfg.Inbound.Domain)
+	}
+
+	// Fix the cause, push the SAME config again: it must be attempted, not
+	// skipped as unchanged.
+	if err := os.Chmod(unwritable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ApplyInbound(2083, cfg); err != nil {
+		t.Fatalf("the retry after fixing the cause failed: %v", err)
+	}
+	if _, err := os.Stat(a.cfg.ConfigPath); err != nil {
+		t.Errorf("the retry was skipped as unchanged; no config was written: %v", err)
+	}
+}
+
+func TestAPushWithNoMtprotoSecretIsNotOurs(t *testing.T) {
+	// The panel fans one credential blob out to every adapter. A wg DEVICE push
+	// carries only wg fields, and refusing it made the node log a warning per
+	// device per sync for a push that was never ours to answer.
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "some-device-id"}); err != nil {
+		t.Fatalf("a push with no MTProto credential should be ignored, got %v", err)
+	}
+	if len(a.users) != 0 {
+		t.Error("a push that is not ours was recorded as a user")
+	}
+}
