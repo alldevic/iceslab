@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { hasNestedQuantifier } from './srr.schemas.js';
+import { hasNestedQuantifier, SrrFormat } from './srr.schemas.js';
+import { SUBSCRIPTION_FORMATS } from '../subscription/subscription.format-names.js';
 
 describe('hasNestedQuantifier (ReDoS heuristic)', () => {
   it('flags nested quantifiers as unsafe', () => {
@@ -32,6 +33,33 @@ describe('hasNestedQuantifier (ReDoS heuristic)', () => {
     ];
     for (const p of safe) {
       expect(hasNestedQuantifier(p), p).toBe(false);
+    }
+  });
+});
+
+// The rule's format list is a THIRD copy of the format vocabulary, after the
+// route's query enum and the host gate's - and it drifted exactly the way the
+// header of subscription.format-names.ts describes the other two drifting.
+// `xrayjson-array` was renderable and reachable only by a `?format=` nobody
+// sends, so the format built FOR Happ could not be given to Happ.
+//
+// Both directions are asserted. A format the route cannot render is a rule that
+// silently serves something else; a whole-subscription format the route renders
+// but no rule can name is a client that cannot be sent to it.
+describe('the User-Agent rule format vocabulary', () => {
+  // Per-node artefacts, not whole-subscription renderings: no UA resolves here.
+  const NOT_UA_SELECTABLE = ['amneziavpn'];
+
+  it('names only formats the subscription route can render', () => {
+    for (const f of SrrFormat.options) {
+      expect(SUBSCRIPTION_FORMATS, `rule format ${f}`).toContain(f);
+    }
+  });
+
+  it('can name every whole-subscription format the route renders', () => {
+    for (const f of SUBSCRIPTION_FORMATS) {
+      if (NOT_UA_SELECTABLE.includes(f)) continue;
+      expect(SrrFormat.options as readonly string[], `no rule can select ${f}`).toContain(f);
     }
   });
 });
