@@ -133,6 +133,7 @@ export function buildWgQuickConf(
       port: wg.port,
       dns: opts?.dns,
       name: opts?.name,
+      presharedKey: wg.presharedKey,
     });
   }
 
@@ -160,5 +161,6 @@ export function buildWgQuickConf(
     i5: wg.i5,
     dns: opts?.dns,
     name: opts?.name,
+    presharedKey: wg.presharedKey,
   });
 }

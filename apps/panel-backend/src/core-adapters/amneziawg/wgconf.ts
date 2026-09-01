@@ -78,6 +78,14 @@ export interface AmneziawgClientConfigOpts {
    */
   name?: string;
   /**
+   * Preshared key for this peer, when the profile issues them. Omitted or
+   * empty writes NO line: `PresharedKey = ` with nothing after it is a parse
+   * error for wg-quick, not "no key", and the iOS parser rejects the file
+   * outright — the same trap the AmneziaVPN link builder documents for
+   * `psk_key`.
+   */
+  presharedKey?: string;
+  /**
    * Persistent keepalive seconds. Default 25, practical for NAT-traversal,
    * matches AmneziaVPN-app default.
    */
@@ -122,6 +130,7 @@ export function buildAmneziawgClientConfig(opts: AmneziawgClientConfigOpts): str
   lines.push('');
   lines.push('[Peer]');
   lines.push(`PublicKey = ${opts.serverPublicKey}`);
+  if (opts.presharedKey) lines.push(`PresharedKey = ${opts.presharedKey}`);
   lines.push(`AllowedIPs = ${allowed}`);
   lines.push(`Endpoint = ${opts.host}:${opts.port}`);
   lines.push(`PersistentKeepalive = ${opts.persistentKeepalive ?? 25}`);

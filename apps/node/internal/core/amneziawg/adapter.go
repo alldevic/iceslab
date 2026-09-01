@@ -278,8 +278,10 @@ func (a *Adapter) AddUser(user core.User) error {
 	// own subnet and therefore its own allocated IP: a node serving both
 	// profiles receives two addresses per user and must not cross them.
 	pubKey, allowedIP := user.AmneziaWGPublicKey, user.AmneziaWGAllowedIP
+	psk := user.AmneziaWGPresharedKey
 	if a.plain() {
 		pubKey, allowedIP = user.WireguardPublicKey, user.WireguardAllowedIP
+		psk = user.WireguardPresharedKey
 	}
 	if pubKey == "" || allowedIP == "" {
 		return nil
@@ -287,6 +289,10 @@ func (a *Adapter) AddUser(user core.User) error {
 	desired := Peer{
 		PublicKey: pubKey,
 		AllowedIP: ensureCIDR(allowedIP),
+		// Part of the comparison below, deliberately: turning preshared keys
+		// on or off for a profile changes nothing but this field, and a peer
+		// compared without it would be judged unchanged and never re-written.
+		PresharedKey: psk,
 	}
 
 	a.mu.Lock()

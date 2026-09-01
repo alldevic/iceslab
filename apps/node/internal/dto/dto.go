@@ -63,6 +63,14 @@ type ProtocolCredentials struct {
 	// differs from AmneziaWGAllowedIP.
 	WireguardPublicKey string `json:"wireguardPublicKey,omitempty"`
 	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
+	// Preshared keys, one per flavour, because the panel enables them per
+	// PROFILE: a node may serve plain WireGuard with PSKs and AmneziaWG
+	// without, or the other way round. Absent means "no PSK on this peer" -
+	// the adapter then writes no PresharedKey line at all, which is what
+	// every existing config already expects. Same shape as a WG key: 32
+	// bytes, base64, 44 chars.
+	AmneziaWGPresharedKey string `json:"amneziawgPresharedKey,omitempty"`
+	WireguardPresharedKey string `json:"wireguardPresharedKey,omitempty"`
 	// TUIC (sing-box engine): per-user UUID + password. Both required for a
 	// TUIC v5 client to authenticate. Only present when the user has access
 	// to a tuic inbound.

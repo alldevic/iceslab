@@ -113,11 +113,15 @@ const FIXTURES: Record<Protocol, Record<string, unknown>> = {
       i1: '<b 0xc00000000108><r 64><t>',
       i2: 'aabbcc', i3: 'ddeeff', i4: '001122', i5: '334455',
     },
+    // Проверяем на `true`, а не на умолчании: форма, потерявшая контрол,
+    // вернула бы `false`, и обход по ключам этого бы не заметил.
+    presharedKey: true,
   },
   wireguard: {
     subnet: '10.88.88.0/24',
     serverPrivateKey: WG_PRIV,
     serverPublicKey: WG_PUB,
+    presharedKey: true,
   },
   naive: {
     hostname: 'naive.example.com',

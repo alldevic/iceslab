@@ -1241,6 +1241,9 @@ export default {
         awgSubnetLockedHint: 'Changing it after keys are handed out strands every peer already on this subnet',
         awgServerPrivLabel: 'Server private key',
         awgServerPubLabel: 'Server public key',
+        presharedKeyLabel: 'Preshared key per device',
+        presharedKeyDescription:
+          'Mixes an extra symmetric key into each handshake. Turning this on invalidates every config already issued: a client without the key cannot complete a handshake with a server that has one, and neither side logs why. Ask buyers to re-download after enabling.',
         awgServerPubPlaceholder: 'derived after generate',
         awgPresetLabel: 'Obfuscation preset',
         awgKeepZero: 'keep 0',

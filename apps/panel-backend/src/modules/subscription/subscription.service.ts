@@ -197,6 +197,9 @@ interface AmneziawgInboundConfig {
   serverPrivateKey: string;
   serverPublicKey: string;
   obfuscation: AmneziawgObfuscation;
+  /** Whether this profile issues a preshared key per peer. Absent on profiles
+   *  saved before the field existed, which is the same as off. */
+  presharedKey?: boolean;
 }
 
 /** Upstream WireGuard: an AmneziaWG inbound minus every obfuscation knob. */
@@ -204,6 +207,8 @@ interface WireguardInboundConfig {
   subnet: string;
   serverPrivateKey: string;
   serverPublicKey: string;
+  /** See AmneziawgInboundConfig.presharedKey. */
+  presharedKey?: boolean;
 }
 
 interface NaiveInboundConfig {
@@ -1040,6 +1045,11 @@ export async function generateSubscription(
           privateKey: device.privateKey,
           allowedIp: `${peer.ip}/32`,
           serverPublicKey: cfg.serverPublicKey,
+          // Carried only when the profile issues preshared keys, and only
+          // when the device holds one. Must match, condition for condition,
+          // what inbounds.queue pushes to the node: the two sides of one
+          // handshake, and a disagreement fails it with nothing in any log.
+          presharedKey: cfg.presharedKey && device.presharedKey ? device.presharedKey : undefined,
           jc: cfg.obfuscation.jc,
           jmin: cfg.obfuscation.jmin,
           jmax: cfg.obfuscation.jmax,
@@ -1078,6 +1088,11 @@ export async function generateSubscription(
           privateKey: device.privateKey,
           allowedIp: `${peer.ip}/32`,
           serverPublicKey: cfg.serverPublicKey,
+          // Carried only when the profile issues preshared keys, and only
+          // when the device holds one. Must match, condition for condition,
+          // what inbounds.queue pushes to the node: the two sides of one
+          // handshake, and a disagreement fails it with nothing in any log.
+          presharedKey: cfg.presharedKey && device.presharedKey ? device.presharedKey : undefined,
           // WireGuard has no share-link scheme either; clients fetch ?format=wgconf.
           uri: '',
         });

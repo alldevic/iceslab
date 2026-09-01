@@ -779,6 +779,11 @@ model WgDevice {
 
   privateKey String @map("private_key") @db.VarChar(64)
   publicKey  String @map("public_key")  @db.VarChar(64)
+  // Symmetric key mixed into this peer's handshake, 32 bytes base64 like the
+  // keypair. Nullable because devices predate the column and because the
+  // panel only PUSHES it when the profile asks for preshared keys - a device
+  // that has one while its profile has them off behaves exactly as before.
+  presharedKey String? @map("preshared_key") @db.VarChar(64)
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   // Revocation keeps the row (and its traffic history) while dropping the peer

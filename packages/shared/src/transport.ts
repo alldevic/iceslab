@@ -48,6 +48,16 @@ export interface ProtocolCredentials {
    *  both flavours gets two addresses for one user; they differ, and crossing
    *  them puts a peer on an interface whose subnet doesn't contain it. */
   wireguardAllowedIp?: string;
+  /**
+   * Optional preshared keys, one per flavour, because the panel enables them
+   * per PROFILE: a node may serve plain WireGuard with them and AmneziaWG
+   * without. Absent means the node writes no `PresharedKey` line, which is
+   * what every config issued before this field expects — and a peer whose key
+   * disagrees with its client's cannot complete a handshake at all, so this is
+   * one of the few fields where "send it sometimes" has to be exact.
+   */
+  amneziawgPresharedKey?: string;
+  wireguardPresharedKey?: string;
   /** TUIC v5 (sing-box engine): per-user UUID + password. */
   tuicUuid?: string;
   tuicPassword?: string;

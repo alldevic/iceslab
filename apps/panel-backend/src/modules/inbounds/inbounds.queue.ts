@@ -547,7 +547,7 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // wgconf path which also keys on profileId.
   async function resolveWgProfile(
     protocol: 'amneziawg' | 'wireguard',
-  ): Promise<{ profileId: string; subnet: string } | null> {
+  ): Promise<{ profileId: string; subnet: string; presharedKey: boolean } | null> {
     const bound = inbounds.find((i) => i.protocol === protocol);
     if (!bound) return null;
     const binding = await prisma.profileNodeBinding.findUnique({
@@ -555,8 +555,18 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
       select: { profileId: true, profile: { select: { config: true } } },
     });
     if (!binding) return null;
-    const pcfg = (binding.profile.config ?? {}) as { subnet?: string };
-    return { profileId: binding.profileId, subnet: pcfg.subnet ?? '10.66.66.0/24' };
+    const pcfg = (binding.profile.config ?? {}) as {
+      subnet?: string;
+      presharedKey?: boolean;
+    };
+    return {
+      profileId: binding.profileId,
+      subnet: pcfg.subnet ?? '10.66.66.0/24',
+      // Per profile, and read here rather than passed down, because the node
+      // takes the key per PEER: the flag decides whether the value travels at
+      // all, and a profile with it off must push nothing, not an empty string.
+      presharedKey: pcfg.presharedKey === true,
+    };
   }
 
   const awgProfile = await resolveWgProfile('amneziawg');
@@ -594,10 +604,20 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
       ),
     })),
   );
-  const wgPeers: { deviceId: string; userId: string; publicKey: string }[] = [];
+  const wgPeers: {
+    deviceId: string;
+    userId: string;
+    publicKey: string;
+    presharedKey: string | null;
+  }[] = [];
   for (const u of users) {
     for (const d of devicesByUser.get(u.id) ?? []) {
-      wgPeers.push({ deviceId: d.id, userId: u.id, publicKey: d.publicKey });
+      wgPeers.push({
+        deviceId: d.id,
+        userId: u.id,
+        publicKey: d.publicKey,
+        presharedKey: d.presharedKey,
+      });
     }
   }
 
@@ -693,6 +713,16 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
           // resolveWgProfile above).
           wireguardPublicKey: peer.publicKey,
           wireguardAllowedIp: wgIp,
+          // Sent only where the profile turned preshared keys on, and only
+          // if the device actually has one. `undefined` is the meaningful
+          // value: the node writes no PresharedKey line, and the client
+          // config built from the same two conditions writes none either.
+          // The two MUST agree - a peer whose key differs from its client's
+          // cannot complete a handshake, and nothing in either log says why.
+          amneziawgPresharedKey:
+            awgProfile?.presharedKey && peer.presharedKey ? peer.presharedKey : undefined,
+          wireguardPresharedKey:
+            wgProfile?.presharedKey && peer.presharedKey ? peer.presharedKey : undefined,
         },
       },
     });

@@ -39,6 +39,20 @@ export function generateWireguardKeyPair(): {
 }
 
 /**
+ * A WireGuard preshared key: 32 random bytes as standard base64, the same
+ * shape `wg genpsk` prints and the same shape a public key has, which is why
+ * the node validates both with one rule.
+ *
+ * Symmetric and unrelated to the keypair: it is mixed into the handshake on
+ * top of the Curve25519 exchange, so it hardens the handshake and changes
+ * nothing about a data packet - not its size, not its shape, not what a
+ * middlebox can see.
+ */
+export function generatePresharedKey(): string {
+  return randomBytes(32).toString('base64');
+}
+
+/**
  * Curve25519 keypair as **base64url** (`-`/`_`, no padding). Used by Xray
  * REALITY: `xray x25519` produces this form. The Xray config validator
  * rejects standard base64 (caught on VPS during slice-23 test on 2026-05-06).

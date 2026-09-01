@@ -593,6 +593,19 @@ export const AmneziawgConfigSchema = z
     /** Public key paired with privateKey, emitted in client config. */
     serverPublicKey: WgKeySchema,
     obfuscation: ObfuscationSchema,
+    /**
+     * Отдавать ли каждому пиру preshared key.
+     *
+     * Флаг, а не значение: сам ключ у КАЖДОГО устройства свой и живёт в
+     * `wg_devices`, потому что WireGuard знает preshared key только per-peer.
+     * Здесь — решение, включён ли механизм на этом инбаунде.
+     *
+     * Выключено по умолчанию, и это не осторожность ради осторожности:
+     * включение немедленно ломает все уже выданные конфиги — клиент без
+     * ключа не пройдёт рукопожатие с сервером, у которого ключ есть. Флаг
+     * поднимают осознанно и следом просят покупателей перекачать конфиги.
+     */
+    presharedKey: z.boolean().default(false),
   })
   // Mirror the constraints the node's config.go validate() enforces at deploy
   // time, so the operator gets a clear form error instead of a confusing
@@ -662,6 +675,19 @@ export const WireguardConfigSchema = z.object({
   serverPrivateKey: WgKeySchema,
   /** Public key paired with privateKey, emitted in the client config. */
   serverPublicKey: WgKeySchema,
+  /**
+   * Отдавать ли каждому пиру preshared key.
+   *
+   * Флаг, а не значение: сам ключ у КАЖДОГО устройства свой и живёт в
+   * `wg_devices`, потому что WireGuard знает preshared key только per-peer.
+   * Здесь — решение, включён ли механизм на этом инбаунде.
+   *
+   * Выключено по умолчанию, и это не осторожность ради осторожности:
+   * включение немедленно ломает все уже выданные конфиги — клиент без
+   * ключа не пройдёт рукопожатие с сервером, у которого ключ есть. Флаг
+   * поднимают осознанно и следом просят покупателей перекачать конфиги.
+   */
+  presharedKey: z.boolean().default(false),
 });
 
 export const NaiveConfigSchema = z.object({

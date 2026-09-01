@@ -20,6 +20,11 @@ type User struct {
 	// subnets. A node bound to both profiles receives both addresses.
 	WireguardPublicKey string
 	WireguardAllowedIP string
+	// Optional preshared key per flavour. Empty = the peer gets no
+	// PresharedKey line, the behaviour every config predating this field
+	// relies on.
+	AmneziaWGPresharedKey string
+	WireguardPresharedKey string
 	TuicUUID           string
 	TuicPassword       string
 	AnytlsPassword     string

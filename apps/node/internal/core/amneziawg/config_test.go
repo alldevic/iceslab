@@ -143,6 +143,49 @@ func TestRenderConfigPeers(t *testing.T) {
 	}
 }
 
+// A preshared key is optional per peer, and its absence has to stay absent:
+// `PresharedKey = ` with nothing after it is not "no key", it is a line
+// wg-quick refuses to parse, which would take down every peer on the
+// interface rather than the one that lacks a key.
+func TestRenderConfigPresharedKey(t *testing.T) {
+	peers := []Peer{
+		{PublicKey: testWGPubKeyA, AllowedIP: "10.0.0.2/32", PresharedKey: testWGPubKeyB},
+		{PublicKey: testWGPubKeyB, AllowedIP: "10.0.0.3/32"},
+	}
+	out, err := renderConfig(validInbound(), peers)
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+	if want := "PresharedKey = " + testWGPubKeyB; !strings.Contains(out, want) {
+		t.Errorf("missing %q in:\n%s", want, out)
+	}
+	if strings.Count(out, "PresharedKey") != 1 {
+		t.Errorf("the peer without a key got a PresharedKey line:\n%s", out)
+	}
+	// The line belongs to the first peer, not the second: a key rendered under
+	// the wrong [Peer] authenticates the wrong client.
+	first := strings.SplitN(out, "[Peer]", 3)[1]
+	if !strings.Contains(first, "PresharedKey = "+testWGPubKeyB) {
+		t.Errorf("preshared key landed outside its own peer block:\n%s", out)
+	}
+}
+
+// Same guard as the public key: a PSK is panel-pushed text that ends up in a
+// file awg-quick sources, so anything but 32 base64 bytes has to be refused
+// before it can close [Peer] and open an [Interface] of its own.
+func TestRenderConfigRejectsInjectedPresharedKey(t *testing.T) {
+	for _, bad := range []string{
+		"short",
+		"AAAA\nPostUp = touch /tmp/pwned",
+		strings.Repeat("A", 43) + "!",
+	} {
+		peers := []Peer{{PublicKey: testWGPubKeyA, AllowedIP: "10.0.0.2/32", PresharedKey: bad}}
+		if _, err := renderConfig(validInbound(), peers); err == nil {
+			t.Errorf("accepted bad preshared key %q", bad)
+		}
+	}
+}
+
 func TestRenderConfigRejectsEmptyPeerFields(t *testing.T) {
 	peers := []Peer{{PublicKey: "", AllowedIP: "10.0.0.2/32"}}
 	if _, err := renderConfig(validInbound(), peers); err == nil {

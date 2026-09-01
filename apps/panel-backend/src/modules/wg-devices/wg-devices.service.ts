@@ -1,4 +1,4 @@
-import { generateWireguardKeyPair } from '../../lib/credentials.js';
+import { generateWireguardKeyPair, generatePresharedKey } from '../../lib/credentials.js';
 import { prisma } from '../../prisma.js';
 import { resolveSquadHwidLimit } from '../hwid/hwid.service.js';
 import { nodeUsersQueue } from '../users/users.queue.js';
@@ -120,7 +120,12 @@ export async function ensureDevices(userId: string, count: number): Promise<WgDe
 
   const rows = Array.from({ length: want - have.length }, () => {
     const kp = generateWireguardKeyPair();
-    return { userId, privateKey: kp.privateKey, publicKey: kp.publicKey };
+    return {
+      userId,
+      privateKey: kp.privateKey,
+      publicKey: kp.publicKey,
+      presharedKey: generatePresharedKey(),
+    };
   });
   await prisma.wgDevice.createMany({ data: rows });
   return listActiveDevices(userId);
@@ -149,20 +154,48 @@ export async function ensureDevicesForUsers(
     where: { userId: { in: userIds }, revokedAt: null },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
+
+  // Devices created before the column exists have no preshared key. Fill them
+  // here rather than in the migration: a profile that turns preshared keys on
+  // must find every one of its peers holding a key, or the buyer whose device
+  // predates the column is the only one whose tunnel silently refuses to
+  // handshake. Idempotent - a device is backfilled once and never again.
+  const needKey = existing.filter((d) => !d.presharedKey);
+  if (needKey.length > 0) {
+    await Promise.all(
+      needKey.map((d) =>
+        prisma.wgDevice.update({
+          where: { id: d.id },
+          data: { presharedKey: generatePresharedKey() },
+        }),
+      ),
+    );
+  }
+
   for (const id of userIds) byUser.set(id, []);
   for (const d of existing) byUser.get(d.userId)?.push(d);
 
-  const toCreate: { userId: string; privateKey: string; publicKey: string }[] = [];
+  const toCreate: {
+    userId: string;
+    privateKey: string;
+    publicKey: string;
+    presharedKey: string;
+  }[] = [];
   for (const id of userIds) {
     const missing = (wantByUser.get(id) ?? 1) - (byUser.get(id)?.length ?? 0);
     for (let i = 0; i < missing; i += 1) {
       const kp = generateWireguardKeyPair();
-      toCreate.push({ userId: id, privateKey: kp.privateKey, publicKey: kp.publicKey });
+      toCreate.push({
+        userId: id,
+        privateKey: kp.privateKey,
+        publicKey: kp.publicKey,
+        presharedKey: generatePresharedKey(),
+      });
     }
   }
-  if (toCreate.length === 0) return byUser;
+  if (toCreate.length === 0 && needKey.length === 0) return byUser;
 
-  await prisma.wgDevice.createMany({ data: toCreate });
+  if (toCreate.length > 0) await prisma.wgDevice.createMany({ data: toCreate });
   const refreshed = await prisma.wgDevice.findMany({
     where: { userId: { in: userIds }, revokedAt: null },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],

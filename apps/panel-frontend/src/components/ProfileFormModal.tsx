@@ -231,11 +231,13 @@ interface FormValues {
   wgSubnet: string;
   wgServerPriv: string;
   wgServerPub: string;
+  wgPresharedKey: boolean;
 
   // AmneziaWG
   awgSubnet: string;
   awgServerPriv: string;
   awgServerPub: string;
+  awgPresharedKey: boolean;
   awgPreset: 'tspu' | 'mobile' | 'custom';
   awgJc: number | '';
   awgJmin: number | '';
@@ -411,10 +413,12 @@ function defaults(profile: Profile | null): FormValues {
     wgSubnet: '10.77.77.0/24',
     wgServerPriv: '',
     wgServerPub: '',
+    wgPresharedKey: false,
 
     awgSubnet: '10.66.66.0/24',
     awgServerPriv: '',
     awgServerPub: '',
+    awgPresharedKey: false,
     awgPreset: 'tspu',
     awgJc: TSPU_PRESET.jc,
     awgJmin: TSPU_PRESET.jmin,
@@ -512,6 +516,7 @@ function defaults(profile: Profile | null): FormValues {
         wgSubnet: (cfg.subnet as string) ?? base.wgSubnet,
         wgServerPriv: (cfg.serverPrivateKey as string) ?? '',
         wgServerPub: (cfg.serverPublicKey as string) ?? '',
+        wgPresharedKey: cfg.presharedKey === true,
       };
     case 'amneziawg': {
       const obf = (cfg.obfuscation as Record<string, number | string> | undefined) ?? {};
@@ -520,6 +525,7 @@ function defaults(profile: Profile | null): FormValues {
         awgSubnet: (cfg.subnet as string) ?? base.awgSubnet,
         awgServerPriv: (cfg.serverPrivateKey as string) ?? '',
         awgServerPub: (cfg.serverPublicKey as string) ?? '',
+        awgPresharedKey: cfg.presharedKey === true,
         awgPreset: 'custom',
         awgJc: (obf.jc as number) ?? '',
         awgJmin: (obf.jmin as number) ?? '',
@@ -939,6 +945,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
           subnet: values.wgSubnet,
           serverPrivateKey: values.wgServerPriv,
           serverPublicKey: values.wgServerPub,
+          presharedKey: values.wgPresharedKey,
         };
         break;
       case 'amneziawg':
@@ -946,6 +953,7 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
           subnet: values.awgSubnet,
           serverPrivateKey: values.awgServerPriv,
           serverPublicKey: values.awgServerPub,
+          presharedKey: values.awgPresharedKey,
           obfuscation: {
             jc: numOr(values.awgJc, 4),
             jmin: numOr(values.awgJmin, 64),
@@ -1998,6 +2006,16 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   {...form.getInputProps('wgServerPub')}
                 />
               </Group>
+              {/* Включение немедленно ломает все уже выданные конфиги: клиент
+                  без ключа не пройдёт рукопожатие с сервером, у которого он
+                  есть. Поэтому подпись говорит это прямо, а не «повысить
+                  безопасность». */}
+              <Switch
+                label={t('profiles.form.cfg.presharedKeyLabel')}
+                description={t('profiles.form.cfg.presharedKeyDescription')}
+                checked={form.values.wgPresharedKey}
+                onChange={(e) => form.setFieldValue('wgPresharedKey', e.currentTarget.checked)}
+              />
             </Stack>
           )}
 
@@ -2067,6 +2085,16 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                   {...form.getInputProps('awgServerPub')}
                 />
               </Group>
+              {/* Включение немедленно ломает все уже выданные конфиги: клиент
+                  без ключа не пройдёт рукопожатие с сервером, у которого он
+                  есть. Поэтому подпись говорит это прямо, а не «повысить
+                  безопасность». */}
+              <Switch
+                label={t('profiles.form.cfg.presharedKeyLabel')}
+                description={t('profiles.form.cfg.presharedKeyDescription')}
+                checked={form.values.awgPresharedKey}
+                onChange={(e) => form.setFieldValue('awgPresharedKey', e.currentTarget.checked)}
+              />
               <Group justify="space-between" align="center" wrap="nowrap" gap="md">
                 <Text size="sm" fw={500}>
                   {t('profiles.form.cfg.awgPresetLabel')}

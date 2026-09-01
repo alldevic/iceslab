@@ -409,6 +409,10 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		AmneziaWGAllowedIP: req.Credentials.AmneziaWGAllowedIP,
 		WireguardPublicKey: req.Credentials.WireguardPublicKey,
 		WireguardAllowedIP: req.Credentials.WireguardAllowedIP,
+
+		AmneziaWGPresharedKey: req.Credentials.AmneziaWGPresharedKey,
+		WireguardPresharedKey: req.Credentials.WireguardPresharedKey,
+
 		TuicUUID:           req.Credentials.TuicUUID,
 		TuicPassword:       req.Credentials.TuicPassword,
 		AnytlsPassword:     req.Credentials.AnytlsPassword,

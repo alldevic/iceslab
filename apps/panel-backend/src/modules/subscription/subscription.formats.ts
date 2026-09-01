@@ -288,6 +288,8 @@ export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase 
   deviceIndex: number;
   /** This device's WireGuard private key. */
   privateKey: string;
+  /** Preshared key for this peer, absent when the profile issues none. */
+  presharedKey?: string;
   /** IP allocated to this user inside the inbound's subnet, CIDR /32 form. */
   allowedIp: string;
   /** Server's WireGuard public key (the inbound's interface PublicKey). */
@@ -325,6 +327,8 @@ export interface WireguardSubscriptionEndpoint extends SubscriptionEndpointBase 
   deviceIndex: number;
   /** This device's WireGuard private key (one keypair serves both flavours). */
   privateKey: string;
+  /** Preshared key for this peer, absent when the profile issues none. */
+  presharedKey?: string;
   /** IP allocated to this user inside the inbound's subnet, CIDR /32 form. */
   allowedIp: string;
   /** Server's WireGuard public key (the inbound's interface PublicKey). */

@@ -197,3 +197,40 @@ describe('wgConfName', () => {
     expect(buildWgQuickConf([wgEp], undefined, 'amneziawg')).toBe('');
   });
 });
+
+const PSK = 'YmFzZTY0LWtleS0zMi1ieXRlcy1sb25nLWV4YWN0bHk=';
+
+describe('preshared key in the client config', () => {
+  // Обе стороны рукопожатия должны совпасть: нода пишет `PresharedKey` пиру
+  // ровно при тех же двух условиях, что и этот файл. Разойдутся — клиент не
+  // пройдёт рукопожатие, и ни один лог не скажет почему.
+  it('пишет ключ, когда он выдан', () => {
+    const out = buildWgQuickConf(
+      [{ ...wgEp, presharedKey: PSK }],
+      undefined,
+      'wireguard',
+    );
+    expect(out).toContain(`PresharedKey = ${PSK}`);
+    // В блоке пира, а не интерфейса: ключ относится к соединению с сервером.
+    const peerPart = out.slice(out.indexOf('[Peer]'));
+    expect(peerPart).toContain('PresharedKey =');
+  });
+
+  // Пустая строка — не «ключа нет», а строка, которую wg-quick не разбирает,
+  // и iOS-парсер на ней отказывается от файла целиком.
+  it('не пишет пустую строку, когда ключа нет', () => {
+    for (const psk of [undefined, '']) {
+      const out = buildWgQuickConf([{ ...wgEp, presharedKey: psk }], undefined, 'wireguard');
+      expect(out).not.toContain('PresharedKey');
+    }
+  });
+
+  it('то же самое для amneziawg', () => {
+    const out = buildWgQuickConf(
+      [{ ...awgEp, presharedKey: PSK }],
+      undefined,
+      'amneziawg',
+    );
+    expect(out).toContain(`PresharedKey = ${PSK}`);
+  });
+});

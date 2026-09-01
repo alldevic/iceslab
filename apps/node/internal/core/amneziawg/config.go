@@ -121,6 +121,11 @@ type Peer struct {
 	PublicKey string
 	// AllowedIP is the peer's IP in CIDR /32 form, e.g. "10.0.0.2/32".
 	AllowedIP string
+	// PresharedKey is the optional symmetric key mixed into the handshake,
+	// same shape as a WG key (32 bytes, base64). Empty writes no line at all:
+	// a blank `PresharedKey = ` is not "none", it is a parse error for
+	// wg-quick and a handshake the client cannot complete.
+	PresharedKey string
 }
 
 func (c *InboundConfig) withDefaults() InboundConfig {
@@ -361,9 +366,20 @@ func renderConfig(inbound InboundConfig, peers []Peer) (string, error) {
 		if err := validateAllowedIP(p.AllowedIP); err != nil {
 			return "", fmt.Errorf("peer AllowedIP: %w", err)
 		}
+		// Validated with the same rule as the public key: a PSK is 32 bytes of
+		// base64 too, and this is the guard that keeps a rogue value from
+		// closing [Peer] and injecting an [Interface]/PostUp of its own.
+		if p.PresharedKey != "" {
+			if err := validateWGKey(p.PresharedKey); err != nil {
+				return "", fmt.Errorf("peer PresharedKey: %w", err)
+			}
+		}
 		fmt.Fprintln(&b)
 		fmt.Fprintln(&b, "[Peer]")
 		fmt.Fprintf(&b, "PublicKey = %s\n", p.PublicKey)
+		if p.PresharedKey != "" {
+			fmt.Fprintf(&b, "PresharedKey = %s\n", p.PresharedKey)
+		}
 		fmt.Fprintf(&b, "AllowedIPs = %s\n", p.AllowedIP)
 	}
 
