@@ -523,7 +523,7 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
       url: `/sub/${user.subscriptionToken}?format=wgconf`,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toContain('text/plain');
+    expect(res.headers['content-type']).toContain('application/octet-stream');
     expect(res.body).toBe('');
   });
 
@@ -551,7 +551,12 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
       url: `/sub/${user.subscriptionToken}?format=wgconf&proto=wireguard`,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toContain('text/plain');
+    // Не text/plain: Android достраивает расширение по MIME-типу и превращает
+    // `OneginVPN-wg.conf` в `…conf.txt`, мимо фильтра `*.conf` в пикере
+    // WireGuard и AmneziaWG. У octet-stream расширения нет, имя доезжает как есть.
+    expect(res.headers['content-type']).toContain('application/octet-stream');
+    expect(res.headers['content-disposition']).toContain('.conf"');
+    expect(res.headers['content-disposition']).not.toContain('.txt');
     expect(res.body).toContain('[Interface]');
     expect(res.body).toContain('[Peer]');
     expect(res.body).toContain('PublicKey = BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');

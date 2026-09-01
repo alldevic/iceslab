@@ -727,7 +727,17 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             Number.isInteger(deviceIndex) ? deviceIndex : undefined,
           );
           return reply
-            .type('text/plain; charset=utf-8')
+            // Не `text/plain`, хотя тело — текст. Android по MIME-типу
+            // ДОСТРАИВАЕТ расширение: для `text/plain` он видит незнакомое
+            // `.conf` и дописывает своё, получается `OneginVPN-wg.conf.txt`.
+            // А файловые пикеры WireGuard, AmneziaWG и wg-quick фильтруют по
+            // `*.conf` — скачанный файл в списке просто не виден, и клиент,
+            // которому его всё же скормили, зовёт конфиг некорректным.
+            // `application/octet-stream` расширения не имеет вовсе, поэтому
+            // имя из Content-Disposition доезжает как есть. Тело не меняется:
+            // клиенты, читающие ответ как текст (импорт по ссылке), разницы
+            // не заметят — charset остаётся в заголовке.
+            .type('application/octet-stream; charset=utf-8')
             .header('Content-Disposition', `attachment; filename="${tunnelName}.conf"`)
             .send(
               buildWgQuickConf(filtered, query.node, query.proto, {
