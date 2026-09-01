@@ -28,22 +28,17 @@ func newTestAdapter(t *testing.T) *Adapter {
 	return a
 }
 
-func TestAddUserRefusesAUserWithNoSecret(t *testing.T) {
-	// Generating one here would produce a user who exists on the node and cannot
-	// connect, because the link the buyer holds carries the panel's secret. That
-	// failure looks like a network problem and is not.
-	a := newTestAdapter(t)
-	err := a.AddUser(core.User{UserID: "u1"})
-	if err == nil {
-		t.Fatal("accepted a user with no MtprotoSecret")
-	}
-	if !strings.Contains(err.Error(), "MtprotoSecret") {
-		t.Errorf("error should name the missing field, got %v", err)
-	}
-	if len(a.users) != 0 {
-		t.Error("the rejected user was still recorded")
-	}
-}
+// TestAddUserRefusesAUserWithNoSecret lived here until 2026-09-02. It required
+// AddUser to ERROR on a missing secret, which read as a guard against a real
+// MTProto user arriving without one — and in the field turned out to be a guard
+// against the panel's ordinary fan-out. One credential blob goes to every
+// adapter, so a wg device push has no MTProto secret and never will; refusing it
+// produced a warning per device per sync about a push that was never ours.
+//
+// The behaviour it asked for is now TestAPushWithNoMtprotoSecretIsNotOurs, and
+// what it was actually protecting is covered where it belongs: the panel derives
+// a secret for every user unconditionally, and per-user-secret.test.ts pins that
+// both sides derive the same one.
 
 func TestAddUserRefusesAMalformedSecret(t *testing.T) {
 	a := newTestAdapter(t)
