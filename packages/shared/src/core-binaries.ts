@@ -141,6 +141,20 @@ export interface CoreBinary {
    * installs a .deb.
    */
   assets: Partial<Record<CoreArch, CoreAsset>>;
+  /**
+   * True for a core with no machine code in it — mtprotoproxy is Python source.
+   * Such a core is one artefact listed under every architecture with the SAME
+   * sha256, which is otherwise the signature of a paste error and is checked
+   * for (see core-binaries.test.ts, "no checksum appears twice"): two arches
+   * claiming the same bytes normally means half the fleet gets the wrong
+   * binary. Declaring it here is what tells the two apart, so the guard stays
+   * sharp for every core that does have per-arch builds.
+   *
+   * Everything else stays identical: same fetch step, same serving route, same
+   * verification on the node. Arch-independence is a property of the entry, not
+   * a second code path.
+   */
+  archIndependent?: true;
   /** Present = the image compiles this core rather than downloading it. */
   source?: CoreSourceBuild;
 }
@@ -281,6 +295,42 @@ export const CORE_BINARIES = {
       armv7: {
         file: 'mtg-2.2.8-linux-armv7.tar.gz',
         sha256: '494ee3794ed00201e5333b478236ce2f434b33f2d3445f227debe9fc386bbef0',
+      },
+    },
+  },
+  mtprotoproxy: {
+    upstream: 'alexbers/mtprotoproxy',
+    version: '1.1.2',
+    archIndependent: true,
+    // Upstream attaches NO files to its releases — all fifteen of them — so the
+    // artefact is GitHub's generated source tarball. That is the only thing
+    // there is to pin, and it is worth saying what the pin is and is not worth:
+    // GitHub has changed how it compresses these before, and if it does again
+    // this sum stops matching. The failure lands at PANEL BUILD, loudly, on the
+    // sha256 check — not on a node, and never as an unexpected file. Re-pin
+    // then, after reading the diff.
+    //
+    // The tag tarball and the same commit's tarball differ in bytes (45103 vs
+    // 45108) purely because the directory inside is named differently, so the
+    // two are not interchangeable. Measured 2026-09-02.
+    urlTemplate: 'https://github.com/alexbers/mtprotoproxy/archive/refs/tags/v{version}/{file}',
+    assets: {
+      // Pure Python: one artefact, no architecture. It is listed under each
+      // arch with the same sum rather than given a special case, so the fetch
+      // step, the serving route and the node's verification stay exactly as
+      // they are for every other core — an arch-independent core is a property
+      // of this entry, not a second code path.
+      amd64: {
+        file: 'v1.1.2.tar.gz',
+        sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702',
+      },
+      arm64: {
+        file: 'v1.1.2.tar.gz',
+        sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702',
+      },
+      armv7: {
+        file: 'v1.1.2.tar.gz',
+        sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702',
       },
     },
   },

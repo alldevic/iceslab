@@ -114,7 +114,11 @@ describe('across the whole manifest', () => {
     // catch: two architectures claiming the same bytes both verify against the
     // same download, and half the fleet gets the wrong binary.
     const sums = entries
-      .filter(([, core]) => !isBuilt(core))
+      // An arch-independent core is ONE artefact listed under every arch, so
+      // its sums repeat on purpose. It says so in the manifest; that
+      // declaration is the difference between "the same file everywhere" and
+      // "somebody pasted a sum into the wrong row".
+      .filter(([, core]) => !isBuilt(core) && !(core as { archIndependent?: true }).archIndependent)
       .flatMap(([name, core]) =>
         Object.entries(core.assets).map(([arch, a]) => ({
           key: `${name}/${arch}`,

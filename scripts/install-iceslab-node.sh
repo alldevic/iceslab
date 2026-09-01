@@ -1234,6 +1234,30 @@ case "$PROTOCOL" in
     rm -f "$MTG_TMP"
     PROTO_BINARY=/usr/local/bin/mtg
     PROTO_CONFIG=/etc/mtg/config.toml
+
+    # MTProto has TWO cores and the node carries both. They are engines of one
+    # protocol, an inbound picks one with `engine:`, and a fleet moving from mtg
+    # to mtprotoproxy needs both present meanwhile — so this is not a second
+    # menu entry, it is the rest of installing MTProto.
+    #
+    # Why anyone would move: mtg is single-secret upstream, so MTProto on it
+    # cannot be counted or revoked per user — a disabled, expired or deleted
+    # buyer keeps working, as does whoever they forwarded the link to.
+    # mtprotoproxy gives each user their own secret, expiry and quota.
+    #
+    # A failure here does NOT fail the install: mtg is already in place and
+    # serving, and the node is usable without the second engine.
+    log "Chaining bootstrap-mtprotoproxy.sh (second MTProto engine, beside mtg)"
+    MPP_TMP="$(mktemp)"
+    if panel_core_fetch mtprotoproxy "$MPP_TMP" && \
+       ICESLAB_CORE_ARTEFACT="$MPP_TMP" \
+         bash "$ICESLAB_NODE_DIR/apps/node/scripts/bootstrap-mtprotoproxy.sh"; then
+      MTPROTOPROXY_READY=1
+    else
+      warn "mtprotoproxy did not install; mtg is in place and the node is usable without it"
+      MTPROTOPROXY_READY=0
+    fi
+    rm -f "$MPP_TMP"
     ;;
   mieru)
     log "Chaining bootstrap-mieru.sh"
@@ -1281,7 +1305,7 @@ mkdir -p "$ENV_DIR"
 # explicit ReadWritePaths. ReadWritePaths can't create directories, only
 # permit writes inside existing ones, so we pre-create every per-protocol
 # config dir here, even if the protocol isn't installed on this node.
-mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/wireguard /etc/caddy /etc/mtg /etc/mita /etc/sing-box
+mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/wireguard /etc/caddy /etc/mtg /etc/mtprotoproxy /etc/mita /etc/sing-box
 ENV_FILE="$ENV_DIR/env"
 
 # Honour --payload only if the env file doesn't exist OR the user passed one.
@@ -1417,6 +1441,19 @@ MTG_STATS_PORT=3129
 # in via panel UI when you create the MTProto inbound; safe default below.
 # MTG_DOMAIN=www.cloudflare.com
 EOF
+      if [[ "${MTPROTOPROXY_READY:-0}" == "1" ]]; then
+        cat >> "$ENV_FILE" <<EOF
+
+# The second MTProto engine, running BESIDE mtg. Both adapters register; the
+# inbound decides which one serves it (\`engine: mtprotoproxy\` on its profile).
+# The ports must differ from mtg's above or the second core cannot bind.
+MTPROTOPROXY_SCRIPT=/opt/mtprotoproxy/mtprotoproxy.py
+MTPROTOPROXY_CONFIG=/etc/mtprotoproxy/config.py
+MTPROTOPROXY_PORT=2084
+MTPROTOPROXY_METRICS_PORT=3130
+# MTPROTOPROXY_DOMAIN=www.cloudflare.com   # optional pre-seed; panel overrides
+EOF
+      fi
       ;;
     mieru)
       cat >> "$ENV_FILE" <<EOF
@@ -1800,7 +1837,7 @@ ProtectHome=true
 # geopkg.Ensure fails EROFS on every asset, so self-hosted geo silently never
 # installs (node falls back to bundled DBs and any ext: rule fails its restart
 # precondition). The seed mkdir/cp happens at install time (still writable then).
-ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/sing-box -/etc/amnezia/amneziawg -/etc/wireguard -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/var/lib/iceslab-node -/run -/etc/iptables -/etc/ufw
+ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/sing-box -/etc/amnezia/amneziawg -/etc/wireguard -/etc/caddy -/etc/mtg -/etc/mtprotoproxy -/etc/mita -/var/lib/mita -/var/lib/iceslab-node -/run -/etc/iptables -/etc/ufw
 PrivateTmp=true
 
 # Journald log limits; without these a node running for months can balloon
