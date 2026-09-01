@@ -29,6 +29,8 @@ import {
   listProfiles,
   listSquads,
   listUserDevices,
+  listUserWgDevices,
+  revokeWgDevice,
   listUsers,
   type CreateUserInput,
   type TrafficLimitStrategy,
@@ -705,6 +707,9 @@ export function UserDrawer({ opened, onClose, user, onSubmit, loading }: Props) 
                     {isEdit && user && (
                       <DeviceList userId={user.id} limit={form.values.hwidDeviceLimit} />
                     )}
+                    {/* Tunnels the panel ISSUED, as opposed to devices a client
+                        claimed above. Same person, two different registers. */}
+                    {isEdit && user && <WgDeviceList userId={user.id} />}
                     <Textarea
                       label={t('userDrawer.note')}
                       placeholder={t('userDrawer.notePlaceholder')}
@@ -1047,6 +1052,172 @@ function DeviceList({ userId, limit }: { userId: string; limit: number | '' }) {
       {full && devices.length > 0 && (
         <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED, marginTop: 8 }}>
           {t('userDrawer.devicesFull')}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+/**
+ * Bytes for a human, from a decimal string.
+ *
+ * The wire carries these as strings because a busy tunnel outgrows 2^53 and
+ * JSON cannot hold the BigInt. Converting to Number here is safe in the way
+ * that matters: the loss starts past a petabyte, and this line says "1.2 GiB".
+ */
+function formatWgBytes(raw: string): string {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n === 0) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+/**
+ * The buyer's WireGuard tunnels: one per device, each with its own key.
+ *
+ * Separate from the HWID block above on purpose, and the two must not be read
+ * as one thing. HWID rows are what a client SAID about itself while polling
+ * the subscription - advisory, and only from the clients that send the header.
+ * These are credentials this panel issued: the traffic is measured by the node
+ * off its own peer counters, and revoking one takes that tunnel down
+ * everywhere. That is why the button here says revoke and not reset.
+ */
+function WgDeviceList({ userId }: { userId: string }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ['user-wg-devices', userId],
+    queryFn: () => listUserWgDevices(userId),
+    staleTime: 30_000,
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) => revokeWgDevice(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['user-wg-devices', userId] });
+      notifications.show({ color: 'green', message: t('userDrawer.wgDeviceRevoked_toast') });
+    },
+    onError: (err) =>
+      notifications.show({
+        color: 'red',
+        title: t('common.deleteError'),
+        message: err instanceof Error ? err.message : String(err),
+      }),
+  });
+
+  const devices = query.data?.devices ?? [];
+  const active = devices.filter((d) => d.revokedAt === null);
+
+  return (
+    <Box
+      style={{
+        borderRadius: 8,
+        border: `1px solid ${HAIRLINE}`,
+        backgroundColor: SUNK,
+        padding: '10px 12px',
+      }}
+    >
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <IconDeviceDesktop size={13} stroke={1.8} color={MIST} />
+        <Text style={{ ...LABEL, letterSpacing: '0.14em' }}>{t('userDrawer.wgDevices')}</Text>
+        <Box style={{ flex: 1 }} />
+        <Text style={{ fontFamily: MONO, fontSize: 10, color: MIST }}>{active.length}</Text>
+      </Box>
+
+      {query.isLoading && <Text style={{ fontSize: 11, color: MIST }}>{t('common.loading')}</Text>}
+      {query.isError && (
+        <Text style={{ fontSize: 11, color: RED }}>{t('userDrawer.wgDevicesError')}</Text>
+      )}
+
+      <Stack gap={5}>
+        {devices.map((d, i) => {
+          const revoked = d.revokedAt !== null;
+          return (
+            <Box
+              key={d.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '7px 9px',
+                borderRadius: 6,
+                backgroundColor: WELL,
+                opacity: revoked ? 0.5 : 1,
+              }}
+            >
+              <Text
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontFamily: DISPLAY,
+                  fontSize: 12,
+                  color: SNOW,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                // The public key is what `awg show` prints, so an operator can
+                // match this row to a line on the node.
+                title={`${d.publicKey}\n${d.addresses.join(', ')}`}
+              >
+                {d.label ?? `#${i + 1}`}
+                {d.addresses.length > 0 && (
+                  <Text component="span" style={{ fontFamily: MONO, fontSize: 10, color: MIST }}>
+                    {'  '}
+                    {d.addresses.join(' · ')}
+                  </Text>
+                )}
+              </Text>
+              <Text style={{ fontFamily: MONO, fontSize: 10, color: MIST, flexShrink: 0 }}>
+                {formatWgBytes(d.bytesIn)} / {formatWgBytes(d.bytesOut)}
+              </Text>
+              <Text style={{ fontFamily: MONO, fontSize: 10, color: MIST, flexShrink: 0 }}>
+                {revoked
+                  ? t('userDrawer.wgDeviceRevoked')
+                  : d.lastSeenAt
+                    ? relativeTime(d.lastSeenAt, t).text
+                    : t('userDrawer.wgDeviceNever')}
+              </Text>
+              {!revoked && (
+                <UnstyledButton
+                  onClick={() => revoke.mutate(d.id)}
+                  disabled={revoke.isPending}
+                  title={t('userDrawer.wgDeviceRevoke')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 22,
+                    height: 22,
+                    borderRadius: 5,
+                    border: `1px solid ${HAIRLINE}`,
+                    color: MIST,
+                    flexShrink: 0,
+                  }}
+                >
+                  <IconX size={12} stroke={2.2} />
+                </UnstyledButton>
+              )}
+            </Box>
+          );
+        })}
+      </Stack>
+
+      {!query.isLoading && !query.isError && devices.length === 0 && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST }}>
+          {t('userDrawer.wgDevicesEmpty')}
+        </Text>
+      )}
+      {devices.length > 0 && (
+        <Text
+          style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST, marginTop: 8 }}
+        >
+          {t('userDrawer.wgDevicesHint')}
         </Text>
       )}
     </Box>

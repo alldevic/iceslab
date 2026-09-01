@@ -1842,6 +1842,38 @@ export async function deleteHwidDevice(id: string): Promise<void> {
   await api.delete(`/api/hwid-devices/${id}`);
 }
 
+// ───── WireGuard devices (slice 51) ─────
+//
+// A different thing from HwidDevice above, despite the shared word. That one
+// records what a client CLAIMED when it polled the subscription. This one is a
+// credential the panel issued: the node enforces it, the node measures its
+// traffic, and revoking it takes a tunnel down.
+
+export interface WgDevice {
+  id: string;
+  userId: string;
+  label: string | null;
+  publicKey: string;
+  /** Tunnel addresses this device holds, one per wg profile. */
+  addresses: string[];
+  /** Strings, not numbers: a busy tunnel outgrows 2^53. */
+  bytesIn: string;
+  bytesOut: string;
+  /** Last poll in which it moved bytes. NULL = never seen. */
+  lastSeenAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export async function listUserWgDevices(userId: string): Promise<{ devices: WgDevice[] }> {
+  const { data } = await api.get<{ devices: WgDevice[] }>(`/api/users/${userId}/wg-devices`);
+  return data;
+}
+
+export async function revokeWgDevice(id: string): Promise<void> {
+  await api.delete(`/api/wg-devices/${id}`);
+}
+
 // ───── Hosts (slice 30) ─────
 //
 // One Binding can fan out into N Hosts in subscriptions. Each Host is a
@@ -2159,6 +2191,11 @@ export interface AdminSettings extends PublicSettings {
   /** TLS-fragment - split the ClientHello in the Xray JSON format so SNI-DPI
    *  cannot match the handshake. Xray JSON only. */
   subscriptionTlsFragment?: boolean;
+  /** Resolvers written into the `DNS =` line of every wg-quick config. Empty
+   *  omits the line, which is not a neutral default on a full tunnel: the
+   *  client keeps its own network's resolver, and a LAN address routes into
+   *  the tunnel and dies there. */
+  subscriptionWgDns?: string[] | null;
   /** R3-b - raw custom xray routing rules. */
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   /** R3 - operator-defined custom domain lists (direct/proxy/block). */
@@ -2178,6 +2215,11 @@ export interface UpdateSettingsInput {
   subscriptionRoutingPreset?: RoutingPresetId;
   subscriptionEntryPoolSize?: number;
   subscriptionTlsFragment?: boolean;
+  /** Resolvers written into the `DNS =` line of every wg-quick config. Empty
+   *  omits the line — which is not a neutral default for a full tunnel: the
+   *  client keeps whatever resolver its network gave it, and a LAN address
+   *  routes into the tunnel and dies there. */
+  subscriptionWgDns?: string[] | null;
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   subscriptionCustomDomainLists?: {
     direct?: string[];

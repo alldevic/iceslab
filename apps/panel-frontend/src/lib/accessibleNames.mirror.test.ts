@@ -84,7 +84,7 @@ const KNOWN_UNNAMED = new Set<string>([
   'components/SquadFormModal.tsx:665 <Checkbox>',
   'components/SquadFormModal.tsx:728 <Checkbox>',
   'components/Toolbar.tsx:44 <TextInput>',
-  'components/UserDrawer.tsx:719 <Select>',
+  'components/UserDrawer.tsx:723 <Select>',
   'pages/CascadeCreatePage.tsx:347 <TextInput>',
   'pages/CascadeEditPage.tsx:439 <TextInput>',
   'pages/HostEditPage.tsx:586 <Select>',

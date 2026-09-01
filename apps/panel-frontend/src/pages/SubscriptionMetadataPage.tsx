@@ -61,6 +61,9 @@ interface Draft {
   preset: RoutingPresetId;
   entryPoolSize: number | '';
   tlsFragment: boolean;
+  /** Comma-separated in the field, an array on the wire. Free text because an
+   *  operator types "1.1.1.1, 1.0.0.1", not a JSON array. */
+  wgDns: string;
 }
 
 export function SubscriptionMetadataPage() {
@@ -97,6 +100,10 @@ export function SubscriptionMetadataPage() {
         subscriptionEntryPoolSize:
           typeof draft.entryPoolSize === 'number' ? draft.entryPoolSize : 0,
         subscriptionTlsFragment: draft.tlsFragment,
+        // Empty field clears the setting, which omits the `DNS =` line - the
+        // pre-2026-08-31 behaviour, and a deliberate choice rather than a
+        // default worth keeping.
+        subscriptionWgDns: parseDnsList(draft.wgDns),
       });
     },
     onSuccess: async () => {
@@ -394,6 +401,27 @@ export function SubscriptionMetadataPage() {
               {t('metadata.fragmentHint')}
             </Text>
           </Stack>
+
+          {/* WireGuard DNS. Its own card rather than a line in another: leaving
+              it empty is what every config shipped before 2026-08-31 did, and
+              that is a failure an operator should be able to see and choose. */}
+          <Stack
+            gap={12}
+            style={{ padding: 20, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}
+          >
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+              <CardCaption>{t('metadata.wgDnsTitle')}</CardCaption>
+            </Box>
+            <TextInput
+              value={draft.wgDns}
+              label={t('metadata.wgDnsTitle')}
+              placeholder="1.1.1.1, 1.0.0.1"
+              onChange={(e) => patch({ wgDns: e.currentTarget.value })}
+            />
+            <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
+              {t('metadata.wgDnsHint')}
+            </Text>
+          </Stack>
         </Box>
       </Box>
     </Stack>
@@ -411,7 +439,23 @@ function toDraft(s: AdminSettings): Draft {
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',
     entryPoolSize: s.subscriptionEntryPoolSize ?? 0,
     tlsFragment: s.subscriptionTlsFragment ?? false,
+    wgDns: (s.subscriptionWgDns ?? []).join(', '),
   };
+}
+
+/**
+ * "1.1.1.1, 1.0.0.1" -> ["1.1.1.1", "1.0.0.1"], empty -> null.
+ *
+ * Null rather than an empty array: the backend treats a missing setting and an
+ * empty one alike, but null is what "no resolvers, omit the line" reads as,
+ * and it keeps the stored row from growing an empty array nobody set.
+ */
+function parseDnsList(raw: string): string[] | null {
+  const parts = raw
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  return parts.length > 0 ? parts : null;
 }
 
 /* ───── Preview ─────────────────────────────────────────────────────────── */

@@ -316,6 +316,15 @@ export default {
     devicesError: 'Could not load the device list.',
     deviceReset: 'Device reset',
     deviceResetHint: 'Reset this device and free its slot',
+    wgDevices: 'WireGuard tunnels',
+    wgDevicesHint:
+      'One key and one address per device. The node measures the traffic itself, so a client cannot misreport it and cannot talk its way past the limit: a device with no key does not connect.',
+    wgDevicesEmpty: 'No tunnels yet: they are cut on the first subscription fetch.',
+    wgDevicesError: 'Could not load the tunnels.',
+    wgDeviceNever: 'never connected',
+    wgDeviceRevoked: 'revoked',
+    wgDeviceRevoke: 'Revoke this tunnel: its key stops working on every node',
+    wgDeviceRevoked_toast: 'Tunnel revoked',
     traffic: 'Traffic',
     expires: 'Expires',
     routing: 'Routing',
@@ -1858,6 +1867,9 @@ export default {
     presetCnSplit: 'CN split',
     presetCnSplitHint: 'Same, but for China sites, with clean China DNS.',
     fragmentTitle: 'TLS fragment',
+    wgDnsTitle: 'DNS for WireGuard',
+    wgDnsHint:
+      'Comma-separated resolvers, written as the DNS line of every wg config handed out. Empty leaves the line out, and on a full tunnel the client then keeps its own network\u2019s resolver: a home 192.168.1.1 routes into the tunnel and dies there. The handshake still succeeds; nothing resolves.',
     fragmentHint:
       'Dials each server through a fragment outbound that chops the ClientHello into pieces, so SNI-based DPI cannot cleanly match it. Xray JSON format only.',
   },

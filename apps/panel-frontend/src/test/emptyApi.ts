@@ -37,6 +37,7 @@ export const EMPTY_API: Record<string, unknown> = {
   listApiTokens: { tokens: [] },
   listUserTags: { tags: [] },
   listUserDevices: { devices: [] },
+  listUserWgDevices: { devices: [] },
   // Declared as a bare array, not as `{ groups: [] }`. Written down because the
   // first draft guessed the wrapper and the mirror refused it.
   listEgressCatalogue: [],
