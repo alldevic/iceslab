@@ -50,10 +50,10 @@ import { emitsVisionFlow, type SubscriptionEndpoint } from '../subscription.form
  *     category, so one domain rule not two), clean DNS via AliDNS 223.5.5.5.
  * Uses the geosite:/geoip: databases that ship inside every xray client
  * install, so no extra files are needed. `domainStrategy` switches to
- * IPIfNonMatch so domains that miss every domain rule get a second, IP-based
- * pass (otherwise geoip:ru / geoip:cn never matches a domain-typed
- * destination). Default 'proxy-all' keeps the output byte-identical to pre-R1
- * builds.
+ * IPOnDemand so the preset's geoip:ru / geoip:cn rule can fire at all - see the
+ * comment on routing.domainStrategy below for why IPIfNonMatch, the obvious
+ * choice, is dead here. Default 'proxy-all' keeps the output byte-identical to
+ * pre-R1 builds.
  */
 export interface XrayJsonBuildOpts {
   bundle?: 'flat' | 'balancer';
@@ -440,10 +440,19 @@ export function buildXrayJson(
         : []),
     ],
     routing: {
-      // Split presets need IPIfNonMatch so a domain-typed destination that
-      // missed every domain rule gets a second, IP-based pass (otherwise
-      // geoip:ru / geoip:cn never matches). proxy-all keeps AsIs.
-      domainStrategy: splitRules ? 'IPIfNonMatch' : 'AsIs',
+      // Split presets need IPOnDemand, not IPIfNonMatch. Under IPIfNonMatch a
+      // domain-typed destination gets its second, IP-based pass only if NO rule
+      // matched the first - and this preset appends a catch-all LAST, which
+      // matches always. So the second pass never comes and the preset's own
+      // geoip:ru / geoip:cn rule is dead: measured 2026-09-01 on a live xray
+      // client, habr.com (foreign domain, Russian address) went into the tunnel
+      // with `geoip:ru -> direct` sitting right there in the config. Nothing
+      // fails; the split quietly does not split. Same trap and same fix as
+      // egress.policy.ts (egressDomainStrategy), where it is measured in full.
+      // Cost: IPOnDemand resolves EVERY connection before routing, and under
+      // the split DNS below non-RU names resolve through the tunnel.
+      // proxy-all keeps AsIs - no rule there needs an address.
+      domainStrategy: splitRules ? 'IPOnDemand' : 'AsIs',
       ...(balancers ? { balancers } : {}),
       rules: [
         // R3-b custom rules win over presets + catch-all.
@@ -618,7 +627,10 @@ export function buildXrayJsonArray(
       ],
       outbounds,
       routing: {
-        domainStrategy: splitRules ? 'IPIfNonMatch' : 'AsIs',
+        // IPOnDemand for the same reason as buildXrayJson: the catch-all below
+        // is last and always matches, so IPIfNonMatch's second pass never comes
+        // and the preset's geoip rule never fires. See the comment there.
+        domainStrategy: splitRules ? 'IPOnDemand' : 'AsIs',
         rules,
       },
     };

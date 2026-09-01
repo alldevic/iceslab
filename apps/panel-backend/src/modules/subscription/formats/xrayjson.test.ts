@@ -185,9 +185,9 @@ describe('buildXrayJson', () => {
       expect(rules[3].outboundTag).toBe('eu-1-xray');
     });
 
-    it('ru-split switches domainStrategy to IPIfNonMatch', () => {
+    it('ru-split switches domainStrategy to IPOnDemand', () => {
       const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split' }));
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
     });
 
     it('proxy-all emits no dns block; ru-split adds split DNS (R2)', () => {
@@ -239,9 +239,9 @@ describe('buildXrayJson', () => {
       expect(rules[3].outboundTag).toBe('eu-1-xray');
     });
 
-    it('switches domainStrategy to IPIfNonMatch', () => {
+    it('switches domainStrategy to IPOnDemand', () => {
       const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'cn-split' }));
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
     });
 
     it('adds AliDNS split DNS (223.5.5.5 scoped to geosite:cn, no fallback)', () => {
@@ -354,7 +354,7 @@ describe('buildXrayJson', () => {
       const v = cfg.outbounds.find((o: any) => o.protocol === 'vless');
       expect(v.streamSettings.sockopt.dialerProxy).toBe('fragment');
       // ru-split rules + split DNS still present.
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
       expect(cfg.routing.rules[0].outboundTag).toBe('block');
       expect(cfg.dns.servers).toHaveLength(2);
       // Every outbound tag is unique.
@@ -755,11 +755,11 @@ describe('buildXrayJsonArray hysteria (hy2)', () => {
 // T2 - the array carries the same routing surface as the single-config builder,
 // but every proxy target is THIS config's own proxy.
 describe('buildXrayJsonArray routing (T2)', () => {
-  it('applies the ru-split preset per config: split rules, split DNS, IPIfNonMatch', () => {
+  it('applies the ru-split preset per config: split rules, split DNS, IPOnDemand', () => {
     const arr = parse(buildXrayJsonArray([xrayEp, xrayEp2], { routingPreset: 'ru-split' }));
     for (const [i, cfg] of arr.entries()) {
       const ownTag = i === 0 ? 'eu-1-xray' : 'us-2-xray';
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
       expect(cfg.dns.servers[0].address).toBe('77.88.8.8');
       const rules = cfg.routing.rules;
       // block/direct split rules present, then bittorrent, then catch-all to OWN proxy.
