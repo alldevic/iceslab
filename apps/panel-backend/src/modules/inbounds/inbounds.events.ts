@@ -151,11 +151,14 @@ export function registerInboundEventHandlers(): void {
     enqueueWgBearingNodes(`user.created ${username} (${userId}) wg peers`);
   });
 
-  // Любая смена статуса, а не только переход в `active`. Набор пиров этот
-  // push строит из `fetchActiveUsers()`, поэтому один и тот же прогон и
-  // возвращает доступ включённому, и снимает пира у выключенного. Без него
-  // выключение отзывало xray и sing-box (это делает `removeUser`), а wg-пир
-  // оставался на ноде живым до ближайшей посторонней правки инбаундов.
+  // Любая смена статуса, а не только переход в `active`: набор строится из
+  // `fetchActiveUsers()`, поэтому включённому этот прогон возвращает пира, а у
+  // выключенного перестаёт его публиковать.
+  //
+  // Перестаёт публиковать — не значит снимает. Агент пиров не сверяет: он
+  // добавляет их по `AddUser` и удаляет только по `RemoveUser` с тем же id.
+  // Снятие живёт в `users.queue.ts`, которая шлёт removeUser по id каждого
+  // устройства. Здесь — только сторона панели.
   eventBus.on('user.status-changed', ({ userId, from, to }) => {
     enqueueWgBearingNodes(`user.status-changed ${from} → ${to} (${userId}) wg peers`);
   });

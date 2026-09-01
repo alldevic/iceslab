@@ -186,6 +186,32 @@ async function syncAddUser(userId: string): Promise<void> {
   );
 }
 
+/**
+ * Every id the node knows this person by, so removal can name all of them.
+ *
+ * A wg peer is dropped by the id it was ADDED under, and it was added under a
+ * DEVICE id (`userId: peer.deviceId`, inbounds.queue.ts). The agent keeps peers
+ * in `a.peers[userID]` and returns nil on a key it does not hold, without a
+ * word. So a removal carrying only the person's id took them out of xray and
+ * sing-box and touched no wg peer at all: a disabled buyer kept using WireGuard
+ * and AmneziaWG for as long as they liked. Measured on s2 2026-09-01 - after
+ * `status: disabled` the panel stopped publishing the peer (3 users + 9 device
+ * records pushed, down from 4 and 12) and all three peers stayed on the node.
+ *
+ * Devices are taken ALL of them, revoked included: `revokeDevice` already sent
+ * its own removeUser and a repeat is an idempotent no-op on the agent, whereas
+ * skipping a device revoked in the same breath would be a hole.
+ *
+ * Exported for the test that pins this.
+ */
+export async function removalTargetsFor(userId: string): Promise<string[]> {
+  const devices = await prisma.wgDevice.findMany({
+    where: { userId },
+    select: { id: true },
+  });
+  return [userId, ...devices.map((d) => d.id)];
+}
+
 async function syncRemoveUser(userId: string): Promise<void> {
   // #4 - status-gate. Skip the removal if the user is currently active and not
   // soft-deleted: a stale removeUser (the user was flipped back to active by a
@@ -202,13 +228,17 @@ async function syncRemoveUser(userId: string): Promise<void> {
     return;
   }
 
-  const req: RemoveUserRequest = { userId };
   const nodes = await fetchActiveNodes();
-  await fanOut(
-    nodes,
-    (node) => new NodeTransport(node).removeUser(req),
-    `removeUser ${userId}`,
-  );
+
+  const targets = await removalTargetsFor(userId);
+  for (const target of targets) {
+    const req: RemoveUserRequest = { userId: target };
+    await fanOut(
+      nodes,
+      (node) => new NodeTransport(node).removeUser(req),
+      target === userId ? `removeUser ${userId}` : `removeUser device ${target}`,
+    );
+  }
 }
 
 /**

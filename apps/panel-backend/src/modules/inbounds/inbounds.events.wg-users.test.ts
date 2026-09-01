@@ -127,9 +127,10 @@ describe('a user who becomes servable gets their wg peers pushed', () => {
     expect(await pushedNodes(spy)).toEqual([NODE_WG]);
   });
 
-  // Один прогон закрывает обе стороны: включённому возвращает пира, у
-  // выключенного снимает — набор строится из fetchActiveUsers(). Без этого
-  // выключение отзывало xray и sing-box, а wg-пир оставался живым.
+  // Толкаем на любой смене статуса: набор строится из fetchActiveUsers(), так
+  // что включённому прогон возвращает пира, а у выключенного перестаёт его
+  // публиковать. Само снятие пира с ноды — не здесь: агент сверки не делает,
+  // и удаление шлёт `users.queue.ts` по id каждого устройства.
   it.each(['active', 'disabled', 'limited'])('pushes on a status change to %s', async (to) => {
     await node(NODE_WG, 'wg-node', '10.0.0.1:8443');
     await boundProfile(NODE_WG, 'p-wireguard', 'wireguard');
