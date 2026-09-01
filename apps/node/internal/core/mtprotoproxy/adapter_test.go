@@ -529,3 +529,38 @@ mtprotoproxy_user_octets_to{user="u1"} 7
 		t.Errorf("TotalBytesIn = %d, want 905 (the legacy cohort plus u1)", st.TotalBytesIn)
 	}
 }
+
+func TestRevokingAUserDoesNotDentTheNodeTotal(t *testing.T) {
+	// The panel reads the node total as a cumulative counter and treats a DROP
+	// as a core restart worth re-baselining. mtprotoproxy keeps a departed
+	// user's counters in its stats after they leave USERS, so the scrape still
+	// carries them — and summing only the CURRENT users would make every
+	// revocation look like a restart, flattening the node's history exactly
+	// when somebody is watching it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `mtprotoproxy_user_octets_from{user="stays"} 100
+mtprotoproxy_user_octets_to{user="stays"} 200
+mtprotoproxy_user_octets_from{user="revoked"} 1000
+mtprotoproxy_user_octets_to{user="revoked"} 2000
+`)
+	}))
+	defer srv.Close()
+
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	if err := a.AddUser(core.User{UserID: "stays", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	// "revoked" is gone from USERS but still in the scrape.
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Users) != 1 || st.Users[0].UserID != "stays" {
+		t.Errorf("a revoked user must not be attributed: %+v", st.Users)
+	}
+	if st.TotalBytesIn != 1100 || st.TotalBytesOut != 2200 {
+		t.Errorf("node totals = %d/%d, want 1100/2200 — the departed user's bytes still happened",
+			st.TotalBytesIn, st.TotalBytesOut)
+	}
+}

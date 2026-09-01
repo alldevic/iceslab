@@ -298,14 +298,28 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	}
 
 	stats := &core.Stats{Cumulative: true, Users: make([]core.UserStats, 0, len(names))}
-	// The legacy cohort has no owner, so it gets no user row — but it is real
-	// traffic on this node and belongs in the node's own totals. Leaving it out
-	// entirely would make a node mid-migration look quieter than it is, which is
-	// the one period when somebody is watching it.
-	if t := traffic[LegacyUserName]; t != nil {
+
+	// Node totals sum EVERY row in the scrape, not just the users we currently
+	// serve. Three kinds of row end up here and all three are real traffic on
+	// this node:
+	//
+	//   - the users below, who also get attributed;
+	//   - the legacy cohort, which has no owner so nobody can be billed for it;
+	//   - users already removed. mtprotoproxy keeps their entry in `user_stats`
+	//     after they leave USERS (metrics iterate the stats, not the config), so
+	//     their final counters keep being reported, frozen.
+	//
+	// That last one is why this sums the scrape rather than the current user
+	// set. The panel reads this as a cumulative counter and deltas it, treating
+	// any DROP as a core restart worth re-baselining. Summing only current users
+	// would make every revocation look like a restart — the node's own history
+	// would flatten each time somebody is cut off, which is exactly when it is
+	// being looked at.
+	for _, t := range traffic {
 		stats.TotalBytesIn += t.BytesIn
 		stats.TotalBytesOut += t.BytesOut
 	}
+
 	for _, n := range names {
 		us := core.UserStats{UserID: n}
 		// A user we know about with no row in the scrape has simply not used
@@ -316,8 +330,6 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 			us.BytesIn, us.BytesOut = t.BytesIn, t.BytesOut
 		}
 		stats.Users = append(stats.Users, us)
-		stats.TotalBytesIn += us.BytesIn
-		stats.TotalBytesOut += us.BytesOut
 	}
 	return stats, nil
 }
