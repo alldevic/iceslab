@@ -4,6 +4,7 @@ import {
   emitsVisionFlow,
   cannotCarryVlessEncryption,
   type SubscriptionEndpoint,
+  expandCascadeExits,
 } from '../subscription.formats.js';
 
 /**
@@ -205,6 +206,11 @@ export function buildSingboxJson(
   endpoints: SubscriptionEndpoint[],
   opts: SingboxBuildOpts = {},
 ): string {
+  // A cascade entry is a LINE PER WAY OUT: one server per exit, each with the
+  // exit's tag in UUID bytes 7-8. Without it the client authenticates fine and
+  // silently egresses at the ENTRY - the buyer sees the exit's name and gets
+  // the entry's country. Nothing reports the difference. See expandCascadeExits.
+  endpoints = expandCascadeExits(endpoints);
   const outbounds: Record<string, unknown>[] = [];
   const proxyTags: string[] = [];
   // Routing preset (R1b + H2). Each split preset selects its own route rules +

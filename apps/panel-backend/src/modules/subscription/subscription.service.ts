@@ -40,7 +40,7 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
-import { withVlessRouteTag } from './formats/xrayjson.js';
+import { expandCascadeExits } from './subscription.formats.js';
 import { resolveBindingConfig } from '../profiles/profiles.service.js';
 
 // ───── Domain errors ─────
@@ -393,6 +393,12 @@ export function disambiguateCascadeLabels(endpoints: SubscriptionEndpoint[]): vo
   }
 }
 
+/** The `plain`/base64 line(s) for one endpoint: one per cascade exit, or the
+ *  single URI it already carries. The rewrite itself lives in
+ *  expandCascadeExits, which every other format goes through - this used to be
+ *  a second copy of it, and a second copy is how the two drift. vmess declines
+ *  to expand because its URI is a base64 blob with no UUID to swap (see
+ *  retargetUri); it yields its one untagged line, as before. */
 export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
   if (
     e.protocol !== 'xray' ||
@@ -402,16 +408,9 @@ export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
   ) {
     return e.uri ? [e.uri] : [];
   }
-  // vless:// and trojan:// both put the UUID in the userinfo, so replacing the
-  // first occurrence of it retargets the link. Strip the original #remark first.
-  const hashIdx = e.uri.indexOf('#');
-  const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
-  return e.cascadeExits.map((profile) => {
-    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, profile.tag));
-    // The label is already unique across this subscription (see
-    // disambiguateCascadeLabels); nothing to append here.
-    return `${tagged}#${encodeURIComponent(profile.label)}`;
-  });
+  return expandCascadeExits([e])
+    .map((x) => x.uri)
+    .filter((u): u is string => Boolean(u));
 }
 
 /**

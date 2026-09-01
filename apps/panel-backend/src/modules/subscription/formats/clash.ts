@@ -1,5 +1,5 @@
 import type { RoutingPresetId } from '@iceslab/shared';
-import { emitsVisionFlow, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, type SubscriptionEndpoint, expandCascadeExits } from '../subscription.formats.js';
 
 /**
  * Clash YAML subscription formatter (targets Clash Meta / Mihomo, covers
@@ -242,6 +242,11 @@ export function buildClashYaml(
   endpoints: SubscriptionEndpoint[],
   buildOpts: ClashBuildOpts = {},
 ): string {
+  // A cascade entry is a LINE PER WAY OUT: one server per exit, each with the
+  // exit's tag in UUID bytes 7-8. Without it the client authenticates fine and
+  // silently egresses at the ENTRY - the buyer sees the exit's name and gets
+  // the entry's country. Nothing reports the difference. See expandCascadeExits.
+  endpoints = expandCascadeExits(endpoints);
   // Routing preset (R1c + H2). Each split preset selects its own DNS + rule
   // lines (the geo-db block is shared); proxy-all leaves them null so the
   // output stays byte-identical to pre-R1 builds.

@@ -1,5 +1,9 @@
 import type { RoutingPresetId } from '@iceslab/shared';
-import { emitsVisionFlow, type SubscriptionEndpoint } from '../subscription.formats.js';
+import {
+  emitsVisionFlow,
+  expandCascadeExits,
+  type SubscriptionEndpoint,
+} from '../subscription.formats.js';
 
 /**
  * Xray-core client JSON subscription formatter.
@@ -472,53 +476,13 @@ export function buildXrayJson(
   return JSON.stringify(config, null, 2) + '\n';
 }
 
-/**
- * Expand every cascade-entry endpoint into one endpoint per exit, with the exit
- * tag already written into the UUID and the exit's label as the display name.
- * Endpoints with no exits come back untouched.
- *
- * One place, because the rule has to hold for every format that renders an xray
- * server, and it did not. A cascade entry is offered to the subscriber as a
- * LINE PER WAY OUT, and what makes a line mean its exit is those two UUID bytes
- * - without them the client authenticates as the same user, the entry has no
- * `vlessRoute` to match, and the traffic egresses at the ENTRY. Measured on a
- * two-VM chain 2026-08-28: the untagged UUID answered 200 while the exit node
- * logged ZERO connections; the tagged one, same client, same second, put 15 on
- * the exit. Nothing anywhere reports the difference — the subscriber simply
- * gets the entry's country while the line says the exit's.
- *
- * `expandEndpointUris` (plain/base64) and `buildXrayJsonArray` did this; the
- * single-config `buildXrayJson` and `xkeen` did not, and v2rayNG - the client
- * this panel marks `recommended` for Android - asks for the single config.
- */
-export function expandCascadeExits(
-  endpoints: SubscriptionEndpoint[],
-): SubscriptionEndpoint[] {
-  return endpoints.flatMap((e) => {
-    if (e.protocol !== 'xray' || !e.cascadeExits || e.cascadeExits.length === 0) return [e];
-    // The label is already unique across the subscription, made so once for
-    // every format rather than guessed per format (see disambiguateCascadeLabels
-    // in subscription.service).
-    return e.cascadeExits.map((profile) => ({
-      ...e,
-      uuid: withVlessRouteTag(e.uuid, profile.tag),
-      nodeName: profile.label,
-      cascadeExits: undefined,
-    }));
-  });
-}
-
-/** A4: overwrite UUID bytes 7-8 (the 3rd hyphen-group) with a big-endian uint16
- *  route tag, e.g. tag 1 -> "...-0001-...". Xray reads those two bytes as
- *  `vlessRoute` and ignores them for authentication (documented + verified in
- *  field 2026-07-25), so the result authenticates as the SAME user but is
- *  pinned to a specific cascade exit. A malformed UUID is returned untouched. */
-export function withVlessRouteTag(uuid: string, tag: number): string {
-  const parts = uuid.split('-');
-  if (parts.length !== 5 || parts[2]!.length !== 4) return uuid;
-  parts[2] = (tag & 0xffff).toString(16).padStart(4, '0');
-  return parts.join('-');
-}
+// `expandCascadeExits` and `withVlessRouteTag` moved to subscription.formats.ts
+// on 2026-09-02. They were never xray-json's own: clash, sing-box, Surge, Loon
+// and QuantumultX render an xray server too and all five skipped the expansion,
+// so their subscribers would have got the entry's country under a line that
+// says the exit's. Living beside SubscriptionEndpoint, every format can reach
+// them without importing this one. Re-exported so existing callers keep working.
+export { expandCascadeExits, withVlessRouteTag } from '../subscription.formats.js';
 
 // `cascadeExitLabel` lived here until 2026-08-15. It suffixed a label with the
 // host remark whenever the host was named, which it did per endpoint, blind to

@@ -206,7 +206,10 @@ interface SubscriptionEndpointBase {
    *  exitIndex) so the entry node's routing rules and this UUID agree. `label` is
    *  the exit name (plain) or `exit · policy` (ad-split). Empty/undefined = a
    *  single plain config (the pre-A4 behaviour, non-balancer-entry endpoints).
-   *  Only the xrayjson-array + plain formats consume this. */
+   *  Consumed by EVERY format that renders an xray server, via
+ *  expandCascadeExits - see its comment, and the mirror test that pins the
+ *  list. A format that renders one and does not expand hands the subscriber
+ *  the ENTRY's country under a line that names the exit. */
   cascadeExits?: { label: string; tag: number; cascadeId?: string }[];
 }
 
@@ -451,4 +454,90 @@ export function buildSubscriptionJson(
     },
     endpoints,
   };
+}
+
+/**
+ * Expand every cascade-entry endpoint into one endpoint per exit, with the exit
+ * tag already written into the UUID and the exit's label as the display name.
+ * Endpoints with no exits come back untouched.
+ *
+ * One place, because the rule has to hold for every format that renders an xray
+ * server, and it did not. A cascade entry is offered to the subscriber as a
+ * LINE PER WAY OUT, and what makes a line mean its exit is those two UUID bytes
+ * - without them the client authenticates as the same user, the entry has no
+ * `vlessRoute` to match, and the traffic egresses at the ENTRY. Measured on a
+ * two-VM chain 2026-08-28: the untagged UUID answered 200 while the exit node
+ * logged ZERO connections; the tagged one, same client, same second, put 15 on
+ * the exit. Nothing anywhere reports the difference — the subscriber simply
+ * gets the entry's country while the line says the exit's.
+ *
+ * It lives here, next to SubscriptionEndpoint, rather than in any one format,
+ * because "every format that renders an xray server" is the whole rule and
+ * putting it inside xray-json is what let five formats miss it. The list of
+ * formats that must call it is pinned by cascade-exit-expansion.mirror.test.ts.
+ *
+ * History of who was missing it, because the pattern repeats: first only
+ * `expandEndpointUris` (plain) and `buildXrayJsonArray` expanded, and the
+ * single-config `buildXrayJson` + `xkeen` did not - which is what v2rayNG, the
+ * client this panel marks `recommended` for Android, asks for. Fixed. Then
+ * 2026-09-02: clash, sing-box, Surge, Loon and QuantumultX still did not, and
+ * clash and sing-box between them carry Clash/FlClash/Stash/mihomo and
+ * Hiddify/NekoBox/Karing/Throne. Fixed the same way.
+ */
+export function expandCascadeExits(
+  endpoints: SubscriptionEndpoint[],
+): SubscriptionEndpoint[] {
+  return endpoints.flatMap((e) => {
+    if (e.protocol !== 'xray' || !e.cascadeExits || e.cascadeExits.length === 0) return [e];
+    // The label is already unique across the subscription, made so once for
+    // every format rather than guessed per format (see disambiguateCascadeLabels
+    // in subscription.service).
+    return e.cascadeExits.map((profile) => ({
+      ...e,
+      uuid: withVlessRouteTag(e.uuid, profile.tag),
+      // The `uri` has to move WITH the uuid. It used to stay pointed at the
+      // entry, which is a tagged endpoint carrying an untagged link - the exact
+      // silent failure this function exists to prevent, reintroduced by anything
+      // that reads `uri` off an expanded endpoint. No format did, which is why
+      // it went unnoticed; `plain` had its own copy of this rewrite instead.
+      uri: retargetUri(e, profile),
+      nodeName: profile.label,
+      cascadeExits: undefined,
+    }));
+  });
+}
+
+/**
+ * Point one endpoint's URI at one exit: swap the UUID, replace the remark with
+ * the exit's label.
+ *
+ * vless:// and trojan:// both carry the UUID in the userinfo, so replacing its
+ * first occurrence retargets the link. vmess:// does NOT - it is a base64 JSON
+ * blob - so its URI is returned untouched. That is not a gap being papered
+ * over: the endpoint's `uuid` FIELD is still tagged, so every format that
+ * builds a server from fields (clash, sing-box, Surge, Loon, QuantumultX,
+ * xray-json) gets a correctly pinned vmess. Only the pre-built link cannot be
+ * rewritten, and `expandEndpointUris` declines to expand vmess for that reason.
+ */
+function retargetUri(
+  e: SubscriptionEndpoint & { protocol: 'xray' },
+  profile: { label: string; tag: number },
+): string {
+  if (!e.uri || e.subprotocol === 'vmess') return e.uri;
+  const hashIdx = e.uri.indexOf('#');
+  const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
+  const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, profile.tag));
+  return `${tagged}#${encodeURIComponent(profile.label)}`;
+}
+
+/** A4: overwrite UUID bytes 7-8 (the 3rd hyphen-group) with a big-endian uint16
+ *  route tag, e.g. tag 1 -> "...-0001-...". Xray reads those two bytes as
+ *  `vlessRoute` and ignores them for authentication (documented + verified in
+ *  field 2026-07-25), so the result authenticates as the SAME user but is
+ *  pinned to a specific cascade exit. A malformed UUID is returned untouched. */
+export function withVlessRouteTag(uuid: string, tag: number): string {
+  const parts = uuid.split('-');
+  if (parts.length !== 5 || parts[2]!.length !== 4) return uuid;
+  parts[2] = (tag & 0xffff).toString(16).padStart(4, '0');
+  return parts.join('-');
 }
