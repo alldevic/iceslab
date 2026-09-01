@@ -223,7 +223,26 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         const w = computeNodeStatsWrites({
           users: userList,
           multiplier: Number(node.consumptionMultiplier ?? 1) || 1,
-          isPresenceOnlyProtocol: node.protocol === 'mtproto',
+          // Presence-only means "this adapter reports who is connected but not
+          // how much they moved", and it is now a property of the ENGINE, not
+          // the protocol: mtg reports every user with zero bytes because it has
+          // one secret for all of them, while mtprotoproxy reports real per-user
+          // counters. The stats response carries no engine, so the shape of the
+          // data decides — mtg's is always all-zeroes and mtprotoproxy's is not.
+          //
+          // What this changes is ONLINE accuracy, not billing: the flag only
+          // affects users whose delta is zero, and a user with real bytes is
+          // billed and dropped from the presence set either way. Without it a
+          // buyer on mtprotoproxy who moved nothing this poll would still be
+          // touched as online, on an engine that can actually tell.
+          //
+          // A genuinely idle mtprotoproxy node still reads as presence-only for
+          // that poll, the same as mtg. It corrects itself the moment anybody
+          // transfers a byte, and treating an idle node as "everyone offline"
+          // would be the worse error.
+          isPresenceOnlyProtocol:
+            node.protocol === 'mtproto' &&
+            !userList.some((u) => Number(u.bytesIn ?? 0) > 0 || Number(u.bytesOut ?? 0) > 0),
           totalBytesIn: res.totalBytesIn,
           totalBytesOut: res.totalBytesOut,
           nodeTotalIsCumulative: !!res.cumulative,
