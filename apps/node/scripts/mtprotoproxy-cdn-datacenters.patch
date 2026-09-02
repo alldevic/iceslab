@@ -1,0 +1,98 @@
+--- a/mtprotoproxy.py
++++ b/mtprotoproxy.py
+@@ -33,6 +33,30 @@
+     "2001:67c:04e8:f004::a", "2001:b28:f23f:f005::a"
+ ]
+ 
++# Telegram hands clients datacenter ids OUTSIDE the 1..5 above. 203 is a CDN
++# datacenter, and it is where media from large public channels is downloaded
++# from. The client names it in the proxy handshake exactly as it names 1..5, so
++# `abs(dc) - 1` indexes past the end of the lists and the connection is dropped
++# having sent no byte and logged no line.
++#
++# Measured on this deployment 2026-09-02: of 272 handshakes that reached a user,
++# 136 died that way. Telegram text chat worked throughout and media did not,
++# which is the shape of the failure this table exists to remove.
++#
++# Addresses are verified one at a time by speaking obfuscated2 to them and
++# asking for a resPQ, not read off a published file: getProxyConfig lists
++# `proxy_for 203 91.105.192.110:443`, and that address closes a direct
++# connection — it is a middle-proxy endpoint. 91.105.192.100:443 answers, and it
++# is the address mtg dials for dc 203 on the same node.
++TG_EXTRA_DATACENTERS_V4 = {
++    203: "91.105.192.100",
++}
++
++# Empty on purpose: getProxyConfigV6 publishes 1..5 only, so Telegram offers no
++# IPv6 route to the CDN datacenter. A v6-preferring node therefore falls back to
++# the v4 address rather than dropping the connection — see do_direct_handshake.
++TG_EXTRA_DATACENTERS_V6 = {}
++
+ # This list will be updated in the runtime
+ TG_MIDDLE_PROXIES_V4 = {
+     1: [("149.154.175.50", 8888)], -1: [("149.154.175.50", 8888)],
+@@ -1351,6 +1375,18 @@
+     return False
+ 
+ 
++def get_dc_addr(dc_id, table, extra):
++    """The address for a datacenter id, or None when there is no entry.
++
++    None is a distinct answer from "index out of range": the caller has to be
++    able to say which datacenter it could not place, and the old expression
++    could not — it had already turned the id into an index.
++    """
++    if 1 <= dc_id <= len(table):
++        return table[dc_id - 1]
++    return extra.get(dc_id)
++
++
+ async def do_direct_handshake(proto_tag, dc_idx, dec_key_and_iv=None):
+     RESERVED_NONCE_FIRST_CHARS = [b"\xef"]
+     RESERVED_NONCE_BEGININGS = [b"\x48\x45\x41\x44", b"\x50\x4F\x53\x54",
+@@ -1361,16 +1397,27 @@
+     global my_ip_info
+     global tg_connection_pool
+ 
+-    dc_idx = abs(dc_idx) - 1
++    dc_id = abs(dc_idx)
+ 
+-    if my_ip_info["ipv6"] and (config.PREFER_IPV6 or not my_ip_info["ipv4"]):
+-        if not 0 <= dc_idx < len(TG_DATACENTERS_V6):
+-            return False
+-        dc = TG_DATACENTERS_V6[dc_idx]
++    prefer_v6 = my_ip_info["ipv6"] and (config.PREFER_IPV6 or not my_ip_info["ipv4"])
++    if prefer_v6:
++        dc = get_dc_addr(dc_id, TG_DATACENTERS_V6, TG_EXTRA_DATACENTERS_V6)
++        # The CDN datacenter has no published IPv6 route, and refusing the
++        # connection over that would take away media on a v6 node to no purpose.
++        if dc is None and my_ip_info["ipv4"]:
++            dc = get_dc_addr(dc_id, TG_DATACENTERS_V4, TG_EXTRA_DATACENTERS_V4)
+     else:
+-        if not 0 <= dc_idx < len(TG_DATACENTERS_V4):
+-            return False
+-        dc = TG_DATACENTERS_V4[dc_idx]
++        dc = get_dc_addr(dc_id, TG_DATACENTERS_V4, TG_EXTRA_DATACENTERS_V4)
++
++    if dc is None:
++        # Say it. The version of this code that just returned False is what made
++        # a broken datacenter table look like a proxy that works: connects
++        # counted, no bad secret, no timeout, no traffic, nothing in the log.
++        update_stats(connects_unknown_dc=1)
++        print_err("No address for datacenter %d, dropping the connection. The "
++                  "client asked for a datacenter this proxy has no entry for; "
++                  "add it to TG_EXTRA_DATACENTERS_V4." % dc_id)
++        return False
+ 
+     try:
+         reader_tgt, writer_tgt = await tg_connection_pool.get_connection(dc, TG_DATACENTER_PORT)
+@@ -1788,6 +1835,9 @@
+         metrics.append(["connects_all", "counter", "incoming connects", stats["connects_all"]])
+         metrics.append(["handshake_timeouts", "counter", "number of timed out handshakes",
+                        stats["handshake_timeouts"]])
++        metrics.append(["connects_unknown_dc", "counter",
++                       "connects asking for a datacenter with no address in the table",
++                       stats["connects_unknown_dc"]])
+ 
+         if config.METRICS_EXPORT_LINKS:
+             for link in proxy_links:

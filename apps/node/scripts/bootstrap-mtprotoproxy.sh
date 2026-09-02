@@ -84,6 +84,43 @@ tar -xzf "$TMPDIR/src.tar.gz" -C "$INSTALL_DIR" --strip-components=1
 [[ -f "$SCRIPT_PATH" ]] || fail "mtprotoproxy.py not found after unpacking"
 [[ -d "$INSTALL_DIR/pyaes" ]] || warn "bundled pyaes missing; harmless while a fast backend is present"
 
+# ───── 2b. The datacenter-table patch ─────
+#
+# Upstream's direct mode knows five datacenters and indexes them with
+# `abs(dc) - 1`. Telegram also hands clients dc 203 — a CDN datacenter, and the
+# one large public channels' media comes from — so that expression runs off the
+# end of the list and the connection is dropped having sent no byte and logged
+# no line. Measured on a fleet node 2026-09-02: half of all handshakes died
+# there, Telegram text worked and media did not, and the deployment was rolled
+# back to mtg without the cause being visible anywhere.
+#
+# Applied here rather than carried as a fork of the file: what the panel pins
+# and serves stays byte-identical to upstream's tarball, and this diff is the
+# whole of what we add to it. It also adds the counter and the log line that
+# would have named the problem in minutes.
+#
+# `--forward` so a rerun on an already-patched tree is a no-op rather than a
+# failure; the tree is freshly unpacked above, so that path is only for someone
+# running the step by hand. A patch that does NOT apply is fatal: it means the
+# pinned version moved these lines, and continuing would install the very
+# silence this removes.
+if ! command -v patch >/dev/null 2>&1; then
+  log "patch(1) not present; installing"
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get -qq update || true
+    DEBIAN_FRONTEND=noninteractive apt-get -qq install -y patch || fail "could not install patch"
+  else
+    fail "no patch(1) and no apt-get; install patch by hand, then rerun"
+  fi
+fi
+PATCH_FILE="$(dirname "$(readlink -f "$0")")/mtprotoproxy-cdn-datacenters.patch"
+[[ -f "$PATCH_FILE" ]] || fail "missing $PATCH_FILE, which is not optional: without it dc 203 is dropped silently"
+patch -p1 -d "$INSTALL_DIR" --forward < "$PATCH_FILE" \
+  || fail "the datacenter patch did not apply to this mtprotoproxy; re-pin it against the new version before shipping"
+grep -q TG_EXTRA_DATACENTERS_V4 "$SCRIPT_PATH" \
+  || fail "the datacenter patch reported success but the table is not there"
+log "Datacenter table patched (adds dc 203 and a counter for ids with no address)"
+
 # ───── 3. Smoke-test ─────
 #
 # Compile it rather than run it: running would bind a port and try to reach
