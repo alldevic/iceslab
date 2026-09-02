@@ -398,6 +398,28 @@ export const APPS: AppDef[] = [
     },
   },
   {
+    // The Android client this deployment already serves without saying so: the
+    // SRR rule was split in two on 2026-09-03 so `wgtunnel/…` receives the
+    // stock config rather than the AmneziaWG one, and its User-Agent was
+    // measured fetching a correct file. Listed for plain WireGuard only - it
+    // reads a wg-quick file and rejects an AmneziaWG one on `Jc = 4`, like
+    // every non-AWG client here.
+    //
+    // Why alongside the official app rather than instead of it: WG Tunnel adds
+    // split tunnelling and auto-connect on trusted networks, which is why
+    // people install it, and the official app is the one the project itself
+    // publishes. Play Store listing checked 2026-09-03: live, "WG Tunnel" by
+    // Zane Schepke.
+    name: 'WG Tunnel',
+    platforms: ['android'],
+    protocols: ['wireguard'],
+    action: { kind: 'wg-conf' },
+    install: {
+      android:
+        'https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel',
+    },
+  },
+  {
     name: 'WireGuard',
     platforms: ['windows', 'macos', 'linux'],
     protocols: ['wireguard'],

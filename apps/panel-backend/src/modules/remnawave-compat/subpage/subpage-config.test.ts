@@ -120,6 +120,27 @@ describe('buildSubpageConfig', () => {
     for (const b of qr) expect(b.link).toContain('proto=amneziawg');
   });
 
+  // WG Tunnel is the Android client this deployment already serves: the SRR
+  // rule was split in two so `wgtunnel/…` gets the stock config rather than the
+  // AmneziaWG one, and its User-Agent was measured fetching a correct file. The
+  // catalogue said nothing about it, so the install screen offered an Android
+  // WireGuard buyer only the official app - which has neither split tunnelling
+  // nor auto-connect, the two reasons people install WG Tunnel.
+  it('offers an Android WireGuard buyer WG Tunnel, not only the official app', () => {
+    const doc = buildSubpageConfig(
+      input({ protocols: ['wireguard'], wgNodes: [{ nodeName: 'nl-1' }] }),
+    )!;
+    const android = doc.platforms.android.apps.map((a) => a.name);
+    expect(android).toContain('WG Tunnel');
+    expect(android).toContain('WireGuard');
+    // It reads a plain wg-quick file and nothing else: offering it to an
+    // AmneziaWG-only buyer would hand them a config it rejects on `Jc = 4`.
+    const awgOnly = buildSubpageConfig(
+      input({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'nl-1', vpnKey: 'vpn://K' }] }),
+    )!;
+    expect(awgOnly.platforms.android?.apps.map((a) => a.name) ?? []).not.toContain('WG Tunnel');
+  });
+
   it('labels tunnel buttons by node only when there is more than one node', () => {
     const one = buildSubpageConfig(
       input({ protocols: ['wireguard'], wgNodes: [{ nodeName: 'nl-1' }] }),
