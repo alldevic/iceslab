@@ -166,7 +166,22 @@ func (a *Adapter) AddUser(user core.User) error {
 	// a secret. That cannot happen quietly: the panel derives it for every user
 	// unconditionally, and the derivation is mirrored by a test on both sides.
 	if user.MtprotoSecret == "" {
-		return nil
+		// Two different silences used to share this line.
+		//
+		// A record carrying no credential of ours is not ours: the panel fans one
+		// blob out to every adapter, and a wg DEVICE push carries only wg fields.
+		// Refusing those made the node log a warning per device per sync.
+		//
+		// A PERSON record without a secret is the panel saying this person may not
+		// use MTProto here - it is the only way it can say so, and it says it on
+		// every sync. Ignoring it is what let a revoked entitlement live on: the
+		// adapter would keep serving whoever it had been told about once, and
+		// nothing else ever removes them. A person is told apart by carrying the
+		// credential every person has and no device does.
+		if user.XrayUUID == "" {
+			return nil
+		}
+		return a.RemoveUser(user.UserID)
 	}
 	u := User{
 		Name:   user.UserID,

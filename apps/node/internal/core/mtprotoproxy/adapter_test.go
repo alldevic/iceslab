@@ -606,12 +606,72 @@ func TestAFailedApplyIsRetried(t *testing.T) {
 func TestAPushWithNoMtprotoSecretIsNotOurs(t *testing.T) {
 	// The panel fans one credential blob out to every adapter. A wg DEVICE push
 	// carries only wg fields, and refusing it made the node log a warning per
-	// device per sync for a push that was never ours to answer.
+	// device per sync for a push that was never ours to answer. A device is told
+	// apart by carrying none of the credentials every PERSON has.
 	a := newTestAdapter(t)
 	if err := a.AddUser(core.User{UserID: "some-device-id"}); err != nil {
 		t.Fatalf("a push with no MTProto credential should be ignored, got %v", err)
 	}
 	if len(a.users) != 0 {
 		t.Error("a push that is not ours was recorded as a user")
+	}
+}
+
+func TestAPersonWithoutASecretIsRevoked(t *testing.T) {
+	// The other half of the same silence, and the one that mattered. The panel
+	// sends the secret only where a squad grants MTProto on this node, so a
+	// person record WITHOUT one is the panel saying "not here" - the only way it
+	// can say so, and it says it on every sync. Ignoring that left a revoked
+	// entitlement serving forever: nothing else removes them, and `USERS` is the
+	// account list of the proxy.
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", XrayUUID: uuidA, MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.users) != 1 {
+		t.Fatalf("the premise failed: the user was not added, %v", a.users)
+	}
+
+	if err := a.AddUser(core.User{UserID: "u1", XrayUUID: uuidA}); err != nil {
+		t.Fatalf("a person pushed without a secret should be dropped, got %v", err)
+	}
+	if _, still := a.users["u1"]; still {
+		t.Error("a person the panel no longer entitles is still an account on the proxy")
+	}
+
+	blob, err := os.ReadFile(a.cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := runPy(t, blob)["USERS"].(map[string]any)
+	if _, still := users["u1"]; still {
+		t.Errorf("the revoked user is still in the config the proxy loads: %v", users)
+	}
+}
+
+func TestRevokingSomeoneWeNeverHadIsQuiet(t *testing.T) {
+	// It arrives on every sync for every person on the node, so the ordinary
+	// case is "not entitled, not held". That must cost nothing - a reload per
+	// unentitled person per sync would restart the proxy continuously.
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u2", XrayUUID: uuidA, MtprotoSecret: secretB}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(a.cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", XrayUUID: uuidA}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(a.cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Error("revoking a user the adapter never held rewrote the config")
+	}
+	if len(a.users) != 1 {
+		t.Errorf("the untouched user went missing: %v", a.users)
 	}
 }

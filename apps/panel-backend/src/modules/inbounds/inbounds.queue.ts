@@ -16,6 +16,7 @@ import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deri
 import { applyEgressForNode } from '../egress/egress.push.js';
 import { getLogger } from '../../lib/logger.js';
 import { resolveBindingConfig } from '../profiles/profiles.service.js';
+import { mtprotoUsersForNode } from './mtproto-access.js';
 
 /**
  * The FQDN to publish in a node's hysteria `acme.domains`, or null to leave the
@@ -684,6 +685,11 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // each device's carries ONLY wg. Every adapter gates on its own credential,
   // so each record reaches exactly the cores it is meant for - see the note
   // above wgPeers.
+  // Who this node may serve MTProto to. Unlike its neighbours the secret is not
+  // inert on arrival: the mtprotoproxy adapter writes what it receives into
+  // USERS, so sending it IS granting access. See mtproto-access.ts.
+  const mtprotoUsers = await mtprotoUsersForNode(nodeId);
+
   type PushItem = { label: string; req: Parameters<typeof transport.addUser>[0] };
   const items: PushItem[] = users.map((u) => ({
     label: u.username,
@@ -699,9 +705,10 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         tuicPassword: deriveTuicPassword(u.xrayUuid),
         anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
         shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
-        // See buildAddUserRequest: derived, sent unconditionally, ignored by the
-        // engine that has no user concept.
-        mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
+        // Only where a squad of theirs grants an mtproto profile on this node.
+        // `undefined` is the revocation: the adapter takes a person record with
+        // no secret as "not entitled here" and drops them if it holds them.
+        mtprotoSecret: mtprotoUsers.has(u.id) ? deriveMtprotoSecret(u.xrayUuid) : undefined,
         // See buildAddUserRequest for what these bound and why the quota is
         // the whole allowance.
         mtprotoExpiresAt: u.expireAt ? u.expireAt.toISOString() : undefined,

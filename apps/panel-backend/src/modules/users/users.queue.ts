@@ -5,6 +5,7 @@ import { prisma } from '../../prisma.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/credentials.js';
 import { getLogger } from '../../lib/logger.js';
+import { mtprotoNodesForUser, mtprotoUsersForNode } from '../inbounds/mtproto-access.js';
 
 // ───── Job data shapes ─────
 
@@ -163,12 +164,12 @@ export async function buildAddUserRequest(userId: string): Promise<AddUserPayloa
         tuicPassword: deriveTuicPassword(user.xrayUuid),
         anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
         shadowtlsPassword: deriveShadowtlsPassword(user.xrayUuid),
-        // Sent unconditionally, like its neighbours above: the value is derived,
-        // not stored, and an adapter with no use for it ignores it. The mtg engine
-        // is exactly such an adapter — it has no user concept — while mtprotoproxy
-        // writes this into USERS and reports metrics labelled with the user it
-        // belongs to.
-        mtprotoSecret: deriveMtprotoSecret(user.xrayUuid),
+        // NOT here: this request goes to every node, and the MTProto secret is
+        // the one credential in this blob that is not inert on arrival — the
+        // mtprotoproxy adapter writes what it receives into USERS, so sending it
+        // IS granting access. Which node may grant it depends on the squads, so
+        // the caller adds it per node (see withMtprotoFor / mtproto-access.ts).
+        // Sending it here made every inbound serve everyone the node knew.
         // The two MTProto backstops. The panel is what actually cuts an
         // expired or over-quota user off — it stops pushing them; these bound
         // the window where it cannot reach the node. Quota is the WHOLE
@@ -179,6 +180,28 @@ export async function buildAddUserRequest(userId: string): Promise<AddUserPayloa
         mtprotoQuotaBytes:
           user.trafficLimitBytes !== null ? Number(user.trafficLimitBytes) : undefined,
       },
+    },
+  };
+}
+
+/**
+ * The same request with the MTProto secret added, or left out, for ONE node.
+ *
+ * `undefined` is not merely "nothing to say": the mtprotoproxy adapter reads a
+ * person record without a secret as "this person is not entitled here" and drops
+ * them if it holds them. That is what makes a squad change take effect on the
+ * proxy rather than only on the link the buyer is shown.
+ */
+function withMtprotoFor(
+  req: AddUserRequest,
+  xrayUuid: string,
+  entitled: boolean,
+): AddUserRequest {
+  return {
+    ...req,
+    credentials: {
+      ...req.credentials,
+      mtprotoSecret: entitled ? deriveMtprotoSecret(xrayUuid) : undefined,
     },
   };
 }
@@ -198,9 +221,13 @@ async function syncAddUser(userId: string): Promise<void> {
   const req = payload.req;
 
   const nodes = await fetchActiveNodes();
+  const mtprotoNodes = await mtprotoNodesForUser(userId);
   await fanOut(
     nodes,
-    (node) => new NodeTransport(node).addUser(req),
+    (node) =>
+      new NodeTransport(node).addUser(
+        withMtprotoFor(req, req.credentials.xrayUuid ?? '', mtprotoNodes.has(node.id)),
+      ),
     `addUser ${userId}`,
   );
 }
@@ -276,6 +303,11 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
     return;
   }
 
+  // Who this node may serve MTProto to, read once for the whole backfill: the
+  // answer is a property of the node's bindings and the squads, and neither
+  // moves while the pages are streaming.
+  const mtprotoUsers = await mtprotoUsersForNode(nodeId);
+
   interface BackfillUserRow {
     id: string;
     shortId: string;
@@ -343,9 +375,9 @@ async function syncBackfillNode(nodeId: string): Promise<void> {
               tuicPassword: deriveTuicPassword(u.xrayUuid),
               anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
               shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
-              // See buildAddUserRequest: derived, sent unconditionally, ignored by the
-              // engine that has no user concept.
-              mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
+              // Only where a squad of theirs grants an mtproto profile on THIS
+              // node; see mtproto-access.ts. Absent is the revocation.
+              mtprotoSecret: mtprotoUsers.has(u.id) ? deriveMtprotoSecret(u.xrayUuid) : undefined,
               // See buildAddUserRequest for what these bound and why the quota is
               // the whole allowance.
               mtprotoExpiresAt: u.expireAt ? u.expireAt.toISOString() : undefined,

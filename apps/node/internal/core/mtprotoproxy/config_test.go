@@ -17,6 +17,10 @@ func baseInbound() InboundConfig {
 const secretA = "0123456789abcdef0123456789abcdef"
 const secretB = "fedcba9876543210fedcba9876543210"
 
+// A person record carries the credential every person has; a device record does
+// not. That is how the adapter tells "not ours" from "not entitled".
+const uuidA = "3b1f0c4e-0000-4000-8000-000000000001"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The load-bearing test: ask PYTHON whether the file we generate is the file we
 // think we generate.
