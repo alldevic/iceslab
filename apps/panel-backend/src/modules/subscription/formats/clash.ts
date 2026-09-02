@@ -472,6 +472,13 @@ export function buildClashYaml(
           `      password: ${yamlString(e.shadowtlsPassword)}`,
           `      version: 3`,
           `    udp: true`,
+          // `udp: true` alone is a promise nothing here can keep: ShadowTLS
+          // carries TCP, so mihomo's native UDP relay has no port to reach.
+          // Measured with mihomo v1.19.30 on 2026-09-03 - TCP through the
+          // cascade worked, every UDP probe timed out; with this line, 3 of 3
+          // including a 1139-byte answer. The sing-box side of the same
+          // channel needed the same one line, spelled `udp_over_tcp`.
+          `    udp-over-tcp: true`,
         ].join('\n'),
       );
     } else if (e.protocol === 'mieru') {

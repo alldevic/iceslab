@@ -265,6 +265,18 @@ describe('buildClashYaml', () => {
 
   // ───── Routing Templates (R1c) ─────
 
+  // Measured with mihomo v1.19.30 on the stand 2026-09-03, because reading the
+  // YAML could not answer it: the proxy already declared `udp: true`, and that
+  // is a promise nothing fulfils here. ShadowTLS carries TCP, so a native UDP
+  // relay has no port to reach - TCP through the cascade worked, every UDP
+  // probe timed out. Adding `udp-over-tcp` and changing nothing else: 3 of 3,
+  // 1139-byte answer included. Same shape as the sing-box side, same one line.
+  it('lets UDP through the shadowtls proxy: udp-over-tcp, not just udp: true', () => {
+    const out = buildClashYaml([shadowtlsEp]);
+    expect(out).toContain('    udp: true');
+    expect(out).toContain('    udp-over-tcp: true');
+  });
+
   describe('routingPreset', () => {
     // The buyer asked for Cloudflare, and every resolver we hand out is a
     // party that sees which names this person looks up. Google was in three
