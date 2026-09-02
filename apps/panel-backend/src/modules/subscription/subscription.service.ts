@@ -237,6 +237,41 @@ interface NaiveInboundConfig {
  * How the client shows one transport, for telling two otherwise identical
  * cascade lines apart. Short on purpose: it sits at the end of a label.
  */
+/**
+ * The port-hopping range a CLIENT may be told about: the profile's, but only
+ * when the node reports redirecting one that covers it.
+ *
+ * The setting is the operator's; the promise is the buyer's. A client honestly
+ * rotates its destination port, the ports outside the node's range reach
+ * nothing, and neither side logs a thing - the channel simply stops working
+ * while every dashboard stays green. Measured on this deployment 2026-09-03:
+ * the profile was given 20000-50000, the node redirected nothing, and every
+ * Hysteria client timed out while TCP through the same cascade was fine.
+ *
+ * `assertPortHoppingFitsNodes` already refuses a range that CONTRADICTS a
+ * reported one. What it cannot judge is a node that reported nothing - an older
+ * agent, or no rule at all - so it passes, deliberately. This is the other half
+ * of that decision: what the panel cannot verify, it does not promise.
+ *
+ * Dropping the range costs the buyer nothing. The single port keeps working,
+ * which is what they have anyway; what they lose is a rotation that was never
+ * going to arrive.
+ */
+export function servedPortHopping(
+  want: { start?: number | null; end?: number | null },
+  node: { start?: number | null; end?: number | null },
+): { start?: number; end?: number } {
+  const w0 = want.start;
+  const w1 = want.end;
+  if (typeof w0 !== 'number' || typeof w1 !== 'number') return {};
+  const n0 = node.start;
+  const n1 = node.end;
+  // Nothing reported is not "any range": it is no answer, and no answer is not
+  // something to hand a client as a fact.
+  if (typeof n0 !== 'number' || typeof n1 !== 'number') return {};
+  return w0 >= n0 && w1 <= n1 ? { start: w0, end: w1 } : {};
+}
+
 const TRANSPORT_LABEL: Record<string, string> = {
   raw: 'TCP',
   xhttp: 'XHTTP',
@@ -566,6 +601,11 @@ export async function generateSubscription(
                   // smart-selection ranker. Null when admin hasn't tagged a region;
                   // ranker still works (utilization-only score for that node).
                   region: { select: { code: true } },
+                  // The UDP range this node actually redirects to its Hysteria
+                  // listener, as the node itself reported it. Null = it reported
+                  // nothing, which is not a promise we may pass to a client.
+                  portHoppingStart: true,
+                  portHoppingEnd: true,
                 },
               },
               // Slice 30: one binding fans out into N enabled hosts. Order them
@@ -891,6 +931,25 @@ export async function generateSubscription(
             portHoppingEnd?: number;
           }
         | null;
+      // Port hopping reaches the CLIENT only when this node says it redirects a
+      // range that covers the profile's. The setting is the operator's, but the
+      // promise is the buyer's: a client honestly rotates its destination port,
+      // the ports outside the node's range reach nothing, and neither side logs
+      // anything - the channel simply stops working while every dashboard stays
+      // green. Measured on this deployment 2026-09-03: the profile was given
+      // 20000-50000, the node redirected nothing, and every Hysteria client
+      // timed out while TCP through the same cascade was fine.
+      //
+      // `assertPortHoppingFitsNodes` already refuses a range that CONTRADICTS a
+      // reported one. What it cannot judge is a node that reported nothing -
+      // an older agent or, as here, no rule at all - so it passes, by design.
+      // This is the other half of that decision: unjudged means unpromised.
+      // Dropping the range costs the buyer nothing; the single port still
+      // works, which is exactly what they get today anyway.
+      const { start: portHoppingStart, end: portHoppingEnd } = servedPortHopping(
+        { start: hyCfg?.portHoppingStart, end: hyCfg?.portHoppingEnd },
+        { start: b.node.portHoppingStart, end: b.node.portHoppingEnd },
+      );
       endpoints.push({
         protocol: 'hysteria',
         nodeName,
@@ -901,8 +960,8 @@ export async function generateSubscription(
         obfsPassword: hyCfg?.obfsPassword,
         upMbps: hyCfg?.brutalUpMbps,
         downMbps: hyCfg?.brutalDownMbps,
-        portHoppingStart: hyCfg?.portHoppingStart,
-        portHoppingEnd: hyCfg?.portHoppingEnd,
+        portHoppingStart,
+        portHoppingEnd,
         allowInsecure: hysteriaAllowsInsecure,
         uri: buildHysteriaUri({
           password: user.hysteriaPassword,
@@ -912,8 +971,8 @@ export async function generateSubscription(
           obfsPassword: hyCfg?.obfsPassword,
           upMbps: hyCfg?.brutalUpMbps,
           downMbps: hyCfg?.brutalDownMbps,
-          portHoppingStart: hyCfg?.portHoppingStart,
-          portHoppingEnd: hyCfg?.portHoppingEnd,
+          portHoppingStart,
+          portHoppingEnd,
           allowInsecure: hysteriaAllowsInsecure,
         }),
       });
