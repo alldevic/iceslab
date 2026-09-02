@@ -357,3 +357,91 @@ func TestUnidentifiedInboundKeepsLegacyBehaviour(t *testing.T) {
 		t.Fatalf("legacy inbound tag changed to %q", tag)
 	}
 }
+
+// cascadeWire is inboundWire plus the chaining fragments the panel attaches to
+// exactly ONE xray inbound. Deliberately minimal: the point here is which
+// inbound the node believes carries them, not what they render into.
+func cascadeWire(t *testing.T, id string) []byte {
+	t.Helper()
+	return []byte(`{
+		"inboundId": "` + id + `",
+		"realityDest": "www.cloudflare.com:443",
+		"realityServerNames": ["www.cloudflare.com"],
+		"realityPrivateKey": "aGVsbG8td29ybGQtdGhpcy1pcy1hLWZha2Uta2V5MDA",
+		"realityShortIds": ["0123456789abcdef"],
+		"cascade": {
+			"outbounds": [{"tag": "cascade-link-out", "protocol": "freedom"}],
+			"rules": [{"type": "field", "outboundTag": "cascade-link-out"}]
+		}
+	}`)
+}
+
+// A cascade entry could hold only ONE xray inbound, and this is why: the panel
+// attaches the fragments to the first xray inbound and pushes the set one call
+// at a time, so the SECOND inbound — which carries none — used to null the
+// adapter's single `cascade` field and restart xray without it. Nothing failed:
+// the push reported applied=2, the node reported the core running, and traffic
+// left the entry's own address instead of the exit's.
+//
+// The cost was not only the lost cascade. It forced the entry to be served by a
+// single inbound, and that inbound had to be xhttp — which sing-box cannot
+// express at all, so every sing-box client was outside the cascade by
+// construction.
+func TestSecondInboundDoesNotWipeTheCascade(t *testing.T) {
+	a := multiAdapter(t)
+
+	if err := a.ApplyInbound(443, cascadeWire(t, "carrier")); err != nil {
+		t.Fatalf("apply carrier: %v", err)
+	}
+	if a.cascade == nil {
+		t.Fatal("the inbound that carries the fragments must put them in force")
+	}
+
+	if err := a.ApplyInbound(8443, inboundWire(t, "plain", 8443)); err != nil {
+		t.Fatalf("apply plain: %v", err)
+	}
+	if a.cascade == nil {
+		t.Fatal("an inbound carrying no fragments must not take away the ones another supplies")
+	}
+	if len(currentInbounds(a)) != 2 {
+		t.Fatalf("both inbounds should be served, got %d", len(currentInbounds(a)))
+	}
+}
+
+// The other direction, and the reason this is keyed by inbound rather than
+// "only overwrite when non-nil": disabling a cascade is signalled by pushing
+// the CARRYING inbound with no fragments. If that could not clear them, a node
+// would keep chaining through an exit the panel no longer knows about.
+func TestCarryingInboundCanTakeTheCascadeAway(t *testing.T) {
+	a := multiAdapter(t)
+	if err := a.ApplyInbound(443, cascadeWire(t, "carrier")); err != nil {
+		t.Fatalf("apply carrier: %v", err)
+	}
+	if err := a.ApplyInbound(8443, inboundWire(t, "plain", 8443)); err != nil {
+		t.Fatalf("apply plain: %v", err)
+	}
+	if err := a.ApplyInbound(443, inboundWire(t, "carrier", 443)); err != nil {
+		t.Fatalf("re-apply carrier without fragments: %v", err)
+	}
+	if a.cascade != nil {
+		t.Error("the carrier pushing no fragments must clear them; a stale cascade chains to an exit nobody configured")
+	}
+}
+
+// And when the carrying inbound is DELETED rather than re-pushed: reconciliation
+// drops it, and the fragments must go with it.
+func TestRetainInboundsDropsTheCascadeWithItsCarrier(t *testing.T) {
+	a := multiAdapter(t)
+	if err := a.ApplyInbound(443, cascadeWire(t, "carrier")); err != nil {
+		t.Fatalf("apply carrier: %v", err)
+	}
+	if err := a.ApplyInbound(8443, inboundWire(t, "plain", 8443)); err != nil {
+		t.Fatalf("apply plain: %v", err)
+	}
+	if err := a.RetainInbounds([]string{"plain"}); err != nil {
+		t.Fatalf("retain: %v", err)
+	}
+	if a.cascade != nil {
+		t.Error("the carrier is gone, so its fragments must be too")
+	}
+}

@@ -106,11 +106,27 @@ type Adapter struct {
 	version     string
 	versionDone bool
 
-	// cascade holds the optional C3 chaining fragments (link-in inbound,
-	// link-out outbound, routing rules) for THIS node's hop, pushed by the
-	// panel via ApplyInbound. nil = node is not part of any cascade, in which
-	// case rendering is byte-identical to a plain node.
+	// cascade is the C3 chaining fragments in force for this node (link-in
+	// inbound, link-out outbound, routing rules). nil = not part of any cascade,
+	// in which case rendering is byte-identical to a plain node. Derived from
+	// cascadeBy; never assigned directly.
 	cascade *CascadeFragments
+
+	// cascadeBy is what each inbound carried, keyed by the panel's inbound id
+	// ("" for the install-time inbound). The panel attaches the fragments to ONE
+	// xray inbound (`inbounds.queue.ts`: "the first xray inbound is the one and
+	// only one that carries the cascade") and pushes them one at a time, so a
+	// single `cascade` field was overwritten by whichever inbound landed last:
+	// the second one carries none, and the node dropped a working cascade and
+	// restarted xray without it. That is why a cascade entry could hold only one
+	// xray inbound — and why sing-box clients had no way into the cascade at all,
+	// since the one inbound had to be xhttp, which sing-box cannot express.
+	//
+	// Keyed rather than "only overwrite when non-nil", because that variant
+	// cannot express DISABLING a cascade: the panel signals that by pushing the
+	// carrying inbound with no fragments, and the node would keep the stale ones
+	// forever. Same shape, and the same reason, as `inbounds` itself.
+	cascadeBy map[string]*CascadeFragments
 
 	// selfSteal is the K9-B local TLS fallback, running only while the inbound
 	// is REALITY self-steal mode. nil otherwise. Lifecycle is managed in
@@ -168,9 +184,12 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 	for id := range a.inbounds {
 		if _, ok := keepSet[id]; !ok {
 			delete(a.inbounds, id)
+			delete(a.cascadeBy, id)
 			dropped = append(dropped, id)
 		}
 	}
+	// The inbound that carried the cascade may be the one that just went away.
+	a.cascade = a.effectiveCascadeLocked()
 	remaining := len(a.inbounds)
 	// The install-time inbound has no panel id and is not managed here; it only
 	// applies while the panel has pushed nothing identified, and only when it is
@@ -258,6 +277,7 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		logger:        logger,
 		users:         make(map[string]xrayClient),
 		inbounds:      make(map[string]InboundConfig),
+		cascadeBy:     make(map[string]*CascadeFragments),
 		countingSince: time.Now(),
 	}
 }
@@ -493,6 +513,30 @@ func (a *Adapter) servedInboundsLocked() []InboundConfig {
 		return []InboundConfig{a.cfg.Inbound}
 	}
 	return out
+}
+
+// effectiveCascadeLocked is the fragments this node renders with: the ones
+// carried by whichever inbound supplies them.
+//
+// The panel guarantees at most one does, so the loop normally finds a single
+// candidate. It walks the ids in sorted order anyway, for the same reason
+// servedInboundsLocked does: were two ever to carry fragments, picking by map
+// order would render a different config on every push and make each one look
+// like a change.
+//
+// Caller holds a.mu.
+func (a *Adapter) effectiveCascadeLocked() *CascadeFragments {
+	ids := make([]string, 0, len(a.cascadeBy))
+	for id := range a.cascadeBy {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if c := a.cascadeBy[id]; c != nil {
+			return c
+		}
+	}
+	return nil
 }
 
 // buildAduPayload builds the `xray api adu` document that adds one user to EVERY
@@ -1032,7 +1076,10 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// committed but xray down, so an identical re-push must still (re)start it.
 	// regenFailed forces a retry after a failed apply even while a prior config
 	// is still up.
-	unchanged := a.started && !a.regenFailed && cascadeEqual(a.cascade, wire.Cascade)
+	// Compare against what THIS inbound carried last time, not against the
+	// node's effective cascade: an inbound that never carries fragments must not
+	// read as "changed" merely because a different inbound supplies them.
+	unchanged := a.started && !a.regenFailed && cascadeEqual(a.cascadeBy[key], wire.Cascade)
 	if key == "" {
 		unchanged = unchanged && inboundEqual(a.cfg.Inbound, newInbound)
 	} else {
@@ -1049,7 +1096,12 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	} else {
 		a.inbounds[key] = newInbound
 	}
-	a.cascade = wire.Cascade
+	if wire.Cascade != nil {
+		a.cascadeBy[key] = wire.Cascade
+	} else {
+		delete(a.cascadeBy, key)
+	}
+	a.cascade = a.effectiveCascadeLocked()
 	count := len(a.inbounds)
 	a.mu.Unlock()
 	a.logger.Info("xray ApplyInbound: config changed, regenerating and restarting",
