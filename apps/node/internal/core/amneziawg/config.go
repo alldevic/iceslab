@@ -106,6 +106,17 @@ type InboundConfig struct {
 	// rendered into the awg-quick `[Interface]` block.
 	I1, I2, I3, I4, I5 string
 
+	// BridgeTproxyPort is bridge B: the loopback port of this node's local xray
+	// dokodemo-door, to which every packet out of this interface is diverted
+	// instead of being NAT'd straight onto the internet. 0 = no bridge, and the
+	// rendered config is byte-identical to what it was before bridge B existed.
+	//
+	// Set only by the panel, and only when its cascade fragments actually carry
+	// a matching inbound (inbounds.queue.ts reads the port back off them rather
+	// than recomputing it). A port nobody listens on is a dead channel, not a
+	// direct one, so the two halves are never emitted apart.
+	BridgeTproxyPort int
+
 	// Optional NAT/forwarding setup. Each element is rendered as its own
 	// `PostUp =` / `PostDown =` line (awg-quick runs them in order), and each
 	// is validated by validatePostHook, so a multi-rule setup stays within
@@ -128,6 +139,163 @@ type Peer struct {
 	PresharedKey string
 }
 
+// ───── bridge B: kernel traffic into the node's local xray ─────
+//
+// A wg client's packet is decrypted and routed inside the kernel; no process
+// sees it, so no process can be told to hand it over. The only thing that
+// catches it before the routing decision and gives it to a local socket
+// UNMODIFIED is TPROXY, and that is what these hooks install.
+//
+// Why the rules live in PostUp/PostDown rather than in adapter Go code: they
+// must exist exactly as long as the interface does. A binding disabled, an
+// inbound reconciled away, an operator running `wg-quick down` by hand - each
+// tears the interface down, and rules that outlived it would divert nothing
+// while looking installed. wg-quick's own lifecycle is the only thing that
+// tracks all three.
+//
+// Why they are appended to PREROUTING directly instead of jumping to a private
+// chain: `iptables -N` fails when the chain is already there, wg-quick runs
+// PostUp under `set -e` with a teardown trap, and a chain left behind by an
+// unclean stop would therefore make the interface refuse to come up at all -
+// turning a stale rule into a dead channel. Every line below is instead a plain
+// -A/-D pair that cannot fail that way. The cost is that a RETURN here ends
+// PREROUTING traversal for that packet rather than returning to it; harmless,
+// because every rule this adapter writes is scoped to one input interface and
+// nothing else on the node uses mangle PREROUTING.
+
+// bridgeMark and bridgeTable are per-FLAVOUR, not shared. A node can run
+// wireguard and amneziawg at once, and the `ip rule` / routing table they need
+// is node-global: one shared pair would have two owners, and whichever
+// interface went down second would delete a rule the other still needed.
+func bridgeMark(plain bool) string {
+	if plain {
+		return "0x11"
+	}
+	return "0x12"
+}
+
+func bridgeTable(plain bool) string {
+	if plain {
+		return "8811"
+	}
+	return "8812"
+}
+
+// bridgeExcludedDests never enter the bridge. This is not tidiness: without the
+// link-local entry a tunnel client could ask the node's xray to fetch the
+// hoster's cloud-metadata service on its behalf, and without the RFC1918 ones
+// it could reach the hoster's internal LAN - s1 sits behind one (ens3 holds
+// 192.168.0.130/24). They are RETURNed, and with no NAT for them left in place
+// they then die on the node's FORWARD policy instead of leaving it with a
+// private source address.
+var bridgeExcludedDests = []string{
+	"0.0.0.0/8",
+	"10.0.0.0/8",
+	"100.64.0.0/10",
+	"127.0.0.0/8",
+	"169.254.0.0/16",
+	"172.16.0.0/12",
+	"192.0.0.0/24",
+	"192.168.0.0/16",
+	"224.0.0.0/4",
+	"240.0.0.0/4",
+	"255.255.255.255/32",
+}
+
+// subnetFromAddress turns the server's in-tunnel address into the client subnet
+// it belongs to: "10.0.0.1/24" -> "10.0.0.0/24". Needed for the one NAT rule
+// the bridge keeps (ICMP), which must name a source range rather than an
+// interface, because a MASQUERADE that names neither would cover the whole box.
+func subnetFromAddress(addr string) (string, error) {
+	pfx, err := netip.ParsePrefix(addr)
+	if err != nil {
+		return "", fmt.Errorf("parse address %q: %w", addr, err)
+	}
+	return pfx.Masked().String(), nil
+}
+
+// bridgeHooks renders the PostUp/PostDown pair that puts this interface behind
+// the local xray. Mirror images by construction: every -A/-I has its -D below,
+// same spec, so a bring-down leaves the node exactly as it found it.
+func bridgeHooks(subnet string, port int, plain bool) (up, down []string) {
+	mark := bridgeMark(plain)
+	tproxy := func(proto string) string {
+		// --on-ip 127.0.0.1 is not optional. The xray side binds loopback (so
+		// the transparent inbound is unreachable from outside the node and
+		// needs no firewall rule of its own), and without --on-ip xt_TPROXY
+		// looks the socket up on the INPUT INTERFACE's address instead - i.e.
+		// on the tunnel address, where nothing is listening, and every packet
+		// is dropped with no log on either side.
+		return fmt.Sprintf("iptables -t mangle -A PREROUTING -i %%i -p %s -j TPROXY --on-ip 127.0.0.1 --on-port %d --tproxy-mark %s",
+			proto, port, mark)
+	}
+
+	// Divert. Exclusions first: -A appends, and the TPROXY lines below must be
+	// the last thing a packet meets.
+	for _, d := range bridgeExcludedDests {
+		up = append(up, fmt.Sprintf("iptables -t mangle -A PREROUTING -i %%i -d %s -j RETURN", d))
+	}
+	up = append(up, tproxy("tcp"), tproxy("udp"))
+
+	// Accept the diverted packet locally. It still carries its ORIGINAL
+	// destination (TPROXY rewrites nothing), so a default-deny INPUT policy
+	// would drop it; matching the mark TPROXY just set is exact, and lets
+	// nothing else in from the tunnel.
+	up = append(up, fmt.Sprintf("iptables -I INPUT 1 -i %%i -m mark --mark %s -j ACCEPT", mark))
+
+	// ICMP is the one thing xray cannot carry at all, so it keeps the old
+	// direct path: ping and traceroute leave from the ENTRY's address. They
+	// carry no payload, and the alternative - ping that dies silently - reads
+	// to a buyer as "the VPN is broken". Everything else that misses the divert
+	// has no NAT and no FORWARD rule and dies on the node, which is the failure
+	// mode worth having: loud, and never a wrong-country egress.
+	up = append(up,
+		"sysctl -w net.ipv4.ip_forward=1",
+		"iptables -I FORWARD 1 -i %i -p icmp -j ACCEPT",
+		"iptables -I FORWARD 1 -o %i -p icmp -j ACCEPT",
+		fmt.Sprintf("iptables -t nat -A POSTROUTING -s %s -p icmp ! -o %%i -j MASQUERADE", subnet),
+	)
+
+	for _, u := range up {
+		// Nothing to undo for sysctl: forwarding is a node-wide setting and
+		// other interfaces may depend on it.
+		if strings.HasPrefix(u, "iptables ") {
+			down = append(down, undoRule(u))
+		}
+	}
+	return up, down
+}
+
+// undoRule turns an iptables add into its exact removal, by the SHAPE of the
+// command rather than by patching its text: `-A CHAIN` and `-I CHAIN POS` both
+// become `-D CHAIN`, and everything after the chain is the match spec, carried
+// over untouched.
+//
+// Written this way after a text-substitution version got it wrong: it stripped
+// the insert position by looking for the literal that followed it in the rules
+// it had been read against, so the one rule shaped differently kept its
+// position and became `-D FORWARD 1 -o %i ...`, which iptables reads as a rule
+// number and a spec at once and refuses. A -D that removes nothing is the worst
+// half of this bridge to get wrong: the interface goes away and its divert
+// stays, mangling traffic for a device that no longer exists.
+func undoRule(add string) string {
+	f := strings.Fields(add)
+	out := make([]string, 0, len(f))
+	for i := 0; i < len(f); i++ {
+		switch f[i] {
+		case "-A":
+			out = append(out, "-D", f[i+1])
+			i++
+		case "-I":
+			out = append(out, "-D", f[i+1])
+			i += 2 // chain, then the insert position, which -D does not take
+		default:
+			out = append(out, f[i])
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 func (c *InboundConfig) withDefaults() InboundConfig {
 	out := *c
 	if out.Interface == "" {
@@ -145,6 +313,25 @@ func (c *InboundConfig) withDefaults() InboundConfig {
 	// zero, not "use the default". Caught live cycle #6 2026-05-12:
 	// admin set Jc=0 in UI to debug, server kept rendering Jc=4 because
 	// of these defaults, handshake silently failed.
+	if out.BridgeTproxyPort > 0 {
+		// Bridge B REPLACES the NAT shape below rather than adding to it, and
+		// that is the whole point. A blanket MASQUERADE and a divert cannot
+		// coexist: whatever the divert does not take would leave the node
+		// directly, which on a cascade entry is egress from the wrong country -
+		// the exact defect this bridge exists to close, reappearing for
+		// whichever flows happened to miss a rule. Measured on the s1 stand
+		// 2026-09-02.
+		//
+		// An operator's own PostUp is overridden too. It cannot be honoured
+		// here without knowing whether it fights the divert, and a hook that is
+		// half-applied is worse than one that is refused.
+		if subnet, err := subnetFromAddress(out.Address); err == nil {
+			out.PostUp, out.PostDown = bridgeHooks(subnet, out.BridgeTproxyPort, out.Plain)
+			return out
+		}
+		// Unparseable address: fall through to the plain shape. validate()
+		// rejects the config immediately after, so this never reaches a node.
+	}
 	if len(out.PostUp) == 0 {
 		// Two things are needed for a client to actually reach the internet:
 		//

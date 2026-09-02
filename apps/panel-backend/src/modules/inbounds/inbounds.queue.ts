@@ -12,7 +12,10 @@ import { inboundSyncJobs } from '../../lib/metrics.js';
 import { allocatePeer, preallocatePeers } from '../amneziawg/amneziawg.service.js';
 import { ensureDevicesForUsers, resolveWgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import { getCascadeFragmentsForNode } from '../cascades/cascade.service.js';
-import { bridgeSocksPortFromInbounds } from '../cascades/cascade.config.js';
+import {
+  bridgeSocksPortFromInbounds,
+  bridgeTproxyPortFromInbounds,
+} from '../cascades/cascade.config.js';
 import { nativeEngineForProtocol } from '../profiles/node-adapter-keys.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/credentials.js';
 import { applyEgressForNode } from '../egress/egress.push.js';
@@ -401,6 +404,40 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
         `[inbound-sync] node ${nodeId} bridges ${bridged.length} non-xray inbound(s) into its local xray on 127.0.0.1:${bridgePort}` +
           (bridged.length === 0
             ? ' - none present, the bridge inbound is idle until one is bound here'
+            : ''),
+      );
+    }
+
+    // Bridge B (2026-09-02) - the sending half for the KERNEL cores.
+    //
+    // Same shape as bridge A above and for the same reason, but the core it
+    // addresses has no outbound to redirect: wireguard and amneziawg are kernel
+    // devices. What this port buys is the node-agent's netfilter half - fwmark,
+    // an `ip rule`, and a TPROXY rule that hands the packet to the transparent
+    // xray inbound the fragments above carry. Neither half is any use alone: no
+    // rules and the inbound never sees a packet; no inbound and the rules divert
+    // traffic into a closed port, which is a dead channel rather than a direct
+    // one.
+    //
+    // Read back off the emitted fragments, never recomputed - see
+    // bridgeTproxyPortFromInbounds for what recomputing costs.
+    const tproxyPort = bridgeTproxyPortFromInbounds(
+      cascade.inbounds as Record<string, unknown>[] | undefined,
+    );
+    if (tproxyPort !== null) {
+      const tunnelled = inbounds.filter(
+        (i) => i.protocol === 'amneziawg' || i.protocol === 'wireguard',
+      );
+      for (const ib of tunnelled) {
+        ib.config = {
+          ...(ib.config as Record<string, unknown>),
+          bridgeTproxyPort: tproxyPort,
+        } as InboundDto['config'];
+      }
+      getLogger().info(
+        `[inbound-sync] node ${nodeId} bridges ${tunnelled.length} wg-family inbound(s) into its local xray on 127.0.0.1:${tproxyPort}` +
+          (tunnelled.length === 0
+            ? ' - none present, the tproxy inbound is idle until one is bound here'
             : ''),
       );
     }

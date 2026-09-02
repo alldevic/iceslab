@@ -911,7 +911,7 @@ export default {
         'Which flows leave this node by which way out, and the channels a rule can name. Rules are compiled per node when the config is pushed.',
       bridgeToggle: 'Route non-xray channels through the local xray',
       bridgeToggleDesc:
-        'Channels served by sing-box (TUIC, AnyTLS, ShadowTLS, Hysteria2) render no routing rules of their own, so cascade, split-routing and egress policy skip them today and their traffic leaves straight from this node. With this on they hand it to the local xray over loopback and all of that starts applying. Only on a cascade ENTRY, and only when there is exactly one direction - otherwise there is nothing to pick the buyer a country from.',
+        'Channels served by sing-box (TUIC, AnyTLS, ShadowTLS, Hysteria2) render no routing rules of their own, and WireGuard / AmneziaWG are kernel devices whose traffic no process sees at all - so cascade, split-routing and egress policy skip every one of them today and their traffic leaves straight from this node. With this on, the sing-box cores hand theirs to the local xray over loopback and the wg interfaces have theirs diverted there by the node (TPROXY), and all of that starts applying. Only on a cascade ENTRY, and only when there is exactly one direction - otherwise there is nothing to pick the buyer a country from. ICMP keeps leaving directly: xray cannot carry it, and ping that dies silently reads as a broken tunnel.',
       zapret2Toggle: 'zapret2 desync channel',
       zapret2ToggleDesc:
         'Run the ss-zapret2 stack here: a local SOCKS proxy whose own egress is DPI-desynced, so a rule pointed at it reaches blocked destinations. Needs the stack provisioned on the node (ansible role).',

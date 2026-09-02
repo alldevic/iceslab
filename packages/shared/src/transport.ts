@@ -188,6 +188,29 @@ export interface BridgeableInboundCfg {
   bridgeSocksPort?: number;
 }
 
+/**
+ * Bridge B (2026-09-02) - the same half of the config, for a core that has no
+ * outbound to point anywhere.
+ *
+ * wireguard and amneziawg are kernel devices: nothing in userspace sees the
+ * decrypted packet, so nothing can be told to hand it over. What the node-agent
+ * does instead is divert it - fwmark, an `ip rule`, and a TPROXY rule in mangle
+ * PREROUTING that gives the packet, unmodified, to a transparent xray inbound
+ * on this port.
+ *
+ * Deliberately a SECOND field rather than a reuse of `bridgeSocksPort`. The two
+ * name different xray inbounds with different protocols (socks vs a transparent
+ * dokodemo-door), and a node can carry both at once. One field would have to
+ * mean "whichever kind the reader is", which is exactly the sort of thing that
+ * reads fine and pushes a wg interface at a socks port.
+ *
+ * Absent/0 = no bridge; the interface is rendered exactly as it was before this
+ * existed, with plain NAT egress out of its own node.
+ */
+export interface TproxyBridgeableInboundCfg {
+  bridgeTproxyPort?: number;
+}
+
 export interface XrayInboundCfg extends BridgeableInboundCfg {
   /**
    * Identity of THIS inbound, so the agent can hold several at once.
@@ -422,7 +445,7 @@ export interface HysteriaInboundCfg extends BridgeableInboundCfg {
   brutalDownMbps?: number;
 }
 
-export interface AmneziawgInboundCfg {
+export interface AmneziawgInboundCfg extends TproxyBridgeableInboundCfg {
   /** Server WG private key (base64-standard, like `wg genkey`). */
   privateKey: string;
   /** Subnet in CIDR notation (e.g. "10.0.0.0/24"). Server takes .1, peers

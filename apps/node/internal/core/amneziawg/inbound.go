@@ -40,6 +40,16 @@ type inboundCfgWire struct {
 	// cycle #6 2026-05-12: client wgconf advertised Endpoint=:443 but
 	// the server bound 51820, all UDP packets fell on the floor.
 	ListenPort int `json:"listenPort,omitempty"`
+	// BridgeTproxyPort is bridge B (2026-09-02): the loopback port of this
+	// node's local xray transparent inbound. Non-zero means "do not egress this
+	// interface yourself - divert it there", and the interface is rendered with
+	// TPROXY hooks instead of the NAT ones.
+	//
+	// Zero from a panel that predates the field, or from a node the panel has
+	// nowhere to bridge to, and then everything renders exactly as it did
+	// before. Which is the right default: a bridge whose xray half is missing
+	// is not a direct channel, it is a dead one.
+	BridgeTproxyPort int `json:"bridgeTproxyPort,omitempty"`
 }
 
 type obfuscationCfg struct {
@@ -79,26 +89,27 @@ func (w inboundCfgWire) toInboundConfig(iface string, listenPort int) (InboundCo
 		port = w.ListenPort
 	}
 	return InboundConfig{
-		Interface:  iface,
-		ListenPort: port,
-		PrivateKey: w.ServerPrivateKey,
-		Address:    addr,
-		Jc:         w.Obfuscation.Jc,
-		Jmin:       w.Obfuscation.Jmin,
-		Jmax:       w.Obfuscation.Jmax,
-		S1:         w.Obfuscation.S1,
-		S2:         w.Obfuscation.S2,
-		S3:         w.Obfuscation.S3,
-		S4:         w.Obfuscation.S4,
-		H1:         w.Obfuscation.H1,
-		H2:         w.Obfuscation.H2,
-		H3:         w.Obfuscation.H3,
-		H4:         w.Obfuscation.H4,
-		I1:         w.Obfuscation.I1,
-		I2:         w.Obfuscation.I2,
-		I3:         w.Obfuscation.I3,
-		I4:         w.Obfuscation.I4,
-		I5:         w.Obfuscation.I5,
+		Interface:        iface,
+		ListenPort:       port,
+		PrivateKey:       w.ServerPrivateKey,
+		Address:          addr,
+		BridgeTproxyPort: w.BridgeTproxyPort,
+		Jc:               w.Obfuscation.Jc,
+		Jmin:             w.Obfuscation.Jmin,
+		Jmax:             w.Obfuscation.Jmax,
+		S1:               w.Obfuscation.S1,
+		S2:               w.Obfuscation.S2,
+		S3:               w.Obfuscation.S3,
+		S4:               w.Obfuscation.S4,
+		H1:               w.Obfuscation.H1,
+		H2:               w.Obfuscation.H2,
+		H3:               w.Obfuscation.H3,
+		H4:               w.Obfuscation.H4,
+		I1:               w.Obfuscation.I1,
+		I2:               w.Obfuscation.I2,
+		I3:               w.Obfuscation.I3,
+		I4:               w.Obfuscation.I4,
+		I5:               w.Obfuscation.I5,
 	}, nil
 }
 
@@ -152,7 +163,11 @@ func classifyDiff(old, new InboundConfig) diffKind {
 	// reported jc=4 until awg-quick down/up bounced the interface. So
 	// treat junk/magic-size changes as diffRestart, same as H1-H4 / key /
 	// port, all interface-init-time-only fields.
+	// BridgeTproxyPort rides with the interface-immutable set: it is rendered
+	// into PostUp/PostDown, and those run only at bring-up. `syncconf` would
+	// report success and change nothing at all.
 	if old.PrivateKey != new.PrivateKey ||
+		old.BridgeTproxyPort != new.BridgeTproxyPort ||
 		old.ListenPort != new.ListenPort ||
 		old.Interface != new.Interface ||
 		old.H1 != new.H1 || old.H2 != new.H2 || old.H3 != new.H3 || old.H4 != new.H4 ||

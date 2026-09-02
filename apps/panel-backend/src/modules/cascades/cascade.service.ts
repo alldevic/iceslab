@@ -25,7 +25,9 @@ import {
 import {
   autoRouteTag,
   BRIDGE_SOCKS_PORT,
+  BRIDGE_TPROXY_PORT,
   bridgeSocksPortFromInbounds,
+  bridgeTproxyPortFromInbounds,
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
   buildTopologyFragmentsForNode,
@@ -1894,6 +1896,7 @@ async function getTopologyFragmentsForNode(
     // country instead of failing, which is the one outcome worth preventing.
     auto: cascadeRow?.autoProfile ?? false,
     bridgeSocksPort: wantsBridge ? BRIDGE_SOCKS_PORT : undefined,
+    bridgeTproxyPort: wantsBridge ? BRIDGE_TPROXY_PORT : undefined,
   });
   if (!mine) return null;
 
@@ -1903,7 +1906,11 @@ async function getTopologyFragmentsForNode(
   // protocol exactly as it is today - direct egress from its own node - rather
   // than choosing a country on the buyer's behalf. Say so, because from the
   // panel the flag looks applied.
-  if (wantsBridge && bridgeSocksPortFromInbounds(mine.inbounds) === null) {
+  if (
+    wantsBridge &&
+    bridgeSocksPortFromInbounds(mine.inbounds) === null &&
+    bridgeTproxyPortFromInbounds(mine.inbounds) === null
+  ) {
     getLogger().info(
       `[cascade] node ${nodeId} has bridgeNonXrayInbounds set but no bridge was emitted; ` +
         `its non-xray cores keep egressing directly. A bridge needs this node to be the ` +

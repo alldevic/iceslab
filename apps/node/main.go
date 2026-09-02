@@ -329,6 +329,7 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 			AwgBin:       awgBinPath,
 			AwgQuickBin:  awgQuickBinPath,
 			SystemctlBin: getenv("SYSTEMCTL_BIN", "/usr/bin/systemctl"),
+			IPBin:        getenv("IP_BIN", "/usr/sbin/ip"),
 			Inbound: amneziawg.InboundConfig{
 				Interface: getenv("AMNEZIAWG_INTERFACE", "awg0"),
 			},
@@ -350,6 +351,7 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 			AwgBin:       wgBinPath,
 			AwgQuickBin:  wgQuickBinPath,
 			SystemctlBin: getenv("SYSTEMCTL_BIN", "/usr/bin/systemctl"),
+			IPBin:        getenv("IP_BIN", "/usr/sbin/ip"),
 			Inbound: amneziawg.InboundConfig{
 				Interface: getenv("WIREGUARD_INTERFACE", "wg0"),
 			},

@@ -152,6 +152,49 @@ describe.skipIf(!XRAY_BIN)('xray accepts the generated cascade config', () => {
     expect(r.ok, r.output).toBe(true);
   });
 
+  // Bridge B: the entry grows a TRANSPARENT inbound - a dokodemo-door with
+  // `sockopt.tproxy` and `followRedirect`. Whether xray takes that shape is not
+  // something a structure test can answer, and it is the shape that decides
+  // whether the wg channel exists at all: a config the core refuses is a crash
+  // loop that takes the entry down for every client on it, tagged ones
+  // included. Bridge A's own version of this case caught a real defect.
+  it('loads an entry that bridges its kernel cores', () => {
+    const oneDirection = {
+      positions: [{ position: 0, nodeIds: [ENTRY] }],
+      directions: [{ tag: 1, nodeIds: [EXIT_A] }],
+      links: [link(ENTRY, EXIT_A, 1, 24000)],
+      hosts,
+      bridgeTproxyPort: 24101,
+      // Literal matchers only - geosite/geoip need the .dat files on disk and
+      // would fail this for a reason unrelated to the case.
+      egressPolicies: new Map([[ENTRY, [{ domain: ['split.example'], target: 'direct' as const }]]]),
+    };
+    const fragment = buildTopologyFragmentsForNode(ENTRY, oneDirection);
+    // Control: without the transparent inbound actually in the fragment, this
+    // would be asserting that xray loads a plain entry, which is covered above.
+    expect(fragment!.inbounds.some((i) => i.tag === 'cascade-bridge-tproxy-in')).toBe(true);
+    const r = xrayAccepts(wrap(fragment));
+    expect(r.ok, r.output).toBe(true);
+  });
+
+  // Both bridges at once, which is what s1 runs: one xray carrying a socks
+  // inbound for sing-box and a transparent one for the kernel, and two
+  // inboundTag rules beside the vlessRoute ones.
+  it('loads an entry that bridges both kinds of core at once', () => {
+    const fragment = buildTopologyFragmentsForNode(ENTRY, {
+      positions: [{ position: 0, nodeIds: [ENTRY] }],
+      directions: [{ tag: 1, nodeIds: [EXIT_A] }],
+      links: [link(ENTRY, EXIT_A, 1, 24000)],
+      hosts,
+      bridgeSocksPort: 24100,
+      bridgeTproxyPort: 24101,
+    });
+    expect(fragment!.inbounds.some((i) => i.tag === 'cascade-bridge-in')).toBe(true);
+    expect(fragment!.inbounds.some((i) => i.tag === 'cascade-bridge-tproxy-in')).toBe(true);
+    const r = xrayAccepts(wrap(fragment));
+    expect(r.ok, r.output).toBe(true);
+  });
+
   it('loads a direction (exit) config', () => {
     const r = xrayAccepts(wrap(buildTopologyFragmentsForNode(EXIT_A, twoDirections)));
     expect(r.ok, r.output).toBe(true);

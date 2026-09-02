@@ -85,6 +85,11 @@ type Config struct {
 	AwgQuickBin  string
 	SystemctlBin string
 
+	// IPBin is iproute2, used for the node-global half of bridge B (the fwmark
+	// rule and the local route table TPROXY delivers through). Empty resolves
+	// `ip` off PATH. Never touched when the inbound carries no bridge port.
+	IPBin string
+
 	// SyncTimeout caps how long `awg syncconf` may run before we bail out
 	// and trigger the systemctl-restart fallback. Default 10s.
 	//
@@ -232,6 +237,10 @@ func (a *Adapter) Start(ctx context.Context) error {
 	}
 
 	if managed {
+		// Before `up`, not after: PostUp installs the mangle rule that starts
+		// marking packets, and a mark with no rule to catch it routes the flow
+		// straight back out of the node.
+		a.ensureBridgeRouting(ctx, inbound)
 		if out, err := a.cfg.runCmd(ctx, a.cfg.AwgQuickBin, "up", inbound.Interface); err != nil {
 			// awg-quick up is idempotent-ish, failing because the iface is
 			// already up is fine. Anything else is a real error.
@@ -267,6 +276,9 @@ func (a *Adapter) Stop(ctx context.Context) error {
 		// "iface not running" is expected on a clean stop after a failed start
 		a.logger.Warn("awg-quick down returned non-zero (often safe)", "err", err)
 	}
+	// The mark/table pair is per-flavour, so this node's OTHER wg interface
+	// cannot be using it and taking it away here is safe.
+	a.dropBridgeRouting(ctx)
 	return nil
 }
 
@@ -761,6 +773,75 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	}
 }
 
+// ensureBridgeRouting installs the NODE-GLOBAL half of bridge B: the policy
+// rule that catches TPROXY's mark and the routing table it points at, whose
+// single `local default` entry is what makes the kernel deliver a packet
+// addressed to the internet to a local socket instead of forwarding it.
+//
+// Deliberately here and not in PostUp, unlike every other rule of this bridge.
+// `ip route add` fails with "File exists" the second time, wg-quick runs PostUp
+// under `set -e` with a teardown trap, and a table left behind by an unclean
+// stop would therefore stop the interface coming up at all - a stale line
+// turning into a dead channel. `ip route replace` has no such failure mode, and
+// this code can simply ignore the errors that mean "already how we want it".
+//
+// Nothing here is interface-scoped, so nothing here needs undoing when the
+// interface goes: a mark that no mangle rule sets any more selects a table that
+// routes nothing. It is dropped on Stop anyway, because the pair is per-flavour
+// and so cannot be in use by the node's other wg interface.
+//
+// Failures are logged, not returned. This runs immediately before
+// `awg-quick up`, and refusing to bring the interface up because a routing rule
+// could not be written would take the channel down entirely - where continuing
+// leaves a tunnel that at worst egresses the way it did yesterday. The log line
+// is the signal; `ip rule` on the node is the check.
+func (a *Adapter) ensureBridgeRouting(ctx context.Context, inbound InboundConfig) {
+	if inbound.BridgeTproxyPort <= 0 || a.cfg.AwgQuickBin == "" {
+		return
+	}
+	mark, table := bridgeMark(a.plain()), bridgeTable(a.plain())
+	// Clear any rule left at this preference before adding ours. `ip rule add`
+	// happily makes duplicates, and duplicates are how a one-line-per-bring-up
+	// mistake becomes a screenful over a month of restarts. Bounded, because an
+	// `ip rule del` that keeps succeeding on an empty table would loop forever.
+	for i := 0; i < 4; i++ {
+		if _, err := a.cfg.runCmd(ctx, a.ipBin(), "rule", "del", "pref", table); err != nil {
+			break
+		}
+	}
+	cmds := [][]string{
+		{"route", "replace", "local", "0.0.0.0/0", "dev", "lo", "table", table},
+		{"rule", "add", "pref", table, "fwmark", mark, "lookup", table},
+	}
+	for _, args := range cmds {
+		if out, err := a.cfg.runCmd(ctx, a.ipBin(), args...); err != nil {
+			a.logger.Error("bridge routing command failed; the tunnel will come up but its traffic will not reach the local xray",
+				"core", a.cfg.Protocol, "args", strings.Join(args, " "),
+				"err", err, "out", strings.TrimSpace(string(out)))
+		}
+	}
+	a.logger.Info("bridge routing installed",
+		"core", a.cfg.Protocol, "fwmark", mark, "table", table, "tproxyPort", inbound.BridgeTproxyPort)
+}
+
+// dropBridgeRouting removes what ensureBridgeRouting installed. Safe to call
+// when nothing was installed: both commands fail harmlessly.
+func (a *Adapter) dropBridgeRouting(ctx context.Context) {
+	if a.cfg.AwgQuickBin == "" {
+		return
+	}
+	table := bridgeTable(a.plain())
+	_, _ = a.cfg.runCmd(ctx, a.ipBin(), "rule", "del", "pref", table)
+	_, _ = a.cfg.runCmd(ctx, a.ipBin(), "route", "flush", "table", table)
+}
+
+func (a *Adapter) ipBin() string {
+	if a.cfg.IPBin != "" {
+		return a.cfg.IPBin
+	}
+	return "ip"
+}
+
 // restartInterfaceFrom writes the given config snapshot and bounces the
 // interface via awg-quick down/up. Used for changes that syncconf can't apply
 // (H1-H4, keys, listen port). Caller MUST hold restartMu and MUST NOT hold mu
@@ -786,6 +867,7 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 		a.logger.Warn("awg-quick down returned non-zero (often safe)",
 			"err", err, "out", strings.TrimSpace(string(out)))
 	}
+	a.ensureBridgeRouting(ctx, inbound)
 	if out, err := a.cfg.runCmd(ctx, a.cfg.AwgQuickBin, "up", inbound.Interface); err != nil {
 		return fmt.Errorf("awg-quick up %s: %w (%s)", inbound.Interface, err, strings.TrimSpace(string(out)))
 	}

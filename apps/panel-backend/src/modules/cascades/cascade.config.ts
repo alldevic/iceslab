@@ -520,6 +520,81 @@ function buildBridgeInbound(port: number): Record<string, unknown> {
     sniffing: { enabled: true, destOverride: ['http', 'tls', 'quic'] },
   };
 }
+
+/** Bridge B: the inbound tag the node's KERNEL cores (wireguard, amneziawg)
+ *  have their traffic diverted to. Separate from BRIDGE_IN_TAG because the two
+ *  arrive by different means and only the tag tells them apart afterwards. */
+export const BRIDGE_TPROXY_IN_TAG = 'cascade-bridge-tproxy-in';
+
+/**
+ * Loopback port of the tproxy bridge inbound. Fixed for the same reasons
+ * BRIDGE_SOCKS_PORT is, and adjacent to it so the pair reads as a pair.
+ */
+export const BRIDGE_TPROXY_PORT = 24101;
+
+/**
+ * Bridge B (2026-09-02) - the loopback inbound that lets a KERNEL core join the
+ * cascade.
+ *
+ * Bridge A above solves the same problem for cores that run in userspace: point
+ * their outbound at a local xray and everything the panel compiles applies. A
+ * WireGuard or AmneziaWG client has no outbound to point. `awg0` is a kernel
+ * device: the packet is decrypted in the kernel, routed by the kernel, and
+ * leaves the node without any process seeing it. So the hand-off cannot be made
+ * by the core; it has to be made by the node's network stack, and the only
+ * thing that catches a packet before it is routed and hands it to a local
+ * socket unmodified is TPROXY.
+ *
+ * TPROXY and not REDIRECT. REDIRECT covers TCP only and rewrites the
+ * destination; a wg client carries DNS and QUIC, and losing them would be
+ * silent. This is the same question bridge A answered with an explicit socks
+ * version "5" and udp:true, and it is answered the same way here.
+ *
+ * `followRedirect` is what reads the original destination back off the socket,
+ * and `sockopt.tproxy` is what makes the listener transparent in the first
+ * place. Neither is optional: without the first every flow would dial this
+ * node's own port 24101, without the second the kernel refuses the diverted
+ * packet and the tunnel goes quiet.
+ *
+ * Bound to loopback like its sibling. That is not just hygiene: it means the
+ * node-agent's mangle rule has to name `--on-ip 127.0.0.1` explicitly, because
+ * xt_TPROXY otherwise looks the socket up on the INPUT INTERFACE's address. The
+ * two halves are written against each other; see the amneziawg adapter.
+ *
+ * `sniffing` is half the feature, not decoration. A packet out of a tunnel
+ * carries an address and no domain, so without it every `geosite`/`domain` rule
+ * in the split would miss and the channel would route on geoip alone - which is
+ * exactly half of the split, and the half that gets `my.games` wrong.
+ */
+function buildBridgeTproxyInbound(port: number): Record<string, unknown> {
+  return {
+    tag: BRIDGE_TPROXY_IN_TAG,
+    // Loopback ONLY - see buildBridgeInbound. A transparent dokodemo-door on a
+    // public address is an open relay to any destination a client names.
+    listen: '127.0.0.1',
+    port,
+    protocol: 'dokodemo-door',
+    settings: { network: 'tcp,udp', followRedirect: true },
+    streamSettings: { sockopt: { tproxy: 'tproxy' } },
+    sniffing: { enabled: true, destOverride: ['http', 'tls', 'quic'] },
+  };
+}
+
+/**
+ * Read the tproxy bridge port back off the fragments that were actually
+ * emitted. Same contract, and same reason, as bridgeSocksPortFromInbounds: the
+ * panel needs the number a second time to tell the wg core where to divert to,
+ * and two computations of one fact drift invisibly - both cores run, the panel
+ * reports ok, and the channel is dead.
+ */
+export function bridgeTproxyPortFromInbounds(
+  inbounds: Record<string, unknown>[] | undefined,
+): number | null {
+  for (const ib of inbounds ?? []) {
+    if (ib.tag === BRIDGE_TPROXY_IN_TAG && typeof ib.port === 'number') return ib.port;
+  }
+  return null;
+}
 const DIRECT_TAG = 'direct';
 
 // Drop QUIC (HTTP/3 = UDP/443) at the cascade entry so clients fall back to
@@ -720,6 +795,11 @@ export interface TopologyInput {
    *  See buildBridgeInbound for why this is a cascade fragment rather than a
    *  thing the node-agent synthesises. */
   bridgeSocksPort?: number;
+  /** Bridge B - loopback tproxy port on which THIS node's xray accepts traffic
+   *  diverted out of its kernel wg/awg interfaces. Same gating and the same
+   *  emitted-or-nothing rule as bridgeSocksPort above; the node-agent's mangle
+   *  rules and this inbound are the two halves of one mechanism. */
+  bridgeTproxyPort?: number;
 }
 
 /** Per-direction outbound tag. Unlike the old index-based `-0/-1` suffix this
@@ -1044,10 +1124,23 @@ export function buildTopologyFragmentsForNode(
   // Placed after the geo split so ru-split still wins: a bridged client's
   // Russian traffic leaves directly from the entry, everything else enters the
   // link. That ordering is the whole product behaviour for this channel.
-  if (isEntry && input.bridgeSocksPort && input.bridgeSocksPort > 0 && dirTargets.size === 1) {
+  //
+  // Bridge B (2026-09-02) rides here unchanged. Traffic diverted out of a
+  // kernel wg interface carries no UUID either - it carries no proxy protocol
+  // at all - so `inboundTag` is the axis for it too, and the ONE thing that
+  // tells the two bridges apart afterwards is which tag they arrived on. Both
+  // are emitted under the same condition and by the same rule, because both
+  // answer the same question and a node that can bridge one can bridge both.
+  if (isEntry && dirTargets.size === 1) {
     const [, target] = [...dirTargets][0]!;
-    inbounds.push(buildBridgeInbound(input.bridgeSocksPort));
-    routingRules.push({ type: 'field', inboundTag: [BRIDGE_IN_TAG], ...target });
+    if (input.bridgeSocksPort && input.bridgeSocksPort > 0) {
+      inbounds.push(buildBridgeInbound(input.bridgeSocksPort));
+      routingRules.push({ type: 'field', inboundTag: [BRIDGE_IN_TAG], ...target });
+    }
+    if (input.bridgeTproxyPort && input.bridgeTproxyPort > 0) {
+      inbounds.push(buildBridgeTproxyInbound(input.bridgeTproxyPort));
+      routingRules.push({ type: 'field', inboundTag: [BRIDGE_TPROXY_IN_TAG], ...target });
+    }
   }
 
   /**
