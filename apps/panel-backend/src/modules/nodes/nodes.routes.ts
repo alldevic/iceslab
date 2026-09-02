@@ -12,6 +12,7 @@ import {
   type HardeningFlags,
 } from './nodes.schemas.js';
 import * as nodesService from './nodes.service.js';
+import { EgressCategoryError } from '../cascades/cascade.geo.stock.js';
 import { egressCatalogue } from '../egress/egress.catalogue.js';
 import { appendHardeningFlags, appendSingboxFlag } from './nodes.service.js';
 import { checkNodePortExposure } from './nodes.exposure.js';
@@ -155,6 +156,9 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       if (err instanceof nodesService.NodeAlreadyExistsError) {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+      }
+      if (err instanceof EgressCategoryError) {
+        return reply.code(400).send({ error: 'INVALID', message: err.message });
       }
       throw err;
     }
@@ -332,6 +336,11 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
       }
       if (err instanceof nodesService.NodeAlreadyExistsError) {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+      }
+      // Same 400 the cascade path answers with, and for the same policy: an
+      // unusable geo category is an authoring mistake, not a server fault.
+      if (err instanceof EgressCategoryError) {
+        return reply.code(400).send({ error: 'INVALID', message: err.message });
       }
       throw err;
     }

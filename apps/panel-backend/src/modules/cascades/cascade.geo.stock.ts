@@ -60,6 +60,17 @@ export interface EgressCategoryIssue {
   reason: string;
 }
 
+/**
+ * Which policy is being judged, because one answer differs between them.
+ *
+ * A custom category is an authoring mistake in both scopes, but the WAY OUT is
+ * not the same: a cascade member can reference it (the panel delivers the file
+ * as a fragment), a node's own policy cannot reference it at all. Telling a node
+ * operator to write `ext:` would send them to a form NodeEgressPolicySchema then
+ * refuses.
+ */
+export type EgressScope = 'cascade' | 'node';
+
 /** Extract the standard category name from a `geosite`/`geoip` array entry, or
  *  null when the entry is already qualified with some OTHER prefix (ext:,
  *  domain:, full:, regexp:, keyword:, an IPv6 literal) - those are validated
@@ -79,6 +90,7 @@ function standardName(entry: string, kind: 'geosite' | 'geoip'): string | null {
 export function validateEgressCategories(
   policy: EgressPolicy | undefined,
   customCategoryNames: Iterable<string>,
+  scope: EgressScope = 'cascade',
 ): EgressCategoryIssue[] {
   const custom = new Set([...customCategoryNames].map((n) => n.toLowerCase()));
   const issues: EgressCategoryIssue[] = [];
@@ -101,6 +113,23 @@ export function validateEgressCategories(
         // geoip code) is caught the same as the un-negated form.
         const bare = name.replace(/^!/, '');
         if (custom.has(bare.toLowerCase())) {
+          if (scope === 'node') {
+            // The node scope cannot reference a custom category AT ALL: the file
+            // it lives in reaches a node only as a cascade fragment, which is
+            // why NodeEgressPolicySchema refuses `ext:` outright. Suggesting the
+            // ext form here would send an operator to a form the next validator
+            // rejects, so say what is actually true.
+            issues.push({
+              matcher: entry,
+              reason:
+                `"${bare}" is a custom category from your geo sources, and a node's own policy ` +
+                `cannot use one: the panel delivers the custom .dat only to a cascade member. ` +
+                `A bare ${kind}: resolves against the node's bundled databases, which do not ` +
+                `contain it, so this rule would be silently dropped. Put the split on the ` +
+                `cascade position instead, or spell the domains out here.`,
+            });
+            continue;
+          }
           issues.push({
             matcher: entry,
             reason:
@@ -146,7 +175,8 @@ export class EgressCategoryError extends Error {
 export function assertEgressCategories(
   policy: EgressPolicy | undefined,
   customCategoryNames: Iterable<string>,
+  scope: EgressScope = 'cascade',
 ): void {
-  const issues = validateEgressCategories(policy, customCategoryNames);
+  const issues = validateEgressCategories(policy, customCategoryNames, scope);
   if (issues.length > 0) throw new EgressCategoryError(issues);
 }

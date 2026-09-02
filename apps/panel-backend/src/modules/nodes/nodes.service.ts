@@ -9,6 +9,9 @@ import * as repo from './nodes.repository.js';
 import { getPanelPublicIp } from './panel-ip.js';
 import { issueBootstrapToken } from './bootstrap.service.js';
 import { registerWarpDevice } from '../warp/warp.service.js';
+import { assertEgressCategories } from '../cascades/cascade.geo.stock.js';
+import { getCategories } from '../geo/geo.categories.js';
+import { coerceEgressPolicy } from '../egress/egress.policy.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
 import {
   mapNodeToPublic,
@@ -57,10 +60,38 @@ export interface CreateNodeContext {
   panelUrl: string;
 }
 
+/**
+ * Refuse a node-level egress policy that names geo categories the node cannot
+ * resolve, at the moment it is typed.
+ *
+ * This check lived only on the cascade path, so `geoip:rus` on a NODE was
+ * accepted with a 200 and pushed. What saves the node is its own `xray -test`
+ * preflight — it refuses to swap in a config that will not load and keeps
+ * serving the old one — but that verdict exists only in the node's journal. From
+ * the panel the save looked done and the split silently did nothing, which is
+ * the worst of the three possible outcomes: no outage, no error, no effect.
+ *
+ * Scoped as 'node' because the two scopes differ in one answer: a cascade member
+ * may reference a custom category, a node's own policy may not (the panel
+ * delivers the custom .dat only as a cascade fragment, which is why
+ * NodeEgressPolicySchema refuses `ext:` here at all).
+ *
+ * The category list is read only when there IS a policy to judge — a node edit
+ * that does not touch the split must not pay for a settings read.
+ */
+async function assertNodeEgressCategories(hardening: unknown): Promise<void> {
+  const policy = coerceEgressPolicy((hardening as { egressPolicy?: unknown } | null)?.egressPolicy);
+  if (!policy || policy.length === 0) return;
+  const names = (await getCategories()).map((c) => c.name);
+  assertEgressCategories(policy, names, 'node');
+}
+
 export async function createNode(
   input: CreateNodeInput,
   ctx: CreateNodeContext,
 ): Promise<CreateNodeResponseDto> {
+  if (input.hardening !== undefined) await assertNodeEgressCategories(input.hardening);
+
   // App-level checks against active (non-soft-deleted) rows.
   const byName = await repo.findActiveByName(input.name);
   if (byName) throw new NodeAlreadyExistsError('name', input.name);
@@ -326,6 +357,8 @@ const EGRESS_HARDENING_KEYS = ['egressPolicy', 'zapret2'] as const;
 export async function updateNode(id: string, input: UpdateNodeInput): Promise<PublicNodeDto> {
   const existing = await repo.findActiveById(id);
   if (!existing) throw new NodeNotFoundError(id);
+
+  if (input.hardening !== undefined) await assertNodeEgressCategories(input.hardening);
 
   if (input.name && input.name !== existing.name) {
     const dupe = await repo.findActiveByName(input.name);
