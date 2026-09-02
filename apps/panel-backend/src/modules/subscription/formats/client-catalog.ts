@@ -107,13 +107,24 @@ export interface AppDef {
   format?: ClientFormat;
 }
 
+// TUIC, AnyTLS and ShadowTLS were added to the clients below on 2026-09-03,
+// and by measurement rather than by reading vendor pages: the live subscription
+// was fetched once per client User-Agent and the result read back. sing-box
+// clients get all three, mihomo clients get all three as well (ShadowTLS
+// arrives as `type: ss` with `plugin: shadow-tls`), and the link-list clients
+// get TUIC and AnyTLS but NOT ShadowTLS — it has no share link at all, so it
+// exists only inside a whole config. Happ and INCY were left alone: Happ's own
+// rule hands it an xray document that carries neither, and INCY was not probed.
+//
+// This list is what decides whether an app is offered at all, so under-declaring
+// it hides a capable client from a buyer who holds only the new channels.
 export const APPS: AppDef[] = [
   // Universal subscription clients (xray / shadowsocks / hysteria via the link).
   {
     name: 'Hiddify',
     format: 'singbox',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv'],
-    protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria'],
+    protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'hiddify' },
     recommended: true,
     // From hiddify.com, the project's own page (checked 2026-08-26). Desktop
@@ -131,7 +142,7 @@ export const APPS: AppDef[] = [
     name: 'sing-box',
     format: 'singbox',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'singbox' },
     // From sing-box.sagernet.org/clients/* (checked 2026-08-26).
     //
@@ -153,7 +164,7 @@ export const APPS: AppDef[] = [
     name: 'Streisand',
     format: 'plain',
     platforms: ['ios', 'macos', 'appletv'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
     action: { kind: 'deeplink', scheme: 'streisand' },
     recommended: true,
     // Checked 2026-08-26: "Streisand" by ARCADIA ODYSSEY INC.
@@ -163,7 +174,7 @@ export const APPS: AppDef[] = [
     name: 'Shadowrocket',
     format: 'plain',
     platforms: ['ios', 'appletv'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
     action: { kind: 'deeplink', scheme: 'shadowrocket' },
     // Checked 2026-08-26: "Shadowrocket" by Shadow Launch Technology Limited.
     install: {
@@ -190,7 +201,7 @@ export const APPS: AppDef[] = [
     name: 'NekoBox',
     format: 'singbox',
     platforms: ['android'],
-    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'manual' },
     // MatsuriDayo/NekoBoxForAndroid (checked 2026-08-26). Alive but quiet —
     // upstream calls its own maintenance "relatively minimal" and the last
@@ -223,7 +234,7 @@ export const APPS: AppDef[] = [
     name: 'Clash Verge',
     format: 'clash',
     platforms: ['windows', 'macos', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'clash' },
     // clash-verge-rev/clash-verge-rev (checked 2026-08-26). `/latest` rather
     // than the pinned .deb/.rpm/.exe URLs the shop's guide carries.
@@ -237,7 +248,7 @@ export const APPS: AppDef[] = [
     name: 'FlClash',
     format: 'clash',
     platforms: ['android', 'windows', 'macos', 'linux'],
-    protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'mieru', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'clash' },
     // chen08209/FlClash (checked 2026-08-26); one release covers all four.
     install: {

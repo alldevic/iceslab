@@ -212,7 +212,7 @@ describe('buildSubpageConfig', () => {
     // AmneziaWG has no checked link, so it is named and not linked — never
     // linked to a guess.
     const awgApp = doc.platforms.ios.apps.find((a) => a.name === 'AmneziaWG')!;
-    expect(awgApp.blocks).toHaveLength(1);
+    expect(awgApp.blocks.map((b) => b.title.en)).not.toContain('Install the app');
     expect(awgApp.blocks[0].buttons.every((b) => b.link.includes('format=wgconf'))).toBe(true);
   });
 
@@ -232,7 +232,7 @@ describe('buildSubpageConfig', () => {
     expect(allButtons(doc).filter((b) => b.link.includes('6673731168'))).toEqual([]);
     // sing-box specifically: named, and given no install block at all.
     const singbox = doc.platforms.ios.apps.find((a) => a.name === 'sing-box')!;
-    expect(singbox.blocks).toHaveLength(1);
+    expect(singbox.blocks.map((b) => b.title.en)).not.toContain('Install the app');
   });
 
   it('offers a mieru buyer the mihomo clients, and only those', () => {
@@ -297,5 +297,65 @@ describe('buildSubpageConfig', () => {
     expect(buildSubpageConfig(input({ protocols: [] }))).toBeNull();
     // The protocol is there but no endpoint produced a link — nothing to offer.
     expect(buildSubpageConfig(input({ protocols: ['mtproto'], mtprotoNodes: [] }))).toBeNull();
+  });
+
+  describe('the "what you get" card', () => {
+    function gives(doc: NonNullable<ReturnType<typeof buildSubpageConfig>>, platform: string, app: string) {
+      const found = doc.platforms[platform]?.apps.find((a) => a.name === app);
+      return found?.blocks.find((b) => b.title.en === 'What you get') ?? null;
+    }
+
+    it('names the channels this buyer holds and no others', () => {
+      const doc = buildSubpageConfig(input({ protocols: ['xray', 'tuic'] }))!;
+      const card = gives(doc, 'ios', 'Hiddify')!;
+      expect(card.description.ru).toContain('VLESS');
+      expect(card.description.ru).toContain('TUIC');
+      // Hiddify speaks AnyTLS, but this buyer has no AnyTLS endpoint to speak it to.
+      expect(card.description.ru).not.toContain('AnyTLS');
+      expect(card.description.en).toContain('VLESS and TUIC');
+    });
+
+    it('says where the routing rules are, because a link list carries none', () => {
+      const doc = buildSubpageConfig(input({ protocols: ['xray'] }))!;
+      // Config formats carry our split: banks resolve directly.
+      expect(gives(doc, 'ios', 'Hiddify')!.description.ru).toContain('приезжают вместе с конфигом');
+      // A link list does not, and that is what a buyer whose bank refuses needs
+      // to have been told BEFORE they write in.
+      const plain = gives(doc, 'ios', 'Streisand')!.description.ru;
+      expect(plain).toContain('банки');
+      expect(plain).toContain('в самом приложении');
+    });
+
+    it('warns that a second tunnel can knock MTProto out', () => {
+      const doc = buildSubpageConfig(
+        input({ protocols: ['mtproto'], mtprotoNodes: [{ nodeName: 'ru-1', tmeUri: 'https://t.me/proxy?server=a' }] }),
+      )!;
+      const card = gives(doc, 'ios', 'Telegram')!;
+      expect(card.description.ru).toContain('перестать подключаться');
+      expect(card.description.en).toContain('leave one of the two');
+    });
+
+    it('points a .conf client at router instructions, and a key client at none', () => {
+      const doc = buildSubpageConfig(
+        input({
+          protocols: ['amneziawg'],
+          awgNodes: [{ nodeName: 'nl-1', deviceIndex: 1, vpnKey: 'vpn://K' }],
+        }),
+      )!;
+      const conf = gives(doc, 'ios', 'AmneziaWG')!;
+      expect(conf.buttons.map((b) => b.link)).toEqual([
+        'https://docs.amnezia.org/documentation/instructions/keenetic-os-awg/',
+        'https://docs.amnezia.org/documentation/instructions/openwrt-os-awg/',
+      ]);
+      expect(conf.description.ru).toContain('роутер');
+      // AmneziaVPN imports a key, not a file: there is no file to put on a router.
+      expect(gives(doc, 'ios', 'AmneziaVPN')!.buttons).toEqual([]);
+    });
+
+    it('offers the per-app split only on Android, where the client has it', () => {
+      const doc = buildSubpageConfig(input({ protocols: ['xray'] }))!;
+      expect(gives(doc, 'android', 'Hiddify')!.description.ru).toContain('выбранные приложения');
+      expect(gives(doc, 'ios', 'Hiddify')!.description.ru).not.toContain('выбранные приложения');
+    });
   });
 });

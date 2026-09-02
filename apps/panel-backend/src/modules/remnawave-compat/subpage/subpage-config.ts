@@ -157,6 +157,118 @@ const APP_ICON_KEY: Record<string, string> = {
   FlClash: 'FlClash',
 };
 
+// ─── "What you get" ─────────────────────────────────────────────────────────
+//
+// The install cards answer "how do I connect". They never answered "and what
+// does this client actually give me", so a buyer picking Happ over sing-box had
+// no way to know it hands back three channels instead of five, and a buyer on a
+// link-list client had no way to know their bank would see a Dutch address.
+//
+// Everything below is derived from data that already decides something else —
+// the catalogue's `protocols` (which apps are offered at all) and its `format`
+// (which formats render for this buyer) — so a channel cannot be promised here
+// without also being offered there.
+
+/** Buyer-facing channel names. `xray` is VLESS on this fleet. */
+const PROTOCOL_LABEL: Partial<Record<ProtocolName, string>> = {
+  xray: 'VLESS',
+  hysteria: 'Hysteria2',
+  tuic: 'TUIC',
+  anytls: 'AnyTLS',
+  shadowtls: 'ShadowTLS',
+  shadowsocks: 'Shadowsocks',
+  mieru: 'Mieru',
+  naive: 'NaiveProxy',
+  wireguard: 'WireGuard',
+  amneziawg: 'AmneziaWG',
+  mtproto: 'MTProto',
+};
+
+/** Stable order, so two buyers with the same channels read the same sentence. */
+const CHANNEL_ORDER: ProtocolName[] = [
+  'xray',
+  'tuic',
+  'hysteria',
+  'anytls',
+  'shadowtls',
+  'shadowsocks',
+  'mieru',
+  'naive',
+  'amneziawg',
+  'wireguard',
+  'mtproto',
+];
+
+/**
+ * One line about the client itself, where it says something the next card does
+ * not. Deliberately sparse: an app with nothing distinctive gets no sentence
+ * rather than filler that makes every card look the same.
+ */
+const APP_TRAIT: Record<string, Localized> = {
+  Hiddify: {
+    en: ' The quickest start: the subscription arrives with one tap.',
+    ru: ' Самый быстрый старт: подписка добавляется одной кнопкой.',
+  },
+  'sing-box': {
+    en: ' The one to take when you want to write your own routing rules.',
+    ru: ' Его стоит брать, если хочется задать свои правила маршрутизации.',
+  },
+  'Clash Verge': {
+    en: ' Servers and rules sit on one screen, switching is a click.',
+    ru: ' Серверы и правила на одном экране, переключение в один клик.',
+  },
+  FlClash: {
+    en: ' Servers and rules sit on one screen, switching is a click.',
+    ru: ' Серверы и правила на одном экране, переключение в один клик.',
+  },
+};
+
+/**
+ * Clients whose Android build can route only chosen apps through the tunnel.
+ * Android-only on purpose: this is the platform VPN API, and the same client on
+ * iOS has no such control.
+ */
+const PER_APP_SPLIT = new Set(['Hiddify', 'sing-box', 'NekoBox', 'v2rayNG', 'FlClash']);
+
+/** Router firmware that ships WireGuard, and the pages that document it. */
+const WG_ROUTER_DOCS = 'https://www.wireguard.com/install/';
+const AWG_ROUTER_KEENETIC = 'https://docs.amnezia.org/documentation/instructions/keenetic-os-awg/';
+const AWG_ROUTER_OPENWRT = 'https://docs.amnezia.org/documentation/instructions/openwrt-os-awg/';
+
+/**
+ * Channels this app receives THROUGH ITS OWN import path.
+ *
+ * The catalogue's `protocols` answers a wider question — what the client can
+ * speak at all — and Hiddify is why the two must not be confused: it reads
+ * AmneziaWG configs, so the catalogue lists it, but the subscription link it
+ * imports carries no tunnel. Promising AmneziaWG on that card would be a
+ * channel the buyer cannot find in the app.
+ */
+const NOT_IN_A_SUBSCRIPTION: ReadonlySet<ProtocolName> = new Set([
+  'wireguard',
+  'amneziawg',
+  'mtproto',
+]);
+
+function channelNames(app: AppDef, protocols: readonly ProtocolName[]): string[] {
+  const held = new Set(protocols);
+  const viaSubscription = app.action.kind === 'deeplink' || app.action.kind === 'manual';
+  return CHANNEL_ORDER.filter(
+    (p) =>
+      held.has(p) &&
+      app.protocols.includes(p) &&
+      !(viaSubscription && NOT_IN_A_SUBSCRIPTION.has(p)),
+  )
+    .map((p) => PROTOCOL_LABEL[p])
+    .filter((label): label is string => !!label);
+}
+
+function joinList(items: string[], lang: 'en' | 'ru'): string {
+  if (items.length <= 1) return items[0] ?? '';
+  const last = items[items.length - 1];
+  return `${items.slice(0, -1).join(', ')} ${lang === 'en' ? 'and' : 'и'} ${last}`;
+}
+
 function t(en: string, ru: string): Localized {
   return { en, ru };
 }
@@ -385,6 +497,135 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
 }
 
 /**
+ * The "what you get" card: which channels this client actually receives, what
+ * it does about Russian destinations, and the one thing worth knowing about it.
+ *
+ * Returns null when there is nothing true to say — an app the buyer holds no
+ * channel for never reaches this point, and a card that only repeated the
+ * install steps would be noise.
+ *
+ * The battery and router lines are properties of the protocols and of router
+ * firmware, not measurements of ours; they are the only claims here that no
+ * test can pin, so they stay qualitative.
+ */
+function givesBlock(
+  app: AppDef,
+  input: SubpageConfigInput,
+  platform: PlatformId,
+): SubpageBlock | null {
+  const names = channelNames(app, input.protocols);
+  if (names.length === 0) return null;
+  const listEn = joinList(names, 'en');
+  const listRu = joinList(names, 'ru');
+  const buttons: SubpageButton[] = [];
+  let en: string;
+  let ru: string;
+
+  if (app.action.kind === 'endpoint-link') {
+    // MTProto lives inside Telegram, and Telegram holds one proxy at a time.
+    // The conflict line is the support answer we would otherwise give twice a
+    // week: a proxy that "stopped working" is usually a second tunnel that was
+    // switched on next to it.
+    en =
+      `Channel: ${listEn}. It works inside Telegram only — no other app goes through it, ` +
+      'and there is nothing to install. With another VPN or proxy running next to it the ' +
+      'proxy can stop connecting: leave one of the two switched on.';
+    ru =
+      `Канал: ${listRu}. Работает только внутри Telegram — другие приложения через него не ходят, ` +
+      'и устанавливать ничего не нужно. Рядом с другим включённым VPN или прокси он может ' +
+      'перестать подключаться: оставьте что-то одно.';
+  } else if (app.action.kind === 'deeplink' || app.action.kind === 'manual') {
+    en =
+      names.length > 1
+        ? `Channels: ${listEn} — switched inside the app.`
+        : `Channel: ${listEn}.`;
+    ru =
+      names.length > 1
+        ? `Каналы: ${listRu} — переключаются прямо в приложении.`
+        : `Канал: ${listRu}.`;
+    if (app.format === 'plain') {
+      // A link list is servers and nothing else. Saying so is the difference
+      // between a buyer who knows why their bank refuses and one who writes in.
+      en +=
+        ' A link carries no routing rules, so everything goes through the VPN and Russian ' +
+        'services — banks, Avito, 2GIS — may refuse to open. The rules are set in the app itself.';
+      ru +=
+        ' Ссылка правил маршрутизации не несёт: весь трафик идёт через VPN, поэтому российские ' +
+        'сервисы — банки, Авито, 2ГИС — могут не открыться. Правила задаются в самом приложении.';
+    } else if (app.format) {
+      en +=
+        ' The routing rules arrive with the config: Russian sites and banks open directly, ' +
+        'ads are dropped.';
+      ru +=
+        ' Правила приезжают вместе с конфигом: российские сайты и банки открываются напрямую, ' +
+        'реклама режется.';
+    }
+    // An app with no declared core gets neither sentence: which of the two is
+    // true depends on the format it fetches, and guessing picks the one that
+    // sends a buyer to support.
+    if ((platform === 'android' || platform === 'androidtv') && PER_APP_SPLIT.has(app.name)) {
+      en += ' On Android it can tunnel only the apps you choose.';
+      ru += ' На Android в туннель можно пустить только выбранные приложения.';
+    }
+    const trait = APP_TRAIT[app.name];
+    if (trait) {
+      en += trait.en;
+      ru += trait.ru;
+    }
+  } else {
+    const isAwg = app.protocols.includes('amneziawg');
+    en =
+      `${names.length > 1 ? 'Channels' : 'Channel'}: ${listEn}. The whole device goes into the ` +
+      'tunnel and the server decides what leaves directly. Of all the channels this one is the ' +
+      'easiest on battery.';
+    ru =
+      `${names.length > 1 ? 'Каналы' : 'Канал'}: ${listRu}. В туннель уходит весь трафик, ` +
+      'а что выпустить напрямую — решает сервер. Из всех каналов этот бережнее прочих к батарее.';
+    if (app.action.kind !== 'awg-vpn') {
+      // Only the .conf apps: a router owner imports the same file, and that is
+      // the one place where "the whole home network" becomes true.
+      en +=
+        ' The same file goes into a router — Keenetic, ASUS, MikroTik, GL.iNet, OpenWrt — and ' +
+        'then the whole home network is covered, TV and console included.';
+      ru +=
+        ' Тот же файл ставится на роутер — Keenetic, ASUS, MikroTik, GL.iNet, OpenWrt — и тогда ' +
+        'защищена вся домашняя сеть, включая телевизор и консоль.';
+      if (isAwg) {
+        buttons.push(
+          {
+            type: 'external',
+            link: AWG_ROUTER_KEENETIC,
+            text: t('AmneziaWG on Keenetic', 'AmneziaWG на Keenetic'),
+            svgIconKey: 'ExternalLink',
+          },
+          {
+            type: 'external',
+            link: AWG_ROUTER_OPENWRT,
+            text: t('AmneziaWG on OpenWrt', 'AmneziaWG на OpenWrt'),
+            svgIconKey: 'ExternalLink',
+          },
+        );
+      } else {
+        buttons.push({
+          type: 'external',
+          link: WG_ROUTER_DOCS,
+          text: t('WireGuard on a router', 'WireGuard на роутере'),
+          svgIconKey: 'ExternalLink',
+        });
+      }
+    }
+  }
+
+  return {
+    svgIconKey: 'Star',
+    svgIconColor: 'blue',
+    title: t('What you get', 'Что это даёт'),
+    description: t(en, ru),
+    buttons,
+  };
+}
+
+/**
  * Build the document for one subscription, or `null` when this fleet has
  * nothing to say about it.
  *
@@ -407,6 +648,10 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
       // Install first, import second — that is the order a person does it in.
       const install = installBlock(app, ours);
       if (install) blocks.unshift(install);
+      // Last card on purpose: a buyer who already knows the client scrolls past
+      // it, one who is choosing reads it after seeing what installing involves.
+      const gives = givesBlock(app, input, ours);
+      if (gives) blocks.push(gives);
       const icon = APP_ICON_KEY[app.name];
       apps.push({
         name: app.name,
