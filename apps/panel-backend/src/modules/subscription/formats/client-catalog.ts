@@ -271,13 +271,23 @@ export const APPS: AppDef[] = [
     // on an install screen is the failure this file's header refuses, so the
     // buyer pastes the link until the scheme is confirmed on a device.
     //
-    // NOTE (2026-09-01): Happ takes `plain`, which carries no routing, so the
-    // client-side split does not reach it. Its own routing profiles do —
-    // deploy/geo/happ-routing.json in the deployment repo. Switching it to
-    // `xrayjson-array` would deliver the split but drop every non-xray
-    // endpoint (mtproto, tuic) from the buyer's subscription.
+    // Happ fetches `xrayjson-array` — the format that exists for it, seeded onto
+    // its User-Agent rule on 2026-09-01 so the routing preset would reach it at
+    // all. `ClientFormat` has no array member because `usableFormats` asks by
+    // rendering, and the array is the same xray document split per profile.
+    //
+    // Declaring `plain` here outlived that change by two days and was not
+    // harmless: the install card reads this field to say where the routing
+    // rules live, so Happ buyers were told their traffic carries no rules while
+    // their config carried five (measured 2026-09-03 on `Happ/4.3.0/Android`:
+    // three profiles, three geo rules each).
+    //
+    // The trade it makes is real and unrecorded here on purpose — see
+    // `14-defects.md` in the deployment repo: an xray document cannot carry
+    // TUIC, AnyTLS, ShadowTLS or the MTProto link, so this buyer sees two
+    // channels where a sing-box client sees five.
     name: 'Happ',
-    format: 'plain',
+    format: 'xrayjson',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },

@@ -352,6 +352,17 @@ describe('buildSubpageConfig', () => {
       expect(gives(doc, 'ios', 'AmneziaVPN')!.buttons).toEqual([]);
     });
 
+    it('does not tell a Happ buyer their config has no rules', () => {
+      // Happ fetches `xrayjson-array`, seeded onto its UA rule so the routing
+      // preset reaches it. The catalogue said `plain` for two days after that,
+      // and this card repeated it to buyers as "everything goes through the
+      // VPN" — the opposite of what their config does.
+      const doc = buildSubpageConfig(input({ protocols: ['xray'] }))!;
+      const happ = gives(doc, 'ios', 'Happ')!;
+      expect(happ.description.ru).toContain('приезжают вместе с конфигом');
+      expect(happ.description.ru).not.toContain('Авито');
+    });
+
     it('offers the per-app split only on Android, where the client has it', () => {
       const doc = buildSubpageConfig(input({ protocols: ['xray'] }))!;
       expect(gives(doc, 'android', 'Hiddify')!.description.ru).toContain('выбранные приложения');
