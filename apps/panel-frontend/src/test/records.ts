@@ -172,6 +172,8 @@ export function aCascade(over: Partial<Cascade> = {}): Cascade {
     mode: 'chain' as Cascade['mode'],
     hideHopsFromSub: true,
     autoProfile: false,
+    autoLabel: null,
+    autoLineLabel: '⚡ ru-exit → Auto',
     hops: [],
     positions: [],
     directions: [],

@@ -726,7 +726,7 @@ export async function getRouteProfilesByEntryNode(
          */
         const usable = c.directions.filter((d) => d.nodes.length > 0);
         if (c.autoProfile && !allowed && usable.length > 1) {
-          const autoLabel = cascadeAutoProfileLabel(c.name);
+          const autoLabel = autoLineLabel(c);
           profiles.push({ label: autoLabel, tag: autoRouteTag(0), cascadeId: c.id });
           // Policy variants of Auto are gated by the direction they can reach,
           // so a policy granted only for one direction does not become an Auto
@@ -806,7 +806,7 @@ export async function getRouteProfilesByEntryNode(
     // as the v4 path: the operator asked for it, and the user is unrestricted,
     // since Auto can reach any exit.
     if (c.autoProfile && isBalancer && !allowByCascade.get(c.id) && fullExits.length > 1) {
-      const autoLabel = cascadeAutoProfileLabel(c.name);
+      const autoLabel = autoLineLabel(c);
       profiles.push({ label: autoLabel, tag: autoRouteTag(0), cascadeId: c.id });
       for (const p of grantedPolicies) {
         profiles.push({
@@ -1282,6 +1282,7 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
           mode,
           hideHopsFromSub: input.hideHopsFromSub,
           autoProfile: input.autoProfile,
+          autoLabel: normaliseLineLabel(input.autoLabel),
           hops: {
             create: hops.map((h, idx) => ({
               // Nested create uses the checked input -> connect the relation
@@ -1416,6 +1417,12 @@ async function storedHopLinks(cascadeId: string, mode: string): Promise<StoredLi
   return out;
 }
 
+/** The Auto line's name: pinned if the operator pinned one, derived from the
+ *  cascade's name otherwise. Same rule as a direction's, one row over. */
+export function autoLineLabel(c: { name: string; autoLabel?: string | null }): string {
+  return normaliseLineLabel(c.autoLabel) ?? cascadeAutoProfileLabel(c.name);
+}
+
 /**
  * What every direction's line is CALLED right now, by tag.
  *
@@ -1435,6 +1442,8 @@ async function lineLabelsByTag(
     where: { id: cascadeId },
     select: {
       name: true,
+      autoProfile: true,
+      autoLabel: true,
       directions: {
         select: {
           tag: true,
@@ -1448,6 +1457,11 @@ async function lineLabelsByTag(
   const out = new Map<number, string>();
   if (!c) return out;
   for (const d of c.directions) out.set(d.tag, directionLineLabel(c.name, d));
+  // The Auto row keys on its own tag, which comes from the top of the uint16
+  // space and cannot collide with a direction's. Only when the operator asked
+  // for the row at all: reporting a rename of a line nobody is handed would be
+  // noise, and noise is how a warning stops being read.
+  if (c.autoProfile) out.set(autoRouteTag(0), autoLineLabel(c));
   return out;
 }
 
@@ -1544,6 +1558,10 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
             ? { hideHopsFromSub: input.hideHopsFromSub }
             : {}),
           ...(input.autoProfile !== undefined ? { autoProfile: input.autoProfile } : {}),
+          // `undefined` leaves the pin alone; only an explicit value touches it.
+          ...(input.autoLabel !== undefined
+            ? { autoLabel: normaliseLineLabel(input.autoLabel) }
+            : {}),
           // Stamped by hand, because every field above is optional and a v4
           // save carries none of them: the topology lives in child rows, so
           // `data` came out EMPTY and `@updatedAt` never fired. The row then

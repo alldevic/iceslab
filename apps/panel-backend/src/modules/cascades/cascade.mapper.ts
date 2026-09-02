@@ -1,4 +1,8 @@
-import { directionLineLabel } from '../../lib/country-flag.js';
+import {
+  cascadeAutoProfileLabel,
+  directionLineLabel,
+  normaliseLineLabel,
+} from '../../lib/country-flag.js';
 
 export interface CascadeHopDto {
   id: string;
@@ -62,6 +66,13 @@ export interface CascadeDto {
   /** Offer the Auto line in the subscription: one profile that names no
    *  direction and lets the entry pick the fastest exit by measured RTT. */
   autoProfile: boolean;
+  /** The name pinned for the Auto line, or null when it is derived from the
+   *  cascade name. Same field, same reason as a direction's `label`. */
+  autoLabel: string | null;
+  /** What a subscriber's client shows for the Auto line, pinned or derived.
+   *  Reported even when `autoProfile` is off, so the form can show what
+   *  turning it on would hand out. */
+  autoLineLabel: string;
   hops: CascadeHopDto[];
   /** v4 shape. Always present (possibly empty): empty means the cascade was
    *  written before the topology tables existed and still describes itself
@@ -105,6 +116,7 @@ interface CascadeRow {
   /** Optional so a caller selecting a narrow row shape still type-checks; a
    *  missing value reads as off, which is the default. */
   autoProfile?: boolean;
+  autoLabel?: string | null;
   nextDirectionTag?: number;
   createdAt: Date;
   updatedAt: Date;
@@ -141,6 +153,8 @@ export function mapCascade(c: CascadeRow): CascadeDto {
     mode: c.mode,
     hideHopsFromSub: c.hideHopsFromSub,
     autoProfile: c.autoProfile ?? false,
+    autoLabel: c.autoLabel ?? null,
+    autoLineLabel: normaliseLineLabel(c.autoLabel) ?? cascadeAutoProfileLabel(c.name),
     hops: c.hops.map((h) => ({
       id: h.id,
       nodeId: h.nodeId,

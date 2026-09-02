@@ -1495,6 +1495,8 @@ export default {
     tag: 'Tag',
     direction: 'Direction',
     directionLabel: 'Name in the client',
+    directionLabelStale:
+      'This name no longer matches where the direction exits. It is pinned, so it does not follow the country — that is the point of pinning, and it is also how it starts telling subscribers the wrong destination.',
     directionNodes: 'Nodes under it',
     countryPlaceholder: 'pick a country',
     addDirection: '+ direction',
@@ -1524,6 +1526,9 @@ export default {
     noTraffic: 'no traffic today',
     nameHint:
       'Renaming changes the name every subscriber sees for the lines under this cascade — unless a line has a name of its own.',
+    autoLabel: 'Name of the Auto line in the client',
+    autoLabelHint:
+      'Empty derives it from the cascade name — and then renaming the cascade renames this server for every subscriber who has it.',
     renamedTitle_one: '{{count}} line changed its name',
     renamedTitle_other: '{{count}} lines changed their names',
     renamedBody:

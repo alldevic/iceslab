@@ -145,6 +145,71 @@ describe('the name a subscriber holds does not move on its own', () => {
     ]);
   });
 
+  it('pins the Auto line too, which is the row that spans every exit', async () => {
+    // Строка Auto — такой же сервер в списке клиента, и её имя тоже выводилось
+    // из имени каскада. Направление закрепить было можно, а её — нет: то есть
+    // единственная строка, на которой сидит большинство подписчиков, когда она
+    // включена, оставалась непокрытой.
+    const entry = await node('entry', 'RU');
+    const exitA = await node('exit-a', 'NL');
+    const exitB = await node('exit-b', 'DE');
+    const c = await createCascade({
+      name: 'auto-pin',
+      enabled: true,
+      hideHopsFromSub: true,
+      autoProfile: true,
+      mode: 'chain',
+      positions: [{ position: 0, nodeIds: [entry], entryProtocol: 'xray', linkProtocol: 'xray' }],
+      directions: [
+        { countryCode: 'NL', nodeIds: [exitA], label: 'Нидерланды' },
+        { countryCode: 'DE', nodeIds: [exitB], label: 'Германия' },
+      ],
+    });
+    // Control: строка Auto вообще выдаётся, иначе проверки ниже ни о чём.
+    expect(await servedLabels(entry)).toEqual(['⚡ auto-pin → Auto', 'Нидерланды', 'Германия']);
+
+    // Без закрепления переименование каскада её двигает — и об этом сообщают,
+    // хотя оба направления закреплены и не сдвинулись.
+    const renamed = await updateCascade(c.id, { name: 'auto-pin-2' });
+    expect(await servedLabels(entry)).toEqual(['⚡ auto-pin-2 → Auto', 'Нидерланды', 'Германия']);
+    expect(renamed.lineRenames).toEqual([
+      { tag: 0xffff, before: '⚡ auto-pin → Auto', after: '⚡ auto-pin-2 → Auto' },
+    ]);
+
+    // Закрепили — и следующее переименование до клиента не едет.
+    const pinned = await updateCascade(c.id, { autoLabel: '⚡ Автовыбор' });
+    expect(pinned.autoLabel).toBe('⚡ Автовыбор');
+    expect(pinned.autoLineLabel).toBe('⚡ Автовыбор');
+    expect(await servedLabels(entry)).toEqual(['⚡ Автовыбор', 'Нидерланды', 'Германия']);
+
+    const after = await updateCascade(c.id, { name: 'auto-pin-3' });
+    expect(await servedLabels(entry)).toEqual(['⚡ Автовыбор', 'Нидерланды', 'Германия']);
+    expect(after.lineRenames, 'a save that renamed nothing reported a rename').toEqual([]);
+  });
+
+  it('says nothing about the Auto line the operator has not asked for', async () => {
+    // Отчёт о переименовании читают ровно до тех пор, пока в нём нет шума.
+    // Строка, которую никому не выдают, переименоваться не может.
+    const entry = await node('entry', 'RU');
+    const exit = await node('exit', 'NL');
+    const c = await createCascade({
+      name: 'no-auto',
+      enabled: true,
+      hideHopsFromSub: true,
+      autoProfile: false,
+      mode: 'chain',
+      positions: [{ position: 0, nodeIds: [entry], entryProtocol: 'xray', linkProtocol: 'xray' }],
+      directions: [{ countryCode: 'NL', nodeIds: [exit], label: 'Нидерланды' }],
+    });
+
+    const res = await updateCascade(c.id, { name: 'no-auto-2' });
+
+    expect(res.lineRenames).toEqual([]);
+    // Control: выводимое имя строки Auto при этом ЕСТЬ в ответе — форма
+    // показывает, что выдаст включение тумблера.
+    expect(res.autoLineLabel).toBe('⚡ no-auto-2 → Auto');
+  });
+
   it('reports the country change that renames a line, and not a new direction', async () => {
     // Смена страны выхода имя МЕНЯЕТ, и правильно делает: строка называет
     // назначение, а оно стало другим. Сказать об этом всё равно надо — у

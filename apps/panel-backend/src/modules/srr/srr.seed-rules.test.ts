@@ -138,6 +138,30 @@ describe('seeded User-Agent rules', () => {
     }
   });
 
+  it('seeds Happ onto the format that was built for it', () => {
+    // `xrayjson-array` существует ИМЕННО для Happ и V2RayTun: единственный
+    // конфиг buildXrayJson они читают как ОДИН сервер, массив — как N. А
+    // единственный механизм, ставящий клиента на формат, — правило по
+    // User-Agent, потому что `?format=` не шлёт ни один клиент. Значит формат,
+    // сделанный для названного клиента, до него не доезжал.
+    //
+    // Замерено на боевой панели 01.09 на `Happ/4.3.0/Android`: 768 байт, ноль
+    // гео-правил, тогда как Hiddify, v2rayNG и Clash свои получили. Пресет
+    // маршрутизации, который выставил оператор, до пользователей Happ молча
+    // не доходил.
+    const happ = shippedRule('Happ');
+    expect(happ, 'no seeded Happ rule found in the migrations').not.toBeNull();
+    expect(happ!.format).toBe('xrayjson-array');
+    expect(compileRule(happ!.pattern).test('Happ/4.3.0/Android')).toBe(true);
+    // Control: соседи по той же пачке остались на своих форматах — правка
+    // адресная, а не «всем universal-клиентам».
+    for (const name of ['Shadowrocket', 'Streisand', 'V2Box']) {
+      const r = shippedRule(name);
+      expect(r, name).not.toBeNull();
+      expect(r!.format, name).toBe('plain');
+    }
+  });
+
   it('gives every seeded rule the case-insensitive flag its neighbours have', () => {
     // The whole 20260617020000 batch carries `(?i)` and says why: a client that
     // misses its rule "fell through to the `.*` -> plain catch-all and got a

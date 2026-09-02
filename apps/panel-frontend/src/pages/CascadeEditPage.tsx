@@ -152,6 +152,10 @@ export function CascadeEditPage() {
         enabled: draft.enabled,
         hideHopsFromSub: draft.hideHops,
         autoProfile: draft.autoProfile,
+        // Всегда, включая пустое: форма — вся правда об этом поле, поэтому
+        // очищенное поле снимает закрепление. (`undefined` оставил бы прежнее
+        // имя, и это поведение для клиентов, которые про поле не знают.)
+        autoLabel: draft.autoLabel.trim(),
         positions: toPositionInputs(draft.pools),
         directions: toDirectionInputs(draft.directions),
       });
@@ -222,7 +226,7 @@ export function CascadeEditPage() {
     );
   }
 
-  const { name, enabled, hideHops, autoProfile, pools, directions } = draft;
+  const { name, enabled, hideHops, autoProfile, autoLabel, pools, directions } = draft;
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
   const positionCount = pools.length + 1;
 
@@ -519,6 +523,22 @@ export function CascadeEditPage() {
                   : t('cascadeEdit.autoProfileHint')
               }
             />
+            {/* Имя строки Auto — под самим тумблером: это её имя, и другого
+                места у него нет. Плейсхолдер показывает выводимое имя, то есть
+                то, что покупатель видит сейчас; пустое поле значит «выводить». */}
+            {autoProfile && (
+              <Stack gap={6} style={{ width: '100%' }}>
+                <FieldLabel>{t('cascadeEdit.autoLabel')}</FieldLabel>
+                <TextInput
+                  value={autoLabel}
+                  aria-label={t('cascadeEdit.autoLabel')}
+                  placeholder={`⚡ ${name} → Auto`}
+                  onChange={(e) => patch({ autoLabel: e.currentTarget.value })}
+                  styles={{ input: { fontSize: 12, height: 32 } }}
+                />
+                <Hint>{t('cascadeEdit.autoLabelHint')}</Hint>
+              </Stack>
+            )}
           </SectionCard>
 
           <Stack
@@ -652,6 +672,7 @@ export function CascadeEditPage() {
                     nodeById.get(dir.nodeIds.find(Boolean) ?? '')?.name ?? '',
                   )}
                   labelHint={t('cascadeCreate.directionLabel')}
+                  labelStaleNote={t('cascadeCreate.directionLabelStale')}
                   onLabel={(v) => setDirection(i, { label: v })}
                   nodeIds={dir.nodeIds}
                   nodes={nodes}
@@ -960,6 +981,8 @@ interface Draft {
   /** Offer the Auto line in the subscription: the entry picks the fastest
    *  direction instead of the subscriber picking a country. */
   autoProfile: boolean;
+  /** Закреплённое имя строки Auto, '' — выводить из имени каскада. */
+  autoLabel: string;
   /** The entry and any transits. The exit is `directions`. */
   pools: PositionDraft[];
   directions: DirectionDraft[];
@@ -1005,6 +1028,7 @@ function toDraft(
       enabled: c.enabled,
       hideHops: c.hideHopsFromSub ?? true,
       autoProfile: c.autoProfile ?? false,
+      autoLabel: c.autoLabel ?? '',
       pools: [...c.positions]
         .sort((a, b) => a.position - b.position)
         .map((p) => ({
@@ -1053,6 +1077,7 @@ function toDraft(
     enabled: c.enabled,
     hideHops: c.hideHopsFromSub ?? true,
     autoProfile: c.autoProfile ?? false,
+    autoLabel: c.autoLabel ?? '',
     pools: [
       ...(head ? [pool(head)] : [{ key: key(), nodeIds: [''], entryProtocol: 'xray' as CascadeProtocol, linkProtocol: 'xray' as CascadeProtocol }]),
       ...transits.map(pool),

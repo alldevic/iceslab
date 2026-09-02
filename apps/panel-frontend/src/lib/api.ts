@@ -1497,6 +1497,14 @@ export interface Cascade {
   /** Offer the Auto line: one profile that names no direction and lets the
    *  entry pick the fastest exit by measured RTT. */
   autoProfile: boolean;
+  /** The name pinned for the Auto line, or null when it is derived from the
+   *  cascade name. Same field and same reason as a direction's `label`: the
+   *  Auto row is a server in the client's list like any other. */
+  autoLabel: string | null;
+  /** What a subscriber's client shows for the Auto line, pinned or derived.
+   *  Reported even when `autoProfile` is off, so the form can say what turning
+   *  it on would hand out. */
+  autoLineLabel: string;
   hops: CascadeHop[];
   /** v4 shape (2026-08-04). Always present; EMPTY means the cascade predates
    *  the move and is still described by `hops`. */
@@ -1606,6 +1614,9 @@ export interface CreateCascadeV4Input {
   enabled?: boolean;
   hideHopsFromSub?: boolean;
   autoProfile?: boolean;
+  /** Pin the Auto line's name. `undefined` leaves a stored pin alone; an empty
+   *  string clears it and hands every subscriber the derived name again. */
+  autoLabel?: string | null;
   positions: CascadePositionInput[];
   directions: CascadeDirectionInput[];
 }

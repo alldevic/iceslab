@@ -130,6 +130,9 @@ const CascadeBaseFields = {
   /** Offer the Auto line: one profile that names no direction and lets the
    *  entry pick the fastest exit. Off by default, see the schema comment. */
   autoProfile: z.boolean().default(false),
+  /** The Auto line's name in the client. Absent/null derives it from the
+   *  cascade name; see CascadeDirection.label for why pinning matters. */
+  autoLabel: z.string().max(64).nullish(),
 };
 
 export const CreateCascadeSchema = z
@@ -162,6 +165,9 @@ export const UpdateCascadeSchema = z
     mode: CascadeMode.optional(),
     hideHopsFromSub: z.boolean().optional(),
     autoProfile: z.boolean().optional(),
+    // `null` clears the pin, `undefined` leaves it: a caller that predates the
+    // field must not rename everyone's Auto row by omitting it.
+    autoLabel: z.string().max(64).nullish(),
     hops: z.array(CascadeHopSchema).min(2).max(MAX_CASCADE_HOPS).optional(),
     positions: z.array(CascadePositionSchema).min(1).max(MAX_CASCADE_HOPS).optional(),
     directions: z.array(CascadeDirectionSchema).min(1).optional(),

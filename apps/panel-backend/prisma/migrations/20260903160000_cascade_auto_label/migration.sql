@@ -1,0 +1,15 @@
+-- The Auto line can carry a name of its own, like a direction can.
+--
+-- Same defect, one row over. The Auto line is a server in the subscriber's
+-- client like any other, and its name was derived on every read from the
+-- cascade's name — so renaming the cascade renamed it for everyone at once, and
+-- a client that identifies a server by its name answers a rename by ADDING the
+-- new line and keeping the old, which no longer routes.
+--
+-- `cascade_directions.label` (20260903140000) closed this for the rows that name
+-- a country. This closes it for the row that names none — the one that spans
+-- every exit, and therefore the one most subscribers sit on when it is offered.
+--
+-- NULL keeps deriving it. Nothing is backfilled, for the same reason as the
+-- direction pin: a guessed name freezes whatever the cascade is called today.
+ALTER TABLE "cascades" ADD COLUMN "auto_label" VARCHAR(64);

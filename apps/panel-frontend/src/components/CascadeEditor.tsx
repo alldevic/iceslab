@@ -620,6 +620,7 @@ export function DirectionRow({
   label,
   labelPlaceholder,
   labelHint,
+  labelStaleNote,
   onLabel,
   nodeIds,
   nodes,
@@ -644,6 +645,9 @@ export function DirectionRow({
    *  box is not a blank but the current answer. */
   labelPlaceholder: string;
   labelHint: string;
+  /** Shown when the pinned name no longer matches what this direction would be
+   *  called: the pin has outlived the exit it describes. */
+  labelStaleNote: string;
   onLabel: (value: string) => void;
   nodeIds: string[];
   nodes: Node[];
@@ -676,6 +680,16 @@ export function DirectionRow({
             onChange={(e) => onLabel(e.currentTarget.value)}
             styles={{ input: { fontSize: 12, height: 32 } }}
           />
+          {/* Закреплённое имя не следует за составом направления — в этом весь
+              смысл, — но именно поэтому оно может начать врать: страну выхода
+              поменяли, а покупатель по-прежнему видит прежнюю. Молчаливое
+              расхождение из тех, что находят по жалобе, поэтому оно сказано
+              прямо, рядом с полем, где его чинят. */}
+          {label.trim().length > 0 && label.trim() !== labelPlaceholder && (
+            <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER }}>
+              {labelStaleNote}
+            </Text>
+          )}
         </Stack>
       </Box>
       <Box className="cascade-direction-nodes">

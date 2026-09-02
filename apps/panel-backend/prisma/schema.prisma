@@ -972,6 +972,16 @@ model Cascade {
   // Off by default so an existing operator's client lists do not grow a row
   // they never asked for after an update.
   autoProfile Boolean @default(false) @map("auto_profile")
+  // The Auto line's name in the subscriber's client, when the operator pins
+  // one. NULL derives it from the cascade name, as it always was.
+  //
+  // Same reason as CascadeDirection.label, and the same cost when it is
+  // missing: the Auto line is a server in the client's list like any other, so
+  // renaming the cascade renames it for everyone — and a client that
+  // identifies a server by name keeps the old one beside the new. The
+  // direction got its pin first; without this one, the row an operator cannot
+  // pin is the row that spans every exit.
+  autoLabel   String?  @map("auto_label") @db.VarChar(64)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

@@ -548,6 +548,7 @@ export function CascadeCreatePage() {
                     nodeById.get(dir.nodeIds.find(Boolean) ?? '')?.name ?? '',
                   )}
                   labelHint={t('cascadeCreate.directionLabel')}
+                  labelStaleNote={t('cascadeCreate.directionLabelStale')}
                   onLabel={(v) => setDirection(i, { label: v })}
                   nodeIds={dir.nodeIds}
                   nodes={nodes}
