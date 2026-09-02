@@ -782,14 +782,25 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // deleted while this node was unreachable therefore kept a live wg peer — the
   // access itself, not a stale record — until someone found it by hand.
   //
-  // Sent as the ids just pushed, users and devices together, because that IS the
-  // desired set: an item whose addUser failed is still meant to be there and
-  // simply is not yet, and retaining it costs nothing.
+  // The set is what the panel BELIEVES should be here — every active user and
+  // every device of theirs on this node's wg profiles — not what the fan-out
+  // above managed to deliver. Those differ, and the difference matters: an
+  // address allocation that failed this round skips the push (see the loop), and
+  // keying the keep set off the pushes would turn that transient into revoking a
+  // working tunnel. Retaining something that is not there yet costs nothing.
   //
   // An agent older than the endpoint answers 404. That is "this node cannot
   // reconcile yet", not a failed sync, and it must not fail the job — the
   // inbounds and users that did land are live.
-  const keepIds = items.map((it) => it.req.userId);
+  // Device ids only where this node carries a wg flavour. Devices are global
+  // rows - they exist for every user whether or not any node serves wg - and a
+  // keep set naming them on an xray-only node would be a claim about something
+  // that node has nothing to do with.
+  const servesWg = awgProfile !== null || wgProfile !== null;
+  const keepIds = [
+    ...users.map((u) => u.id),
+    ...(servesWg ? wgPeers.map((p) => p.deviceId) : []),
+  ];
   try {
     const res = await transport.retainUsers({ userIds: keepIds });
     if (res.reconciled.length > 0) {

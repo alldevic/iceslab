@@ -130,6 +130,35 @@ describe('every inbound sync states the node’s whole user set', () => {
     expect(sent.userIds).toEqual([alice]);
   });
 
+  it('keeps a device whose address allocation failed this round', async () => {
+    // The keep set is what the panel BELIEVES belongs here, not what the fan-out
+    // delivered. A device with no allocated address is skipped by the push - and
+    // if that skip also dropped it from the keep set, one transient allocator
+    // failure would revoke a working tunnel on the node.
+    const nodeId = await node('retain-alloc');
+    const profileId = await boundProfile(nodeId, 'amneziawg', 1234);
+    const alice = await user('alice');
+    const device = await prisma.wgDevice.create({
+      data: {
+        userId: alice,
+        label: 'phone',
+        publicKey: 'pub-key-of-a-phone',
+        privateKey: 'priv',
+        presharedKey: null,
+      },
+    });
+    const retain = stubTransport();
+    // No address is allocated for it on this profile, so the push skips it.
+    expect(
+      await prisma.amneziawgPeer.findFirst({ where: { deviceId: device.id, profileId } }),
+    ).toBeNull();
+
+    await applyInboundsForNode(nodeId);
+
+    const sent = retain.mock.calls[0]![0] as RetainUsersRequest;
+    expect(sent.userIds).toContain(device.id);
+  });
+
   it('does not fail the sync on an agent that has no such endpoint', async () => {
     // A node mid-upgrade answers 404. The inbounds and users that landed are
     // live, and failing the job would retry a push that already worked.
