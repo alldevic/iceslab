@@ -10,6 +10,7 @@ import { mapUserToPublic } from '../users/users.mapper.js';
 import * as squadsService from '../squads/squads.service.js';
 import * as hwidService from '../hwid/hwid.service.js';
 import * as wgDevicesService from '../wg-devices/wg-devices.service.js';
+import { describeWgTunnel } from '../wg-devices/wg-devices.presentation.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { getOverview } from '../dashboard/dashboard.service.js';
 import { formatBytes } from '../settings/settings.service.js';
@@ -130,36 +131,30 @@ function mapDevice(d: {
  * `hwid` is `wg:<id>`, which is what makes disconnect work: the shop hashes it
  * into the button token and sends the same string back, and the delete handler
  * below reads the prefix and revokes the tunnel. Revoke, not delete - see there.
+ *
+ * The tunnel's NAME is not made here: it comes from `describeWgTunnel`, which
+ * the first-use notification uses too. A buyer who gets "a new device
+ * connected: X" has to find X in this list, and two independently written
+ * names are two names to drift apart.
  */
-function mapWgTunnel(
-  d: {
-    id: string;
-    createdAt: Date;
-    lastSeenAt: Date | null;
-    bytesIn: bigint;
-    bytesOut: bigint;
-    peers: { ip: string }[];
-  },
-  index: number,
-) {
-  const addresses = d.peers.map((p) => p.ip);
-  // One keypair serves every wg profile on the fleet, so a tunnel holds one
-  // address per profile and they are all the same device. The first is enough
-  // to tell two tunnels apart, which is all the line is for.
-  const address = addresses[0] ?? '';
+function mapWgTunnel(d: {
+  id: string;
+  createdAt: Date;
+  lastSeenAt: Date | null;
+  bytesIn: bigint;
+  bytesOut: bigint;
+  peers: { ip: string }[];
+}) {
   const traffic = `↑ ${formatBytes(d.bytesOut)} ↓ ${formatBytes(d.bytesIn)}`;
   const seen = d.lastSeenAt ? d.lastSeenAt.toISOString().slice(0, 16).replace('T', ' ') : null;
   return {
     id: d.id,
-    hwid: `wg:${d.id}`,
-    // Named by protocol family rather than by flavour: the same keypair works
-    // with the WireGuard app and the AmneziaWG one, so calling it either would
-    // be wrong half the time.
-    platform: 'WireGuard/AmneziaWG',
-    osVersion: [address, traffic, seen].filter(Boolean).join(' · '),
-    deviceModel: `WireGuard #${index}`,
+    ...describeWgTunnel(d),
+    // What the card adds on top of the identity. The address is NOT repeated
+    // here - it is the name now, and the shop draws the name and this line one
+    // above the other, so a second copy would only make the line longer.
+    osVersion: [traffic, seen].filter(Boolean).join(' · '),
     userAgent: null,
-    createdAt: d.createdAt.toISOString(),
   };
 }
 
@@ -1281,15 +1276,12 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     // they no longer have.
     const live = tunnels.filter((t) => t.revokedAt === null);
     // An untouched tunnel is a slot, not a device - see wgShowUnusedTunnels.
-    // The index is taken over the WHOLE live set, before this filter, so
-    // "WireGuard #2" keeps meaning the second tunnel whether or not the first
-    // one has ever been used. Numbering that shifted with the filter would
-    // rename a buyer's tunnels the moment one of them went quiet.
-    const shown = live
-      .map((t, i) => ({ t, index: i + 1 }))
-      .filter(({ t }) => settings.wgShowUnusedTunnels || t.lastSeenAt !== null);
+    // The ORDER is the live set's own, oldest first, which is the order
+    // `device=N` counts in as well: the Nth card and the Nth download link are
+    // the same tunnel, and `wg-device-numbering.test.ts` pins that they stay so.
+    const shown = live.filter((t) => settings.wgShowUnusedTunnels || t.lastSeenAt !== null);
     return sendResponse(reply, {
-      devices: [...rows.map(mapDevice), ...shown.map(({ t, index }) => mapWgTunnel(t, index))],
+      devices: [...rows.map(mapDevice), ...shown.map((t) => mapWgTunnel(t))],
     });
   });
 

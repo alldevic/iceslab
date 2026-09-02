@@ -25,6 +25,7 @@ const adminToken = `icp_wgdev_${Date.now()}`;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const bearer = () => ({ authorization: `Bearer ${adminToken}` });
 const userIds: string[] = [];
+const profileIds: string[] = [];
 
 beforeAll(async () => {
   process.env['REMNAWAVE_COMPAT_ENABLED'] = 'true';
@@ -41,10 +42,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (userIds.length) {
+    await prisma.amneziawgPeer.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.wgDevice.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.hwidUserDevice.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
+  if (profileIds.length) await prisma.profile.deleteMany({ where: { id: { in: profileIds } } });
   await prisma.apiToken.deleteMany({ where: { tokenHash: sha(adminToken) } });
   await prisma.appSetting.deleteMany({ where: { key: 'wgShowUnusedTunnels' } });
   await app.close();
@@ -69,9 +72,12 @@ async function mkUser(): Promise<{ id: string; ref: number }> {
   return { id: row.id, ref };
 }
 
-async function mkTunnel(userId: string, opts: { used: boolean; revoked?: boolean }) {
+async function mkTunnel(
+  userId: string,
+  opts: { used: boolean; revoked?: boolean; ip?: string },
+) {
   const n = seq++;
-  return prisma.wgDevice.create({
+  const device = await prisma.wgDevice.create({
     data: {
       userId,
       privateKey: `priv-${n}`.padEnd(44, 'x'),
@@ -81,6 +87,19 @@ async function mkTunnel(userId: string, opts: { used: boolean; revoked?: boolean
       ...(opts.revoked ? { revokedAt: new Date() } : {}),
     },
   });
+  // The address is the tunnel's NAME on the card, so a test about naming has
+  // to allocate one. In production the subscription does it: every device gets
+  // an address on the first fetch, used or not.
+  if (opts.ip) {
+    const profile = await prisma.profile.create({
+      data: { name: `wgdev-profile-${Date.now()}-${seq++}`, protocol: 'amneziawg', config: {} },
+    });
+    profileIds.push(profile.id);
+    await prisma.amneziawgPeer.create({
+      data: { deviceId: device.id, profileId: profile.id, userId, ip: opts.ip },
+    });
+  }
+  return device;
 }
 
 /** The setting is read through a TTL cache, so a test that flips it has to
@@ -135,19 +154,42 @@ describe('wg tunnels are devices too', () => {
     await setShowUnused(false);
   });
 
-  it('numbering follows the tunnel, not the filter', async () => {
-    // Tunnel #2 must stay #2 whether or not #1 has ever been used. Numbering
-    // over the filtered set would rename a buyer's tunnels the moment one of
-    // them went quiet, and the name is how they tell which config is which.
+  it('names a tunnel by its own address, so nothing else can rename it', async () => {
+    // The name used to be the tunnel's POSITION, and a position is a property
+    // of the set rather than of the tunnel: hiding a quiet neighbour, or
+    // revoking one, renamed the tunnels the buyer never touched - while the
+    // name is exactly what they use to decide which one to disconnect. The
+    // address is the tunnel's own and is in the config file they imported.
     await setShowUnused(false);
     const u = await mkUser();
-    await mkTunnel(u.id, { used: false });
+    await mkTunnel(u.id, { used: false, ip: '10.90.0.2' });
     await new Promise((r) => setTimeout(r, 5));
-    await mkTunnel(u.id, { used: true });
+    await mkTunnel(u.id, { used: true, ip: '10.90.0.3' });
+
+    const hidden = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
+    expect(hidden).toHaveLength(1);
+    expect(hidden[0]!.deviceModel).toBe('10.90.0.3');
+
+    // The quiet one appears beside it and the used one keeps its name.
+    await setShowUnused(true);
+    const both = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
+    expect(both.map((d) => d.deviceModel)).toEqual(['10.90.0.2', '10.90.0.3']);
+    await setShowUnused(false);
+  });
+
+  it('leaves the traffic line without a second copy of the address', async () => {
+    // Name and line are drawn one above the other by the shop, and the same
+    // fields make up the "new device" notification's one-line label. The
+    // address is the name now; repeating it below only makes both longer.
+    await setShowUnused(false);
+    const u = await mkUser();
+    await mkTunnel(u.id, { used: true, ip: '10.90.0.7' });
 
     const body = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
-    expect(body).toHaveLength(1);
-    expect(body[0]!.deviceModel).toBe('WireGuard #2');
+    expect(body[0]!.deviceModel).toBe('10.90.0.7');
+    expect(String(body[0]!.osVersion)).not.toContain('10.90.0.7');
+    // Control: the line is not simply empty - it still carries the traffic.
+    expect(String(body[0]!.osVersion)).toContain('↑');
   });
 
   it('a revoked tunnel is history and never shows, even with the setting on', async () => {
