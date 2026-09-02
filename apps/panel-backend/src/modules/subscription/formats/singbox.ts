@@ -380,8 +380,12 @@ export function buildSingboxJson(
         server_port: e.port,
         method: e.method,
         password: e.password,
-        // SS2022 supports UDP relay; sing-box defaults `network: tcp` so
-        // we must enable UDP explicitly to match what the server emits.
+        // TCP only, and the comment here used to claim the opposite - that
+        // UDP was enabled - while the code below disabled it. Nothing is
+        // deployed on plain shadowsocks today, so which of native UDP relay
+        // or UoT this server actually answers is UNMEASURED; guessing would
+        // hand the buyer a channel whose UDP goes nowhere. Recorded in the
+        // deployment's defect registry rather than fixed blind.
         network: 'tcp',
         udp_over_tcp: false,
       });
@@ -434,8 +438,13 @@ export function buildSingboxJson(
         method: e.ssMethod,
         password: e.ssPassword,
         detour: stlsTag,
-        network: 'tcp',
-        udp_over_tcp: false,
+        // ShadowTLS carries TCP and only TCP, so UDP-over-TCP is the whole of
+        // this channel's UDP. Without it the buyer has none: measured on the
+        // live stand 2026-09-03, TCP through the cascade worked while every
+        // UDP probe timed out - QUIC, calls, games and DNS over UDP all gone,
+        // and the channel still reporting healthy. `network` is deliberately
+        // left unset: pinning it to 'tcp' makes the flag moot.
+        udp_over_tcp: true,
       });
       outbounds.push({
         type: 'shadowtls',

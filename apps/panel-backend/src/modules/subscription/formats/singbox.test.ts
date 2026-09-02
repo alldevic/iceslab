@@ -159,6 +159,26 @@ describe('buildSingboxJson', () => {
     expect(stls.tls.server_name).toBe('www.microsoft.com');
   });
 
+  // Measured on the live stand 2026-09-03, not reasoned about: with
+  // `network: 'tcp'` and `udp_over_tcp: false` a ShadowTLS buyer has NO UDP at
+  // all - no QUIC, no calls, no games, no DNS over UDP - while TCP keeps
+  // working. So the channel reads as healthy and the complaint arrives as
+  // "calls don't connect" rather than "the VPN is down".
+  //
+  // ShadowTLS carries TCP by construction, so UDP-over-TCP is the only path,
+  // and the node needs nothing for it: the same chain with the flag flipped
+  // passed all three probes through the cascade, 1139-byte answer included.
+  it('lets UDP through the shadowtls channel: the ss outbound speaks UoT', () => {
+    const cfg = parse(buildSingboxJson([shadowtlsEp]));
+    const ss = cfg.outbounds.find(
+      (o: any) => o.type === 'shadowsocks' && o.tag === 'eu-1-shadowtls',
+    );
+    expect(ss.udp_over_tcp).toBe(true);
+    // `network: 'tcp'` pins the outbound to TCP and makes the flag moot, so
+    // asserting the flag alone would pass on a config that still drops UDP.
+    expect(ss.network).toBeUndefined();
+  });
+
   // ───── Slice 24c part 3a: Trojan subprotocol ─────
 
   it('emits a trojan outbound when subprotocol=trojan; UUID becomes password', () => {
