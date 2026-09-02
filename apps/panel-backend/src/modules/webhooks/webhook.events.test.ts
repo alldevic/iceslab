@@ -143,6 +143,11 @@ describe('the webhook registry', () => {
         'node.changed',
         'node.updated',
         'squad.changed',
+        // Ordered by revoking or minting a tunnel, and it fans out to an
+        // inbound-sync on every wg-bearing node. Internal plumbing of the same
+        // kind as squad.changed: a receiver wants the DEVICE, which arrives as
+        // user_hwid_devices.added, not the re-push that follows it.
+        'wg-devices.changed',
       ].sort(),
     );
   });
