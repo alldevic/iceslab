@@ -126,6 +126,9 @@ interface FormValues {
   // {enabled:false} so the agent gets a tear-down push.
   zapret2Present: boolean;
   zapret2Enabled: boolean;
+  // Bridge A - hand this node's non-xray cores to its local xray so cascade,
+  // split-routing and egress policy reach them.
+  bridgeNonXrayInbounds: boolean;
   zapret2Preset: string;
   zapret2SocksPort: number | '';
   zapret2PortsTcp: string;
@@ -236,6 +239,11 @@ function buildHardening(v: FormValues, existing?: NodeHardening | null): NodeHar
     };
   }
 
+  // Bridge A: off means no key at all, so a node that never asked for it is
+  // byte-identical to one from before the feature existed.
+  delete h.bridgeNonXrayInbounds;
+  if (v.bridgeNonXrayInbounds) h.bridgeNonXrayInbounds = true;
+
   // B1: no rules means no key, and the node routes as it did before.
   delete h.egressPolicy;
   const rules = egressRulesFromForm(v.egressRules);
@@ -296,6 +304,7 @@ export function NodeEditModal({
       hardenSshAllowlist: node?.hardening?.sshAllowlist ?? [],
       zapret2Present: node?.hardening?.zapret2 != null,
       zapret2Enabled: node?.hardening?.zapret2?.enabled ?? false,
+      bridgeNonXrayInbounds: node?.hardening?.bridgeNonXrayInbounds ?? false,
       zapret2Preset: node?.hardening?.zapret2?.preset ?? ZAPRET2_PRESETS[0],
       zapret2SocksPort: node?.hardening?.zapret2?.socksPort ?? '',
       zapret2PortsTcp: node?.hardening?.zapret2?.portsTcp ?? '',
@@ -324,6 +333,7 @@ export function NodeEditModal({
         hardenSshAllowlist: node.hardening?.sshAllowlist ?? [],
         zapret2Present: node.hardening?.zapret2 != null,
         zapret2Enabled: node.hardening?.zapret2?.enabled ?? false,
+        bridgeNonXrayInbounds: node.hardening?.bridgeNonXrayInbounds ?? false,
         zapret2Preset: node.hardening?.zapret2?.preset ?? ZAPRET2_PRESETS[0],
         zapret2SocksPort: node.hardening?.zapret2?.socksPort ?? '',
         zapret2PortsTcp: node.hardening?.zapret2?.portsTcp ?? '',
@@ -885,6 +895,11 @@ export function NodeEditModal({
                     </Stack>
                   </Group>
                   <Stack gap="sm">
+                    <Switch
+                      label={t('nodes.edit.bridgeToggle')}
+                      description={t('nodes.edit.bridgeToggleDesc')}
+                      {...form.getInputProps('bridgeNonXrayInbounds', { type: 'checkbox' })}
+                    />
                     <Switch
                       label={t('nodes.edit.zapret2Toggle')}
                       description={t('nodes.edit.zapret2ToggleDesc')}

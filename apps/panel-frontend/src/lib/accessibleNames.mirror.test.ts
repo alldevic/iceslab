@@ -72,7 +72,7 @@ const KNOWN_UNNAMED = new Set<string>([
   'components/GeoPanel.tsx:723 <Select>',
   'components/GeoPanel.tsx:732 <TextInput>',
   'components/HostsManager.tsx:316 <Switch>',
-  'components/NodeEditModal.tsx:1237 <NumberInput>',
+  'components/NodeEditModal.tsx:1251 <NumberInput>',
   'components/NodeFormModal.tsx:626 <Checkbox>',
   'components/ProfileFormModal.tsx:1485 <PasswordInput>',
   'components/ProfileFormModal.tsx:2018 <SegmentedControl>',

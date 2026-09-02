@@ -126,6 +126,32 @@ describe.skipIf(!XRAY_BIN)('xray accepts the generated cascade config', () => {
     expect(r.ok, r.output).toBe(true);
   });
 
+  // Bridge A: the entry grows a loopback socks inbound plus an inboundTag rule.
+  // Structure tests cannot answer whether xray takes a `socks` inbound with
+  // `sniffing` in this position, or whether `inboundTag` is accepted alongside
+  // the vlessRoute rules - and a config the core refuses is a crash loop that
+  // takes the whole entry down, tagged clients included.
+  it('loads an entry that bridges its non-xray cores', () => {
+    const oneDirection = {
+      positions: [{ position: 0, nodeIds: [ENTRY] }],
+      directions: [{ tag: 1, nodeIds: [EXIT_A] }],
+      links: [link(ENTRY, EXIT_A, 1, 24000)],
+      hosts,
+      bridgeSocksPort: 24100,
+      // A literal domain matcher, not geosite/geoip: those need the .dat
+      // databases on disk, and their absence fails the config for a reason
+      // that has nothing to do with what this case is testing. (It failed
+      // exactly that way first - `failed to open file: geoip.dat`.)
+      egressPolicies: new Map([[ENTRY, [{ domain: ['split.example'], target: 'direct' as const }]]]),
+    };
+    const fragment = buildTopologyFragmentsForNode(ENTRY, oneDirection);
+    // Control: without the bridge inbound in it, this test would be asserting
+    // that xray accepts a plain entry, which the case above already covers.
+    expect(fragment!.inbounds.some((i) => i.tag === 'cascade-bridge-in')).toBe(true);
+    const r = xrayAccepts(wrap(fragment));
+    expect(r.ok, r.output).toBe(true);
+  });
+
   it('loads a direction (exit) config', () => {
     const r = xrayAccepts(wrap(buildTopologyFragmentsForNode(EXIT_A, twoDirections)));
     expect(r.ok, r.output).toBe(true);

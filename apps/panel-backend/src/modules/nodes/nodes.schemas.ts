@@ -77,6 +77,22 @@ export const HardeningSchema = z
     // in this blob (not a new column) to stay migration-free; install-time
     // appendHardeningFlags ignores it, the live /applyEgress push path reads it.
     zapret2: Zapret2ConfigSchema.optional(),
+    // Bridge A - hand this node's NON-xray cores (sing-box: tuic, anytls,
+    // shadowtls, hysteria2, and the sing-box-served xray family) to its local
+    // xray over loopback, so cascade, split-routing and egress policy apply to
+    // them. Without it those cores egress straight out of the node: they render
+    // no routing section at all, which is why the three features silently skip
+    // them today.
+    //
+    // Opt-in, and deliberately not inferred from "this node has such a core".
+    // A node can legitimately serve a protocol as a DIRECT channel (our own
+    // `direct-s2` squad is exactly that), and turning that into a cascaded one
+    // behind the operator's back would move where those buyers appear to be.
+    //
+    // A no-op on a node with no such cores, and on one that is not a cascade
+    // entry: there is nowhere for the bridged traffic to go, so nothing is
+    // emitted (see buildTopologyFragmentsForNode pass 3b).
+    bridgeNonXrayInbounds: z.boolean().optional(),
   })
   .strict()
   .nullish();

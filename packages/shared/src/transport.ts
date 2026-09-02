@@ -167,7 +167,28 @@ export interface InboundDto {
     | ShadowtlsInboundCfg;
 }
 
-export interface XrayInboundCfg {
+/**
+ * Bridge A (2026-09-02) - the half of an inbound config that says where its
+ * core hands traffic instead of egressing itself.
+ *
+ * Set by the panel only on a node whose xray carries a matching loopback socks
+ * inbound (cascade fragment `cascade-bridge-in`), and only for cores that
+ * render no routing of their own. Those cores - everything sing-box serves -
+ * otherwise egress straight out of the node, which on a cascade ENTRY means the
+ * buyer comes out of the entry country while their subscription says otherwise.
+ *
+ * Protocol-independent on purpose, and parsed as such by the node-agent
+ * (`bridgeWire` in the sing-box adapter): one field, one meaning, decoded once
+ * rather than repeated in each per-protocol wire struct.
+ *
+ * Absent/0 = no bridge, and the rendered core config is byte-identical to what
+ * it was before this existed.
+ */
+export interface BridgeableInboundCfg {
+  bridgeSocksPort?: number;
+}
+
+export interface XrayInboundCfg extends BridgeableInboundCfg {
   /**
    * Identity of THIS inbound, so the agent can hold several at once.
    *
@@ -394,7 +415,7 @@ export interface GeoAssetSpec {
   sha256: string;
 }
 
-export interface HysteriaInboundCfg {
+export interface HysteriaInboundCfg extends BridgeableInboundCfg {
   obfsPassword?: string;          // Salamander; empty = no obfuscation
   masqueradeUrl?: string;
   brutalUpMbps?: number;
@@ -439,7 +460,7 @@ export interface NaiveInboundCfg {
  * `settings.password` level for SS2022 multi-user; clients connect with
  * `base64url(method:ServerPSK:UserPSK)` joined.
  */
-export interface ShadowsocksInboundCfg {
+export interface ShadowsocksInboundCfg extends BridgeableInboundCfg {
   method:
     | '2022-blake3-aes-128-gcm'
     | '2022-blake3-aes-256-gcm'
@@ -481,7 +502,7 @@ export interface MieruInboundCfg {
  * sender. TLS is the node's self-signed pair for the alpha (client connects
  * with allow-insecure + this SNI). Per-user uuid+password live in credentials.
  */
-export interface TuicInboundCfg {
+export interface TuicInboundCfg extends BridgeableInboundCfg {
   serverName?: string;
   congestionControl?: 'bbr' | 'cubic' | 'new_reno';
 }
@@ -491,7 +512,7 @@ export interface TuicInboundCfg {
  * per-user password lives in credentials). `serverName` is the TLS SNI the
  * node's self-signed cert is issued for (client uses allow-insecure in alpha).
  */
-export interface AnytlsInboundCfg {
+export interface AnytlsInboundCfg extends BridgeableInboundCfg {
   serverName?: string;
 }
 
@@ -502,7 +523,7 @@ export interface AnytlsInboundCfg {
  * is the inner ss server key (auto-generated panel-side, valid base64). Per-user
  * auth is the shadowtls password (credentials). No share-link (sing-box/clash).
  */
-export interface ShadowtlsInboundCfg {
+export interface ShadowtlsInboundCfg extends BridgeableInboundCfg {
   handshake?: string;
   ssMethod?: string;
   ssPassword?: string;

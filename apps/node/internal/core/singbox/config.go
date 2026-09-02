@@ -18,7 +18,19 @@ type sbConfig struct {
 	Log          sbLog           `json:"log"`
 	Inbounds     []sbInbound     `json:"inbounds"`
 	Outbounds    []sbOutbound    `json:"outbounds"`
+	Route        *sbRoute        `json:"route,omitempty"`
 	Experimental *sbExperimental `json:"experimental,omitempty"`
+}
+
+// sbRoute is the smallest possible sing-box routing section: nothing but the
+// default outbound. Bridge A (2026-09-02) does NOT give sing-box a routing
+// subsystem - that is variant A1, the expensive one this deliberately avoids.
+// It only names which of the two outbounds below is the default, because
+// "the first outbound wins" is an implementation detail across sing-box
+// versions and the cost of being wrong is that every bridged flow silently
+// egresses from this node instead of entering the cascade.
+type sbRoute struct {
+	Final string `json:"final"`
 }
 
 type sbLog struct {
@@ -96,6 +108,72 @@ type sbHandshake struct {
 type sbOutbound struct {
 	Type string `json:"type"`
 	Tag  string `json:"tag"`
+
+	// socks-only (the bridge outbound): where to dial. Omitted for `direct`.
+	Server     string `json:"server,omitempty"`
+	ServerPort int    `json:"server_port,omitempty"`
+	Version    string `json:"version,omitempty"`
+}
+
+// bridgeOutboundTag is the tag of the outbound that hands this core's traffic
+// to the node's local xray. Referenced from sbRoute.Final.
+const bridgeOutboundTag = "bridge-out"
+
+// directOutboundTag is the tag of the plain egress outbound, and the default
+// when no bridge is configured.
+const directOutboundTag = "direct"
+
+// buildOutbounds is the ONE place a sing-box config decides where its traffic
+// goes, and every renderer below calls it.
+//
+// Bridge A (2026-09-02). sing-box renders no routing rules at all, so a TUIC /
+// AnyTLS / Hysteria2 / ShadowTLS / Shadowsocks client on this node egresses
+// straight out of it: no cascade, no split, no egress policy - the panel
+// compiles all three into xray rules and this core never sees them. The bridge
+// hands the flow to the local xray over loopback socks instead, and everything
+// the panel already knows how to compile applies to it unchanged.
+//
+// `direct` is kept in the list even when bridging. It is not reachable through
+// `route.final`, but sing-box requires at least one non-socks outbound for its
+// own auxiliary dials, and keeping the tag stable means a config that loses its
+// bridge (panel clears the port) renders byte-identically to a pre-bridge one.
+//
+// This is a helper rather than a literal in each renderer because there are SIX
+// of them and the repo has been bitten by exactly this shape before: a rule
+// that must hold "for every renderer" written inside each renderer, where five
+// of them got it and the sixth did not (expandCascadeExits, 2026-09-01). The
+// mirror test in config_bridge_test.go pins the list of callers.
+func buildOutbounds(inbound InboundConfig) []sbOutbound {
+	direct := sbOutbound{Type: "direct", Tag: directOutboundTag}
+	if inbound.BridgeSocksPort <= 0 {
+		return []sbOutbound{direct}
+	}
+	return []sbOutbound{
+		{
+			Type: "socks",
+			Tag:  bridgeOutboundTag,
+			// Loopback only. The xray side binds 127.0.0.1 too, so the bridge
+			// port is never reachable from outside the node and needs no
+			// firewall rule of its own.
+			Server:     "127.0.0.1",
+			ServerPort: inbound.BridgeSocksPort,
+			// SOCKS5, spelled out: the default differs between sing-box
+			// versions and version 4 has no UDP ASSOCIATE, which would drop
+			// every UDP flow (QUIC, DNS) of a TUIC client without an error.
+			Version: "5",
+		},
+		direct,
+	}
+}
+
+// buildRoute returns the route section that names the bridge as the default
+// outbound, or nil when there is no bridge (keeping the config byte-identical
+// to a pre-bridge one).
+func buildRoute(inbound InboundConfig) *sbRoute {
+	if inbound.BridgeSocksPort <= 0 {
+		return nil
+	}
+	return &sbRoute{Final: bridgeOutboundTag}
 }
 
 // experimental.v2ray_api drives per-user traffic stats. sing-box implements the
@@ -151,6 +229,14 @@ type InboundConfig struct {
 	// The inner shadowsocks reuses Method + ServerPSK above as a single
 	// server-wide key (no per-user uPSK - per-user auth is the shadowtls layer).
 	ShadowtlsHandshake string // camouflage "host[:port]" the shadowtls inbound fronts
+
+	// ───── bridge A (all sing-box protocols) ─────
+	// Loopback port of the node's local xray socks inbound. 0 = no bridge, the
+	// core egresses directly as it always has. Set by the panel only when it
+	// has somewhere for the traffic to go (see inbounds.queue.ts), so a node
+	// whose xray is absent or carries no routing keeps the old behaviour rather
+	// than dialling a port nobody listens on.
+	BridgeSocksPort int
 }
 
 // userEntry is the per-user TUIC credential the adapter tracks in memory,
@@ -205,7 +291,8 @@ func renderConfig(certPath, keyPath, statsListen string, inbound InboundConfig, 
 				KeyPath:         keyPath,
 			},
 		}},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
+		Outbounds: buildOutbounds(inbound),
+		Route:     buildRoute(inbound),
 	}
 
 	if statsListen != "" {
@@ -254,7 +341,8 @@ func renderAnytlsConfig(certPath, keyPath, statsListen string, inbound InboundCo
 				KeyPath:         keyPath,
 			},
 		}},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
+		Outbounds: buildOutbounds(inbound),
+		Route:     buildRoute(inbound),
 	}
 
 	if statsListen != "" {
@@ -330,7 +418,8 @@ func renderXrayFamilyConfig(statsListen string, inbound InboundConfig, users map
 			Users:      sbUsers,
 			TLS:        &tls,
 		}},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
+		Outbounds: buildOutbounds(inbound),
+		Route:     buildRoute(inbound),
 	}
 
 	if statsListen != "" {
@@ -430,7 +519,8 @@ func renderHysteria2Config(certPath, keyPath, statsListen string, inbound Inboun
 	cfg := sbConfig{
 		Log:       sbLog{Level: "warn", Timestamp: true},
 		Inbounds:  []sbInbound{in},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
+		Outbounds: buildOutbounds(inbound),
+		Route:     buildRoute(inbound),
 	}
 
 	if statsListen != "" {
@@ -491,7 +581,10 @@ func renderShadowtlsConfig(statsListen string, inbound InboundConfig, users map[
 	doc := map[string]any{
 		"log":       map[string]any{"level": "warn", "timestamp": true},
 		"inbounds":  inbounds,
-		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
+		"outbounds": outboundsAsAny(buildOutbounds(inbound)),
+	}
+	if r := buildRoute(inbound); r != nil {
+		doc["route"] = map[string]any{"final": r.Final}
 	}
 	if statsListen != "" {
 		doc["experimental"] = map[string]any{
@@ -531,7 +624,8 @@ func renderShadowsocksConfig(statsListen string, inbound InboundConfig, users ma
 			Password:   inbound.ServerPSK,
 			Users:      sbUsers,
 		}},
-		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
+		Outbounds: buildOutbounds(inbound),
+		Route:     buildRoute(inbound),
 	}
 
 	if statsListen != "" {
@@ -544,4 +638,29 @@ func renderShadowsocksConfig(statsListen string, inbound InboundConfig, users ma
 	}
 
 	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// outboundsAsAny adapts buildOutbounds for renderShadowtlsConfig, the one
+// renderer that builds its document as maps rather than structs (its inbound
+// pair has no equivalent in sbInbound). Round-tripping through JSON keeps the
+// `omitempty` behaviour identical to the struct path, so `direct` renders as
+// the same two keys in both.
+func outboundsAsAny(obs []sbOutbound) []any {
+	out := make([]any, 0, len(obs))
+	for _, ob := range obs {
+		blob, err := json.Marshal(ob)
+		if err != nil {
+			// sbOutbound is plain scalars; Marshal cannot fail. Fall back to
+			// the minimal form rather than dropping the outbound entirely.
+			out = append(out, map[string]any{"type": ob.Type, "tag": ob.Tag})
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal(blob, &m); err != nil {
+			out = append(out, map[string]any{"type": ob.Type, "tag": ob.Tag})
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }

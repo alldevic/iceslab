@@ -19,6 +19,11 @@ export interface HardeningDto {
   egressPolicy?: unknown;
   /** B2a: the zapret2 desync channel config. */
   zapret2?: unknown;
+  /** Bridge A: route this node's non-xray cores through its local xray. Unlike
+   *  the three above this IS a wizard toggle, so it is typed: the editor has to
+   *  read it to draw the switch in the right position, and an `unknown` here
+   *  would leave the switch off on a node that has it on. */
+  bridgeNonXrayInbounds?: boolean;
 }
 
 // Shape of the nodes.coreRestarts jsonb blob. Defined once in @iceslab/shared

@@ -24,6 +24,8 @@ import {
 } from './cascade.validation.js';
 import {
   autoRouteTag,
+  BRIDGE_SOCKS_PORT,
+  bridgeSocksPortFromInbounds,
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
   buildTopologyFragmentsForNode,
@@ -1840,9 +1842,17 @@ async function getTopologyFragmentsForNode(
   }
   const nodeRows = await prisma.node.findMany({
     where: { id: { in: [...nodeIds] } },
-    select: { id: true, address: true },
+    select: { id: true, address: true, hardening: true },
   });
   const hosts = new Map(nodeRows.map((n) => [n.id, n.address.split(':')[0]!]));
+
+  // Bridge A: opt-in, per node. Read here rather than passed in because the
+  // fragment builder is the only place that can honour it - the bridge inbound
+  // and the rule that steers it must be emitted together or not at all.
+  const mineHardening = nodeRows.find((n) => n.id === nodeId)?.hardening as {
+    bridgeNonXrayInbounds?: boolean;
+  } | null;
+  const wantsBridge = mineHardening?.bridgeNonXrayInbounds === true;
 
   const rows: TopologyLinkRow[] = [];
   for (const l of links) {
@@ -1883,8 +1893,23 @@ async function getTopologyFragmentsForNode(
     // profile whose rule is missing at the entry egresses from the entry
     // country instead of failing, which is the one outcome worth preventing.
     auto: cascadeRow?.autoProfile ?? false,
+    bridgeSocksPort: wantsBridge ? BRIDGE_SOCKS_PORT : undefined,
   });
   if (!mine) return null;
+
+  // Asked for a bridge and did not get one: the only reason the builder refuses
+  // is that this entry has more than one direction, and a bridged client cannot
+  // say which it wants (it picks no subscription line). Refusing leaves the
+  // protocol exactly as it is today - direct egress from its own node - rather
+  // than choosing a country on the buyer's behalf. Say so, because from the
+  // panel the flag looks applied.
+  if (wantsBridge && bridgeSocksPortFromInbounds(mine.inbounds) === null) {
+    getLogger().info(
+      `[cascade] node ${nodeId} has bridgeNonXrayInbounds set but no bridge was emitted; ` +
+        `its non-xray cores keep egressing directly. A bridge needs this node to be the ` +
+        `cascade ENTRY and the cascade to have exactly one direction (it has ${directions.length}).`,
+    );
+  }
 
   // Assets for THIS node: the files its own policy still references after
   // reconciliation. Absent when it has no split, so the fragment stays

@@ -12,6 +12,8 @@ import { inboundSyncJobs } from '../../lib/metrics.js';
 import { allocatePeer, preallocatePeers } from '../amneziawg/amneziawg.service.js';
 import { ensureDevicesForUsers, resolveWgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import { getCascadeFragmentsForNode } from '../cascades/cascade.service.js';
+import { bridgeSocksPortFromInbounds } from '../cascades/cascade.config.js';
+import { nativeEngineForProtocol } from '../profiles/node-adapter-keys.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/credentials.js';
 import { applyEgressForNode } from '../egress/egress.push.js';
 import { getLogger } from '../../lib/logger.js';
@@ -361,6 +363,45 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
     } else {
       getLogger().info(
         `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound the xray engine serves; cascade not applied`,
+      );
+    }
+
+    // Bridge A (2026-09-02) - the other half of the cascade bridge.
+    //
+    // The fragments above may carry a loopback socks inbound plus the rule that
+    // steers it (buildTopologyFragmentsForNode pass 3b). That is the RECEIVING
+    // half; this is the sending one: every core on this node that renders no
+    // routing of its own is told to hand its traffic to that port instead of
+    // egressing itself. Without it the receiving inbound sits there with
+    // nothing dialling it, and tuic/anytls/shadowtls/hysteria2 buyers keep
+    // leaving from the entry node - which is the whole defect being fixed.
+    //
+    // The port is read back off the emitted fragments rather than recomputed.
+    // Two computations of "which port" drift, and the drift is invisible: the
+    // panel reports `ok`, both cores run, and the channel is simply dead.
+    //
+    // Only when the fragments actually carry it. A node that asked for a bridge
+    // and did not get one (several directions, so no unambiguous way out) must
+    // NOT be told to dial: it would hand every flow to a port nobody listens
+    // on. cascade.service.ts logs that case.
+    const bridgePort = bridgeSocksPortFromInbounds(
+      cascade.inbounds as Record<string, unknown>[] | undefined,
+    );
+    if (bridgePort !== null) {
+      const bridged = inbounds.filter(
+        (i) => nativeEngineForProtocol(i.protocol) === 'singbox' || i.engine === 'singbox',
+      );
+      for (const ib of bridged) {
+        ib.config = {
+          ...(ib.config as Record<string, unknown>),
+          bridgeSocksPort: bridgePort,
+        } as InboundDto['config'];
+      }
+      getLogger().info(
+        `[inbound-sync] node ${nodeId} bridges ${bridged.length} non-xray inbound(s) into its local xray on 127.0.0.1:${bridgePort}` +
+          (bridged.length === 0
+            ? ' - none present, the bridge inbound is idle until one is bound here'
+            : ''),
       );
     }
   }

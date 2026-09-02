@@ -453,6 +453,73 @@ export interface HopConfig {
 
 const LINK_IN_TAG = 'cascade-link-in';
 const LINK_OUT_TAG = 'cascade-link-out';
+
+/** Bridge A: the inbound tag the node's non-xray cores hand their traffic to. */
+export const BRIDGE_IN_TAG = 'cascade-bridge-in';
+
+/**
+ * Loopback port the bridge inbound listens on. Fixed rather than allocated:
+ * it is bound to 127.0.0.1, so it collides with nothing outside this node, and
+ * one port serves every non-xray core on the machine (a socks inbound is not
+ * per-client). Chosen in the same band as the inter-hop link port (24000) and
+ * well clear of the xray stats API (8080).
+ */
+export const BRIDGE_SOCKS_PORT = 24100;
+
+/**
+ * Bridge A (2026-09-02) - the loopback inbound that lets a NON-xray core join
+ * the cascade.
+ *
+ * The problem it solves: routing, cascade and egress policy are all compiled
+ * into xray rules, and only xray executes them. A TUIC (or AnyTLS, ShadowTLS,
+ * Hysteria2) client is served by sing-box, which renders no routing section at
+ * all - so its traffic leaves the ENTRY node directly. The buyer connected to
+ * a Russian address expecting to come out abroad and comes out in Russia, and
+ * nothing says so.
+ *
+ * The fix is not to teach sing-box routing (that is variant A1, and it buys a
+ * second rule engine to keep in sync). It is to let sing-box hand the flow to
+ * the xray that is ALREADY running on this node, over loopback. Everything the
+ * panel compiles then applies to that flow unchanged: the geo split above, the
+ * direction rules below, WARP, zapret2, the lot.
+ *
+ * It is emitted as a cascade fragment rather than as something the node-agent
+ * builds because the panel already owns the exact xray shapes here (link-in is
+ * the same kind of object), and because it must appear and disappear together
+ * with the rule that steers it - an inbound with no rule is the silent-egress
+ * failure this exists to prevent.
+ *
+ * `sniffing` is not decoration. Loopback socks carries a destination, but the
+ * geo split matches on domain and geosite: without sniffing, a flow handed over
+ * as an IP would miss every domain rule and take the wrong way out. destOverride
+ * mirrors the user inbounds the node-agent renders.
+ */
+export function bridgeSocksPortFromInbounds(
+  inbounds: Record<string, unknown>[] | undefined,
+): number | null {
+  // Read back off the fragments that were actually emitted rather than
+  // recomputing the decision. The panel needs this number a second time - it
+  // has to tell the sing-box core which port to dial - and two computations of
+  // one fact drift: a node whose sing-box dials a port its xray does not listen
+  // on loses that channel entirely, with `ok` reported on both sides.
+  for (const ib of inbounds ?? []) {
+    if (ib.tag === BRIDGE_IN_TAG && typeof ib.port === 'number') return ib.port;
+  }
+  return null;
+}
+
+function buildBridgeInbound(port: number): Record<string, unknown> {
+  return {
+    tag: BRIDGE_IN_TAG,
+    // Loopback ONLY. The bridge is an internal hand-off; bound to 0.0.0.0 it
+    // would be an open, unauthenticated socks proxy on a public address.
+    listen: '127.0.0.1',
+    port,
+    protocol: 'socks',
+    settings: { auth: 'noauth', udp: true },
+    sniffing: { enabled: true, destOverride: ['http', 'tls', 'quic'] },
+  };
+}
 const DIRECT_TAG = 'direct';
 
 // Drop QUIC (HTTP/3 = UDP/443) at the cascade entry so clients fall back to
@@ -647,6 +714,12 @@ export interface TopologyInput {
    *  choice to a latency balancer spanning every direction. Off unless the
    *  operator turned it on for this cascade. */
   auto?: boolean;
+  /** Bridge A - loopback socks port on which THIS node's xray accepts traffic
+   *  from its non-xray cores. Set only for a node that has such cores AND has
+   *  been opted in; 0/undefined renders byte-identically to a pre-bridge node.
+   *  See buildBridgeInbound for why this is a cascade fragment rather than a
+   *  thing the node-agent synthesises. */
+  bridgeSocksPort?: number;
 }
 
 /** Per-direction outbound tag. Unlike the old index-based `-0/-1` suffix this
@@ -946,6 +1019,35 @@ export function buildTopologyFragmentsForNode(
       ...directionCondition(directionTag, nodeId, input, isEntry),
       ...target,
     });
+  }
+
+  // ── Pass 3b (bridge A): the same, for traffic that arrived from one of this
+  // node's NON-xray cores.
+  //
+  // Every rule above steers by something the flow carries: `vlessRoute` at an
+  // entry (the tag inside the client's UUID), the arrival credential at a
+  // transit. Bridged traffic carries NEITHER - a TUIC client has no VLESS UUID,
+  // and it reaches xray over plain loopback socks. So none of those rules can
+  // ever fire for it, and it would run to the terminal refusal at the bottom of
+  // this builder and be blocked. That failure is at least loud; the one this
+  // whole pass exists to fix is the quiet one it replaces, where the flow never
+  // reaches xray at all and sing-box egresses it from the ENTRY country while
+  // the buyer's subscription says otherwise.
+  //
+  // Which direction it gets cannot come from the client: a wg or TUIC client
+  // picks no subscription line and has no way to express a choice. With ONE
+  // direction there is nothing to choose and this is unambiguous. With several,
+  // this deliberately emits NOTHING - no inbound, no rule - which leaves the
+  // protocol exactly as it is today (direct egress from its own node) instead
+  // of silently picking a country for the buyer. The caller reports that.
+  //
+  // Placed after the geo split so ru-split still wins: a bridged client's
+  // Russian traffic leaves directly from the entry, everything else enters the
+  // link. That ordering is the whole product behaviour for this channel.
+  if (isEntry && input.bridgeSocksPort && input.bridgeSocksPort > 0 && dirTargets.size === 1) {
+    const [, target] = [...dirTargets][0]!;
+    inbounds.push(buildBridgeInbound(input.bridgeSocksPort));
+    routingRules.push({ type: 'field', inboundTag: [BRIDGE_IN_TAG], ...target });
   }
 
   /**

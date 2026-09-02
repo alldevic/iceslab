@@ -426,6 +426,18 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		newInbound = wire.toInboundConfig(port)
 	}
 
+	// Bridge A (2026-09-02). The bridge port is protocol-INDEPENDENT: the panel
+	// sends it on whichever inbound it wants routed through the node's local
+	// xray, and every protocol this adapter serves is bridged the same way. So
+	// it is parsed once, here, rather than repeated in each of the five
+	// per-protocol wire structs - which is the shape that let one renderer out
+	// of six miss a rule that was supposed to hold for all of them.
+	var bridge bridgeWire
+	if err := json.Unmarshal(rawCfg, &bridge); err != nil {
+		return fmt.Errorf("singbox ApplyInbound: parse bridge cfg: %w", err)
+	}
+	newInbound.BridgeSocksPort = bridge.BridgeSocksPort
+
 	a.mu.Lock()
 	if a.inbound == newInbound {
 		a.mu.Unlock()
@@ -561,6 +573,14 @@ func (a *Adapter) regenerateAndRestart() error {
 //
 // The panel pushes a small TUIC config blob via /applyInbounds. Port comes from
 // the outer InboundDto.Port (first-class since slice 50); the rest is here.
+
+// bridgeWire is the protocol-independent half of every sing-box inbound config:
+// where this core hands its traffic instead of egressing itself. Decoded from
+// the same blob as the per-protocol wire above, which ignores unknown keys, so
+// an older panel that sends no bridge leaves it 0 and nothing changes.
+type bridgeWire struct {
+	BridgeSocksPort int `json:"bridgeSocksPort,omitempty"`
+}
 
 type inboundCfgWire struct {
 	ServerName        string `json:"serverName,omitempty"`

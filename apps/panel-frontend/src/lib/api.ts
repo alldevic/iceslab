@@ -596,6 +596,11 @@ export interface NodeHardening {
   egressPolicy?: NodeEgressRule[];
   /** B2a: the zapret2 desync channel. */
   zapret2?: NodeZapret2Config;
+  /** Bridge A: hand this node's non-xray cores (everything sing-box serves) to
+   *  its local xray over loopback, so cascade, split-routing and egress policy
+   *  apply to them. Off/absent = those cores egress straight out of the node,
+   *  which is what they have always done. */
+  bridgeNonXrayInbounds?: boolean;
 }
 
 /**

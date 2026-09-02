@@ -36,10 +36,25 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
-/** Member names of a TypeScript interface, in declaration order. */
+/** Member names of a TypeScript interface, in declaration order, INCLUDING the
+ *  ones it inherits.
+ *
+ *  Following `extends` is not tidiness. The panel pushes an inherited key just
+ *  like a declared one, so a mirror that stopped at the interface's own body
+ *  would go on passing while the key it no longer sees is silently dropped by
+ *  the agent - the precise failure this file exists to catch, arrived at by a
+ *  refactor rather than by a new field. Caught 2026-09-02, when
+ *  `XrayInboundCfg extends BridgeableInboundCfg` made the old parser throw. */
 function interfaceKeys(src: string, name: string): string[] {
-  const start = src.indexOf(`export interface ${name} {`);
-  if (start < 0) throw new Error(`interface ${name} not found`);
+  const decl = new RegExp(`export interface ${name}(?: extends ([\\w, ]+))? \\{`);
+  const m = decl.exec(src);
+  if (!m) throw new Error(`interface ${name} not found`);
+  const inherited = (m[1] ?? '')
+    .split(',')
+    .map((b) => b.trim())
+    .filter(Boolean)
+    .flatMap((b) => interfaceKeys(src, b));
+  const start = m.index;
   const open = src.indexOf('{', start);
   let depth = 0;
   let end = open;
@@ -51,7 +66,8 @@ function interfaceKeys(src: string, name: string): string[] {
     }
   }
   const body = stripComments(src.slice(open + 1, end));
-  return [...body.matchAll(/^\s*([A-Za-z_$][\w$]*)\??\s*:/gm)].map((m) => m[1]);
+  const own = [...body.matchAll(/^\s*([A-Za-z_$][\w$]*)\??\s*:/gm)].map((k) => k[1]);
+  return [...inherited, ...own];
 }
 
 /** `json:"name"` tags of a Go struct, in declaration order. */
@@ -100,10 +116,27 @@ const EXPLAINED_ABSENCES: Record<string, string> = {
   grpcMultiMode: "GATED: grpc only; toInboundConfig refuses any network but 'raw'.",
 };
 
+/**
+ * Every key the sing-box adapter actually decodes for an xray-family inbound.
+ *
+ * Two structs, because the adapter decodes the blob twice: `xrayFamilyWire` for
+ * the protocol half, and `bridgeWire` for the half that is the same on every
+ * protocol it serves (where this core hands its traffic instead of egressing
+ * itself). Reading only the first would report the bridge key as dropped when
+ * the agent does read it - and, worse, would let a later per-protocol struct
+ * stop reading it without anyone noticing.
+ */
+function agentReadKeys(): Set<string> {
+  return new Set([
+    ...goStructJsonTags(singboxSrc, 'xrayFamilyWire'),
+    ...goStructJsonTags(singboxSrc, 'bridgeWire'),
+  ]);
+}
+
 describe('sing-box engine coverage of the xray wire config', () => {
   it('reads or explains every key the panel can push', () => {
     const panelKeys = interfaceKeys(transportSrc, 'XrayInboundCfg');
-    const agentKeys = new Set(goStructJsonTags(singboxSrc, 'xrayFamilyWire'));
+    const agentKeys = agentReadKeys();
 
     // Guard the mirror itself: a parse that quietly returns nothing would make
     // this test pass by knowing nothing.
@@ -125,7 +158,7 @@ describe('sing-box engine coverage of the xray wire config', () => {
 
   it('keeps no stale entry in the explanation list', () => {
     const panelKeys = new Set(interfaceKeys(transportSrc, 'XrayInboundCfg'));
-    const agentKeys = new Set(goStructJsonTags(singboxSrc, 'xrayFamilyWire'));
+    const agentKeys = agentReadKeys();
     const stale = Object.keys(EXPLAINED_ABSENCES).filter(
       (k) => !panelKeys.has(k) || agentKeys.has(k),
     );
