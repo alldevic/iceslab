@@ -60,6 +60,23 @@ function parse(out: string) {
   return JSON.parse(out);
 }
 
+
+// Same requirement as the clash side: the fallback resolver of every split
+// preset was a bare `8.8.8.8` - not even DoH, so the name and the answer both
+// travelled in clear to Google. Happ and v2rayNG buyers get this document.
+describe('split DNS names no Google resolver', () => {
+  it.each(['ru-split', 'cn-split'] as const)('%s', (preset) => {
+    const out = buildXrayJson([xrayEp], { routingPreset: preset });
+    const dns = JSON.stringify(JSON.parse(out).dns ?? {});
+    expect(dns).not.toContain('8.8.8.8');
+    expect(dns).not.toContain('8.8.4.4');
+    expect(dns).not.toContain('dns.google');
+    // Control: an empty dns block would satisfy the assertions above, so each
+    // preset must still name its own regional resolver.
+    expect(dns).toContain(preset === 'ru-split' ? '77.88.8.8' : '223.5.5.5');
+  });
+});
+
 describe('buildXrayJson', () => {
   it('produces valid JSON with trailing newline', () => {
     const out = buildXrayJson([xrayEp]);
@@ -203,7 +220,7 @@ describe('buildXrayJson', () => {
         skipFallback: true,
       });
       // General resolver second: plain IP (no DoH bootstrap problem).
-      expect(cfg.dns.servers[1]).toBe('8.8.8.8');
+      expect(cfg.dns.servers[1]).toBe('1.1.1.1');
     });
 
     it('ru-split composes with bundle=balancer (preset rules first, balancer catch-all last)', () => {
@@ -252,7 +269,7 @@ describe('buildXrayJson', () => {
         domains: ['geosite:cn'],
         skipFallback: true,
       });
-      expect(cfg.dns.servers[1]).toBe('8.8.8.8');
+      expect(cfg.dns.servers[1]).toBe('1.1.1.1');
     });
 
     it('does not leak RU categories or the Yandex resolver', () => {

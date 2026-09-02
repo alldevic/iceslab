@@ -266,6 +266,29 @@ describe('buildClashYaml', () => {
   // ───── Routing Templates (R1c) ─────
 
   describe('routingPreset', () => {
+    // The buyer asked for Cloudflare, and every resolver we hand out is a
+    // party that sees which names this person looks up. Google was in three
+    // places at once: the plain `8.8.8.8` pair of the proxy-all preset and the
+    // `https://dns.google/dns-query` second entry of both presets' `nameserver`
+    // list. Measured on the live subscription 2026-09-03.
+    //
+    // The cost of the answer is real and belongs next to it: with Google gone
+    // there is one operator behind every resolver we name, so a Cloudflare
+    // outage or a block takes the whole list rather than half of it.
+    it.each(['proxy-all', 'ru-split', 'cn-split'] as const)(
+      'names no Google resolver in the %s preset',
+      (preset) => {
+        const out = buildClashYaml([xrayEp], { routingPreset: preset });
+        expect(out).not.toContain('8.8.8.8');
+        expect(out).not.toContain('8.8.4.4');
+        expect(out).not.toContain('dns.google');
+        // The control: this asserts an ABSENCE, so it would pass just as well
+        // on a preset that emits no DNS at all. Presets that carry a DNS block
+        // must still carry one.
+        if (preset !== 'proxy-all') expect(out).toContain('nameserver:');
+      },
+    );
+
     it('proxy-all carries no routing rules and no geo databases', () => {
       expect(buildClashYaml([xrayEp], { routingPreset: 'proxy-all' })).toBe(
         buildClashYaml([xrayEp]),

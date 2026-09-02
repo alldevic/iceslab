@@ -119,9 +119,9 @@ const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
 /**
  * Split DNS (R2). RU domains resolve via Yandex DNS (77.88.8.8) so RU CDNs
  * return geo-correct answers; `skipFallback` keeps those queries off the
- * general resolver. Everything else asks 8.8.8.8. Xray's built-in DNS obeys
+ * general resolver. Everything else asks 1.1.1.1. Xray's built-in DNS obeys
  * the routing table above, so the 77.88.8.8 query itself rides direct
- * (matches geoip:ru) while 8.8.8.8 rides the tunnel - no plaintext foreign
+ * (matches geoip:ru) while 1.1.1.1 rides the tunnel - no plaintext foreign
  * DNS on the RU wire. Plain-IP servers dodge the DoH bootstrap problem
  * (resolving the resolver's own hostname).
  */
@@ -132,7 +132,7 @@ const RU_SPLIT_DNS: Record<string, unknown> = {
       domains: ['geosite:category-ru', 'geosite:category-gov-ru'],
       skipFallback: true,
     },
-    '8.8.8.8',
+    '1.1.1.1',
   ],
 };
 
@@ -151,9 +151,9 @@ const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
 /**
  * Split DNS (H2). China domains resolve via AliDNS (223.5.5.5) so CN CDNs
  * return geo-correct answers; `skipFallback` keeps those queries off the
- * general resolver. Everything else asks 8.8.8.8. Xray's built-in DNS obeys
+ * general resolver. Everything else asks 1.1.1.1. Xray's built-in DNS obeys
  * the routing table above, so the 223.5.5.5 query itself rides direct
- * (matches geoip:cn) while 8.8.8.8 rides the tunnel - no plaintext foreign
+ * (matches geoip:cn) while 1.1.1.1 rides the tunnel - no plaintext foreign
  * DNS on the CN wire. Plain-IP server dodges the DoH bootstrap problem (the
  * same rationale as the Yandex IP in RU_SPLIT_DNS).
  */
@@ -164,7 +164,7 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
       domains: ['geosite:cn'],
       skipFallback: true,
     },
-    '8.8.8.8',
+    '1.1.1.1',
   ],
 };
 
