@@ -984,7 +984,9 @@ function tryFoldPositions(
  * what makes the switchover boring instead of a big-bang rewrite.
  *
  * Tag preservation is the whole point of the model, so it is spelled out here:
- *   - a direction the client identified by `id` keeps its tag;
+ *   - a direction the client identified by `id` keeps its tag AND its id: the
+ *     row is updated in place, because the id is what the next save will use to
+ *     name it, and a re-minted id demotes that save to the pool guess below;
  *   - one the client did not identify, but whose node pool matches a stored
  *     direction, is treated as that same direction (the panel does not send ids
  *     yet; without this fallback every save would burn new tags and silently
@@ -1034,9 +1036,13 @@ async function writeTopologyV4(
     }
     if (match && unclaimed.has(match.id)) {
       unclaimed.delete(match.id);
-      return { ...d, tag: match.tag };
+      // Carry the stored ROW, not only its tag. The row id is what the editor
+      // sends back to name this direction on the next save, so a save that
+      // re-mints it leaves the client holding an id that identifies nothing and
+      // silently demotes the next edit to the pool fallback below.
+      return { ...d, tag: match.tag, storedId: match.id };
     }
-    return { ...d, tag: nextTag++ };
+    return { ...d, tag: nextTag++, storedId: undefined as string | undefined };
   });
 
   // A policy may force traffic through a named direction. Tags are resolved
@@ -1086,7 +1092,16 @@ async function writeTopologyV4(
 
   await tx.cascadeLink.deleteMany({ where: { cascadeId } });
   await tx.cascadePosition.deleteMany({ where: { cascadeId } });
-  await tx.cascadeDirection.deleteMany({ where: { cascadeId } });
+  // Directions are NOT dropped and rebuilt with the rest. Everything else here
+  // is plumbing whose identity nobody outside this function holds; a direction's
+  // id is the handle the panel and any deploy script use to say WHICH way out
+  // they mean, and re-minting it on every save made that handle a lie the moment
+  // it was read. What survives is only what was matched above: a stored row the
+  // payload no longer names still goes, and its tag goes with it.
+  const claimed = new Set(resolved.flatMap((d) => (d.storedId ? [d.storedId] : [])));
+  await tx.cascadeDirection.deleteMany({
+    where: { cascadeId, id: { notIn: [...claimed] } },
+  });
 
   for (const p of positions) {
     await tx.cascadePosition.create({
@@ -1109,6 +1124,21 @@ async function writeTopologyV4(
     });
   }
   for (const d of resolved) {
+    if (d.storedId) {
+      // The pool is replaced rather than diffed: membership is the whole content
+      // of the join row, so a delete-and-create of the members is the same state
+      // and one round trip fewer than working out which ones moved. The
+      // DIRECTION row is what had to survive, and it does.
+      await tx.cascadeDirectionNode.deleteMany({ where: { directionId: d.storedId } });
+      await tx.cascadeDirection.update({
+        where: { id: d.storedId },
+        data: {
+          countryCode: d.countryCode ?? null,
+          nodes: { create: d.nodeIds.map((nodeId) => ({ nodeId })) },
+        },
+      });
+      continue;
+    }
     await tx.cascadeDirection.create({
       data: {
         cascadeId,
