@@ -306,18 +306,43 @@ export function collapseCascadeLines(
   const keyOf = (e: SubscriptionEndpoint): string =>
     `${e.nodeName}|${e.host}|${e.port}|${e.protocol === 'xray' ? (e.network ?? '') : ''}`;
 
-  // cascadeId -> entry key -> endpoint
+  // Entries are interchangeable only when they share a TRANSPORT, so the
+  // dealing below happens within one, not across all of them.
+  //
+  // The paragraph above says duplicates are indistinguishable "when both
+  // entries share a transport", and that condition turned out to be doing real
+  // work. Two entries on different transports are not two ways of saying the
+  // same thing: a client that cannot express one of them gets nothing from the
+  // line dealt to it. sing-box has no XHTTP at all (refused upstream), so a
+  // sing-box subscriber dealt the xhttp entry of a cascade received a
+  // subscription with the cascade simply absent — measured 2026-09-02 on a
+  // two-entry entry pool, where Hiddify saw one direct server and no cascade.
+  //
+  // Grouping by transport keeps every promise the collapse made: within a
+  // transport the lines are still dealt to one entry, still by rendezvous hash
+  // (stable per person), still spread by tag. What changes is that a transport
+  // cannot be dealt out of existence. Labels that now collide are separated
+  // downstream by disambiguateCascadeLabels, which already suffixes with the
+  // transport name.
+  const transportOf = (e: SubscriptionEndpoint): string =>
+    e.protocol === 'xray' ? (e.network ?? '') : '';
+
+  // "cascadeId\u0000transport" -> entry key -> endpoint
   const entriesByCascade = new Map<string, Map<string, SubscriptionEndpoint>>();
+  const cascadeIdOfGroup = new Map<string, string>();
   for (const e of endpoints) {
     for (const x of e.cascadeExits ?? []) {
       if (!x.cascadeId) continue;
-      const perCascade = entriesByCascade.get(x.cascadeId) ?? new Map<string, SubscriptionEndpoint>();
+      const group = `${x.cascadeId}\u0000${transportOf(e)}`;
+      cascadeIdOfGroup.set(group, x.cascadeId);
+      const perCascade = entriesByCascade.get(group) ?? new Map<string, SubscriptionEndpoint>();
       perCascade.set(keyOf(e), e);
-      entriesByCascade.set(x.cascadeId, perCascade);
+      entriesByCascade.set(group, perCascade);
     }
   }
 
-  for (const [cascadeId, perCascade] of entriesByCascade) {
+  for (const [group, perCascade] of entriesByCascade) {
+    const cascadeId = cascadeIdOfGroup.get(group)!;
     if (perCascade.size < 2) continue;
     const order = rendezvousOrder(
       [...perCascade.keys()].map((id) => ({ id, name: id, regionCode: null, maxUsers: null })),

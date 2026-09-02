@@ -158,3 +158,51 @@ describe('a pooled cascade in a list of share links', () => {
     expect(endpoints.every((e) => e.cascadeExits === undefined)).toBe(true);
   });
 });
+
+/**
+ * Two entries on DIFFERENT transports are not duplicates, and dealing a line to
+ * one of them takes the cascade away from every client that cannot speak it.
+ *
+ * sing-box has no XHTTP — refused upstream, "no plan" — so the panel correctly
+ * skips such a server rather than emit an outbound whose every handshake fails.
+ * With the whole direction dealt to the xhttp entry, that skip left a sing-box
+ * subscriber with no cascade at all: measured 2026-09-02, Hiddify received one
+ * direct server and nothing else, while an xray client on the same subscription
+ * got the cascade.
+ */
+describe('collapseCascadeLines across transports', () => {
+  const xhttp = entry({ host: 'ru-01.example', network: 'xhttp', cascadeExits: lines() } as never);
+  const raw = entry({ host: 'ru-01.example', port: 8443, network: 'raw', cascadeExits: lines() } as never);
+
+  // ONE direction and two entries is the shape that breaks: with several
+  // directions the tag-modulo spread already lands something on each entry, so
+  // a test with three lines passes against the old code too. This install has
+  // exactly one exit.
+  const oneLine = () => [{ label: '🇳🇱 ru → NL', tag: NL, cascadeId: CASCADE }];
+
+  it('keeps a line on each transport instead of dealing one out of existence', () => {
+    const endpoints = [xhttp, raw].map((e) => ({ ...e, cascadeExits: oneLine() }));
+    collapseCascadeLines(endpoints as never, 'user-1');
+
+    const byTransport = new Map<string, number>();
+    for (const e of endpoints) {
+      byTransport.set(e.network as string, (e.cascadeExits ?? []).length);
+    }
+    expect(byTransport.get('xhttp')).toBeGreaterThan(0);
+    expect(byTransport.get('raw')).toBeGreaterThan(0);
+  });
+
+  it('still collapses within one transport', () => {
+    // Same shape as the pair above, but both entries speak xhttp: these ARE
+    // duplicates a subscriber cannot judge, and the collapse must still deal
+    // each direction to exactly one of them.
+    const a = { ...entry({ host: 'ru-01.example', network: 'xhttp' } as never), cascadeExits: lines() };
+    const b = { ...entry({ host: 'ru-02.example', network: 'xhttp' } as never), cascadeExits: lines() };
+    const endpoints = [a, b];
+    collapseCascadeLines(endpoints as never, 'user-1');
+
+    const total = endpoints.reduce((n, e) => n + (e.cascadeExits ?? []).length, 0);
+    expect(total).toBe(lines().length);
+    expect(endpoints.length).toBe(2);
+  });
+});
