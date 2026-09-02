@@ -1,4 +1,4 @@
-import { countCascadeLinks } from '@iceslab/shared';
+import { countCascadeLinks, derivedCascadeLineLabel } from '@iceslab/shared';
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { countryFlag } from '../lib/countries';
@@ -162,6 +162,27 @@ export function CascadeEditPage() {
       qc.invalidateQueries({ queryKey: ['cascade-status', id] });
       // Re-seed from what came back, so the bar stops claiming unsaved changes.
       setDraft(toDraft(saved, nodeById, () => nextKey.current++));
+      // Переименование строки — не косметика, и узнать о нём больше неоткуда.
+      // Клиент, опознающий сервер по имени, на новое имя отвечает НОВЫМ
+      // сервером и оставляет старый рядом; старый больше никуда не ведёт, но
+      // трафик в него идёт. Замерено у живого покупателя 02.09: 1602
+      // соединения в терминальный отказ входа против 901 через каскад за
+      // пятнадцать минут — у одного человека, державшего обе строки.
+      //
+      // Без autoClose: это единственное место, где оператор может это узнать
+      // вовремя, и оно требует действия — сказать покупателям удалить старый
+      // сервер.
+      const renames = saved.lineRenames ?? [];
+      if (renames.length > 0) {
+        notifications.show({
+          color: 'yellow',
+          autoClose: false,
+          title: t('cascadeEdit.renamedTitle', { count: renames.length }),
+          message: `${renames
+            .map((r) => `${r.before} → ${r.after}`)
+            .join('; ')}. ${t('cascadeEdit.renamedBody')}`,
+        });
+      }
       watchCascadeProvisioning(id, t);
     },
     onError: (err) => {
@@ -621,6 +642,17 @@ export function CascadeEditPage() {
                   prospectiveTag={nextFreeTag(directions, i, draft.nextTag)}
                   countryCode={dir.countryCode}
                   onCountry={(code) => setDirection(i, { countryCode: code })}
+                  label={dir.label}
+                  // Плейсхолдер — это имя, которое покупатель видит СЕЙЧАС, а
+                  // не подсказка. Пустое поле значит «выводить», и показать
+                  // здесь надо ровно то, что выведется.
+                  labelPlaceholder={derivedCascadeLineLabel(
+                    name,
+                    dir.countryCode,
+                    nodeById.get(dir.nodeIds.find(Boolean) ?? '')?.name ?? '',
+                  )}
+                  labelHint={t('cascadeCreate.directionLabel')}
+                  onLabel={(v) => setDirection(i, { label: v })}
                   nodeIds={dir.nodeIds}
                   nodes={nodes}
                   claimedBy={claimedBy}
@@ -643,7 +675,7 @@ export function CascadeEditPage() {
                   patch({
                     directions: [
                       ...directions,
-                      { key: nextKey.current++, id: null, countryCode: '', nodeIds: [''], tag: null },
+                      { key: nextKey.current++, id: null, countryCode: '', label: '', nodeIds: [''], tag: null },
                     ],
                   })
                 }
@@ -989,6 +1021,11 @@ function toDraft(
         key: key(),
         id: d.id,
         countryCode: d.countryCode ?? '',
+        // The PINNED name, not the one the subscriber sees. An empty box means
+        // "derive it", and seeding it with the derived string would pin that
+        // string on the next save — freezing whatever the row said today,
+        // including the country it may later stop exiting through.
+        label: d.label ?? '',
         // A direction with no nodes is a legitimate state, not a broken row:
         // the tag exists and waits for a node to stand behind it.
         nodeIds: d.nodeIds.length ? [...d.nodeIds] : [''],
@@ -1028,10 +1065,11 @@ function toDraft(
           key: key(),
           id: null,
           countryCode: byId.get(h.nodeId)?.countryCode ?? '',
+          label: '',
           nodeIds: [h.nodeId],
           tag: i + 1,
         }))
-      : [{ key: key(), id: null, countryCode: '', nodeIds: [''], tag: null }],
+      : [{ key: key(), id: null, countryCode: '', label: '', nodeIds: [''], tag: null }],
     // The counter is kept per cascade and answered even for one still stored as
     // hops, so a direction added here gets the number the server will actually
     // issue rather than one derived from the rows on screen.

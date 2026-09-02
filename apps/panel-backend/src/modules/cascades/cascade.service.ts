@@ -6,7 +6,12 @@ import { GEO_SITE_ARTIFACT, GEO_IP_ARTIFACT } from '../geo/geo.orchestrator.js';
 import { coerceEgressPolicy, entryDomainStrategy, type EgressPolicy } from './cascade.geo.js';
 import { compileRules, nodeEgressTargets } from '../egress/egress.policy.js';
 import { zapret2SocksPortFor } from '../egress/egress.zapret2.js';
-import { cascadeAutoProfileLabel, cascadeProfileLabel } from '../../lib/country-flag.js';
+import {
+  cascadeAutoProfileLabel,
+  cascadeProfileLabel,
+  directionLineLabel,
+  normaliseLineLabel,
+} from '../../lib/country-flag.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/event-bus.js';
@@ -49,7 +54,7 @@ import type {
 } from './cascade.schemas.js';
 import { assertEgressCategories } from './cascade.geo.stock.js';
 import { getCategories } from '../geo/geo.categories.js';
-import { mapCascade, type CascadeDto } from './cascade.mapper.js';
+import { mapCascade, type CascadeDto, type CascadeLineRename } from './cascade.mapper.js';
 
 // The two custom .dat files the panel itself produces. A matcher pointing at
 // anything else cannot be satisfied by pushing a file, so it is stripped rather
@@ -459,7 +464,12 @@ const hopInclude = {
   },
   directions: {
     orderBy: { tag: 'asc' as const },
-    include: { nodes: { select: { nodeId: true } } },
+    // The exit node's NAME comes along because the line a subscriber reads
+    // falls back to it when no country is set, and the mapper reports that
+    // string (`lineLabel`) rather than making the panel derive it again.
+    include: {
+      nodes: { select: { nodeId: true, node: { select: { name: true, countryCode: true } } } },
+    },
   },
 };
 
@@ -736,8 +746,10 @@ export async function getRouteProfilesByEntryNode(
           // Squad ACL is keyed on exit NODES, so a direction survives if any of
           // its pool is allowed.
           if (allowed && !d.nodes.some((n) => allowed.has(n.node.id))) continue;
-          const first = d.nodes[0]!.node;
-          const label = cascadeProfileLabel(c.name, d.countryCode ?? first.countryCode, first.name);
+          // Через directionLineLabel, а не напрямую: закреплённое оператором имя
+          // должно доехать до клиента, иначе поле есть, а строка в приложении
+          // прежняя.
+          const label = directionLineLabel(c.name, d);
           profiles.push({ label, tag: routeTag(0, d.tag - 1), cascadeId: c.id });
           for (const p of policiesForDirection(d.nodes.map((n) => n.node.id))) {
             profiles.push({
@@ -1006,11 +1018,16 @@ async function writeTopologyV4(
     /** E - per-node geo split, keyed by node id (see CascadePositionSchema). */
     egressPolicies?: Record<string, EgressPolicy>;
   }[],
-  directions: { id?: string; nodeIds: string[]; countryCode?: string | null }[],
+  directions: {
+    id?: string;
+    nodeIds: string[];
+    countryCode?: string | null;
+    label?: string | null;
+  }[],
 ): Promise<void> {
   const stored = await tx.cascadeDirection.findMany({
     where: { cascadeId },
-    select: { id: true, tag: true, nodes: { select: { nodeId: true } } },
+    select: { id: true, tag: true, label: true, nodes: { select: { nodeId: true } } },
   });
   const storedById = new Map(stored.map((d) => [d.id, d]));
   const unclaimed = new Set(stored.map((d) => d.id));
@@ -1134,6 +1151,11 @@ async function writeTopologyV4(
         where: { id: d.storedId },
         data: {
           countryCode: d.countryCode ?? null,
+          // `undefined` in the payload LEAVES the pinned name alone; only an
+          // explicit null clears it. A caller that does not know about the
+          // field — the legacy fold, a deploy script written before it — must
+          // not silently un-pin a line and rename every buyer's server.
+          ...(d.label !== undefined ? { label: normaliseLineLabel(d.label) } : {}),
           nodes: { create: d.nodeIds.map((nodeId) => ({ nodeId })) },
         },
       });
@@ -1144,6 +1166,7 @@ async function writeTopologyV4(
         cascadeId,
         tag: d.tag,
         countryCode: d.countryCode ?? null,
+        label: normaliseLineLabel(d.label),
         nodes: { create: d.nodeIds.map((nodeId) => ({ nodeId })) },
       },
     });
@@ -1393,6 +1416,55 @@ async function storedHopLinks(cascadeId: string, mode: string): Promise<StoredLi
   return out;
 }
 
+/**
+ * What every direction's line is CALLED right now, by tag.
+ *
+ * Read before a save and again after it, so the save can report which of the
+ * names its subscribers hold have changed. A renamed line is not a rename to a
+ * client that identifies a server by its name: it is a second server, added
+ * beside the first, and the first keeps taking traffic. Measured on a live
+ * buyer 2026-09-02, in the fifteen minutes after a cascade's line changed name:
+ * 1602 connections into the entry's terminal refusal against 901 through the
+ * cascade, from one person holding both.
+ */
+async function lineLabelsByTag(
+  db: Prisma.TransactionClient | typeof prisma,
+  cascadeId: string,
+): Promise<Map<number, string>> {
+  const c = await db.cascade.findUnique({
+    where: { id: cascadeId },
+    select: {
+      name: true,
+      directions: {
+        select: {
+          tag: true,
+          label: true,
+          countryCode: true,
+          nodes: { select: { node: { select: { name: true, countryCode: true } } } },
+        },
+      },
+    },
+  });
+  const out = new Map<number, string>();
+  if (!c) return out;
+  for (const d of c.directions) out.set(d.tag, directionLineLabel(c.name, d));
+  return out;
+}
+
+/** Lines that existed before this save and answer to a different name after
+ *  it. In tag order, so the report reads the way the client list does. */
+function renamedLines(
+  before: Map<number, string>,
+  after: Map<number, string>,
+): CascadeLineRename[] {
+  const out: CascadeLineRename[] = [];
+  for (const [tag, was] of before) {
+    const now = after.get(tag);
+    if (now !== undefined && now !== was) out.push({ tag, before: was, after: now });
+  }
+  return out.sort((a, b) => a.tag - b.tag);
+}
+
 export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<CascadeDto> {
   const existing = await prisma.cascade.findUnique({
     where: { id },
@@ -1407,6 +1479,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
     },
   });
   if (!existing) throw new CascadeNotFoundError(id);
+  const labelsBefore = await lineLabelsByTag(prisma, id);
   // Capture the pre-update members: a node dropped from the cascade (or a
   // disable toggle) must also re-push so its now-stale fragments are removed.
   const oldNodeIds = cascadeMemberNodeIds(existing);
@@ -1530,7 +1603,18 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
     ];
     emitCascadeChanged(id, [...new Set([...oldNodeIds, ...newNodeIds])], 'update');
     invalidateHiddenCascadeNodeCache();
-    return mapCascade(c);
+    // Said out loud, because nothing downstream can undo it. The panel puts
+    // this in front of the operator, and the log carries it for the case where
+    // the save came from a script.
+    const renamed = renamedLines(labelsBefore, await lineLabelsByTag(prisma, id));
+    for (const r of renamed) {
+      getLogger().warn(
+        `[cascade] ${id}: the line for direction ${r.tag} is now called "${r.after}" and was ` +
+          `"${r.before}". A client that identifies a server by name will ADD the new line and ` +
+          `keep the old one, which no longer routes — subscribers must delete it.`,
+      );
+    }
+    return { ...mapCascade(c), lineRenames: renamed };
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       throw new CascadeNameTakenError(input.name ?? '');

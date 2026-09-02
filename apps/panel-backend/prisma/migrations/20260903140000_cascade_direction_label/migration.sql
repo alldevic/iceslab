@@ -1,0 +1,15 @@
+-- A direction can carry the name its line has in the subscriber's client.
+--
+-- Until now that name was derived on every read from the cascade's name and the
+-- exit's country, so renaming the cascade renamed every buyer's server. To a
+-- client that identifies a server BY ITS NAME a rename is not a rename: it is a
+-- second server, added next to the one already there, and the old one keeps
+-- being used. Measured on a live buyer 2026-09-02, fifteen minutes after the
+-- cascade's line changed name: 1602 connections into the entry's terminal
+-- refusal against 901 through the cascade, from one person holding both.
+--
+-- NULL keeps deriving it, which is what every existing direction does today.
+-- Nothing is backfilled: a stored label that was guessed rather than chosen
+-- would freeze whatever the row happened to say at migration time, including
+-- the country it would later stop exiting through.
+ALTER TABLE "cascade_directions" ADD COLUMN "label" VARCHAR(64);

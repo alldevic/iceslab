@@ -1494,6 +1494,7 @@ export default {
     directionsCaption: 'Directions · the tag belongs to the direction, not the node',
     tag: 'Tag',
     direction: 'Direction',
+    directionLabel: 'Name in the client',
     directionNodes: 'Nodes under it',
     countryPlaceholder: 'pick a country',
     addDirection: '+ direction',
@@ -1521,7 +1522,12 @@ export default {
     factDirections: '{{n}} directions',
     factToday: '{{size}} today',
     noTraffic: 'no traffic today',
-    nameHint: 'Renaming changes the label of the Auto entry in every subscription.',
+    nameHint:
+      'Renaming changes the name every subscriber sees for the lines under this cascade — unless a line has a name of its own.',
+    renamedTitle_one: '{{count}} line changed its name',
+    renamedTitle_other: '{{count}} lines changed their names',
+    renamedBody:
+      'A client that identifies a server by its name adds the new line and keeps the old one, which no longer routes. Subscribers have to refresh AND delete the old server. To avoid this, give the line a name of its own and rename that instead.',
     subLabel: 'Subscription label',
     hideHopsHintNamed:
       'On: {{names}} are reachable only through this cascade. Off: they also appear as direct picks.',

@@ -1089,6 +1089,19 @@ model CascadeDirection {
   // empty or its nodes carry no country, which is legitimate in v4: a direction
   // can exist with its tag frozen while it has no live node.
   countryCode String?  @map("country_code") @db.Char(2)
+  // The line's name in the subscriber's client, when the operator pins one.
+  // NULL derives it from the cascade name and the exit country, which is what
+  // every direction did before this column.
+  //
+  // It exists because that derived name moves for reasons that have nothing to
+  // do with the subscriber: renaming the cascade renames every line under it.
+  // And a renamed line is not a renamed line to a client that identifies a
+  // server by its name — it is a SECOND server, added beside the one it already
+  // has, which keeps being used. Measured on a live buyer 2026-09-02 after the
+  // cascade moved to v4 and its line changed name: 1602 connections into the
+  // entry's terminal refusal against 901 through the cascade, in fifteen
+  // minutes, from one person holding both.
+  label       String?  @db.VarChar(64)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   cascade Cascade                @relation(fields: [cascadeId], references: [id], onDelete: Cascade)

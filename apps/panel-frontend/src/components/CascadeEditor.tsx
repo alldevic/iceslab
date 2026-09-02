@@ -2,7 +2,7 @@ import { MAX_CASCADE_LINKS } from '@iceslab/shared';
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Box, Select, Stack, Switch, Text, UnstyledButton } from '@mantine/core';
+import { Box, Select, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
 import type { CascadeMode, CascadeProtocol, EgressRule, Node } from '../lib/api';
 import { COUNTRIES, countryFlag } from '../lib/countries';
 import {
@@ -296,6 +296,16 @@ export interface PositionDraft {
 export interface DirectionDraft {
   key: number;
   countryCode: string;
+  /**
+   * The name this line carries in a subscriber's client, when the operator
+   * pins one. Empty means derive it from the cascade name and the country,
+   * which is what every direction did before the field existed.
+   *
+   * Pinning is how a rename made for the operator's own reasons is kept from
+   * reaching people's clients: a client that identifies a server by its name
+   * answers a rename by ADDING the new line and keeping the old.
+   */
+  label: string;
   nodeIds: string[];
   /**
    * Server identity of a direction that already exists. This is what carries
@@ -380,6 +390,11 @@ export function toDirectionInputs(directions: DirectionDraft[]) {
   return directions.map((d) => ({
     ...(d.id ? { id: d.id } : {}),
     countryCode: d.countryCode,
+    // Always sent, including empty — the form is the whole truth about this
+    // field, so clearing the box has to clear the pin. (`undefined` would leave
+    // the stored name alone, which is what the API does for callers that know
+    // nothing about the field.)
+    label: d.label.trim(),
     nodeIds: d.nodeIds.filter(Boolean),
   }));
 }
@@ -602,6 +617,10 @@ export function DirectionRow({
   prospectiveTag,
   countryCode,
   onCountry,
+  label,
+  labelPlaceholder,
+  labelHint,
+  onLabel,
   nodeIds,
   nodes,
   claimedBy,
@@ -619,6 +638,13 @@ export function DirectionRow({
   prospectiveTag: number;
   countryCode: string;
   onCountry: (code: string) => void;
+  /** Pinned line name, '' when derived. */
+  label: string;
+  /** The name a subscriber sees today — shown as the placeholder, so an empty
+   *  box is not a blank but the current answer. */
+  labelPlaceholder: string;
+  labelHint: string;
+  onLabel: (value: string) => void;
   nodeIds: string[];
   nodes: Node[];
   claimedBy: Map<string, string>;
@@ -638,7 +664,19 @@ export function DirectionRow({
         <TagSlot tag={tag} prospective={prospectiveTag} />
       </Box>
       <Box className="cascade-direction-country">
-        <CountrySelect value={countryCode} onChange={onCountry} />
+        <Stack gap={6}>
+          <CountrySelect value={countryCode} onChange={onCountry} />
+          {/* Под страной, а не отдельной колонкой: это имя ТОЙ ЖЕ строки, и
+              оператор должен видеть их рядом — страна решает, куда трафик
+              выходит, имя решает, чем клиент отличает сервер от сервера. */}
+          <TextInput
+            value={label}
+            placeholder={labelPlaceholder}
+            aria-label={labelHint}
+            onChange={(e) => onLabel(e.currentTarget.value)}
+            styles={{ input: { fontSize: 12, height: 32 } }}
+          />
+        </Stack>
       </Box>
       <Box className="cascade-direction-nodes">
         <PoolField

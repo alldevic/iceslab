@@ -249,8 +249,8 @@ describe('an edit PAGE sends back the record it was given', () => {
         { position: 0, nodeIds: [entry.id], entryProtocol: 'xray', linkProtocol: 'xray' },
       ],
       directions: [
-        { id: 'dir-a', tag: 1, countryCode: 'DE', nodeIds: [exitA.id] },
-        { id: 'dir-b', tag: 4, countryCode: 'SE', nodeIds: [exitB.id] },
+        { id: 'dir-a', tag: 1, countryCode: 'DE', label: null, lineLabel: '🇩🇪 c → DE', nodeIds: [exitA.id] },
+        { id: 'dir-b', tag: 4, countryCode: 'SE', label: null, lineLabel: '🇸🇪 c → SE', nodeIds: [exitB.id] },
       ],
       nextDirectionTag: 5,
     });
@@ -287,8 +287,13 @@ describe('an edit PAGE sends back the record it was given', () => {
     // id is what writeTopologyV4 matches a direction to its stored tag by, so
     // losing it renumbers the tag every client authenticates with.
     expect(p.directions).toEqual([
-      { id: 'dir-a', nodeIds: [exitA.id], countryCode: 'DE' },
-      { id: 'dir-b', nodeIds: [exitB.id], countryCode: 'SE' },
+      { id: 'dir-a', nodeIds: [exitA.id], countryCode: 'DE', label: '' },
+      { id: 'dir-b', nodeIds: [exitB.id], countryCode: 'SE', label: '' },
     ]);
+    // Пустая метка — это «выводить имя», и именно её несёт форма, в которой
+    // оператор ничего не закреплял. Не `undefined`: форма — единственный
+    // источник правды об этом поле, поэтому очищенное поле должно снимать
+    // закрепление, а не молча оставлять прежнее имя.
+    expect(p.name).toBe('ru-exit-renamed');
   });
 });

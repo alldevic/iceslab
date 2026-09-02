@@ -104,6 +104,17 @@ export const CascadeDirectionSchema = z.object({
    *  payload without stripping fields. */
   tag: z.number().int().optional(),
   countryCode: z.string().length(2).nullish(),
+  /**
+   * The name this direction's line carries in the subscriber's client.
+   *
+   * Absent or null derives it, which is the behaviour every direction had
+   * before the field existed: `<flag> <cascade name> → <CC>`. Pinning one is
+   * how an operator stops a rename they are making for their own reasons from
+   * reaching people's clients — because a renamed line is not renamed to a
+   * client that identifies a server by name, it is an additional one, and the
+   * old server keeps taking traffic.
+   */
+  label: z.string().max(64).nullish(),
   /** May be EMPTY: v4 can express "the tag exists, the node behind it does
    *  not yet". Serving skips such a direction until it has a node. The old
    *  model could not express this, because a direction WAS a node. */

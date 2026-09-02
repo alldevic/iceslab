@@ -1,3 +1,5 @@
+import { directionLineLabel } from '../../lib/country-flag.js';
+
 export interface CascadeHopDto {
   id: string;
   nodeId: string;
@@ -34,6 +36,16 @@ export interface CascadeDirectionDto {
    *  accepted as input, only reported. */
   tag: number;
   countryCode: string | null;
+  /** The name the operator pinned for this line, or null when it is derived
+   *  from the cascade name and the exit country. See the column: a derived name
+   *  moves whenever the cascade is renamed, and a client that identifies a
+   *  server by name answers a rename by keeping BOTH. */
+  label: string | null;
+  /** What a subscriber's client actually shows for this line, pinned or
+   *  derived. Reported so the panel can show the operator the string their
+   *  buyers see, without deriving it a second time and getting it slightly
+   *  different. */
+  lineLabel: string;
   /** May be empty: a direction can exist with its tag reserved and no node
    *  behind it yet. Such a direction is simply not served. */
   nodeIds: string[];
@@ -61,8 +73,27 @@ export interface CascadeDto {
    *  delete `max(tag) + 1` guesses wrong (delete 5, add one, the server issues
    *  6 while the form promises 5). */
   nextDirectionTag: number;
+  /**
+   * Lines this save renamed, present only on the response to a save that
+   * renamed one.
+   *
+   * Reported rather than refused: renaming is sometimes exactly what the
+   * operator means. But it is never free, and it is not a thing the operator
+   * can find out afterwards from anywhere else — a client that identifies a
+   * server by its name answers a rename by ADDING the new line and keeping the
+   * old, which no longer routes. Subscribers have to delete it by hand.
+   */
+  lineRenames?: CascadeLineRename[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** One renamed line: the tag that identifies the direction, and the two names
+ *  a subscriber's client will now hold side by side. */
+export interface CascadeLineRename {
+  tag: number;
+  before: string;
+  after: string;
 }
 
 interface CascadeRow {
@@ -95,7 +126,10 @@ interface CascadeRow {
     id: string;
     tag: number;
     countryCode: string | null;
-    nodes: { nodeId: string }[];
+    label?: string | null;
+    /** Present where the caller included the node rows; `lineLabel` falls back
+     *  to the exit country alone without them. */
+    nodes: { nodeId: string; node?: { name: string; countryCode: string | null } }[];
   }[];
 }
 
@@ -134,6 +168,12 @@ export function mapCascade(c: CascadeRow): CascadeDto {
         id: d.id,
         tag: d.tag,
         countryCode: d.countryCode,
+        label: d.label ?? null,
+        lineLabel: directionLineLabel(c.name, {
+          label: d.label,
+          countryCode: d.countryCode,
+          nodes: d.nodes.flatMap((n) => (n.node ? [{ node: n.node }] : [])),
+        }),
         nodeIds: d.nodes.map((n) => n.nodeId),
       })),
     nextDirectionTag: c.nextDirectionTag ?? 1,

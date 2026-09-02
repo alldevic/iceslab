@@ -1417,6 +1417,14 @@ export interface CascadeDirection {
   id: string;
   tag: number;
   countryCode: string;
+  /** The name pinned for this line, or null when it is derived from the cascade
+   *  name and the exit country. */
+  label: string | null;
+  /** What a subscriber's client shows for this line, pinned or derived. Read,
+   *  never recomputed here: this string is what a client identifies the server
+   *  by, and a panel deriving its own version would show a name the
+   *  subscription does not serve. */
+  lineLabel: string;
   /** May legitimately be empty: the tag exists, no node stands behind it yet,
    *  and the direction is simply not handed to clients. */
   nodeIds: string[];
@@ -1500,8 +1508,27 @@ export interface Cascade {
    * a number that is already spent. Read it, never compute it.
    */
   nextDirectionTag: number;
+  /** Lines this save renamed. Present only on the answer to a save, and only
+   *  when it renamed one. See CascadeLineRename. */
+  lineRenames?: CascadeLineRename[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A line whose name a save changed.
+ *
+ * Worth its own type because of what a client does with it: one that
+ * identifies a server by name treats the new name as a NEW server, adds it, and
+ * keeps the old — which no longer routes. Measured on a live buyer 2026-09-02,
+ * fifteen minutes after a cascade line was renamed: 1602 connections into the
+ * entry's terminal refusal against 901 through the cascade, from one person
+ * holding both.
+ */
+export interface CascadeLineRename {
+  tag: number;
+  before: string;
+  after: string;
 }
 
 export interface CascadeHopInput {
@@ -1567,6 +1594,10 @@ export interface CascadeDirectionInput {
   /** Omit only for a direction being created right now. */
   id?: string;
   countryCode: string;
+  /** Pin the line's name. `undefined` leaves whatever is stored alone — which
+   *  matters, because clearing a pin renames the server in every subscriber's
+   *  client. An empty string clears it deliberately. */
+  label?: string | null;
   nodeIds: string[];
 }
 

@@ -1,4 +1,4 @@
-import { countCascadeLinks } from '@iceslab/shared';
+import { countCascadeLinks, derivedCascadeLineLabel } from '@iceslab/shared';
 import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -103,7 +103,7 @@ export function CascadeCreatePage() {
   // Nothing on this page exists server-side yet, so every direction carries a
   // null id and gets its tag from the panel on create.
   const [directions, setDirections] = useState<DirectionDraft[]>([
-    { key: 1, id: null, countryCode: '', nodeIds: [''], tag: null },
+    { key: 1, id: null, countryCode: '', label: '', nodeIds: [''], tag: null },
   ]);
 
   usePageMeta([t('cascadeCreate.crumbSection'), t('cascadeCreate.crumbNew')]);
@@ -206,7 +206,7 @@ export function CascadeCreatePage() {
       if (prev.length >= want) return prev;
       const next = [...prev];
       while (next.length < want) {
-        next.push({ key: nextKey.current++, id: null, countryCode: '', nodeIds: [''], tag: null });
+        next.push({ key: nextKey.current++, id: null, countryCode: '', label: '', nodeIds: [''], tag: null });
       }
       return next;
     });
@@ -538,6 +538,17 @@ export function CascadeCreatePage() {
                   prospectiveTag={i + 1}
                   countryCode={dir.countryCode}
                   onCountry={(code) => setDirection(i, { countryCode: code })}
+                  label={dir.label}
+                  // Плейсхолдер — это имя, которое покупатель видит СЕЙЧАС, а
+                  // не подсказка. Пустое поле значит «выводить», и показать
+                  // здесь надо ровно то, что выведется.
+                  labelPlaceholder={derivedCascadeLineLabel(
+                    name,
+                    dir.countryCode,
+                    nodeById.get(dir.nodeIds.find(Boolean) ?? '')?.name ?? '',
+                  )}
+                  labelHint={t('cascadeCreate.directionLabel')}
+                  onLabel={(v) => setDirection(i, { label: v })}
                   nodeIds={dir.nodeIds}
                   nodes={nodes}
                   claimedBy={claimedBy}
@@ -559,7 +570,7 @@ export function CascadeCreatePage() {
                 onClick={() =>
                   setDirections((prev) => [
                     ...prev,
-                    { key: nextKey.current++, id: null, countryCode: '', nodeIds: [''], tag: null },
+                    { key: nextKey.current++, id: null, countryCode: '', label: '', nodeIds: [''], tag: null },
                   ])
                 }
               />
