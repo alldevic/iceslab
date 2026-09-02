@@ -119,16 +119,43 @@ export async function ensureDevices(userId: string, count: number): Promise<WgDe
   const have = await listActiveDevices(userId);
   if (have.length >= want) return have;
 
-  const rows = Array.from({ length: want - have.length }, () => {
-    const kp = generateWireguardKeyPair();
-    return {
-      userId,
-      privateKey: kp.privateKey,
-      publicKey: kp.publicKey,
-      presharedKey: generatePresharedKey(),
-    };
+  // Count, then create, UNDER A LOCK. Read-then-write here is the shape that
+  // hands a buyer more devices than their limit, and it is not theoretical:
+  // revoking one device enqueues a sync per node, the syncs run at once, both
+  // read "two live" and both mint the third. Measured 2026-09-02 on a service
+  // account - two devices created in the same millisecond, four live against a
+  // limit of three.
+  //
+  // The damage is not the extra row. Each sync pushes the peer set IT computed,
+  // so the device minted by the other one is on that node and missing from this
+  // one: the panel then hands out a config whose key exists on the exit and not
+  // on the ENTRY, and the buyer's tunnel handshakes with nothing. That is the
+  // "deleted a device, downloaded the config again, will not connect" report.
+  //
+  // Same instrument the HWID gate already uses for the same reason
+  // (`pg_advisory_xact_lock` in hwid.service.ts): a per-user lock, held for the
+  // transaction, so concurrent top-ups queue instead of racing. Per USER rather
+  // than global - two different buyers have nothing to serialize.
+  const created = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
+    // Re-read inside the lock: the value read before it is exactly what the
+    // loser of the race was acting on.
+    const fresh = await tx.wgDevice.count({ where: { userId, revokedAt: null } });
+    const missing = want - fresh;
+    if (missing <= 0) return 0;
+    const rows = Array.from({ length: missing }, () => {
+      const kp = generateWireguardKeyPair();
+      return {
+        userId,
+        privateKey: kp.privateKey,
+        publicKey: kp.publicKey,
+        presharedKey: generatePresharedKey(),
+      };
+    });
+    await tx.wgDevice.createMany({ data: rows });
+    return rows.length;
   });
-  await prisma.wgDevice.createMany({ data: rows });
+  if (created === 0) return listActiveDevices(userId);
   // A minted device is a keypair the node has never heard of.
   //
   // The peer row and its address are written by whoever asked for the device -
@@ -148,7 +175,7 @@ export async function ensureDevices(userId: string, count: number): Promise<WgDe
   // This is the same failure inbounds.events.ts already describes for
   // user.created - "a valid .conf with a key the node does not have" - closed
   // there for the user lifecycle and left open for the device lifecycle.
-  eventBus.emit('wg-devices.changed', { userId, reason: `${rows.length} device(s) minted` });
+  eventBus.emit('wg-devices.changed', { userId, reason: `${created} device(s) minted` });
   return listActiveDevices(userId);
 }
 
@@ -216,7 +243,35 @@ export async function ensureDevicesForUsers(
   }
   if (toCreate.length === 0 && needKey.length === 0) return byUser;
 
-  if (toCreate.length > 0) await prisma.wgDevice.createMany({ data: toCreate });
+  if (toCreate.length > 0) {
+    // Under the same per-user lock as ensureDevices, and re-counted inside it.
+    // This is the path that actually raced: revoking a device enqueues one sync
+    // per node, and each sync calls this for the whole active set. Both read the
+    // same "two live" and both minted a third, so one node got a device the
+    // other had never heard of.
+    //
+    // One transaction over the batch, taking each user's lock in a stable order
+    // (the ids are already sorted by the caller's query): locks acquired in a
+    // fixed order cannot deadlock against another batch doing the same.
+    await prisma.$transaction(async (tx) => {
+      const byUserToCreate = new Map<string, typeof toCreate>();
+      for (const row of toCreate) {
+        const list = byUserToCreate.get(row.userId) ?? [];
+        list.push(row);
+        byUserToCreate.set(row.userId, list);
+      }
+      const finalRows: typeof toCreate = [];
+      for (const id of [...byUserToCreate.keys()].sort()) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
+        const fresh = await tx.wgDevice.count({ where: { userId: id, revokedAt: null } });
+        const missing = (wantByUser.get(id) ?? 1) - fresh;
+        // Whatever this batch prepared, only the shortfall that still exists
+        // under the lock gets written. The loser of a race writes nothing.
+        finalRows.push(...(byUserToCreate.get(id) ?? []).slice(0, Math.max(0, missing)));
+      }
+      if (finalRows.length > 0) await tx.wgDevice.createMany({ data: finalRows });
+    });
+  }
   const refreshed = await prisma.wgDevice.findMany({
     where: { userId: { in: userIds }, revokedAt: null },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],

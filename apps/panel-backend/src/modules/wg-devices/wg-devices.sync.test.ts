@@ -22,7 +22,7 @@ import { closeRedis } from '../../lib/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { generateUserCredentials } from '../../lib/credentials.js';
 import { eventBus } from '../../lib/event-bus.js';
-import { ensureDevices, revokeDevice } from './wg-devices.service.js';
+import { ensureDevices, ensureDevicesForUsers, revokeDevice } from './wg-devices.service.js';
 
 const seen: { userId: string; reason: string }[] = [];
 const record = (e: { userId: string; reason: string }) => void seen.push(e);
@@ -115,6 +115,46 @@ describe('a wg device that appears or leaves announces itself', () => {
     await settled();
     expect(seen).toHaveLength(1);
     expect(seen[0]!.userId).toBe(userId);
+  });
+
+  // Honest about which half of this pair proves anything. With the lock removed
+  // the BULK test below goes red and this one stays green: two awaits in one
+  // process rarely interleave at the exact statement that matters, and the
+  // re-count inside the transaction narrows the window further. It is kept
+  // because the invariant belongs to both entry points and a future change to
+  // ensureDevices should have something asserting it - but the control lives
+  // downstairs, and this one must not be read as proof.
+  it('two simultaneous top-ups mint the shortfall ONCE, not twice', async () => {
+    // The reported bug, at its root. Revoking a device enqueues a sync per
+    // node; the syncs run at once, both read the same live count, and before
+    // the lock both minted the third device. Measured on a service account:
+    // two devices created in the same millisecond, four live against a limit
+    // of three - and each node pushed only the one its own sync had minted, so
+    // the buyer's config named a key present on the exit and absent from the
+    // ENTRY. The tunnel then handshakes with nothing, which is exactly
+    // "downloaded the config again and it will not connect".
+    const userId = await createUser('wgsync-race');
+    await ensureDevices(userId, 2);
+    seen.length = 0;
+
+    const [a, b] = await Promise.all([ensureDevices(userId, 3), ensureDevices(userId, 3)]);
+    expect(a).toHaveLength(3);
+    expect(b).toHaveLength(3);
+    const live = await prisma.wgDevice.count({ where: { userId, revokedAt: null } });
+    expect(live).toBe(3);
+  });
+
+  it('the bulk path is serialised too, and it is the one that raced', async () => {
+    // ensureDevicesForUsers is what the node sync calls, once per node, for
+    // every active user at once. Two nodes means two of these in flight.
+    const userId = await createUser('wgsync-race-bulk');
+    await ensureDevices(userId, 2);
+    await Promise.all([
+      ensureDevicesForUsers([{ userId, count: 3 }]),
+      ensureDevicesForUsers([{ userId, count: 3 }]),
+    ]);
+    const live = await prisma.wgDevice.count({ where: { userId, revokedAt: null } });
+    expect(live).toBe(3);
   });
 
   it('stays quiet when there was nothing to revoke', async () => {
