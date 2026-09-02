@@ -97,7 +97,60 @@ describe('wgConfName', () => {
   it('collapses a run of unusable characters instead of one per code unit', () => {
     // Имя ноды несёт эмодзи флага; посимвольная замена давала `_____s2`.
     expect(wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'wireguard')).toBe('OneginVPN-s2-wg');
-    expect(wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'amneziawg')).toBe('OneginVPN-s2-awg');
+  });
+
+  // This name becomes the INTERFACE name, and the kernel refuses anything over
+  // 15 characters. Measured on a live node 2026-09-03:
+  //   OneginVPN-s1-wg    (15)  device created
+  //   OneginVPN-s1-awg   (16)  Error: Attribute failed policy validation
+  //   OneginVPN-s1-wg-2  (17)  Error: Attribute failed policy validation
+  // So the cap of 64 this function used to apply meant every AmneziaWG config
+  // and every device from the second onwards was served under a name its own
+  // tunnel cannot come up as. The buyer sees an import error, and the file
+  // looks like the culprit.
+  //
+  // The tail is what tells two tunnels apart, so the brand is what gets cut.
+  // Cutting the tail instead would hand the buyer two files that differ only
+  // in a truncated suffix - or not at all.
+  it('keeps the name inside the 15-character interface ceiling', () => {
+    const cases: [string, string | undefined, 'wireguard' | 'amneziawg' | undefined, number | undefined][] = [
+      ['OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'wireguard', 1],
+      ['OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'amneziawg', 1],
+      ['OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'wireguard', 2],
+      ['OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'amneziawg', 3],
+      ['a'.repeat(200), 'node', 'amneziawg', 10],
+    ];
+    for (const [brand, node, flavour, device] of cases) {
+      const name = wgConfName(brand, node, flavour, device);
+      expect(name.length).toBeLessThanOrEqual(15);
+      // A trailing separator is what naive truncation leaves behind, and
+      // `wg-quick` takes the file name verbatim.
+      expect(name).toMatch(/^[a-zA-Z0-9._-]+$/);
+      expect(name).not.toMatch(/[-_.]$/);
+    }
+  });
+
+  it('cuts the brand, never the part that tells two tunnels apart', () => {
+    // Same node, same buyer, different flavour and different device: whatever
+    // the brand is trimmed to, these four must stay four distinct names.
+    const names = [
+      wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'wireguard', 1),
+      wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'amneziawg', 1),
+      wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'wireguard', 2),
+      wgConfName('OneginVPN', '\u{1F1F3}\u{1F1F1} s2', 'amneziawg', 2),
+    ];
+    expect(new Set(names).size).toBe(4);
+    for (const n of names) expect(n).toMatch(/-s2-a?wg(-\d+)?$/);
+    // The most common tunnel by far keeps the name it has today: a rename
+    // makes a client treat it as a different server.
+    expect(names[0]).toBe('OneginVPN-s2-wg');
+    // And the rest are cut at the brand's word boundary, so the buyer sees one
+    // alternative spelling rather than a different stump per device.
+    expect(names.slice(1)).toEqual([
+      'Onegin-s2-awg',
+      'Onegin-s2-wg-2',
+      'Onegin-s2-awg-2',
+    ]);
   });
 
   it('falls back when the brand sanitises to nothing, and stays a legal file name', () => {

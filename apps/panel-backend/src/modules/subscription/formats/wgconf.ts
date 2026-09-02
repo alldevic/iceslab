@@ -37,6 +37,45 @@ export interface WgQuickOpts {
  * Sanitised to the file-name charset for the same reason: whatever this
  * returns has to survive being a file name on Windows and macOS.
  */
+/**
+ * The longest form of a brand that fits `budget`, cut at a word boundary when
+ * one is available.
+ *
+ * Straight truncation is correct but reads as damage: `OneginVPN` becomes
+ * `OneginVP` for an AmneziaWG tunnel and `OneginV` for the second device, so a
+ * buyer with three devices sees the brand spelled three ways and wonders which
+ * file is the real one. Cutting at a boundary gives `Onegin` for all of them —
+ * one alternative spelling instead of four, and a word rather than a stump.
+ *
+ * Boundaries are the case transitions and separators inside the already
+ * sanitised name (`OneginVPN` -> `Onegin` + `VPN`). Hard truncation stays as
+ * the last resort: a single long word has no boundary to cut at, and a name
+ * over the ceiling is worse than an ugly one.
+ */
+function fitBrand(brand: string, budget: number): string {
+  if (brand.length <= budget) return brand;
+  const boundaries: number[] = [];
+  for (let i = 1; i < brand.length; i++) {
+    const prev = brand[i - 1]!;
+    const cur = brand[i]!;
+    const caseChange = /[a-z0-9]/.test(prev) && /[A-Z]/.test(cur);
+    const separator = /[._-]/.test(cur);
+    if (caseChange || separator) boundaries.push(i);
+  }
+  // Longest boundary cut that fits, so `OneginVPNPro` prefers `OneginVPN` to
+  // `Onegin` when there is room for it.
+  for (const at of [...boundaries].reverse()) {
+    const cut = brand.slice(0, at).replace(/[-_.]+$/, '');
+    if (cut.length > 0 && cut.length <= budget) return cut;
+  }
+  return brand.slice(0, budget);
+}
+
+/** Ceiling on a WireGuard interface name: IFNAMSIZ (16) minus the terminator.
+ *  wg-quick and the mobile apps take the file name as the interface name, so
+ *  this is a hard limit on what we may serve, not a style preference. */
+const NAME_MAX = 15;
+
 export function wgConfName(
   brand: string,
   nodeName?: string,
@@ -47,16 +86,35 @@ export function wgConfName(
   // эмодзи флага, и посимвольная замена давала `_____s2`.
   const clean = (s: string): string =>
     s.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
-  const parts = [clean(brand) || 'subscription'];
+  const tail: string[] = [];
   if (nodeName) {
     const node = clean(nodeName);
-    if (node) parts.push(node);
+    if (node) tail.push(node);
   }
-  if (flavour) parts.push(flavour === 'wireguard' ? 'wg' : 'awg');
+  if (flavour) tail.push(flavour === 'wireguard' ? 'wg' : 'awg');
   // Device 1 goes unmarked: the buyer with a single device should not have to
   // wonder what the trailing number means, and the great majority have one.
-  if (deviceIndex && deviceIndex > 1) parts.push(String(deviceIndex));
-  return parts.join('-').slice(0, 64);
+  if (deviceIndex && deviceIndex > 1) tail.push(String(deviceIndex));
+  const suffix = tail.length > 0 ? `-${tail.join('-')}` : '';
+  // The interface name IS this string, and the kernel caps it at 15 (IFNAMSIZ
+  // minus the terminator). Measured on a live node 2026-09-03: 15 creates the
+  // device, 16 and 17 fail with `Attribute failed policy validation`. The
+  // previous cap of 64 therefore served every AmneziaWG config and every
+  // device from the second onwards under a name its own tunnel cannot come up
+  // as — and the buyer reads that as a broken file.
+  //
+  // The brand is the part that gets cut, because the tail is the part that
+  // tells two of this buyer's tunnels apart. Trimming the tail instead would
+  // hand them two files distinguishable only by a mangled suffix.
+  const budget = NAME_MAX - suffix.length;
+  const head = fitBrand(clean(brand) || 'subscription', Math.max(budget, 0));
+  const name = `${head}${suffix}`;
+  // Truncation can leave a separator hanging where the brand was cut, and
+  // wg-quick takes the name verbatim.
+  return (name.replace(/^[-_.]+/, '').replace(/[-_.]+$/, '') || 'subscription').slice(
+    0,
+    NAME_MAX,
+  );
 }
 
 type WgEndpoint = AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint;
