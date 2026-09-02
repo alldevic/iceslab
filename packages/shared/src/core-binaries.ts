@@ -412,6 +412,13 @@ export const ENGINE_CORE: Record<string, CoreName | null> = {
   singbox: 'sing-box',
   hysteria: 'hysteria',
   mtproto: 'mtg',
+  // Two engines serve the mtproto protocol and they are different programs, so
+  // they pin different artefacts. Missing this line, the cores view fell through
+  // to PROTOCOL_CORE['mtproto'] and printed mtg's pinned 2.2.8 beside the
+  // mtprotoproxy row — an operator reading "should be" saw another core's
+  // number. It did not show as drift only because this adapter reports no
+  // version of its own (upstream states one nowhere) and drift needs both.
+  mtprotoproxy: 'mtprotoproxy',
   mieru: 'mita',
   naive: null,
   amneziawg: null,
