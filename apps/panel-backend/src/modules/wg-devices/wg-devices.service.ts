@@ -2,6 +2,7 @@ import { generateWireguardKeyPair, generatePresharedKey } from '../../lib/creden
 import { prisma } from '../../prisma.js';
 import { resolveSquadHwidLimit } from '../hwid/hwid.service.js';
 import { nodeUsersQueue } from '../users/users.queue.js';
+import { eventBus } from '../../lib/event-bus.js';
 import type { WgDevice } from '../../generated/prisma/client.js';
 
 /**
@@ -128,6 +129,26 @@ export async function ensureDevices(userId: string, count: number): Promise<WgDe
     };
   });
   await prisma.wgDevice.createMany({ data: rows });
+  // A minted device is a keypair the node has never heard of.
+  //
+  // The peer row and its address are written by whoever asked for the device -
+  // the subscription render allocates one per binding - so the panel is
+  // immediately able to hand out a complete, correct .conf. The NODE is not:
+  // peers reach it only through an inbound sync, and nothing here used to order
+  // one. So the buyer downloaded a valid config carrying a key that existed
+  // nowhere on the machine, and the handshake failed silently and permanently -
+  // the periodic re-push only fires on a node status flip, so nothing healed it
+  // until an unrelated edit.
+  //
+  // Reported from live use as "deleted a device, downloaded the config again,
+  // it will not connect", and reproduced on 2026-09-02 with a service account:
+  // the replacement device had addresses in the panel and its public key was on
+  // neither wg0 nor awg0.
+  //
+  // This is the same failure inbounds.events.ts already describes for
+  // user.created - "a valid .conf with a key the node does not have" - closed
+  // there for the user lifecycle and left open for the device lifecycle.
+  eventBus.emit('wg-devices.changed', { userId, reason: `${rows.length} device(s) minted` });
   return listActiveDevices(userId);
 }
 
@@ -248,5 +269,10 @@ export async function revokeDevice(deviceId: string): Promise<WgDevice | null> {
     prisma.amneziawgPeer.deleteMany({ where: { deviceId } }),
   ]);
   await nodeUsersQueue.add('removeUser', { userId: deviceId });
+  // `removeUser` names the node one device id, which is enough when it lands.
+  // The sync is ordered as well because only it reconciles the whole set
+  // (`/retainUsers`), so a revoke that raced a push in flight cannot leave the
+  // peer behind - the same reason user.deleted orders one.
+  eventBus.emit('wg-devices.changed', { userId: device.userId, reason: 'device revoked' });
   return updated;
 }

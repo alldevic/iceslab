@@ -181,6 +181,23 @@ export function registerInboundEventHandlers(): void {
     enqueueWgBearingNodes(`user.deleted (${userId}) wg peers`);
   });
 
+  // Устройство завели или отозвали — набор пиров на wg-нодах устарел.
+  //
+  // Это та же поломка, что описана выше для `user.created`, только приходящая
+  // с другой стороны: пользователь не менялся вовсе, а ключ появился. Заводит
+  // устройства в том числе **выдача подписки** — она дотягивает покупателя до
+  // его числа устройств, — и до этого обработчика такая выдача не говорила
+  // ноде ничего. Покупатель скачивал валидный `.conf` с ключом, которого на
+  // машине нет, и не подключался; само это не чинилось никогда, потому что
+  // повторный пуш по cron бывает только на смене статуса ноды.
+  //
+  // Воспроизведено 02.09 служебной учёткой: у заведённого взамен отозванного
+  // устройства в панели есть адреса, а публичного ключа нет ни на `wg0`, ни на
+  // `awg0`.
+  eventBus.on('wg-devices.changed', ({ userId, reason }) => {
+    enqueueWgBearingNodes(`wg-devices.changed ${reason} (${userId})`);
+  });
+
   // cascade.changed → re-push every node that is now or was a hop, so the xray
   // cascade fragments get injected (create/enable) or removed (disable/delete).
   // The cascade service computes the union of old+new hop nodes.

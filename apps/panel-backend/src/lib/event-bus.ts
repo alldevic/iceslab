@@ -13,6 +13,13 @@ export interface DomainEventMap {
   'user.status-changed':  { userId: string; from: string; to: string };
   'user.deleted':         { userId: string };
   'user.traffic-reset':   { userId: string; previousUsedBytes: bigint };
+  // wg-devices.changed → a WireGuard/AmneziaWG device was minted or revoked,
+  // so the peer set on every wg-bearing node is stale. Its own event rather
+  // than a user.* one because it fires on a path where the user did not
+  // change at all: a subscription fetch that tops the buyer back up to their
+  // device count mints a keypair, hands out the config, and until this event
+  // existed told no node about it. See wg-devices.service.ts.
+  'wg-devices.changed':   { userId: string; reason: string };
   // node.created → backfill all active users to this node. Required because
   // an empty new node otherwise stays empty until each existing user is
   // mutated again. Caught live during slice-23 VPS test 2026-05-06.
