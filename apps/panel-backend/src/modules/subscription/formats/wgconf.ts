@@ -99,9 +99,11 @@ function isWgEndpoint(e: SubscriptionEndpoint): e is WgEndpoint {
  *
  * `opts.name` writes the leading `# Name =` comment — see wgConfName.
  *
- * Returns an empty string when no matching endpoint is available, the route
- * handler turns that into a 204-style empty body, telling the client "no
- * wg inbound configured for you".
+ * Returns an empty string when nothing matches. Kept for the callers that only
+ * want the text (the HTML page and the shop's install screen walk the endpoints
+ * themselves, so a miss there is already impossible). The ROUTE must not use
+ * this to decide the response — see selectWgEndpoint for why an empty body is
+ * the one answer that cannot be told apart from a broken config.
  */
 export function buildWgQuickConf(
   endpoints: SubscriptionEndpoint[],
@@ -109,20 +111,100 @@ export function buildWgQuickConf(
   flavour?: WgFlavour,
   opts?: WgQuickOpts,
 ): string {
-  let candidates = endpoints.filter(isWgEndpoint);
-  if (flavour) {
-    candidates = candidates.filter((e) => e.protocol === flavour);
+  const picked = selectWgEndpoint(endpoints, {
+    node: nodeName,
+    proto: flavour,
+    device: opts?.device,
+  });
+  if (!picked.ok) return '';
+  return renderWgQuickConf(picked.endpoint, opts);
+}
+
+/** One tunnel the subscription actually holds, in the terms the query names it
+ *  by. This is what a miss gets told about, so it carries the node name
+ *  VERBATIM — that name normally leads with a flag emoji, and `?node=s2`
+ *  against `🇳🇱 s2` is the ordinary way to miss with a right-looking value. */
+export interface WgTunnelRef {
+  node: string;
+  proto: WgFlavour;
+  device: number;
+}
+
+/**
+ * Which tunnel `?node=`/`?proto=`/`?device=` name, or why none.
+ *
+ * Three outcomes, because they are three different answers and the caller owes
+ * the client a different one for each:
+ *
+ *   `no-wg-endpoint` — this subscription carries no wg-family channel at all.
+ *     Nothing to give. Nothing the caller can rephrase to get one.
+ *   `no-match` — it carries some, and the selectors named none of them. The
+ *     request asked for something that does not exist, and `available` says
+ *     what does.
+ *   ok — the tunnel.
+ *
+ * All three used to be `''`, which the route sent as a 200 with a
+ * `Content-Disposition` and a zero-byte body. Every wg client imports that and
+ * reports the same thing: the config has no `PrivateKey`. So the symptom names
+ * the config while the cause is in the selectors, and the buyer tells support
+ * "the config is invalid" for a link that was merely addressed wrong.
+ */
+export type WgSelection =
+  | { ok: true; endpoint: WgEndpoint }
+  | { ok: false; reason: 'no-wg-endpoint'; available: [] }
+  | { ok: false; reason: 'no-match'; available: WgTunnelRef[] };
+
+export function selectWgEndpoint(
+  endpoints: SubscriptionEndpoint[],
+  want: { node?: string; proto?: WgFlavour; device?: string },
+): WgSelection {
+  const wgAll = endpoints.filter(isWgEndpoint);
+  if (wgAll.length === 0) return { ok: false, reason: 'no-wg-endpoint', available: [] };
+
+  let candidates = wgAll;
+  if (want.proto) {
+    candidates = candidates.filter((e) => e.protocol === want.proto);
   }
-  if (opts?.device) {
-    const wanted = opts.device;
+  if (want.device) {
+    const wanted = want.device;
     const byIndex = Number(wanted);
     candidates = candidates.filter(
       (e) => e.deviceId === wanted || (Number.isInteger(byIndex) && e.deviceIndex === byIndex),
     );
   }
-  // nodeName selects which node's tunnel; absent = first (legacy whole-sub link).
-  const wg = nodeName ? candidates.find((e) => e.nodeName === nodeName) : candidates[0];
-  if (!wg) return '';
+  // node selects which node's tunnel; absent = first (legacy whole-sub link).
+  const wg = want.node ? candidates.find((e) => e.nodeName === want.node) : candidates[0];
+  if (!wg) {
+    return { ok: false, reason: 'no-match', available: listWgTunnels(wgAll) };
+  }
+  return { ok: true, endpoint: wg };
+}
+
+/** Every (node, flavour, device) this subscription can hand over, deduped and
+ *  in subscription order. */
+export function listWgTunnels(endpoints: SubscriptionEndpoint[]): WgTunnelRef[] {
+  const seen = new Set<string>();
+  const out: WgTunnelRef[] = [];
+  for (const e of endpoints) {
+    if (!isWgEndpoint(e)) continue;
+    const ref = { node: e.nodeName, proto: e.protocol, device: e.deviceIndex };
+    const key = `${ref.node}\u0000${ref.proto}\u0000${ref.device}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
+}
+
+/** One line per tunnel, in the exact form the query takes them: the operator or
+ *  the buyer reading this has to be able to paste it back. */
+export function describeWgTunnels(available: WgTunnelRef[]): string {
+  return available
+    .map((t) => `node=${JSON.stringify(t.node)} proto=${t.proto} device=${t.device}`)
+    .join('; ');
+}
+
+function renderWgQuickConf(wg: WgEndpoint, opts?: WgQuickOpts): string {
 
   if (wg.protocol === 'wireguard') {
     return buildWireguardClientConfig({

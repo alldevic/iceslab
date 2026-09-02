@@ -5,7 +5,13 @@ import { ROUTING_PRESET_IDS, type RoutingPresetId } from '@iceslab/shared';
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson, type CustomGeoRef } from './formats/singbox.js';
-import { buildWgQuickConf, wgConfName } from './formats/wgconf.js';
+import {
+  buildWgQuickConf,
+  describeWgTunnels,
+  selectWgEndpoint,
+  wgConfName,
+  type WgSelection,
+} from './formats/wgconf.js';
 import { collectMtprotoNodes, collectWgNodes, tunnelConfigUrls } from './formats/per-node.js';
 import { usableFormats } from './formats/format-usable.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
@@ -254,6 +260,54 @@ function wantsHtmlPage(
 ): boolean {
   if (query.format) return false;
   return acceptHeader.toLowerCase().includes('text/html');
+}
+
+/**
+ * The answer to a wg link that names nothing.
+ *
+ * Until this existed the route sent `buildWgQuickConf`'s empty string as a 200
+ * with `Content-Disposition: attachment; filename="…​.conf"`: a zero-byte FILE.
+ * Every wg client imports it and says the same thing — no `PrivateKey` — so the
+ * complaint that reaches support is "the config is invalid", pointing at the
+ * one part of the system that is fine.
+ *
+ * 404 rather than 204: 204 is still a success, and a client that gets one has
+ * no more idea what happened than with the empty file. What the buyer asked for
+ * does not exist, and the two ways for it not to exist get different bodies —
+ * `available` is the whole point of the second one. The node name it lists is
+ * verbatim, flag emoji and all: `?node=s2` against `🇳🇱 s2` is exactly how a
+ * right-looking value misses, and no shorter answer would show that.
+ */
+function wgMiss(
+  reply: FastifyReply,
+  miss: Extract<WgSelection, { ok: false }>,
+  query: { node?: string; proto?: string; device?: string },
+  kind: 'wg' | 'awg',
+): FastifyReply {
+  const asked = [
+    query.node !== undefined ? `node=${JSON.stringify(query.node)}` : null,
+    query.proto !== undefined ? `proto=${query.proto}` : null,
+    query.device !== undefined ? `device=${query.device}` : null,
+  ]
+    .filter((p): p is string => p !== null)
+    .join(' ');
+  if (miss.reason === 'no-wg-endpoint') {
+    return reply.code(404).send({
+      error: 'NO_WG_TUNNEL',
+      message:
+        kind === 'awg'
+          ? 'this subscription has no AmneziaWG tunnel, so there is no vpn:// key to hand over'
+          : 'this subscription has no WireGuard or AmneziaWG tunnel',
+      available: [],
+    });
+  }
+  return reply.code(404).send({
+    error: 'NO_MATCHING_WG_TUNNEL',
+    message:
+      `no tunnel in this subscription matches ${asked || 'the request'}` +
+      `; it has: ${describeWgTunnels(miss.available)}`,
+    available: miss.available,
+  });
 }
 
 function pickLang(acceptLanguage: string | undefined): 'ru' | 'en' {
@@ -705,6 +759,14 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         }
         case 'wgconf': {
           const wgSettings = await getSubscriptionSettings();
+          // Resolved BEFORE anything is rendered, because a miss is an answer
+          // in its own right and it is not a file. See wgMiss.
+          const picked = selectWgEndpoint(filtered, {
+            node: query.node,
+            proto: query.proto,
+            device: query.device,
+          });
+          if (!picked.ok) return wgMiss(reply, picked, query, 'wg');
           // Filename = `<brand>-<node>-<flavour>.conf`. The node and flavour
           // parts keep several tunnels apart (the browser otherwise saves
           // test.conf, test(1).conf, ...), and the `.conf` suffix matters: the
@@ -756,8 +818,19 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // AmneziaVPN-app "vpn://" connection key (base64 blob the flagship
           // AmneziaVPN clients import directly: their QR scanner and "paste
           // key" both accept it). Single tunnel per key, so `?node=` selects
-          // which AmneziaWG node; absent = first. Empty body = no AWG endpoint
-          // for this user (same 204-style contract as wgconf).
+          // which AmneziaWG node; absent = first.
+          //
+          // The flavour is not a query here, it is the format: only AmneziaWG
+          // has a vpn:// form. A subscription carrying stock WireGuard alone
+          // therefore misses with `no-match` and the reply lists the tunnels it
+          // does have — which is the useful answer, because the .conf link for
+          // each of them works.
+          const pickedAwg = selectWgEndpoint(filtered, {
+            node: query.node,
+            proto: 'amneziawg',
+            device: query.device,
+          });
+          if (!pickedAwg.ok) return wgMiss(reply, pickedAwg, query, 'awg');
           return reply
             .type('text/plain; charset=utf-8')
             .send(

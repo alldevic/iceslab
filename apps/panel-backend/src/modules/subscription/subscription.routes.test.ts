@@ -338,7 +338,8 @@ describe('GET /sub/:token (JSON format)', () => {
       method: 'GET',
       url: `/sub/${user.subscriptionToken}?${href}`,
     });
-    expect(empty.body).toBe('');
+    expect(empty.statusCode).toBe(404);
+    expect(JSON.parse(empty.body).error).toBe('NO_WG_TUNNEL');
     // … so the page must not offer it.
     expect(await page()).not.toContain('format=wgconf');
   });
@@ -514,7 +515,11 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
     expect(v.streamSettings.network).toBe('raw');
   });
 
-  it('returns empty wgconf body when user has no AmneziaWG endpoint', async () => {
+  it('says there is no wg tunnel instead of handing over an empty file', async () => {
+    // Не 200 с нулём байт. Пустое тело приезжает клиенту как ФАЙЛ (у ответа
+    // есть Content-Disposition), клиент его импортирует и жалуется на
+    // отсутствующий PrivateKey — то есть симптом называет конфиг, а причина в
+    // том, что канала wg у покупателя нет вовсе.
     const user = await createUser('alice');
     await createNode('eu-1', '10.0.0.1:8443');
 
@@ -522,9 +527,96 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
       method: 'GET',
       url: `/sub/${user.subscriptionToken}?format=wgconf`,
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toContain('application/octet-stream');
-    expect(res.body).toBe('');
+    expect(res.statusCode).toBe(404);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('NO_WG_TUNNEL');
+    // Nothing to offer, so nothing is offered: this is the "nothing to give"
+    // half, and it must not be confused with "you asked for the wrong one".
+    expect(body.available).toEqual([]);
+    expect(res.headers['content-disposition']).toBeUndefined();
+  });
+
+  it('names the tunnels it has when the selector matches none of them', async () => {
+    // Промахнуться можно ПРАВИЛЬНЫМ именем. `?node=` сверяется с именем,
+    // которое видит клиент, а оно начинается с флага страны — `?node=s2` на
+    // ноде по имени `🇳🇱 s2` не совпадает ни с чем. Раньше это был файл в ноль
+    // байт с кодом 200; теперь ответ называет то, что есть, в том же виде, в
+    // каком это надо написать в запросе.
+    const user = await createUser('alice');
+    const nodeRes = await app.inject({
+      method: 'POST',
+      url: '/api/nodes',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 's2', address: '10.0.0.9', countryCode: 'NL' },
+    });
+    expect(nodeRes.statusCode).toBe(201);
+    const nodeId = JSON.parse(nodeRes.body).id as string;
+    const profileId = await createProfile(
+      'wireguard',
+      {
+        subnet: '10.79.79.0/24',
+        serverPrivateKey: 'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFsGm3Uk=',
+        serverPublicKey: 'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      },
+      'missname',
+    );
+    await createBinding(profileId, nodeId, 51822);
+
+    // Control: without a selector the same subscription serves the file. Без
+    // него весь тест доказывал бы только то, что у покупателя нет wg.
+    const ok = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?format=wgconf&proto=wireguard`,
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body).toContain('[Interface]');
+
+    const miss = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?format=wgconf&node=s2`,
+    });
+    expect(miss.statusCode).toBe(404);
+    const body = JSON.parse(miss.body);
+    // Not NO_WG_TUNNEL: this buyer HAS one. The two are different answers.
+    expect(body.error).toBe('NO_MATCHING_WG_TUNNEL');
+    // One entry per (node, flavour, DEVICE): every one of them is a distinct
+    // tunnel with its own keypair, and `?device=` is how a link names it.
+    expect(body.available.length).toBeGreaterThan(0);
+    // The name as the query has to spell it — flag included. That is the whole
+    // point of answering with a list rather than with nothing.
+    for (const t of body.available) {
+      expect(t.node).toBe('🇳🇱 s2');
+      expect(t.proto).toBe('wireguard');
+    }
+    expect(body.available.map((t: { device: number }) => t.device)).toContain(1);
+    expect(body.message).toContain('🇳🇱 s2');
+    // And the value that was asked for is quoted back, so a log line is enough
+    // to see which of the two names was used.
+    expect(body.message).toContain('node="s2"');
+    // The right name works, which is what makes the answer above actionable.
+    const named = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?format=wgconf&node=${encodeURIComponent('🇳🇱 s2')}`,
+    });
+    expect(named.statusCode).toBe(200);
+    expect(named.body).toContain('[Interface]');
+
+    // Same for a device that does not exist. One tunnel, positions start at 1.
+    const noDevice = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?format=wgconf&device=99`,
+    });
+    expect(noDevice.statusCode).toBe(404);
+    expect(JSON.parse(noDevice.body).error).toBe('NO_MATCHING_WG_TUNNEL');
+
+    // And for the flavour: this node serves stock WireGuard, not AmneziaWG, so
+    // the vpn:// key cannot be built — and the reply says which .conf can.
+    const noKey = await app.inject({
+      method: 'GET',
+      url: `/sub/${user.subscriptionToken}?format=amneziavpn`,
+    });
+    expect(noKey.statusCode).toBe(404);
+    expect(JSON.parse(noKey.body).available[0].proto).toBe('wireguard');
   });
 
   // The wg path end to end: a profile saved through the API, bound to a node,
