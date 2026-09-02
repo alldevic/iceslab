@@ -95,8 +95,21 @@ export interface CascadeDto {
    * old, which no longer routes. Subscribers have to delete it by hand.
    */
   lineRenames?: CascadeLineRename[];
+  /** Entry nodes whose non-xray bridge this save has just switched off, by
+   *  making the cascade multi-direction. Present only on a save that caused it;
+   *  empty array means the save was checked and changed nothing. */
+  bridgesDisabled?: CascadeBridgeDisabled[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** One entry node that asked for a bridge and no longer gets one. `directions`
+ *  is the count that made it impossible: a bridge needs exactly one, because
+ *  bridged traffic carries no tag to choose an exit with. */
+export interface CascadeBridgeDisabled {
+  nodeId: string;
+  nodeName: string;
+  directions: number;
 }
 
 /** One renamed line: the tag that identifies the direction, and the two names

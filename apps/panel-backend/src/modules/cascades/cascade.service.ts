@@ -1438,6 +1438,52 @@ export function autoLineLabel(c: { name: string; autoLabel?: string | null }): s
  * 1602 connections into the entry's terminal refusal against 901 through the
  * cascade, from one person holding both.
  */
+/**
+ * Entry nodes whose bridge this cascade's direction count has just switched
+ * off, so the save can say it out loud.
+ *
+ * A bridge is emitted only when the entry has EXACTLY ONE direction: bridged
+ * traffic carries no per-user tag, so with two directions the node cannot tell
+ * which exit a given connection wanted. Refusing is the right call - choosing a
+ * country on the buyer's behalf would be worse - but the cost lands on the
+ * buyer and nowhere else: wg, awg, TUIC, AnyTLS, ShadowTLS and Hysteria2 go
+ * back to egressing from the entry node, which for this deployment means from
+ * RUSSIA, while the toggle in the node's card stays on and the panel keeps
+ * looking correct.
+ *
+ * Until now the only trace was an INFO line written later, when the node's
+ * config was compiled - long after the operator had moved on. This reports it
+ * at the moment the direction is added, in the response to the very save that
+ * caused it, next to `lineRenames` and for the same reason: nothing downstream
+ * can undo it.
+ */
+async function bridgesDisabledByDirections(
+  db: Prisma.TransactionClient | typeof prisma,
+  cascadeId: string,
+): Promise<{ nodeId: string; nodeName: string; directions: number }[]> {
+  const c = await db.cascade.findUnique({
+    where: { id: cascadeId },
+    select: {
+      directions: { select: { tag: true } },
+      positions: {
+        where: { position: 0 },
+        select: { nodes: { select: { node: { select: { id: true, name: true, hardening: true } } } } },
+      },
+    },
+  });
+  if (!c || c.directions.length <= 1) return [];
+  const out: { nodeId: string; nodeName: string; directions: number }[] = [];
+  for (const p of c.positions) {
+    for (const n of p.nodes) {
+      const hardening = n.node.hardening as { bridgeNonXrayInbounds?: boolean } | null;
+      if (hardening?.bridgeNonXrayInbounds === true) {
+        out.push({ nodeId: n.node.id, nodeName: n.node.name, directions: c.directions.length });
+      }
+    }
+  }
+  return out;
+}
+
 async function lineLabelsByTag(
   db: Prisma.TransactionClient | typeof prisma,
   cascadeId: string,
@@ -1636,7 +1682,19 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
           `keep the old one, which no longer routes — subscribers must delete it.`,
       );
     }
-    return { ...mapCascade(c), lineRenames: renamed };
+    // Same rule as the renames above: said at the moment it becomes true, in
+    // the response to the save that caused it. The buyer's traffic changes
+    // country here, and the toggle that promised otherwise stays lit.
+    const bridgesDisabled = await bridgesDisabledByDirections(prisma, id);
+    for (const b of bridgesDisabled) {
+      getLogger().warn(
+        `[cascade] ${id}: node "${b.nodeName}" has bridgeNonXrayInbounds ON, but this cascade ` +
+          `now has ${b.directions} directions and a bridge needs exactly one. Its wireguard, ` +
+          `amneziawg, tuic, anytls, shadowtls and hysteria clients egress DIRECTLY from that ` +
+          `node again — the toggle stays on and nothing else reports this.`,
+      );
+    }
+    return { ...mapCascade(c), lineRenames: renamed, bridgesDisabled };
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       throw new CascadeNameTakenError(input.name ?? '');
