@@ -1471,6 +1471,18 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
             ? { hideHopsFromSub: input.hideHopsFromSub }
             : {}),
           ...(input.autoProfile !== undefined ? { autoProfile: input.autoProfile } : {}),
+          // Stamped by hand, because every field above is optional and a v4
+          // save carries none of them: the topology lives in child rows, so
+          // `data` came out EMPTY and `@updatedAt` never fired. The row then
+          // said the cascade had not been touched since whenever a scalar last
+          // changed — measured on the live cascade 2026-09-03, ten hours behind
+          // the positions and links its own save had just written.
+          //
+          // Not only a date in the interface. `getCascadeStatus` asks whether
+          // each hop's `lastInboundSyncAt` is later than this, so a stale value
+          // makes every hop of a cascade that was JUST saved report `applied`
+          // before the push it is waiting on has been sent.
+          updatedAt: new Date(),
         },
       });
       if (!hops && input.positions && input.directions) {
