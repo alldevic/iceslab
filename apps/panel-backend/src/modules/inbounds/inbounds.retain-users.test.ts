@@ -173,6 +173,45 @@ describe('every inbound sync states the node’s whole user set', () => {
   });
 });
 
+describe('a wg key travels only with its address', () => {
+  it('omits the flavour the node has no profile for', async () => {
+    // A node can run both wg adapters with only one flavour bound. Sending the
+    // device's key for the unbound one used to be inert - the adapter dropped a
+    // peer with no address and answered ok. Now it refuses, correctly, so the
+    // panel must stop sending what it knows cannot be made.
+    const nodeId = await node('awg-only');
+    await boundProfile(nodeId, 'amneziawg', 1234);
+    const alice = await user('alice');
+    await prisma.wgDevice.create({
+      data: {
+        userId: alice,
+        label: 'phone',
+        publicKey: 'pub-key-of-a-phone',
+        privateKey: 'priv',
+        presharedKey: null,
+      },
+    });
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockResolvedValue({
+      ok: true,
+      applied: 1,
+      skipped: 0,
+    });
+    vi.spyOn(NodeTransport.prototype, 'retainUsers').mockResolvedValue({ ok: true, reconciled: [] });
+    const addUser = vi.spyOn(NodeTransport.prototype, 'addUser').mockResolvedValue(undefined);
+
+    await applyInboundsForNode(nodeId);
+
+    const device = addUser.mock.calls.map(([r]) => r).find((r) => r.userId !== alice);
+    expect(device, 'the device was not pushed at all').toBeDefined();
+    expect(device!.credentials.amneziawgPublicKey).toBe('pub-key-of-a-phone');
+    expect(device!.credentials.amneziawgAllowedIp).toBeTruthy();
+    expect(
+      device!.credentials.wireguardPublicKey,
+      'a key was sent for a flavour with no address, which the node now refuses',
+    ).toBeUndefined();
+  });
+});
+
 describe('the wg push says which inbound it is', () => {
   it('carries the binding id, which is what a removal is later matched against', async () => {
     // The adapter holds ONE inbound and applyInbounds is dispatched one at a

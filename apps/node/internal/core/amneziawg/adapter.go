@@ -389,10 +389,17 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 	a.peers = make(map[string]Peer)
 	a.lastStats = make(map[string]peerCounters)
 	a.cfg.Inbound = InboundConfig{
-		Interface: iface,
-		Plain:     a.plain(),
-		PostUp:    a.cfg.Inbound.PostUp,
-		PostDown:  a.cfg.Inbound.PostDown,
+		// What survives is install-time identity, not anything the removed
+		// inbound brought: the device name, its PostUp/PostDown, and the port the
+		// installer bound. The private key going is what makes Provisioned()
+		// false, and the port staying is what lets a pre-port-on-the-wire panel
+		// re-provision this interface later without it rendering a config with
+		// no port at all.
+		Interface:  iface,
+		ListenPort: a.cfg.Inbound.ListenPort,
+		Plain:      a.plain(),
+		PostUp:     a.cfg.Inbound.PostUp,
+		PostDown:   a.cfg.Inbound.PostDown,
 	}
 	a.started = false
 	a.healthCheckedAt = time.Time{}

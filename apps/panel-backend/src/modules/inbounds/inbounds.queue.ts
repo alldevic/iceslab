@@ -735,11 +735,16 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         shortId: '',
         username: usernameById.get(peer.userId) ?? '',
         credentials: {
-          amneziawgPublicKey: peer.publicKey,
+          // A flavour's key travels only WITH its address. One device key, its
+          // own subnet's address per flavour (see resolveWgProfile above) - and
+          // a key without an address is not half a peer the node can make, it is
+          // a peer it must refuse. The node used to answer `ok` to that and do
+          // nothing; now it says so, which only helps if the panel stops sending
+          // it. The ordinary way it arose: a node running both adapters with only
+          // one flavour bound, where every device carried a key for the other.
+          amneziawgPublicKey: awgIp ? peer.publicKey : undefined,
           amneziawgAllowedIp: awgIp,
-          // One device key, its own subnet's address per flavour (see
-          // resolveWgProfile above).
-          wireguardPublicKey: peer.publicKey,
+          wireguardPublicKey: wgIp ? peer.publicKey : undefined,
           wireguardAllowedIp: wgIp,
           // Sent only where the profile turned preshared keys on, and only
           // if the device actually has one. `undefined` is the meaningful
