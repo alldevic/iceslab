@@ -79,6 +79,47 @@ describe('buildSubpageConfig', () => {
     }
   });
 
+  // The shop draws one QR and it is always the subscription URL, on every tab
+  // including WireGuard. A wg client's scanner reads that text as the body of
+  // a config: measured 2026-09-03, WG Tunnel answered "no PrivateKey" to the
+  // QR shown on the page telling the buyer to set up WireGuard. The shop has
+  // no per-button QR and its CSS pins any SVG we could smuggle in to 19x19, so
+  // the fix is a link to the page that already draws the right QR per tunnel.
+  it('offers a wg buyer the QR of their own tunnel, not just a file', () => {
+    const doc = buildSubpageConfig(
+      input({
+        protocols: ['wireguard'],
+        wgNodes: [{ nodeName: 'nl-1', deviceIndex: 1 }, { nodeName: 'nl-1', deviceIndex: 2 }],
+      }),
+    )!;
+    const qr = allButtons(doc).filter((b) => !b.link.includes('format=') && b.link.includes('proto='));
+    expect(qr.length).toBeGreaterThan(0);
+    for (const b of qr) {
+      // No `format=`: an explicit format is what makes the route serve a
+      // config instead of the page, so a QR link carrying one lands the buyer
+      // back on a downloaded file.
+      expect(b.link).not.toContain('format=');
+      expect(b.link).toContain('proto=wireguard');
+      expect(b.link).toContain('node=nl-1');
+    }
+    // One per tunnel, pinned by device: a buyer with two devices scanning the
+    // same QR twice puts one key on both phones.
+    expect(qr.map((b) => b.link).some((l) => l.endsWith('device=1'))).toBe(true);
+    expect(qr.map((b) => b.link).some((l) => l.endsWith('device=2'))).toBe(true);
+  });
+
+  it('pins the AmneziaWG QR link to the amneziawg flavour', () => {
+    const doc = buildSubpageConfig(
+      input({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'nl-1', vpnKey: 'vpn://KEY' }] }),
+    )!;
+    const qr = allButtons(doc).filter((b) => !b.link.includes('format=') && b.link.includes('proto='));
+    expect(qr.length).toBeGreaterThan(0);
+    // Without `proto=`, `?format=wgconf` picks the first wg endpoint whatever
+    // its flavour, and a stock client handed an AmneziaWG file rejects it on
+    // `Jc = 4`. The QR link must not reintroduce that ambiguity.
+    for (const b of qr) expect(b.link).toContain('proto=amneziawg');
+  });
+
   it('labels tunnel buttons by node only when there is more than one node', () => {
     const one = buildSubpageConfig(
       input({ protocols: ['wireguard'], wgNodes: [{ nodeName: 'nl-1' }] }),

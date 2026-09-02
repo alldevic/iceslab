@@ -20,6 +20,69 @@ function base(overrides: Partial<SubscriptionPageData> = {}): SubscriptionPageDa
 }
 
 describe('buildSubscriptionPage', () => {
+  // A buyer arriving from "show me the QR for THIS tunnel" must land on that
+  // tunnel's QR. The default is the subscription QR, and that is the artefact
+  // this whole path exists to avoid handing a WireGuard client: measured
+  // 2026-09-03, WG Tunnel read the subscription URL out of a QR as the body of
+  // a config and reported a missing PrivateKey.
+  it('opens on the preselected tunnel instead of the subscription QR', () => {
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['xray', 'amneziawg', 'wireguard'],
+        subUrlQrSvg: '<svg id="sub"></svg>',
+        awgNodes: [{ nodeName: 'n1', deviceIndex: 1, confQrSvg: '<svg id="awg1"></svg>' }],
+        wgNodes: [
+          { nodeName: 'n1', deviceIndex: 1, confQrSvg: '<svg id="wg1"></svg>' },
+          { nodeName: 'n1', deviceIndex: 2, confQrSvg: '<svg id="wg2"></svg>' },
+        ],
+        preselect: { flavour: 'wireguard', nodeName: 'n1', deviceIndex: 2 },
+      }),
+    );
+    expect(html).toContain('<figure class="qrf on" data-target="wg:n1#2"');
+    // ...and the subscription QR must not also be open: two `on` figures is
+    // whichever one the stylesheet happens to stack last.
+    expect(html).toContain('<figure class="qrf" data-target="sub"');
+    expect(html).toContain('<button class="seg on" data-target="wg:n1#2">');
+  });
+
+  it('opens a preselected AmneziaWG tunnel on its .conf QR, not the vpn:// key', () => {
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['xray', 'amneziawg'],
+        subUrlQrSvg: '<svg id="sub"></svg>',
+        awgNodes: [
+          {
+            nodeName: 'n1',
+            deviceIndex: 1,
+            confQrSvg: '<svg id="awgconf"></svg>',
+            vpnQrSvg: '<svg id="awgvpn"></svg>',
+          },
+        ],
+        preselect: { flavour: 'amneziawg', nodeName: 'n1', deviceIndex: 1 },
+      }),
+    );
+    expect(html).toContain('data-target="awg:n1#1" data-app="conf"');
+    expect(html).toMatch(/<figure class="qrf on" data-target="awg:n1#1" data-app="conf"/);
+    expect(html).toMatch(/<figure class="qrf" data-target="awg:n1#1" data-app="vpn"/);
+    // The app toggle has to be visible and on the right half, or the buyer
+    // sees a QR whose label contradicts the highlighted button.
+    expect(html).toContain('<button class="seg on" data-app="conf">AmneziaWG</button>');
+    expect(html).not.toContain('class="segs appsel" style="display:none"');
+  });
+
+  // The default path is what every buyer without such a link still gets.
+  it('still leads with the subscription QR when nothing is preselected', () => {
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['xray', 'wireguard'],
+        subUrlQrSvg: '<svg id="sub"></svg>',
+        wgNodes: [{ nodeName: 'n1', deviceIndex: 1, confQrSvg: '<svg id="wg1"></svg>' }],
+      }),
+    );
+    expect(html).toContain('<figure class="qrf on" data-target="sub"');
+    expect(html).toContain('<figure class="qrf" data-target="wg:n1#1"');
+  });
+
   it('renders an HTML document with the subscription URL', () => {
     const html = buildSubscriptionPage(base());
     expect(html).toContain('<!DOCTYPE html>');

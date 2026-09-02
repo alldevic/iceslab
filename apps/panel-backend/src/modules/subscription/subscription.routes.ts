@@ -670,6 +670,20 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             // Not format-gated: the t.me link is built from the endpoint and
             // fetches nothing back from us.
             mtprotoNodes: collectMtprotoNodes(result.endpoints),
+            // The same `proto`/`node`/`device` triple the .conf links carry,
+            // reused to open the page on that tunnel's QR. A link that says
+            // "the QR for THIS tunnel" and lands on the subscription QR is
+            // worse than no link: the buyer scans what is in front of them,
+            // and a wg client reads a URL as the body of a config.
+            preselect: query.proto
+              ? {
+                  flavour: query.proto,
+                  nodeName: query.node,
+                  deviceIndex: Number.isInteger(Number(query.device))
+                    ? Number(query.device)
+                    : undefined,
+                }
+              : undefined,
             usableFormats: usableFormats(result.endpoints),
           }),
         );

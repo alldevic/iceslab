@@ -302,6 +302,31 @@ function tunnelSuffix(
   return parts.length > 0 ? ` · ${parts.join(' ')}` : '';
 }
 
+/**
+ * The buyer's own subscription page, opened on ONE tunnel's QR.
+ *
+ * Same `proto`/`node`/`device` triple as the file link, minus `format`: the
+ * page is what the panel serves a browser, and those three are what it uses to
+ * decide which QR to open on.
+ *
+ * Why a link out at all. The shop draws exactly one QR and it is always the
+ * subscription URL - true for every tab, including the WireGuard one. A wg
+ * client's scanner reads that text as the body of a config, so the buyer gets
+ * "no PrivateKey" from the QR shown on the page that told them to set up
+ * WireGuard (measured 2026-09-03 with WG Tunnel). The shop has no per-button
+ * QR to fix this with, and its CSS pins any SVG we could smuggle through
+ * `svgLibrary` to 19x19 - unscannable. The panel's own page already draws the
+ * right QR per tunnel, so the honest fix is to take the buyer there.
+ */
+function qrUrl(
+  subUrl: string,
+  proto: string,
+  nodeName: string,
+  deviceIndex: number,
+): string {
+  return `${subUrl}?proto=${proto}&node=${encodeURIComponent(nodeName)}&device=${deviceIndex}`;
+}
+
 function fileUrl(
   subUrl: string,
   format: string,
@@ -489,6 +514,24 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
               `${label} (.conf)${tunnelSuffix(n.nodeName, n.deviceIndex, many, manyDevices)}`,
             ),
             svgIconKey: 'DownloadIcon',
+          })),
+        },
+        {
+          svgIconKey: 'ExternalLink',
+          svgIconColor: 'sky',
+          title: t('Or scan a QR code', 'Или отсканируйте QR-код'),
+          description: t(
+            `Opens the QR for this tunnel — scan it with ${app.name} and skip the file entirely. Importing a downloaded file is where phones make trouble: the name gets a "(1)" on a second download, and the app takes that name as the tunnel's own.`,
+            `Откроется QR именно этого туннеля — отсканируйте его в ${app.name}, и файл не понадобится вовсе. Именно на импорте файла телефоны и капризничают: при повторном скачивании к имени добавляется «(1)», а приложение берёт это имя как имя туннеля.`,
+          ),
+          buttons: nodes.map((n) => ({
+            type: 'external' as const,
+            link: qrUrl(subUrl, proto, n.nodeName, n.deviceIndex),
+            text: t(
+              `QR${tunnelSuffix(n.nodeName, n.deviceIndex, many, manyDevices)}`,
+              `QR${tunnelSuffix(n.nodeName, n.deviceIndex, many, manyDevices)}`,
+            ),
+            svgIconKey: 'ExternalLink',
           })),
         },
       ];

@@ -65,6 +65,19 @@ export interface SubscriptionPageData {
     nodeName: string;
     tmeUri: string;
   }>;
+  /** Which QR to open on, taken from the link the buyer followed.
+   *
+   *  Without it the page leads with the subscription QR, and that is exactly
+   *  the artefact a WireGuard client cannot read: measured 2026-09-03, a buyer
+   *  scanned the one QR in front of them with WG Tunnel and got "no
+   *  PrivateKey", because the app read the URL as the body of a config. A
+   *  buyer who arrived from "show me the QR for THIS tunnel" must land on that
+   *  tunnel's QR, not on a menu whose default is the wrong answer. */
+  preselect?: {
+    flavour: 'amneziawg' | 'wireguard';
+    nodeName?: string;
+    deviceIndex?: number;
+  };
   /** Formats that render at least one server for this buyer. */
   usableFormats?: ReadonlySet<ClientFormat>;
 }
@@ -430,16 +443,41 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
       label: chipLabel('WireGuard', n, multiWg, multiWgDevices),
     });
 
+  // Which target opens first. Without a preselect this reproduces what the
+  // page always did - the subscription QR when there is one, else the first
+  // AmneziaWG server, else the first WireGuard one - because `targets` is
+  // built in exactly that order.
+  const wantKind = data.preselect
+    ? data.preselect.flavour === 'amneziawg'
+      ? 'awg'
+      : 'wg'
+    : null;
+  const wantPool = wantKind === 'awg' ? awgNodes : wantKind === 'wg' ? wgNodes : [];
+  const wanted = data.preselect
+    ? wantPool.find(
+        (n) =>
+          (data.preselect!.nodeName === undefined || n.nodeName === data.preselect!.nodeName) &&
+          (data.preselect!.deviceIndex === undefined ||
+            n.deviceIndex === data.preselect!.deviceIndex),
+      )
+    : undefined;
+  const preselectId = wanted ? `${wantKind}:${wanted.nodeName}#${wanted.deviceIndex}` : null;
+  const activeTarget = preselectId ?? targets[0]?.id ?? null;
+  // A preselected AmneziaWG target opens on the .conf QR, not the vpn:// key:
+  // the buyer came from an AmneziaWG import step, and the key QR is the dense
+  // one we tell people to copy instead of scan.
+  const activeApp: 'vpn' | 'conf' = preselectId?.startsWith('awg:') ? 'conf' : 'vpn';
+
   const figures: string[] = [];
   if (showSub) {
     figures.push(
-      `<figure class="qrf on" data-target="sub"><div class="qbx">${data.subUrlQrSvg}</div><figcaption>${esc(t.scanSubHint)}</figcaption></figure>`,
+      `<figure class="qrf${activeTarget === 'sub' ? ' on' : ''}" data-target="sub"><div class="qbx">${data.subUrlQrSvg}</div><figcaption>${esc(t.scanSubHint)}</figcaption></figure>`,
     );
   }
-  awgNodes.forEach((n, ni) => {
-    // The first AWG node's vpn:// QR is the default view when there is no proxy
-    // subscription QR to lead with.
-    const vpnOn = !showSub && ni === 0 ? ' on' : '';
+  awgNodes.forEach((n) => {
+    const id = `awg:${n.nodeName}#${n.deviceIndex}`;
+    const vpnOn = activeTarget === id && activeApp === 'vpn' ? ' on' : '';
+    const confOn = activeTarget === id && activeApp === 'conf' ? ' on' : '';
     if (n.vpnQrSvg) {
       const copyBtn = n.vpnKey
         ? `<button class="copyk" type="button" data-key="${esc(n.vpnKey)}">${esc(t.copyKey)}</button>`
@@ -450,15 +488,15 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     }
     if (n.confQrSvg) {
       figures.push(
-        `<figure class="qrf" data-target="awg:${esc(n.nodeName)}#${n.deviceIndex}" data-app="conf"><div class="qbx">${n.confQrSvg}</div><figcaption>AmneziaWG</figcaption></figure>`,
+        `<figure class="qrf${confOn}" data-target="awg:${esc(n.nodeName)}#${n.deviceIndex}" data-app="conf"><div class="qbx">${n.confQrSvg}</div><figcaption>AmneziaWG</figcaption></figure>`,
       );
     }
   });
   // No data-app on the WireGuard figures: there is a single import path, and
   // the widget's script only consults data-app for `awg:` targets.
-  wgNodes.forEach((n, ni) => {
+  wgNodes.forEach((n) => {
     if (!n.confQrSvg) return;
-    const on = !showSub && !hasAwg && ni === 0 ? ' on' : '';
+    const on = activeTarget === `wg:${n.nodeName}#${n.deviceIndex}` ? ' on' : '';
     figures.push(
       `<figure class="qrf${on}" data-target="wg:${esc(n.nodeName)}#${n.deviceIndex}"><div class="qbx">${n.confQrSvg}</div><figcaption>WireGuard</figcaption></figure>`,
     );
@@ -468,16 +506,17 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     targets.length > 1
       ? `<div class="segs tgsel" role="tablist">${targets
           .map(
-            (tg, i) =>
-              `<button class="seg${i === 0 ? ' on' : ''}" data-target="${esc(tg.id)}">${esc(tg.label)}</button>`,
+            (tg) =>
+              `<button class="seg${tg.id === activeTarget ? ' on' : ''}" data-target="${esc(tg.id)}">${esc(tg.label)}</button>`,
           )
           .join('')}</div>`
       : '';
   // AmneziaVPN / AmneziaWG toggle, only meaningful for an AWG target. Hidden at
   // first when the default target is the proxy subscription QR; the script
   // reveals it the moment an AWG server is selected.
+  const awgActive = !!activeTarget?.startsWith('awg:');
   const appSel = hasAwg
-    ? `<div class="segs appsel"${showSub ? ' style="display:none"' : ''} role="tablist"><button class="seg on" data-app="vpn">AmneziaVPN</button><button class="seg" data-app="conf">AmneziaWG</button></div>`
+    ? `<div class="segs appsel"${awgActive ? '' : ' style="display:none"'} role="tablist"><button class="seg${activeApp === 'vpn' ? ' on' : ''}" data-app="vpn">AmneziaVPN</button><button class="seg${activeApp === 'conf' ? ' on' : ''}" data-app="conf">AmneziaWG</button></div>`
     : '';
   const scanSection =
     figures.length > 0
