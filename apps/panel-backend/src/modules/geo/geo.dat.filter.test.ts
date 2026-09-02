@@ -31,6 +31,60 @@ function bigSite(categories: number, perCategory: number): Map<string, Domain[]>
   return m;
 }
 
+/**
+ * Two categories: GOOD, and POISON whose single domain has a field with wire
+ * type 3 — a type this codec does not support and throws on. Hand-built because
+ * the encoder cannot produce it, which is the point: it is unreachable unless
+ * the domains are decoded.
+ */
+function poisonedSecondCategory(): Uint8Array {
+  const bytes: number[] = [];
+  const varint = (n: number): void => {
+    while (n > 127) {
+      bytes.push((n & 0x7f) | 0x80);
+      n = Math.floor(n / 128);
+    }
+    bytes.push(n);
+  };
+  const lenDelim = (field: number, payload: number[]): void => {
+    varint(field * 8 + 2);
+    varint(payload.length);
+    bytes.push(...payload);
+  };
+  const str = (s: string): number[] => [...new TextEncoder().encode(s)];
+  const sub = (build: (out: number[]) => void): number[] => {
+    const out: number[] = [];
+    build(out);
+    return out;
+  };
+  const strField = (out: number[], field: number, value: string): void => {
+    out.push(field * 8 + 2, value.length, ...str(value));
+  };
+
+  // GOOD { country_code: "GOOD", domain: { type: 2, value: "kept.example" } }
+  lenDelim(
+    1,
+    sub((out) => {
+      strField(out, 1, 'GOOD');
+      const dom = sub((d) => {
+        d.push(1 * 8 + 0, 2); // type = 2 (suffix)
+        strField(d, 2, 'kept.example');
+      });
+      out.push(2 * 8 + 2, dom.length, ...dom);
+    }),
+  );
+  // POISON { country_code: "POISON", domain: { <field 1, wire 3> } }
+  lenDelim(
+    1,
+    sub((out) => {
+      strField(out, 1, 'POISON');
+      const dom = [1 * 8 + 3]; // wire type 3: parseGeoSite's Reader.skip throws
+      out.push(2 * 8 + 2, dom.length, ...dom);
+    }),
+  );
+  return Uint8Array.from(bytes);
+}
+
 describe('a parse builds only what was asked for', () => {
   it('returns just the named categories', () => {
     const bytes = encodeGeoSite(bigSite(5, 10));
@@ -75,23 +129,20 @@ describe('a parse builds only what was asked for', () => {
     expect(some.get('RU')).toEqual(ips.get('RU'));
   });
 
-  it('does not build the objects it was not asked for', () => {
-    // The claim is about memory, so measure memory rather than trust the shape
-    // of the code. 400k domains across 20 categories is ~10MB of wire and, fully
-    // parsed, tens of MB of JS objects; one category out of twenty must cost a
-    // small fraction of that. A range rather than a number: GC timing is not
-    // deterministic, and the point is the order of magnitude.
-    const bytes = encodeGeoSite(bigSite(20, 20_000));
-    const measure = (run: () => unknown): number => {
-      global.gc?.();
-      const before = process.memoryUsage().heapUsed;
-      const kept = run();
-      const after = process.memoryUsage().heapUsed;
-      expect(kept).toBeTruthy();
-      return after - before;
-    };
-    const all = measure(() => parseGeoSite(bytes));
-    const one = measure(() => parseGeoSite(bytes, ['CAT7']));
-    expect(one).toBeLessThan(all / 4);
+  it('does not decode the categories it was not asked for', () => {
+    // The claim is about work not done, so it is proved by work that would fail
+    // if it were done: an entry whose DOMAIN carries an unsupported wire type.
+    // The country-code pass steps over a domain submessage without descending
+    // into it, so this only throws if something actually decodes the domains.
+    //
+    // Deterministic on purpose. The size of the saving was measured on the real
+    // sources (590 MB of heap, 762 MB RSS, on a build with no categories at
+    // all); a heap-delta assertion inside a suite that is also allocating tells
+    // you about the suite, not about the parser.
+    const bytes = poisonedSecondCategory();
+    expect(() => parseGeoSite(bytes), 'the poison is inert, so this proves nothing').toThrow();
+    const good = parseGeoSite(bytes, ['GOOD']);
+    expect([...good.keys()]).toEqual(['GOOD']);
+    expect(good.get('GOOD')).toEqual([{ type: 2, value: 'kept.example' }]);
   });
 });
