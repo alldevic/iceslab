@@ -352,7 +352,12 @@ export async function disableNodeWarp(id: string): Promise<PublicNodeDto> {
  * install-time flags (ufw, fail2ban, ssh allowlist) that only matter when the
  * node is provisioned. Editing one of these has to re-push the config.
  */
-const EGRESS_HARDENING_KEYS = ['egressPolicy', 'zapret2'] as const;
+// Hardening keys whose value changes what the node's RUNNING config looks like,
+// so an edit to one has to be pushed rather than only stored. A key missing from
+// this list saves fine, shows in the panel as set, and never reaches the node:
+// the operator reads the switch as applied and the machine behaves as before.
+// `bridgeNonXrayInbounds` was added 2026-09-02 after doing exactly that on s1.
+const EGRESS_HARDENING_KEYS = ['egressPolicy', 'zapret2', 'bridgeNonXrayInbounds'] as const;
 
 export async function updateNode(id: string, input: UpdateNodeInput): Promise<PublicNodeDto> {
   const existing = await repo.findActiveById(id);
