@@ -407,15 +407,26 @@ export function disambiguateCascadeLabels(endpoints: SubscriptionEndpoint[]): vo
       seen.set(x.label, (seen.get(x.label) ?? 0) + 1);
     }
   }
+  // COPY the line rather than rename it in place. The exits are built once per
+  // cascade and handed to every entry that offers them, so two endpoints hold
+  // the SAME objects: renaming through one endpoint renamed the other's line
+  // too, and the second pass then saw an already-suffixed label, failed the
+  // `< 2` test and left it alone. Both rows came out named after the first
+  // endpoint's transport — two servers with one name, which is the shape a
+  // client cannot tell apart at all.
+  //
+  // Invisible until entries of different transports could both keep a line
+  // (2026-09-02): before that the collapse left exactly one endpoint per
+  // direction, so nothing was ever shared.
   for (const e of endpoints) {
-    for (const x of e.cascadeExits ?? []) {
-      if ((seen.get(x.label) ?? 0) < 2) continue;
-      const network = e.protocol === 'xray' ? e.network : undefined;
-      const suffix =
-        (network ? TRANSPORT_LABEL[network] : undefined) ??
-        (e.hostRemark && e.hostRemark !== 'Default' ? e.hostRemark : e.nodeName);
-      x.label = `${x.label} · ${suffix}`;
-    }
+    if (!e.cascadeExits) continue;
+    const network = e.protocol === 'xray' ? e.network : undefined;
+    const suffix =
+      (network ? TRANSPORT_LABEL[network] : undefined) ??
+      (e.hostRemark && e.hostRemark !== 'Default' ? e.hostRemark : e.nodeName);
+    e.cascadeExits = e.cascadeExits.map((x) =>
+      (seen.get(x.label) ?? 0) < 2 ? x : { ...x, label: `${x.label} · ${suffix}` },
+    );
   }
 }
 

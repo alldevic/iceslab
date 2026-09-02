@@ -116,3 +116,31 @@ describe('the direction a cascade label reads in', () => {
     expect(cascadeProfileLabel('ru', null, 'nl-01')).toBe('ru → nl-01');
   });
 });
+
+/**
+ * Two entries share the SAME exit objects — the panel builds the lines once per
+ * cascade and hands them to every entry that offers them. Renaming in place
+ * therefore renamed both, and the second endpoint's line, already suffixed,
+ * failed the "is this label ambiguous" test and kept the first one's transport.
+ * The subscription came out with two servers under one name.
+ */
+describe('disambiguateCascadeLabels with shared line objects', () => {
+  it('names each endpoint after ITS OWN transport', () => {
+    const shared = [{ label: '🇳🇱 ru → NL', tag: 1, cascadeId: 'c-1' }];
+    const xhttp = {
+      protocol: 'xray', network: 'xhttp', nodeName: 'ru-01', host: 'ru-01', port: 443,
+      cascadeExits: [...shared],
+    } as never;
+    const raw = {
+      protocol: 'xray', network: 'raw', nodeName: 'ru-01', host: 'ru-01', port: 8443,
+      cascadeExits: [...shared],
+    } as never;
+
+    disambiguateCascadeLabels([xhttp, raw] as never);
+
+    const labels = [xhttp, raw].map((e) => (e as never as { cascadeExits: { label: string }[] }).cascadeExits[0]!.label);
+    expect(labels[0]).toContain('XHTTP');
+    expect(labels[1]).toContain('TCP');
+    expect(labels[0]).not.toBe(labels[1]);
+  });
+});
