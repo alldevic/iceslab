@@ -14,13 +14,22 @@ import {
  * panel.
  *
  * So neither half is restated here. The set of multi-inbound adapters is
- * derived from the node's own `core.InboundReconciler` implementations, and the
+ * derived from the node's own `core.MultiInbound` implementations, and the
  * native-engine map from `dto.NativeEngine`. The day an adapter learns to hold
- * several - which upstream would do by implementing `RetainInbounds`, the same
- * way xray did - this test fails and names it, instead of the panel quietly
+ * several - which upstream would do by declaring `HoldsSeveralInbounds`, the
+ * same way xray did - this test fails and names it, instead of the panel quietly
  * going on refusing a deploy the node could now serve. It fails in the other
  * direction too: an adapter that loses the interface while the panel still
  * believes it multiplexes is the silent eviction this whole guard exists for.
+ *
+ * It reads `core.MultiInbound` rather than `core.InboundReconciler`, and the
+ * difference is not a detail. Reconciliation answers "can this adapter be told
+ * what the panel no longer sends"; multiplicity answers "may two profiles be
+ * deployed onto it". They were one question only while xray was the only adapter
+ * that answered yes to either. The wg flavours now reconcile - it is the only way
+ * their inbound can ever be REMOVED - and they still hold exactly one, so reading
+ * the reconciler here would have made the panel offer a second wg profile on a
+ * core that silently drops the first.
  */
 
 const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
@@ -67,11 +76,32 @@ function adapterPackages(): string[] {
     .sort();
 }
 
-/** Adapter packages implementing core.InboundReconciler - the multi-inbound ones. */
+/** Adapter packages implementing core.InboundReconciler - the ones that can be
+ *  told an inbound is gone. Says nothing about how many they hold. */
 function reconcilerPackages(): string[] {
   return adapterPackages().filter((pkg) =>
     /func \(a \*Adapter\) RetainInbounds\(/.test(code(`${coreDir}/${pkg}/adapter.go`)),
   );
+}
+
+/** Adapter packages declaring core.MultiInbound with a literal `true` - the ones
+ *  that really do hold several inbounds at once. A body that is not a literal
+ *  cannot be read from here and is refused rather than guessed at. */
+function multiInboundPackages(): string[] {
+  return adapterPackages().filter((pkg) => {
+    const m = code(`${coreDir}/${pkg}/adapter.go`).match(
+      /func \(a \*Adapter\) HoldsSeveralInbounds\(\) bool \{ return ([^}]+) \}/,
+    );
+    if (!m) return false;
+    const body = m[1]!.trim();
+    if (body !== 'true' && body !== 'false') {
+      throw new Error(
+        `${pkg}: HoldsSeveralInbounds is computed, and this mirror can only read a literal; ` +
+          `MULTI_INBOUND_ADAPTER_KEYS cannot describe a per-instance answer`,
+      );
+    }
+    return body === 'true';
+  });
 }
 
 /** The node's native-engine map, read out of dto.NativeEngine's switch. */
@@ -109,21 +139,48 @@ describe('the panel’s picture of the node’s adapters, read from the node', (
 
   it('agrees with the node on which adapters hold SEVERAL inbounds', () => {
     const keys = new Set<string>();
-    for (const pkg of reconcilerPackages()) {
+    for (const pkg of multiInboundPackages()) {
       const { names, engines } = adapterIdentity(pkg);
       expect(
         names.length && engines.length,
-        `${pkg} implements RetainInbounds but does not name a single (protocol, engine) pair; ` +
+        `${pkg} holds several inbounds but does not name a single (protocol, engine) pair; ` +
           `the panel's MULTI_INBOUND_ADAPTER_KEYS cannot describe it and needs widening by hand`,
       ).toBeTruthy();
       for (const n of names) for (const e of engines) keys.add(`${n}|${e}`);
     }
     expect(
       [...keys].sort(),
-      'an adapter gained or lost core.InboundReconciler on the node; ' +
+      'an adapter gained or lost core.MultiInbound on the node; ' +
         'MULTI_INBOUND_ADAPTER_KEYS in node-adapter-keys.ts must move with it, or the panel ' +
         'either refuses a deploy the node can now serve, or allows one it silently evicts',
     ).toEqual([...MULTI_INBOUND_ADAPTER_KEYS].sort());
+  });
+
+  it('lets an adapter reconcile without claiming to hold several', () => {
+    // The wg flavours are exactly this: they can be told their inbound is gone -
+    // which is the only way one is ever removed from a node - while ApplyInbound
+    // still overwrites a single field. The panel must keep refusing a second
+    // profile on them.
+    const reconcilers = reconcilerPackages();
+    expect(reconcilers, 'nothing reconciles at all, so this case proves nothing').toContain('xray');
+    expect(reconcilers).toContain('amneziawg');
+    expect(multiInboundPackages()).not.toContain('amneziawg');
+    expect(MULTI_INBOUND_ADAPTER_KEYS.has('amneziawg|amneziawg')).toBe(false);
+    expect(MULTI_INBOUND_ADAPTER_KEYS.has('wireguard|wireguard')).toBe(false);
+  });
+
+  it('refuses an adapter that claims several inbounds and cannot drop one', () => {
+    // The other direction, and the reason InboundReconciler exists: holding
+    // several without being able to be told one went away leaves a deleted
+    // inbound listening forever.
+    const reconcilers = new Set(reconcilerPackages());
+    for (const pkg of multiInboundPackages()) {
+      expect(
+        reconcilers.has(pkg),
+        `${pkg} holds several inbounds and implements no RetainInbounds; a deleted inbound ` +
+          `would keep serving on the node with nothing saying so`,
+      ).toBe(true);
+    }
   });
 
   it('agrees with the node on which core serves a protocol by default', () => {

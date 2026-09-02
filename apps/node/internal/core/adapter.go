@@ -136,6 +136,48 @@ type InboundReconciler interface {
 	RetainInbounds(keep []string) error
 }
 
+// MultiInbound is an OPTIONAL interface an adapter implements to state that its
+// core can serve MORE THAN ONE inbound of its (protocol, engine) pair at once.
+//
+// Split from InboundReconciler because the two answer different questions, and
+// conflating them cost the wg adapters their reconciliation. "Can this adapter
+// be told what the panel no longer sends" is one question; "may two profiles be
+// deployed onto this core" is another. xray answers yes to both. An adapter that
+// holds ONE inbound still needs the first — the way to remove its inbound is to
+// be told the set no longer contains it — while the panel must keep refusing a
+// second profile on it.
+//
+// The panel mirrors this set (MULTI_INBOUND_ADAPTER_KEYS) and a mirror test
+// reads these implementations, so declaring it here is a statement about how the
+// adapter STORES inbounds, not a preference.
+type MultiInbound interface {
+	// HoldsSeveralInbounds is true for an adapter keeping its inbounds keyed by
+	// the panel's id, false-by-absence for one whose ApplyInbound overwrites a
+	// single field.
+	HoldsSeveralInbounds() bool
+}
+
+// UserReconciler is an OPTIONAL interface for adapters that must be able to
+// notice a user (or a device) the panel no longer sends.
+//
+// Same shape and the same reason as InboundReconciler: `addUser` is dispatched
+// one record at a time, so an adapter that only ever adds keeps serving whoever
+// it was told about once. RemoveUser closes the gap only for a removal the panel
+// KNOWS to address — it drops one id and returns nil on an id it does not hold,
+// having reported ok — so anything the panel forgot to name, or named while the
+// node was unreachable, lives forever.
+//
+// For the wg family this is not bookkeeping: a peer is the access. A device
+// deleted while its node was down keeps a working tunnel until someone runs
+// `awg-quick down` by hand.
+type UserReconciler interface {
+	// RetainUsers drops every user whose id is not in `keep` and reloads if
+	// anything went away. `keep` is the panel's COMPLETE set for this node —
+	// user ids and, for adapters keyed per device, device ids. An EMPTY set is
+	// legitimate (a node with nobody on it) and must be honoured, not ignored.
+	RetainUsers(keep []string) error
+}
+
 // Provisionable is an OPTIONAL interface for adapters that can be REGISTERED
 // without being CONFIGURED. The installer registers an adapter for every
 // protocol the operator might switch on later, and such an adapter sits idle

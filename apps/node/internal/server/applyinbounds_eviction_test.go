@@ -27,16 +27,21 @@ import (
 // name what it dropped.
 
 // reconcilingAdapter is a fakeAdapter that also implements
-// core.InboundReconciler - i.e. it holds several inbounds, like xray.
+// core.InboundReconciler: it can be told which inbounds are still live. On its
+// own that says nothing about HOW MANY it holds - the wg adapters reconcile and
+// hold one - so multiplicity is declared separately, by core.MultiInbound.
 type reconcilingAdapter struct {
 	fakeAdapter
-	kept []string
+	kept  []string
+	multi bool
 }
 
 func (r *reconcilingAdapter) RetainInbounds(keep []string) error {
 	r.kept = keep
 	return nil
 }
+
+func (r *reconcilingAdapter) HoldsSeveralInbounds() bool { return r.multi }
 
 func newLoggingServer(t *testing.T, buf *bytes.Buffer, adapters ...core.CoreAdapter) *Server {
 	t.Helper()
@@ -120,7 +125,7 @@ func TestApplyInboundsStaysQuietForAnAdapterThatHoldsSeveral(t *testing.T) {
 	// them are not an eviction. Asking the interface rather than the protocol
 	// name is what keeps this true when another adapter learns the same trick.
 	var logs bytes.Buffer
-	xr := &reconcilingAdapter{fakeAdapter: fakeAdapter{name: "xray", engine: "xray"}}
+	xr := &reconcilingAdapter{fakeAdapter: fakeAdapter{name: "xray", engine: "xray"}, multi: true}
 	srv := newLoggingServer(t, &logs, xr)
 
 	push(t, srv, `{"inbounds":[
@@ -133,6 +138,33 @@ func TestApplyInboundsStaysQuietForAnAdapterThatHoldsSeveral(t *testing.T) {
 	}
 	if len(xr.kept) != 2 {
 		t.Errorf("RetainInbounds should have been handed both ids, got %v", xr.kept)
+	}
+}
+
+func TestApplyInboundsStillWarnsForAnAdapterThatReconcilesButHoldsOne(t *testing.T) {
+	// The distinction this pair of interfaces exists for. A wg adapter can be
+	// told its inbound is gone - that is how removing it works at all - and it
+	// still holds exactly ONE, so two inbounds on it are still an eviction. When
+	// the warning read the reconciler instead, teaching wg to reconcile would
+	// have silently taken this warning away from it.
+	var logs bytes.Buffer
+	wg := &reconcilingAdapter{
+		fakeAdapter: fakeAdapter{name: "amneziawg", engine: "amneziawg"},
+		multi:       false,
+	}
+	srv := newLoggingServer(t, &logs, wg)
+
+	push(t, srv, `{"inbounds":[
+		{"id":"a","name":"awg-1","protocol":"amneziawg","port":1234,"config":{}},
+		{"id":"b","name":"awg-2","protocol":"amneziawg","port":1235,"config":{}}
+	]}`)
+
+	if !strings.Contains(logs.String(), "holds one inbound at a time") {
+		t.Errorf("an adapter that reconciles but holds one was treated as multi-inbound; logs=%q",
+			logs.String())
+	}
+	if len(wg.kept) != 2 {
+		t.Errorf("RetainInbounds should still be handed the full keep set, got %v", wg.kept)
 	}
 }
 

@@ -225,6 +225,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/addUser", s.handleAddUser)
 	mux.HandleFunc("/removeUser", s.handleRemoveUser)
+	mux.HandleFunc("/retainUsers", s.handleRetainUsers)
 	mux.HandleFunc("/applyInbounds", s.handleApplyInbounds)
 	mux.HandleFunc("/applyEgress", s.handleApplyEgress)
 	mux.HandleFunc("/generateKeys", s.handleGenerateKeys)
@@ -505,6 +506,58 @@ func (s *Server) handleRemoveUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.RemoveUserResponse{OK: true})
 }
 
+// handleRetainUsers takes the panel's complete user set for this node and lets
+// every adapter that accumulates users drop what is not in it.
+//
+// The counterpart of the RetainInbounds pass at the end of handleApplyInbounds,
+// and for the same reason: a fan-out that only ever ADDS cannot express a
+// deletion. Until this existed the only removal was an addressed `removeUser`,
+// which reaches exactly the ids the panel thought to send — so a device row
+// deleted while the node was unreachable, or one the panel never learned about,
+// kept a live wg peer forever.
+//
+// An EMPTY set is meaningful and is honoured: it means nobody is served here.
+// It is logged at WARN because it is also what a panel-side bug would produce,
+// and the operator should be able to find the moment every peer went away.
+func (s *Server) handleRetainUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.RetainUsersRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+
+	if len(req.UserIDs) == 0 {
+		s.logger.Warn("retainUsers: the panel says this node serves nobody; " +
+			"every reconciling adapter is about to drop all of its users")
+	}
+
+	reconciled := make([]string, 0, len(s.cfg.Adapters))
+	var failed []string
+	for _, adapter := range s.cfg.Adapters {
+		rec, ok := adapter.(core.UserReconciler)
+		if !ok {
+			continue
+		}
+		if err := rec.RetainUsers(req.UserIDs); err != nil {
+			// Not fatal for the request: the users that DID land are served, and
+			// answering with a failure would make the panel retry a push that
+			// already half-landed - the same call the RetainInbounds pass makes.
+			s.logger.Error("adapter RetainUsers failed", "core", adapter.Name(),
+				"engine", adapter.Engine(), "err", err)
+			failed = append(failed, adapter.Name())
+			continue
+		}
+		reconciled = append(reconciled, core.AdapterKey(adapter.Name(), adapter.Engine()))
+	}
+	if len(failed) > 0 {
+		s.logger.Warn("retainUsers finished with failures", "adapters", strings.Join(failed, ", "))
+	}
+	writeJSON(w, http.StatusOK, dto.RetainUsersResponse{OK: true, Reconciled: reconciled})
+}
+
 // handleApplyInbounds receives the panel's full inbound set for this node
 // and persists it to disk so the next node-agent / adapter restart picks it
 // up. Slice 24 v1, minimal version: persists + logs, no per-protocol live
@@ -568,7 +621,11 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 				"protocol", ib.Protocol, "engine", wantEngine)
 			continue
 		}
-		if _, ok := matched.(core.InboundReconciler); !ok {
+		// Asked of core.MultiInbound, not of the reconciler: an adapter can be
+		// able to DROP an inbound it no longer gets (every wg flavour now is)
+		// while still holding exactly one, and reading the reconciler here would
+		// have turned that into "several" and dropped this warning silently.
+		if multi, ok := matched.(core.MultiInbound); !ok || !multi.HoldsSeveralInbounds() {
 			key := core.AdapterKey(string(ib.Protocol), string(wantEngine))
 			if prev, clash := servedBy[key]; clash {
 				s.logger.Warn("applyInbounds: this core holds one inbound at a time; "+

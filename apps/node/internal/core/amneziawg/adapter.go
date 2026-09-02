@@ -118,6 +118,13 @@ type Adapter struct {
 	// an agent restart over a still-up interface never re-bills the lifetime.
 	lastStats map[string]peerCounters
 
+	// inboundID is which inbound the panel last pushed here, as the panel names
+	// it. "" means nothing identified has ever arrived: either an install-time
+	// interface nobody has bound a profile to, or a panel too old to send the
+	// field. Both keep the pre-reconciliation behaviour, because there is nothing
+	// to reconcile against.
+	inboundID string
+
 	// N3 - cached `awg show` health probe (guarded by mu). Healthy() serves
 	// healthResult and refreshes in the background once older than
 	// healthProbeTTL, so the hot health path never forks the CLI inline.
@@ -283,8 +290,24 @@ func (a *Adapter) AddUser(user core.User) error {
 		pubKey, allowedIP = user.WireguardPublicKey, user.WireguardAllowedIP
 		psk = user.WireguardPresharedKey
 	}
-	if pubKey == "" || allowedIP == "" {
+	if pubKey == "" && allowedIP == "" {
+		// Not a wg record at all. The panel fans one credential blob out to every
+		// adapter, and a record for another core carries none of these fields.
 		return nil
+	}
+	if pubKey == "" || allowedIP == "" {
+		// Half a peer. This used to return nil, so the node answered `ok`, the
+		// panel logged the add as done, and no peer existed - the exact shape of
+		// the per-user queue's push, which carries a public key and no allocated
+		// address because only inbound-sync knows the subnets. A missing half is
+		// the panel failing to say something, not a record meant for someone
+		// else, and it has to read as a failure.
+		missing := "an allocated address"
+		if pubKey == "" {
+			missing = "a public key"
+		}
+		return fmt.Errorf("%s AddUser %s: %s is missing, no peer was created",
+			a.cfg.Protocol, user.UserID, missing)
 	}
 	desired := Peer{
 		PublicKey: pubKey,
@@ -318,6 +341,124 @@ func (a *Adapter) RemoveUser(userID string) error {
 	delete(a.peers, userID)
 	a.mu.Unlock()
 
+	return a.syncConfigState(context.Background())
+}
+
+// RetainInbounds implements core.InboundReconciler: when the panel's push no
+// longer contains the inbound this adapter holds, take the interface down.
+//
+// This adapter holds exactly ONE inbound - it does not implement
+// core.MultiInbound - and reconciliation is still what removal requires. The
+// push carries the node's whole set and is dispatched one inbound at a time, so
+// an inbound that vanished produces no call at all; before this, disabling a wg
+// binding in the panel simply stopped pushing, and the interface, its peers and
+// its UDP port stayed up indefinitely. Measured 2026-08-31: both wg bindings
+// disabled, `awg0` and `wg0` still up with every peer, and the only way back was
+// `awg-quick down` on the box.
+//
+// An empty `keep` is the ordinary way that happens (the last wg binding was
+// disabled) and is honoured. An adapter that never received an identified
+// inbound does nothing: it has nothing to compare, and tearing down an
+// install-time interface on a push about other protocols would take a working
+// tunnel away for no reason.
+func (a *Adapter) RetainInbounds(keep []string) error {
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
+
+	a.mu.Lock()
+	id := a.inboundID
+	if id == "" {
+		a.mu.Unlock()
+		return nil
+	}
+	for _, k := range keep {
+		if k == id {
+			a.mu.Unlock()
+			return nil
+		}
+	}
+
+	iface := a.cfg.Inbound.Interface
+	managed := a.cfg.AwgQuickBin != ""
+	peers := len(a.peers)
+	// Forget everything the removed inbound brought. The private key going is
+	// what makes Provisioned() false again, so /healthz reports this core as
+	// unconfigured - the state it was in before the binding existed - instead of
+	// as a configured core that has died.
+	a.inboundID = ""
+	a.peers = make(map[string]Peer)
+	a.lastStats = make(map[string]peerCounters)
+	a.cfg.Inbound = InboundConfig{
+		Interface: iface,
+		Plain:     a.plain(),
+		PostUp:    a.cfg.Inbound.PostUp,
+		PostDown:  a.cfg.Inbound.PostDown,
+	}
+	a.started = false
+	a.healthCheckedAt = time.Time{}
+	a.healthResult = false
+	a.mu.Unlock()
+
+	a.logger.Info("inbound removed by the panel, taking the interface down",
+		"core", a.cfg.Protocol, "inboundId", id, "interface", iface, "peers", peers)
+
+	if !managed {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if out, err := a.cfg.runCmd(ctx, a.cfg.AwgQuickBin, "down", iface); err != nil {
+		// Down on an interface that is not up is the normal outcome of a repeat
+		// push, and must not read as a failure - the state we were asked for is
+		// the state we are in. The config file is deliberately left on disk: it
+		// is what `awg-quick down` reads, so removing it would make a retry
+		// impossible, and it holds no access on its own once the interface is
+		// gone.
+		a.logger.Warn("awg-quick down returned non-zero (often safe)",
+			"core", a.cfg.Protocol, "err", err, "out", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// RetainUsers implements core.UserReconciler: drop every peer the panel no
+// longer counts among this node's users.
+//
+// `addUser` adds and `removeUser` removes one addressed id, so the peer set only
+// ever grew towards whatever the panel remembered to mention. A peer is not
+// bookkeeping here - it IS the access - so anything the panel failed to name
+// (a device deleted while the node was unreachable, a user removed by a job that
+// died) kept a working tunnel until someone noticed by hand. `removeUser` on an
+// id the adapter does not hold returns nil and is logged as ok, which is why the
+// gap could not be seen from the panel at all.
+//
+// Peers are keyed per DEVICE (inbounds.queue.ts pushes each device under its own
+// id), and `keep` carries user ids and device ids together; a user id simply
+// matches no peer here.
+func (a *Adapter) RetainUsers(keep []string) error {
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, id := range keep {
+		keepSet[id] = struct{}{}
+	}
+
+	a.mu.Lock()
+	dropped := make([]string, 0)
+	for id, peer := range a.peers {
+		if _, ok := keepSet[id]; ok {
+			continue
+		}
+		delete(a.peers, id)
+		delete(a.lastStats, peer.PublicKey)
+		dropped = append(dropped, id)
+	}
+	remaining := len(a.peers)
+	a.mu.Unlock()
+
+	if len(dropped) == 0 {
+		return nil
+	}
+	sort.Strings(dropped)
+	a.logger.Info("peers the panel no longer lists, removing",
+		"core", a.cfg.Protocol, "dropped", dropped, "remaining", remaining)
 	return a.syncConfigState(context.Background())
 }
 
@@ -543,6 +684,12 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	defer a.restartMu.Unlock()
 
 	a.mu.Lock()
+	// Remember which inbound this is before anything can return early: the
+	// unchanged case returns without touching the config, and an adapter that
+	// forgot its id there could not be told the inbound was later removed.
+	if wire.InboundID != "" {
+		a.inboundID = wire.InboundID
+	}
 	// Slice 50: prefer the panel-pushed port over install-time fallback.
 	// Pre-slice-50 panel paths still work because port=0 falls through to
 	// a.cfg.Inbound.ListenPort below.

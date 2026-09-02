@@ -245,6 +245,13 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
       config = {
         ...(config as Record<string, unknown>),
         listenPort: b.port,
+        // Which inbound this is, for the same reason xray gets it above and one
+        // more: the wg adapter holds a single inbound, and without an id it
+        // cannot be told that the push no longer contains it. Disabling a wg
+        // binding used to stop the pushes and leave the interface, its peers and
+        // its UDP port up forever — `awg-quick down` on the box was the only way
+        // out. The adapter reconciles on this id (RetainInbounds).
+        inboundId: b.id,
       } as InboundDto['config'];
     }
 
@@ -759,6 +766,42 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   getLogger().info(
     `[worker:inbound-sync] user sync to ${node.name} done (${items.length - chunkFailed}/${items.length} ok, ${users.length} user(s) + ${items.length - users.length} device record(s))`,
   );
+
+  // Everything above ADDS. Say what the whole set is, so the node can drop what
+  // is not in it.
+  //
+  // Nothing else can: `removeUser` reaches only the ids the panel remembers to
+  // name, and an adapter answers `ok` for an id it does not hold. A device row
+  // deleted while this node was unreachable therefore kept a live wg peer — the
+  // access itself, not a stale record — until someone found it by hand.
+  //
+  // Sent as the ids just pushed, users and devices together, because that IS the
+  // desired set: an item whose addUser failed is still meant to be there and
+  // simply is not yet, and retaining it costs nothing.
+  //
+  // An agent older than the endpoint answers 404. That is "this node cannot
+  // reconcile yet", not a failed sync, and it must not fail the job — the
+  // inbounds and users that did land are live.
+  const keepIds = items.map((it) => it.req.userId);
+  try {
+    const res = await transport.retainUsers({ userIds: keepIds });
+    if (res.reconciled.length > 0) {
+      getLogger().info(
+        `[worker:inbound-sync] ${node.name} reconciled ${keepIds.length} id(s) on ${res.reconciled.join(', ')}`,
+      );
+    }
+  } catch (err) {
+    const status = err instanceof NodeRequestError ? err.status : undefined;
+    const detail = err instanceof Error ? err.message : String(err);
+    if (status === 404) {
+      getLogger().info(
+        `[worker:inbound-sync] ${node.name} has no /retainUsers (agent predates it); ` +
+          `users it was never told to remove stay until it is updated`,
+      );
+    } else {
+      getLogger().info(`[worker:inbound-sync] retainUsers on ${node.name} FAILED: ${detail}`);
+    }
+  }
 
   // End-of-job dirty check: if an admin edit landed during the push window,
   // the event handler re-SET the flag we cleared above. Re-enqueue so the

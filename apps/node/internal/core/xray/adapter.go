@@ -163,6 +163,12 @@ type Adapter struct {
 	restartMu sync.Mutex
 }
 
+// HoldsSeveralInbounds implements core.MultiInbound: this adapter keeps its
+// inbounds in a map keyed by the panel's binding id, so a second push ADDS.
+// Every other adapter overwrites one field and evicts the first, which is what
+// the panel's assertNodeCoreFree refuses on their behalf.
+func (a *Adapter) HoldsSeveralInbounds() bool { return true }
+
 // RetainInbounds implements core.InboundReconciler: forget every inbound the
 // panel no longer sends, then re-render if anything was dropped.
 //

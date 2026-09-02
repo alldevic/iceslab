@@ -211,6 +211,29 @@ type RemoveUserResponse struct {
 	OK bool `json:"ok"`
 }
 
+// ───── POST /retainUsers ─────
+//
+// The panel's COMPLETE set of ids for this node, so an adapter that accumulates
+// users can notice one it was never told to remove. `addUser` is dispatched one
+// record at a time and `removeUser` only removes what the panel remembers to
+// name, so a device deleted while the node was unreachable kept its access
+// indefinitely — for wg that access is a peer in the kernel, which no later
+// push touches.
+//
+// Ids are user ids AND device ids, because the wg adapters key peers per DEVICE
+// (see inbounds.queue.ts, which pushes each device under its own id). An adapter
+// keyed per user simply finds no device id in its map and drops nothing.
+type RetainUsersRequest struct {
+	UserIDs []string `json:"userIds"`
+}
+
+type RetainUsersResponse struct {
+	OK bool `json:"ok"`
+	// Adapters that reconciled, so the panel's log can say who acted rather
+	// than that the call returned.
+	Reconciled []string `json:"reconciled"`
+}
+
 // ───── GET /stats ─────
 
 type UserStats struct {

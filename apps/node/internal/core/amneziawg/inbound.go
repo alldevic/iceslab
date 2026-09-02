@@ -13,6 +13,21 @@ import (
 // half. We accept the field on the wire so the JSON shape stays identical
 // and ignore it during mapping.
 type inboundCfgWire struct {
+	// Which inbound this config is, as the panel names it (the binding id).
+	// Injected by panel-backend alongside ListenPort below; see
+	// inbounds.queue.ts.
+	//
+	// It travels in the config because ApplyInbound is shared by every adapter
+	// and widening that signature would touch all of them. What it buys here is
+	// the ability to notice DELETION: applyInbounds carries the node's whole set,
+	// and an adapter that cannot say which inbound it holds cannot be told that
+	// the set no longer contains it. Without it the interface, its peers and its
+	// port outlived the binding forever, and only `awg-quick down` by hand ended
+	// them.
+	//
+	// Empty from a panel that predates the field, which keeps that panel's
+	// behaviour exactly as it was: nothing to identify, nothing reconciled.
+	InboundID        string         `json:"inboundId,omitempty"`
 	Subnet           string         `json:"subnet"`
 	ServerPrivateKey string         `json:"serverPrivateKey"`
 	ServerPublicKey  string         `json:"serverPublicKey"` // unused on agent

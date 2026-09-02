@@ -2,6 +2,8 @@ import { fetch, Agent } from 'undici';
 import type {
   AddUserRequest,
   RemoveUserRequest,
+  RetainUsersRequest,
+  RetainUsersResponse,
   GetStatsResponse,
   HealthcheckResponse,
   HostMetricsResponse,
@@ -201,6 +203,17 @@ export class NodeTransport {
 
   async removeUser(req: RemoveUserRequest): Promise<void> {
     await this.request<void>('POST', '/removeUser', req);
+  }
+
+  /**
+   * Hand the node the complete set of ids it should be serving, so an adapter
+   * that accumulates users can drop what is not in it.
+   *
+   * An agent that predates the endpoint answers 404; the caller treats that as
+   * "this node cannot reconcile yet", not as a failed sync.
+   */
+  async retainUsers(req: RetainUsersRequest): Promise<RetainUsersResponse> {
+    return this.request<RetainUsersResponse>('POST', '/retainUsers', req);
   }
 
   async getStats(): Promise<GetStatsResponse> {

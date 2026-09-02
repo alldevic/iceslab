@@ -49,21 +49,45 @@ func TestAdapter_StartWritesConfig(t *testing.T) {
 	}
 }
 
-func TestAdapter_AddUserSkipsWithoutCreds(t *testing.T) {
+func TestAdapter_AddUserSkipsARecordThatIsNotOurs(t *testing.T) {
 	a, _ := newTestAdapter(t)
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// Both fields missing → no-op.
+	// Neither field: the panel fans one credential blob out to every adapter and
+	// this record belongs to another core. Silence is correct here.
 	if err := a.AddUser(core.User{UserID: "u1"}); err != nil {
 		t.Fatalf("AddUser empty: %v", err)
 	}
-	// Only public key, no IP → no-op.
-	if err := a.AddUser(core.User{UserID: "u1", AmneziaWGPublicKey: "pub"}); err != nil {
-		t.Fatalf("AddUser without IP: %v", err)
+	if len(a.peers) != 0 {
+		t.Errorf("expected 0 peers, got %d", len(a.peers))
+	}
+}
+
+func TestAdapter_AddUserRefusesHalfAPeer(t *testing.T) {
+	// A public key with no address is the panel failing to say something, not a
+	// record for someone else. It used to return nil: the node answered ok, the
+	// panel logged the add as done, and no peer existed - which is precisely how
+	// enabling a user appeared to restore wg access and did not.
+	a, _ := newTestAdapter(t)
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	err := a.AddUser(core.User{UserID: "u1", AmneziaWGPublicKey: "pub"})
+	if err == nil {
+		t.Fatalf("AddUser with a key and no address reported success")
+	}
+	if !strings.Contains(err.Error(), "no peer was created") {
+		t.Errorf("the error does not say a peer was not created: %v", err)
 	}
 	if len(a.peers) != 0 {
 		t.Errorf("expected 0 peers, got %d", len(a.peers))
+	}
+
+	// And the other half, so the message cannot be right by accident.
+	err = a.AddUser(core.User{UserID: "u2", AmneziaWGAllowedIP: "10.0.0.5"})
+	if err == nil || !strings.Contains(err.Error(), "public key") {
+		t.Errorf("an address with no key should name the missing key: %v", err)
 	}
 }
 

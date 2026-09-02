@@ -580,6 +580,27 @@ export interface RemoveUserResponse {
   ok: true;
 }
 
+// ───── POST /retainUsers ─────
+//
+// The node's COMPLETE user set, so an adapter that accumulates users can drop
+// one nobody thought to remove. `addUser` is dispatched one record at a time and
+// `removeUser` only reaches ids the panel remembers to name, so a device deleted
+// while a node was unreachable kept its access — and for wg that access is a
+// peer in the kernel, which no later push touches.
+//
+// Ids are user ids AND device ids together: the wg adapters key peers per
+// device. An adapter keyed per user finds no device id in its map and drops
+// nothing.
+export interface RetainUsersRequest {
+  userIds: string[];
+}
+
+export interface RetainUsersResponse {
+  ok: true;
+  /** Adapter keys that reconciled, so a log can say who acted. */
+  reconciled: string[];
+}
+
 // ───── GET /stats ─────
 
 export interface UserStats {
