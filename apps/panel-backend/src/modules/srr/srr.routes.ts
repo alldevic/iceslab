@@ -6,8 +6,9 @@ import {
   UpdateSrrSchema,
   SrrIdParamSchema,
   TestSrrSchema,
+  assertProtoMatchesFormat,
 } from './srr.schemas.js';
-import { matchFormatForUserAgent, invalidateSrrCache } from './srr.service.js';
+import { matchRuleForUserAgent, invalidateSrrCache } from './srr.service.js';
 
 export async function srrRoutes(app: FastifyInstance): Promise<void> {
   // Wave-14 #15: per-route auth (see users.routes.ts header comment).
@@ -45,6 +46,21 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
   app.put('/api/srr/:id', auth, async (request, reply) => {
     const params = SrrIdParamSchema.parse(request.params);
     const input = UpdateSrrSchema.parse(request.body);
+    // The flavour and the format belong together, and a PUT may carry either
+    // one alone: setting `proto` on a rule that is already `singbox`, or moving
+    // a wg rule to `clash` and leaving its flavour behind. Both are only
+    // visible in the MERGED rule, so the check reads the stored one.
+    const current = await prisma.subscriptionResponseRule.findUnique({
+      where: { id: params.id },
+      select: { format: true, proto: true },
+    });
+    if (!current) {
+      return reply.code(404).send({ error: 'NOT_FOUND', message: 'Rule not found' });
+    }
+    assertProtoMatchesFormat({
+      format: input.format ?? current.format,
+      proto: input.proto === undefined ? current.proto : input.proto ?? null,
+    });
     try {
       const rule = await prisma.subscriptionResponseRule.update({
         where: { id: params.id },
@@ -94,8 +110,14 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
   // kept and tested.
   app.post('/api/srr/test', auth, async (request, reply) => {
     const input = TestSrrSchema.parse(request.body);
-    const matched = await matchFormatForUserAgent(input.userAgent);
-    return reply.send({ format: matched, userAgent: input.userAgent });
+    const matched = await matchRuleForUserAgent(input.userAgent);
+    // `proto` alongside the format, because for a wg client the format is only
+    // half the answer — the two files `wgconf` can render are incompatible.
+    return reply.send({
+      format: matched?.format ?? null,
+      proto: matched?.proto ?? null,
+      userAgent: input.userAgent,
+    });
   });
 }
 

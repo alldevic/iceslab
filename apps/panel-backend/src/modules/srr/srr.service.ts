@@ -20,6 +20,7 @@ const SRR_CACHE_TTL_MS = 60_000;
 interface CompiledRule {
   re: RegExp;
   format: string;
+  proto: string | null;
 }
 let srrCache: { rules: CompiledRule[]; expiresAt: number } | null = null;
 
@@ -33,7 +34,7 @@ async function getCompiledRules(): Promise<CompiledRule[]> {
   const raw = await prisma.subscriptionResponseRule.findMany({
     where: { enabled: true },
     orderBy: { priority: 'asc' },
-    select: { uaPattern: true, format: true },
+    select: { uaPattern: true, format: true, proto: true },
   });
   const rules: CompiledRule[] = [];
   for (const r of raw) {
@@ -53,32 +54,48 @@ async function getCompiledRules(): Promise<CompiledRule[]> {
       continue;
     }
     const re = compileUaPattern(r.uaPattern);
-    if (re) rules.push({ re, format: r.format });
+    if (re) rules.push({ re, format: r.format, proto: r.proto });
   }
   srrCache = { rules, expiresAt: Date.now() + SRR_CACHE_TTL_MS };
   return rules;
 }
 
+/** What a matched rule delivers: the format, and — for `wgconf` — which of the
+ *  two wg flavours to render. See the `proto` column for why the format alone
+ *  is not an answer. */
+export interface MatchedDelivery {
+  format: string;
+  proto: string | null;
+}
+
 /**
- * Walk enabled SRR rules in `priority ASC` order; return the first rule's
- * `format` whose `uaPattern` regex matches the (truncated) User-Agent.
+ * Walk enabled SRR rules in `priority ASC` order; return the first rule whose
+ * `uaPattern` regex matches the (truncated) User-Agent.
  *
  * Returns null when there's no UA, no rules, or no rule matches, the route
  * handler then falls through to its existing Accept-header heuristic and
  * finally to `plain`. The compiled RegExps carry no `g` flag, so `.test` is
  * stateless and safe to reuse from the cache.
  */
-export async function matchFormatForUserAgent(
+export async function matchRuleForUserAgent(
   userAgent: string | null | undefined,
-): Promise<string | null> {
+): Promise<MatchedDelivery | null> {
   if (!userAgent) return null;
   const ua = userAgent.slice(0, UA_MAX_LENGTH);
   for (const rule of await getCompiledRules()) {
     if (rule.re.test(ua)) {
-      return rule.format;
+      return { format: rule.format, proto: rule.proto };
     }
   }
   return null;
+}
+
+/** The format half of matchRuleForUserAgent, for callers that have no wg
+ *  question to ask. */
+export async function matchFormatForUserAgent(
+  userAgent: string | null | undefined,
+): Promise<string | null> {
+  return (await matchRuleForUserAgent(userAgent))?.format ?? null;
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   createSrrRule,
   listSrrRules,
   updateSrrRule,
+  type SrrProto,
   type SubscriptionFormat,
 } from '../lib/api';
 import { CASCADE_AWARE_FORMATS, SRR_FORMATS, formatTone } from '../lib/srrFormats';
@@ -46,6 +47,9 @@ interface Draft {
   uaPattern: string;
   priority: number | '';
   format: SubscriptionFormat;
+  /** null = let the builder take the first wg endpoint. Only meaningful on
+   *  `wgconf`; every other format stores null. */
+  proto: SrrProto | null;
   enabled: boolean;
 }
 
@@ -54,8 +58,11 @@ const BLANK: Draft = {
   uaPattern: '',
   priority: 100,
   format: 'plain',
+  proto: null,
   enabled: true,
 };
+
+
 
 export function SrrRulePage() {
   const { t } = useTranslation();
@@ -88,6 +95,7 @@ export function SrrRulePage() {
       uaPattern: existing.uaPattern,
       priority: existing.priority,
       format: existing.format,
+      proto: existing.proto ?? null,
       enabled: existing.enabled,
     });
   }
@@ -138,6 +146,10 @@ export function SrrRulePage() {
         name: draft.name.trim(),
         uaPattern: draft.uaPattern,
         format: draft.format,
+        // Cleared with the format, not merely hidden. The API refuses a
+        // flavour on anything but `wgconf`, and a value that survives out of
+        // sight is the kind an operator finds again by accident.
+        proto: draft.format === 'wgconf' ? draft.proto : null,
         priority,
         enabled: draft.enabled,
       };
@@ -377,8 +389,8 @@ export function SrrRulePage() {
             {formats.map((f) => {
               const selected = draft.format === f;
               return (
+                <Box key={f}>
                 <UnstyledButton
-                  key={f}
                   type="button"
                   onClick={() => patch({ format: f })}
                   style={{
@@ -460,6 +472,126 @@ export function SrrRulePage() {
                     </Box>
                   )}
                 </UnstyledButton>
+                {/* The flavour, under the format it belongs to. `wgconf` is
+                    the only format that renders two different files, and until
+                    a rule could say which, a rule sending wg clients here sent
+                    half of them a config their client deletes on sight. */}
+                {f === 'wgconf' && selected && (
+                  <Stack
+                    gap={0}
+                    style={{ padding: '4px 20px 14px 48px', backgroundColor: `${CYAN}0D` }}
+                  >
+                    <Text
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: 10,
+                        letterSpacing: '0.14em',
+                        lineHeight: '12px',
+                        textTransform: 'uppercase',
+                        color: MIST,
+                        paddingBottom: 8,
+                      }}
+                    >
+                      {t('delivery.protoTitle')}
+                    </Text>
+                    {/* Spelt out rather than mapped over key names: a
+                        `t(`delivery.proto${…}`)` is invisible to the scan that
+                        checks every key exists in both locales, and a missing
+                        one then shows up as the raw key in the panel. */}
+                    {(
+                      [
+                        {
+                          value: null,
+                          label: t('delivery.protoAuto'),
+                          hint: t('delivery.protoAutoHint'),
+                        },
+                        {
+                          value: 'amneziawg',
+                          label: t('delivery.protoAmneziawg'),
+                          hint: t('delivery.protoAmneziawgHint'),
+                        },
+                        {
+                          value: 'wireguard',
+                          label: t('delivery.protoWireguard'),
+                          hint: t('delivery.protoWireguardHint'),
+                        },
+                      ] as { value: SrrProto | null; label: string; hint: string }[]
+                    ).map((fl) => {
+                      const on = draft.proto === fl.value;
+                      return (
+                        <UnstyledButton
+                          key={fl.label}
+                          type="button"
+                          aria-label={fl.label}
+                          onClick={() => patch({ proto: fl.value })}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                            padding: '7px 0',
+                            width: '100%',
+                            textAlign: 'left',
+                          }}
+                        >
+                          <Box
+                            style={{
+                              width: 12,
+                              height: 12,
+                              borderRadius: 999,
+                              border: `1px solid ${on ? AMBER : DIM}`,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {on && (
+                              <Box
+                                style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: AMBER }}
+                              />
+                            )}
+                          </Box>
+                          <Text
+                            style={{
+                              fontFamily: MONO,
+                              fontSize: 12,
+                              lineHeight: '16px',
+                              color: on ? AMBER : MIST,
+                              width: 138,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {fl.label}
+                          </Text>
+                          <Text
+                            style={{
+                              fontFamily: DISPLAY,
+                              fontSize: 11,
+                              lineHeight: '15px',
+                              color: on ? MIST : FAINT,
+                              flex: 1,
+                              minWidth: 0,
+                            }}
+                          >
+                            {fl.hint}
+                          </Text>
+                        </UnstyledButton>
+                      );
+                    })}
+                    <Text
+                      style={{
+                        fontFamily: DISPLAY,
+                        fontSize: 11,
+                        lineHeight: '15px',
+                        color: FAINT,
+                        paddingTop: 8,
+                      }}
+                    >
+                      {t('delivery.protoHint')}
+                    </Text>
+                  </Stack>
+                )}
+                </Box>
               );
             })}
           </Stack>

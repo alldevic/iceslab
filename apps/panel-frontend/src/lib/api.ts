@@ -923,11 +923,18 @@ export type SubscriptionFormat =
   | 'plain' | 'json' | 'clash' | 'singbox' | 'wgconf' | 'xrayjson' | 'xrayjson-array' | 'xkeen'
   | 'outline' | 'surge' | 'quantumultx' | 'loon';
 
+/** Which wg file `wgconf` renders. Null = whichever endpoint comes first,
+ *  which is the pre-2026-09-03 behaviour and right only where one flavour is
+ *  served. The two files are incompatible: stock wireguard-tools refuses an
+ *  AmneziaWG config and deletes the device. */
+export type SrrProto = 'amneziawg' | 'wireguard';
+
 export interface SrrRule {
   id: string;
   name: string;
   uaPattern: string;
   format: SubscriptionFormat;
+  proto: SrrProto | null;
   priority: number;
   enabled: boolean;
   createdAt: string;
@@ -938,6 +945,7 @@ export interface CreateSrrInput {
   name: string;
   uaPattern: string;
   format: SubscriptionFormat;
+  proto?: SrrProto | null;
   priority?: number;
   enabled?: boolean;
 }
@@ -946,6 +954,7 @@ export interface UpdateSrrInput {
   name?: string;
   uaPattern?: string;
   format?: SubscriptionFormat;
+  proto?: SrrProto | null;
   priority?: number;
   enabled?: boolean;
 }

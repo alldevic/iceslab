@@ -711,6 +711,20 @@ model SubscriptionResponseRule {
   uaPattern String   @map("ua_pattern")
   // Must match the FormatEnum in subscription.routes.ts.
   format    String   @db.VarChar(16)
+  // Which wg flavour the `wgconf` format should render: 'amneziawg' or
+  // 'wireguard'. NULL everywhere else, and NULL on wgconf too until an
+  // operator picks one.
+  //
+  // A format alone does not decide what a wg client receives. Both flavours
+  // render through `wgconf` and the two files are incompatible — an AmneziaWG
+  // config carries `Jc`/`S`/`H` directives, and stock wireguard-tools answers
+  // `Line unrecognized: 'Jc = 4'` and then deletes the device. Without this
+  // column a rule could send a client to `wgconf` and not say WHICH, so the
+  // builder took the first wg endpoint it had: measured on the live panel
+  // 2026-09-03, a stock `WireGuard/1.0.16 (Android)` was handed AmneziaWG on
+  // port 1234 and refused it. `?proto=` in the query could say so; a rule,
+  // which is the only thing a real client goes through, could not.
+  proto     String?  @db.VarChar(16)
   // Lower priority = evaluated first. Drag-and-drop UI mutates this.
   priority  Int      @default(100)
   enabled   Boolean  @default(true)

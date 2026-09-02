@@ -303,7 +303,7 @@ export function SrrPage() {
                   </Text>
 
                   <Box style={{ width: 170, flexShrink: 0, display: 'flex' }}>
-                    <FormatChip format={rule.format} muted={off} />
+                    <FormatChip format={rule.format} proto={rule.proto} muted={off} />
                   </Box>
 
                   <Box style={{ width: 70, flexShrink: 0 }}>
@@ -392,7 +392,7 @@ export function SrrPage() {
                   <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: FAINT }}>
                     {'->'}
                   </Text>
-                  <FormatChip format={winner.format} />
+                  <FormatChip format={winner.format} proto={winner.proto} />
                   <Box style={{ flex: 1, minWidth: 0 }} />
                   {/* Everything below the winner never runs for this client. */}
                   {hits.length > 1 && (
@@ -515,7 +515,23 @@ export function isCatchAll(pattern: string): boolean {
 
 /* ───── Pieces ──────────────────────────────────────────────────────────── */
 
-export function FormatChip({ format, muted }: { format: string; muted?: boolean }) {
+/**
+ * The format a rule serves, and — where `wgconf` renders two incompatible
+ * files — which one.
+ *
+ * The flavour is part of what the rule DELIVERS, so it belongs on the same
+ * chip. A list showing bare `wgconf` on two rules that hand out different
+ * files is a list in which the difference that matters is invisible.
+ */
+export function FormatChip({
+  format,
+  proto,
+  muted,
+}: {
+  format: string;
+  proto?: string | null;
+  muted?: boolean;
+}) {
   const tone = muted ? FAINT : formatTone(format);
   return (
     <Box
@@ -531,7 +547,7 @@ export function FormatChip({ format, muted }: { format: string; muted?: boolean 
       }}
     >
       <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em', lineHeight: '12px', color: tone }}>
-        {format}
+        {proto ? `${format} · ${proto === 'wireguard' ? 'wg' : 'awg'}` : format}
       </Text>
     </Box>
   );

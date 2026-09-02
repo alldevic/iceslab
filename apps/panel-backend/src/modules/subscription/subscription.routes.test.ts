@@ -447,6 +447,112 @@ describe('GET /sub/:token - SRR auto-format (slice 22)', () => {
     expect(res.headers['content-type']).toContain('text/yaml');
   });
 
+  it('lets a rule name the wg flavour, because the format alone does not', async () => {
+    // Проверяем ПО User-Agent, а не через `?format=`: `?format=` идёт в обход
+    // правил, и именно поэтому дефект не заметили в прошлый раз. Настоящий
+    // клиент шлёт заголовок и никогда — строку запроса.
+    const user = await createUser('alice');
+    const nodeId = await createNode('eu-1', '10.0.0.1:8443');
+    // Оба флейвора на одной ноде. AmneziaWG заведён ПЕРВЫМ: без флейвора в
+    // правиле подбор берёт первый wg-эндпоинт, то есть именно его.
+    const awgProfileId = await createProfile(
+      'amneziawg',
+      {
+        subnet: '10.86.0.0/24',
+        serverPrivateKey: 'aP8lgNU9c2vTGSvljeH1JO1qfCWQ6LwdVT92/RBO/FA=',
+        serverPublicKey: 'BQ6TIcR/TaTqtY4slJvnVj0I95pkC3z7t4HA54i8qVA=',
+        obfuscation: { jc: 4, jmin: 64, jmax: 128, s1: 32, s2: 56, h1: 100, h2: 200, h3: 300, h4: 400 },
+      },
+      'flavour',
+    );
+    await createBinding(awgProfileId, nodeId, 1234);
+    const wgProfileId = await createProfile(
+      'wireguard',
+      {
+        subnet: '10.87.0.0/24',
+        serverPrivateKey: 'iOFrH+3vXxLdV2y8mAqM0d4Wd8LZ2b1n4uOJFsGm3Uk=',
+        serverPublicKey: 'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      },
+      'flavour',
+    );
+    await createBinding(wgProfileId, nodeId, 51820);
+
+    const rule = await prisma.subscriptionResponseRule.create({
+      data: { name: 'WireGuard', uaPattern: '(?i)wireguard', format: 'wgconf', priority: 10 },
+    });
+    const fetchAsWgClient = async () => {
+      invalidateSrrCache();
+      return app.inject({
+        method: 'GET',
+        url: `/sub/${user.subscriptionToken}`,
+        headers: { 'user-agent': 'WireGuard/1.0.16 (Android)' },
+      });
+    };
+
+    // Контроль — это и есть сам дефект. Правило без флейвора отправляет
+    // стокового клиента на wgconf и молчит о том, КАКОЙ; подбор берёт первый
+    // эндпоинт, и клиент получает AmneziaWG. Стоковый wireguard-tools отвечает
+    // на это `Line unrecognized: 'Jc = 4'` и следом сносит интерфейс.
+    const wrong = await fetchAsWgClient();
+    expect(wrong.statusCode).toBe(200);
+    expect(wrong.body).toContain('Jc = ');
+    expect(wrong.body).toContain('Endpoint = 10.0.0.1:1234');
+
+    await prisma.subscriptionResponseRule.update({
+      where: { id: rule.id },
+      data: { proto: 'wireguard' },
+    });
+
+    const right = await fetchAsWgClient();
+    expect(right.statusCode).toBe(200);
+    expect(right.headers['content-type']).toContain('application/octet-stream');
+    expect(right.body).toContain('[Interface]');
+    expect(right.body).toContain('Endpoint = 10.0.0.1:51820');
+    expect(right.body).toContain('PublicKey = BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');
+    // Ни одной директивы, которую стоковый клиент откажется разобрать.
+    for (const key of ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4'])
+      expect(right.body, key).not.toContain(`${key} = `);
+  });
+
+  it('refuses a wg flavour on a format that renders no wg file', async () => {
+    // Поле, которое можно задать и никогда не увидеть его действия, — это
+    // настройка, которой верят, а потом час её отлаживают.
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/srr',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Bad', uaPattern: '(?i)bad', format: 'singbox', proto: 'wireguard' },
+    });
+    expect(created.statusCode).toBe(400);
+
+    // И то же самое, когда пара складывается из ЗАПРОСА и уже сохранённого
+    // правила: PUT может нести любую половину по отдельности.
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/srr',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Wg', uaPattern: '(?i)wireguard', format: 'wgconf', proto: 'wireguard' },
+    });
+    expect(ok.statusCode).toBe(201);
+    const id = JSON.parse(ok.body).id as string;
+    const moved = await app.inject({
+      method: 'PUT',
+      url: `/api/srr/${id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { format: 'clash' },
+    });
+    expect(moved.statusCode).toBe(400);
+    // Снятое вместе с флейвором — уезжает.
+    const cleared = await app.inject({
+      method: 'PUT',
+      url: `/api/srr/${id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { format: 'clash', proto: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(JSON.parse(cleared.body).proto).toBeNull();
+  });
+
   it('falls back to plain when UA does not match any rule', async () => {
     const user = await createUser('alice');
     await createNode('eu-1', '10.0.0.1:8443');

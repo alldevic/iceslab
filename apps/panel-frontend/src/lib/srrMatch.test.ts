@@ -27,6 +27,7 @@ function rule(over: Partial<SrrRule> = {}): SrrRule {
     name: `rule ${seq}`,
     uaPattern: 'happ',
     format: 'singbox' as SubscriptionFormat,
+    proto: null,
     priority: 100,
     enabled: true,
     createdAt: '2026-01-01T00:00:00.000Z',

@@ -31,6 +31,19 @@ export const SrrFormat = z.enum([
   'loon',
 ]);
 
+/**
+ * Which wg flavour `wgconf` should render for a matched client.
+ *
+ * Only `wgconf` renders wg at all, so this is meaningless on every other
+ * format — and refused there (see the refinement below), because a flavour on a
+ * `singbox` rule would read as a setting that does something.
+ *
+ * Optional on `wgconf` too. Left unset the builder keeps its old behaviour and
+ * takes the first wg endpoint the subscription holds, which is right for an
+ * install serving exactly one flavour and a coin-toss for one serving both.
+ */
+export const SrrProto = z.enum(['amneziawg', 'wireguard']);
+
 const UaPatternField = z
   .string()
   .min(1)
@@ -41,13 +54,16 @@ const UaPatternField = z
       'Pattern risks catastrophic backtracking (a nested quantifier like (a+)+); simplify it',
   });
 
-export const CreateSrrSchema = z.object({
-  name: z.string().min(1).max(64),
-  uaPattern: UaPatternField,
-  format: SrrFormat,
-  priority: z.number().int().min(0).max(10000).optional().default(100),
-  enabled: z.boolean().optional().default(true),
-});
+export const CreateSrrSchema = z
+  .object({
+    name: z.string().min(1).max(64),
+    uaPattern: UaPatternField,
+    format: SrrFormat,
+    proto: SrrProto.nullish(),
+    priority: z.number().int().min(0).max(10000).optional().default(100),
+    enabled: z.boolean().optional().default(true),
+  })
+  .superRefine(protoBelongsToFormat);
 
 export type CreateSrrInput = z.infer<typeof CreateSrrSchema>;
 
@@ -55,11 +71,45 @@ export const UpdateSrrSchema = z.object({
   name: z.string().min(1).max(64).optional(),
   uaPattern: UaPatternField.optional(),
   format: SrrFormat.optional(),
+  // `null` clears the flavour, `undefined` leaves it. The pairing with `format`
+  // cannot be judged here — a PUT may carry either one alone — so the route
+  // checks the MERGED rule; see assertProtoMatchesFormat.
+  proto: SrrProto.nullish(),
   priority: z.number().int().min(0).max(10000).optional(),
   enabled: z.boolean().optional(),
 });
 
 export type UpdateSrrInput = z.infer<typeof UpdateSrrSchema>;
+
+/** A flavour only means something where a wg file is rendered. Anywhere else it
+ *  is a field an operator can set and never see take effect, which is the shape
+ *  of a setting people trust and then debug for an hour. */
+function protoBelongsToFormat(
+  value: { format?: string; proto?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.proto && value.format !== 'wgconf') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['proto'],
+      message: `proto is only meaningful for the wgconf format, not "${value.format}"`,
+    });
+  }
+}
+
+/** The same rule applied to a rule after an update is merged into it. Throws
+ *  the zod error the schema would have thrown, so the route reports both the
+ *  same way. */
+export function assertProtoMatchesFormat(merged: {
+  format: string;
+  proto: string | null;
+}): void {
+  const parsed = z
+    .object({ format: z.string(), proto: z.string().nullable() })
+    .superRefine(protoBelongsToFormat)
+    .safeParse(merged);
+  if (!parsed.success) throw parsed.error;
+}
 
 export const SrrIdParamSchema = z.object({
   id: z.string().uuid(),
