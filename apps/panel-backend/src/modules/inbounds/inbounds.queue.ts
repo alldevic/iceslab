@@ -787,9 +787,9 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // deleted while this node was unreachable therefore kept a live wg peer — the
   // access itself, not a stale record — until someone found it by hand.
   //
-  // The set is what the panel BELIEVES should be here — every active user and
-  // every device of theirs on this node's wg profiles — not what the fan-out
-  // above managed to deliver. Those differ, and the difference matters: an
+  // The set is what the panel believes should be here AT THE MOMENT IT IS SENT
+  // — every active user and every device of theirs on this node's wg profiles —
+  // not what the fan-out above managed to deliver. Those differ, and the difference matters: an
   // address allocation that failed this round skips the push (see the loop), and
   // keying the keep set off the pushes would turn that transient into revoking a
   // working tunnel. Retaining something that is not there yet costs nothing.
@@ -802,9 +802,64 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   // keep set naming them on an xray-only node would be a claim about something
   // that node has nothing to do with.
   const servesWg = awgProfile !== null || wgProfile !== null;
+  // Re-read, as late as the answer can be given.
+  //
+  // The snapshot this job started from can be older than a deletion that
+  // committed while it was pushing. Deletion revokes by telling each node to
+  // drop the person (`node-users` → removeUser); a sync that read the users
+  // BEFORE that commit then adds them back afterwards, and names them in the
+  // keep set too, so the node holds a peer for someone the panel has deleted.
+  // Silently: `addUser` on a wg adapter answers ok either way.
+  //
+  // Recomputing here closes it inside this job instead of leaving it to the
+  // next one. The window left is the gap between this query and the node
+  // applying the set — the interval between two syncs was the window before,
+  // and in it a deleted buyer kept working.
+  //
+  // Intersected with the snapshot rather than replacing it. This can only ever
+  // SHRINK the set, which is the direction a stale snapshot is dangerous in;
+  // widening it would name people this job never pushed.
+  const now = new Date();
+  const stillActive = new Set(
+    (
+      await prisma.user.findMany({
+        where: {
+          id: { in: users.map((u) => u.id) },
+          deletedAt: null,
+          status: 'active',
+          OR: [{ expireAt: null }, { expireAt: { gt: now } }],
+        },
+        select: { id: true },
+      })
+    ).map((u) => u.id),
+  );
+  // Devices are their own rows and revoked on their own, so a device revoked
+  // mid-push is the same race one level down.
+  const keptDevices = servesWg
+    ? new Set(
+        (
+          await prisma.wgDevice.findMany({
+            where: {
+              id: { in: wgPeers.map((p) => p.deviceId) },
+              revokedAt: null,
+              user: { deletedAt: null, status: 'active' },
+            },
+            select: { id: true },
+          })
+        ).map((d) => d.id),
+      )
+    : new Set<string>();
+  const dropped =
+    users.length - stillActive.size + (servesWg ? wgPeers.length - keptDevices.size : 0);
+  if (dropped > 0) {
+    getLogger().info(
+      `[worker:inbound-sync] ${node.name}: ${dropped} id(s) stopped being servable while this push ran; ` +
+        `not retained`,
+    );
+  }
   const keepIds = [
-    ...users.map((u) => u.id),
-    ...(servesWg ? wgPeers.map((p) => p.deviceId) : []),
+    ...users.filter((u) => stillActive.has(u.id)).map((u) => u.id),
+    ...(servesWg ? wgPeers.filter((p) => keptDevices.has(p.deviceId)).map((p) => p.deviceId) : []),
   ];
   try {
     const res = await transport.retainUsers({ userIds: keepIds });

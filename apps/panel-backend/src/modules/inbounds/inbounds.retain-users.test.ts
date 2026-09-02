@@ -159,6 +159,51 @@ describe('every inbound sync states the node’s whole user set', () => {
     expect(sent.userIds).toContain(device.id);
   });
 
+  it('drops a buyer deleted while this very push was in flight', async () => {
+    // Гонка, которая отказывает молча. Синк читает пользователей ДО коммита
+    // удаления, а дописывает пиров ПОСЛЕ того, как их сняли: `removeUser`
+    // отработал по старому набору, а этот прогон вернул человека обратно и
+    // назвал его в наборе для сверки. `addUser` на wg-адаптере отвечает `ok`
+    // в обоих случаях, так что в логе это выглядит как обычный успешный синк.
+    //
+    // Набор для сверки перечитывается перед самой отправкой, поэтому тот же
+    // прогон, который человека вернул, его и снимает. Раньше это ложилось на
+    // СЛЕДУЮЩИЙ синк, какой бы ни случился, и до него удалённый покупатель
+    // продолжал ходить.
+    const nodeId = await node('retain-race');
+    await boundProfile(nodeId, 'amneziawg', 1234);
+    const alice = await user('alice');
+    const gone = await user('gone');
+    const retain = stubTransport();
+    // Удаление приходит в середине раздачи: набор уже прочитан, устройства уже
+    // заведены, пиры уже уезжают на ноду.
+    vi.spyOn(NodeTransport.prototype, 'addUser').mockImplementation(async () => {
+      await prisma.user.update({ where: { id: gone }, data: { deletedAt: new Date() } });
+    });
+
+    await applyInboundsForNode(nodeId);
+
+    const sent = retain.mock.calls[0]![0] as RetainUsersRequest;
+    expect(sent.userIds).toContain(alice);
+    expect(sent.userIds).not.toContain(gone);
+    // И устройства тоже: пир — это и есть доступ, а заведён он под id
+    // УСТРОЙСТВА, так что набор, назвавший их, оставил бы туннель живым.
+    const devices = await prisma.wgDevice.findMany({
+      where: { userId: gone },
+      select: { id: true },
+    });
+    // Control: у удалённого устройства действительно были, иначе проверка ниже
+    // не проверяет ничего.
+    expect(devices.length).toBeGreaterThan(0);
+    for (const d of devices) expect(sent.userIds).not.toContain(d.id);
+    // А у живого — остались.
+    const aliceDevices = await prisma.wgDevice.findMany({
+      where: { userId: alice },
+      select: { id: true },
+    });
+    for (const d of aliceDevices) expect(sent.userIds).toContain(d.id);
+  });
+
   it('does not fail the sync on an agent that has no such endpoint', async () => {
     // A node mid-upgrade answers 404. The inbounds and users that landed are
     // live, and failing the job would retry a push that already worked.

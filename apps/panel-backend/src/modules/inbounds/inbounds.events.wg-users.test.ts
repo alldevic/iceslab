@@ -140,4 +140,24 @@ describe('a user who becomes servable gets their wg peers pushed', () => {
 
     expect(await pushedNodes(spy)).toEqual([NODE_WG]);
   });
+
+  // Удаление заказывает сверку набора.
+  //
+  // `removeUser` называет ноде id, которые панель помнит, и этого хватает ровно
+  // до тех пор, пока в ту же секунду не идёт синк, прочитавший пользователей ДО
+  // коммита удаления: он допишет пиров уже после снятия и промолчит. Сверить
+  // набор целиком умеет только inbound-sync (`/retainUsers`), а до сих пор
+  // удаление её не заказывало — значит лишнее снимал следующий синк, какой бы
+  // ни случился, и в окне между ними удалённый покупатель ходил.
+  it('asks the wg nodes to reconcile when a user is deleted', async () => {
+    await node(NODE_WG, 'wg-node', '10.0.0.1:8443');
+    await node(NODE_XRAY_ONLY, 'xray-node', '10.0.0.2:8443');
+    await boundProfile(NODE_WG, 'p-amneziawg', 'amneziawg');
+    await boundProfile(NODE_XRAY_ONLY, 'p-xray', 'xray');
+    const spy = vi.spyOn(inboundSyncQueue, 'add').mockResolvedValue({} as never);
+
+    eventBus.emit('user.deleted', { userId: 'u-6' });
+
+    expect(await pushedNodes(spy)).toEqual([NODE_WG]);
+  });
 });
