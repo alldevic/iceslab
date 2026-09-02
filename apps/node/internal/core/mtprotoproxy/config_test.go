@@ -256,3 +256,39 @@ func TestDefaultsFillIn(t *testing.T) {
 		t.Error("MetricsPort should default to 3129: without it there is no per-user accounting, which is the point of this engine")
 	}
 }
+
+// FAST_MODE is the one key whose ABSENCE is a decision. Nil must render a file
+// with no such key — that is what reproduces the run that failed in the field —
+// and a pinned value must reach Python as a Python bool, not as the Go spelling
+// (`true` is a NameError in an executed config, so a wrong literal here is a
+// proxy that does not start).
+func TestFastModeIsWrittenOnlyWhenPinned(t *testing.T) {
+	users := []User{{Name: "aaa", Secret: secretA}}
+
+	blob, err := renderConfig(baseInbound(), users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "FAST_MODE") {
+		t.Errorf("unpinned FastMode must leave the key out; got:\n%s", blob)
+	}
+	if _, ok := runPy(t, blob)["FAST_MODE"]; ok {
+		t.Error("FAST_MODE reached Python from a config that must not mention it")
+	}
+
+	for _, tc := range []struct {
+		pin  bool
+		want any
+	}{{true, true}, {false, false}} {
+		in := baseInbound()
+		in.FastMode = &tc.pin
+		blob, err := renderConfig(in, users)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := runPy(t, blob)
+		if got["FAST_MODE"] != tc.want {
+			t.Errorf("FastMode=%v: python read FAST_MODE = %#v, want %#v", tc.pin, got["FAST_MODE"], tc.want)
+		}
+	}
+}

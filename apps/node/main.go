@@ -271,6 +271,11 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 				ListenPort:  getenvInt("MTPROTOPROXY_PORT", 443),
 				MetricsPort: getenvInt("MTPROTOPROXY_METRICS_PORT", 3130),
 				Domain:      os.Getenv("MTPROTOPROXY_DOMAIN"), // empty → deferred until ApplyInbound
+				// Unset leaves FAST_MODE out of the generated config, i.e.
+				// upstream's default of on. "0"/"1" pins it. See the field's
+				// comment in mtprotoproxy/config.go for what it switches and
+				// why it is reachable from the outside at all.
+				FastMode: getenvBoolPtr("MTPROTOPROXY_FAST_MODE"),
 			},
 			// Migration cover for a node moving off mtg. A tg:// link is not a
 			// subscription — the client stored a secret and has nothing to
@@ -552,6 +557,22 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// getenvBoolPtr reads a tri-state env var: absent (or unrecognised) means "not
+// pinned" and returns nil, so the caller can tell "leave the default alone"
+// from "set it to false". An unrecognised value reads as absent rather than as
+// false, because a typo silently flipping a flag off is the failure this shape
+// exists to avoid.
+func getenvBoolPtr(key string) *bool {
+	yes, no := true, false
+	switch strings.ToLower(os.Getenv(key)) {
+	case "1", "true", "yes", "on":
+		return &yes
+	case "0", "false", "no", "off":
+		return &no
+	}
+	return nil
 }
 
 func getenvInt(key string, def int) int {

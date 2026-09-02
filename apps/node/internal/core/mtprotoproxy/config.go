@@ -146,6 +146,24 @@ type InboundConfig struct {
 	// the whole reason this engine exists. The adapter defaults it rather than
 	// leaving it off.
 	MetricsPort int
+
+	// FastMode pins mtprotoproxy's FAST_MODE. Nil leaves the key out of the
+	// generated config, which is upstream's default of True.
+	//
+	// What the flag does (mtprotoproxy.py:1645-1668): with it on, the proxy
+	// hands the CLIENT's key material to the Telegram connection and then
+	// replaces its own tg-side decryptor and client-side encryptor with
+	// pass-throughs, so bytes coming back from Telegram are relayed to the
+	// client without being decrypted and re-encrypted. Off, every byte is
+	// re-encrypted by the proxy, which is what mtg does.
+	//
+	// It is a field rather than a constant because the tg→client direction is
+	// exactly the one that failed on this deployment 2026-09-02 — 284
+	// connections, no rejected handshake, no timeout, and 1.1 MB delivered —
+	// and the only way to tell whether that path is the cause is to run the
+	// same traffic with it off. Nil vs false matters here: nil reproduces the
+	// failed run byte for byte, false is the experiment.
+	FastMode *bool
 }
 
 func (c InboundConfig) withDefaults() InboundConfig {
@@ -341,7 +359,23 @@ func renderConfig(inbound InboundConfig, users []User) ([]byte, error) {
 	// a credential store with no authentication in front of it.
 	b.WriteString("METRICS_EXPORT_LINKS = False\n")
 
+	// Written only when pinned. An absent key is upstream's own default, and
+	// writing it out anyway would make a config that changes meaning if
+	// upstream ever changes that default look like a config we chose.
+	if cfg.FastMode != nil {
+		fmt.Fprintf(&b, "FAST_MODE = %s\n", pyBool(*cfg.FastMode))
+	}
+
 	return []byte(b.String()), nil
+}
+
+// pyBool renders a Go bool as the Python literal, since the config file is
+// executed as Python and `true` is a NameError there, not a value.
+func pyBool(v bool) string {
+	if v {
+		return "True"
+	}
+	return "False"
 }
 
 // writeSection emits `NAME = {...}` over the users for which `value` returns a
