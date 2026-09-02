@@ -84,7 +84,7 @@ tar -xzf "$TMPDIR/src.tar.gz" -C "$INSTALL_DIR" --strip-components=1
 [[ -f "$SCRIPT_PATH" ]] || fail "mtprotoproxy.py not found after unpacking"
 [[ -d "$INSTALL_DIR/pyaes" ]] || warn "bundled pyaes missing; harmless while a fast backend is present"
 
-# ───── 2b. The datacenter-table patch ─────
+# ───── 2b. The patch: the datacenter table, and the counters that name a drop ─────
 #
 # Upstream's direct mode knows five datacenters and indexes them with
 # `abs(dc) - 1`. Telegram also hands clients dc 203 — a CDN datacenter, and the
@@ -98,6 +98,15 @@ tar -xzf "$TMPDIR/src.tar.gz" -C "$INSTALL_DIR" --strip-components=1
 # and serves stays byte-identical to upstream's tarball, and this diff is the
 # whole of what we add to it. It also adds the counter and the log line that
 # would have named the problem in minutes.
+#
+# The same diff carries the general form of that lesson. A connection that
+# finished the handshake, named a user and then relayed nothing appears in NO
+# upstream counter: `user_connects` is bumped right after the handshake and the
+# duration histogram only once the relay has run, so these could be found only by
+# subtracting the histogram and the current-connection gauge from user_connects —
+# which is how the datacenter fault was found, and is not a signal anyone will
+# compute by hand twice. `connects_dropped` counts them, and
+# `connects_dropped_reason` says which of the five ways it was.
 #
 # `--forward` so a rerun on an already-patched tree is a no-op rather than a
 # failure; the tree is freshly unpacked above, so that path is only for someone
@@ -117,9 +126,14 @@ PATCH_FILE="$(dirname "$(readlink -f "$0")")/mtprotoproxy-cdn-datacenters.patch"
 [[ -f "$PATCH_FILE" ]] || fail "missing $PATCH_FILE, which is not optional: without it dc 203 is dropped silently"
 patch -p1 -d "$INSTALL_DIR" --forward < "$PATCH_FILE" \
   || fail "the datacenter patch did not apply to this mtprotoproxy; re-pin it against the new version before shipping"
+# Both halves are checked, because `patch --forward` exits 0 on a diff it decided
+# was already applied, and half a patch is the failure mode this whole file is
+# about.
 grep -q TG_EXTRA_DATACENTERS_V4 "$SCRIPT_PATH" \
-  || fail "the datacenter patch reported success but the table is not there"
-log "Datacenter table patched (adds dc 203 and a counter for ids with no address)"
+  || fail "the patch reported success but the datacenter table is not there"
+grep -q "def update_dropped" "$SCRIPT_PATH" \
+  || fail "the patch reported success but the dropped-connection counter is not there"
+log "Patched (dc 203, plus counters for a connection that named a user and relayed nothing)"
 
 # ───── 3. Smoke-test ─────
 #

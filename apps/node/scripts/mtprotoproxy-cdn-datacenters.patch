@@ -31,7 +31,41 @@
  # This list will be updated in the runtime
  TG_MIDDLE_PROXIES_V4 = {
      1: [("149.154.175.50", 8888)], -1: [("149.154.175.50", 8888)],
-@@ -1351,6 +1375,18 @@
+@@ -432,6 +456,33 @@
+     update_stats(**{"connects_with_duration_le_%s" % str(bucket): 1})
+ 
+ 
++# Every way a connection that has already NAMED A USER can end without relaying
++# a byte. Spelled out rather than accumulated on demand, so each one is exported
++# from the first scrape: a counter that appears only after it fires cannot be
++# alerted on, and its absence cannot be read as "this is not happening".
++DROPPED_REASONS = ("no_telegram", "bad_proto_tag", "tcp_limit", "expired", "quota")
++
++
++def update_dropped(reason):
++    """Count one connection that authenticated a user and relayed nothing.
++
++    Such a connection was invisible in every counter this proxy had.
++    `user_connects` is bumped straight after the handshake and `update_durations`
++    only once the relay has run, so the only way to see these was to subtract the
++    duration histogram and the current-connection gauge from user_connects. That
++    IS how the CDN-datacenter fault was found - 136 of 272 connections on
++    2026-09-02, while Telegram text worked and media did not - and a signal that
++    has to be computed in someone's head by hand is not a signal anyone will
++    compute twice.
++
++    `connects_unknown_dc` stays as it is: it is one REASON inside no_telegram,
++    and knowing the datacenter table is the cause is worth more than not counting
++    the connection twice.
++    """
++    update_stats(connects_dropped=1)
++    update_stats(**{"connects_dropped_%s" % reason: 1})
++
++
+ def get_curr_connects_count():
+     global user_stats
+ 
+@@ -1351,6 +1402,18 @@
      return False
  
  
@@ -50,7 +84,7 @@
  async def do_direct_handshake(proto_tag, dc_idx, dec_key_and_iv=None):
      RESERVED_NONCE_FIRST_CHARS = [b"\xef"]
      RESERVED_NONCE_BEGININGS = [b"\x48\x45\x41\x44", b"\x50\x4F\x53\x54",
-@@ -1361,16 +1397,27 @@
+@@ -1361,16 +1424,27 @@
      global my_ip_info
      global tg_connection_pool
  
@@ -86,13 +120,59 @@
  
      try:
          reader_tgt, writer_tgt = await tg_connection_pool.get_connection(dc, TG_DATACENTER_PORT)
-@@ -1788,6 +1835,9 @@
+@@ -1650,6 +1724,11 @@
+         tg_data = await do_middleproxy_handshake(proto_tag, dc_idx, cl_ip, cl_port)
+ 
+     if not tg_data:
++        # The handshake succeeded, the user is known, and Telegram was never
++        # reached: no address for the datacenter, a refused connection, a
++        # timeout. From the client's side this is indistinguishable from a proxy
++        # that works and a channel that will not load.
++        update_dropped("no_telegram")
+         return
+ 
+     reader_tg, writer_tg = tg_data
+@@ -1677,6 +1756,7 @@
+             reader_clt = MTProtoSecureIntermediateFrameStreamReader(reader_clt)
+             writer_clt = MTProtoSecureIntermediateFrameStreamWriter(writer_clt)
+         else:
++            update_dropped("bad_proto_tag")
+             return
+ 
+     tg_to_clt = tg_connect_reader_to_writer(reader_tg, writer_clt, user,
+@@ -1708,6 +1788,17 @@
+         start = time.time()
+         await asyncio.wait([task_tg_to_clt, task_clt_to_tg], return_when=asyncio.FIRST_COMPLETED)
+         update_durations(time.time() - start)
++    else:
++        # A deliberate refusal, and still a connection that counted as a connect
++        # and carried nothing. Counted with the faults rather than apart from
++        # them because the question these counters answer is "why did this user
++        # get nothing", and "because you set a limit" is one of the answers.
++        if tcp_limit_hit:
++            update_dropped("tcp_limit")
++        elif user_expired:
++            update_dropped("expired")
++        else:
++            update_dropped("quota")
+ 
+     update_user_stats(user, curr_connects=-1)
+ 
+@@ -1788,6 +1879,17 @@
          metrics.append(["connects_all", "counter", "incoming connects", stats["connects_all"]])
          metrics.append(["handshake_timeouts", "counter", "number of timed out handshakes",
                         stats["handshake_timeouts"]])
 +        metrics.append(["connects_unknown_dc", "counter",
 +                       "connects asking for a datacenter with no address in the table",
 +                       stats["connects_unknown_dc"]])
++        metrics.append(["connects_dropped", "counter",
++                       "connects that named a user and relayed no byte",
++                       stats["connects_dropped"]])
++        for dropped_reason in DROPPED_REASONS:
++            metrics.append(["connects_dropped_reason", "counter",
++                           "connects that named a user and relayed no byte, by reason",
++                           {"reason": dropped_reason,
++                            "val": stats["connects_dropped_%s" % dropped_reason]}])
  
          if config.METRICS_EXPORT_LINKS:
              for link in proxy_links:
