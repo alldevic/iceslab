@@ -71,13 +71,15 @@ export async function previewSourceCategory(
   if (kind === 'geosite') {
     if (!source.geositeUrl) return null;
     const bytes = await loadSourceDat(source.geositeUrl, intervalMs(source), 'ifDue', now, defaultFetchDat);
-    const doms = parseGeoSite(bytes).get(key);
+    // One category, so build one: this runs on an operator keystroke and used
+    // to materialise the whole database to answer about a single name.
+    const doms = parseGeoSite(bytes, [key]).get(key);
     if (!doms) return null;
     return { entries: domainMatchers(doms.slice(0, PREVIEW_CAP)), total: doms.length, truncated: doms.length > PREVIEW_CAP };
   }
   if (!source.geoipUrl) return null;
   const bytes = await loadSourceDat(source.geoipUrl, intervalMs(source), 'ifDue', now, defaultFetchDat);
-  const cidrs = parseGeoIP(bytes).get(key);
+  const cidrs = parseGeoIP(bytes, [key]).get(key);
   if (!cidrs) return null;
   return {
     entries: cidrs.slice(0, PREVIEW_CAP).map(cidrToString).filter((s) => s !== ''),

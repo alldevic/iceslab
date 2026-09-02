@@ -135,12 +135,57 @@ class Writer {
 // crash-loop). Real geosite/geoip data is well under 4M total entries, so this
 // cap is generous headroom; exceeding it throws, and the orchestrator records
 // the source as failed and skips it (the build degrades instead of dying).
+// Counts what is MATERIALISED, not what the file contains: a filtered parse
+// builds only the categories asked for, and the cap exists to bound the objects
+// in memory rather than to judge the file.
 const MAX_GEO_ENTRIES = 8_000_000;
 
-/** Parse geosite.dat into UPPERCASED category -> domains (matches how xray and
- *  geo-svc key lookups). */
-export function parseGeoSite(data: Uint8Array): Map<string, Domain[]> {
+/**
+ * The country code of one entry, read WITHOUT materialising its contents.
+ *
+ * Skipping a length-delimited field is pointer arithmetic — no object is built,
+ * no string is decoded — so this pass is what makes a filtered parse cheap. It is
+ * a separate pass rather than a check inside the main loop because protobuf does
+ * not promise field order: relying on country_code arriving before the domains
+ * would work on every generator anyone has shipped and fail silently on the one
+ * that does not, by parsing everything into a category nobody asked for.
+ */
+function entryCategory(payload: Uint8Array): string {
+  const r = new Reader(payload);
+  while (!r.eof) {
+    const f = r.tag();
+    if (f.field === 1 && f.wire === 2) return utf8.decode(r.lenDelim()).toUpperCase();
+    r.skip(f.wire);
+  }
+  return '';
+}
+
+/** The filter as a set, or null for "everything". */
+function wantedSet(only: Iterable<string> | undefined): Set<string> | null {
+  if (!only) return null;
+  return new Set([...only].map((c) => c.toUpperCase()));
+}
+
+/**
+ * Parse geosite.dat into UPPERCASED category -> domains (matches how xray and
+ * geo-svc key lookups).
+ *
+ * `only` narrows what is BUILT, not what is read. Parsing is how categories are
+ * enumerated, so it used to happen in full whenever a build ran at all: on the
+ * runetfreedom sources that is 3.15M domains and 1.23M networks, measured at
+ * 590 MB of heap and 762 MB RSS — on a build with no custom categories, whose
+ * whole output is a copy of the bytes we already hold. Under the image's own
+ * `--max-old-space-size=512` that is a fatal heap error, and with GEO_SELF_HOST
+ * on it made the panel's start-up warm-up a crash loop.
+ *
+ * Every caller knows which categories it wants: a category spec names its
+ * sources and their categories, and the .srs step compiles a fixed list. Passing
+ * that list makes the cost proportional to what is used rather than to the size
+ * of the upstream database.
+ */
+export function parseGeoSite(data: Uint8Array, only?: Iterable<string>): Map<string, Domain[]> {
   const out = new Map<string, Domain[]>();
+  const wanted = wantedSet(only);
   const r = new Reader(data);
   let total = 0;
   while (!r.eof) {
@@ -149,7 +194,9 @@ export function parseGeoSite(data: Uint8Array): Map<string, Domain[]> {
       r.skip(wire);
       continue;
     }
-    const entry = new Reader(r.lenDelim());
+    const payload = r.lenDelim();
+    if (wanted && !wanted.has(entryCategory(payload))) continue;
+    const entry = new Reader(payload);
     let cc = '';
     const doms: Domain[] = [];
     while (!entry.eof) {
@@ -176,9 +223,11 @@ export function parseGeoSite(data: Uint8Array): Map<string, Domain[]> {
   return out;
 }
 
-/** Parse geoip.dat into UPPERCASED category -> CIDRs. */
-export function parseGeoIP(data: Uint8Array): Map<string, CIDR[]> {
+/** Parse geoip.dat into UPPERCASED category -> CIDRs. `only` narrows what is
+ *  built; see parseGeoSite for why that matters. */
+export function parseGeoIP(data: Uint8Array, only?: Iterable<string>): Map<string, CIDR[]> {
   const out = new Map<string, CIDR[]>();
+  const wanted = wantedSet(only);
   const r = new Reader(data);
   let total = 0;
   while (!r.eof) {
@@ -187,7 +236,9 @@ export function parseGeoIP(data: Uint8Array): Map<string, CIDR[]> {
       r.skip(wire);
       continue;
     }
-    const entry = new Reader(r.lenDelim());
+    const payload = r.lenDelim();
+    if (wanted && !wanted.has(entryCategory(payload))) continue;
+    const entry = new Reader(payload);
     let cc = '';
     const cidrs: CIDR[] = [];
     while (!entry.eof) {

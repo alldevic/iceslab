@@ -111,6 +111,28 @@ export async function buildGeoArtifacts(opts?: {
   const intervalMs = (s: { refreshIntervalHours: number }): number =>
     Math.max(1, s.refreshIntervalHours) * 3_600_000;
 
+  // What each source is actually READ for, by database. A source contributes to
+  // a build only through the categories an enabled spec names in it, so nothing
+  // else has to be turned into objects.
+  //
+  // Before this, parsing was unconditional, because parsing is how categories get
+  // enumerated - so a build with no custom categories at all still turned 3.15M
+  // domains and 1.23M networks into JS objects to produce an output that is a
+  // copy of bytes already in hand. Measured 590 MB of heap and 762 MB RSS, above
+  // the image's own --max-old-space-size=512, which with GEO_SELF_HOST on made
+  // start-up warm-up a crash loop.
+  const siteWanted = new Map<string, Set<string>>();
+  const ipWanted = new Map<string, Set<string>>();
+  const want = (m: Map<string, Set<string>>, sourceId: string, category: string): void => {
+    const set = m.get(sourceId) ?? new Set<string>();
+    set.add(category);
+    m.set(sourceId, set);
+  };
+  for (const spec of specs) {
+    for (const r of spec.domainRefs) want(siteWanted, r.sourceId, r.category);
+    for (const r of spec.ipRefs) want(ipWanted, r.sourceId, r.category);
+  }
+
   // Fetch + parse each source's .dat once, keyed by sourceId. A failure is
   // recorded and the source is skipped (degrade, don't fail the build).
   const siteMaps = new Map<string, Map<string, Domain[]>>();
@@ -123,7 +145,11 @@ export async function buildGeoArtifacts(opts?: {
     if (s.geositeUrl) {
       try {
         const bytes = await loadSourceDat(s.geositeUrl, intervalMs(s), mode, now, fetchDat);
-        siteMaps.set(s.id, parseGeoSite(bytes));
+        // The FETCH is unconditional even when nothing reads this source: the
+        // raw bytes are the mirror clients pull, and the cache revalidation is
+        // the point of running the build. Only the parse is narrowed.
+        const cats = siteWanted.get(s.id);
+        if (cats) siteMaps.set(s.id, parseGeoSite(bytes, cats));
         if (!mirrorSite) mirrorSite = { name: GEO_MIRROR_SITE, bytes, sha256: sha256(bytes) };
       } catch (err) {
         sourceErrors.push({ sourceId: s.id, url: s.geositeUrl, error: (err as Error).message });
@@ -132,7 +158,8 @@ export async function buildGeoArtifacts(opts?: {
     if (s.geoipUrl) {
       try {
         const bytes = await loadSourceDat(s.geoipUrl, intervalMs(s), mode, now, fetchDat);
-        ipMaps.set(s.id, parseGeoIP(bytes));
+        const cats = ipWanted.get(s.id);
+        if (cats) ipMaps.set(s.id, parseGeoIP(bytes, cats));
         if (!mirrorIp) mirrorIp = { name: GEO_MIRROR_IP, bytes, sha256: sha256(bytes) };
       } catch (err) {
         sourceErrors.push({ sourceId: s.id, url: s.geoipUrl, error: (err as Error).message });
@@ -165,7 +192,10 @@ export async function buildGeoArtifacts(opts?: {
   // failure (or no binary) just omits that .srs.
   const ruleSets: GeoArtifact[] = [];
   if (singboxBin && mirrorSite) {
-    const site = parseGeoSite(mirrorSite.bytes);
+    // The four presets, not the whole database: this is the parse that a
+    // production panel pays on every build, because self-hosting the .srs is
+    // exactly the reason the subsystem is switched on.
+    const site = parseGeoSite(mirrorSite.bytes, SRS_GEOSITE);
     for (const cat of SRS_GEOSITE) {
       const doms = site.get(cat.toUpperCase());
       if (!doms) continue;
@@ -177,7 +207,7 @@ export async function buildGeoArtifacts(opts?: {
       }
     }
     if (mirrorIp) {
-      const ips = parseGeoIP(mirrorIp.bytes);
+      const ips = parseGeoIP(mirrorIp.bytes, SRS_GEOIP);
       for (const cat of SRS_GEOIP) {
         const cidrs = ips.get(cat.toUpperCase());
         if (!cidrs) continue;
