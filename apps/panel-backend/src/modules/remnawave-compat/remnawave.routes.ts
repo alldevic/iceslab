@@ -137,19 +137,22 @@ function mapDevice(d: {
  * connected: X" has to find X in this list, and two independently written
  * names are two names to drift apart.
  */
-function mapWgTunnel(d: {
-  id: string;
-  createdAt: Date;
-  lastSeenAt: Date | null;
-  bytesIn: bigint;
-  bytesOut: bigint;
-  peers: { ip: string }[];
-}) {
+function mapWgTunnel(
+  d: {
+    id: string;
+    createdAt: Date;
+    lastSeenAt: Date | null;
+    bytesIn: bigint;
+    bytesOut: bigint;
+    peers: { ip: string; profileId: string }[];
+  },
+  served: ReadonlySet<string>,
+) {
   const traffic = `↑ ${formatBytes(d.bytesOut)} ↓ ${formatBytes(d.bytesIn)}`;
   const seen = d.lastSeenAt ? d.lastSeenAt.toISOString().slice(0, 16).replace('T', ' ') : null;
   return {
     id: d.id,
-    ...describeWgTunnel(d),
+    ...describeWgTunnel(d, served),
     // What the card adds on top of the identity. The address is NOT repeated
     // here - it is the name now, and the shop draws the name and this line one
     // above the other, so a second copy would only make the line longer.
@@ -1266,10 +1269,14 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   app.get('/api/hwid/devices/:ref', opts, async (request, reply) => {
     const { ref } = request.params as { ref: string };
     const userId = await resolveUserId(ref);
-    const [rows, tunnels, settings] = await Promise.all([
+    const [rows, tunnels, settings, served] = await Promise.all([
       hwidService.listUserDevices(userId),
       wgDevicesService.listDevicesWithPeers(userId),
       getSubscriptionSettings(),
+      // A tunnel holds one address per wg profile, and peers are allocated more
+      // widely than squads grant - so the addresses have to be narrowed to what
+      // this buyer's subscription can actually hand them.
+      wgDevicesService.servedProfileIds(userId),
     ]);
     // A revoked tunnel is history, not a device: the row survives so its
     // traffic can still be answered for, and the buyer must not see access
@@ -1281,7 +1288,7 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     // the same tunnel, and `wg-device-numbering.test.ts` pins that they stay so.
     const shown = live.filter((t) => settings.wgShowUnusedTunnels || t.lastSeenAt !== null);
     return sendResponse(reply, {
-      devices: [...rows.map(mapDevice), ...shown.map((t) => mapWgTunnel(t))],
+      devices: [...rows.map(mapDevice), ...shown.map((t) => mapWgTunnel(t, served))],
     });
   });
 

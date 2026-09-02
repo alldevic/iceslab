@@ -88,8 +88,30 @@ export async function listDevicesWithPeers(userId: string) {
   return prisma.wgDevice.findMany({
     where: { userId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    include: { peers: { select: { ip: true }, orderBy: { ip: 'asc' } } },
+    include: { peers: { select: { ip: true, profileId: true }, orderBy: { ip: 'asc' } } },
   });
+}
+
+/**
+ * The profiles this user's squads actually give them.
+ *
+ * Needed only for DISPLAY, and only because peers are allocated more widely
+ * than access is granted: every user of a wg-bearing node gets a peer on every
+ * wg profile there, squad or no squad (the upstream defect recorded in
+ * HANDOFF). So a buyer's tunnel holds addresses from inbounds their
+ * subscription never offers, and naming the tunnel by one of those names it by
+ * something they have never seen.
+ *
+ * An empty result means "narrow by nothing" to the callers, not "show nothing":
+ * a user with no squad has no subscription to compare against anyway, and
+ * hiding every address would leave the card with no name at all.
+ */
+export async function servedProfileIds(userId: string): Promise<Set<string>> {
+  const rows = await prisma.groupProfile.findMany({
+    where: { group: { members: { some: { userId } } } },
+    select: { profileId: true },
+  });
+  return new Set(rows.map((r) => r.profileId));
 }
 
 /**

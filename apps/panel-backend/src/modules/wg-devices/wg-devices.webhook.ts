@@ -2,6 +2,7 @@ import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/logger.js';
 import { emitRemnaWebhookForUser } from '../remnawave-compat/remnawave.webhook.js';
 import { describeWgTunnel } from './wg-devices.presentation.js';
+import { servedProfileIds } from './wg-devices.service.js';
 
 /**
  * "A config that had never been used has started being used."
@@ -38,16 +39,24 @@ export async function announceFirstWgTunnelUse(deviceIds: string[]): Promise<voi
         id: true,
         userId: true,
         createdAt: true,
-        peers: { select: { ip: true }, orderBy: { ip: 'asc' } },
+        peers: { select: { ip: true, profileId: true }, orderBy: { ip: 'asc' } },
       },
     });
+    // Narrowed per owner, and resolved once each: a poll folds one node's
+    // devices, so these are nearly always all the same person. The tunnel has
+    // to be named here exactly as the device list names it - a buyer told about
+    // an address they cannot find in their list has been told nothing.
+    const servedByUser = new Map<string, ReadonlySet<string>>();
+    for (const userId of new Set(rows.map((r) => r.userId))) {
+      servedByUser.set(userId, await servedProfileIds(userId));
+    }
     for (const d of rows) {
       // Fire-and-forget, through the same semaphore and the same "resolve the
       // user inside the slot" path as every other event this facade sends. A
       // notification must never hold up the stats poll it rides on, and a shop
       // that is down must not cost the panel a tick of accounting.
       emitRemnaWebhookForUser('user_hwid_devices.added', d.userId, {}, {
-        hwidUserDevice: describeWgTunnel(d),
+        hwidUserDevice: describeWgTunnel(d, servedByUser.get(d.userId)),
       });
     }
   } catch (err: unknown) {

@@ -37,6 +37,7 @@ let sent: Record<string, any>[] = []; // eslint-disable-line @typescript-eslint/
 
 const userIds: string[] = [];
 const profileIds: string[] = [];
+const groupIds: string[] = [];
 let seq = 0;
 
 beforeAll(async () => {
@@ -55,6 +56,7 @@ afterAll(async () => {
     await prisma.wgDevice.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
+  if (groupIds.length) await prisma.group.deleteMany({ where: { id: { in: groupIds } } });
   if (profileIds.length) await prisma.profile.deleteMany({ where: { id: { in: profileIds } } });
   await prisma.$disconnect();
   const { closeRedis } = await import('../../lib/redis.js');
@@ -108,14 +110,35 @@ async function makeUser(): Promise<string> {
   return row.id;
 }
 
-/** The address is what the buyer is told; a tunnel without one has nothing to
- *  be identified by, so the tests that assert on the name allocate a peer. */
-async function giveAddress(userId: string, deviceId: string, ip: string): Promise<void> {
+/**
+ * Give a device an address on a profile, optionally one the buyer's squad
+ * actually gives them.
+ *
+ * Both halves matter. The address is what the buyer is told, so the tests that
+ * assert on the name allocate one. And peers are allocated for every user of a
+ * wg-bearing node whether or not their squad grants the profile, so a device
+ * carries addresses from inbounds the buyer will never be offered - `served`
+ * is what tells the two apart.
+ */
+async function giveAddress(
+  userId: string,
+  deviceId: string,
+  ip: string,
+  opts: { served?: boolean } = {},
+): Promise<void> {
   seq += 1;
   const profile = await prisma.profile.create({
     data: { name: `wgfirst-profile-${Date.now()}-${seq}`, protocol: 'amneziawg', config: {} },
   });
   profileIds.push(profile.id);
+  if (opts.served) {
+    const group = await prisma.group.create({
+      data: { name: `wgfirst-squad-${Date.now()}-${seq}` },
+    });
+    groupIds.push(group.id);
+    await prisma.groupProfile.create({ data: { groupId: group.id, profileId: profile.id } });
+    await prisma.groupMember.create({ data: { groupId: group.id, userId } });
+  }
   await prisma.amneziawgPeer.create({
     data: { deviceId, profileId: profile.id, userId, ip },
   });
@@ -153,7 +176,12 @@ describe('the first use of a wg tunnel is announced', () => {
   it('sends one event the shop can read the tunnel out of, named by its address', async () => {
     const userId = await makeUser();
     const [device] = await service.ensureDevices(userId, 1);
-    await giveAddress(userId, device.id, '10.68.0.28');
+    await giveAddress(userId, device.id, '10.68.0.28', { served: true });
+    // The same tunnel on a profile this buyer's squad does NOT give them. Peers
+    // are allocated per node, not per squad, so this is the ordinary shape of a
+    // device rather than a contrived one - measured on the live panel, where a
+    // `main` buyer's device held four addresses and their config had one.
+    await giveAddress(userId, device.id, '10.66.0.64');
 
     await stats.foldDeviceStats([{ userId: device.id, bytesIn: 1200, bytesOut: 340 }]);
     await settle();
@@ -173,6 +201,10 @@ describe('the first use of a wg tunnel is announced', () => {
     // file they imported.
     expect(shopLabel(found!)).toContain('10.68.0.28');
     expect(shopLabel(found!)).not.toMatch(/#\d/);
+    // And NOT the address from an inbound their subscription never offers: the
+    // buyer cannot find that one anywhere, so naming the tunnel by it is worse
+    // than naming it by a number - a number at least does not look like a fact.
+    expect(shopLabel(found!)).not.toContain('10.66.0.64');
     // Its own creation time, not the poll's: the shop's dedupe fingerprint is
     // hwid+createdAt, and a moving timestamp would make every redelivery look
     // like a new device.
@@ -251,11 +283,29 @@ describe('the first use of a wg tunnel is announced', () => {
     expect(row.bytesIn, 'the traffic is still accounted for').toBe(90n);
   });
 
+  it('names every address the buyer could be holding, not the first one', async () => {
+    // One keypair serves every wg profile, and the allocator gives a different
+    // host part on each - so the file the buyer imported carries ONE of the
+    // tunnel's addresses. Two flavours on one node is the normal case (stock
+    // WireGuard and AmneziaWG), and either file has to be recognisable.
+    const userId = await makeUser();
+    const [device] = await service.ensureDevices(userId, 1);
+    await giveAddress(userId, device.id, '10.68.0.51', { served: true });
+    await giveAddress(userId, device.id, '10.69.0.51', { served: true });
+
+    await stats.foldDeviceStats([{ userId: device.id, bytesIn: 7, bytesOut: 7 }]);
+    await settle();
+
+    const label = shopLabel(shopFindsDevice(sent[0]!.payload)!);
+    expect(label).toContain('10.68.0.51');
+    expect(label).toContain('10.69.0.51');
+  });
+
   it("announces each of a buyer's tunnels on its own first use", async () => {
     const userId = await makeUser();
     const devices = await service.ensureDevices(userId, 2);
-    await giveAddress(userId, devices[0].id, '10.68.0.41');
-    await giveAddress(userId, devices[1].id, '10.68.0.42');
+    await giveAddress(userId, devices[0].id, '10.68.0.41', { served: true });
+    await giveAddress(userId, devices[1].id, '10.68.0.42', { served: true });
 
     await stats.foldDeviceStats([{ userId: devices[0].id, bytesIn: 5, bytesOut: 5 }]);
     await settle();

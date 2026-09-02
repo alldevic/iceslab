@@ -26,6 +26,7 @@ const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const bearer = () => ({ authorization: `Bearer ${adminToken}` });
 const userIds: string[] = [];
 const profileIds: string[] = [];
+const groupIds: string[] = [];
 
 beforeAll(async () => {
   process.env['REMNAWAVE_COMPAT_ENABLED'] = 'true';
@@ -47,6 +48,7 @@ afterAll(async () => {
     await prisma.hwidUserDevice.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
+  if (groupIds.length) await prisma.group.deleteMany({ where: { id: { in: groupIds } } });
   if (profileIds.length) await prisma.profile.deleteMany({ where: { id: { in: profileIds } } });
   await prisma.apiToken.deleteMany({ where: { tokenHash: sha(adminToken) } });
   await prisma.appSetting.deleteMany({ where: { key: 'wgShowUnusedTunnels' } });
@@ -74,7 +76,7 @@ async function mkUser(): Promise<{ id: string; ref: number }> {
 
 async function mkTunnel(
   userId: string,
-  opts: { used: boolean; revoked?: boolean; ip?: string },
+  opts: { used: boolean; revoked?: boolean; ip?: string; unservedIp?: string },
 ) {
   const n = seq++;
   const device = await prisma.wgDevice.create({
@@ -90,13 +92,22 @@ async function mkTunnel(
   // The address is the tunnel's NAME on the card, so a test about naming has
   // to allocate one. In production the subscription does it: every device gets
   // an address on the first fetch, used or not.
-  if (opts.ip) {
+  for (const [ip, served] of [
+    ...(opts.ip ? ([[opts.ip, true]] as [string, boolean][]) : []),
+    ...(opts.unservedIp ? ([[opts.unservedIp, false]] as [string, boolean][]) : []),
+  ]) {
     const profile = await prisma.profile.create({
       data: { name: `wgdev-profile-${Date.now()}-${seq++}`, protocol: 'amneziawg', config: {} },
     });
     profileIds.push(profile.id);
+    if (served) {
+      const group = await prisma.group.create({ data: { name: `wgdev-squad-${Date.now()}-${seq++}` } });
+      groupIds.push(group.id);
+      await prisma.groupProfile.create({ data: { groupId: group.id, profileId: profile.id } });
+      await prisma.groupMember.create({ data: { groupId: group.id, userId } });
+    }
     await prisma.amneziawgPeer.create({
-      data: { deviceId: device.id, profileId: profile.id, userId, ip: opts.ip },
+      data: { deviceId: device.id, profileId: profile.id, userId, ip },
     });
   }
   return device;
@@ -175,6 +186,20 @@ describe('wg tunnels are devices too', () => {
     const both = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
     expect(both.map((d) => d.deviceModel)).toEqual(['10.90.0.2', '10.90.0.3']);
     await setShowUnused(false);
+  });
+
+  it('names the tunnel only by addresses the buyer could actually be holding', async () => {
+    // wg peers are allocated for every user of a wg-bearing node, squad or no
+    // squad, so a device carries addresses from inbounds this buyer is never
+    // offered. Naming the card by one of those names it by something they
+    // cannot find in any config of theirs - and the notification, built from
+    // the same description, would repeat it.
+    await setShowUnused(false);
+    const u = await mkUser();
+    await mkTunnel(u.id, { used: true, ip: '10.68.0.9', unservedIp: '10.66.0.9' });
+
+    const body = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
+    expect(body[0]!.deviceModel).toBe('10.68.0.9');
   });
 
   it('leaves the traffic line without a second copy of the address', async () => {
