@@ -47,6 +47,20 @@ export const UpdateSettingsSchema = z.object({
     })
     .nullable()
     .optional(),
+  // Whether a wg tunnel that has never handshaked is listed as a device.
+  //
+  // Tunnels are PRE-CUT: the buyer gets one per device their limit allows, all
+  // minted up front, because the install screen is rendered from what we hand
+  // the shop and a fixed set of "Device 1..N" links needs no button there. So a
+  // buyer with a limit of ten has ten tunnels the moment they exist, and on the
+  // live fleet one of them had exactly that - ten tunnels, not one handshake.
+  // Listing those as devices would tell them they own ten things they have
+  // never used.
+  //
+  // Off by default for that reason: a device is something in use. On, the slots
+  // show too, which is what an operator wants when a buyer says "I downloaded
+  // the config and nothing appeared".
+  wgShowUnusedTunnels: z.boolean().optional(),
   // Subscription landing-page default language. The panel's LanguageSwitcher
   // mirrors its UI language here so the human /sub page defaults to the same
   // language the operator runs the panel in. The page also carries an in-page

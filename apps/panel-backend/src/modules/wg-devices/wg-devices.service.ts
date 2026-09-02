@@ -221,6 +221,25 @@ export async function ensureDevicesForUsers(
  * their owner: revoking one must not reach into the user's xray or hysteria
  * access.
  */
+/**
+ * The device with this id IF it belongs to this user and still has access.
+ *
+ * Exists because `revokeDevice` is addressed by device id alone and is shared
+ * with the admin path, where the caller is trusted with every user. On the
+ * buyer-facing path the id arrives from their own browser, so the owner has to
+ * be established before anything is revoked - not after, which would revoke
+ * first and discover the theft second.
+ *
+ * Already-revoked reads as absent: revoking twice is a no-op worth reporting
+ * as "nothing happened" rather than as success.
+ */
+export async function findDeviceForUser(
+  deviceId: string,
+  userId: string,
+): Promise<WgDevice | null> {
+  return prisma.wgDevice.findFirst({ where: { id: deviceId, userId, revokedAt: null } });
+}
+
 export async function revokeDevice(deviceId: string): Promise<WgDevice | null> {
   const device = await prisma.wgDevice.findUnique({ where: { id: deviceId } });
   if (!device || device.revokedAt) return device;

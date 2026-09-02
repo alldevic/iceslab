@@ -9,6 +9,8 @@ import { CreateUserSchema, UpdateUserSchema } from '../users/users.schemas.js';
 import { mapUserToPublic } from '../users/users.mapper.js';
 import * as squadsService from '../squads/squads.service.js';
 import * as hwidService from '../hwid/hwid.service.js';
+import * as wgDevicesService from '../wg-devices/wg-devices.service.js';
+import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { getOverview } from '../dashboard/dashboard.service.js';
 import { formatBytes } from '../settings/settings.service.js';
 import { inboundSyncQueue, inboundDirtyKey } from '../inbounds/inbounds.queue.js';
@@ -100,6 +102,64 @@ function mapDevice(d: {
     deviceModel: d.deviceModel,
     userAgent: d.userAgent,
     createdAt: d.firstSeenAt.toISOString(),
+  };
+}
+
+/**
+ * A wg tunnel, dressed as a device for the shop.
+ *
+ * The shop's device tab is fed by exactly one endpoint - this one - and it
+ * treats what comes back as opaque: it counts the array for "N of M", renders
+ * `deviceModel` / `platform` / `osVersion` as text, and hands `hwid` straight
+ * back when the buyer taps disconnect. So the tunnels can simply join the list,
+ * and the shop needs no change at all to show them or to count them.
+ *
+ * That "count them" is the point, not a side effect. The device limit is one
+ * number, and a buyer spends it on whatever they connect - a phone running Happ
+ * and a laptop on WireGuard are two devices. Counting only the ones that send
+ * `x-hwid` meant wg was free, which is a bug in the meaning of the limit rather
+ * than in its arithmetic.
+ *
+ * WHY the fields are packed the way they are: the card's labels belong to the
+ * shop and cannot be changed from here. It draws a bold name, a small line
+ * under it, "connected at", the identifier, and a "User Agent" row. So
+ * everything worth reading goes into the small line, and `userAgent` is left
+ * EMPTY on purpose - the shop omits that row when it is blank, and an empty row
+ * beats a row of traffic figures under a label that says User Agent.
+ *
+ * `hwid` is `wg:<id>`, which is what makes disconnect work: the shop hashes it
+ * into the button token and sends the same string back, and the delete handler
+ * below reads the prefix and revokes the tunnel. Revoke, not delete - see there.
+ */
+function mapWgTunnel(
+  d: {
+    id: string;
+    createdAt: Date;
+    lastSeenAt: Date | null;
+    bytesIn: bigint;
+    bytesOut: bigint;
+    peers: { ip: string }[];
+  },
+  index: number,
+) {
+  const addresses = d.peers.map((p) => p.ip);
+  // One keypair serves every wg profile on the fleet, so a tunnel holds one
+  // address per profile and they are all the same device. The first is enough
+  // to tell two tunnels apart, which is all the line is for.
+  const address = addresses[0] ?? '';
+  const traffic = `↑ ${formatBytes(d.bytesOut)} ↓ ${formatBytes(d.bytesIn)}`;
+  const seen = d.lastSeenAt ? d.lastSeenAt.toISOString().slice(0, 16).replace('T', ' ') : null;
+  return {
+    id: d.id,
+    hwid: `wg:${d.id}`,
+    // Named by protocol family rather than by flavour: the same keypair works
+    // with the WireGuard app and the AmneziaWG one, so calling it either would
+    // be wrong half the time.
+    platform: 'WireGuard/AmneziaWG',
+    osVersion: [address, traffic, seen].filter(Boolean).join(' · '),
+    deviceModel: `WireGuard #${index}`,
+    userAgent: null,
+    createdAt: d.createdAt.toISOString(),
   };
 }
 
@@ -1210,8 +1270,27 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // GET /api/hwid/devices/:userUuid — list a user's devices (metadata nullable).
   app.get('/api/hwid/devices/:ref', opts, async (request, reply) => {
     const { ref } = request.params as { ref: string };
-    const rows = await hwidService.listUserDevices(await resolveUserId(ref));
-    return sendResponse(reply, { devices: rows.map(mapDevice) });
+    const userId = await resolveUserId(ref);
+    const [rows, tunnels, settings] = await Promise.all([
+      hwidService.listUserDevices(userId),
+      wgDevicesService.listDevicesWithPeers(userId),
+      getSubscriptionSettings(),
+    ]);
+    // A revoked tunnel is history, not a device: the row survives so its
+    // traffic can still be answered for, and the buyer must not see access
+    // they no longer have.
+    const live = tunnels.filter((t) => t.revokedAt === null);
+    // An untouched tunnel is a slot, not a device - see wgShowUnusedTunnels.
+    // The index is taken over the WHOLE live set, before this filter, so
+    // "WireGuard #2" keeps meaning the second tunnel whether or not the first
+    // one has ever been used. Numbering that shifted with the filter would
+    // rename a buyer's tunnels the moment one of them went quiet.
+    const shown = live
+      .map((t, i) => ({ t, index: i + 1 }))
+      .filter(({ t }) => settings.wgShowUnusedTunnels || t.lastSeenAt !== null);
+    return sendResponse(reply, {
+      devices: [...rows.map(mapDevice), ...shown.map(({ t, index }) => mapWgTunnel(t, index))],
+    });
   });
 
   // POST /api/hwid/devices/delete {userId, hwid} — the 3.x selector is the
@@ -1236,6 +1315,24 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     // the loser's delete-by-id then threw P2025 ("record required but not
     // found") — a 500 for work that was already done. deleteMany is a no-op when
     // the row is gone, so a repeat/concurrent delete is simply {deleted:false}.
+    // A wg tunnel comes back through the same button, carrying the `wg:<id>`
+    // this endpoint's list handed out. REVOKED, never deleted: the row holds
+    // the traffic it did, and deleting it would free the tunnel's address for
+    // the next device allocated - at which point the config the buyer just
+    // disconnected becomes a working config again, for somebody else.
+    const wgId = body.hwid.startsWith('wg:') ? body.hwid.slice(3) : null;
+    if (wgId) {
+      // Ownership BEFORE the revoke, not after. `revokeDevice` takes a device
+      // id and nothing else - it is also the admin path, where the caller is
+      // already trusted with every user - so checking afterwards would mean
+      // the tunnel was already gone by the time we found out it belonged to
+      // somebody else. The id travels through the buyer's own browser, so
+      // "somebody else's" is a request anyone can make.
+      const owned = await wgDevicesService.findDeviceForUser(wgId, userId);
+      if (!owned) return sendResponse(reply, { deleted: false });
+      await wgDevicesService.revokeDevice(wgId);
+      return sendResponse(reply, { deleted: true });
+    }
     const { count } = await prisma.hwidUserDevice.deleteMany({
       where: { userId, hwid: body.hwid },
     });

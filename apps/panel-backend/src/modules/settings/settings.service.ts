@@ -45,6 +45,10 @@ export interface SubscriptionSettings {
   entryPoolSize: number;
   /** Resolvers for the `DNS =` line of wg-quick configs. Empty = omit the line. */
   wgDns: string[];
+  /** List wg tunnels that have never handshaked among the buyer's devices.
+   *  Off by default: tunnels are pre-cut per allowed device, so an untouched
+   *  one is a slot rather than a device. See UpdateSettingsSchema. */
+  wgShowUnusedTunnels: boolean;
 }
 
 // B5 - in-process cache for the subscription settings. `/sub/:token` is hit on
@@ -132,6 +136,10 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     ? wgDnsRaw.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).slice(0, 4)
     : [];
 
+  // Same rule as tlsFragment: only the literal boolean turns it on, so a
+  // hand-edited or missing row falls back to the quieter behaviour.
+  const wgShowUnusedTunnels = map.get('wgShowUnusedTunnels') === true;
+
   const value: SubscriptionSettings = {
     profileTitle: asString('subscriptionProfileTitle'),
     updateIntervalHours: asInt('subscriptionUpdateIntervalHours', 24),
@@ -147,6 +155,7 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     // be a subscriber seeing everything, never a subscriber seeing nothing.
     entryPoolSize: Math.max(0, asInt('subscriptionEntryPoolSize', 0)),
     wgDns,
+    wgShowUnusedTunnels,
   };
   settingsCache = { value, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS };
   return value;

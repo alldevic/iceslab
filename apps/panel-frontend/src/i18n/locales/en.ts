@@ -1889,6 +1889,9 @@ export default {
       'Comma-separated resolvers, written as the DNS line of every wg config handed out. Empty leaves the line out, and on a full tunnel the client then keeps its own network\u2019s resolver: a home 192.168.1.1 routes into the tunnel and dies there. The handshake still succeeds; nothing resolves.',
     fragmentHint:
       'Dials each server through a fragment outbound that chops the ClientHello into pieces, so SNI-based DPI cannot cleanly match it. Xray JSON format only.',
+    wgUnusedTitle: 'Show unused WireGuard tunnels',
+    wgUnusedHint:
+      'Tunnels are cut in advance \u2014 one per device the buyer\u2019s limit allows, minted before anyone connects. Off, only tunnels that have completed a handshake are listed as devices, because that is what a device is. On, the unused slots show too: worth turning on while answering \u201cI imported the config and nothing appeared\u201d.',
   },
   regions: {
     title: 'Regions',

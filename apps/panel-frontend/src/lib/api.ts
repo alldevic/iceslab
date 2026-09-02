@@ -2247,6 +2247,7 @@ export interface AdminSettings extends PublicSettings {
   /** TLS-fragment - split the ClientHello in the Xray JSON format so SNI-DPI
    *  cannot match the handshake. Xray JSON only. */
   subscriptionTlsFragment?: boolean;
+  wgShowUnusedTunnels?: boolean;
   /** Resolvers written into the `DNS =` line of every wg-quick config. Empty
    *  omits the line, which is not a neutral default on a full tunnel: the
    *  client keeps its own network's resolver, and a LAN address routes into
@@ -2271,6 +2272,7 @@ export interface UpdateSettingsInput {
   subscriptionRoutingPreset?: RoutingPresetId;
   subscriptionEntryPoolSize?: number;
   subscriptionTlsFragment?: boolean;
+  wgShowUnusedTunnels?: boolean;
   /** Resolvers written into the `DNS =` line of every wg-quick config. Empty
    *  omits the line — which is not a neutral default for a full tunnel: the
    *  client keeps whatever resolver its network gave it, and a LAN address

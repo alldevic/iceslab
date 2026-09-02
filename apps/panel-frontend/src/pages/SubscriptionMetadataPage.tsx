@@ -61,6 +61,7 @@ interface Draft {
   preset: RoutingPresetId;
   entryPoolSize: number | '';
   tlsFragment: boolean;
+  wgShowUnusedTunnels: boolean;
   /** Comma-separated in the field, an array on the wire. Free text because an
    *  operator types "1.1.1.1, 1.0.0.1", not a JSON array. */
   wgDns: string;
@@ -100,6 +101,7 @@ export function SubscriptionMetadataPage() {
         subscriptionEntryPoolSize:
           typeof draft.entryPoolSize === 'number' ? draft.entryPoolSize : 0,
         subscriptionTlsFragment: draft.tlsFragment,
+        wgShowUnusedTunnels: draft.wgShowUnusedTunnels,
         // Empty field clears the setting, which omits the `DNS =` line - the
         // pre-2026-08-31 behaviour, and a deliberate choice rather than a
         // default worth keeping.
@@ -422,6 +424,31 @@ export function SubscriptionMetadataPage() {
               {t('metadata.wgDnsHint')}
             </Text>
           </Stack>
+
+          {/* Whether a wg tunnel nobody has ever connected shows up among the
+              buyer's devices. Tunnels are pre-cut - one per device the buyer's
+              limit allows, minted before they are used - so on by default this
+              would tell someone with a limit of ten that they own ten devices
+              they have never touched. Left off, and here rather than in an env
+              var, because the answer changes while looking at a support
+              ticket. */}
+          <Stack
+            gap={12}
+            style={{ padding: 20, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}
+          >
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+              <CardCaption>{t('metadata.wgUnusedTitle')}</CardCaption>
+              <Box style={{ flex: 1, minWidth: 0 }} />
+              <Switch
+                checked={draft.wgShowUnusedTunnels}
+                aria-label={t('metadata.wgUnusedTitle')}
+                onChange={(e) => patch({ wgShowUnusedTunnels: e.currentTarget.checked })}
+              />
+            </Box>
+            <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
+              {t('metadata.wgUnusedHint')}
+            </Text>
+          </Stack>
         </Box>
       </Box>
     </Stack>
@@ -439,6 +466,7 @@ function toDraft(s: AdminSettings): Draft {
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',
     entryPoolSize: s.subscriptionEntryPoolSize ?? 0,
     tlsFragment: s.subscriptionTlsFragment ?? false,
+    wgShowUnusedTunnels: s.wgShowUnusedTunnels ?? false,
     wgDns: (s.subscriptionWgDns ?? []).join(', '),
   };
 }
