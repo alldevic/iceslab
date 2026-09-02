@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compileRule } from './srr.service.js';
+import { APPS } from '../subscription/formats/client-catalog.js';
 
 const MIGRATIONS = join(process.cwd(), 'prisma', 'migrations');
 
@@ -70,6 +71,118 @@ function shippedRule(ruleName: string): ShippedRule | null {
 function shippedPattern(ruleName: string): string {
   return shippedRule(ruleName)?.pattern ?? '';
 }
+
+/**
+ * Every rule a fresh deployment ships, in the order the matcher tries them.
+ *
+ * The by-name reader above answers "what does rule X say"; this one answers
+ * "what does a given client GET", which is a different question and the one
+ * the catalogue makes claims about. Both INSERT shapes are read: the VALUES
+ * list and the `SELECT ... WHERE EXISTS` form the flavour split ships.
+ */
+function allShippedRules(): { name: string; pattern: string; format: string; priority: number }[] {
+  const byName = new Map<string, { name: string; pattern: string; format: string; priority: number }>();
+  for (const dir of readdirSync(MIGRATIONS).sort()) {
+    let sql: string;
+    try {
+      sql = readFileSync(join(MIGRATIONS, dir, 'migration.sql'), 'utf8');
+    } catch {
+      continue;
+    }
+    const rows = sql.matchAll(
+      /(?:\(gen_random_uuid\(\),|SELECT gen_random_uuid\(\),)\s*'([^']+)',\s*([\s\S]*?)(\d+),\s*CURRENT_TIMESTAMP/g,
+    );
+    for (const r of rows) {
+      const quoted = [...(r[2] as string).matchAll(/'([^']*)'/g)].map((m) => m[1] as string);
+      if (quoted.length < 2) continue;
+      byName.set(r[1] as string, {
+        name: r[1] as string,
+        pattern: quoted[0] as string,
+        format: quoted[1] as string,
+        priority: Number(r[3]),
+      });
+    }
+    for (const u of sql.matchAll(
+      /UPDATE "subscription_response_rules"([\s\S]*?)WHERE "name" = '([^']*)'/g,
+    )) {
+      const cur = byName.get(u[2] as string);
+      if (!cur) continue;
+      const pattern = /"ua_pattern" = '([^']*)'/.exec(u[1] as string);
+      if (pattern) cur.pattern = pattern[1] as string;
+      const format = /"format" = '([^']*)'/.exec(u[1] as string);
+      if (format) cur.format = format[1] as string;
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.priority - b.priority);
+}
+
+/** What a fresh deployment would actually serve this User-Agent. */
+function deliveredFormat(ua: string): { rule: string; format: string } | null {
+  for (const rule of allShippedRules()) {
+    if (compileRule(rule.pattern).test(ua)) return { rule: rule.name, format: rule.format };
+  }
+  return null;
+}
+
+/**
+ * A rule format under the name the catalogue uses for it.
+ *
+ * One rule format has no `ClientFormat` member, and deliberately:
+ * `xrayjson-array` is the SAME xray document split one-profile-per-entry, made
+ * for Happ. `usableFormats` asks whether a format renders anything by actually
+ * rendering it, and there is nothing separate to render - so the type names
+ * four cores, not five serialisations.
+ *
+ * That equivalence used to live only in a commit message, which is why the
+ * mirror below found it as a disagreement the first time it ran. Stated here so
+ * there is one place to read it, and so a NEW divergence is still a failure
+ * rather than something a reader waves through.
+ */
+function catalogueName(ruleFormat: string): string {
+  return ruleFormat === 'xrayjson-array' ? 'xrayjson' : ruleFormat;
+}
+
+// The catalogue says what a client speaks; the rules decide what it is sent.
+// They are two independent places and they drift silently - which already cost
+// a false statement to buyers on 2026-09-03, when the install card read
+// `format` and told Happ users their config carried no routing rules while it
+// carried five per profile. Nothing compared the two until this.
+describe('the catalogue and the shipped rules agree on what each client gets', () => {
+  const checkable = APPS.filter((a) => a.uaSample && a.format);
+
+  it('serves every catalogued client the format the catalogue claims', () => {
+    // The control this kind of mirror needs: it asserts over a filtered list,
+    // and an empty list would make it pass by checking nothing. Six apps carry
+    // a measured User-Agent today; the number may only grow.
+    expect(checkable.length).toBeGreaterThanOrEqual(5);
+
+    for (const app of checkable) {
+      const got = deliveredFormat(app.uaSample as string);
+      expect(got, `${app.name}: no shipped rule matches ${app.uaSample}`).not.toBeNull();
+      expect(
+        catalogueName(got!.format),
+        `${app.name} declares format=${app.format} but rule "${got!.rule}" serves ${got!.format} ` +
+          `to ${app.uaSample}`,
+      ).toBe(app.format);
+    }
+  });
+
+  it('sends every tunnel client a wg config, whatever the catalogue says about cards', () => {
+    // These apps carry no `format` on purpose - the card has nothing to say
+    // about routing for a tunnel - but they DO fetch a format, and sending one
+    // a proxy list is the failure that had WG Tunnel complaining about a
+    // missing PrivateKey before the rule was split.
+    const tunnels = APPS.filter(
+      (a) => a.uaSample && (a.action.kind === 'wg-conf' || a.action.kind === 'awg-conf'),
+    );
+    expect(tunnels.length).toBeGreaterThanOrEqual(1);
+    for (const app of tunnels) {
+      const got = deliveredFormat(app.uaSample as string);
+      expect(got, `${app.name}: nothing matches ${app.uaSample}`).not.toBeNull();
+      expect(got!.format, `${app.name} would be served ${got!.format}`).toBe('wgconf');
+    }
+  });
+});
 
 describe('seeded User-Agent rules', () => {
   it('routes the Clash-family clients it names, whatever the casing', () => {

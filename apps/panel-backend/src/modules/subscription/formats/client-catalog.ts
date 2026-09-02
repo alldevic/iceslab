@@ -105,6 +105,20 @@ export interface AppDef {
    * (the tunnel apps, Telegram) and for ones whose choice is not ours to state.
    */
   format?: ClientFormat;
+  /**
+   * A User-Agent this client actually sends, for the mirror that checks
+   * `format` against the shipped delivery rule.
+   *
+   * MEASURED, never guessed: every value here was read out of the panel's own
+   * `subscription_request_history` on a fleet these clients are in daily use
+   * on. A guessed sample would make the mirror agree with an imagined client
+   * and stay green while real buyers got the wrong format — which is the exact
+   * failure the mirror exists to catch.
+   *
+   * Absent means "not observed yet", and the mirror skips it rather than
+   * inventing one.
+   */
+  uaSample?: string;
 }
 
 // TUIC, AnyTLS and ShadowTLS were added to the clients below on 2026-09-03,
@@ -122,6 +136,7 @@ export const APPS: AppDef[] = [
   // Universal subscription clients (xray / shadowsocks / hysteria via the link).
   {
     name: 'Hiddify',
+    uaSample: 'Hiddify/2.5.7',
     format: 'singbox',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv'],
     protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
@@ -140,6 +155,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'sing-box',
+    uaSample: 'sing-box 1.13.19',
     format: 'singbox',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android'],
     protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
@@ -172,6 +188,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'Shadowrocket',
+    uaSample: 'Shadowrocket/2.2.0',
     format: 'plain',
     platforms: ['ios', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
@@ -184,6 +201,7 @@ export const APPS: AppDef[] = [
   },
   {
     name: 'v2rayNG',
+    uaSample: 'v2rayNG/1.9',
     format: 'xrayjson',
     platforms: ['android', 'androidtv'],
     protocols: ['xray', 'shadowsocks'],
@@ -287,6 +305,7 @@ export const APPS: AppDef[] = [
     // TUIC, AnyTLS, ShadowTLS or the MTProto link, so this buyer sees two
     // channels where a sing-box client sees five.
     name: 'Happ',
+    uaSample: 'Happ/4.3.0/Android/17877369741321921509',
     format: 'xrayjson',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
@@ -311,6 +330,13 @@ export const APPS: AppDef[] = [
     // deep link (AES-GCM payload from @incy/link-encoder); wire that up once the
     // package is installed (see deeplinkHref). Until then: import via the link.
     name: 'INCY',
+    // Measured 2026-09-03: no shipped rule names INCY, so its User-Agent falls
+    // into the `.*` catch-all and it receives `plain` - a link list with no
+    // routing rules in it at all. Declared rather than left blank so the
+    // "what you get" card stops being silent about routing for this buyer,
+    // and so the mirror below has something to check.
+    format: 'plain',
+    uaSample: 'INCY/3.5.5/android Dalvik/2.1.0',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },
@@ -411,6 +437,7 @@ export const APPS: AppDef[] = [
     // publishes. Play Store listing checked 2026-09-03: live, "WG Tunnel" by
     // Zane Schepke.
     name: 'WG Tunnel',
+    uaSample: 'wgtunnel/5.5.0 (Android)',
     platforms: ['android'],
     protocols: ['wireguard'],
     action: { kind: 'wg-conf' },
