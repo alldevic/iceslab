@@ -503,11 +503,17 @@ export const PROTOCOL_DELIVERY: Record<ProtocolName, Delivery> = {
   wireguard: 'per-node-file',
   // Telegram is the client, and it imports one t.me/proxy link per node.
   mtproto: 'per-endpoint-link',
-  // Reachable in the subscription builder but not in the product: a squad holds
-  // PROFILES, and `POST /api/profiles` rejects shadowtls (the discriminator
-  // lists eight protocols; measured 2026-08-25, HTTP 400). Nobody can buy it,
-  // so nobody is stranded by it — but the branch in subscription.service.ts is
-  // dead until profiles learn the protocol. Same for tuic/anytls above.
+  // In the product since 2026-09-02, and the note that used to sit here is
+  // stale: `POST /api/profiles` accepts shadowtls now (the discriminator lists
+  // eleven protocols; the old comment measured eight on 2026-08-25). Verified by
+  // creating one.
+  //
+  // What IS still true, and matters more, is that ShadowTLS has no share link at
+  // all - subscription.service.ts emits `uri: ''` for it, because no standard URI
+  // form exists. So it reaches only the clients that read a FULL config from us:
+  // sing-box and clash. A buyer on `plain` (Shadowrocket, Streisand, V2Box) or on
+  // Happ does not see this channel, and no error says so - the line is simply
+  // absent. Worth knowing before a tariff promises it by name.
   shadowtls: 'subscription',
 };
 
