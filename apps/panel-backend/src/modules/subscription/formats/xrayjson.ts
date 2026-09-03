@@ -124,8 +124,23 @@ const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
  * (matches geoip:ru) while 1.1.1.1 rides the tunnel - no plaintext foreign
  * DNS on the RU wire. Plain-IP servers dodge the DoH bootstrap problem
  * (resolving the resolver's own hostname).
+ *
+ * `queryStrategy` is IPv4-only, and that is not a preference. Left unset, xray
+ * defaults to UseIP and asks for A AND AAAA; when the AAAA never comes back it
+ * has no record of that type to return, and the error it reports for exactly
+ * that is `record not found` - which reaches the user as a name that does not
+ * resolve, on a tunnel that is otherwise carrying traffic. Every path we hand
+ * out is IPv4 end to end (endpoints, the cascade link, the wg subnets), so an
+ * AAAA answer is a route we could not use even if it arrived. The sing-box
+ * format has said `prefer_ipv4` since its DNS block was written; this one said
+ * nothing, and the two clients differed for the same buyer on the same day.
+ *
+ * The value has to be spelled from xray's accepted set: an unrecognised string
+ * silently falls back to UseIP rather than failing, so a typo here reads as
+ * "did not help" instead of as an error.
  */
 const RU_SPLIT_DNS: Record<string, unknown> = {
+  queryStrategy: 'UseIPv4',
   servers: [
     {
       address: '77.88.8.8',
@@ -158,6 +173,9 @@ const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
  * same rationale as the Yandex IP in RU_SPLIT_DNS).
  */
 const CN_SPLIT_DNS: Record<string, unknown> = {
+  // IPv4-only for the same reason as RU_SPLIT_DNS: a missing AAAA becomes
+  // `record not found` and looks like a dead tunnel.
+  queryStrategy: 'UseIPv4',
   servers: [
     {
       address: '223.5.5.5',

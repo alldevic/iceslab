@@ -77,6 +77,33 @@ describe('split DNS names no Google resolver', () => {
   });
 });
 
+// Reported by the buyer 2026-09-03, on a tunnel that had just started carrying
+// traffic: names stopped resolving in Happ on Windows, `record not found`,
+// while the same account on Hiddify was fine. `record not found` is what xray
+// answers when it holds no record OF THE TYPE ASKED, and left unset its query
+// strategy asks for A and AAAA both. Every path this deployment hands out is
+// IPv4 end to end, so the AAAA can only ever come back empty. The sing-box
+// document has said `prefer_ipv4` since its DNS block was written - the two
+// formats disagreed, and only one of them had been asked to resolve anything.
+describe('split DNS asks only for records this tunnel can route', () => {
+  it.each(['ru-split', 'cn-split'] as const)('%s', (preset) => {
+    const dns = JSON.parse(buildXrayJson([xrayEp], { routingPreset: preset })).dns;
+    // Spelled from xray's accepted set on purpose: an unrecognised string is
+    // not an error there, it silently falls back to UseIP - so a typo would
+    // read as "the fix did not help" rather than as a broken config.
+    expect(dns.queryStrategy).toBe('UseIPv4');
+  });
+
+  it('the array format carries it too - Happ reads that one', () => {
+    const dns = JSON.parse(buildXrayJsonArray([xrayEp], { routingPreset: 'ru-split' }))[0].dns;
+    expect(dns.queryStrategy).toBe('UseIPv4');
+  });
+
+  it('proxy-all has no dns block to carry it, and that stays true', () => {
+    expect(JSON.parse(buildXrayJson([xrayEp], { routingPreset: 'proxy-all' })).dns).toBeUndefined();
+  });
+});
+
 describe('buildXrayJson', () => {
   it('produces valid JSON with trailing newline', () => {
     const out = buildXrayJson([xrayEp]);
