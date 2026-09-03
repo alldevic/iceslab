@@ -102,6 +102,25 @@ describe('split DNS asks only for records this tunnel can route', () => {
   it('proxy-all has no dns block to carry it, and that stays true', () => {
     expect(JSON.parse(buildXrayJson([xrayEp], { routingPreset: 'proxy-all' })).dns).toBeUndefined();
   });
+
+  // The resolver behind the tunnel must not depend on the client relaying UDP
+  // over its outbound. clash has asked for DoH since its DNS block was written
+  // and sing-box says `type: https`; this format alone sent a plain UDP query
+  // to 1.1.1.1 through the tunnel, and it is the format the client that failed
+  // reads. A core that does not carry UDP there answers every name with
+  // `record not found` while TCP through the same tunnel keeps working - which
+  // is exactly the shape reported: tunnel up, Hiddify fine, Happ resolving
+  // nothing. An IP literal, so there is no resolver hostname to bootstrap.
+  it.each(['ru-split', 'cn-split'] as const)('%s asks the far resolver over DoH', (preset) => {
+    const servers = JSON.parse(buildXrayJson([xrayEp], { routingPreset: preset })).dns
+      .servers as unknown[];
+    const far = servers[servers.length - 1];
+    expect(far).toBe('https://1.1.1.1/dns-query');
+    // Control: the regional server stays a plain IP on purpose - it is reached
+    // direct, and a DoH hostname there would need resolving before it can
+    // resolve anything.
+    expect(servers[0]).toMatchObject({ address: preset === 'ru-split' ? '77.88.8.8' : '223.5.5.5' });
+  });
 });
 
 describe('buildXrayJson', () => {
@@ -247,7 +266,9 @@ describe('buildXrayJson', () => {
         skipFallback: true,
       });
       // General resolver second: plain IP (no DoH bootstrap problem).
-      expect(cfg.dns.servers[1]).toBe('1.1.1.1');
+      // DoH, not plain UDP: the tunnel-side resolver must not depend on the
+      // client relaying UDP over its outbound. See the DoH describe below.
+      expect(cfg.dns.servers[1]).toBe('https://1.1.1.1/dns-query');
     });
 
     it('ru-split composes with bundle=balancer (preset rules first, balancer catch-all last)', () => {
@@ -296,7 +317,9 @@ describe('buildXrayJson', () => {
         domains: ['geosite:cn'],
         skipFallback: true,
       });
-      expect(cfg.dns.servers[1]).toBe('1.1.1.1');
+      // DoH, not plain UDP: the tunnel-side resolver must not depend on the
+      // client relaying UDP over its outbound. See the DoH describe below.
+      expect(cfg.dns.servers[1]).toBe('https://1.1.1.1/dns-query');
     });
 
     it('does not leak RU categories or the Yandex resolver', () => {

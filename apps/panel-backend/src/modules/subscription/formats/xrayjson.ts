@@ -125,19 +125,31 @@ const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
  * DNS on the RU wire. Plain-IP servers dodge the DoH bootstrap problem
  * (resolving the resolver's own hostname).
  *
- * `queryStrategy` is IPv4-only, and that is not a preference. Left unset, xray
- * defaults to UseIP and asks for A AND AAAA; when the AAAA never comes back it
- * has no record of that type to return, and the error it reports for exactly
- * that is `record not found` - which reaches the user as a name that does not
- * resolve, on a tunnel that is otherwise carrying traffic. Every path we hand
- * out is IPv4 end to end (endpoints, the cascade link, the wg subnets), so an
- * AAAA answer is a route we could not use even if it arrived. The sing-box
- * format has said `prefer_ipv4` since its DNS block was written; this one said
- * nothing, and the two clients differed for the same buyer on the same day.
+ * Two things here answer the same complaint, and they are separate claims.
  *
- * The value has to be spelled from xray's accepted set: an unrecognised string
- * silently falls back to UseIP rather than failing, so a typo here reads as
- * "did not help" instead of as an error.
+ * `queryStrategy` is IPv4-only because the AAAA it would otherwise hand out
+ * names a route this deployment cannot carry. Measured 2026-09-03: the cascade
+ * exit has ZERO global IPv6 addresses and no IPv6 connectivity, so a client
+ * that prefers the AAAA answer sends its first connection into a tunnel with
+ * nowhere to put it. Worth being exact about what this does NOT fix: with the
+ * strategy unset the AAAA resolved perfectly well (two records for
+ * example.com, measured through this very config), so a missing AAAA was never
+ * the failure - handing out an unroutable one was.
+ *
+ * The fallback resolver is DoH, and that is the asymmetry the buyer actually
+ * hit. clash has said `https://1.1.1.1/dns-query` since its DNS block was
+ * written, sing-box says `type: https` - and this format alone sent a plain
+ * UDP query to 1.1.1.1 through the tunnel. A core that does not relay UDP over
+ * its outbound (and hy2 in an unknown client build is exactly that kind of
+ * unknown) answers every name with `record not found`, which is what xray
+ * reports when a query produced no record at all, while TCP through the same
+ * tunnel keeps working. That is the reported shape: the tunnel is up, Hiddify
+ * on DoH is fine, Happ on UDP resolves nothing. An IP literal, not a hostname,
+ * so there is no DoH bootstrap problem to dodge.
+ *
+ * The strategy value has to be spelled from xray's accepted set: an
+ * unrecognised string silently falls back to UseIP rather than failing, so a
+ * typo here reads as "did not help" instead of as an error.
  */
 const RU_SPLIT_DNS: Record<string, unknown> = {
   queryStrategy: 'UseIPv4',
@@ -147,7 +159,7 @@ const RU_SPLIT_DNS: Record<string, unknown> = {
       domains: ['geosite:category-ru', 'geosite:category-gov-ru'],
       skipFallback: true,
     },
-    '1.1.1.1',
+    'https://1.1.1.1/dns-query',
   ],
 };
 
@@ -173,8 +185,9 @@ const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
  * same rationale as the Yandex IP in RU_SPLIT_DNS).
  */
 const CN_SPLIT_DNS: Record<string, unknown> = {
-  // IPv4-only for the same reason as RU_SPLIT_DNS: a missing AAAA becomes
-  // `record not found` and looks like a dead tunnel.
+  // Both knobs for the same reasons as RU_SPLIT_DNS: no IPv6 to route an AAAA
+  // into, and a resolver behind the tunnel that does not depend on the client
+  // relaying UDP.
   queryStrategy: 'UseIPv4',
   servers: [
     {
@@ -182,7 +195,7 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
       domains: ['geosite:cn'],
       skipFallback: true,
     },
-    '1.1.1.1',
+    'https://1.1.1.1/dns-query',
   ],
 };
 
