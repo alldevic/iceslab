@@ -324,7 +324,10 @@ function qrUrl(
   nodeName: string,
   deviceIndex: number,
 ): string {
-  return `${subUrl}?proto=${proto}&node=${encodeURIComponent(nodeName)}&device=${deviceIndex}`;
+  // `#scan` lands the buyer on the QR block itself. The block sits second on
+  // the page as of 2026-09-03, so this is belt and braces rather than the fix -
+  // but it is the half that survives a future reordering of the page.
+  return `${subUrl}?proto=${proto}&node=${encodeURIComponent(nodeName)}&device=${deviceIndex}#scan`;
 }
 
 function fileUrl(

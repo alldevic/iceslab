@@ -83,6 +83,26 @@ describe('buildSubscriptionPage', () => {
     expect(html).toContain('<figure class="qrf" data-target="wg:n1#1"');
   });
 
+  // A buyer who followed "show me the QR for this tunnel" came for the QR. It
+  // used to sit below the status card, the subscription link AND the whole
+  // install guide - four cards of scrolling to reach the thing they tapped.
+  // Order is load-bearing here, so it is pinned rather than left to a reviewer.
+  it('puts the QR block directly under the status card', () => {
+    const html = buildSubscriptionPage(
+      base({
+        protocols: ['xray', 'wireguard'],
+        subUrlQrSvg: '<svg id="sub"></svg>',
+        wgNodes: [{ nodeName: 'n1', deviceIndex: 1, confQrSvg: '<svg id="wg1"></svg>' }],
+      }),
+    );
+    const scan = html.indexOf('id="scan"');
+    const sublink = html.indexOf('id="sublink"');
+    const downloads = html.indexOf('id="downloads"');
+    expect(scan).toBeGreaterThan(-1);
+    expect(scan).toBeLessThan(sublink);
+    expect(sublink).toBeLessThan(downloads);
+  });
+
   it('renders an HTML document with the subscription URL', () => {
     const html = buildSubscriptionPage(base());
     expect(html).toContain('<!DOCTYPE html>');

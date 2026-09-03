@@ -103,9 +103,10 @@ describe('buildSubpageConfig', () => {
       expect(b.link).toContain('node=nl-1');
     }
     // One per tunnel, pinned by device: a buyer with two devices scanning the
-    // same QR twice puts one key on both phones.
-    expect(qr.map((b) => b.link).some((l) => l.endsWith('device=1'))).toBe(true);
-    expect(qr.map((b) => b.link).some((l) => l.endsWith('device=2'))).toBe(true);
+    // same QR twice puts one key on both phones. The `#scan` fragment lands
+    // them on the QR block rather than the top of the page.
+    expect(qr.map((b) => b.link).some((l) => l.endsWith('device=1#scan'))).toBe(true);
+    expect(qr.map((b) => b.link).some((l) => l.endsWith('device=2#scan'))).toBe(true);
   });
 
   it('pins the AmneziaWG QR link to the amneziawg flavour', () => {

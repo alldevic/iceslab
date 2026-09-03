@@ -518,6 +518,11 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   const appSel = hasAwg
     ? `<div class="segs appsel"${awgActive ? '' : ' style="display:none"'} role="tablist"><button class="seg${activeApp === 'vpn' ? ' on' : ''}" data-app="vpn">AmneziaVPN</button><button class="seg${activeApp === 'conf' ? ' on' : ''}" data-app="conf">AmneziaWG</button></div>`
     : '';
+  // Directly under the status card, and above the subscription link: a buyer
+  // who followed "show me the QR for this tunnel" came for exactly this, and
+  // until 2026-09-03 it sat below the whole install guide - they had to scroll
+  // past four cards to reach the thing they tapped for. The link and the guide
+  // are for a different visit: the one where you already know what you need.
   const scanSection =
     figures.length > 0
       ? `<section class="card" id="scan">
@@ -720,6 +725,8 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     ${protocolChips ? `<div style="margin-top:16px"><div class="lbl" style="margin-bottom:8px">${esc(t.protocols)}</div><div class="protos">${protocolChips}</div></div>` : ''}
   </section>
 
+  ${scanSection}
+
   <section class="card" id="sublink">
     <div class="lbl">${esc(t.subLink)}</div>
     <div class="linkrow">
@@ -738,8 +745,6 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   </section>`
       : ''
   }
-
-  ${scanSection}
 
   <section class="card" id="downloads">
     <div class="lbl">${esc(t.downloadTitle)}</div>
