@@ -124,6 +124,57 @@ function withGeoBase(
  * split by destination; resolution stays with the client app's own DNS
  * config (clash/xrayjson formats do carry split DNS, see R2 in ROADMAP).
  */
+/**
+ * Split DNS for the split presets, in the only shape every sing-box that can
+ * read this config accepts.
+ *
+ * Why it exists now. Clash and xray-json have carried split DNS since R2; this
+ * format did not, and the header said why: "no `dns`, the client app fills
+ * those in", to avoid drift across sing-box versions. The reasoning was sound
+ * and the cost was never written down - a buyer on sing-box resolves RU domains
+ * with whatever their app is configured for, and if that is a foreign resolver
+ * inside the tunnel, the answers are foreign CDN addresses that `geoip-ru` then
+ * fails to match. The split degrades on exactly the sites it exists for.
+ *
+ * Measured 2026-09-03 with `sing-box check` against four releases:
+ *   1.11.15  rejects this subscription outright, DNS or not: `unknown outbound
+ *            type: anytls`. Anything older than 1.12 cannot use our config at
+ *            all, so it has nothing to lose here.
+ *   1.12.9   legacy `address:` form warns; modern form + `default_domain_resolver` accepted
+ *   1.13.19  legacy form is an ERROR; modern form accepted
+ *   1.14.0   legacy form is FATAL - removed; modern form accepted
+ * So there is exactly one form to write, and the versions it would have drifted
+ * against are the ones already excluded by AnyTLS.
+ *
+ * `default_domain_resolver` is required once a `dns` block exists (all three
+ * releases say so) and points at the DIRECT regional server: it resolves the
+ * proxy's own hostname, which must not depend on the proxy being up.
+ *
+ * What this does NOT claim: `check` proves the config loads, not that resolution
+ * behaves. That needs a live run, the way the UDP work was measured.
+ */
+function splitDns(preset: RoutingPresetId, proxyTag: string): Record<string, unknown> | null {
+  const regional =
+    preset === 'ru-split'
+      ? { server: '77.88.8.8', ruleSets: ['geosite-category-ru', 'geosite-category-gov-ru'] }
+      : preset === 'cn-split'
+        ? { server: '223.5.5.5', ruleSets: ['geosite-cn'] }
+        : null;
+  if (!regional) return null;
+  return {
+    servers: [
+      // Direct, by IP: a resolver named by hostname would need resolving first.
+      { type: 'udp', tag: 'dns-regional', server: regional.server, detour: 'direct' },
+      // Everything else over DoH inside the tunnel, so the query is neither
+      // readable nor answerable on the local wire.
+      { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: proxyTag },
+    ],
+    rules: [{ rule_set: regional.ruleSets, server: 'dns-regional' }],
+    final: 'dns-proxy',
+    strategy: 'prefer_ipv4',
+  };
+}
+
 const RU_SPLIT_RULE_SETS: ReadonlyArray<Record<string, unknown>> = [
   {
     type: 'remote',
@@ -490,6 +541,13 @@ export function buildSingboxJson(
   }
   outbounds.push({ type: 'direct', tag: 'direct' });
 
+  // After primaryTag settles: the DoH server rides the same outbound the
+  // traffic does, so it cannot be built before the selector's name is known.
+  // Only for a split preset - proxy-all sends everything one way and has no
+  // regional half to resolve differently, which is also why xray-json emits no
+  // dns block for it.
+  const dns = splitDns(preset, primaryTag);
+
   // G6b - operator custom categories as self-hosted remote rule-sets. A plain
   // inline domain still has no portable sing-box vehicle post-1.12, but an
   // `ext:<file>:<cat>` ref does: the panel serves `custom-<cat>.srs`. Emitted
@@ -551,9 +609,14 @@ export function buildSingboxJson(
       },
     ],
     outbounds,
+    ...(dns ? { dns } : {}),
     route: {
       ...(routeRules.length > 0 ? { rules: routeRules, rule_set: routeRuleSets } : {}),
       final: primaryTag,
+      // Required by 1.12+ the moment a `dns` block exists, and pointed at the
+      // direct regional server on purpose: this resolves the proxy's own
+      // hostname, so it must not depend on the proxy.
+      ...(dns ? { default_domain_resolver: 'dns-regional' } : {}),
       auto_detect_interface: true,
     },
   };

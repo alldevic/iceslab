@@ -398,12 +398,60 @@ describe('buildSingboxJson', () => {
       expect(cfg.route.final).toBe('Auto');
     });
 
-    it('emits NO dns block (parity with ru-split) and no RU rule-sets', () => {
+    it('resolves CN domains regionally and leaks no RU rule-sets', () => {
+      // This used to assert the opposite - that no `dns` block was emitted at
+      // all - and the assertion was right for its time: the formatter left DNS
+      // to the client app to avoid drifting across sing-box releases. The cost
+      // was never written down. A buyer resolving regional domains through a
+      // foreign resolver inside the tunnel gets foreign CDN addresses, and then
+      // `geoip-cn` does not match them: the split quietly degrades on exactly
+      // the sites it exists for.
+      //
+      // Measured 2026-09-03 with `sing-box check` on 1.11.15, 1.12.9, 1.13.19
+      // and 1.14.0: the modern server form plus `default_domain_resolver` is
+      // accepted by every release that can read this config at all, and 1.11
+      // rejects the subscription regardless over AnyTLS.
       const out = buildSingboxJson([xrayEp], { routingPreset: 'cn-split' });
       const cfg = parse(out);
-      expect((cfg as any).dns).toBeUndefined();
+      expect(cfg.dns.servers[0]).toEqual({
+        type: 'udp',
+        tag: 'dns-regional',
+        server: '223.5.5.5',
+        detour: 'direct',
+      });
+      expect(cfg.dns.rules[0]).toEqual({ rule_set: ['geosite-cn'], server: 'dns-regional' });
+      expect(cfg.route.default_domain_resolver).toBe('dns-regional');
+      // The RU half must not leak into the CN preset, which is what this test
+      // guarded before and still does.
       expect(out).not.toContain('geosite-category-ru');
       expect(out).not.toContain('geoip-ru');
+      expect(out).not.toContain('77.88.8.8');
+    });
+
+    it('sends the general half over DoH through the proxy, not in the clear', () => {
+      const out = buildSingboxJson([xrayEp], { routingPreset: 'ru-split' });
+      const cfg = parse(out);
+      expect(cfg.dns.servers[1]).toEqual({
+        type: 'https',
+        tag: 'dns-proxy',
+        server: '1.1.1.1',
+        detour: 'Auto',
+      });
+      expect(cfg.dns.final).toBe('dns-proxy');
+      // The regional server is reached DIRECTLY and by address: a resolver
+      // named by hostname would need resolving first, and one that rode the
+      // proxy could not answer while the proxy was being dialled.
+      expect(cfg.dns.servers[0].detour).toBe('direct');
+      expect(cfg.route.default_domain_resolver).toBe('dns-regional');
+    });
+
+    it('still emits no dns block for proxy-all', () => {
+      // Nothing to split, so nothing to resolve differently - the same reason
+      // xray-json emits none there. Also the control for the two tests above:
+      // they would pass on a formatter that emitted DNS unconditionally.
+      const cfg = parse(buildSingboxJson([xrayEp], { routingPreset: 'proxy-all' }));
+      expect(cfg.dns).toBeUndefined();
+      expect(cfg.route.default_domain_resolver).toBeUndefined();
     });
   });
 
