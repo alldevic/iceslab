@@ -40,6 +40,18 @@ export const HysteriaConfigSchema = z.object({
   hostname: z.string().max(253).optional(),
   /** Optional Salamander obfuscation password. Leave empty for no obfs. */
   obfsPassword: z.string().max(128).optional(),
+  /**
+   * Lowercase hex sha256 of the leaf certificate this inbound terminates TLS
+   * with, needed only by the xray-json formats: that core removed
+   * `allowInsecure`, so a self-signed certificate is trusted by pinning it or
+   * not at all, and the panel never sees the certificate. Read it off the node:
+   *   openssl x509 -in /etc/sing-box/cert.pem -outform der | openssl dgst -sha256
+   * Left empty on a node holding a real certificate - there is nothing to pin.
+   */
+  pinnedPeerCertSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/, 'expected 64 lowercase hex characters')
+    .optional(),
   /** Local URL Hysteria masquerades to for non-authenticated probers. */
   masqueradeUrl: z.string().url().optional(),
   /** Brutal CC up bandwidth in Mbps (server hint). */

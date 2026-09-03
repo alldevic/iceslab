@@ -203,6 +203,7 @@ interface FormValues {
 
   // Hysteria
   hyObfsPassword: string;
+  hyPinnedCertSha256: string;
   hyMasqueradeUrl: string;
   hyBrutalUp: number | '';
   hyBrutalDown: number | '';
@@ -404,6 +405,7 @@ function defaults(profile: Profile | null): FormValues {
     engine: (profile?.engine as FormEngine | undefined) ?? 'native',
 
     hyObfsPassword: '',
+    hyPinnedCertSha256: '',
     hyMasqueradeUrl: '',
     hyBrutalUp: '',
     hyBrutalDown: '',
@@ -498,6 +500,7 @@ function defaults(profile: Profile | null): FormValues {
       return {
         ...base,
         hyObfsPassword: (cfg.obfsPassword as string) ?? '',
+        hyPinnedCertSha256: (cfg.pinnedPeerCertSha256 as string) ?? '',
         hyMasqueradeUrl: (cfg.masqueradeUrl as string) ?? '',
         hyBrutalUp: (cfg.brutalUpMbps as number) ?? '',
         hyBrutalDown: (cfg.brutalDownMbps as number) ?? '',
@@ -890,6 +893,9 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
       case 'hysteria':
         config = {
           ...(values.hyObfsPassword ? { obfsPassword: values.hyObfsPassword } : {}),
+          ...(values.hyPinnedCertSha256
+            ? { pinnedPeerCertSha256: values.hyPinnedCertSha256.trim().toLowerCase() }
+            : {}),
           ...(values.hyMasqueradeUrl ? { masqueradeUrl: values.hyMasqueradeUrl } : {}),
           ...(values.hyBrutalUp ? { brutalUpMbps: Number(values.hyBrutalUp) } : {}),
           ...(values.hyBrutalDown ? { brutalDownMbps: Number(values.hyBrutalDown) } : {}),
@@ -1373,6 +1379,12 @@ export function ProfileFormModal({ opened, onClose, profile, onSubmit, loading, 
                 label={t('profiles.form.cfg.salamanderObfsLabel')}
                 description={t('profiles.form.cfg.salamanderObfsDesc')}
                 {...form.getInputProps('hyObfsPassword')}
+              />
+              <TextInput
+                label={t('profiles.form.cfg.pinnedCertLabel')}
+                description={t('profiles.form.cfg.pinnedCertDesc')}
+                placeholder="053871a6…"
+                {...form.getInputProps('hyPinnedCertSha256')}
               />
               <TextInput
                 label={t('profiles.form.cfg.masqueradeUrlLabel')}

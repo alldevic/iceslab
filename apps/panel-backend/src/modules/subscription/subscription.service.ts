@@ -925,6 +925,7 @@ export async function generateSubscription(
       const hyCfg = ib.config as
         | {
             obfsPassword?: string;
+            pinnedPeerCertSha256?: string;
             brutalUpMbps?: number;
             brutalDownMbps?: number;
             portHoppingStart?: number;
@@ -958,6 +959,7 @@ export async function generateSubscription(
         ...hostMeta,
         password: user.hysteriaPassword,
         obfsPassword: hyCfg?.obfsPassword,
+        pinnedPeerCertSha256: hyCfg?.pinnedPeerCertSha256,
         upMbps: hyCfg?.brutalUpMbps,
         downMbps: hyCfg?.brutalDownMbps,
         portHoppingStart,

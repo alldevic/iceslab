@@ -440,6 +440,9 @@ export interface GeoAssetSpec {
 
 export interface HysteriaInboundCfg extends BridgeableInboundCfg {
   obfsPassword?: string;          // Salamander; empty = no obfuscation
+  /** sha256 of the leaf cert this inbound serves; only the xray-json formats
+   *  need it, and only to pin a self-signed one (they cannot skip verify). */
+  pinnedPeerCertSha256?: string;
   masqueradeUrl?: string;
   brutalUpMbps?: number;
   brutalDownMbps?: number;

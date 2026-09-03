@@ -987,6 +987,8 @@ export async function deleteSrrRule(id: string): Promise<void> {
 
 export interface HysteriaInboundConfig {
   obfsPassword?: string;
+  /** sha256 of the leaf cert, read only by xray-json clients (see the form). */
+  pinnedPeerCertSha256?: string;
   masqueradeUrl?: string;
   brutalUpMbps?: number;
   brutalDownMbps?: number;
@@ -1524,8 +1526,28 @@ export interface Cascade {
   /** Lines this save renamed. Present only on the answer to a save, and only
    *  when it renamed one. See CascadeLineRename. */
   lineRenames?: CascadeLineRename[];
+  /** Entry nodes whose non-xray bridge this save has just switched off, by
+   *  making the cascade multi-direction. Present only on the answer to a save;
+   *  an empty array means the save was checked and changed nothing. */
+  bridgesDisabled?: CascadeBridgeDisabled[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * One entry node that asked for a bridge and no longer gets one.
+ *
+ * A bridge needs the cascade to have exactly ONE direction: bridged traffic
+ * carries no tag to choose an exit with. `directions` is the count that made it
+ * impossible. Worth reporting because the node's switch stays ON while the
+ * bridge is off, so nothing on screen contradicts the operator - before this
+ * the only trace was an INFO line written later, when a node config was
+ * compiled, and somewhere other than the save the operator just pressed.
+ */
+export interface CascadeBridgeDisabled {
+  nodeId: string;
+  nodeName: string;
+  directions: number;
 }
 
 /**

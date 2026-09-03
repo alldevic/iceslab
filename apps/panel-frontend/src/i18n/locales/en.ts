@@ -1128,6 +1128,9 @@ export default {
       cfg: {
         salamanderObfsLabel: 'Salamander obfs password',
         salamanderObfsDesc: 'Optional. Empty = no obfuscation.',
+        pinnedCertLabel: 'Certificate sha256 (self-signed nodes)',
+        pinnedCertDesc:
+          'Needed only by xray-json clients (Happ, V2RayTun): that core removed "allowInsecure", so a self-signed certificate is trusted by pinning it or not at all, and this server is dropped from their config while it is empty. Read it on the node: openssl x509 -in /etc/sing-box/cert.pem -outform der | openssl dgst -sha256. Leave empty on a node with a real certificate.',
         masqueradeUrlLabel: 'Masquerade URL',
         brutalUpLabel: 'Brutal CC, ↑ Mbps',
         brutalDownLabel: 'Brutal CC, ↓ Mbps',

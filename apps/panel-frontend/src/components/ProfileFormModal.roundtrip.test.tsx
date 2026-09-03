@@ -63,6 +63,7 @@ const FIXTURES: Record<Protocol, Record<string, unknown>> = {
   hysteria: {
     hostname: 'hy.example.com',
     obfsPassword: 'salamander-probe',
+    pinnedPeerCertSha256: '053871a6284d8fb97f691036aca7489f188c7adec4b0ffa002722f48a7a86f3f',
     masqueradeUrl: 'https://masquerade.example.org/',
     brutalUpMbps: 240,
     brutalDownMbps: 960,

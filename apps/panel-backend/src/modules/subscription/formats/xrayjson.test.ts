@@ -745,11 +745,57 @@ describe('buildXrayJsonArray hysteria (hy2)', () => {
     expect(out.streamSettings.hysteriaSettings.down).toBe('300mbps');
   });
 
-  it('does NOT emit obfs (xray-core hy2 outbound has no field for it)', () => {
-    // Documented limitation: an obfs node needs Happ native hy2 core, not this.
-    const out = JSON.stringify(buildXrayJsonArray([hy2Ep]));
-    expect(out).not.toContain('salt');
-    expect(out.toLowerCase()).not.toContain('obfs');
+  // Measured 2026-09-03 against the live s1 hysteria2 inbound with xray 26.3.27,
+  // one fault removed at a time. The document the panel handed Happ carried
+  // none of the three below and did not connect at all; with all three it
+  // carries traffic through the cascade, 3 of 3.
+  it('carries Salamander obfuscation in finalmask, where this core reads it', () => {
+    // Without it the server drops every packet unread: the client sees silence
+    // and a QUIC idle timeout, indistinguishable from an unreachable node.
+    const out = parse(buildXrayJsonArray([hy2Ep]))[0].outbounds.find(
+      (o: any) => o.protocol === 'hysteria',
+    );
+    expect(out.streamSettings.finalmask.udp).toEqual([
+      { type: 'salamander', settings: { password: 'salt' } },
+    ]);
+  });
+
+  it('carries Brutal bandwidth in quicParams, not only the deprecated slot', () => {
+    // `hysteriaSettings.up/down` moved to finalmask/quicParams: current cores
+    // only WARN about them and advertise Hysteria-CC-RX: 0. A sing-box server
+    // with its own up/down set and `ignore_client_bandwidth` answers exactly
+    // that request with the masquerade page, which the client reports as
+    // `auth failed` - a wrong password by every appearance.
+    const out = parse(buildXrayJsonArray([hy2Ep]))[0].outbounds.find(
+      (o: any) => o.protocol === 'hysteria',
+    );
+    expect(out.streamSettings.finalmask.quicParams).toEqual({
+      congestion: 'brutal',
+      brutalUp: '100mbps',
+      brutalDown: '300mbps',
+    });
+  });
+
+  it('pins the self-signed certificate instead of asking to skip verification', () => {
+    // `allowInsecure` is REMOVED from this core, not deprecated: a config
+    // carrying it fails to LOAD, so emitting it would take the whole server
+    // away from clients that could otherwise use it. The replacement pins the
+    // leaf by sha256, which the operator reads off the node.
+    const out = parse(
+      buildXrayJsonArray([{ ...hy2Ep, allowInsecure: true, pinnedPeerCertSha256: 'ab'.repeat(32) }]),
+    )[0].outbounds.find((o: any) => o.protocol === 'hysteria');
+    expect(out.streamSettings.tlsSettings.pinnedPeerCertSha256).toBe('ab'.repeat(32));
+    expect(JSON.stringify(out)).not.toContain('allowInsecure');
+  });
+
+  it('drops a server whose certificate it can neither verify nor pin', () => {
+    // The house rule from the port-hopping fix: what the panel cannot make
+    // work, it does not hand out. An unpinned self-signed hy2 server fails
+    // certificate validation on every client that reads this format, and a
+    // server that is present but cannot connect costs the buyer more than one
+    // that is absent.
+    const arr = parse(buildXrayJsonArray([{ ...hy2Ep, allowInsecure: true }, xrayEp]));
+    expect(arr.map((c: any) => c.remarks)).toEqual(['eu-1']);
   });
 
   it('catch-all routes to the hy2 tag', () => {

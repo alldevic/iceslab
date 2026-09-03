@@ -480,8 +480,22 @@ func splitHostPort(hostPort string, defPort int) (string, int) {
 // the self-signed cert/key from bootstrap-singbox.sh (like tuic/anytls), so the
 // client connects with cert verification off. Per-user auth is the inline
 // users[] password (= the user's HysteriaPassword), unlike the xray-hysteria
-// path which authenticates via an HTTP callback. ignore_client_bandwidth mirrors
-// that path's "just works even when a client negotiates up=0" default.
+// path which authenticates via an HTTP callback.
+//
+// ignore_client_bandwidth is meant to make this "just work even when a client
+// negotiates up=0", and it does - but ONLY while no bandwidth is declared here.
+// sing-box refuses the pair: with up/down set and the flag on, a client that
+// negotiates rx=0 is served the MASQUERADE page instead of auth-ok, and every
+// client reports that as an authentication failure - a wrong password by every
+// appearance, on a channel whose password is right. Which clients declare a
+// rate is not ours to choose: `upmbps`/`downmbps` are not in the hysteria2 URI
+// spec, so a client is free to ignore them, and the ones that do were the ones
+// failing. Measured against sing-box 1.13.19 on 2026-09-03.
+//
+// So the flag follows the declaration: declared bandwidth means Brutal for
+// clients that ask for it and BBR for those that do not, and nobody is refused;
+// no declaration means the flag stays on, which is what stops a client from
+// naming its own uncapped Brutal rate.
 func renderHysteria2Config(certPath, keyPath, statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
 	ids := sortedIDs(users)
 	sbUsers := make([]sbUser, 0, len(ids))
@@ -495,7 +509,7 @@ func renderHysteria2Config(certPath, keyPath, statsListen string, inbound Inboun
 		Listen:                "0.0.0.0",
 		ListenPort:            inbound.ListenPort,
 		Users:                 sbUsers,
-		IgnoreClientBandwidth: true,
+		IgnoreClientBandwidth: inbound.BrutalUpMbps == 0 && inbound.BrutalDownMbps == 0,
 		TLS: &sbTLS{
 			Enabled:         true,
 			ServerName:      inbound.ServerName,

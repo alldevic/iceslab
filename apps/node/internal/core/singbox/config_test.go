@@ -277,8 +277,14 @@ func TestRenderHysteria2Config(t *testing.T) {
 	if !in.TLS.Enabled || in.TLS.CertificatePath != "/c.pem" || in.TLS.KeyPath != "/k.pem" {
 		t.Errorf("tls = %+v", in.TLS)
 	}
-	if !in.IgnoreClientBandwidth {
-		t.Error("ignore_client_bandwidth should be true")
+	// Declared bandwidth and ignore_client_bandwidth are the one pair sing-box
+	// refuses to hold together: with up/down set AND the flag on, a client that
+	// negotiates rx=0 is answered with the MASQUERADE page instead of auth-ok,
+	// which every client reports as an authentication failure. Measured against
+	// sing-box 1.13.19 on 2026-09-03: the same client connects with either the
+	// bandwidth removed or the flag off, and is refused with both.
+	if in.IgnoreClientBandwidth {
+		t.Error("ignore_client_bandwidth must be off when a bandwidth is declared")
 	}
 	if in.UpMbps != 100 || in.DownMbps != 200 {
 		t.Errorf("bandwidth = %d/%d, want 100/200", in.UpMbps, in.DownMbps)
@@ -307,6 +313,12 @@ func TestRenderHysteria2Config(t *testing.T) {
 	}
 	if cfg2.Inbounds[0].Masquerade != "" {
 		t.Error("masquerade should be empty when no url")
+	}
+	// With no bandwidth declared the flag has to stay ON: without it sing-box
+	// hands a client that declares its own rate an uncapped Brutal sender,
+	// which is the thing the flag exists to prevent.
+	if !cfg2.Inbounds[0].IgnoreClientBandwidth {
+		t.Error("ignore_client_bandwidth must stay on when no bandwidth is declared")
 	}
 }
 

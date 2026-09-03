@@ -299,30 +299,62 @@ function buildProxyOutbound(
 }
 
 /**
- * Build a hysteria2 outbound for the array format, in xray-core's documented
- * client shape (protocol "hysteria", settings.version 2 + address/port,
+ * Build a hysteria2 outbound for the array format, in xray-core's client shape
+ * (protocol "hysteria", settings.version 2 + address/port,
  * streamSettings.network "hysteria" + hysteriaSettings).
  *
- * FIELD-PENDING, do not treat as verified. Two open risks:
- *   1. xray-core's hy2 outbound has NO Salamander obfs field. Our RU nodes set
- *      obfsPassword (bare QUIC is DPI-throttled in RU), so on an obfs node this
- *      outbound will NOT connect via xray-core. It only works on non-obfs hy2
- *      nodes. The Remnawave эталон likely routes protocol:"hysteria" through
- *      Happ's NATIVE hy2 core (not xray-core), which does support obfs, so the
- *      real working shape must be confirmed against that эталон + a live hy2
- *      node before tester sign-off.
- *   2. xray-core has open bugs on the hy2 outbound (XTLS/Xray-core#5619).
- * Isolated here so the exact shape is one edit once the эталон lands.
+ * VERIFIED 2026-09-03 against the live s1 hysteria2 inbound (sing-box 1.13.19,
+ * self-signed cert, Salamander obfs, Brutal 500/500) with xray 26.3.27, one
+ * fault removed at a time. The document this function used to produce did not
+ * connect at all, and there were THREE independent reasons, each of which
+ * looks like a different kind of outage:
+ *
+ *   1. No obfuscation. The server drops every packet unread, so the client
+ *      sees silence and a QUIC idle timeout - the signature of an unreachable
+ *      node, not of a bad config. Salamander lives in `finalmask.udp` here.
+ *   2. A self-signed certificate with nothing saying to trust it:
+ *      `cannot validate certificate ... does not contain any IP SANs`.
+ *      `allowInsecure` is REMOVED from this core, not deprecated - a config
+ *      carrying it fails to load outright - so the trust is expressed by
+ *      pinning the leaf, and the fingerprint has to come from the operator.
+ *   3. `up`/`down` in `hysteriaSettings` are the deprecated slot: the core
+ *      only warns about them and then advertises `Hysteria-CC-RX: 0`. A
+ *      sing-box server that sets its own up/down AND `ignore_client_bandwidth`
+ *      answers precisely that request with its masquerade page, which the
+ *      client reports as `auth failed`. Nothing about the message suggests
+ *      bandwidth. Both are emitted: `quicParams` for cores that moved, the old
+ *      pair for cores that have not.
+ *
+ * Anything this function cannot make connectable is dropped by the caller
+ * rather than handed out - see the filter in buildXrayJsonArray.
  */
 function buildHysteriaOutbound(e: SubscriptionEndpoint, tag: string): Record<string, unknown> {
   if (e.protocol !== 'hysteria') throw new Error('unreachable'); // narrowing
   const hysteriaSettings: Record<string, unknown> = { version: 2, auth: e.password };
-  // Brutal CC bandwidth. Xray wants a unit-suffixed string ("100mbps").
+  // Brutal CC bandwidth, unit-suffixed ("100mbps"). Kept in the deprecated slot
+  // for cores that still read it; `quicParams` below is where cores that moved
+  // read it, and reason 3 above is what happens when only this pair is sent.
   if (typeof e.upMbps === 'number') hysteriaSettings.up = `${e.upMbps}mbps`;
   if (typeof e.downMbps === 'number') hysteriaSettings.down = `${e.downMbps}mbps`;
-  // NB: obfsPassword is intentionally NOT emitted, xray-core hy2 outbound has no
-  // field for it. See the FIELD-PENDING note above: an obfs node needs Happ's
-  // native hy2 core, and the эталон is the source of truth for that shape.
+
+  const finalmask: Record<string, unknown> = {};
+  if (e.obfsPassword) {
+    finalmask.udp = [{ type: 'salamander', settings: { password: e.obfsPassword } }];
+  }
+  if (typeof e.upMbps === 'number' || typeof e.downMbps === 'number') {
+    finalmask.quicParams = {
+      congestion: 'brutal',
+      ...(typeof e.upMbps === 'number' ? { brutalUp: `${e.upMbps}mbps` } : {}),
+      ...(typeof e.downMbps === 'number' ? { brutalDown: `${e.downMbps}mbps` } : {}),
+    };
+  }
+
+  const tlsSettings: Record<string, unknown> = { serverName: e.host };
+  // Never `allowInsecure`: it is removed from this core, and a config carrying
+  // it does not load. hysteriaOutboundIsUsable is what keeps an endpoint that
+  // NEEDS it and has no fingerprint from reaching this point at all.
+  if (e.pinnedPeerCertSha256) tlsSettings.pinnedPeerCertSha256 = e.pinnedPeerCertSha256;
+
   return {
     tag,
     protocol: 'hysteria',
@@ -330,10 +362,26 @@ function buildHysteriaOutbound(e: SubscriptionEndpoint, tag: string): Record<str
     streamSettings: {
       network: 'hysteria',
       security: 'tls',
-      tlsSettings: { serverName: e.host },
+      tlsSettings,
       hysteriaSettings,
+      ...(Object.keys(finalmask).length > 0 ? { finalmask } : {}),
     },
   };
+}
+
+/**
+ * Whether an endpoint can produce a hysteria outbound that could connect.
+ *
+ * A hysteria server whose certificate the client is asked to skip verifying
+ * has no way to say so in this format any more, so what the panel would emit
+ * is a server entry that fails certificate validation on every client reading
+ * it. That is worse than no entry: the buyer sees a channel, tries it, and
+ * concludes the VPN is broken. Same rule as the port-hopping range the node
+ * does not confirm - what the panel cannot make work, it does not promise.
+ */
+function hysteriaOutboundIsUsable(e: SubscriptionEndpoint): boolean {
+  if (e.protocol !== 'hysteria') return true;
+  return !e.allowInsecure || Boolean(e.pinnedPeerCertSha256);
 }
 
 export function buildXrayJson(
@@ -518,10 +566,12 @@ export function buildXrayJsonArray(
   opts: XrayJsonBuildOpts = {},
 ): string {
   // xray endpoints AND hysteria endpoints, in endpoint order so the array order
-  // matches the эталон. hy2 is FIELD-PENDING (see buildHysteriaOutbound). Other
-  // protocols are skipped, this is an xray/hy2 surface.
+  // matches the эталон. Other protocols are skipped, this is an xray/hy2
+  // surface; a hy2 endpoint this format cannot render connectably is skipped
+  // too (see hysteriaOutboundIsUsable).
   const supported = endpoints.filter(
-    (e) => e.protocol === 'xray' || e.protocol === 'hysteria',
+    (e) =>
+      (e.protocol === 'xray' || e.protocol === 'hysteria') && hysteriaOutboundIsUsable(e),
   );
   const preset = opts.routingPreset ?? 'proxy-all';
   const splitRules = splitRulesFor(preset);

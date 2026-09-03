@@ -1191,6 +1191,9 @@ export default {
       cfg: {
         salamanderObfsLabel: 'Пароль для obfs (Salamander)',
         salamanderObfsDesc: 'Опционально. Пусто, без обфускации.',
+        pinnedCertLabel: 'sha256 сертификата (для самоподписанных нод)',
+        pinnedCertDesc:
+          'Нужен только клиентам на xray-json (Happ, V2RayTun): их ядро убрало «allowInsecure», поэтому самоподписанный сертификат либо закрепляется, либо не принимается вовсе, — и пока поле пусто, этот сервер в их конфиг не попадает. Смотреть на ноде: openssl x509 -in /etc/sing-box/cert.pem -outform der | openssl dgst -sha256. На ноде с настоящим сертификатом оставить пустым.',
         masqueradeUrlLabel: 'URL для маскировки',
         brutalUpLabel: 'Brutal CC, ↑ Mbps',
         brutalDownLabel: 'Brutal CC, ↓ Mbps',

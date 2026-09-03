@@ -220,6 +220,19 @@ export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {
   /** Salamander obfuscation password: present only when the inbound has
    *  `obfsPassword` set. Critical on RU/IR/CN ISPs that DPI-throttle bare QUIC. */
   obfsPassword?: string;
+  /**
+   * Lowercase hex sha256 of the leaf certificate this inbound terminates TLS
+   * with. Only the xray-json formats read it, and only because their core has
+   * no way left to say "trust this self-signed certificate": `allowInsecure`
+   * is removed there, and the replacement pins the certificate rather than
+   * waiving it. sing-box and clash still take a skip-verify flag and are
+   * unaffected.
+   *
+   * Operator-supplied, like `obfsPassword`: the certificate belongs to the
+   * node and the panel never sees it. Read it off the node with
+   * `openssl x509 -in <cert> -outform der | openssl dgst -sha256`.
+   */
+  pinnedPeerCertSha256?: string;
   /** Brutal CC bandwidth declaration in Mbps. Forwarded into URI / singbox
    *  / clash output so the client negotiates a non-zero send window. See
    *  HysteriaUriOpts.upMbps for the gory detail. */
