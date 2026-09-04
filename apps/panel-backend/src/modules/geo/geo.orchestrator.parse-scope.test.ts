@@ -20,9 +20,15 @@ import type { DatFetcher } from './geo.fetch.js';
  *
  * That the narrowing SAVES the memory is measured in geo.dat.filter.test.ts,
  * where the parsed result can be held and weighed. What is pinned here is the
- * other half — that the orchestrator asks for the narrow thing, and asks for
- * exactly the categories its specs name — which cannot be weighed, because the
- * maps are released before the build returns.
+ * other half — that the orchestrator asks for the narrow thing — which cannot
+ * be weighed, because the maps are released before the build returns.
+ *
+ * Since 2026-09-04 the narrow thing is "the specs' categories PLUS the fixed
+ * preset list": the emitted artifact has to carry the categories this panel's
+ * own documents reference, so it always reads those four. That is still a
+ * bounded, named set — the invariant that actually holds the memory is the LAST
+ * test here, that no parse is ever unbounded. A build that enumerates is the
+ * one that crash-looped.
  */
 
 const parseCalls: { fn: 'site' | 'ip'; only: string[] | null }[] = [];
@@ -42,7 +48,14 @@ vi.mock('./geo.dat.js', async () => {
   };
 });
 
-const { buildGeoArtifacts } = await import('./geo.orchestrator.js');
+const { buildGeoArtifacts, PRESET_GEOSITE, PRESET_GEOIP } = await import(
+  './geo.orchestrator.js'
+);
+
+/** Every parse the build asked for, as sorted category lists by database. */
+function scope(fn: 'site' | 'ip'): string[] {
+  return [...new Set(parseCalls.filter((c) => c.fn === fn).flatMap((c) => c.only ?? []))].sort();
+}
 
 const GS = encodeGeoSite(
   new Map<string, Domain[]>([
@@ -85,11 +98,12 @@ afterAll(async () => {
 });
 
 describe('a build parses what it is going to use', () => {
-  it('parses nothing when no category reads anything', async () => {
+  it('reads only the presets when no category reads anything', async () => {
     await synSource();
     const res = await buildGeoArtifacts({ fetchDat, singboxBin: '' });
 
-    expect(parseCalls, `parsed anyway: ${JSON.stringify(parseCalls)}`).toEqual([]);
+    expect(scope('site')).toEqual([...PRESET_GEOSITE].sort());
+    expect(scope('ip')).toEqual([...PRESET_GEOIP].sort());
     // And it still did its job: the mirror is what clients pull, and
     // revalidating the sources is the reason this build runs at all. The saving
     // is in the parse, not the fetch.
@@ -97,7 +111,7 @@ describe('a build parses what it is going to use', () => {
     expect(res.mirror.geoip!.bytes).toEqual(GI);
   });
 
-  it('asks for exactly the categories its specs name', async () => {
+  it('asks for the categories its specs name, on top of the presets', async () => {
     const sourceId = await synSource();
     await addCategory({
       name: 'one-cat',
@@ -106,10 +120,8 @@ describe('a build parses what it is going to use', () => {
     });
     const res = await buildGeoArtifacts({ fetchDat, singboxBin: '' });
 
-    expect(parseCalls).toEqual([
-      { fn: 'site', only: ['cat2'] },
-      { fn: 'ip', only: ['ipcat1'] },
-    ]);
+    expect(scope('site')).toEqual([...PRESET_GEOSITE, 'cat2'].sort());
+    expect(scope('ip')).toEqual([...PRESET_GEOIP, 'ipcat1'].sort());
     // The control that matters: narrowing must not change the answer.
     const built = res.categories.find((c) => c.name === 'ONE-CAT');
     expect(built).toMatchObject({ domains: 2, cidrs: 1, missing: [] });
@@ -121,9 +133,9 @@ describe('a build parses what it is going to use', () => {
     await addCategory({ name: 'b', domainRefs: [{ sourceId, category: 'cat1' }] });
     await buildGeoArtifacts({ fetchDat, singboxBin: '' });
 
-    const site = parseCalls.filter((c) => c.fn === 'site');
-    expect(site).toHaveLength(1);
-    expect([...site[0]!.only!].sort()).toEqual(['cat0', 'cat1']);
+    // One parse per source for the specs (the union), plus the preset parse.
+    const specCall = parseCalls.find((c) => c.fn === 'site' && c.only?.includes('cat0'));
+    expect([...specCall!.only!].sort()).toEqual(['cat0', 'cat1']);
   });
 
   it('skips a disabled category, which is what "enabled" has to mean here', async () => {
@@ -134,6 +146,24 @@ describe('a build parses what it is going to use', () => {
       domainRefs: [{ sourceId, category: 'cat0' }],
     });
     await buildGeoArtifacts({ fetchDat, singboxBin: '' });
-    expect(parseCalls).toEqual([]);
+    expect(scope('site')).toEqual([...PRESET_GEOSITE].sort());
+    expect(scope('site')).not.toContain('cat0');
+  });
+
+  // The invariant that actually holds the heap. Everything above pins WHICH
+  // categories are read; this pins that the answer is always a named set at
+  // all. `parseGeoSite(bytes)` with no second argument is the enumerating call
+  // that measured 590 MB and turned start-up into a crash loop, and it is one
+  // forgotten argument away at every call site.
+  it('never parses a whole database', async () => {
+    const sourceId = await synSource();
+    await addCategory({ name: 'c', domainRefs: [{ sourceId, category: 'cat0' }] });
+    await buildGeoArtifacts({ fetchDat, singboxBin: '' });
+
+    const unbounded = parseCalls.filter((c) => c.only === null);
+    expect(unbounded, `unbounded parse: ${JSON.stringify(unbounded)}`).toEqual([]);
+    // Control: the assertion above passes trivially on a build that parsed
+    // nothing at all, so at least one parse must have happened.
+    expect(parseCalls.length).toBeGreaterThan(0);
   });
 });

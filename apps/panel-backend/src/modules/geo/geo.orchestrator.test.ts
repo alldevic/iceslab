@@ -11,7 +11,12 @@ import {
   type Domain,
   type CIDR,
 } from './geo.dat.js';
-import { buildGeoArtifacts, plannedCustomSrs } from './geo.orchestrator.js';
+import {
+  buildGeoArtifacts,
+  plannedCustomSrs,
+  PRESET_GEOSITE,
+  PRESET_GEOIP,
+} from './geo.orchestrator.js';
 import { composeCategory, type ComposedCategory } from './geo.compose.js';
 import type { DatFetcher } from './geo.fetch.js';
 import { invalidateSourceCache } from './geo.sourcecache.js';
@@ -59,14 +64,24 @@ describe('plannedCustomSrs (custom .srs selection + naming)', () => {
 });
 
 // Synthetic upstream .dat the injected fetcher serves (no network in tests).
+// It also carries the standard preset categories, because the artifact this
+// build emits has to be usable on its own by the documents this panel hands
+// out - see the PRESET describe below.
 const GS = encodeGeoSite(
   new Map<string, Domain[]>([
     ['YOUTUBE', [{ type: 2, value: 'youtube.com' }, { type: 2, value: 'ytimg.com' }]],
     ['ADS', [{ type: 2, value: 'ads.example' }]],
+    ['CATEGORY-ADS-ALL', [{ type: 2, value: 'doubleclick.net' }]],
+    ['CATEGORY-RU', [{ type: 2, value: 'yandex.ru' }]],
+    ['CATEGORY-GOV-RU', [{ type: 2, value: 'gosuslugi.ru' }]],
+    ['CN', [{ type: 2, value: 'baidu.com' }]],
   ]),
 );
 const GI = encodeGeoIP(
-  new Map<string, CIDR[]>([['RU', [{ ip: Uint8Array.from([77, 88, 0, 0]), prefix: 16 }]]]),
+  new Map<string, CIDR[]>([
+    ['RU', [{ ip: Uint8Array.from([77, 88, 0, 0]), prefix: 16 }]],
+    ['CN', [{ ip: Uint8Array.from([1, 2, 0, 0]), prefix: 16 }]],
+  ]),
 );
 
 beforeEach(async () => {
@@ -76,6 +91,71 @@ beforeEach(async () => {
 afterAll(async () => {
   await prisma.$disconnect();
   await closeRedis();
+});
+
+// The artifact this build emits is handed to clients as their geosite.dat, and
+// the subscription documents this same panel emits reference categories BY NAME.
+// Until 2026-09-04 those two sets were unrelated: the build carried only the
+// operator's own categories (RU-DIRECT, ADS), while every xray document asked
+// for `geosite:category-ads-all` and `geosite:category-ru`. A client holding
+// this artifact and nothing else does not merely lose ad-blocking - xray
+// REFUSES TO START, `code not found in geosite.dat: CATEGORY-ADS-ALL`, and the
+// whole channel is dead. Two buyers reported exactly that.
+//
+// The category is named in the error because it is the FIRST geosite lookup in
+// the rule list, not because it is special: renaming it away just moves the
+// error to CATEGORY-RU.
+describe('the emitted artifact carries the categories our own documents reference', () => {
+  it('geo-custom.dat has every preset geosite category, alongside the operator ones', async () => {
+    const src = await addSource({
+      name: 'syn',
+      geositeUrl: 'https://example.com/gs.dat',
+      geoipUrl: 'https://example.com/gi.dat',
+    });
+    await addCategory({ name: 'my-block', domainRefs: [{ sourceId: src.id, category: 'youtube' }] });
+    const fetchDat: DatFetcher = async (url) => {
+      if (url === 'https://example.com/gs.dat') return { status: 200, bytes: GS };
+      if (url === 'https://example.com/gi.dat') return { status: 200, bytes: GI };
+      throw new Error('unreachable in test');
+    };
+    const res = await buildGeoArtifacts({ fetchDat });
+    const site = parseGeoSite(res.geosite.bytes);
+
+    for (const cat of PRESET_GEOSITE) {
+      expect(site.get(cat.toUpperCase()), `${cat} missing from geo-custom.dat`).toBeTruthy();
+    }
+    // Control: the operator's own category must survive alongside them, or the
+    // assertions above would pass on a build that dropped the point of the file.
+    expect(site.get('MY-BLOCK')).toBeTruthy();
+
+    const ip = parseGeoIP(res.geoip.bytes);
+    for (const cat of PRESET_GEOIP) {
+      expect(ip.get(cat.toUpperCase()), `${cat} missing from geo-custom-ip.dat`).toBeTruthy();
+    }
+  });
+
+  it('an operator category of the same name wins, and is not emitted twice', async () => {
+    // Two entries under one name would silently drop one of them (see
+    // composedToGeoSiteDat) - the operator's meaning must be the one that
+    // survives, because they chose it deliberately.
+    const src = await addSource({ name: 'syn', geositeUrl: 'https://example.com/gs.dat' });
+    await addCategory({
+      name: 'category-ru',
+      domainRefs: [],
+      manualDomains: ['only-mine.example'],
+    });
+    const fetchDat: DatFetcher = async (url) =>
+      url === 'https://example.com/gs.dat'
+        ? { status: 200, bytes: GS }
+        : (() => {
+            throw new Error('unreachable in test');
+          })();
+    const res = await buildGeoArtifacts({ fetchDat });
+    expect(parseGeoSite(res.geosite.bytes).get('CATEGORY-RU')).toEqual([
+      { type: 2, value: 'only-mine.example' },
+    ]);
+    expect(res.categories.filter((c) => c.name === 'CATEGORY-RU')).toHaveLength(1);
+  });
 });
 
 describe('geo build orchestrator', () => {

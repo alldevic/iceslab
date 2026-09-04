@@ -82,10 +82,26 @@ export function plannedCustomSrs(
     .map((c) => ({ category: c, artifact: customSrsName(c.name) }));
 }
 
-// Standard preset categories the sing-box subscription format references; their
-// .srs are compiled from the mirror so sing-box fetches them from the panel.
-const SRS_GEOSITE = ['category-ads-all', 'category-ru', 'category-gov-ru', 'cn'];
-const SRS_GEOIP = ['ru', 'cn'];
+/**
+ * The standard categories the routing presets reference by name.
+ *
+ * They are needed in TWO places, and for a long time only one of them used the
+ * list. sing-box gets them as self-hosted `.srs`; xray and clash reference them
+ * inside the document as `geosite:category-ru` and friends, and have no way to
+ * fetch anything - they read whatever .dat the client happens to hold.
+ *
+ * So the artifact this build emits must CARRY them. Until 2026-09-04 it carried
+ * only the operator's own categories, and a client holding it as its geosite.dat
+ * could not start xray at all: `code not found in geosite.dat: CATEGORY-ADS-ALL`
+ * - the first geosite lookup in the rule list, named in the error not because it
+ * is special but because it is first. Two buyers reported it as an ad-blocking
+ * category being missing; what they had was a dead channel.
+ *
+ * Copied through under their STANDARD names, from the mirror, which is the same
+ * parse the .srs step already paid for.
+ */
+export const PRESET_GEOSITE = ['category-ads-all', 'category-ru', 'category-gov-ru', 'cn'];
+export const PRESET_GEOIP = ['ru', 'cn'];
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -184,8 +200,44 @@ export async function buildGeoArtifacts(opts?: {
     }),
   );
 
-  const geositeBytes = composedToGeoSiteDat(composed);
-  const geoipBytes = composedToGeoIPDat(composed);
+  // Preset categories, copied through from the mirror under their standard
+  // names so the artifact satisfies the documents this panel itself emits.
+  //
+  // This is the SAME parse the .srs step below already performs on every build,
+  // hoisted so it happens once and regardless of whether a sing-box binary is
+  // configured - the xray and clash formats need these categories even where
+  // no .srs is ever compiled. Nothing new is turned into objects: the narrowed
+  // parse that keeps this build inside its heap budget stays narrowed.
+  const presetSite =
+    mirrorSite !== null ? parseGeoSite(mirrorSite.bytes, PRESET_GEOSITE) : new Map<string, Domain[]>();
+  const presetIp =
+    mirrorIp !== null ? parseGeoIP(mirrorIp.bytes, PRESET_GEOIP) : new Map<string, CIDR[]>();
+
+  // An operator category of the same name WINS. Two entries under one name
+  // would silently drop one of them (see composedToGeoSiteDat), and the one
+  // worth keeping is the one somebody chose on purpose.
+  const taken = new Set(composed.map((c) => c.name));
+  const presets: ComposedCategory[] = [];
+  for (const cat of PRESET_GEOSITE) {
+    const name = cat.toUpperCase();
+    if (taken.has(name)) continue;
+    const domains = presetSite.get(name);
+    if (!domains?.length) continue;
+    taken.add(name);
+    presets.push({ name, domains, cidrs: presetIp.get(name) ?? [], missing: [] });
+  }
+  for (const cat of PRESET_GEOIP) {
+    const name = cat.toUpperCase();
+    if (taken.has(name)) continue;
+    const cidrs = presetIp.get(name);
+    if (!cidrs?.length) continue;
+    taken.add(name);
+    presets.push({ name, domains: presetSite.get(name) ?? [], cidrs, missing: [] });
+  }
+  const emitted = [...composed, ...presets];
+
+  const geositeBytes = composedToGeoSiteDat(emitted);
+  const geoipBytes = composedToGeoIPDat(emitted);
 
   // Compile the standard preset categories to sing-box .srs from the mirror, so
   // the sing-box format fetches them from the panel. Best-effort: a compile
@@ -195,8 +247,8 @@ export async function buildGeoArtifacts(opts?: {
     // The four presets, not the whole database: this is the parse that a
     // production panel pays on every build, because self-hosting the .srs is
     // exactly the reason the subsystem is switched on.
-    const site = parseGeoSite(mirrorSite.bytes, SRS_GEOSITE);
-    for (const cat of SRS_GEOSITE) {
+    const site = presetSite;
+    for (const cat of PRESET_GEOSITE) {
       const doms = site.get(cat.toUpperCase());
       if (!doms) continue;
       try {
@@ -207,8 +259,8 @@ export async function buildGeoArtifacts(opts?: {
       }
     }
     if (mirrorIp) {
-      const ips = parseGeoIP(mirrorIp.bytes, SRS_GEOIP);
-      for (const cat of SRS_GEOIP) {
+      const ips = presetIp;
+      for (const cat of PRESET_GEOIP) {
         const cidrs = ips.get(cat.toUpperCase());
         if (!cidrs) continue;
         try {
@@ -249,7 +301,7 @@ export async function buildGeoArtifacts(opts?: {
     categoryDomains: composed
       .filter((c) => c.domains.length > 0)
       .map((c) => ({ name: c.name, domains: domainMatchers(c.domains) })),
-    categories: composed.map((c) => ({
+    categories: emitted.map((c) => ({
       name: c.name,
       domains: c.domains.length,
       cidrs: c.cidrs.length,
