@@ -2269,11 +2269,6 @@ export interface AdminSettings extends PublicSettings {
   /** TLS-fragment - split the ClientHello in the Xray JSON format so SNI-DPI
    *  cannot match the handshake. Xray JSON only. */
   subscriptionTlsFragment?: boolean;
-  /** Require credentials on the local socks/http listeners the Xray JSON
-   *  document binds on the device. Those listeners share the buyer's loopback
-   *  with every app installed on it. Off by default: Android's system proxy
-   *  cannot carry credentials, so this may break system-proxy clients. */
-  subscriptionLocalProxyAuth?: boolean;
   wgShowUnusedTunnels?: boolean;
   /** Resolvers written into the `DNS =` line of every wg-quick config. Empty
    *  omits the line, which is not a neutral default on a full tunnel: the
@@ -2299,7 +2294,6 @@ export interface UpdateSettingsInput {
   subscriptionRoutingPreset?: RoutingPresetId;
   subscriptionEntryPoolSize?: number;
   subscriptionTlsFragment?: boolean;
-  subscriptionLocalProxyAuth?: boolean;
   wgShowUnusedTunnels?: boolean;
   /** Resolvers written into the `DNS =` line of every wg-quick config. Empty
    *  omits the line — which is not a neutral default for a full tunnel: the

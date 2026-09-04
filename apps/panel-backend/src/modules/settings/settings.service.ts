@@ -20,13 +20,6 @@ export interface SubscriptionSettings {
   /** TLS-fragment - split the ClientHello via a freedom `fragment` outbound in
    *  the Xray JSON format so SNI-DPI cannot match the handshake. Xray JSON only. */
   tlsFragment: boolean;
-  /**
-   * 3.15 - require credentials on the local socks/http listeners the Xray JSON
-   * document binds on the buyer's device. Off by default: Android's ProxyInfo
-   * has no credential fields, so this may break system-proxy clients, and that
-   * has to be measured on a device rather than argued. Xray JSON only.
-   */
-  localProxyAuth: boolean;
   /** R3-b - raw custom xray routing rules, or null. Applied to xray/xkeen. */
   customRoutingRules: Record<string, unknown>[] | null;
   /** R3 - operator-defined custom domain lists (direct/proxy/block), or null
@@ -100,12 +93,6 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
   // rows fall back to false, keeping the Xray JSON output byte-identical.
   const tlsFragment = map.get('subscriptionTlsFragment') === true;
 
-  // 3.15 - same rule as tlsFragment: only the literal boolean turns it on, so a
-  // missing or hand-edited row leaves the document byte-identical. The quiet
-  // side of the fallback is the open one here, and that is deliberate: the loud
-  // failure (a client that can no longer start) is worse than the quiet one.
-  const localProxyAuth = map.get('subscriptionLocalProxyAuth') === true;
-
   // R3-b - custom xray routing rules. Must be an array of objects, else null
   // so a hand-edited / malformed row can never break /sub.
   const customRaw = map.get('subscriptionCustomRoutingRules');
@@ -161,7 +148,6 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     brandName: asString('brandName'),
     routingPreset: isRoutingPresetId(routingRaw) ? routingRaw : 'proxy-all',
     tlsFragment,
-    localProxyAuth,
     customRoutingRules,
     customDomainLists,
     defaultLocale,

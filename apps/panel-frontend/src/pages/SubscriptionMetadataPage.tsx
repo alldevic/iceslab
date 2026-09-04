@@ -61,7 +61,6 @@ interface Draft {
   preset: RoutingPresetId;
   entryPoolSize: number | '';
   tlsFragment: boolean;
-  localProxyAuth: boolean;
   wgShowUnusedTunnels: boolean;
   /** Comma-separated in the field, an array on the wire. Free text because an
    *  operator types "1.1.1.1, 1.0.0.1", not a JSON array. */
@@ -102,7 +101,6 @@ export function SubscriptionMetadataPage() {
         subscriptionEntryPoolSize:
           typeof draft.entryPoolSize === 'number' ? draft.entryPoolSize : 0,
         subscriptionTlsFragment: draft.tlsFragment,
-        subscriptionLocalProxyAuth: draft.localProxyAuth,
         wgShowUnusedTunnels: draft.wgShowUnusedTunnels,
         // Empty field clears the setting, which omits the `DNS =` line - the
         // pre-2026-08-31 behaviour, and a deliberate choice rather than a
@@ -406,29 +404,6 @@ export function SubscriptionMetadataPage() {
             </Text>
           </Stack>
 
-          {/* Password on the local proxy (3.15). Its own card rather than a
-              line elsewhere: turning it on can stop a system-proxy client from
-              starting, and that is a decision an operator should see, not
-              stumble into. */}
-          <Stack
-            gap={12}
-            style={{ padding: 20, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}
-          >
-            <Box style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-              <LockIcon size={15} color={CYAN2} />
-              <CardCaption>{t('metadata.localProxyAuthTitle')}</CardCaption>
-              <Box style={{ flex: 1, minWidth: 0 }} />
-              <Switch
-                checked={draft.localProxyAuth}
-                aria-label={t('metadata.localProxyAuthTitle')}
-                onChange={(e) => patch({ localProxyAuth: e.currentTarget.checked })}
-              />
-            </Box>
-            <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
-              {t('metadata.localProxyAuthHint')}
-            </Text>
-          </Stack>
-
           {/* WireGuard DNS. Its own card rather than a line in another: leaving
               it empty is what every config shipped before 2026-08-31 did, and
               that is a failure an operator should be able to see and choose. */}
@@ -491,7 +466,6 @@ function toDraft(s: AdminSettings): Draft {
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',
     entryPoolSize: s.subscriptionEntryPoolSize ?? 0,
     tlsFragment: s.subscriptionTlsFragment ?? false,
-    localProxyAuth: s.subscriptionLocalProxyAuth ?? false,
     wgShowUnusedTunnels: s.wgShowUnusedTunnels ?? false,
     wgDns: (s.subscriptionWgDns ?? []).join(', '),
   };
@@ -853,15 +827,6 @@ function ExternalIcon({ size, color }: { size: number; color: string }) {
       <path d="M4.5 1.5H10.5V7.5" fill="none" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
       <path d="M10.5 1.5L5.5 6.5" fill="none" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
       <path d="M9 8.5V10.5H1.5V3H3.5" fill="none" stroke={color} strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function LockIcon({ size, color }: { size: number; color: string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
-      <rect x="4" y="10" width="16" height="11" rx="2" fill="none" stroke={color} strokeWidth="1.8" />
-      <path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
