@@ -101,7 +101,13 @@ export function plannedCustomSrs(
  * parse the .srs step already paid for.
  */
 export const PRESET_GEOSITE = ['category-ads-all', 'category-ru', 'category-gov-ru', 'cn'];
-export const PRESET_GEOIP = ['ru', 'cn'];
+// `private` belongs here and the reason is worth writing down: it LOOKS like a
+// built-in (xray's own RFC1918 list) and it is not - the core looks it up in
+// geoip.dat like any other code, and an artifact without it fails to load with
+// `code not found in geoip.dat: PRIVATE`. Measured 2026-09-04 on a stand, after
+// a first attempt at this fix shipped every other category and excluded this one
+// on the strength of that assumption.
+export const PRESET_GEOIP = ['ru', 'cn', 'private'];
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');

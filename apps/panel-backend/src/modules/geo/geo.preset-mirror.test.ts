@@ -18,15 +18,18 @@ import { PRESET_GEOSITE, PRESET_GEOIP } from './geo.orchestrator.js';
  * geosite lookup in the rule list.
  *
  * So: a category a format asks for must be one the build is going to emit.
- * `private` is the exception and stays one - it is xray's own built-in range
- * list, not something any .dat carries.
+ *
+ * There are NO exceptions, and this file used to carry one. `geoip:private`
+ * reads like a built-in - xray's own RFC1918 list - so the first version of
+ * this test excused it. It is not built in: the core looks it up in geoip.dat
+ * like any other code, and an artifact without it fails to load with `code not
+ * found in geoip.dat: PRIVATE`. The excuse was an assumption written as a
+ * comment, and a stand caught it two hours later. An exemption in a mirror test
+ * is a claim about the world, and it has to be measured like any other.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FORMATS = join(HERE, '..', 'subscription', 'formats');
-
-/** xray's built-in private-range matcher; no .dat supplies it. */
-const BUILT_IN_GEOIP = new Set(['private']);
 
 function referenced(): { site: Set<string>; ip: Set<string>; files: string[] } {
   const site = new Set<string>();
@@ -74,7 +77,7 @@ describe('every geo category a format asks for is one the build emits', () => {
 
   it('names no geoip category the artifact will not carry', () => {
     const { ip } = referenced();
-    const missing = [...ip].filter((c) => !PRESET_GEOIP.includes(c) && !BUILT_IN_GEOIP.has(c));
+    const missing = [...ip].filter((c) => !PRESET_GEOIP.includes(c));
     expect(missing, `formats ask for geoip ${missing.join(', ')}, which no build emits`).toEqual([]);
   });
 });

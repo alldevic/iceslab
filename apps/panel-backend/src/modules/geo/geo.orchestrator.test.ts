@@ -81,6 +81,7 @@ const GI = encodeGeoIP(
   new Map<string, CIDR[]>([
     ['RU', [{ ip: Uint8Array.from([77, 88, 0, 0]), prefix: 16 }]],
     ['CN', [{ ip: Uint8Array.from([1, 2, 0, 0]), prefix: 16 }]],
+    ['PRIVATE', [{ ip: Uint8Array.from([10, 0, 0, 0]), prefix: 8 }]],
   ]),
 );
 
