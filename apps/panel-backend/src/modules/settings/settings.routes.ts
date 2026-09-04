@@ -39,6 +39,12 @@ import { UpdateSettingsSchema } from './settings.schemas.js';
  *                                                   so SNI-based DPI cannot
  *                                                   cleanly match the handshake.
  *                                                   Default false. Xray JSON only.
+ *   - `subscriptionLocalProxyAuth` (boolean)      - when true, the Xray JSON
+ *     document requires credentials on its local socks/http listeners. Those
+ *     listeners sit on the buyer's own loopback, which on Android is shared
+ *     with every installed app. OFF by default and deliberately so: Android's
+ *     ProxyInfo carries no credentials, so system-proxy clients may stop
+ *     working — measure on a device before turning it on.
  *   - `subscriptionWgDns` (string[]): resolvers for the `DNS =` line of every
  *                                                   wg-quick config. Empty omits
  *                                                   the line; for a full tunnel

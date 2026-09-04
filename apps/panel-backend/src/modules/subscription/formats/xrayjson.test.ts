@@ -127,6 +127,62 @@ describe('the document binds both listeners a client may look for', () => {
   });
 });
 
+// 3.15: the local listeners are reachable by ANY app on the device. On Android
+// there is no per-app loopback isolation, so a hostile app opens 127.0.0.1:10808
+// and rides the buyer's tunnel - spending their quota and leaving from their
+// address. Measured with real xray 26.3.27: `auth: password` on socks and
+// `accounts` on http are ENFORCED (no credentials -> refused / 407), and the
+// current noauth pair answers 200 to anyone.
+//
+// Opt-in, and off by default, because the client half is NOT measurable here:
+// Android's ProxyInfo has no credential fields, so an authenticated http
+// inbound may well break the very system-proxy mode we just repaired. Default
+// off keeps the document byte-identical until someone measures a device.
+describe('local listeners can require credentials (3.15)', () => {
+  const creds = { user: 'onegin', pass: 'sekret' };
+
+  const wantsAuth = (cfg: any) => {
+    const byProto = Object.fromEntries(
+      (cfg.inbounds as any[]).map((i) => [i.protocol, i]),
+    );
+    expect(byProto.socks.settings.auth, 'socks still noauth').toBe('password');
+    expect(byProto.socks.settings.accounts).toEqual([creds]);
+    // UDP must survive the change: it is what carries DNS and calls.
+    expect(byProto.socks.settings.udp).toBe(true);
+    expect(byProto.http.settings.accounts).toEqual([creds]);
+  };
+
+  it('single-config format', () => {
+    wantsAuth(JSON.parse(buildXrayJson([xrayEp], { localProxyAuth: creds })));
+  });
+
+  it('array format - the one Happ reads', () => {
+    for (const cfg of JSON.parse(buildXrayJsonArray([xrayEp, hy2Ep], { localProxyAuth: creds })))
+      wantsAuth(cfg);
+  });
+
+  it('CONTROL: without the option the document is unchanged', () => {
+    // The whole safety of this change rests on this assertion: an installation
+    // that does not opt in must get byte-identical output.
+    expect(buildXrayJson([xrayEp], { localProxyAuth: undefined })).toBe(
+      buildXrayJson([xrayEp]),
+    );
+    expect(buildXrayJsonArray([xrayEp, hy2Ep], { localProxyAuth: undefined })).toBe(
+      buildXrayJsonArray([xrayEp, hy2Ep]),
+    );
+    const plain = JSON.parse(buildXrayJson([xrayEp]));
+    const socks = plain.inbounds.find((i: any) => i.protocol === 'socks');
+    expect(socks.settings.auth).toBe('noauth');
+    expect(socks.settings.accounts).toBeUndefined();
+  });
+
+  it('CONTROL: the router form still binds nothing', () => {
+    expect(
+      JSON.parse(buildXrayJson([xrayEp], { forRouter: true, localProxyAuth: creds })).inbounds,
+    ).toBeUndefined();
+  });
+});
+
 describe('the split preset carries its own geo when it can', () => {
   const inline = {
     domains: {

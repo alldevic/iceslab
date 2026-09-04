@@ -16,6 +16,7 @@ import { collectMtprotoNodes, collectWgNodes, tunnelConfigUrls } from './formats
 import { usableFormats } from './formats/format-usable.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
+import { localProxyCredentials } from './local-proxy-auth.js';
 import { buildOutlineJson } from './formats/outline.js';
 import { buildSurgeConf } from './formats/surge.js';
 import { buildQuantumultXConf } from './formats/quantumultx.js';
@@ -119,6 +120,13 @@ const QuerySchema = z.object({
   // it on, `0` forces it off. Only meaningful for the xrayjson format - the
   // fragment outbound + dialerProxy is an Xray-native technique.
   fragment: z.enum(['0', '1']).optional(),
+  // 3.15 - per-request override of the panel-wide `subscriptionLocalProxyAuth`
+  // setting, same idea as `?fragment=`. It exists for one reason: the only
+  // remaining question about that setting ("does a system-proxy client still
+  // start?") is answerable ONLY on a device, and the setting itself is
+  // panel-wide — flipping it to ask would put the question to every subscriber
+  // at once. `1` forces it on for this request, `0` forces it off.
+  localproxyauth: z.enum(['0', '1']).optional(),
   // Node selector for single-node formats (wgconf). wg-quick holds one tunnel
   // per file, so a user with several AmneziaWG nodes gets one link per node,
   // each pinned with `?node=<node name>`. Matched against the endpoint's
@@ -712,6 +720,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
       let tlsFragment = false;
+      // 3.15 - credentials for the local listeners, when the operator opted in.
+      // Undefined keeps the document byte-identical.
+      let localProxyAuth: { user: string; pass: string } | undefined;
       if (
         format === 'clash' ||
         format === 'singbox' ||
@@ -750,6 +761,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         }
         tlsFragment =
           query.fragment !== undefined ? query.fragment === '1' : settings.tlsFragment;
+        // Derived from the token, so it follows the same lifetime: rotating the
+        // token already forces every client to re-fetch this document.
+        const wantLocalProxyAuth =
+          query.localproxyauth !== undefined
+            ? query.localproxyauth === '1'
+            : settings.localProxyAuth;
+        localProxyAuth = wantLocalProxyAuth ? localProxyCredentials(params.token) : undefined;
       }
 
       const geo = selfHostedGeo();
@@ -905,7 +923,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(filtered, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline }));
+            .send(buildXrayJson(filtered, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline, localProxyAuth }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per
@@ -914,7 +932,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // `bundle` (no balancer: the client picks a server, not an outbound).
           return reply
             .type('application/json')
-            .send(buildXrayJsonArray(filtered, { routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline }));
+            .send(buildXrayJsonArray(filtered, { routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline, localProxyAuth }));
         }
         case 'xkeen': {
           // XKeen (xray-core on Keenetic routers): outbounds + routing +

@@ -103,6 +103,26 @@ export interface XrayJsonBuildOpts {
    * all an installation without a geo build can do.
    */
   presetGeoInline?: PresetGeoInline;
+  /**
+   * 3.15 - require credentials on the local socks/http listeners.
+   *
+   * Those listeners sit on 127.0.0.1 of the buyer's own device, and on Android
+   * loopback is NOT isolated per app: any installed app can open 10808/10809
+   * and ride the tunnel, spending the buyer's quota and leaving from their
+   * address. Credentials help precisely because the config lives in the VPN
+   * client's sandbox, which a hostile app cannot read.
+   *
+   * Measured with real xray 26.3.27: both listeners ENFORCE this (no or wrong
+   * credentials -> socks refuses the handshake, http answers 407), and the
+   * noauth pair we ship today answers 200 to anyone.
+   *
+   * Undefined = omit it entirely = byte-identical output. Default off on
+   * purpose: Android's ProxyInfo carries no credential fields, so an
+   * authenticated http inbound may break system-proxy mode - the very mode
+   * whose breakage cost us a day. Turning this on needs a measurement on a
+   * device, not an argument.
+   */
+  localProxyAuth?: { user: string; pass: string };
 }
 
 /** Preset categories as literal xray matchers: domains and IPv4 CIDRs. */
@@ -134,22 +154,34 @@ const TLS_FRAGMENT_SETTINGS: Record<string, string> = {
  * 10808/10809 is the pair this ecosystem has used since v2rayNG, so a client
  * looking for either finds it where it expects.
  */
-const LOCAL_INBOUNDS: ReadonlyArray<Record<string, unknown>> = [
-  {
-    tag: 'socks-in',
-    port: 10808,
-    listen: '127.0.0.1',
-    protocol: 'socks',
-    settings: { auth: 'noauth', udp: true },
-  },
-  {
-    tag: 'http-in',
-    port: 10809,
-    listen: '127.0.0.1',
-    protocol: 'http',
-    settings: {},
-  },
-];
+function localInbounds(
+  auth?: { user: string; pass: string },
+): ReadonlyArray<Record<string, unknown>> {
+  // `accounts` is what both xray inbounds read; socks additionally needs
+  // `auth: 'password'` to stop accepting the anonymous method. `udp` stays on
+  // either way - it carries DNS and calls, and dropping it would look like a
+  // network fault, not like a credential change.
+  const socksSettings = auth
+    ? { auth: 'password', accounts: [auth], udp: true }
+    : { auth: 'noauth', udp: true };
+  const httpSettings = auth ? { accounts: [auth] } : {};
+  return [
+    {
+      tag: 'socks-in',
+      port: 10808,
+      listen: '127.0.0.1',
+      protocol: 'socks',
+      settings: socksSettings,
+    },
+    {
+      tag: 'http-in',
+      port: 10809,
+      listen: '127.0.0.1',
+      protocol: 'http',
+      settings: httpSettings,
+    },
+  ];
+}
 
 const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
   { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'block' },
@@ -632,7 +664,7 @@ export function buildXrayJson(
     ...(opts.forRouter
       ? {}
       : {
-          inbounds: LOCAL_INBOUNDS,
+          inbounds: localInbounds(opts.localProxyAuth),
         }),
     outbounds: [
       ...proxyOutbounds,
@@ -789,7 +821,7 @@ export function buildXrayJsonArray(
       remarks: remark,
       log: { loglevel: 'warning' },
       ...(splitDns ? { dns: splitDns } : {}),
-      inbounds: LOCAL_INBOUNDS,
+      inbounds: localInbounds(opts.localProxyAuth),
       outbounds,
       routing: {
         // IPOnDemand for the same reason as buildXrayJson: the catch-all below

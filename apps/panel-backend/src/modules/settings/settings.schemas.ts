@@ -18,6 +18,7 @@ export const UpdateSettingsSchema = z.object({
   // TLS-fragment - split the client's outgoing ClientHello so SNI-based DPI
   // (RU TSPU / RKN) cannot cleanly match the handshake. Xray JSON format only.
   subscriptionTlsFragment: z.boolean().optional(),
+  subscriptionLocalProxyAuth: z.boolean().optional(),
   // Resolvers written into the `DNS =` line of every wg-quick config we hand
   // out (both flavours). Empty / null omits the line, which is the previous
   // behaviour and NOT a safe default for a full tunnel: with

@@ -621,6 +621,55 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
     expect(v.streamSettings.network).toBe('raw');
   });
 
+  // 3.15 - the per-request override. It exists because the only open question
+  // about local-proxy auth ("does a system-proxy client still start?") is
+  // answerable ONLY on a device, and the setting behind it is panel-wide: asking
+  // by flipping it would ask every subscriber at once. So the tester gets a link
+  // with `?localproxyauth=1` and nobody else is touched.
+  //
+  // This is tested on the ROUTE, not as a mirror of the inline expression,
+  // because the failure it guards against is exactly a link that silently does
+  // nothing: the tester would report "no password" and we would conclude the
+  // client rejects auth, when in fact it was never sent one.
+  it('?localproxyauth=1 puts credentials on the local listeners, ?0 and absent do not', async () => {
+    const user = await createUser('alice', ['hysteria', 'xray']);
+    const nodeId = await createNode('eu-1', '10.0.0.1:8443');
+    await createXrayInbound(nodeId);
+
+    const get = async (q: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/sub/${user.subscriptionToken}?format=xrayjson${q}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const cfg = JSON.parse(res.body);
+      return Object.fromEntries(
+        (cfg.inbounds as { protocol: string }[]).map((i) => [i.protocol, i]),
+      );
+    };
+
+    const on = await get('&localproxyauth=1');
+    expect(on.socks.settings.auth).toBe('password');
+    expect(on.socks.settings.accounts).toHaveLength(1);
+    expect(on.socks.settings.accounts[0].user).toEqual(expect.any(String));
+    expect(on.socks.settings.accounts[0].pass).toEqual(expect.any(String));
+    // UDP must survive: it is what carries DNS and calls.
+    expect(on.socks.settings.udp).toBe(true);
+    expect(on.http.settings.accounts).toHaveLength(1);
+    // Both listeners must take the SAME pair, or the tester ends up proving
+    // only half of the question.
+    expect(on.http.settings.accounts[0]).toEqual(on.socks.settings.accounts[0]);
+
+    // CONTROL: the default and the explicit off must both stay open, or the
+    // override would be changing everyone's document rather than one link.
+    for (const q of ['', '&localproxyauth=0']) {
+      const off = await get(q);
+      expect(off.socks.settings.auth, `q=${q}`).toBe('noauth');
+      expect(off.socks.settings.accounts, `q=${q}`).toBeUndefined();
+      expect(off.http.settings.accounts, `q=${q}`).toBeUndefined();
+    }
+  });
+
   it('says there is no wg tunnel instead of handing over an empty file', async () => {
     // Не 200 с нулём байт. Пустое тело приезжает клиенту как ФАЙЛ (у ответа
     // есть Content-Disposition), клиент его импортирует и жалуется на

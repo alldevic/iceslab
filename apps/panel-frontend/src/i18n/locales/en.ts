@@ -1887,6 +1887,9 @@ export default {
     presetCnSplit: 'CN split',
     presetCnSplitHint: 'Same, but for China sites, with clean China DNS.',
     fragmentTitle: 'TLS fragment',
+    localProxyAuthTitle: 'Password on the local proxy',
+    localProxyAuthHint:
+      'The Xray JSON config opens a socks and an http listener on the buyer\u2019s own 127.0.0.1. Android does not isolate loopback per app, so any installed app can reach them and ride the tunnel \u2014 spending the quota, leaving from that address. On, both listeners require a password derived from the subscription token, which a neighbouring app cannot read out of the client\u2019s sandbox. Off by default because Android\u2019s system proxy carries no credentials: a client running as a system proxy may stop working. Measure on a device before turning it on.',
     wgDnsTitle: 'DNS for WireGuard',
     wgDnsHint:
       'Comma-separated resolvers, written as the DNS line of every wg config handed out. Empty leaves the line out, and on a full tunnel the client then keeps its own network\u2019s resolver: a home 192.168.1.1 routes into the tunnel and dies there. The handshake still succeeds; nothing resolves.',
