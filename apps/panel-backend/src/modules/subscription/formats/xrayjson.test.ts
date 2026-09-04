@@ -85,6 +85,93 @@ describe('split DNS names no Google resolver', () => {
 // IPv4 end to end, so the AAAA can only ever come back empty. The sing-box
 // document has said `prefer_ipv4` since its DNS block was written - the two
 // formats disagreed, and only one of them had been asked to resolve anything.
+// A document that names a geo category is betting on a file we do not control:
+// the client reads whatever .dat it holds, and when that file lacks the category
+// xray refuses to START. Not "ads stop being blocked" - the channel is dead.
+// Three buyers hit it, and refreshing the subscription did nothing, because only
+// the artifact had been fixed and the document still named the categories.
+describe('the split preset carries its own geo when it can', () => {
+  const inline = {
+    domains: {
+      'category-ru': ['domain:ru', 'domain:2gis.com'],
+      'category-gov-ru': ['domain:gosuslugi.ru'],
+      cn: ['domain:cn'],
+    },
+    cidrs: { ru: ['77.88.0.0/16'], cn: ['1.2.0.0/16'] },
+  };
+
+  it('inlines the matchers instead of naming categories, and names none at all', () => {
+    const out = buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: inline });
+    // The point of the exercise: not one geo reference survives, so no client
+    // file can decide whether this document loads.
+    expect(out).not.toContain('geosite:');
+    expect(out).not.toContain('geoip:');
+    const cfg = JSON.parse(out);
+    const direct = cfg.routing.rules.find((r: any) => r.domain && r.outboundTag === 'direct');
+    expect(direct.domain).toEqual(['domain:ru', 'domain:2gis.com', 'domain:gosuslugi.ru']);
+  });
+
+  it('keeps the IP rule, because that is the one protecting the source address', () => {
+    // A Russian service on a foreign domain (pobeda.aero) is caught by this list
+    // and by nothing else. Without it those requests go out through the tunnel
+    // and a bank or Gosuslugi sees a datacenter instead of the buyer.
+    const cfg = JSON.parse(
+      buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: inline }),
+    );
+    const ipRule = cfg.routing.rules.find((r: any) => r.ip && r.outboundTag === 'direct');
+    expect(ipRule.ip).toContain('77.88.0.0/16');
+    // private is written out too: it reads like an xray built-in and is not -
+    // the core looks it up in geoip.dat like any other code.
+    expect(ipRule.ip).toContain('192.168.0.0/16');
+    expect(ipRule.ip).toContain('10.0.0.0/8');
+  });
+
+  it('drops the ads rule rather than inlining 4.2 MB of it', () => {
+    const cfg = JSON.parse(
+      buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: inline }),
+    );
+    expect(cfg.routing.rules.some((r: any) => r.outboundTag === 'block')).toBe(false);
+    // Control: the rest of the split must still be there, or this passes on a
+    // build that dropped the routing altogether.
+    expect(cfg.routing.rules.filter((r: any) => r.outboundTag === 'direct')).toHaveLength(2);
+  });
+
+  it('inlines the DNS scope too - a named category fails there just the same', () => {
+    const cfg = JSON.parse(
+      buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: inline }),
+    );
+    expect(cfg.dns.servers[0].domains).toEqual([
+      'domain:ru',
+      'domain:2gis.com',
+      'domain:gosuslugi.ru',
+    ]);
+    expect(cfg.dns.servers[0].address).toBe('77.88.8.8');
+  });
+
+  it('the array format carries it too - that is the one the failing client reads', () => {
+    const out = buildXrayJsonArray([xrayEp], {
+      routingPreset: 'ru-split',
+      presetGeoInline: inline,
+    });
+    expect(out).not.toContain('geosite:');
+    expect(out).not.toContain('geoip:');
+  });
+
+  it('names the categories when there is nothing to inline', () => {
+    // An installation without a geo build has no other vehicle, and naming them
+    // at least fails loudly rather than silently narrowing the split.
+    const out = buildXrayJson([xrayEp], { routingPreset: 'ru-split' });
+    expect(out).toContain('geosite:category-ru');
+    expect(out).toContain('geoip:ru');
+  });
+
+  it('names them rather than emit half a split when the build is incomplete', () => {
+    const half = { domains: { 'category-ru': ['domain:ru'] }, cidrs: {} };
+    const out = buildXrayJson([xrayEp], { routingPreset: 'ru-split', presetGeoInline: half });
+    expect(out).toContain('geoip:ru');
+  });
+});
+
 describe('split DNS asks only for records this tunnel can route', () => {
   it.each(['ru-split', 'cn-split'] as const)('%s', (preset) => {
     const dns = JSON.parse(buildXrayJson([xrayEp], { routingPreset: preset })).dns;

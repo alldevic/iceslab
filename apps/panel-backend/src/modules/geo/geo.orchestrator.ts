@@ -7,6 +7,7 @@ import {
   composedToGeoSiteDat,
   composedToGeoIPDat,
   domainMatchers,
+  cidrMatchers,
   type ComposedCategory,
 } from './geo.compose.js';
 import { fetchDat as defaultFetchDat, type DatFetcher } from './geo.fetch.js';
@@ -44,6 +45,30 @@ export interface GeoBuildResult {
   /** Composed custom categories' domains as xray matcher strings, for inlining
    *  a category into a subscription that cannot fetch a remote .dat. */
   categoryDomains: { name: string; domains: string[] }[];
+  /**
+   * The preset categories as literal matchers, for a document that must carry
+   * its own routing data.
+   *
+   * The xray-json formats have no way to fetch anything: the client reads
+   * whatever .dat it happens to hold, and we do not control that file. Three
+   * buyers in a row proved what that costs — a geosite without
+   * `category-ads-all` and xray refuses to start, so the channel is dead, and
+   * refreshing the subscription changes nothing because the DOCUMENT never
+   * changed. Inlining removes the bet on someone else's file entirely.
+   *
+   * Domains and CIDRs, because both halves of the split are needed: the domain
+   * list names Russian services (the whole .ru/.su/.рф zone plus 830 foreign
+   * domains they also use), and the CIDR list is the backstop that catches a
+   * Russian service on a foreign domain — `pobeda.aero`, whose primary domain
+   * is not in any zone we match. Dropping the backstop would send exactly those
+   * out through the tunnel, and services that check the caller's address
+   * (banks, Gosuslugi) would see a datacenter.
+   *
+   * NOT here: anything huge. `category-ads-all` is 148 872 matchers, 4.2 MB per
+   * config — that one belongs on the node, where an ad rule costs nothing and
+   * blocks for every client instead of only those holding the right file.
+   */
+  presetInline: { domains: Record<string, string[]>; cidrs: Record<string, string[]> };
   categories: { name: string; domains: number; cidrs: number; missing: string[] }[];
   sourceErrors: { sourceId: string; url: string; error: string }[];
   /** True when sources WERE configured but every fetch failed (no mirror at
@@ -307,6 +332,18 @@ export async function buildGeoArtifacts(opts?: {
     categoryDomains: composed
       .filter((c) => c.domains.length > 0)
       .map((c) => ({ name: c.name, domains: domainMatchers(c.domains) })),
+    presetInline: {
+      domains: Object.fromEntries(
+        PRESET_GEOSITE.map((c) => [c, domainMatchers(presetSite.get(c.toUpperCase()) ?? [])]).filter(
+          ([, v]) => (v as string[]).length > 0,
+        ),
+      ),
+      cidrs: Object.fromEntries(
+        PRESET_GEOIP.map((c) => [c, cidrMatchers(presetIp.get(c.toUpperCase()) ?? [])]).filter(
+          ([, v]) => (v as string[]).length > 0,
+        ),
+      ),
+    },
     categories: emitted.map((c) => ({
       name: c.name,
       domains: c.domains.length,

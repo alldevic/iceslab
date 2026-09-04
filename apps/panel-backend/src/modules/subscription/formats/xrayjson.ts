@@ -96,6 +96,19 @@ export interface XrayJsonBuildOpts {
    * output byte-identical. Xray JSON only (the technique is Xray-native).
    */
   tlsFragment?: boolean;
+  /**
+   * Preset geo data as literal matchers, keyed by category name. When given,
+   * the split preset inlines it instead of naming `geosite:`/`geoip:` — see
+   * splitRulesFor for why that matters. Omitted = name the categories, which is
+   * all an installation without a geo build can do.
+   */
+  presetGeoInline?: PresetGeoInline;
+}
+
+/** Preset categories as literal xray matchers: domains and IPv4 CIDRs. */
+export interface PresetGeoInline {
+  domains: Record<string, string[]>;
+  cidrs: Record<string, string[]>;
 }
 
 // TLS-fragment defaults (upstream-verified). `tlshello` fragments the TLS
@@ -114,6 +127,32 @@ const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
     outboundTag: 'direct',
   },
   { type: 'field', ip: ['geoip:private', 'geoip:ru'], outboundTag: 'direct' },
+];
+
+/**
+ * RFC1918 + the rest of what `geoip:private` means, written out.
+ *
+ * Inlined rather than named because `private` LOOKS like a built-in and is not:
+ * xray reads it out of geoip.dat like any other code, so a document naming it
+ * fails to load on a client whose .dat lacks it — measured, `code not found in
+ * geoip.dat: PRIVATE`.
+ */
+const PRIVATE_CIDRS: readonly string[] = [
+  '0.0.0.0/8',
+  '10.0.0.0/8',
+  '100.64.0.0/10',
+  '127.0.0.0/8',
+  '169.254.0.0/16',
+  '172.16.0.0/12',
+  '192.0.0.0/24',
+  '192.0.2.0/24',
+  '192.168.0.0/16',
+  '198.18.0.0/15',
+  '198.51.100.0/24',
+  '203.0.113.0/24',
+  '224.0.0.0/4',
+  '240.0.0.0/4',
+  '255.255.255.255/32',
 ];
 
 /**
@@ -201,13 +240,78 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
 
 // Preset selectors, shared by the single-config builder and the array (T2) so
 // both pick the same split rules / DNS from one place.
+/** Which preset categories each split names, so the inline path can look them up. */
+const PRESET_CATS: Record<string, { site: string[]; ip: string }> = {
+  'ru-split': { site: ['category-ru', 'category-gov-ru'], ip: 'ru' },
+  'cn-split': { site: ['cn'], ip: 'cn' },
+};
+
+/**
+ * The split rules, inlined when the caller could supply the geo data.
+ *
+ * NAMING a category is a bet on a file we do not control: the client reads
+ * whatever .dat it holds, and when that file lacks the category xray refuses to
+ * START — not "no ad-blocking", a dead channel. Three buyers hit it, and
+ * refreshing the subscription did nothing for them because only the ARTIFACT had
+ * been fixed and the document still named the categories.
+ *
+ * So when the geo build can hand over the matchers, they go in literally and the
+ * document stops depending on the client's files. Measured: RU domains 28 KB,
+ * RU networks 238 KB, private 15 lines — 266 KB per config.
+ *
+ * The ads rule is NOT inlined and NOT kept: 148 872 matchers is 4.2 MB per
+ * config, and a blocked request has no source address to protect, so that rule
+ * belongs on the node — where it costs nothing and covers every client instead
+ * of only those holding the right .dat.
+ *
+ * The IP rule stays because the SOURCE ADDRESS is what it protects. Services
+ * that check the caller — banks, Gosuslugi — must see the buyer's own address,
+ * and a Russian service on a foreign domain (`pobeda.aero`) is caught by this
+ * list and by nothing else. Dropping it would route exactly those through the
+ * tunnel and show them a datacenter.
+ *
+ * With no geo build there is nothing to inline and naming the categories is the
+ * only vehicle left, so that stays the fallback.
+ */
 function splitRulesFor(
   preset: RoutingPresetId,
+  inline?: PresetGeoInline,
 ): ReadonlyArray<Record<string, unknown>> | null {
-  return preset === 'ru-split' ? RU_SPLIT_RULES : preset === 'cn-split' ? CN_SPLIT_RULES : null;
+  const cats = PRESET_CATS[preset];
+  if (!cats || !inline) {
+    return preset === 'ru-split' ? RU_SPLIT_RULES : preset === 'cn-split' ? CN_SPLIT_RULES : null;
+  }
+  const domains = cats.site.flatMap((c) => inline.domains[c] ?? []);
+  const cidrs = inline.cidrs[cats.ip] ?? [];
+  if (domains.length === 0 || cidrs.length === 0) {
+    // A half-built geo answer would silently narrow the split, which is worse
+    // than naming the categories: at least that fails loudly.
+    return preset === 'ru-split' ? RU_SPLIT_RULES : preset === 'cn-split' ? CN_SPLIT_RULES : null;
+  }
+  return [
+    { type: 'field', domain: domains, outboundTag: 'direct' },
+    { type: 'field', ip: [...PRIVATE_CIDRS, ...cidrs], outboundTag: 'direct' },
+  ];
 }
-function splitDnsFor(preset: RoutingPresetId): Record<string, unknown> | null {
-  return preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
+
+/**
+ * The split DNS block, with the same inlining — and it needs it just as much:
+ * the regional resolver is scoped by `domains: ['geosite:category-ru', …]`, and
+ * a missing category there fails the config exactly like a routing rule does.
+ */
+function splitDnsFor(
+  preset: RoutingPresetId,
+  inline?: PresetGeoInline,
+): Record<string, unknown> | null {
+  const base = preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
+  const cats = PRESET_CATS[preset];
+  if (!base || !cats || !inline) return base;
+  const domains = cats.site.flatMap((c) => inline.domains[c] ?? []);
+  if (domains.length === 0) return base;
+  const servers = (base.servers as unknown[]).map((srv) =>
+    srv && typeof srv === 'object' && 'domains' in srv ? { ...(srv as object), domains } : srv,
+  );
+  return { ...base, servers };
 }
 
 /**
@@ -427,8 +531,8 @@ export function buildXrayJson(
   // split-DNS block; proxy-all leaves both null so the output stays
   // byte-identical to pre-R1 builds.
   const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules = splitRulesFor(preset);
-  const splitDns = splitDnsFor(preset);
+  const splitRules = splitRulesFor(preset, opts.presetGeoInline);
+  const splitDns = splitDnsFor(preset, opts.presetGeoInline);
 
   // TLS-fragment - the fragment outbound's tag must not collide with any proxy
   // (`${nodeName}-xray`), `direct`, or `block` tag, and must exactly equal the
@@ -605,8 +709,8 @@ export function buildXrayJsonArray(
       (e.protocol === 'xray' || e.protocol === 'hysteria') && hysteriaOutboundIsUsable(e),
   );
   const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules = splitRulesFor(preset);
-  const splitDns = splitDnsFor(preset);
+  const splitRules = splitRulesFor(preset, opts.presetGeoInline);
+  const splitDns = splitDnsFor(preset, opts.presetGeoInline);
   const tlsFragment = opts.tlsFragment === true;
   const cdl = opts.customDomainLists;
 

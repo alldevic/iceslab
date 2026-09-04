@@ -183,6 +183,21 @@ export function getCategoryDomains(name: string): string[] | null {
   return c ? c.domains : null;
 }
 
+/**
+ * The preset categories as literal matchers, for a document that must carry its
+ * own routing data instead of naming categories the client may not have.
+ *
+ * `null` when there is no build — and that is the honest answer, not an empty
+ * object: a caller that inlines nothing must fall back to naming the categories,
+ * because an installation with no geo build has no other vehicle at all.
+ */
+export function getPresetInline(): {
+  domains: Record<string, string[]>;
+  cidrs: Record<string, string[]>;
+} | null {
+  return cached ? cached.result.presetInline : null;
+}
+
 export function invalidateGeoBuild(): void {
   cached = null;
 }

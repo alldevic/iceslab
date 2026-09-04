@@ -183,6 +183,26 @@ export function domainMatchers(domains: Domain[]): string[] {
   });
 }
 
+/**
+ * CIDRs as xray `ip:` rule strings — "1.2.3.0/24".
+ *
+ * IPv4 ONLY, and that is a decision, not an oversight. These strings go into a
+ * subscription that will be carried by an IPv4-only path: every endpoint, the
+ * cascade link and the wg subnets are v4, the cascade exit has no global IPv6
+ * address at all, and the DNS the same document hands out asks for A records
+ * only. A v6 network in this list could therefore never match traffic we carry,
+ * and it is not free — the RU set is 13 003 v4 networks against 238 KB of JSON,
+ * and the v6 half would grow the subscription for nothing.
+ */
+export function cidrMatchers(cidrs: CIDR[]): string[] {
+  const out: string[] = [];
+  for (const c of cidrs) {
+    if (c.ip.length !== 4) continue;
+    out.push(`${c.ip[0]}.${c.ip[1]}.${c.ip[2]}.${c.ip[3]}/${c.prefix}`);
+  }
+  return out;
+}
+
 /** Emit a geosite.dat carrying the composed categories that have domains. */
 export function composedToGeoSiteDat(cats: ComposedCategory[]): Uint8Array {
   const m = new Map<string, Domain[]>();

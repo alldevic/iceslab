@@ -32,7 +32,7 @@ import { enforceHwid, resolveSquadHwidLimit } from '../hwid/hwid.service.js';
 import { prisma } from '../../prisma.js';
 import { config, subscriptionOrigin } from '../../config.js';
 import { geoArtifactBaseUrl } from '../geo/geo.url.js';
-import { getCategoryDomains, getGeoBuildMeta } from '../geo/geo.registry.js';
+import { getCategoryDomains, getGeoBuildMeta, getPresetInline } from '../geo/geo.registry.js';
 import { GEO_MIRROR_SITE, GEO_MIRROR_IP } from '../geo/geo.orchestrator.js';
 import { subscriptionRequests } from '../../lib/metrics.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/telegram-notify.js';
@@ -694,6 +694,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // per-user override, then their per-squad override, then the panel-wide
       // setting. plain/json/wgconf carry no routing section, so we skip the
       // read there.
+      // The preset's geo data as literal matchers, when this installation has a
+      // geo build to take them from. The xray-json formats cannot fetch a .dat,
+      // so naming a category bets on the client's own file - and that bet lost
+      // three times in a row. null here means no build, and then naming the
+      // categories is the only vehicle there is.
+      const presetGeoInline = getPresetInline() ?? undefined;
       let routingPreset: RoutingPresetId = 'proxy-all';
       let customRoutingRules: Record<string, unknown>[] | undefined;
       // R3 - operator-defined custom domain lists (direct/proxy/block), emitted
@@ -899,7 +905,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(filtered, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJson(filtered, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per
@@ -908,7 +914,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // `bundle` (no balancer: the client picks a server, not an outbound).
           return reply
             .type('application/json')
-            .send(buildXrayJsonArray(filtered, { routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJsonArray(filtered, { routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline }));
         }
         case 'xkeen': {
           // XKeen (xray-core on Keenetic routers): outbounds + routing +
@@ -925,7 +931,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               'Content-Disposition',
               `attachment; filename="${sanitizeFilename(result.json.user.username)}-xkeen.json"`,
             )
-            .send(buildXrayJson(filtered, { bundle: xkBundle, routingPreset, forRouter: true, customRules: customRoutingRules, customDomainLists }));
+            .send(buildXrayJson(filtered, { bundle: xkBundle, routingPreset, forRouter: true, customRules: customRoutingRules, customDomainLists, presetGeoInline }));
         }
         case 'outline':
           // SIP008 Shadowsocks online-config (Outline / shadowsocks-* clients).
