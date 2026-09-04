@@ -119,6 +119,38 @@ const TLS_FRAGMENT_SETTINGS: Record<string, string> = {
   interval: '10-20',
 };
 
+/**
+ * The local listeners a client binds on the device.
+ *
+ * SOCKS alone is not enough, and the failure it causes looks like anything but
+ * a missing inbound. Happ starts a system HTTP proxy and takes its port from an
+ * `http` inbound in the config; with only SOCKS it logs
+ * `No HTTP inbound found to start proxy on port 10810`, binds nothing, and the
+ * browser answers `ERR_PROXY_CONNECTION_FAILED` — which reads as "the VPN is
+ * broken", not as "the document is missing a listener". Reported as "no sites
+ * open at all", on both entry transports, by buyers whose app runs in
+ * system-proxy mode; buyers whose app runs a TUN never saw it.
+ *
+ * 10808/10809 is the pair this ecosystem has used since v2rayNG, so a client
+ * looking for either finds it where it expects.
+ */
+const LOCAL_INBOUNDS: ReadonlyArray<Record<string, unknown>> = [
+  {
+    tag: 'socks-in',
+    port: 10808,
+    listen: '127.0.0.1',
+    protocol: 'socks',
+    settings: { auth: 'noauth', udp: true },
+  },
+  {
+    tag: 'http-in',
+    port: 10809,
+    listen: '127.0.0.1',
+    protocol: 'http',
+    settings: {},
+  },
+];
+
 const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
   { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'block' },
   {
@@ -600,15 +632,7 @@ export function buildXrayJson(
     ...(opts.forRouter
       ? {}
       : {
-          inbounds: [
-            {
-              tag: 'socks-in',
-              port: 10808,
-              listen: '127.0.0.1',
-              protocol: 'socks',
-              settings: { auth: 'noauth', udp: true },
-            },
-          ],
+          inbounds: LOCAL_INBOUNDS,
         }),
     outbounds: [
       ...proxyOutbounds,
@@ -765,15 +789,7 @@ export function buildXrayJsonArray(
       remarks: remark,
       log: { loglevel: 'warning' },
       ...(splitDns ? { dns: splitDns } : {}),
-      inbounds: [
-        {
-          tag: 'socks-in',
-          port: 10808,
-          listen: '127.0.0.1',
-          protocol: 'socks',
-          settings: { auth: 'noauth', udp: true },
-        },
-      ],
+      inbounds: LOCAL_INBOUNDS,
       outbounds,
       routing: {
         // IPOnDemand for the same reason as buildXrayJson: the catch-all below

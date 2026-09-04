@@ -90,6 +90,43 @@ describe('split DNS names no Google resolver', () => {
 // xray refuses to START. Not "ads stop being blocked" - the channel is dead.
 // Three buyers hit it, and refreshing the subscription did nothing, because only
 // the artifact had been fixed and the document still named the categories.
+// Reported as "no sites open at all", on both entry transports, by buyers whose
+// app runs a system proxy rather than a TUN. The core said what was wrong and
+// nobody was reading it: `No HTTP inbound found to start proxy on port 10810`.
+// Happ takes the system-proxy port from an `http` inbound in the config; with
+// only SOCKS it binds nothing, and the browser answers
+// ERR_PROXY_CONNECTION_FAILED - which reads as a broken tunnel, not as a
+// document missing a listener. It is not the transport, not the routing and not
+// the geo: the traffic never reaches the core at all.
+describe('the document binds both listeners a client may look for', () => {
+  const wants = (cfg: any) => {
+    const byProto = Object.fromEntries(
+      (cfg.inbounds as any[]).map((i) => [i.protocol, i]),
+    );
+    expect(byProto.socks, 'no socks inbound').toBeTruthy();
+    expect(byProto.http, 'no http inbound - a system-proxy client binds nothing').toBeTruthy();
+    expect(byProto.socks.port).toBe(10808);
+    expect(byProto.http.port).toBe(10809);
+    // Loopback only: these are listeners on the buyer's own device.
+    expect(byProto.socks.listen).toBe('127.0.0.1');
+    expect(byProto.http.listen).toBe('127.0.0.1');
+  };
+
+  it('single-config format', () => {
+    wants(JSON.parse(buildXrayJson([xrayEp])));
+  });
+
+  it('array format - the one Happ reads', () => {
+    for (const cfg of JSON.parse(buildXrayJsonArray([xrayEp, hy2Ep]))) wants(cfg);
+  });
+
+  it('the router format still binds nothing - the router owns its inbounds', () => {
+    // Control: XKeen supplies its own transparent inbound, so adding listeners
+    // there would be wrong, and a blanket "always emit both" would break it.
+    expect(JSON.parse(buildXrayJson([xrayEp], { forRouter: true })).inbounds).toBeUndefined();
+  });
+});
+
 describe('the split preset carries its own geo when it can', () => {
   const inline = {
     domains: {
@@ -218,12 +255,13 @@ describe('buildXrayJson', () => {
   });
 
   it('emits a SOCKS5 inbound on 127.0.0.1:10808 with udp enabled', () => {
+    // The HTTP inbound beside it has its own describe below; this one pins the
+    // SOCKS half, which is what a TUN-mode client uses.
     const cfg = parse(buildXrayJson([xrayEp]));
-    expect(cfg.inbounds).toHaveLength(1);
-    expect(cfg.inbounds[0].protocol).toBe('socks');
-    expect(cfg.inbounds[0].port).toBe(10808);
-    expect(cfg.inbounds[0].listen).toBe('127.0.0.1');
-    expect(cfg.inbounds[0].settings.udp).toBe(true);
+    const socks = cfg.inbounds.find((i: any) => i.protocol === 'socks');
+    expect(socks.port).toBe(10808);
+    expect(socks.listen).toBe('127.0.0.1');
+    expect(socks.settings.udp).toBe(true);
   });
 
   it('emits a vless+REALITY outbound with v24.9.30 raw network', () => {
@@ -540,7 +578,7 @@ describe('buildXrayJson', () => {
     it('desktop (client) form is unchanged: keeps log + inbound', () => {
       const cfg = parse(buildXrayJson([xrayEp]));
       expect(cfg.log).toBeDefined();
-      expect(cfg.inbounds).toHaveLength(1);
+      expect(cfg.inbounds.length).toBeGreaterThan(0);
     });
   });
 
@@ -685,9 +723,7 @@ describe('buildXrayJsonArray (T1)', () => {
   it('each element is a full config: own socks inbound + proxy/direct/block outbounds', () => {
     const arr = parse(buildXrayJsonArray([xrayEp]));
     const cfg = arr[0];
-    expect(cfg.inbounds).toHaveLength(1);
-    expect(cfg.inbounds[0].protocol).toBe('socks');
-    expect(cfg.inbounds[0].port).toBe(10808);
+    expect(cfg.inbounds.find((i: any) => i.protocol === 'socks').port).toBe(10808);
     const tags = cfg.outbounds.map((o: any) => o.tag);
     expect(tags).toEqual(['eu-1-xray', 'direct', 'block']);
   });
