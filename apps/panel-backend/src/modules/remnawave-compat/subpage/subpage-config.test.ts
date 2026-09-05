@@ -285,7 +285,35 @@ describe('buildSubpageConfig', () => {
     // linked — never linked to a guess.
     const awgAndroid = doc.platforms.android.apps.find((a) => a.name === 'AmneziaWG')!;
     expect(awgAndroid.blocks.map((b) => b.title.en)).not.toContain('Install the app');
-    expect(awgAndroid.blocks[0].buttons.every((b) => b.link.includes('format=wgconf'))).toBe(true);
+    // By title again: `blocks[0]` was the download step until the "what you
+    // get" card moved above it, and the assertion followed the index rather
+    // than the thing it was about. Second time in this file.
+    const download = awgAndroid.blocks.find((b) => b.title.en === 'Download the config')!;
+    expect(download.buttons.every((b) => b.link.includes('format=wgconf'))).toBe(true);
+  });
+
+  it('orders a card the way a buyer decides: can I get it, what is it, then install', () => {
+    // The "what you get" card sat last until 2026-09-05 on the reasoning that a
+    // buyer who knows the client scrolls past it. The buyer this page is for is
+    // choosing, and the store notice can make the whole card moot — so the two
+    // that answer "is this for me" come before the two that are work.
+    const doc = buildSubpageConfig(input({ protocols: ['xray', 'hysteria'] }))!;
+    const happ = doc.platforms.ios.apps.find((a) => a.name === 'Happ')!;
+    const at = (title: string) => happ.blocks.findIndex((b) => b.title.en === title);
+
+    expect(at('Not in the Russian App Store')).toBe(0);
+    expect(at('What you get')).toBe(1);
+    expect(at('Install the app')).toBe(2);
+    expect(at('Add the subscription')).toBeGreaterThan(at('Install the app'));
+    // Closing the local proxy is work for after the client runs, not a reason
+    // to choose it.
+    expect(at('Close the local proxy')).toBeGreaterThan(at('Add the subscription'));
+
+    // Same order where there is no notice: the description still leads.
+    const wg = doc.platforms.android.apps.find((a) => a.name === 'Happ')!;
+    const wAt = (t: string) => wg.blocks.findIndex((b) => b.title.en === t);
+    expect(wAt('What you get')).toBe(0);
+    expect(wAt('Install the app')).toBe(1);
   });
 
   // Measured 2026-09-05 against the Russian storefront, with a control on both

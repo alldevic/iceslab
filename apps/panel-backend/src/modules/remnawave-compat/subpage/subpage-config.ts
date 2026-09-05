@@ -878,8 +878,16 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
       // Install first, import second — that is the order a person does it in.
       const install = installBlock(app, ours);
       if (install) blocks.unshift(install);
-      // And above install: a step that says the install button leads to a page
-      // this buyer's account cannot open belongs before they tap it.
+      // Above install: what this client actually gives them. The card used to
+      // sit last, on the reasoning that a buyer who already knows the client
+      // scrolls past it — but the buyer this page is for is CHOOSING, and the
+      // decision is "is this the client for me", which install cannot answer.
+      // Customer's call, 2026-09-05.
+      const gives = givesBlock(app, input, ours);
+      if (gives) blocks.unshift(gives);
+      // And above that: a step saying the install button leads to a page this
+      // buyer's account cannot open belongs before they tap it. It stays first
+      // because it can make the whole card moot.
       if (gap) {
         // Alternatives that share a channel with this app, so the sentence
         // cannot send an AmneziaWG buyer to a subscription client. Three at
@@ -892,14 +900,10 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
           .slice(0, 3);
         blocks.unshift(storeBlock(app, gap, alts));
       }
-      // Before "what you get": it is an action, and actions come before the
-      // description of what the client is.
+      // Last, and after the import steps on purpose: it is something to do once
+      // the client is set up, not a reason to pick it.
       const localProxy = localProxyBlock(app);
       if (localProxy) blocks.push(localProxy);
-      // Last card on purpose: a buyer who already knows the client scrolls past
-      // it, one who is choosing reads it after seeing what installing involves.
-      const gives = givesBlock(app, input, ours);
-      if (gives) blocks.push(gives);
       const icon = APP_ICON_KEY[app.name];
       apps.push({
         name: app.name,
