@@ -250,7 +250,16 @@ const NOT_IN_A_SUBSCRIPTION: ReadonlySet<ProtocolName> = new Set([
   'mtproto',
 ]);
 
-function channelNames(app: AppDef, protocols: readonly ProtocolName[]): string[] {
+/**
+ * The channels this buyer would actually get FROM THIS APP, in reading order.
+ *
+ * Not `app.protocols`: that answers the wider "what can this client speak",
+ * and the two differ wherever the import path drops something. Hiddify reads
+ * AmneziaWG configs and imports a subscription, which carries no tunnel — so
+ * the honest answer for Hiddify is "no AmneziaWG", and anything reasoning about
+ * what an app gives a buyer has to ask this function rather than the field.
+ */
+function deliveredProtocols(app: AppDef, protocols: readonly ProtocolName[]): ProtocolName[] {
   const held = new Set(protocols);
   const viaSubscription = app.action.kind === 'deeplink' || app.action.kind === 'manual';
   return CHANNEL_ORDER.filter(
@@ -258,7 +267,11 @@ function channelNames(app: AppDef, protocols: readonly ProtocolName[]): string[]
       held.has(p) &&
       app.protocols.includes(p) &&
       !(viaSubscription && NOT_IN_A_SUBSCRIPTION.has(p)),
-  )
+  );
+}
+
+function channelNames(app: AppDef, protocols: readonly ProtocolName[]): string[] {
+  return deliveredProtocols(app, protocols)
     .map((p) => PROTOCOL_LABEL[p])
     .filter((label): label is string => !!label);
 }
@@ -351,6 +364,130 @@ function fileUrl(
  * an app, because an app card with no blocks fails validation.
  */
 /**
+ * The step that has to come FIRST when it comes at all: this app cannot be
+ * fetched from the store on this buyer's device.
+ *
+ * Above "install the app" on the customer's instruction and for the reason
+ * they gave — buyers were tapping an install button that lands on a page their
+ * account cannot open, and the tickets that followed were about our
+ * instructions, not about the client. A note underneath the step it invalidates
+ * is a note that arrives after the buyer has already tried.
+ *
+ * What it does NOT say is "use another app": the client keeps working on a
+ * device that already has it, and that buyer is holding a working config. It
+ * says what is true, and the two reasons say different true things — an Apple
+ * account from another country is the answer to one of them and to neither the
+ * other.
+ */
+function storeBlock(
+  app: AppDef,
+  reason: 'ru-storefront' | 'delisted',
+  alternatives: string[],
+): SubpageBlock {
+  // Named from the tab as it was actually built, never from the catalogue: an
+  // app with no checked link for this platform is not somewhere to send anyone,
+  // and one carrying its own gap is the failure being described.
+  const listEn = joinList(alternatives, 'en');
+  const listRu = joinList(alternatives, 'ru');
+  const altEn = alternatives.length
+    ? ` On this tab ${listEn} can be installed from the store as usual, and works with this same subscription.`
+    : '';
+  // Singular and plural spelled out rather than one form that limps in the
+  // other: this sentence is read by a person who is already stuck.
+  const altRu = alternatives.length
+    ? alternatives.length === 1
+      ? ` На этой вкладке ${listRu} ставится из магазина как обычно и работает с той же подпиской.`
+      : ` На этой вкладке ${listRu} ставятся из магазина как обычно и работают с той же подпиской.`
+    : '';
+
+  if (reason === 'delisted') {
+    return {
+      svgIconKey: 'AppleIcon',
+      svgIconColor: 'amber',
+      title: t('Not in the App Store right now', 'Сейчас нет в App Store'),
+      description: t(
+        `${app.name} is not in the App Store at all at the moment — its publisher cannot post it ` +
+          'there, and this has nothing to do with the country of your account. If it is already ' +
+          'installed it keeps working. Apps with similar names in the store are made by other ' +
+          `people and are not this client.${altEn}`,
+        `Приложения ${app.name} сейчас в App Store нет вовсе — издатель не может его там публиковать, ` +
+          'и это не связано со страной вашего аккаунта. Если оно уже установлено, оно продолжает ' +
+          'работать. ' +
+          'Приложения с похожими названиями в магазине сделаны другими людьми и этим клиентом не ' +
+          `являются.${altRu}`,
+      ),
+      buttons: [],
+    };
+  }
+
+  return {
+    svgIconKey: 'AppleIcon',
+    svgIconColor: 'amber',
+    title: t('Not in the Russian App Store', 'Нет в российском App Store'),
+    description: t(
+      `${app.name} is not available in the Russian App Store. If it is already installed it keeps ` +
+        'working as before — but installing it again, on this or a new device, needs an Apple ' +
+        `account registered in another country.${altEn}`,
+      `Приложения ${app.name} нет в российском App Store. Если оно уже установлено, оно продолжает ` +
+        'работать — но установить его заново, на этом или на новом устройстве, можно только с ' +
+        `аккаунтом Apple другой страны.${altRu}`,
+    ),
+    buttons: [],
+  };
+}
+
+/**
+ * The one thing about this client only its owner can fix.
+ *
+ * A proxy client feeds the device through a local SOCKS listener, and on
+ * Android the loopback is not isolated between apps: with authorisation off,
+ * any app on the phone can use the buyer's tunnel. We cannot close it from
+ * here — a server-side password was written, measured and reverted, because
+ * with Happ's factory setting it kills the tunnel instead (`36ea18e4`).
+ *
+ * Two sentences rather than one, because the two clients need opposite advice:
+ * telling an INCY owner to "turn it on" would send them looking for a switch
+ * that is already thrown, and telling a Happ owner it is fine by default would
+ * be false.
+ */
+function localProxyBlock(app: AppDef): SubpageBlock | null {
+  if (!app.localProxyAuth) return null;
+  const shared = {
+    en:
+      ' With it off, any app on the device can go out through your tunnel — spending your ' +
+      'traffic and using your address.',
+    ru:
+      ' При выключенной авторизации любое приложение на устройстве может выйти в сеть через ваш ' +
+      'туннель — расходуя ваш трафик и выходя с вашего адреса.',
+  };
+  const en =
+    app.localProxyAuth === 'off-by-default'
+      ? `${app.name} leaves the authorisation of its local SOCKS proxy OFF out of the box. Open the ` +
+        'app settings, find the local SOCKS proxy and set its authorisation mode to "Auto": the app ' +
+        'then makes up a login and password and fills them in for itself, so there is nothing to ' +
+        `type.${shared.en}`
+      : `${app.name} asks for a login and password on its local SOCKS proxy out of the box, so there ` +
+        'is nothing to do — but if you have ever switched that off, turn it back on in the app ' +
+        `settings, in the mode where the app fills the credentials in itself.${shared.en}`;
+  const ru =
+    app.localProxyAuth === 'off-by-default'
+      ? `В ${app.name} авторизация локального SOCKS-прокси по умолчанию ВЫКЛЮЧЕНА. Откройте ` +
+        'настройки приложения, найдите локальный SOCKS-прокси и поставьте режим авторизации ' +
+        '«Авто»: приложение само придумает логин и пароль и подставит их себе, вводить ничего не ' +
+        `нужно.${shared.ru}`
+      : `В ${app.name} логин и пароль на локальном SOCKS-прокси спрашиваются по умолчанию — делать ` +
+        'ничего не нужно. Но если вы когда-нибудь это отключали, включите обратно в настройках ' +
+        `приложения, в режиме, где приложение подставляет их само.${shared.ru}`;
+  return {
+    svgIconKey: 'ShieldPlus',
+    svgIconColor: 'rose',
+    title: t('Close the local proxy', 'Закройте локальный прокси'),
+    description: t(en, ru),
+    buttons: [],
+  };
+}
+
+/**
  * The "get the app" block, when there is a checked link for this platform.
  *
  * Absent for most of the catalogue on purpose (see InstallLinks): an install
@@ -440,8 +577,8 @@ function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
           svgIconColor: 'emerald',
           title: t('Paste the connection key', 'Вставьте ключ подключения'),
           description: t(
-            'Copy the key, open AmneziaVPN and choose to add a connection from a key.',
-            'Скопируйте ключ, откройте AmneziaVPN и добавьте подключение из ключа.',
+            `Copy the key, open ${app.name} and choose to add a connection from a key.`,
+            `Скопируйте ключ, откройте ${app.name} и добавьте подключение из ключа.`,
           ),
           buttons: withKey.map((n) => ({
             type: 'copyButton' as const,
@@ -687,13 +824,47 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
     const shopKey = PLATFORM_TO_SHOP[ours];
     if (!shopKey) continue;
 
+    // Two passes, because the store notice names the alternatives on this same
+    // tab and those are not known until the tab is built. Naming them from the
+    // catalogue instead would offer a buyer a client this subscription cannot
+    // fill — the exact promise the rest of this file exists to refuse.
+    const candidates = appsForPlatform(ours, input.protocols, input.usableFormats)
+      .map((app) => ({ app, blocks: blocksFor(app, input) }))
+      .filter((c) => c.blocks.length > 0);
+    // An alternative has to be gettable, not merely listed: a checked install
+    // link for THIS platform and no gap of its own. The first version of this
+    // named sing-box to iPhone buyers as the client their store does sell — it
+    // is the one app on that tab with no listing anywhere at all, which is the
+    // whole reason it has no link. The list must be built from the same fields
+    // that decide whether a buyer can get the app, or it invents a way out.
+    const reachable = candidates
+      .map((c) => c.app)
+      .filter((a) => !a.storeGap?.[ours] && !!a.install?.[ours]);
+
     const apps: SubpageApp[] = [];
-    for (const app of appsForPlatform(ours, input.protocols, input.usableFormats)) {
-      const blocks = blocksFor(app, input);
-      if (blocks.length === 0) continue;
+    for (const { app, blocks } of candidates) {
+      const gap = app.storeGap?.[ours];
       // Install first, import second — that is the order a person does it in.
       const install = installBlock(app, ours);
       if (install) blocks.unshift(install);
+      // And above install: a step that says the install button leads to a page
+      // this buyer's account cannot open belongs before they tap it.
+      if (gap) {
+        // Alternatives that share a channel with this app, so the sentence
+        // cannot send an AmneziaWG buyer to a subscription client. Three at
+        // most: a longer list reads as a menu rather than a way out.
+        const mine = new Set(deliveredProtocols(app, input.protocols));
+        const alts = reachable
+          .filter((a) => deliveredProtocols(a, input.protocols).some((pr) => mine.has(pr)))
+          .map((a) => a.name)
+          .filter((n, i, all) => all.indexOf(n) === i)
+          .slice(0, 3);
+        blocks.unshift(storeBlock(app, gap, alts));
+      }
+      // Before "what you get": it is an action, and actions come before the
+      // description of what the client is.
+      const localProxy = localProxyBlock(app);
+      if (localProxy) blocks.push(localProxy);
       // Last card on purpose: a buyer who already knows the client scrolls past
       // it, one who is choosing reads it after seeing what installing involves.
       const gives = givesBlock(app, input, ours);
@@ -702,7 +873,11 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
       apps.push({
         name: app.name,
         ...(icon ? { svgIconKey: icon } : {}),
-        featured: !!app.recommended,
+        // A client the buyer's own store does not sell is not the one to put a
+        // "recommended" badge on, however good it is elsewhere. The flag stays
+        // on the app — it is still the recommendation on Android and desktop —
+        // and is suppressed here, on the tab where it cannot be acted on.
+        featured: !!app.recommended && !gap,
         blocks,
       });
     }

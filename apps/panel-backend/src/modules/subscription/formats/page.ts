@@ -143,6 +143,8 @@ interface Labels {
   setup: string;
   pickPlatform: string;
   recommended: string;
+  /** Chip on an app the store on this platform cannot hand the buyer. */
+  noStore: string;
   getApp: string;
   open: string;
   download: string;
@@ -177,6 +179,7 @@ const L: Record<'ru' | 'en', Labels> = {
     setup: 'Set up',
     pickPlatform: 'Pick your device, then open or import in an app below.',
     recommended: 'recommended',
+    noStore: 'not in the store',
     getApp: 'Get it',
     open: 'Open',
     download: 'Config',
@@ -214,6 +217,7 @@ const L: Record<'ru' | 'en', Labels> = {
     setup: 'Установка',
     pickPlatform: 'Выберите устройство и откройте или импортируйте в приложении ниже.',
     recommended: 'рекомендуем',
+    noStore: 'нет в магазине',
     getApp: 'Скачать',
     open: 'Открыть',
     download: 'Конфиг',
@@ -297,15 +301,20 @@ function renderApps(
           action = `<a class="act" href="#sublink">${esc(t.linkAction)}</a>`;
           break;
       }
-      const rec = a.recommended
+      // Measured per platform, not assumed: see `ruStoreMissing`. Two effects,
+      // and the badge is the one that matters most here — an app the buyer's
+      // own store does not sell must not be the one we point at first.
+      const noStore = !!a.storeGap?.[platform];
+      const rec = a.recommended && !noStore
         ? `<span class="rec">${esc(t.recommended)}</span>`
         : '';
+      const store = noStore ? `<span class="nostore">${esc(t.noStore)}</span>` : '';
       // "Get it" sits before the import action, for the buyer who does not have
       // the app yet. Only for the apps whose download link has been checked.
       const install = a.install?.[platform]
         ? `<a class="act" href="${esc(a.install[platform] as string)}" rel="noopener noreferrer" target="_blank">${esc(t.getApp)}</a>`
         : '';
-      return `<div class="app"><span class="ava">${initial}</span><span class="aname">${esc(a.name)}${rec}</span>${install}${action}</div>`;
+      return `<div class="app"><span class="ava">${initial}</span><span class="aname">${esc(a.name)}${rec}${store}</span>${install}${action}</div>`;
     })
     .join('');
 }
@@ -549,7 +558,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   :root{
     --ground:#08101A; --ground2:#0B1622; --card:#0F1A28; --card2:#152233;
     --hair:#1C2A3D; --snow:#C8D4E3; --mist:#7A8BA3; --dim:#5A6B82;
-    --cyan:#7DD3FC; --cyan2:#2A93D1; --moss:#A7D8B9;
+    --cyan:#7DD3FC; --cyan2:#2A93D1; --moss:#A7D8B9; --sand:#E3C08A;
     --mono:ui-monospace,'SF Mono','Cascadia Code','JetBrains Mono',Menlo,Consolas,monospace;
     --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,system-ui,sans-serif;
   }
@@ -650,6 +659,8 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   .aname{flex:1; min-width:0; font-size:14px; font-weight:500; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
   .rec{font-family:var(--mono); font-size:9px; text-transform:uppercase; letter-spacing:.1em;
     color:var(--moss); border:1px solid rgba(167,216,185,.3); border-radius:5px; padding:2px 6px;}
+  .nostore{font-family:var(--mono); font-size:9px; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--sand); border:1px solid rgba(227,192,138,.3); border-radius:5px; padding:2px 6px;}
   .act{flex:0 0 auto; text-decoration:none; cursor:pointer; font-size:13px; font-weight:500;
     border:1px solid var(--hair); color:var(--cyan); border-radius:8px; padding:7px 13px;
     transition:border-color .15s, background .15s;}

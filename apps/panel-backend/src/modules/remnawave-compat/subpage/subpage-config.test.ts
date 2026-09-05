@@ -267,16 +267,155 @@ describe('buildSubpageConfig', () => {
     const doc = buildSubpageConfig(
       input({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'nl-1', vpnKey: 'vpn://K' }] }),
     )!;
-    const amnezia = doc.platforms.ios.apps.find((a) => a.name === 'AmneziaVPN')!;
-    // Install first: that is the order a person does it in.
-    expect(amnezia.blocks[0].buttons[0].link).toBe('https://apps.apple.com/app/id1600529900');
-    expect(amnezia.blocks[1].buttons[0].link).toBe('vpn://K');
+    // By title, not by index: this assertion was written against block 0 and
+    // broke the day a step was added above it, which says nothing about the
+    // order it exists to pin.
+    const step = (app: string, title: string, platform = 'ios') =>
+      doc.platforms[platform].apps.find((a) => a.name === app)!.blocks.findIndex((b) => b.title.en === title);
 
-    // AmneziaWG has no checked link, so it is named and not linked — never
-    // linked to a guess.
-    const awgApp = doc.platforms.ios.apps.find((a) => a.name === 'AmneziaWG')!;
-    expect(awgApp.blocks.map((b) => b.title.en)).not.toContain('Install the app');
-    expect(awgApp.blocks[0].buttons.every((b) => b.link.includes('format=wgconf'))).toBe(true);
+    // Install before import: that is the order a person does it in.
+    expect(step('AmneziaVPN', 'Install the app')).toBeGreaterThanOrEqual(0);
+    expect(step('AmneziaVPN', 'Install the app')).toBeLessThan(step('AmneziaVPN', 'Paste the connection key'));
+    const amnezia = doc.platforms.ios.apps.find((a) => a.name === 'AmneziaVPN')!;
+    expect(amnezia.blocks.find((b) => b.title.en === 'Install the app')!.buttons[0].link).toBe(
+      'https://apps.apple.com/app/id1600529900',
+    );
+
+    // Android has no checked link for AmneziaWG, so there it is named and not
+    // linked — never linked to a guess.
+    const awgAndroid = doc.platforms.android.apps.find((a) => a.name === 'AmneziaWG')!;
+    expect(awgAndroid.blocks.map((b) => b.title.en)).not.toContain('Install the app');
+    expect(awgAndroid.blocks[0].buttons.every((b) => b.link.includes('format=wgconf'))).toBe(true);
+  });
+
+  // Measured 2026-09-05 against the Russian storefront, with a control on both
+  // sides (Telegram present, Proton VPN absent). Buyers were following an
+  // install button to a store page their account cannot open, and the tickets
+  // that followed were about these instructions.
+  describe('an app the Russian App Store does not carry', () => {
+    const proxy = () => buildSubpageConfig(input({ protocols: ['xray', 'hysteria'] }))!;
+    const card = (
+      doc: NonNullable<ReturnType<typeof buildSubpageConfig>>,
+      platform: string,
+      app: string,
+    ) => doc.platforms[platform]?.apps.find((a) => a.name === app);
+
+    it('says so above the install step, not below it', () => {
+      const happ = card(proxy(), 'ios', 'Happ')!;
+      const titles = happ.blocks.map((b) => b.title.en);
+      expect(titles).toContain('Not in the Russian App Store');
+      expect(titles.indexOf('Not in the Russian App Store')).toBeLessThan(
+        titles.indexOf('Install the app'),
+      );
+      // A note under the step it invalidates arrives after the buyer has tried.
+      expect(titles.indexOf('Not in the Russian App Store')).toBe(0);
+    });
+
+    it('keeps the app and says the installed copy still works', () => {
+      const happ = card(proxy(), 'ios', 'Happ')!;
+      const note = happ.blocks.find((b) => b.title.en === 'Not in the Russian App Store')!;
+      expect(note.description.ru).toContain('продолжает');
+      expect(note.description.en).toContain('keeps');
+      // Dropping the app would take the instructions away from the buyers who
+      // hold it and a working config.
+      expect(card(proxy(), 'ios', 'Happ')).toBeDefined();
+    });
+
+    it('drops the recommended badge there and keeps it where the store is fine', () => {
+      const doc = proxy();
+      expect(card(doc, 'ios', 'Hiddify')!.featured).toBe(false);
+      expect(card(doc, 'android', 'Hiddify')!.featured).toBe(true);
+      // Marked per platform because one app can be missing on the phone store
+      // and present on the TV one: Happ's TV build is a different listing.
+      expect(card(doc, 'appleTV', 'Happ')!.blocks.map((b) => b.title.en)).not.toContain(
+        'Not in the Russian App Store',
+      );
+    });
+
+    it('names alternatives from the same tab that can serve the same channels', () => {
+      const doc = proxy();
+      const note = card(doc, 'ios', 'Hiddify')!.blocks.find(
+        (b) => b.title.en === 'Not in the Russian App Store',
+      )!;
+      const offered = new Set(doc.platforms.ios.apps.map((a) => a.name));
+      const named = ['Shadowrocket', 'INCY'].filter((n) => note.description.ru.includes(n));
+      expect(named.length).toBeGreaterThan(0);
+      for (const n of named) expect(offered).toContain(n);
+      // Never an app carrying a gap of its own: Streisand shares this
+      // storefront, and sing-box has no listing anywhere at all — naming
+      // either as the way out is the failure this sentence exists to avoid.
+      expect(note.description.ru).not.toContain('Streisand');
+      expect(note.description.ru).not.toContain('sing-box');
+    });
+
+    it('tells the two reasons apart, because the answers differ', () => {
+      const doc = proxy();
+      // Re-measured 2026-09-05: sing-box's listing answers resultCount 0 in the
+      // US storefront too, so "get an account in another country" would be
+      // advice that cannot work.
+      const singbox = card(doc, 'ios', 'sing-box')!;
+      const note = singbox.blocks.find((b) => b.title.ru === 'Сейчас нет в App Store')!;
+      expect(note.description.ru).not.toContain('другой страны');
+      expect(note.description.ru).toContain('похожими названиями');
+      // And the storefront case still gives the answer that does work.
+      const happ = card(doc, 'ios', 'Happ')!.blocks.find(
+        (b) => b.title.ru === 'Нет в российском App Store',
+      )!;
+      expect(happ.description.ru).toContain('другой страны');
+    });
+
+    it('offers an iOS AmneziaWG buyer a client their own store sells', () => {
+      const doc = buildSubpageConfig(
+        input({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'nl-1', vpnKey: 'vpn://K' }] }),
+      )!;
+      const ios = doc.platforms.ios.apps;
+      const names = ios.map((a) => a.name);
+      // AmneziaVPN's listing is gone from this storefront; both of these are in
+      // it, measured the same day and the same way.
+      expect(names).toContain('DefaultVPN');
+      expect(names).toContain('AmneziaWG');
+      const dv = ios.find((a) => a.name === 'DefaultVPN')!;
+      expect(dv.blocks.map((b) => b.title.en)).not.toContain('Not in the Russian App Store');
+      // It takes the same key, and the copy must say ITS name, not the name of
+      // the app this block was originally written for.
+      const key = dv.blocks.find((b) => b.title.en === 'Paste the connection key')!;
+      expect(key.description.ru).toContain('DefaultVPN');
+      expect(key.buttons[0].link).toBe('vpn://K');
+    });
+  });
+
+  // The hole is real and the lock belongs to the client: a server-side password
+  // was written, measured and reverted, because with Happ's factory setting it
+  // kills the tunnel instead. What is left is telling the buyer.
+  describe('the local proxy note', () => {
+    const doc = () => buildSubpageConfig(input({ protocols: ['xray', 'hysteria'] }))!;
+    const note = (platform: string, app: string) =>
+      doc()
+        .platforms[platform]?.apps.find((a) => a.name === app)
+        ?.blocks.find((b) => b.title.en === 'Close the local proxy') ?? null;
+
+    it('tells a Happ buyer to switch the authorisation on', () => {
+      const happ = note('android', 'Happ')!;
+      expect(happ.description.ru).toContain('«Авто»');
+      expect(happ.description.ru).toContain('ВЫКЛЮЧЕНА');
+      expect(happ.description.ru).toContain('вашего адреса');
+    });
+
+    it('tells an INCY buyer where it is, without telling them to turn on what is already on', () => {
+      const incy = note('android', 'INCY')!;
+      expect(incy.description.ru).toContain('по умолчанию');
+      // The opposite advice to Happ's, and the reason the sentence is per
+      // client: "turn it on" sends this buyer looking for a switch already
+      // thrown.
+      expect(incy.description.ru).not.toContain('ВЫКЛЮЧЕНА');
+      expect(incy.description.en).toContain('nothing to do');
+    });
+
+    it('says nothing about a client whose setting we have not looked at', () => {
+      // An unlooked-at client gets no sentence rather than a guessed one.
+      expect(note('android', 'v2rayNG')).toBeNull();
+      expect(note('ios', 'Shadowrocket')).toBeNull();
+    });
   });
 
   it('links no app anywhere to a store page that is gone', () => {

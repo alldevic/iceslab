@@ -91,6 +91,60 @@ export interface AppDef {
   /** Verified download destinations, per platform. See InstallLinks. */
   install?: InstallLinks;
   /**
+   * Platforms where the store cannot hand this buyer the app, and why.
+   *
+   * `ru-storefront` — the listing exists, the RUSSIAN storefront does not carry
+   * it. `delisted` — the listing is gone from every storefront.
+   *
+   * MEASURED, not read off a news story: `itunes.apple.com/lookup?id=<id>&
+   * country=ru` returns `resultCount: 0` for a listing that storefront does not
+   * serve, and the same id answers 1 under `country=us`. Run 2026-09-05 with a
+   * control on both sides — Telegram (686449807) answered 1, Proton VPN
+   * (1437005085, removed from the Russian store in 2024) answered 0 — because a
+   * probe that cannot fail proves nothing about the ones it passes.
+   *
+   * Both reasons change the same three things and none is cosmetic: the app
+   * loses its "recommended" mark on that platform, its card leads with a step
+   * saying so ABOVE "install the app", and it is never named as somebody else's
+   * alternative. Buyers were following an install button to a store page their
+   * account cannot open, and support paid for it.
+   *
+   * The two reasons are kept apart because the answer differs: an Apple account
+   * from another country fixes the first and nothing about the second.
+   *
+   * The app is NOT dropped. A listing missing from this storefront still runs
+   * on the devices that already have it, and those buyers are the ones holding
+   * a working config.
+   *
+   * Per platform rather than per app: one universal Apple listing can serve
+   * iOS, macOS and Apple TV, and a client can be absent from the Apple store
+   * while its Android and desktop builds come from GitHub or the vendor's own
+   * page, which no storefront gates. Happ is exactly that shape — its phone
+   * listing is missing here, its TV listing is a separate id that is present.
+   */
+  storeGap?: Partial<Record<PlatformId, 'ru-storefront' | 'delisted'>>;
+  /**
+   * Whether this client's own local SOCKS/HTTP listener asks for a password
+   * out of the box.
+   *
+   * The listener is how a proxy client feeds the device, and on Android the
+   * loopback is not isolated between apps: with authorisation off, ANY app on
+   * the phone can open `127.0.0.1:10808` and leave through the buyer's tunnel,
+   * spending their traffic and wearing their address.
+   *
+   * Declared here rather than left to the copy because the fix is not ours and
+   * differs per client: a server-side password was written, measured and
+   * reverted (`36ea18e4`) — with Happ's factory `disable` it kills the tunnel
+   * for every buyer, and with its `auto` the client has already closed the hole
+   * with credentials of its own that we never see. What is left is telling the
+   * buyer, and only a per-client sentence is worth reading: "turn it on" is
+   * wrong advice for the client that ships it on.
+   *
+   * Absent means the client has no such setting, or we have not looked — and
+   * an unlooked-at client gets no sentence rather than a guessed one.
+   */
+  localProxyAuth?: 'off-by-default' | 'on-by-default';
+  /**
    * The core this client speaks, and so the format it fetches from `/sub`.
    *
    * Declared so the catalogue can drop an app whose format renders NOTHING for
@@ -142,6 +196,9 @@ export const APPS: AppDef[] = [
     protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'hiddify' },
     recommended: true,
+    // The iOS listing only: the desktop builds come off hiddify.com and the
+    // Android one off Google Play, neither of which this storefront gates.
+    storeGap: { ios: 'ru-storefront' },
     // From hiddify.com, the project's own page (checked 2026-08-26). Desktop
     // builds live on GitHub releases, so the project page is the destination
     // rather than a versioned asset.
@@ -175,6 +232,13 @@ export const APPS: AppDef[] = [
       windows: 'https://github.com/SagerNet/sing-box/releases',
       linux: 'https://github.com/SagerNet/sing-box/releases',
     },
+    // Re-measured 2026-09-05: listing 6673731168 answers `resultCount: 0` in
+    // the US storefront as well as the Russian one, so the note above is the
+    // state of the world today and not a stale reading. Until now the iPhone
+    // buyer got this card with no link and no reason — the honest half of
+    // "named, not linked" without the half that says why. Third-party builds
+    // under similar names are in the store and are NOT this client.
+    storeGap: { ios: 'delisted' },
   },
   {
     name: 'Streisand',
@@ -185,6 +249,11 @@ export const APPS: AppDef[] = [
     recommended: true,
     // Checked 2026-08-26: "Streisand" by ARCADIA ODYSSEY INC.
     install: { ios: 'https://apps.apple.com/app/id6450534064' },
+    // All three of its platforms, because all three are that ONE listing: an
+    // Apple app absent from a storefront is absent on every device that
+    // storefront serves. Only iOS is linked here, and the other two tabs would
+    // otherwise name a client with no way to get it and no note saying why.
+    storeGap: { ios: 'ru-storefront', macos: 'ru-storefront', appletv: 'ru-storefront' },
   },
   {
     name: 'Shadowrocket',
@@ -323,6 +392,15 @@ export const APPS: AppDef[] = [
       windows: 'https://github.com/Happ-proxy/happ-desktop/releases/latest',
       linux: 'https://github.com/Happ-proxy/happ-desktop/releases/latest',
     },
+    // iOS and macOS are the same listing (6504287215) and it is missing from
+    // the Russian storefront; the TV build is a DIFFERENT listing (6748297274)
+    // and that one is present. Marking the app whole would tell an Apple TV
+    // owner their store has nothing when it has exactly this.
+    storeGap: { ios: 'ru-storefront', macos: 'ru-storefront' },
+    // Happ ships its local SOCKS listener with authorisation OFF
+    // (`socks-auth-mode: disable`, verified 2026-09-05 on a clean reinstall),
+    // and the buyer is the only one who can close it — see LOCAL_PROXY_NOTE.
+    localProxyAuth: 'off-by-default',
   },
   {
     // INCY (incy-app.com). Cross-platform client; imports our subscription via
@@ -337,6 +415,10 @@ export const APPS: AppDef[] = [
     // and so the mirror below has something to check.
     format: 'plain',
     uaSample: 'INCY/3.5.5/android Dalvik/2.1.0',
+    // Ships with the local listener's authorisation ON (customer, 2026-09-05).
+    // Still stated on the card: a buyer who turned it off has no way to learn
+    // what that cost them, and the same sentence answers both clients.
+    localProxyAuth: 'on-by-default',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria'],
     action: { kind: 'manual' },
@@ -370,12 +452,40 @@ export const APPS: AppDef[] = [
       macos: 'https://amnezia.org/en/downloads',
       linux: 'https://amnezia.org/en/downloads',
     },
+    // The iOS listing only. Desktop comes straight off amnezia.org, which is
+    // why the same client stays reachable on macOS, Windows and Linux.
+    storeGap: { ios: 'ru-storefront' },
+  },
+  {
+    // Amnezia's OTHER client, and the reason it earns a row: AmneziaVPN's
+    // listing is missing from the Russian App Store and this one is present
+    // (measured 2026-09-05, both ways — see storeGap). Same publisher
+    // (AMNEZIA UNIPESSOAL LDA) and the same import path: its own listing says
+    // it takes "a VPN configuration in the form of a key", which is the
+    // `vpn://` key this panel already builds for AmneziaVPN.
+    //
+    // NOT marked recommended, deliberately. The store listing is measured; the
+    // key being accepted is inferred from the publisher and that sentence, and
+    // has not been put on a device. It is offered as the alternative it is, and
+    // the AmneziaWG row below — a file import we serve and have measured — sits
+    // next to it for the buyer whose key is refused.
+    name: 'DefaultVPN',
+    platforms: ['ios'],
+    protocols: ['amneziawg'],
+    action: { kind: 'awg-vpn' },
+    install: { ios: 'https://apps.apple.com/app/id6744725017' },
   },
   {
     name: 'AmneziaWG',
     platforms: ['ios', 'android'],
     protocols: ['amneziawg'],
     action: { kind: 'awg-conf' },
+    // Present in the Russian storefront, measured the same way on the same day
+    // ("AmneziaWG" by Privacy Technologies OU, id 6478942365). It was named
+    // and unlinked until now, which was the honest state while nobody had
+    // checked the listing; it stops being honest once the neighbouring row
+    // loses its own store and this is where those buyers are sent.
+    install: { ios: 'https://apps.apple.com/app/id6478942365' },
   },
   {
     name: 'wg-quick / awg',
