@@ -410,11 +410,26 @@ describe('buildSubpageConfig', () => {
         .platforms[platform]?.apps.find((a) => a.name === app)
         ?.blocks.find((b) => b.title.en === 'Close the local proxy') ?? null;
 
-    it('tells a Happ buyer to switch the authorisation on', () => {
+    it('tells a Happ buyer to switch the authorisation on, and where', () => {
       const happ = note('android', 'Happ')!;
       expect(happ.description.ru).toContain('«Авто»');
       expect(happ.description.ru).toContain('ВЫКЛЮЧЕНА');
       expect(happ.description.ru).toContain('вашего адреса');
+      // The path was read off a device (customer, 2026-09-05). "Open the
+      // settings and find it" was the honest wording while nobody had looked,
+      // and it is the wording a buyer writes to support about.
+      expect(happ.description.ru).toContain('Inbounds');
+      expect(happ.description.ru).toContain('шестерёнка');
+      expect(happ.description.en).toContain('Inbounds');
+    });
+
+    it('gives no menu path for a client nobody has opened', () => {
+      // A guessed route reads as authoritative and sends the buyer somewhere
+      // that does not exist. INCY is the client we have not seen: it gets the
+      // sentence without the path.
+      const incy = note('android', 'INCY')!;
+      expect(incy.description.ru).not.toContain('Inbounds');
+      expect(incy.description.ru).toContain('настройках приложения');
     });
 
     it('tells an INCY buyer where it is, without telling them to turn on what is already on', () => {

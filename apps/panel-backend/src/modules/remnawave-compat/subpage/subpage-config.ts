@@ -455,8 +455,28 @@ function storeBlock(
  * that is already thrown, and telling a Happ owner it is fine by default would
  * be false.
  */
+/**
+ * Where the setting actually lives, for the clients somebody has looked at on a
+ * device.
+ *
+ * Kept apart from the sentence above because it is the half we cannot derive:
+ * a menu path is read off a phone, and a guessed one is the failure this
+ * deployment has already paid for twice. An app with no entry here gets the
+ * sentence without the path — "open the app settings and find it" — rather than
+ * a route invented to look complete.
+ *
+ * Happ, 2026-09-05, from the customer's own device.
+ */
+const LOCAL_PROXY_PATH: Record<string, Localized> = {
+  Happ: {
+    en: ' Open Settings (the gear), go to Inbounds, find the `socks` row and switch it from Disabled to Auto.',
+    ru: ' Откройте настройки (шестерёнка) → «Входящие соединения» (Inbounds), найдите строку socks и вместо «Отключено» (Disabled) выберите режим «Авто» (Auto).',
+  },
+};
+
 function localProxyBlock(app: AppDef): SubpageBlock | null {
   if (!app.localProxyAuth) return null;
+  const path = LOCAL_PROXY_PATH[app.name];
   const shared = {
     en:
       ' With it off, any app on the device can go out through your tunnel — spending your ' +
@@ -467,18 +487,24 @@ function localProxyBlock(app: AppDef): SubpageBlock | null {
   };
   const en =
     app.localProxyAuth === 'off-by-default'
-      ? `${app.name} leaves the authorisation of its local SOCKS proxy OFF out of the box. Open the ` +
-        'app settings, find the local SOCKS proxy and set its authorisation mode to "Auto": the app ' +
-        'then makes up a login and password and fills them in for itself, so there is nothing to ' +
-        `type.${shared.en}`
+      ? `${app.name} leaves the authorisation of its local SOCKS proxy OFF out of the box.` +
+        (path
+          ? path.en
+          : ' Open the app settings, find the local SOCKS proxy and set its authorisation mode to' +
+            ' "Auto".') +
+        ' The app then makes up a login and password and fills them in for itself, so there is ' +
+        `nothing to type.${shared.en}`
       : `${app.name} asks for a login and password on its local SOCKS proxy out of the box, so there ` +
         'is nothing to do — but if you have ever switched that off, turn it back on in the app ' +
         `settings, in the mode where the app fills the credentials in itself.${shared.en}`;
   const ru =
     app.localProxyAuth === 'off-by-default'
-      ? `В ${app.name} авторизация локального SOCKS-прокси по умолчанию ВЫКЛЮЧЕНА. Откройте ` +
-        'настройки приложения, найдите локальный SOCKS-прокси и поставьте режим авторизации ' +
-        '«Авто»: приложение само придумает логин и пароль и подставит их себе, вводить ничего не ' +
+      ? `В ${app.name} авторизация локального SOCKS-прокси по умолчанию ВЫКЛЮЧЕНА.` +
+        (path
+          ? path.ru
+          : ' Откройте настройки приложения, найдите локальный SOCKS-прокси и поставьте режим' +
+            ' авторизации «Авто».') +
+        ' Приложение само придумает логин и пароль и подставит их себе, вводить ничего не ' +
         `нужно.${shared.ru}`
       : `В ${app.name} логин и пароль на локальном SOCKS-прокси спрашиваются по умолчанию — делать ` +
         'ничего не нужно. Но если вы когда-нибудь это отключали, включите обратно в настройках ' +
