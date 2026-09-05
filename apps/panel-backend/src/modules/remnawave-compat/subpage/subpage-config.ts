@@ -389,15 +389,20 @@ function storeBlock(
   // and one carrying its own gap is the failure being described.
   const listEn = joinList(alternatives, 'en');
   const listRu = joinList(alternatives, 'ru');
+  // "Without that restriction", never "from the store": on the macOS tab the
+  // alternatives are Hiddify, sing-box and Clash Verge, and NONE of them comes
+  // from a store — they are downloaded from the vendor's page and from GitHub.
+  // Read on the live document 2026-09-05, where the first wording said "from
+  // the store as usual" to a Mac owner about three apps that are not in it.
   const altEn = alternatives.length
-    ? ` On this tab ${listEn} can be installed from the store as usual, and works with this same subscription.`
+    ? ` On this tab ${listEn} can be installed without that restriction, and works with this same subscription.`
     : '';
   // Singular and plural spelled out rather than one form that limps in the
   // other: this sentence is read by a person who is already stuck.
   const altRu = alternatives.length
     ? alternatives.length === 1
-      ? ` На этой вкладке ${listRu} ставится из магазина как обычно и работает с той же подпиской.`
-      : ` На этой вкладке ${listRu} ставятся из магазина как обычно и работают с той же подпиской.`
+      ? ` На этой вкладке ${listRu} ставится без этого ограничения и работает с той же подпиской.`
+      : ` На этой вкладке ${listRu} ставятся без этого ограничения и работают с той же подпиской.`
     : '';
 
   if (reason === 'delisted') {

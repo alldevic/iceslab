@@ -348,6 +348,22 @@ describe('buildSubpageConfig', () => {
       expect(note.description.ru).not.toContain('sing-box');
     });
 
+    it('never says an alternative comes "from the store" where it does not', () => {
+      // The macOS tab offers Hiddify, sing-box and Clash Verge, and not one of
+      // them is in any store — they are the vendor's page and GitHub. Read off
+      // the live document 2026-09-05, where the first wording told a Mac owner
+      // exactly that.
+      const doc = proxy();
+      const notes = Object.values(doc.platforms).flatMap((p) =>
+        p.apps.flatMap((a) => a.blocks.filter((b) => b.title.en.includes('App Store'))),
+      );
+      expect(notes.length).toBeGreaterThan(0);
+      for (const n of notes) {
+        const alt = n.description.ru.split('вкладке')[1] ?? '';
+        expect(alt).not.toContain('из магазина');
+      }
+    });
+
     it('tells the two reasons apart, because the answers differ', () => {
       const doc = proxy();
       // Re-measured 2026-09-05: sing-box's listing answers resultCount 0 in the
