@@ -271,7 +271,22 @@ export const APPS: AppDef[] = [
   {
     name: 'v2rayNG',
     uaSample: 'v2rayNG/1.9',
-    format: 'xrayjson',
+    // `plain`, not `xrayjson`, and this is measured rather than preferred.
+    // v2rayNG does not import a whole xray config from a subscription in any
+    // usable way: it lands as a "custom config" — one nameless row showing an
+    // address and a port, with the protocol invisible (reproduced 2026-09-07 on
+    // v2rayNG/2.2.6). Upstream knows: 2dust/v2rayNG#3863 (JSON subscription
+    // import regressed in 1.9.10–1.9.11) and #2008 (a subscription may carry
+    // ONE json config, never several). A format the client cannot import is
+    // worth nothing, so this client gets the base64 URI list its subscription
+    // mechanism was built for — six servers with visible protocols instead of
+    // two inside an entry nobody can read.
+    //
+    // The cost is real and belongs next to the choice: `plain` carries no
+    // client-side routing, so the direct-list rules (banks, and since
+    // 2026-09-07 the game services) do not reach this client. The RU split and
+    // the ad blocking survive — the node does those.
+    format: 'plain',
     platforms: ['android', 'androidtv'],
     protocols: ['xray', 'shadowsocks'],
     action: { kind: 'deeplink', scheme: 'v2rayng' },

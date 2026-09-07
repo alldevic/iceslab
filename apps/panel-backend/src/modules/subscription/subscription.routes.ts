@@ -712,6 +712,10 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
       let tlsFragment = false;
+      // Имя документа как ОДНОЙ записи: клиенты, импортирующие целый конфиг
+      // (v2rayNG, FoXray), берут подпись строки отсюда. Берётся там же, где её
+      // берут остальные форматы, чтобы не разъехалось.
+      let docRemarks: string | undefined;
       if (
         format === 'clash' ||
         format === 'singbox' ||
@@ -750,6 +754,8 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         }
         tlsFragment =
           query.fragment !== undefined ? query.fragment === '1' : settings.tlsFragment;
+        docRemarks =
+          settings.profileTitle ?? settings.brandName ?? result.json.user.username;
       }
 
       const geo = selfHostedGeo();
@@ -905,7 +911,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(filtered, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline }));
+            .send(buildXrayJson(filtered, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment, presetGeoInline, remarks: docRemarks }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per

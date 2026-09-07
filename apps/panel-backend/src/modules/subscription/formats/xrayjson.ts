@@ -103,6 +103,16 @@ export interface XrayJsonBuildOpts {
    * all an installation without a geo build can do.
    */
   presetGeoInline?: PresetGeoInline;
+  /**
+   * Name for the document as ONE entry. Clients that import a whole xray config
+   * (v2rayNG, FoXray) take the row label from here; without it the buyer sees a
+   * nameless row showing an IP and a port, with nothing to say what it is.
+   *
+   * Undefined = omit the key = byte-identical output. The router form
+   * (`forRouter`) never emits it: XKeen consumes this as confdir fragments,
+   * where a stray top-level key is noise rather than a name.
+   */
+  remarks?: string;
 }
 
 /** Preset categories as literal xray matchers: domains and IPv4 CIDRs. */
@@ -627,6 +637,8 @@ export function buildXrayJson(
   // forRouter (XKeen): drop log + the client SOCKS inbound; the router owns
   // those. Keep dns (split presets), outbounds and routing.
   const config: Record<string, unknown> = {
+    // First key so a client that shows the raw document leads with the name.
+    ...(opts.forRouter || !opts.remarks ? {} : { remarks: opts.remarks }),
     ...(opts.forRouter ? {} : { log: { loglevel: 'warning' } }),
     ...(splitDns ? { dns: splitDns } : {}),
     ...(opts.forRouter

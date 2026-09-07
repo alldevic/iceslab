@@ -127,6 +127,32 @@ describe('the document binds both listeners a client may look for', () => {
   });
 });
 
+// 3.23-b: the single-config document had no `remarks`, so every client that
+// imports it as one entry showed it nameless. v2rayNG takes the entry name from
+// exactly this field — the buyer sees an unnamed row with an IP and a port and
+// no way to tell what it is. Measured on the live panel 2026-09-07: the
+// top-level keys were log/dns/inbounds/outbounds/routing and nothing else.
+//
+// The router form stays without it: XKeen consumes this as confdir fragments
+// (04_outbounds / 05_routing), where a stray top-level key is noise, not a name.
+describe('the single-config document names itself (3.23-b)', () => {
+  it('carries remarks when the caller supplies one', () => {
+    const cfg = JSON.parse(buildXrayJson([xrayEp], { remarks: 'OneginVPN' }));
+    expect(cfg.remarks).toBe('OneginVPN');
+  });
+
+  it('CONTROL: without one the document is byte-identical', () => {
+    expect(buildXrayJson([xrayEp], { remarks: undefined })).toBe(buildXrayJson([xrayEp]));
+    expect(JSON.parse(buildXrayJson([xrayEp])).remarks).toBeUndefined();
+  });
+
+  it('CONTROL: the router form stays nameless', () => {
+    const cfg = JSON.parse(buildXrayJson([xrayEp], { forRouter: true, remarks: 'OneginVPN' }));
+    expect(cfg.remarks).toBeUndefined();
+    expect(cfg.inbounds).toBeUndefined();
+  });
+});
+
 describe('the split preset carries its own geo when it can', () => {
   const inline = {
     domains: {
