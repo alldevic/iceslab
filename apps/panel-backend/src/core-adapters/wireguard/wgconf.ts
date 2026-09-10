@@ -59,7 +59,7 @@ export interface WireguardClientConfigOpts {
 }
 
 export function buildWireguardClientConfig(opts: WireguardClientConfigOpts): string {
-  const allowed = (opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0', '::/0']).join(', ');
+  const allowed = (opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0', ]).join(', ');
   const lines: string[] = [];
 
   // Первой строкой и только ей: парсер WG Tunnel читает ИМЕННО первый
