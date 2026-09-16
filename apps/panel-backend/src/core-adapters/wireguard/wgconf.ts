@@ -27,10 +27,18 @@ export interface WireguardClientConfigOpts {
   /** Public UDP port the WireGuard inbound listens on. */
   port: number;
   /**
-   * Routes the client tunnels through the VPN. Default `0.0.0.0/0,::/0`
-   * (full tunnel). A split-tunnel deployment passes an explicit CIDR list —
-   * `AllowedIPs` is the only split mechanism WireGuard has, there is no
-   * domain-level routing to fall back on.
+   * Routes the client tunnels through the VPN. Default `0.0.0.0/0` — a full
+   * tunnel over IPv4, and IPv4 only.
+   *
+   * `::/0` was in that default until 572a3189 and was wrong from the start:
+   * the interface below gets exactly one address, from `allowedIp`, and every
+   * address this panel allocates is IPv4. Claiming all of IPv6 for a tunnel
+   * with no IPv6 address makes the client route its v6 traffic into a black
+   * hole, which on a dual-stacked phone is most destinations.
+   *
+   * A deployment that really does hand out IPv6 passes its own CIDR list and
+   * it goes through verbatim — `AllowedIPs` is the only split mechanism
+   * WireGuard has, there is no domain-level routing to fall back on.
    */
   clientAllowedIps?: string[];
   /** Optional DNS pushed to the client. Default empty (client uses system DNS). */
@@ -59,7 +67,7 @@ export interface WireguardClientConfigOpts {
 }
 
 export function buildWireguardClientConfig(opts: WireguardClientConfigOpts): string {
-  const allowed = (opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0', ]).join(', ');
+  const allowed = (opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0']).join(', ');
   const lines: string[] = [];
 
   // Первой строкой и только ей: парсер WG Tunnel читает ИМЕННО первый

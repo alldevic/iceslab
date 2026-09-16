@@ -20,12 +20,23 @@ describe('buildWireguardClientConfig', () => {
         '',
         '[Peer]',
         'PublicKey = srvPub64',
-        'AllowedIPs = 0.0.0.0/0, ::/0',
+        'AllowedIPs = 0.0.0.0/0',
         'Endpoint = wg.example.com:51820',
         'PersistentKeepalive = 25',
         '',
       ].join('\n'),
     );
+  });
+
+  it('never routes IPv6 into a tunnel that has no IPv6 address', () => {
+    // The assertion above pins the string; this one pins the REASON, so a
+    // future "restore the full tunnel" cannot quietly put `::/0` back while
+    // the interface is still IPv4-only. An explicit caller list is not
+    // touched — a deployment that really does hand out IPv6 addresses passes
+    // its own AllowedIPs, and that path stays verbatim.
+    expect(buildWireguardClientConfig(base)).not.toContain('::/0');
+    const explicit = buildWireguardClientConfig({ ...base, clientAllowedIps: ['::/0'] });
+    expect(explicit).toContain('AllowedIPs = ::/0');
   });
 
   it('carries no AmneziaWG directive whatsoever', () => {
@@ -35,8 +46,16 @@ describe('buildWireguardClientConfig', () => {
     }
   });
 
-  it('defaults to a full tunnel and takes an explicit split list', () => {
-    expect(buildWireguardClientConfig(base)).toContain('AllowedIPs = 0.0.0.0/0, ::/0');
+  it('defaults to a full IPv4 tunnel and takes an explicit split list', () => {
+    // IPv4 only, and that is the whole default rather than half of one. The
+    // interface this config describes gets exactly ONE address line, from
+    // `allowedIp`, and every address this panel allocates is IPv4 (10.66.66.0/24
+    // and 10.68.0.0/16 on this fleet). So `::/0` used to tell the client to
+    // route all of its IPv6 into a tunnel with no IPv6 address at all — a black
+    // hole for every dual-stacked destination, which on a phone is most of
+    // them. Dropped in 572a3189; these assertions were pinned to the old string
+    // and are the only thing that broke.
+    expect(buildWireguardClientConfig(base)).toContain('AllowedIPs = 0.0.0.0/0');
     // CIDR AllowedIPs is WireGuard's only split mechanism; the generator has to
     // pass a caller-supplied list through verbatim, in order.
     const split = buildWireguardClientConfig({
