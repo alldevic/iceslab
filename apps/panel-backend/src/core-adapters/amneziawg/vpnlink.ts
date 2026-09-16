@@ -69,7 +69,12 @@ export function buildAmneziaVpnLink(opts: AmneziaVpnLinkOpts): string {
   // The full wg-quick text drives the tunnel; the structured fields mirror it
   // so the app can populate its UI and reconnect.
   const conf = buildAmneziawgClientConfig(opts);
-  const allowed = opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0', '::/0'];
+  // IPv4 only, and it mirrors `buildAmneziawgClientConfig` above deliberately:
+  // the daemon rebuilds the [Interface] from these structured fields and
+  // ignores the .conf text, so the two defaults drifting apart would hand one
+  // buyer two different tunnels depending on the import path. See wgconf.ts for
+  // why IPv6 is not claimed.
+  const allowed = opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0'];
 
   // Obfuscation params as strings (the app serializes them as JSON strings),
   // present both at the awg-server level and inside last_config. CRITICAL: on

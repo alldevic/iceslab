@@ -81,7 +81,11 @@ describe('buildAmneziaVpnLink', () => {
     expect(inner.server_pub_key).toBe('srvPub64');
     expect(inner.client_ip).toBe('10.66.66.2/32');
     expect(inner.port).toBe(51820); // inner port is an INT (unlike the server-level string)
-    expect(inner.allowed_ips).toEqual(['0.0.0.0/0', '::/0']);
+    // IPv4 only, and it MUST match the .conf above: the daemon rebuilds the
+    // [Interface] from these structured keys and ignores the embedded text, so
+    // the two import paths for one tunnel disagreeing is the buyer getting a
+    // different tunnel depending on how they imported it.
+    expect(inner.allowed_ips).toEqual(['0.0.0.0/0']);
     // psk_key is ABSENT (not '') without a preshared key: a blank one made the
     // app rebuild an empty `PresharedKey = ` line that the iOS parser rejects.
     expect('psk_key' in inner).toBe(false);

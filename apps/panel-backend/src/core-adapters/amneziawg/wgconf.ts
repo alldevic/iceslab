@@ -58,8 +58,22 @@ export interface AmneziawgClientConfigOpts {
   i5?: string;
 
   /**
-   * Routes the client tunnels through the VPN. Default `0.0.0.0/0,::/0`
-   * (full tunnel). Pass `[]` for split-tunnel split-by-app on Android, etc.
+   * Routes the client tunnels through the VPN. Default `0.0.0.0/0` — a full
+   * tunnel over IPv4, and IPv4 only. Pass `[]` for split-tunnel split-by-app on
+   * Android, etc.
+   *
+   * `::/0` was in that default until 2026-09-16 and was wrong for the same
+   * reason it was wrong in the plain WireGuard builder: the interface below
+   * gets exactly one address, from `allowedIp`, and every address this panel
+   * allocates is IPv4. Claiming all of IPv6 for a tunnel with no IPv6 address
+   * makes the client route its v6 traffic into a black hole, which on a
+   * dual-stacked phone is most destinations. Fixed there first (572a3189) and
+   * left here for three days — the same defect, half-repaired.
+   *
+   * `vpnlink.ts` carries the same default and the two MUST agree: the
+   * AmneziaVPN daemon rebuilds the [Interface] from the key's structured
+   * fields and ignores the embedded .conf text, so a divergence hands the buyer
+   * a different tunnel depending on which way they imported it.
    */
   clientAllowedIps?: string[];
   /**
@@ -93,7 +107,7 @@ export interface AmneziawgClientConfigOpts {
 }
 
 export function buildAmneziawgClientConfig(opts: AmneziawgClientConfigOpts): string {
-  const allowed = (opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0', '::/0']).join(', ');
+  const allowed = (opts.clientAllowedIps?.length ? opts.clientAllowedIps : ['0.0.0.0/0']).join(', ');
   const lines: string[] = [];
 
   // Первой строкой и только ей: парсер WG Tunnel читает ИМЕННО первый

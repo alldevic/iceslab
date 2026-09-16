@@ -46,9 +46,16 @@ describe('buildAmneziawgClientConfig', () => {
     expect(out).toContain('Endpoint = n1.example.com:51820');
   });
 
-  it('defaults to full-tunnel AllowedIPs (0.0.0.0/0, ::/0)', () => {
+  it('defaults to a full IPv4 tunnel, and never claims IPv6 it cannot carry', () => {
+    // Same reasoning as the plain WireGuard builder, and the same fix, applied
+    // here on 2026-09-16 because it had only been half done: the [Interface]
+    // gets exactly ONE address, from `allowedIp`, and every address this panel
+    // allocates is IPv4 (10.66.66.0/24 and 10.68.0.0/16 on this fleet).
+    // `::/0` told the client to route all of its IPv6 into a tunnel with no
+    // IPv6 address at all — a black hole for every dual-stacked destination.
     const out = buildAmneziawgClientConfig(baseOpts);
-    expect(out).toContain('AllowedIPs = 0.0.0.0/0, ::/0');
+    expect(out).toContain('AllowedIPs = 0.0.0.0/0');
+    expect(out).not.toContain('::/0');
   });
 
   it('honours custom clientAllowedIps for split tunnels', () => {
