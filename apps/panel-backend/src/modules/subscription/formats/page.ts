@@ -267,7 +267,13 @@ function renderApps(
   }
   return apps
     .map((a) => {
-      const initial = esc(a.name.replace(/[^A-Za-z0-9]/, '').charAt(0).toUpperCase() || 'A');
+      // First character of the name, whatever alphabet it is in. The previous
+      // form stripped non-alphanumerics with an UNANCHORED, non-global regex,
+      // so it dropped exactly one character — harmless while every name began
+      // with a Latin letter, and wrong the moment one did not: «Другой клиент»
+      // rendered «Р», the second letter. Checked against all 27 names in the
+      // catalogue: this changes that one and nothing else.
+      const initial = esc(([...a.name][0] ?? 'A').toUpperCase());
       let action: string;
       switch (a.action.kind) {
         case 'deeplink':

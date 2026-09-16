@@ -208,6 +208,89 @@ const APP_TRAIT: Record<string, Localized> = {
 };
 
 /**
+ * What each channel is good at and what it costs, one entry per protocol.
+ *
+ * Only the "any other client" card renders these, and only for the channels
+ * THIS buyer holds. It exists because that card cannot say the one thing every
+ * other card says — which client this is and what it does — so the useful
+ * thing left to describe is the subscription itself: here is what is in it,
+ * here is when each line is the one to switch to.
+ *
+ * Every claim is either a property of the protocol or a fact about this
+ * deployment, and the deployment ones are read rather than recalled: the
+ * self-signed certificates and `insecure=1` are how these inbounds are
+ * configured here, and ShadowTLS having no share link is why
+ * `subscription.service.ts` emits `uri: ''` for it.
+ *
+ * Deliberately two sentences each. A buyer opens this card when something did
+ * not work, and a paragraph per protocol is not read by that person.
+ */
+const CHANNEL_NOTE: Partial<Record<ProtocolName, Localized>> = {
+  xray: {
+    en:
+      'The main channel here and the one to start with: it runs over TCP and hides inside what ' +
+      'looks like an ordinary TLS connection to a real website, so it survives strict filtering. ' +
+      'Of the channels here it is the one the most clients speak.',
+    ru:
+      'Основной канал и тот, с которого стоит начинать: работает поверх TCP и прячется внутри ' +
+      'того, что выглядит как обычное TLS-соединение с настоящим сайтом, поэтому переживает ' +
+      'жёсткую фильтрацию. Из перечисленных каналов его поддерживают больше всего приложений.',
+  },
+  tuic: {
+    en:
+      'Runs over QUIC, that is over UDP: on a flaky mobile network it recovers from losses faster ' +
+      'than the TCP channels. The cost is the same UDP — some providers throttle or block it, and ' +
+      'then this line simply will not connect while the others do.',
+    ru:
+      'Работает по QUIC, то есть поверх UDP: на капризной мобильной сети он переносит потери ' +
+      'лучше, чем каналы на TCP. Цена — тот же UDP: часть провайдеров его режет или блокирует, и ' +
+      'тогда эта строка просто не подключится, а остальные будут работать.',
+  },
+  hysteria: {
+    en:
+      'Also UDP, and built for bad links: where the rest crawl on a lossy or high-latency network ' +
+      'this one is usually the fastest. Two costs: the same UDP as above, and our certificate is ' +
+      'self-signed, so the link carries insecure=1 and a client that ignores it refuses to ' +
+      'connect.',
+    ru:
+      'Тоже UDP и сделан ради плохих каналов: там, где остальные еле тянут на потерях и большой ' +
+      'задержке, он обычно самый быстрый. Цены две: тот же UDP, что выше, и наш сертификат ' +
+      'самоподписанный — в ссылке стоит insecure=1, и приложение, которое это поле игнорирует, ' +
+      'подключаться откажется.',
+  },
+  anytls: {
+    en:
+      'TCP again, and it looks like plain TLS — a good fallback for a network where UDP is dead. ' +
+      'It is a young protocol, so fewer clients support it, and its certificate is self-signed ' +
+      'like Hysteria2.',
+    ru:
+      'Снова TCP, и выглядит как обычный TLS — хороший запасной вариант там, где UDP не ходит. ' +
+      'Протокол молодой, поэтому его поддерживают не все приложения, а сертификат у него ' +
+      'самоподписанный, как у Hysteria2.',
+  },
+  shadowtls: {
+    en:
+      'Hides inside a handshake with a real site, which makes it quiet. It has no share link at ' +
+      'all, though: it exists only inside a whole configuration file, so a client that imports a ' +
+      'list of links never sees this channel however capable it is.',
+    ru:
+      'Прячется внутри рукопожатия с настоящим сайтом и потому малозаметен. Но у него нет ' +
+      'ссылки вовсе: он существует только внутри целого файла конфигурации, поэтому приложение, ' +
+      'импортирующее список ссылок, этого канала не увидит, каким бы хорошим оно ни было.',
+  },
+  shadowsocks: {
+    en:
+      'The oldest and most widely supported of the list — if a client speaks only one thing, it ' +
+      'is usually this. It carries no camouflage of its own, so a provider that looks closely ' +
+      'spots it sooner than the channels above.',
+    ru:
+      'Самый старый и самый широко поддерживаемый из списка — если приложение умеет что-то одно, ' +
+      'то обычно именно его. Собственной маскировки у него нет, поэтому провайдер, который ' +
+      'смотрит внимательно, замечает его раньше остальных.',
+  },
+};
+
+/**
  * Clients whose Android build can route only chosen apps through the tunnel.
  * Android-only on purpose: this is the platform VPN API, and the same client on
  * iOS has no such control.
@@ -612,7 +695,104 @@ function installBlock(app: AppDef, platform: PlatformId): SubpageBlock | null {
   };
 }
 
+/**
+ * The whole card for the "any other client" row: what it is, what is in the
+ * subscription, and how to hand it over.
+ *
+ * Built apart from `blocksFor` because every sentence there names an app, and
+ * this row has no app to name. "Скопируйте ссылку и добавьте её в Другой
+ * клиент" is the shape that comes out of reusing it.
+ *
+ * Order follows the same rule as every other card: what this is before the work
+ * it asks for. The channel blocks sit between the two because they ARE the
+ * answer to "is this for me" here — there is no client to describe instead.
+ */
+function genericClientBlocks(input: SubpageConfigInput): SubpageBlock[] {
+  const held = new Set(input.protocols);
+  // The one line the customer asked to be explicit about, and it is not a
+  // hedge: clients differ in what they read, and the ShadowTLS block below is
+  // the measured example rather than a hypothetical.
+  const partial = {
+    en: ' Clients differ in what they read, so yours may show only some of the lines below — that is normal, and the ones it does show work.',
+    ru: ' Клиенты читают разное, поэтому ваш может показать не все строки из перечисленных ниже — это нормально, а те, что показал, работают.',
+  };
+  // Only when the buyer actually has one. `plain` carries a tg:// entry, no VPN
+  // client can do anything with it, and a dead-looking server in the list is a
+  // support ticket.
+  const tg = held.has('mtproto')
+    ? {
+        en: ' One more: if an MTProto line turns up in the list, it is for Telegram rather than for a VPN client — Telegram connects it itself.',
+        ru: ' И отдельно: если в списке окажется строка MTProto, она предназначена Telegram, а не VPN-приложению — мессенджер подключает её сам.',
+      }
+    : { en: '', ru: '' };
+
+  const blocks: SubpageBlock[] = [
+    {
+      svgIconKey: 'Star',
+      svgIconColor: 'blue',
+      title: t('Any client will do', 'Подойдёт любой клиент'),
+      description: t(
+        'We do not limit which app you use. The subscription is a standard one and most current ' +
+          'clients read it, so if you already have a favourite, take it — the apps this guide ' +
+          `names are the ones we have checked ourselves, not a closed set.${partial.en}${tg.en}`,
+        'Мы не ограничиваем вас в выборе приложения. Подписка у нас стандартная, и её читает ' +
+          'большинство современных клиентов — если у вас уже есть привычный, берите его. ' +
+          'Приложения, которые мы называем в инструкции, — то, что мы проверили сами, а не ' +
+          `закрытый перечень.${partial.ru}${tg.ru}`,
+      ),
+      buttons: [],
+    },
+  ];
+
+  // One block per channel, because the shop renders a description as a single
+  // paragraph with no line breaks (InstallGuideScreen.svelte + its CSS): a list
+  // inside one block collapses into a wall of text at 13px.
+  for (const proto of CHANNEL_ORDER) {
+    if (!held.has(proto) || NOT_IN_A_SUBSCRIPTION.has(proto)) continue;
+    const note = CHANNEL_NOTE[proto];
+    const label = PROTOCOL_LABEL[proto];
+    // A channel with nothing written about it gets no block rather than an
+    // empty one: the catalogue's own test refuses the gap upstream of here.
+    if (!note || !label) continue;
+    blocks.push({
+      svgIconKey: 'Check',
+      svgIconColor: 'sky',
+      title: t(label, label),
+      description: note,
+      buttons: [],
+    });
+  }
+
+  blocks.push({
+    svgIconKey: 'CloudDownload',
+    svgIconColor: 'violet',
+    title: t('Add the subscription', 'Добавьте подписку'),
+    description: t(
+      'Copy the link with the button below and add it in your app as a subscription — the menu ' +
+        'item is usually called "Add from URL", "Import from URL" or "Subscribe". The same ' +
+        'address is on this screen as a QR code further down, if scanning is easier.',
+      'Скопируйте ссылку кнопкой ниже и добавьте её в своём приложении как подписку — пункт меню ' +
+        'обычно называется «Добавить по URL», «Import from URL» или «Subscribe». Тот же адрес ' +
+        'есть ниже на этом экране QR-кодом, если удобнее отсканировать.',
+    ),
+    buttons: [
+      {
+        type: 'copyButton',
+        link: input.subUrl,
+        text: t('Copy the link', 'Скопировать ссылку'),
+        svgIconKey: 'ExternalLink',
+      },
+    ],
+  });
+
+  return blocks;
+}
+
 function blocksFor(app: AppDef, input: SubpageConfigInput): SubpageBlock[] {
+  // Not an app: its card is built whole, because every string in the switch
+  // below names one.
+  if (app.genericFallback) return genericClientBlocks(input);
+
   const { subUrl, awgNodes, wgNodes, mtprotoNodes } = input;
 
   switch (app.action.kind) {
@@ -960,7 +1140,11 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
       // scrolls past it — but the buyer this page is for is CHOOSING, and the
       // decision is "is this the client for me", which install cannot answer.
       // Customer's call, 2026-09-05.
-      const gives = givesBlock(app, input, ours);
+      // Not for the generic row: that card ends "switched inside the app",
+      // which is a promise about an app nobody has identified. Its own channel
+      // blocks say the same thing about the SUBSCRIPTION, which is what we
+      // know.
+      const gives = app.genericFallback ? null : givesBlock(app, input, ours);
       if (gives) blocks.unshift(gives);
       // And above that: a step saying the install button leads to a page this
       // buyer's account cannot open — or to a price — belongs before they tap

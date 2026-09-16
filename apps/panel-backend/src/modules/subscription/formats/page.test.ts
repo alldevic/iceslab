@@ -141,6 +141,28 @@ describe('buildSubscriptionPage', () => {
     expect(both).toContain('Hiddify');
   });
 
+  it('takes the avatar letter from the start of the name, in any alphabet', () => {
+    // The old form used a non-global `replace(/[^A-Za-z0-9]/, '')`, which drops
+    // exactly ONE character: harmless while every name started with a Latin
+    // letter, and wrong the moment one did not — the any-client row rendered
+    // «Р», the second letter of «Другой клиент».
+    const html = buildSubscriptionPage(base({ protocols: ['xray', 'hysteria'] }));
+    expect(html).toContain('<span class="ava">Д</span>');
+    expect(html).not.toContain('<span class="ava">Р</span>');
+    // And the Latin names are untouched.
+    expect(html).toContain('<span class="ava">H</span>');
+  });
+
+  it('offers the any-client row on every tab, and points it at the link block', () => {
+    // The catalogue is a recommendation, not a gate. On this page the row's
+    // action is the same anchor every manual client gets: the subscription
+    // block, which carries the link and its QR.
+    const html = buildSubscriptionPage(base({ protocols: ['xray', 'hysteria'] }));
+    expect(html).toContain('Другой клиент');
+    const idx = html.indexOf('Другой клиент');
+    expect(html.slice(idx, idx + 160)).toContain('href="#sublink"');
+  });
+
   it('marks a paid client with its price, and marks nothing on the free ones', () => {
     // Both install surfaces project the same catalogue, and the rule written
     // down on 2026-09-05 is that they must not drift: the shop's install screen

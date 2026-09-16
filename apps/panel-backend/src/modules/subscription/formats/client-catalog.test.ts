@@ -122,6 +122,44 @@ describe('the client catalogue', () => {
     }
   });
 
+  it('offers the any-client row every channel a subscription client can be handed', () => {
+    // The row describes the SUBSCRIPTION, so a channel it does not declare is a
+    // channel the buyer holds and the card stays silent about. Two exclusions
+    // and this file states the reason for both elsewhere: mieru reaches only
+    // the mihomo family, and no client here speaks naive at all.
+    const EXCLUDED = new Set(['mieru', 'naive']);
+    const generic = APPS.find((a) => a.genericFallback);
+    expect(generic, 'no any-client row in the catalogue').toBeDefined();
+    const offeredElsewhere = new Set(
+      APPS.filter((a) => !a.genericFallback)
+        .flatMap((a) => a.protocols)
+        .filter((p) => PROTOCOL_DELIVERY[p] === 'subscription' && !EXCLUDED.has(p)),
+    );
+    expect(offeredElsewhere.size).toBeGreaterThan(3);
+    for (const p of offeredElsewhere) {
+      expect(generic!.protocols, `the any-client row is silent about ${p}`).toContain(p);
+    }
+  });
+
+  it('keeps the any-client row last, because the tab order is this array', () => {
+    const last = APPS[APPS.length - 1];
+    expect(last?.genericFallback, `${last?.name} is last instead`).toBe(true);
+    expect(APPS.filter((a) => a.genericFallback).length).toBe(1);
+  });
+
+  it('gives the any-client row nothing to install and no store of its own', () => {
+    // It is not an app: there is no page to send anyone to, so a link here
+    // would be a link to somebody's product picked at random.
+    const generic = APPS.find((a) => a.genericFallback)!;
+    expect(generic.install).toBeUndefined();
+    expect(generic.storeGap).toBeUndefined();
+    expect(generic.storePrice).toBeUndefined();
+    // And no format: what an unrecognised client is served depends on its
+    // User-Agent, so both routing sentences would be guesses.
+    expect(generic.format).toBeUndefined();
+    expect(generic.action.kind).toBe('manual');
+  });
+
   it('builds a deep link that carries the subscription URL', () => {
     const sub = 'https://panel.example/sub/tok';
     for (const app of APPS) {

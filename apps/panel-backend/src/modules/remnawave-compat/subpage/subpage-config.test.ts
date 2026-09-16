@@ -618,6 +618,127 @@ describe('buildSubpageConfig', () => {
     });
   });
 
+  // The buyer who already has a client, or wants one we have never opened. The
+  // catalogue is a recommendation, not a gate: the subscription is a standard
+  // one and most clients read it.
+  describe('the "any other client" card', () => {
+    const proxy = () =>
+      buildSubpageConfig(input({ protocols: ['xray', 'tuic', 'hysteria', 'anytls', 'shadowtls'] }))!;
+    const GENERIC = 'Другой клиент';
+    const card = (doc: NonNullable<ReturnType<typeof buildSubpageConfig>>, platform: string) =>
+      doc.platforms[platform]?.apps.find((a) => a.name === GENERIC);
+
+    it('stands on every platform tab, last', () => {
+      const doc = proxy();
+      for (const tab of Object.keys(doc.platforms)) {
+        const apps = doc.platforms[tab].apps;
+        expect(apps.map((a) => a.name), tab).toContain(GENERIC);
+        // Last, because it is the fallback: a buyer scanning the tab reads the
+        // clients we have actually checked first.
+        expect(apps[apps.length - 1].name, tab).toBe(GENERIC);
+      }
+    });
+
+    it('is NOT offered to a buyer whose subscription link is empty', () => {
+      // The one case where "take any client and paste the link" is a lie: a
+      // tunnel-only buyer gets 0 bytes from the subscription (measured
+      // 2026-08-25). This is the same rule that keeps Hiddify off that tab,
+      // and it falls out of the action rather than being special-cased.
+      const tunnelOnly = buildSubpageConfig(
+        input({
+          protocols: ['amneziawg'],
+          awgNodes: [{ nodeName: 'n1', deviceIndex: 1, vpnKey: 'vpn://K' }],
+        }),
+      )!;
+      for (const tab of Object.keys(tunnelOnly.platforms)) {
+        expect(tunnelOnly.platforms[tab].apps.map((a) => a.name), tab).not.toContain(GENERIC);
+      }
+    });
+
+    it('has nothing to install and hands over the link itself', () => {
+      const c = card(proxy(), 'ios')!;
+      const titles = c.blocks.map((b) => b.title.en);
+      expect(titles).not.toContain('Install the app');
+      const copy = c.blocks.flatMap((b) => b.buttons).find((b) => b.type === 'copyButton');
+      // Its own button rather than only "the link below": the card must not
+      // point at a part of the screen we do not control.
+      expect(copy?.link).toBe('https://panel.example/sub/tok');
+    });
+
+    it('describes every channel this buyer actually holds, one block each', () => {
+      // The description is rendered as a single <p> with no `white-space`
+      // handling (read in InstallGuideScreen.svelte / .css), so a list inside
+      // one block would collapse into a wall of text. One block per channel is
+      // the structure the schema does give us.
+      const c = card(proxy(), 'ios')!;
+      const titles = c.blocks.map((b) => b.title.ru);
+      for (const ch of ['VLESS', 'TUIC', 'Hysteria2', 'AnyTLS', 'ShadowTLS']) {
+        expect(titles, ch).toContain(ch);
+      }
+    });
+
+    it('names no channel this buyer does not hold', () => {
+      const c = card(
+        buildSubpageConfig(input({ protocols: ['xray'] }))!,
+        'ios',
+      )!;
+      const titles = c.blocks.map((b) => b.title.ru);
+      expect(titles).toContain('VLESS');
+      for (const ch of ['TUIC', 'Hysteria2', 'AnyTLS', 'ShadowTLS']) {
+        expect(titles, ch).not.toContain(ch);
+      }
+    });
+
+    it('says the client may read only some of them, and says which one proves it', () => {
+      const c = card(proxy(), 'ios')!;
+      const lead = c.blocks[0];
+      expect(lead.description.ru).toContain('не все');
+      // ShadowTLS is the concrete case, not a hypothetical: it has no share
+      // link at all, so a client importing a link list never sees it however
+      // capable it is.
+      const stls = c.blocks.find((b) => b.title.ru === 'ShadowTLS')!;
+      expect(stls.description.ru).toContain('ссылки');
+    });
+
+    it('warns about the Telegram line only when the buyer has one', () => {
+      // `plain` carries a tg:// entry, and no VPN client can use it. A buyer
+      // who finds a dead server in their list writes to support.
+      const withTg = card(
+        buildSubpageConfig(input({ protocols: ['xray', 'mtproto'], mtprotoNodes: [{ nodeName: 'n1', tmeUri: 'https://t.me/proxy?server=s' }] }))!,
+        'ios',
+      )!;
+      expect(withTg.blocks[0].description.ru).toContain('MTProto');
+      expect(card(proxy(), 'ios')!.blocks[0].description.ru).not.toContain('MTProto');
+    });
+
+    it('has a written note for every channel the catalogue lets it claim', () => {
+      // The builder skips a channel it has nothing written about, which is the
+      // right behaviour and the wrong thing to discover in production: the row
+      // would quietly describe less than the buyer holds. Declared and
+      // described have to move together.
+      const all = buildSubpageConfig(
+        input({
+          protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
+        }),
+      )!;
+      const c = all.platforms.ios.apps.find((a) => a.name === GENERIC)!;
+      // lead + six channels + "add the subscription"
+      expect(c.blocks.length).toBe(8);
+      for (const b of c.blocks) {
+        expect(b.description.ru.length, b.title.ru).toBeGreaterThan(40);
+        expect(b.description.en.length, b.title.en).toBeGreaterThan(40);
+      }
+    });
+
+    it('carries no "what you get" card of its own', () => {
+      // That card ends "переключаются прямо в приложении", which is a promise
+      // about an app nobody has identified. The channel blocks below say the
+      // same thing about the SUBSCRIPTION, which is what we actually know.
+      const c = card(proxy(), 'ios')!;
+      expect(c.blocks.map((b) => b.title.en)).not.toContain('What you get');
+    });
+  });
+
   // Both were already being served the right format — the seeded rules name
   // `(?i)karing` (singbox) and `(?i)v2box` (plain) since 20260617020000. They
   // were missing from the curated catalogue only, which is the same shape as

@@ -188,6 +188,32 @@ export interface AppDef {
    */
   storeNameAlike?: true;
   /**
+   * Not an app at all: the "any other client" card.
+   *
+   * The catalogue is a recommendation, not a gate — the subscription we serve
+   * is a standard one and most clients read it — but until now the install
+   * screen only ever named apps we had checked, so a buyer who already runs
+   * something else had nowhere to look. This entry is that place.
+   *
+   * It is a row in APPS rather than a special case in the two renderers so it
+   * inherits the rules that matter, and the important one is the delivery
+   * check: `action: 'manual'` needs a protocol that rides in the subscription,
+   * so a tunnel-only buyer — whose link serves 0 bytes — is never told to
+   * paste it anywhere. "Take any client and paste this" is exactly the
+   * "working client aimed at nothing" this file refuses, and the refusal is
+   * the same machinery that keeps Hiddify off that tab.
+   *
+   * No `format`: what an unrecognised client is served depends on its
+   * User-Agent (the seeded rules name eighteen of them; everything else falls
+   * into the `.*` catch-all and gets a link list), so neither routing sentence
+   * is true for it. What CAN be stated is what the subscription carries, and
+   * that is what the card says instead.
+   *
+   * Last in APPS on purpose: the array order is the tab order, and a buyer
+   * scanning the list should meet the clients we have actually checked first.
+   */
+  genericFallback?: true;
+  /**
    * Whether this client's own local SOCKS/HTTP listener asks for a password
    * out of the box.
    *
@@ -782,6 +808,33 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'android', 'windows', 'macos', 'linux'],
     protocols: ['mtproto'],
     action: { kind: 'endpoint-link' },
+  },
+  {
+    // The last row, and the only one that is not an app. See genericFallback.
+    //
+    // Every platform, including `router`: a router owner importing a
+    // subscription into their firmware is exactly the person this card is for,
+    // and `router` is the tab where the catalogue names the fewest clients.
+    // (The shop's document cannot express `router` at all, so there it appears
+    // on the seven tabs the shop knows.)
+    //
+    // The channels a client that reads a subscription can be handed. Five of
+    // the six are deployed here as of 2026-09-16, read from `GET /api/profiles`
+    // rather than assumed: three xray profiles, two TUIC, one Hysteria2, one
+    // AnyTLS, one ShadowTLS. Shadowsocks is declared as well although no node
+    // serves it today - the card only ever describes what the BUYER holds, so
+    // an undeployed channel costs nothing and a deployed one is already
+    // handled.
+    //
+    // `mieru` and `naive` are the two deliberate omissions, and this file
+    // already says why for both: mieru reaches only the mihomo family, and no
+    // client in this catalogue speaks naive at all. Adding them here would be
+    // this card promising channels the rest of the file refuses to promise.
+    name: 'Другой клиент',
+    genericFallback: true,
+    platforms: ['ios', 'android', 'windows', 'macos', 'linux', 'androidtv', 'appletv', 'router'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
+    action: { kind: 'manual' },
   },
 ];
 
