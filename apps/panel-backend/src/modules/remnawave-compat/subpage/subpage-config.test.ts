@@ -186,6 +186,36 @@ describe('buildSubpageConfig', () => {
     expect(doc.platforms.router).toBeUndefined();
   });
 
+  it('sends the shop no app badges and no app icons', () => {
+    // Decision 2026-09-16. Both used to be per-app decoration the catalogue
+    // could not apply evenly: the vendored library has a glyph for eight of
+    // our clients and nothing for the rest, so half the list was branded and
+    // half was not, and the badge was a judgement the shop's card is not the
+    // place for. Blocks and platforms keep their icons — those keys are
+    // REQUIRED by the shop's validator, and a document missing one is rejected
+    // whole rather than drawn plain.
+    const doc = buildSubpageConfig(
+      input({
+        protocols: ['xray', 'hysteria', 'amneziawg', 'wireguard', 'mtproto'],
+        awgNodes: [{ nodeName: 'n1', deviceIndex: 1, vpnKey: 'vpn://K' }],
+        wgNodes: [{ nodeName: 'n1', deviceIndex: 1 }],
+        mtprotoNodes: [{ nodeName: 'n1', tmeUri: 'https://t.me/proxy?server=s' }],
+      }),
+    )!;
+    const apps = Object.values(doc.platforms).flatMap((p) => p.apps);
+    expect(apps.length).toBeGreaterThan(10);
+    for (const a of apps) {
+      expect(a.svgIconKey, `${a.name} still carries an icon`).toBeUndefined();
+      expect(a.featured, `${a.name} still carries a badge`).toBe(false);
+    }
+    // And the halves that stay: a platform tab and every block still name an
+    // icon, because without one the document does not validate.
+    for (const p of Object.values(doc.platforms)) {
+      expect(p.svgIconKey).toBeTruthy();
+      for (const app of p.apps) for (const b of app.blocks) expect(b.svgIconKey).toBeTruthy();
+    }
+  });
+
   it('never references an svgIconKey the library does not carry', () => {
     const doc = buildSubpageConfig(
       input({
@@ -349,15 +379,19 @@ describe('buildSubpageConfig', () => {
       expect(card(proxy(), 'ios', 'Happ')).toBeDefined();
     });
 
-    it('drops the recommended badge there and keeps it where the store is fine', () => {
+    it('still marks the gap per platform, not per app', () => {
+      // One app can be missing from the phone store and present on the TV one:
+      // Happ's TV build is a different listing, and it is in this storefront.
+      // This used to be checked through the "recommended" badge, which the
+      // catalogue no longer carries — the property it was checking is the
+      // per-platform gap, so it is checked directly now.
       const doc = proxy();
-      expect(card(doc, 'ios', 'Hiddify')!.featured).toBe(false);
-      expect(card(doc, 'android', 'Hiddify')!.featured).toBe(true);
-      // Marked per platform because one app can be missing on the phone store
-      // and present on the TV one: Happ's TV build is a different listing.
-      expect(card(doc, 'appleTV', 'Happ')!.blocks.map((b) => b.title.en)).not.toContain(
-        'Not in the Russian App Store',
-      );
+      const titles = (platform: string, app: string) =>
+        card(doc, platform, app)!.blocks.map((b) => b.title.en);
+      expect(titles('ios', 'Happ')).toContain('Not in the Russian App Store');
+      expect(titles('appleTV', 'Happ')).not.toContain('Not in the Russian App Store');
+      expect(titles('ios', 'Hiddify')).toContain('Not in the Russian App Store');
+      expect(titles('android', 'Hiddify')).not.toContain('Not in the Russian App Store');
     });
 
     it('names alternatives from the same tab that can serve the same channels', () => {
@@ -408,6 +442,26 @@ describe('buildSubpageConfig', () => {
       expect(happ.description.ru).toContain('другой страны');
     });
 
+    it('warns about the name-alikes where the store actually has some', () => {
+      // Every wording of "this is not in your store" sends the buyer to search
+      // for the name. Measured 2026-09-16 with
+      // `search?term=<name>&country=ru`: Happ has four impostors in that
+      // storefront (Happ VPN, Happ VPN Official, Happ VPN ++, Happ Lite),
+      // V2Box has a straight collision, AmneziaVPN has one — and Hiddify and
+      // Streisand have none. Until now only sing-box said so, in prose.
+      const doc = proxy();
+      const gapNote = (platform: string, app: string) =>
+        card(doc, platform, app)!.blocks.find((b) => b.title.en.includes('App Store'))!;
+      for (const app of ['Happ', 'V2Box']) {
+        expect(gapNote('ios', app).description.ru, app).toContain('похожими названиями');
+      }
+      // And not where the search came back clean: an unmeasured warning is
+      // noise on a block a stuck person is reading.
+      for (const app of ['Hiddify', 'Streisand']) {
+        expect(gapNote('ios', app).description.ru, app).not.toContain('похожими названиями');
+      }
+    });
+
     it('offers an iOS AmneziaWG buyer a client their own store sells', () => {
       const doc = buildSubpageConfig(
         input({ protocols: ['amneziawg'], awgNodes: [{ nodeName: 'nl-1', vpnKey: 'vpn://K' }] }),
@@ -425,6 +479,219 @@ describe('buildSubpageConfig', () => {
       const key = dv.blocks.find((b) => b.title.en === 'Paste the connection key')!;
       expect(key.description.ru).toContain('DefaultVPN');
       expect(key.buttons[0].link).toBe('vpn://K');
+    });
+  });
+
+  // Measured the same way and the same day as the storefront probe above
+  // (2026-09-16, `lookup?id=<id>&country=ru`, Telegram present / Proton VPN
+  // absent as the controls): of everything the Russian storefront DOES carry,
+  // exactly one client costs money. A buyer who taps "Get the app" and lands on
+  // a price is the same interrupted install the notice above exists for.
+  describe('an app the store sells for money', () => {
+    const proxy = () => buildSubpageConfig(input({ protocols: ['xray', 'hysteria'] }))!;
+    const card = (
+      doc: NonNullable<ReturnType<typeof buildSubpageConfig>>,
+      platform: string,
+      app: string,
+    ) => doc.platforms[platform]?.apps.find((a) => a.name === app);
+
+    it('says so above the install step, not below it', () => {
+      const sr = card(proxy(), 'ios', 'Shadowrocket')!;
+      const titles = sr.blocks.map((b) => b.title.en);
+      expect(titles).toContain('A paid app');
+      expect(titles.indexOf('A paid app')).toBeLessThan(titles.indexOf('Install the app'));
+      // First, for the same reason the storefront notice is first: it can make
+      // the whole card moot before the buyer does any of the work.
+      expect(titles.indexOf('A paid app')).toBe(0);
+    });
+
+    it('names the price, and dates it rather than pretending it is a constant', () => {
+      const note = card(proxy(), 'ios', 'Shadowrocket')!.blocks.find(
+        (b) => b.title.en === 'A paid app',
+      )!;
+      expect(note.description.ru).toContain('249');
+      expect(note.description.en).toContain('249');
+      // A price is a measurement, and a stale number with no date on it becomes
+      // a lie. With the date it stays a fact, and the store page is named as
+      // the authority.
+      expect(note.description.ru).toContain('16.09.2026');
+      expect(note.description.ru).toContain('App Store');
+      // NOT "a one-off purchase": the listing carries the in-app purchases
+      // badge, so that sentence would be false.
+      expect(note.description.ru).not.toContain('разова');
+    });
+
+    it('carries the same notice on every tab that listing serves', () => {
+      // One Apple listing, two of our tabs. Missing it on the second is how a
+      // TV owner would meet the price with no warning at all.
+      const tv = card(proxy(), 'appleTV', 'Shadowrocket')!;
+      expect(tv.blocks.map((b) => b.title.en)).toContain('A paid app');
+    });
+
+    it('says nothing of the kind about the free clients on the same tab', () => {
+      const doc = proxy();
+      for (const app of ['INCY', 'Karing']) {
+        const c = card(doc, 'ios', app);
+        expect(c, `${app} is not offered on iOS`).toBeDefined();
+        expect(c!.blocks.map((b) => b.title.en), app).not.toContain('A paid app');
+      }
+    });
+
+    it('never offers a paid app as the way out of one the store does not carry', () => {
+      // The alternatives sentence exists to name a way out that works. A client
+      // the buyer has to pay 249 ₽ for is a different obstacle, not a way out —
+      // and until this was measured we were naming it as one to every iPhone
+      // buyer whose client is missing from the storefront.
+      const doc = proxy();
+      const notes = Object.values(doc.platforms).flatMap((p) =>
+        p.apps.flatMap((a) =>
+          a.blocks.filter((b) => b.title.en.includes('App Store') || b.title.en === 'A paid app'),
+        ),
+      );
+      expect(notes.length).toBeGreaterThan(0);
+      for (const n of notes) {
+        const alt = n.description.ru.split('вкладке')[1] ?? '';
+        expect(alt).not.toContain('Shadowrocket');
+      }
+    });
+
+    it('offers the alternatives as free, not as "without that restriction"', () => {
+      // Caught by READING the rendered document, not by a test: the first draft
+      // shared one sentence with the storefront notice, so the paid card ended
+      // "Karing и INCY ставятся без этого ограничения" — a restriction nobody
+      // had mentioned, under a block whose whole subject is money. Every
+      // assertion about that sentence was about WHO it names, and all of them
+      // were green. Second time this exact class has shipped here.
+      const note = card(proxy(), 'ios', 'Shadowrocket')!.blocks.find(
+        (b) => b.title.en === 'A paid app',
+      )!;
+      expect(note.description.ru).toContain('бесплатно');
+      expect(note.description.ru).not.toContain('без этого ограничения');
+      expect(note.description.en).toContain('free');
+      // And the storefront notice keeps its own wording, which is right there.
+      const gap = card(proxy(), 'ios', 'Happ')!.blocks.find(
+        (b) => b.title.ru === 'Нет в российском App Store',
+      )!;
+      expect(gap.description.ru).toContain('без этого ограничения');
+    });
+
+    it('agrees in number with the list it just built', () => {
+      // "Karing ставятся" is what one form for both cases produces, and an
+      // assertion on the name stays green through it.
+      const doc = proxy();
+      const notes = Object.values(doc.platforms).flatMap((p) =>
+        p.apps.flatMap((a) =>
+          a.blocks.filter(
+            (b) =>
+              (b.title.en.includes('App Store') || b.title.en === 'A paid app') &&
+              b.description.ru.includes('вкладке'),
+          ),
+        ),
+      );
+      expect(notes.length).toBeGreaterThan(0);
+      for (const n of notes) {
+        const alt = n.description.ru.slice(n.description.ru.indexOf('вкладке'));
+        const plural = / и [^ ]/.test(alt.split(/ставится|ставятся/)[0] ?? '');
+        expect(alt, alt).toContain(plural ? 'ставятся' : 'ставится');
+      }
+    });
+
+    it('still names somebody, on every tab where it says anything at all', () => {
+      // The control this needs: dropping the paid client from the list must not
+      // leave the sentence empty — an alternatives clause with nobody in it is
+      // worse than none.
+      const doc = proxy();
+      const withAlts = Object.values(doc.platforms).flatMap((p) =>
+        p.apps.flatMap((a) =>
+          a.blocks.filter(
+            (b) =>
+              (b.title.en.includes('App Store') || b.title.en === 'A paid app') &&
+              b.description.ru.includes('вкладке'),
+          ),
+        ),
+      );
+      expect(withAlts.length).toBeGreaterThan(0);
+      for (const n of withAlts) {
+        const alt = n.description.ru.split('вкладке')[1] ?? '';
+        expect(alt.trim().length, n.description.ru).toBeGreaterThan(20);
+      }
+    });
+  });
+
+  // Both were already being served the right format — the seeded rules name
+  // `(?i)karing` (singbox) and `(?i)v2box` (plain) since 20260617020000. They
+  // were missing from the curated catalogue only, which is the same shape as
+  // the Happ gap: the shop drew OUR list without a client our own panel knows
+  // how to answer.
+  describe('the two clients the shipped rules already serve', () => {
+    const proxy = () => buildSubpageConfig(input({ protocols: ['xray', 'hysteria'] }))!;
+
+    it('offers Karing on every platform its vendor publishes a build for', () => {
+      const doc = proxy();
+      for (const tab of ['ios', 'macos', 'appleTV', 'android', 'androidTV', 'windows', 'linux']) {
+        expect(
+          doc.platforms[tab]?.apps.map((a) => a.name),
+          `Karing missing from ${tab}`,
+        ).toContain('Karing');
+      }
+    });
+
+    it('opens Karing with the scheme its own source registers', () => {
+      // `karing://install-config?url=` — read off KaringX/karing
+      // (`lib/screens/scheme_handler.dart`, and the scheme registered in
+      // Info.plist and AndroidManifest), never guessed from a neighbouring app.
+      const add = proxy()
+        .platforms.ios.apps.find((a) => a.name === 'Karing')!
+        .blocks.find((b) => b.title.en === 'Add the subscription')!;
+      expect(add.buttons[0].link).toBe(
+        `karing://install-config?url=${encodeURIComponent('https://panel.example/sub/tok')}`,
+      );
+    });
+
+    it('gives the iPhone buyer a client their own store carries for free', () => {
+      // The point of adding it, stated as a property: on the iOS tab Hiddify,
+      // Streisand, Happ and V2Box are missing from this storefront and
+      // Shadowrocket costs money.
+      const ios = proxy().platforms.ios.apps;
+      const karing = ios.find((a) => a.name === 'Karing')!;
+      const titles = karing.blocks.map((b) => b.title.en);
+      expect(titles).not.toContain('Not in the Russian App Store');
+      expect(titles).not.toContain('A paid app');
+      expect(karing.blocks.find((b) => b.title.en === 'Install the app')!.buttons[0].link).toBe(
+        'https://apps.apple.com/app/id6472431552',
+      );
+    });
+
+    it('tells a Karing buyer their routing rules arrive, and a V2Box buyer that they do not', () => {
+      // The two differ by core, and the card reads `format`: Karing runs
+      // sing-box and the seeded rule hands it `singbox`; V2Box gets the link
+      // list. Saying the same thing about both is the failure that told Happ
+      // buyers their config carried no rules while it carried five.
+      const ios = proxy().platforms.ios.apps;
+      const gives = (name: string) =>
+        ios.find((a) => a.name === name)!.blocks.find((b) => b.title.en === 'What you get')!;
+      expect(gives('Karing').description.ru).toContain('Правила приезжают вместе с конфигом');
+      expect(gives('V2Box').description.ru).toContain('правил маршрутизации не несёт');
+    });
+
+    it('leads the V2Box card with the storefront it is missing from', () => {
+      // Measured 2026-09-16: listing 6446814690 answers resultCount 0 under
+      // country=ru and 1 under country=us. Added WITH the notice rather than
+      // added and then explained.
+      const v2box = proxy().platforms.ios.apps.find((a) => a.name === 'V2Box')!;
+      expect(v2box.blocks[0].title.ru).toBe('Нет в российском App Store');
+      expect(v2box.featured).toBe(false);
+    });
+
+    it('offers V2Box nowhere but the iPhone', () => {
+      // Its listing says "Designed for iPad. Not verified for macOS", and the
+      // publisher ships no Android build at all — the "V2Box" in the Russian
+      // storefront is a different app by a different publisher.
+      const doc = proxy();
+      for (const [tab, platform] of Object.entries(doc.platforms)) {
+        if (tab === 'ios') continue;
+        expect(platform.apps.map((a) => a.name), tab).not.toContain('V2Box');
+      }
     });
   });
 

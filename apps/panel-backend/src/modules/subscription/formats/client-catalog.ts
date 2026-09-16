@@ -54,7 +54,10 @@ export const PLATFORM_LABEL: Record<PlatformId, string> = {
 };
 
 export type AppAction =
-  | { kind: 'deeplink'; scheme: 'hiddify' | 'streisand' | 'v2rayng' | 'clash' | 'singbox' | 'shadowrocket' }
+  | {
+      kind: 'deeplink';
+      scheme: 'hiddify' | 'streisand' | 'v2rayng' | 'clash' | 'singbox' | 'shadowrocket' | 'karing';
+    }
   | { kind: 'awg-vpn' } // scan the AmneziaVPN vpn:// QR below
   | { kind: 'awg-conf' } // scan the AmneziaWG .conf QR below
   | { kind: 'wg-conf' } // scan the plain WireGuard .conf QR below
@@ -87,7 +90,6 @@ export interface AppDef {
   platforms: PlatformId[];
   protocols: ProtocolName[];
   action: AppAction;
-  recommended?: boolean;
   /** Verified download destinations, per platform. See InstallLinks. */
   install?: InstallLinks;
   /**
@@ -103,11 +105,11 @@ export interface AppDef {
    * (1437005085, removed from the Russian store in 2024) answered 0 — because a
    * probe that cannot fail proves nothing about the ones it passes.
    *
-   * Both reasons change the same three things and none is cosmetic: the app
-   * loses its "recommended" mark on that platform, its card leads with a step
-   * saying so ABOVE "install the app", and it is never named as somebody else's
-   * alternative. Buyers were following an install button to a store page their
-   * account cannot open, and support paid for it.
+   * Both reasons change the same two things and neither is cosmetic: the app's
+   * card leads with a step saying so ABOVE "install the app", and the app is
+   * never named as somebody else's alternative. Buyers were following an
+   * install button to a store page their account cannot open, and support paid
+   * for it.
    *
    * The two reasons are kept apart because the answer differs: an Apple account
    * from another country fixes the first and nothing about the second.
@@ -123,6 +125,68 @@ export interface AppDef {
    * listing is missing here, its TV listing is a separate id that is present.
    */
   storeGap?: Partial<Record<PlatformId, 'ru-storefront' | 'delisted'>>;
+  /**
+   * Platforms where the store DOES carry the app and charges for it, with the
+   * price that storefront quotes.
+   *
+   * The other half of the question `storeGap` answers. A buyer tapping "Get the
+   * app" meets one of two interruptions — a page their account cannot open, or
+   * a price — and the page warned about the first while saying nothing of the
+   * second.
+   *
+   * MEASURED the same way and with the same controls as `storeGap`, against the
+   * RUSSIAN storefront because that is the one our buyers open (2026-09-16,
+   * `itunes.apple.com/lookup?id=<id>&country=ru`, field `formattedPrice`;
+   * Telegram 686449807 present and Proton VPN 1437005085 absent as the controls
+   * on both sides). Of everything that storefront carries out of this
+   * catalogue, exactly one client costs money.
+   *
+   * The value is the price AS QUOTED, in that storefront's currency: the same
+   * listing reads $2.99 in the US, which for this buyer is a different and
+   * unpayable claim.
+   *
+   * Per platform for the same reason as `storeGap`: one Apple listing serves
+   * several of our tabs, and a client can be paid in one store and free in
+   * another. Never on `linux`, `windows` or `router` — there is no store there
+   * to quote a price, and the catalogue test refuses it.
+   *
+   * What it does, and this is the half that changes existing copy: a priced
+   * app is never named as somebody else's alternative. That sentence exists to
+   * name a way out that works, and until this was measured it was offering
+   * every iPhone buyer Shadowrocket as the client their store sells — true, and
+   * 249 ₽ short of being a way out.
+   *
+   * A price is a measurement and it drifts, so the block that renders it says
+   * when it was taken and names the store page as the authority. Undated, a
+   * stale number stops being a fact.
+   */
+  storePrice?: Partial<Record<PlatformId, string>>;
+  /**
+   * Whether the Russian storefront carries OTHER apps under this name.
+   *
+   * It only matters next to a gap, and there it matters a lot: every wording of
+   * "this is not in your store" sends the buyer to search for the name, and
+   * where the search has an answer that is not us, they install somebody else's
+   * client and come back with a problem we cannot reproduce.
+   *
+   * MEASURED 2026-09-16 — `itunes.apple.com/search?term=<name>&country=ru`,
+   * counting results whose `trackName` carries the name and whose `sellerName`
+   * is not the real publisher:
+   *
+   *   Happ        4 (Happ VPN, Happ VPN Official, Happ VPN ++, Happ Lite)
+   *   sing-box    1 (sing-box MT, Metamerism LLC — the one already written
+   *                 into the copy by hand on 2026-09-05)
+   *   AmneziaVPN  1 (Amnezia VPN - супер впн 2026)
+   *   V2Box       1 (V2Box, Hunan Bofan Network Technology — a straight name
+   *                 collision, not even a suffix)
+   *   Hiddify     0
+   *   Streisand   0
+   *
+   * Flag rather than a count: the sentence says "apps with similar names", and
+   * the buyer does not need our arithmetic. Absent means the search was clean
+   * on that date, or nobody ran it — and an unrun search gets no sentence.
+   */
+  storeNameAlike?: true;
   /**
    * Whether this client's own local SOCKS/HTTP listener asks for a password
    * out of the box.
@@ -195,7 +259,6 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv'],
     protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'hiddify' },
-    recommended: true,
     // The iOS listing only: the desktop builds come off hiddify.com and the
     // Android one off Google Play, neither of which this storefront gates.
     storeGap: { ios: 'ru-storefront' },
@@ -239,6 +302,54 @@ export const APPS: AppDef[] = [
     // "named, not linked" without the half that says why. Third-party builds
     // under similar names are in the store and are NOT this client.
     storeGap: { ios: 'delisted' },
+    // "sing-box MT" and friends, the third-party builds the note already warned
+    // about in prose. Re-measured 2026-09-16 and moved into data, so the two
+    // gap wordings say it from one place.
+    storeNameAlike: true,
+  },
+  {
+    // Karing (karing.app, KaringX/karing) — a sing-box GUI, by its own README
+    // and with a modified sing-box core vendored in. It earns a row for the
+    // reason the iOS tab makes plain: measured 2026-09-16, listing 6472431552
+    // IS in the Russian storefront and IS free, while Hiddify, Streisand, Happ
+    // and V2Box are missing from it and Shadowrocket costs 249 ₽. That tab had
+    // exactly one free, gettable subscription client on it (INCY) and now has
+    // two.
+    //
+    // It was never a client this panel could not serve: the seeded rule
+    // `(?i)karing` → `singbox` has shipped since 20260617020000. Only the
+    // curated catalogue was missing it, which is the same shape as the Happ gap
+    // of 2026-09-01 — the shop drew OUR list without a client our own rules
+    // already answer correctly.
+    //
+    // No `uaSample`: nobody in this deployment has been observed fetching with
+    // it, and the mirror that checks `format` against the shipped rule skips an
+    // app rather than agreeing with an imagined User-Agent.
+    name: 'Karing',
+    format: 'singbox',
+    platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
+    action: { kind: 'deeplink', scheme: 'karing' },
+    // Apple platforms from the listing itself (iPhone, iPad, Mac ≥ 12.0 and
+    // Apple TV ≥ tvOS 17 are one id, 6472431552, and the repository carries an
+    // ios/, macos/ and tvos/ target each). Everything else from the vendor's
+    // own download page, which is the destination rather than a release asset:
+    // the GitHub releases are per-architecture files and there is a build for
+    // each of these platforms in the current tag (v1.2.25.2802, 2026-09-10).
+    //
+    // NOT Google Play: `com.karing.app` there is "Karing: Caregiving
+    // Organized", a different app by different people. The same name-alike trap
+    // as `sing-box MT`, and it is the reason the Android link points at the
+    // vendor instead.
+    install: {
+      ios: 'https://apps.apple.com/app/id6472431552',
+      macos: 'https://karing.app/download',
+      appletv: 'https://apps.apple.com/app/id6472431552',
+      android: 'https://karing.app/download',
+      androidtv: 'https://karing.app/download',
+      windows: 'https://karing.app/download',
+      linux: 'https://karing.app/download',
+    },
   },
   {
     name: 'Streisand',
@@ -246,7 +357,6 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'macos', 'appletv'],
     protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls'],
     action: { kind: 'deeplink', scheme: 'streisand' },
-    recommended: true,
     // Checked 2026-08-26: "Streisand" by ARCADIA ODYSSEY INC.
     install: { ios: 'https://apps.apple.com/app/id6450534064' },
     // All three of its platforms, because all three are that ONE listing: an
@@ -267,6 +377,56 @@ export const APPS: AppDef[] = [
       ios: 'https://apps.apple.com/app/id932747118',
       appletv: 'https://apps.apple.com/app/id932747118',
     },
+    // The one paid client in this catalogue, measured 2026-09-16: 249,00 ₽ in
+    // the Russian storefront ($2.99 in the US). Both tabs, because both are the
+    // same listing — a TV owner meeting the price with no warning is the same
+    // interrupted install as an iPhone owner meeting it.
+    //
+    // The copy says the price and NOT "a one-off purchase": the listing also
+    // carries Apple's in-app purchases badge, so that sentence would be false.
+    storePrice: { ios: '249 ₽', appletv: '249 ₽' },
+  },
+  {
+    // V2Box - V2ray Client (listing 6446814690, publisher techlaim). Another
+    // client the shipped rules have always served — `(?i)v2box` → `plain` since
+    // 20260617020000 — and which this catalogue never named. It is already
+    // written into the deployment's own notes as one of the link-list clients;
+    // it was simply invisible on the install screen.
+    //
+    // iOS ONLY, and that is measured rather than trimmed for caution: the
+    // listing says "Designed for iPad. Not verified for macOS", so the Mac is
+    // not a platform this app is offered on, and the publisher's site
+    // (hexasoftware.dev) carries no Android build at all.
+    //
+    // `manual`, not a deep link: no scheme is documented anywhere by the
+    // publisher — not in the listing, not on their site — and this file refuses
+    // a guessed deep link on an install screen.
+    //
+    // Protocols from the publisher's own feature list: Shadowsocks, VLESS/VMess
+    // /Trojan with Reality and Vision, and Hysteria2. TUIC and AnyTLS are NOT
+    // named there, so they are not claimed here — under-declaring hides a line
+    // from a card, over-declaring promises a channel the buyer cannot find.
+    //
+    // `localProxyAuth` deliberately absent although its listing advertises
+    // "Share on Local SOCKS5 / HTTP (accessible over network)": nobody has read
+    // the factory value off a device, and a guessed sentence about this setting
+    // is what got the server-side implementation written and reverted.
+    name: 'V2Box',
+    format: 'plain',
+    platforms: ['ios'],
+    protocols: ['xray', 'shadowsocks', 'hysteria'],
+    action: { kind: 'manual' },
+    install: { ios: 'https://apps.apple.com/app/id6446814690' },
+    // Measured 2026-09-16 with the controls: `resultCount: 0` under country=ru,
+    // 1 under country=us. Added WITH the notice rather than added and explained
+    // later. Note for whoever re-measures: the Russian storefront DOES carry a
+    // "V2Box" (6773664716, Hunan Bofan Network Technology) and it is a
+    // different app by different people — check `trackName` AND the publisher,
+    // not just the count.
+    storeGap: { ios: 'ru-storefront' },
+    // And it is a straight collision, not a suffix: the buyer searching "V2Box"
+    // after reading "not in your store" finds something called exactly that.
+    storeNameAlike: true,
   },
   {
     name: 'v2rayNG',
@@ -290,7 +450,6 @@ export const APPS: AppDef[] = [
     platforms: ['android', 'androidtv'],
     protocols: ['xray', 'shadowsocks'],
     action: { kind: 'deeplink', scheme: 'v2rayng' },
-    recommended: true,
     // 2dust/v2rayNG, the upstream repository (checked 2026-08-26). `/latest`
     // rather than a tag: the shop's own guide pins `v2rayNG_2.0.9.apk`, which
     // is two majors behind by now.
@@ -308,7 +467,7 @@ export const APPS: AppDef[] = [
     // MatsuriDayo/NekoBoxForAndroid (checked 2026-08-26). Alive but quiet —
     // upstream calls its own maintenance "relatively minimal" and the last
     // release is from early 2024. Listed after the actively developed clients
-    // on the same tab, never as the recommended one.
+    // on the same tab, and its position is the only thing that says so.
     install: { android: 'https://github.com/MatsuriDayo/NekoBoxForAndroid/releases/latest' },
   },
   {
@@ -412,6 +571,10 @@ export const APPS: AppDef[] = [
     // and that one is present. Marking the app whole would tell an Apple TV
     // owner their store has nothing when it has exactly this.
     storeGap: { ios: 'ru-storefront', macos: 'ru-storefront' },
+    // Four of them in the Russian storefront on 2026-09-16, none by this
+    // publisher: Happ VPN, Happ VPN Official, Happ VPN ++, Happ Lite. The most
+    // searched-for name in this catalogue is also the most impersonated one.
+    storeNameAlike: true,
     // Happ ships its local SOCKS listener with authorisation OFF
     // (`socks-auth-mode: disable`, verified 2026-09-05 on a clean reinstall),
     // and the buyer is the only one who can close it — see LOCAL_PROXY_NOTE.
@@ -455,7 +618,6 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv'],
     protocols: ['amneziawg'],
     action: { kind: 'awg-vpn' },
-    recommended: true,
     // From amnezia.org/en/downloads, the project's own page (checked
     // 2026-08-26); the store listing is "AmneziaVPN" by Privacy Technologies.
     // Desktop builds are direct files off that page, so the page itself is the
@@ -470,6 +632,9 @@ export const APPS: AppDef[] = [
     // The iOS listing only. Desktop comes straight off amnezia.org, which is
     // why the same client stays reachable on macOS, Windows and Linux.
     storeGap: { ios: 'ru-storefront' },
+    // "Amnezia VPN - супер впн 2026" by HONG KONG SEJAHTERA TECHNOLOGY LIMITED
+    // is in that storefront and is not this client (2026-09-16).
+    storeNameAlike: true,
   },
   {
     // Amnezia's OTHER client, and the reason it earns a row: AmneziaVPN's
@@ -479,10 +644,9 @@ export const APPS: AppDef[] = [
     // it takes "a VPN configuration in the form of a key", which is the
     // `vpn://` key this panel already builds for AmneziaVPN.
     //
-    // NOT marked recommended, deliberately. The store listing is measured; the
-    // key being accepted is inferred from the publisher and that sentence, and
-    // has not been put on a device. It is offered as the alternative it is, and
-    // the AmneziaWG row below — a file import we serve and have measured — sits
+    // The store listing is measured; the key being accepted is inferred from
+    // the publisher and that sentence, and has not been put on a device. The
+    // AmneziaWG row below — a file import we serve and have measured — sits
     // next to it for the buyer whose key is refused.
     name: 'DefaultVPN',
     platforms: ['ios'],
@@ -540,7 +704,6 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'android'],
     protocols: ['wireguard'],
     action: { kind: 'wg-conf' },
-    recommended: true,
     // wireguard.com/install is the project's own list (checked 2026-08-26); the
     // iOS listing is "WireGuard" by WireGuard Development Team / WireGuard LLC.
     install: {
@@ -576,7 +739,6 @@ export const APPS: AppDef[] = [
     platforms: ['windows', 'macos', 'linux'],
     protocols: ['wireguard'],
     action: { kind: 'download' },
-    recommended: true,
     // Same source. Linux is per-distro package commands there, so the page is
     // the destination; macOS is its own App Store listing.
     install: {
@@ -620,7 +782,6 @@ export const APPS: AppDef[] = [
     platforms: ['ios', 'android', 'windows', 'macos', 'linux'],
     protocols: ['mtproto'],
     action: { kind: 'endpoint-link' },
-    recommended: true,
   },
 ];
 
@@ -642,6 +803,13 @@ export function deeplinkHref(
       return `sing-box://import-remote-profile?url=${enc}`;
     case 'shadowrocket':
       return `sub://${Buffer.from(subUrl, 'utf8').toString('base64')}`;
+    // Read off the vendor's own source rather than copied from a neighbouring
+    // client: KaringX/karing registers the `karing` scheme in ios/macos
+    // Info.plist and AndroidManifest, and `lib/screens/scheme_handler.dart`
+    // branches on host `install-config` and takes `url` from the query — with
+    // the percent-encoded form in its own worked examples.
+    case 'karing':
+      return `karing://install-config?url=${enc}`;
   }
 }
 

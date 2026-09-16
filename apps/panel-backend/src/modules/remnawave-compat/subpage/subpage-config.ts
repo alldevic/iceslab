@@ -64,6 +64,8 @@ interface SubpageBlock {
 
 interface SubpageApp {
   name: string;
+  /** Part of the shop's schema and optional there (`_optional_svg_icon_key`).
+   *  We stopped emitting it on 2026-09-16 — see where the apps are built. */
   svgIconKey?: string;
   featured: boolean;
   blocks: SubpageBlock[];
@@ -139,24 +141,6 @@ const PLATFORM_DISPLAY: Record<string, string> = {
   appleTV: 'Apple TV',
 };
 
-// App icon keys the shop's vendored library happens to carry. Optional on an
-// app (`_optional_svg_icon_key`), so an app we have no icon for — AmneziaVPN,
-// WireGuard, WireSock, INCY, the Neko family — simply goes without rather than
-// referencing a key that would fail validation and sink the document.
-const APP_ICON_KEY: Record<string, string> = {
-  Hiddify: 'Hiddify',
-  // The vendored library already carried a Happ glyph while the catalogue had
-  // no Happ to hang it on; the shop drew our list without the one client most
-  // of its buyers actually run.
-  Happ: 'Happ',
-  'sing-box': 'Singbox',
-  Streisand: 'Streisand',
-  Shadowrocket: 'Shadowrocket',
-  v2rayNG: 'VRayNG',
-  'Clash Verge': 'ClashVerge',
-  FlClash: 'FlClash',
-};
-
 // ─── "What you get" ─────────────────────────────────────────────────────────
 //
 // The install cards answer "how do I connect". They never answered "and what
@@ -228,7 +212,12 @@ const APP_TRAIT: Record<string, Localized> = {
  * Android-only on purpose: this is the platform VPN API, and the same client on
  * iOS has no such control.
  */
-const PER_APP_SPLIT = new Set(['Hiddify', 'sing-box', 'NekoBox', 'v2rayNG', 'FlClash']);
+// Karing added 2026-09-16 off the vendor's own source rather than its marketing
+// page: `lib/screens/perapp_android_screen.dart`, and the fork of
+// `android_package_manager` in its pubspec that exists to enumerate the
+// installed apps for it. (It carries a `perapp_macos_screen.dart` too — which
+// does not widen the sentence, because the sentence is about Android.)
+const PER_APP_SPLIT = new Set(['Hiddify', 'sing-box', 'NekoBox', 'v2rayNG', 'FlClash', 'Karing']);
 
 /** Router firmware that ships WireGuard, and the pages that document it. */
 const WG_ROUTER_DOCS = 'https://www.wireguard.com/install/';
@@ -364,6 +353,92 @@ function fileUrl(
  * an app, because an app card with no blocks fails validation.
  */
 /**
+ * The "somebody else on this tab can be had instead" sentence.
+ *
+ * Shared by the two blocks that interrupt an install — the missing listing and
+ * the price — because both are read by a person who is already stuck, and both
+ * are only worth writing if they end somewhere.
+ *
+ * Callers pass a list already filtered to apps this buyer can actually GET on
+ * THIS tab: a checked link, no gap of its own, and no price. An alternative
+ * that costs money is not a way out of a page that would not open, and it is
+ * certainly not a way out of a price.
+ *
+ * `obstacle` picks which escape is being offered, and it is not decoration.
+ * "Ставятся без этого ограничения" was written for a listing that will not
+ * open, and reads as nonsense under a price — the obstacle there is the money,
+ * and the thing worth saying about the alternatives is that they are free. The
+ * rendered document said the wrong one of these for the length of one draft;
+ * no test noticed, because every assertion in it was about WHO is named.
+ *
+ * Russian singular and plural are spelled out rather than served by one form
+ * that limps in the other, and both forms are gender-free on purpose: app names
+ * have no gender to agree with, so it is "ставится/ставятся", never "бесплатен".
+ * `toContain('Shadowrocket')` stays green through "Shadowrocket ставятся", and
+ * that sentence has shipped here once already.
+ */
+function alternativesSentence(
+  alternatives: string[],
+  obstacle: 'no-listing' | 'price',
+): Localized {
+  if (alternatives.length === 0) return t('', '');
+  const listEn = joinList(alternatives, 'en');
+  const listRu = joinList(alternatives, 'ru');
+  const many = alternatives.length > 1;
+  if (obstacle === 'price') {
+    return t(
+      ` On this tab ${listEn} ${many ? 'are' : 'is'} free and ${many ? 'work' : 'works'} with this same subscription.`,
+      many
+        ? ` На этой вкладке ${listRu} ставятся бесплатно и работают с той же подпиской.`
+        : ` На этой вкладке ${listRu} ставится бесплатно и работает с той же подпиской.`,
+    );
+  }
+  // "Without that restriction", never "from the store": on the macOS tab the
+  // alternatives are Hiddify, sing-box and Clash Verge, and NONE of them comes
+  // from a store — they are downloaded from the vendor's page and from GitHub.
+  // Read on the live document 2026-09-05, where the first wording said "from
+  // the store as usual" to a Mac owner about three apps that are not in it.
+  return t(
+    ` On this tab ${listEn} can be installed without that restriction, and works with this same subscription.`,
+    many
+      ? ` На этой вкладке ${listRu} ставятся без этого ограничения и работают с той же подпиской.`
+      : ` На этой вкладке ${listRu} ставится без этого ограничения и работает с той же подпиской.`,
+  );
+}
+
+/**
+ * The step for the OTHER way an install stops: the store has the app and wants
+ * money for it.
+ *
+ * Same position and the same reason as the storefront notice — first in the
+ * card, above "install the app", because it can make the whole card moot before
+ * the buyer does any of the work. Customer's ask, 2026-09-16, alongside the
+ * request to name the paid ones among the apps their store does carry.
+ *
+ * The price is DATED in the text and the store page is named as the authority,
+ * because a price is a measurement that drifts and an undated number stops
+ * being a fact. And it is only the price: the listing also carries Apple's
+ * in-app purchases badge, so "a one-off purchase, not a subscription" — the
+ * obvious reassuring sentence, and the one worth saying next to a VPN the buyer
+ * is already paying for — would be false.
+ */
+function paidBlock(app: AppDef, price: string, alternatives: string[]): SubpageBlock {
+  const alt = alternativesSentence(alternatives, 'price');
+  return {
+    svgIconKey: 'AppleIcon',
+    svgIconColor: 'amber',
+    title: t('A paid app', 'Платное приложение'),
+    description: t(
+      `${app.name} costs money in the Russian App Store — ${price} as measured on 2026-09-16. ` +
+        `The store page always shows the current price.${alt.en}`,
+      `${app.name} в российском App Store платный — ${price} по замеру на 16.09.2026. Актуальную ` +
+        `цену всегда показывает сама страница магазина.${alt.ru}`,
+    ),
+    buttons: [],
+  };
+}
+
+/**
  * The step that has to come FIRST when it comes at all: this app cannot be
  * fetched from the store on this buyer's device.
  *
@@ -387,22 +462,15 @@ function storeBlock(
   // Named from the tab as it was actually built, never from the catalogue: an
   // app with no checked link for this platform is not somewhere to send anyone,
   // and one carrying its own gap is the failure being described.
-  const listEn = joinList(alternatives, 'en');
-  const listRu = joinList(alternatives, 'ru');
-  // "Without that restriction", never "from the store": on the macOS tab the
-  // alternatives are Hiddify, sing-box and Clash Verge, and NONE of them comes
-  // from a store — they are downloaded from the vendor's page and from GitHub.
-  // Read on the live document 2026-09-05, where the first wording said "from
-  // the store as usual" to a Mac owner about three apps that are not in it.
-  const altEn = alternatives.length
-    ? ` On this tab ${listEn} can be installed without that restriction, and works with this same subscription.`
+  const { en: altEn, ru: altRu } = alternativesSentence(alternatives, 'no-listing');
+  // Every sentence here sends the buyer to search the store for this name, so
+  // where the search HAS an answer that is not us, saying so is part of the same
+  // warning rather than an extra. Measured, per app — see `storeNameAlike`.
+  const alikeEn = app.storeNameAlike
+    ? ' Apps with similar names in the store are made by other people and are not this client.'
     : '';
-  // Singular and plural spelled out rather than one form that limps in the
-  // other: this sentence is read by a person who is already stuck.
-  const altRu = alternatives.length
-    ? alternatives.length === 1
-      ? ` На этой вкладке ${listRu} ставится без этого ограничения и работает с той же подпиской.`
-      : ` На этой вкладке ${listRu} ставятся без этого ограничения и работают с той же подпиской.`
+  const alikeRu = app.storeNameAlike
+    ? ' Приложения с похожими названиями в магазине сделаны другими людьми и этим клиентом не являются.'
     : '';
 
   if (reason === 'delisted') {
@@ -413,13 +481,10 @@ function storeBlock(
       description: t(
         `${app.name} is not in the App Store at all at the moment — its publisher cannot post it ` +
           'there, and this has nothing to do with the country of your account. If it is already ' +
-          'installed it keeps working. Apps with similar names in the store are made by other ' +
-          `people and are not this client.${altEn}`,
+          `installed it keeps working.${alikeEn}${altEn}`,
         `Приложения ${app.name} сейчас в App Store нет вовсе — издатель не может его там публиковать, ` +
           'и это не связано со страной вашего аккаунта. Если оно уже установлено, оно продолжает ' +
-          'работать. ' +
-          'Приложения с похожими названиями в магазине сделаны другими людьми и этим клиентом не ' +
-          `являются.${altRu}`,
+          `работать.${alikeRu}${altRu}`,
       ),
       buttons: [],
     };
@@ -432,10 +497,10 @@ function storeBlock(
     description: t(
       `${app.name} is not available in the Russian App Store. If it is already installed it keeps ` +
         'working as before — but installing it again, on this or a new device, needs an Apple ' +
-        `account registered in another country.${altEn}`,
+        `account registered in another country.${alikeEn}${altEn}`,
       `Приложения ${app.name} нет в российском App Store. Если оно уже установлено, оно продолжает ` +
         'работать — но установить его заново, на этом или на новом устройстве, можно только с ' +
-        `аккаунтом Apple другой страны.${altRu}`,
+        `аккаунтом Apple другой страны.${alikeRu}${altRu}`,
     ),
     buttons: [],
   };
@@ -863,18 +928,30 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
       .map((app) => ({ app, blocks: blocksFor(app, input) }))
       .filter((c) => c.blocks.length > 0);
     // An alternative has to be gettable, not merely listed: a checked install
-    // link for THIS platform and no gap of its own. The first version of this
-    // named sing-box to iPhone buyers as the client their store does sell — it
-    // is the one app on that tab with no listing anywhere at all, which is the
-    // whole reason it has no link. The list must be built from the same fields
-    // that decide whether a buyer can get the app, or it invents a way out.
+    // link for THIS platform, no gap of its own, and no price. The first
+    // version of this named sing-box to iPhone buyers as the client their store
+    // does sell — it is the one app on that tab with no listing anywhere at
+    // all, which is the whole reason it has no link. The list must be built
+    // from the same fields that decide whether a buyer can get the app, or it
+    // invents a way out.
+    //
+    // The price joined that filter on 2026-09-16, when it was first measured:
+    // until then every iPhone buyer whose client is missing from the storefront
+    // was pointed at Shadowrocket, which their store does sell — for 249 ₽.
+    // True, and not a way out. Checked while adding it that no tab is left with
+    // an empty list by this.
     const reachable = candidates
       .map((c) => c.app)
-      .filter((a) => !a.storeGap?.[ours] && !!a.install?.[ours]);
+      .filter((a) => !a.storeGap?.[ours] && !a.storePrice?.[ours] && !!a.install?.[ours]);
 
     const apps: SubpageApp[] = [];
     for (const { app, blocks } of candidates) {
       const gap = app.storeGap?.[ours];
+      // A storefront cannot both refuse to carry an app and quote a price for
+      // it, so these two are mutually exclusive per platform by construction —
+      // pinned as an invariant in the catalogue's own tests rather than assumed
+      // here.
+      const price = app.storePrice?.[ours];
       // Install first, import second — that is the order a person does it in.
       const install = installBlock(app, ours);
       if (install) blocks.unshift(install);
@@ -886,9 +963,9 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
       const gives = givesBlock(app, input, ours);
       if (gives) blocks.unshift(gives);
       // And above that: a step saying the install button leads to a page this
-      // buyer's account cannot open belongs before they tap it. It stays first
-      // because it can make the whole card moot.
-      if (gap) {
+      // buyer's account cannot open — or to a price — belongs before they tap
+      // it. Either stays first because it can make the whole card moot.
+      if (gap || price) {
         // Alternatives that share a channel with this app, so the sentence
         // cannot send an AmneziaWG buyer to a subscription client. Three at
         // most: a longer list reads as a menu rather than a way out.
@@ -898,21 +975,29 @@ export function buildSubpageConfig(input: SubpageConfigInput): SubpageConfig | n
           .map((a) => a.name)
           .filter((n, i, all) => all.indexOf(n) === i)
           .slice(0, 3);
-        blocks.unshift(storeBlock(app, gap, alts));
+        blocks.unshift(gap ? storeBlock(app, gap, alts) : paidBlock(app, price as string, alts));
       }
       // Last, and after the import steps on purpose: it is something to do once
       // the client is set up, not a reason to pick it.
       const localProxy = localProxyBlock(app);
       if (localProxy) blocks.push(localProxy);
-      const icon = APP_ICON_KEY[app.name];
       apps.push({
         name: app.name,
-        ...(icon ? { svgIconKey: icon } : {}),
-        // A client the buyer's own store does not sell is not the one to put a
-        // "recommended" badge on, however good it is elsewhere. The flag stays
-        // on the app — it is still the recommendation on Android and desktop —
-        // and is suppressed here, on the tab where it cannot be acted on.
-        featured: !!app.recommended && !gap,
+        // No app icon and no badge, by decision 2026-09-16: the shop's card
+        // draws neither, so the document does not carry either.
+        //
+        // `featured` is kept in the payload as a constant `false` rather than
+        // dropped — the shop reads `bool(app.get("featured", False))`, so both
+        // spellings mean the same to it, and the explicit key says this is a
+        // decision rather than a field somebody forgot to fill in.
+        //
+        // The icon was ALSO the only per-app thing the catalogue could not
+        // express honestly: the vendored library carries a glyph for eight of
+        // our clients and nothing for the rest, so half the list was branded
+        // and half was not. Blocks and platforms keep theirs — those keys are
+        // required by the shop's validator and a document without them is
+        // rejected whole.
+        featured: false,
         blocks,
       });
     }

@@ -141,6 +141,35 @@ describe('buildSubscriptionPage', () => {
     expect(both).toContain('Hiddify');
   });
 
+  it('marks a paid client with its price, and marks nothing on the free ones', () => {
+    // Both install surfaces project the same catalogue, and the rule written
+    // down on 2026-09-05 is that they must not drift: the shop's install screen
+    // grew a "paid app" step, so this page grows the chip that says the same
+    // thing. The date and the caveat live on the shop's screen, which has room
+    // for a sentence; here the number is the whole message.
+    const html = buildSubscriptionPage(base({ protocols: ['xray', 'hysteria'] }));
+    expect(html).toContain('<span class="paid">249 ₽</span>');
+    // One chip per priced (app, platform) pair, and Shadowrocket is on two
+    // tabs: iOS and Apple TV are the same listing and the same price.
+    expect(html.match(/<span class="paid">/g)?.length).toBe(2);
+    // And nothing of the sort next to the free clients this page also lists.
+    const near = (name: string) =>
+      html.slice(html.indexOf(name), html.indexOf(name) + 160);
+    expect(near('INCY')).not.toContain('class="paid"');
+    expect(near('Karing')).not.toContain('class="paid"');
+  });
+
+  it('offers the two clients the shipped rules have always served', () => {
+    // Missing from the catalogue only: `(?i)karing` and `(?i)v2box` have been
+    // seeded since 20260617000000. Karing is the one that matters to an iPhone
+    // buyer - measured 2026-09-16, it is in the Russian storefront and free,
+    // where Hiddify, Streisand, Happ and V2Box are not in it at all.
+    const html = buildSubscriptionPage(base({ protocols: ['xray', 'hysteria'] }));
+    expect(html).toContain('Karing');
+    expect(html).toContain('V2Box');
+    expect(html).toContain('https://apps.apple.com/app/id6472431552');
+  });
+
   it('sends an mtproto buyer to Telegram itself, not to the subscription link', () => {
     // Telegram is the client: nothing to install, nothing to import, and the
     // subscription link means nothing to it. Before the endpoint-link channel

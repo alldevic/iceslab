@@ -1,6 +1,6 @@
 /**
  * Prints the install document as a BUYER reads it: every platform, every app,
- * every step, in Russian, with the "recommended" badge shown where it survives.
+ * every step, in Russian.
  *
  * Why a script and not a test. The tests hold single claims — this block comes
  * before that one, this card names that channel — and every one of them can
@@ -53,7 +53,7 @@ if (!doc) {
 for (const [platformKey, platform] of Object.entries(doc.platforms)) {
   console.log(`\n${'='.repeat(60)}\n${platform.displayName} (${platformKey})`);
   for (const app of platform.apps) {
-    console.log(`\n  ${app.name}${app.featured ? '   [recommended]' : ''}`);
+    console.log(`\n  ${app.name}`);
     for (const block of app.blocks) {
       console.log(`    - ${block.title[lang]}`);
       console.log(`      ${block.description[lang]}`);

@@ -87,6 +87,41 @@ describe('the client catalogue', () => {
     }
   });
 
+  it('quotes a price only where a store both carries the app and sells it', () => {
+    // A price is a fact about a storefront, so it can only sit where there IS
+    // one. Two ways to get this wrong, and both make the page say something
+    // impossible: a price on a platform whose store does not carry the app at
+    // all, and a price on Linux or a router, where nobody is buying anything.
+    const STOREFRONTS = new Set(['ios', 'macos', 'appletv', 'android', 'androidtv']);
+    for (const app of APPS) {
+      for (const platform of Object.keys(app.storePrice ?? {})) {
+        expect(STOREFRONTS, `${app.name}: price on ${platform}, which has no store`).toContain(
+          platform,
+        );
+        expect(
+          app.storeGap?.[platform as keyof typeof app.storeGap],
+          `${app.name}: priced on ${platform}, where the store does not carry it`,
+        ).toBeUndefined();
+        expect(
+          app.install?.[platform as keyof typeof app.install],
+          `${app.name}: priced on ${platform} with no checked link to buy it from`,
+        ).toBeDefined();
+        expect(app.platforms, `${app.name}: price for ${platform}`).toContain(platform);
+      }
+    }
+  });
+
+  it('quotes the price in the currency the buyer is charged', () => {
+    // Measured against the RUSSIAN storefront (2026-09-16), because that is the
+    // one our buyers open. The US number for the same listing is $2.99 and
+    // would be a different, unpayable claim.
+    for (const app of APPS) {
+      for (const [platform, price] of Object.entries(app.storePrice ?? {})) {
+        expect(price, `${app.name}/${platform}`).toContain('₽');
+      }
+    }
+  });
+
   it('builds a deep link that carries the subscription URL', () => {
     const sub = 'https://panel.example/sub/tok';
     for (const app of APPS) {
