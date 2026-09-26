@@ -564,10 +564,19 @@ function splitDest(dest: string, serverName: string): [string, number] {
  * else it says. They are on every role, not only the exit, because a transit
  * that forwards them has already carried them across a border.
  */
-function protectionRules(): Json[] {
+function protectionRules(hijackOnlyOn?: string[]): Json[] {
   return [
     { action: 'sniff' },
-    { protocol: 'dns', action: 'hijack-dns' },
+    // E56, stand 26.09: an AmneziaWG client's DNS (10.66.66.3 -> 1.1.1.1:53)
+    // arrived by TPROXY, was hijacked here and answered by the ENTRY's system
+    // resolver, the hoster's RU one, while the traffic left in NL: every CDN
+    // answer was a Russian edge. On an entry that takes TPROXY the hijack is
+    // kept to the socks listeners (an xray or hysteria user's lookups have
+    // always been answered here), and the tunnel's DNS goes on like any UDP,
+    // by the entry policy and Auto, to be answered where it leaves.
+    hijackOnlyOn
+      ? { protocol: 'dns', inbound: hijackOnlyOn, action: 'hijack-dns' }
+      : { protocol: 'dns', action: 'hijack-dns' },
     // `drop` rather than the default refusal: a refused connection tells the
     // other end something is filtering, a dropped one looks like the internet.
     { port: [25], action: 'reject', method: 'drop' },
@@ -626,7 +635,10 @@ export function renderChainConfig(input: ChainRenderInput): Json {
   const isEntry = input.role === 'entry';
   const policies = isEntry ? (input.policies ?? []) : [];
   const tproxy = isEntry ? input.tproxy : undefined;
-  const rules: Json[] = [...protectionRules(), ...policyRules(policies, tproxy)];
+  const rules: Json[] = [
+    ...protectionRules(tproxy ? (input.directionTags ?? []).map(socksTag) : undefined),
+    ...policyRules(policies, tproxy),
+  ];
   // E53: the exit's node policy, after the protections (an operator's rule
   // must not reopen port 25 here either) and before the default way out.
   const exitPolicy = input.role === 'exit' ? input.exitPolicy : undefined;
