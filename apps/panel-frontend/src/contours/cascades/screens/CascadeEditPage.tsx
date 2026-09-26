@@ -34,6 +34,7 @@ import { ChainStatusLine } from '@/ui/ChainStatusLine';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
 import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
+import { useEntryAwg31 } from '@/contours/cascades/lib/useEntryAwg31';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
@@ -234,6 +235,8 @@ export function CascadeEditPage() {
     draft?.pools[0]?.nodeIds ?? [],
     nodeById,
   );
+  // E58: AWG 3.1 на нодах входа, для строки подписки. Тоже до раннего выхода.
+  const entryAwg31 = useEntryAwg31(draft?.pools[0]?.entryProtocol, draft?.pools[0]?.nodeIds ?? []);
 
   // Seed once per cascade, and only once the node list is in: a direction is
   // named after a country, which is a fact about the node under it. Re-seeding
@@ -1241,7 +1244,7 @@ export function CascadeEditPage() {
                   width: '100%',
                 }}
               >
-                {subscriptionRows(draft, nodeById, t).map((row, i) => (
+                {subscriptionRows(draft, nodeById, t, entryAwg31).map((row, i) => (
                   <Box
                     key={row.label + i}
                     style={{
@@ -1272,7 +1275,9 @@ export function CascadeEditPage() {
                         minWidth: 0,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                        // Строка без пометки справа (вход AWG) переносится
+                        // целиком, а не режется многоточием.
+                        whiteSpace: row.note ? 'nowrap' : 'normal',
                       }}
                     >
                       {row.label}
@@ -1286,7 +1291,13 @@ export function CascadeEditPage() {
             )}
 
             <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>
-              {directions.length > 1 ? t('cascadeEdit.subHintMany') : t('cascadeEdit.subHintOne')}
+              {/* E58: у входа AmneziaWG записей по направлениям нет, и подпись
+                  про них ввела бы в заблуждение. */}
+              {pools[0]?.entryProtocol === 'amneziawg'
+                ? t('cascadeEdit.subHintAwg')
+                : directions.length > 1
+                  ? t('cascadeEdit.subHintMany')
+                  : t('cascadeEdit.subHintOne')}
             </Text>
           </Stack>
 
@@ -1651,8 +1662,18 @@ function subscriptionRows(
   d: Draft,
   byId: Map<string, Node>,
   t: (k: string, o?: Record<string, unknown>) => string,
+  entryAwg31: boolean | undefined,
 ): { label: string; note: string; tone: string }[] {
   const rows: { label: string; note: string; tone: string }[] = [];
+  // E58: вход AmneziaWG направлений в подписку не отдаёт: клиент ходит одним
+  // туннелем через Авто и политику входа. Направления перечисляются только у
+  // входа xray и hysteria.
+  if (d.pools[0]?.entryProtocol === 'amneziawg') {
+    // Без правой пометки: в узкой колонке она съедала бы саму строку.
+    rows.push({ label: `${t('cascadeEdit.subAwg')}${entryAwg31 ? ' · 3.1' : ''}`, note: '', tone: MOSS });
+    if (!d.hideHops) pushDirect(d, byId, t, rows);
+    return rows;
+  }
   // Same two conditions the panel enforces when it builds the subscription: the
   // switch is on, and there are at least two directions to choose between.
   // Направление на выходе (фаза 10) обслуживается так же, как с пулом.
@@ -1675,13 +1696,20 @@ function subscriptionRows(
     });
   });
   // Off means the direction nodes keep their own direct entries alongside.
-  if (!d.hideHops) {
-    for (const nid of d.directions.flatMap((x) => (directionVia(x) === 'pool' ? x.nodeIds.filter(Boolean) : []))) {
-      const name = byId.get(nid)?.name;
-      if (name) rows.push({ label: name, note: t('cascadeEdit.subDirect'), tone: DIM });
-    }
-  }
+  if (!d.hideHops) pushDirect(d, byId, t, rows);
   return rows;
+}
+
+function pushDirect(
+  d: Draft,
+  byId: Map<string, Node>,
+  t: (k: string, o?: Record<string, unknown>) => string,
+  rows: { label: string; note: string; tone: string }[],
+): void {
+  for (const nid of d.directions.flatMap((x) => (directionVia(x) === 'pool' ? x.nodeIds.filter(Boolean) : []))) {
+    const name = byId.get(nid)?.name;
+    if (name) rows.push({ label: name, note: t('cascadeEdit.subDirect'), tone: DIM });
+  }
 }
 
 /* ───── Formatting ──────────────────────────────────────────────────────── */

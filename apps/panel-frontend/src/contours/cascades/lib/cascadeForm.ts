@@ -580,6 +580,20 @@ export function outboundChainGaps(
 }
 
 /**
+ * E58: есть ли на нодах входа инбаунд AmneziaWG 3.1, то есть привязка профиля
+ * amneziawg с `awgProtocol: 3`. `undefined`: ответы ещё не пришли, и тогда
+ * «· 3.1» не пишется (незнание не факт).
+ */
+export function entryHasAwg31(
+  bindings: readonly { profileId: string }[] | undefined,
+  profiles: readonly { id: string; protocol: string; awgProtocol?: number | null }[] | undefined,
+): boolean | undefined {
+  if (!bindings || !profiles) return undefined;
+  const awg31 = new Set(profiles.filter((p) => p.protocol === 'amneziawg' && p.awgProtocol === 3).map((p) => p.id));
+  return bindings.some((b) => awg31.has(b.profileId));
+}
+
+/**
  * Что показать в строке пула на месте выбора ноды.
  *
  * Три случая, и третий выглядел как первый. Строка держит `nodeId`, а ноды с

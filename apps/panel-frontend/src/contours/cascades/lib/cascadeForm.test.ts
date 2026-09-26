@@ -41,6 +41,7 @@ import {
   directionEmpty,
   directionLines,
   directionOfRefusal,
+  entryHasAwg31,
   entryChainGaps,
   entryChainNotes,
   outboundChainGaps,
@@ -49,6 +50,22 @@ import {
   type DirectionDraft,
 } from '@/contours/cascades/lib/cascadeForm';
 import { directionOutbounds, type NamedOutbound } from '@/lib/domain/namedOutbounds';
+
+describe('entryHasAwg31: AWG 3.1 на нодах входа (E58)', () => {
+  const profiles = [
+    { id: 'p1', protocol: 'amneziawg', awgProtocol: 3 },
+    { id: 'p2', protocol: 'amneziawg', awgProtocol: null },
+    { id: 'p3', protocol: 'xray', awgProtocol: 3 },
+  ];
+  it('привязка профиля amneziawg 3: да; только 1.x или чужой протокол: нет', () => {
+    expect(entryHasAwg31([{ profileId: 'p2' }, { profileId: 'p1' }], profiles)).toBe(true);
+    expect(entryHasAwg31([{ profileId: 'p2' }, { profileId: 'p3' }], profiles)).toBe(false);
+  });
+  it('ответы не пришли: undefined', () => {
+    expect(entryHasAwg31(undefined, profiles)).toBeUndefined();
+    expect(entryHasAwg31([], undefined)).toBeUndefined();
+  });
+});
 
 describe('направление на именованном выходе (фаза 10, d28cc14)', () => {
   const dir = (over: Partial<DirectionDraft>): DirectionDraft => ({

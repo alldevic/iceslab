@@ -230,6 +230,9 @@ export const cascades = {
     subAuto: '⚡ {{name}} → Auto',
     subTag: 'tag {{tag}} · plain',
     subDirect: 'also a direct pick',
+    subAwg: 'AWG tunnel: Auto and the entry policy',
+    subHintAwg:
+      'An AmneziaWG entry gives the client one tunnel: Auto and the entry policy pick the way out, the subscription has no per-direction entries.',
     subHintMany:
       'One entry per direction, and a squad can narrow the list to the directions it grants. A direction with no live node under it never reaches a subscription. Every entry of a pool offers the same set, so those lines carry their transport to stay distinct.',
     subHintOne:
