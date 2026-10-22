@@ -242,6 +242,18 @@ func TestShadowsocksUsersAreHandedOverTheAPIWithoutARestart(t *testing.T) {
 		t.Fatalf("alice through ssm-managed shadowsocks: %v", err)
 	}
 	defer stream.Close()
+	// bob's client listens before he is asked about: a refused socks port
+	// would read as "not let in" here and fail the add below for nothing.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", socksB))
+		if err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("bob's client never listened: %v", err)
+		}
+	}
 
 	if body, err := getVia(socksB, target.Listener.Addr().String()); err == nil && body == "ok" {
 		t.Fatal("bob got through before he was added")
