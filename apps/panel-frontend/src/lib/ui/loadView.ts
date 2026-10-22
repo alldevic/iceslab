@@ -14,6 +14,23 @@ export function loadView(q: { data: unknown; isError: boolean }): LoadView {
 }
 
 /**
+ * A side list of a form (a selector's options, a status rail) that did not
+ * arrive: the words to say and the retry, or null while it is fine or still
+ * on its way. The form around it stays usable; only the part it feeds says it
+ * failed, instead of looking empty. `say` turns the error into words, so this
+ * file stays free of the network layer.
+ */
+export type LoadFailure = { message: string; onRetry: () => void };
+
+export function loadFailure(
+  q: { data: unknown; isError: boolean; error: unknown; refetch: () => unknown },
+  say: (err: unknown) => string,
+): LoadFailure | null {
+  if (loadView(q) !== 'failed') return null;
+  return { message: say(q.error), onRetry: () => void q.refetch() };
+}
+
+/**
  * The gate of an edit screen: the list that holds the item, whether the item
  * is in it, and the lists the form needs besides. «Gone» is said only when the
  * list ARRIVED and the item is not in it; a failed or pending list, or a

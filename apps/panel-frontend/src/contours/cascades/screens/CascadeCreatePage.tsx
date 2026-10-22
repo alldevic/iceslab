@@ -21,6 +21,8 @@ import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
 import { cascadeClaims } from '@/lib/domain/cascadeMembership';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { editGate, loadFailure } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import {
   BarButton,
   CardCaption,
@@ -387,6 +389,22 @@ export function CascadeCreatePage() {
     },
   });
 
+  // The node list is the pickers and the cascade list is which nodes are taken:
+  // a failed one is said as that, not as an empty fleet or as «nothing is
+  // taken» (spec frontend-cascades, the A-141 gate the edit page has).
+  const gate = editGate(nodesQuery, true, [cascadesQuery]);
+  if (gate.kind === 'failed') {
+    const q = gate.index === 0 ? nodesQuery : cascadesQuery;
+    return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
+  if (gate.kind !== 'ready') {
+    return (
+      <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
+        <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>{t('common.loading')}</Text>
+      </Box>
+    );
+  }
+
   // What still stands between this draft and a cascade. One sentence, the first
   // thing missing, so the note reads as an instruction rather than a report.
   const blocker = !trimmedName
@@ -583,6 +601,7 @@ export function CascadeCreatePage() {
                     place={entryPolicyPlace(pool.entryProtocol, entryPolicyKnown)}
                     value={entryPolicyId}
                     policies={policiesQuery.data?.policies ?? []}
+                    loadFailed={loadFailure(policiesQuery, apiErrorMessage)}
                     gone={entryPolicyGone}
                     onChange={(v) => {
                       setEntryPolicyGone(false);
@@ -728,6 +747,7 @@ export function CascadeCreatePage() {
                             }),
                           outboundId: dir.outboundId ?? null,
                           options: outboundOptions,
+                          loadFailed: loadFailure(outboundsQuery, apiErrorMessage),
                           onOutbound: (o) =>
                             setDirection(i, {
                               outboundId: o?.id ?? null,

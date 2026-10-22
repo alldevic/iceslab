@@ -49,6 +49,8 @@ import { outboundAddress, type NamedOutbound } from '@/lib/domain/namedOutbounds
 import type { LinkCell, LinkCongestion, LinkParams, LinkUnderlay } from '@/lib/domain/cascades';
 import { cascadeNodeChips, type CascadeLegs } from '@/lib/domain/cascadeChips';
 import { CoreChips } from '@/ui/CoreChips';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import type { LoadFailure } from '@/lib/ui/loadView';
 import {
   engineListWords,
   isRealisedLinkCell,
@@ -1010,6 +1012,8 @@ export function DirectionRow({
     /** Только vless и socks (directionOutbounds). */
     options: NamedOutbound[];
     onOutbound: (o: NamedOutbound | null) => void;
+    /** The outbound list did not arrive: said instead of «there are none». */
+    loadFailed?: LoadFailure | null;
   };
 }) {
   const { t } = useTranslation();
@@ -1051,7 +1055,9 @@ export function DirectionRow({
                 onChange={(id) => outbound.onOutbound(outbound.options.find((o) => o.id === id) ?? null)}
               />
               {picked && <OutboundCard outbound={picked} />}
-              {outbound.options.length === 0 && (
+              {outbound.loadFailed ? (
+                <LoadFailedLine message={outbound.loadFailed.message} onRetry={outbound.loadFailed.onRetry} />
+              ) : outbound.options.length === 0 && (
                 <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>
                   {t('cascadeCreate.outboundNoneHint')}{' '}
                   <Link to="/traffic/named-outbounds" style={{ color: CYAN }}>
@@ -2092,6 +2098,7 @@ export function EntryPolicyRow({
   policies,
   gone,
   onChange,
+  loadFailed = null,
 }: {
   place: EntryPolicyPlace;
   value: string | null;
@@ -2099,6 +2106,8 @@ export function EntryPolicyRow({
   /** 400 ENTRY_POLICY_NOT_FOUND после сохранения: выбранную удалили. */
   gone: boolean;
   onChange: (id: string | null) => void;
+  /** Список политик не пришёл: сказать это, а не показывать один «нет». */
+  loadFailed?: LoadFailure | null;
 }) {
   const { t } = useTranslation();
   if (place === 'hidden') return null;
@@ -2129,6 +2138,7 @@ export function EntryPolicyRow({
           {t('cascadeCreate.entryPolicyHint')}
         </Text>
       </Box>
+      {loadFailed && <LoadFailedLine message={loadFailed.message} onRetry={loadFailed.onRetry} />}
       {gone && (
         <Note tone={RED} icon={<WarnIcon size={13} color={RED} />}>
           {t('cascadeCreate.entryPolicyGone')}

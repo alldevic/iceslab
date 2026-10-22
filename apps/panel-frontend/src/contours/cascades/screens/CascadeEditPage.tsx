@@ -9,6 +9,7 @@ import { apiErrorMessage } from '@/lib/net/client';
 import {
   DEFAULT_LINK_UNDERLAY,
   deleteCascade,
+  cascadeDeleteRefusal,
   cascadeShapeError,
   getCascadeStatus,
   listCascades,
@@ -35,8 +36,8 @@ import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvisi
 import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
 import { cascadeClaims, cascadeMembers } from '@/lib/domain/cascadeMembership';
-import { editGate } from '@/lib/ui/loadView';
-import { LoadFailed } from '@/ui/LoadFailed';
+import { editGate, loadFailure, loadView } from '@/lib/ui/loadView';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
 import { useEntryAwg31 } from '@/contours/cascades/lib/useEntryAwg31';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { useOverview } from '@/lib/domain/dashboard';
@@ -467,8 +468,24 @@ export function CascadeEditPage() {
       notifications.show({ color: 'green', message: t('cascades.deleted') });
       navigate('/nodes');
     },
-    onError: (err) =>
-      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) }),
+    // Same reading as the list (cascadeDeleteRefusal): already gone is what the
+    // operator asked for, so the page leaves; another refusal the server
+    // explained stays on screen in its words, beside the form.
+    onError: (err) => {
+      const refusal = cascadeDeleteRefusal(err);
+      if (refusal?.kind === 'gone') {
+        qc.invalidateQueries({ queryKey: ['cascades'] });
+        qc.invalidateQueries({ queryKey: ['nodes'] });
+        notifications.show({ message: t('cascades.alreadyDeleted') });
+        navigate('/nodes');
+        return;
+      }
+      if (refusal) {
+        setSaveRefusal(`${t('cascades.deleteRefused')} ${refusal.message}`);
+        return;
+      }
+      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
+    },
   });
 
   // «No such cascade» only when the list arrived without it (A-141): a failed
@@ -865,6 +882,7 @@ export function CascadeEditPage() {
                     place={entryPolicyPlace(pool.entryProtocol, draft.entryPolicyId !== undefined)}
                     value={draft.entryPolicyId ?? null}
                     policies={policiesQuery.data?.policies ?? []}
+                    loadFailed={loadFailure(policiesQuery, apiErrorMessage)}
                     gone={entryPolicyGone}
                     onChange={(v) => {
                       setEntryPolicyGone(false);
@@ -1041,6 +1059,7 @@ export function CascadeEditPage() {
                             }),
                           outboundId: dir.outboundId ?? null,
                           options: outboundOptions,
+                          loadFailed: loadFailure(outboundsQuery, apiErrorMessage),
                           onOutbound: (o) =>
                             setDirection(i, {
                               outboundId: o?.id ?? null,
@@ -1366,6 +1385,15 @@ export function CascadeEditPage() {
               </Text>
             )}
 
+            {/* The status did not arrive: said as that, not «loading» forever
+                (cascadeStatusView reads no data as loading, which is only true
+                while the request is out). */}
+            {loadView(statusQuery) === 'failed' ? (
+              <LoadFailedLine
+                message={apiErrorMessage(statusQuery.error)}
+                onRetry={() => void statusQuery.refetch()}
+              />
+            ) : (
             <Text
               style={{
                 fontFamily: DISPLAY,
@@ -1382,6 +1410,7 @@ export function CascadeEditPage() {
                     ? t('cascadeEdit.brokenShort')
                     : t('cascadeEdit.pushPending', { names: pushView.waiting.join(', ') })}
             </Text>
+            )}
 
             {(statusQuery.data?.hops ?? []).map((hop) => {
               // Три разные вещи про один хоп, и ни одна не выводится из

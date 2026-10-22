@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { editGate, loadView } from '@/lib/ui/loadView';
+import { editGate, loadFailure, loadView } from '@/lib/ui/loadView';
+
+describe('loadFailure (spec frontend-cascades)', () => {
+  const say = (err: unknown) => `said: ${String((err as Error).message)}`;
+  let retried = 0;
+  const q = (data: unknown, isError: boolean) => ({
+    data,
+    isError,
+    error: isError ? new Error('503') : null,
+    refetch: () => {
+      retried += 1;
+    },
+  });
+
+  it('список не пришёл: слова и повтор', () => {
+    const f = loadFailure(q(undefined, true), say);
+    expect(f?.message).toBe('said: 503');
+    f?.onRetry();
+    expect(retried).toBe(1);
+  });
+
+  it('пришёл, ждём, или повтор упал поверх данных: null', () => {
+    expect(loadFailure(q({ outbounds: [] }, false), say)).toBeNull();
+    expect(loadFailure(q(undefined, false), say)).toBeNull();
+    expect(loadFailure(q({ outbounds: [] }, true), say)).toBeNull();
+  });
+});
 
 describe('editGate (A-141)', () => {
   const ok = { data: {}, isError: false };
