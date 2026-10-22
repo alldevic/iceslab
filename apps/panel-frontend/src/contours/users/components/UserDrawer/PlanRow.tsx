@@ -1,7 +1,7 @@
 import { EXPIRY_SPANS, expiryDate, formatExpiryDate, spanOfDays } from '@/contours/users/lib/userExpiry';
 import { IconChevronDown } from '@tabler/icons-react';
 import { Box, Menu, Text, UnstyledButton } from '@mantine/core';
-import { CARD, CYAN, FAINT, DISPLAY, FIELD_EDGE, HAIRLINE, MIST, MONO, SNOW, WELL } from '@/contours/users/lib/colors';
+import { CARD, CYAN, FAINT, DISPLAY, FIELD_EDGE, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contours/users/lib/colors';
 import { STRATEGY_VALUES } from '@/contours/users/lib/userForm';
 import { expireRelative } from '@/contours/users/lib/userFormat';
 import { useTranslation } from 'react-i18next';
@@ -144,6 +144,9 @@ export function PlanRow({
               </Menu.Dropdown>
             </Menu>
           </Box>
+          {form.errors.trafficLimitGb && (
+            <Text style={{ fontSize: 11, lineHeight: '14px', color: RED }}>{form.errors.trafficLimitGb}</Text>
+          )}
         </Box>
       </Box>
 

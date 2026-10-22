@@ -49,6 +49,7 @@ export const common = {
     portRequired: 'Порт обязателен',
     portRange: 'Порт от 1 до 65535',
     emailInvalid: 'Некорректный email',
+    trafficWholeGb: 'Лимит от 1 ГБ. Без лимита: оставьте поле пустым',
     required: 'Обязательно',
     xray: {
       networkInvalid:

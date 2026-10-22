@@ -49,6 +49,7 @@ export const common = {
     portRequired: 'Port is required',
     portRange: 'Port must be 1–65535',
     emailInvalid: 'Invalid email',
+    trafficWholeGb: 'The limit starts at 1 GB. For no limit, leave the field empty',
     required: 'Required',
     xray: {
       networkInvalid:

@@ -4,7 +4,7 @@ import type { Preset } from '@/contours/users/lib/userPresets';
 import type { PreviewData, PreviewRowData } from '@/contours/users/components/UserDrawer/PreviewCard';
 import type { ExpirySpan } from '@/contours/users/lib/userExpiry';
 import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
-import { defaultValues } from '@/contours/users/lib/userForm';
+import { defaultValues, trafficLimitInput, trafficLimitProblem } from '@/contours/users/lib/userForm';
 import { expiryDays } from '@/contours/users/lib/userExpiry';
 import { fetchUserEndpoints, listUsers } from '@/lib/domain/users';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
@@ -60,6 +60,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
       },
       email: (v) =>
         v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? t('validation.emailInvalid') : null,
+      trafficLimitGb: (v) => (trafficLimitProblem(v) ? t('validation.trafficWholeGb') : null),
     },
   });
 
@@ -298,7 +299,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
         // the field out entirely rather than restating the stored date.
         ...(values.expirySet ? { expireAt: chosenExpiry?.toISOString() ?? null } : {}),
         status: values.status,
-        trafficLimitGb: values.trafficLimitGb === '' ? null : Number(values.trafficLimitGb) || null,
+        trafficLimitGb: trafficLimitInput(values.trafficLimitGb),
         trafficLimitStrategy: values.trafficLimitStrategy,
         description: values.description || null,
         tag: values.tag || null,
@@ -312,7 +313,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     } else {
       const input: CreateUserInput = {
         username: values.username.trim(),
-        trafficLimitGb: values.trafficLimitGb === '' ? null : Number(values.trafficLimitGb) || null,
+        trafficLimitGb: trafficLimitInput(values.trafficLimitGb),
         trafficLimitStrategy: values.trafficLimitStrategy,
         expireDays: values.expireDays === '' ? null : Number(values.expireDays),
         description: values.description || null,
