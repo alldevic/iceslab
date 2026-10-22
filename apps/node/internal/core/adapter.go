@@ -145,6 +145,16 @@ type IdentifiedApplier interface {
 	ApplyIdentifiedInbound(id string, port int, cfg json.RawMessage) error
 }
 
+// ScopedUserAdder is an OPTIONAL interface for an adapter that can put a user
+// on some of its inbounds and not the others (A-022): xray renders clients per
+// inbound, AmneziaWG has one interface per generation. inboundIDs are this
+// adapter's own, never empty (a user named on none of them is removed with
+// RemoveUser). An adapter without it serves its users on all its inbounds,
+// so the server only adds or removes the user there as a whole.
+type ScopedUserAdder interface {
+	AddUserOn(user User, inboundIDs []string) error
+}
+
 // PushScoped is an OPTIONAL interface: the server tells the adapter, BEFORE it
 // applies the push's inbounds, which of its inbound ids the push carries, so
 // one deleted by this push does not stand in the way of one it creates (the

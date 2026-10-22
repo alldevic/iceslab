@@ -118,6 +118,26 @@ type Server struct {
 
 	// certsMu guards building cfg.Certs from the payload once.
 	certsMu sync.Mutex
+
+	// owners: the adapter each inbound of the last applied push went to, by
+	// the panel's inbound id. Nil until a push (or the restore) lands.
+	ownersMu sync.Mutex
+	owners   map[string]core.CoreAdapter
+}
+
+// inboundsByAdapter groups the inbound ids an addUser names by the adapter
+// that holds each. An id this node does not hold (another node's, or one a
+// push has not brought yet) is skipped.
+func (s *Server) inboundsByAdapter(ids []string) map[core.CoreAdapter][]string {
+	s.ownersMu.Lock()
+	defer s.ownersMu.Unlock()
+	out := make(map[core.CoreAdapter][]string)
+	for _, id := range ids {
+		if a, ok := s.owners[id]; ok {
+			out[a] = append(out[a], id)
+		}
+	}
+	return out
 }
 
 func New(cfg Config) (*Server, error) {
@@ -783,10 +803,27 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	// pre-2026-05-21 ANY adapter error 500'd the request, which kept
 	// BullMQ retrying backfill against a fresh node where xray wasn't up yet
 	// but mtproto had already accepted the user.
+	// A-022: the panel names the inbounds of this node the user is on (their
+	// squad), and they come off every other. nil is every inbound, as before
+	// and from an older panel; an empty list is no inbound, a removal.
+	var named map[core.CoreAdapter][]string
+	if req.InboundIDs != nil {
+		named = s.inboundsByAdapter(*req.InboundIDs)
+	}
 	var healthyFailed []string
 	for _, adapter := range s.cfg.Adapters {
 		isHealthy := adapter.Healthy()
-		if err := adapter.AddUser(coreUser); err != nil {
+		apply := func() error { return adapter.AddUser(coreUser) }
+		if named != nil {
+			ids := named[adapter]
+			switch scoped, ok := adapter.(core.ScopedUserAdder); {
+			case len(ids) == 0:
+				apply = func() error { return adapter.RemoveUser(coreUser.UserID) }
+			case ok:
+				apply = func() error { return scoped.AddUserOn(coreUser, ids) }
+			}
+		}
+		if err := apply(); err != nil {
 			if isHealthy {
 				s.logger.Error("adapter addUser failed", "core", adapter.Name(), "err", err)
 				healthyFailed = append(healthyFailed, adapter.Name())
@@ -1158,12 +1195,18 @@ func (s *Server) applyPushOutcome(
 	// Which core each inbound goes to, settled before any of them is applied,
 	// so the cores this push does not name are known up front.
 	matchedBy := make([]core.CoreAdapter, len(req.Inbounds))
+	owners := make(map[string]core.CoreAdapter, len(req.Inbounds))
 	for i, ib := range req.Inbounds {
 		if m := s.adapterFor(ib); m != nil {
 			matchedBy[i] = m
 			named[m] = true
+			owners[ib.ID] = m
 		}
 	}
+	// Which adapter holds which inbound, for addUser's inboundIds (A-022).
+	s.ownersMu.Lock()
+	s.owners = owners
+	s.ownersMu.Unlock()
 
 	// And those stop serving BEFORE the named ones start, because they may hold
 	// the very port a named inbound is about to take. E34, 25.09 on nl-01: a

@@ -573,6 +573,26 @@ func (a *Adapter) Stop(ctx context.Context) error {
 //
 // Idempotent: re-adding the same user with the same UUID is a no-op.
 func (a *Adapter) AddUser(user core.User) error {
+	return a.addUser(user, "")
+}
+
+// AddUserOn implements core.ScopedUserAdder (A-022): the user goes onto these
+// inbounds of the node only, and off the others. The panel's squad decides
+// which; before this every user was on every inbound of every node, so a
+// squad limited what the subscription showed, not what a client could use.
+func (a *Adapter) AddUserOn(user core.User, inboundIDs []string) error {
+	ids := append([]string(nil), inboundIDs...)
+	sort.Strings(ids)
+	scope := strings.Join(ids, ",")
+	if scope == "" {
+		// Named on none of this core's inbounds: the server says so with
+		// RemoveUser, and an empty scope here would read as "every inbound".
+		return a.RemoveUser(user.UserID)
+	}
+	return a.addUser(user, scope)
+}
+
+func (a *Adapter) addUser(user core.User, scope string) error {
 	if user.XrayUUID == "" {
 		// User has no Xray credentials, nothing to do.
 		return nil
@@ -587,9 +607,10 @@ func (a *Adapter) AddUser(user core.User) error {
 	// serves, and Vision is only legal on raw. The inbound owns it now, see
 	// buildUserInboundSettings.
 	desired := xrayClient{
-		ID:    user.XrayUUID,
-		Email: user.UserID,
-		Login: user.Username,
+		ID:       user.XrayUUID,
+		Email:    user.UserID,
+		Login:    user.Username,
+		Inbounds: scope,
 	}
 	if exists && existing == desired {
 		a.mu.Unlock()
@@ -603,13 +624,13 @@ func (a *Adapter) AddUser(user core.User) error {
 	if dormant {
 		return nil
 	}
-	change := userChange{op: liveAdd, target: desired}
+	change := userChange{next: &desired}
 	if exists {
-		// A rename changes only the socks/http login. The user is already on
-		// every vless/trojan/vmess inbound with the same id, and re-adding them
-		// there would fail as a duplicate and fall back to a restart.
-		change.managedUnchanged = existing.ID == desired.ID && existing.Email == desired.Email
-		change.prevLogin = existing.Login
+		// A rename changes only the socks/http login: the user stays on the
+		// vless/trojan/vmess inbounds they are on with the same id, and
+		// re-adding them there would fail as a duplicate and fall back to a
+		// restart. liveUpdateUser works that out from the pair.
+		change.prev = &existing
 	}
 	if a.liveUpdateUser(context.Background(), change) {
 		return nil
@@ -657,7 +678,7 @@ func (a *Adapter) RemoveUser(userID string) error {
 	if dormant {
 		return nil
 	}
-	if a.liveUpdateUser(context.Background(), userChange{op: liveRemove, target: removed}) {
+	if a.liveUpdateUser(context.Background(), userChange{prev: &removed}) {
 		return nil
 	}
 	return a.regenerateAndRestart(context.Background())
@@ -670,35 +691,42 @@ const (
 	liveRemove
 )
 
-// userChange is one AddUser/RemoveUser as the live path needs to see it.
+// userChange is one AddUser/RemoveUser as the live path needs to see it: the
+// user as the running core carries them (prev, nil when new) and as they are
+// to be (next, nil when removed). Membership per inbound, identity and the
+// socks/http login all follow from the two.
 type userChange struct {
-	op     liveOp
-	target xrayClient
-	// managedUnchanged: the user's id and email are what the vless/trojan/vmess
-	// inbounds already carry, so only the socks/http accounts move (a rename).
-	managedUnchanged bool
-	// prevLogin: the login this user had before an add that replaced them.
-	prevLogin string
+	prev, next *xrayClient
 }
 
-// accountsBeforeChange: how many socks/http accounts the running core carried
-// BEFORE this change, from the count after it. It decides whether each plain
-// inbound exists in the running core right now (an inbound with no accounts is
-// not rendered, see renderMultiConfig), so whether it has to be removed before
-// it is added back.
-func accountsBeforeChange(after int, c userChange) int {
-	has := func(login string) int {
-		if login != "" {
-			return 1
+// clientsBefore is the user list as the running core carries it, from the
+// list after the change: next taken out, prev put back.
+func clientsBefore(after []xrayClient, prev, next *xrayClient) []xrayClient {
+	out := make([]xrayClient, 0, len(after)+1)
+	for _, c := range after {
+		if next != nil && c.Email == next.Email {
+			continue
 		}
-		return 0
+		out = append(out, c)
 	}
-	switch c.op {
-	case liveAdd:
-		return after - has(c.target.Login) + has(c.prevLogin)
-	default:
-		return after + has(c.target.Login)
+	if prev != nil {
+		out = append(out, *prev)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
+	return out
+}
+
+// sameAccounts: two socks/http account lists that render the same.
+func sameAccounts(a, b []xrayClient) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Login != b[i].Login || a[i].ID != b[i].ID {
+			return false
+		}
+	}
+	return true
 }
 
 // buildAduInbound renders the JSON that `xray api adu` consumes. It MUST be a
@@ -780,7 +808,6 @@ func buildAduInboundEntry(inbound InboundConfig, target xrayClient) map[string]a
 // false tells the caller to fall back to a full restart. restartMu-guarded so
 // it can't race a regenerateAndRestart; a.mu only for the fast snapshot.
 func (a *Adapter) liveUpdateUser(ctx context.Context, change userChange) bool {
-	op, target := change.op, change.target
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
 
@@ -830,15 +857,38 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, change userChange) bool {
 	// adu to cover them would come back short of "Added N" and send every user
 	// change on the node into a restart, dropping every vless session on it.
 	managed, plain := splitInbounds(inbounds)
-	if len(managed) > 0 && !change.managedUnchanged {
-		if !a.liveManaged(cctx, run, binPath, server, op, managed, target) {
-			return false
+	prev, next := change.prev, change.next
+	// Per inbound, since a user may be on some of them only (A-022): off the
+	// ones they leave, onto the ones they join. A changed id on an inbound they
+	// stay on is the same pair, rmu of the old then adu of the new: adu alone
+	// answers "already exists" for the email and falls into a restart.
+	same := prev != nil && next != nil && prev.ID == next.ID && prev.Email == next.Email
+	var leave, join []InboundConfig
+	for _, in := range managed {
+		was := prev != nil && prev.servesOn(in)
+		is := next != nil && next.servesOn(in)
+		if was && (!is || !same) {
+			leave = append(leave, in)
+		}
+		if is && (!was || !same) {
+			join = append(join, in)
 		}
 	}
-	if len(plain) > 0 {
-		after := len(plainAccounts(clients))
-		before := accountsBeforeChange(after, change)
-		if !a.refreshPlainInbounds(cctx, run, binPath, server, plain, clients, before > 0, after > 0) {
+	if len(leave) > 0 && !a.liveManaged(cctx, run, binPath, server, liveRemove, leave, *prev) {
+		return false
+	}
+	if len(join) > 0 && !a.liveManaged(cctx, run, binPath, server, liveAdd, join, *next) {
+		return false
+	}
+	// socks/http, each replaced whole only when its own accounts changed.
+	before := clientsBefore(clients, prev, next)
+	for _, in := range plain {
+		was := plainAccounts(usersFor(in, before))
+		is := plainAccounts(usersFor(in, clients))
+		if sameAccounts(was, is) {
+			continue
+		}
+		if !a.refreshPlainInbounds(cctx, run, binPath, server, []InboundConfig{in}, usersFor(in, clients), len(was) > 0, len(is) > 0) {
 			return false
 		}
 	}
@@ -1328,6 +1378,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	key := wire.InboundID
 	if key != "" {
 		newInbound.Tag = inboundTagFor(key, newInbound.Tag)
+		newInbound.ID = key
 	}
 
 	a.mu.Lock()

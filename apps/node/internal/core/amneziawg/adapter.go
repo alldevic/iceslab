@@ -446,6 +446,40 @@ func (a *Adapter) RemoveUser(userID string) error {
 			return err
 		}
 	}
+	return a.removeOne(userID)
+}
+
+// AddUserOn implements core.ScopedUserAdder (A-022): the user's peer goes on
+// the interfaces whose inbound the panel names, and off the other. One
+// interface per generation, so a 1.x and a 3.1 inbound are scoped apart.
+func (a *Adapter) AddUserOn(user core.User, inboundIDs []string) error {
+	named := make(map[string]bool, len(inboundIDs))
+	for _, id := range inboundIDs {
+		named[id] = true
+	}
+	a.mu.Lock()
+	id1 := a.inboundID
+	a.mu.Unlock()
+	scoped := user
+	if !named[id1] {
+		if err := a.removeOne(user.UserID); err != nil {
+			return err
+		}
+		scoped.AmneziaWGAllowedIP = "" // addPeer then leaves this interface alone
+	}
+	if a.v3 != nil {
+		a.v3.mu.Lock()
+		id3 := a.v3.inboundID
+		a.v3.mu.Unlock()
+		if !named[id3] {
+			scoped.AmneziaWGAllowedIP3 = "" // AddUser takes it off the 3.1 interface
+		}
+	}
+	return a.AddUser(scoped)
+}
+
+// removeOne drops the peer from this interface alone.
+func (a *Adapter) removeOne(userID string) error {
 	a.mu.Lock()
 	if _, ok := a.peers[userID]; !ok {
 		a.mu.Unlock()

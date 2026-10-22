@@ -155,6 +155,11 @@ func policyOutboundTag(a dto.NodePolicyAction) (string, error) {
 // admin settings (slice 23 will move these into the inbounds table) and kept
 // constant across user mutations.
 type InboundConfig struct {
+	// ID is the panel's binding id, the key the adapter holds it under; empty
+	// for the install-time inbound. A user scoped to inbounds (A-022) is
+	// rendered on the ones whose ID they name.
+	ID string
+
 	// Tag uniquely identifies the inbound inside Xray. Default: "vless-in".
 	Tag string
 
@@ -467,6 +472,34 @@ type xrayClient struct {
 	// into the user's id. Empty for a panel that does not send it: such a user
 	// gets no socks/http account rather than an account with an empty name.
 	Login string `json:"-"`
+	// Inbounds: the panel ids of the inbounds this user is on, sorted and
+	// comma-joined, so the struct stays comparable. Empty is every inbound,
+	// what a panel that names none means (A-022).
+	Inbounds string `json:"-"`
+}
+
+// servesOn: the user belongs on this inbound.
+func (c xrayClient) servesOn(in InboundConfig) bool {
+	if c.Inbounds == "" {
+		return true
+	}
+	for _, id := range strings.Split(c.Inbounds, ",") {
+		if id == in.ID {
+			return true
+		}
+	}
+	return false
+}
+
+// usersFor is the users of one inbound, in the order given.
+func usersFor(in InboundConfig, users []xrayClient) []xrayClient {
+	out := make([]xrayClient, 0, len(users))
+	for _, u := range users {
+		if u.servesOn(in) {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // plainAccounts are the users that can hold a socks/http account: the ones
@@ -661,10 +694,11 @@ func renderMultiConfig(
 		// (proxy/http/server.go:125), so an empty one is an open proxy on the
 		// internet. socks with an empty list happens to refuse everyone, and is
 		// left out too, so the rule is one rule.
-		if cfg.isPlain() && len(plainAccounts(users)) == 0 {
+		ibUsers := usersFor(cfg, users)
+		if cfg.isPlain() && len(plainAccounts(ibUsers)) == 0 {
 			continue
 		}
-		inbounds = append(inbounds, userInboundEntry(cfg, users))
+		inbounds = append(inbounds, userInboundEntry(cfg, ibUsers))
 	}
 
 	// One management inbound for the whole process, not one per user inbound:
