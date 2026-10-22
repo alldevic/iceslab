@@ -280,18 +280,22 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/sing-box.tar.gz \
-              https://github.com/SagerNet/sing-box/releases/download/v1.13.14/sing-box-1.13.14-linux-amd64.tar.gz
+              https://github.com/icecompany-tech/iceslab/releases/download/core-singbox-v1.13.14/sing-box-1.13.14-iceslab-linux-amd64.tar.gz
             then break; fi
             echo "sing-box download failed (attempt ${attempt}/3)"
             [ "$attempt" = 3 ] && exit 1
             sleep $(( attempt * 5 ))
           done
-          echo "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697  /tmp/sing-box.tar.gz" | sha256sum -c -
+          echo "8c982dfa05d5d2bf508a3e282fa3cceb22b0d6e7993b845f4e82df32660ae19e  /tmp/sing-box.tar.gz" | sha256sum -c -
           tar -xzf /tmp/sing-box.tar.gz -C /tmp
           mkdir -p /tmp/sing-box-bin
-          install -m 0755 /tmp/sing-box-1.13.14-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
+          install -m 0755 /tmp/sing-box-1.13.14-iceslab-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
           echo "SINGBOX_BIN=/tmp/sing-box-bin/sing-box" >> "$GITHUB_ENV"
-          /tmp/sing-box-bin/sing-box version | head -1
+          # Our build (cores.yml): the official tags plus with_v2ray_api. A
+          # binary without it would let a config with v2ray_api pass nowhere.
+          ver=$(/tmp/sing-box-bin/sing-box version)
+          head -1 <<<"$ver"
+          case "$ver" in *with_v2ray_api*) ;; *) echo "::error::sing-box without with_v2ray_api"; exit 1 ;; esac
 
       # E30a: hysteria-pin.live.test.ts runs native hysteria on the pair the
       # PANEL mints and dials it with hysteria's own client, sing-box and xray,
@@ -432,7 +436,7 @@ jobs:
             else
               echo "- tests: no report, so the part did not get as far as running"
             fi
-            echo "- config validity asked of the pinned engines: xray v26.3.27, sing-box v1.13.14"
+            echo "- config validity asked of the pinned engines: xray v26.3.27, sing-box v1.13.14 (our build with v2ray_api, core-singbox-v1.13.14)"
             echo "- geo rule-sets compared on the release pair ${{ steps.geo.outputs.tag || '-' }} (dlc.dat and sing-geosite of one tag)"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -709,18 +713,22 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/sing-box.tar.gz \
-              https://github.com/SagerNet/sing-box/releases/download/v1.13.14/sing-box-1.13.14-linux-amd64.tar.gz
+              https://github.com/icecompany-tech/iceslab/releases/download/core-singbox-v1.13.14/sing-box-1.13.14-iceslab-linux-amd64.tar.gz
             then break; fi
             echo "sing-box download failed (attempt ${attempt}/3)"
             [ "$attempt" = 3 ] && exit 1
             sleep $(( attempt * 5 ))
           done
-          echo "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697  /tmp/sing-box.tar.gz" | sha256sum -c -
+          echo "8c982dfa05d5d2bf508a3e282fa3cceb22b0d6e7993b845f4e82df32660ae19e  /tmp/sing-box.tar.gz" | sha256sum -c -
           tar -xzf /tmp/sing-box.tar.gz -C /tmp
           mkdir -p /tmp/sing-box-bin
-          install -m 0755 /tmp/sing-box-1.13.14-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
+          install -m 0755 /tmp/sing-box-1.13.14-iceslab-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
           echo "SINGBOX_BIN=/tmp/sing-box-bin/sing-box" >> "$GITHUB_ENV"
-          /tmp/sing-box-bin/sing-box version | head -1
+          # Our build (cores.yml): the official tags plus with_v2ray_api. A
+          # binary without it would let a config with v2ray_api pass nowhere.
+          ver=$(/tmp/sing-box-bin/sing-box version)
+          head -1 <<<"$ver"
+          case "$ver" in *with_v2ray_api*) ;; *) echo "::error::sing-box without with_v2ray_api"; exit 1 ;; esac
 
       # caddy-naive for the naive adapter's live test (A-118, admin API on a
       # unix socket). The same pinned set bootstrap-naive.sh builds on a node
@@ -825,7 +833,7 @@ jobs:
             else
               echo "- the suite produced no output, so it did not get as far as running"
             fi
-            echo "- engines asked: hysteria v2.12.3, xray v26.3.27, sing-box v1.13.14, caddy-naive (caddy v2.11.7 + forwardproxy c096d6a00cb2)"
+            echo "- engines asked: hysteria v2.12.3, xray v26.3.27, sing-box v1.13.14 (our build with v2ray_api), caddy-naive (caddy v2.11.7 + forwardproxy c096d6a00cb2)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Slice 36 follow-up: build + publish container images to GHCR on every
