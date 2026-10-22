@@ -1353,6 +1353,30 @@ export interface NodeChain {
    * mean the same thing, "no tunnels on this node".
    */
   tunnels?: ChainTunnel[];
+  /**
+   * A-111: the ports this node's chain RECEIVES legs on over the internet, for
+   * the agent's firewall. One per listener port, with every previous hop that
+   * dials it.
+   *
+   * The agent opened a leg's port only from the legacy xray fragments
+   * (`cascade.linkIngressPort`), which a node with a chain does not get: a
+   * hy2 or tuic leg, a node whose chain already runs, a node that dials a named
+   * outbound. On a node with ufw such a leg was closed from its first push.
+   * The agent opens these on every push and again at start from the stored
+   * push. A leg inside an AWG tunnel is not listed: it arrives on the tunnel's
+   * interface, which the tunnel opens. Absent or empty: nothing to open.
+   */
+  linkIngress?: ChainLinkIngress[];
+}
+
+/** One port a chain receives legs on, restricted to the hops that dial it. */
+export interface ChainLinkIngress {
+  port: number;
+  /** tcp for vless, udp for hy2 and tuic, both for shadowsocks. */
+  transports: Transport[];
+  /** Addresses of the previous hops (an FQDN is resolved by the agent).
+   *  Never empty: a leg whose peer the panel cannot name is not rendered. */
+  allowFrom: string[];
 }
 
 /**

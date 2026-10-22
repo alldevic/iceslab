@@ -53,8 +53,9 @@ func transportsOf(ib dto.InboundDto) []string {
 
 // The firewall calls, swappable in tests (ufw is not there).
 var (
-	fwAllow = firewall.Allow
-	fwClose = firewall.Close
+	fwAllow     = firewall.Allow
+	fwClose     = firewall.Close
+	fwAllowFrom = firewall.AllowFrom
 )
 
 // protoForInbound returns the L4 protocols the given inbound listens on.
@@ -1187,6 +1188,9 @@ func (s *Server) applyPushKept(
 			o.chainInForce = handoffBlock
 		}
 		chainInForce = s.cfg.Chain.Active()
+		// A-111: the ports the chain receives legs on. The block in force, so a
+		// refused one opens nothing it does not run.
+		s.ensureChainFirewall(ctx, handoffBlock)
 	} else if req.Chain != nil {
 		// Loud, and counted: the panel believes this node draws a chain in its
 		// own process, and nothing here does.
@@ -1581,6 +1585,28 @@ func (s *Server) ensureCascadeFirewall(ctx context.Context, ib dto.InboundDto) {
 	}
 }
 
+// ensureChainFirewall opens UFW for the ports the chain process receives legs
+// on (A-111), each restricted to the previous hops the panel names. Until this
+// the only opening was ensureCascadeFirewall, which reads the legacy xray
+// fragments a node with a chain does not get, so a hy2 or tuic leg, or any leg
+// into a node whose chain already ran, met a closed port. A port with no
+// source named is not opened: AllowFrom would fall open to anywhere, and the
+// panel never sends one without.
+func (s *Server) ensureChainFirewall(ctx context.Context, chain *dto.NodeChain) {
+	if chain == nil {
+		return
+	}
+	for _, in := range chain.LinkIngress {
+		if len(in.AllowFrom) == 0 {
+			s.logger.Warn("chain: link port with no source named, not opened", "port", in.Port)
+			continue
+		}
+		for _, proto := range in.Transports {
+			fwAllowFrom(ctx, s.logger, in.Port, proto, in.AllowFrom)
+		}
+	}
+}
+
 // ensureFirewallFromStore re-opens UFW for every persisted inbound port on boot.
 // The applyInbounds handler opens ports too, but only when a push lands; a node
 // that restarts (or whose ufw rule was lost to a reimage, or to a transient
@@ -1604,6 +1630,7 @@ func (s *Server) ensureFirewallFromStore(ctx context.Context) {
 		s.ensureInboundFirewall(ctx, ib)
 		s.ensureCascadeFirewall(ctx, ib)
 	}
+	s.ensureChainFirewall(ctx, req.Chain)
 	if len(inbounds) > 0 {
 		s.logger.Info("ensureFirewallFromStore: re-ensured firewall for persisted inbounds", "count", len(inbounds))
 	}

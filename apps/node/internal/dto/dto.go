@@ -335,6 +335,20 @@ type NodeChain struct {
 	// ends of each leg. Mirrors NodeChain.tunnels. Shipped in the contract ahead
 	// of the agent's half (Ф8.2); until then no panel sends it.
 	Tunnels []ChainTunnel `json:"tunnels,omitempty"`
+	// LinkIngress (A-111) is every port the chain receives legs on over the
+	// internet, with the previous hops that dial it. Mirrors
+	// NodeChain.linkIngress: the agent opens these in the firewall on every
+	// push and at start from the stored push.
+	LinkIngress []ChainLinkIngress `json:"linkIngress,omitempty"`
+}
+
+// ChainLinkIngress mirrors ChainLinkIngress in shared/transport.ts.
+type ChainLinkIngress struct {
+	Port int `json:"port"`
+	// Transports is tcp, udp, or both.
+	Transports []string `json:"transports"`
+	// AllowFrom is the previous hops' addresses; never empty from the panel.
+	AllowFrom []string `json:"allowFrom"`
 }
 
 // ChainTunnelIfacePrefix starts the name of every leg tunnel: awg-l<index>.

@@ -1,6 +1,8 @@
 import {
   LINK_CELL_ENGINES,
   LINK_CELL_TRANSPORT,
+  TRANSPORTS,
+  type ChainLinkIngress,
   type ChainStatus,
   type ChainTunnel,
   type ChainUserCore,
@@ -2593,6 +2595,7 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
         : { iface: tunnelIface(x.index), conf: renderTunnelConf(x, 'to'), listenPort: x.port },
     );
 
+  const linkIngress = chainLinkIngressOf(nodeId, topology);
   return {
     engine: 'singbox',
     config: config as Record<string, unknown>,
@@ -2600,7 +2603,41 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
     socksPassword: secret,
     ...userCoreFor(nodeId, topology, role, secret, awgPorts),
     ...(tunnels.length > 0 ? { tunnels } : {}),
+    ...(linkIngress.length > 0 ? { linkIngress } : {}),
   };
+}
+
+/**
+ * A-111: the ports this node's chain receives legs on over the internet, each
+ * with the hops that dial it, for the agent's firewall. One entry per port:
+ * the legs of one receiving step share one listener. A leg inside an AWG
+ * tunnel is left out, it arrives on the tunnel's interface. Shadowsocks gets
+ * both transports, as its listener takes both; the other cells their one.
+ * A leg whose peer has no address is not here, and chainInputFor renders no
+ * chain for it either.
+ */
+export function chainLinkIngressOf(nodeId: string, t: TopologyInput): ChainLinkIngress[] {
+  const byPort = new Map<number, { transports: Set<Transport>; allowFrom: Set<string> }>();
+  for (const l of t.links) {
+    if (l.toNodeId !== nodeId || l.underlay === 'awg') continue;
+    const from = t.hosts.get(l.fromNodeId);
+    if (!from) continue;
+    const e = byPort.get(l.cred.port) ?? { transports: new Set<Transport>(), allowFrom: new Set<string>() };
+    if (l.cred.protocol === 'shadowsocks') {
+      e.transports.add('tcp').add('udp');
+    } else {
+      e.transports.add(LINK_CELL_TRANSPORT[l.cred.protocol]);
+    }
+    e.allowFrom.add(from);
+    byPort.set(l.cred.port, e);
+  }
+  return [...byPort.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([port, e]) => ({
+      port,
+      transports: TRANSPORTS.filter((x) => e.transports.has(x)),
+      allowFrom: [...e.allowFrom].sort(),
+    }));
 }
 
 /**
