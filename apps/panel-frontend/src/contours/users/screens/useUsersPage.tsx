@@ -250,7 +250,7 @@ export function useUsersPage() {
     [squadsQuery, tagsQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null;
 
   // Counts come from the dashboard; without it they are unknown, not zero
-  // (spec frontend-users). 	otal falls back to the list's own total.
+  // (spec frontend-users). `total` falls back to the list's own total.
   const stats = useMemo(() => {
     const users = dashQuery.data?.users;
     const byStatus = users?.byStatus;
