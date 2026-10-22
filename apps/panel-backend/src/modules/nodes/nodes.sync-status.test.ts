@@ -88,9 +88,20 @@ async function bind(profileId: string, nodeId: string, port: number): Promise<st
   return JSON.parse(res.body).id as string;
 }
 
-/** The agent acknowledging a push, which is the only thing that stamps this. */
-async function acknowledge(nodeId: string, when = new Date()): Promise<void> {
-  await prisma.node.update({ where: { id: nodeId }, data: { lastInboundSyncAt: when } });
+/**
+ * The agent acknowledging a push, which is the only thing that stamps this.
+ *
+ * ⚠ Two milliseconds after the last write, not "now". Applied is
+ * lastInboundSyncAt > configChangedAt, strictly, and both are millisecond
+ * Dates: on a fast runner the stamp landed in the same millisecond as the
+ * Default host the bind had just written, and the node read as pending. Red
+ * in CI on e6d3d87 (run 39746320074), green on the next run of the same
+ * code. A real agent acknowledges a push that was built after the save, never
+ * within the same millisecond; A-162 replaces the time comparison anyway.
+ */
+async function acknowledge(nodeId: string, when?: Date): Promise<void> {
+  if (!when) await new Promise((r) => setTimeout(r, 2));
+  await prisma.node.update({ where: { id: nodeId }, data: { lastInboundSyncAt: when ?? new Date() } });
 }
 
 async function syncStatus(nodeId: string) {
