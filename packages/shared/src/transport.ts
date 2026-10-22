@@ -586,6 +586,16 @@ export interface AddUserRequest {
   shortId: string;
   username: string;
   credentials: ProtocolCredentials;
+  /**
+   * A-022: the inbounds of THIS node (InboundDto.id, the binding id) the user
+   * is served on, from the profiles of their squads.
+   *
+   * SET semantics: the agent puts the user on exactly these and takes them off
+   * every other inbound of the node, so narrowing a squad is one call. An
+   * empty list is removeUser on this node. Absent = every inbound, which is
+   * what every agent did before this field and what an older panel sends.
+   */
+  inboundIds?: string[];
 }
 
 export interface AddUserResponse {
@@ -1547,6 +1557,34 @@ export interface UserStats {
    * the panel falls back to the label.
    */
   protocol?: string;
+  /**
+   * A-163: the engine of the adapter that counted this entry. With `protocol`
+   * it names the ADAPTER: the sing-box adapter serving the xray family says
+   * protocol "xray", and six sing-box adapters are six processes with their
+   * own cumulative counters and their own restarts. The panel keys a user's
+   * snapshot by (node, user, protocol, engine). Absent on older agents.
+   */
+  engine?: EngineName;
+}
+
+/**
+ * A-152: one adapter's total for this poll, with its own counter semantics.
+ * The adapter is the (protocol, engine) pair, as in UserStats and in the
+ * agent's adapterFor.
+ */
+export interface CoreTrafficTotal {
+  protocol: ProtocolName;
+  engine: EngineName;
+  bytesIn: number;
+  bytesOut: number;
+  cumulative: boolean;
+  /**
+   * The adapter did not answer its stats query this poll: no numbers, which
+   * is NOT zero, and its users are absent from `users`. The panel leaves this
+   * adapter's snapshots where they are; zeros taken as a fact turned a missed
+   * poll into a burst on the next one (A-163).
+   */
+  noData?: boolean;
 }
 
 export interface GetStatsResponse {
@@ -1565,6 +1603,9 @@ export interface GetStatsResponse {
    * non-destructive read). Absent/false = legacy already-deltas semantics.
    */
   cumulative?: boolean;
+  /** A-152: the total per adapter. Absent from an older agent, which leaves
+   *  the panel on totalBytesIn/Out with `cumulative`. */
+  cores?: CoreTrafficTotal[];
 }
 
 // ───── GET /healthz ─────
@@ -1895,6 +1936,46 @@ export interface HealthcheckResponse {
    * the chain, which may still end vless and shadowsocks legs in its xray.
    */
   chainEngine?: EngineName;
+  /** A-124: notAfter of this node's mTLS server certificate, RFC3339. The
+   *  panel renews it ahead of time over rotateCert. Absent from an older
+   *  agent. */
+  certNotAfter?: string;
+  /** The agent's build: main.version, set with -X at release, "dev" for a
+   *  local build. Absent from an older agent. */
+  agentVersion?: string;
+}
+
+// ───── POST /rotateCert, POST /rotateCert/confirm (A-124) ─────
+//
+// The panel hands the agent a new server certificate over the live mTLS
+// channel, ahead of the old one's expiry. The agent checks it (key matches,
+// chains to its own CA, in date, SAN fits), serves it to new handshakes and
+// waits for the panel to confirm, from a NEW connection, that it sees the new
+// fingerprint. No confirm by `confirmBy`: the agent rolls back by itself.
+//
+// Errors: 400 CERT_INVALID, 409 CERT_ROTATION_PENDING (an earlier rotation
+// still waits for its confirm); 404 from an older agent = "update the agent".
+// ⚠ The panel neither logs nor keeps `keyPem` after the call.
+
+export interface RotateCertRequest {
+  certPem: string;
+  keyPem: string;
+}
+
+export interface RotateCertResponse {
+  ok: true;
+  /** sha256 hex of the new leaf's DER. */
+  fingerprint: string;
+  /** RFC3339: no confirm by then and the agent goes back to the old pair. */
+  confirmBy: string;
+}
+
+export interface ConfirmCertRequest {
+  fingerprint: string;
+}
+
+export interface ConfirmCertResponse {
+  ok: true;
 }
 
 /**

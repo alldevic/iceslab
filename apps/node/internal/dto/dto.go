@@ -82,6 +82,13 @@ type AddUserRequest struct {
 	ShortID     string              `json:"shortId"`
 	Username    string              `json:"username"`
 	Credentials ProtocolCredentials `json:"credentials"`
+	// InboundIDs (A-022): the inbounds of THIS node (InboundDto.ID, the panel's
+	// binding id) the user is served on. SET semantics: exactly these, and the
+	// user is taken off every other inbound of the node; an empty list equals
+	// removeUser here. nil (absent) = every inbound, the behaviour before the
+	// field and what an older panel sends. A pointer, since a plain slice
+	// cannot tell absent from empty.
+	InboundIDs *[]string `json:"inboundIds,omitempty"`
 }
 
 type AddUserResponse struct {
@@ -512,6 +519,29 @@ type UserStats struct {
 	// node's label, which on a node with xray beside mtproto said "xray" and
 	// left every mtproto user offline. Omitted by older agents.
 	Protocol string `json:"protocol,omitempty"`
+	// Engine (A-163) is the engine of the adapter that counted this entry. With
+	// Protocol it names the ADAPTER, the pair adapterFor dispatches on: the
+	// sing-box adapter serving the xray family reports Protocol "xray", and six
+	// sing-box adapters are six processes with their own cumulative counters
+	// and their own restarts. The panel keys a user's snapshot by (node, user,
+	// protocol, engine). Omitted by older agents.
+	Engine EngineName `json:"engine,omitempty"`
+}
+
+// CoreTrafficTotal (A-152) is one adapter's total for this poll, with its own
+// counter semantics. The adapter is the (Protocol, Engine) pair, as in
+// UserStats.
+type CoreTrafficTotal struct {
+	Protocol   ProtocolName `json:"protocol"`
+	Engine     EngineName   `json:"engine"`
+	BytesIn    int64        `json:"bytesIn"`
+	BytesOut   int64        `json:"bytesOut"`
+	Cumulative bool         `json:"cumulative"`
+	// NoData: this adapter did not answer its stats query this poll. Its
+	// numbers are absent, NOT zero, and its users are absent from Users; the
+	// panel leaves this adapter's snapshots where they are. Sending zeros as a
+	// fact is what turned a missed poll into a burst on the next one (A-163).
+	NoData bool `json:"noData,omitempty"`
 }
 
 type GetStatsResponse struct {
@@ -523,6 +553,9 @@ type GetStatsResponse struct {
 	// the panel must compute deltas against its stored snapshot. Absent/false
 	// keeps the legacy "already-deltas" interpretation for older agents. #5.
 	Cumulative bool `json:"cumulative,omitempty"`
+	// Cores (A-152): the total per adapter. Absent from an older agent, which
+	// leaves the panel on TotalBytesIn/Out with Cumulative.
+	Cores []CoreTrafficTotal `json:"cores,omitempty"`
 }
 
 // ───── GET /healthz ─────
@@ -749,6 +782,48 @@ type HealthcheckResponse struct {
 	// node without this engine carries no leg at all. Absent from an agent older
 	// than the chain, which may still end vless and shadowsocks legs in xray.
 	ChainEngine EngineName `json:"chainEngine,omitempty"`
+	// CertNotAfter (A-124): notAfter of this node's mTLS server certificate,
+	// RFC3339. The panel renews it ahead of time over rotateCert. Absent from
+	// an agent older than the field.
+	CertNotAfter string `json:"certNotAfter,omitempty"`
+	// AgentVersion: main.version, set with -X at release, "dev" for a local
+	// build. Absent from an agent older than the field.
+	AgentVersion string `json:"agentVersion,omitempty"`
+}
+
+// ───── POST /rotateCert, POST /rotateCert/confirm (A-124) ─────
+//
+// The panel hands the agent a new server certificate over the live mTLS
+// channel, ahead of the old one's expiry. The agent checks it (the key matches
+// the certificate, it chains to its own CA, it is in date, its SAN fits),
+// writes it beside the old pair, serves it to new handshakes and waits for the
+// panel to confirm from a NEW connection that it sees the new fingerprint. No
+// confirm by ConfirmBy: the agent goes back to the old pair by itself.
+//
+// Errors: 400 CERT_INVALID (any of the checks above), 409
+// CERT_ROTATION_PENDING (an earlier rotation still waits for its confirm). An
+// agent older than this answers 404, which the panel reads as "update the
+// agent". The panel neither logs nor keeps KeyPEM after the call.
+
+type RotateCertRequest struct {
+	CertPEM string `json:"certPem"`
+	KeyPEM  string `json:"keyPem"`
+}
+
+type RotateCertResponse struct {
+	OK bool `json:"ok"`
+	// Fingerprint is the sha256 hex of the new leaf's DER.
+	Fingerprint string `json:"fingerprint"`
+	// ConfirmBy is RFC3339: no confirm by then and the agent rolls back.
+	ConfirmBy string `json:"confirmBy"`
+}
+
+type ConfirmCertRequest struct {
+	Fingerprint string `json:"fingerprint"`
+}
+
+type ConfirmCertResponse struct {
+	OK bool `json:"ok"`
 }
 
 // ResolverDownReason: the host's own resolver did not answer the agent's probe
