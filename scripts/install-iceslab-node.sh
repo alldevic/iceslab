@@ -1210,9 +1210,21 @@ fi
 
 step "Build node-agent (Go, static)"
 cd "$ICESLAB_NODE_DIR/apps/node"
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/iceslab-node .
+# The version the agent reports (A-202): the release tag when the checkout is
+# one, else the short commit. Without -X it said "dev" on every node, and an
+# SSH update is this same rebuild. A shallow fetch of a tag by name leaves no
+# local tag for `git describe`, so a ref that is a release tag counts as well;
+# the shape check keeps anything else out of -ldflags.
+AGENT_VERSION=$(git -C "$ICESLAB_NODE_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)
+if [[ -z "$AGENT_VERSION" && "$ICESLAB_NODE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+  AGENT_VERSION=$ICESLAB_NODE_REF
+fi
+if [[ ! "$AGENT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+  AGENT_VERSION=$(git -C "$ICESLAB_NODE_DIR" rev-parse --short=7 HEAD 2>/dev/null || echo dev)
+fi
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${AGENT_VERSION}" -o /usr/local/bin/iceslab-node .
 chmod +x /usr/local/bin/iceslab-node
-ok "built /usr/local/bin/iceslab-node ($(stat -c %s /usr/local/bin/iceslab-node) bytes)"
+ok "built /usr/local/bin/iceslab-node ${AGENT_VERSION} ($(stat -c %s /usr/local/bin/iceslab-node) bytes)"
 
 # The core versions the panel chose for this node, as defaults for the
 # bootstrap scripts below; an explicit env pair still wins.

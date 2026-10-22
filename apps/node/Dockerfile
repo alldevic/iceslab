@@ -28,12 +28,16 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 COPY . .
 
+# The version the agent reports (A-202): CI passes the release tag or the short
+# commit; a plain `docker build` off a checkout says "dev", as before.
+ARG AGENT_VERSION=dev
+
 # Static binary, stripped, no symbols/DWARF.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
-        -ldflags="-s -w" \
+        -ldflags="-s -w -X main.version=${AGENT_VERSION}" \
         -o /out/iceslab-node \
         .
 

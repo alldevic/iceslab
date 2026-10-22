@@ -872,6 +872,21 @@ jobs:
         id: node
         run: echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
 
+      # The version the node agent reports (A-202), the same rule as the
+      # installer: the release tag on a tag, else the short commit. Only the
+      # agent's Dockerfile reads it; the other two ignore the build arg.
+      - name: Agent version
+        id: agent
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" == tag && "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "version=$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       # Only needed to publish. Skipped on a pull request, where the job builds
       # and throws the image away - a fork PR has no write token anyway, so
       # attempting the login there would fail the job for no reason.
@@ -914,6 +929,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             NODE_VERSION=${{ steps.node.outputs.version }}-alpine
+            AGENT_VERSION=${{ steps.agent.outputs.version }}
           # Cache via GHA cache (free, ephemeral), speeds up incremental
           # builds dramatically without needing a paid registry tier.
           cache-from: type=gha,scope=${{ matrix.image.name }}

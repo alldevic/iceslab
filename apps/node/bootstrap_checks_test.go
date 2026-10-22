@@ -207,6 +207,44 @@ func TestEveryNewIdentityTakesTheAgentsDiskPairAway(t *testing.T) {
 	}
 }
 
+// A-202: every agent build writes its version in with -X main.version, and the
+// variable is there to take it (-X on a name that does not exist is silently
+// nothing). Without it the agent said "dev" on every node: the installer's
+// build, which is also how a node is updated over SSH, and the image's.
+func TestEveryAgentBuildWritesItsVersion(t *testing.T) {
+	main, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^var version = `).Match(main) {
+		t.Fatal("main.go has no `var version`: -X main.version would set nothing")
+	}
+	builds := map[string]string{
+		"scripts/install-iceslab-node.sh": installerPath,
+		"apps/node/Dockerfile":            "Dockerfile",
+		".github/workflows/release.yml":   filepath.Join("..", "..", ".github", "workflows", "release.yml"),
+	}
+	for name, path := range builds {
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, line := range strings.Split(string(blob), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") || !strings.Contains(line, "-ldflags=") {
+				continue
+			}
+			n++
+			if !strings.Contains(line, "-X main.version=") {
+				t.Errorf("%s builds the agent without its version: %s", name, strings.TrimSpace(line))
+			}
+		}
+		if n == 0 {
+			t.Errorf("%s: no -ldflags line found, the build moved and this check no longer sees it", name)
+		}
+	}
+}
+
 // xray's --remove warns that sing-box loses its traffic counters, true when
 // xray alone goes. Inside the installer's --uninstall sing-box goes right after,
 // and the warning was noise on a clean removal (stand, 26.09).
