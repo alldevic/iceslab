@@ -1188,12 +1188,6 @@ export async function generateSubscription(
           allowInsecure: hostAllowInsecure,
           securityLayer: effectiveSecurityLayer,
         });
-      } else if (subprotocol === 'vmess' && network === 'xhttp' && cfg.xhttpMode && cfg.xhttpMode !== 'auto') {
-        // The vmess link (v2rayN's JSON, wiki "Description of VMess share link")
-        // has no XHTTP and no key for its mode: a link would dial the client's
-        // default mode against a server in another one (A-133). No link, as
-        // AmneziaWG has none; the JSON formats still carry the endpoint.
-        uri = '';
       } else if (subprotocol === 'vmess') {
         // VMess share link carries no REALITY: security is none (CDN-fronted /
         // plain) or tls only. 'default' (reality) collapses to 'none' here.
@@ -1206,6 +1200,7 @@ export async function generateSubscription(
           path: xrayPath,
           hostHeader: xrayHostHeader,
           serviceName: cfg.serviceName,
+          xhttpMode: cfg.xhttpMode,
           sni,
           fingerprint,
           alpn: hostAlpn,

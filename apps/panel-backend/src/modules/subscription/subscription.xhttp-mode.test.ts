@@ -97,14 +97,17 @@ describe('the XHTTP mode', () => {
     expect(e.uri).toContain('mode=packet-up');
   });
 
-  it('a vmess link has no key for it, so a non-auto mode gives no link', async () => {
+  // v2rayN reads 	ype as the XHTTP mode on xhttp (VmessFmt.cs ResolveVmess).
+  const vmessJson = (uri: string) => JSON.parse(Buffer.from(uri.slice('vmess://'.length), 'base64').toString('utf8')) as { net: string; type: string };
+
+  it('a vmess link carries the mode in type, auto when the profile says auto', async () => {
     const one = await xrayEndpoint({ subprotocol: 'vmess', security: 'none', network: 'xhttp', path: '/xh', xhttpMode: 'stream-one' });
-    expect(one.uri).toBe('');
+    expect(vmessJson(one.uri)).toMatchObject({ net: 'xhttp', type: 'stream-one' });
   });
 
-  it('a vmess link on auto is still written', async () => {
+  it('a vmess link on auto says auto, not the header type none', async () => {
     const auto = await xrayEndpoint({ subprotocol: 'vmess', security: 'none', network: 'xhttp', path: '/xh', xhttpMode: 'auto' });
-    expect(auto.uri).toMatch(/^vmess:\/\//);
+    expect(vmessJson(auto.uri)).toMatchObject({ net: 'xhttp', type: 'auto' });
   });
 });
 
