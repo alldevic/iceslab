@@ -18,6 +18,8 @@ import { TestConnectModal } from '@/contours/profiles/components/TestConnectModa
 import { DeployProfileModal } from '@/contours/profiles/components/DeployProfileModal';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { apiErrorMessage } from '@/lib/net/client';
+import { editGate } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { engineRefused } from '@/contours/profiles/lib/plainSubprotocol';
 import { singboxXrayMessage, singboxXrayRefusal, type SingboxXrayRefusal } from '@/lib/domain/singboxXray';
 import { CARD, CYAN, HAIRLINE, MIST, SNOW, WELL } from '@/contours/profiles/lib/colors';
@@ -119,14 +121,19 @@ export function ProfileEditPage() {
 
   usePageMeta([isNew ? t('profileEdit.newCrumb') : (profile?.name ?? '')]);
 
+  // «Not found» only when the list arrived without it (A-141).
+  const gate = isNew ? null : editGate(profilesQuery, profile !== null);
+  if (gate?.kind === 'failed') {
+    return <LoadFailed message={apiErrorMessage(profilesQuery.error)} onRetry={() => void profilesQuery.refetch()} />;
+  }
   if (!profile && !isNew) {
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Stack align="center" gap={14}>
           <Text style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 500, color: SNOW }}>
-            {profilesQuery.isLoading ? t('common.loading') : t('profileEdit.notFound')}
+            {gate?.kind === 'gone' ? t('profileEdit.notFound') : t('common.loading')}
           </Text>
-          {!profilesQuery.isLoading && (
+          {gate?.kind === 'gone' && (
             <PageButton onClick={() => navigate('/profiles')}>
               {t('profileEdit.backToList')}
             </PageButton>

@@ -10,6 +10,9 @@ import { Box, Text, UnstyledButton } from '@mantine/core';
 import { CARD, CYAN_HI, DIM, DISPLAY, EDGE, FAINT, HAIRLINE, MIST, MONO, MOSS, RED, SNOW, WELL } from '@/contours/nodes/lib/colors';
 import { refusalOf } from '@/lib/domain/syncRefusal';
 import { useTranslation } from 'react-i18next';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
 
 /**
@@ -68,7 +71,16 @@ export function HostsPanel({
               </PlainButton>
             </Box>
 
-            {(hostsQuery.data?.hosts ?? []).length === 0 ? (
+            {/* A list that did not arrive is not «no hosts» (A-141). */}
+            {loadView(hostsQuery) === 'failed' ? (
+              <Box style={{ padding: '0 20px 20px' }}>
+                <LoadFailed message={apiErrorMessage(hostsQuery.error)} onRetry={() => void hostsQuery.refetch()} />
+              </Box>
+            ) : loadView(hostsQuery) === 'loading' ? (
+              <Box style={{ padding: '18px 20px', borderTop: `1px solid ${HAIRLINE}` }}>
+                <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: FAINT }}>{t('common.loading')}</Text>
+              </Box>
+            ) : (hostsQuery.data?.hosts ?? []).length === 0 ? (
               <Box style={{ padding: '18px 20px', borderTop: `1px solid ${HAIRLINE}` }}>
                 <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: FAINT }}>
                   {t('nodeEdit.hostsEmpty')}

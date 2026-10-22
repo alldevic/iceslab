@@ -92,7 +92,8 @@ export function SystemPanel({
 
                 <Divider />
                 <FactRow label={t('nodeEdit.today')} value={formatBytes(dashNode?.todayBytes ?? 0)} />
-                <FactRow label={t('nodeEdit.hosts')} value={String(hostsQuery.data?.hosts.length ?? 0)} />
+                {/* «-» without the list: «0 hosts» over a failed request is a claim (A-141). */}
+                <FactRow label={t('nodeEdit.hosts')} value={hostsQuery.data ? String(hostsQuery.data.hosts.length) : '-'} />
                 <FactRow
                   label={t('nodeEdit.userReach')}
                   value={dashNode ? `~${dashNode.inboundCount}` : '-'}
