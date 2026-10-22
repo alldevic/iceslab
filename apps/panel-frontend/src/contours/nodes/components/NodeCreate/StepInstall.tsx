@@ -255,7 +255,7 @@ export function StepInstall({
                   title={t('nodeCreate.tl4', { count: registered.hosts.length })}
                   hint={
                     registered.hosts.length > 0
-                      ? registered.hosts.map((h) => `${h.name} on ${h.port}`).join(', ')
+                      ? registered.hosts.map((h) => t('nodeCreate.tl4Host', { name: h.name, port: h.port })).join(', ')
                       : t('nodeCreate.tl4None')
                   }
                 />

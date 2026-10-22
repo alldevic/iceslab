@@ -176,6 +176,8 @@ export const nodes = {
     tl4_one: '{{count}} host starts serving',
     tl4_other: '{{count}} hosts start serving',
     tl4None: 'Attach hosts later from the node page.',
+    tl4Host: '{{name}} on port {{port}}',
+    slotHeld: 'adapter taken: "{{name}}"',
     heartbeatWait: 'Waiting for the first heartbeat',
     heartbeatGot: 'First heartbeat received',
     stepPending: 'This step is drawn next, against its own artboard.',
