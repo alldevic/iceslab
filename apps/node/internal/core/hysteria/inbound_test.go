@@ -78,6 +78,10 @@ func TestRenderConfig_WithBrutalBandwidth(t *testing.T) {
 	if !strings.Contains(got, "bandwidth:\n  up: 100 mbps\n  down: 200 mbps\n") {
 		t.Errorf("missing bandwidth section, got:\n%s", got)
 	}
+	// A-154: beside a bandwidth the flag turned Brutal off on both sides.
+	if strings.Contains(got, "ignoreClientBandwidth") {
+		t.Errorf("ignoreClientBandwidth beside a bandwidth, Brutal would be off:\n%s", got)
+	}
 }
 
 func TestRenderConfig_RequiresHostname(t *testing.T) {

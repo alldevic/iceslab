@@ -318,18 +318,23 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		}
 	}
 
-	// Cycle #5 ground truth: Hysteria 2 + Brutal CC requires the client to
-	// declare its own bandwidth at session start. Hiddify iOS / NekoBox /
-	// Streisand frequently negotiate `up=0` and the tunnel handshake then
-	// completes successfully but every proxied request times out at tx=0.
-	// Setting `ignoreClientBandwidth: true` forces BBR (CUBIC-class
-	// congestion control) and removes the client-bandwidth dependency
-	// entirely, at the cost of not using Brutal's aggressive scheduling.
-	// For real-world residential broadband this is invisible; for clients
-	// that DO declare valid bandwidth values via our subscription URI
-	// (`upmbps=`/`downmbps=`) Brutal still kicks in. Net: defaults that
-	// "just work" without sacrificing power-user tunability.
-	b.WriteString("\nignoreClientBandwidth: true\n")
+	// Brutal or BBR, one rule on both engines (A-154, 22.10; the sing-box
+	// render follows it). A profile with a bandwidth gets Brutal, capped by
+	// it: the server takes the client's declared rates, bounded by the
+	// profile's. A profile without one gets `ignoreClientBandwidth: true`,
+	// BBR on both sides, for clients that declare nothing usable (cycle #5:
+	// some negotiate up=0 and then time out every request).
+	//
+	// It was written always, and with it hysteria drops Brutal on both sides
+	// whatever the bandwidth says: the profile's Brutal fields did nothing,
+	// while the comment here promised Brutal for clients that declare their
+	// rates. Measured 22.10 on 2.12.3, a client declaring 30/40 Mbps: with
+	// the bandwidth and the flag both ends logged tx 0 (BBR); with the
+	// bandwidth alone the client logged tx 3750000 and the server 5000000
+	// (Brutal at the client's rates).
+	if inbound.BrutalUpMbps == 0 && inbound.BrutalDownMbps == 0 {
+		b.WriteString("\nignoreClientBandwidth: true\n")
+	}
 
 	// Cycle #6 reality-check 2026-05-12: Hysteria 2's per-user uplink/downlink
 	// counters are exposed via a separate HTTP API (`trafficStats:` block).

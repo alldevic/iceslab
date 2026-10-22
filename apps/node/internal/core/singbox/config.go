@@ -420,8 +420,15 @@ func splitHostPort(hostPort string, defPort int) (string, int) {
 // the self-signed cert/key from bootstrap-singbox.sh (like tuic/anytls), so the
 // client connects with cert verification off. Per-user auth is the inline
 // users[] password (= the user's HysteriaPassword), unlike the xray-hysteria
-// path which authenticates via an HTTP callback. ignore_client_bandwidth mirrors
-// that path's "just works even when a client negotiates up=0" default.
+// path which authenticates via an HTTP callback.
+//
+// Brutal or BBR by the native path's rule (A-154, 22.10): a profile with a
+// bandwidth gets up_mbps/down_mbps and Brutal, one without gets
+// ignore_client_bandwidth and BBR. Both were written together, which sing-box
+// documents as a conflict and which forced Brutal on the client, the opposite
+// of what the same profile did on native hysteria (Brutal off on both sides).
+// Measured 22.10 on 1.13.14 with a hysteria client declaring 30/40 Mbps: up/down
+// alone, client tx 3750000 (Brutal); the flag alone, client tx 0 (BBR).
 func renderHysteria2Config(certPath, keyPath, statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
 	ids := sortedIDs(users)
 	sbUsers := make([]sbUser, 0, len(ids))
@@ -435,7 +442,7 @@ func renderHysteria2Config(certPath, keyPath, statsListen string, inbound Inboun
 		Listen:                "0.0.0.0",
 		ListenPort:            inbound.ListenPort,
 		Users:                 sbUsers,
-		IgnoreClientBandwidth: true,
+		IgnoreClientBandwidth: inbound.BrutalUpMbps == 0 && inbound.BrutalDownMbps == 0,
 		TLS: &sbTLS{
 			Enabled:         true,
 			ServerName:      inbound.ServerName,
