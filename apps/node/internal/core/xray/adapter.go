@@ -1655,6 +1655,14 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		return &refusedError{fmt.Errorf("validate xray config: %w", err)}
 	}
 
+	// Only the routing changed (a policy rule, a cascade's entry rules): handed
+	// to the running core, no restart, open connections keep going (A-134).
+	if live, err := a.applyRoutingLive(ctx, blob, inbound.withDefaults().ApiPort, geo); err != nil {
+		return err
+	} else if live {
+		return nil
+	}
+
 	if cfgPath != "" {
 		if err := writeConfig(cfgPath, blob); err != nil {
 			return err

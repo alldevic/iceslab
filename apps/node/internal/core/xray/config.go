@@ -882,8 +882,13 @@ func renderMultiConfig(
 		},
 		"stats": map[string]any{},
 		"api": map[string]any{
-			"tag":      "api",
-			"services": []string{"StatsService", "HandlerService"},
+			"tag": "api",
+			// RoutingService for `xray api adrules`: a routing-only change is
+			// handed to the running core instead of restarting it (A-134).
+			// Without it the call answers "unknown service
+			// xray.app.router.command.RoutingService" (found on the live test,
+			// 22.10).
+			"services": []string{"StatsService", "HandlerService", "RoutingService"},
 		},
 		"policy": map[string]any{
 			"levels": map[string]any{
