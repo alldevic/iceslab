@@ -7,8 +7,9 @@
 //   - sing-box runs as a managed subprocess (`sing-box run -c config.json`),
 //     same lifecycle model as the xray adapter.
 //   - TUIC users live inside the inbound's `users[]`, so AddUser/RemoveUser
-//     re-render the config and restart sing-box (config-restart model). Live
-//     user management without restart is a later optimisation.
+//     re-render the config and restart sing-box (config-restart model), in
+//     batches (batch.go): sing-box 1.13.14 has no live user management outside
+//     shadowsocks, and its reload closes open connections too.
 //   - regenerateAndRestart is serialized by restartMu; a.mu is held only for
 //     fast in-memory snapshots, never across the subprocess Stop/Start IO, so
 //     Healthy()/GetStats never block behind a multi-second restart (bug #1).
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
@@ -52,6 +54,10 @@ type Config struct {
 	XrayStatsBin string
 	// RunCmd runs the stats query; nil defaults to os/exec. Tests inject a fake.
 	RunCmd RunCmdFunc
+	// QuietWindow and MaxWait batch user changes into one restart (batch.go).
+	// Zero takes the defaults, 2 s and 10 s.
+	QuietWindow time.Duration
+	MaxWait     time.Duration
 }
 
 type Adapter struct {
@@ -76,6 +82,12 @@ type Adapter struct {
 	// changes can't race the subprocess swap. Never held together with mu
 	// across IO.
 	restartMu sync.Mutex
+
+	// The pending batch of user changes (batch.go), under mu. onFlush is a
+	// test hook: the moment a batch decides to restart.
+	batchTimer *time.Timer
+	batchFirst time.Time
+	onFlush    func()
 }
 
 func New(cfg Config, logger *slog.Logger) *Adapter {
@@ -84,6 +96,12 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 	}
 	if cfg.Protocol == "" {
 		cfg.Protocol = Name
+	}
+	if cfg.QuietWindow == 0 {
+		cfg.QuietWindow = defaultQuietWindow
+	}
+	if cfg.MaxWait == 0 {
+		cfg.MaxWait = defaultMaxWait
 	}
 	return &Adapter{
 		cfg:      cfg,
@@ -124,6 +142,7 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
 	a.mu.Lock()
+	a.dropBatchLocked()
 	if a.inbound == (InboundConfig{}) && a.proc == nil {
 		a.mu.Unlock()
 		return nil
@@ -141,6 +160,7 @@ func (a *Adapter) Idle(ctx context.Context) error {
 
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.mu.Lock()
+	a.dropBatchLocked()
 	a.started = false
 	proc := a.proc
 	a.proc = nil
@@ -171,8 +191,13 @@ func (a *Adapter) AddUser(user core.User) error {
 		Password: password,
 		Username: user.Username,
 	}
+	serving := a.inbound.ListenPort != 0
 	a.mu.Unlock()
-	return a.regenerateAndRestart()
+	// Nothing runs without an inbound; the first ApplyInbound renders them.
+	if serving {
+		a.scheduleRestart()
+	}
+	return nil
 }
 
 // credsFor extracts (uuid, password) for the adapter's protocol from a user.
@@ -208,8 +233,12 @@ func (a *Adapter) RemoveUser(userID string) error {
 		return nil
 	}
 	delete(a.users, userID)
+	serving := a.inbound.ListenPort != 0
 	a.mu.Unlock()
-	return a.regenerateAndRestart()
+	if serving {
+		a.scheduleRestart()
+	}
+	return nil
 }
 
 // GetStats reports per-user cumulative byte counters, read from sing-box's
@@ -344,6 +373,9 @@ func (a *Adapter) regenerateAndRestart() error {
 	defer a.restartMu.Unlock()
 
 	a.mu.Lock()
+	// This render carries every user change so far: a batch still waiting
+	// would only restart again for nothing.
+	a.dropBatchLocked()
 	inbound := a.inbound
 	binPath := a.cfg.BinaryPath
 	cfgPath := a.cfg.ConfigPath
