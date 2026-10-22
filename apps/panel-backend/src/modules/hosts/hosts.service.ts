@@ -14,6 +14,7 @@ import {
   PortHeldByCoreServiceError,
   PortInUseError,
   ProfileNotFoundError,
+  updateBinding,
 } from '../profiles/profiles.service.js';
 import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
 import { hostConfigChangedAt } from './hosts.freshness.js';
@@ -32,6 +33,23 @@ export class HostNotFoundError extends Error {
   constructor(public id: string) {
     super(`Host ${id} not found`);
     this.name = 'HostNotFoundError';
+  }
+}
+
+/** A-150: moving the listen port would move the other hosts of the binding. */
+export class HostPortSharedError extends Error {
+  readonly code = 'HOST_PORT_SHARED';
+  constructor(
+    public port: number,
+    public hosts: string[],
+  ) {
+    super(
+      `the port belongs to the inbound on the node, and ${hosts.length === 1 ? 'host' : 'hosts'} ` +
+        `${hosts.map((h) => `"${h}"`).join(', ')} ${hosts.length === 1 ? 'uses' : 'use'} it too. ` +
+        `Moving it to ${port} moves ${hosts.length === 1 ? 'that host' : 'them'} as well: send ` +
+        `confirmSharedPort to do that.`,
+    );
+    this.name = 'HostPortSharedError';
   }
 }
 
@@ -235,12 +253,23 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
     securityLayer: input.securityLayer,
   });
 
+  // A-150: an override equal to what clients get anyway (the binding's public
+  // port, else its listen port) is not stored. The create screen sent the
+  // binding's own port as one, and that copy then shadowed every later move
+  // of the listen port in the subscription.
+  const existingBinding = plan.bindingId
+    ? await prisma.profileNodeBinding.findUnique({
+        where: { id: plan.bindingId },
+        select: { port: true, publicPort: true },
+      })
+    : null;
+  const listenPort = existingBinding ? (existingBinding.publicPort ?? existingBinding.port) : plan.port;
   const hostData = {
     remark: input.remark,
     priority: input.priority,
     enabled: input.enabled,
     addressOverride: input.addressOverride ?? null,
-    portOverride: input.portOverride ?? null,
+    portOverride: input.portOverride != null && input.portOverride !== listenPort ? input.portOverride : null,
     sniOverride: input.sniOverride ?? null,
     hostHeaderOverride: input.hostHeaderOverride ?? null,
     pathOverride: input.pathOverride ?? null,
@@ -381,12 +410,46 @@ export async function updateHost(
       input.securityLayer !== undefined ? input.securityLayer : existing.securityLayer,
   });
 
+  /**
+   * A-150: the port on this screen is the port the node LISTENS on, and it
+   * belongs to the binding. Moving it goes through updateBinding: the same
+   * port checks as creating one, then the push. Before this the field wrote
+   * portOverride, the node kept the old port, and every client was handed a
+   * port nothing listened on.
+   *
+   * The binding may carry other hosts (a CDN variant beside the direct one);
+   * they all move with it, so that takes `confirmSharedPort` and is refused
+   * by name otherwise.
+   */
+  const binding = await prisma.profileNodeBinding.findUniqueOrThrow({
+    where: { id: existing.bindingId },
+    select: { port: true, publicPort: true, hosts: { select: { id: true, remark: true } } },
+  });
+  const moving = input.port !== undefined && input.port !== binding.port;
+  if (moving) {
+    const others = binding.hosts.filter((h) => h.id !== id).map((h) => h.remark);
+    if (others.length > 0 && input.confirmSharedPort !== true) {
+      throw new HostPortSharedError(input.port!, others);
+    }
+    await updateBinding(existing.bindingId, { port: input.port! });
+  }
+  // What clients get without an override: the binding's public port, else the
+  // port the node listens on (subscription.service.ts, basePort).
+  const listenPort = binding.publicPort ?? (moving ? input.port! : binding.port);
+
   const data: Prisma.HostUpdateInput = {};
   if (input.remark !== undefined) data.remark = input.remark;
   if (input.priority !== undefined) data.priority = input.priority;
   if (input.enabled !== undefined) data.enabled = input.enabled;
   if (input.addressOverride !== undefined) data.addressOverride = input.addressOverride;
-  if (input.portOverride !== undefined) data.portOverride = input.portOverride;
+  // An override equal to the listen port is no override: stored as null, so a
+  // later move of the listen port is not shadowed by a stale copy of the old
+  // one (the trace the create screen used to leave, A-150).
+  if (input.portOverride !== undefined) {
+    data.portOverride = input.portOverride === listenPort ? null : input.portOverride;
+  } else if (moving && existing.portOverride === listenPort) {
+    data.portOverride = null;
+  }
   if (input.sniOverride !== undefined) data.sniOverride = input.sniOverride;
   if (input.hostHeaderOverride !== undefined) {
     data.hostHeaderOverride = input.hostHeaderOverride;

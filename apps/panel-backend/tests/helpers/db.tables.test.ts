@@ -28,6 +28,10 @@ const EXEMPT = new Set<string>([
   // Prisma's own migration ledger. Truncating it would make every later run
   // believe the schema was never migrated.
   '_prisma_migrations',
+  // A-150's rollback record: the port overrides the data migration cleared.
+  // No code writes it and no test reads it; dropped by that migration's
+  // rollback.
+  'host_port_override_a150_backup',
 ]);
 
 describe('the test-database truncate list', () => {

@@ -87,7 +87,18 @@ export const UpdateHostSchema = z
     remark: z.string().min(1).max(64).optional(),
     priority: z.number().int().min(0).max(1000).optional(),
     enabled: z.boolean().optional(),
+    /**
+     * A-150: the port the NODE listens on, i.e. the binding's port. Changing it
+     * moves the inbound (same port checks as creating one, then a push). Before
+     * this the screen's "port" wrote portOverride, so the node kept listening
+     * on the old port while the subscription handed out the new one.
+     */
+    port: z.number().int().min(1).max(65535).optional(),
+    /** A-150: the binding carries other hosts too; `true` moves them all. */
+    confirmSharedPort: z.boolean().optional(),
     addressOverride: z.string().min(1).max(253).nullable().optional(),
+    /** The port CLIENTS dial when it differs from the one the node listens on
+     *  (NAT, CDN). Only this writes portOverride; null clears it. */
     portOverride: z.number().int().min(1).max(65535).nullable().optional(),
     sniOverride: z.string().min(1).max(253).nullable().optional(),
     hostHeaderOverride: z.string().min(1).max(253).nullable().optional(),

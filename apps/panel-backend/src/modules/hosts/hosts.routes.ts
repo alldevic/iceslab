@@ -108,6 +108,18 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
           expected: err.expected,
         });
       }
+      // A-150: a port move. The other hosts it would carry along, by name.
+      if (err instanceof svc.HostPortSharedError) {
+        return reply.code(409).send({ error: err.code, message: err.message, port: err.port, hosts: err.hosts });
+      }
+      // And the port checks of the binding it moves, the same body as create.
+      if (
+        err instanceof svc.PortInUseError ||
+        err instanceof svc.PortHeldByCascadeError ||
+        err instanceof svc.PortHeldByCoreServiceError
+      ) {
+        return reply.code(409).send({ error: err.code, message: err.message, conflicts: err.conflicts });
+      }
       throw err;
     }
   });
