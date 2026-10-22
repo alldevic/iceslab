@@ -100,8 +100,10 @@ export type SubscriptionLinkShape = 'per-node' | 'per-exit';
 
 export type DeadTexts = Partial<Record<DeadTextState, { ru?: string; en?: string }>>;
 
-/** Что вернула проверка адреса выдачи. `ok` это «панель достучалась», а не
- *  «всё хорошо»: 404 по несуществующему токену тоже ответ, и правильный. */
+/** Что вернула проверка адреса выдачи. `ok` с A-137 (371d5d85) это «ответил сам
+ *  маршрут подписки» (его 404 по токену, которого ни у кого нет), а не любой
+ *  ответ ниже 500. `error` слова сервера при `ok: false`, и когда адрес ответил
+ *  не тем (`status` > 0), и когда не ответил вовсе. Читается probeVerdict. */
 export interface SubscriptionProbe {
   ok: boolean;
   status: number;

@@ -61,7 +61,8 @@ export const subscription = {
 
     probe: 'Check',
     probing: 'Checking',
-    probeOk: 'The address answers the panel',
+    probeOk: 'The subscription route answers at this address',
+    probeNotRoute: 'The address answers, but not the subscription route: clients will not get configs',
     probeBad: 'The address could not be reached',
     probeFailed: 'The check did not run',
     probeCode: 'Code',
