@@ -929,6 +929,13 @@ export async function updateBinding(
   // after this edit rather than from what it was.
   const nextOverrides = input.overrides !== undefined ? input.overrides : existing.overrides;
   assertSingboxServesBinding(existing.profile, nextOverrides);
+  // A-199: an MTU set through the binding's overrides is the node's mieru MTU
+  // too, and one mita process holds one. Beside another mieru inbound a
+  // different MTU is refused here, or the agent answers 500 on every push.
+  if (existing.profile.protocol === 'mieru' && input.overrides !== undefined) {
+    const node = await prisma.node.findUniqueOrThrow({ where: { id: existing.nodeId }, select: { id: true, name: true } });
+    await assertAdapterSlotFree(node, { ...existing.profile, id: existing.profileId }, nextOverrides);
+  }
   const transport = transportForBinding(existing.profile, nextOverrides);
   const nextPort = input.port ?? existing.port;
 

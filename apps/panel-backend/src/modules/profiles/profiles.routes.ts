@@ -327,6 +327,10 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof svc.ProfileEngineNotForTransportError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: err.path });
       }
+      // A-199: an MTU in the overrides that the node's mieru does not run.
+      if (err instanceof MieruMtuMismatchError) {
+        return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });
+      }
       throw err;
     }
   });

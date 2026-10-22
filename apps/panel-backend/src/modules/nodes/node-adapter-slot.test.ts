@@ -161,6 +161,21 @@ describe('one inbound per adapter where the agent holds one', () => {
     expect(JSON.parse(res.body).error).toBe('MIERU_MTU_MISMATCH');
   });
 
+  it('an MTU set through a binding override beside another mieru is refused (A-199)', async () => {
+    const n = await node();
+    const a = await profile('mieru', { mtu: 1400 });
+    const b = await profile('mieru', { mtu: 1400 });
+    expect((await post('/api/bindings', { profileId: a, nodeId: n, port: 2012 })).status).toBe(201);
+    const second = await post('/api/bindings', { profileId: b, nodeId: n, port: 2013 });
+    expect(second.status).toBe(201);
+    const put = (overrides: unknown) =>
+      app.inject({ method: 'PUT', url: `/api/bindings/${second.body.id}`, headers: auth(), payload: { overrides } });
+    const refused = await put({ mtu: 1280 });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: 'MIERU_MTU_MISMATCH', mtu: 1400, wanted: 1280 });
+    expect((await put({ mtu: 1400 })).statusCode).toBe(200);
+  });
+
   it('a second hysteria on its native core is refused', async () => {
     const n = await node();
     const a = await profile('hysteria', {});
