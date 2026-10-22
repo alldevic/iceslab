@@ -4,11 +4,14 @@ import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { DISPLAY, GROUND, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contours/users/lib/colors';
 import { LABEL } from '@/contours/users/lib/userForm';
 import { deleteHwidDevice, listUserDevices } from '@/lib/domain/users';
+import type { DeviceCap } from '@/contours/users/lib/deviceLimit';
 import { notifications } from '@mantine/notifications';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-export function DeviceList({ userId, limit }: { userId: string; limit: number | '' }) {
+/** Devices against the limit the user is actually held to (A-148,
+ *  `effectiveDeviceCap`): their own, the squads', or none. */
+export function DeviceList({ userId, cap }: { userId: string; cap: DeviceCap }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const devicesQuery = useQuery({
@@ -32,8 +35,13 @@ export function DeviceList({ userId, limit }: { userId: string; limit: number | 
 
   const devices = devicesQuery.data?.devices ?? [];
   const used = devices.length;
-  const cap = limit === '' ? null : Number(limit);
-  const full = cap !== null && cap > 0 && used >= cap;
+  const full = cap.kind === 'limit' && used >= cap.limit;
+  const counter =
+    cap.kind === 'limit'
+      ? t(cap.from === 'squad' ? 'userDrawer.devicesCounterSquad' : 'userDrawer.devicesCounter', { used, limit: cap.limit })
+      : cap.kind === 'none'
+        ? t(cap.from === 'user' ? 'userDrawer.devicesCounterUnlimited' : 'userDrawer.devicesCounterNoLimit', { used })
+        : t('userDrawer.devicesCounterUnknown', { used });
 
   return (
     <Box
@@ -49,9 +57,7 @@ export function DeviceList({ userId, limit }: { userId: string; limit: number | 
         <Text style={{ ...LABEL, letterSpacing: '0.14em' }}>{t('userDrawer.devices')}</Text>
         <Box style={{ flex: 1 }} />
         <Text style={{ fontFamily: MONO, fontSize: 10, color: full ? RED : MIST }}>
-          {cap === null
-            ? t('userDrawer.devicesCounterNoLimit', { used })
-            : t('userDrawer.devicesCounter', { used, limit: cap })}
+          {counter}
         </Text>
       </Box>
 

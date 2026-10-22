@@ -134,7 +134,8 @@ export const USER_COLUMNS: UserColumn[] = [
     id: 'deviceLimit',
     label: 'deviceLimit',
     width: 130,
-    filter: { kind: 'choice', param: 'deviceLimit', values: ['set', 'unset'] },
+    // A-148: 0 is its own value, the explicit no-limit; `unset` is «as the squad».
+    filter: { kind: 'choice', param: 'deviceLimit', values: ['set', 'unlimited', 'unset'] },
   },
   {
     id: 'firstConnected',

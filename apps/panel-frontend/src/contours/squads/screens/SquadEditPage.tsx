@@ -835,7 +835,10 @@ export function SquadEditPage() {
                   placeholder={t('squadEdit.hwidPlaceholder')}
                   value={hwidLimit}
                   disabled={isAll}
-                  min={0}
+                  // A-148: a squad's limit is 1 or more (the server refuses 0);
+                  // the explicit no-limit, 0, is the user's own value only.
+                  min={1}
+                  clampBehavior="strict"
                   onChange={(v) => {
                     setHwidLimit(typeof v === 'number' ? v : '');
                     setDirty(true);

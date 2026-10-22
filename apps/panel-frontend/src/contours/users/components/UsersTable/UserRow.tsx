@@ -12,6 +12,7 @@ import { copyToClipboard } from '@/lib/ui/clipboard';
 import { expireRelative, formatBytes, trafficPercent } from '@/contours/users/lib/userFormat';
 import { presetKey } from '@/lib/domain/routingPresets';
 import { subscriptionLink } from '@/contours/users/lib/subscriptionLink';
+import { deviceLimitCell } from '@/contours/users/lib/deviceLimit';
 import { apiErrorMessage } from '@/lib/net/client';
 import { useTranslation } from 'react-i18next';
 import { SquadPill } from '@/contours/users/components/UsersTable/SquadPill';
@@ -271,7 +272,13 @@ export function UserRow({
           : t('userDrawer.inheritsSquad')}
       </Plain>
     ),
-    deviceLimit: () => <Plain>{u.hwidDeviceLimit ?? '∞'}</Plain>,
+    // A-148: null is «as the squad», not «no limit»; 0 is the explicit no-limit.
+    deviceLimit: () => {
+      const cell = deviceLimitCell(u.hwidDeviceLimit);
+      return (
+        <Plain>{cell.kind === 'limit' ? cell.limit : cell.kind === 'none' ? '∞' : t('usersTable.deviceLimitSquad')}</Plain>
+      );
+    },
     /**
      * Three answers again, and the middle one is the whole point.
      *

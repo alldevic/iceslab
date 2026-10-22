@@ -134,7 +134,11 @@ export const users = {
       'Это прикидка по развёрнутым профилям. Точный список появится после сохранения: его считает та же сборка, что отдаёт подписку.',
     devices: 'Устройства',
     devicesCounter: 'занято {{used}} из {{limit}}',
-    devicesCounterNoLimit: 'зарегистрировано: {{used}}',
+    devicesCounterNoLimit: 'зарегистрировано: {{used}}, сквады лимит не задают',
+    // A-148: счёт по действующему лимиту.
+    devicesCounterSquad: 'занято {{used}} из {{limit}} (лимит сквада)',
+    devicesCounterUnlimited: 'зарегистрировано: {{used}}, явно без лимита',
+    devicesCounterUnknown: 'зарегистрировано: {{used}}, лимит сквада неизвестен',
     devicesEmpty:
       'Устройств нет, и это нормально: строка появляется, когда клиент впервые присылает свой идентификатор.',
     devicesFull: 'Все места заняты. Новое устройство не подключится, пока не сбросить одно из этих.',
@@ -195,7 +199,7 @@ export const users = {
     hwidLimit: 'Лимит HWID',
     tag: 'Тег',
     hwidHint:
-      'Пусто = без лимита. Работает только для клиентов, которые шлют заголовок x-hwid (Hiddify, Streisand, Happ).',
+      'Лимит устройств. Пусто: как у сквада; 0: без лимита. Работает только для клиентов, которые шлют заголовок x-hwid (Hiddify, Streisand, Happ).',
     note: 'Заметка',
     notePlaceholder: 'Внутренняя заметка, клиенту не видна',
     routingOverride: 'Переопределение маршрутов',
@@ -287,6 +291,7 @@ export const users = {
   },
 
   usersTable: {
+    deviceLimitSquad: 'как у сквада',
     paused: '- пауза',
     pausedHintQuota: 'квота исчерпана',
     pausedHintExpired: 'срок истёк',
@@ -335,7 +340,7 @@ export const users = {
     // `none`. Словари взяты с сервера дословно.
     filterValue: {
       trafficLimit: { limited: 'С лимитом', unlimited: 'Без лимита' },
-      deviceLimit: { set: 'Лимит задан', unset: 'Без лимита' },
+      deviceLimit: { set: 'Лимит задан', unlimited: 'Явно без лимита', unset: 'Как у сквада' },
       telegram: { linked: 'Привязан', none: 'Не привязан' },
       email: { set: 'Заполнен', none: 'Пустой' },
       revoked: { yes: 'Отозвана', no: 'Действует' },

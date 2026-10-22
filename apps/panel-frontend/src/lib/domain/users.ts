@@ -126,7 +126,9 @@ export interface UserFilters {
   trafficLimit?: 'limited' | 'unlimited';
   usedOver?: number;
   usedUnder?: number;
-  deviceLimit?: 'set' | 'unset';
+  /** A-148 (e5d4d75c): `set` a limit of one or more, `unlimited` the explicit
+   *  no-limit (0), `unset` none of the user's own (as the squads say). */
+  deviceLimit?: 'set' | 'unlimited' | 'unset';
   telegram?: 'linked' | 'none';
   email?: 'set' | 'none';
   revoked?: 'yes' | 'no';

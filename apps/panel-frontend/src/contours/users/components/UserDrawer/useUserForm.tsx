@@ -7,6 +7,7 @@ import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
 import { defaultValues, trafficLimitInput, trafficLimitProblem, userUpdatePatch } from '@/contours/users/lib/userForm';
 import { expiryDays } from '@/contours/users/lib/userExpiry';
 import { endpointsWhy } from '@/contours/users/lib/endpointsWhy';
+import { effectiveDeviceCap } from '@/contours/users/lib/deviceLimit';
 import { userSaveRefusal } from '@/contours/users/lib/userSaveRefusal';
 import { fetchUserEndpoints, listUsers } from '@/lib/domain/users';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
@@ -255,6 +256,22 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
    * Every user is in All whether or not the form lists it, so All's own preset
    * counts here exactly as the backend counts it.
    */
+  // The device limit the user is held to (A-148): their own, or the squads'
+  // (All plus the picked ones, as the routing clash below counts them). No
+  // squad list: an inherited limit is unknown, not «none».
+  const deviceCap = useMemo(
+    () =>
+      effectiveDeviceCap(
+        form.values.hwidDeviceLimit,
+        loadView(squadsQuery) === 'ready'
+          ? squads
+              .filter((s) => s.id === ALL_SQUAD_ID || form.values.groupIds.includes(s.id))
+              .map((s) => s.hwidDeviceLimit)
+          : null,
+      ),
+    [form.values.hwidDeviceLimit, form.values.groupIds, squads, squadsQuery],
+  );
+
   const squadRoutingClash = useMemo(() => {
     const named = squads.filter(
       (s) =>
@@ -419,6 +436,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     endpointsQuery,
     estimate,
     preview,
+    deviceCap,
     squadRoutingClash,
     squadRoutingSource,
     setCreateNext,

@@ -125,7 +125,10 @@ export const users = {
       'An estimate from the deployed profiles. The exact list appears once saved: it is built by the same pipeline that serves the subscription.',
     devices: 'Devices',
     devicesCounter: '{{used}} of {{limit}} slots used',
-    devicesCounterNoLimit: 'registered: {{used}}',
+    devicesCounterNoLimit: 'registered: {{used}}, no squad sets a limit',
+    devicesCounterSquad: '{{used}} of {{limit}} slots used (squad limit)',
+    devicesCounterUnlimited: 'registered: {{used}}, explicitly unlimited',
+    devicesCounterUnknown: 'registered: {{used}}, squad limit unknown',
     devicesEmpty:
       'No devices, which is normal: a row appears the first time a client sends its identifier.',
     devicesFull: 'Every slot is taken. A new device cannot connect until one of these is reset.',
@@ -184,7 +187,7 @@ export const users = {
     hwidLimit: 'HWID limit',
     tag: 'Tag',
     hwidHint:
-      'Empty means no limit. Enforced only for clients sending the x-hwid header (Hiddify, Streisand, Happ).',
+      'Device limit. Empty: as the squad; 0: no limit. Enforced only for clients sending the x-hwid header (Hiddify, Streisand, Happ).',
     note: 'Note',
     notePlaceholder: 'Internal note, never shown to the client',
     routingOverride: 'Routing override',
@@ -275,6 +278,7 @@ export const users = {
   },
 
   usersTable: {
+    deviceLimitSquad: 'as squad',
     paused: '- paused',
     pausedHintQuota: 'quota hit',
     pausedHintExpired: 'expired',
@@ -318,7 +322,7 @@ export const users = {
     // `unset` in one and `none` in the other. Taken from the server verbatim.
     filterValue: {
       trafficLimit: { limited: 'Limited', unlimited: 'Unlimited' },
-      deviceLimit: { set: 'Limit set', unset: 'No limit' },
+      deviceLimit: { set: 'Limit set', unlimited: 'Explicitly unlimited', unset: 'As the squad' },
       telegram: { linked: 'Linked', none: 'Not linked' },
       email: { set: 'Filled in', none: 'Empty' },
       revoked: { yes: 'Revoked', no: 'Live' },
