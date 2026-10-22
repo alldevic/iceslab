@@ -39,7 +39,7 @@ func coresSection(t *testing.T) string {
 
 type installRun struct {
 	out, calls, env string
-	err            error
+	err             error
 }
 
 // runInstall builds a checkout (with or without lib/node-env.sh), runs

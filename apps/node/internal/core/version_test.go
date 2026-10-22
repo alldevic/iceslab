@@ -26,8 +26,8 @@ func TestParseVersionOnWhatTheBinariesActuallySay(t *testing.T) {
 		// Unix timestamp went out as the naive version.
 		`{"level":"info","ts":1790322240.3261952,"msg":"maxprocs: Leaving GOMAXPROCS=2: CPU quota undefined"}` + "\n" +
 			"v2.11.4 h1:XKxkY1bSEM1eCTrRMYHCN5NsuaQNSOWzEx8mA1k4Hkw=\n": "2.11.4",
-		"no version here":  "",
-		"":                 "",
+		"no version here": "",
+		"":                "",
 	}
 	for out, want := range cases {
 		if got := ParseVersion([]byte(out)); got != want {
