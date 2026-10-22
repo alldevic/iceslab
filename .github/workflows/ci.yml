@@ -8,6 +8,13 @@ on:
     # main. Without it a merge into develop reached that server having passed
     # nothing but whatever the PR happened to run.
     branches: [main, develop]
+    # ⚠ Release tags too. With `branches` alone a tag push starts nothing:
+    # GitHub runs a push workflow only for the ref kinds it lists, so from
+    # 2026-07-30 until this line no tag ran CI, the `docker` job's semver tags
+    # (`:0.2.1`, `:0.2`, `:latest`) were never published, and release.yml,
+    # which waits for this workflow to pass ON THE TAG, would have waited
+    # forever.
+    tags: ['v*']
 
 # Cancel in-flight runs when a new commit lands on the same ref. Saves
 # minutes on rapid push-fix-push cycles and removes confusing red marks
@@ -34,15 +41,19 @@ jobs:
     name: changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # A release tag runs everything. What a release ships is the whole tree, not
+    # the diff of its last commit, and a tag push has no `before` to compare
+    # with in the first place.
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      node: ${{ steps.filter.outputs.node }}
+      backend: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.backend }}
+      frontend: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.frontend }}
+      node: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.node }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: dorny/paths-filter@v4
         id: filter
+        if: "!startsWith(github.ref, 'refs/tags/')"
         with:
           # The lockfile, the workspace file and THIS FILE are in every list: an
           # install affects all three apps whichever one the commit was about,
@@ -77,9 +88,9 @@ jobs:
             echo ""
             echo "| area | runs |"
             echo "| --- | --- |"
-            echo "| backend | ${{ steps.filter.outputs.backend }} |"
-            echo "| frontend | ${{ steps.filter.outputs.frontend }} |"
-            echo "| node-agent | ${{ steps.filter.outputs.node }} |"
+            echo "| backend | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.backend }} |"
+            echo "| frontend | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.frontend }} |"
+            echo "| node-agent | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.node }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
@@ -539,7 +550,7 @@ jobs:
   #   ghcr.io/icecompany-tech/iceslab-backend:main         (rolling)
   #   ghcr.io/icecompany-tech/iceslab-backend:develop      (rolling, test server)
   #   ghcr.io/icecompany-tech/iceslab-backend:sha-<7c>     (every push)
-  #   ghcr.io/icecompany-tech/iceslab-backend:v1.2.3       (only on `v*` tags)
+  #   ghcr.io/icecompany-tech/iceslab-backend:1.2.3        (only on `v*` tags, no `v`)
   # develop publishes because the operator's test server pulls from it; the
   # `develop` tag is what makes "merged into develop" and "deployable to test"
   # the same event instead of a manual rebuild on the box.
@@ -625,6 +636,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # What a tag gets, read from metadata-action's procSemver, not assumed:
+      #   v0.3.0       -> 0.3.0, 0.3, sha-<7>, and `latest` (flavor latest=auto)
+      #   v0.3.0-rc.1  -> 0.3.0-rc.1 and sha-<7> only. A pre-release falls back
+      #                   to {{version}} for every pattern and never sets latest.
+      # `type=ref,event=branch` is empty on any tag, so no tag moves `main`.
+      # Nothing here pulls `latest` (compose defaults to `main`), but a
+      # candidate must not move it for whoever does.
       - name: Metadata
         id: meta
         uses: docker/metadata-action@v6
