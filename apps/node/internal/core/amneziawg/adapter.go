@@ -146,12 +146,16 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 }
 
 func newOne(cfg Config, logger *slog.Logger) *Adapter {
-	return &Adapter{
+	a := &Adapter{
 		cfg:       cfg,
 		logger:    logger,
 		peers:     make(map[string]Peer),
 		lastStats: make(map[string]peerCounters),
 	}
+	// Before Start and before the first push: the interface the kernel kept
+	// up is matched by what the previous agent applied to it (A-114).
+	a.loadState()
+	return a
 }
 
 // both is this adapter and its 3.1 one, when there is one.
@@ -317,6 +321,9 @@ func (a *Adapter) idleOne(ctx context.Context) error {
 	managed := a.cfg.AwgQuickBin != ""
 	iface := a.cfg.Inbound.Interface
 	a.mu.Unlock()
+	// Saved without the key, so a restart does not bring back up an interface
+	// the last push took down.
+	a.saveState()
 	a.logger.Info("amneziawg: no inbound in the last push, interface down", "interface", iface)
 	if !managed {
 		return nil
@@ -403,6 +410,13 @@ func (a *Adapter) addPeer(user core.User) error {
 	desired := Peer{
 		PublicKey: user.AmneziaWGPublicKey,
 		AllowedIP: ensureCIDR(user.AmneziaWGAllowedIP),
+	}
+	// Checked before it is kept. П-3, 22.10: a peer the render refuses sat in
+	// the map, and every later render of the interface failed on it: nobody
+	// added, nobody removed, the config frozen until the agent restarted. Now
+	// it is this call that fails, and only it.
+	if err := validatePeer(desired); err != nil {
+		return fmt.Errorf("amneziawg AddUser %s: %w", user.UserID, err)
 	}
 
 	a.mu.Lock()
@@ -833,6 +847,7 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 		if err := writeConfig(a.cfg.ConfigPath, blob); err != nil {
 			return err
 		}
+		a.saveState()
 		a.logger.Info("amneziawg restart skipped (config-only mode)")
 		a.setStarted(true)
 		return nil
@@ -848,6 +863,7 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 	if err := writeConfig(a.cfg.ConfigPath, blob); err != nil {
 		return err
 	}
+	a.saveState()
 	for _, t := range []*ChainTProxy{also, inbound.Chain} {
 		if err := a.sweepChain(ctx, inbound.Interface, t); err != nil {
 			return err
@@ -1042,6 +1058,7 @@ func (a *Adapter) applyCascadeOne(next *ChainTProxy) error {
 		if err := writeConfig(a.cfg.ConfigPath, mustRender(inbound, peers)); err != nil {
 			return err
 		}
+		a.saveState()
 		a.logger.Info("amneziawg ApplyCascade: hand-off to the chain changed in place, no bounce",
 			"interface", inbound.Interface, "chain", next != nil)
 		a.logChain(ctx, inbound.Interface, next)
@@ -1298,7 +1315,11 @@ func (a *Adapter) writeConfigSnapshot(inbound InboundConfig, peers []Peer) error
 	if err != nil {
 		return fmt.Errorf("render amneziawg config: %w", err)
 	}
-	return writeConfig(a.cfg.ConfigPath, blob)
+	if err := writeConfig(a.cfg.ConfigPath, blob); err != nil {
+		return err
+	}
+	a.saveState()
+	return nil
 }
 
 // sortedPeers returns peers in deterministic AllowedIP order so successive
