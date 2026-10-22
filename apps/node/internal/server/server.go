@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,28 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/hopguard"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/metrics"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
+)
+
+// transportsOf is what the firewall opens for one inbound: protoForInbound,
+// and xray on kcp is UDP (A-158, 22.10), the rule the panel's transportOf
+// (packages/shared/src/transport.ts) keeps. A kcp inbound got only a TCP
+// rule, and ufw dropped every packet of its clients.
+func transportsOf(ib dto.InboundDto) []string {
+	if ib.Protocol == dto.ProtocolXray && len(ib.Config) > 0 {
+		var cfg struct {
+			Network string `json:"network"`
+		}
+		if json.Unmarshal(ib.Config, &cfg) == nil && cfg.Network == "kcp" {
+			return []string{"udp"}
+		}
+	}
+	return protoForInbound(ib.Protocol)
+}
+
+// The firewall calls, swappable in tests (ufw is not there).
+var (
+	fwAllow = firewall.Allow
+	fwClose = firewall.Close
 )
 
 // protoForInbound returns the L4 protocols the given inbound listens on.
@@ -964,7 +987,10 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		// 22.10: it was written before, so a push the cores refused (and kept
 		// running the previous config through) became what the next agent
 		// restart came up on, with nothing left to fall back to.
-		if err := s.persistAccepted(req, o); err != nil {
+		before, after, err := s.persistAccepted(req, o)
+		if err == nil {
+			s.closeDroppedPorts(ctx, before, after)
+		} else {
 			s.logger.Error("persist inbounds failed", "err", err, "path", s.cfg.InboundsStorePath)
 			if failed == 0 {
 				// Applied, but a restart would not bring it back: the panel has
@@ -1479,8 +1505,48 @@ func (s *Server) ensureInboundFirewall(ctx context.Context, ib dto.InboundDto) {
 			"protocol", ib.Protocol, "inboundId", ib.ID)
 		return
 	}
-	for _, proto := range protoForInbound(ib.Protocol) {
-		firewall.Allow(ctx, s.logger, ib.Port, proto)
+	for _, proto := range transportsOf(ib) {
+		fwAllow(ctx, s.logger, ib.Port, proto)
+	}
+}
+
+// closeDroppedPorts closes the ports the cores served on before a push and do
+// not after it (A-158): a removed host, or one moved to another port, left
+// its rule open. Both sides are what the cores RUN (the stored accepted push
+// before and after), not what the panel sent: a refused inbound keeps its
+// old port, and closing it would cut the users still on it. A (port, proto)
+// another inbound still uses stays open, and the SSH port and the agent's own
+// are never touched.
+func (s *Server) closeDroppedPorts(ctx context.Context, before, after []dto.InboundDto) {
+	open := func(ibs []dto.InboundDto) map[string]bool {
+		out := map[string]bool{}
+		for _, ib := range ibs {
+			if ib.Port <= 0 {
+				continue
+			}
+			for _, proto := range transportsOf(ib) {
+				out[fmt.Sprintf("%d/%s", ib.Port, proto)] = true
+			}
+		}
+		return out
+	}
+	still := open(after)
+	keep := map[int]bool{22: true}
+	if p, err := strconv.Atoi(s.cfg.Port); err == nil {
+		keep[p] = true
+	}
+	for _, ib := range before {
+		if ib.Port <= 0 || keep[ib.Port] {
+			continue
+		}
+		for _, proto := range transportsOf(ib) {
+			spec := fmt.Sprintf("%d/%s", ib.Port, proto)
+			if still[spec] {
+				continue
+			}
+			still[spec] = true // once, even if two old inbounds shared it
+			fwClose(ctx, s.logger, ib.Port, proto)
+		}
 	}
 }
 

@@ -79,8 +79,9 @@ func readStored(path string) (storeFile, error) {
 }
 
 // persistAccepted writes what the cores took from this push over the stored
-// one. See acceptedPush.
-func (s *Server) persistAccepted(req dto.ApplyInboundsRequest, o pushOutcome) error {
+// one (see acceptedPush), and says the inbounds the cores ran before it and
+// run after it, for the firewall (closeDroppedPorts).
+func (s *Server) persistAccepted(req dto.ApplyInboundsRequest, o pushOutcome) (before, after []dto.InboundDto, err error) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	// No store yet, or one this agent cannot read: nothing to fall back to, so
@@ -89,7 +90,10 @@ func (s *Server) persistAccepted(req dto.ApplyInboundsRequest, o pushOutcome) er
 	out := storeFile{ApplyInboundsRequest: acceptedPush(prev.ApplyInboundsRequest, req, o)}
 	out.Policy, out.PolicyByCore = acceptedBlock(prev.Policy, prev.PolicyByCore, req.Policy, o.policyRefusedBy, o.policyTaken)
 	out.Dns, out.DnsByCore = acceptedBlock(prev.Dns, prev.DnsByCore, req.Dns, o.dnsRefusedBy, o.dnsTaken)
-	return writeStored(s.cfg.InboundsStorePath, out)
+	if err := writeStored(s.cfg.InboundsStorePath, out); err != nil {
+		return nil, nil, err
+	}
+	return prev.Inbounds, out.Inbounds, nil
 }
 
 /*

@@ -8,10 +8,9 @@
 // on during cycle #6 (subnet collision was its sibling).
 //
 // Idempotent by design: `ufw allow N/proto` is a no-op when the rule
-// already exists. We don't track old ports for cleanup, leftover
-// ufw rules from past port changes are harmless (just a few extra
-// ALLOW lines). Add `--delete` logic only if a real operator
-// complains about firewall noise.
+// already exists. A port no inbound uses any more is closed again (Close,
+// A-158): the agent compares the inbounds the cores ran before a push with
+// the ones they run after it.
 package firewall
 
 import (
@@ -110,6 +109,30 @@ func Allow(ctx context.Context, logger *slog.Logger, port int, proto string) {
 	allowedSpecs[spec] = struct{}{}
 	allowedMu.Unlock()
 	logger.Info("firewall.Allow: rule ensured", "spec", spec)
+}
+
+// Close removes the rule Allow added for (port, proto): `ufw delete allow
+// N/proto` (A-158, 22.10: the port of a removed host stayed open). Best-effort
+// like Allow: no ufw, or no such rule, is not a failure.
+func Close(ctx context.Context, logger *slog.Logger, port int, proto string) {
+	if port <= 0 || port > 65535 || (proto != "tcp" && proto != "udp") {
+		logger.Warn("firewall.Close: invalid spec, skipping", "port", port, "proto", proto)
+		return
+	}
+	spec := fmt.Sprintf("%d/%s", port, proto)
+	allowedMu.Lock()
+	delete(allowedSpecs, spec)
+	allowedMu.Unlock()
+	if _, err := exec.LookPath("ufw"); err != nil {
+		logger.Debug("firewall.Close: ufw not installed, skipping", "spec", spec)
+		return
+	}
+	out, err := runUfw(ctx, "delete", "allow", spec)
+	if err != nil {
+		logger.Warn("firewall.Close: ufw delete failed", "spec", spec, "err", err, "out", string(out))
+		return
+	}
+	logger.Info("firewall.Close: rule removed", "spec", spec, "out", strings.TrimSpace(string(out)))
 }
 
 // ifaceNameRe is what AllowInOn accepts as an interface name: the characters
