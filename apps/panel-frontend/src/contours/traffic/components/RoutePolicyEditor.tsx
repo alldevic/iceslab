@@ -20,21 +20,23 @@ import { type Squad } from '@/lib/domain/squads';
  * panel always puts its own hygiene rules first, and whatever matched nothing
  * has to leave somewhere.
  *
- * The rule model (ordered, four actions, per-rule note) is what the design
- * needs and what `RoutePolicyInput` describes. The API stores two flat domain
- * arrays and has no write route yet, so a policy loaded today is DERIVED from
- * those arrays and Save reports the 404 rather than pretending. Everything
- * else on this screen is live.
+ * The server stores two lists, blocked and direct, and the node renders block
+ * above direct whatever the row order (A-151, decisions.md 2026-10-22). So
+ * the editor offers those two actions, no row order and no notes: anything
+ * more would be saved «successfully» and lost. WARP and proxy by domain are
+ * the exit node's policy, and the editor says where.
  */
 
 export function RoutePolicyEditor({
   policy,
   squads,
   onCreated,
+  onOpenNodePolicies,
 }: {
   policy: RoutePolicy;
   squads: Squad[];
   onCreated?: () => void;
+  onOpenNodePolicies: () => void;
 }) {
   const { t } = useTranslation();
   const {
@@ -44,13 +46,10 @@ export function RoutePolicyEditor({
     setRule,
     addRule,
     removeRule,
-    move,
     confirmDelete,
     name,
     setName,
     rules,
-    dragging,
-    setDragging,
     unknownEntries,
   } = useRoutePolicyForm(policy, squads, onCreated);
 
@@ -89,7 +88,7 @@ export function RoutePolicyEditor({
         {dirty && <Chip tone={AMBER}>{t('routes.unsaved')}</Chip>}
         <Box style={{ flex: 1, minWidth: 0 }} />
         <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>
-          {t('routes.firstMatchWins')}
+          {t('routes.blockAboveDirect')}
         </Text>
         {policy.id !== NEW_POLICY_ID && (
           <IconAction title={t('common.delete')} onClick={confirmDelete}>
@@ -121,7 +120,7 @@ export function RoutePolicyEditor({
         <Box style={{ width: 22, flexShrink: 0 }} />
         <ColHead className="routes-rule-match">{t('routes.colMatch')}</ColHead>
         <ColHead className="routes-rule-action">{t('routes.colSend')}</ColHead>
-        <ColHead flex>{t('routes.colNote')}</ColHead>
+        <ColHead flex>{t('routes.colShadow')}</ColHead>
       </Box>
 
       {/* The panel's own hygiene rules. Not editable and not a lie: they are
@@ -150,7 +149,15 @@ export function RoutePolicyEditor({
         </Text>
       </Box>
 
-      <RulesList shadows={shadows} setRule={setRule} addRule={addRule} removeRule={removeRule} move={move} rules={rules} dragging={dragging} setDragging={setDragging} unknownEntries={unknownEntries} />
+      <RulesList
+        shadows={shadows}
+        setRule={setRule}
+        addRule={addRule}
+        removeRule={removeRule}
+        rules={rules}
+        unknownEntries={unknownEntries}
+        onOpenNodePolicies={onOpenNodePolicies}
+      />
 
       {/* The row that always exists and always has a value. */}
       <Box

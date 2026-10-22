@@ -18,7 +18,7 @@ import { ROUTING_PRESET_WRITES_LIVE, listRoutePolicies, listRoutingPresets, type
 import { getSettings } from '@/lib/domain/settings';
 import { listSquads } from '@/lib/domain/squads';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { blankPolicy } from '@/contours/traffic/lib/routeRules';
+import { blankPolicy, importedPolicy } from '@/contours/traffic/lib/routeRules';
 import { blankPreset } from '@/contours/traffic/lib/devicePresets';
 
 /**
@@ -165,7 +165,14 @@ export function RoutesPage() {
     }
     const first = parsed[0]!;
     if (onNode) {
-      stage(null, { ...blankPolicy(), name: first.name, rules: first.rules }, null);
+      // The route policy is two lists on the server (A-151): the file folds
+      // into them, and a WARP or proxy rule is left out and said so, since
+      // the editor would not show it and the save would not keep it.
+      const folded = importedPolicy(first.rules);
+      stage(null, { ...blankPolicy(), name: first.name, ...folded.lists }, null);
+      if (folded.dropped > 0) {
+        notifications.show({ color: 'yellow', message: t('routes.importDroppedActions', { count: folded.dropped }) });
+      }
     } else {
       stage(null, null, { ...blankPreset(), name: first.name, rules: first.rules });
     }
@@ -349,6 +356,7 @@ export function RoutesPage() {
           draft={nodeDraft}
           draftKey={draftSeq}
           onDraftDone={() => setNodeDraft(null)}
+          onOpenNodePolicies={() => setPane('policy')}
         />
       ) : (
         <DevicePane

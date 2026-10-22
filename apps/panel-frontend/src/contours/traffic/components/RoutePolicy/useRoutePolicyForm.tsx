@@ -1,7 +1,7 @@
 import { Stack, Text } from '@mantine/core';
 import { listCascades } from '@/lib/domain/cascades';
 import type { DraftRule } from '@/contours/traffic/lib/routeRules';
-import { NEW_POLICY_ID, findShadows, strip, toRules } from '@/contours/traffic/lib/routeRules';
+import { NEW_POLICY_ID, findShadows, policyDirty, strip, toRules } from '@/contours/traffic/lib/routeRules';
 import { apiErrorMessage } from '@/lib/net/client';
 import {
   createRoutePolicy,
@@ -39,7 +39,6 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
   const [name, setName] = useState(policy.name);
   const [rules, setRules] = useState<DraftRule[]>(initial);
   const [loadedFor, setLoadedFor] = useState(policy.id);
-  const [dragging, setDragging] = useState<number | null>(null);
   /** Записи из отказа ROUTE_POLICY_ENTRY_UNKNOWN: подсветка до правки строки. */
   const [unknownEntries, setUnknownEntries] = useState<string[]>([]);
 
@@ -48,16 +47,15 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
     setLoadedFor(policy.id);
     setName(policy.name);
     setRules(toRules(policy));
-    setDragging(null);
     setUnknownEntries([]);
   }
 
   // A policy that has never been saved is dirty by definition, even straight
-  // out of an imported file where nothing has been typed yet.
-  const dirty =
-    policy.id === NEW_POLICY_ID ||
-    name !== policy.name ||
-    JSON.stringify(strip(rules)) !== JSON.stringify(strip(initial));
+  // out of an imported file where nothing has been typed yet. Otherwise the
+  // draft is compared as the server stores it, two sets (policyDirty, A-151):
+  // compared row by row, a save that the server re-orders read «unsaved»
+  // forever.
+  const dirty = policyDirty(policy, name, rules);
   const shadows = useMemo(() => findShadows(rules), [rules]);
   const granted = squads.filter((s) => s.policyIds.includes(policy.id));
 
@@ -140,16 +138,6 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
   function removeRule(i: number) {
     setRules((prev) => prev.filter((_, j) => j !== i));
   }
-  /** Move `from` to `to`, the way a drop reads: the row lands where it hovers. */
-  function move(from: number, to: number) {
-    if (from === to) return;
-    setRules((prev) => {
-      const next = [...prev];
-      const [row] = next.splice(from, 1);
-      next.splice(to, 0, row!);
-      return next;
-    });
-  }
 
   function confirmDelete() {
     const blocked = (entryOf?.length ?? 0) > 0;
@@ -187,7 +175,6 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
     setRule,
     addRule,
     removeRule,
-    move,
     confirmDelete,
     name,
     setName,
@@ -195,8 +182,6 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
     setRules,
     loadedFor,
     setLoadedFor,
-    dragging,
-    setDragging,
     unknownEntries,
   };
 }

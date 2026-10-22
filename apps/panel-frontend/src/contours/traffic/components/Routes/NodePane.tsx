@@ -15,6 +15,7 @@ export function NodePane({
   draft,
   draftKey,
   onDraftDone,
+  onOpenNodePolicies,
 }: {
   policies: RoutePolicy[];
   squads: Squad[];
@@ -22,6 +23,8 @@ export function NodePane({
   draft: RoutePolicy | null;
   draftKey: number;
   onDraftDone: () => void;
+  /** Opens the node-policy tab: where WARP and proxy by domain live (A-151). */
+  onOpenNodePolicies: () => void;
 }) {
   const { t } = useTranslation();
   // `null` is the plain profile: ordinal 0, implicit, never a row in the table.
@@ -103,6 +106,7 @@ export function NodePane({
           key={draft ? `draft-${draftKey}` : policy.id}
           policy={policy}
           squads={squads}
+          onOpenNodePolicies={onOpenNodePolicies}
           onCreated={() => {
             onDraftDone();
             setSelected(null);
