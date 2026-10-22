@@ -292,10 +292,28 @@ export function buildClashYaml(
         ].join('\n'),
       );
     } else if (e.protocol === 'xray') {
-      proxyNames.push(name);
       const sub = e.subprotocol ?? 'vless';
-      // Clash Meta `network` uses "tcp" for our "raw".
-      const network = e.network === 'raw' || !e.network ? 'tcp' : e.network;
+      // A-133 (wiki.metacubex.one/en/config/proxies/{vless,vmess,trojan} and
+      // .../transport, read 22.10). A `network` mihomo does not know is not
+      // refused there: "If unset or set to another value, TCP is used", so a
+      // network written as it stands went out as a line that dials bare TCP.
+      //   vless   ws, grpc, xhttp (xhttp-opts: path, host);
+      //   vmess   ws, grpc (mkcp too, but its seed and header are not in the
+      //           endpoint, and a default that differs from the node fails);
+      //   trojan  ws, grpc;
+      //   httpupgrade on all three is `network: ws` with
+      //   `ws-opts.v2ray-http-upgrade: true`, not a network of its own.
+      // Anything else (kcp everywhere, xhttp off vless) is left out, as the
+      // other proxy-line formats leave out what their client does not speak.
+      const speaks =
+        e.network === 'raw' || !e.network || e.network === 'ws' || e.network === 'grpc' ||
+        e.network === 'httpupgrade' || (e.network === 'xhttp' && sub === 'vless');
+      if (!speaks) continue;
+      proxyNames.push(name);
+      // Clash Meta `network` uses "tcp" for our "raw", "ws" for httpupgrade.
+      const network =
+        e.network === 'raw' || !e.network ? 'tcp' : e.network === 'httpupgrade' ? 'ws' : e.network;
+      const httpUpgrade = e.network === 'httpupgrade';
       // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none'
       // (plain, e.g. CDN terminates TLS). REALITY emits reality-opts; tls emits
       // a plain TLS block; none disables client TLS.
@@ -339,24 +357,29 @@ export function buildClashYaml(
           `      short-id: ${yamlString(e.shortId)}`,
         );
       }
-      // Transport-specific options for ws/httpupgrade. Clash Meta accepts
-      // the underscore-less `httpupgrade` form on modern Mihomo (≥1.18);
-      // older builds wanted `http-upgrade`, but we don't target those.
+      // Transport options. ws carries httpupgrade too (v2ray-http-upgrade);
+      // there was a `network: httpupgrade` with `httpupgrade-opts` here, which
+      // mihomo has no such name for and read as TCP. xhttp has its own block.
       // grpc has its own block below.
-      if (network === 'ws' || network === 'httpupgrade') {
-        const optsKey = `${network}-opts`;
+      if (network === 'ws') {
         const opts: string[] = [];
         if (e.path) opts.push(`      path: ${yamlString(e.path)}`);
         if (e.hostHeader) {
-          if (network === 'ws') {
-            opts.push(`      headers:`);
-            opts.push(`        Host: ${yamlString(e.hostHeader)}`);
-          } else {
-            opts.push(`      host: ${yamlString(e.hostHeader)}`);
-          }
+          opts.push(`      headers:`);
+          opts.push(`        Host: ${yamlString(e.hostHeader)}`);
         }
+        if (httpUpgrade) opts.push(`      v2ray-http-upgrade: true`);
         if (opts.length > 0) {
-          block.push(`    ${optsKey}:`);
+          block.push(`    ws-opts:`);
+          block.push(...opts);
+        }
+      }
+      if (network === 'xhttp') {
+        const opts: string[] = [];
+        if (e.path) opts.push(`      path: ${yamlString(e.path)}`);
+        if (e.hostHeader) opts.push(`      host: ${yamlString(e.hostHeader)}`);
+        if (opts.length > 0) {
+          block.push(`    xhttp-opts:`);
           block.push(...opts);
         }
       }
