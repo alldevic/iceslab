@@ -1447,24 +1447,49 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	// statsquery, awg show dump); serial polling stacked the per-adapter
 	// timeouts into one long request. Per-index slots avoid a shared-write race.
 	type statResult struct {
-		users      []dto.UserStats
-		in         int64
-		out        int64
+		users []dto.UserStats
+		core  *dto.CoreTrafficTotal
+		// in/out: the adapter's own totals, which is what the legacy
+		// TotalBytesIn/Out always summed. Kept as they were for a panel that
+		// does not read Cores.
+		in, out    int64
 		cumulative bool
 	}
 	results := make([]statResult, len(s.cfg.Adapters))
 	var wg sync.WaitGroup
 	for i, adapter := range s.cfg.Adapters {
+		// A stand-in for a core that is not installed counts nothing and is
+		// not an adapter the panel keeps a snapshot for.
+		if core.IsAbsent(adapter) {
+			continue
+		}
 		wg.Add(1)
 		go func(i int, adapter core.CoreAdapter) {
 			defer wg.Done()
+			total := &dto.CoreTrafficTotal{
+				Protocol: dto.ProtocolName(adapter.Name()),
+				Engine:   dto.EngineName(adapter.Engine()),
+			}
 			stats, err := adapter.GetStats()
-			if err != nil {
+			if err != nil || stats == nil {
 				s.logger.Error("adapter getStats failed", "core", adapter.Name(), "err", err)
+				total.NoData = true
+				results[i] = statResult{core: total}
 				return
 			}
-			res := statResult{in: stats.TotalBytesIn, out: stats.TotalBytesOut, cumulative: stats.Cumulative}
+			total.Cumulative = stats.Cumulative
+			if stats.NoData {
+				// A-163: absent, not zero. The users of this adapter are left
+				// out too, so the panel moves none of their snapshots.
+				total.NoData = true
+				results[i] = statResult{core: total}
+				return
+			}
+			res := statResult{core: total, cumulative: stats.Cumulative, in: stats.TotalBytesIn, out: stats.TotalBytesOut}
+			var sumIn, sumOut int64
 			for _, u := range stats.Users {
+				sumIn += u.BytesIn
+				sumOut += u.BytesOut
 				res.users = append(res.users, dto.UserStats{
 					UserID:   u.UserID,
 					BytesIn:  u.BytesIn,
@@ -1476,7 +1501,19 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 					// And with its protocol, the inbound the user came through: the
 					// panel decides per entry whether bytes or presence count.
 					Protocol: adapter.Name(),
+					// And its engine (A-163): with the protocol it names the
+					// adapter, whose counters are its own. The sing-box adapter
+					// of the xray family is protocol "xray" too.
+					Engine: dto.EngineName(adapter.Engine()),
 				})
+			}
+			// The adapter's own total when it keeps one (xray's inbound
+			// counters see a cascade link-in its users do not), else the sum
+			// of its users, which is what a core without totals has (A-152:
+			// hysteria's traffic never reached the node's history).
+			total.BytesIn, total.BytesOut = stats.TotalBytesIn, stats.TotalBytesOut
+			if total.BytesIn == 0 && total.BytesOut == 0 {
+				total.BytesIn, total.BytesOut = sumIn, sumOut
 			}
 			results[i] = res
 		}(i, adapter)
@@ -1484,16 +1521,22 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	allUsers := []dto.UserStats{}
+	cores := []dto.CoreTrafficTotal{}
 	var totalIn, totalOut int64
 	var cumulative bool
 	for _, res := range results {
+		if res.core == nil {
+			continue
+		}
+		cores = append(cores, *res.core)
 		allUsers = append(allUsers, res.users...)
 		totalIn += res.in
 		totalOut += res.out
 		// #5 - response-level flag stays as the OR across cores so older panels
 		// still enter the snapshot-delta path. New panels read the per-user
 		// dto.UserStats.Cumulative set above, which is what makes a mixed
-		// cumulative+delta node bill each user correctly.
+		// cumulative+delta node bill each user correctly, and the per-adapter
+		// totals in Cores for the node's own history (A-152).
 		cumulative = cumulative || res.cumulative
 	}
 	uptime := int64(time.Since(s.startedAt).Seconds())
@@ -1503,6 +1546,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalBytesIn:  totalIn,
 		TotalBytesOut: totalOut,
 		Cumulative:    cumulative,
+		Cores:         cores,
 	})
 }
 

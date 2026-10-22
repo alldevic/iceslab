@@ -409,11 +409,9 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 
 	counters, err := fetchTrafficStats(httpClient, statsListen, statsSecret)
 	if err != nil {
+		// NoData, not zeros (A-163): absent, the panel moves nothing.
 		a.logger.Warn("hysteria GetStats: traffic API fetch failed", "err", err)
-		for _, e := range users {
-			out = append(out, core.UserStats{UserID: e.UserID})
-		}
-		return &core.Stats{Users: out}, nil
+		return &core.Stats{NoData: true}, nil
 	}
 
 	for _, e := range users {

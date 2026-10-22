@@ -383,7 +383,8 @@ func TestQueryUserStats_ErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestGetStats_SoftFailsToZeroCounters(t *testing.T) {
+// A failed statsquery is NoData, not zero counters (A-163).
+func TestGetStats_SoftFailsToNoData(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	failingRun := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return nil, errors.New("xray not running")
@@ -399,10 +400,7 @@ func TestGetStats_SoftFailsToZeroCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStats should soft-fail, got error: %v", err)
 	}
-	if len(stats.Users) != 1 {
-		t.Errorf("user list should still be reported, got %d", len(stats.Users))
-	}
-	if stats.Users[0].BytesIn != 0 || stats.Users[0].BytesOut != 0 {
-		t.Errorf("counters should be zero on stats fail, got %+v", stats.Users[0])
+	if !stats.NoData || len(stats.Users) != 0 {
+		t.Errorf("expected NoData with no users on stats fail, got %+v", stats)
 	}
 }

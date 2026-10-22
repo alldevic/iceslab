@@ -273,9 +273,10 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	if err != nil {
 		// Stats poll must not fail just because metrics endpoint is
 		// momentarily unreachable (mtg restart, port not yet bound, ...).
-		// Log + return zero totals so the panel-side cron stays happy.
-		a.logger.Warn("mtproto: prometheus scrape failed, returning zero totals", "err", err)
-		return &core.Stats{Users: users}, nil
+		// Said as NoData, not as zero totals (A-163): a zero total read as a
+		// counter reset and the next scrape landed whole.
+		a.logger.Warn("mtproto: prometheus scrape failed, no data this poll", "err", err)
+		return &core.Stats{NoData: true}, nil
 	}
 	return &core.Stats{
 		Users:         users,

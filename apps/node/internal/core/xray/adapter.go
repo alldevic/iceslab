@@ -1127,25 +1127,26 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	if len(users) > 0 {
 		counters, err := queryUserStats(ctx, run, binary, apiPort)
 		if err != nil {
-			// Soft-fail: emit NO per-user rows this poll, not zero-counter rows.
-			// Zero-counter rows would read as a cumulative drop to 0 and re-baseline
-			// the panel's per-user snapshots, spiking each user's quota on recovery.
-			// The node total below still reports via the inbound query.
-			a.logger.Warn("xray GetStats: user statsquery failed, skipping per-user this poll", "err", err)
-		} else {
-			for _, u := range users {
-				c := counters[u.UserID]
-				// The same person through a socks/http door: a second counter
-				// under their login, added to the first.
-				if login, ok := loginOf[u.UserID]; ok {
-					viaLogin := counters[login]
-					c.UplinkBytes += viaLogin.UplinkBytes
-					c.DownlinkBytes += viaLogin.DownlinkBytes
-				}
-				out = append(out, core.UserStats{UserID: u.UserID, BytesIn: c.UplinkBytes, BytesOut: c.DownlinkBytes})
-				userIn += c.UplinkBytes
-				userOut += c.DownlinkBytes
+			// No per-user rows this poll, not zero-counter rows: those would
+			// read as a cumulative drop to 0 and re-baseline the panel's
+			// per-user snapshots, spiking each user's quota on recovery. And
+			// said as NoData (A-163), so the panel leaves this core's snapshots
+			// alone instead of reading the missing rows as nothing.
+			a.logger.Warn("xray GetStats: user statsquery failed, no data this poll", "err", err)
+			return &core.Stats{NoData: true, Cumulative: true}, nil
+		}
+		for _, u := range users {
+			c := counters[u.UserID]
+			// The same person through a socks/http door: a second counter
+			// under their login, added to the first.
+			if login, ok := loginOf[u.UserID]; ok {
+				viaLogin := counters[login]
+				c.UplinkBytes += viaLogin.UplinkBytes
+				c.DownlinkBytes += viaLogin.DownlinkBytes
 			}
+			out = append(out, core.UserStats{UserID: u.UserID, BytesIn: c.UplinkBytes, BytesOut: c.DownlinkBytes})
+			userIn += c.UplinkBytes
+			userOut += c.DownlinkBytes
 		}
 	}
 

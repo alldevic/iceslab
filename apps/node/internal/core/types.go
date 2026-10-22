@@ -43,4 +43,10 @@ type Stats struct {
 	// non-destructive read; panels that don't see this flag use the legacy
 	// delta path. #5.
 	Cumulative bool
+	// NoData: the core was asked and did not answer this poll. Users and the
+	// totals are then absent, not zero (A-163, 22.10): zeros from a missed
+	// poll read as a cumulative counter dropping to 0, the panel re-baselined
+	// the user's snapshot, and the next good poll billed the whole counter at
+	// once. A core that is not running and so was not asked is not NoData.
+	NoData bool
 }

@@ -232,7 +232,9 @@ func TestAdapter_GetStats_ParsesDumpAndReportsDeltas(t *testing.T) {
 	}
 }
 
-func TestAdapter_GetStats_AwgFailureReturnsZeros(t *testing.T) {
+// A configured interface whose dump failed is NoData, not zeros (A-163): the
+// poll does not fail, and the panel leaves the users' snapshots alone.
+func TestAdapter_GetStats_AwgFailureIsNoData(t *testing.T) {
 	dir := t.TempDir()
 	a := New(Config{
 		Inbound:     validInbound(),
@@ -254,8 +256,8 @@ func TestAdapter_GetStats_AwgFailureReturnsZeros(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStats should fall back, not error: %v", err)
 	}
-	if len(stats.Users) != 1 || stats.Users[0].BytesIn != 0 {
-		t.Errorf("expected zero-counter fallback, got %+v", stats.Users)
+	if !stats.NoData || len(stats.Users) != 0 {
+		t.Errorf("expected NoData with no users, got %+v", stats)
 	}
 }
 

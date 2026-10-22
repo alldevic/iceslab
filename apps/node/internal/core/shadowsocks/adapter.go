@@ -445,7 +445,8 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		// inbound shows up later" and stats noise is operationally
 		// meaningless until the inbound exists.
 		a.logger.Debug("shadowsocks GetStats: statsquery failed", "err", err)
-		return &core.Stats{Users: users}, nil
+		// NoData, not zeros (A-163): absent, the panel moves nothing.
+		return &core.Stats{NoData: true}, nil
 	}
 
 	out := make([]core.UserStats, 0, len(users))

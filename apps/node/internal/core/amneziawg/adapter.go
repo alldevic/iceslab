@@ -497,9 +497,12 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 }
 
 func mergeStats(a, b *core.Stats) *core.Stats {
+	// One interface silent: the other's deltas stand, and the silent one's
+	// are kept by its own snapshot for its next answer. Both silent: no data.
 	out := &core.Stats{
 		TotalBytesIn:  a.TotalBytesIn + b.TotalBytesIn,
 		TotalBytesOut: a.TotalBytesOut + b.TotalBytesOut,
+		NoData:        a.NoData && b.NoData,
 	}
 	at := make(map[string]int, len(a.Users))
 	for _, u := range a.Users {
@@ -532,6 +535,7 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 		a.mu.Unlock()
 		return &core.Stats{Users: users}, nil
 	}
+	configured := a.cfg.Inbound.PrivateKey != ""
 	a.mu.Unlock()
 
 	if iface == "" {
@@ -547,8 +551,12 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 
 	users := make([]core.UserStats, 0, len(a.peers))
 	if err != nil {
-		// Interface may be down or never started, fall back to zero counters
-		// rather than failing the whole stats poll.
+		// An interface nothing configured has nothing to count: zero counters.
+		// One that is configured and did not answer is NoData (A-163), so the
+		// panel does not take its silence for a poll with no traffic.
+		if configured {
+			return &core.Stats{NoData: true}, nil
+		}
 		for id := range a.peers {
 			users = append(users, core.UserStats{UserID: id})
 		}

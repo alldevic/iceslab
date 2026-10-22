@@ -215,8 +215,8 @@ func (a *Adapter) RemoveUser(userID string) error {
 // GetStats reports per-user cumulative byte counters, read from sing-box's
 // v2ray_api via the xray-binary stats client (see stats.go). Non-destructive
 // read -> Cumulative=true, so the panel computes deltas against its snapshot
-// (mirrors xray, #5). Degrades gracefully to zero counters when stats aren't
-// configured or the query fails, so a stats outage never poisons the poller.
+// (mirrors xray, #5). Zero counters when stats aren't configured or nothing
+// runs; a query that fails is NoData, never zeros.
 func (a *Adapter) GetStats() (*core.Stats, error) {
 	a.mu.Lock()
 	statsListen := a.cfg.StatsListen
@@ -247,8 +247,10 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 
 	counters, err := queryUserStats(context.Background(), run, bin, statsListen)
 	if err != nil {
+		// No data, not zeros (A-152/A-163): these counters are cumulative, and
+		// a zero read as one dropped to 0 re-baselined every user's snapshot.
 		a.logger.Warn("singbox GetStats: statsquery failed", "err", err)
-		return zero(), nil
+		return &core.Stats{NoData: true, Cumulative: true}, nil
 	}
 
 	out := make([]core.UserStats, 0, len(userIDs))
