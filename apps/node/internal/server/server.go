@@ -105,6 +105,10 @@ type Server struct {
 	// one, for /healthz. Nil until then.
 	geoMu      sync.Mutex
 	geoVersion *string
+
+	// storeMu covers the read of the stored push and the write of the next
+	// one (persistAccepted), so two pushes cannot interleave the two halves.
+	storeMu sync.Mutex
 }
 
 func New(cfg Config) (*Server, error) {
@@ -768,19 +772,32 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	o := s.applyPushOutcome(r.Context(), req)
+	applied, failed, reasons := o.applied, o.failed, o.reasons
+
 	if s.cfg.InboundsStorePath != "" {
 		// The WHOLE push, not only the inbounds: this file is what a restart
 		// restores from, and inbounds without the node-level policy and
 		// resolver would come back as a node quietly running other routing
 		// than the operator saved.
-		if err := writePushStore(s.cfg.InboundsStorePath, req); err != nil {
+		//
+		// Written AFTER the cores answered, and only what they took. A-113,
+		// 22.10: it was written before, so a push the cores refused (and kept
+		// running the previous config through) became what the next agent
+		// restart came up on, with nothing left to fall back to.
+		if err := s.persistAccepted(req, o); err != nil {
 			s.logger.Error("persist inbounds failed", "err", err, "path", s.cfg.InboundsStorePath)
-			writeError(w, http.StatusInternalServerError, "PERSIST_FAILED", err.Error())
-			return
+			if failed == 0 {
+				// Applied, but a restart would not bring it back: the panel has
+				// to hear that, or it records a node as in sync that is not.
+				writeError(w, http.StatusInternalServerError, "PERSIST_FAILED", err.Error())
+				return
+			}
+			failed++
+			reasons = append(reasons, "persist: "+err.Error())
 		}
 	}
 
-	applied, failed, reasons := s.applyPush(r.Context(), req)
 	if failed > 0 {
 		writeError(w, http.StatusInternalServerError, "ADAPTER_FAILED",
 			fmt.Sprintf("%d/%d inbounds failed to apply: %s",
@@ -807,6 +824,33 @@ func (s *Server) applyPush(
 	ctx context.Context,
 	req dto.ApplyInboundsRequest,
 ) (applied int, failed int, reasons []string) {
+	o := s.applyPushOutcome(ctx, req)
+	return o.applied, o.failed, o.reasons
+}
+
+// pushOutcome is applyPush with the parts the cores refused named, which is
+// what persistAccepted needs to store only what they took.
+type pushOutcome struct {
+	applied, failed int
+	reasons         []string
+	// refused holds indexes into req.Inbounds whose adapter returned an error.
+	refused map[int]bool
+	// chainRefused: the chain block did not apply (or this agent runs no
+	// chain), so the chain process kept what it had.
+	chainRefused bool
+	// userCoreRefused: the chain's userCore was malformed and no core was told
+	// about a cascade, so every core kept what it had.
+	userCoreRefused bool
+}
+
+func (s *Server) applyPushOutcome(
+	ctx context.Context,
+	req dto.ApplyInboundsRequest,
+) (o pushOutcome) {
+	o.refused = make(map[int]bool)
+	var applied, failed int
+	var reasons []string
+
 	// The geo files this push stands on, noted before anything renders, so a
 	// restart the push causes anyway picks them up and FlushGeo below has
 	// nothing left to do. Absent geo leaves every adapter where it was.
@@ -875,6 +919,7 @@ func (s *Server) applyPush(
 			// not a reason to take the node dark. It travels back as a failure
 			// reason and stands in the healthcheck as chain.error.
 			s.logger.Error("chain block failed to apply", "err", err)
+			o.chainRefused = true
 			failed++
 			reasons = append(reasons, fmt.Sprintf("chain: %s", err.Error()))
 		}
@@ -883,6 +928,7 @@ func (s *Server) applyPush(
 		// Loud, and counted: the panel believes this node draws a chain in its
 		// own process, and nothing here does.
 		s.logger.Error("applyInbounds: a chain block arrived but this agent runs no chain manager")
+		o.chainRefused = true
 		failed++
 		reasons = append(reasons, "chain: this agent cannot run a chain process")
 	}
@@ -916,6 +962,7 @@ func (s *Server) applyPush(
 				failed++
 				reasons = append(reasons, err.Error())
 				userCoreRefused = true
+				o.userCoreRefused = true
 			} else {
 				cascadeFragments = payload
 				router = string(req.Chain.UserCore.Engine)
@@ -1020,6 +1067,7 @@ func (s *Server) applyPush(
 		if err := matched.ApplyInbound(ib.Port, ib.Config); err != nil {
 			s.logger.Error("adapter ApplyInbound failed",
 				"core", matched.Name(), "inboundId", ib.ID, "err", err)
+			o.refused[i] = true
 			failed++
 			if len(reasons) < 3 {
 				// The name, not the id: the operator reads this in the panel,
@@ -1073,7 +1121,8 @@ func (s *Server) applyPush(
 		s.cfg.HopGuard.Sync(ctx, udpPortsOf(req))
 	}
 
-	return applied, failed, reasons
+	o.applied, o.failed, o.reasons = applied, failed, reasons
+	return o
 }
 
 // settleGeo finishes a push that carried geo: a core still running on files
