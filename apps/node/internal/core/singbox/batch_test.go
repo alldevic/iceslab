@@ -42,7 +42,9 @@ func countingAdapter(t *testing.T) (*Adapter, string, *flushLog) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "sing-box-stub")
 	// `version` answers at once (the adapter asks it for its build tags).
+	// `check` refuses a config that names "refuse-me" (A-110 test).
 	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'sing-box version 1.13.14'; exit 0; fi\n" +
+		"if [ \"$1\" = check ]; then if grep -q refuse-me \"$3\"; then echo 'FATAL refused'; exit 1; fi; exit 0; fi\n" +
 		"echo start >> \"$(dirname \"$3\")/starts\"\nexec sleep 60\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

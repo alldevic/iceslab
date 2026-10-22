@@ -81,7 +81,8 @@ func TestAFailedHandOverIsRetriedAndTheCoreIsUnhealthyMeanwhile(t *testing.T) {
 
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "sing-box")
-	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'sing-box version 1.13.14'; exit 0; fi\nexec sleep 60\n"
+	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'sing-box version 1.13.14'; exit 0; fi\n" +
+		"if [ \"$1\" = check ]; then exit 0; fi\nexec sleep 60\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

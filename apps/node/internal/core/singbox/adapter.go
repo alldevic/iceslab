@@ -19,15 +19,18 @@ package singbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
 )
@@ -503,9 +506,53 @@ func (a *Adapter) ApplyIdentifiedInbound(id string, port int, rawCfg json.RawMes
 			return fmt.Errorf("singbox ApplyInbound: port %d is already taken by another %s inbound on sing-box", newInbound.ListenPort, a.protocol)
 		}
 	}
+	prev, had := a.inbounds[id]
 	a.inbounds[id] = newInbound
 	a.mu.Unlock()
-	return a.regenerateAndRestart()
+	err = a.regenerateAndRestart()
+	var refused *refusedError
+	if errors.As(err, &refused) {
+		// The engine never took it (A-130 form): memory goes back to what
+		// runs, so the next user change does not render it again.
+		a.mu.Lock()
+		if cur, ok := a.inbounds[id]; ok && cur == newInbound {
+			if had {
+				a.inbounds[id] = prev
+			} else {
+				delete(a.inbounds, id)
+			}
+		}
+		a.mu.Unlock()
+	}
+	return err
+}
+
+// refusedError: the render or `sing-box check` said no, before anything on
+// disk or in the process changed.
+type refusedError struct{ err error }
+
+func (e *refusedError) Error() string { return e.err.Error() }
+func (e *refusedError) Unwrap() error { return e.err }
+
+// checkConfig asks the engine about a candidate in a temp dir, never the live
+// file. A refusal carries the engine's own words.
+func checkConfig(ctx context.Context, bin string, blob []byte) error {
+	dir, err := os.MkdirTemp("", "iceslab-singbox-check-")
+	if err != nil {
+		return fmt.Errorf("temp dir for the config check: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	candidate := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(candidate, blob, 0o600); err != nil {
+		return fmt.Errorf("write candidate config: %w", err)
+	}
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, bin, "check", "-c", candidate).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sing-box rejected the config: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // ScopePush implements core.PushScoped: the inbounds this push no longer
@@ -668,12 +715,22 @@ func (a *Adapter) regenerateAndRestart() error {
 
 	blob, err := a.renderAll(certPath, keyPath, statsListen, held, users)
 	if err != nil {
-		return fmt.Errorf("singbox: render config: %w", err)
+		return &refusedError{fmt.Errorf("singbox: render config: %w", err)}
+	}
+	// Asked before anything is replaced, as the chain process and xray do.
+	// A-110, 22.10: the config went straight over the running one with
+	// os.WriteFile; a render the engine would not take put the process into
+	// its restart budget on that file, with the working config gone. Now a
+	// refusal leaves the running process and the file as they were, and the
+	// write is atomic.
+	if err := checkConfig(ctx, binPath, blob); err != nil {
+		a.logger.Error("sing-box refused the new config, keeping the running one", "protocol", a.protocol, "err", err)
+		return &refusedError{err}
 	}
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		return fmt.Errorf("singbox: mkdir config dir: %w", err)
 	}
-	if err := os.WriteFile(cfgPath, blob, 0o600); err != nil {
+	if err := atomicfile.Write(cfgPath, blob, 0o600); err != nil {
 		return fmt.Errorf("singbox: write %s: %w", cfgPath, err)
 	}
 
