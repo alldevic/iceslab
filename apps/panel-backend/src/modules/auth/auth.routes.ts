@@ -8,7 +8,8 @@ import * as adminService from '../admin/admin.service.js';
 import { mapAdminToPublic } from '../admin/admin.mapper.js';
 import { notifyTelegramAsync, escapeMarkdown, redactIp, redactUsername } from '../../lib/notify/telegram-notify.js';
 import { loginAttempts } from '../../lib/infra/metrics.js';
-import { config, subscriptionOrigin } from '../../config.js';
+import { config } from '../../config.js';
+import { subscriptionLinkOrigin } from '../subscription/subscription.link.js';
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/auth/status - public discovery: tells the frontend which auth
@@ -29,8 +30,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       panel: {
         // Origin the SPA prepends to a token for the copy-paste link. Client
         // facing, so it follows a subscription-domain split rather than the
-        // panel's own address.
-        publicUrl: subscriptionOrigin(),
+        // panel's own address, and the host the operator set in the panel
+        // first (A-171, 22.10): it was the environment's alone, and the link
+        // copied from the users list kept the old domain after the move.
+        publicUrl: await subscriptionLinkOrigin(),
         // Subscription path prefix. Default `/sub`, admin can override
         // via SUBSCRIPTION_PATH_PREFIX env to mask the Iceslab
         // signature (e.g. `/v` or `/get`). Always starts with `/`.
