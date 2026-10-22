@@ -184,6 +184,10 @@ services:
     image: iceslab-frontend:latest
     container_name: iceslab-prod-frontend
     mem_limit: 96m
+    environment:
+      # The same value the backend gets: nginx proxies subscriptions at this
+      # prefix and serves the SPA everywhere else (A-137).
+      SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
     depends_on:
       backend:
         condition: service_healthy

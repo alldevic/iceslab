@@ -2,8 +2,17 @@
 #
 # Two responsibilities:
 #   1. Serve the Vite-built SPA with client-side-routing fallback.
-#   2. Reverse-proxy `/api`, `/sub`, `/health` to the backend service so the
-#      browser sees a single origin (no CORS).
+#   2. Reverse-proxy `/api`, the subscription prefix, `/health` to the backend
+#      service so the browser sees a single origin (no CORS).
+#
+# ⚠ A TEMPLATE, not a config. The image's entrypoint renders it with envsubst
+# into /etc/nginx/conf.d/default.conf at start, and the only variable it
+# substitutes is ${SUBSCRIPTION_PATH_PREFIX} (NGINX_ENVSUBST_FILTER in the
+# Dockerfile): every other `$name` here is an nginx variable and stays as it
+# is. The prefix is the backend's own setting, so the two cannot disagree:
+# until 2026-10-22 (A-137) this file proxied a hard-coded /sub/, and a panel
+# with its own prefix answered every subscription with the SPA's index.html
+# and a 200.
 #
 # The upstream `backend` resolves via Docker Compose's service DNS, that
 # means this image is opinionated for our compose topology. If you front
@@ -106,7 +115,10 @@ server {
         proxy_read_timeout 10s;
     }
 
-    location /sub/ {
+    # The subscription endpoint, at the prefix the backend registered it on.
+    # Default /sub; checked against the backend's own rule before rendering
+    # (docker-entrypoint.d/15-subscription-prefix.sh).
+    location ${SUBSCRIPTION_PATH_PREFIX}/ {
         proxy_pass http://$backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

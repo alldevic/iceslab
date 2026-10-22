@@ -1064,6 +1064,160 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
+  # Does the FRONTEND image send subscriptions to the backend at the prefix
+  # the operator set?
+  #
+  # A-137, 2026-10-22: the backend read SUBSCRIPTION_PATH_PREFIX, the
+  # frontend's nginx proxied a hard-coded /sub/, and with any other prefix
+  # every subscription came back as the SPA's index.html with a 200. Nothing
+  # failed, the clients just got HTML. The image now renders its config from
+  # the variable at start; this job runs it the way an operator would and
+  # asks a stand-in backend what reached it.
+  #
+  # Same rule as smoke: the published image on a push, a local build on a
+  # pull request.
+  # ───────────────────────────────────────────────────────────────────────
+  frontend-proxy:
+    name: smoke (frontend proxies the subscription prefix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [docker]
+    if: "!cancelled() && needs.docker.result == 'success'"
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+        if: github.event_name == 'pull_request'
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the published image
+        id: image
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/${{ github.repository_owner }}/iceslab-frontend:sha-$(echo "${{ github.sha }}" | cut -c1-7)"
+          docker pull "$ref"
+          docker tag "$ref" iceslab-frontend:proxy
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend image (pull request only)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/panel-frontend/Dockerfile
+          push: false
+          load: true
+          tags: iceslab-frontend:proxy
+          cache-from: type=gha,scope=iceslab-frontend
+
+      # The stand-in answers every request with the path it received, so the
+      # check reads where a request went, not just that something answered.
+      - name: Stand-in backend
+        run: |
+          set -euo pipefail
+          docker network create proxy-net
+          docker run -d --name backend --network proxy-net --network-alias backend \
+            node:22-alpine node -e \
+            "require('http').createServer((q,s)=>s.end('BACKEND '+q.url)).listen(3000)"
+
+      - name: Subscription prefix /s2, and the default
+        run: |
+          set -euo pipefail
+          start() {
+            local name="$1" port="$2"; shift 2
+            docker run -d --name "$name" --network proxy-net -p "127.0.0.1:${port}:80" "$@" iceslab-frontend:proxy
+            for i in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:${port}/" >/dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            docker logs "$name"
+            echo "::error::$name did not answer on :$port"
+            exit 1
+          }
+          # `[[ == ]]` on a variable, not `| grep -q` (E33).
+          expect_backend() {
+            local body
+            body=$(curl -fsS "$1")
+            if [[ "$body" != "BACKEND $2" ]]; then
+              echo "::error::$1 should reach the backend as $2, got: ${body:0:120}"
+              exit 1
+            fi
+            echo "ok: $1 -> backend $2"
+          }
+          expect_spa() {
+            local body
+            body=$(curl -fsS "$1")
+            if [[ "$body" == BACKEND* || "$body" != *'<div id="root">'* ]]; then
+              echo "::error::$1 should be the SPA, got: ${body:0:120}"
+              exit 1
+            fi
+            echo "ok: $1 -> SPA index.html"
+          }
+
+          start fe-s2 8081 -e SUBSCRIPTION_PATH_PREFIX=/s2
+          expect_backend http://127.0.0.1:8081/s2/tok-123 /s2/tok-123
+          expect_spa http://127.0.0.1:8081/sub/tok-123
+          expect_backend http://127.0.0.1:8081/api/auth/status /api/auth/status
+
+          # No variable: the image's default, as before the change.
+          start fe-default 8082
+          expect_backend http://127.0.0.1:8082/sub/tok-123 /sub/tok-123
+          expect_spa http://127.0.0.1:8082/s2/tok-123
+
+      # A value the backend would refuse stops the container with a reason,
+      # instead of reaching a location line.
+      - name: A prefix the backend would refuse is refused here too
+        run: |
+          set -euo pipefail
+          for bad in '/s2;x' 'sub' '/api'; do
+            if docker run --rm --network proxy-net -e "SUBSCRIPTION_PATH_PREFIX=$bad" \
+                 iceslab-frontend:proxy nginx -t >/tmp/bad.log 2>&1; then
+              cat /tmp/bad.log
+              echo "::error::SUBSCRIPTION_PATH_PREFIX=$bad was accepted"
+              exit 1
+            fi
+            out=$(cat /tmp/bad.log)
+            if [[ "$out" != *"iceslab-frontend: SUBSCRIPTION_PATH_PREFIX=\"$bad\""* ]]; then
+              echo "$out"
+              echo "::error::$bad was refused, but not by the prefix check"
+              exit 1
+            fi
+            echo "ok: $bad refused"
+          done
+
+      - name: Container logs on failure
+        if: failure()
+        run: |
+          for c in fe-s2 fe-default backend; do echo "== $c"; docker logs "$c" 2>&1 | tail -40 || true; done
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### smoke (frontend proxies the subscription prefix)"
+            echo ""
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
+              echo "- ran the PUBLISHED image: \`${{ steps.image.outputs.ref }}\`"
+            else
+              echo "- pull request: nothing is published, so the image was built here"
+            fi
+            echo "- SUBSCRIPTION_PATH_PREFIX=/s2: /s2/<token> reaches the backend, /sub/<token> is the SPA"
+            echo "- unset: /sub/<token> reaches the backend, as before"
+            echo "- /s2;x, sub and /api: the container refuses to start"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────
   # One check to protect the branch with.
   #
   # Branch protection reads the checks list, and a SKIPPED job is green there.
@@ -1085,7 +1239,7 @@ jobs:
     timeout-minutes: 5
     if: always()
     needs:
-      [changes, audit, secrets-scan, backend, backend-files, frontend, node-agent, go-lint, docker, smoke]
+      [changes, audit, secrets-scan, backend, backend-files, frontend, node-agent, go-lint, docker, smoke, frontend-proxy]
     steps:
       - name: Every check accounted for
         env:
@@ -1148,6 +1302,7 @@ jobs:
           check docker "$docker_may_skip"
           # Smoke follows docker: no image, nothing to boot.
           check smoke "$docker_may_skip"
+          check frontend-proxy "$docker_may_skip"
 
           {
             echo "### gate"
