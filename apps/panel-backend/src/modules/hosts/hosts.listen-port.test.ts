@@ -102,6 +102,28 @@ describe('the listen port on the host screen', () => {
     expect(await subscribedPorts(user.subscriptionToken)).toEqual([8443]);
   });
 
+  it('a binding from the node wizard (publicPort = port) moves too: clients get the new port', async () => {
+    const { host, user } = await seed();
+    // What the wizard left on every binding it created, before the server
+    // stopped storing the copy.
+    const b = await bindingOf(host.id);
+    await prisma.profileNodeBinding.update({ where: { id: b.id }, data: { publicPort: 443 } });
+
+    const res = await call('PUT', `/api/hosts/${host.id}`, { port: 8443 });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const after = await bindingOf(host.id);
+    expect([after.port, after.publicPort]).toEqual([8443, null]);
+    expect(await subscribedPorts(user.subscriptionToken)).toEqual([8443]);
+  });
+
+  it('a public port equal to the listen port is not stored by the bindings API either', async () => {
+    const { host } = await seed();
+    const b = await bindingOf(host.id);
+    const res = await call('PUT', `/api/bindings/${b.id}`, { publicPort: 443 });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect((await bindingOf(host.id)).publicPort).toBeNull();
+  });
+
   it('an override is the port clients dial; the binding is not touched', async () => {
     const { host, user } = await seed();
     const res = await call('PUT', `/api/hosts/${host.id}`, { portOverride: 2053 });

@@ -435,7 +435,10 @@ export async function updateHost(
   }
   // What clients get without an override: the binding's public port, else the
   // port the node listens on (subscription.service.ts, basePort).
-  const listenPort = binding.publicPort ?? (moving ? input.port! : binding.port);
+  // A public port equal to the old listen port was a copy, and updateBinding
+  // dropped it with the move (A-150 tail).
+  const publicPort = moving && binding.publicPort === binding.port ? null : binding.publicPort;
+  const listenPort = publicPort ?? (moving ? input.port! : binding.port);
 
   const data: Prisma.HostUpdateInput = {};
   if (input.remark !== undefined) data.remark = input.remark;

@@ -831,7 +831,7 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
       nodeId: input.nodeId,
       port: input.port,
       publicHost: input.publicHost ?? null,
-      publicPort: input.publicPort ?? null,
+      publicPort: storedPublicPort(input.publicPort, input.port),
       overrides: (input.overrides as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
       transport,
       enabled: input.enabled,
@@ -880,6 +880,11 @@ export async function getBindingById(id: string): Promise<PublicBindingDto> {
   return mapBinding(b, nodeRendersProfile(b.node, b.profile));
 }
 
+/** A-150 tail: a public port equal to the listen port is no public port. */
+export function storedPublicPort(publicPort: number | null | undefined, port: number): number | null {
+  return publicPort == null || publicPort === port ? null : publicPort;
+}
+
 export async function updateBinding(
   id: string,
   input: UpdateBindingInput,
@@ -922,7 +927,14 @@ export async function updateBinding(
   const data: Prisma.ProfileNodeBindingUpdateInput = {};
   if (input.port !== undefined) data.port = input.port;
   if (input.publicHost !== undefined) data.publicHost = input.publicHost;
-  if (input.publicPort !== undefined) data.publicPort = input.publicPort;
+  // A-150 tail: the public port is stored only when it differs from the listen
+  // port. The node wizard sent publicPort = port, and that copy stayed behind
+  // when the listen port moved, so clients kept the old port.
+  if (input.publicPort !== undefined) {
+    data.publicPort = storedPublicPort(input.publicPort, nextPort);
+  } else if (nextPort !== existing.port && existing.publicPort === existing.port) {
+    data.publicPort = null;
+  }
   if (input.enabled !== undefined) data.enabled = input.enabled;
   if (input.overrides !== undefined) {
     data.overrides =
