@@ -18,10 +18,21 @@ const RoutingPresetField = z.enum(ROUTING_PRESET_IDS).nullish();
 //   - exitNodeIds: []   -> the cascade is OFF for this squad, no line of it is
 //                          built. Stored (GroupCascadeOff); until 2026-09-24 an
 //                          empty list was dropped and read as "absent".
-const ExitAclEntry = z.object({
-  cascadeId: z.uuid(),
-  exitNodeIds: z.array(z.uuid()),
-});
+//
+// A-149: keyed by DIRECTION. `directionIds` is the list; `exitNodeIds` is
+// still accepted for the screen that has not moved yet and is mapped on the
+// server to the directions whose pool holds those nodes (a legacy hop cascade,
+// which has no directions, keeps node rows). When both come, directionIds
+// wins. Off is the given list empty.
+const ExitAclEntry = z
+  .object({
+    cascadeId: z.uuid(),
+    directionIds: z.array(z.uuid()).optional(),
+    exitNodeIds: z.array(z.uuid()).optional(),
+  })
+  .refine((e) => e.directionIds !== undefined || e.exitNodeIds !== undefined, {
+    message: 'exitAcl entry needs directionIds (or exitNodeIds)',
+  });
 
 // One entry per cascade. Two entries for one cascade would have to be merged by
 // a rule nobody asked for ([] and [x]: off or restricted?), so they are refused.

@@ -123,14 +123,16 @@ describe('the three states of a squad\'s exitAcl, as the subscription reads them
 describe('exitAcl on the squad API', () => {
   const read = async (id: string) =>
     JSON.parse((await app.inject({ method: 'GET', url: `/api/squads/${id}`, headers: auth() })).body) as {
-      exitAcl: { cascadeId: string; exitNodeIds: string[] }[];
+      exitAcl: { cascadeId: string; directionIds: string[]; exitNodeIds: string[] }[];
     };
+  const dirOf = async (nodeId: string) =>
+    (await prisma.cascadeDirection.findFirstOrThrow({ where: { cascadeId, nodes: { some: { nodeId } } } })).id;
   const put = (id: string, exitAcl: unknown) =>
     app.inject({ method: 'PUT', url: `/api/squads/${id}`, headers: auth(), payload: { exitAcl } });
 
   it('stores an empty list and reads it back empty, not absent', async () => {
     const g = await squad([{ cascadeId, exitNodeIds: [] }]);
-    expect((await read(g)).exitAcl).toEqual([{ cascadeId, exitNodeIds: [] }]);
+    expect((await read(g)).exitAcl).toEqual([{ cascadeId, directionIds: [], exitNodeIds: [] }]);
   });
 
   it('moves between all three states on PUT, never holding two at once', async () => {
@@ -138,10 +140,10 @@ describe('exitAcl on the squad API', () => {
     expect((await read(g)).exitAcl).toEqual([]);
 
     expect((await put(g, [{ cascadeId, exitNodeIds: [] }])).statusCode).toBe(200);
-    expect((await read(g)).exitAcl).toEqual([{ cascadeId, exitNodeIds: [] }]);
+    expect((await read(g)).exitAcl).toEqual([{ cascadeId, directionIds: [], exitNodeIds: [] }]);
 
     expect((await put(g, [{ cascadeId, exitNodeIds: [exitSe] }])).statusCode).toBe(200);
-    expect((await read(g)).exitAcl).toEqual([{ cascadeId, exitNodeIds: [exitSe] }]);
+    expect((await read(g)).exitAcl).toEqual([{ cascadeId, directionIds: [await dirOf(exitSe)], exitNodeIds: [exitSe] }]);
     expect(await prisma.groupCascadeOff.count({ where: { groupId: g } })).toBe(0);
 
     expect((await put(g, [])).statusCode).toBe(200);

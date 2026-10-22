@@ -334,12 +334,22 @@ describe('what the subscription offers', () => {
     expect(profiles.find((p) => p.tag === routeTag(0, 2))!.label).toBe(`🇬🇪 ${cascade.name} → GE`);
   });
 
-  it('keeps it from a squad that restricts the exits, which has no way to name it', async () => {
-    const { ru, nl, cascade } = await cascadeWithOutbounds();
+  it('keeps it from a squad that restricts the exits to another direction', async () => {
+    const { ru, cascade } = await cascadeWithOutbounds();
     const g = await prisma.group.create({ data: { name: 'nl-only' } });
-    await prisma.groupCascadeExit.create({ data: { groupId: g.id, cascadeId: cascade.id, exitNodeId: nl } });
+    const nlDir = await prisma.cascadeDirection.findFirstOrThrow({ where: { cascadeId: cascade.id, tag: 1 } });
+    await prisma.groupCascadeExit.create({ data: { groupId: g.id, cascadeId: cascade.id, directionId: nlDir.id } });
     const profiles = (await getRouteProfilesByEntryNode([ru], [g.id])).get(ru)!;
     expect(profiles.map((p) => p.tag)).toEqual([routeTag(0, 0)]);
+  });
+
+  it('A-149: a squad can now be given a direction on an outbound, which has no node to name', async () => {
+    const { ru, cascade } = await cascadeWithOutbounds();
+    const g = await prisma.group.create({ data: { name: 'tbilisi-only' } });
+    const outDir = await prisma.cascadeDirection.findFirstOrThrow({ where: { cascadeId: cascade.id, tag: 3 } });
+    await prisma.groupCascadeExit.create({ data: { groupId: g.id, cascadeId: cascade.id, directionId: outDir.id } });
+    const profiles = (await getRouteProfilesByEntryNode([ru], [g.id])).get(ru)!;
+    expect(profiles.map((p) => p.tag)).toEqual([routeTag(0, 2)]);
   });
 
   it('names a hysteria entry after its one way out when that is an outbound', async () => {

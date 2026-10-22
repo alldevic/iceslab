@@ -35,7 +35,7 @@ describe('policiesForEntry', () => {
     const got = policiesForEntry({
       ...fieldSetup(),
       entryNodeId: RU_ENTRY,
-      directionNodeIds: [NL_EXIT],
+      directionIds: [NL_EXIT],
     });
     expect(got).toEqual([NO_ADS]);
   });
@@ -44,7 +44,7 @@ describe('policiesForEntry', () => {
     const got = policiesForEntry({
       ...fieldSetup(),
       entryNodeId: RU2_ENTRY,
-      directionNodeIds: [SE_EXIT],
+      directionIds: [SE_EXIT],
     });
     expect(got).toEqual([]);
   });
@@ -58,7 +58,7 @@ describe('policiesForEntry', () => {
         [RU2_ENTRY, new Set(['squad-no-ads'])],
       ]),
       entryNodeId: RU2_ENTRY,
-      directionNodeIds: [SE_EXIT],
+      directionIds: [SE_EXIT],
     });
     expect(got).toEqual([NO_ADS]);
   });
@@ -70,7 +70,7 @@ describe('policiesForEntry', () => {
     const got = policiesForEntry({
       ...fieldSetup(),
       entryNodeId: 'node-unknown',
-      directionNodeIds: [SE_EXIT],
+      directionIds: [SE_EXIT],
     });
     expect(got).toEqual([]);
   });
@@ -82,7 +82,7 @@ describe('policiesForEntry', () => {
       groupIds: ['squad-no-ads'],
       policiesByGroup: new Map([['squad-no-ads', [NO_ADS]]]),
       entryNodeId: RU2_ENTRY,
-      directionNodeIds: [SE_EXIT],
+      directionIds: [SE_EXIT],
     });
     expect(got).toEqual([NO_ADS]);
   });
@@ -97,8 +97,8 @@ describe('policiesForEntry', () => {
       entryNodeId: RU_ENTRY,
       exitAllowByGroup: new Map([['squad-no-ads', new Set([NL_EXIT])]]),
     };
-    expect(policiesForEntry({ ...args, directionNodeIds: [NL_EXIT] })).toEqual([NO_ADS]);
-    expect(policiesForEntry({ ...args, directionNodeIds: [SE_EXIT] })).toEqual([]);
+    expect(policiesForEntry({ ...args, directionIds: [NL_EXIT] })).toEqual([NO_ADS]);
+    expect(policiesForEntry({ ...args, directionIds: [SE_EXIT] })).toEqual([]);
   });
 
   it('unions grants from several squads that reach the same entry', () => {
@@ -110,7 +110,7 @@ describe('policiesForEntry', () => {
       ]),
       entryReach: new Map([[RU_ENTRY, new Set(['squad-a', 'squad-b'])]]),
       entryNodeId: RU_ENTRY,
-      directionNodeIds: [NL_EXIT],
+      directionIds: [NL_EXIT],
     });
     expect(got).toEqual([NO_ADS, KIDS]);
   });
@@ -126,7 +126,7 @@ describe('policiesForEntry', () => {
       ]),
       entryReach: new Map([[RU_ENTRY, new Set(['squad-a', 'squad-b'])]]),
       entryNodeId: RU_ENTRY,
-      directionNodeIds: [NL_EXIT],
+      directionIds: [NL_EXIT],
     });
     expect(got).toEqual([NO_ADS]);
   });

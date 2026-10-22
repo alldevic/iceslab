@@ -1120,7 +1120,11 @@ export async function getRouteProfilesByEntryNode(
 
   // A4 increment 2: per-squad exit allow-list. Union the user's allow rows per
   // cascade. OPT-IN restriction: a cascade absent from this map is unrestricted
-  // (no rows => all exits); present => keep only the allowed exit nodes.
+  // (no rows => all exits); present => keep only what is allowed.
+  //
+  // A-149: the set holds DIRECTION ids for a cascade with directions and exit
+  // NODE ids for the legacy hop shape (aclKey). A row with neither key still
+  // puts the cascade in the map: restricted to nothing, never to everything.
   const allowByCascade = new Map<string, Set<string>>();
   // Per-SQUAD views of the same two facts, so a policy can be attributed to the
   // squad that granted it (see policiesForDirection).
@@ -1132,7 +1136,7 @@ export async function getRouteProfilesByEntryNode(
     const [allExitRows, grants, offRows] = await Promise.all([
       prisma.groupCascadeExit.findMany({
         where: { groupId: { in: groupIds }, cascadeId: { in: cascades.map((c) => c.id) } },
-        select: { groupId: true, cascadeId: true, exitNodeId: true },
+        select: { groupId: true, cascadeId: true, directionId: true, exitNodeId: true },
       }),
       prisma.groupRoutePolicy.findMany({
         where: { groupId: { in: groupIds } },
@@ -1154,7 +1158,8 @@ export async function getRouteProfilesByEntryNode(
     for (const r of exitRows) {
       const k = `${r.groupId}|${r.cascadeId}`;
       const s = allowByGroupCascade.get(k) ?? new Set<string>();
-      s.add(r.exitNodeId);
+      const key = aclKey(r);
+      if (key) s.add(key);
       allowByGroupCascade.set(k, s);
     }
     for (const g of grants) {
@@ -1168,7 +1173,8 @@ export async function getRouteProfilesByEntryNode(
         set = new Set();
         allowByCascade.set(r.cascadeId, set);
       }
-      set.add(r.exitNodeId);
+      const key = aclKey(r);
+      if (key) set.add(key);
     }
   }
 
@@ -1231,13 +1237,13 @@ export async function getRouteProfilesByEntryNode(
         // Switched off by every squad that hands this entry out: no line of the
         // cascade here, and the entry stays whatever else it is to the user.
         if (cascadeIsOffAt({ groupIds, entryNodeId, entryReach, offGroups })) continue;
-        const policiesForDirection = (directionNodeIds: string[]): RoutePolicyRef[] =>
+        const policiesForDirection = (directionIds: string[]): RoutePolicyRef[] =>
           policiesForEntry({
             groupIds,
             entryNodeId,
             policiesByGroup,
             entryReach,
-            directionNodeIds,
+            directionIds,
             exitAllowByGroup,
             offGroups,
           });
@@ -1265,7 +1271,7 @@ export async function getRouteProfilesByEntryNode(
           // Policy variants of Auto are gated by the direction they can reach,
           // so a policy granted only for one direction does not become an Auto
           // row that can egress through another.
-          for (const p of policiesForDirection(usable.flatMap((d) => d.nodes.map((n) => n.node.id)))) {
+          for (const p of policiesForDirection(usable.map((d) => d.id))) {
             profiles.push({
               label: `${autoLabel} · ${p.name}`,
               tag: autoRouteTag(p.ordinal),
@@ -1277,18 +1283,14 @@ export async function getRouteProfilesByEntryNode(
           // A direction with neither a node nor an outbound serves nobody;
           // offering it would hand out a config that cannot connect.
           if (!directionServes(d)) continue;
-          // Squad ACL is keyed on exit NODES, so a direction survives if any of
-          // its pool is allowed.
-          //
-          // ⚠ Phase 10: a direction on a named outbound has no node for an
-          // allow-list to name, so a squad that restricts this cascade's exits
-          // does not get it. Restriction is the smaller access, and granting a
-          // way out the list cannot express would walk past it, as Auto would.
-          // Opening it to such squads needs the ACL keyed by direction.
-          if (allowed && !d.nodes.some((n) => allowed.has(n.node.id))) continue;
+          // Squad ACL is keyed on the DIRECTION (A-149): replacing or adding a
+          // node under it changes neither who may use it nor anything else.
+          // A direction on a named outbound is named the same way, so a
+          // restricted squad can be given it now.
+          if (allowed && !allowed.has(d.id)) continue;
           const label = directionProfileLabel(c.name, d);
           profiles.push({ label, tag: routeTag(0, d.tag - 1), cascadeId: c.id });
-          for (const p of policiesForDirection(d.nodes.map((n) => n.node.id))) {
+          for (const p of policiesForDirection([d.id])) {
             profiles.push({
               label: `${label} · ${p.name}`,
               tag: routeTag(p.ordinal, d.tag - 1),
@@ -1402,23 +1404,24 @@ export function policiesForEntry(args: {
   entryNodeId: string;
   policiesByGroup: Map<string, RoutePolicyRef[]>;
   entryReach?: Map<string, Set<string>>;
-  /** Exit nodes of the direction being offered. Omit to skip the exit gate. */
-  directionNodeIds?: string[];
-  /** groupId -> allowed exit nodes for THIS cascade. */
+  /** The direction(s) being offered (A-149: ids, not exit nodes). Omit to
+   *  skip the exit gate. */
+  directionIds?: string[];
+  /** groupId -> allowed directions for THIS cascade. */
   exitAllowByGroup?: Map<string, Set<string>>;
   /** Squads that switched THIS cascade off: they grant nothing on it. */
   offGroups?: Set<string>;
 }): RoutePolicyRef[] {
-  const { groupIds, entryNodeId, policiesByGroup, entryReach, directionNodeIds } = args;
+  const { groupIds, entryNodeId, policiesByGroup, entryReach, directionIds } = args;
   const reach = entryReach?.get(entryNodeId);
   const seen = new Set<number>();
   const out: RoutePolicyRef[] = [];
   for (const groupId of groupIds) {
     if (entryReach && !reach?.has(groupId)) continue;
     if (args.offGroups?.has(groupId)) continue;
-    if (directionNodeIds) {
+    if (directionIds) {
       const allows = args.exitAllowByGroup?.get(groupId);
-      if (allows && !directionNodeIds.some((id) => allows.has(id))) continue;
+      if (allows && !directionIds.some((id) => allows.has(id))) continue;
     }
     for (const p of policiesByGroup.get(groupId) ?? []) {
       if (seen.has(p.ordinal)) continue;
@@ -1453,6 +1456,14 @@ export function cascadeIsOffAt(args: {
   const reach = entryReach?.get(entryNodeId);
   const speaking = groupIds.filter((g) => !entryReach || reach?.has(g));
   return speaking.length > 0 && speaking.every((g) => offGroups.has(g));
+}
+
+/** A-149: what an allow row names. A direction for a cascade with directions,
+ *  the exit node for the legacy hop shape; null for a row that restricts to
+ *  nothing (its direction was deleted, or its node had left before the
+ *  migration). */
+function aclKey(r: { directionId: string | null; exitNodeId: string | null }): string | null {
+  return r.directionId ?? r.exitNodeId;
 }
 
 /** A4 increment 2: apply a squad exit allow-set to a cascade's full exit list.

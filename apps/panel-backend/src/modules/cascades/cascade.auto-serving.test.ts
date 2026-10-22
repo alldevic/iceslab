@@ -61,11 +61,16 @@ async function cascade(opts: {
   return c.id;
 }
 
-/** A squad that may only leave through the nodes it names. */
+/** A squad that may only leave through the directions holding the nodes it
+ *  names (A-149: the allow-list is keyed by direction). */
 async function restrictedSquad(cascadeId: string, exitNodeIds: string[]): Promise<string> {
   const g = await prisma.group.create({ data: { name: `squad-${randomBytes(4).toString('hex')}` }, select: { id: true } });
-  for (const exitNodeId of exitNodeIds) {
-    await prisma.groupCascadeExit.create({ data: { groupId: g.id, cascadeId, exitNodeId } });
+  const dirs = await prisma.cascadeDirection.findMany({
+    where: { cascadeId, nodes: { some: { nodeId: { in: exitNodeIds } } } },
+    select: { id: true },
+  });
+  for (const d of dirs) {
+    await prisma.groupCascadeExit.create({ data: { groupId: g.id, cascadeId, directionId: d.id } });
   }
   return g.id;
 }

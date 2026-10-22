@@ -33,6 +33,9 @@ export async function squadsRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof squadsService.SquadAlreadyExistsError) {
         return reply.code(409).send({ error: 'NAME_TAKEN', message: err.message });
       }
+      if (err instanceof squadsService.SquadExitAclError) {
+        return reply.code(400).send({ error: err.code, message: err.message });
+      }
       throw err;
     }
   });
@@ -48,6 +51,9 @@ export async function squadsRoutes(app: FastifyInstance): Promise<void> {
       }
       if (err instanceof squadsService.SquadAlreadyExistsError) {
         return reply.code(409).send({ error: 'NAME_TAKEN', message: err.message });
+      }
+      if (err instanceof squadsService.SquadExitAclError) {
+        return reply.code(400).send({ error: err.code, message: err.message });
       }
       if (err instanceof squadsService.SquadProtectedError) {
         return reply.code(403).send({ error: 'PROTECTED', message: err.message });
