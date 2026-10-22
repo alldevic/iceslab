@@ -31,6 +31,7 @@ export const login = {
     // No arrow glyph in the copy: the button draws its own.
     continueAction: 'Continue',
     createAdminAction: 'Create admin',
+    lockedFor: 'Locked, {{seconds}} s left',
     bootstrapHint: 'First admin has full panel access. Choose a strong password, bootstrap runs once.',
     signInFailed: 'Sign-in failed',
     unknownError: 'Unknown error',
