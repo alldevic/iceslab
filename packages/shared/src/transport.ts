@@ -1719,6 +1719,21 @@ export interface CoreStatus {
    *  than the field. */
   engine?: EngineName;
   /**
+   * Whether this core counts traffic per user. false: it reports who is
+   * connected but no bytes per user (sing-box built without with_v2ray_api,
+   * naive); true: it counts; absent: an agent older than the field, unknown.
+   * The panel stores it with the node's core report and the screen says
+   * "no traffic accounting" for false.
+   */
+  countsUsers?: boolean;
+  /**
+   * Why the core is not working right now, when it is a FAULT: the process
+   * exited, "ssm-api sync pending: ...". Not `reason`, which says a core does
+   * not run by design. Absent when it works, and from an older agent. The
+   * panel keeps it with the node's core report for the node screen.
+   */
+  error?: string;
+  /**
    * Whether THIS core carries out the node-level policy / the node-level
    * resolver (ApplyInboundsRequest.policy and .dns).
    *
@@ -2034,6 +2049,11 @@ export interface NodeCoreInfo {
   installed?: boolean;
   rendersPolicy?: boolean;
   rendersDns?: boolean;
+  /** See CoreStatus.countsUsers. Inventory: it changes with the core build. */
+  countsUsers?: boolean;
+  /** See CoreStatus.error: the fault as of the last report, for the node
+   *  screen. Gone with the next report that has none. */
+  error?: string;
   /**
    * Stored, unlike `running`, because it is inventory and not liveness: which
    * ports a core holds changes when the node is reconfigured, not from tick to

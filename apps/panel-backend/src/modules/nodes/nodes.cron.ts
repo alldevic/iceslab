@@ -389,6 +389,10 @@ export function observedCores(
       ...(c.installed !== undefined ? { installed: c.installed } : {}),
       ...(c.rendersPolicy !== undefined ? { rendersPolicy: c.rendersPolicy } : {}),
       ...(c.rendersDns !== undefined ? { rendersDns: c.rendersDns } : {}),
+      // Whether the core counts bytes per user; absent stays absent (unknown).
+      ...(c.countsUsers !== undefined ? { countsUsers: c.countsUsers } : {}),
+      // The fault as the agent words it, for the node screen.
+      ...(c.error ? { error: c.error } : {}),
       // Kept, unlike `running`, because it is inventory: the ports a core holds
       // change when the node is reconfigured, and the port check has to answer
       // between two healthchecks rather than by calling the node.

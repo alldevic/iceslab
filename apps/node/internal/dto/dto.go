@@ -618,6 +618,15 @@ type CoreStatus struct {
 	// same question: tuic and vless can both be sing-box on one node. Empty
 	// from an agent older than the field.
 	Engine string `json:"engine,omitempty"`
+	// CountsUsers: whether this core counts traffic per user. false = it
+	// reports presence without bytes per user (sing-box built without
+	// with_v2ray_api, naive); true = it counts; nil = unknown (an agent older
+	// than the field). A pointer so absence is a state of its own.
+	CountsUsers *bool `json:"countsUsers,omitempty"`
+	// Error: why the core is not working now when it is a fault (the process
+	// exited, "ssm-api sync pending: ..."). Not Reason, which is "does not
+	// run by design". nil when it works and from an older agent.
+	Error *string `json:"error,omitempty"`
 	// RendersPolicy / RendersDns: whether THIS core carries out the node-level
 	// policy and the node-level resolver. Both are optional adapter interfaces
 	// (core.PolicyReceiver, core.DnsReceiver) and today exactly one core
