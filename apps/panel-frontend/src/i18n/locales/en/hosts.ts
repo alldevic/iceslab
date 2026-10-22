@@ -44,6 +44,7 @@ export const hosts = {
       'xray-api': 'the xray gRPC API',
       'shadowsocks-api': 'the gRPC API of the second xray behind Shadowsocks',
       'singbox-api': 'the sing-box v2ray API',
+      'singbox-ssm-api': 'the sing-box SSM API',
       'mtproto-stats': 'the mtg stats endpoint',
       // Phase 4, the chain as its own process. Added ahead of time: it draws
       // nothing until an agent reports it, and an unknown key would reach the

@@ -45,6 +45,7 @@ export const hosts = {
       'xray-api': 'gRPC-API xray',
       'shadowsocks-api': 'gRPC-API второго xray под Shadowsocks',
       'singbox-api': 'v2ray-API sing-box',
+      'singbox-ssm-api': 'SSM-API sing-box',
       'mtproto-stats': 'статистикой mtg',
       // Фаза 4, цепь отдельным процессом. Ключ заведён заранее: он ничего не
       // рисует, пока агент его не пришлёт, а неизвестный ключ показался бы

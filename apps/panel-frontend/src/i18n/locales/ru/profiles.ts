@@ -87,6 +87,8 @@ export const profiles = {
       pin: 'пин',
       noPin: 'пина нет',
       noPinWhy: 'Пина нет: {{reason}}',
+      // Ноды, где движок не считает трафик по юзеру (countsUsers: false).
+      uncounted: 'Без учёта трафика, лимиты на этом движке не считаются:',
       component: {
         xray: 'xray',
         singbox: 'sing-box',

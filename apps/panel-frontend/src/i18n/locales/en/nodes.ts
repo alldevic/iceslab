@@ -251,6 +251,8 @@ export const nodes = {
     coresInventoryNote:
       'This is the inventory, not liveness: whether a core is up right now is what the node status above says. An idle core is a normal state, the agent registers an adapter for every protocol.',
     coresRendersPolicy: 'applies the policy',
+    coreFault: 'the core is not working: {{error}}',
+    coreUncounted: 'no traffic accounting: user limits on this engine are not counted',
     coresAwgFact: {
       awg3: 'AWG 3.1: carries 1.x and 3.1 profiles',
       awg1: 'AWG 1.x: 1.x profiles only',

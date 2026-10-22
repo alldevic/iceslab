@@ -82,6 +82,7 @@ export const profiles = {
       pin: 'pin',
       noPin: 'no pin',
       noPinWhy: 'No pin: {{reason}}',
+      uncounted: 'No traffic accounting, user limits on this engine are not counted:',
       component: {
         xray: 'xray',
         singbox: 'sing-box',

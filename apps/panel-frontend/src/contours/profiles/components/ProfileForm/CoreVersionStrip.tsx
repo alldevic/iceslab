@@ -7,6 +7,7 @@ import type { EngineName } from '@iceslab/shared';
 import type { Node } from '@/lib/domain/nodes';
 import { coreVersionFleet, type CoreVersionFleet } from '@/lib/domain/coreVersions';
 import { coreVersionScope } from '@/contours/profiles/lib/coreVersionScope';
+import { uncountedNodes } from '@/lib/domain/coreReport';
 import type { PreviewKindKey } from '@/contours/profiles/lib/profileKinds';
 import { AMBER, CYAN, FAINT, HAIRLINE, MIST, MOSS, SNOW, WELL } from '@/contours/profiles/lib/colors';
 
@@ -59,6 +60,9 @@ export function CoreVersionStrip({
     );
   }
   const fleets = scope.components.map((c) => coreVersionFleet(c, nodes));
+  // Nodes where this engine counts no traffic per user (countsUsers: false,
+  // 49699f88): user limits on this profile are not enforced there.
+  const uncounted = uncountedNodes(nodes, engine);
 
   return (
     <Stack
@@ -106,6 +110,14 @@ export function CoreVersionStrip({
       {fleets.map((f) => (
         <FleetLine key={`fleet-${f.component}`} fleet={f} named={fleets.length > 1} />
       ))}
+
+      {uncounted.length > 0 && (
+        <NodeList
+          title={t('profiles.engine.uncounted')}
+          items={uncounted.map((n) => ({ id: n.id, text: n.name }))}
+          tone={AMBER}
+        />
+      )}
 
       <Text style={{ fontSize: 11, lineHeight: '16px', color: MIST }}>
         {t('profiles.engine.coreVersionHint')}{' '}
@@ -186,9 +198,9 @@ function FleetLine({ fleet: f, named }: { fleet: CoreVersionFleet; named: boolea
   );
 }
 
-function NodeList({ title, items }: { title: string; items: { id: string; text: string }[] }) {
+function NodeList({ title, items, tone = FAINT }: { title: string; items: { id: string; text: string }[]; tone?: string }) {
   return (
-    <Text style={{ fontSize: 11, lineHeight: '16px', color: FAINT }}>
+    <Text style={{ fontSize: 11, lineHeight: '16px', color: tone }}>
       {title}{' '}
       {items.map((n, i) => (
         <span key={n.id}>
