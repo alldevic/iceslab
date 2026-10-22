@@ -12,7 +12,8 @@ import { prisma } from '../../prisma.js';
 import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
-import { allocatePeer, preallocatePeers } from '../amneziawg/amneziawg.service.js';
+import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
+import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { layOutGeo } from '../geo-sets/geo-push.js';
@@ -157,58 +158,6 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
       naivePassword: true,
     },
   });
-}
-
-/**
- * Each AWG user's address in the subnet of the profile behind `binding`, or an
- * empty map when there is no such binding.
- *
- * Wave-14 #13: allocated serially (allocatePeer is racy under concurrency, IP
- * slots aren't unique-indexed) before the addUser fan-out, and B7: one bulk
- * allocation for the whole set, stragglers (race loss / contention) falling
- * back to the per-user allocator.
- */
-async function allocateAwgAddresses(
-  binding: InboundDto | undefined,
-  users: { id: string; username: string; amneziawgPublicKey: string | null }[],
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  if (!binding) return out;
-  const row = await prisma.profileNodeBinding.findUnique({
-    where: { id: binding.id },
-    select: { profileId: true, profile: { select: { config: true } } },
-  });
-  if (!row) return out;
-  const profileId = row.profileId;
-  const subnet = ((row.profile.config ?? {}) as { subnet?: string }).subnet ?? '10.66.66.0/24';
-  const awgUsers = users.filter((u) => u.amneziawgPublicKey);
-  const bulk = await preallocatePeers(
-    profileId,
-    awgUsers.map((u) => u.id),
-    subnet,
-  ).catch((err) => {
-    const detail = err instanceof Error ? err.message : String(err);
-    getLogger().info(
-      `[worker:inbound-sync] bulk preallocatePeers on profile ${profileId} FAILED, per-user fallback: ${detail}`,
-    );
-    return new Map<string, string>();
-  });
-  for (const u of awgUsers) {
-    let ip = bulk.get(u.id);
-    if (!ip) {
-      try {
-        ip = (await allocatePeer(profileId, u.id, subnet)).ip;
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        getLogger().info(`[worker:inbound-sync] allocatePeer ${u.username} on profile ${profileId} FAILED: ${detail}`);
-        // Fall through, addUser will silently skip the AWG portion on the
-        // node side, other protocols still work for this user.
-        continue;
-      }
-    }
-    out.set(u.id, ip);
-  }
-  return out;
 }
 
 export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]> {
@@ -722,8 +671,25 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   getLogger().info(
     `[worker:inbound-sync] pushing ${users.length} user(s) to ${node.name}`,
   );
-  const awgIpByUser = await allocateAwgAddresses(awgBinding, users);
-  const awg3IpByUser = await allocateAwgAddresses(awg3Binding, users);
+  // A-022: each user on exactly the inbounds of this node their squads reach
+  // (the subscription's own rule, user-reach.ts). A user who reaches none of
+  // them gets an empty list, which takes them off the node: a squad that lost
+  // this node's profile must not leave its members on it. An agent older than
+  // the field ignores the list and serves everyone on every inbound, as before.
+  const reach = await reachOfUsers(
+    users.map((u) => u.id),
+    { nodeId },
+  );
+  const inboundIdsOf = (userId: string): string[] => reach.get(userId)?.get(nodeId) ?? [];
+  // A-164: an address only for the users who reach that AmneziaWG inbound.
+  const awgIpByUser = await allocateAwgAddresses(
+    awgBinding?.id,
+    users.filter((u) => awgBinding && inboundIdsOf(u.id).includes(awgBinding.id)),
+  );
+  const awg3IpByUser = await allocateAwgAddresses(
+    awg3Binding?.id,
+    users.filter((u) => awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id)),
+  );
 
   // Chunked parallel fanout. 25 is a balance between throughput and not
   // hammering the node-agent's HTTP server (default Node http.Agent
@@ -739,6 +705,7 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
           userId: u.id,
           shortId: u.shortId,
           username: u.username,
+          inboundIds: inboundIdsOf(u.id),
           credentials: {
             xrayUuid: u.xrayUuid,
             hysteriaPassword: u.hysteriaPassword,

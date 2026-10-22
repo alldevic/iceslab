@@ -17,10 +17,25 @@ export function registerUserEventHandlers(): void {
     await nodeUsersQueue.add('addUser', { userId });
   });
 
-  eventBus.on('user.updated', ({ userId, changes }) => {
+  eventBus.on('user.updated', async ({ userId, changes }) => {
     console.log(`[event] user.updated - ${userId} - ${changes.join(', ')}`);
-    // No node sync needed for pure metadata updates (description, tag, email, etc.)
-    // Status changes have their own event below.
+    // A-022: the squads decide which nodes and inbounds the user is on, so a
+    // change of squads rolls the user out again (addUser takes them off the
+    // nodes they no longer reach). Pure metadata needs no node sync; status
+    // changes have their own event below.
+    if (changes.includes('groupIds')) await nodeUsersQueue.add('addUser', { userId });
+  });
+
+  // A-022: a squad that changed what it grants (profiles, hosts) moves its
+  // members' reach. Each active member is rolled out again; addUser skips a
+  // member who is not active.
+  eventBus.on('squad.changed', async ({ squadId }) => {
+    const members = await prisma.groupMember.findMany({
+      where: { groupId: squadId, user: { deletedAt: null, status: 'active' } },
+      select: { userId: true },
+    });
+    if (members.length === 0) return;
+    await nodeUsersQueue.addBulk(members.map((m) => ({ name: 'addUser', data: { userId: m.userId } })));
   });
 
   eventBus.on('user.status-changed', async ({ userId, from, to }) => {
