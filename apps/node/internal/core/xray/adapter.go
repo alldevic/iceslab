@@ -1342,6 +1342,20 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	unchanged := fromNode || cascadeEqual(a.cascade, wire.Cascade)
 	prev, had := a.inbounds[key]
 	prevLegacy, prevCascade := a.cfg.Inbound, a.cascade
+	// Two self-steal inbounds naming one host with different pages behind it
+	// cannot share the fallback (A-129): refused before it is stored.
+	if newInbound.RealityMode == selfStealModeValue && key != "" {
+		others := make([]InboundConfig, 0, len(a.inbounds)+1)
+		for id, in := range a.inbounds {
+			if id != key {
+				others = append(others, in)
+			}
+		}
+		if err := selfStealConflict(append(others, newInbound)); err != nil {
+			a.mu.Unlock()
+			return fmt.Errorf("xray ApplyInbound: %w", err)
+		}
+	}
 	if key == "" {
 		unchanged = unchanged && inboundEqual(a.cfg.Inbound, newInbound)
 	} else {
@@ -1630,10 +1644,11 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		return nil
 	}
 
-	// K9-B: bring the self-steal local TLS fallback in line with the inbound's
+	// K9-B: bring the self-steal local TLS fallback in line with the inbounds'
 	// REALITY mode BEFORE the xray swap, so REALITY's loopback dest
-	// (127.0.0.1:8443) is already answering when xray comes back up.
-	a.reconcileSelfSteal(ctx, inbound)
+	// (127.0.0.1:8443) is already answering when xray comes back up. From the
+	// set just rendered, not the install-time inbound (A-129).
+	a.reconcileSelfSteal(ctx, pushed)
 
 	// Stop the existing subprocess (keep the field pointing at it so Healthy
 	// reflects "down" during the swap; xray binds a fixed port so old must
@@ -1678,36 +1693,27 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 // matches the inbound's REALITY mode. Called from regenerateAndRestart under
 // restartMu (so it can't race itself); a.mu only guards the field read/write,
 // never held across the slow start/Shutdown.
-func (a *Adapter) reconcileSelfSteal(ctx context.Context, inbound InboundConfig) {
-	want := inbound.RealityMode == selfStealModeValue
-	domain := ""
-	if want && len(inbound.RealityServerNames) > 0 {
-		domain = inbound.RealityServerNames[0]
-	}
-	// No domain -> no cert subject -> can't run the fallback; treat as "off".
-	if domain == "" {
-		want = false
-	}
-	// G1 realistic-fallback target (only meaningful when self-steal is on).
-	upstream := ""
-	if want {
-		upstream = inbound.RealityFallbackUpstream
-	}
+func (a *Adapter) reconcileSelfSteal(ctx context.Context, inbounds []InboundConfig) {
+	// Every inbound the core is about to serve, not one: each self-steal
+	// inbound renders dest = selfStealAddr and needs its site there (A-129).
+	sites := selfStealSites(inbounds)
+	want := len(sites) > 0
+	key := selfStealKey(sites)
 
 	a.mu.Lock()
 	cur := a.selfSteal
 	a.mu.Unlock()
 
-	// Already in the desired state: off-and-nil, or on with the same domain AND
-	// upstream (a changed upstream restarts the fallback with the new target).
+	// Already in the desired state: off-and-nil, or on with the same sites (a
+	// changed name or upstream restarts the fallback with the new set).
 	if !want && cur == nil {
 		return
 	}
-	if want && cur != nil && cur.domain == domain && cur.upstream == upstream {
+	if want && cur != nil && cur.key == key {
 		return
 	}
 
-	// Stop the existing server (mode turned off, or the domain changed).
+	// Stop the existing server (mode turned off, or the sites changed).
 	if cur != nil {
 		if err := cur.stop(ctx); err != nil {
 			a.logger.Warn("xray self-steal stop failed", "err", err)
@@ -1720,12 +1726,12 @@ func (a *Adapter) reconcileSelfSteal(ctx context.Context, inbound InboundConfig)
 		return
 	}
 
-	srv, err := startSelfSteal(selfStealAddr, domain, upstream, a.logger)
+	srv, err := startSelfSteal(selfStealAddr, sites, a.logger)
 	if err != nil {
 		// Non-fatal: xray still starts, but REALITY's dest (127.0.0.1:8443)
 		// won't answer until the next reconcile. Surface loudly.
 		a.logger.Error("xray self-steal start failed; REALITY dest will not answer",
-			"domain", domain, "err", err)
+			"sites", key, "err", err)
 		return
 	}
 	a.mu.Lock()
