@@ -74,8 +74,11 @@ func TestRenderedConfigUsesNoRetiredFields(t *testing.T) {
 		"anytls":      func() ([]byte, error) { return renderAnytlsConfig("c", "k", "127.0.0.1:8083", in, users) },
 		"xray-family": func() ([]byte, error) { return renderXrayFamilyConfig("127.0.0.1:8084", in, users) },
 		"hysteria2":   func() ([]byte, error) { return renderHysteria2Config("c", "k", "127.0.0.1:8085", in, users) },
-		"shadowsocks": func() ([]byte, error) { return renderShadowsocksConfig("127.0.0.1:8086", in, users) },
-		"shadowtls":   func() ([]byte, error) { return renderShadowtlsConfig("127.0.0.1:8087", in, users) },
+		"shadowsocks": func() ([]byte, error) { return renderShadowsocksConfig("127.0.0.1:8086", "", in, users) },
+		"shadowsocks+ssm": func() ([]byte, error) {
+			return renderShadowsocksConfig("127.0.0.1:8086", "127.0.0.1:8088", in, users)
+		},
+		"shadowtls": func() ([]byte, error) { return renderShadowtlsConfig("127.0.0.1:8087", in, users) },
 	}
 
 	// Retired or moved in 1.12 / 1.13. Matched as JSON keys, so a password that

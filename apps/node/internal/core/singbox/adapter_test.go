@@ -77,6 +77,8 @@ func TestHealthyConfigOnly(t *testing.T) {
 
 func TestGetStatsViaFakeRunCmd(t *testing.T) {
 	a := New(Config{
+		// A binary that carries v2ray_api: without it there are no counters.
+		BinaryPath:   taggedBinary(t, "with_quic,with_v2ray_api"),
 		StatsListen:  "127.0.0.1:8082",
 		XrayStatsBin: "/usr/local/bin/xray",
 		RunCmd: func(_ context.Context, _ string, _ ...string) ([]byte, error) {

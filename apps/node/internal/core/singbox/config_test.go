@@ -313,7 +313,7 @@ func TestRenderHysteria2Config(t *testing.T) {
 func TestRenderShadowsocksConfig(t *testing.T) {
 	users := map[string]userEntry{"u1": {Password: "uuid-1"}}
 	const method = "2022-blake3-aes-256-gcm"
-	blob, err := renderShadowsocksConfig("127.0.0.1:8086", InboundConfig{
+	blob, err := renderShadowsocksConfig("127.0.0.1:8086", "", InboundConfig{
 		ListenPort: 8388,
 		Method:     method,
 		ServerPSK:  "SERVER-PSK",

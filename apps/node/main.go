@@ -410,10 +410,13 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		// xrayUuid (matches the xray SS adapter + the subscription URI). Distinct
 		// config + stats port; no cert needed.
 		adapters = append(adapters, singbox.New(singbox.Config{
-			Protocol:     "shadowsocks",
-			BinaryPath:   singboxBin,
-			ConfigPath:   getenv("SINGBOX_SS_CONFIG", "/etc/sing-box/ss.json"),
-			StatsListen:  getenv("SINGBOX_SS_API_LISTEN", "127.0.0.1:8086"),
+			Protocol:    "shadowsocks",
+			BinaryPath:  singboxBin,
+			ConfigPath:  getenv("SINGBOX_SS_CONFIG", "/etc/sing-box/ss.json"),
+			StatsListen: getenv("SINGBOX_SS_API_LISTEN", "127.0.0.1:8086"),
+			// Users handed over the ssm-api instead of a restart, and counted
+			// there with any build of sing-box (A-119).
+			SSMListen:    getenv("SINGBOX_SS_SSM_LISTEN", "127.0.0.1:8088"),
 			XrayStatsBin: singboxStatsBin,
 		}, logger))
 		logger.Info("singbox (shadowsocks) adapter registered")

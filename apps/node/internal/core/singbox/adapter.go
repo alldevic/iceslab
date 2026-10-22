@@ -54,6 +54,10 @@ type Config struct {
 	XrayStatsBin string
 	// RunCmd runs the stats query; nil defaults to os/exec. Tests inject a fake.
 	RunCmd RunCmdFunc
+	// SSMListen is the loopback host:port of the ssm-api service, shadowsocks
+	// only: users are handed to the running process instead of restarting it,
+	// and counted there. Empty keeps the users in the config file.
+	SSMListen string
 	// QuietWindow and MaxWait batch user changes into one restart (batch.go).
 	// Zero takes the defaults, 2 s and 10 s.
 	QuietWindow time.Duration
@@ -192,12 +196,65 @@ func (a *Adapter) AddUser(user core.User) error {
 		Username: user.Username,
 	}
 	serving := a.inbound.ListenPort != 0
+	method := a.inbound.Method
 	a.mu.Unlock()
 	// Nothing runs without an inbound; the first ApplyInbound renders them.
-	if serving {
-		a.scheduleRestart()
+	if !serving {
+		return nil
 	}
+	// shadowsocks: straight into the running process, no restart.
+	if ssm := a.ssm(); ssm != nil && a.running() {
+		if err := ssm.put(context.Background(), user.UserID, core.DeriveSsPassword(password, method)); err == nil {
+			return nil
+		} else {
+			a.logger.Warn("singbox: ssm-api add failed, restarting with the user instead", "err", err)
+		}
+	}
+	a.scheduleRestart()
 	return nil
+}
+
+// ssm is the ssm-api client of a managed shadowsocks adapter, nil for every
+// other protocol and when no SSMListen is set.
+func (a *Adapter) ssm() *ssmClient {
+	if a.protocol != "shadowsocks" || a.cfg.SSMListen == "" {
+		return nil
+	}
+	return newSSMClient(a.cfg.SSMListen)
+}
+
+func (a *Adapter) running() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.proc != nil && a.proc.Running()
+}
+
+// countsUsers: this binary was built with v2ray_api, the only per-user
+// counters sing-box has besides ssm-api. The pinned 1.13.14 release is NOT
+// (its Tags line has no with_v2ray_api), and a config carrying the block is
+// refused at start: "create v2ray-server: v2ray api is not included in this
+// build" (found 22.10, every user core of sing-box on the pinned binary
+// failed to start). Read from `sing-box version`, cached until the file
+// changes, so a binary rebuilt with the tag turns the counters on by itself.
+func (a *Adapter) countsUsers() bool {
+	out, ok := a.versions.Answer(a.cfg.BinaryPath, []string{"version"}, nil)
+	return ok && hasBuildTag(out, "with_v2ray_api")
+}
+
+// hasBuildTag reads the "Tags:" line of `sing-box version`.
+func hasBuildTag(versionOut, tag string) bool {
+	for _, line := range strings.Split(versionOut, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Tags:")
+		if !ok {
+			continue
+		}
+		for _, t := range strings.Split(rest, ",") {
+			if strings.TrimSpace(t) == tag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // credsFor extracts (uuid, password) for the adapter's protocol from a user.
@@ -235,9 +292,17 @@ func (a *Adapter) RemoveUser(userID string) error {
 	delete(a.users, userID)
 	serving := a.inbound.ListenPort != 0
 	a.mu.Unlock()
-	if serving {
-		a.scheduleRestart()
+	if !serving {
+		return nil
 	}
+	if ssm := a.ssm(); ssm != nil && a.running() {
+		if err := ssm.remove(context.Background(), userID); err == nil {
+			return nil
+		} else {
+			a.logger.Warn("singbox: ssm-api remove failed, restarting without the user instead", "err", err)
+		}
+	}
+	a.scheduleRestart()
 	return nil
 }
 
@@ -270,6 +335,28 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		return &core.Stats{Users: out}
 	}
 
+	if ssm := a.ssm(); ssm != nil {
+		if !running {
+			return zero(), nil
+		}
+		counters, err := ssm.stats(context.Background())
+		if err != nil {
+			a.logger.Warn("singbox GetStats: ssm-api stats failed", "err", err)
+			return &core.Stats{NoData: true, Cumulative: true}, nil
+		}
+		out := make([]core.UserStats, 0, len(userIDs))
+		for _, id := range userIDs {
+			c := counters[id]
+			out = append(out, core.UserStats{UserID: id, BytesIn: c.UplinkBytes, BytesOut: c.DownlinkBytes})
+		}
+		return &core.Stats{Users: out, Cumulative: true}, nil
+	}
+
+	// A binary without v2ray_api has no per-user counters to ask: presence
+	// without bytes, as naive.
+	if !a.countsUsers() {
+		statsListen = ""
+	}
 	if statsListen == "" || bin == "" || run == nil || !running {
 		return zero(), nil
 	}
@@ -365,6 +452,29 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	return a.regenerateAndRestart()
 }
 
+// render is the config this adapter's protocol runs on. The v2ray_api block
+// only when the binary carries it (countsUsers), and for shadowsocks the
+// ssm-api service in its place when SSMListen is set.
+func (a *Adapter) render(certPath, keyPath, statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
+	if !a.countsUsers() {
+		statsListen = ""
+	}
+	switch a.protocol {
+	case "anytls":
+		return renderAnytlsConfig(certPath, keyPath, statsListen, inbound, users)
+	case "xray":
+		return renderXrayFamilyConfig(statsListen, inbound, users)
+	case "hysteria":
+		return renderHysteria2Config(certPath, keyPath, statsListen, inbound, users)
+	case "shadowsocks":
+		return renderShadowsocksConfig(statsListen, a.cfg.SSMListen, inbound, users)
+	case "shadowtls":
+		return renderShadowtlsConfig(statsListen, inbound, users)
+	default:
+		return renderConfig(certPath, keyPath, statsListen, inbound, users)
+	}
+}
+
 // regenerateAndRestart re-renders the sing-box config from current state and
 // swaps the subprocess. Serialized by restartMu; mu is only held for the
 // snapshot. No-op in config-only mode (no binary) or before an inbound exists.
@@ -397,22 +507,7 @@ func (a *Adapter) regenerateAndRestart() error {
 		ctx = context.Background()
 	}
 
-	var blob []byte
-	var err error
-	switch a.protocol {
-	case "anytls":
-		blob, err = renderAnytlsConfig(certPath, keyPath, statsListen, inbound, users)
-	case "xray":
-		blob, err = renderXrayFamilyConfig(statsListen, inbound, users)
-	case "hysteria":
-		blob, err = renderHysteria2Config(certPath, keyPath, statsListen, inbound, users)
-	case "shadowsocks":
-		blob, err = renderShadowsocksConfig(statsListen, inbound, users)
-	case "shadowtls":
-		blob, err = renderShadowtlsConfig(statsListen, inbound, users)
-	default:
-		blob, err = renderConfig(certPath, keyPath, statsListen, inbound, users)
-	}
+	blob, err := a.render(certPath, keyPath, statsListen, inbound, users)
 	if err != nil {
 		return fmt.Errorf("singbox: render config: %w", err)
 	}
@@ -442,6 +537,17 @@ func (a *Adapter) regenerateAndRestart() error {
 	a.mu.Lock()
 	a.proc = proc
 	a.mu.Unlock()
+	// A managed shadowsocks inbound starts with nobody: its users are handed
+	// over the API, every one of them, after each start.
+	if ssm := a.ssm(); ssm != nil {
+		want := make(map[string]string, len(users))
+		for id, u := range users {
+			want[id] = core.DeriveSsPassword(u.Password, inbound.Method)
+		}
+		if err := ssm.sync(ctx, want); err != nil {
+			return fmt.Errorf("singbox: hand the users to ssm-api: %w", err)
+		}
+	}
 	a.logger.Info("singbox: config applied and (re)started",
 		"port", inbound.ListenPort, "users", len(users))
 	return nil
@@ -623,12 +729,21 @@ func (a *Adapter) Installed() bool { return core.BinaryPresent(a.cfg.BinaryPath)
 
 // ReservedPorts: the loopback v2ray_api socket sing-box opens for per-user
 // counters. Empty StatsListen means stats are off and nothing is held.
+// The v2ray_api port only when the binary carries v2ray_api (otherwise it is
+// not drawn and nothing listens there), and the ssm-api port of a managed
+// shadowsocks.
 func (a *Adapter) ReservedPorts() []core.ReservedPort {
-	p := core.PortOfListenAddr(a.cfg.StatsListen)
-	if p == 0 {
-		return nil
+	var out []core.ReservedPort
+	if a.ssm() != nil {
+		if p := core.PortOfListenAddr(a.cfg.SSMListen); p != 0 {
+			out = append(out, core.ReservedPort{Owner: "singbox-ssm-api", Port: p})
+		}
+	} else if a.countsUsers() {
+		if p := core.PortOfListenAddr(a.cfg.StatsListen); p != 0 {
+			out = append(out, core.ReservedPort{Owner: "singbox-api", Port: p})
+		}
 	}
-	return []core.ReservedPort{{Owner: "singbox-api", Port: p}}
+	return out
 }
 
 // CoreVersion implements core.Versioner from `sing-box version`, re-asked only when

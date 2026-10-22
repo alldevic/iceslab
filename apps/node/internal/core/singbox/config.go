@@ -18,7 +18,17 @@ type sbConfig struct {
 	Log          sbLog           `json:"log"`
 	Inbounds     []sbInbound     `json:"inbounds"`
 	Outbounds    []sbOutbound    `json:"outbounds"`
+	Services     []sbService     `json:"services,omitempty"`
 	Experimental *sbExperimental `json:"experimental,omitempty"`
+}
+
+// sbService is the ssm-api service (sing-box 1.12+): a REST API on loopback
+// that manages the users of a managed shadowsocks inbound at runtime.
+type sbService struct {
+	Type       string            `json:"type"`
+	Listen     string            `json:"listen"`
+	ListenPort int               `json:"listen_port"`
+	Servers    map[string]string `json:"servers"`
 }
 
 type sbLog struct {
@@ -40,6 +50,9 @@ type sbInbound struct {
 	// shadowsocks-only: cipher + server-level iPSK (omitted for others).
 	Method   string `json:"method,omitempty"`
 	Password string `json:"password,omitempty"`
+	// Managed: the inbound's users come from the ssm-api service, not from
+	// this file. shadowsocks only.
+	Managed bool `json:"managed,omitempty"`
 
 	// hysteria2-only knobs (omitted for every other protocol).
 	UpMbps                int     `json:"up_mbps,omitempty"`
@@ -510,7 +523,13 @@ func renderShadowtlsConfig(statsListen string, inbound InboundConfig, users map[
 // own AEAD encryption. Multi-user: a server-level iPSK (password) plus per-user
 // uPSKs (users[].password), each derived from the user's xray UUID via
 // core.DeriveSsPassword so the key matches the panel URI and the xray SS adapter.
-func renderShadowsocksConfig(statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
+//
+// With ssmListen set the inbound is managed: its users are not in the file but
+// handed to the running process over the ssm-api service (A-119, 22.10), which
+// also counts their bytes, so no v2ray_api is drawn then. Verified live on the
+// pinned 1.13.14: a user added over POST /server/v1/users connects, another
+// user's open stream survives it, and GET /server/v1/stats counts by username.
+func renderShadowsocksConfig(statsListen, ssmListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
 	ids := sortedIDs(users)
 	sbUsers := make([]sbUser, 0, len(ids))
 	for _, id := range ids {
@@ -520,19 +539,34 @@ func renderShadowsocksConfig(statsListen string, inbound InboundConfig, users ma
 		})
 	}
 
+	in := sbInbound{
+		Type:       "shadowsocks",
+		Tag:        "ss-in",
+		Listen:     "0.0.0.0",
+		ListenPort: inbound.ListenPort,
+		Method:     inbound.Method,
+		Password:   inbound.ServerPSK,
+		Users:      sbUsers,
+	}
 	cfg := sbConfig{
-		Log: sbLog{Level: "warn", Timestamp: true},
-		Inbounds: []sbInbound{{
-			Type:       "shadowsocks",
-			Tag:        "ss-in",
-			Listen:     "0.0.0.0",
-			ListenPort: inbound.ListenPort,
-			Method:     inbound.Method,
-			Password:   inbound.ServerPSK,
-			Users:      sbUsers,
-		}},
+		Log:       sbLog{Level: "warn", Timestamp: true},
 		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
 	}
+	if ssmListen != "" {
+		host, port, err := net.SplitHostPort(ssmListen)
+		if err != nil {
+			return nil, fmt.Errorf("ssm-api listen %q: %w", ssmListen, err)
+		}
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			return nil, fmt.Errorf("ssm-api listen %q: %w", ssmListen, err)
+		}
+		in.Managed = true
+		in.Users = []sbUser{}
+		cfg.Services = []sbService{{Type: "ssm-api", Listen: host, ListenPort: p, Servers: map[string]string{"/": "ss-in"}}}
+		statsListen = ""
+	}
+	cfg.Inbounds = []sbInbound{in}
 
 	if statsListen != "" {
 		cfg.Experimental = &sbExperimental{

@@ -19,7 +19,7 @@ func TestAFailedStatsqueryIsNoDataNotZeros(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a := New(Config{
 		Protocol:     "tuic",
-		BinaryPath:   "/usr/bin/sing-box",
+		BinaryPath:   taggedBinary(t, "with_quic,with_v2ray_api"),
 		StatsListen:  "127.0.0.1:8082",
 		XrayStatsBin: "/usr/bin/xray",
 		RunCmd: func(context.Context, string, ...string) ([]byte, error) {
