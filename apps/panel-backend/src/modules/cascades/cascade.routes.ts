@@ -48,6 +48,14 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof svc.CascadeEntryPolicyNotFoundError) {
     return reply.code(400).send({ error: err.code, message: err.message, policyId: err.policyId });
   }
+  if (err instanceof svc.CascadePositionMovedError) {
+    return reply.code(400).send({
+      error: err.code,
+      message: err.message,
+      position: err.position,
+      storedPosition: err.storedPosition,
+    });
+  }
   if (err instanceof svc.CascadeNodeMissingError) {
     return reply.code(400).send({ error: 'INVALID', message: err.message });
   }

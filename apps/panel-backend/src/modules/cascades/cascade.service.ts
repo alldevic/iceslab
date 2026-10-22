@@ -137,6 +137,23 @@ async function assertEntryPolicyExists(policyId: string | null | undefined): Pro
   const found = await prisma.routePolicy.findUnique({ where: { id: policyId }, select: { id: true } });
   if (!found) throw new CascadeEntryPolicyNotFoundError(policyId);
 }
+/** A-140: a position's pool moved to another number without its linkParams. */
+export class CascadePositionMovedError extends Error {
+  readonly code = 'POSITION_MOVED_WITHOUT_LINK_PARAMS';
+  constructor(
+    public position: number,
+    public storedPosition: number,
+  ) {
+    super(
+      `position ${position} holds the nodes stored at position ${storedPosition}, and came without ` +
+        `linkParams. The leg settings are kept by number, so this save would hand that leg the ` +
+        `settings of position ${position} (an AWG underlay or a congestion controller moving to ` +
+        `another leg). Send linkParams for every position that moved.`,
+    );
+    this.name = 'CascadePositionMovedError';
+  }
+}
+
 export class CascadeNodeMissingError extends Error {
   constructor(
     public nodeId: string,
@@ -742,6 +759,17 @@ async function assertBalancerEntrySupportsVlessRoute(entryNodeId: string): Promi
   if (!versionAtLeast(version, MIN_XRAY_VLESSROUTE)) {
     throw new CascadeEntryCoreTooOldError(node.name, version, MIN_XRAY_VLESSROUTE);
   }
+}
+
+/** The same gate for every node of an entry pool: a client may land on any of
+ *  them, so one old xray in the pool is the silent failure for its share of
+ *  users (A-145). */
+async function assertEntryPoolSupportsVlessRoute(nodeIds: string[]): Promise<void> {
+  for (const id of new Set(nodeIds)) await assertBalancerEntrySupportsVlessRoute(id);
+}
+
+function entryPoolOf(positions: { position: number; nodeIds: string[] }[] | undefined): string[] {
+  return positions?.find((p) => p.position === 0)?.nodeIds ?? [];
 }
 
 const hopInclude = {
@@ -1642,9 +1670,24 @@ async function positionsForSave(
   if (!cascadeId) return incoming;
   const stored = await prisma.cascadePosition.findMany({
     where: { cascadeId },
-    select: { position: true, linkParams: true },
+    select: { position: true, linkParams: true, nodes: { select: { nodeId: true } } },
   });
   const byIndex = new Map(stored.map((p) => [p.position, p]));
+  /**
+   * A-140. The knob is filled in BY NUMBER, so a position that moved without
+   * its knob would take the knob of whatever stood at its new number: swap two
+   * transits and the leg hidden in AWG goes out direct, the direct one into the
+   * tunnel, with nothing said. Refused instead: a pool that sat at another
+   * number has to bring its linkParams. A stable position id is the real fix,
+   * planned after Э4.
+   */
+  const poolKey = (ids: string[]) => [...ids].sort().join(',');
+  const storedAt = new Map(stored.map((p) => [poolKey(p.nodes.map((n) => n.nodeId)), p.position]));
+  for (const p of incoming) {
+    if ('linkParams' in p) continue;
+    const was = storedAt.get(poolKey(p.nodeIds));
+    if (was !== undefined && was !== p.position) throw new CascadePositionMovedError(p.position, was);
+  }
   return incoming.map((p) =>
     'linkParams' in p
       ? p
@@ -2069,9 +2112,8 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // T7: an enabled balancer entry serves vlessRoute-tagged exit configs; gate
   // it on the entry's xray version. Disabled cascades don't expand in subs.
   // A v4-only shape gates on its entry position instead.
-  const entryNodeId = hops[0]?.nodeId ?? positions?.find((p) => p.position === 0)?.nodeIds[0];
-  if (input.enabled && entryNodeId && (isBalancer || !folded)) {
-    await assertBalancerEntrySupportsVlessRoute(entryNodeId);
+  if (input.enabled && (isBalancer || !folded)) {
+    await assertEntryPoolSupportsVlessRoute(hops.length > 0 ? [hops[0]!.nodeId] : entryPoolOf(positions));
   }
   // Pre-generate inter-hop link creds.
   //   chain:    one cred per link, stored on each non-exit (originating) hop.
@@ -2276,12 +2318,21 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   await assertDirectionOutbounds(gatePositions, gateDirections);
   // T7: gate an effectively-enabled balancer on the entry node's xray version
   // (covers both enabling an existing cascade and swapping in a new entry hop).
+  //
+  // A-145: the entry is read the way create reads it, from the positions
+  // (sent, or stored when the toggle switches the cascade on), and every node
+  // of the entry pool is asked. The stored hops this used to read are empty
+  // for a shape that does not fold, so a v4 cascade was never gated here.
   const willBeEnabled = input.enabled ?? existing.enabled;
-  if (isBalancer && willBeEnabled) {
-    const entryNodeId = hops
-      ? hops[0]!.nodeId
-      : existing.hops.find((h) => h.position === 0)?.nodeId;
-    if (entryNodeId) await assertBalancerEntrySupportsVlessRoute(entryNodeId);
+  const gateFolded = gatePositions && gateDirections ? tryFoldPositions(gatePositions, gateDirections) : null;
+  const v4Only = gatePositions !== undefined && !gateFolded;
+  if (willBeEnabled && (isBalancer || v4Only)) {
+    const entryPool = hops
+      ? [hops[0]!.nodeId]
+      : gatePositions
+        ? entryPoolOf(gatePositions)
+        : existing.hops.filter((h) => h.position === 0).map((h) => h.nodeId);
+    await assertEntryPoolSupportsVlessRoute(entryPool);
   }
   const creds = hops
     ? await generateLinkCreds(
