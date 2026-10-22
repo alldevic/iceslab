@@ -496,6 +496,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				Engine:  adapter.Engine(),
 			}
 			idle := s.isIdle(adapter)
+			// Whether its per-user numbers are bytes or presence.
+			if uc, ok := adapter.(core.UserCounter); ok {
+				counts := uc.CountsUsers()
+				cs.CountsUsers = &counts
+			}
 			// Which node-level settings this core actually carries out. Both are
 			// optional interfaces, and today only one adapter implements either,
 			// so on a node whose cores do not the operator's policy and resolver
@@ -526,6 +531,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				cs.Running = false
 				cs.Provisioned = &f
 				cs.Reason = core.IdleReason
+			}
+			// Why it is down when that is a fault (P1: the operator sees the
+			// reason, not only the red). Idle or never configured is down by
+			// design and says nothing.
+			if fr, ok := adapter.(core.FaultReporter); ok && !cs.Running && (cs.Provisioned == nil || *cs.Provisioned) {
+				if f := fr.Fault(); f != "" {
+					cs.Error = &f
+				}
 			}
 			// And whether it is even on the machine, which is a different
 			// question: a core can be configured perfectly and absent from

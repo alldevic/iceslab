@@ -99,8 +99,10 @@ type Adapter struct {
 
 	// The ssm-api hand-over of a managed shadowsocks (ssm_retry.go), under mu:
 	// done for the current process, and the process generation a retry
-	// belongs to (a newer start or a Stop ends an older retry).
+	// belongs to (a newer start or a Stop ends an older retry). ssmErr is the
+	// last failure of the hand-over, for CoreStatus.error.
 	ssmSynced    bool
+	ssmErr       string
 	ssmGen       int
 	ssmRetryBase time.Duration
 
@@ -760,8 +762,14 @@ func (a *Adapter) regenerateAndRestart() error {
 		a.ssmGen++
 		gen := a.ssmGen
 		a.ssmSynced = false
+		a.ssmErr = ""
 		a.mu.Unlock()
 		if err := a.ssmSyncAll(ctx, held, users); err != nil {
+			a.mu.Lock()
+			if a.ssmGen == gen {
+				a.ssmErr = err.Error()
+			}
+			a.mu.Unlock()
 			// A-213, 22.10: the managed inbound starts with nobody, and a
 			// failed hand-over left it so: a 500 to a push, a journal line
 			// after a batch. Now it is tried again until it takes, and the
@@ -772,6 +780,7 @@ func (a *Adapter) regenerateAndRestart() error {
 		a.mu.Lock()
 		if a.ssmGen == gen {
 			a.ssmSynced = true
+			a.ssmErr = ""
 		}
 		a.mu.Unlock()
 	}

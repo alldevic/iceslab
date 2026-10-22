@@ -136,6 +136,20 @@ type InboundReconciler interface {
 	RetainInbounds(keep []string) error
 }
 
+// UserCounter is an OPTIONAL interface: whether this core counts traffic per
+// user, or only reports who is on it (CoreStatus.countsUsers). Not
+// implemented = unknown.
+type UserCounter interface {
+	CountsUsers() bool
+}
+
+// FaultReporter is an OPTIONAL interface: why the core is not working when
+// that is a fault, in the core's or the agent's words (CoreStatus.error);
+// empty when it works or when it is down by design (idle, never configured).
+type FaultReporter interface {
+	Fault() string
+}
+
 // IdentifiedApplier is an OPTIONAL interface for an adapter that holds several
 // inbounds whose wire config carries no id of its own (mieru's is the MTU
 // alone). The server calls it instead of ApplyInbound, with the id it already

@@ -57,9 +57,13 @@ func (a *Adapter) retrySSMSync(ctx context.Context, gen int, held []heldInbound,
 		a.mu.Lock()
 		if err == nil && a.ssmGen == gen {
 			a.ssmSynced = true
+			a.ssmErr = ""
 			a.mu.Unlock()
 			a.logger.Info("singbox: users handed to ssm-api after a retry")
 			return
+		}
+		if err != nil && a.ssmGen == gen {
+			a.ssmErr = err.Error()
 		}
 		a.mu.Unlock()
 		if err != nil {

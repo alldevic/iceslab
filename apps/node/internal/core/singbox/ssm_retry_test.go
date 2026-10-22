@@ -104,6 +104,13 @@ func TestAFailedHandOverIsRetriedAndTheCoreIsUnhealthyMeanwhile(t *testing.T) {
 	if a.Healthy() {
 		t.Fatal("the core is healthy with its users not handed over")
 	}
+	// CoreStatus.error: the pending hand-over, in the words of its failure.
+	if f := a.Fault(); !strings.HasPrefix(f, "ssm-api sync pending: ") || !strings.Contains(f, "busy") {
+		t.Errorf("Fault() = %q, want the pending hand-over and why", f)
+	}
+	if !a.CountsUsers() {
+		t.Error("a managed shadowsocks counts over ssm-api, whatever the build tags")
+	}
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline) && !a.Healthy(); time.Sleep(20 * time.Millisecond) {
 	}
 	if !a.Healthy() {
@@ -111,5 +118,8 @@ func TestAFailedHandOverIsRetriedAndTheCoreIsUnhealthyMeanwhile(t *testing.T) {
 	}
 	if !ssm.has("alice") {
 		t.Fatal("healthy, yet alice is not on the managed inbound")
+	}
+	if f := a.Fault(); f != "" {
+		t.Errorf("Fault() = %q after the hand-over took", f)
 	}
 }
