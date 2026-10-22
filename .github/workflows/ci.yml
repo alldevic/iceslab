@@ -55,9 +55,9 @@ jobs:
       frontend: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.frontend }}
       node: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.node }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         if: "!startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'"
         with:
@@ -111,13 +111,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.33.2
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # ⚠ From .nvmrc, never a literal. The workflow and the backend image
           # drifted apart once (22.x against 22.22) and the image crash-looped on
@@ -208,13 +208,13 @@ jobs:
       NODE_ENV: test
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.33.2
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # ⚠ From .nvmrc, never a literal. The workflow and the backend image
           # drifted apart once (22.x against 22.22) and the image crash-looped on
@@ -355,7 +355,7 @@ jobs:
 
       # By tag: a run downloads only when upstream publishes a newer pair.
       - name: Cache the geo release pair
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/geo
           key: geo-pair-${{ steps.geo.outputs.tag }}
@@ -411,7 +411,7 @@ jobs:
       # and the count is about which files ran, not whether they passed.
       - name: Keep the report for the file count
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-vitest-${{ matrix.shard }}
           path: /tmp/backend-vitest-${{ matrix.shard }}.json
@@ -451,9 +451,9 @@ jobs:
     needs: [changes, backend]
     if: "!cancelled() && needs.changes.outputs.backend == 'true'"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: backend-vitest-*
           path: /tmp/reports
@@ -508,13 +508,13 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.frontend == 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.33.2
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # ⚠ From .nvmrc, never a literal. The workflow and the backend image
           # drifted apart once (22.x against 22.22) and the image crash-looped on
@@ -615,9 +615,9 @@ jobs:
     if: needs.changes.outputs.node == 'true'
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.22'
           # No go.sum yet (zero external deps), let setup-go skip cache wiring.
@@ -751,9 +751,9 @@ jobs:
             dockerfile: apps/node/Dockerfile
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # The runtime the images are built on comes from the same file the
       # workflow's own Node comes from. The Dockerfiles keep a default so a
@@ -767,7 +767,7 @@ jobs:
       # attempting the login there would fail the job for no reason.
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -782,7 +782,7 @@ jobs:
       # candidate must not move it for whoever does.
       - name: Metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }}
           tags: |
@@ -792,7 +792,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build + push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.dockerfile }}
@@ -847,7 +847,7 @@ jobs:
       # For the SARIF upload below.
       security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: a secret committed and "removed" a few commits later
           # is still there, and scanning only the tip would call that clean.
@@ -873,7 +873,7 @@ jobs:
       # the report stays redacted: this repository is public.
       - name: Upload findings
         if: always() && hashFiles('gitleaks.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -906,12 +906,12 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.node == 'true'
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.24'
           cache-dependency-path: apps/node/go.sum
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: latest
           working-directory: apps/node
@@ -974,14 +974,14 @@ jobs:
           --health-timeout 5s --health-retries 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: github.event_name == 'pull_request'
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1003,7 +1003,7 @@ jobs:
       # artifact.
       - name: Build backend image (pull request only)
         if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: apps/panel-backend/Dockerfile
@@ -1087,14 +1087,14 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: github.event_name == 'pull_request'
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1112,7 +1112,7 @@ jobs:
 
       - name: Build frontend image (pull request only)
         if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: apps/panel-frontend/Dockerfile
