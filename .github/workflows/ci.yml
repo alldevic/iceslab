@@ -15,6 +15,12 @@ on:
     # which waits for this workflow to pass ON THE TAG, would have waited
     # forever.
     tags: ['v*']
+  # By hand, from the Actions tab or `gh workflow run ci.yml --ref develop`.
+  # A merge made with GITHUB_TOKEN (the dependabot auto-merge) starts no
+  # workflow, so without this the merged tree had no push run and develop had
+  # no image until the next human push. A manual run tests everything, like a
+  # tag, and on main or develop it publishes, like a push.
+  workflow_dispatch:
 
 # Cancel in-flight runs when a new commit lands on the same ref. Saves
 # minutes on rapid push-fix-push cycles and removes confusing red marks
@@ -41,19 +47,19 @@ jobs:
     name: changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # A release tag runs everything. What a release ships is the whole tree, not
-    # the diff of its last commit, and a tag push has no `before` to compare
-    # with in the first place.
+    # A release tag and a manual run test everything. What a release ships is
+    # the whole tree, not the diff of its last commit; and neither a tag push
+    # nor a manual run has a `before` to compare with in the first place.
     outputs:
-      backend: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.backend }}
-      frontend: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.frontend }}
-      node: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.node }}
+      backend: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.backend }}
+      frontend: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.frontend }}
+      node: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.node }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: dorny/paths-filter@v4
         id: filter
-        if: "!startsWith(github.ref, 'refs/tags/')"
+        if: "!startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'"
         with:
           # The lockfile, the workspace file and THIS FILE are in every list: an
           # install affects all three apps whichever one the commit was about,
@@ -88,9 +94,9 @@ jobs:
             echo ""
             echo "| area | runs |"
             echo "| --- | --- |"
-            echo "| backend | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.backend }} |"
-            echo "| frontend | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.frontend }} |"
-            echo "| node-agent | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.node }} |"
+            echo "| backend | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.backend }} |"
+            echo "| frontend | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.frontend }} |"
+            echo "| node-agent | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.node }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
@@ -626,7 +632,10 @@ jobs:
        (github.event_name == 'push' &&
         (github.ref == 'refs/heads/main' ||
          github.ref == 'refs/heads/develop' ||
-         startsWith(github.ref, 'refs/tags/v'))))
+         startsWith(github.ref, 'refs/tags/v'))) ||
+       (github.event_name == 'workflow_dispatch' &&
+        (github.ref == 'refs/heads/main' ||
+         github.ref == 'refs/heads/develop')))
     permissions:
       contents: read
       packages: write
@@ -665,7 +674,7 @@ jobs:
       # and throws the image away - a fork PR has no write token anyway, so
       # attempting the login there would fail the job for no reason.
       - name: Log in to GHCR
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -698,7 +707,7 @@ jobs:
           # Build everywhere, publish only from the branches that something
           # actually pulls. On a pull request the image is built and discarded:
           # the point there is to prove the Dockerfile still works.
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -714,7 +723,7 @@ jobs:
           {
             echo "### docker: ${{ matrix.image.name }}"
             echo ""
-            if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
               echo "published:"
             else
               echo "built and discarded (pull request), tags it would have carried:"
@@ -839,7 +848,7 @@ jobs:
   # resolve inside the container while every test and build was green.
   # ───────────────────────────────────────────────────────────────────────
   #
-  # ⚠ On a push this pulls the PUBLISHED image by its sha tag instead of
+  # ⚠ On a push (or a manual run) this pulls the PUBLISHED image by its sha tag instead of
   # building its own. Building a second time proved the Dockerfile works, which
   # is not the question: the question is whether the artifact the test server
   # will pull boots, and a local rebuild can differ from the published one for
@@ -876,10 +885,10 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
-        if: github.event_name != 'push'
+        if: github.event_name == 'pull_request'
 
       - name: Log in to GHCR
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -889,7 +898,7 @@ jobs:
       # The published artifact, by the same sha tag the docker job wrote.
       - name: Pull the published image
         id: image
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           ref="ghcr.io/${{ github.repository_owner }}/iceslab-backend:sha-$(echo "${{ github.sha }}" | cut -c1-7)"
@@ -901,7 +910,7 @@ jobs:
       # and be explicit that this proves the Dockerfile, not a deployable
       # artifact.
       - name: Build backend image (pull request only)
-        if: github.event_name != 'push'
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -954,7 +963,7 @@ jobs:
           {
             echo "### smoke (image boots)"
             echo ""
-            if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
               echo "- ran the PUBLISHED image: \`${{ steps.image.outputs.ref }}\`"
             else
               echo "- pull request: nothing is published, so the image was built here"
@@ -1033,6 +1042,10 @@ jobs:
           if [ "$EVENT" = "push" ]; then
             case "$REF" in
               refs/heads/main|refs/heads/develop|refs/tags/v*) docker_may_skip=no ;;
+            esac
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            case "$REF" in
+              refs/heads/main|refs/heads/develop) docker_may_skip=no ;;
             esac
           elif [ "$EVENT" = "pull_request" ] && [ "$SAME_REPO" = "true" ]; then
             docker_may_skip=no
