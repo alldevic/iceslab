@@ -96,6 +96,38 @@ func TestAThousandAddsAreOneRestart(t *testing.T) {
 	}
 }
 
+// A batch that fires while the adapter is being stopped: the Stop lands after
+// the batch has decided to restart and before it renders. The adapter is
+// stopped, so no process may come up after it (AUDT, 22.10: Stop did not take
+// restartMu and the render did not look at started).
+func TestAStopDuringABatchLeavesNoProcess(t *testing.T) {
+	a, path, _ := countingAdapter(t)
+	time.Sleep(100 * time.Millisecond)
+	stopped := make(chan struct{})
+	a.mu.Lock()
+	a.onFlush = func() {
+		_ = a.Stop(context.Background())
+		close(stopped)
+	}
+	a.mu.Unlock()
+	base := startCount(path)
+	if err := a.AddUser(user(1)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the batch never fired")
+	}
+	time.Sleep(300 * time.Millisecond)
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if proc != nil || startCount(path) != base {
+		t.Fatalf("a process came up after Stop: proc=%v starts +%d", proc != nil, startCount(path)-base)
+	}
+}
+
 // A steady stream of changes, every 10 ms against a 40 ms quiet window, for
 // six caps: the cap holds. Restarts are decided about once per cap, never put
 // off forever.

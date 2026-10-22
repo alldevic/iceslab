@@ -163,6 +163,12 @@ func (a *Adapter) Idle(ctx context.Context) error {
 }
 
 func (a *Adapter) Stop(ctx context.Context) error {
+	// Under restartMu, so a render already under way (a batch that fired the
+	// moment Stop came) finishes first and its process is the one stopped
+	// here; and every render after this sees started == false and starts
+	// nothing (AUDT, 22.10: a batch brought sing-box back up after Stop).
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
 	a.mu.Lock()
 	a.dropBatchLocked()
 	a.started = false
@@ -486,6 +492,12 @@ func (a *Adapter) regenerateAndRestart() error {
 	// This render carries every user change so far: a batch still waiting
 	// would only restart again for nothing.
 	a.dropBatchLocked()
+	if !a.started {
+		// Stopped (or not yet started): nothing is to run. Start renders
+		// whatever is held when it comes.
+		a.mu.Unlock()
+		return nil
+	}
 	inbound := a.inbound
 	binPath := a.cfg.BinaryPath
 	cfgPath := a.cfg.ConfigPath
