@@ -264,7 +264,9 @@ function buildProxyOutbound(
     streamSettings.xhttpSettings = {
       ...(e.path ? { path: e.path } : {}),
       ...(e.hostHeader ? { host: e.hostHeader } : {}),
-      mode: 'auto',
+      // The node's mode (A-133): it was 'auto' whatever the profile said, and
+      // a client on auto against a server in another mode does not connect.
+      mode: e.xhttpMode ?? 'auto',
     };
   } else if (network === 'grpc') {
     streamSettings.grpcSettings = { serviceName: e.serviceName ?? '' };

@@ -39,6 +39,8 @@ export interface VlessRealityUriOpts {
   hostHeader?: string;
   /** gRPC serviceName. Required when network=grpc. */
   serviceName?: string;
+  /** XHTTP mode, written as `mode=` when it is not auto (A-133). */
+  xhttpMode?: string;
   /** Slice 30.1: per-host overrides emitted into the URI. */
   /** ALPN list (e.g. ['h2','http/1.1']). Joined by comma into `alpn` param. */
   alpn?: string[];
@@ -103,6 +105,13 @@ export function buildVlessRealityUri(opts: VlessRealityUriOpts): string {
   if (network === 'ws' || network === 'xhttp' || network === 'httpupgrade') {
     if (opts.path) params.set('path', opts.path);
     if (opts.hostHeader) params.set('host', opts.hostHeader);
+  }
+  // XHTTP's mode, the key the share-link standard names (Xray-core
+  // discussion #716, 4.3.18 "(XHTTP) mode", added 2024-11-11 with PR #3994),
+  // when it is not auto: a client on auto against a server in another mode
+  // does not connect (A-133).
+  if (network === 'xhttp' && opts.xhttpMode && opts.xhttpMode !== 'auto') {
+    params.set('mode', opts.xhttpMode);
   }
   if (network === 'grpc' && opts.serviceName) {
     params.set('serviceName', opts.serviceName);

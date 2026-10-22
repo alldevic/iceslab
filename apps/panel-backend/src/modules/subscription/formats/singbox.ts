@@ -252,6 +252,13 @@ export function buildSingboxJson(
             },
       );
     } else if (e.protocol === 'xray') {
+      // sing-box's V2Ray transports are http, ws, quic, grpc and httpupgrade
+      // (sing-box.sagernet.org/configuration/shared/v2ray-transport, read
+      // 22.10: "No mKCP transport", no XHTTP). xhttp and kcp went out with no
+      // transport block, that is bare TCP: a line that looked fine and never
+      // connected, the REALITY-over-XHTTP default among them (A-133). Left
+      // out, as the proxy-line formats leave out what their client lacks.
+      if (e.network === 'xhttp' || e.network === 'kcp') continue;
       proxyTags.push(tag);
       const sub = e.subprotocol ?? 'vless';
       // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none'
