@@ -68,7 +68,7 @@ export async function namedOutboundsRoutes(app: FastifyInstance): Promise<void> 
   app.post('/api/named-outbounds', auth, async (req, reply) => {
     const input = CreateNamedOutboundSchema.parse(req.body);
     try {
-      return reply.code(201).send(await svc.createNamedOutbound(input));
+      return reply.code(201).send(forReader(req, await svc.createNamedOutbound(input)));
     } catch (err) {
       return fail(err, reply);
     }
@@ -91,7 +91,9 @@ export async function namedOutboundsRoutes(app: FastifyInstance): Promise<void> 
       ),
     );
     try {
-      return reply.send(await svc.updateNamedOutbound(id, input));
+      // The answer too: the stored password put back into this body above is
+      // the one GET hides from a restricted token.
+      return reply.send(forReader(req, await svc.updateNamedOutbound(id, input)));
     } catch (err) {
       return fail(err, reply);
     }

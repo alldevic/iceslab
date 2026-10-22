@@ -138,9 +138,31 @@ describe('server secrets and restricted tokens', () => {
       payload: { config: { ...read.config, port: 1081 } },
     });
     expect(put.statusCode, put.body).toBe(200);
+    // The answer to the write must not hand back the password the write kept.
+    expect(put.body).not.toContain('upstream-secret');
     const stored = (await prisma.namedOutbound.findUniqueOrThrow({ where: { id } })).config as Record<string, unknown>;
     expect(stored.password).toBe('upstream-secret');
     expect(stored.port).toBe(1081);
+
+    // The session's answer to the same write still carries it.
+    const asSession = await app.inject({
+      method: 'PUT',
+      url: `/api/named-outbounds/${id}`,
+      headers: { authorization: `Bearer ${session}` },
+      payload: { countryCode: 'DE' },
+    });
+    expect(asSession.statusCode, asSession.body).toBe(200);
+    expect(asSession.body).toContain('upstream-secret');
+
+    // And a create by the token answers without what it just sent.
+    const created2 = await app.inject({
+      method: 'POST',
+      url: '/api/named-outbounds',
+      headers: { authorization: `Bearer ${bot}` },
+      payload: { name: 'up2', type: 'socks', config: { server: '203.0.113.6', port: 1080, username: 'u', password: 'second-secret' } },
+    });
+    expect(created2.statusCode, created2.body).toBe(201);
+    expect(created2.body).not.toContain('second-secret');
   });
 
   it('the chain password needs nodes:write, as the bootstrap does', async () => {
