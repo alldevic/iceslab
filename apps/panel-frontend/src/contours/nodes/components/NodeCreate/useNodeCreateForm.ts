@@ -26,6 +26,7 @@ import {
 } from '@/contours/nodes/lib/nodeCreateForm';
 import { coreVersionRefusal } from '@/lib/domain/coreVersions';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { buildHardening } from '@/contours/nodes/lib/nodeInstall';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import { installIntentLabel, nodeIntentWords } from '@/lib/domain/engines';
@@ -110,6 +111,12 @@ export function useNodeCreateForm() {
     refetchInterval: 5000,
   });
   if (!isOnline && nodeWatch.data?.status === 'online') setIsOnline(true);
+  // The poll that did not answer is said beside «waiting for the agent»: the
+  // panel cannot tell waiting from not knowing (spec frontend-nodes). Read on
+  // the current poll, not on stale data: an old «offline» is not an answer.
+  const watchFailure = nodeWatch.isError
+    ? { message: apiErrorMessage(nodeWatch.error), onRetry: () => void nodeWatch.refetch() }
+    : null;
 
   // Seconds since the node was registered, for the "waiting" clock.
   const [waited, setWaited] = useState(0);
@@ -147,6 +154,11 @@ export function useNodeCreateForm() {
    * не слал ключ, который сервер отвергнет.
    */
   const enginesKnown = nodeFieldKnown(fleetQuery.data, 'intendedEngines');
+  // A fleet list that did not arrive is not «the server is older than these
+  // fields»: the page waits for it or says it failed instead of drawing the
+  // old form (spec frontend-nodes).
+  const fleetView = loadView(fleetQuery);
+  const fleetFailure = loadFailure(fleetQuery, apiErrorMessage);
   /** Отказ 400 INVALID_ENGINES или LAST_CORE: под чипами. */
   const [enginesRefusal, setEnginesRefusal] = useState<NodeEnginesRefusal | null>(null);
   // Какие ядра встанут на ноду: чипы, или то же из старой формы.
@@ -165,6 +177,8 @@ export function useNodeCreateForm() {
   // the profile: its effective engine, resolved by the server, among them.
   // Everything else is listed with the reason it cannot, rather than hidden,
   // so the operator sees the whole inventory and why it is short.
+  // A profile list that did not arrive is not «no profile fits».
+  const profilesFailure = loadFailure(profilesQuery, apiErrorMessage);
   const enginesKey = engines.join(',');
   const groups = useMemo(() => {
     const all = profilesQuery.data?.profiles ?? [];
@@ -218,6 +232,7 @@ export function useNodeCreateForm() {
 
   function goNext() {
     if (step === 0) {
+      if (fleetView !== 'ready') return;
       const result = form.validate();
       if (result.hasErrors) return;
       setStep(1);
@@ -386,5 +401,9 @@ export function useNodeCreateForm() {
     register,
     copy,
     downloadPayload,
+    fleetView,
+    fleetFailure,
+    profilesFailure,
+    watchFailure,
   };
 }
