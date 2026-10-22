@@ -123,4 +123,8 @@ EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
 
-CMD ["node", "dist/index.js"]
+# A-019: V8's linear-time regexp engine, for the user-supplied patterns the
+# panel matches (the `l` flag needs it). The app turns it on itself at start
+# and refuses to start without it; the flag here is the second guard and the
+# visible trace of it in the image.
+CMD ["node", "--enable-experimental-regexp-engine", "dist/index.js"]
