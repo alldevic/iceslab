@@ -832,17 +832,40 @@ func renderMultiConfig(
 		}
 	}
 
-	// WARP egress (per-node v1): add the Cloudflare WARP wireguard outbound and
-	// route this inbound's user traffic through it. Appended last so the DNS,
+	// WARP egress: the Cloudflare WARP wireguard outbound, and each inbound
+	// that carries WARP routed through it. Appended last so the DNS,
 	// BitTorrent/SMTP block, and cascade rules still take precedence (warp +
 	// cascade is out of v1 scope: cascade routing matches first, so the warp
 	// rule simply never fires on a cascade node).
-	if cfg.Warp != nil {
-		outbounds = append(outbounds, buildWarpOutbound(cfg.Warp))
+	//
+	// A-033, 22.10: this read `cfg`, the LAST inbound of the loop above, so on
+	// a node with two xray inbounds the WARP of the first was not rendered at
+	// all and its users went out directly while the panel showed WARP on. Each
+	// inbound is now asked for its own. The first credentials keep the tag
+	// "warp" (the policy action routes there); an inbound with other
+	// credentials gets an outbound of its own.
+	warpTags := map[string]string{} // rendered outbound JSON -> its tag
+	for _, ib := range inboundCfgs {
+		c := ib.withDefaults()
+		if c.Warp == nil {
+			continue
+		}
+		ob := buildWarpOutbound(c.Warp)
+		key, _ := json.Marshal(ob)
+		tag, seen := warpTags[string(key)]
+		if !seen {
+			tag = "warp"
+			if len(warpTags) > 0 {
+				tag = "warp-" + c.Tag
+			}
+			warpTags[string(key)] = tag
+			ob["tag"] = tag
+			outbounds = append(outbounds, ob)
+		}
 		rules = append(rules, map[string]any{
 			"type":        "field",
-			"inboundTag":  []string{cfg.Tag},
-			"outboundTag": "warp",
+			"inboundTag":  []string{c.Tag},
+			"outboundTag": tag,
 		})
 	}
 
