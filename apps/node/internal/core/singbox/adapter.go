@@ -5,8 +5,9 @@
 //
 // Architecture:
 //   - sing-box runs as a managed subprocess (`sing-box run -c config.json`),
-//     same lifecycle model as the xray adapter.
-//   - TUIC users live inside the inbound's `users[]`, so AddUser/RemoveUser
+//     same lifecycle model as the xray adapter. ONE process per protocol, with
+//     every inbound of that protocol on the node in it (A-055, multi.go).
+//   - Users live inside each inbound's `users[]`, so AddUser/RemoveUser
 //     re-render the config and restart sing-box (config-restart model), in
 //     batches (batch.go): sing-box 1.13.14 has no live user management outside
 //     shadowsocks, and its reload closes open connections too.
@@ -22,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -72,15 +74,20 @@ type Adapter struct {
 	protocol string
 	logger   *slog.Logger
 
-	// mu protects in-memory state (users, inbound, proc, started, ctx). Held
+	// mu protects in-memory state (users, inbounds, proc, started, ctx). Held
 	// ONLY for fast ops. The slow render + subprocess Stop/Start runs under
 	// restartMu with mu released.
 	mu      sync.Mutex
 	started bool
 	ctx     context.Context
 	users   map[string]userEntry // key: userId
-	inbound InboundConfig
-	proc    *subprocess.Subprocess
+	// inbounds by the push's inbound id ("" for a push without one), all
+	// rendered into the one process of this protocol (multi.go).
+	inbounds map[string]InboundConfig
+	// scopeDropped: ScopePush took inbounds out, RetainInbounds renders
+	// without them (core.PushScoped).
+	scopeDropped bool
+	proc         *subprocess.Subprocess
 
 	// restartMu serializes regenerateAndRestart so concurrent user/inbound
 	// changes can't race the subprocess swap. Never held together with mu
@@ -112,6 +119,7 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		protocol: cfg.Protocol,
 		logger:   logger,
 		users:    make(map[string]userEntry),
+		inbounds: make(map[string]InboundConfig),
 	}
 }
 
@@ -128,7 +136,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.mu.Lock()
 	a.started = true
 	a.ctx = ctx
-	hasInbound := a.inbound.ListenPort != 0
+	hasInbound := len(a.inbounds) > 0
 	a.mu.Unlock()
 	if hasInbound {
 		return a.regenerateAndRestart()
@@ -136,8 +144,15 @@ func (a *Adapter) Start(ctx context.Context) error {
 	return nil
 }
 
+// Provisioned implements core.Provisionable: an inbound was pushed.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.inbounds) > 0
+}
+
 // Idle implements core.Idler: no inbound of this protocol on sing-box in the
-// last push. Stops the process and forgets the applied inbound (the one
+// last push. Stops the process and forgets the applied inbounds (the ones
 // ApplyInbound diffs against), so the same inbound pushed again brings it back.
 // The adapter stays started: it is the process that goes, not the agent's
 // readiness for the next push. The chain process is not this adapter's and is
@@ -147,11 +162,11 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	defer a.restartMu.Unlock()
 	a.mu.Lock()
 	a.dropBatchLocked()
-	if a.inbound == (InboundConfig{}) && a.proc == nil {
+	if len(a.inbounds) == 0 && a.proc == nil {
 		a.mu.Unlock()
 		return nil
 	}
-	a.inbound = InboundConfig{}
+	a.inbounds = make(map[string]InboundConfig)
 	proc := a.proc
 	a.proc = nil
 	a.mu.Unlock()
@@ -181,36 +196,51 @@ func (a *Adapter) Stop(ctx context.Context) error {
 	return proc.Stop(ctx)
 }
 
-// AddUser registers a TUIC user and restarts sing-box so the new user lands in
-// the inbound's users[]. Idempotent: re-adding identical credentials is a no-op
-// (no restart).
+// AddUser registers a user on every inbound of this protocol. Idempotent:
+// re-adding identical credentials is a no-op (no restart).
 func (a *Adapter) AddUser(user core.User) error {
+	return a.addUser(user, "")
+}
+
+// AddUserOn implements core.ScopedUserAdder (A-022): the user is on these
+// inbounds of this protocol only.
+func (a *Adapter) AddUserOn(user core.User, inboundIDs []string) error {
+	ids := append([]string(nil), inboundIDs...)
+	sort.Strings(ids)
+	scope := strings.Join(ids, ",")
+	if scope == "" {
+		return a.RemoveUser(user.UserID)
+	}
+	return a.addUser(user, scope)
+}
+
+func (a *Adapter) addUser(user core.User, scope string) error {
 	uuid, password := a.credsFor(user)
 	if uuid == "" && password == "" {
 		// No credentials for this protocol, nothing to do.
 		return nil
 	}
+	desired := userEntry{UUID: uuid, Password: password, Username: user.Username, Inbounds: scope}
 	a.mu.Lock()
-	cur, ok := a.users[user.UserID]
-	if ok && cur.UUID == uuid && cur.Password == password {
+	cur, existed := a.users[user.UserID]
+	if existed && cur == desired {
 		a.mu.Unlock()
 		return nil
 	}
-	a.users[user.UserID] = userEntry{
-		UUID:     uuid,
-		Password: password,
-		Username: user.Username,
-	}
-	serving := a.inbound.ListenPort != 0
-	method := a.inbound.Method
+	a.users[user.UserID] = desired
+	held := sortedHeld(a.inbounds)
 	a.mu.Unlock()
 	// Nothing runs without an inbound; the first ApplyInbound renders them.
-	if !serving {
+	if len(held) == 0 {
 		return nil
 	}
 	// shadowsocks: straight into the running process, no restart.
-	if ssm := a.ssm(); ssm != nil && a.running() {
-		if err := ssm.put(context.Background(), user.UserID, core.DeriveSsPassword(password, method)); err == nil {
+	if a.ssmOn() && a.running() {
+		var prev *userEntry
+		if existed {
+			prev = &cur
+		}
+		if err := a.ssmApplyUser(context.Background(), user.UserID, prev, &desired, held); err == nil {
 			return nil
 		} else {
 			a.logger.Warn("singbox: ssm-api add failed, restarting with the user instead", "err", err)
@@ -220,13 +250,36 @@ func (a *Adapter) AddUser(user core.User) error {
 	return nil
 }
 
-// ssm is the ssm-api client of a managed shadowsocks adapter, nil for every
-// other protocol and when no SSMListen is set.
+// ssmOn: a managed shadowsocks adapter, its users handed over ssm-api.
+func (a *Adapter) ssmOn() bool {
+	return a.protocol == "shadowsocks" && a.cfg.SSMListen != ""
+}
+
+// ssm is the client for one managed inbound, by its id (ssmPath).
 func (a *Adapter) ssm() *ssmClient {
-	if a.protocol != "shadowsocks" || a.cfg.SSMListen == "" {
+	if !a.ssmOn() {
 		return nil
 	}
 	return newSSMClient(a.cfg.SSMListen)
+}
+
+// ssmApplyUser moves one user to what next says, inbound by inbound: put
+// where they serve, remove where they no longer do. prev/next nil = absent.
+func (a *Adapter) ssmApplyUser(ctx context.Context, userID string, prev, next *userEntry, held []heldInbound) error {
+	for _, h := range held {
+		c := newSSMClient(a.cfg.SSMListen).at(ssmPath(h.id))
+		switch {
+		case next != nil && next.servesOn(h.id):
+			if err := c.put(ctx, userID, core.DeriveSsPassword(next.Password, h.cfg.Method)); err != nil {
+				return err
+			}
+		case prev != nil && prev.servesOn(h.id):
+			if err := c.remove(ctx, userID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (a *Adapter) running() bool {
@@ -291,18 +344,19 @@ func (a *Adapter) credsFor(user core.User) (uuid, password string) {
 // unknown user is a no-op (no restart).
 func (a *Adapter) RemoveUser(userID string) error {
 	a.mu.Lock()
-	if _, ok := a.users[userID]; !ok {
+	cur, ok := a.users[userID]
+	if !ok {
 		a.mu.Unlock()
 		return nil
 	}
 	delete(a.users, userID)
-	serving := a.inbound.ListenPort != 0
+	held := sortedHeld(a.inbounds)
 	a.mu.Unlock()
-	if !serving {
+	if len(held) == 0 {
 		return nil
 	}
-	if ssm := a.ssm(); ssm != nil && a.running() {
-		if err := ssm.remove(context.Background(), userID); err == nil {
+	if a.ssmOn() && a.running() {
+		if err := a.ssmApplyUser(context.Background(), userID, &cur, nil, held); err == nil {
 			return nil
 		} else {
 			a.logger.Warn("singbox: ssm-api remove failed, restarting without the user instead", "err", err)
@@ -313,15 +367,17 @@ func (a *Adapter) RemoveUser(userID string) error {
 }
 
 // GetStats reports per-user cumulative byte counters, read from sing-box's
-// v2ray_api via the xray-binary stats client (see stats.go). Non-destructive
-// read -> Cumulative=true, so the panel computes deltas against its snapshot
-// (mirrors xray, #5). Zero counters when stats aren't configured or nothing
-// runs; a query that fails is NoData, never zeros.
+// v2ray_api via the xray-binary stats client (see stats.go), or from ssm-api
+// for a managed shadowsocks. Non-destructive read -> Cumulative=true, so the
+// panel computes deltas against its snapshot (mirrors xray, #5). Zero counters
+// when stats aren't configured or nothing runs; a query that fails is NoData,
+// never zeros.
 func (a *Adapter) GetStats() (*core.Stats, error) {
 	a.mu.Lock()
 	statsListen := a.cfg.StatsListen
 	bin := a.cfg.XrayStatsBin
 	run := a.cfg.RunCmd
+	held := sortedHeld(a.inbounds)
 	// Asked only of a process that is running. Every adapter is registered on
 	// every node, so an idle one (no inbound pushed, no process) was asked
 	// anyway and answered with a refused connection: six WARN lines every 30 s
@@ -341,18 +397,29 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		return &core.Stats{Users: out}
 	}
 
-	if ssm := a.ssm(); ssm != nil {
+	if a.ssmOn() {
 		if !running {
 			return zero(), nil
 		}
-		counters, err := ssm.stats(context.Background())
-		if err != nil {
-			a.logger.Warn("singbox GetStats: ssm-api stats failed", "err", err)
-			return &core.Stats{NoData: true, Cumulative: true}, nil
+		// One ssm-api server per inbound; a user on two inbounds is one user,
+		// and the panel bills the sum.
+		sum := make(map[string]ssmUser)
+		for _, h := range held {
+			counters, err := a.ssm().at(ssmPath(h.id)).stats(context.Background())
+			if err != nil {
+				a.logger.Warn("singbox GetStats: ssm-api stats failed", "err", err)
+				return &core.Stats{NoData: true, Cumulative: true}, nil
+			}
+			for name, c := range counters {
+				s := sum[name]
+				s.UplinkBytes += c.UplinkBytes
+				s.DownlinkBytes += c.DownlinkBytes
+				sum[name] = s
+			}
 		}
 		out := make([]core.UserStats, 0, len(userIDs))
 		for _, id := range userIDs {
-			c := counters[id]
+			c := sum[id]
 			out = append(out, core.UserStats{UserID: id, BytesIn: c.UplinkBytes, BytesOut: c.DownlinkBytes})
 		}
 		return &core.Stats{Users: out, Cumulative: true}, nil
@@ -383,7 +450,7 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	return &core.Stats{Users: out, Cumulative: true}, nil
 }
 
-// Healthy: agent must be started; if a TUIC inbound is configured and a binary
+// Healthy: agent must be started; if an inbound is configured and a binary
 // is set, the subprocess must be running. Before any inbound is applied (or in
 // config-only mode) the agent itself is up, so report healthy.
 func (a *Adapter) Healthy() bool {
@@ -392,75 +459,143 @@ func (a *Adapter) Healthy() bool {
 	if !a.started {
 		return false
 	}
-	if a.cfg.BinaryPath == "" || a.inbound.ListenPort == 0 {
+	if a.cfg.BinaryPath == "" || len(a.inbounds) == 0 {
 		return true
 	}
 	return a.proc != nil && a.proc.Running()
 }
 
-// ApplyInbound parses the panel-pushed TUIC config, diffs against the last
-// applied inbound, and on change re-renders + restarts. Idempotent.
+// ApplyInbound is the push without an inbound id: one inbound, under "".
 func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
-	var newInbound InboundConfig
-	switch a.protocol {
-	case "xray":
-		var wire xrayFamilyWire
-		if err := json.Unmarshal(rawCfg, &wire); err != nil {
-			return fmt.Errorf("singbox ApplyInbound: parse xray cfg: %w", err)
-		}
-		ic, err := wire.toInboundConfig(port)
-		if err != nil {
-			return fmt.Errorf("singbox ApplyInbound: %w", err)
-		}
-		newInbound = ic
-	case "hysteria":
-		var wire hy2FamilyWire
-		if err := json.Unmarshal(rawCfg, &wire); err != nil {
-			return fmt.Errorf("singbox ApplyInbound: parse hysteria cfg: %w", err)
-		}
-		newInbound = wire.toInboundConfig(port)
-	case "shadowsocks":
-		var wire ssFamilyWire
-		if err := json.Unmarshal(rawCfg, &wire); err != nil {
-			return fmt.Errorf("singbox ApplyInbound: parse shadowsocks cfg: %w", err)
-		}
-		ic, err := wire.toInboundConfig(port)
-		if err != nil {
-			return fmt.Errorf("singbox ApplyInbound: %w", err)
-		}
-		newInbound = ic
-	case "shadowtls":
-		var wire shadowtlsWire
-		if err := json.Unmarshal(rawCfg, &wire); err != nil {
-			return fmt.Errorf("singbox ApplyInbound: parse shadowtls cfg: %w", err)
-		}
-		ic, err := wire.toInboundConfig(port)
-		if err != nil {
-			return fmt.Errorf("singbox ApplyInbound: %w", err)
-		}
-		newInbound = ic
-	default:
-		var wire inboundCfgWire
-		if err := json.Unmarshal(rawCfg, &wire); err != nil {
-			return fmt.Errorf("singbox ApplyInbound: parse cfg: %w", err)
-		}
-		newInbound = wire.toInboundConfig(port)
-	}
+	return a.ApplyIdentifiedInbound("", port, rawCfg)
+}
 
+// ApplyIdentifiedInbound implements core.IdentifiedApplier (A-055): one
+// inbound of several, by the push's id, all in the one process of this
+// protocol. Refused before it is stored when another inbound of the protocol
+// already has its port. Idempotent.
+func (a *Adapter) ApplyIdentifiedInbound(id string, port int, rawCfg json.RawMessage) error {
+	newInbound, err := a.parseInbound(port, rawCfg)
+	if err != nil {
+		return err
+	}
 	a.mu.Lock()
-	if a.inbound == newInbound {
+	if cur, ok := a.inbounds[id]; ok && cur == newInbound {
 		a.mu.Unlock()
 		a.logger.Info("singbox ApplyInbound: config unchanged, skipping")
 		return nil
 	}
-	a.inbound = newInbound
+	for other, in := range a.inbounds {
+		if other != id && in.ListenPort == newInbound.ListenPort {
+			a.mu.Unlock()
+			return fmt.Errorf("singbox ApplyInbound: port %d is already taken by another %s inbound on sing-box", newInbound.ListenPort, a.protocol)
+		}
+	}
+	a.inbounds[id] = newInbound
 	a.mu.Unlock()
 	return a.regenerateAndRestart()
 }
 
-// render is the config this adapter's protocol runs on. The v2ray_api block
-// only when the binary carries it (countsUsers), and for shadowsocks the
-// ssm-api service in its place when SSMListen is set.
+// ScopePush implements core.PushScoped: the inbounds this push no longer
+// carries leave before its own are applied, so a binding re-created on the
+// same port is not refused against the one it replaces (A-199's shape).
+func (a *Adapter) ScopePush(keep []string) {
+	kept := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		kept[id] = true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id := range a.inbounds {
+		if !kept[id] {
+			delete(a.inbounds, id)
+			a.scopeDropped = true
+		}
+	}
+}
+
+// RetainInbounds implements core.InboundReconciler: forget the inbounds the
+// push no longer carries; with none left the process stops, as Idle.
+func (a *Adapter) RetainInbounds(keep []string) error {
+	kept := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		kept[id] = true
+	}
+	a.mu.Lock()
+	dropped := a.scopeDropped
+	a.scopeDropped = false
+	for id := range a.inbounds {
+		if !kept[id] {
+			delete(a.inbounds, id)
+			dropped = true
+		}
+	}
+	left := len(a.inbounds)
+	running := a.proc != nil
+	a.mu.Unlock()
+	if !dropped {
+		return nil
+	}
+	if left == 0 {
+		if !running {
+			return nil
+		}
+		return a.Idle(context.Background())
+	}
+	return a.regenerateAndRestart()
+}
+
+// parseInbound reads one pushed inbound for this adapter's protocol.
+func (a *Adapter) parseInbound(port int, rawCfg json.RawMessage) (InboundConfig, error) {
+	switch a.protocol {
+	case "xray":
+		var wire xrayFamilyWire
+		if err := json.Unmarshal(rawCfg, &wire); err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: parse xray cfg: %w", err)
+		}
+		ic, err := wire.toInboundConfig(port)
+		if err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: %w", err)
+		}
+		return ic, nil
+	case "hysteria":
+		var wire hy2FamilyWire
+		if err := json.Unmarshal(rawCfg, &wire); err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: parse hysteria cfg: %w", err)
+		}
+		return wire.toInboundConfig(port), nil
+	case "shadowsocks":
+		var wire ssFamilyWire
+		if err := json.Unmarshal(rawCfg, &wire); err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: parse shadowsocks cfg: %w", err)
+		}
+		ic, err := wire.toInboundConfig(port)
+		if err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: %w", err)
+		}
+		return ic, nil
+	case "shadowtls":
+		var wire shadowtlsWire
+		if err := json.Unmarshal(rawCfg, &wire); err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: parse shadowtls cfg: %w", err)
+		}
+		ic, err := wire.toInboundConfig(port)
+		if err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: %w", err)
+		}
+		return ic, nil
+	default:
+		var wire inboundCfgWire
+		if err := json.Unmarshal(rawCfg, &wire); err != nil {
+			return InboundConfig{}, fmt.Errorf("singbox ApplyInbound: parse cfg: %w", err)
+		}
+		return wire.toInboundConfig(port), nil
+	}
+}
+
+// render is the config of ONE inbound, as this adapter's protocol draws it.
+// The v2ray_api block only when the binary carries it (countsUsers), and for
+// shadowsocks the ssm-api service in its place when SSMListen is set.
 func (a *Adapter) render(certPath, keyPath, statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
 	if !a.countsUsers() {
 		statsListen = ""
@@ -498,7 +633,7 @@ func (a *Adapter) regenerateAndRestart() error {
 		a.mu.Unlock()
 		return nil
 	}
-	inbound := a.inbound
+	held := sortedHeld(a.inbounds)
 	binPath := a.cfg.BinaryPath
 	cfgPath := a.cfg.ConfigPath
 	certPath := a.cfg.CertPath
@@ -512,14 +647,14 @@ func (a *Adapter) regenerateAndRestart() error {
 	}
 	a.mu.Unlock()
 
-	if binPath == "" || inbound.ListenPort == 0 {
+	if binPath == "" || len(held) == 0 {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	blob, err := a.render(certPath, keyPath, statsListen, inbound, users)
+	blob, err := a.renderAll(certPath, keyPath, statsListen, held, users)
 	if err != nil {
 		return fmt.Errorf("singbox: render config: %w", err)
 	}
@@ -550,18 +685,22 @@ func (a *Adapter) regenerateAndRestart() error {
 	a.proc = proc
 	a.mu.Unlock()
 	// A managed shadowsocks inbound starts with nobody: its users are handed
-	// over the API, every one of them, after each start.
-	if ssm := a.ssm(); ssm != nil {
-		want := make(map[string]string, len(users))
-		for id, u := range users {
-			want[id] = core.DeriveSsPassword(u.Password, inbound.Method)
-		}
-		if err := ssm.sync(ctx, want); err != nil {
-			return fmt.Errorf("singbox: hand the users to ssm-api: %w", err)
+	// over the API, every one of them, after each start, inbound by inbound.
+	if a.ssmOn() {
+		for _, h := range held {
+			want := make(map[string]string, len(users))
+			for id, u := range users {
+				if u.servesOn(h.id) {
+					want[id] = core.DeriveSsPassword(u.Password, h.cfg.Method)
+				}
+			}
+			if err := a.ssm().at(ssmPath(h.id)).sync(ctx, want); err != nil {
+				return fmt.Errorf("singbox: hand the users to ssm-api: %w", err)
+			}
 		}
 	}
 	a.logger.Info("singbox: config applied and (re)started",
-		"port", inbound.ListenPort, "users", len(users))
+		"inbounds", len(held), "users", len(users))
 	return nil
 }
 

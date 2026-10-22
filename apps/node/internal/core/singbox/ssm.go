@@ -23,6 +23,16 @@ func newSSMClient(listen string) *ssmClient {
 	return &ssmClient{base: "http://" + listen + "/server/v1", http: &http.Client{Timeout: 5 * time.Second}}
 }
 
+// at is the client for one managed inbound, served under its own path
+// ("/" or "/<id>", see ssmPath).
+func (c *ssmClient) at(path string) *ssmClient {
+	host := strings.TrimSuffix(strings.TrimPrefix(c.base, "http://"), "/server/v1")
+	if i := strings.Index(host, "/"); i >= 0 {
+		host = host[:i]
+	}
+	return &ssmClient{base: "http://" + host + strings.TrimSuffix(path, "/") + "/server/v1", http: c.http}
+}
+
 type ssmUser struct {
 	UserName      string `json:"username"`
 	Password      string `json:"uPSK,omitempty"`

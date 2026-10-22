@@ -172,6 +172,22 @@ type userEntry struct {
 	UUID     string
 	Password string
 	Username string
+	// Inbounds: the inbound ids this user is on, sorted and comma-joined so
+	// the struct stays comparable; empty is every inbound (A-022).
+	Inbounds string
+}
+
+// servesOn: the user belongs on the inbound with this id.
+func (u userEntry) servesOn(id string) bool {
+	if u.Inbounds == "" {
+		return true
+	}
+	for _, s := range strings.Split(u.Inbounds, ",") {
+		if s == id {
+			return true
+		}
+	}
+	return false
 }
 
 // renderConfig builds the full sing-box config JSON for a single TUIC inbound.

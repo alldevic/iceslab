@@ -114,6 +114,18 @@ func TestEveryProtocolRendersAConfigThePinnedEngineTakes(t *testing.T) {
 				if out, err := exec.Command(bin, "check", "-c", path).CombinedOutput(); err != nil {
 					t.Fatalf("sing-box check refused the %s render: %v\n%s\n%s", proto, err, out, blob)
 				}
+				// And two inbounds of the protocol in one process (A-055).
+				second := in
+				second.ListenPort += 100
+				held := []heldInbound{{id: "aaaaaaaa-1", cfg: in}, {id: "bbbbbbbb-2", cfg: second}}
+				blob, err = a.renderAll(cert, key, a.cfg.StatsListen, held, users)
+				if err != nil {
+					t.Fatalf("renderAll: %v", err)
+				}
+				_ = os.WriteFile(path, blob, 0o600)
+				if out, err := exec.Command(bin, "check", "-c", path).CombinedOutput(); err != nil {
+					t.Fatalf("sing-box check refused two %s inbounds in one config: %v\n%s\n%s", proto, err, out, blob)
+				}
 			})
 		}
 	}

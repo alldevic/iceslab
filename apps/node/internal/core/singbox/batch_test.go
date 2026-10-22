@@ -41,7 +41,9 @@ func countingAdapter(t *testing.T) (*Adapter, string, *flushLog) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "sing-box-stub")
-	script := "#!/bin/sh\necho start >> \"$(dirname \"$3\")/starts\"\nexec sleep 60\n"
+	// `version` answers at once (the adapter asks it for its build tags).
+	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'sing-box version 1.13.14'; exit 0; fi\n" +
+		"echo start >> \"$(dirname \"$3\")/starts\"\nexec sleep 60\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
