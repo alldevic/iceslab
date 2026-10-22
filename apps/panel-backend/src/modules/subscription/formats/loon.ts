@@ -9,6 +9,12 @@ import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.
  * builder wrote `key:value` and `tls-name:`, taken from nothing it could
  * cite, and Loon read none of those parameters: a Salamander hysteria went
  * out without its obfuscation, a REALITY vless without its key.
+ *
+ * Transports (A-133, 22.10, the same page re-read): `transport=tcp|ws` (and
+ * `http`, which this panel does not serve), WebSocket with `path=` and
+ * `host=`; Trojan takes `tcp` and `ws` only. No gRPC, XHTTP, httpupgrade or
+ * kcp in Loon's grammar, so such an endpoint is left out. gRPC went out as
+ * `transport=grpc` and the rest as `transport=tcp`, and ws without its path.
  */
 function safeName(name: string): string {
   return name.replace(/[,=]/g, '-').trim();
@@ -37,10 +43,14 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
       const reality = sec === 'default';
       const tls = sec !== 'none';
       const sub = e.subprotocol ?? 'vless';
-      const net = e.network === 'ws' ? 'ws' : e.network === 'grpc' ? 'grpc' : 'tcp';
+      // A transport Loon does not speak: leave the endpoint out (A-133).
+      if (e.network !== 'raw' && e.network !== 'ws') continue;
+      const ws = e.network === 'ws';
+      const net = ws ? 'ws' : 'tcp';
+      const wsParts = ws ? [`path=${e.path ?? '/'}`, `host=${e.hostHeader ?? (tls ? e.sni : e.host)}`] : [];
       if (sub === 'vless') {
-        const p = [`${name} = VLESS,${e.host},${e.port},"${e.uuid}"`, `transport=${net}`];
-        if (e.flow) p.push(`flow=${e.flow}`);
+        const p = [`${name} = VLESS,${e.host},${e.port},"${e.uuid}"`, `transport=${net}`, ...wsParts];
+        if (e.flow && !ws) p.push(`flow=${e.flow}`);
         if (reality) p.push(`public-key="${e.publicKey}"`, `short-id=${e.shortId}`);
         if (tls) p.push('over-tls=true', `sni=${e.sni}`);
         lines.push(p.join(','));
@@ -48,11 +58,11 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
         // ⚠ The cipher `auto` is NOT verified: the docs' example shows
         // `aes-128-gcm` and does not list the accepted values. Kept until a
         // live import in Loon on iOS says whether `auto` is read (ARCH, 25.09).
-        const p = [`${name} = VMess,${e.host},${e.port},auto,"${e.uuid}"`, `transport=${net}`];
+        const p = [`${name} = VMess,${e.host},${e.port},auto,"${e.uuid}"`, `transport=${net}`, ...wsParts];
         if (tls) p.push('over-tls=true', `sni=${e.sni}`);
         lines.push(p.join(','));
       } else if (sub === 'trojan') {
-        const p = [`${name} = Trojan,${e.host},${e.port},"${e.uuid}"`];
+        const p = [`${name} = Trojan,${e.host},${e.port},"${e.uuid}"`, ...(ws ? ['transport=ws', ...wsParts] : [])];
         if (tls) p.push(`sni=${e.sni}`);
         lines.push(p.join(','));
       }

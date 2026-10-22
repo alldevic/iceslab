@@ -39,17 +39,25 @@ export function buildSurgeConf(endpoints: SubscriptionEndpoint[]): string {
       // Surge cannot do REALITY; only emit xray endpoints over real TLS.
       if (sec === 'default') continue;
       const tls = sec === 'tls';
+      // A-133 (manual.nssurge.com policies/vmess and policies/trojan, read
+      // 22.10): WebSocket is the one transport, `ws=true`, `ws-path=`,
+      // `ws-headers=Host:<name>`. gRPC, XHTTP, httpupgrade and kcp went out as
+      // a bare line; such an endpoint is left out now.
+      if (e.network !== 'raw' && e.network !== 'ws') continue;
       const ws = e.network === 'ws';
+      const wsParts = ws
+        ? ['ws=true', `ws-path=${e.path ?? '/'}`, ...(e.hostHeader ? [`ws-headers=Host:${e.hostHeader}`] : [])]
+        : [];
       if (e.subprotocol === 'trojan') {
         const p = [`${name} = trojan, ${e.host}, ${e.port}, password=${e.uuid}`];
         if (tls) p.push(`sni=${e.sni}`);
-        if (ws) p.push('ws=true', `ws-path=${e.path ?? '/'}`);
+        p.push(...wsParts);
         if (e.allowInsecure) p.push('skip-cert-verify=true');
         lines.push(p.join(', '));
       } else if (e.subprotocol === 'vmess') {
         const p = [`${name} = vmess, ${e.host}, ${e.port}, username=${e.uuid}`, 'vmess-aead=true'];
         if (tls) p.push('tls=true', `sni=${e.sni}`);
-        if (ws) p.push('ws=true', `ws-path=${e.path ?? '/'}`);
+        p.push(...wsParts);
         if (e.allowInsecure) p.push('skip-cert-verify=true');
         lines.push(p.join(', '));
       }
