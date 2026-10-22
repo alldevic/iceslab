@@ -29,6 +29,23 @@ export interface StatsUserEntry {
    * entry; absent on older agents.
    */
   protocol?: string;
+  /**
+   * A-163: the engine of the adapter that counted this entry (wire field
+   * `engine`). With `protocol` it names the ADAPTER, the key of the user's
+   * cumulative snapshot. Absent on older agents: their entries keep one
+   * summed snapshot per (node, user), as before.
+   */
+  engine?: string;
+}
+
+/** The adapter an entry's snapshot is keyed by: (protocol, engine), or
+ *  ('', '') for an agent that does not name its engine (one summed row). */
+export function snapshotAdapterOf(u: { protocol?: string; engine?: string }): { protocol: string; engine: string } {
+  return u.engine ? { protocol: u.protocol ?? '', engine: u.engine } : { protocol: '', engine: '' };
+}
+
+export function snapshotKey(userId: string, a: { protocol: string; engine: string }): string {
+  return `${userId}|${a.protocol}|${a.engine}`;
 }
 
 /**
@@ -74,6 +91,14 @@ export interface NodeStatsInput {
    * zero delta instead of billing the whole since-start cumulative as one spike.
    */
   nodeTotalIsCumulative?: boolean;
+  /**
+   * A-152: the node's raw bytes this poll, already worked out per adapter
+   * (computeNodeTotalsFromCores) from an agent that reports `cores`. When set
+   * it IS the node total: neither the per-user sum nor the mixed cumulative
+   * total is used, so a delta core beside a cumulative one is counted, not
+   * swallowed by a snapshot of their sum.
+   */
+  nodeTotals?: { upload: bigint; download: bigint };
 }
 
 /** One per-user `user_traffic` increment (used+lifetime). 0 = presence touch. */
@@ -122,8 +147,10 @@ export interface UserSnapshot {
 export interface UserDeltaResult {
   /** Per-poll deltas, ready to feed into computeNodeStatsWrites as `users`. */
   deltas: StatsUserEntry[];
-  /** Cumulative values seen this tick, to persist as the new snapshot per user. */
-  snapshots: { userId: string; cumIn: bigint; cumOut: bigint }[];
+  /** Cumulative values seen this tick, to persist as the new snapshot per
+   *  (user, adapter). An adapter that did not answer this poll has no entry,
+   *  so its snapshot stays where it was (A-163). */
+  snapshots: { userId: string; protocol: string; engine: string; cumIn: bigint; cumOut: bigint }[];
 }
 
 /**
@@ -150,38 +177,103 @@ export function computeUserDeltas(
   reported: StatsUserEntry[],
   prev: Map<string, UserSnapshot>,
 ): UserDeltaResult {
-  // A node can report the same userId more than once per poll: a user reachable
-  // on multiple inbounds/protocols on one node (vless + shadowsocks both ride
-  // xray; the agent merges every adapter's stats). Sum their cumulative counters
-  // into ONE entry per userId FIRST. Without this, the snapshot upsert's unnest
-  // gets a duplicate (node_id, user_id) and Postgres aborts the whole statement
-  // with 21000 ("ON CONFLICT DO UPDATE command cannot affect row a second
-  // time"), rolling back the node's entire stats transaction (so it records
-  // nothing). Mirrors the userId aggregation computeNodeStatsWrites already does.
-  const byUser = new Map<string, { cumIn: bigint; cumOut: bigint; protocols: Set<string | undefined> }>();
+  // A-163: grouped by (user, ADAPTER), each group against its own snapshot,
+  // and the per-adapter deltas then add up downstream (computeNodeStatsWrites
+  // sums by user). Summing every adapter of a user against ONE snapshot was
+  // the bug: one adapter silent for a poll lowered the sum, the snapshot
+  // re-baselined down, and its return billed the adapter's whole cumulative
+  // counter at once. An adapter that did not answer has no entries here, so
+  // its snapshot is simply not touched.
+  //
+  // Within one adapter the entries of a user are still summed first (a user on
+  // two inbounds of the same xray), or the snapshot upsert's unnest would meet
+  // a duplicate key and Postgres would abort the node's whole stats
+  // transaction with 21000. An agent that names no engine falls into one
+  // ('', '') group per user: the summed snapshot it always had.
+  const groups = new Map<
+    string,
+    { userId: string; protocol: string; engine: string; cumIn: bigint; cumOut: bigint; protocols: Set<string | undefined> }
+  >();
   for (const u of reported) {
-    const cur = byUser.get(u.userId) ?? { cumIn: 0n, cumOut: 0n, protocols: new Set() };
+    const a = snapshotAdapterOf(u);
+    const key = snapshotKey(u.userId, a);
+    const cur = groups.get(key) ?? { userId: u.userId, ...a, cumIn: 0n, cumOut: 0n, protocols: new Set() };
     cur.cumIn += BigInt(u.bytesIn || 0);
     cur.cumOut += BigInt(u.bytesOut || 0);
     cur.protocols.add(u.protocol);
-    byUser.set(u.userId, cur);
+    groups.set(key, cur);
   }
 
   const deltas: StatsUserEntry[] = [];
-  const snapshots: { userId: string; cumIn: bigint; cumOut: bigint }[] = [];
-  for (const [userId, { cumIn, cumOut, protocols }] of byUser) {
-    const p = prev.get(userId);
-    const dIn = p ? (cumIn >= p.cumIn ? cumIn - p.cumIn : 0n) : 0n;
-    const dOut = p ? (cumOut >= p.cumOut ? cumOut - p.cumOut : 0n) : 0n;
-    // The protocol survives the merge, so a summed entry is still judged by its
-    // inbound downstream and not by the node's label. Every entry here comes
-    // from a cumulative core (xray, sing-box), none of them presence-only, so
-    // which of several it keeps changes nothing.
-    const protocol = [...protocols].find((x) => x !== undefined);
-    deltas.push({ userId, bytesIn: Number(dIn), bytesOut: Number(dOut), ...(protocol !== undefined ? { protocol } : {}) });
-    snapshots.push({ userId, cumIn, cumOut });
+  const snapshots: UserDeltaResult['snapshots'] = [];
+  for (const [key, g] of groups) {
+    const p = prev.get(key);
+    // First sight of this (user, adapter): baseline only. A counter below its
+    // snapshot: that adapter restarted, re-baseline with 0 (losing one poll is
+    // the safe side of a phantom spike).
+    const dIn = p ? (g.cumIn >= p.cumIn ? g.cumIn - p.cumIn : 0n) : 0n;
+    const dOut = p ? (g.cumOut >= p.cumOut ? g.cumOut - p.cumOut : 0n) : 0n;
+    // The protocol survives the merge, so the entry is still judged by its
+    // inbound downstream; none of these cumulative cores is presence-only.
+    const protocol = [...g.protocols].find((x) => x !== undefined);
+    deltas.push({
+      userId: g.userId,
+      bytesIn: Number(dIn),
+      bytesOut: Number(dOut),
+      ...(protocol !== undefined ? { protocol } : {}),
+    });
+    snapshots.push({ userId: g.userId, protocol: g.protocol, engine: g.engine, cumIn: g.cumIn, cumOut: g.cumOut });
   }
   return { deltas, snapshots };
+}
+
+/** One adapter's node total from the agent (wire CoreTrafficTotal). */
+export interface CoreTotalEntry {
+  protocol: string;
+  engine: string;
+  bytesIn: number;
+  bytesOut: number;
+  cumulative: boolean;
+  noData?: boolean;
+}
+
+/**
+ * A-152: the node's raw bytes this poll, adapter by adapter. A cumulative
+ * adapter is deltaed against its own snapshot (first sight baselines to 0, a
+ * drop below the snapshot is a restart and re-baselines to 0); a delta adapter
+ * counts as it comes; an adapter with noData counts nothing and keeps its
+ * snapshot. The sum is the node total.
+ *
+ * Before, the node total was one mixed number (a cumulative xray counter plus
+ * a per-poll AmneziaWG delta) compared with one snapshot: xray +1 MB beside
+ * AmneziaWG 50 MB then 5 MB read as a drop, re-baselined and counted 0, where
+ * 6 MB crossed the wire.
+ */
+export function computeNodeTotalsFromCores(
+  cores: CoreTotalEntry[],
+  prev: Map<string, { in: bigint; out: bigint }>,
+): { upload: bigint; download: bigint; snapshots: Map<string, { in: bigint; out: bigint }> } {
+  let upload = 0n;
+  let download = 0n;
+  const snapshots = new Map<string, { in: bigint; out: bigint }>();
+  for (const c of cores) {
+    if (c.noData) continue;
+    const inB = BigInt(c.bytesIn || 0);
+    const outB = BigInt(c.bytesOut || 0);
+    if (!c.cumulative) {
+      upload += inB;
+      download += outB;
+      continue;
+    }
+    const key = `${c.protocol}|${c.engine}`;
+    const p = prev.get(key);
+    if (p) {
+      upload += inB >= p.in ? inB - p.in : 0n;
+      download += outB >= p.out ? outB - p.out : 0n;
+    }
+    snapshots.set(key, { in: inB, out: outB });
+  }
+  return { upload, download, snapshots };
 }
 
 export function computeNodeStatsWrites(input: NodeStatsInput): NodeStatsWrites {
@@ -221,7 +313,7 @@ export function computeNodeStatsWrites(input: NodeStatsInput): NodeStatsWrites {
     // Node-level totals are raw, unscaled bytes across the wire. Skipped when
     // the node total comes from the cumulative inbound counter instead (that
     // path adds the node delta below), so per-user bytes aren't double-counted.
-    if (!input.nodeTotalIsCumulative) {
+    if (!input.nodeTotalIsCumulative && !input.nodeTotals) {
       nodeUpload += inB;
       nodeDownload += outB;
     }
@@ -280,7 +372,11 @@ export function computeNodeStatsWrites(input: NodeStatsInput): NodeStatsWrites {
   // Either way: delta against the stored snapshot, and a counter that dropped
   // below the snapshot means the core restarted, so re-baseline with a 0 delta.
   let newSnapshot: { in: bigint; out: bigint } | null = null;
-  if (input.nodeTotalIsCumulative || (nodeDownload === 0n && nodeUpload === 0n)) {
+  if (input.nodeTotals) {
+    // A-152: worked out per adapter by the caller.
+    nodeUpload = input.nodeTotals.upload;
+    nodeDownload = input.nodeTotals.download;
+  } else if (input.nodeTotalIsCumulative || (nodeDownload === 0n && nodeUpload === 0n)) {
     const cumIn = BigInt(input.totalBytesIn || 0);
     const cumOut = BigInt(input.totalBytesOut || 0);
     if (cumIn > 0n || cumOut > 0n) {

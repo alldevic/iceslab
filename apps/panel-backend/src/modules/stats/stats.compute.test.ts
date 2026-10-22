@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeNodeStatsWrites,
+  computeNodeTotalsFromCores,
   computeUserDeltas,
+  snapshotKey,
+  type StatsUserEntry,
   type UserSnapshot,
 } from './stats.compute.js';
 
@@ -273,9 +276,9 @@ describe('computeUserDeltas (#5 - non-destructive cumulative)', () => {
         { userId: 'u1', bytesIn: 100, bytesOut: 50 },
         { userId: 'u1', bytesIn: 20, bytesOut: 5 },
       ],
-      new Map([['u1', snap(100n, 30n)]]),
+      new Map([['u1||', snap(100n, 30n)]]),
     );
-    expect(r.snapshots).toEqual([{ userId: 'u1', cumIn: 120n, cumOut: 55n }]);
+    expect(r.snapshots).toEqual([{ userId: 'u1', protocol: '', engine: '', cumIn: 120n, cumOut: 55n }]);
     // delta = summed cumulative (120/55) - prev (100/30)
     expect(r.deltas).toEqual([{ userId: 'u1', bytesIn: 20, bytesOut: 25 }]);
   });
@@ -284,28 +287,28 @@ describe('computeUserDeltas (#5 - non-destructive cumulative)', () => {
     const r = computeUserDeltas([{ userId: 'u1', bytesIn: 5000, bytesOut: 3000 }], new Map());
     // must NOT bill the whole cumulative-since-core-start counter to the user
     expect(r.deltas).toEqual([{ userId: 'u1', bytesIn: 0, bytesOut: 0 }]);
-    expect(r.snapshots).toEqual([{ userId: 'u1', cumIn: 5000n, cumOut: 3000n }]);
+    expect(r.snapshots).toEqual([{ userId: 'u1', protocol: '', engine: '', cumIn: 5000n, cumOut: 3000n }]);
   });
 
   it('bills the delta against the prior snapshot', () => {
     const r = computeUserDeltas(
       [{ userId: 'u1', bytesIn: 5200, bytesOut: 3100 }],
-      new Map([['u1', snap(5000n, 3000n)]]),
+      new Map([['u1||', snap(5000n, 3000n)]]),
     );
     expect(r.deltas).toEqual([{ userId: 'u1', bytesIn: 200, bytesOut: 100 }]);
-    expect(r.snapshots).toEqual([{ userId: 'u1', cumIn: 5200n, cumOut: 3100n }]);
+    expect(r.snapshots).toEqual([{ userId: 'u1', protocol: '', engine: '', cumIn: 5200n, cumOut: 3100n }]);
   });
 
   it('bills 0 and re-baselines when the counter drops below the snapshot', () => {
     const r = computeUserDeltas(
       [{ userId: 'u1', bytesIn: 40, bytesOut: 10 }],
-      new Map([['u1', snap(5000n, 3000n)]]),
+      new Map([['u1||', snap(5000n, 3000n)]]),
     );
     // A drop below the snapshot is a core restart or a partial report, not a
     // real per-poll delta. Bill 0 (matching the node-level path) so a residual
     // cumulative never spikes the user's quota; re-baseline to the new value.
     expect(r.deltas).toEqual([{ userId: 'u1', bytesIn: 0, bytesOut: 0 }]);
-    expect(r.snapshots).toEqual([{ userId: 'u1', cumIn: 40n, cumOut: 10n }]);
+    expect(r.snapshots).toEqual([{ userId: 'u1', protocol: '', engine: '', cumIn: 40n, cumOut: 10n }]);
   });
 
   it('a failed tick loses nothing: next poll re-derives from the un-advanced baseline', () => {
@@ -313,10 +316,126 @@ describe('computeUserDeltas (#5 - non-destructive cumulative)', () => {
     // so a failed commit leaves the baseline un-advanced. Against that same
     // baseline, a later poll's delta re-includes every byte since it - contrast
     // the destructive -reset model, where the drained bytes were gone.
-    const baseline = new Map([['u1', snap(100n, 0n)]]);
+    const baseline = new Map([['u1||', snap(100n, 0n)]]);
     const failedTick = computeUserDeltas([{ userId: 'u1', bytesIn: 250, bytesOut: 0 }], baseline);
     expect(failedTick.deltas[0]!.bytesIn).toBe(150); // would have billed 150, but commit failed
     const nextTick = computeUserDeltas([{ userId: 'u1', bytesIn: 400, bytesOut: 0 }], baseline);
     expect(nextTick.deltas[0]!.bytesIn).toBe(300); // 150 (lost tick) + 150 (this tick), nothing dropped
+  });
+});
+
+/**
+ * A-163, the scenario from the registry: a user on xray (40 GB) and sing-box
+ * (9 GB) on one node; sing-box misses one poll; sing-box comes back. Summed
+ * against one snapshot, the return billed 9 GB at once and the user went
+ * limited. Per adapter it is the traffic that moved, about 0.02 GB.
+ */
+describe('computeUserDeltas per adapter (A-163)', () => {
+  const GB = 1024 ** 3;
+  const MB = 1024 ** 2;
+  const xray = (cum: number): StatsUserEntry => ({ userId: 'u', bytesIn: cum, bytesOut: 0, cumulative: true, protocol: 'xray', engine: 'xray' });
+  const sb = (cum: number): StatsUserEntry => ({ userId: 'u', bytesIn: cum, bytesOut: 0, cumulative: true, protocol: 'xray', engine: 'singbox' });
+
+  function run(polls: StatsUserEntry[][], start: Map<string, UserSnapshot>): number {
+    const snaps = new Map(start);
+    let billed = 0;
+    for (const reported of polls) {
+      const r = computeUserDeltas(reported, snaps);
+      billed += r.deltas.reduce((a, d) => a + (d.bytesIn ?? 0) + (d.bytesOut ?? 0), 0);
+      for (const s of r.snapshots) snaps.set(snapshotKey(s.userId, s), { cumIn: s.cumIn, cumOut: s.cumOut });
+    }
+    return billed;
+  }
+
+  it('xray 40 + sing-box 9; sing-box silent; sing-box back: about 0.02 GB, not 9.02', () => {
+    const start = new Map<string, UserSnapshot>([
+      [snapshotKey('u', { protocol: 'xray', engine: 'xray' }), { cumIn: BigInt(40 * GB), cumOut: 0n }],
+      [snapshotKey('u', { protocol: 'xray', engine: 'singbox' }), { cumIn: BigInt(9 * GB), cumOut: 0n }],
+    ]);
+    const billed = run(
+      [
+        [xray(40 * GB + 10 * MB), sb(9 * GB)],
+        // sing-box noData: the agent leaves its users out of users[]
+        [xray(40 * GB + 20 * MB)],
+        [xray(40 * GB + 20 * MB), sb(9 * GB)],
+      ],
+      start,
+    );
+    expect(billed).toBe(20 * MB);
+  });
+
+  it('the same polls summed into one snapshot (an agent without engine) still spike: what the per-adapter key fixes', () => {
+    const legacy = (e: StatsUserEntry): StatsUserEntry => ({ ...e, engine: undefined });
+    const start = new Map<string, UserSnapshot>([[snapshotKey('u', { protocol: '', engine: '' }), { cumIn: BigInt(49 * GB), cumOut: 0n }]]);
+    const billed = run(
+      [
+        [legacy(xray(40 * GB + 10 * MB)), legacy(sb(9 * GB))],
+        [legacy(xray(40 * GB + 20 * MB))],
+        [legacy(xray(40 * GB + 20 * MB)), legacy(sb(9 * GB))],
+      ],
+      start,
+    );
+    expect(billed).toBe(10 * MB + 9 * GB);
+  });
+});
+
+/**
+ * A-152, the mixed node from the registry: xray (cumulative) beside AmneziaWG
+ * (per-poll delta). Poll 1: xray baseline, AWG 50 MB; poll 2: xray +1 MB, AWG
+ * 5 MB. One mixed counter read poll 2 as a drop and counted 0; per adapter it
+ * is the 6 MB that crossed the wire.
+ */
+describe('computeNodeTotalsFromCores (A-152)', () => {
+  const MB = 1024 ** 2;
+  it('counts a delta core beside a cumulative one: 6 MB, not 0', () => {
+    const p1 = computeNodeTotalsFromCores(
+      [
+        { protocol: 'xray', engine: 'xray', bytesIn: 100 * MB, bytesOut: 0, cumulative: true },
+        { protocol: 'amneziawg', engine: 'amneziawg', bytesIn: 50 * MB, bytesOut: 0, cumulative: false },
+      ],
+      new Map(),
+    );
+    expect(p1.upload).toBe(BigInt(50 * MB)); // xray baselines, AWG counts
+    const p2 = computeNodeTotalsFromCores(
+      [
+        { protocol: 'xray', engine: 'xray', bytesIn: 101 * MB, bytesOut: 0, cumulative: true },
+        { protocol: 'amneziawg', engine: 'amneziawg', bytesIn: 5 * MB, bytesOut: 0, cumulative: false },
+      ],
+      p1.snapshots,
+    );
+    expect(p2.upload).toBe(BigInt(6 * MB));
+
+    // And the old mixed path on the same numbers: the reason for the change.
+    const old = computeNodeStatsWrites({
+      users: [],
+      multiplier: 1,
+      isPresenceOnlyProtocol: false,
+      totalBytesIn: 106 * MB,
+      totalBytesOut: 0,
+      nodeTotalIsCumulative: true,
+      prevSnapshot: { in: BigInt(150 * MB), out: 0n },
+    });
+    expect(old.nodeUpload).toBe(0n);
+  });
+
+  it('an adapter with noData counts nothing and keeps its snapshot', () => {
+    const prev = new Map([['xray|singbox', { in: BigInt(9 * MB), out: 0n }]]);
+    const r = computeNodeTotalsFromCores(
+      [{ protocol: 'xray', engine: 'singbox', bytesIn: 0, bytesOut: 0, cumulative: true, noData: true }],
+      prev,
+    );
+    expect(r.upload).toBe(0n);
+    expect(r.snapshots.has('xray|singbox')).toBe(false); // the caller keeps the old one
+  });
+
+  it('feeds computeNodeStatsWrites as the node total', () => {
+    const w = computeNodeStatsWrites({
+      users: [{ userId: 'u', bytesIn: 1 * MB, bytesOut: 0 }],
+      multiplier: 1,
+      isPresenceOnlyProtocol: false,
+      nodeTotals: { upload: BigInt(6 * MB), download: 0n },
+    });
+    expect(w.nodeUpload).toBe(BigInt(6 * MB));
+    expect(w.newSnapshot).toBeNull();
   });
 });

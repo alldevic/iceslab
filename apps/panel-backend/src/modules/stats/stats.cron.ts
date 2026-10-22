@@ -4,7 +4,9 @@ import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import {
   computeNodeStatsWrites,
+  computeNodeTotalsFromCores,
   computeUserDeltas,
+  snapshotKey,
   type StatsUserEntry,
 } from './stats.compute.js';
 
@@ -16,6 +18,13 @@ import {
  * first tick after restart just records the current snapshot.
  */
 const totalSnapshot = new Map<string, { in: bigint; out: bigint }>();
+
+/**
+ * A-152: the same, per node and per ADAPTER ("protocol|engine"), for an agent
+ * that reports `cores`. In memory like the one above: the first poll after a
+ * backend restart baselines each cumulative adapter at a zero delta.
+ */
+const adapterTotalSnapshot = new Map<string, Map<string, { in: bigint; out: bigint }>>();
 
 /**
  * Per-user per-poll sanity ceiling for ingested traffic deltas. node-stats-poll
@@ -124,7 +133,10 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         // ~zero and that traffic goes unbilled). When no user carries the flag
         // (legacy agent) we fall back to treating the whole list as cumulative,
         // so single-core and old-agent nodes stay byte-identical.
-        let snapshotUpserts: { userId: string; cumIn: bigint; cumOut: bigint }[] = [];
+        let snapshotUpserts: { userId: string; protocol: string; engine: string; cumIn: bigint; cumOut: bigint }[] = [];
+        // Users whose entries name their adapter this poll: their old summed
+        // ('', '') snapshot row on this node is dropped (A-163 transition).
+        let adapterKeyedUsers: string[] = [];
         if (res.cumulative && userList.length > 0) {
           const tagged = userList.some((u) => u.cumulative !== undefined);
           const cumulativeUsers = tagged ? userList.filter((u) => u.cumulative) : userList;
@@ -132,15 +144,30 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
           if (cumulativeUsers.length > 0) {
             const prevRows = await prisma.nodeUserTrafficSnapshot.findMany({
               where: { nodeId: node.id, userId: { in: cumulativeUsers.map((u) => u.userId) } },
-              select: { userId: true, cumIn: true, cumOut: true },
+              select: { userId: true, protocol: true, engine: true, cumIn: true, cumOut: true },
             });
+            // A-163: one snapshot per (user, adapter).
             const prev = new Map(
-              prevRows.map((r) => [r.userId, { cumIn: r.cumIn, cumOut: r.cumOut }]),
+              prevRows.map((r) => [
+                snapshotKey(r.userId, { protocol: r.protocol, engine: r.engine }),
+                { cumIn: r.cumIn, cumOut: r.cumOut },
+              ]),
             );
             const d = computeUserDeltas(cumulativeUsers, prev);
             userList = [...d.deltas, ...deltaUsers];
             snapshotUpserts = d.snapshots;
+            adapterKeyedUsers = [...new Set(cumulativeUsers.filter((u) => u.engine).map((u) => u.userId))];
           }
+        }
+
+        // A-152: the node total adapter by adapter when the agent says it.
+        let nodeTotals: { upload: bigint; download: bigint } | undefined;
+        let newAdapterTotals: Map<string, { in: bigint; out: bigint }> | null = null;
+        if (res.cores && res.cores.length > 0) {
+          const t = computeNodeTotalsFromCores(res.cores, adapterTotalSnapshot.get(node.id) ?? new Map());
+          nodeTotals = { upload: t.upload, download: t.download };
+          // Kept for the adapters that did not answer: their snapshot stays.
+          newAdapterTotals = new Map([...(adapterTotalSnapshot.get(node.id) ?? new Map()), ...t.snapshots]);
         }
 
         // All the delta math (scaling, zero-delta skip, presence-only signal,
@@ -159,6 +186,7 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
           nodeTotalIsCumulative: !!res.cumulative,
           prevSnapshot: totalSnapshot.get(node.id),
           maxUserDeltaBytes: NODE_STATS_MAX_USER_DELTA_BYTES,
+          ...(nodeTotals ? { nodeTotals } : {}),
         });
 
         // A non-empty clamp list is a misbehaving / outdated node-agent re-billing
@@ -252,21 +280,36 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
             a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0,
           );
           const sids = sorted.map((s) => s.userId);
+          const sprotos = sorted.map((s) => s.protocol);
+          const sengines = sorted.map((s) => s.engine);
           const sins = sorted.map((s) => s.cumIn.toString());
           const souts = sorted.map((s) => s.cumOut.toString());
           stmts.push(
             prisma.$executeRaw(Prisma.sql`
-              INSERT INTO node_user_traffic_snapshot (node_id, user_id, cum_in, cum_out, updated_at)
-              SELECT ${node.id}::uuid, u.uid, u.cin, u.cout, ${now}
+              INSERT INTO node_user_traffic_snapshot (node_id, user_id, protocol, engine, cum_in, cum_out, updated_at)
+              SELECT ${node.id}::uuid, u.uid, u.proto, u.eng, u.cin, u.cout, ${now}
               FROM unnest(
                 ARRAY[${Prisma.join(sids)}]::uuid[],
+                ARRAY[${Prisma.join(sprotos)}]::varchar[],
+                ARRAY[${Prisma.join(sengines)}]::varchar[],
                 ARRAY[${Prisma.join(sins)}]::bigint[],
                 ARRAY[${Prisma.join(souts)}]::bigint[]
-              ) AS u(uid, cin, cout)
-              ON CONFLICT (node_id, user_id) DO UPDATE SET
+              ) AS u(uid, proto, eng, cin, cout)
+              ON CONFLICT (node_id, user_id, protocol, engine) DO UPDATE SET
                 cum_in     = EXCLUDED.cum_in,
                 cum_out    = EXCLUDED.cum_out,
                 updated_at = EXCLUDED.updated_at
+            `),
+          );
+        }
+        // A-163 transition: a user now counted per adapter on this node has
+        // no use for the summed row an older agent left.
+        if (adapterKeyedUsers.length > 0) {
+          stmts.push(
+            prisma.$executeRaw(Prisma.sql`
+              DELETE FROM node_user_traffic_snapshot
+              WHERE node_id = ${node.id}::uuid AND protocol = '' AND engine = ''
+                AND user_id = ANY(ARRAY[${Prisma.join(adapterKeyedUsers)}]::uuid[])
             `),
           );
         }
@@ -278,6 +321,7 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         // failed write doesn't drop those node-level bytes (next poll
         // re-derives the delta from the un-advanced baseline).
         if (w.newSnapshot) totalSnapshot.set(node.id, w.newSnapshot);
+        if (newAdapterTotals) adapterTotalSnapshot.set(node.id, newAdapterTotals);
         ok++;
       } catch (err) {
         failed++;
