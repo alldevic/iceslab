@@ -2,9 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { GEO_BUILTIN, geoBuiltinUrl } from '@iceslab/shared';
+import { join } from 'node:path';
 import {
   GeoDatError,
   GeoTagUnknownError,
@@ -190,51 +188,49 @@ describe('geoip', () => {
 });
 
 /**
- * The real release, when the files are at hand: GEO_DLC_DAT is v2fly
- * domain-list-community 20260922112956 `dlc.dat` (the GEO_BUILTIN pin) and
- * SING_GEOSITE_DB is SagerNet/sing-geosite 20260922112956 `geosite.db`, built
- * by their converter from that same file. Three tags whose composition
- * sing-geosite does not rewrite (filterTags, mergeTags) must come out equal,
- * key by key. Both files are megabytes and stay out of the repo.
+ * A real release against the oracle: GEO_DLC_DAT is v2fly
+ * domain-list-community `dlc.dat` of one tag and SING_GEOSITE_DB
+ * is SagerNet/sing-geosite `geosite.db` of the SAME tag, built by their
+ * converter from that file. Three tags whose composition sing-geosite does
+ * not rewrite (filterTags, mergeTags) must come out equal, key by key. Both
+ * files are megabytes and stay out of the repo.
  *
- * A laptop without them skips this; CI does not. There the files come from a
- * cached step, and a missing one is a failure, not a quiet skip.
+ * ⚠ The tag is not the GEO_BUILTIN pin, and must not be tied to it.
+ * sing-geosite deletes old releases: on 22.10 its 20260922112956, the tag the
+ * panel pins, answered 404 and CI went red with no change to the code. What
+ * this test proves is the converter, and any tag that has both releases
+ * proves it; CI takes the newest such tag. The pin itself
+ * (packages/shared/src/geo.ts) moves with a panel release, not with this.
+ *
+ * The tag comes in as GEO_COMPARE_TAG (CI's "Pick the geo release pair"
+ * step). On a laptop without it the comparison skips itself and says why,
+ * the way the engine tests skip without XRAY_BIN. In CI there is no skip: a
+ * missing tag, file or binary is a failure, since a quiet skip there would
+ * read as a passed comparison.
  */
+const COMPARE_TAG = process.env.GEO_COMPARE_TAG ?? '';
 const DLC = process.env.GEO_DLC_DAT ?? '';
 const SING_DB = process.env.SING_GEOSITE_DB ?? '';
 const SINGBOX_BIN =
   process.env.SINGBOX_BIN ?? ['/usr/local/bin/sing-box', '/usr/bin/sing-box'].find((p) => existsSync(p)) ?? '';
-const HAVE_FILES = Boolean(DLC && SING_DB && SINGBOX_BIN);
+const HAVE_FILES = Boolean(COMPARE_TAG && DLC && SING_DB && SINGBOX_BIN && existsSync(DLC) && existsSync(SING_DB));
 const IN_CI = process.env.CI === 'true';
+const RUN = Boolean(COMPARE_TAG) || IN_CI;
 
-/** sing-geosite's release built from the pinned dlc, and its geosite.db. */
-const SING_GEOSITE = {
-  url: 'https://github.com/SagerNet/sing-geosite/releases/download/20260922112956/geosite.db',
-  sha256: '48cbdf0fea7467b9ceb1d347474a2f704747027ee9063fe1884f427de341c9e9',
-};
-
-describe('CI compares against the release the panel pins', () => {
-  const ci = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), '../../../../../.github/workflows/ci.yml'),
-    'utf8',
-  );
-  it('the dlc.dat of GEO_BUILTIN, by the same sha256, and sing-geosite of the same tag', () => {
-    const dlc = GEO_BUILTIN.geosite;
-    expect(ci).toContain(geoBuiltinUrl(dlc));
-    expect(ci).toContain(dlc.sha256);
-    expect(SING_GEOSITE.url).toContain(`/${dlc.tag}/`);
-    expect(ci).toContain(SING_GEOSITE.url);
-    expect(ci).toContain(SING_GEOSITE.sha256);
-  });
+describe.skipIf(RUN)('dlc.dat against sing-geosite of the same tag', () => {
+  it.skip('oracle tag not set (GEO_COMPARE_TAG, with GEO_DLC_DAT and SING_GEOSITE_DB of that tag)', () => {});
 });
 
-describe.runIf(HAVE_FILES || IN_CI)('the pinned release against sing-box export', () => {
-  it('has the files it compares', () => {
-    expect(HAVE_FILES, 'CI must set GEO_DLC_DAT, SING_GEOSITE_DB and SINGBOX_BIN (the "Fetch the pinned geo lists" step)').toBe(true);
+describe.runIf(RUN)(`dlc.dat against sing-geosite, tag ${COMPARE_TAG || 'unset'}`, () => {
+  it('has the tag and the files it compares', () => {
+    expect(
+      HAVE_FILES,
+      'needs GEO_COMPARE_TAG, and GEO_DLC_DAT, SING_GEOSITE_DB of that tag and SINGBOX_BIN pointing at files',
+    ).toBe(true);
   });
 
-  const buf = new Uint8Array(DLC ? readFileSync(DLC) : []);
-  const index = DLC ? parseGeoDat(buf, 'geosite') : null;
+  const buf = new Uint8Array(HAVE_FILES ? readFileSync(DLC) : []);
+  const index = HAVE_FILES ? parseGeoDat(buf, 'geosite') : null;
   const dir = mkdtempSync(join(tmpdir(), 'geo-'));
 
   const theirs = (tag: string): RuleSetJson => {
