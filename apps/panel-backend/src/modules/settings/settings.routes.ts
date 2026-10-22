@@ -14,6 +14,7 @@ import {
   getSubscriptionSettings,
   invalidateSubscriptionSettingsCache,
 } from './settings.service.js';
+import { readCapped, subscriptionProbeAnswered } from './settings.probe.js';
 
 /**
  * When the certificate on that address runs out, or null when there is none
@@ -300,12 +301,22 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
           headersTimeout: 5000,
           bodyTimeout: 5000,
         });
-        // Drain, or undici keeps the socket and the next probe queues behind it.
-        await res.body.dump();
+        const body = await readCapped(res.body, 4096);
+        const contentType = String(res.headers['content-type'] ?? '');
+        // Only the subscription route's own answer for a token nobody owns
+        // (A-137, 22.10). It was anything under 500, and with a prefix the
+        // frontend's nginx did not route, the SPA's index.html came back with
+        // 200 and the probe was green while every subscriber got HTML.
+        const ok = subscriptionProbeAnswered(res.statusCode, contentType, body);
         return reply.send({
-          // Anything the app answers means the address is ours and reachable.
-          // 404 is the expected one for a token nobody owns.
-          ok: res.statusCode < 500,
+          ok,
+          ...(ok
+            ? {}
+            : {
+                error:
+                  `the address answered ${res.statusCode} (${contentType || 'no content type'}), ` +
+                  'not the subscription route: the request did not reach the panel backend at this prefix',
+              }),
           status: res.statusCode,
           ms: Date.now() - started,
           tlsExpiresAt: await peerCertificateExpiry(url),
