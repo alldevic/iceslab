@@ -65,7 +65,7 @@ import {
 } from '@/lib/domain/nodeCoreFit';
 import { NodeCoreLine } from '@/ui/NodeCoreLine';
 import { CoreGateRefusalLine } from '@/ui/CoreGateRefusalLine';
-import { adapterSlotRefusal, type AdapterSlotRefusal } from '@/lib/domain/adapterSlot';
+import { adapterRefusal, adapterRefusalWords, type AdapterRefusal } from '@/lib/domain/adapterSlot';
 import {
   checkNodePort,
   portRefusalOf,
@@ -192,8 +192,8 @@ export function HostEditPage() {
   const [dirty, setDirty] = useState(false);
   /** Отказ гейта ядра после «Сохранить» (409 CORE_NOT_ON_NODE / CORE_VERSION_REFUSED). */
   const [coreRefusal, setCoreRefusal] = useState<CoreGateRefusal | null>(null);
-  /** A-055: 409 ADAPTER_SLOT_TAKEN, said under the picked node. */
-  const [slotRefusal, setSlotRefusal] = useState<AdapterSlotRefusal | null>(null);
+  /** A-055: 409 ADAPTER_SLOT_TAKEN or MIERU_MTU_MISMATCH, said under the picked node. */
+  const [slotRefusal, setSlotRefusal] = useState<AdapterRefusal | null>(null);
 
   const currentBinding = bindings.find((b) => b.id === (bindingId ?? host?.bindingId));
   // On create there is no binding yet, so the chosen node is the only source.
@@ -566,7 +566,7 @@ export function HostEditPage() {
       }
       // The adapter already serves another host on this node (A-055). Read
       // before the port fallback, which takes any 409 for a port clash.
-      const slot = adapterSlotRefusal(err);
+      const slot = adapterRefusal(err);
       if (slot) {
         setSlotRefusal(slot);
         return;
@@ -1390,7 +1390,7 @@ export function HostEditPage() {
                   {r.selected && slotRefusal && (
                     <Box style={{ padding: '0 14px 12px 46px' }}>
                       <Text style={{ fontSize: 11, lineHeight: '15px', color: RED }}>
-                        {t('hostEdit.adapterSlotTaken', { ...slotRefusal })}
+                        {adapterRefusalWords({ ...slotRefusal, nodeName: null }, t)}
                       </Text>
                     </Box>
                   )}

@@ -196,6 +196,9 @@ export const hosts = {
     portConflictFallback: 'Этот порт на этой ноде уже занят.',
     // A-055: 409 ADAPTER_SLOT_TAKEN, второй вход того же адаптера на ноде.
     adapterSlotTaken: 'На этой ноде уже есть вход {{protocol}} на ядре {{engine}}: «{{heldBy}}». Нода держит один такой вход, второй молча заменил бы первый.',
+    // 409 MIERU_MTU_MISMATCH: один процесс mieru держит один MTU.
+    mieruMtuMismatch: 'mieru на этой ноде уже работает с MTU {{mtu}} («{{heldBy}}»). Второй вход mieru здесь должен быть с тем же MTU, а не {{wanted}}.',
+    onNode: 'Нода «{{name}}»:',
     goneWhileEditing:
       'Профиль или нода исчезли. Списки обновлены, выберите заново перед сохранением.',
     sniMismatchToast: 'Такое имя нода не обслуживает.',

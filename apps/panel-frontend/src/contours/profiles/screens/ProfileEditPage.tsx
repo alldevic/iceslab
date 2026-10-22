@@ -24,6 +24,7 @@ import { engineRefused } from '@/contours/profiles/lib/plainSubprotocol';
 import { singboxXrayMessage, singboxXrayRefusal, type SingboxXrayRefusal } from '@/lib/domain/singboxXray';
 import { CARD, CYAN, HAIRLINE, MIST, SNOW, WELL } from '@/contours/profiles/lib/colors';
 import { awgGateText, coreGateRefusal, type CoreGateRefusal } from '@/lib/domain/nodeCoreFit';
+import { adapterRefusal, adapterRefusalWords } from '@/lib/domain/adapterSlot';
 
 /**
  * Create / edit a profile as a page. A profile is a protocol template with a
@@ -89,6 +90,10 @@ export function ProfileEditPage() {
     const awgText = gate ? awgGateText(gate, t) : null;
     setAwgRefusal(awgText !== null ? gate : null);
     if (sb) return singboxXrayMessage(sb, t);
+    // A bound profile moved onto an adapter a node already holds, or a mieru
+    // MTU the node's process does not run: the server names the node.
+    const adapter = adapterRefusal(err);
+    if (adapter) return adapterRefusalWords(adapter, t);
     if (awgText !== null) return awgText;
     return engineRefused(err) ? t('profileEdit.engineRefused') : apiErrorMessage(err);
   };

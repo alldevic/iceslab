@@ -27,6 +27,8 @@ import {
   type Profile,
 } from '@/lib/domain/profiles';
 import { deployDiff } from '@/contours/profiles/lib/deployDiff';
+import { deployOutcome, DeployIncomplete } from '@/contours/profiles/lib/deployResult';
+import { adapterRefusalWords, type AdapterRefusal } from '@/lib/domain/adapterSlot';
 import { plainDefaultPort } from '@/contours/profiles/lib/plainSubprotocol';
 import { hostHiddenFacts, listHosts, type Host } from '@/lib/domain/hosts';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
@@ -244,11 +246,14 @@ export function DeployProfileModal({ profile, onClose }: Props) {
 
   /** Отказ гейта ядра (409 CORE_NOT_ON_NODE / CORE_VERSION_REFUSED) по имени ноды. */
   const [coreRefusal, setCoreRefusal] = useState<CoreGateRefusal | null>(null);
+  /** A-055: ADAPTER_SLOT_TAKEN / MIERU_MTU_MISMATCH by the node the binding was sent for. */
+  const [adapterRefusals, setAdapterRefusals] = useState<Map<string, AdapterRefusal>>(new Map());
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!profile) return;
       setCoreRefusal(null);
+      setAdapterRefusals(new Map());
       // Поштучно: POST на новую галку, DELETE на снятую. Снимается только то,
       // что оператор снял сам (`deployDiff`).
       const { create: toCreate, remove: toDelete } = deployDiff(
@@ -257,18 +262,15 @@ export function DeployProfileModal({ profile, onClose }: Props) {
         bindingsQuery.data?.bindings ?? [],
       );
 
-      await Promise.all([
-        ...toCreate.map((nodeId) =>
-          createBinding({
-            profileId: profile.id,
-            nodeId,
-            port,
-          }),
-        ),
-        ...toDelete.map((id) => deleteBinding(id)),
+      // Settled one by one: a node whose adapter refuses (A-055) is named under
+      // its own row, and the bindings that went through stand (deployOutcome).
+      const [creates, deletes] = await Promise.all([
+        Promise.allSettled(toCreate.map((nodeId) => createBinding({ profileId: profile.id, nodeId, port }))),
+        Promise.allSettled(toDelete.map((id) => deleteBinding(id))),
       ]);
-
-      return { created: toCreate.length, deleted: toDelete.length };
+      const outcome = deployOutcome(toCreate, creates, deletes);
+      if (outcome.refused.size > 0 || outcome.other !== null) throw new DeployIncomplete(outcome);
+      return { created: outcome.created, deleted: outcome.deleted };
     },
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['bindings'] });
@@ -285,7 +287,17 @@ export function DeployProfileModal({ profile, onClose }: Props) {
       }
       onClose();
     },
-    onError: (err) => {
+    onError: (failure) => {
+      // Part of the deploy may have gone through: the lists are read again, and
+      // each adapter refusal stands under its node. Anything else is read below.
+      let err: unknown = failure;
+      if (failure instanceof DeployIncomplete) {
+        qc.invalidateQueries({ queryKey: ['bindings'] });
+        qc.invalidateQueries({ queryKey: ['profiles'] });
+        setAdapterRefusals(failure.outcome.refused);
+        if (failure.outcome.other === null) return;
+        err = failure.outcome.other;
+      }
       /**
        * Порт занят на одной из выбранных нод.
        *
@@ -321,6 +333,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
   function toggle(nodeId: string) {
     // Отказ был про прежний набор нод.
     setCoreRefusal(null);
+    setAdapterRefusals(new Map());
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(nodeId)) next.delete(nodeId);
@@ -452,6 +465,11 @@ export function DeployProfileModal({ profile, onClose }: Props) {
                   {checked && portInHopRange(portCheckTransport, port, node) && (
                     <Text size="xs" c="yellow" style={{ lineHeight: '15px' }}>
                       {t('nodeCore.portInHopRange')}
+                    </Text>
+                  )}
+                  {adapterRefusals.has(node.id) && (
+                    <Text size="xs" c="red" style={{ lineHeight: '15px' }}>
+                      {adapterRefusalWords({ ...adapterRefusals.get(node.id)!, nodeName: null }, t)}
                     </Text>
                   )}
                   {coreRefusal?.nodeName === node.name && (

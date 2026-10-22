@@ -27,7 +27,7 @@ import {
 import { coreVersionRefusal } from '@/lib/domain/coreVersions';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
-import { adapterSlotRefusal, addOnePerSlot, slotHeldBy } from '@/lib/domain/adapterSlot';
+import { adapterRefusal, adapterRefusalWords, addOnePerSlot, slotHeldBy } from '@/lib/domain/adapterSlot';
 import { buildHardening } from '@/contours/nodes/lib/nodeInstall';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import { installIntentLabel, nodeIntentWords } from '@/lib/domain/engines';
@@ -306,8 +306,8 @@ export function useNodeCreateForm() {
         } catch (err) {
           // The server's reason beside the name: «port taken» and «core
           // refused» are different fixes.
-          const slot = adapterSlotRefusal(err);
-          failed.push(`${profile.name}: ${slot ? t('hostEdit.adapterSlotTaken', { ...slot }) : apiErrorMessage(err)}`);
+          const slot = adapterRefusal(err);
+          failed.push(`${profile.name}: ${slot ? adapterRefusalWords({ ...slot, nodeName: null }, t) : apiErrorMessage(err)}`);
         }
       }
       if (failed.length > 0) {

@@ -1,31 +1,22 @@
+import { adapterSlot, MULTI_INBOUND_ADAPTERS } from '@iceslab/shared';
+
 /**
- * One inbound per adapter on a node (A-055, BACK 0c1fb86).
+ * One inbound per adapter on a node (A-055), what the screens do with it.
  *
- * The agent hands an inbound to an adapter by (protocol, engine), and for
- * AmneziaWG by (protocol, generation). Every adapter but native xray holds ONE
- * inbound: a second binding of the same adapter on a node is refused 409
- * ADAPTER_SLOT_TAKEN { protocol, engine, heldBy }, on POST /api/hosts and
- * POST /api/bindings alike.
- *
- * ⚠ The key and the one shared adapter are a hand mirror of
- * `apps/panel-backend/src/modules/nodes/node-adapter-slot.ts` (adapterSlot,
- * MULTI). The server stays the judge: the wizard uses this only to not offer
- * a second host it knows would be refused, and the refusal is still read.
+ * The rule itself, the adapter key and the adapters that take several
+ * inbounds, lives in `@iceslab/shared` (adapters.ts, A-175/A-196): the server's
+ * gate and the screens read one table. This file holds only what the screens
+ * add on top: which pick to not offer in the wizard, and how a refusal reads.
  */
 
-const MULTI = new Set(['xray|xray']);
+export { adapterSlot };
 
-export function adapterSlot(p: { protocol: string; effectiveEngine: string; awgProtocol?: number | null }): string {
-  if (p.protocol === 'amneziawg') return `amneziawg|${p.awgProtocol === 3 ? 3 : 1}`;
-  return `${p.protocol}|${p.effectiveEngine}`;
-}
-
-/** The adapter takes more than one inbound (native xray only, today). */
+/** The adapter takes more than one inbound on one node. */
 export function slotShared(slot: string): boolean {
-  return MULTI.has(slot);
+  return MULTI_INBOUND_ADAPTERS.includes(slot);
 }
 
-type SlotProfile = { id: string; name: string; protocol: string; effectiveEngine: string; awgProtocol?: number | null };
+type SlotProfile = { id: string; name: string; protocol: string; engine: string | null; awgProtocol?: number | null };
 
 /**
  * Candidates that cannot be picked because a picked profile already holds
@@ -69,22 +60,44 @@ export function addOnePerSlot(selected: readonly string[], candidates: readonly 
   return out;
 }
 
-/** 409 ADAPTER_SLOT_TAKEN, read with the input checked first. */
-export interface AdapterSlotRefusal {
-  protocol: string;
-  engine: string;
-  heldBy: string;
-  message: string;
-}
+/**
+ * The two 409s a binding can meet on a node's adapter, read with the input
+ * checked first:
+ *   slot  ADAPTER_SLOT_TAKEN { protocol, engine, heldBy } (A-055): the adapter
+ *         holds one inbound and serves another already;
+ *   mtu   MIERU_MTU_MISMATCH { nodeName, mtu, wanted, heldBy }: mieru takes
+ *         several inbounds, but one MTU per process.
+ * `nodeName` is there when the server names the node (PUT /api/profiles/:id
+ * names it for both; POST /api/hosts and /api/bindings name it for MTU only).
+ */
+export type AdapterRefusal =
+  | { kind: 'slot'; nodeName: string | null; protocol: string; engine: string; heldBy: string }
+  | { kind: 'mtu'; nodeName: string | null; mtu: number | null; wanted: number | null; heldBy: string };
 
-export function adapterSlotRefusal(err: unknown): AdapterSlotRefusal | null {
+export function adapterRefusal(err: unknown): AdapterRefusal | null {
   if (!err || typeof err !== 'object') return null;
   const res = (err as { response?: unknown }).response;
   if (!res || typeof res !== 'object') return null;
   const { status, data } = res as { status?: unknown; data?: unknown };
   if (status !== 409 || !data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
-  if (d.error !== 'ADAPTER_SLOT_TAKEN') return null;
   const str = (v: unknown) => (typeof v === 'string' ? v : '');
-  return { protocol: str(d.protocol), engine: str(d.engine), heldBy: str(d.heldBy), message: str(d.message) };
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const nodeName = typeof d.nodeName === 'string' && d.nodeName !== '' ? d.nodeName : null;
+  if (d.error === 'ADAPTER_SLOT_TAKEN') {
+    return { kind: 'slot', nodeName, protocol: str(d.protocol), engine: str(d.engine), heldBy: str(d.heldBy) };
+  }
+  if (d.error === 'MIERU_MTU_MISMATCH') {
+    return { kind: 'mtu', nodeName, mtu: num(d.mtu), wanted: num(d.wanted), heldBy: str(d.heldBy) };
+  }
+  return null;
+}
+
+/** The refusal in the panel's words; the node is named when the server named it. */
+export function adapterRefusalWords(r: AdapterRefusal, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  const body =
+    r.kind === 'slot'
+      ? t('hostEdit.adapterSlotTaken', { protocol: r.protocol, engine: r.engine, heldBy: r.heldBy })
+      : t('hostEdit.mieruMtuMismatch', { mtu: r.mtu ?? '?', wanted: r.wanted ?? '?', heldBy: r.heldBy });
+  return r.nodeName ? `${t('hostEdit.onNode', { name: r.nodeName })} ${body}` : body;
 }
