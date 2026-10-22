@@ -37,6 +37,16 @@ export class HostNotFoundError extends Error {
   }
 }
 
+/**
+ * A-215: the node a host's binding sits on. A host decides who reaches the
+ * inbound (a squad narrowed to hosts reaches a binding through them), so a
+ * host created, toggled or removed moves the node's user reach; host.changed
+ * carries the node and the push hands its users out again.
+ */
+async function nodeOfBinding(bindingId: string): Promise<string | undefined> {
+  return (await prisma.profileNodeBinding.findUnique({ where: { id: bindingId }, select: { nodeId: true } }))?.nodeId;
+}
+
 /** A-150: moving the listen port would move the other hosts of the binding. */
 export class HostPortSharedError extends Error {
   readonly code = 'HOST_PORT_SHARED';
@@ -316,7 +326,7 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
   }
   // A host IS an endpoint in the subscription, so every mutation here changes
   // what users are handed.
-  eventBus.emit('host.changed', {});
+  eventBus.emit('host.changed', { nodeId: await nodeOfBinding(created.bindingId) });
   return mapHost(created, undefined, undefined, await hidingCascadeOfBinding(created.bindingId));
 }
 
@@ -475,7 +485,7 @@ export async function updateHost(
   }
 
   const updated = await prisma.host.update({ where: { id }, data });
-  eventBus.emit('host.changed', {});
+  eventBus.emit('host.changed', { nodeId: await nodeOfBinding(updated.bindingId) });
   return mapHost(updated, undefined, undefined, await hidingCascadeOfBinding(updated.bindingId));
 }
 
@@ -500,6 +510,8 @@ export async function updateHost(
 export async function deleteHost(id: string): Promise<void> {
   const existing = await prisma.host.findUnique({ where: { id } });
   if (!existing) throw new HostNotFoundError(id);
+  // Read before the delete: the binding may go with its last host.
+  const nodeId = await nodeOfBinding(existing.bindingId);
 
   const orphanedBinding = await prisma.$transaction(async (tx) => {
     await tx.host.delete({ where: { id } });
@@ -516,7 +528,7 @@ export async function deleteHost(id: string): Promise<void> {
     return binding;
   });
 
-  eventBus.emit('host.changed', {});
+  eventBus.emit('host.changed', { nodeId });
   // Ordered after host.changed on purpose: this one re-pushes the node's
   // inbound set, so it should run once the subscription caches already know
   // the host is gone.

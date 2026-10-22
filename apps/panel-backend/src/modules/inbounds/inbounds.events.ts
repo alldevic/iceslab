@@ -67,6 +67,12 @@ export function registerInboundEventHandlers(): void {
   // binding.* is per-(profile, node), only that node needs re-push.
   // profile.* changed shared config, every bound node needs re-push.
 
+  // A-215: a host decides who reaches its inbound, so a change of hosts moves
+  // the node's user reach; the push hands the users out again. A reorder
+  // carries no node and changes no reach.
+  eventBus.on('host.changed', ({ nodeId }) => {
+    if (nodeId) enqueue(nodeId, 'host.changed');
+  });
   eventBus.on('binding.created', ({ bindingId, nodeId }) => {
     enqueue(nodeId, `binding.created ${bindingId}`);
   });

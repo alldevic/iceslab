@@ -11,6 +11,7 @@ import { observedCores } from '../nodes/nodes.cron.js';
 import { reachOfUsers } from './user-reach.js';
 import { syncAddUser } from './users.queue.js';
 import { applyInboundsForNode } from '../inbounds/inbounds.queue.js';
+import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
 
 /**
  * A-022: a user is rolled out only onto the nodes and inbounds their squads
@@ -187,3 +188,45 @@ describe('the push hands users out by reach', () => {
     expect(byUser.get(outside)).toEqual([]);
   });
 });
+
+describe('a host change moves the reach, and the node is pushed (A-215)', () => {
+  it('a squad narrowed to H2: creating H2 on the existing binding queues the push, and the push puts the user on', async () => {
+    registerInboundEventHandlersOnce();
+    const n = await node();
+    const p = await profile('xray', VLESS);
+    const h1 = await host(p, n, 443, 'H1');
+    const before = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).desiredRevision;
+
+    // The squad narrowed to a host that does not exist yet is created after it;
+    // first H2 on the same binding, then the squad naming it.
+    const h2 = await post('/api/hosts', { bindingId: h1.bindingId, remark: 'H2' });
+    await expect
+      .poll(async () => (await prisma.node.findUniqueOrThrow({ where: { id: n } })).desiredRevision, { timeout: 5000 })
+      .toBeGreaterThan(before);
+
+    const sq = await post('/api/squads', { name: 'h2-only', profileIds: [p], hostIds: [h2.id] });
+    const u = await user('h2_user', [sq.id]);
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockResolvedValue({ ok: true, applied: 1, skipped: 0 });
+    const { added } = capture();
+    await applyInboundsForNode(n);
+    expect(added.find((x) => x.req.userId === u)?.req.inboundIds).toEqual([h1.bindingId]);
+
+    // H2 switched off: the user reaches nothing there, the node is pushed again.
+    const mid = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).desiredRevision;
+    const off = await app.inject({ method: 'PUT', url: `/api/hosts/${h2.id}`, headers: auth(), payload: { enabled: false } });
+    expect(off.statusCode, off.body).toBe(200);
+    await expect
+      .poll(async () => (await prisma.node.findUniqueOrThrow({ where: { id: n } })).desiredRevision, { timeout: 5000 })
+      .toBeGreaterThan(mid);
+    added.length = 0;
+    await applyInboundsForNode(n);
+    expect(added.find((x) => x.req.userId === u)?.req.inboundIds).toEqual([]);
+  });
+});
+
+let handlersOn = false;
+function registerInboundEventHandlersOnce(): void {
+  if (handlersOn) return;
+  handlersOn = true;
+  registerInboundEventHandlers();
+}
