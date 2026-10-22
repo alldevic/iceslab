@@ -247,19 +247,56 @@ func (a *Adapter) addUser(user core.User, scope string) error {
 		return nil
 	}
 	// shadowsocks: straight into the running process, no restart.
-	if a.ssmOn() && a.running() {
+	if a.ssmOn() {
 		var prev *userEntry
 		if existed {
 			prev = &cur
 		}
-		if err := a.ssmApplyUser(context.Background(), user.UserID, prev, &desired, held); err == nil {
+		if a.ssmChange(user.UserID, prev, &desired) {
 			return nil
-		} else {
-			a.logger.Warn("singbox: ssm-api add failed, restarting with the user instead", "err", err)
 		}
 	}
 	a.scheduleRestart()
 	return nil
+}
+
+// ssmChange hands one user change to the running process over ssm-api.
+// False sends the caller to a restart.
+//
+// Under restartMu (П-5, 22.10): taken without it, a change landing while a
+// restart was in its check went to the old process, and the hand-over after
+// the start synced the users as they were before the change, so an added
+// user was gone and a removed one back, until the next restart. Now a change
+// waits out a restart and is then put to the process that runs; the sync
+// after a start reads the users as they are by then (ssmSyncAll's callers).
+func (a *Adapter) ssmChange(userID string, prev, next *userEntry) bool {
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
+	// The inbounds as the process that runs now holds them, after any
+	// restart this waited out.
+	a.mu.Lock()
+	held := sortedHeld(a.inbounds)
+	running := a.proc != nil && a.proc.Running()
+	a.mu.Unlock()
+	if !running || len(held) == 0 {
+		return false
+	}
+	if err := a.ssmApplyUser(context.Background(), userID, prev, next, held); err != nil {
+		a.logger.Warn("singbox: ssm-api change failed, restarting with it instead", "user", userID, "err", err)
+		return false
+	}
+	return true
+}
+
+// usersNow is a copy of the users as they are, under mu.
+func (a *Adapter) usersNow() map[string]userEntry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make(map[string]userEntry, len(a.users))
+	for k, v := range a.users {
+		out[k] = v
+	}
+	return out
 }
 
 // ssmOn: a managed shadowsocks adapter, its users handed over ssm-api.
@@ -367,12 +404,8 @@ func (a *Adapter) RemoveUser(userID string) error {
 	if len(held) == 0 {
 		return nil
 	}
-	if a.ssmOn() && a.running() {
-		if err := a.ssmApplyUser(context.Background(), userID, &cur, nil, held); err == nil {
-			return nil
-		} else {
-			a.logger.Warn("singbox: ssm-api remove failed, restarting without the user instead", "err", err)
-		}
+	if a.ssmOn() && a.ssmChange(userID, &cur, nil) {
+		return nil
 	}
 	a.scheduleRestart()
 	return nil
@@ -764,7 +797,10 @@ func (a *Adapter) regenerateAndRestart() error {
 		a.ssmSynced = false
 		a.ssmErr = ""
 		a.mu.Unlock()
-		if err := a.ssmSyncAll(ctx, held, users); err != nil {
+		// The users as they are NOW, not the copy the render started from
+		// (П-5): a change made since went to the old process, and syncing the
+		// copy would undo it on the new one.
+		if err := a.ssmSyncAll(ctx, held, a.usersNow()); err != nil {
 			a.mu.Lock()
 			if a.ssmGen == gen {
 				a.ssmErr = err.Error()
@@ -774,7 +810,7 @@ func (a *Adapter) regenerateAndRestart() error {
 			// failed hand-over left it so: a 500 to a push, a journal line
 			// after a batch. Now it is tried again until it takes, and the
 			// core is not healthy until then.
-			go a.retrySSMSync(ctx, gen, held, users)
+			go a.retrySSMSync(ctx, gen, held)
 			return fmt.Errorf("singbox: hand the users to ssm-api (retrying): %w", err)
 		}
 		a.mu.Lock()

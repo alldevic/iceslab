@@ -28,7 +28,7 @@ func (a *Adapter) ssmSyncAll(ctx context.Context, held []heldInbound, users map[
 // retrySSMSync tries the hand-over again, 1, 2, 4 ... 30 s apart, for as long
 // as the process it was started for is the current one and the adapter runs.
 // A newer start brings its own hand-over, and Stop/Idle end it.
-func (a *Adapter) retrySSMSync(ctx context.Context, gen int, held []heldInbound, users map[string]userEntry) {
+func (a *Adapter) retrySSMSync(ctx context.Context, gen int, held []heldInbound) {
 	a.mu.Lock()
 	wait := a.ssmRetryBase
 	a.mu.Unlock()
@@ -41,6 +41,10 @@ func (a *Adapter) retrySSMSync(ctx context.Context, gen int, held []heldInbound,
 			return
 		case <-time.After(wait):
 		}
+		// Under restartMu, like a single change over ssm-api (ssmChange): a
+		// change landing between the read below and the sync would be put to
+		// the process and then removed by it (П-5).
+		a.restartMu.Lock()
 		a.mu.Lock()
 		current := a.ssmGen == gen && a.started && a.proc != nil
 		// The users as they are now, not as they were at the start: changes
@@ -51,9 +55,11 @@ func (a *Adapter) retrySSMSync(ctx context.Context, gen int, held []heldInbound,
 		}
 		a.mu.Unlock()
 		if !current {
+			a.restartMu.Unlock()
 			return
 		}
 		err := a.ssmSyncAll(ctx, held, now)
+		a.restartMu.Unlock()
 		a.mu.Lock()
 		if err == nil && a.ssmGen == gen {
 			a.ssmSynced = true
