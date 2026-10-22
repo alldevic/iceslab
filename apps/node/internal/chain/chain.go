@@ -23,6 +23,7 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -309,6 +310,14 @@ func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
 			return m.fail(err)
 		}
 	}
+	// The same block as the one running, and the process up: nothing to do.
+	// A-106, 22.10: every push restarted the chain, and pushes come for things
+	// that are not the chain (a profile edit, a policy, a geo roll-out, a node
+	// flapping degraded/online), so each cut every connection riding the
+	// cascade on this node. A process that died is started again.
+	if m.unchanged(block) {
+		return nil
+	}
 	if m.cfg.BinaryPath == "" {
 		// The sentence an operator reads on the node's card, so it says what to
 		// DO rather than what is missing. Without the command they get a fact
@@ -384,6 +393,30 @@ func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
 
 	m.cfg.Logger.Info("chain applied", "ways-out", len(block.Socks), "config", m.cfg.ConfigPath)
 	return nil
+}
+
+// unchanged: the block is the one in force, byte for byte once compacted,
+// and its process is running.
+func (m *Manager) unchanged(block *dto.NodeChain) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.accepted == nil || m.proc == nil || !m.proc.Running() {
+		return false
+	}
+	a, errA := json.Marshal(compactBlock(m.accepted))
+	b, errB := json.Marshal(compactBlock(block))
+	return errA == nil && errB == nil && bytes.Equal(a, b)
+}
+
+// compactBlock is the block with its engine config compacted, so whitespace
+// the panel did not mean is not a change.
+func compactBlock(b *dto.NodeChain) dto.NodeChain {
+	c := *b
+	var buf bytes.Buffer
+	if json.Compact(&buf, b.Config) == nil {
+		c.Config = buf.Bytes()
+	}
+	return c
 }
 
 // stop takes the chain out of service: the process goes down and the ports it
