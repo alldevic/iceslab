@@ -12,7 +12,8 @@ import type { Cascade } from '@/lib/domain/cascades';
  * Positions and directions first; hops only for a cascade stored the old way.
  *
  * The generator takes the first enabled cascade a node belongs to, so the
- * first cascade in the list keeps the node here too.
+ * first cascade in the list keeps the node here too. A-101 (BACK) changes that
+ * server rule; this one follows it when it lands, not before.
  */
 export type CascadeRole = 'entry' | 'transit' | 'exit';
 
