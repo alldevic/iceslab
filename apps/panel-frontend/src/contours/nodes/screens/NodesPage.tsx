@@ -40,7 +40,7 @@ import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import { policyBadgeFacts } from '@/contours/nodes/lib/policyReach';
 import {
   deleteNode,
-  listNodes,
+  listAllNodes,
   listRegions,
   refreshNodeBootstrap,
   type Node,
@@ -456,12 +456,10 @@ export function NodesPage() {
 
   const nodesQuery = useQuery({
     queryKey: ['nodes', regionFilter],
-    queryFn: () =>
-      listNodes({
-        page: 1,
-        limit: 100,
-        regionId: regionFilter === 'all' ? undefined : regionFilter,
-      }),
+    // The whole fleet, not page 1: with no filter this key is ['nodes', 'all'],
+    // the very key the pickers fill with listAllNodes (A-138), and one key
+    // must hold one shape.
+    queryFn: () => listAllNodes({ regionId: regionFilter === 'all' ? undefined : regionFilter }),
     // Core version and the restart tally ride on this response, not on the
     // overview blob, and until 2026-08-04 nothing refetched it: a core could
     // bounce with the page open and the card would keep the numbers it was

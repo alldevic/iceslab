@@ -23,7 +23,7 @@ import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
 import { deleteSquad, listSquads, type Squad } from '@/lib/domain/squads';
 import { listBindings } from '@/lib/domain/profiles';
 import { listCascades } from '@/lib/domain/cascades';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { squadExitsSummary } from '@/contours/squads/lib/squadCascades';
 import { AMBER, CARD, CYAN, DIM, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/squads/lib/colors';
@@ -54,7 +54,7 @@ export function SquadsPage() {
 
   const squadsQuery = useQuery({ queryKey: ['squads'], queryFn: listSquads });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   // A4 increment 2 - balancer cascades for the per-squad exit allow-list.
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
 

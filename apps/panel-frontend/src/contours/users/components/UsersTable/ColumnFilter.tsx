@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Box, Menu, Stack, Text, UnstyledButton } from '@mantine/core';
 import { IconFilter, IconFilterFilled, IconX } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import type { UserFilters } from '@/lib/domain/users';
 import { filterKeys, type ColumnFilter as Descriptor } from '@/contours/users/lib/usersTable';
 import { AMBER, CYAN, HAIRLINE, MIST, SNOW, WELL } from '@/contours/users/lib/colors';
@@ -217,7 +217,7 @@ function NodeFilter({
 }) {
   const { t } = useTranslation();
   // The fleet is small and every other screen already holds this cache.
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   const nodes = nodesQuery.data?.nodes ?? [];
 
   return (

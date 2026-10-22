@@ -9,7 +9,7 @@ import {
   findNode,
   getNodeExposure,
   getNodeSyncStatus,
-  listNodes,
+  listAllNodes,
   listRegions,
   refreshNodeBootstrap,
   registerNodeWarp,
@@ -51,7 +51,7 @@ export function useNodeEditForm() {
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
   // The fleet, for naming a cascade's directions after the country of the node
   // under each one. Shares the cache key every other page already uses.
-  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const bindingsQuery = useQuery({
     queryKey: ['bindings', id],
     queryFn: () => listBindings({ nodeId: id }),

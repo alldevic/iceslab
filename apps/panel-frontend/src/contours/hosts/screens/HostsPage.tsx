@@ -35,7 +35,7 @@ import { HostHiddenLine } from '@/ui/HostHiddenLine';
 import { AwgGenerationBadge } from '@/ui/AwgGenerationBadge';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { profilePairLabel, type EngineName } from '@/lib/domain/engines';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { COUNTRIES } from '@/lib/domain/countries';
 import { AMBER, CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/hosts/lib/colors';
@@ -62,7 +62,7 @@ export function HostsPage() {
 
   const hostsQuery = useQuery({ queryKey: ['hosts'], queryFn: () => listHosts() });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
 
   const rows = useMemo(() => {

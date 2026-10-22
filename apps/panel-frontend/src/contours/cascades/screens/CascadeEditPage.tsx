@@ -16,7 +16,7 @@ import {
   type Cascade,
   type CascadeProtocol,
 } from '@/lib/domain/cascades';
-import { listNodes, type Node } from '@/lib/domain/nodes';
+import { listAllNodes, type Node } from '@/lib/domain/nodes';
 import {
   directionOutbounds,
   listNamedOutbounds,
@@ -34,6 +34,7 @@ import { ChainStatusLine } from '@/ui/ChainStatusLine';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
 import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
+import { cascadeClaims } from '@/contours/cascades/lib/cascadeClaims';
 import { useEntryAwg31 } from '@/contours/cascades/lib/useEntryAwg31';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { useOverview } from '@/lib/domain/dashboard';
@@ -162,7 +163,7 @@ export function CascadeEditPage() {
   // There is no single-cascade endpoint; the list is short and already cached
   // by the page the operator came from.
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const overviewQuery = useOverview();
   const cascade = cascadesQuery.data?.cascades.find((c) => c.id === id) ?? null;
   // Какие поля сервер рендерит, говорит `fields` конверта; по стоящим каскадам
@@ -185,14 +186,8 @@ export function CascadeEditPage() {
 
   // Every other cascade that already claims a node. This one is excluded: its
   // own nodes are not a clash.
-  const claimedBy = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of cascadesQuery.data?.cascades ?? []) {
-      if (c.id === id) continue;
-      for (const h of c.hops) m.set(h.nodeId, c.name);
-    }
-    return m;
-  }, [cascadesQuery.data, id]);
+  // v4 positions and directions included (cascadeClaims, A-139).
+  const claimedBy = useMemo(() => cascadeClaims(cascadesQuery.data?.cascades ?? [], id), [cascadesQuery.data, id]);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);

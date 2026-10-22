@@ -3,7 +3,7 @@ import { Box, Group, Text, UnstyledButton } from '@mantine/core';
 import { IconBolt, IconCheck, IconInfoCircle, IconPlus } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import type { EngineName } from '@iceslab/shared';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { nativeEngineOfIntent } from '@/lib/domain/engines';
 import { CoreVersionStrip } from '@/contours/profiles/components/ProfileForm/CoreVersionStrip';
 import {
@@ -60,7 +60,7 @@ export function EnginePicker({
   onPickPreview: (key: PreviewKindKey) => void;
 }) {
   const { t } = useTranslation();
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
 
   const tabs: { value: EngineTab; label: string }[] = [
     { value: 'native', label: t('profiles.engine.native') },

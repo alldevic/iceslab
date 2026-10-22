@@ -8,7 +8,7 @@ import { defaultValues } from '@/contours/users/lib/userForm';
 import { expiryDays } from '@/contours/users/lib/userExpiry';
 import { fetchUserEndpoints, listUsers } from '@/lib/domain/users';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { listSquads } from '@/lib/domain/squads';
 import { loadPresets } from '@/contours/users/lib/userPresets';
 import { useMemo, useState } from 'react';
@@ -110,7 +110,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     queryFn: () => listBindings(),
     enabled: opened,
   });
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes(), enabled: opened });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes(), enabled: opened });
 
   // Memoised because two derived blocks below key off it: a fresh [] per render
   // would recompute the estimate and the routing check on every keystroke.

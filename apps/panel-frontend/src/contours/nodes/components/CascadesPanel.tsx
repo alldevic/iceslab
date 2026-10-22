@@ -4,7 +4,7 @@ import { Stack } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listCascades, updateCascade, deleteCascade, type Cascade } from '@/lib/domain/cascades';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { apiErrorMessage } from '@/lib/net/client';
 import { FleetEmpty } from '@/contours/nodes/components/FleetEmpty';
 import { CascadesView, type CascadeLayout } from '@/contours/nodes/components/CascadesView';
@@ -26,7 +26,7 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
   const navigate = useNavigate();
   const qc = useQueryClient();
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['cascades'] });
   const onError = (err: unknown) => {

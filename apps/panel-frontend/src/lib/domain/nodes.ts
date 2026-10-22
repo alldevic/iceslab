@@ -401,7 +401,40 @@ export async function listNodes(params?: {
 }
 
 /** Largest page the list endpoint accepts; asking for more is a 400. */
-const NODES_PAGE_MAX = 100;
+export const NODES_PAGE_MAX = 100;
+
+/**
+ * Every page of the node list as one response (A-138).
+ *
+ * The endpoint answers 50 by default and 100 at most, and fifteen screens
+ * asked once: on a fleet past that, nodes dropped out of every picker and
+ * hosts on them read as orphans. The walk stops on the page that reaches
+ * `total` or on a page that brings nothing new, and a node seen twice (the
+ * list shifted under the walk) is kept once. `fields` is the first page's: it describes the
+ * server, not the page.
+ */
+export async function collectNodePages(
+  fetchPage: (page: number) => Promise<NodesListResponse>,
+): Promise<NodesListResponse> {
+  const seen = new Map<string, Node>();
+  let first: NodesListResponse | null = null;
+  for (let page = 1; ; page++) {
+    const res = await fetchPage(page);
+    first ??= res;
+    const before = seen.size;
+    for (const n of res.nodes) if (!seen.has(n.id)) seen.set(n.id, n);
+    // A page with nothing new ends the walk too: a server that ignored `page`
+    // would otherwise be asked forever.
+    if (seen.size === before || page * NODES_PAGE_MAX >= res.total) break;
+  }
+  const nodes = [...seen.values()];
+  return { ...first, nodes, total: nodes.length, page: 1, limit: nodes.length };
+}
+
+/** The whole fleet, for pickers and lookups. Same filters as listNodes. */
+export function listAllNodes(params?: { status?: string; regionId?: string }): Promise<NodesListResponse> {
+  return collectNodePages((page) => listNodes({ ...params, page, limit: NODES_PAGE_MAX }));
+}
 
 /**
  * One node by id. There is no single-node GET, so this walks the list a page

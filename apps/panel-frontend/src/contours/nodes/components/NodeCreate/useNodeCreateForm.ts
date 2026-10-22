@@ -10,7 +10,7 @@ import { createBinding, listProfiles, type Profile } from '@/lib/domain/profiles
 import {
   createNode,
   findNode,
-  listNodes,
+  listAllNodes,
   type NodeWithPayload,
 } from '@/lib/domain/nodes';
 import {
@@ -136,7 +136,7 @@ export function useNodeCreateForm() {
    * (nodeFieldKnown). Не знаем: прежняя форма, а не выбор, который сервер
    * может отвергнуть.
    */
-  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const coreVersionsKnown = nodeFieldKnown(fleetQuery.data, 'coreVersions');
   /** Строки отказа 400 CORE_VERSION_NOT_LISTED после «Зарегистрировать». */
   const [coreRefusal, setCoreRefusal] = useState<string[] | null>(null);

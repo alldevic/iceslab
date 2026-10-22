@@ -12,12 +12,13 @@ import {
   listCascades,
   type CascadeProtocol,
 } from '@/lib/domain/cascades';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { listFieldKnown } from '@/lib/domain/nodeFields';
 import { listRoutePolicies } from '@/lib/domain/routePolicies';
 import { linkCellEngines, nodeCarriesCell } from '@/lib/domain/linkCells';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
+import { cascadeClaims } from '@/contours/cascades/lib/cascadeClaims';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import {
@@ -157,7 +158,7 @@ export function CascadeCreatePage() {
 
   usePageMeta([t('cascadeCreate.crumbSection'), t('cascadeCreate.crumbNew')]);
 
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
   // Политика входа (Ф9.3). Знает ли сервер поле, говорит `fields` конверта
   // каскадов (и на пустом списке); по стоящим каскадам только у сервера старше.
@@ -183,16 +184,9 @@ export function CascadeCreatePage() {
   // протокола: они в каскад не войдут, и сказать это надо при выборе входа.
   const bystanders = useEntryBystanders(pools[0]?.entryProtocol, pools[0]?.nodeIds ?? [], nodeById);
 
-  // Which cascade already claims a node. The config generator picks the first
-  // enabled cascade a node belongs to, so a second one would be written and then
-  // silently ignored: worth saying out loud at pick time.
-  const claimedBy = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of cascadesQuery.data?.cascades ?? []) {
-      for (const h of c.hops) m.set(h.nodeId, c.name);
-    }
-    return m;
-  }, [cascadesQuery.data]);
+  // Which cascade already claims a node, v4 positions and directions included
+  // (cascadeClaims, A-139).
+  const claimedBy = useMemo(() => cascadeClaims(cascadesQuery.data?.cascades ?? []), [cascadesQuery.data]);
 
   const positionCount = pools.length + 1;
 

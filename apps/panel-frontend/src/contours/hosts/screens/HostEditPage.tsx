@@ -74,7 +74,7 @@ import {
   getProfileFormats,
   hostFormatFacts,
 } from '@/lib/domain/formats';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
 import { portInHopRange } from '@/lib/domain/portHopping';
 import { type Fingerprint } from '@/lib/domain/protocols';
@@ -118,7 +118,7 @@ export function HostEditPage() {
 
   const hostsQuery = useQuery({ queryKey: ['hosts'], queryFn: () => listHosts() });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   // Four aggregates over the request history, so it is asked once per host and
   // never for a host that does not exist yet.
   const freshnessQuery = useQuery({

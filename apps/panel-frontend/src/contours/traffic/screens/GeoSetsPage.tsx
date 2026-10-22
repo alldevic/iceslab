@@ -21,7 +21,7 @@ import {
   type GeoSet,
   type GeoSetKind,
 } from '@/lib/domain/geoSets';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import {
   geoAttention,
@@ -82,7 +82,7 @@ export function GeoSetsPage() {
   // Что требует внимания: битые наборы и ноды, у которых гео отстаёт. Ноды
   // считаются по факту карточек (nodeGeoFacts), тем же ключом кэша, что у
   // списка нод. Отдельного ящика внимания в панели пока нет.
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const geoKnown = nodeFieldKnown(nodesQuery.data, 'geo');
   const nodesBehind = (nodesQuery.data?.nodes ?? []).filter((n) => nodeGeoFacts(n, geoKnown)?.state === 'behind').length;
   const attention = facts.state === 'list' ? geoAttention(facts.sets, nodesBehind) : null;

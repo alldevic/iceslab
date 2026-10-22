@@ -30,7 +30,7 @@ import { deployDiff } from '@/contours/profiles/lib/deployDiff';
 import { plainDefaultPort } from '@/contours/profiles/lib/plainSubprotocol';
 import { hostHiddenFacts, listHosts, type Host } from '@/lib/domain/hosts';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
-import { listNodes, type Node as PanelNode } from '@/lib/domain/nodes';
+import { listAllNodes, type Node as PanelNode } from '@/lib/domain/nodes';
 import { nodeStatusText } from '@/lib/domain/nodeStatusText';
 import {
   engineCoreWord,
@@ -78,7 +78,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
     // but a different queryFn shape. Namespacing avoids the two clobbering each
     // other's cache.
     queryKey: ['nodes', 'deploy-picker'],
-    queryFn: () => listNodes({ limit: 100 }),
+    queryFn: () => listAllNodes(),
     enabled: opened,
   });
 
