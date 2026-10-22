@@ -1,4 +1,5 @@
 import { prisma } from '../../src/prisma.js';
+import { redis } from '../../src/lib/infra/redis.js';
 import { _resetBindingsCacheForTest } from '../../src/modules/subscription/subscription.bindings-cache.js';
 import { invalidateSubscriptionSettingsCache } from '../../src/modules/settings/settings.service.js';
 
@@ -103,6 +104,11 @@ export async function cleanDatabase(): Promise<void> {
   // minute, so truncating app_settings above would otherwise leave the previous
   // file's values being served from memory for the rest of the run.
   invalidateSubscriptionSettingsCache();
+  // The security gate counts per IP in Redis (`sec:sub-ip:*`, `sec:blacklist:*`),
+  // and every test asks from 127.0.0.1: one file's subscription fetches used up
+  // the next file's minute and it got 429. The limit stays real, tests stay apart.
+  const sec = await redis.keys('sec:*');
+  if (sec.length) await redis.del(...sec);
   // Re-seed the "All" squad, slice 26 wired user-create to default to it,
   // so an empty groups table makes every user-create fail with FK violation.
   // The seed migration installs this row in production; tests truncate it
