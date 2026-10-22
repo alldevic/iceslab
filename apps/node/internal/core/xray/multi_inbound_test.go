@@ -134,14 +134,24 @@ func TestInboundTagIsStableAcrossPushes(t *testing.T) {
 
 // Two inbounds on one port is a configuration error worth naming: xray would
 // otherwise reject the whole file with a parser message that points nowhere.
+// The clashing inbound is refused on its own push and not kept (A-130), so the
+// one already serving stays renderable.
 func TestPortClashIsRefusedByName(t *testing.T) {
 	a := multiAdapter(t)
 	_ = a.ApplyInbound(443, inboundWire(t, "aaaaaaaa-1111-4000-8000-000000000001", 443))
-	_ = a.ApplyInbound(443, inboundWire(t, "bbbbbbbb-2222-4000-8000-000000000002", 443))
-
-	_, err := renderMultiConfig(currentInbounds(a), nil, nil, 8080, nil, nil)
+	err := a.ApplyInbound(443, inboundWire(t, "bbbbbbbb-2222-4000-8000-000000000002", 443))
 	if err == nil {
 		t.Fatal("expected a port clash to be refused")
+	}
+
+	if _, err := renderMultiConfig(currentInbounds(a), nil, nil, 8080, nil, nil); err != nil {
+		t.Fatalf("the refused inbound stayed held and breaks the render: %v", err)
+	}
+	a.mu.Lock()
+	held := len(a.inbounds)
+	a.mu.Unlock()
+	if held != 1 {
+		t.Fatalf("adapter holds %d inbounds after a refused one, want 1", held)
 	}
 }
 

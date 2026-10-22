@@ -187,12 +187,22 @@ func (a *Adapter) ApplyPolicy(raw json.RawMessage) error {
 		a.mu.Unlock()
 		return nil
 	}
+	prev := a.policy
 	a.policy = parsed.Rules
 	count := len(parsed.Rules)
 	a.mu.Unlock()
 
 	a.logger.Info("xray ApplyPolicy: policy changed, regenerating", "rules", count)
-	return a.regenerateAndRestart(context.Background())
+	err := a.regenerateAndRestart(context.Background())
+	if isRefused(err) {
+		// Same rule as ApplyInbound (A-130): what the core refused is not kept.
+		a.mu.Lock()
+		if policyEqual(a.policy, parsed.Rules) {
+			a.policy = prev
+		}
+		a.mu.Unlock()
+	}
+	return err
 }
 
 // ApplyDns implements core.DnsReceiver: store the node's resolver and re-render
@@ -232,11 +242,21 @@ func (a *Adapter) ApplyDns(raw json.RawMessage) error {
 		a.mu.Unlock()
 		return nil
 	}
+	prev := a.dns
 	a.dns = parsed
 	a.mu.Unlock()
 
 	a.logger.Info("xray ApplyDns: resolver changed, regenerating", "named", parsed != nil)
-	return a.regenerateAndRestart(context.Background())
+	err := a.regenerateAndRestart(context.Background())
+	if isRefused(err) {
+		// Same rule as ApplyInbound (A-130): what the core refused is not kept.
+		a.mu.Lock()
+		if a.dns == parsed {
+			a.dns = prev
+		}
+		a.mu.Unlock()
+	}
+	return err
 }
 
 // ApplyCascade implements core.CascadeReceiver: take this node's hop in a
@@ -274,20 +294,37 @@ func (a *Adapter) ApplyCascade(fragments json.RawMessage) error {
 			a.mu.Unlock()
 			return nil
 		}
+		prev := a.cascade
 		a.cascade = nil
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyCascade: the chain process holds the cascade, dropping the legs from xray")
-		return a.regenerateAndRestart(context.Background())
+		return a.revertRefusedCascade(a.regenerateAndRestart(context.Background()), nil, prev)
 	}
 	if parsed == nil || cascadeEqual(a.cascade, parsed) {
 		a.mu.Unlock()
 		return nil
 	}
+	prev := a.cascade
 	a.cascade = parsed
 	a.mu.Unlock()
 
 	a.logger.Info("xray ApplyCascade: cascade changed, regenerating")
-	return a.regenerateAndRestart(context.Background())
+	return a.revertRefusedCascade(a.regenerateAndRestart(context.Background()), parsed, prev)
+}
+
+// revertRefusedCascade: same rule as ApplyInbound (A-130), what the core
+// refused is not kept. `stored` is what the call put in a.cascade; a newer
+// value there is not ours to undo.
+func (a *Adapter) revertRefusedCascade(err error, stored, prev *CascadeFragments) error {
+	if !isRefused(err) {
+		return err
+	}
+	a.mu.Lock()
+	if a.cascade == stored {
+		a.cascade = prev
+	}
+	a.mu.Unlock()
+	return err
 }
 
 // SetChainHolds implements core.ChainAware; the server calls it before
@@ -770,19 +807,14 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, change userChange) bool {
 		return false
 	}
 
-	// Keep the on-disk config current so a later restart has the same user set
-	// (and the same cascade fragments). Rendered from the full inbound set, the
-	// same way regenerateAndRestart does it: rendering the single install-time
-	// inbound here would overwrite a multi-inbound config on disk with one that
-	// serves a fraction of it.
+	// The on-disk config follows the change so a later restart has the same user
+	// set (and the same cascade fragments). Rendered from the full inbound set,
+	// the same way regenerateAndRestart does it: rendering the single
+	// install-time inbound here would overwrite a multi-inbound config on disk
+	// with one that serves a fraction of it. Written at the end, see there.
 	blob, err := renderMultiConfig(inbounds, clients, cascade, inbounds[0].withDefaults().ApiPort, policy, dns)
 	if err != nil {
 		return false
-	}
-	if cfgPath != "" {
-		if err := writeConfig(cfgPath, blob); err != nil {
-			return false
-		}
 	}
 
 	// The api port is install-time identity and identical across inbounds; the
@@ -807,6 +839,18 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, change userChange) bool {
 		after := len(plainAccounts(clients))
 		before := accountsBeforeChange(after, change)
 		if !a.refreshPlainInbounds(cctx, run, binPath, server, plain, clients, before > 0, after > 0) {
+			return false
+		}
+	}
+	// Only now, with the running core holding exactly this state. This blob is
+	// never put through `xray -test`, and written ahead of the live call it went
+	// to disk even when the call then failed: the next supervisor restart (a
+	// crash, the memory watchdog) loaded it, and a config the core refuses took
+	// the node dark (A-130, 22.10). Written after, it is what the core already
+	// runs. A failed write falls back to the restart, which validates and writes.
+	if cfgPath != "" {
+		if err := writeConfig(cfgPath, blob); err != nil {
+			a.logger.Warn("xray: user changed live, config write failed; falling back to restart", "err", err)
 			return false
 		}
 	}
@@ -1296,10 +1340,11 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// push look like a change and restart the core for nothing.
 	fromNode := a.cascadeFromNode
 	unchanged := fromNode || cascadeEqual(a.cascade, wire.Cascade)
+	prev, had := a.inbounds[key]
+	prevLegacy, prevCascade := a.cfg.Inbound, a.cascade
 	if key == "" {
 		unchanged = unchanged && inboundEqual(a.cfg.Inbound, newInbound)
 	} else {
-		prev, had := a.inbounds[key]
 		unchanged = unchanged && had && inboundEqual(prev, newInbound)
 	}
 	if unchanged {
@@ -1327,7 +1372,30 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// Use background context for the restart, the request that triggered
 	// this call may have a short deadline and we want xray to keep coming
 	// back up even if the caller times out.
-	return a.regenerateAndRestart(context.Background())
+	err := a.regenerateAndRestart(context.Background())
+	if !isRefused(err) {
+		return err
+	}
+	// The core never saw it, so memory goes back to what the core runs. Only
+	// what this call put there: a newer push for the same inbound is not ours
+	// to undo.
+	a.mu.Lock()
+	if key == "" {
+		if inboundEqual(a.cfg.Inbound, newInbound) {
+			a.cfg.Inbound = prevLegacy
+		}
+	} else if cur, ok := a.inbounds[key]; ok && inboundEqual(cur, newInbound) {
+		if had {
+			a.inbounds[key] = prev
+		} else {
+			delete(a.inbounds, key)
+		}
+	}
+	if !fromNode && a.cascade == wire.Cascade {
+		a.cascade = prevCascade
+	}
+	a.mu.Unlock()
+	return err
 }
 
 func inboundEqual(a, b InboundConfig) bool {
@@ -1438,6 +1506,25 @@ func rawSliceEqual(a, b []json.RawMessage) bool {
 	return true
 }
 
+// refusedError is a regenerateAndRestart that stopped before touching anything:
+// the render or `xray -test` said no, so the disk and the running process still
+// hold the last config the core accepted. The caller that stored the change
+// takes it back on this error and only on this one; a failure after the write
+// (a process that would not start) leaves the new config on disk, and memory
+// has to keep matching it.
+//
+// A-130, 22.10: the inbound -test refused stayed in the map, and every later
+// adu/rmu named its tag, which the running core does not have.
+type refusedError struct{ err error }
+
+func (e *refusedError) Error() string { return e.err.Error() }
+func (e *refusedError) Unwrap() error { return e.err }
+
+func isRefused(err error) bool {
+	var r *refusedError
+	return errors.As(err, &r)
+}
+
 // regenerateAndRestart renders the current users-map to ConfigPath and
 // (re)starts the xray subprocess. Bug #1: it must NOT be called with a.mu
 // held. restartMu serializes restarts; a.mu is taken only for the fast
@@ -1488,7 +1575,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	}
 	blob, err := renderMultiConfig(pushed, clients, cascade, inbound.withDefaults().ApiPort, policy, dns)
 	if err != nil {
-		return fmt.Errorf("render xray config: %w", err)
+		return &refusedError{fmt.Errorf("render xray config: %w", err)}
 	}
 
 	// Ask the core before replacing anything. A config it rejects is refused
@@ -1499,7 +1586,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	if err := validateConfig(ctx, run, binPath, blob); err != nil {
 		a.logger.Error("xray refused the new config, keeping the running one",
 			"err", err, "inbounds", len(pushed), "users", len(clients))
-		return fmt.Errorf("validate xray config: %w", err)
+		return &refusedError{fmt.Errorf("validate xray config: %w", err)}
 	}
 
 	if cfgPath != "" {
