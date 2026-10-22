@@ -107,7 +107,9 @@ func acceptedPush(prev, req dto.ApplyInboundsRequest, o pushOutcome) dto.ApplyIn
 	}
 	switch {
 	case o.chainRefused:
-		out.Chain = prev.Chain
+		// What the chain runs on and the cores were drawn to, so a restart
+		// rebuilds that same pair.
+		out.Chain = o.chainInForce
 	case o.userCoreRefused && req.Chain != nil:
 		// The chain process took the new block; the cores were told nothing and
 		// kept the hand-off they had.

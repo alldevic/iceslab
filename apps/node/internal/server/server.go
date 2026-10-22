@@ -836,8 +836,11 @@ type pushOutcome struct {
 	// refused holds indexes into req.Inbounds whose adapter returned an error.
 	refused map[int]bool
 	// chainRefused: the chain block did not apply (or this agent runs no
-	// chain), so the chain process kept what it had.
+	// chain). chainInForce is then the block the chain runs on and the cores
+	// were drawn to: the previously accepted one, or the refused one when
+	// nothing was accepted before (it fails closed).
 	chainRefused bool
+	chainInForce *dto.NodeChain
 	// userCoreRefused: the chain's userCore was malformed and no core was told
 	// about a cascade, so every core kept what it had.
 	userCoreRefused bool
@@ -926,6 +929,9 @@ func (s *Server) applyPushOutcome(
 	// that knows it must therefore IGNORE the fragments: two processes drawing
 	// one chain fight over the link port, and the loser's users go nowhere.
 	chainInForce := false
+	// The block whose hand-off the user's core is drawn to: the pushed one,
+	// unless the chain refused it while an earlier one still runs.
+	handoffBlock := req.Chain
 	if s.cfg.Chain != nil {
 		if err := s.cfg.Chain.Apply(ctx, req.Chain); err != nil {
 			// Not fatal to the push: the inbounds below are what keeps users
@@ -936,6 +942,17 @@ func (s *Server) applyPushOutcome(
 			o.chainRefused = true
 			failed++
 			reasons = append(reasons, fmt.Sprintf("chain: %s", err.Error()))
+			// 22.10: the cores were drawn to the REFUSED block's socks
+			// ports while the chain process still ran the previous block on its
+			// own, so a cascade entry sent its users to a loopback port nobody
+			// listened on. The process that runs is the one the cores follow.
+			// With nothing accepted before, the refused block stays: its empty
+			// port fails closed, where no hand-off at all would send users out
+			// of the entry country.
+			if accepted := s.cfg.Chain.Accepted(); accepted != nil {
+				handoffBlock = accepted
+			}
+			o.chainInForce = handoffBlock
 		}
 		chainInForce = s.cfg.Chain.Active()
 	} else if req.Chain != nil {
@@ -943,6 +960,7 @@ func (s *Server) applyPushOutcome(
 		// own process, and nothing here does.
 		s.logger.Error("applyInbounds: a chain block arrived but this agent runs no chain manager")
 		o.chainRefused = true
+		o.chainInForce = req.Chain
 		failed++
 		reasons = append(reasons, "chain: this agent cannot run a chain process")
 	}
@@ -964,13 +982,13 @@ func (s *Server) applyPushOutcome(
 		if req.Cascade != nil {
 			s.cfg.Chain.NoteCascadeIgnored()
 		}
-		if req.Chain != nil && req.Chain.UserCore != nil {
+		if handoffBlock != nil && handoffBlock.UserCore != nil {
 			// One shape per engine since phase 6: xray gets its fragments, a
 			// hysteria entry gets the socks hand-off. A block whose halves do not
 			// match its engine is refused OUT LOUD and delivered to nobody: handed
 			// on as "nothing", a hysteria entry would render with no outbounds and
 			// send every user out of the entry country with a working connection.
-			payload, err := req.Chain.UserCore.Payload()
+			payload, err := handoffBlock.UserCore.Payload()
 			if err != nil {
 				s.logger.Error("applyInbounds: chain userCore refused, every core keeps what it had", "err", err)
 				failed++
@@ -979,7 +997,7 @@ func (s *Server) applyPushOutcome(
 				o.userCoreRefused = true
 			} else {
 				cascadeFragments = payload
-				router = string(req.Chain.UserCore.Engine)
+				router = string(handoffBlock.UserCore.Engine)
 			}
 		}
 	} else if req.Cascade != nil {

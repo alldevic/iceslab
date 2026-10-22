@@ -115,6 +115,9 @@ type Manager struct {
 	// points at (userCore.tproxy / tproxy3), 0 when it has none. Read off the
 	// wire like the socks ports, not off a constant here.
 	tproxyPort int
+	// accepted is the last block put into force (its config written for the
+	// process), nil when none is. A refused block does not replace it.
+	accepted *dto.NodeChain
 	// held says whether a chain block has ever been accepted and not since
 	// withdrawn. It is what makes the healthcheck able to distinguish "no chain
 	// here" from "the chain is down", which the panel needs: reading absence as
@@ -168,6 +171,16 @@ func (m *Manager) Active() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.held
+}
+
+// Accepted is the block the chain runs on: the last one whose config was
+// written for the process, nil when none is in force. After a refused push it
+// is still the previous block, and the user's core has to be drawn to ITS
+// hand-off, not to the refused one's.
+func (m *Manager) Accepted() *dto.NodeChain {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.accepted
 }
 
 // NoteCascadeIgnored writes the one line the incident review starts from, and
@@ -327,6 +340,8 @@ func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
 	// exact minutes the node is trying to come back.
 	m.mu.Lock()
 	old := m.proc
+	accepted := *block
+	m.accepted = &accepted
 	m.socks = append([]dto.ChainSocks(nil), block.Socks...)
 	m.tproxyPort = tproxyPortOf(block)
 	m.held = true
@@ -382,6 +397,7 @@ func (m *Manager) stop(why string) error {
 	proc := m.proc
 	was := m.held
 	m.proc = nil
+	m.accepted = nil
 	m.socks = nil
 	m.tproxyPort = 0
 	m.held = false

@@ -154,7 +154,7 @@ func TestAcceptedPushKeepsThePreviousChainPartsThatWereRefused(t *testing.T) {
 	prev := dto.ApplyInboundsRequest{Chain: oldChain}
 	req := dto.ApplyInboundsRequest{Chain: newChain}
 
-	out := acceptedPush(prev, req, pushOutcome{chainRefused: true})
+	out := acceptedPush(prev, req, pushOutcome{chainRefused: true, chainInForce: oldChain})
 	if out.Chain != oldChain {
 		t.Fatalf("a refused chain was stored over the previous one: %+v", out.Chain)
 	}
