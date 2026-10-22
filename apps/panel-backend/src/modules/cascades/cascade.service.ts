@@ -1653,6 +1653,38 @@ async function positionsForSave(
 }
 
 /**
+ * The stored v4 topology in the shape a save sends, for the gates of a save
+ * that switches the cascade on without sending one (A-126). Null for a
+ * cascade with no v4 rows: the legacy hops are checked from the hop rows.
+ *
+ * A direction goes as its id alone: resolveDirections fills everything absent
+ * from the stored row, so the gates see exactly what is stored. A position
+ * carries its pool and cells, which positionsForSave does not fill in.
+ */
+async function storedTopologyForGates(
+  cascadeId: string,
+): Promise<{ positions: CascadePositionInput[]; directions: CascadeDirectionInput[] } | null> {
+  const [positions, directions] = await Promise.all([
+    prisma.cascadePosition.findMany({
+      where: { cascadeId },
+      orderBy: { position: 'asc' },
+      select: { position: true, entryProtocol: true, linkProtocol: true, nodes: { select: { nodeId: true } } },
+    }),
+    prisma.cascadeDirection.findMany({ where: { cascadeId }, select: { id: true } }),
+  ]);
+  if (positions.length === 0 && directions.length === 0) return null;
+  return {
+    positions: positions.map((p) => ({
+      position: p.position,
+      nodeIds: p.nodes.map((n) => n.nodeId),
+      ...(p.entryProtocol ? { entryProtocol: p.entryProtocol as CascadePositionInput['entryProtocol'] } : {}),
+      ...(p.linkProtocol ? { linkProtocol: p.linkProtocol as CascadePositionInput['linkProtocol'] } : {}),
+    })),
+    directions: directions.map((d) => ({ id: d.id })),
+  };
+}
+
+/**
  * Fold a v4 payload into hops, or return null when the shape cannot be held by
  * the old model (a pool, or transits with several directions).
  *
@@ -2198,6 +2230,25 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   // would judge a leg this save is not going to build. See direction-merge.ts.
   const directions = await directionsForSave(id, input.directions);
   const positions = await positionsForSave(id, input.positions);
+  /**
+   * What the topology gates below are asked about. The payload's topology when
+   * it carries one; the STORED one when this save switches the cascade on and
+   * carries none.
+   *
+   * A-126. The toggle on the node screen sends `{ enabled: true }` alone, so
+   * `positions` and `directions` above are undefined and every gate had
+   * nothing to check. A switched-off cascade could hold a node deleted since
+   * (deleting was allowed under a disabled cascade), the toggle switched it on,
+   * and the renderer then refused every push to its entries: the 2026-09-22
+   * incident through a door the guard on deletion did not cover.
+   *
+   * Gates only. What is written stays what the payload said, so a toggle
+   * still rewrites no hop, leg or credential.
+   */
+  const switchingOn = input.enabled === true && !existing.enabled;
+  const stored = switchingOn && !positions && !directions ? await storedTopologyForGates(id) : null;
+  const gateDirections = directions ?? (stored ? await directionsForSave(id, stored.directions) : undefined);
+  const gatePositions = positions ?? (stored ? await positionsForSave(id, stored.positions) : undefined);
 
   // Same fold as create. A v4 payload also decides the mode, since the shape
   // now says it: one direction is a chain, several are a balancer.
@@ -2220,9 +2271,9 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
    *
    * Both shapes are asked about, because both can be sent.
    */
-  await assertNodesExistNamed(nodeRefsOfTopology(positions, directions));
+  await assertNodesExistNamed(nodeRefsOfTopology(gatePositions, gateDirections));
   if (hops) await assertNodesExist(hops.map((h) => h.nodeId));
-  await assertDirectionOutbounds(positions, directions);
+  await assertDirectionOutbounds(gatePositions, gateDirections);
   // T7: gate an effectively-enabled balancer on the entry node's xray version
   // (covers both enabling an existing cascade and swapping in a new entry hop).
   const willBeEnabled = input.enabled ?? existing.enabled;
@@ -2251,13 +2302,13 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   // a QUIC cell for a direction that has been served over vless since C3 is one
   // dropdown, and the node it lands on may be an xray-only machine nobody has
   // touched since.
-  await assertNodesCarryCells(positions, directions);
+  await assertNodesCarryCells(gatePositions, gateDirections);
   // Phase 8: a leg riding AWG needs AmneziaWG on both of its ends.
-  await assertUnderlayOnNodes(positions, directions);
+  await assertUnderlayOnNodes(gatePositions, gateDirections);
   // Phase 6, in this order. First whether the entry CAN chain, because that is
   // a refusal no confirmation lifts; asking the operator to confirm a switch
   // that is then refused anyway would be a question with no useful answer.
-  await assertEntryCanChain(positions);
+  await assertEntryCanChain(gatePositions);
   await assertEntryChangeConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryNodesDropConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryPolicyExists(input.entryPolicyId);

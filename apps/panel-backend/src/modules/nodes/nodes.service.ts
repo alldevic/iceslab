@@ -74,12 +74,14 @@ export class NodeInUseByCascadeError extends Error {
     public cascades: string[],
   ) {
     super(
-      `Node "${nodeName}" is part of the enabled cascade${cascades.length > 1 ? 's' : ''} ` +
+      `Node "${nodeName}" is part of the cascade${cascades.length > 1 ? 's' : ''} ` +
         `${cascades.map((c) => `"${c}"`).join(', ')}. Deleting it would leave ${
           cascades.length > 1 ? 'those chains' : 'that chain'
         } pointing at a node that is gone, and the panel would stop pushing config to ` +
-        `every node in ${cascades.length > 1 ? 'them' : 'it'}. Take the cascade down, or move ` +
-        `the way out to another node, and then delete this one.`,
+        `every node in ${cascades.length > 1 ? 'them' : 'it'}, now or the day ${
+          cascades.length > 1 ? 'they are' : 'it is'
+        } switched on. Move this node out of the cascade, or delete the cascade, and then ` +
+        `delete this one.`,
     );
     this.name = 'NodeInUseByCascadeError';
   }
@@ -566,14 +568,19 @@ export async function deleteNode(id: string): Promise<void> {
    * all, so the two RU entries stopped receiving config, and nobody found out
    * until their cores were restarted a day later and came up empty.
    *
-   * Refused rather than cascaded-deleted, and only for ENABLED cascades: taking
-   * somebody's live chain down as a side effect of retiring one VPS is a bigger
-   * decision than the click that triggered it. A disabled cascade is not
-   * serving anyone, so the old behaviour stands there.
+   * Refused rather than cascaded-deleted: taking somebody's chain down as a
+   * side effect of retiring one VPS is a bigger decision than the click that
+   * triggered it.
+   *
+   * ⚠ For a SWITCHED-OFF cascade too (A-126, rest of A-023). It used to be
+   * allowed there, as "serving nobody", but the delete below drops only
+   * cascades the node is a legacy hop of, so a v4 cascade kept its positions
+   * and directions pointing at the deleted row, and switching it back on
+   * repeated 2026-09-22 a step later. A disabled cascade is still a plan that
+   * one toggle puts live.
    */
   const live = await prisma.cascade.findMany({
     where: {
-      enabled: true,
       OR: [
         { hops: { some: { nodeId: id } } },
         { positions: { some: { nodes: { some: { nodeId: id } } } } },
@@ -586,46 +593,23 @@ export async function deleteNode(id: string): Promise<void> {
     throw new NodeInUseByCascadeError(node.name, live.map((c) => c.name));
   }
 
-  // A cascade is a chain: drop one hop and it can't route. So deleting a node
-  // that's a hop deletes the whole cascade(s) it belongs to. We collect the
-  // OTHER members first to re-push them afterwards (they go back to plain
-  // nodes). Without this the hops dangle, pointing at a soft-deleted node that
-  // the cascade view renders as UNKNOWN forever.
-  const affectedCascades = await prisma.cascade.findMany({
-    where: { hops: { some: { nodeId: id } } },
-    select: { id: true, name: true, hops: { select: { nodeId: true } } },
-  });
-  const cascadeIds = affectedCascades.map((c) => c.id);
-  const survivorNodeIds = [
-    ...new Set(affectedCascades.flatMap((c) => c.hops.map((h) => h.nodeId))),
-  ].filter((nid) => nid !== id);
-
-  // One transaction: drop the cascades (their hops go via FK onDelete: Cascade),
-  // hard-delete this node's profile bindings (leaving them made a re-install
-  // look double-bound), and soft-delete the node row (kept for audit history).
+  // The guard above refuses every cascade the node is in, legacy hops
+  // included, so there is no cascade left to drop with it: the old delete of
+  // the hop's whole cascade and the re-push of its survivors never runs now.
+  //
+  // One transaction: hard-delete this node's profile bindings (leaving them
+  // made a re-install look double-bound), and soft-delete the node row (kept
+  // for audit history).
   await prisma.$transaction([
-    ...(cascadeIds.length > 0
-      ? [prisma.cascade.deleteMany({ where: { id: { in: cascadeIds } } })]
-      : []),
     prisma.profileNodeBinding.deleteMany({ where: { nodeId: id } }),
     prisma.node.update({ where: { id }, data: { deletedAt: new Date() } }),
   ]);
 
-  // Stop serving this node's endpoints now. cascade.changed below fires only
-  // when the node happened to be a hop, so an ordinary delete needs its own
-  // signal or the subscription keeps advertising a node that is gone.
+  // Stop serving this node's endpoints now, or the subscription keeps
+  // advertising a node that is gone.
   eventBus.emit('node.deleted', { nodeId: id });
-
-  // Re-render the surviving cascade members as plain nodes (drop link fragments).
-  if (survivorNodeIds.length > 0) {
-    eventBus.emit('cascade.changed', { nodeIds: survivorNodeIds });
-  }
 
   notifyTelegramAsync(
     `🗑 *Node deleted*\nname: \`${escapeMarkdown(node.name)}\`\naddress: \`${escapeMarkdown(node.address)}\``,
   );
-  if (affectedCascades.length > 0) {
-    const names = affectedCascades.map((c) => `\`${escapeMarkdown(c.name)}\``).join(', ');
-    notifyTelegramAsync(`🔗 *Cascade removed* (member node deleted): ${names}`);
-  }
 }

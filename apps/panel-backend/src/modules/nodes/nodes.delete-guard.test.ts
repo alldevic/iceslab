@@ -114,18 +114,61 @@ describe('deleting a node a cascade runs through', () => {
     expect(body.cascades.sort()).toEqual(['ru-a', 'ru-b']);
   });
 
-  it('allows it when the cascade is switched OFF', async () => {
-    // Disabled is not serving anyone, so the old behaviour stands: the delete
-    // goes through and takes the chain's legacy hops with it.
+  it('refuses when the cascade is switched OFF too (A-126)', async () => {
+    // It was allowed, as "serving nobody", and the v4 rows kept pointing at
+    // the deleted node; one toggle later the entries got no config at all.
     const entry = await makeNode('ru-01');
     const nl = await makeNode('nl-exit');
     const se = await makeNode('se-exit');
     await makeCascade('ru', entry, [nl, se], false);
 
     const res = await del(nl);
-    expect(res.statusCode, res.body).toBe(204);
-    const gone = await prisma.node.findUnique({ where: { id: nl } });
-    expect(gone?.deletedAt).not.toBeNull();
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body).cascades).toEqual(['ru']);
+    const still = await prisma.node.findUnique({ where: { id: nl } });
+    expect(still?.deletedAt).toBeNull();
+  });
+
+  it('a switched-off cascade that already holds a deleted node is not switched on by the toggle', async () => {
+    // The state a panel can already be in: a node deleted under a disabled
+    // cascade before the guard above. The toggle sends `enabled` alone.
+    const entry = await makeNode('ru-01');
+    const nl = await makeNode('nl-exit');
+    const se = await makeNode('se-exit');
+    await makeCascade('ru', entry, [nl, se], false);
+    await prisma.node.update({ where: { id: nl }, data: { deletedAt: new Date() } });
+    const cascade = await prisma.cascade.findFirstOrThrow({ where: { name: 'ru' } });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/cascades/${cascade.id}`,
+      headers: auth(),
+      payload: { enabled: true },
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.body).toContain(nl);
+    expect((await prisma.cascade.findUniqueOrThrow({ where: { id: cascade.id } })).enabled).toBe(false);
+  });
+
+  it('the toggle still switches on a sound cascade, and rewrites none of its legs', async () => {
+    const entry = await makeNode('ru-01');
+    const nl = await makeNode('nl-exit');
+    const se = await makeNode('se-exit');
+    await makeCascade('ru', entry, [nl, se], false);
+    const cascade = await prisma.cascade.findFirstOrThrow({ where: { name: 'ru' } });
+    const linksBefore = await prisma.cascadeLink.findMany({ where: { cascadeId: cascade.id }, orderBy: { id: 'asc' } });
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/cascades/${cascade.id}`,
+      headers: auth(),
+      payload: { enabled: true },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await prisma.cascade.findUniqueOrThrow({ where: { id: cascade.id } })).enabled).toBe(true);
+    expect(await prisma.cascadeLink.findMany({ where: { cascadeId: cascade.id }, orderBy: { id: 'asc' } })).toEqual(
+      linksBefore,
+    );
   });
 
   it('allows it when no cascade touches the node', async () => {
