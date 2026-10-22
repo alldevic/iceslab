@@ -39,6 +39,7 @@ import {
   type Region,
 } from '@/lib/domain/nodes';
 import { disable2fa, enable2fa, get2faStatus, setup2fa, type TotpSetup } from '@/lib/auth/api';
+import { isTotpRefusal } from '@/contours/settings/lib/totpRefusal';
 import {
   getRecipeSources,
   addRecipeSource,
@@ -824,15 +825,24 @@ function TwoFactorCard() {
 
   const [setupData, setSetupData] = useState<TotpSetup | null>(null);
   const [code, setCode] = useState('');
+  // A wrong code is said at the field it came from (A-169); editing the code
+  // takes the words away, the next try earns them again.
+  const [codeWrong, setCodeWrong] = useState(false);
+  const editCode = (value: string) => {
+    setCode(value.replace(/\D/g, ''));
+    setCodeWrong(false);
+  };
 
   const fail = (err: unknown) =>
     notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
+  const failCode = (err: unknown) => (isTotpRefusal(err) ? setCodeWrong(true) : fail(err));
 
   const setupMutation = useMutation({
     mutationFn: setup2fa,
     onSuccess: (d) => {
       setSetupData(d);
       setCode('');
+      setCodeWrong(false);
     },
     onError: fail,
   });
@@ -841,20 +851,23 @@ function TwoFactorCard() {
     onSuccess: () => {
       setSetupData(null);
       setCode('');
+      setCodeWrong(false);
       qc.invalidateQueries({ queryKey: ['2fa-status'] });
       notifications.show({ color: 'green', message: t('settings.twofa.enabledNotice') });
     },
-    onError: fail,
+    onError: failCode,
   });
   const disableMutation = useMutation({
     mutationFn: () => disable2fa(code),
     onSuccess: () => {
       setCode('');
+      setCodeWrong(false);
       qc.invalidateQueries({ queryKey: ['2fa-status'] });
       notifications.show({ color: 'green', message: t('settings.twofa.disabledNotice') });
     },
-    onError: fail,
+    onError: failCode,
   });
+  const codeError = codeWrong ? t('settings.twofa.codeWrong') : undefined;
 
   const codeValid = /^\d{6}$/.test(code);
 
@@ -923,14 +936,15 @@ function TwoFactorCard() {
       {enabled ? (
         <Stack gap={6}>
           <FieldLabel>{t('settings.twofa.codeLabel')}</FieldLabel>
-          <Box style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+          <Box style={{ display: 'flex', alignItems: 'flex-start', gap: 12, width: '100%' }}>
             <TextInput
               style={{ flex: 1, minWidth: 0 }}
               placeholder="000000"
               inputMode="numeric"
               maxLength={6}
               value={code}
-              onChange={(e) => setCode(e.currentTarget.value.replace(/\D/g, ''))}
+              error={codeError}
+              onChange={(e) => editCode(e.currentTarget.value)}
               styles={{ input: { fontFamily: MONO, letterSpacing: '0.3em' } }}
             />
             <Action
@@ -954,7 +968,8 @@ function TwoFactorCard() {
               inputMode="numeric"
               maxLength={6}
               value={code}
-              onChange={(e) => setCode(e.currentTarget.value.replace(/\D/g, ''))}
+              error={codeError}
+              onChange={(e) => editCode(e.currentTarget.value)}
               styles={{ input: { fontFamily: MONO, letterSpacing: '0.3em' } }}
             />
           </Stack>

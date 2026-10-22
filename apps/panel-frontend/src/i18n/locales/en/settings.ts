@@ -22,6 +22,7 @@ export const settings = {
       disable: 'Disable 2FA',
       confirm: 'Confirm',
       codeLabel: '6-digit code',
+      codeWrong: 'The code did not match. Enter the current code from the authenticator; if that fails, check the clock on the device',
       secretLabel: 'Secret',
       uriLabel: 'otpauth URI',
       scanHint: 'Add this secret to your authenticator app (scan the otpauth URI, or enter the secret manually), then enter the current code to confirm.',
