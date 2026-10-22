@@ -292,40 +292,76 @@ jobs:
 
       # Phase 9: the panel converts v2fly geo lists into the chain's rule-sets
       # itself, and geo-dat.test.ts compares that, key by key, with sing-box's
-      # own export of the same release (sing-geosite is built from the same
-      # dlc.dat). The pair is pinned by release tag and sha256; the dlc pin is
-      # GEO_BUILTIN in packages/shared/src/geo.ts and the test holds this step
-      # to it. Cached under a key made of both sha256, so a run downloads them
-      # only when a pin moves.
+      # own export of a sing-geosite release built from the SAME dlc.dat.
       #
-      # Unlike the engine tests, the comparison does NOT skip itself in CI
-      # when the files are missing: it fails, on purpose.
-      - name: Cache the pinned geo lists (for the conversion test)
+      # ⚠ Not the product pin (GEO_BUILTIN in packages/shared/src/geo.ts).
+      # sing-geosite keeps only its recent releases: on 2026-10-22 the one
+      # matching the pin, 20260922112956, answered 404 and develop went red
+      # from 3dee885 for a reason no commit had touched. The test checks the
+      # CONVERTER, so any pair works as long as both files come from one dlc
+      # release: the freshest sing-geosite tag that v2fly also has a release
+      # for. The tag reaches the test as GEO_COMPARE_TAG, and with it set the
+      # test fails rather than skips when a file is missing.
+      - name: Pick the geo release pair (for the conversion test)
+        id: geo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags=""
+          for attempt in 1 2 3; do
+            if tags=$(gh api 'repos/SagerNet/sing-geosite/releases?per_page=20' --jq '.[].tag_name'); then break; fi
+            echo "sing-geosite release list failed (attempt ${attempt}/3)"
+            [ "$attempt" = 3 ] && exit 1
+            sleep $(( attempt * 5 ))
+          done
+          tag=""
+          for t in $tags; do
+            if gh api "repos/v2fly/domain-list-community/releases/tags/$t" --silent 2>/dev/null; then
+              tag="$t"
+              break
+            fi
+          done
+          if [ -z "$tag" ]; then
+            echo "::error::none of the last 20 sing-geosite releases has a domain-list-community release of the same tag"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "GEO_COMPARE_TAG=$tag" >> "$GITHUB_ENV"
+
+      # By tag: a run downloads only when upstream publishes a newer pair.
+      - name: Cache the geo release pair
         uses: actions/cache@v6
         with:
           path: /tmp/geo
-          key: geo-dlc-ccfd5caee2947964da989f6b94cc3c96f068cba198b163f3ac64def70a0addb5-sing-48cbdf0fea7467b9ceb1d347474a2f704747027ee9063fe1884f427de341c9e9
+          key: geo-pair-${{ steps.geo.outputs.tag }}
 
-      - name: Fetch the pinned geo lists
+      # No sha256 of ours to hold them to (the pair moves by design), so each
+      # file is checked against the .sha256sum its own release publishes.
+      - name: Fetch the geo release pair
+        env:
+          TAG: ${{ steps.geo.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/geo
+          cd /tmp/geo
           fetch() {
-            local url="$1" out="$2" sha="$3"
-            if ! echo "${sha}  ${out}" | sha256sum -c - >/dev/null 2>&1; then
-              for attempt in 1 2 3; do
-                if curl -fsSL --retry 2 --retry-delay 3 -o "$out" "$url"; then break; fi
-                echo "download failed: $url (attempt ${attempt}/3)"
-                [ "$attempt" = 3 ] && exit 1
-                sleep $(( attempt * 5 ))
-              done
+            local base="$1" file="$2"
+            if [ -f "$file" ] && [ -f "$file.sha256sum" ] && sha256sum -c "$file.sha256sum" >/dev/null 2>&1; then
+              return 0
             fi
-            echo "${sha}  ${out}" | sha256sum -c -
+            for attempt in 1 2 3; do
+              if curl -fsSL --retry 2 --retry-delay 3 -o "$file" "$base/$file" &&
+                 curl -fsSL --retry 2 --retry-delay 3 -o "$file.sha256sum" "$base/$file.sha256sum"
+              then break; fi
+              echo "download failed: $base/$file (attempt ${attempt}/3)"
+              [ "$attempt" = 3 ] && exit 1
+              sleep $(( attempt * 5 ))
+            done
+            sha256sum -c "$file.sha256sum"
           }
-          fetch https://github.com/v2fly/domain-list-community/releases/download/20260922112956/dlc.dat \
-            /tmp/geo/dlc.dat ccfd5caee2947964da989f6b94cc3c96f068cba198b163f3ac64def70a0addb5
-          fetch https://github.com/SagerNet/sing-geosite/releases/download/20260922112956/geosite.db \
-            /tmp/geo/geosite.db 48cbdf0fea7467b9ceb1d347474a2f704747027ee9063fe1884f427de341c9e9
+          fetch "https://github.com/v2fly/domain-list-community/releases/download/$TAG" dlc.dat
+          fetch "https://github.com/SagerNet/sing-geosite/releases/download/$TAG" geosite.db
           echo "GEO_DLC_DAT=/tmp/geo/dlc.dat" >> "$GITHUB_ENV"
           echo "SING_GEOSITE_DB=/tmp/geo/geosite.db" >> "$GITHUB_ENV"
 
@@ -360,7 +396,7 @@ jobs:
               echo "- tests: no report, so the suite did not get as far as running"
             fi
             echo "- config validity asked of the pinned engines: xray v26.3.27, sing-box v1.13.14"
-            echo "- geo rule-sets compared with sing-geosite 20260922112956"
+            echo "- geo rule-sets compared on the release pair ${{ steps.geo.outputs.tag || '-' }} (dlc.dat and sing-geosite of one tag)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # No Postgres, no Redis, no Prisma: the SPA never touches them. Its own job
