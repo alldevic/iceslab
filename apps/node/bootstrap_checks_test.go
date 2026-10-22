@@ -152,6 +152,33 @@ func TestTheAwgRemoveTakesTheStateWithTheConfigs(t *testing.T) {
 	}
 }
 
+// The mieru installer leaves mita IDLE: it enables the daemon the agent talks
+// to and nothing more. Per mieru's own docs, mita listens only after
+// `mita start`, on what `mita apply config` stored. A port open before the
+// panel's first push is the agent's to decide (A-153 took the install-time
+// 2012 out of the agent's Start), so the installer must never apply, start or
+// reload a config of its own. Comments may name the commands; code may not.
+func TestTheMieruInstallerLeavesMitaIdle(t *testing.T) {
+	script := readScript(t, "bootstrap-mieru.sh")
+	// `mita <cmd>` or `"$(mita_bin)" <cmd>`, the two ways the script calls it.
+	forbidden := regexp.MustCompile(`(^|[\s;&|(])("?\$\(mita_bin\)"?|mita)\s+(apply|start|reload|restart)\b`)
+	for i, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if forbidden.MatchString(line) {
+			t.Errorf("bootstrap-mieru.sh:%d runs the proxy itself: %s", i+1, strings.TrimSpace(line))
+		}
+	}
+	// And the daemon it does enable is the unit, not a config with a port in it.
+	if !strings.Contains(script, "systemctl enable --now mita.service") {
+		t.Error("bootstrap-mieru.sh no longer enables mita.service: the agent's mita calls need the daemon")
+	}
+	if strings.Contains(script, "2012") {
+		t.Error("bootstrap-mieru.sh names port 2012: the port is the panel's push, not the installer's")
+	}
+}
+
 // xray's --remove warns that sing-box loses its traffic counters, true when
 // xray alone goes. Inside the installer's --uninstall sing-box goes right after,
 // and the warning was noise on a clean removal (stand, 26.09).
