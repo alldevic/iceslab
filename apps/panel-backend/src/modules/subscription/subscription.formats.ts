@@ -209,9 +209,9 @@ export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {
   /** Salamander obfuscation password: present only when the inbound has
    *  `obfsPassword` set. Critical on RU/IR/CN ISPs that DPI-throttle bare QUIC. */
   obfsPassword?: string;
-  /** Brutal CC bandwidth declaration in Mbps. Forwarded into URI / singbox
-   *  / clash output so the client negotiates a non-zero send window. See
-   *  HysteriaUriOpts.upMbps for the gory detail. */
+  /** The client's bandwidth claim in Mbps, from the CLIENT's side (up is what
+   *  it sends): the profile's Brutal pair turned over, or absent when the
+   *  profile has none. See clientBandwidthClaim. */
   upMbps?: number;
   downMbps?: number;
   /** Port-hopping range (slice 31.5). When set, URI emits `mport=`, sing-box

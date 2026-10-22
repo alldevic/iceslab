@@ -201,14 +201,14 @@ export function buildSingboxJson(
         server_port: e.port,
         ...(portHopRange ? { server_ports: portHopRange } : {}),
         password: e.password,
-        // Brutal CC bandwidth declaration. Without these the client
-        // negotiates a 0-byte send window, handshake succeeds but every
-        // proxied request times out at tx=0. The server can override via
-        // `ignoreClientBandwidth: true` (recommended default in our
-        // adapter), but supplying real values here keeps Brutal CC active
-        // when the server does honour client bandwidth.
-        up_mbps: e.upMbps ?? 50,
-        down_mbps: e.downMbps ?? 100,
+        // The client's bandwidth claim (clientBandwidthClaim, A-154): the
+        // profile's pair turned over when the profile has one, and nothing
+        // when it has none. The node runs `ignore_client_bandwidth` (BBR)
+        // only for a profile without a bandwidth, and there a claim plays no
+        // part; with one it runs Brutal, and each direction takes the lower
+        // of the two claims, so a fixed claim here would cap the profile.
+        ...(e.upMbps ? { up_mbps: e.upMbps } : {}),
+        ...(e.downMbps ? { down_mbps: e.downMbps } : {}),
         ...(e.obfsPassword
           ? { obfs: { type: 'salamander', password: e.obfsPassword } }
           : {}),

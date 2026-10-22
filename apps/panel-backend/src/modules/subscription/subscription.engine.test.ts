@@ -6,6 +6,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { generateSubscription } from './subscription.service.js';
+import { buildSingboxJson } from './formats/singbox.js';
 
 /**
  * The share link depends on the CORE, not only on the protocol.
@@ -45,7 +46,10 @@ const auth = () => ({ authorization: `Bearer ${token}` });
 
 /** Deploy one hysteria profile with obfs on `engine`, and return the user's
  *  endpoints as the subscription pipeline builds them. */
-async function hysteriaEndpoints(engine: 'hysteria' | 'singbox' | 'xray') {
+async function hysteriaEndpoints(
+  engine: 'hysteria' | 'singbox' | 'xray',
+  config: Record<string, unknown> = { obfsPassword: 'salt-pw', brutalUpMbps: 100, brutalDownMbps: 200 },
+) {
   seq += 1;
   const node = await app.inject({
     method: 'POST',
@@ -67,7 +71,7 @@ async function hysteriaEndpoints(engine: 'hysteria' | 'singbox' | 'xray') {
       // this very behaviour exists; the row is written directly for that
       // reason, and the engine is what the test is about.
       ...(engine === 'hysteria' ? {} : { engine: 'singbox' }),
-      config: { obfsPassword: 'salt-pw', brutalUpMbps: 100, brutalDownMbps: 200 },
+      config,
     },
   });
   expect(profile.statusCode, profile.body).toBe(201);
@@ -127,7 +131,8 @@ describe('a hysteria link is built for the core that serves it', () => {
     // formatters do not re-add it.
     expect(e?.uri).toContain('hysteria2://');
     expect(e?.obfsPassword).toBeUndefined();
-    expect(e?.upMbps).toBe(100);
+    // The client claims what it sends: the profile's down (A-154).
+    expect(e?.upMbps).toBe(200);
   });
 
   it('still stores the obfs password on the profile either way', async () => {
@@ -140,5 +145,39 @@ describe('a hysteria link is built for the core that serves it', () => {
     });
     expect((profile.config as { obfsPassword?: string }).obfsPassword).toBe('salt-pw');
     expect(e?.uri).not.toContain('salt-pw');
+  });
+});
+
+/**
+ * A-154: with a bandwidth the node runs Brutal, and each direction takes the
+ * lower of the server's and the client's claim. The subscription once claimed
+ * a fixed 50 up / 100 down for every client, which capped a 500/200 profile at
+ * a fraction of its speed. Now the client claims the profile's pair turned over
+ * (the server's upload is the client's download), and nothing without one.
+ */
+describe('the client claims the profile bandwidth, or nothing', () => {
+  const singboxOutbound = (e: Parameters<typeof buildSingboxJson>[0][number]) =>
+    (JSON.parse(buildSingboxJson([e])) as { outbounds: Record<string, unknown>[] }).outbounds.find(
+      (o) => o.type === 'hysteria2',
+    )!;
+
+  it('a 500 up / 200 down profile: the client claims 200 up / 500 down, in the link and in sing-box', async () => {
+    const [e] = await hysteriaEndpoints('hysteria', { brutalUpMbps: 500, brutalDownMbps: 200 });
+    const q = new URL(e!.uri).searchParams;
+    expect(q.get('upmbps')).toBe('200');
+    expect(q.get('downmbps')).toBe('500');
+    const o = singboxOutbound(e!);
+    expect(o.up_mbps).toBe(200);
+    expect(o.down_mbps).toBe(500);
+  });
+
+  it('a profile without a bandwidth: no claim anywhere', async () => {
+    const [e] = await hysteriaEndpoints('hysteria', {});
+    const q = new URL(e!.uri).searchParams;
+    expect(q.has('upmbps')).toBe(false);
+    expect(q.has('downmbps')).toBe(false);
+    const o = singboxOutbound(e!);
+    expect(o).not.toHaveProperty('up_mbps');
+    expect(o).not.toHaveProperty('down_mbps');
   });
 });

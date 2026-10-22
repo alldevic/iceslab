@@ -47,7 +47,7 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
-import { engineSpeaksHysteriaObfs } from '../../core-adapters/hysteria/index.js';
+import { clientBandwidthClaim, engineSpeaksHysteriaObfs } from '../../core-adapters/hysteria/index.js';
 import { effectiveEngineOf } from '../nodes/node-engines.js';
 import { hysteriaPinFor } from '../nodes/hysteria-tls-shape.js';
 import { ensureAwg3Geometry, readAwg3Geometry } from '../nodes/awg3-geometry.js';
@@ -1025,6 +1025,8 @@ export async function generateSubscription(
       // has no FQDN (then ACME, no pin) and only on the native core (sing-box
       // brings its own certificate).
       const tlsPin = hysteriaPinFor(ib.engine, b.node.address, b.node.hysteriaTls);
+      // A-154: the client's claim is the profile's bandwidth turned over, or none.
+      const claim = clientBandwidthClaim(hyCfg);
       endpoints.push({
         protocol: 'hysteria',
         nodeName,
@@ -1033,8 +1035,7 @@ export async function generateSubscription(
         ...hostMeta,
         password: user.hysteriaPassword,
         obfsPassword,
-        upMbps: hyCfg?.brutalUpMbps,
-        downMbps: hyCfg?.brutalDownMbps,
+        ...claim,
         portHoppingStart: hyCfg?.portHoppingStart,
         portHoppingEnd: hyCfg?.portHoppingEnd,
         ...(tlsPin ? { tlsPin } : {}),
@@ -1044,8 +1045,7 @@ export async function generateSubscription(
           port,
           name: nodeName,
           obfsPassword,
-          upMbps: hyCfg?.brutalUpMbps,
-          downMbps: hyCfg?.brutalDownMbps,
+          ...claim,
           portHoppingStart: hyCfg?.portHoppingStart,
           portHoppingEnd: hyCfg?.portHoppingEnd,
           pinSha256: tlsPin?.certSha256,
