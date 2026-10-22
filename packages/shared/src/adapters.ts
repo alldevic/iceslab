@@ -46,10 +46,22 @@ export function adapterSlot(profile: {
  * read by the server's gate and by the screen.
  *   - xray|xray: native xray, always;
  *   - mieru|mieru: agent f8bac16 (22.10), one MTU per process (the server
- *     checks it, MIERU_MTU_MISMATCH).
- * Not before v0.3.0 (owner, 22.10): hysteria, AmneziaWG of one generation.
+ *     checks it, MIERU_MTU_MISMATCH);
+ *   - the six protocols on sing-box: agent 22.10. A second inbound on a port
+ *     already taken is refused by the port check, as on any node.
+ * Not before v0.3.0 (owner, 22.10): native hysteria, AmneziaWG of one
+ * generation. Still one each: native shadowsocks, naive, mtproto.
  */
-export const MULTI_INBOUND_ADAPTERS: readonly string[] = ['xray|xray', 'mieru|mieru'];
+export const MULTI_INBOUND_ADAPTERS: readonly string[] = [
+  'xray|xray',
+  'mieru|mieru',
+  'xray|singbox',
+  'tuic|singbox',
+  'anytls|singbox',
+  'hysteria|singbox',
+  'shadowsocks|singbox',
+  'shadowtls|singbox',
+];
 
 /** Steps of a cascade, entry to exit (A-175: was copied into the screen). */
 export const MAX_CASCADE_HOPS = 5;

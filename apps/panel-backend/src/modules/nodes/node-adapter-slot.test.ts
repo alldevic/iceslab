@@ -35,6 +35,8 @@ afterAll(async () => {
 
 const auth = () => ({ authorization: `Bearer ${token}` });
 
+const SS = { method: '2022-blake3-aes-256-gcm' };
+
 const VLESS = {
   security: 'reality',
   realityDest: 'www.microsoft.com:443',
@@ -72,16 +74,16 @@ const awg = (subnet: string) => ({
 });
 
 describe('one inbound per adapter where the agent holds one', () => {
-  it('a second vless on the sing-box engine is refused, by host route and bindings route alike', async () => {
+  it('a second native shadowsocks is refused, by host route and bindings route alike', async () => {
     const n = await node();
-    const a = await profile('xray', VLESS, { engine: 'singbox' });
-    const b = await profile('xray', VLESS, { engine: 'singbox' });
-    const c = await profile('xray', VLESS, { engine: 'singbox' });
+    const a = await profile('shadowsocks', SS);
+    const b = await profile('shadowsocks', SS);
+    const c = await profile('shadowsocks', SS);
     expect((await post('/api/hosts', { profileId: a, nodeId: n, port: 443, remark: 'First' })).status).toBe(201);
 
     const viaHost = await post('/api/hosts', { profileId: b, nodeId: n, port: 8443, remark: 'Second' });
     expect(viaHost.status).toBe(409);
-    expect(viaHost.body).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'xray', engine: 'singbox', heldBy: 'First' });
+    expect(viaHost.body).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'shadowsocks', engine: 'xray', heldBy: 'First' });
 
     const viaBinding = await post('/api/bindings', { profileId: c, nodeId: n, port: 9443 });
     expect(viaBinding.status).toBe(409);
@@ -90,6 +92,14 @@ describe('one inbound per adapter where the agent holds one', () => {
     const nodeName = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).name;
     expect(viaHost.body.nodeName).toBe(nodeName);
     expect(viaBinding.body.nodeName).toBe(nodeName);
+  });
+
+  it('vless on sing-box takes several too since the agent serves them (22.10)', async () => {
+    const n = await node();
+    const a = await profile('xray', VLESS, { engine: 'singbox' });
+    const b = await profile('xray', VLESS, { engine: 'singbox' });
+    expect((await post('/api/hosts', { profileId: a, nodeId: n, port: 443 })).status).toBe(201);
+    expect((await post('/api/hosts', { profileId: b, nodeId: n, port: 8443 })).status).toBe(201);
   });
 
   it('vless on native xray takes as many as the operator wants', async () => {
@@ -124,21 +134,23 @@ describe('one inbound per adapter where the agent holds one', () => {
 
   it('a bound profile moved onto a taken adapter (engine switch) is refused, naming the node', async () => {
     const n = await node();
-    const onSingbox = await profile('xray', VLESS, { engine: 'singbox' });
-    const onXray = await profile('xray', VLESS);
-    expect((await post('/api/hosts', { profileId: onSingbox, nodeId: n, port: 443, remark: 'SB' })).status).toBe(201);
-    expect((await post('/api/hosts', { profileId: onXray, nodeId: n, port: 8443, remark: 'XR' })).status).toBe(201);
+    // shadowsocks: native holds one, sing-box several. Moving the sing-box one
+    // onto the native core where that one is taken is the refusal.
+    const native = await profile('shadowsocks', SS);
+    const onSb = await profile('shadowsocks', SS, { engine: 'singbox' });
+    expect((await post('/api/hosts', { profileId: native, nodeId: n, port: 443, remark: 'SB' })).status).toBe(201);
+    expect((await post('/api/hosts', { profileId: onSb, nodeId: n, port: 8443, remark: 'XR' })).status).toBe(201);
 
     const res = await app.inject({
       method: 'PUT',
-      url: `/api/profiles/${onXray}`,
+      url: `/api/profiles/${onSb}`,
       headers: auth(),
-      payload: { engine: 'singbox' },
+      payload: { engine: null },
     });
     expect(res.statusCode, res.body).toBe(409);
     const nodeName = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).name;
     expect(JSON.parse(res.body)).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', nodeName, heldBy: 'SB' });
-    expect((await prisma.profile.findUniqueOrThrow({ where: { id: onXray } })).engine).toBeNull();
+    expect((await prisma.profile.findUniqueOrThrow({ where: { id: onSb } })).engine).toBe('singbox');
   });
 
   it('mieru takes several inbounds (agent f8bac16), all on one MTU', async () => {
