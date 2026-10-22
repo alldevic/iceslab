@@ -6,9 +6,10 @@ import { checkSniConsistency } from '../profiles/host-fields.js';
 // Reused rather than redefined so the operator gets the same wording whichever
 // route created the binding.
 import {
+  assertBindingFitsNode,
   assertPortFreeOfOthers,
-  assertSingboxServesBinding,
   NodeNotFoundError,
+  ProfileDoesNotRunOnNodeError,
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,
   PortHeldByCoreServiceError,
@@ -19,8 +20,8 @@ import {
 import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
 import { hostConfigChangedAt } from './hosts.freshness.js';
 import { getHiddenCascadeNodes, type HidingCascade } from '../cascades/cascade.service.js';
-import { assertAwgSubnetFree, assertCoreOnNode } from '../nodes/node-core-gate.js';
-import { assertAdapterSlotFree, AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
+import { assertCoreOnNode } from '../nodes/node-core-gate.js';
+import { AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
 import type {
   CreateHostInput,
   ListHostsQuery,
@@ -77,6 +78,7 @@ export {
   AdapterSlotTakenError,
   MieruMtuMismatchError,
   NodeNotFoundError,
+  ProfileDoesNotRunOnNodeError,
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,
   PortHeldByCoreServiceError,
@@ -254,13 +256,9 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
   // the two writes then happen together. Creating the binding first and letting
   // the host fail afterwards would leave an orphan the operator cannot see or
   // remove: the new UI has no screen for bindings at all.
+  // A new binding under the host passes the bindings route's gate there
+  // (assertBindingFitsNode), sing-box's fields included.
   const plan = await planHostCreate(input);
-  // Creating the binding here is the fourth way onto a node, and a profile
-  // saved before the sing-box rule existed (xray family on sing-box with TLS or
-  // xhttp) would otherwise reach the node through it unrefused.
-  if (!plan.bindingId) {
-    assertSingboxServesBinding({ ...plan.profile, engine: plan.profile.engine ?? null }, undefined);
-  }
 
   await assertSniMatchesProfileConfig({
     protocol: plan.profile.protocol,
@@ -354,7 +352,7 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   if (input.bindingId) {
     const binding = await prisma.profileNodeBinding.findUnique({
       where: { id: input.bindingId },
-      select: { id: true, profile: { select: { id: true, protocol: true, config: true } } },
+      select: { id: true, profile: { select: { id: true, protocol: true, config: true, engine: true } } },
     });
     if (!binding) throw new BindingNotFoundError(input.bindingId);
     return { bindingId: binding.id, profile: binding.profile };
@@ -364,16 +362,10 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   const nodeId = input.nodeId!;
   const port = input.port!;
 
-  const profile = await prisma.profile.findUnique({
-    where: { id: profileId },
-    select: { id: true, protocol: true, config: true, engine: true, awgProtocol: true },
-  });
+  const profile = await prisma.profile.findUnique({ where: { id: profileId } });
   if (!profile) throw new ProfileNotFoundError(profileId);
 
-  const node = await prisma.node.findFirst({
-    where: { id: nodeId, deletedAt: null },
-    select: { id: true, name: true, cores: true, coreVersions: true },
-  });
+  const node = await prisma.node.findFirst({ where: { id: nodeId, deletedAt: null } });
   if (!node) throw new NodeNotFoundError(nodeId);
 
   const existing = await prisma.profileNodeBinding.findUnique({
@@ -402,12 +394,12 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   // creates the binding under it, so this route reaches the same socket the
   // bindings route does and has to ask the same question.
   await assertPortFreeOfOthers(nodeId, port, transport, node.name);
-  // After the ports, before anything is written (docs/plan/core-lifecycle.md 6).
-  assertCoreOnNode(node, profile);
-  await assertAwgSubnetFree(node, profile);
-  // A-055: the same slot gate as the bindings route, this path creates a
-  // binding too.
-  await assertAdapterSlotFree(node, profile);
+  // After the ports, before anything is written (docs/plan/core-lifecycle.md 6):
+  // the bindings route's gate, whole (A-161). It had the core and the subnet
+  // and not the engine list, so a sing-box profile went onto a node that had
+  // reported its engines without sing-box. sing-box's own fields are part of
+  // it too, which used to be asked separately in createHost.
+  await assertBindingFitsNode(node, profile);
 
   return { bindingId: null, profile, nodeId, port };
 }

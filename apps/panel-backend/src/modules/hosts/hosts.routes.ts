@@ -88,6 +88,18 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
       // this panel refuses. Same body as the bindings route.
       const core = coreGateReply(err);
       if (core) return reply.code(core.status).send(core.body);
+      // The node reported its engines and the profile's is not among them
+      // (A-161): the bindings route's 409, word for word.
+      if (err instanceof svc.ProfileDoesNotRunOnNodeError) {
+        return reply.code(409).send({
+          error: 'PROFILE_DOES_NOT_RUN_ON_NODE',
+          message: err.message,
+          nodeName: err.nodeName,
+          neededEngine: err.neededEngine,
+          reportedEngines: err.reportedEngines,
+          canWait: err.canWait,
+        });
+      }
       // The new binding would put an xray-family profile on sing-box with a
       // field sing-box cannot serve: the bindings route's answer, word for word.
       if (err instanceof svc.ProfileEngineNotForTransportError) {

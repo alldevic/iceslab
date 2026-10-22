@@ -434,14 +434,14 @@ export async function updateProfile(
         effectiveEngineOf(existing)) {
       const deployed = await prisma.profileNodeBinding.findMany({
         where: { profileId: id, node: { deletedAt: null } },
-        select: {
-          node: {
-            select: { name: true, cores: true, protocol: true, singboxEngine: true, intendedEngines: true },
-          },
-        },
+        select: { node: true },
       });
+      const next = { ...existing, engine: input.engine ?? null };
       for (const b of deployed) {
-        assertNodeRendersProfile(b.node, { protocol: existing.protocol, engine: input.engine ?? null });
+        // The core's own report too (A-161): a node whose sing-box is a
+        // refused version took the move with the engine list alone.
+        assertCoreOnNode(b.node, next);
+        assertNodeRendersProfile(b.node, next);
       }
     }
   }
@@ -709,9 +709,15 @@ export class ProfileDoesNotRunOnNodeError extends Error {
         `this node reports ${
           reportedEngines.length ? reportedEngines.join(', ') : 'no core at all'
         }.` +
+        // canWait is "the agent declares the engine and reports no core for
+        // it" (since E42 the declaration comes from the agent's env, not from
+        // an edit here). Waiting helps only right after the bootstrap; past
+        // that the bootstrap failed or the binary went (A-161, 22.10: the
+        // sentence promised the next poll would fix it, and it never did).
         (canWait
-          ? ` The node is set up to run ${neededEngine} but has not reported it yet. If you have` +
-            ` just enabled it, wait for the next status poll and try again.`
+          ? ` The node's agent declares ${neededEngine} but reports no such core. If its` +
+            ` bootstrap has just run, the next status poll will show it; otherwise run the` +
+            ` ${neededEngine} bootstrap on the node again.`
           : ''),
     );
     this.name = 'ProfileDoesNotRunOnNodeError';
@@ -813,6 +819,33 @@ export function assertSingboxServesBinding(
   throw new ProfileEngineNotForTransportError(f, own ? 'overrides' : 'config');
 }
 
+/**
+ * The node's facts for a new binding, one function for every way a binding is
+ * made (A-161, 22.10): the bindings route and the host form, which creates
+ * the binding under a new host. The host path asked the core and the subnet
+ * but not the engine list, so a sing-box profile went onto a node that had
+ * reported its engines without sing-box: the node answered the push with
+ * `skipped`, and the subscription handed out an endpoint nobody served.
+ *
+ * In this order: the core by the node's own report first (the specific answer,
+ * with the command), then the engine list, what sing-box can serve, the
+ * AmneziaWG subnet and the adapter slot (A-055).
+ */
+export async function assertBindingFitsNode(
+  node: Parameters<typeof assertCoreOnNode>[0] & Parameters<typeof assertNodeRendersProfile>[0] &
+    Parameters<typeof assertAwgSubnetFree>[0] & Parameters<typeof assertAdapterSlotFree>[0],
+  profile: Parameters<typeof assertCoreOnNode>[1] & Parameters<typeof assertNodeRendersProfile>[1] &
+    Parameters<typeof assertSingboxServesBinding>[0] & Parameters<typeof assertAwgSubnetFree>[1] &
+    Parameters<typeof assertAdapterSlotFree>[1],
+  overrides?: unknown,
+): Promise<void> {
+  assertCoreOnNode(node, profile);
+  assertNodeRendersProfile(node, profile);
+  assertSingboxServesBinding(profile, overrides);
+  await assertAwgSubnetFree(node, profile);
+  await assertAdapterSlotFree(node, profile, overrides);
+}
+
 export async function createBinding(input: CreateBindingInput): Promise<PublicBindingDto> {
   const profile = await prisma.profile.findUnique({ where: { id: input.profileId } });
   if (!profile) throw new ProfileNotFoundError(input.profileId);
@@ -843,16 +876,8 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
     },
   });
   if (dupBinding) throw new NodeAlreadyBoundError(input.profileId, input.nodeId);
-  // The core, by the node's own report: explicitly not installed, or a
-  // version this panel refuses. First, because it is the specific answer and
-  // it carries the command; the engine-list gate below is the general one.
-  assertCoreOnNode(node, profile);
-  assertNodeRendersProfile(node, profile);
-  assertSingboxServesBinding(profile, input.overrides);
-  await assertAwgSubnetFree(node, profile);
-  // A-055: the adapter this profile lands on holds one inbound, and already
-  // serves another binding here.
-  await assertAdapterSlotFree(node, profile, input.overrides);
+  // The node's facts, the same gate as the host form's (assertBindingFitsNode).
+  await assertBindingFitsNode(node, profile, input.overrides);
 
   const created = await prisma.profileNodeBinding.create({
     data: {
