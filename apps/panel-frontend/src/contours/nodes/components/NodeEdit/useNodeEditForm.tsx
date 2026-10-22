@@ -15,8 +15,10 @@ import {
   listRegions,
   refreshNodeBootstrap,
   registerNodeWarp,
+  rotateNodeCert,
   updateNode,
 } from '@/lib/domain/nodes';
+import { certRotateRefusal } from '@/contours/nodes/lib/nodeCert';
 import type { Node } from '@/lib/domain/nodes';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listCascades, type Cascade } from '@/lib/domain/cascades';
@@ -252,6 +254,20 @@ export function useNodeEditForm() {
     mutationFn: () => getNodeExposure(id!),
   });
 
+  // A-124: a refusal the server names is said under the certificate row
+  // (certRotateRefusal); anything else is a toast in the server's words.
+  const certMutation = useMutation({
+    mutationFn: () => rotateNodeCert(id!),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['node', id] });
+      void qc.invalidateQueries({ queryKey: ['nodes'] });
+    },
+    onError: (err) => {
+      if (certRotateRefusal(err)) return;
+      notifications.show({ color: 'red', title: t('common.error'), message: apiErrorMessage(err) });
+    },
+  });
+
   /** The command of a re-issued token, shown until the operator closes it (A-147). */
   const [issuedBootstrap, setIssuedBootstrap] = useState<BootstrapInfo | null>(null);
   const bootstrapMutation = useMutation({
@@ -319,6 +335,7 @@ export function useNodeEditForm() {
     setEnginesRefusal,
     warpMutation,
     exposureMutation,
+    certMutation,
     bootstrapMutation,
     statusTone,
     warpOn,

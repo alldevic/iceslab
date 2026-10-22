@@ -66,6 +66,7 @@ export function NodeEditPage() {
     saveMutation,
     warpMutation,
     exposureMutation,
+    certMutation,
     bootstrapMutation,
     statusTone,
     egress,
@@ -332,7 +333,14 @@ export function NodeEditPage() {
               </Box>
             </Box>
 
-            <SystemPanel hostsQuery={hostsQuery} dashNode={dashNode} metrics={metrics} exposureMutation={exposureMutation} />
+            <SystemPanel
+              node={node}
+              hostsQuery={hostsQuery}
+              dashNode={dashNode}
+              metrics={metrics}
+              exposureMutation={exposureMutation}
+              certMutation={certMutation}
+            />
           </Box>
 
           <HostsPanel navigate={navigate} qc={qc} node={node} hostsQuery={hostsQuery} profileById={profileById} bindingById={bindingById} id={id} />

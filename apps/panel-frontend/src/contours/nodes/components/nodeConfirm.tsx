@@ -48,6 +48,22 @@ export function confirmNodeDelete(node: Node, t: TFunction, onConfirm: () => voi
 }
 
 /**
+ * The window before the node's mTLS certificate is renewed on request (A-124).
+ * The panel confirms the new pair from a fresh connection; without that the
+ * agent goes back to the old one by itself, so the window says it costs
+ * nothing but a retry and does not touch users or links.
+ */
+export function confirmCertRotate(node: Pick<Node, 'name'>, t: TFunction, onConfirm: () => void): void {
+  modals.openConfirmModal({
+    title: t('nodeConfirm.certTitle', { name: node.name }),
+    children: <Text size="sm">{t('nodeConfirm.certBody')}</Text>,
+    labels: { confirm: t('nodeConfirm.certConfirm'), cancel: t('common.cancel') },
+    confirmProps: { color: 'blue' },
+    onConfirm,
+  });
+}
+
+/**
  * The one window before a bootstrap token is re-issued, on the list and on the
  * node page (spec frontend-nodes). The page used to re-issue on one click.
  */

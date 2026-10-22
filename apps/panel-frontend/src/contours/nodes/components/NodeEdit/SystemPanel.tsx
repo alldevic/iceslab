@@ -10,18 +10,32 @@ import { Box, Stack, Text } from '@mantine/core';
 import { CARD, CYAN, DISPLAY, HAIRLINE, MIST, MONO, MOSS, WELL } from '@/contours/nodes/lib/colors';
 import { useTranslation } from 'react-i18next';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
+import type { Node } from '@/lib/domain/nodes';
+import { CertRow } from '@/contours/nodes/components/NodeEdit/CertRow';
+import { confirmCertRotate } from '@/contours/nodes/components/nodeConfirm';
+import { certTerm } from '@/contours/nodes/lib/nodeCert';
+import { useNow } from '@/lib/ui/useNow';
 
 /**
  * What the box reports about itself: uptime, load, disk, core versions.
  * Read-only.
  */
 export function SystemPanel({
+  node,
   hostsQuery,
   dashNode,
   metrics,
   exposureMutation,
-}: Pick<NodeEditor, 'hostsQuery' | 'dashNode' | 'metrics' | 'exposureMutation'>) {
+  certMutation,
+}: Pick<NodeEditor, 'hostsQuery' | 'dashNode' | 'metrics' | 'exposureMutation' | 'certMutation'> & {
+  node: Pick<Node, 'name' | 'certNotAfter'>;
+}) {
   const { t } = useTranslation();
+  // After a renewal the page shows the end the server just gave, until the
+  // node query brings the same back.
+  const now = useNow(60_000);
+  const certNotAfter = certMutation.data?.notAfter ?? node.certNotAfter;
+  const cert = certTerm(certNotAfter, now);
 
   return (
     <>
@@ -115,6 +129,18 @@ export function SystemPanel({
                   </PlainButton>
                 </Box>
                 {exposureMutation.data && <ExposureNote result={exposureMutation.data} />}
+                {cert && (
+                  <>
+                    <Divider />
+                    <CertRow
+                      term={cert}
+                      onRotate={() => confirmCertRotate(node, t, () => certMutation.mutate())}
+                      rotating={certMutation.isPending}
+                      rotated={certMutation.data?.notAfter ?? null}
+                      error={certMutation.error}
+                    />
+                  </>
+                )}
               </Stack>
             </Box>
     </>

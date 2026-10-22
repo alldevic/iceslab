@@ -136,6 +136,13 @@ export interface Node {
    */
   hysteriaTls?: NodeHysteriaTls | null;
   /**
+   * End of the node's mTLS certificate as the agent reports it (A-124,
+   * 92572130). `null` = the agent never said (older than rotation), which is
+   * «unknown», not «expired»; `undefined` = a server older than the field.
+   * Read through `certTerm` (contours/nodes/lib/nodeCert.ts).
+   */
+  certNotAfter?: string | null;
+  /**
    * The cores this machine reported, with the panel's freshness stamp.
    *
    * ⚠ `null` means no reporting agent has ever checked in, which is NOT a node
@@ -289,6 +296,16 @@ export interface NodeHysteriaTls {
  */
 export async function rotateHysteriaTls(id: string): Promise<{ hysteriaTls: NodeHysteriaTls }> {
   const { data } = await api.post<{ hysteriaTls: NodeHysteriaTls }>(`/api/nodes/${id}/hysteria-tls/rotate`);
+  return data;
+}
+
+/**
+ * Renew the node's mTLS certificate now (A-124): 200 { fingerprint, notAfter }.
+ * Refusals are read by `certRotateRefusal`; on any of them the node keeps or
+ * goes back to its old pair.
+ */
+export async function rotateNodeCert(id: string): Promise<{ fingerprint: string; notAfter: string }> {
+  const { data } = await api.post<{ fingerprint: string; notAfter: string }>(`/api/nodes/${id}/cert/rotate`);
   return data;
 }
 
