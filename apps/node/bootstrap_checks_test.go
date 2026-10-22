@@ -139,6 +139,19 @@ func TestNoBootstrapPipesIntoGrepQ(t *testing.T) {
 	}
 }
 
+// The agent keeps <iface>.state.json beside each AmneziaWG config
+// (core/amneziawg/state.go statePath: the server key and the peers). --remove
+// that took the configs and left the state brought the old key and peers back
+// on the next install instead of what the panel sends.
+func TestTheAwgRemoveTakesTheStateWithTheConfigs(t *testing.T) {
+	remove := fnBody(t, readScript(t, "bootstrap-amneziawg.sh"), "remove_core")
+	for _, want := range []string{"/etc/amnezia/amneziawg/*.conf", "/etc/amnezia/amneziawg/*.state.json"} {
+		if !strings.Contains(remove, want) {
+			t.Errorf("bootstrap-amneziawg.sh --remove leaves %s behind", want)
+		}
+	}
+}
+
 // xray's --remove warns that sing-box loses its traffic counters, true when
 // xray alone goes. Inside the installer's --uninstall sing-box goes right after,
 // and the warning was noise on a clean removal (stand, 26.09).
