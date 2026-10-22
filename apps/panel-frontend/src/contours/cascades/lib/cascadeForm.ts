@@ -408,6 +408,35 @@ export function poolRoleAt(index: number): HopRole {
 }
 
 /**
+ * Позиции после перестановки или удаления (A-140).
+ *
+ * Сервер подставляет неприсланный `linkParams` из хранимой позиции С ТЕМ ЖЕ
+ * НОМЕРОМ (`positionsForSave`, cascade.service.ts:1637-1653): ключа у
+ * позиции нет, номер и есть ключ. Поэтому позиция, сменившая номер, шлёт свои
+ * настройки ноги явно, иначе подложка AWG и congestion остаются на старом
+ * номере и уезжают к соседней ноге. Позиция, у которой сервер поля не отдал
+ * (`undefined`), не помечается: прислать за неё нечего, а `null` стёр бы
+ * хранимое.
+ */
+export function reorderedPositions(before: PositionDraft[], after: PositionDraft[]): PositionDraft[] {
+  return after.map((p, i) =>
+    before[i]?.key !== p.key && p.linkParams !== undefined && !p.linkTouched ? { ...p, linkTouched: true } : p,
+  );
+}
+
+export function movePosition(pools: PositionDraft[], idx: number, dir: -1 | 1): PositionDraft[] {
+  const j = idx + dir;
+  if (j < 0 || j >= pools.length) return pools;
+  const next = [...pools];
+  [next[idx], next[j]] = [next[j]!, next[idx]!];
+  return reorderedPositions(pools, next);
+}
+
+export function removePosition(pools: PositionDraft[], idx: number): PositionDraft[] {
+  return reorderedPositions(pools, pools.filter((_, j) => j !== idx));
+}
+
+/**
  * ⚠ `linkParams` уходит ТОЛЬКО если оператор его правил.
  *
  * То же правило, что у направления, и по той же причине: у сервера отсутствие

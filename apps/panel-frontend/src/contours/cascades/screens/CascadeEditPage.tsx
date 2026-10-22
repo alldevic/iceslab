@@ -116,6 +116,8 @@ import {
   statusTone,
   toDirectionInputs,
   toPositionInputs,
+  movePosition,
+  removePosition,
   withEntryConfirm,
   withUnderlay,
   isOneLegCascade,
@@ -533,12 +535,9 @@ export function CascadeEditPage() {
     );
   }
 
+  // A-140: позиция, сменившая номер, шлёт свою ногу явно (movePosition).
   function movePool(idx: number, dir: -1 | 1) {
-    const j = idx + dir;
-    if (j < 0 || j >= pools.length) return;
-    const next = [...pools];
-    [next[idx], next[j]] = [next[j]!, next[idx]!];
-    patch({ pools: next });
+    patch({ pools: movePosition(pools, idx, dir) });
   }
 
   function moveDirection(idx: number, dir: -1 | 1) {
@@ -839,7 +838,7 @@ export function CascadeEditPage() {
                 canDelete={i > 0}
                 onUp={() => movePool(i, -1)}
                 onDown={() => movePool(i, 1)}
-                onDelete={() => patch({ pools: pools.filter((_, j) => j !== i) })}
+                onDelete={() => patch({ pools: removePosition(pools, i) })}
               >
                 {/* Отказ сервера по входным нодам: sing-box на них нет. Факт
                     сервера по отчёту ноды, поэтому показывается только после

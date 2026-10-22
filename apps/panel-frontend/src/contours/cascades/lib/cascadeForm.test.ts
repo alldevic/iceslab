@@ -47,7 +47,10 @@ import {
   outboundChainGaps,
   outboundTakenBy,
   refusedDirection,
+  movePosition,
+  removePosition,
   type DirectionDraft,
+  type PositionDraft,
 } from '@/contours/cascades/lib/cascadeForm';
 import { directionOutbounds, type NamedOutbound } from '@/lib/domain/namedOutbounds';
 
@@ -1212,5 +1215,37 @@ describe('entryProtocolDefault: вход по ядрам ноды, а не по 
   it('сервер старше intendedEngines: прежнее правило по метке, иначе сказать нечего', () => {
     expect(entryProtocolDefault({ protocol: 'hysteria' })).toEqual({ kind: 'protocol', protocol: 'hysteria' });
     expect(entryProtocolDefault({ protocol: 'tuic' })).toEqual({ kind: 'unknown' });
+  });
+});
+
+describe('A-140: позиция, сменившая номер, шлёт свою ногу', () => {
+  const entry: PositionDraft = { key: 0, nodeIds: ['e'], entryProtocol: 'xray', linkProtocol: 'xray', linkParams: null };
+  const a: PositionDraft = { key: 1, nodeIds: ['a'], entryProtocol: 'xray', linkProtocol: 'xray', linkParams: { underlay: 'awg' } };
+  const b: PositionDraft = { key: 2, nodeIds: ['b'], entryProtocol: 'xray', linkProtocol: 'tuic', linkParams: { congestion: 'bbr' } };
+
+  it('два транзита местами: у обоих в пейлоаде linkParams нового места', () => {
+    const out = toPositionInputs(movePosition([entry, a, b], 1, 1));
+    expect(out[1]).toMatchObject({ nodeIds: ['b'], position: 1, linkProtocol: 'tuic', linkParams: { congestion: 'bbr' } });
+    expect(out[2]).toMatchObject({ nodeIds: ['a'], position: 2, linkProtocol: 'xray', linkParams: { underlay: 'awg' } });
+    expect('linkParams' in out[0]!).toBe(false);
+  });
+
+  it('удаление средней: сдвинутые шлют своё, оставшиеся на месте нет', () => {
+    const out = toPositionInputs(removePosition([entry, a, b], 1));
+    expect(out).toHaveLength(2);
+    expect('linkParams' in out[0]!).toBe(false);
+    expect(out[1]).toMatchObject({ nodeIds: ['b'], position: 1, linkParams: { congestion: 'bbr' } });
+  });
+
+  it('поле, которое сервер не отдал, не помечается: null стёр бы хранимое', () => {
+    const blind = { ...b, linkParams: undefined };
+    const out = toPositionInputs(movePosition([entry, a, blind], 2, -1));
+    expect('linkParams' in out[1]!).toBe(false);
+    expect(out[2]).toMatchObject({ linkParams: { underlay: 'awg' } });
+  });
+
+  it('за край не двигает', () => {
+    const pools = [entry, a];
+    expect(movePosition(pools, 1, 1)).toBe(pools);
   });
 });
