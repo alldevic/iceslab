@@ -10,7 +10,8 @@ import { bootstrapCa } from '../keygen/keygen.service.js';
 import { generateNodeCert } from '../keygen/keygen.crypto.js';
 import { closeNodeTransport, NodeTransport } from './nodes.transport.js';
 import { renewExpiringNodeCerts, rotateNodeCert, sansOf } from './node-cert-rotation.js';
-import { parseCertNotAfter, pollNodeStatuses } from './nodes.cron.js';
+import { _resetHandshakeCertReadsForTest, parseCertNotAfter, pollNodeStatuses } from './nodes.cron.js';
+import { mapNodeToPublic } from './nodes.mapper.js';
 
 /**
  * A-124 on the panel side, against a stand-in agent that speaks the agent's
@@ -34,7 +35,7 @@ async function fakeAgent(opts: {
   lifetimeMs?: number;
   /** A node that answers ok to /rotateCert but keeps serving the old leaf. */
   liesAboutRotation?: boolean;
-  /** An agent older than rotation: 404. */
+  /** An agent older than rotation: 404, and no certNotAfter in /healthz. */
   noRotation?: boolean;
 }): Promise<FakeAgent> {
   const ca = await bootstrapCa();
@@ -53,7 +54,13 @@ async function fakeAgent(opts: {
           res.writeHead(code, { 'content-type': 'application/json' });
           res.end(JSON.stringify(obj));
         };
-        if (req.url === '/healthz') return send(200, { status: 'ok', cores: [], certNotAfter: new X509Certificate(current).validTo });
+        if (req.url === '/healthz') {
+          return send(200, {
+            status: 'ok',
+            cores: [],
+            ...(opts.noRotation ? {} : { certNotAfter: new Date(new X509Certificate(current).validTo).toISOString() }),
+          });
+        }
         if (opts.noRotation) return send(404, { error: 'NOT_FOUND', message: 'no route' });
         if (req.url === '/rotateCert') {
           const r = JSON.parse(body) as { certPem: string; keyPem: string };
@@ -105,6 +112,7 @@ beforeEach(async () => {
   await cleanDatabase();
   // The shared agent holds the CA of the previous test's database.
   await closeNodeTransport();
+  _resetHandshakeCertReadsForTest();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -203,6 +211,29 @@ describe('the status poll keeps the end the agent reports', () => {
     expect((await prisma.node.findUniqueOrThrow({ where: { id } })).certNotAfter?.toISOString()).toBe(
       '2027-10-01T00:00:00.000Z',
     );
+  });
+
+  it('an agent that does not report the end: read off the handshake, and the node says it cannot rotate (A-221)', async () => {
+    const day = 24 * 3600_000;
+    const old = await fakeAgent({ sans: [{ type: 'ip', value: '127.0.0.1' }], noRotation: true, lifetimeMs: 20 * day });
+    const fresh = await fakeAgent({ sans: [{ type: 'ip', value: '127.0.0.1' }], lifetimeMs: 200 * day });
+    agents.push(old, fresh);
+    const oldId = await nodeAt(old.port);
+    const freshId = await nodeAt(fresh.port);
+    await pollNodeStatuses();
+
+    const o = await prisma.node.findUniqueOrThrow({ where: { id: oldId } });
+    expect(o.certFromHandshake).toBe(true);
+    expect(Math.abs(o.certNotAfter!.getTime() - (Date.now() + 20 * day))).toBeLessThan(60_000);
+    expect(mapNodeToPublic(o)).toMatchObject({ certNotAfter: o.certNotAfter!.toISOString(), agentCanRotate: false });
+
+    const f = await prisma.node.findUniqueOrThrow({ where: { id: freshId } });
+    expect(f.certFromHandshake).toBe(false);
+    expect(mapNodeToPublic(f).agentCanRotate).toBe(true);
+
+    // Due within 30 days, but the cron does not ask an agent that cannot rotate.
+    expect(await renewExpiringNodeCerts()).toEqual({ renewed: 0, failed: 0 });
+    expect(old.rotations).toHaveLength(0);
   });
 
   it('reads the field strictly', () => {

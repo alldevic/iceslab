@@ -108,6 +108,10 @@ model Node {
   // reports it (null: an agent older than the field, or never polled). The
   // renewal cron reads it to hand the node a new pair ahead of expiry.
   certNotAfter          DateTime? @map("cert_not_after") @db.Timestamptz(6)
+  // A-221: certNotAfter was read off the leaf the node presented on a
+  // handshake, because its agent does not report it: an agent older than
+  // rotation, which cannot be renewed in place and has to be updated first.
+  certFromHandshake     Boolean   @default(false) @map("cert_from_handshake")
   // What the agent reported about this node's CHAIN process (phase 4).
   //
   // Shape (ChainStatus in packages/shared): { running, version?, error? }.

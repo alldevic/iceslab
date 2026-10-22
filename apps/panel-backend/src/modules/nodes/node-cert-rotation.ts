@@ -123,7 +123,7 @@ export async function rotateNodeCert(nodeId: string, opts: RotateNodeCertOptions
   }
 
   const notAfter = certNotAfter(pair.certPem);
-  await prisma.node.update({ where: { id: node.id }, data: { certNotAfter: notAfter } });
+  await prisma.node.update({ where: { id: node.id }, data: { certNotAfter: notAfter, certFromHandshake: false } });
   getLogger().info({ node: node.name, fingerprint, notAfter }, '[cert] node certificate renewed');
   return { fingerprint, notAfter: notAfter.toISOString() };
 }
@@ -139,6 +139,9 @@ export async function renewExpiringNodeCerts(now = new Date()): Promise<{ renewe
       deletedAt: null,
       status: { in: ['online', 'degraded'] },
       certNotAfter: { lt: new Date(now.getTime() + CERT_RENEW_AHEAD_MS) },
+      // A-221: an end read off the handshake is an agent without rotation:
+      // asking it would only 404 every hour. The card tells the operator.
+      certFromHandshake: false,
     },
     select: { id: true, name: true },
   });

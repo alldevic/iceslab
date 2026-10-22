@@ -54,6 +54,11 @@ export interface PublicNodeDto {
   /** A-124: notAfter of the node's mTLS certificate, ISO; null until an agent
    *  that reports it is polled. The panel renews it 30 days ahead. */
   certNotAfter: string | null;
+  /** A-221: whether the agent can renew that certificate in place. false: the
+   *  end was read off a handshake because the agent does not report it, an
+   *  agent older than rotation; update it before certNotAfter or the panel
+   *  loses the node. null: nothing known yet (certNotAfter null). */
+  agentCanRotate: boolean | null;
   /** See NodeCoreRestarts. null = never reported (not the same as zero). */
   coreRestarts: NodeCoreRestarts | null;
   // T7: proxy-core version reported by the agent (e.g. xray "26.3.27"), NULL
@@ -266,6 +271,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     lastStatusChange: node.lastStatusChange?.toISOString() ?? null,
     lastStatusMessage: node.lastStatusMessage,
     certNotAfter: node.certNotAfter?.toISOString() ?? null,
+    agentCanRotate: node.certNotAfter ? !node.certFromHandshake : null,
     coreRestarts: (node.coreRestarts as NodeCoreRestarts | null) ?? null,
     coreVersion: node.coreVersion,
     lastInboundSyncAt: node.lastInboundSyncAt?.toISOString() ?? null,

@@ -55,6 +55,8 @@ export interface PresentedCert {
   fingerprint: string;
   /** As Node gives it, e.g. "DNS:a.example, IP Address:1.2.3.4"; "" without SANs. */
   subjectAltName: string;
+  /** The leaf's notAfter (A-221: the end of a node whose agent does not report it). */
+  notAfter: Date;
 }
 
 /** Node's colon-separated uppercase sha256 as the agent and keygen write it. */
@@ -240,7 +242,11 @@ export class NodeTransport {
         checkServerIdentity: (host: string, cert: PeerCertificate) => {
           const err = checkServerIdentity(host, cert);
           if (err) return err;
-          presented = { fingerprint: plainFingerprint(cert.fingerprint256), subjectAltName: cert.subjectaltname ?? '' };
+          presented = {
+            fingerprint: plainFingerprint(cert.fingerprint256),
+            subjectAltName: cert.subjectaltname ?? '',
+            notAfter: new Date(cert.valid_to),
+          };
           if (expectFingerprint && presented.fingerprint !== expectFingerprint) {
             return new Error(
               `node ${this.node.address} presented ${presented.fingerprint}, not the rotated ${expectFingerprint}`,

@@ -64,6 +64,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       protocol: true,
       singboxEngine: true,
       certNotAfter: true,
+      certFromHandshake: true,
     },
   });
 
@@ -136,7 +137,9 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // A-124: the certificate's end, same rule: undefined keeps what is
       // stored (unreachable, or an agent older than the field).
       const certChanged =
-        result.certNotAfter !== undefined && result.certNotAfter.getTime() !== node.certNotAfter?.getTime();
+        result.certNotAfter !== undefined &&
+        (result.certNotAfter.getTime() !== node.certNotAfter?.getTime() ||
+          result.certFromHandshake !== node.certFromHandshake);
       if (
         certChanged ||
         statusChanged ||
@@ -152,7 +155,9 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
           where: { id: node.id },
           data: {
             ...(intended ?? {}),
-            ...(certChanged ? { certNotAfter: result.certNotAfter } : {}),
+            ...(certChanged
+              ? { certNotAfter: result.certNotAfter, certFromHandshake: result.certFromHandshake === true }
+              : {}),
             status: result.status,
             lastStatusChange: statusChanged ? new Date() : undefined,
             lastStatusMessage: result.message,
@@ -270,6 +275,8 @@ interface PollResult {
   declaredEngines?: EngineName[];
   /** A-124: notAfter of the node's mTLS certificate; undefined keeps the stored one. */
   certNotAfter?: Date;
+  /** A-221: certNotAfter came off the handshake, the agent does not report it. */
+  certFromHandshake?: boolean;
   /**
    * `online`   - the agent answers and every configured core is serving.
    * `degraded`   - the agent answers, a configured core is not running. Still
@@ -490,6 +497,8 @@ async function checkOne(node: {
   /** Whether the panel has ever sent this node a chain block. See
    *  statusFromHealth: it decides whether a missing chain is a fault. */
   chainSentAt?: Date | null;
+  certNotAfter?: Date | null;
+  certFromHandshake?: boolean;
 }): Promise<PollResult> {
   try {
     const transport = new NodeTransport(node);
@@ -544,7 +553,7 @@ async function checkOne(node: {
       chain: res.chain ?? null,
       geo: res.geo ?? null,
       declaredEngines: res.declaredEngines,
-      certNotAfter: parseCertNotAfter(res.certNotAfter),
+      ...(await certEndOf(transport, node, res.certNotAfter)),
     };
   } catch (err) {
     if (err instanceof NodeRequestError) {
@@ -554,6 +563,44 @@ async function checkOne(node: {
       status: 'unreachable',
       message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
     };
+  }
+}
+
+/** How often the end of an old agent's certificate is read off a handshake. */
+const HANDSHAKE_CERT_REREAD_MS = 6 * 60 * 60 * 1000;
+const handshakeCertReadAt = new Map<string, number>();
+
+/** Test hook: forget when each node's certificate was last read off a handshake. */
+export function _resetHandshakeCertReadsForTest(): void {
+  handshakeCertReadAt.clear();
+}
+
+/**
+ * The certificate's end for this poll (A-124, A-221). The agent's own field
+ * when it sends one. Without it (an agent older than rotation) the end is read
+ * off the leaf the node presents on a handshake of its own, marked as such:
+ * that node cannot be renewed in place, but its operator can be told by when
+ * to update the agent. The extra handshake is made when nothing is stored, and
+ * then every six hours: the leaf of an old agent only changes by a reinstall.
+ * A failed read keeps what is stored.
+ */
+async function certEndOf(
+  transport: NodeTransport,
+  node: { id: string; certNotAfter?: Date | null; certFromHandshake?: boolean },
+  reported: string | undefined,
+): Promise<{ certNotAfter?: Date; certFromHandshake?: boolean }> {
+  const fromAgent = parseCertNotAfter(reported);
+  if (fromAgent) return { certNotAfter: fromAgent, certFromHandshake: false };
+  const last = handshakeCertReadAt.get(node.id);
+  const stale = !node.certNotAfter || !node.certFromHandshake || last === undefined || Date.now() - last >= HANDSHAKE_CERT_REREAD_MS;
+  if (!stale) return {};
+  try {
+    const presented = await transport.presentedCert();
+    handshakeCertReadAt.set(node.id, Date.now());
+    if (!Number.isFinite(presented.notAfter.getTime())) return {};
+    return { certNotAfter: presented.notAfter, certFromHandshake: true };
+  } catch {
+    return {};
   }
 }
 
