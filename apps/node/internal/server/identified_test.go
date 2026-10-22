@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
@@ -20,6 +21,36 @@ func (c *idCore) ApplyInbound(int, json.RawMessage) error { c.plain++; return ni
 func (c *idCore) ApplyIdentifiedInbound(id string, _ int, _ json.RawMessage) error {
 	c.ids = append(c.ids, id)
 	return nil
+}
+
+// scopedCore records the order of ScopePush, the applies and RetainInbounds.
+type scopedCore struct {
+	idCore
+	order []string
+}
+
+func (c *scopedCore) ScopePush(keep []string) {
+	c.order = append(c.order, "scope:"+strings.Join(keep, ","))
+}
+func (c *scopedCore) ApplyIdentifiedInbound(id string, _ int, _ json.RawMessage) error {
+	c.order = append(c.order, "apply:"+id)
+	return nil
+}
+func (c *scopedCore) RetainInbounds(keep []string) error {
+	c.order = append(c.order, "retain:"+strings.Join(keep, ","))
+	return nil
+}
+
+// A-199: the adapter learns what the push keeps BEFORE its inbounds apply.
+func TestAPushScopedAdapterIsScopedBeforeItsInboundsApply(t *testing.T) {
+	mieru := &scopedCore{idCore: idCore{fakeCore: fakeCore{name: "mieru", engine: "mieru", running: true}}}
+	s := serverWithStore(t, "", mieru)
+	s.applyPush(context.Background(), dto.ApplyInboundsRequest{Inbounds: []dto.InboundDto{
+		{ID: "new", Name: "one", Protocol: "mieru", Port: 0, Config: json.RawMessage(`{"mtu":1400}`)},
+	}})
+	if got := strings.Join(mieru.order, " "); got != "scope:new apply:new retain:new" {
+		t.Fatalf("order %q", got)
+	}
 }
 
 func TestAnIdentifiedApplierGetsThePushsInboundIDs(t *testing.T) {

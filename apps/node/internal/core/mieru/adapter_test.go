@@ -263,6 +263,75 @@ func TestASecondInboundWithAnotherMTUIsRefused(t *testing.T) {
 	}
 }
 
+// A-198, 22.10: a new agent over a mita the old one left RUNNING. The first
+// push without mieru must stop it, though this agent never started it.
+func TestTheFirstIdleAfterAnUpdateStopsTheMitaLeftRunning(t *testing.T) {
+	runner := &recordingRunner{}
+	a, _ := managedAdapter(t, runner)
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Idle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.joined()
+	if len(calls) != 1 || !strings.HasSuffix(calls[0], " stop") {
+		t.Fatalf("calls %v, want one mita stop", calls)
+	}
+	// After that, an idle mita is known idle: no stop on every push.
+	if err := a.Idle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(runner.joined()); n != 1 {
+		t.Fatalf("a second Idle stopped mita again: %v", runner.joined())
+	}
+}
+
+// A-199, 22.10: a binding re-created on the same port under a new id, in one
+// push. The server scopes the push first, so the new one is not refused
+// against the one it replaces, and mita keeps serving.
+func TestABindingRecreatedOnTheSamePortIsNotRefused(t *testing.T) {
+	runner := &recordingRunner{}
+	a, path := managedAdapter(t, runner)
+	if err := a.ApplyIdentifiedInbound("old", 9012, []byte(`{"mtu":1400}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The push, in the server's order: scope, apply, retain.
+	a.ScopePush([]string{"new"})
+	if err := a.ApplyIdentifiedInbound("new", 9012, []byte(`{"mtu":1400}`)); err != nil {
+		t.Fatalf("the re-created binding was refused: %v", err)
+	}
+	if err := a.RetainInbounds([]string{"new"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := bindingPorts(t, path); got != "9012/TCP 9012/UDP" {
+		t.Fatalf("bindings %q", got)
+	}
+	for _, c := range runner.joined() {
+		if strings.HasSuffix(c, " stop") {
+			t.Fatalf("mita was stopped: %v", runner.joined())
+		}
+	}
+}
+
+// A push that only deletes: the scope takes the inbound out, nothing is
+// applied for mieru, and RetainInbounds still renders without it.
+func TestAPushThatOnlyDeletesStillRendersWithoutTheDeletedOne(t *testing.T) {
+	a, path := managedAdapter(t, &recordingRunner{})
+	_ = a.ApplyIdentifiedInbound("in-1", 9012, []byte(`{"mtu":1400}`))
+	_ = a.ApplyIdentifiedInbound("in-2", 9013, []byte(`{"mtu":1400}`))
+	a.ScopePush([]string{"in-2"})
+	if err := a.ApplyIdentifiedInbound("in-2", 9013, []byte(`{"mtu":1400}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RetainInbounds([]string{"in-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := bindingPorts(t, path); got != "9013/TCP 9013/UDP" {
+		t.Fatalf("bindings %q, want in-2 alone", got)
+	}
+}
+
 func bindingPorts(t *testing.T, path string) string {
 	t.Helper()
 	blob, err := os.ReadFile(path)

@@ -61,6 +61,12 @@ type Adapter struct {
 	// serving: the last apply put mita's proxy up (`mita start`), and no Idle
 	// has stopped it since.
 	serving bool
+	// unknown: this agent has not yet stopped or started mita, so what mita
+	// runs is whatever the previous agent left (A-198).
+	unknown bool
+	// scopeDropped: ScopePush took inbounds out that this push no longer
+	// carries, and RetainInbounds has to render without them (A-199).
+	scopeDropped bool
 	// N6 - sha256 of the last successfully-applied rendered config. A sync that
 	// produces an identical blob skips the two `mita apply/reload` CLI forks.
 	renderedHash [32]byte
@@ -78,6 +84,7 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		logger:   logger,
 		users:    make(map[string]User),
 		inbounds: make(map[string]InboundConfig),
+		unknown:  true,
 	}
 }
 
@@ -133,7 +140,13 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
 	a.mu.Lock()
-	had := len(a.inbounds) > 0 || a.serving
+	// A-198, 22.10: a new agent knows nothing of the mita an older one left
+	// RUNNING (on 2012, with its users of that moment), so "nothing held,
+	// nothing to stop" let it serve on after the update, a removed user
+	// included. Until this agent has stopped or started mita once, Idle stops
+	// it whatever memory says.
+	had := len(a.inbounds) > 0 || a.serving || a.unknown
+	a.unknown = false
 	a.inbounds = make(map[string]InboundConfig)
 	a.serving = false
 	a.renderedHash = [32]byte{}
@@ -147,6 +160,31 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	}
 	a.logger.Info("mieru: no inbound in the last push, mita stopped")
 	return nil
+}
+
+// ScopePush implements core.PushScoped: before this push's inbounds are
+// applied, the ones it no longer carries leave the map, so a binding
+// re-created on the same port is not refused against the one it replaces, and
+// the render does not carry both. A-199, 22.10: the clash check ran against
+// the inbound the same push was deleting, answered "port taken" (500), and
+// RetainInbounds then stopped mita with nothing left. The render without them
+// happens in the apply that follows or, when the push applies nothing here,
+// in RetainInbounds.
+var _ core.PushScoped = (*Adapter)(nil)
+
+func (a *Adapter) ScopePush(keep []string) {
+	kept := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		kept[id] = true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id := range a.inbounds {
+		if !kept[id] {
+			delete(a.inbounds, id)
+			a.scopeDropped = true
+		}
+	}
 }
 
 // RetainInbounds implements core.InboundReconciler: forget the inbounds the
@@ -165,6 +203,10 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 			delete(a.inbounds, id)
 			dropped++
 		}
+	}
+	if a.scopeDropped {
+		dropped++
+		a.scopeDropped = false
 	}
 	left := len(a.inbounds)
 	a.mu.Unlock()
@@ -399,6 +441,7 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 
 	a.mu.Lock()
 	a.serving = true
+	a.unknown = false
 	a.renderedHash = hash
 	a.mu.Unlock()
 	a.logger.Info("mieru (mita) reloaded", "users", len(users), "inbounds", len(inbounds))

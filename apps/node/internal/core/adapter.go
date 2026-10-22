@@ -145,6 +145,15 @@ type IdentifiedApplier interface {
 	ApplyIdentifiedInbound(id string, port int, cfg json.RawMessage) error
 }
 
+// PushScoped is an OPTIONAL interface: the server tells the adapter, BEFORE it
+// applies the push's inbounds, which of its inbound ids the push carries, so
+// one deleted by this push does not stand in the way of one it creates (the
+// same port re-bound under a new id). RetainInbounds still runs after the
+// inbounds, as for every reconciler.
+type PushScoped interface {
+	ScopePush(keep []string)
+}
+
 // PolicyReceiver is an OPTIONAL interface for adapters that can render the
 // node-level routing policy (see dto.NodePolicy).
 //

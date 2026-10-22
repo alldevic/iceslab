@@ -1195,6 +1195,20 @@ func (s *Server) applyPushOutcome(
 	//
 	// Capped at the first three: a node with forty inbounds and a broken shared
 	// profile would otherwise answer with a wall of the same sentence.
+	//
+	// The set each adapter keeps, known before anything is applied: an adapter
+	// that checks one inbound against its others (mieru: port, MTU) must not
+	// check it against one this same push deletes (A-199).
+	keepByProtocol := make(map[string][]string, len(req.Inbounds))
+	for _, ib := range req.Inbounds {
+		key := string(ib.Protocol) + "|" + string(ib.ResolvedEngine())
+		keepByProtocol[key] = append(keepByProtocol[key], ib.ID)
+	}
+	for _, adapter := range s.cfg.Adapters {
+		if ps, ok := adapter.(core.PushScoped); ok {
+			ps.ScopePush(keepByProtocol[adapter.Name()+"|"+adapter.Engine()])
+		}
+	}
 	for i, ib := range req.Inbounds {
 		s.logger.Info("applyInbounds received",
 			"id", ib.ID, "name", ib.Name, "protocol", ib.Protocol, "port", ib.Port)
@@ -1238,11 +1252,6 @@ func (s *Server) applyPushOutcome(
 	// arrived for it, and let it drop the rest. Runs even when the list is
 	// empty for an adapter - that is exactly the "last inbound removed" case,
 	// and skipping it would leave a deleted inbound serving forever.
-	keepByProtocol := make(map[string][]string, len(req.Inbounds))
-	for _, ib := range req.Inbounds {
-		key := string(ib.Protocol) + "|" + string(ib.ResolvedEngine())
-		keepByProtocol[key] = append(keepByProtocol[key], ib.ID)
-	}
 	for _, adapter := range s.cfg.Adapters {
 		rec, ok := adapter.(core.InboundReconciler)
 		if !ok {
