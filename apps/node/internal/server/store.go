@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
 )
 
@@ -30,7 +31,29 @@ import (
 // is a bare JSON array. Refusing it would mean a node that restarts during the
 // rollout restores nothing, which is exactly the situation being fixed.
 func readPushStore(path string) (dto.ApplyInboundsRequest, error) {
-	var out dto.ApplyInboundsRequest
+	st, err := readStored(path)
+	return st.ApplyInboundsRequest, err
+}
+
+// storeFile is the file: the push as the cores took it, plus the policy and
+// resolver of each core that kept an older one (A-185). Agent-local, not the
+// contract: the wire never carries the two maps.
+type storeFile struct {
+	dto.ApplyInboundsRequest
+	// By coreKey: the block a core runs on when it refused the push's one.
+	// A JSON null is "none", which is what it ran before it had one.
+	PolicyByCore map[string]json.RawMessage `json:"policyByCore,omitempty"`
+	DnsByCore    map[string]json.RawMessage `json:"dnsByCore,omitempty"`
+}
+
+// coreKey names a core in the stored maps: the protocol and the engine, which
+// together tell the registered adapters apart.
+func coreKey(adapter core.CoreAdapter) string {
+	return adapter.Name() + "@" + adapter.Engine()
+}
+
+func readStored(path string) (storeFile, error) {
+	var out storeFile
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return out, err
@@ -62,8 +85,55 @@ func (s *Server) persistAccepted(req dto.ApplyInboundsRequest, o pushOutcome) er
 	defer s.storeMu.Unlock()
 	// No store yet, or one this agent cannot read: nothing to fall back to, so
 	// a refused part is simply not stored.
-	prev, _ := readPushStore(s.cfg.InboundsStorePath)
-	return writePushStore(s.cfg.InboundsStorePath, acceptedPush(prev, req, o))
+	prev, _ := readStored(s.cfg.InboundsStorePath)
+	out := storeFile{ApplyInboundsRequest: acceptedPush(prev.ApplyInboundsRequest, req, o)}
+	out.Policy, out.PolicyByCore = acceptedBlock(prev.Policy, prev.PolicyByCore, req.Policy, o.policyRefusedBy, o.policyTaken)
+	out.Dns, out.DnsByCore = acceptedBlock(prev.Dns, prev.DnsByCore, req.Dns, o.dnsRefusedBy, o.dnsTaken)
+	return writeStored(s.cfg.InboundsStorePath, out)
+}
+
+/*
+acceptedBlock is a node-level block (policy or resolver) as the cores took it,
+core by core (A-185, 22.10). It was one flag for all: one core refusing put the
+previous block in the store for every core, and a restart took the new one
+away from the core that had accepted it.
+
+  - nobody refused: the push's block, no exceptions;
+  - nobody took it (every core that renders it refused): the stored block and
+    the stored exceptions stay as they were;
+  - some took it: the push's block, and each core that refused keeps, as an
+    exception, the block it ran before (its own exception, or the stored one).
+*/
+func acceptedBlock(prev json.RawMessage, prevBy map[string]json.RawMessage, pushed json.RawMessage,
+	refusedBy map[string]bool, taken bool) (json.RawMessage, map[string]json.RawMessage) {
+	if len(refusedBy) == 0 {
+		return pushed, nil
+	}
+	if !taken {
+		return prev, prevBy
+	}
+	by := make(map[string]json.RawMessage, len(refusedBy))
+	for key := range refusedBy {
+		if old, ok := prevBy[key]; ok {
+			by[key] = old
+		} else {
+			by[key] = prev
+		}
+	}
+	return pushed, by
+}
+
+// blockFor is the block a core is given on a restore: its exception, or the
+// stored one. A stored null is no block.
+func blockFor(key string, stored json.RawMessage, by map[string]json.RawMessage) json.RawMessage {
+	b, ok := by[key]
+	if !ok {
+		return stored
+	}
+	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) {
+		return nil
+	}
+	return b
 }
 
 /*
@@ -72,8 +142,8 @@ acceptedPush is the push as the cores took it: what a restart has to come up on.
 A part a core refused is left running its previous version (xray keeps the
 running config, A-130; the chain process keeps its old process), so the store
 keeps that previous version too, out of the push it was in before. A refused
-inbound that had no previous version is not stored at all. A refused policy or
-resolver keeps the stored one the same way. Everything else is the new push:
+inbound that had no previous version is not stored at all. The policy and the
+resolver go core by core, see acceptedBlock. Everything else is the new push:
 the parts that applied, the deletions it made, and the node-level blocks the
 cores took.
 
@@ -99,12 +169,6 @@ func acceptedPush(prev, req dto.ApplyInboundsRequest, o pushOutcome) dto.ApplyIn
 			out.Inbounds = append(out.Inbounds, old)
 		}
 	}
-	if o.policyRefused {
-		out.Policy = prev.Policy
-	}
-	if o.dnsRefused {
-		out.Dns = prev.Dns
-	}
 	switch {
 	case o.chainRefused:
 		// What the chain runs on and the cores were drawn to, so a restart
@@ -128,11 +192,15 @@ func acceptedPush(prev, req dto.ApplyInboundsRequest, o pushOutcome) dto.ApplyIn
 // Mode 0600 because the configs embed REALITY private keys, WireGuard server
 // keys and the cascade's link credentials.
 func writePushStore(path string, req dto.ApplyInboundsRequest) error {
+	return writeStored(path, storeFile{ApplyInboundsRequest: req})
+}
+
+func writeStored(path string, st storeFile) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	body, err := json.MarshalIndent(req, "", "  ")
+	body, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}

@@ -1023,15 +1023,36 @@ type pushOutcome struct {
 	// userCoreRefused: the chain's userCore was malformed and no core was told
 	// about a cascade, so every core kept what it had.
 	userCoreRefused bool
-	// policyRefused / dnsRefused: a core refused the node-level block and
-	// kept the one it had.
-	policyRefused, dnsRefused bool
+	// policyRefusedBy / dnsRefusedBy: the cores (coreKey) that refused the
+	// node-level block and kept the one they had; policyTaken / dnsTaken: at
+	// least one core took it (A-185, the store keeps each core's version).
+	policyRefusedBy, dnsRefusedBy map[string]bool
+	policyTaken, dnsTaken         bool
+}
+
+// keptBlocks: on a restore, the policy and resolver of each core that kept an
+// older one (storeFile). Nil on a push from the panel.
+type keptBlocks struct {
+	policy, dns map[string]json.RawMessage
 }
 
 func (s *Server) applyPushOutcome(
 	ctx context.Context,
 	req dto.ApplyInboundsRequest,
+) pushOutcome {
+	return s.applyPushKept(ctx, req, nil)
+}
+
+func (s *Server) applyPushKept(
+	ctx context.Context,
+	req dto.ApplyInboundsRequest,
+	kept *keptBlocks,
 ) (o pushOutcome) {
+	o.policyRefusedBy = make(map[string]bool)
+	o.dnsRefusedBy = make(map[string]bool)
+	if kept == nil {
+		kept = &keptBlocks{}
+	}
 	o.refused = make(map[int]bool)
 	var applied, failed int
 	var reasons []string
@@ -1065,11 +1086,14 @@ func (s *Server) applyPushOutcome(
 		if !ok {
 			continue
 		}
-		if err := pr.ApplyPolicy(req.Policy); err != nil {
+		key := coreKey(adapter)
+		if err := pr.ApplyPolicy(blockFor(key, req.Policy, kept.policy)); err != nil {
 			s.logger.Error("adapter ApplyPolicy failed", "core", adapter.Name(), "err", err)
-			o.policyRefused = true
+			o.policyRefusedBy[key] = true
 			failed++
 			reasons = append(reasons, fmt.Sprintf("policy (%s): %v", adapter.Name(), err))
+		} else {
+			o.policyTaken = true
 		}
 	}
 
@@ -1083,11 +1107,14 @@ func (s *Server) applyPushOutcome(
 		if !ok {
 			continue
 		}
-		if err := dr.ApplyDns(req.Dns); err != nil {
+		key := coreKey(adapter)
+		if err := dr.ApplyDns(blockFor(key, req.Dns, kept.dns)); err != nil {
 			s.logger.Error("adapter ApplyDns failed", "core", adapter.Name(), "err", err)
-			o.dnsRefused = true
+			o.dnsRefusedBy[key] = true
 			failed++
 			reasons = append(reasons, fmt.Sprintf("dns (%s): %v", adapter.Name(), err))
+		} else {
+			o.dnsTaken = true
 		}
 	}
 
@@ -1544,7 +1571,8 @@ func (s *Server) restoreFromStore(ctx context.Context) {
 	if s.cfg.InboundsStorePath == "" {
 		return
 	}
-	req, err := readPushStore(s.cfg.InboundsStorePath)
+	st, err := readStored(s.cfg.InboundsStorePath)
+	req := st.ApplyInboundsRequest
 	if err != nil {
 		if !os.IsNotExist(err) {
 			s.logger.Warn("restore from disk: cannot read the last push",
@@ -1564,9 +1592,12 @@ func (s *Server) restoreFromStore(ctx context.Context) {
 		}
 	}
 
+	// Each core back on the policy and resolver it ran, which for a core that
+	// refused the last push's is an older one (A-185).
 	s.pushMu.Lock()
-	applied, failed, reasons := s.applyPush(ctx, req)
+	o := s.applyPushKept(ctx, req, &keptBlocks{policy: st.PolicyByCore, dns: st.DnsByCore})
 	s.pushMu.Unlock()
+	applied, failed, reasons := o.applied, o.failed, o.reasons
 	if failed > 0 {
 		s.logger.Error("restored from disk with failures",
 			"applied", applied, "failed", failed,
