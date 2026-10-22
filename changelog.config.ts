@@ -1,4 +1,5 @@
-// Список изменений GitHub-релиза: grouped conventional-commit changelog,
+// Список изменений GitHub-релиза (группы feat, fix, perf, refactor, docs,
+// build, chore, ci): grouped conventional-commit changelog,
 // который собирает changelogen в .github/workflows/release.yml (через
 // .github/scripts/release-notes.mjs). CHANGELOG.md он не трогает.
 //
@@ -19,7 +20,10 @@ export default {
     docs: { title: '📖 Documentation' },
     chore: { title: '🏡 Chore' },
     ci: { title: '🤖 CI' },
-    build: false,
+    // Dockerfile и базовый образ касаются оператора напрямую (смена
+    // node-образа меняет то, что крутится у него в проде), поэтому строкой,
+    // а не в свёртку зависимостей.
+    build: { title: '🧱 Build' },
     types: false,
     examples: false,
     test: false,
