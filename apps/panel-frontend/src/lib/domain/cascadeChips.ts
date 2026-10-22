@@ -47,7 +47,14 @@ export interface CoreChip {
 
 const LABEL: Partial<Record<EngineName, string>> = { singbox: 'sing-box', amneziawg: 'AWG' };
 
-export function legEngine(cell: string | null | undefined): EngineName {
+/**
+ * The engine a leg runs on. On an agent that carries legs only through its
+ * chain (`cores.chainEngine`, E46) that is the chain engine for every cell,
+ * as the server decides it (cell-carriage.ts); the table below is the rule for
+ * agents older than the chain (A-170).
+ */
+export function legEngine(cell: string | null | undefined, chainEngine?: EngineName | null): EngineName {
+  if (chainEngine) return chainEngine;
   if (cell === 'hy2' || cell === 'tuic') return 'singbox';
   return linkCellPair(cell ?? 'vless')?.engine ?? 'xray';
 }
@@ -75,8 +82,9 @@ export function cascadeNodeChips(
   if (role === 'entry' && legs.entryProtocol) add(nativeEngineOfIntent(legs.entryProtocol));
   // `undefined` is «this screen does not know the leg» and adds nothing; `null`
   // is an unset cell, i.e. the default vless leg on xray.
-  if (role !== 'entry' && legs.inLeg !== undefined) add(legEngine(legs.inLeg));
-  if (role !== 'exit' && legs.outLeg !== undefined) add(legEngine(legs.outLeg));
+  const chain = node.cores?.chainEngine;
+  if (role !== 'entry' && legs.inLeg !== undefined) add(legEngine(legs.inLeg, chain));
+  if (role !== 'exit' && legs.outLeg !== undefined) add(legEngine(legs.outLeg, chain));
   // A leg inside an AmneziaWG tunnel: both ends raise it.
   if ((role !== 'entry' && legs.inUnderlay === 'awg') || (role !== 'exit' && legs.outUnderlay === 'awg')) {
     add('amneziawg');

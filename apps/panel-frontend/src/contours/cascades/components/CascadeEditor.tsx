@@ -53,10 +53,10 @@ import {
   engineListWords,
   isRealisedLinkCell,
   linkCellOptions,
-  nodeCarriesCascadeLink,
   legCellName,
   pairCaveats,
 } from '@/lib/domain/engines';
+import { nodeCarriesCell } from '@/lib/domain/linkCells';
 
 /**
  * The pieces both cascade pages are built from. Creating and editing a cascade
@@ -361,7 +361,12 @@ export function NodeSelect({
                 </Text>
               )),
             )}
-            {node && needsLink && nodeCarriesCascadeLink(node) === false && (
+            {/* As the server decides it (A-170): the cell of THIS leg on this
+                node, through the chain engine when the agent has one
+                (nodeCarriesCell, E46). «Is xray there» said no to a sing-box
+                transit the server takes, and yes to an xray-only node it refuses.
+                An unset cell is the default vless leg. */}
+            {node && needsLink && nodeCarriesCell(node, legs?.outLeg ?? 'vless') === false && (
               <Text
                 title={t('engine.legWhy')}
                 style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: AMBER, flexShrink: 0 }}
@@ -489,7 +494,10 @@ export function PositionRow({
   onDown,
   onDelete,
   children,
+  linkCell,
 }: {
+  /** The cell of the leg this position dials: what its pool has to carry (A-170). */
+  linkCell?: string | null;
   role: HopRole;
   poolLabel: string;
   nodeIds: string[];
@@ -537,9 +545,9 @@ export function PositionRow({
           claimedBy={claimedBy}
           usedElsewhere={usedElsewhere}
           meta={role === 'entry' ? 'core' : 'status'}
-          // The leg's cell is picked under the pool, not here: only the
-          // entry protocol is known to this row, the leg is left unsaid.
-          legs={{ entryProtocol }}
+          // The leg's cell is picked under the pool; the page hands it in so
+          // the pickers judge the cell this pool has to carry (A-170).
+          legs={{ entryProtocol, ...(linkCell !== undefined ? { outLeg: linkCell } : {}) }}
           // Every position links onward, to the next position or to the
           // directions, so every machine in a pool has to be able to build one.
           needsLink

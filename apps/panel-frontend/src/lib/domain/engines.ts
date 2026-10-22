@@ -258,19 +258,6 @@ export function nodeRunsEngine(
 }
 
 /**
- * Can this node carry a leg of a cascade.
- *
- * Both realised link cells (vless and shadowsocks-2022) are built into the xray
- * config of the node, see cascade.config.ts:16-18 in the backend, so the
- * question is whether xray is among the cores it reported. Undefined while it
- * has reported nothing: a node may well be running xray under a label that says
- * something else.
- */
-export function nodeCarriesCascadeLink(node: Pick<Node, 'engines'>): boolean | undefined {
-  return nodeRunsEngine(node, 'xray');
-}
-
-/**
  * Пары «протокол + движок» у тех ячеек, за которыми стоит ровно одна пара.
  *
  * Список ячеек СВОЙ здесь больше не объявляется: он в контракте (`LINK_CELLS`

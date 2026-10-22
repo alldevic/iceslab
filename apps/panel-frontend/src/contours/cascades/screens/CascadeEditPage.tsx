@@ -839,6 +839,7 @@ export function CascadeEditPage() {
                 role={poolRoleAt(i)}
                 poolLabel={i === 0 ? t('cascadeCreate.poolEntry') : t('cascadeCreate.poolTransit')}
                 nodeIds={pool.nodeIds}
+                linkCell={pool.linkProtocol}
                 nodes={nodes}
                 claimedBy={claimedBy}
                 usedElsewhere={othersThan(pool.nodeIds)}

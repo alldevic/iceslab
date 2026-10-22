@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cascadeNodeChips, coreChipText, legEngine } from '@/lib/domain/cascadeChips';
+import { nodeCarriesCell } from '@/lib/domain/linkCells';
 import type { Node, NodeCore } from '@/lib/domain/nodes';
 
 const core = (c: Partial<NodeCore> & { name: NodeCore['name'] }): NodeCore => c as NodeCore;
@@ -73,7 +74,19 @@ describe('cascadeNodeChips: only the cores the cascade uses on the node', () => 
   });
 
   it('ячейки ног: vless и shadowsocks у xray, hy2 и tuic у sing-box', () => {
-    expect(['vless', 'xray', 'shadowsocks', null].map(legEngine)).toEqual(['xray', 'xray', 'xray', 'xray']);
-    expect(['hy2', 'tuic'].map(legEngine)).toEqual(['singbox', 'singbox']);
+    expect(['vless', 'xray', 'shadowsocks', null].map((c) => legEngine(c))).toEqual(['xray', 'xray', 'xray', 'xray']);
+    expect(['hy2', 'tuic'].map((c) => legEngine(c))).toEqual(['singbox', 'singbox']);
+    // A-170: на агенте с цепью ногу любой ячейки несёт движок цепи.
+    expect(['vless', 'shadowsocks', null].map((c) => legEngine(c, 'singbox'))).toEqual(['singbox', 'singbox', 'singbox']);
+  });
+});
+
+describe('A-170: подсказка «ногой быть не может» по nodeCarriesCell с chainEngine', () => {
+  it('нода только с sing-box на агенте с цепью ногу vless несёт; только с xray нет', () => {
+    expect(nodeCarriesCell({ engines: ['singbox'], cores: { chainEngine: 'singbox' } }, 'vless')).toBe(true);
+    expect(nodeCarriesCell({ engines: ['xray'], cores: { chainEngine: 'singbox' } }, 'vless')).toBe(false);
+  });
+  it('нода не отчиталась: подсказка молчит', () => {
+    expect(nodeCarriesCell({}, 'vless')).toBeUndefined();
   });
 });
