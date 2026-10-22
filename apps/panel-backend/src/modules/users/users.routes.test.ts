@@ -74,7 +74,26 @@ describe('POST /api/users', () => {
     });
 
     expect(res.statusCode).toBe(409);
-    expect(JSON.parse(res.body).error).toBe('CONFLICT');
+    // A-210: its own code, not the CONFLICT a taken token also got.
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'USERNAME_TAKEN', field: 'username' });
+  });
+
+  it('returns 409 SUBSCRIPTION_TOKEN_TAKEN when the imported token is taken (A-210)', async () => {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: auth(),
+      payload: { username: 'tok-a', subscriptionToken: 'imported-token-0001' },
+    });
+    expect(first.statusCode, first.body).toBe(201);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: auth(),
+      payload: { username: 'tok-b', subscriptionToken: 'imported-token-0001' },
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'SUBSCRIPTION_TOKEN_TAKEN', field: 'subscriptionToken' });
   });
 
   it('returns 400 for invalid traffic strategy', async () => {

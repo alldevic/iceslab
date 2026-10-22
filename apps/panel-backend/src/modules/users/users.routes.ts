@@ -83,11 +83,16 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       const user = await usersService.createUser(input);
       return reply.code(201).send(user);
     } catch (err) {
+      // Two refusals, two codes (A-210, 22.10): both were CONFLICT, and the
+      // screen could tell the taken name from the taken token only by
+      // parsing the English sentence. The field travels too.
       if (err instanceof usersService.UserAlreadyExistsError) {
-        return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+        return reply.code(409).send({ error: 'USERNAME_TAKEN', message: err.message, field: 'username' });
       }
       if (err instanceof usersService.SubscriptionTokenTakenError) {
-        return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+        return reply
+          .code(409)
+          .send({ error: 'SUBSCRIPTION_TOKEN_TAKEN', message: err.message, field: 'subscriptionToken' });
       }
       throw err;
     }

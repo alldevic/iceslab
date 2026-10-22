@@ -64,6 +64,14 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
+/** The columns or constraint a P2002 names (`meta.target`: a list of fields,
+ *  or the constraint's name), as strings; empty when it names none. */
+function uniqueTargetNames(err: unknown): string[] {
+  const target = (err as { meta?: { target?: unknown } }).meta?.target;
+  if (Array.isArray(target)) return target.map(String);
+  return typeof target === 'string' ? [target] : [];
+}
+
 // ───── Service methods ─────
 
 export async function createUser(input: CreateUserInput): Promise<PublicUserDto> {
@@ -147,6 +155,10 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
     // loser surfaces here as P2002 instead of a raw 500. Mirrors
     // nodes.service.ts createNode.
     if (isUniqueViolation(err)) {
+      // The race can be lost on the imported token as well (A-210): say which.
+      if (input.subscriptionToken && uniqueTargetNames(err).some((t) => /subscription_?token/i.test(t))) {
+        throw new SubscriptionTokenTakenError(input.subscriptionToken);
+      }
       throw new UserAlreadyExistsError(input.username);
     }
     throw err;
