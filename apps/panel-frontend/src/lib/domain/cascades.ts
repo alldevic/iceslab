@@ -345,6 +345,43 @@ export function cascadeDeleteRefusal(err: unknown): CascadeDeleteRefusal | null 
   return { kind: 'refused', code: typeof error === 'string' ? error : '', message };
 }
 
+/**
+ * A-101 (BACK 7c5e3ed7): a node carries one ENABLED cascade. The server
+ * refuses 409 NODE_IN_OTHER_CASCADE { nodeName, cascadeId, cascadeName } when
+ * a save would put a node of an enabled cascade into a second enabled one:
+ * on create of an enabled cascade, on an edit that changes its members
+ * (hops, positions, directions), and on switching one on. A rename alone
+ * passes. Input checked first; without the node or the other cascade named
+ * the refusal is not read here (the server's sentence still says it).
+ */
+export interface NodeInOtherCascade {
+  nodeName: string;
+  cascadeId: string | null;
+  cascadeName: string;
+}
+
+export function nodeInOtherCascadeRefusal(err: unknown): NodeInOtherCascade | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 409 || !data || typeof data !== 'object') return null;
+  const d = data as { error?: unknown; nodeName?: unknown; cascadeId?: unknown; cascadeName?: unknown };
+  if (d.error !== 'NODE_IN_OTHER_CASCADE') return null;
+  if (typeof d.nodeName !== 'string' || d.nodeName === '') return null;
+  if (typeof d.cascadeName !== 'string' || d.cascadeName === '') return null;
+  return {
+    nodeName: d.nodeName,
+    cascadeId: typeof d.cascadeId === 'string' && d.cascadeId !== '' ? d.cascadeId : null,
+    cascadeName: d.cascadeName,
+  };
+}
+
+/** The refusal in the panel's words, one sentence for create, edit and the toggle. */
+export function nodeInOtherCascadeWords(r: NodeInOtherCascade, t: (key: string, opts?: Record<string, string>) => string): string {
+  return t('cascades.nodeInOtherCascade', { node: r.nodeName, cascade: r.cascadeName });
+}
+
 export async function createCascadeV4(input: CreateCascadeV4Input): Promise<Cascade> {
   const { data } = await api.post<Cascade>('/api/cascades', input);
   return data;

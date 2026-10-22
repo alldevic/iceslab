@@ -18,6 +18,7 @@ const v4: C = {
   id: 'c1',
   name: 'first',
   mode: 'balancer',
+  enabled: true,
   hops: [],
   positions: [pos(0, ['x', 'y']), pos(1, ['t'])],
   directions: [dir(['d1'], 'DE', 1), dir([], '', 2)],
@@ -26,6 +27,7 @@ const old: C = {
   id: 'c2',
   name: 'legacy',
   mode: 'chain',
+  enabled: true,
   hops: [hop('h1', 0), hop('h2', 1), hop('h3', 2)],
   positions: [],
   directions: [],
@@ -47,9 +49,21 @@ describe('cascadeMemberships (A-144): v4 по позициям и направл
     expect(['h1', 'h2', 'h3'].map((id) => m.get(id)?.role)).toEqual(['entry', 'transit', 'exit']);
   });
 
-  it('нода в двух каскадах: первый в списке держит её, как генератор', () => {
+  it('нода в двух каскадах: первый в порядке сервера держит её, как генератор (A-101)', () => {
     const second: C = { ...old, id: 'c3', name: 'second', hops: [hop('x', 0)] };
     expect(cascadeMemberships([v4, second]).get('x')?.cascade.name).toBe('first');
+    // Порядок сервера (старший первым) не пересортировывается: первый в списке и держит.
+    expect(cascadeMemberships([second, v4]).get('x')?.cascade.name).toBe('second');
+  });
+
+  it('A-101: выключенный каскад ноду не держит, держит первый включённый', () => {
+    const off: C = { ...v4, id: 'c0', name: 'off', enabled: false };
+    const on: C = { ...old, id: 'c3', name: 'on', hops: [hop('x', 0)] };
+    expect(cascadeMemberships([off, on]).get('x')?.cascade.name).toBe('on');
+    expect(cascadeMemberships([off]).size).toBe(0);
+    // Отметка «в каскаде X» при выборе ноды тоже только от включённых.
+    expect(cascadeClaims([off, on]).get('x')).toBe('on');
+    expect(cascadeClaims([off]).has('x')).toBe(false);
   });
 
   it('вход каскада для «сегодня через каскады»: весь пул входа', () => {

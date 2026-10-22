@@ -13,6 +13,8 @@ import {
   cascadeShapeError,
   getCascadeStatus,
   listCascades,
+  nodeInOtherCascadeRefusal,
+  nodeInOtherCascadeWords,
   updateCascadeV4,
   type Cascade,
   type CascadeProtocol,
@@ -448,6 +450,13 @@ export function CascadeEditPage() {
       // something this page did not. Its sentence is the useful one, and it
       // stays ON SCREEN rather than in a toast: the server names the place
       // («direction "DE"»), and it is read next to the rows it is about.
+      // A-101: a member change put a node of this enabled cascade into another
+      // enabled one. On screen, beside the rows, in the panel's words.
+      const taken = nodeInOtherCascadeRefusal(err);
+      if (taken) {
+        setSaveRefusal(nodeInOtherCascadeWords(taken, t));
+        return;
+      }
       const shape = cascadeShapeError(err);
       if (shape) {
         setSaveRefusal(shape);

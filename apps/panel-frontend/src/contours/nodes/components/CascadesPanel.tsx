@@ -9,6 +9,8 @@ import {
   cascadeToggleRefusal,
   deleteCascade,
   listCascades,
+  nodeInOtherCascadeRefusal,
+  nodeInOtherCascadeWords,
   setCascadeEnabled,
   type Cascade,
 } from '@/lib/domain/cascades';
@@ -87,7 +89,10 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
       const refusal = cascadeToggleRefusal(err);
       if (!refusal) return onError(err);
       invalidate();
-      setRefusals((r) => ({ ...r, [c.id]: { action: 'enable', ...refusal } }));
+      // A-101: the node and the cascade that holds it, in the panel's words.
+      const taken = nodeInOtherCascadeRefusal(err);
+      const message = taken ? nodeInOtherCascadeWords(taken, t) : refusal.message;
+      setRefusals((r) => ({ ...r, [c.id]: { action: 'enable', code: refusal.code, message } }));
     },
   });
   const pendingId = enableMutation.isPending ? enableMutation.variables.id : null;

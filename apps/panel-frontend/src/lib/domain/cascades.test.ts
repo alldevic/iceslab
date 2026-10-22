@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { cascadeDeleteRefusal, cascadeShapeError, cascadeToggleRefusal } from '@/lib/domain/cascades';
+import {
+  cascadeDeleteRefusal,
+  cascadeShapeError,
+  cascadeToggleRefusal,
+  nodeInOtherCascadeRefusal,
+  nodeInOtherCascadeWords,
+} from '@/lib/domain/cascades';
 
 const res = (status: number, data: unknown) => ({ response: { status, data } });
 
@@ -82,5 +88,27 @@ describe('cascadeToggleRefusal (A-126)', () => {
     expect(cascadeToggleRefusal(res(500, { error: 'INTERNAL', message: 'boom' }))).toBeNull();
     expect(cascadeToggleRefusal(res(400, { error: 'INVALID' }))).toBeNull();
     expect(cascadeToggleRefusal(res(400, 'text'))).toBeNull();
+  });
+});
+
+describe('nodeInOtherCascadeRefusal (A-101)', () => {
+  const body = { error: 'NODE_IN_OTHER_CASCADE', message: 'Node "nl-exit" is already in ...', nodeName: 'nl-exit', cascadeId: 'c1', cascadeName: 'first' };
+
+  it('409 с нодой и каскадом: читается, слова панели называют обоих', () => {
+    const r = nodeInOtherCascadeRefusal(res(409, body));
+    expect(r).toEqual({ nodeName: 'nl-exit', cascadeId: 'c1', cascadeName: 'first' });
+    const t = (k: string, o?: Record<string, string>) => `${k} ${JSON.stringify(o)}`;
+    expect(nodeInOtherCascadeWords(r!, t)).toBe('cascades.nodeInOtherCascade {"node":"nl-exit","cascade":"first"}');
+    expect(nodeInOtherCascadeRefusal(res(409, { ...body, cascadeId: undefined }))?.cascadeId).toBeNull();
+  });
+
+  it('тот же отказ виден и общему парсеру тумблера, код не теряется', () => {
+    expect(cascadeToggleRefusal(res(409, body))?.code).toBe('NODE_IN_OTHER_CASCADE');
+  });
+
+  it('мусор, чужой код, не 409 или без имён: null', () => {
+    for (const e of [null, 'x', new Error('net'), { response: null }, res(409, null), res(409, { ...body, error: 'CONFLICT' }), res(400, body), res(409, { ...body, nodeName: '' }), res(409, { ...body, cascadeName: 7 })]) {
+      expect(nodeInOtherCascadeRefusal(e)).toBeNull();
+    }
   });
 });

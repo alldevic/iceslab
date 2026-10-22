@@ -10,6 +10,8 @@ import {
   cascadeShapeError,
   createCascadeV4,
   listCascades,
+  nodeInOtherCascadeRefusal,
+  nodeInOtherCascadeWords,
   type CascadeProtocol,
 } from '@/lib/domain/cascades';
 import { listAllNodes } from '@/lib/domain/nodes';
@@ -381,10 +383,12 @@ export function CascadeCreatePage() {
       // The form blocks both unstorable shapes, so a 400 here means the API saw
       // something this page did not. Its sentence is the useful one, not ours.
       const shape = cascadeShapeError(err);
+      // A-101: a picked node already carries another enabled cascade.
+      const taken = nodeInOtherCascadeRefusal(err);
       notifications.show({
         color: 'red',
         title: t('common.createError'),
-        message: shape ?? apiErrorMessage(err),
+        message: taken ? nodeInOtherCascadeWords(taken, t) : (shape ?? apiErrorMessage(err)),
       });
     },
   });

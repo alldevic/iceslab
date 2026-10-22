@@ -11,13 +11,18 @@ import type { Cascade } from '@/lib/domain/cascades';
  * filed it under «single», the node page said its traffic leaves directly.
  * Positions and directions first; hops only for a cascade stored the old way.
  *
- * The generator takes the first enabled cascade a node belongs to, so the
- * first cascade in the list keeps the node here too. A-101 (BACK) changes that
- * server rule; this one follows it when it lands, not before.
+ * A-101 (BACK 7c5e3ed7): a node carries one ENABLED cascade. A save that
+ * would put it in a second one is refused 409 NODE_IN_OTHER_CASCADE, and a
+ * pair stored before the rule is held by the OLDEST enabled cascade
+ * (createdAt, then id), which is also the order GET /api/cascades answers in.
+ * So only enabled cascades count here, in the server's order, never re-sorted:
+ * the first one that names the node holds it, and the «in cascade X» note at
+ * pick time names the cascade the server would refuse over. A switched-off
+ * cascade holds nothing: it is not drawn on the node.
  */
 export type CascadeRole = 'entry' | 'transit' | 'exit';
 
-type Shape = Pick<Cascade, 'id' | 'name' | 'mode' | 'hops' | 'positions' | 'directions'>;
+type Shape = Pick<Cascade, 'id' | 'name' | 'mode' | 'enabled' | 'hops' | 'positions' | 'directions'>;
 
 /** Every node of one cascade with its role, in path order, each node once. */
 export function cascadeMembers(c: Shape): { nodeId: string; role: CascadeRole }[] {
@@ -50,7 +55,7 @@ export function cascadeMemberships<C extends Shape>(
 ): Map<string, { cascade: C; role: CascadeRole }> {
   const m = new Map<string, { cascade: C; role: CascadeRole }>();
   for (const c of cascades) {
-    if (c.id === exceptId) continue;
+    if (c.id === exceptId || !c.enabled) continue;
     for (const { nodeId, role } of cascadeMembers(c)) if (!m.has(nodeId)) m.set(nodeId, { cascade: c, role });
   }
   return m;

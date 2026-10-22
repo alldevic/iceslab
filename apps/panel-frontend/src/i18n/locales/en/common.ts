@@ -322,6 +322,8 @@ export const common = {
     },
     deleted: 'Cascade deleted',
     alreadyDeleted: 'The cascade is already gone: it was deleted earlier.',
+    nodeInOtherCascade:
+      'Node {{node}} is already in the enabled cascade «{{cascade}}». A node carries one enabled cascade: take it out of that one or switch that one off, then try again.',
     saved: 'Cascade saved',
     provisioning: 'Applying the config on the nodes...',
     provisioned: 'Every node applied the new config.',
