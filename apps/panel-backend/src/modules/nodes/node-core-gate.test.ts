@@ -306,10 +306,18 @@ describe('the AmneziaWG generation gate (t07-1)', () => {
     const onlyOne = await makeNode();
     await report(onlyOne, [awgRow(3, '3.1.20260906', [1])], 'amd64');
     const never = await makeNode();
-    for (const res of [await bind(three, old, 51820), await bind(three, onlyOne, 51820), await host(three, never, 51820)]) {
+    for (const res of [await bind(three, old, 51820), await bind(three, onlyOne, 51820)]) {
       expect(res.statusCode, res.body).toBe(409);
-      expect(JSON.parse(res.body)).toMatchObject({ error: 'AWG_AGENT_TOO_OLD' });
+      expect(JSON.parse(res.body)).toMatchObject({ error: 'AWG_AGENT_TOO_OLD', neverReported: false });
+      expect(JSON.parse(res.body).message).toContain('Rebuild the agent');
     }
+    // A-160: a node that has not reported at all is not an old agent: the same
+    // refusal, saying to wait for the first poll, with the flag for the wizard.
+    const first = await host(three, never, 51820);
+    expect(first.statusCode, first.body).toBe(409);
+    expect(JSON.parse(first.body)).toMatchObject({ error: 'AWG_AGENT_TOO_OLD', neverReported: true });
+    expect(JSON.parse(first.body).message).toContain('has not reported yet');
+    expect(JSON.parse(first.body).message).not.toContain('Rebuild');
     // A 1.x profile asks nothing of the agent.
     const one = await makeProfile('amneziawg', { ...AWG, subnet: '10.68.68.0/24' });
     expect((await bind(one, old, 51821)).statusCode).toBe(201);

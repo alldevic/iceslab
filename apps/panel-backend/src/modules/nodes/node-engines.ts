@@ -153,12 +153,15 @@ export function renderableAtSave(
   const engines = reportedEngines(node);
   const wanted = effectiveEngineOf(profile);
   if (!engines) return { ok: true, engines: [], wanted, justEnabled: false };
-  // The narrow edge: the operator switches sing-box on for a node that has
-  // already reported, and between that click and the next poll the report still
-  // says what it said before. The pair is legitimate and the refusal is only
-  // "not yet". Falling back to intent to avoid it is what we just measured as
-  // wrong, so the difference is carried in the MESSAGE instead: this is the one
-  // job intendedEngines still has.
+  // The engine is DECLARED and not reported: since E42 intendedEngines follows
+  // the env blocks the node's bootstraps wrote, so this reads "the agent's env
+  // names the engine, its report has no such core". Right after a bootstrap
+  // the next poll shows it; past that the bootstrap failed or the binary went
+  // (A-160/A-161, 22.10: the field once meant "just switched on in the panel",
+  // and the sentence built on it promised a poll that never helped). The
+  // refusal stands either way, falling back to intent is what was measured as
+  // wrong; the difference travels in the message. The name `justEnabled` (and
+  // `canWait` on the wire) stays.
   const justEnabled = !engines.includes(wanted) && intendedEngines(node).includes(wanted);
   return { ok: engines.includes(wanted), engines, wanted, justEnabled };
 }

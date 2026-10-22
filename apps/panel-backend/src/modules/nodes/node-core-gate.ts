@@ -96,10 +96,19 @@ export class AwgProtocolMismatchError extends Error {
  */
 export class AwgAgentTooOldError extends Error {
   readonly code = 'AWG_AGENT_TOO_OLD';
-  constructor(public nodeName: string) {
+  constructor(
+    public nodeName: string,
+    /** A-160: the node has not reported at all yet (a node just created, before
+     *  its first poll), so nothing says its agent is old: the profile binds
+     *  after that poll, and rebuilding is not the advice. */
+    public neverReported = false,
+  ) {
     super(
-      `The agent on node "${nodeName}" is older than the AmneziaWG 3.1 interface. ` +
-        `Rebuild the agent on the node, then bind the 3.1 profile.`,
+      neverReported
+        ? `Node "${nodeName}" has not reported yet. A 3.1 AmneziaWG profile binds once the first ` +
+            `status poll shows the agent brings up a 3.1 interface.`
+        : `The agent on node "${nodeName}" is older than the AmneziaWG 3.1 interface. ` +
+            `Rebuild the agent on the node, then bind the 3.1 profile.`,
     );
     this.name = 'AwgAgentTooOldError';
   }
@@ -154,7 +163,7 @@ export function assertAwgProtocolOnNode(
   const has = reportedAwgProtocol(cores);
   if (has === 1) throw new AwgProtocolMismatchError(node.name, wanted, has);
   // Not the fact-only rule: see AwgAgentTooOldError.
-  if (!agentCarriesAwg3(cores)) throw new AwgAgentTooOldError(node.name);
+  if (!agentCarriesAwg3(cores)) throw new AwgAgentTooOldError(node.name, cores === null);
 }
 
 /**
@@ -273,7 +282,10 @@ export function coreGateReply(err: unknown): { status: 409; body: Record<string,
     };
   }
   if (err instanceof AwgAgentTooOldError) {
-    return { status: 409, body: { error: err.code, message: err.message, nodeName: err.nodeName } };
+    return {
+      status: 409,
+      body: { error: err.code, message: err.message, nodeName: err.nodeName, neverReported: err.neverReported },
+    };
   }
   if (err instanceof AwgSubnetOverlapError) {
     return {
