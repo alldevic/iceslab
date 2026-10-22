@@ -19,6 +19,7 @@ import { readChainSecret } from './chain-secret.js';
 import { PolicyDoesNotFitNodeError } from '../node-policies/node-policies.service.js';
 import * as bootstrap from './bootstrap.service.js';
 import { getPanelPublicIp } from './panel-ip.js';
+import { NodeCertRotationError, rotateNodeCert } from './node-cert-rotation.js';
 
 /**
  * Derive the panel URL the admin is currently using to talk to the API.
@@ -137,6 +138,24 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
       }
       if (err instanceof nodesService.HysteriaTlsNotSelfSignedError) {
         return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName });
+      }
+      throw err;
+    }
+  });
+
+  // A-124: renew the node's mTLS server certificate now, the cron's work done
+  // on request. 200 { fingerprint, notAfter }. 404 unknown node; 409
+  // UPDATE_AGENT (the agent has no rotation), PENDING (an earlier one waits
+  // for its confirm); 502 for a node that refused the pair, did not confirm,
+  // or did not answer: the node keeps or goes back to its old pair.
+  app.post('/api/nodes/:id/cert/rotate', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    try {
+      return reply.send(await rotateNodeCert(params.id));
+    } catch (err) {
+      if (err instanceof NodeCertRotationError) {
+        const status = err.code === 'NODE_NOT_FOUND' ? 404 : err.code === 'UPDATE_AGENT' || err.code === 'PENDING' ? 409 : 502;
+        return reply.code(status).send({ error: `CERT_${err.code}`, message: err.message });
       }
       throw err;
     }

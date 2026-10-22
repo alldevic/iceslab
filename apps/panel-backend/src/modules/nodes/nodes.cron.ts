@@ -63,6 +63,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       intendedEngines: true,
       protocol: true,
       singboxEngine: true,
+      certNotAfter: true,
     },
   });
 
@@ -132,7 +133,12 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // (E42). null = nothing to write: an older agent, an unreadable env, or
       // the same set as stored.
       const intended = intendedFromReport(node, result.declaredEngines);
+      // A-124: the certificate's end, same rule: undefined keeps what is
+      // stored (unreachable, or an agent older than the field).
+      const certChanged =
+        result.certNotAfter !== undefined && result.certNotAfter.getTime() !== node.certNotAfter?.getTime();
       if (
+        certChanged ||
         statusChanged ||
         messageChanged ||
         versionChanged ||
@@ -146,6 +152,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
           where: { id: node.id },
           data: {
             ...(intended ?? {}),
+            ...(certChanged ? { certNotAfter: result.certNotAfter } : {}),
             status: result.status,
             lastStatusChange: statusChanged ? new Date() : undefined,
             lastStatusMessage: result.message,
@@ -261,8 +268,10 @@ interface PollResult {
   geo?: GeoStatus | null;
   /** E42: the cores the node's env declares. undefined keeps the stored intent. */
   declaredEngines?: EngineName[];
+  /** A-124: notAfter of the node's mTLS certificate; undefined keeps the stored one. */
+  certNotAfter?: Date;
   /**
-   * `online`     - the agent answers and every configured core is serving.
+   * `online`   - the agent answers and every configured core is serving.
    * `degraded`   - the agent answers, a configured core is not running. Still
    *                served in subscriptions: its other endpoints work, and the
    *                liveness filter is keyed on `unreachable`, not on this.
@@ -535,6 +544,7 @@ async function checkOne(node: {
       chain: res.chain ?? null,
       geo: res.geo ?? null,
       declaredEngines: res.declaredEngines,
+      certNotAfter: parseCertNotAfter(res.certNotAfter),
     };
   } catch (err) {
     if (err instanceof NodeRequestError) {
@@ -545,6 +555,13 @@ async function checkOne(node: {
       message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
     };
   }
+}
+
+/** The agent's RFC3339 certNotAfter, or undefined for absent or unreadable. */
+export function parseCertNotAfter(raw: string | undefined): Date | undefined {
+  if (!raw) return undefined;
+  const at = new Date(raw);
+  return Number.isFinite(at.getTime()) ? at : undefined;
 }
 
 /**

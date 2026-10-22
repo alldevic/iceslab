@@ -9,6 +9,7 @@ import {
   alertNearLimits,
 } from '../users/users.cron.js';
 import { pollNodeStatuses, pollNodeMetrics } from '../nodes/nodes.cron.js';
+import { renewExpiringNodeCerts } from '../nodes/node-cert-rotation.js';
 import { pollNodeStats } from '../stats/stats.cron.js';
 import { pruneHistory } from '../maintenance/retention.cron.js';
 import { queueDueUrlFetches } from '../geo-sets/geo-sets.queue.js';
@@ -48,6 +49,7 @@ const CRON_JOBS: CronJobSpec[] = [
   { name: 'prune-history',                  pattern: '30 3 * * *' },     // 03:30 каждый день - B2 retention для append-only history-таблиц
   { name: 'alert-near-expiry',              pattern: '0 9 * * *'  },     // 09:00 каждый день - K3 near-expiry/near-cap дайджест в Telegram
   { name: 'geo-url-refresh',                pattern: '*/10 * * * *' },   // каждые 10 минут - Ф9.4: гео-наборы по URL, у которых вышел refreshHours
+  { name: 'node-cert-renew',                pattern: '20 * * * *' },     // каждый час в :20 - A-124: сертификат ноды за 30 дней до конца
 ];
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────
@@ -140,6 +142,13 @@ export function startCronTasksWorker(): Worker {
         case 'geo-url-refresh': {
           const n = await queueDueUrlFetches();
           if (n > 0) getLogger().info(`[cron] geo-url-refresh - queued ${n} geo set fetch(es)`);
+          break;
+        }
+        case 'node-cert-renew': {
+          const { renewed, failed } = await renewExpiringNodeCerts();
+          if (renewed + failed > 0) {
+            getLogger().info(`[cron] node-cert-renew - ${renewed} renewed, ${failed} failed`);
+          }
           break;
         }
         case 'prune-history': {

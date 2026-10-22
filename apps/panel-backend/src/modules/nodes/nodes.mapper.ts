@@ -51,6 +51,9 @@ export interface PublicNodeDto {
   status: string;
   lastStatusChange: string | null;
   lastStatusMessage: string | null;
+  /** A-124: notAfter of the node's mTLS certificate, ISO; null until an agent
+   *  that reports it is polled. The panel renews it 30 days ahead. */
+  certNotAfter: string | null;
   /** See NodeCoreRestarts. null = never reported (not the same as zero). */
   coreRestarts: NodeCoreRestarts | null;
   // T7: proxy-core version reported by the agent (e.g. xray "26.3.27"), NULL
@@ -262,6 +265,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
     status: node.status,
     lastStatusChange: node.lastStatusChange?.toISOString() ?? null,
     lastStatusMessage: node.lastStatusMessage,
+    certNotAfter: node.certNotAfter?.toISOString() ?? null,
     coreRestarts: (node.coreRestarts as NodeCoreRestarts | null) ?? null,
     coreVersion: node.coreVersion,
     lastInboundSyncAt: node.lastInboundSyncAt?.toISOString() ?? null,

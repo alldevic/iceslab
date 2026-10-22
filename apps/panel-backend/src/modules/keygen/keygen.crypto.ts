@@ -31,6 +31,9 @@ export interface NodeCertOptions {
   commonName: string;
   /** Subject Alternative Names (DNS / IP) for the node's address. */
   sans?: { type: 'dns' | 'ip'; value: string }[];
+  /** How long the certificate lives; a year by default. A-124: a test
+   *  issues short-lived pairs to drive renewal without waiting a year. */
+  lifetimeMs?: number;
 }
 
 // Node's webcrypto types and the DOM CryptoKey @peculiar/x509 expects are
@@ -182,6 +185,11 @@ export async function certFingerprintSha256(certPem: string): Promise<string> {
   return Buffer.from(digest).toString('hex');
 }
 
+/** notAfter of a certificate. */
+export function certNotAfter(certPem: string): Date {
+  return new x509.X509Certificate(certPem).notAfter;
+}
+
 // ───── Per-node cert (signed by CA) ─────
 
 export async function generateNodeCert(
@@ -219,7 +227,7 @@ export async function generateNodeCert(
     subject: `CN=${opts.commonName}`,
     issuer: caCert.subject,
     notBefore: new Date(),
-    notAfter: new Date(Date.now() + ONE_YEAR_MS),
+    notAfter: new Date(Date.now() + (opts.lifetimeMs ?? ONE_YEAR_MS)),
     signingAlgorithm: ALGORITHM,
     publicKey: keys.publicKey,
     signingKey: caKey,

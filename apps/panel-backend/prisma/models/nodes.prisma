@@ -104,6 +104,10 @@ model Node {
   appliedRevision       BigInt    @default(0) @map("applied_revision")
   // When desiredRevision last grew: what the node card shows as "changed at".
   configChangedAt       DateTime? @map("config_changed_at") @db.Timestamptz(6)
+  // A-124: notAfter of the node's mTLS server certificate, as its /healthz
+  // reports it (null: an agent older than the field, or never polled). The
+  // renewal cron reads it to hand the node a new pair ahead of expiry.
+  certNotAfter          DateTime? @map("cert_not_after") @db.Timestamptz(6)
   // What the agent reported about this node's CHAIN process (phase 4).
   //
   // Shape (ChainStatus in packages/shared): { running, version?, error? }.
