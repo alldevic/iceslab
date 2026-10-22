@@ -55,8 +55,12 @@ const QUEUE_NAME = 'inbound-sync';
  * worker's event, where the old job no longer holds the jobId.
  */
 export async function enqueueNodePush(nodeId: string): Promise<void> {
+  // The panel's clock, not the database's now(): lastInboundSyncAt beside it
+  // is stamped by the panel too, and the node card puts the two side by side.
+  // A Postgres in a VM can run seconds off the host (seen locally 22.10, a
+  // test reading "changed after it was applied").
   await prisma.$executeRaw`
-    UPDATE nodes SET desired_revision = desired_revision + 1, config_changed_at = now()
+    UPDATE nodes SET desired_revision = desired_revision + 1, config_changed_at = ${new Date()}
     WHERE id = ${nodeId}::uuid`;
   await inboundSyncQueue.add('applyNodeInbounds', { nodeId }, { jobId: `apply-${nodeId}` });
 }
