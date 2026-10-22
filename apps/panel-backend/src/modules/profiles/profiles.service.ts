@@ -10,6 +10,7 @@ import {
 import { ensureDefaultHost } from '../hosts/hosts.service.js';
 import {
   generateSsServerPsk,
+  pskFitsMethod,
 } from './ss-helpers.js';
 import {
   AWG_PROTOCOL_NOT_AWG_MESSAGE,
@@ -482,6 +483,26 @@ export async function updateProfile(
       if (!incoming.ssPassword) {
         const stored = (existing.config ?? {}) as { ssPassword?: string };
         incoming.ssPassword = stored.ssPassword ?? generateSsServerPsk(incoming.ssMethod);
+      }
+    }
+    /**
+     * Shadowsocks keeps its server key the same way (A-028).
+     *
+     * The profile form has no serverPsk field, so every save sent a config
+     * without one and the stored key was overwritten by nothing: the node then
+     * got a new key on the next push, or none, and every 2022 client lost the
+     * server half of its password. Absent is not a value, it is no edit. Kept
+     * when it still fits the cipher; a method change to a different key length
+     * needs a new key anyway, and gets one rather than a key the node refuses.
+     */
+    if (existing.protocol === 'shadowsocks') {
+      const incoming = parsed as { method: string; serverPsk?: string };
+      if (!incoming.serverPsk) {
+        const stored = (existing.config ?? {}) as { serverPsk?: string };
+        incoming.serverPsk =
+          stored.serverPsk && pskFitsMethod(stored.serverPsk, incoming.method)
+            ? stored.serverPsk
+            : generateSsServerPsk(incoming.method);
       }
     }
     // After parse, so schema defaults are filled in first and only then the
