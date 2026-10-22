@@ -17,18 +17,31 @@ name: Dependabot auto-merge
 #   - a required status check on develop. Without one, `--auto` has nothing to
 #     wait for and merges at once, green or not.
 #
-# ⚠ A merge made with GITHUB_TOKEN starts no workflow of its own (GitHub's rule
-# against recursive runs), so the push to develop that this merge makes runs no
-# CI and publishes no `develop` image. The PR's own CI is what vouched for it;
-# the next push to develop builds and ships it with everything else.
+# The merge is queued with a GitHub App's token, not GITHUB_TOKEN. A merge made
+# with GITHUB_TOKEN starts no workflow of its own (GitHub's rule against
+# recursive runs), so until 2026-10-22 the push to develop it made ran no CI
+# and published no `develop` image, and the operator's test server waited for
+# the next human push. Auto-merge is carried out as whoever queued it, so the
+# App's token here is what makes the merged commit run CI like any push.
+#
+# The App (owner's settings, not this repository): installed on this
+# repository only, with Contents, Pull requests and Workflows read/write.
+# Workflows because the actions group edits files under .github/workflows,
+# and GitHub refuses to merge those for an App without that permission. Its
+# Client ID and private key are DEPENDABOT secrets, not Actions secrets: a
+# workflow started by dependabot is given only the former.
+#
+# `workflow_dispatch` in ci.yml stays as the way to run CI by hand if this ever
+# stops doing it.
 
 on:
   pull_request:
     branches: [develop]
 
+# GITHUB_TOKEN only reads the metadata now; the merge goes through the App.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 jobs:
   automerge:
@@ -40,9 +53,21 @@ jobs:
         uses: dependabot/fetch-metadata@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Queue the merge for when the checks are green
+
+      - id: app
         if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          # This repository and these three, whatever else the App is granted.
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Queue the merge for when the checks are green
+        if: steps.app.outcome == 'success'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
