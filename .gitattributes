@@ -24,6 +24,17 @@ Makefile    text eol=lf
 *.html      text
 *.sql       text
 
+# Test goldens and fixtures are compared BYTE FOR BYTE with what the code
+# renders, which is LF. Under autocrlf a Windows checkout rewrote them to CRLF,
+# and every golden test failed on a render that had not changed (26.09).
+**/__testdata__/**  text eol=lf
+# The same for the generated artefacts a test compares with a fresh build:
+# the recipes snapshot and its JSON schema (recipes.snapshot.test.ts).
+packages/shared/src/recipes.snapshot.json  text eol=lf
+packages/shared/recipe.schema.json         text eol=lf
+# The agent's release keys are read byte for byte by the agent and by openssl.
+.github/agent-keys/*.pub                   text eol=lf
+
 # Binary: never touch line endings.
 *.png       binary
 *.jpg       binary
