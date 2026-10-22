@@ -33,11 +33,12 @@ import { isRealisedLinkCell } from '@/lib/domain/engines';
 import { SyncRefusalStrip } from '@/ui/SyncRefusalStrip';
 import { ChainStatusLine } from '@/ui/ChainStatusLine';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
-import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
+import { cascadeStatusView, hopBroken } from '@/lib/domain/cascadeStatus';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
-import { cascadeClaims, cascadeMembers } from '@/lib/domain/cascadeMembership';
+import { cascadeClaims } from '@/lib/domain/cascadeMembership';
 import { editGate, loadFailure, loadView } from '@/lib/ui/loadView';
 import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
+import { confirmCascadeDelete } from '@/ui/confirmCascadeDelete';
 import { useEntryAwg31 } from '@/contours/cascades/lib/useEntryAwg31';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { useOverview } from '@/lib/domain/dashboard';
@@ -660,15 +661,7 @@ export function CascadeEditPage() {
                 : null;
 
   function confirmDelete() {
-    modals.openConfirmModal({
-      title: t('cascadeEdit.deleteTitle', { name: cascade!.name }),
-      // Nodes by positions and directions (cascadeMembers): a v4 cascade has
-      // `hops: []` and used to ask «delete a cascade of 0 nodes» (A-141).
-      children: <Text size="sm">{t('cascadeEdit.deleteBody', { count: cascadeMembers(cascade!).length })}</Text>,
-      labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
-      confirmProps: { color: 'red' },
-      onConfirm: () => deleteMutation.mutate(),
-    });
+    confirmCascadeDelete(cascade!, t, () => deleteMutation.mutate());
   }
 
   const directionNames = directions
@@ -890,7 +883,7 @@ export function CascadeEditPage() {
                     }}
                   />
                 )}
-                {i === 0 && <EntryBystandersNote items={bystanders} />}
+                {i === 0 && <EntryBystandersNote items={bystanders.items} failure={bystanders.failure} />}
                 {i === 0 &&
                   entryChainNotes(
                     entryChainGaps(entryIds.map((id) => nodeById.get(id))),
@@ -1270,7 +1263,7 @@ export function CascadeEditPage() {
                   width: '100%',
                 }}
               >
-                {subscriptionRows(draft, nodeById, t, entryAwg31).map((row, i) => (
+                {subscriptionRows(draft, nodeById, t, entryAwg31.awg31, entryAwg31.failure !== null).map((row, i) => (
                   <Box
                     key={row.label + i}
                     style={{
@@ -1699,14 +1692,21 @@ function subscriptionRows(
   byId: Map<string, Node>,
   t: (k: string, o?: Record<string, unknown>) => string,
   entryAwg31: boolean | undefined,
+  awg31Unknown: boolean,
 ): { label: string; note: string; tone: string }[] {
   const rows: { label: string; note: string; tone: string }[] = [];
   // E58: вход AmneziaWG направлений в подписку не отдаёт: клиент ходит одним
   // туннелем через Авто и политику входа. Направления перечисляются только у
   // входа xray и hysteria.
   if (d.pools[0]?.entryProtocol === 'amneziawg') {
-    // Без правой пометки: в узкой колонке она съедала бы саму строку.
-    rows.push({ label: `${t('cascadeEdit.subAwg')}${entryAwg31 ? ' · 3.1' : ''}`, note: '', tone: MOSS });
+    // Без правой пометки: в узкой колонке она съедала бы саму строку. Кроме
+    // случая, когда поколение не прочитано (A-172 п.4): тогда строка говорит
+    // это, а не притворяется «не 3.1».
+    rows.push({
+      label: `${t('cascadeEdit.subAwg')}${entryAwg31 ? ' · 3.1' : ''}`,
+      note: awg31Unknown ? t('common.loadFailed') : '',
+      tone: awg31Unknown ? AMBER : MOSS,
+    });
     if (!d.hideHops) pushDirect(d, byId, t, rows);
     return rows;
   }

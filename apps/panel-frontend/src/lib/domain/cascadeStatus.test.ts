@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
+import { cascadeStatusView, hopBroken } from '@/lib/domain/cascadeStatus';
 
 const hop = (name: string, applied: boolean, broken?: string | null) => ({
   nodeId: name,

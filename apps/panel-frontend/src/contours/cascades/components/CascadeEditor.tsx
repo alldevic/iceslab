@@ -2190,8 +2190,16 @@ export function EntryChainNote({
  * Профили входных нод, которые в каскад не входят. Спокойная строка: это
  * свойство модели «один вход на каскад», а не ошибка оператора.
  */
-export function EntryBystandersNote({ items }: { items: EntryBystander[] | undefined }) {
+export function EntryBystandersNote({
+  items,
+  failure = null,
+}: {
+  items: EntryBystander[] | undefined;
+  /** Привязки или профили входа не пришли: сказать это, а не промолчать (A-172 п.4). */
+  failure?: LoadFailure | null;
+}) {
   const { t } = useTranslation();
+  if (failure) return <LoadFailedLine message={failure.message} onRetry={failure.onRetry} />;
   if (!items || items.length === 0) return null;
   return (
     <>

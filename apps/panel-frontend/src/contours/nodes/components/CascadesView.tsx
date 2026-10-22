@@ -7,6 +7,7 @@ import { CoreChips } from '@/ui/CoreChips';
 import { LoadFailedLine } from '@/ui/LoadFailed';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
+import { cascadeStatusView } from '@/lib/domain/cascadeStatus';
 import { countryFlag } from '@/lib/domain/countries';
 import { directionWhere, type CascadeRow, type DirectionView, type HopView } from '@/contours/nodes/lib/cascadeRows';
 import { AMBER, CARD, CYAN, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, RED, SNOW, WELL } from '@/contours/nodes/lib/colors';
@@ -984,20 +985,29 @@ function PushState({ cascadeId, compact }: { cascadeId: string; compact?: boolea
   }
   if (!query.data) return null;
 
+  // Broken beats applied, by the one rule the edit page reads too
+  // (cascadeStatusView, E46): every hop can have taken the config while the
+  // chain on one of them is down, and «applied» in green over that is the
+  // «all is well» the panel must not say (P1).
+  const view = cascadeStatusView(query.data);
+
   // The status endpoint can answer without a per-node list (nothing pushed
   // yet). A missing list is not a crash, and it is not "all 0 applied" either:
   // there is simply nothing to report.
   const nodes = query.data.hops ?? [];
-  if (nodes.length === 0) return null;
+  if (nodes.length === 0 && view.kind !== 'broken') return null;
 
   const pending = nodes.filter((h) => !h.applied);
-  const ok = pending.length === 0;
-  const tone = ok ? MOSS : AMBER;
-  const text = ok
-    ? compact
-      ? t('cascades.push.okShort')
-      : t('cascades.push.ok', { count: nodes.length })
-    : t('cascades.push.pending', { names: pending.map((h) => h.name).join(', ') });
+  const ok = view.kind !== 'broken' && pending.length === 0;
+  const tone = view.kind === 'broken' ? RED : ok ? MOSS : AMBER;
+  const text =
+    view.kind === 'broken'
+      ? t('cascades.provisionBroken', { broken: view.broken })
+      : ok
+        ? compact
+          ? t('cascades.push.okShort')
+          : t('cascades.push.ok', { count: nodes.length })
+        : t('cascades.push.pending', { names: pending.map((h) => h.name).join(', ') });
 
   return (
     <Box style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>

@@ -609,7 +609,7 @@ export function CascadeCreatePage() {
                     }}
                   />
                 )}
-                {i === 0 && <EntryBystandersNote items={bystanders} />}
+                {i === 0 && <EntryBystandersNote items={bystanders.items} failure={bystanders.failure} />}
                 {i === 0 &&
                   entryChainNotes(
                     entryChainGaps(entryIds.map((id) => nodeById.get(id))),

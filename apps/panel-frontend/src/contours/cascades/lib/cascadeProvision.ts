@@ -1,6 +1,6 @@
 import { notifications } from '@mantine/notifications';
 import { getCascadeStatus } from '@/lib/domain/cascades';
-import { cascadeStatusView } from '@/contours/cascades/lib/cascadeStatus';
+import { cascadeStatusView } from '@/lib/domain/cascadeStatus';
 
 /**
  * A cascade save commits fast and reaches its hop nodes afterwards
