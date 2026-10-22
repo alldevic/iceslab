@@ -1,7 +1,6 @@
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
-import { inboundSyncQueue, inboundDirtyKey } from './inbounds.queue.js';
-import { redis } from '../../lib/infra/redis.js';
+import { enqueueNodePush } from './inbounds.queue.js';
 
 /**
  * Register inbound-related event handlers.
@@ -17,18 +16,12 @@ import { redis } from '../../lib/infra/redis.js';
 export function registerInboundEventHandlers(): void {
   const enqueue = (nodeId: string, reason: string): void => {
     console.log(`[event] ${reason}: enqueue applyInbounds for node ${nodeId}`);
-    // Set a dirty flag BEFORE enqueuing. If a worker is already mid-push
-    // for this node, BullMQ silently rejects the duplicate jobId, the
-    // worker's end-of-job check sees this flag and re-enqueues so the
-    // intermediate edit doesn't disappear. See applyInboundsForNode.
-    void redis.set(inboundDirtyKey(nodeId), '1').catch(() => null);
-    void inboundSyncQueue.add(
-      'applyNodeInbounds',
-      { nodeId },
-      // Coalesce: if an `applyNodeInbounds` is already queued for this node,
-      // don't add another. The currently-running one will read the latest
-      // state from the DB anyway. `removeOnComplete` cleans up later.
-      { jobId: `apply-${nodeId}` },
+    // A-162: the node's revision grows here, and the jobId coalesces a push
+    // already queued. An edit during a running push of the same node is not
+    // lost: the job acknowledges the revision it read at its start, and the
+    // worker queues it again when it ends (enqueueNodePush, requeueIfMoved).
+    void enqueueNodePush(nodeId).catch((err) =>
+      console.error(`[event] ${reason}: enqueue for node ${nodeId} failed`, err),
     );
   };
 

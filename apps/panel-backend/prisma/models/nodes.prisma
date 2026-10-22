@@ -87,6 +87,23 @@ model Node {
   // Written in the failure branch, cleared in the success branch beside the
   // stamp above, so the pair reads as one state and never as two half-truths.
   lastInboundSyncError  Json?     @map("last_inbound_sync_error")
+  // A-162 (principle P1): the node's config as a REVISION, not as a time.
+  //
+  // desiredRevision grows by one on every event that asks for a push, in the
+  // same place the push is queued (enqueueNodePush). The push job reads it
+  // at the START of building the request and, once the agent answered ok,
+  // writes it to appliedRevision. Applied is appliedRevision >= desiredRevision.
+  //
+  // This replaced a Redis "dirty" flag and a millisecond comparison of
+  // lastInboundSyncAt with four updatedAt maxima. The flag lost an edit made
+  // during a push of the same node (the re-queue ran inside the job, BullMQ
+  // dropped it as a duplicate jobId, and the flag was already eaten), and the
+  // comparison then called the lost edit applied. A revision read at the start
+  // cannot be claimed by an answer to an older request.
+  desiredRevision       BigInt    @default(0) @map("desired_revision")
+  appliedRevision       BigInt    @default(0) @map("applied_revision")
+  // When desiredRevision last grew: what the node card shows as "changed at".
+  configChangedAt       DateTime? @map("config_changed_at") @db.Timestamptz(6)
   // What the agent reported about this node's CHAIN process (phase 4).
   //
   // Shape (ChainStatus in packages/shared): { running, version?, error? }.

@@ -3,7 +3,7 @@ import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/infra/redis.js';
 import { NodeTransport, NodeRequestError } from './nodes.transport.js';
 import { intendedFromReport } from './node-intended-engines.js';
-import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
+import { inboundSyncQueue, reconcileNodeRevisions } from '../inbounds/inbounds.queue.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
@@ -239,6 +239,14 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
         );
       }
     }),
+  );
+
+  // A-162, P1: a node that is online and behind its desired revision (its
+  // last push failed and nobody has edited since) is pushed again, without
+  // waiting for an event. After the statuses above are written, so a node
+  // that just came back counts as online.
+  await reconcileNodeRevisions().catch((err) =>
+    getLogger().warn({ err }, '[cron] revision reconciliation failed'),
   );
 
   return { ok, down };

@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
 
 /**
  * "Saved, but not applied yet" for a node.
@@ -22,6 +23,11 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 let app: FastifyInstance;
 let token: string;
 let seq = 0;
+
+// A-162: what marks a node pending is the push being ASKED for, which the
+// event handlers do (index.ts registers them; buildApp does not). Subscribed
+// once: the bus has no unsubscribe.
+beforeAll(() => registerInboundEventHandlers());
 
 beforeEach(async () => {
   app = await buildApp();
@@ -88,20 +94,29 @@ async function bind(profileId: string, nodeId: string, port: number): Promise<st
   return JSON.parse(res.body).id as string;
 }
 
+/** The node's revision once the event handlers of the last request have run:
+ *  they bump it asynchronously, after the response. */
+async function settledRevision(nodeId: string): Promise<bigint> {
+  let last = -1n;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 30));
+    const now = (await prisma.node.findUniqueOrThrow({ where: { id: nodeId } })).desiredRevision;
+    if (now === last) return now;
+    last = now;
+  }
+}
+
 /**
- * The agent acknowledging a push, which is the only thing that stamps this.
- *
- * ⚠ Two milliseconds after the last write, not "now". Applied is
- * lastInboundSyncAt > configChangedAt, strictly, and both are millisecond
- * Dates: on a fast runner the stamp landed in the same millisecond as the
- * Default host the bind had just written, and the node read as pending. Red
- * in CI on e6d3d87 (run 39746320074), green on the next run of the same
- * code. A real agent acknowledges a push that was built after the save, never
- * within the same millisecond; A-162 replaces the time comparison anyway.
+ * The agent acknowledging a push, which is the only thing that stamps this:
+ * as the worker does it (A-162), the revision the push was built for and the
+ * time it was built.
  */
 async function acknowledge(nodeId: string, when?: Date): Promise<void> {
-  if (!when) await new Promise((r) => setTimeout(r, 2));
-  await prisma.node.update({ where: { id: nodeId }, data: { lastInboundSyncAt: when ?? new Date() } });
+  const rev = await settledRevision(nodeId);
+  await prisma.node.update({
+    where: { id: nodeId },
+    data: { lastInboundSyncAt: when ?? new Date(), appliedRevision: rev },
+  });
 }
 
 async function syncStatus(nodeId: string) {
@@ -150,7 +165,7 @@ describe('node sync status', () => {
     });
     expect(res.statusCode, res.body).toBe(200);
 
-    expect((await syncStatus(nodeId)).applied).toBe(false);
+    await expect.poll(async () => (await syncStatus(nodeId)).applied, { timeout: 10_000 }).toBe(false);
   });
 
   it('goes back to pending when the PROFILE changes, though no node row was touched', async () => {
@@ -171,8 +186,8 @@ describe('node sync status', () => {
     });
     expect(res.statusCode, res.body).toBe(200);
 
+    await expect.poll(async () => (await syncStatus(nodeId)).applied, { timeout: 10_000 }).toBe(false);
     const after = await syncStatus(nodeId);
-    expect(after.applied).toBe(false);
     expect(new Date(after.configChangedAt) > new Date(after.lastInboundSyncAt!)).toBe(true);
   });
 

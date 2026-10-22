@@ -38,23 +38,33 @@ export interface ApplyNodeInboundsJobData {
 const QUEUE_NAME = 'inbound-sync';
 
 /**
- * Redis key for the "dirty" flag used by the dirty-flag coalescing pattern.
+ * A-162: every push is asked for HERE, and asking bumps the node's revision.
  *
- * Race the flag fixes: BullMQ's per-jobId dedupe rejects new enqueues for
- * jobs that are currently `active` (mid-push), so an admin edit landing
- * during the 5-30 s mTLS push window was silently dropped, the running
- * worker never saw the change, and no new push got scheduled. Next push
- * had to wait for an unrelated event.
+ * BullMQ drops an add whose jobId is still active, so an edit landing during
+ * the 5-30 s of a push of the same node used to vanish. A Redis "dirty" flag
+ * was meant to catch that, and did not: the re-queue ran inside the job,
+ * where the jobId was still active, so it was dropped too, after the flag had
+ * been eaten; a node with no hosts returned before the check; a last failed
+ * attempt never got there. And the status then compared the acknowledgement
+ * time with updatedAt maxima, so the lost edit read as applied.
  *
- * Sequence with the flag:
- *   enqueue → SET dirty
- *   worker start → DEL dirty (consume current intent)
- *   worker do-work (any concurrent enqueue re-SETs the flag here)
- *   worker end → GET dirty; if set, re-enqueue (new job, succeeds since
- *               the active one just completed)
+ * Now the intent lives in the database as nodes.desired_revision. The job
+ * reads it at the start of building the request and acknowledges exactly
+ * that revision (applied_revision). When the job ends, completed or out of
+ * attempts, and the revision moved meanwhile, it is queued again from the
+ * worker's event, where the old job no longer holds the jobId.
  */
-export function inboundDirtyKey(nodeId: string): string {
-  return `inbound-sync:dirty:${nodeId}`;
+export async function enqueueNodePush(nodeId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE nodes SET desired_revision = desired_revision + 1, config_changed_at = now()
+    WHERE id = ${nodeId}::uuid`;
+  await inboundSyncQueue.add('applyNodeInbounds', { nodeId }, { jobId: `apply-${nodeId}` });
+}
+
+/** The revision a push about to be built stands for. Null: no such node. */
+export async function readDesiredRevision(nodeId: string): Promise<bigint | null> {
+  const row = await prisma.node.findUnique({ where: { id: nodeId }, select: { desiredRevision: true } });
+  return row?.desiredRevision ?? null;
 }
 
 export const inboundSyncQueue = new Queue<ApplyNodeInboundsJobData>(QUEUE_NAME, {
@@ -510,11 +520,12 @@ export async function applyInboundsRequestForNode(
  * Slice 24: replaces the manual `/etc/iceslab-node/env` editing dance
  * caught during the 2026-05-06 VPS test.
  */
-export async function applyInboundsForNode(nodeId: string): Promise<void> {
-  // Consume the dirty-flag at the start. Any enqueue that comes in WHILE
-  // we're working will re-SET this key; we check it again at the end and
-  // re-enqueue if it's set. See inboundDirtyKey() for the full rationale.
-  await redis.del(inboundDirtyKey(nodeId)).catch(() => null);
+export async function applyInboundsForNode(nodeId: string, revision?: bigint | null): Promise<void> {
+  // A-162: the revision and the time this push stands for are taken BEFORE
+  // anything is read for the request, so an edit that lands while it is being
+  // built or delivered is newer than what it acknowledges.
+  const rev = revision !== undefined ? revision : await readDesiredRevision(nodeId);
+  const builtAt = new Date();
 
   const node = await fetchNode(nodeId);
   if (!node) {
@@ -594,7 +605,9 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         // both current and broken, and an operator has no way to tell which
         // half is the old one.
         data: {
-          lastInboundSyncAt: new Date(),
+          // A-162: when the request was BUILT, not when the agent answered:
+          // an edit saved during the push is then later than this stamp.
+          lastInboundSyncAt: builtAt,
           lastInboundSyncError: Prisma.DbNull,
           /**
            * Whether this node was sent a chain block, recorded by the side
@@ -611,6 +624,14 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         },
       })
       .catch(() => null);
+    // A-162: the revision read before building, never a later one: an edit
+    // that landed meanwhile stays above it and is pushed again. GREATEST so a
+    // slow answer to an older request cannot lower what a newer one set.
+    if (rev !== null) {
+      await prisma.$executeRaw`
+        UPDATE nodes SET applied_revision = GREATEST(applied_revision, ${rev})
+        WHERE id = ${nodeId}::uuid`.catch(() => null);
+    }
   } catch (err) {
     const detail =
       err instanceof NodeRequestError
@@ -743,30 +764,80 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   getLogger().info(
     `[worker:inbound-sync] user sync to ${node.name} done (${users.length - chunkFailed}/${users.length} ok)`,
   );
+}
 
-  // End-of-job dirty check: if an admin edit landed during the push window,
-  // the event handler re-SET the flag we cleared above. Re-enqueue so the
-  // intermediate edit doesn't get silently lost behind BullMQ's per-jobId
-  // active-job dedupe.
-  const stillDirty = await redis.getdel(inboundDirtyKey(nodeId)).catch(() => null);
-  if (stillDirty) {
-    void inboundSyncQueue.add(
-      'applyNodeInbounds',
-      { nodeId },
-      { jobId: `apply-${nodeId}` },
-    );
+/**
+ * A-162: after a job, completed or out of attempts, push again when the
+ * node's revision moved past the one the job read. Called from the worker's
+ * events, where the finished job no longer holds the jobId (removeOnComplete
+ * and removeOnFail), so this add is not dropped as a duplicate.
+ *
+ * "Moved past what was read", not "above what is applied": a node that is
+ * down would otherwise be queued again and again after every last attempt.
+ * Such a node is brought back by the poll cron instead (reconcileNodeRevisions).
+ */
+export async function requeueIfMoved(nodeId: string, readRevision: bigint | null | undefined): Promise<boolean> {
+  if (readRevision === null || readRevision === undefined) return false;
+  const now = await readDesiredRevision(nodeId);
+  if (now === null || now <= readRevision) return false;
+  // ⚠ The worker emits completed/failed while the finished job still holds
+  // its jobId (measured on BullMQ here: getState() said "active" inside the
+  // handler), so an add right away is folded into the job that is ending and
+  // lost, the very bug this replaces. Wait until the old job is gone, two
+  // seconds at most, then add.
+  const jobId = `apply-${nodeId}`;
+  for (let i = 0; i < 100; i++) {
+    const old = await inboundSyncQueue.getJob(jobId);
+    if (!old || (await old.getState()) !== 'active') break;
+    await new Promise((r) => setTimeout(r, 20));
   }
+  await inboundSyncQueue.add('applyNodeInbounds', { nodeId }, { jobId });
+  return true;
+}
+
+/**
+ * A-162, principle P1: a node converges by itself. Online, and its applied
+ * revision behind the desired one (the last attempt failed and nothing has
+ * been edited since): queue its push. Run from the status poll; one query on
+ * a small table, and the jobId folds a push already queued.
+ *
+ * ⚠ At most once an hour per (node, revision). A config the agent REFUSES
+ * stays behind too, and that refusal restarts the node's cores on every try:
+ * retried on each poll tick it would bounce a live node every half minute
+ * over an error only an edit can fix. Once an hour still converges a node
+ * whose last attempt died on the network, which is the case this is for.
+ */
+const RECONCILE_EVERY_S = 3600;
+
+export async function reconcileNodeRevisions(): Promise<number> {
+  const behind = await prisma.$queryRaw<{ id: string; desired: bigint }[]>`
+    SELECT id::text AS id, desired_revision AS desired FROM nodes
+    WHERE deleted_at IS NULL AND status = 'online' AND applied_revision < desired_revision`;
+  let queued = 0;
+  for (const n of behind) {
+    const first = await redis.set(`inbound-sync:reconciled:${n.id}:${n.desired}`, '1', 'EX', RECONCILE_EVERY_S, 'NX');
+    if (first !== 'OK') continue;
+    await inboundSyncQueue.add('applyNodeInbounds', { nodeId: n.id }, { jobId: `apply-${n.id}` });
+    queued++;
+  }
+  return queued;
 }
 
 // ───── Worker ─────
 
 export function startInboundSyncWorker(): Worker<ApplyNodeInboundsJobData> {
+  // A-162: the revision each running job read, for its completed/failed
+  // event. Kept in this process: the events of a job fire in the worker that
+  // ran it.
+  const readByJob = new Map<string, bigint | null>();
   const worker = new Worker<ApplyNodeInboundsJobData>(
     QUEUE_NAME,
     async (job: Job<ApplyNodeInboundsJobData>) => {
       switch (job.name) {
         case 'applyNodeInbounds': {
-          await applyInboundsForNode(job.data.nodeId);
+          const rev = await readDesiredRevision(job.data.nodeId);
+          readByJob.set(job.id ?? '', rev);
+          await applyInboundsForNode(job.data.nodeId, rev);
           break;
         }
         default:
@@ -802,6 +873,18 @@ export function startInboundSyncWorker(): Worker<ApplyNodeInboundsJobData> {
         `(attempt ${job?.attemptsMade ?? '?'} of ${job?.opts?.attempts ?? '?'}) ` +
         `node=${job?.data?.nodeId ?? 'unknown'}: ${err?.message ?? String(err)}`,
     );
+    // Only the LAST attempt ends the job: an earlier one retries and reads
+    // the revision again at its start.
+    if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+      const rev = readByJob.get(job.id ?? '');
+      readByJob.delete(job.id ?? '');
+      void requeueIfMoved(job.data.nodeId, rev).catch(() => null);
+    }
+  });
+  worker.on('completed', (job) => {
+    const rev = readByJob.get(job.id ?? '');
+    readByJob.delete(job.id ?? '');
+    void requeueIfMoved(job.data.nodeId, rev).catch(() => null);
   });
 
   return worker;
