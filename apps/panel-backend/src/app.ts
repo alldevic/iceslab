@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import { trustProxyHops } from './lib/util/ip.js';
 import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyCors from '@fastify/cors';
@@ -57,7 +58,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Production behind Caddy + Cloudflare uses TRUST_PROXY_HOPS=2.
     // Bumping this above the real hop count is a security bug, any
     // client can then forge X-Forwarded-For and dodge per-IP rate limits.
-    trustProxy: config.TRUST_PROXY_HOPS,
+    // As a function since Fastify 5.12.2 turned a NUMBER into "trust
+    // nobody": see trustProxyHops.
+    trustProxy: trustProxyHops(config.TRUST_PROXY_HOPS),
   });
 
   /**

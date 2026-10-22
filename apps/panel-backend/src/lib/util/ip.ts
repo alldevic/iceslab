@@ -13,6 +13,32 @@ import { isIP } from 'node:net';
  * combine this with a correct proxy-hop count so a forged *public* IP can't be
  * used to blacklist a third party.
  */
+/**
+ * TRUST_PROXY_HOPS as Fastify's `trustProxy`: trust the nearest `hops`
+ * addresses of the chain (the socket peer is hop 0), the client is the next.
+ *
+ * ⚠ Written as a function, not handed over as the number, since Fastify
+ * 5.12.2. That release took `number` out of the option's type AND, at runtime,
+ * turned a number into "trust nobody" (lib/request.js getTrustProxyFn, "fail
+ * closed"). Passing the number on would have type-failed, and with the types
+ * silenced it would have made `request.ip` the proxy's address for EVERY
+ * request: Caddy in the default deploy. The per-IP rate limits (the
+ * subscription's 120 a minute per address, the login bucket) would then have
+ * been one bucket for the whole user base. Caught by the typecheck of the
+ * dependency PR, 01.10.
+ *
+ * The function keeps the meaning the setting always had (it is what
+ * proxy-addr compiled the number into), so no operator's env changes. What
+ * Fastify's new rule warns about holds for it too: a hop count trusts the
+ * socket peer whoever it is, so the panel's port must only be reachable
+ * through the proxy, which the default deploy does (Caddy in front, the
+ * panel on the compose network).
+ */
+export function trustProxyHops(hops: number): false | ((address: string, hop: number) => boolean) {
+  if (hops <= 0) return false;
+  return (_address, hop) => hop < hops;
+}
+
 export function isPublicRoutableIp(ip: string): boolean {
   if (!ip) return false;
   const v = isIP(ip);
