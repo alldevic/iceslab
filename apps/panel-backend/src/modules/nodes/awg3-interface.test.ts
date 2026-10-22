@@ -174,7 +174,11 @@ describe('the subnets of the two interfaces', () => {
     const nodeId = await makeNode();
     expect((await bind(await awgProfile(1, '10.66.66.0/24'), nodeId, 51820)).statusCode).toBe(201);
     expect((await bind(await awgProfile(3, '10.67.67.0/24'), nodeId, 51830)).statusCode).toBe(201);
-    expect((await bind(await awgProfile(1, '10.66.66.0/24'), nodeId, 51821)).statusCode).toBe(201);
+    // A second 1.x on the same subnet: the subnet gate does not ask (one
+    // interface per generation), and since A-055 the adapter slot answers.
+    const second = await bind(await awgProfile(1, '10.66.66.0/24'), nodeId, 51821);
+    expect(second.statusCode).toBe(409);
+    expect(JSON.parse(second.body).error).toBe('ADAPTER_SLOT_TAKEN');
   });
 
   it('reads overlap as networks, not strings', () => {

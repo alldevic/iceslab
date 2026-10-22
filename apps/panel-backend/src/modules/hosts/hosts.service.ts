@@ -20,6 +20,7 @@ import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
 import { hostConfigChangedAt } from './hosts.freshness.js';
 import { getHiddenCascadeNodes, type HidingCascade } from '../cascades/cascade.service.js';
 import { assertAwgSubnetFree, assertCoreOnNode } from '../nodes/node-core-gate.js';
+import { assertAdapterSlotFree, AdapterSlotTakenError } from '../nodes/node-adapter-slot.js';
 import type {
   CreateHostInput,
   ListHostsQuery,
@@ -63,6 +64,7 @@ export class BindingNotFoundError extends Error {
 // Re-exported so the routes layer can catch them without importing the profiles
 // module, which it otherwise has no business knowing about.
 export {
+  AdapterSlotTakenError,
   NodeNotFoundError,
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,
@@ -388,6 +390,9 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   // After the ports, before anything is written (docs/plan/core-lifecycle.md 6).
   assertCoreOnNode(node, profile);
   await assertAwgSubnetFree(node, profile);
+  // A-055: the same slot gate as the bindings route, this path creates a
+  // binding too.
+  await assertAdapterSlotFree(node, profile);
 
   return { bindingId: null, profile, nodeId, port };
 }

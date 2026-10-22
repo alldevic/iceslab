@@ -12,6 +12,7 @@ import {
   generateSsServerPsk,
   pskFitsMethod,
 } from './ss-helpers.js';
+import { assertAdapterSlotFree } from '../nodes/node-adapter-slot.js';
 import {
   AWG_PROTOCOL_NOT_AWG_MESSAGE,
   engineServesSubprotocol,
@@ -824,6 +825,9 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
   assertNodeRendersProfile(node, profile);
   assertSingboxServesBinding(profile, input.overrides);
   await assertAwgSubnetFree(node, profile);
+  // A-055: the adapter this profile lands on holds one inbound, and already
+  // serves another binding here.
+  await assertAdapterSlotFree(node, profile);
 
   const created = await prisma.profileNodeBinding.create({
     data: {

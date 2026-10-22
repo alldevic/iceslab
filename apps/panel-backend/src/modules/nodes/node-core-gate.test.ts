@@ -281,8 +281,12 @@ describe('the AmneziaWG generation gate (t07-1)', () => {
     // AWG_SUBNET_OVERLAP).
     const three = await makeProfile('amneziawg', { ...AWG, subnet: '10.67.67.0/24' }, { awgProtocol: 3 });
     expect((await bind(legacy, nodeId, 51820)).statusCode).toBe(201);
-    expect((await bind(one, nodeId, 51821)).statusCode).toBe(201);
     expect((await bind(three, nodeId, 51822)).statusCode).toBe(201);
+    // An explicit 1.x is the same generation as the legacy one: the gate here
+    // lets it through, and the adapter slot (A-055) refuses the second 1.x.
+    const another = await makeNode();
+    await report(another, [awgRow(3)], 'amd64');
+    expect((await bind(one, another, 51821)).statusCode).toBe(201);
   });
 
   it('lets through a node whose module does not say, when its agent carries 3.1', async () => {

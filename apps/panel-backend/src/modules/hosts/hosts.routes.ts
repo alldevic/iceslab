@@ -70,6 +70,16 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
           .code(409)
           .send({ error: err.code, message: err.message, conflicts: err.conflicts });
       }
+      // A-055: the adapter holds one inbound and serves another host already.
+      if (err instanceof svc.AdapterSlotTakenError) {
+        return reply.code(409).send({
+          error: err.code,
+          message: err.message,
+          protocol: err.protocol,
+          engine: err.engine,
+          heldBy: err.heldBy,
+        });
+      }
       // The node's core for this profile is not installed, or runs a version
       // this panel refuses. Same body as the bindings route.
       const core = coreGateReply(err);

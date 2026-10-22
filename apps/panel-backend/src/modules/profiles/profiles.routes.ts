@@ -19,6 +19,7 @@ import { resolveHostFields } from './host-fields.js';
 import { profileFormats } from './profile-formats.js';
 import { getProfileKeyImpact } from './profiles.key-impact.js';
 import { coreGateReply } from '../nodes/node-core-gate.js';
+import { AdapterSlotTakenError } from '../nodes/node-adapter-slot.js';
 import * as svc from './profiles.service.js';
 
 const KeypairQuery = z.object({
@@ -220,6 +221,16 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       }
       if (err instanceof svc.NodeAlreadyBoundError) {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+      }
+      // A-055: the same body as the host route.
+      if (err instanceof AdapterSlotTakenError) {
+        return reply.code(409).send({
+          error: err.code,
+          message: err.message,
+          protocol: err.protocol,
+          engine: err.engine,
+          heldBy: err.heldBy,
+        });
       }
       // The node's core for this profile is not installed, runs a version this
       // panel refuses, or its AmneziaWG module cannot speak the profile's
