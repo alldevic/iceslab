@@ -860,9 +860,20 @@ jobs:
       #
       # --redact so a finding does not print the secret into a public build log,
       # which would leak it a second time to a wider audience.
+      #
+      # ⚠ Pinned by version AND digest. This image is handed the whole history
+      # of a public repository, so `:latest` was the one place where whatever
+      # the registry served that day ran over everything we ever committed.
+      # Dependabot does not update a `docker run` line, so a bump is by hand:
+      # take the newest release from github.com/gitleaks/gitleaks/releases,
+      # read its index digest with
+      #   docker buildx imagetools inspect zricethezav/gitleaks:vX.Y.Z
+      # (the "Digest:" line, the index, not one platform's manifest), put both
+      # here, and check this job still reports the same findings as before.
       - name: gitleaks
         run: |
-          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+          docker run --rm -v "$PWD:/repo" \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source=/repo --config=/repo/.gitleaks.toml \
             --redact --verbose --no-banner \
             --report-format sarif --report-path /repo/gitleaks.sarif
@@ -913,7 +924,14 @@ jobs:
           cache-dependency-path: apps/node/go.sum
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          # The linter itself, pinned: `latest` changed the rule set under a
+          # commit that changed nothing. Dependabot moves the action above, not
+          # this. A bump is by hand: the newest release from
+          # github.com/golangci/golangci-lint/releases, then compare the issue
+          # count in this job's log ("N issues:") with the run before it; the
+          # action logs the version it installed ("Installing golangci-lint
+          # binary vX.Y.Z").
+          version: v2.15.0
           working-directory: apps/node
           # Report-only for now: turning a fresh linter loose on existing code
           # usually produces a wall of findings, and a red pipeline nobody can
