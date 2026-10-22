@@ -18,7 +18,8 @@ import (
 )
 
 // A-120, live against the pinned hysteria (HYSTERIA_BIN): a client holds a
-// stream open, the user is removed, and the stream dies. The instrument
+// stream open, the user is removed, and the stream dies; the same for a
+// password reissued. The instrument
 // first: forgetting the password alone leaves the open stream alive, which is
 // the defect, and shows the test can tell a cut stream from a living one.
 func TestARemovedUsersOpenStreamIsCut(t *testing.T) {
@@ -122,6 +123,27 @@ func TestARemovedUsersOpenStreamIsCut(t *testing.T) {
 	if !alive(bob, time.Second) {
 		t.Error("kicking alice cut bob")
 	}
+
+	// A reissued password: carol's stream on the old one dies, the old one
+	// gets no new stream, a client with the new one gets through.
+	_ = a.AddUser(core.User{UserID: "u-carol", HysteriaPassword: "pw-carol-old-not-a-secret"})
+	oldSocks := client("pw-carol-old-not-a-secret")
+	carol := open(oldSocks)
+	defer carol.Close()
+	if err := a.AddUser(core.User{UserID: "u-carol", HysteriaPassword: "pw-carol-new-not-a-secret"}); err != nil {
+		t.Fatalf("reissue: %v", err)
+	}
+	if alive(carol, 5*time.Second) {
+		t.Fatal("carol's stream on the old password outlived the reissue")
+	}
+	if c, err := socksDial(oldSocks, echo); err == nil {
+		err = roundTrip(c)
+		c.Close()
+		if err == nil {
+			t.Fatal("the old password got a new stream after the reissue")
+		}
+	}
+	open(client("pw-carol-new-not-a-secret")).Close()
 }
 
 // run starts a process from dir and, when ready is set, waits for it in the

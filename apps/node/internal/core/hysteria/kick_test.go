@@ -95,6 +95,55 @@ func TestAFailedKickIsRetriedByTheNextRemoval(t *testing.T) {
 	}
 }
 
+// A reissued password replaces the old one: the old refuses, the new passes,
+// and the sessions opened with the old are kicked.
+func TestAReissuedPasswordRetiresTheOldOne(t *testing.T) {
+	k := &kickClient{status: http.StatusOK}
+	a := kickAdapter(k, true)
+	if err := a.AddUser(core.User{UserID: "u1", HysteriaPassword: "p2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.LookupByPassword("p1"); ok {
+		t.Error("the old password still authenticates after the reissue")
+	}
+	if id, ok := a.LookupByPassword("p2"); !ok || id != "u1" {
+		t.Errorf("the new password does not authenticate u1: %q %v", id, ok)
+	}
+	want := `POST /kick fixture-stats-secret-not-a-secret ["u1"]`
+	if got := k.sent(); len(got) != 1 || got[0] != want {
+		t.Fatalf("requests = %q, want one %q", got, want)
+	}
+	// The same password again changes nothing and kicks nobody.
+	if err := a.AddUser(core.User{UserID: "u1", HysteriaPassword: "p2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := k.sent(); len(got) != 1 {
+		t.Fatalf("a repeated add kicked: %q", got)
+	}
+}
+
+// A reissue whose kick fails fails the call, and the panel's retry of the
+// same add kicks again.
+func TestAFailedReissueKickIsRetriedByTheNextAdd(t *testing.T) {
+	k := &kickClient{status: http.StatusInternalServerError}
+	a := kickAdapter(k, true)
+	if err := a.AddUser(core.User{UserID: "u1", HysteriaPassword: "p2"}); err == nil {
+		t.Fatal("a failed kick on a reissue must fail the call")
+	}
+	if _, ok := a.LookupByPassword("p1"); ok {
+		t.Error("the old password authenticates although the kick failed")
+	}
+	k.mu.Lock()
+	k.status = http.StatusOK
+	k.mu.Unlock()
+	if err := a.AddUser(core.User{UserID: "u1", HysteriaPassword: "p2"}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := k.sent(); len(got) != 2 {
+		t.Fatalf("requests = %q, want the failed kick and its retry", got)
+	}
+}
+
 // Without the traffic stats API there is nothing to kick through.
 func TestNoStatsAPINoKick(t *testing.T) {
 	k := &kickClient{status: http.StatusOK}

@@ -343,13 +343,29 @@ func (a *Adapter) AddUser(user core.User) error {
 		// User has no Hysteria credentials, nothing to do for this protocol.
 		return nil
 	}
+	// The map is keyed by password, so a reissued password was added beside
+	// the old one and the old one kept authenticating (22.10). The user's other
+	// passwords go, and the sessions opened with them are kicked, as on a
+	// removal; a kick still owed from a failed removal or rotation goes too.
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	held := a.kickPending[user.UserID]
+	for password, entry := range a.users {
+		if entry.UserID == user.UserID && password != user.HysteriaPassword {
+			delete(a.users, password)
+			held = true
+		}
+	}
 	a.users[user.HysteriaPassword] = userEntry{
 		UserID:   user.UserID,
 		Username: user.Username,
 	}
-	delete(a.kickPending, user.UserID)
+	a.mu.Unlock()
+	if !held {
+		return nil
+	}
+	if err := a.kick(user.UserID); err != nil {
+		return fmt.Errorf("hysteria: kick the sessions of the user's old password: %w", err)
+	}
 	return nil
 }
 
@@ -370,9 +386,24 @@ func (a *Adapter) RemoveUser(userID string) error {
 			held = true
 		}
 	}
-	listen, secret, client := a.cfg.TrafficStatsListen, a.cfg.TrafficStatsSecret, a.cfg.HTTPClient
 	a.mu.Unlock()
-	if !held || listen == "" || secret == "" || !a.serving() {
+	if !held {
+		return nil
+	}
+	if err := a.kick(userID); err != nil {
+		return fmt.Errorf("hysteria: kick the removed user's open sessions: %w", err)
+	}
+	return nil
+}
+
+// kick closes the user's open sessions when the traffic stats API is there
+// and hysteria serves; a failure is remembered in kickPending for the next
+// AddUser/RemoveUser of the user, a success clears it. Called without mu.
+func (a *Adapter) kick(userID string) error {
+	a.mu.RLock()
+	listen, secret, client := a.cfg.TrafficStatsListen, a.cfg.TrafficStatsSecret, a.cfg.HTTPClient
+	a.mu.RUnlock()
+	if listen == "" || secret == "" || !a.serving() {
 		return nil
 	}
 	if client == nil {
@@ -389,10 +420,7 @@ func (a *Adapter) RemoveUser(userID string) error {
 		delete(a.kickPending, userID)
 	}
 	a.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("hysteria: kick the removed user's open sessions: %w", err)
-	}
-	return nil
+	return err
 }
 
 // kickUsers closes the open sessions of these users (hysteria's traffic stats
