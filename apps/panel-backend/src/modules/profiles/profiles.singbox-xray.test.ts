@@ -194,11 +194,33 @@ describe('an xray-family profile on the sing-box engine', () => {
     expect(await prisma.profileNodeBinding.count({ where: { profileId } })).toBe(0);
   });
 
+  it('is refused with more than one REALITY server name, the path on realityServerNames (A-159)', async () => {
+    // sing-box serves one name, the first; a host on the second was refused by
+    // the node on every handshake while the panel showed it green.
+    const two = { ...reality, realityServerNames: ['www.microsoft.com', 'www.apple.com'] };
+    const res = await create('sb-two-names', two, 'singbox');
+    expect(res.statusCode, res.body).toBe(400);
+    expect(issuePath(res.body)).toEqual(['config', 'realityServerNames']);
+
+    // Moving a two-name xray profile onto sing-box is refused the same way.
+    const created = await create('xr-two-names', two, 'xray');
+    expect(created.statusCode, created.body).toBe(201);
+    const move = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${JSON.parse(created.body).id as string}`,
+      headers: auth(),
+      payload: { engine: 'singbox' },
+    });
+    expect(move.statusCode, move.body).toBe(400);
+    expect(JSON.parse(move.body)).toMatchObject({ error: 'SINGBOX_XRAY_FAMILY', path: ['config', 'realityServerNames'] });
+  });
+
   it('leaves the same configs alone on the xray engine', async () => {
     for (const [name, cfg] of [
       ['xr-tls-ok', tls],
       ['xr-self-ok', { ...reality, realityMode: 'self-steal' }],
       ['xr-ws-ok', { ...reality, network: 'ws' }],
+      ['xr-names-ok', { ...reality, realityServerNames: ['www.microsoft.com', 'www.apple.com'] }],
     ] as const) {
       const res = await create(name, cfg, 'xray');
       expect(res.statusCode, `${name}: ${res.body}`).toBe(201);

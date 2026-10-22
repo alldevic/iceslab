@@ -271,6 +271,8 @@ export function checkSniConsistency(opts: {
   config: unknown;
   sniOverride: string | null | undefined;
   securityLayer: string | null | undefined;
+  /** The profile's effective engine: on sing-box only the first name serves. */
+  engine?: string | null;
 }): { ok: false; expected: string[] } | null {
   const { protocol, sniOverride, securityLayer } = opts;
   if (protocol !== 'xray' || !sniOverride) return null;
@@ -281,7 +283,11 @@ export function checkSniConsistency(opts: {
   // Self-steal serves the node's own domain, which the profile does not know.
   if (cfg.realityMode === 'self-steal') return null;
 
-  const names = cfg.realityServerNames ?? [];
+  // sing-box serves one REALITY name, the first (A-159): a profile saved with
+  // several before the profile save refused them still has a list, and a host
+  // on its second name would be refused by the node on every handshake.
+  const all = cfg.realityServerNames ?? [];
+  const names = opts.engine === 'singbox' ? all.slice(0, 1) : all;
   if (names.length === 0) return null;
   if (names.includes(sniOverride)) return null;
   return { ok: false, expected: names };

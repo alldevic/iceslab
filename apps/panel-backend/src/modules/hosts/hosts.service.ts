@@ -118,23 +118,26 @@ async function assertSniMatchesProfile(opts: {
   if (!opts.sniOverride) return;
   const binding = await prisma.profileNodeBinding.findUnique({
     where: { id: opts.bindingId },
-    select: { profile: { select: { protocol: true, config: true } } },
+    select: { profile: { select: { protocol: true, config: true, engine: true } } },
   });
   if (!binding) return; // caller already raises BindingNotFoundError
 
   await assertSniMatchesProfileConfig({
     protocol: binding.profile.protocol,
     config: binding.profile.config,
+    engine: binding.profile.engine,
     sniOverride: opts.sniOverride,
     securityLayer: opts.securityLayer,
   });
 }
 
 /** Same check against a profile already in hand, so create can run it before
- *  opening a transaction rather than after writing the binding. */
+ *  opening a transaction rather than after writing the binding. The engine
+ *  decides which names serve (A-159: one, the first, on sing-box). */
 async function assertSniMatchesProfileConfig(opts: {
   protocol: string;
   config: unknown;
+  engine: string | null | undefined;
   sniOverride: string | null | undefined;
   securityLayer: string | null | undefined;
 }): Promise<void> {
@@ -262,6 +265,7 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
   await assertSniMatchesProfileConfig({
     protocol: plan.profile.protocol,
     config: plan.profile.config,
+    engine: plan.profile.engine,
     sniOverride: input.sniOverride,
     securityLayer: input.securityLayer,
   });

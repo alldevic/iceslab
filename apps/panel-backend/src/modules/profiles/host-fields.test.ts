@@ -132,6 +132,21 @@ describe('checkSniConsistency', () => {
     ).toBeNull();
   });
 
+  it('on sing-box takes only the first name (A-159): the second is refused, the first passes', () => {
+    const two = {
+      protocol: 'xray',
+      config: { security: 'reality', realityServerNames: ['www.microsoft.com', 'www.apple.com'] },
+      securityLayer: 'default',
+    };
+    expect(checkSniConsistency({ ...two, engine: 'singbox', sniOverride: 'www.apple.com' })).toEqual({
+      ok: false,
+      expected: ['www.microsoft.com'],
+    });
+    expect(checkSniConsistency({ ...two, engine: 'singbox', sniOverride: 'www.microsoft.com' })).toBeNull();
+    // xray serves the whole list.
+    expect(checkSniConsistency({ ...two, engine: null, sniOverride: 'www.apple.com' })).toBeNull();
+  });
+
   it('leaves a CDN-fronted host alone: there the SNI is the CDN name', () => {
     expect(
       checkSniConsistency({ ...reality, sniOverride: 'cdn.example.com', securityLayer: 'tls' }),

@@ -97,9 +97,9 @@ export function engineServesSubprotocol(
 export const SINGBOX_XRAY_FAMILY_CODE = 'SINGBOX_XRAY_FAMILY';
 
 export const SINGBOX_XRAY_FAMILY_MESSAGE =
-  'sing-box serves the xray family only as REALITY over raw; use the xray engine for TLS, none, self-steal and other transports';
+  'sing-box serves the xray family only as REALITY over raw with one server name; use the xray engine for TLS, none, self-steal, several server names and other transports';
 
-export type SingboxXrayField = 'security' | 'realityMode' | 'network';
+export type SingboxXrayField = 'security' | 'realityMode' | 'network' | 'realityServerNames';
 
 /**
  * The field that keeps an xray-family profile (vless, vmess, trojan) off the
@@ -115,6 +115,12 @@ export type SingboxXrayField = 'security' | 'realityMode' | 'network';
  * Read on the config as it will be stored or pushed, the schema defaults
  * filled in (reality, steal-others, raw). An absent or empty value passes, as
  * on the agent. socks and http answer engineServesSubprotocol, not this.
+ *
+ * And one REALITY server name (A-159, 22.10): sing-box takes exactly one
+ * (1.13.14 common/tls/reality_server.go, ServerNames is a one-key map of
+ * options.ServerName), and the agent renders the first of the list. A host
+ * with the second name as its SNI passed the panel, went out in the
+ * subscription, and every handshake on it was refused by the node.
  */
 export function singboxRefusesXrayField(
   protocol: string,
@@ -127,12 +133,14 @@ export function singboxRefusesXrayField(
     security?: unknown;
     realityMode?: unknown;
     network?: unknown;
+    realityServerNames?: unknown;
   };
   if ((XRAY_PLAIN_SUBPROTOCOLS as readonly unknown[]).includes(c.subprotocol)) return null;
   const set = (v: unknown) => v !== undefined && v !== null && v !== '';
   if (set(c.security) && c.security !== 'reality') return 'security';
   if (c.realityMode === 'self-steal') return 'realityMode';
   if (set(c.network) && c.network !== 'raw') return 'network';
+  if (Array.isArray(c.realityServerNames) && c.realityServerNames.length > 1) return 'realityServerNames';
   return null;
 }
 
