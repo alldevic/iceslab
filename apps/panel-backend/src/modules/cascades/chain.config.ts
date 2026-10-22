@@ -3,6 +3,7 @@ import { LINK_PORT_BASE, type LinkCred } from './cascade.config.js';
 import { CHAIN_TPROXY_PORT, chainSocksPort, chainSocksUser } from './chain.ports.js';
 import { chainMatchIsEmpty, type ChainPolicy } from './chain-policy.js';
 import { LINK_TLS_SERVER_NAME, pemLines, type LinkTls } from './link-tls.js';
+import { dialFamilyOf, LEG_DNS_TAG, singboxDialFields } from './dial-family.js';
 
 /**
  * The chain as its own process: one sing-box config per node, rendered here.
@@ -134,6 +135,12 @@ export interface ChainRenderInput {
    * `ruleSets`. Exit only: that is where the cascade's traffic leaves.
    */
   exitPolicy?: { rules: Json[]; warp?: ChainWarp };
+  /**
+   * This node's own address in the panel, which the next hops' firewalls name
+   * as the source of its legs (linkIngress.allowFrom). A leg to a hostname is
+   * dialled over that address's family (dial-family.ts). Absent: no pin.
+   */
+  selfHost?: string;
 }
 
 /** The exit's Cloudflare WARP egress, from the node's registered account. */
@@ -703,9 +710,16 @@ export function renderChainConfig(input: ChainRenderInput): Json {
   }
   /** One leg out, one branch per CELL. Same switch as the inbound side, for the
    *  same reason: a new cell must not fall through into vless. */
+  let legDns = false;
   const renderLeg = (tag: string, leg: ChainLegOut): Json => {
     const rendered = renderLegCell(tag, leg);
-    return leg.via ? { ...rendered, bind_interface: leg.via } : rendered;
+    if (leg.via) return { ...rendered, bind_interface: leg.via };
+    // A-111: over the internet, dialled over the family the next hop's rule
+    // names. Inside a tunnel the leg dials an inner literal, nothing to pin.
+    const family = dialFamilyOf(input.selfHost, leg.host);
+    if (!family) return rendered;
+    legDns = true;
+    return { ...rendered, ...singboxDialFields(family) };
   };
   const renderLegCell = (tag: string, leg: ChainLegOut): Json => {
     switch (cellOf(leg.cred)) {
@@ -817,6 +831,9 @@ export function renderChainConfig(input: ChainRenderInput): Json {
     (isEntry && policies.length > 0) || (exitPolicy && exitPolicy.rules.length > 0) ? (input.ruleSets ?? []) : [];
   return {
     log: { level: 'warn' },
+    // The resolver a pinned leg names (dial-family.ts): the system's, as an
+    // unpinned leg uses, with only the family narrowed.
+    ...(legDns ? { dns: { servers: [{ type: 'local', tag: LEG_DNS_TAG }] } } : {}),
     inbounds,
     outbounds,
     ...(exitPolicy?.warp ? { endpoints: [warpEndpoint(exitPolicy.warp)] } : {}),

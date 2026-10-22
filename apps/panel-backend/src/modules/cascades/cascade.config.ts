@@ -12,6 +12,7 @@ import {
 } from '@iceslab/shared';
 import { getLogger } from '../../lib/infra/logger.js';
 import { chainSocksPort, chainSocksUser } from './chain.ports.js';
+import { dialFamilyOf, withXrayDialFamily } from './dial-family.js';
 import { xrayGeoEntry } from '../geo-sets/geo-names.js';
 import { splitPolicyEntries } from './policy-entries.js';
 import { generateLinkTls, type LinkTls } from './link-tls.js';
@@ -1097,12 +1098,15 @@ function linkInbound(cred: LinkCred): Record<string, unknown> {
   }
 }
 
-function linkOutbound(host: string, cred: LinkCred): Record<string, unknown> {
+/** `selfHost`: this node's own address in the panel, which the next hop's
+ *  firewall names; the dial is pinned to its family (dial-family.ts). */
+function linkOutbound(host: string, cred: LinkCred, selfHost?: string): Record<string, unknown> {
+  const family = dialFamilyOf(selfHost, host);
   switch (cred.protocol) {
     case 'shadowsocks':
-      return ssLinkOutbound(host, cred);
+      return withXrayDialFamily(ssLinkOutbound(host, cred), family);
     case 'vless':
-      return vlessLinkOutbound(host, cred);
+      return withXrayDialFamily(vlessLinkOutbound(host, cred), family);
     default:
       return refuseQuicCell(cred);
   }
@@ -1466,7 +1470,7 @@ export function buildTopologyFragmentsForNode(
     const idx = perDirCounter.get(l.directionTag) ?? 0;
     perDirCounter.set(l.directionTag, idx + 1);
     const tag = dirOutTag(l.directionTag, idx);
-    outbounds.push({ ...linkOutbound(host, l.cred), tag });
+    outbounds.push({ ...linkOutbound(host, l.cred, input.hosts.get(nodeId)), tag });
     const list = byDirection.get(l.directionTag) ?? [];
     list.push(tag);
     byDirection.set(l.directionTag, list);
@@ -1784,7 +1788,7 @@ export function buildCascadeConfigs(
 
     const inbounds = linkIn ? [linkInbound(linkIn)] : [];
     const outbounds: Record<string, unknown>[] = [];
-    if (linkOut) outbounds.push(linkOutbound(sorted[i + 1]!.nodeHost, linkOut));
+    if (linkOut) outbounds.push(linkOutbound(sorted[i + 1]!.nodeHost, linkOut, hop.nodeHost));
     outbounds.push(freedomOutbound);
 
     const routingRules: Record<string, unknown>[] = [];
@@ -1869,8 +1873,8 @@ const OBSERVATORY_PROBE_INTERVAL = '1m';
 /** Like linkOutbound but with a caller-chosen tag, so N link-outs can share the
  *  LINK_OUT_TAG prefix (xray selectors are prefix matches) while staying
  *  distinct outbounds. */
-function linkOutboundTagged(host: string, cred: LinkCred, tag: string): Record<string, unknown> {
-  return { ...linkOutbound(host, cred), tag };
+function linkOutboundTagged(host: string, cred: LinkCred, tag: string, selfHost?: string): Record<string, unknown> {
+  return { ...linkOutbound(host, cred, selfHost), tag };
 }
 
 /** A4 ad-split: an extra route-policy applied at the balancer ENTRY. A client's
@@ -1967,7 +1971,7 @@ export function buildBalancerCascadeConfigs(
   // Entry: one link-out per exit, all sharing the LINK_OUT_TAG prefix so the
   // observatory/balancer selector matches them; plus freedom for split-routing.
   const entryOutbounds: Record<string, unknown>[] = exits.map((ex, i) =>
-    linkOutboundTagged(ex.nodeHost, linkCreds[i]!, `${LINK_OUT_TAG}-${i}`),
+    linkOutboundTagged(ex.nodeHost, linkCreds[i]!, `${LINK_OUT_TAG}-${i}`, entry.nodeHost),
   );
   entryOutbounds.push(freedomOutbound);
 

@@ -2896,6 +2896,8 @@ function chainInputFor(
     : undefined;
 
   const foreign = foreignOf(nodeId, t);
+  // This node's address as the next hops' firewalls name it (A-111).
+  const selfHost = t.hosts.get(nodeId);
   if (role === 'entry') {
     // The tags the user core may ask for, Auto first when the cascade offers
     // it. Auto has no leg of its own: the chain renders it as a group over the
@@ -2932,6 +2934,7 @@ function chainInputFor(
     return {
       role,
       socksPassword,
+      ...(selfHost ? { selfHost } : {}),
       directionTags,
       out,
       ...(foreign.length > 0 ? { foreign } : {}),
@@ -2944,7 +2947,14 @@ function chainInputFor(
   if (!inLeg) return null;
   return role === 'exit'
     ? { role, socksPassword, in: inLeg }
-    : { role, socksPassword, in: inLeg, out, ...(foreign.length > 0 ? { foreign } : {}) };
+    : {
+        role,
+        socksPassword,
+        ...(selfHost ? { selfHost } : {}),
+        in: inLeg,
+        out,
+        ...(foreign.length > 0 ? { foreign } : {}),
+      };
 }
 
 /**
