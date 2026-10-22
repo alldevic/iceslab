@@ -116,10 +116,54 @@ export interface CreateHostInput {
 }
 
 // The binding is immutable: moving a host to another node is a delete plus a
-// create, not an edit.
-export type UpdateHostInput = Partial<
-  Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId' | 'port'>
->;
+// create, not an edit. Its listen port is not (A-150, 328fc8d): `port` moves
+// the inbound on the node, `portOverride` is only what clients dial.
+export type UpdateHostInput = Partial<Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId'>> & {
+  /** The binding carries other hosts too; `true` moves them all (HOST_PORT_SHARED). */
+  confirmSharedPort?: boolean;
+};
+
+/**
+ * 409 HOST_PORT_SHARED (A-150): moving the listen port would move the other
+ * hosts of the same inbound, named here. Input checked first; null when the
+ * refusal is another one.
+ */
+export function hostPortShared(err: unknown): { port: number; hosts: string[] } | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 409 || !data || typeof data !== 'object') return null;
+  const d = data as { error?: unknown; port?: unknown; hosts?: unknown };
+  if (d.error !== 'HOST_PORT_SHARED' || typeof d.port !== 'number' || !Array.isArray(d.hosts)) return null;
+  return { port: d.port, hosts: d.hosts.filter((h): h is string => typeof h === 'string' && h !== '') };
+}
+
+/**
+ * The port fields of a host save (A-150). The «Port» field is the port the
+ * node listens on (the binding's), «Client port» is the override clients dial
+ * behind NAT or a CDN, empty when they dial the listen port.
+ *
+ * An edit sends each only when it changed: an absent key is no edit, and
+ * restating the listen port would be read as a move. A create sends the listen
+ * port always and the client port only when one was typed.
+ */
+export function hostPortPayload(
+  stored: { listenPort: number; clientPort: number | null } | null,
+  form: { port: number | ''; clientPort: number | '' },
+): { port?: number; portOverride?: number | null } {
+  const client = form.clientPort === '' ? null : form.clientPort;
+  if (stored === null) {
+    return {
+      ...(form.port !== '' ? { port: form.port } : {}),
+      ...(client !== null ? { portOverride: client } : {}),
+    };
+  }
+  return {
+    ...(form.port !== '' && form.port !== stored.listenPort ? { port: form.port } : {}),
+    ...(client !== stored.clientPort ? { portOverride: client } : {}),
+  };
+}
 
 /** The port is taken on that node. The message names the profile holding it, so
  *  it is worth showing verbatim rather than replacing with "port busy". */

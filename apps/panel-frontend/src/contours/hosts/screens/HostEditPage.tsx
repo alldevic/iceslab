@@ -35,7 +35,10 @@ import {
   listHosts,
   portConflict,
   updateHost,
+  hostPortPayload,
+  hostPortShared,
 } from '@/lib/domain/hosts';
+import { modals } from '@mantine/modals';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
 import { HostFreshnessCard } from '@/contours/hosts/components/HostFreshnessCard';
 import { nodePortClaims } from '@/contours/hosts/lib/portClaims';
@@ -140,7 +143,10 @@ export function HostEditPage() {
 
   const [name, setName] = useState('');
   const [country, setCountry] = useState<string | null>(null);
+  /** The port the node listens on: the binding's (A-150). */
   const [port, setPort] = useState<number | ''>('');
+  /** The port clients dial when it differs (NAT, CDN): the host's override. */
+  const [clientPort, setClientPort] = useState<number | ''>('');
   const [enabled, setEnabled] = useState(true);
   /**
    * Arriving from a profile: /hosts/new?profileId=... starts with it chosen.
@@ -333,7 +339,11 @@ export function HostEditPage() {
     const node = binding ? nodes.find((n) => n.id === binding.nodeId) : undefined;
     setName(host.remark);
     setCountry(node?.countryCode ? node.countryCode.toUpperCase() : null);
-    setPort(host.portOverride ?? binding?.publicPort ?? binding?.port ?? '');
+    // A-150: «Port» is where the node listens, not what the subscription hands
+    // out. It used to be seeded from portOverride and saved into it, so the
+    // node kept the old port while clients were sent the new one.
+    setPort(binding?.port ?? '');
+    setClientPort(host.portOverride ?? '');
     setEnabled(host.enabled);
     setProfileId(binding?.profileId ?? null);
     setBindingId(host.bindingId);
@@ -441,7 +451,9 @@ export function HostEditPage() {
   ]);
 
   const saveMutation = useMutation({
-    mutationFn: () => {
+    // `confirmSharedPort`: the second try after HOST_PORT_SHARED, when the
+    // operator agreed to move the other hosts of the inbound as well.
+    mutationFn: (confirmSharedPort: boolean) => {
       // A field the profile cannot serve is sent as NULL rather than as whatever
       // an earlier profile left in the form. Otherwise switching a host from an
       // xray profile to a Hysteria one would keep writing a dead SNI.
@@ -449,7 +461,6 @@ export function HostEditPage() {
         remark: name.trim(),
         enabled,
         addressOverride: address.trim() || null,
-        portOverride: port === '' ? null : Number(port),
         sniOverride: can('sniOverride') ? sni.trim() || null : null,
         hostHeaderOverride: can('hostHeaderOverride') ? hostHeader.trim() || null : null,
         pathOverride: can('pathOverride') ? path.trim() || null : null,
@@ -468,9 +479,16 @@ export function HostEditPage() {
         if (!profileId || !profiles.some((p) => p.id === profileId) || !nodeId || port === '') {
           throw new Error(t('hostEdit.pickNodeFirst'));
         }
-        return createHost({ profileId, nodeId, port: Number(port), ...payload });
+        return createHost({ profileId, nodeId, ...payload, ...hostPortPayload(null, { port, clientPort }) });
       }
-      return updateHost(host!.id, payload);
+      // Ports only when changed (hostPortPayload): restating the listen port
+      // would read as a move, and an override equal to it is no override.
+      const stored = currentBinding ? { listenPort: currentBinding.port, clientPort: host!.portOverride } : null;
+      return updateHost(host!.id, {
+        ...payload,
+        ...(stored ? hostPortPayload(stored, { port, clientPort }) : {}),
+        ...(confirmSharedPort ? { confirmSharedPort: true } : {}),
+      });
     },
     onSuccess: (saved) => {
       qc.invalidateQueries({ queryKey: ['hosts'] });
@@ -504,6 +522,25 @@ export function HostEditPage() {
        * Английская фраза сервера остаётся запасной для кодов, которых панель
        * ещё не знает: показать её как есть честнее, чем промолчать.
        */
+      // The listen port belongs to the inbound, and other hosts ride it: they
+      // are named, and «move for all» repeats the save with consent (A-150).
+      const shared = hostPortShared(err);
+      if (shared) {
+        modals.openConfirmModal({
+          title: t('hostEdit.portSharedTitle', { port: shared.port }),
+          children: (
+            <Text size="sm">
+              {t('hostEdit.portSharedBody', {
+                count: shared.hosts.length,
+                names: shared.hosts.map((h) => `«${h}»`).join(', '),
+              })}
+            </Text>
+          ),
+          labels: { confirm: t('hostEdit.portSharedConfirm'), cancel: t('common.cancel') },
+          onConfirm: () => saveMutation.mutate(true),
+        });
+        return;
+      }
       const refusal = portRefusalOf(err);
       if (refusal) {
         setPortRefusal(refusal);
@@ -664,7 +701,7 @@ export function HostEditPage() {
           <PageButton onClick={() => navigate('/hosts')}>{t('common.cancel')}</PageButton>
           <PageButton
             primary
-            onClick={() => saveMutation.mutate()}
+            onClick={() => saveMutation.mutate(false)}
             disabled={saveMutation.isPending || blocker !== null}
           >
             {isNew ? t('hostEdit.create') : t('common.save')}
@@ -759,6 +796,22 @@ export function HostEditPage() {
                   port={port === '' ? 0 : port}
                   transport={portCheckTransport}
                 />
+              </Box>
+              {/* A-150: the port clients dial when it is not the one the node
+                  listens on. Empty means they dial the listen port. */}
+              <Box style={{ flex: 1 }}>
+                <NumberInput
+                  label={t('hostEdit.clientPort')}
+                  placeholder={port === '' ? '' : String(currentBinding?.publicPort ?? port)}
+                  value={clientPort}
+                  min={1}
+                  max={65535}
+                  onChange={(v) => {
+                    setClientPort(typeof v === 'number' ? v : '');
+                    setDirty(true);
+                  }}
+                />
+                <Hint>{t('hostEdit.clientPortHint')}</Hint>
               </Box>
               <Box style={{ flex: 1 }}>
                 <Text style={{ ...LABEL, marginBottom: 8 }}>{t('hostEdit.state')}</Text>
@@ -1342,8 +1395,12 @@ export function HostEditPage() {
               <Text style={{ flex: 1, fontFamily: DISPLAY, fontSize: 15, fontWeight: 500, color: SNOW }}>
                 {name.trim() || t('hostEdit.unnamed')}
               </Text>
+              {/* The port a client dials: its own override, else the inbound's
+                  public port, else where the node listens (A-150). */}
               {port !== '' && (
-                <Text style={{ fontFamily: MONO, fontSize: 12, color: CYAN_HI }}>{port}</Text>
+                <Text style={{ fontFamily: MONO, fontSize: 12, color: CYAN_HI }}>
+                  {clientPort !== '' ? clientPort : (currentBinding?.publicPort ?? port)}
+                </Text>
               )}
             </Box>
             <Hint>{isNew ? t('hostEdit.previewHintNew') : t('hostEdit.previewHint')}</Hint>

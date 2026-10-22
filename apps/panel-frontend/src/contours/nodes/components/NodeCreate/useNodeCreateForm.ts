@@ -262,7 +262,9 @@ export function useNodeCreateForm() {
             nodeId: node.id,
             port: hostPort,
             publicHost: form.values.host.trim(),
-            publicPort: hostPort,
+            // No publicPort (A-150): the wizard has no external-port field, and
+            // a copy of the listen port stored as one shadowed every later move
+            // of that port in the subscription.
           });
           hosts.push({ name: profile.name, port: hostPort });
         } catch {
