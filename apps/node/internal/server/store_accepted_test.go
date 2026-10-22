@@ -86,6 +86,63 @@ func TestARestartComesUpOnWhatTheCoresTookNotOnWhatTheyRefused(t *testing.T) {
 	}
 }
 
+// blockRefusingCore refuses a policy or resolver that says "bad".
+type blockRefusingCore struct{ fakeCore }
+
+func (b *blockRefusingCore) ApplyPolicy(p json.RawMessage) error {
+	if strings.Contains(string(p), "bad") {
+		return errors.New("an action this core cannot render")
+	}
+	return nil
+}
+
+func (b *blockRefusingCore) ApplyDns(d json.RawMessage) error {
+	if strings.Contains(string(d), "bad") {
+		return errors.New("core rejected the config")
+	}
+	return nil
+}
+
+// P1, 22.10: a refused policy or resolver was only logged. The push answered
+// OK, the panel showed the node in sync with routing it was not running, and
+// the store kept the refused block for the next restart.
+func TestARefusedPolicyOrResolverFailsThePushAndIsNotStored(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "inbounds.json")
+	xray := &blockRefusingCore{fakeCore{name: "xray", engine: "xray", running: true}}
+	s := serverWithStore(t, store, xray)
+
+	const inbound = `"inbounds":[{"id":"i1","name":"one","protocol":"xray","port":0,"config":{}}]`
+	if code := pushOver(t, s, `{`+inbound+`,"policy":{"rules":[{"kind":"block"}]},"dns":{"servers":[{"address":"1.1.1.1"}]}}`); code != http.StatusOK {
+		t.Fatalf("good push answered %d", code)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/applyInbounds", strings.NewReader(
+		`{`+inbound+`,"policy":{"rules":[{"kind":"bad"}]},"dns":{"servers":[{"address":"bad.example"}]}}`))
+	rec := httptest.NewRecorder()
+	s.handleApplyInbounds(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a push with a refused policy and resolver answered %d, want 500", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "policy (xray)") || !strings.Contains(body, "dns (xray)") {
+		t.Fatalf("the refusals must travel back in the reasons, got: %s", body)
+	}
+
+	back, err := readPushStore(store)
+	if err != nil {
+		t.Fatalf("readPushStore: %v", err)
+	}
+	if strings.Contains(string(back.Policy), "bad") || !strings.Contains(string(back.Policy), "block") {
+		t.Fatalf("store policy = %s, want the previous one", back.Policy)
+	}
+	if strings.Contains(string(back.Dns), "bad") || !strings.Contains(string(back.Dns), "1.1.1.1") {
+		t.Fatalf("store dns = %s, want the previous one", back.Dns)
+	}
+	if len(back.Inbounds) != 1 {
+		t.Fatalf("the inbound that applied must stay stored, got %+v", back.Inbounds)
+	}
+}
+
 // The chain block goes the same way: a refused chain keeps the stored one, and
 // a refused userCore keeps the hand-off the cores had while the chain process
 // takes its new block.

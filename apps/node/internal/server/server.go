@@ -841,6 +841,9 @@ type pushOutcome struct {
 	// userCoreRefused: the chain's userCore was malformed and no core was told
 	// about a cascade, so every core kept what it had.
 	userCoreRefused bool
+	// policyRefused / dnsRefused: a core refused the node-level block and
+	// kept the one it had.
+	policyRefused, dnsRefused bool
 }
 
 func (s *Server) applyPushOutcome(
@@ -867,9 +870,14 @@ func (s *Server) applyPushOutcome(
 	// each inbound triggers already carries it. The other order would restart
 	// the core twice for one push: once without the policy, once with it.
 	//
-	// A failure here is not fatal to the request. The inbounds below are what
-	// keeps users connected; refusing the whole push over a policy the operator
-	// can fix in the panel would take the node dark for a routing preference.
+	// A failure here does not stop the push. The inbounds below are what keeps
+	// users connected; refusing the whole push over a policy the operator can
+	// fix in the panel would take the node dark for a routing preference.
+	//
+	// It is still a failure of the push, said in its reasons, and the store
+	// keeps the previous policy (acceptedPush). It was only logged: the core
+	// kept its old routing while the panel showed the node in sync with the new
+	// one (P1, 22.10).
 	for _, adapter := range s.cfg.Adapters {
 		pr, ok := adapter.(core.PolicyReceiver)
 		if !ok {
@@ -877,6 +885,9 @@ func (s *Server) applyPushOutcome(
 		}
 		if err := pr.ApplyPolicy(req.Policy); err != nil {
 			s.logger.Error("adapter ApplyPolicy failed", "core", adapter.Name(), "err", err)
+			o.policyRefused = true
+			failed++
+			reasons = append(reasons, fmt.Sprintf("policy (%s): %v", adapter.Name(), err))
 		}
 	}
 
@@ -892,6 +903,9 @@ func (s *Server) applyPushOutcome(
 		}
 		if err := dr.ApplyDns(req.Dns); err != nil {
 			s.logger.Error("adapter ApplyDns failed", "core", adapter.Name(), "err", err)
+			o.dnsRefused = true
+			failed++
+			reasons = append(reasons, fmt.Sprintf("dns (%s): %v", adapter.Name(), err))
 		}
 	}
 
@@ -1037,8 +1051,9 @@ func (s *Server) applyPushOutcome(
 	// on it would turn one bad block into an outage of another core. An inbound
 	// that fails below no longer holds the idle back: the push named what it
 	// named whether or not that inbound then applies, and the core it names is
-	// named, so a failure cannot idle it.
-	if failed == 0 {
+	// named, so a failure cannot idle it. Nor does a refused policy or
+	// resolver: they say nothing about which cores should run.
+	if !o.chainRefused && !o.userCoreRefused {
 		s.idleUnnamed(ctx, named)
 	}
 

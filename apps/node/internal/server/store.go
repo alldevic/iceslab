@@ -72,9 +72,10 @@ acceptedPush is the push as the cores took it: what a restart has to come up on.
 A part a core refused is left running its previous version (xray keeps the
 running config, A-130; the chain process keeps its old process), so the store
 keeps that previous version too, out of the push it was in before. A refused
-inbound that had no previous version is not stored at all. Everything else is
-the new push: the parts that applied, the deletions it made, and its node-level
-blocks.
+inbound that had no previous version is not stored at all. A refused policy or
+resolver keeps the stored one the same way. Everything else is the new push:
+the parts that applied, the deletions it made, and the node-level blocks the
+cores took.
 
 A-113, 22.10: the push was stored whole before it was applied, and a restart
 brought up exactly the version the cores had refused, on a node that was
@@ -97,6 +98,12 @@ func acceptedPush(prev, req dto.ApplyInboundsRequest, o pushOutcome) dto.ApplyIn
 		if old, ok := prevByID[ib.ID]; ok && ib.ID != "" {
 			out.Inbounds = append(out.Inbounds, old)
 		}
+	}
+	if o.policyRefused {
+		out.Policy = prev.Policy
+	}
+	if o.dnsRefused {
+		out.Dns = prev.Dns
 	}
 	switch {
 	case o.chainRefused:
