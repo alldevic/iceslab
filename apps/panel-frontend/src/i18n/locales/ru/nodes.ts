@@ -206,7 +206,7 @@
     unsaved: 'Есть несохранённое',
     reissue: 'Перевыпустить bootstrap',
     bootstrapIssued: 'Новый bootstrap-токен выпущен',
-    bootstrapCopied: 'Команда установки в буфере обмена. Старый токен больше не работает.',
+    bootstrapShown: 'Команда установки в окне. Старый токен больше не работает.',
     tabParams: 'Параметры',
     tabRoutes: 'Маршруты',
     paramsTitle: 'Параметры',

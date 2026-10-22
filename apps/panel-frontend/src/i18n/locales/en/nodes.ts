@@ -192,7 +192,7 @@
     unsaved: 'Unsaved changes',
     reissue: 'Re-issue bootstrap',
     bootstrapIssued: 'New bootstrap token issued',
-    bootstrapCopied: 'The install command is on your clipboard. The old token is dead.',
+    bootstrapShown: 'The install command is in the window. The old token is dead.',
     tabParams: 'Parameters',
     tabRoutes: 'Routes',
     paramsTitle: 'Parameters',

@@ -1,4 +1,5 @@
 import { modals } from '@mantine/modals';
+import { notifications } from '@mantine/notifications';
 import { countryFlag } from '@/lib/domain/countries';
 import { deleteHost } from '@/lib/domain/hosts';
 import { GlobeIcon, LinkIcon, TrashIcon } from '@/contours/nodes/components/NodeEdit/icons';
@@ -262,9 +263,21 @@ export function HostsPanel({
                           children: <Text size="sm">{t('nodeEdit.detachBody')}</Text>,
                           labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
                           confirmProps: { color: 'red' },
+                          // A refusal said in the server's words, and the list
+                          // read again either way (A-147): it used to vanish
+                          // into an unhandled promise with the modal closed.
                           onConfirm: async () => {
-                            await deleteHost(h.id);
-                            qc.invalidateQueries({ queryKey: ['hosts', id] });
+                            try {
+                              await deleteHost(h.id);
+                            } catch (err) {
+                              notifications.show({
+                                color: 'red',
+                                title: t('common.deleteError'),
+                                message: apiErrorMessage(err),
+                              });
+                            } finally {
+                              qc.invalidateQueries({ queryKey: ['hosts', id] });
+                            }
                           },
                         })
                       }

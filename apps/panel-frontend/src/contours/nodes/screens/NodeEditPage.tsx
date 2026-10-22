@@ -31,6 +31,10 @@ import { NodeDeleteCascades } from '@/contours/nodes/components/NodeDelete';
 import { showNodeDeleteFailed } from '@/contours/nodes/components/nodeDeleteToast';
 import { nodeDeleteFacts } from '@/contours/nodes/lib/nodeDelete';
 import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
+import { NodePayloadModal } from '@/contours/nodes/components/NodePayloadModal';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 
 /**
  * A registered node, as a page with tabs. Parameters is what the panel stores
@@ -41,6 +45,8 @@ import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
 export function NodeEditPage() {
   const { t } = useTranslation();
   const {
+    issuedBootstrap,
+    setIssuedBootstrap,
     tab,
     setTab,
     id,
@@ -88,6 +94,10 @@ export function NodeEditPage() {
 
   // The id in the URL may match nothing: show the fallback rather than an
   // editor bound to a node that is not there.
+  // A failed list is not «no such node» (A-141).
+  if (!node && loadView(nodesQuery) === 'failed') {
+    return <LoadFailed message={apiErrorMessage(nodesQuery.error)} onRetry={() => void nodesQuery.refetch()} />;
+  }
   if (!node) {
     return <NodeNotFound isLoading={nodesQuery.isLoading} onBack={() => navigate('/nodes')} />;
   }
@@ -99,6 +109,17 @@ export function NodeEditPage() {
 
   return (
     <Stack gap={20}>
+      {/* The re-issued token's install command, shown rather than only copied
+          (A-147): on plain http there is no clipboard API to copy it with. */}
+      {issuedBootstrap && (
+        <NodePayloadModal
+          opened
+          onClose={() => setIssuedBootstrap(null)}
+          nodeName={node.name}
+          payload=""
+          bootstrap={issuedBootstrap}
+        />
+      )}
       {/* Page bar */}
       <Box
         style={{

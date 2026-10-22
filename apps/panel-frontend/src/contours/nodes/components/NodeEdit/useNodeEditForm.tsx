@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { apiErrorMessage } from '@/lib/net/client';
+import { onBootstrapIssued, type BootstrapInfo } from '@/contours/nodes/lib/bootstrapIssued';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useForm } from '@mantine/form';
@@ -249,21 +251,17 @@ export function useNodeEditForm() {
     mutationFn: () => getNodeExposure(id!),
   });
 
+  /** The command of a re-issued token, shown until the operator closes it (A-147). */
+  const [issuedBootstrap, setIssuedBootstrap] = useState<BootstrapInfo | null>(null);
   const bootstrapMutation = useMutation({
     mutationFn: () => refreshNodeBootstrap(id!),
-    onSuccess: (info) => {
-      void navigator.clipboard.writeText(info.command).catch(() => undefined);
-      notifications.show({
-        color: 'green',
-        title: t('nodeEdit.bootstrapIssued'),
-        message: t('nodeEdit.bootstrapCopied'),
-      });
-    },
+    onSuccess: (info) =>
+      onBootstrapIssued(info, setIssuedBootstrap, (n) => notifications.show({ color: 'green', ...n }), t),
     onError: (err) =>
       notifications.show({
         color: 'red',
         title: t('common.error'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -272,6 +270,8 @@ export function useNodeEditForm() {
   const egress: 'direct' | 'warp' | 'cascade' = cascade ? 'cascade' : warpOn ? 'warp' : 'direct';
 
   return {
+    issuedBootstrap,
+    setIssuedBootstrap,
     tab,
     setTab,
     id,
