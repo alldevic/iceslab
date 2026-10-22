@@ -200,6 +200,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (err instanceof twofa.TotpBadCodeError) {
       return reply.code(400).send({ error: 'INVALID_TOTP', message: err.message });
     }
+    // Too many wrong codes (A-123): the login's lockout answer, word for word.
+    if (err instanceof authService.AccountLockedError) {
+      reply.header('Retry-After', err.retryAfterSeconds.toString());
+      return reply.code(429).send({
+        error: 'ACCOUNT_LOCKED',
+        message: err.message,
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
+    }
     if (err instanceof twofa.TotpAlreadyEnabledError) {
       return reply.code(409).send({ error: 'CONFLICT', message: err.message });
     }
