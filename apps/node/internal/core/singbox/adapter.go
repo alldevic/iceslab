@@ -94,6 +94,13 @@ type Adapter struct {
 	// across IO.
 	restartMu sync.Mutex
 
+	// The ssm-api hand-over of a managed shadowsocks (ssm_retry.go), under mu:
+	// done for the current process, and the process generation a retry
+	// belongs to (a newer start or a Stop ends an older retry).
+	ssmSynced    bool
+	ssmGen       int
+	ssmRetryBase time.Duration
+
 	// The pending batch of user changes (batch.go), under mu. onFlush is a
 	// test hook: the moment a batch decides to restart.
 	batchTimer *time.Timer
@@ -462,6 +469,11 @@ func (a *Adapter) Healthy() bool {
 	if a.cfg.BinaryPath == "" || len(a.inbounds) == 0 {
 		return true
 	}
+	// A managed shadowsocks whose users have not been handed over serves
+	// nobody, whatever the process says (A-213).
+	if a.ssmOn() && !a.ssmSynced {
+		return false
+	}
 	return a.proc != nil && a.proc.Running()
 }
 
@@ -687,17 +699,24 @@ func (a *Adapter) regenerateAndRestart() error {
 	// A managed shadowsocks inbound starts with nobody: its users are handed
 	// over the API, every one of them, after each start, inbound by inbound.
 	if a.ssmOn() {
-		for _, h := range held {
-			want := make(map[string]string, len(users))
-			for id, u := range users {
-				if u.servesOn(h.id) {
-					want[id] = core.DeriveSsPassword(u.Password, h.cfg.Method)
-				}
-			}
-			if err := a.ssm().at(ssmPath(h.id)).sync(ctx, want); err != nil {
-				return fmt.Errorf("singbox: hand the users to ssm-api: %w", err)
-			}
+		a.mu.Lock()
+		a.ssmGen++
+		gen := a.ssmGen
+		a.ssmSynced = false
+		a.mu.Unlock()
+		if err := a.ssmSyncAll(ctx, held, users); err != nil {
+			// A-213, 22.10: the managed inbound starts with nobody, and a
+			// failed hand-over left it so: a 500 to a push, a journal line
+			// after a batch. Now it is tried again until it takes, and the
+			// core is not healthy until then.
+			go a.retrySSMSync(ctx, gen, held, users)
+			return fmt.Errorf("singbox: hand the users to ssm-api (retrying): %w", err)
 		}
+		a.mu.Lock()
+		if a.ssmGen == gen {
+			a.ssmSynced = true
+		}
+		a.mu.Unlock()
 	}
 	a.logger.Info("singbox: config applied and (re)started",
 		"inbounds", len(held), "users", len(users))
