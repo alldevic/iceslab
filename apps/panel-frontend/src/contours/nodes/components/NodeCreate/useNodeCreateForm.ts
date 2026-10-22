@@ -19,6 +19,7 @@ import {
   legacyEngines,
   nodeEnginesRefusal,
   pickFreePort,
+  selectedThatCan,
   type FormValues,
   type NodeEnginesRefusal,
   type Registered,
@@ -186,6 +187,12 @@ export function useNodeCreateForm() {
     return { can, cannot };
   }, [profilesQuery.data, enginesKey, t]);
 
+  // A profile whose core was taken off on step 1 leaves the selection, so the
+  // counter, the summary, the ports and the button count only what can stand
+  // (A-146). Done in render, not in an effect: the next frame already agrees.
+  const live = selectedThatCan(selected, profilesQuery.data ? groups.can.map((p) => p.id) : null);
+  if (live.length !== selected.length) setSelected(live);
+
   // Ports are assigned in selection order, so the chip on a row is the port
   // that row will actually listen on once the node registers.
   const portByProfile = useMemo(() => {
@@ -255,7 +262,13 @@ export function useNodeCreateForm() {
       for (const id of selected) {
         const profile = groups.can.find((p) => p.id === id);
         const hostPort = portByProfile.get(id) ?? DEFAULT_NODE_PORT;
-        if (!profile) continue;
+        // Not a silent skip (A-146): a picked profile that cannot stand on
+        // this node is named in the toast with the rest that did not bind.
+        if (!profile) {
+          const gone = profilesQuery.data?.profiles.find((p) => p.id === id);
+          failed.push(`${gone?.name ?? id.slice(0, 8)}: ${t('nodeCreate.reasonCannotStand')}`);
+          continue;
+        }
         try {
           await createBinding({
             profileId: id,
@@ -267,15 +280,17 @@ export function useNodeCreateForm() {
             // of that port in the subscription.
           });
           hosts.push({ name: profile.name, port: hostPort });
-        } catch {
-          failed.push(profile.name);
+        } catch (err) {
+          // The server's reason beside the name: «port taken» and «core
+          // refused» are different fixes.
+          failed.push(`${profile.name}: ${apiErrorMessage(err)}`);
         }
       }
       if (failed.length > 0) {
         notifications.show({
           color: 'yellow',
           title: t('nodeCreate.hostsPartialTitle'),
-          message: t('nodeCreate.hostsPartial', { names: failed.join(', ') }),
+          message: t('nodeCreate.hostsPartial', { names: failed.join('; ') }),
         });
       }
 

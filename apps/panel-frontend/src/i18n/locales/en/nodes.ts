@@ -134,6 +134,7 @@
     cannotAttachHint: 'This node does not run the core these hosts need',
     reasonNoCore: 'no {{protocol}} core here',
     reasonNoSingbox: 'sing-box engine not installed',
+    reasonCannotStand: "the node does not carry this profile's core",
     portChip: 'port {{port}}',
     summaryTitle: 'What will be created',
     sumNode: 'Node record',

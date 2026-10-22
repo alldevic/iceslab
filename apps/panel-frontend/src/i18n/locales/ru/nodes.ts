@@ -146,6 +146,7 @@
     cannotAttachHint: 'На этой ноде нет ядра, которое нужно этим хостам',
     reasonNoCore: 'нет ядра {{protocol}}',
     reasonNoSingbox: 'движок sing-box не ставится',
+    reasonCannotStand: 'ядра этого профиля на ноде нет',
     portChip: 'порт {{port}}',
     summaryTitle: 'Что будет создано',
     sumNode: 'Запись ноды',

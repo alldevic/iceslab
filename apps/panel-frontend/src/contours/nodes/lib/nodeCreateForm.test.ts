@@ -8,11 +8,21 @@ import {
   legacyEngines,
   nodeEnginesRefusal,
   sameEngines,
+  selectedThatCan,
   toggleEngine,
   wizardCoreComponents,
 } from '@/contours/nodes/lib/nodeCreateForm';
 import { formProtocolOf, nodeEnginesPut } from '@/contours/nodes/lib/nodeEditForm';
 import { intendedEnginesWords, nodeIntentWords } from '@/lib/domain/engines';
+
+describe('selectedThatCan (A-146)', () => {
+  it('профиль снятого ядра уходит из выбора, порядок остальных сохраняется', () => {
+    expect(selectedThatCan(['sb', 'xr', 'awg'], ['xr', 'awg'])).toEqual(['xr', 'awg']);
+  });
+  it('список профилей ещё не пришёл: выбор не трогается', () => {
+    expect(selectedThatCan(['sb', 'xr'], null)).toEqual(['sb', 'xr']);
+  });
+});
 
 describe('wizardCoreComponents: ядра выбранных движков первыми', () => {
   it('hysteria: hysteria сверху, остальные под «остальные ядра»; строк столько, сколько компонентов в манифесте', () => {
