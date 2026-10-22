@@ -12,6 +12,7 @@ import { reachOfUsers } from './user-reach.js';
 import { syncAddUser } from './users.queue.js';
 import { applyInboundsForNode } from '../inbounds/inbounds.queue.js';
 import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
+import { generateSubscription } from '../subscription/subscription.service.js';
 
 /**
  * A-022: a user is rolled out only onto the nodes and inbounds their squads
@@ -221,6 +222,50 @@ describe('a host change moves the reach, and the node is pushed (A-215)', () => 
     added.length = 0;
     await applyInboundsForNode(n);
     expect(added.find((x) => x.req.userId === u)?.req.inboundIds).toEqual([]);
+  });
+});
+
+describe('a cascade switched off for a squad on a hysteria entry (A-116)', () => {
+  it('its members are not put on the entry inbound and get no host; a second squad that keeps it brings both back', async () => {
+    seq += 1;
+    const entry = (await post('/api/nodes', { name: `hy-entry-${seq}`, address: `hy-entry-${seq}.test`, protocol: 'hysteria' }))
+      .id as string;
+    await prisma.node.update({ where: { id: entry }, data: { lastInboundSyncAt: new Date() } });
+    const exit = await node();
+    const p = await profile('hysteria', { obfsPassword: 'salt' });
+    const h = await host(p, entry, 443, 'HY');
+    const c = await prisma.cascade.create({ data: { name: 'hy-c', enabled: true, mode: 'chain' }, select: { id: true } });
+    await prisma.cascadePosition.create({
+      data: { cascadeId: c.id, position: 0, entryProtocol: 'hysteria', nodes: { create: [{ nodeId: entry }] } },
+    });
+    await prisma.cascadeDirection.create({
+      data: { cascadeId: c.id, tag: 1, countryCode: 'NL', nodes: { create: [{ nodeId: exit }] } },
+    });
+
+    const off = await post('/api/squads', { name: 'hy-off', profileIds: [p], exitAcl: [{ cascadeId: c.id, directionIds: [] }] });
+    const u = await user('hy_off_user', [off.id]);
+    const hyHosts = async () => {
+      const token = (await prisma.user.findUniqueOrThrow({ where: { id: u }, select: { subscriptionToken: true } }))
+        .subscriptionToken;
+      const sub = await generateSubscription(token, { ip: '127.0.0.1', userAgent: '' });
+      return sub.endpoints.filter((e) => e.protocol === 'hysteria').length;
+    };
+
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockResolvedValue({ ok: true, applied: 1, skipped: 0 });
+    const { added } = capture();
+    await applyInboundsForNode(entry);
+    expect(added.find((x) => x.req.userId === u)?.req.inboundIds).toEqual([]);
+    expect((await reachOfUsers([u])).get(u)?.get(entry)).toBeUndefined();
+    expect(await hyHosts()).toBe(0);
+
+    // The same user in a second squad that grants the profile and keeps the
+    // cascade on: the union reaches the entry again.
+    const on = await post('/api/squads', { name: 'hy-on', profileIds: [p] });
+    await prisma.groupMember.create({ data: { userId: u, groupId: on.id } });
+    added.length = 0;
+    await applyInboundsForNode(entry);
+    expect(added.find((x) => x.req.userId === u)?.req.inboundIds).toEqual([h.bindingId]);
+    expect(await hyHosts()).toBe(1);
   });
 });
 

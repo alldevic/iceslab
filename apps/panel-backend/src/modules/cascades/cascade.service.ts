@@ -987,7 +987,11 @@ export interface CascadeRouteProfile {
  * a password, there is no route tag). So the host is not a direct server any
  * more, it IS the cascade, and it is named like one: the exit's flag and
  * country when there is one direction, the Auto line when there are several.
- * A squad that switched the cascade off keeps the host under its own name.
+ * A squad that switched the cascade off does not get the host at all (A-116,
+ * entriesSwitchedOff): the node puts every user of the inbound into the chain,
+ * so a host under its own name would promise a direct server the node is not.
+ * The off check below therefore no longer meets a host the subscription keeps;
+ * it stays as the same rule seen from the label's side.
  *
  * `protocol` since t07-wire: an AmneziaWG entry's awg host is the cascade in
  * the same way, its users are keys and pick no way out either.

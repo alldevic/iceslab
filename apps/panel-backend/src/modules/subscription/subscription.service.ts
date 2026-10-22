@@ -18,6 +18,7 @@ import {
   getRouteProfilesByEntryNode,
 } from '../cascades/cascade.service.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
+import { entriesSwitchedOff } from '../users/user-reach.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/auth/credentials.js';
@@ -756,6 +757,31 @@ export async function generateSubscription(
         );
       }
     }
+  }
+  // A-116: a squad that switched off a cascade entered through hysteria or
+  // AmneziaWG does not reach that entry's inbound (entriesSwitchedOff): the node
+  // cannot leave the squad out of the chain, so the host is not handed out. A
+  // binding there stays when another squad of the user grants it, reaches one
+  // of its hosts and did not switch the cascade off; user-reach.ts follows the
+  // same rule, so the node and the subscription agree.
+  const switchedOff = await entriesSwitchedOff(groupIds);
+  if (switchedOff.size > 0) {
+    const grants = await prisma.groupProfile.findMany({
+      where: { groupId: { in: groupIds } },
+      select: { groupId: true, profileId: true },
+    });
+    const kept = bindings.filter((b) => {
+      const key = `${b.node.id}|${b.profile.protocol}`;
+      if (![...switchedOff.values()].some((keys) => keys.has(key))) return true;
+      return groupIds.some(
+        (g) =>
+          !switchedOff.get(g)?.has(key) &&
+          grants.some((r) => r.groupId === g && r.profileId === b.profile.id) &&
+          (!narrowedSquads.has(g) || b.hosts.some((h) => h.groupHosts.some((gh) => gh.groupId === g))),
+      );
+    });
+    bindings.length = 0;
+    bindings.push(...kept);
   }
   // Sort by node createdAt then port so the order across formats stays stable.
   bindings.sort((a, b) => {

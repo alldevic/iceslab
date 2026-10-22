@@ -12,7 +12,9 @@ import { prisma } from '../../prisma.js';
  *   - and when it has an enabled host that squad reaches: a squad with no host
  *     rows reaches every host of its profiles (the opt-in narrowing), one with
  *     host rows only those hosts. A binding with no enabled host serves nobody,
- *     the subscription emits nothing for it.
+ *     the subscription emits nothing for it;
+ *   - and when that squad has not switched off a cascade entered through this
+ *     very inbound (entriesSwitchedOff, A-116).
  *
  * Liveness (unreachable) is left out on purpose: the subscription drops a node
  * that has been unreachable for a while, but the user must still be on it when
@@ -23,6 +25,48 @@ import { prisma } from '../../prisma.js';
  */
 export type UserReach = Map<string, Map<string, string[]>>;
 
+/**
+ * A-116: the cascade entries a squad switched off where the entry cannot keep
+ * the switch. Per squad, keys `${nodeId}|${protocol}`.
+ *
+ * A cascade entered through hysteria or AmneziaWG sends everything its inbound
+ * takes into the chain: there is no per-user rule on the node to leave a squad
+ * out (A-134 refuses narrowing there for the same reason). So "off" for a squad
+ * means its members do not reach that inbound at all: they are not put on it,
+ * and the subscription does not hand its host out. A member of another squad
+ * that did not switch the cascade off still reaches it, the union of squads
+ * does that as everywhere else. An xray entry keeps the switch in its routing
+ * (cascadeIsOffAt), and is not listed here.
+ */
+export async function entriesSwitchedOff(groupIds: string[]): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>();
+  if (groupIds.length === 0) return out;
+  const rows = await prisma.groupCascadeOff.findMany({
+    where: {
+      groupId: { in: groupIds },
+      cascade: {
+        enabled: true,
+        positions: { some: { position: 0, entryProtocol: { in: ['hysteria', 'amneziawg'] } } },
+      },
+    },
+    select: {
+      groupId: true,
+      cascade: {
+        select: {
+          positions: { where: { position: 0 }, select: { entryProtocol: true, nodes: { select: { nodeId: true } } } },
+        },
+      },
+    },
+  });
+  for (const r of rows) {
+    const keys = out.get(r.groupId) ?? out.set(r.groupId, new Set()).get(r.groupId)!;
+    for (const p of r.cascade.positions) {
+      for (const n of p.nodes) keys.add(`${n.nodeId}|${p.entryProtocol}`);
+    }
+  }
+  return out;
+}
+
 /** Per squad, the bindings it reaches (the rule above), on one node or all. */
 export async function bindingsReachedBySquads(
   groupIds: string[],
@@ -30,7 +74,7 @@ export async function bindingsReachedBySquads(
 ): Promise<Map<string, { id: string; nodeId: string }[]>> {
   const reachedBy = new Map<string, { id: string; nodeId: string }[]>();
   if (groupIds.length === 0) return reachedBy;
-  const [grants, hostGrants, bindings] = await Promise.all([
+  const [grants, hostGrants, bindings, switchedOff] = await Promise.all([
     prisma.groupProfile.findMany({ where: { groupId: { in: groupIds } }, select: { groupId: true, profileId: true } }),
     prisma.groupHost.findMany({ where: { groupId: { in: groupIds } }, select: { groupId: true, hostId: true } }),
     prisma.profileNodeBinding.findMany({
@@ -40,8 +84,15 @@ export async function bindingsReachedBySquads(
         profile: { enabled: true, groupProfiles: { some: { groupId: { in: groupIds } } } },
         node: { deletedAt: null, status: { not: 'disabled' } },
       },
-      select: { id: true, nodeId: true, profileId: true, hosts: { where: { enabled: true }, select: { id: true } } },
+      select: {
+        id: true,
+        nodeId: true,
+        profileId: true,
+        profile: { select: { protocol: true } },
+        hosts: { where: { enabled: true }, select: { id: true } },
+      },
     }),
+    entriesSwitchedOff(groupIds),
   ]);
 
   const profilesOf = new Map<string, Set<string>>();
@@ -53,6 +104,7 @@ export async function bindingsReachedBySquads(
     const profiles = profilesOf.get(g);
     if (!profiles) continue;
     const narrowed = hostsOf.get(g);
+    const off = switchedOff.get(g);
     reachedBy.set(
       g,
       bindings
@@ -60,7 +112,8 @@ export async function bindingsReachedBySquads(
           (b) =>
             profiles.has(b.profileId) &&
             b.hosts.length > 0 &&
-            (!narrowed || b.hosts.some((h) => narrowed.has(h.id))),
+            (!narrowed || b.hosts.some((h) => narrowed.has(h.id))) &&
+            !off?.has(`${b.nodeId}|${b.profile.protocol}`),
         )
         .map((b) => ({ id: b.id, nodeId: b.nodeId })),
     );
