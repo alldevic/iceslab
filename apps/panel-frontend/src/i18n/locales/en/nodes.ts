@@ -54,7 +54,8 @@ export const nodes = {
       country: 'Country',
       countryDesc: 'ISO 3166-1 for GeoIP',
       multiplier: 'Consumption multiplier',
-      multiplierDesc: '1 = normal, > 1 premium',
+      multiplierDesc:
+        'How much traffic a user is charged for each gigabyte through this node. 1: as is, 0.5: half, 2: double, 0: the node is free. From 0 to 100, step 0.1.',
       domain: 'Domain (FQDN, optional)',
       domainDesc: 'A-record this to the node IP. Used as REALITY serverName for self-steal profiles (SNI matches IP, survives RU DPI). Not the hysteria certificate name, that follows the address above.',
       singboxEngine: 'Also install sing-box engine',
@@ -202,10 +203,12 @@ export const nodes = {
     region: 'Region',
     regionDesc: 'Filter grouping plus smart selection.',
     noRegion: 'no region',
-    multiplier: 'Multiplier',
-    multiplierDesc: '1 = standard, above 1 = premium.',
-    maxUsers: 'Max users',
-    maxUsersDesc: 'Feeds the capacity bar on the card.',
+    multiplier: 'Consumption multiplier',
+    multiplierDesc:
+      'How much traffic a user is charged for each gigabyte through this node. 1: as is, 0.5: half, 2: double, 0: the node is free. From 0 to 100, step 0.1.',
+    multiplierBad: 'The multiplier is from 0 to 100 in steps of 0.1',
+    maxUsers: 'User ceiling',
+    maxUsersDesc: 'Empty: no ceiling. Otherwise a whole number from 1',
     policy: 'Node policy',
     policyDesc:
       'The ordered rules this node uses to decide which door traffic leaves by. One policy can sit on several nodes.',
@@ -466,6 +469,10 @@ export const nodes = {
       unknown: 'policy · no data',
     },
     reBootstrap: 'Re-bootstrap',
+    multiplierFree: 'free',
+    multiplierFreeTip: 'Multiplier 0: traffic through this node is not charged to users.',
+    multiplierTimes: '×{{value}}',
+    multiplierTimesTip: 'Consumption multiplier: each gigabyte through this node is charged to the user as {{value}} GB.',
     cert: {
       expired: 'certificate',
       expiredTip: "The node's mTLS certificate has expired: the panel may lose the node. Date and renewal on the node page.",

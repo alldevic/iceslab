@@ -38,6 +38,7 @@ import type { ChainFacts } from '@/lib/domain/chainStatus';
 import type { NodeGeoFacts } from '@/lib/domain/geoSets';
 import { ChainStatusLine } from '@/ui/ChainStatusLine';
 import type { CertAlarm } from '@/contours/nodes/lib/nodeCert';
+import { multiplierBadge } from '@/contours/nodes/lib/nodeLimits';
 import type { PolicyReachFacts } from '@/contours/nodes/lib/policyReach';
 import { nodeStatusText, statusRepeatsRefusal } from '@/lib/domain/nodeStatusText';
 import { AMBER, CARD, CYAN, DIM, FAINT, GROUND, HAIRLINE, MIST, MOSS, RED, SNOW, VIOLET } from '@/contours/nodes/lib/colors';
@@ -102,6 +103,8 @@ interface CardNode {
   /** Сертификат mTLS горит (certAlarm): только значок, без даты; дата и
    *  кнопка на странице ноды. null = гореть нечему или сказать нечего. */
   certAlarm?: CertAlarm | null;
+  /** Множитель потребления (A-143): значок, только когда он не 1. */
+  multiplier?: number | string;
 }
 
 interface Props {
@@ -244,6 +247,7 @@ export function NodeCard({
             </Stack>
           </Group>
           <Group gap={4} wrap="nowrap">
+            <MultiplierBadge stored={node.multiplier} />
             {node.certAlarm && <CertAlarmBadge alarm={node.certAlarm} />}
             <Badge
               variant="light"
@@ -844,6 +848,39 @@ function CertAlarmBadge({ alarm }: { alarm: CertAlarm }) {
         }}
       >
         {t(`nodeCard.cert.${alarm}`)}
+      </Badge>
+    </Tooltip>
+  );
+}
+
+/** The consumption multiplier when it is not 1 (A-143): «free» at 0, «×0,5»
+ *  otherwise, with the language's decimal mark. Nothing at 1 or unknown. */
+function MultiplierBadge({ stored }: { stored: number | string | undefined }) {
+  const { t, i18n } = useTranslation();
+  const badge = multiplierBadge(stored);
+  if (!badge) return null;
+  const value = badge.kind === 'times' ? String(badge.value).replace('.', i18n.language.startsWith('ru') ? ',' : '.') : '';
+  const tone = badge.kind === 'free' ? MOSS : CYAN;
+  return (
+    <Tooltip
+      label={badge.kind === 'free' ? t('nodeCard.multiplierFreeTip') : t('nodeCard.multiplierTimesTip', { value })}
+      withArrow
+      multiline
+      w={260}
+    >
+      <Badge
+        variant="light"
+        size="sm"
+        style={{
+          backgroundColor: `${tone}1A`,
+          color: tone,
+          border: `1px solid ${tone}33`,
+          textTransform: badge.kind === 'free' ? 'uppercase' : 'none',
+          fontFamily: "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace",
+          letterSpacing: '0.08em',
+        }}
+      >
+        {badge.kind === 'free' ? t('nodeCard.multiplierFree') : t('nodeCard.multiplierTimes', { value })}
       </Badge>
     </Tooltip>
   );

@@ -27,6 +27,7 @@ import {
 } from '@/contours/nodes/lib/nodeCreateForm';
 import { coreVersionRefusal } from '@/lib/domain/coreVersions';
 import { awgGateText, coreGateRefusal } from '@/lib/domain/nodeCoreFit';
+import { multiplierPatch, parseMultiplier } from '@/contours/nodes/lib/nodeLimits';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { adapterRefusal, adapterRefusalWords, addOnePerSlot, slotHeldBy } from '@/lib/domain/adapterSlot';
@@ -59,7 +60,7 @@ export function useNodeCreateForm() {
       port: DEFAULT_NODE_PORT,
       protocol: 'xray',
       countryCode: '',
-      consumptionMultiplier: 1,
+      consumptionMultiplier: '1',
       domain: '',
       singboxEngine: false,
       engines: ['xray'],
@@ -71,6 +72,7 @@ export function useNodeCreateForm() {
     },
     validateInputOnBlur: true,
     validate: {
+      consumptionMultiplier: (v) => (parseMultiplier(v).ok ? null : t('nodeEdit.multiplierBad')),
       name: (v) => {
         const trimmed = v.trim();
         if (trimmed.length === 0) return t('validation.nameRequired');
@@ -267,8 +269,8 @@ export function useNodeCreateForm() {
         name: form.values.name.trim(),
         address: `${form.values.host.trim()}:${port}`,
         countryCode: form.values.countryCode || null,
-        consumptionMultiplier:
-          form.values.consumptionMultiplier === '' ? 1 : Number(form.values.consumptionMultiplier),
+        // Step 1 refuses a value that does not parse (A-143); none is guessed here.
+        ...multiplierPatch(form.values.consumptionMultiplier),
         domain: form.values.domain.trim() || null,
         hardening: buildHardening(form.values),
         // Ядра: intendedEngines с меткой в паре, или прежние поля у сервера

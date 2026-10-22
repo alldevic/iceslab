@@ -13,7 +13,8 @@ export interface FormValues {
   port: number | '';
   protocol: NodeProtocol;
   countryCode: string;
-  consumptionMultiplier: number | '';
+  /** Typed text, comma or dot (A-143, parseMultiplier). */
+  consumptionMultiplier: string;
   domain: string;
   singboxEngine: boolean;
   /** Ядра, на которые нода настроена (intendedEngines): множество, порядок

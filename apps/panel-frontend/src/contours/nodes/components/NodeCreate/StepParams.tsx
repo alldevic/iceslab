@@ -143,17 +143,14 @@ export function StepParams({
                   nothingFoundMessage={t('common.nothingFound')}
                   {...form.getInputProps('countryCode')}
                 />
-                <NumberInput
+                {/* Text, not a number field (A-143): comma or dot, 1,25 refused. */}
+                <TextInput
                   {...FIELD}
                   style={{ flex: 1, minWidth: 0 }}
                   label={t('nodes.form.multiplier')}
                   description={t('nodes.form.multiplierDesc')}
-                  min={0.1}
-                  max={10}
-                  step={0.1}
-                  decimalScale={1}
-                  fixedDecimalScale
-                  allowNegative={false}
+                  inputMode="decimal"
+                  placeholder="1"
                   {...form.getInputProps('consumptionMultiplier')}
                 />
               </Box>

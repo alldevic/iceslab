@@ -19,6 +19,7 @@ import {
   updateNode,
 } from '@/lib/domain/nodes';
 import { certRotateRefusal } from '@/contours/nodes/lib/nodeCert';
+import { maxUsersPatch, multiplierPatch, parseMaxUsers, parseMultiplier } from '@/contours/nodes/lib/nodeLimits';
 import type { Node } from '@/lib/domain/nodes';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listCascades, type Cascade } from '@/lib/domain/cascades';
@@ -39,7 +40,9 @@ import { AMBER, DIM, MOSS } from '@/contours/nodes/lib/colors';
 import { DEFAULT_NODE_PORT } from '@/contours/nodes/lib/nodeProtocols';
 import { coreVersionRefusal, coreVersionsPatch } from '@/lib/domain/coreVersions';
 export function useNodeEditForm() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // The multiplier is shown with the language's decimal mark (A-143).
+  const comma = i18n.language.startsWith('ru');
 
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -86,9 +89,12 @@ export function useNodeEditForm() {
   const overviewQuery = useOverview();
 
   const form = useForm<FormValues>({
-    initialValues: defaults(node),
+    initialValues: defaults(node, comma),
     validateInputOnBlur: true,
     validate: {
+      // A-143: refused at the field, never rounded.
+      consumptionMultiplier: (v) => (parseMultiplier(v).ok ? null : t('nodeEdit.multiplierBad')),
+      maxUsers: (v) => (parseMaxUsers(v).ok ? null : t('nodeEdit.maxUsersDesc')),
       name: (v) => {
         const trimmed = v.trim();
         if (trimmed.length === 0) return t('validation.nameRequired');
@@ -113,8 +119,8 @@ export function useNodeEditForm() {
   // Seed the form once the node lands, without clobbering edits in flight.
   const [seeded, setSeeded] = useState(false);
   if (node && !seeded) {
-    form.setValues(defaults(node));
-    form.resetDirty(defaults(node));
+    form.setValues(defaults(node, comma));
+    form.resetDirty(defaults(node, comma));
     setSeeded(true);
   }
 
@@ -186,9 +192,9 @@ export function useNodeEditForm() {
         address: `${form.values.host.trim()}:${port}`,
         countryCode: form.values.countryCode || null,
         regionId: form.values.regionId || null,
-        consumptionMultiplier:
-          form.values.consumptionMultiplier === '' ? 1 : Number(form.values.consumptionMultiplier),
-        maxUsers: form.values.maxUsers === '' ? null : Number(form.values.maxUsers),
+        // Validated before the save is offered; a value that does not parse here is not sent.
+        ...multiplierPatch(form.values.consumptionMultiplier),
+        ...maxUsersPatch(form.values.maxUsers),
         policyId: form.values.policyId || null,
         // Поколения AWG нет: это факт модуля, не выбор (227054e).
         // Версии ядер: только изменённые компоненты, и только если сервер поле

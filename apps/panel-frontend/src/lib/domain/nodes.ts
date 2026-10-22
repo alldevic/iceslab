@@ -85,7 +85,10 @@ export interface Node {
   // T7 - proxy-core version (e.g. xray "26.3.27"), null until a versioned agent
   // reports in. Shown on the node card; cascade form warns on an old balancer entry.
   coreVersion: string | null;
-  consumptionMultiplier: string;
+  /** A-143: a number from 0 to 100, one decimal; a server older than the
+   *  numeric DTO sends it as a string. Read through multiplierBadge and
+   *  multiplierInput (contours/nodes/lib/nodeLimits.ts), never compared raw. */
+  consumptionMultiplier: number | string;
   // Slice 27.5
   regionId: string | null;
   maxUsers: number | null;

@@ -1,6 +1,7 @@
 import type { EngineName, NodeCoreVersions } from '@iceslab/shared';
 import type { Node, NodeLabel, NodeProtocol } from '@/lib/domain/nodes';
 import { DEFAULT_NODE_PORT } from '@/contours/nodes/lib/nodeProtocols';
+import { multiplierInput } from '@/contours/nodes/lib/nodeLimits';
 export interface FormValues {
   name: string;
   host: string;
@@ -8,7 +9,8 @@ export interface FormValues {
   protocol: NodeProtocol;
   countryCode: string;
   regionId: string;
-  consumptionMultiplier: number | '';
+  /** Typed text, comma or dot (A-143, parseMultiplier); never a rounded number. */
+  consumptionMultiplier: string;
   maxUsers: number | '';
   /** Э3 layer B: which node policy runs here. '' means none, and saving '' is
    *  a real detach, not a no-op: the config is rewritten without the rules. */
@@ -59,7 +61,7 @@ export function splitAddress(address: string): { host: string; port: number } {
   };
 }
 
-export function defaults(node: Node | null): FormValues {
+export function defaults(node: Node | null, decimalComma = false): FormValues {
   const { host, port } = splitAddress(node?.address ?? '');
   return {
     name: node?.name ?? '',
@@ -68,7 +70,7 @@ export function defaults(node: Node | null): FormValues {
     protocol: formProtocolOf(node?.protocol),
     countryCode: node?.countryCode ?? '',
     regionId: node?.regionId ?? '',
-    consumptionMultiplier: node ? Number(node.consumptionMultiplier) : 1,
+    consumptionMultiplier: multiplierInput(node ? node.consumptionMultiplier : 1, decimalComma),
     maxUsers: node?.maxUsers ?? '',
     policyId: node?.policyId ?? '',
     coreVersions: { ...(node?.coreVersions ?? {}) },

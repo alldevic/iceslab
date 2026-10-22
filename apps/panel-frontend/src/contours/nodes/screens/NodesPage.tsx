@@ -985,6 +985,7 @@ export function NodesPage() {
                   policyReach: policyBadgeFacts(n),
                   // Сертификат mTLS: значок только там, где горит (A-221).
                   certAlarm: certAlarm(n, now),
+                  multiplier: n.consumptionMultiplier,
                   // Причина статуса словами сервера, с /api/nodes.
                   statusMessage: n.lastStatusMessage,
                   protocol: n.protocol,

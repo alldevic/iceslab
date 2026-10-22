@@ -133,17 +133,15 @@ export function NodeParamsForm({
                     clearable
                     {...form.getInputProps('regionId')}
                   />
-                  <NumberInput
+                  {/* Text, not a number field (A-143): a comma and a dot are both taken,
+                      and 1,25 is refused at the field instead of rounded. */}
+                  <TextInput
                     {...FIELD}
                     style={{ flex: 1, minWidth: 0 }}
                     label={t('nodeEdit.multiplier')}
                     description={t('nodeEdit.multiplierDesc')}
-                    min={0.1}
-                    max={10}
-                    step={0.1}
-                    decimalScale={1}
-                    fixedDecimalScale
-                    allowNegative={false}
+                    inputMode="decimal"
+                    placeholder="1"
                     {...form.getInputProps('consumptionMultiplier')}
                   />
                   <NumberInput
@@ -151,7 +149,7 @@ export function NodeParamsForm({
                     style={{ flex: 1, minWidth: 0 }}
                     label={t('nodeEdit.maxUsers')}
                     description={t('nodeEdit.maxUsersDesc')}
-                    min={0}
+                    min={1}
                     allowDecimal={false}
                     allowNegative={false}
                     {...form.getInputProps('maxUsers')}
