@@ -78,7 +78,7 @@ func newManagedTestAdapter(t *testing.T, fake *fakeCLI) (*Adapter, string) {
 		runCmd:        fake.run,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	// Write the initial Caddyfile so reload has something to point at.
-	blob, err := renderCaddyfile(a.cfg.Inbound, usersSlice(a.users))
+	blob, err := renderCaddyfile(a.cfg.Inbound, usersSlice(a.users), a.cfg.AdminSocket)
 	if err != nil {
 		t.Fatalf("render seed Caddyfile: %v", err)
 	}
@@ -262,6 +262,40 @@ func TestReload_AddUserCallsCaddyReload(t *testing.T) {
 	}
 	if !strings.Contains(seq[0], "--adapter caddyfile") {
 		t.Errorf("expected --adapter caddyfile in reload; got: %s", seq[0])
+	}
+	// A-118: the reload goes to the admin socket the Caddyfile names, not to
+	// the TCP default.
+	if !strings.HasSuffix(seq[0], "--address unix//run/iceslab/caddy.sock") {
+		t.Errorf("reload does not name the admin socket; got: %s", seq[0])
+	}
+}
+
+// A-118: before a cold start the socket's directory is the agent's alone,
+// also when it was there with wider rights, and a stale socket is gone.
+func TestPrepareAdminSocketLocksTheDirectoryAndClearsAStaleSocket(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "caddy.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareAdminSocket(sock); err != nil {
+		t.Fatalf("prepareAdminSocket: %v", err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Errorf("socket dir mode = %o, want 700", st.Mode().Perm())
+	}
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Errorf("stale socket left in place: %v", err)
+	}
+	if err := prepareAdminSocket(sock); err != nil {
+		t.Errorf("a second call with nothing to remove: %v", err)
 	}
 }
 

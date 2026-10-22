@@ -73,11 +73,12 @@ func TestRenderCaddyfileShape(t *testing.T) {
 		{Username: "alice", Password: "secret-a"},
 		{Username: "bob", Password: "secret-b"},
 	}
-	out, err := renderCaddyfile(validInbound(), users)
+	out, err := renderCaddyfile(validInbound(), users, DefaultAdminSocket)
 	if err != nil {
 		t.Fatalf("renderCaddyfile: %v", err)
 	}
 	for _, want := range []string{
+		"admin unix//run/iceslab/caddy.sock",
 		":443, n1.example.com {",
 		"tls ops@example.com",
 		"forward_proxy {",
@@ -100,15 +101,15 @@ func TestRenderCaddyfileSortsUsers(t *testing.T) {
 	// otherwise `caddy reload` flaps even on no-op user-set changes.
 	users1 := []User{{Username: "bob", Password: "b"}, {Username: "alice", Password: "a"}}
 	users2 := []User{{Username: "alice", Password: "a"}, {Username: "bob", Password: "b"}}
-	out1, _ := renderCaddyfile(validInbound(), users1)
-	out2, _ := renderCaddyfile(validInbound(), users2)
+	out1, _ := renderCaddyfile(validInbound(), users1, DefaultAdminSocket)
+	out2, _ := renderCaddyfile(validInbound(), users2, DefaultAdminSocket)
 	if out1 != out2 {
 		t.Errorf("expected deterministic order; got:\n--- a:\n%s\n--- b:\n%s", out1, out2)
 	}
 }
 
 func TestRenderCaddyfileNoUsers(t *testing.T) {
-	out, err := renderCaddyfile(validInbound(), nil)
+	out, err := renderCaddyfile(validInbound(), nil, DefaultAdminSocket)
 	if err != nil {
 		t.Fatalf("renderCaddyfile: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestRenderCaddyfileNoUsers(t *testing.T) {
 
 func TestRenderCaddyfilePropagatesUserError(t *testing.T) {
 	bad := []User{{Username: "ok", Password: "ok"}, {Username: "x x", Password: "p"}}
-	if _, err := renderCaddyfile(validInbound(), bad); err == nil {
+	if _, err := renderCaddyfile(validInbound(), bad, DefaultAdminSocket); err == nil {
 		t.Errorf("expected user-validation error to propagate")
 	}
 }
@@ -139,8 +140,18 @@ func TestRenderCaddyfilePropagatesUserError(t *testing.T) {
 func TestRenderCaddyfilePropagatesInboundError(t *testing.T) {
 	bad := validInbound()
 	bad.TLSEmail = ""
-	if _, err := renderCaddyfile(bad, nil); err == nil {
+	if _, err := renderCaddyfile(bad, nil, DefaultAdminSocket); err == nil {
 		t.Errorf("expected inbound-validation error to propagate")
+	}
+}
+
+// A-118: the admin API never falls back to TCP. A socket path the Caddyfile
+// cannot carry is refused, not rendered into a broken global block.
+func TestRenderCaddyfileRefusesABadAdminSocket(t *testing.T) {
+	for _, sock := range []string{"", "caddy.sock", "/run/x y.sock", "/run/x}\n\tadmin localhost:2019"} {
+		if _, err := renderCaddyfile(validInbound(), nil, sock); err == nil {
+			t.Errorf("admin socket %q accepted", sock)
+		}
 	}
 }
 
