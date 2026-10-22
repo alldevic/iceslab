@@ -11,6 +11,8 @@ export const common = {
     back: 'Назад',
     next: 'Далее',
     loading: 'Загрузка…',
+    loadFailed: 'Не удалось загрузить',
+    loadRetry: 'Повторить',
     yes: 'Да',
     no: 'Нет',
     online: 'онлайн',

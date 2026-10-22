@@ -4,6 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { Box, Loader, Stack, Text, UnstyledButton } from '@mantine/core';
 import { getInsights, type Insights } from '@/lib/domain/dashboard';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { AMBER, CARD, CYAN, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/lib/ui/tokens';
 
 /**
@@ -24,11 +27,14 @@ export function InsightsPage() {
   const { t } = useTranslation();
   const [days, setDays] = useState(7);
 
-  const { data, isLoading } = useQuery<Insights>({
+  const insightsQuery = useQuery<Insights>({
     queryKey: ['insights', days],
     queryFn: () => getInsights(days),
     staleTime: 60_000,
   });
+  const { data } = insightsQuery;
+  // A failed request is said with a retry, not a spinner forever (A-141).
+  const view = loadView(insightsQuery);
 
   return (
     <Stack gap={20}>
@@ -115,7 +121,9 @@ export function InsightsPage() {
         </Box>
       </Box>
 
-      {isLoading || !data ? (
+      {view === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(insightsQuery.error)} onRetry={() => void insightsQuery.refetch()} />
+      ) : !data ? (
         <Box
           style={{
             display: 'flex',

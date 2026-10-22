@@ -7,6 +7,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SettingsTabs } from '@/contours/subscription/components/SettingsTabs';
 import { formatLabel } from '@/lib/domain/formats';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import {
   getSettings,
   getSubscriptionPreviewUrl,
@@ -142,6 +144,10 @@ export function SubscriptionDeliveryPage() {
   });
 
   if (!draft) {
+    // Settings did not arrive: the error and a retry, not «loading» forever (A-141).
+    if (loadView(settingsQuery) === 'failed') {
+      return <LoadFailed message={apiErrorMessage(settingsQuery.error)} onRetry={() => void settingsQuery.refetch()} />;
+    }
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>

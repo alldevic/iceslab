@@ -11,6 +11,8 @@ export const common = {
     back: 'Back',
     next: 'Next',
     loading: 'Loading…',
+    loadFailed: 'Could not load',
+    loadRetry: 'Retry',
     yes: 'Yes',
     no: 'No',
     online: 'online',
