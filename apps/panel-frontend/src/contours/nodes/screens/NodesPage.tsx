@@ -34,6 +34,8 @@ import { chainFacts } from '@/lib/domain/chainStatus';
 import { nodeGeoFacts } from '@/lib/domain/geoSets';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import { policyBadgeFacts } from '@/contours/nodes/lib/policyReach';
+import { certAlarm } from '@/contours/nodes/lib/nodeCert';
+import { useNow } from '@/lib/ui/useNow';
 import {
   deleteNode,
   listAllNodes,
@@ -409,6 +411,8 @@ type MembershipFilter = 'all' | 'standalone' | 'cascade';
 
 export function NodesPage() {
   const { t } = useTranslation();
+  // The clock the certificate badges are read against (certAlarm).
+  const now = useNow(60_000);
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [payload, setPayload] = useState<{
@@ -979,6 +983,8 @@ export function NodesPage() {
                   // функция: «политики нет» и «политика не работает» слишком
                   // легко спутать, чтобы разбирать их в разметке.
                   policyReach: policyBadgeFacts(n),
+                  // Сертификат mTLS: значок только там, где горит (A-221).
+                  certAlarm: certAlarm(n, now),
                   // Причина статуса словами сервера, с /api/nodes.
                   statusMessage: n.lastStatusMessage,
                   protocol: n.protocol,

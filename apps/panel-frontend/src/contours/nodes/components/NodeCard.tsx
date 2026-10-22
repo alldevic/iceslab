@@ -37,6 +37,7 @@ import type { SyncRefusal } from '@/lib/domain/syncRefusal';
 import type { ChainFacts } from '@/lib/domain/chainStatus';
 import type { NodeGeoFacts } from '@/lib/domain/geoSets';
 import { ChainStatusLine } from '@/ui/ChainStatusLine';
+import type { CertAlarm } from '@/contours/nodes/lib/nodeCert';
 import type { PolicyReachFacts } from '@/contours/nodes/lib/policyReach';
 import { nodeStatusText, statusRepeatsRefusal } from '@/lib/domain/nodeStatusText';
 import { AMBER, CARD, CYAN, DIM, FAINT, GROUND, HAIRLINE, MIST, MOSS, RED, SNOW, VIOLET } from '@/contours/nodes/lib/colors';
@@ -98,6 +99,9 @@ interface CardNode {
   /** Гео на этой машине против намерения. `null` = сервер поля не отдаёт,
    *  карточка молчит. См. `nodeGeoFacts`. */
   geo?: NodeGeoFacts;
+  /** Сертификат mTLS горит (certAlarm): только значок, без даты; дата и
+   *  кнопка на странице ноды. null = гореть нечему или сказать нечего. */
+  certAlarm?: CertAlarm | null;
 }
 
 interface Props {
@@ -240,6 +244,7 @@ export function NodeCard({
             </Stack>
           </Group>
           <Group gap={4} wrap="nowrap">
+            {node.certAlarm && <CertAlarmBadge alarm={node.certAlarm} />}
             <Badge
               variant="light"
               size="sm"
@@ -813,6 +818,33 @@ function PolicyBadge({ facts }: { facts: PolicyReachFacts }) {
           {t(`nodeCard.policyBadge.${facts.state}`)}
         </Text>
       </Box>
+    </Tooltip>
+  );
+}
+
+/** The mTLS certificate burns on this node (ARCH 23.10, A-221): red when it
+ *  ended, amber when it ends within 30 days or the agent cannot renew it. The
+ *  words are in the tooltip; the date and the button live on the node page. */
+function CertAlarmBadge({ alarm }: { alarm: CertAlarm }) {
+  const { t } = useTranslation();
+  const tone = alarm === 'expired' ? RED : AMBER;
+  return (
+    <Tooltip label={t(`nodeCard.cert.${alarm}Tip`)} withArrow multiline w={260}>
+      <Badge
+        variant="light"
+        size="sm"
+        leftSection={<IconKey size={10} />}
+        style={{
+          backgroundColor: `${tone}1A`,
+          color: tone,
+          border: `1px solid ${tone}33`,
+          textTransform: 'uppercase',
+          fontFamily: "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace",
+          letterSpacing: '0.08em',
+        }}
+      >
+        {t(`nodeCard.cert.${alarm}`)}
+      </Badge>
     </Tooltip>
   );
 }

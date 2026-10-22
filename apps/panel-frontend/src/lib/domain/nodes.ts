@@ -143,6 +143,14 @@ export interface Node {
    */
   certNotAfter?: string | null;
   /**
+   * Whether the agent can renew that certificate in place (A-221, 2b725c64).
+   * `false`: an agent older than rotation, the end read off a handshake; the
+   * panel cannot renew it, update the agent before the end. `null`: nothing
+   * known (no end yet); `undefined`: a server older than the field. Only
+   * `false` is a «no» (certPageView, certAlarm).
+   */
+  agentCanRotate?: boolean | null;
+  /**
    * The cores this machine reported, with the panel's freshness stamp.
    *
    * ⚠ `null` means no reporting agent has ever checked in, which is NOT a node

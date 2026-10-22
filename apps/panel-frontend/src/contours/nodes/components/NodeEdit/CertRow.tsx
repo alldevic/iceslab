@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Box, Text } from '@mantine/core';
 import { PlainButton } from '@/contours/nodes/components/NodeEdit/PlainButton';
 import { TickIcon, WarnIcon } from '@/contours/nodes/components/NodeEdit/icons';
-import { certRotateRefusal, type CertTerm } from '@/contours/nodes/lib/nodeCert';
+import { certPageView, certRotateRefusal, type CertTerm } from '@/contours/nodes/lib/nodeCert';
 import { AMBER, DISPLAY, FAINT, MIST, MONO, MOSS, RED, SNOW } from '@/contours/nodes/lib/colors';
 
 /**
@@ -13,12 +13,15 @@ import { AMBER, DISPLAY, FAINT, MIST, MONO, MOSS, RED, SNOW } from '@/contours/n
  */
 export function CertRow({
   term,
+  agentCanRotate,
   onRotate,
   rotating,
   rotated,
   error,
 }: {
   term: CertTerm;
+  /** A-221: false = the agent cannot renew, no button (certPageView). */
+  agentCanRotate: unknown;
   onRotate: () => void;
   rotating: boolean;
   /** The new end after a renewal in this visit. */
@@ -34,6 +37,7 @@ export function CertRow({
         : t('nodeEdit.cert.until', { date: fmtDate(term.notAfter), n: term.days });
   const tone = term.kind === 'expired' ? RED : term.kind === 'soon' ? AMBER : term.kind === 'unknown' ? FAINT : SNOW;
   const refusal = certRotateRefusal(error);
+  const view = certPageView(term, agentCanRotate);
 
   return (
     <>
@@ -42,12 +46,22 @@ export function CertRow({
           {t('nodeEdit.cert.label')}
         </Text>
         <Text style={{ fontFamily: MONO, fontSize: 12, fontWeight: 600, lineHeight: '15px', color: tone }}>{value}</Text>
-        <PlainButton icon="key" strong height={30} disabled={rotating} onClick={onRotate}>
-          {t('nodeEdit.cert.rotate')}
-        </PlainButton>
+        {view.button && (
+          <PlainButton icon="key" strong height={30} disabled={rotating} onClick={onRotate}>
+            {t('nodeEdit.cert.rotate')}
+          </PlainButton>
+        )}
       </Box>
-      {term.kind === 'soon' && <Note tone={AMBER} text={t('nodeEdit.cert.soonHint', { n: term.days })} />}
-      {term.kind === 'expired' && <Note tone={RED} text={t('nodeEdit.cert.expiredHint')} />}
+      {view.oldAgent && term.kind !== 'unknown' && (
+        <Note
+          tone={term.kind === 'ok' ? AMBER : RED}
+          text={t('nodeEdit.cert.oldAgent', { date: fmtDate(term.notAfter) })}
+        />
+      )}
+      {view.hint === 'soon' && term.kind === 'soon' && (
+        <Note tone={AMBER} text={t('nodeEdit.cert.soonHint', { n: term.days })} />
+      )}
+      {view.hint === 'expired' && <Note tone={RED} text={t('nodeEdit.cert.expiredHint')} />}
       {rotated && !refusal && <Note tone={MOSS} ok text={t('nodeEdit.cert.rotated', { date: fmtDate(rotated) })} />}
       {refusal && (
         <Note

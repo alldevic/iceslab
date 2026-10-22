@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CERT_WARN_DAYS, certRotateRefusal, certTerm } from '@/contours/nodes/lib/nodeCert';
+import { CERT_WARN_DAYS, certAlarm, certPageView, certRotateRefusal, certTerm } from '@/contours/nodes/lib/nodeCert';
 
 const NOW = Date.parse('2026-10-23T12:00:00Z');
 const DAY = 24 * 60 * 60 * 1000;
@@ -58,5 +58,47 @@ describe('certRotateRefusal (A-124)', () => {
     expect(certRotateRefusal(res(500, { error: 'CERT_UNREACHABLE' }))).toBeNull();
     expect(certRotateRefusal(res(404, { error: 'NOT_FOUND' }))).toBeNull();
     expect(certRotateRefusal(res(409, { error: 'toString' }))).toBeNull();
+  });
+});
+
+describe('certPageView (A-221)', () => {
+  const ok = { kind: 'ok', notAfter: 'x', days: 200 } as const;
+  const soon = { kind: 'soon', notAfter: 'x', days: 5 } as const;
+  const expired = { kind: 'expired', notAfter: 'x', daysAgo: 1 } as const;
+
+  it('агент умеет или неизвестно: кнопка, подсказка по сроку', () => {
+    for (const can of [true, null, undefined]) {
+      expect(certPageView(ok, can)).toEqual({ button: true, oldAgent: false, hint: null });
+      expect(certPageView(soon, can)).toEqual({ button: true, oldAgent: false, hint: 'soon' });
+      expect(certPageView(expired, can)).toEqual({ button: true, oldAgent: false, hint: 'expired' });
+    }
+  });
+
+  it('старый агент: без кнопки, «обновите агент», без «панель обновит сама»', () => {
+    expect(certPageView(ok, false)).toEqual({ button: false, oldAgent: true, hint: null });
+    expect(certPageView(soon, false)).toEqual({ button: false, oldAgent: true, hint: null });
+    expect(certPageView(expired, false)).toEqual({ button: false, oldAgent: true, hint: 'expired' });
+  });
+
+  it('срок неизвестен: false без даты не повод прятать кнопку', () => {
+    expect(certPageView({ kind: 'unknown' }, false)).toEqual({ button: true, oldAgent: false, hint: null });
+  });
+});
+
+describe('certAlarm: значок на карточке флота', () => {
+  const end = (days: number) => at(NOW + days * DAY);
+
+  it('горит: истёк, потом скоро, потом старый агент', () => {
+    expect(certAlarm({ certNotAfter: end(-1), agentCanRotate: false }, NOW)).toBe('expired');
+    expect(certAlarm({ certNotAfter: end(5), agentCanRotate: false }, NOW)).toBe('soon');
+    expect(certAlarm({ certNotAfter: end(5) }, NOW)).toBe('soon');
+    expect(certAlarm({ certNotAfter: end(200), agentCanRotate: false }, NOW)).toBe('oldAgent');
+  });
+
+  it('не горит: срок далеко у умеющего агента, неизвестен или поля нет', () => {
+    expect(certAlarm({ certNotAfter: end(200), agentCanRotate: true }, NOW)).toBeNull();
+    expect(certAlarm({ certNotAfter: end(200), agentCanRotate: null }, NOW)).toBeNull();
+    expect(certAlarm({ certNotAfter: null, agentCanRotate: false }, NOW)).toBeNull();
+    expect(certAlarm({}, NOW)).toBeNull();
   });
 });

@@ -32,6 +32,50 @@ export function certTerm(certNotAfter: unknown, now: number): CertTerm | null {
 }
 
 /**
+ * What the node page says beside the term (A-221, BACK 2b725c64).
+ *
+ * `agentCanRotate` false: the agent is older than rotation, the end was read
+ * off a handshake, the panel cannot renew it and its cron skips the node. So
+ * no button and no «the panel renews it itself»: the line says to update the
+ * agent before the end. null or absent is not false (nothing known, or a
+ * server older than the field): the button stays, the server's 409
+ * CERT_UPDATE_AGENT still answers in words.
+ */
+export interface CertPageView {
+  /** The renew button. */
+  button: boolean;
+  /** «Update the agent before <end>». */
+  oldAgent: boolean;
+  /** The hint under the row: soon says the panel renews by itself, so it is
+   *  not given for an agent that cannot. */
+  hint: 'soon' | 'expired' | null;
+}
+
+export function certPageView(term: CertTerm, agentCanRotate: unknown): CertPageView {
+  const old = agentCanRotate === false && term.kind !== 'unknown';
+  return {
+    button: !old,
+    oldAgent: old,
+    hint: term.kind === 'expired' ? 'expired' : term.kind === 'soon' && !old ? 'soon' : null,
+  };
+}
+
+/**
+ * The warning on the node card in the fleet (ARCH 23.10): only where it
+ * burns, without a date; the date and the button stay on the node page.
+ * Worst first: expired, then soon, then an agent that cannot renew by itself.
+ */
+export type CertAlarm = 'expired' | 'soon' | 'oldAgent';
+
+export function certAlarm(node: { certNotAfter?: unknown; agentCanRotate?: unknown }, now: number): CertAlarm | null {
+  const term = certTerm(node.certNotAfter, now);
+  if (!term || term.kind === 'unknown') return null;
+  if (term.kind === 'expired') return 'expired';
+  if (term.kind === 'soon') return 'soon';
+  return node.agentCanRotate === false ? 'oldAgent' : null;
+}
+
+/**
  * A refused renewal, by the server's code (nodes.routes.ts, cert/rotate):
  *   404 CERT_NODE_NOT_FOUND;
  *   409 CERT_UPDATE_AGENT (the agent has no rotation), CERT_PENDING (one is

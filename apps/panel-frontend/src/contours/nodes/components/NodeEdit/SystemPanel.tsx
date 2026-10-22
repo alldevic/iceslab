@@ -28,7 +28,7 @@ export function SystemPanel({
   exposureMutation,
   certMutation,
 }: Pick<NodeEditor, 'hostsQuery' | 'dashNode' | 'metrics' | 'exposureMutation' | 'certMutation'> & {
-  node: Pick<Node, 'name' | 'certNotAfter'>;
+  node: Pick<Node, 'name' | 'certNotAfter' | 'agentCanRotate'>;
 }) {
   const { t } = useTranslation();
   // After a renewal the page shows the end the server just gave, until the
@@ -134,6 +134,8 @@ export function SystemPanel({
                     <Divider />
                     <CertRow
                       term={cert}
+                      // A renewal that went through proves the agent can.
+                      agentCanRotate={certMutation.data ? true : node.agentCanRotate}
                       onRotate={() => confirmCertRotate(node, t, () => certMutation.mutate())}
                       rotating={certMutation.isPending}
                       rotated={certMutation.data?.notAfter ?? null}
