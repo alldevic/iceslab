@@ -19,6 +19,9 @@ name: Release
 #                `release`: the owner approves every tag, and only main may
 #                use it), plus build provenance for people;
 #   release      the notes and the GitHub release, with the four files.
+# ⚠ agent-sign WAITS for the owner's Approve on every tag (Actions -> the run
+# -> Review deployments). Until then nothing is released, and without it no
+# release is made at all: the tag stays without its release and binaries.
 # A pre-release tag (v0.3.0-rc.1) takes the same path; only the release's
 # pre-release flag differs.
 #
