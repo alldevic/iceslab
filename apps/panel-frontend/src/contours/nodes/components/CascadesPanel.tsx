@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { cascadeToggleRefusal } from '@/contours/nodes/lib/cascadeToggle';
 import { useNavigate } from 'react-router-dom';
 import { Stack } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
@@ -46,11 +48,30 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
     onError,
   });
 
+  /**
+   * Refusals to switch on, by cascade id (A-126). The card is drawn from the
+   * server's `enabled` only, so it never shows «on» before the answer; a
+   * refusal the server explained stays under the card in its words instead of
+   * a toast that is gone in four seconds. The next try clears it.
+   */
+  const [refusals, setRefusals] = useState<Record<string, { code: string; message: string }>>({});
   const enableMutation = useMutation({
     mutationFn: (c: Cascade) => updateCascade(c.id, { enabled: !c.enabled }),
+    onMutate: (c) =>
+      setRefusals((r) => {
+        const next = { ...r };
+        delete next[c.id];
+        return next;
+      }),
     onSuccess: invalidate,
-    onError,
+    onError: (err, c) => {
+      const refusal = cascadeToggleRefusal(err);
+      if (!refusal) return onError(err);
+      invalidate();
+      setRefusals((r) => ({ ...r, [c.id]: refusal }));
+    },
   });
+  const pendingId = enableMutation.isPending ? enableMutation.variables.id : null;
 
   const rows = useCascadeRows(cascadesQuery.data?.cascades ?? [], nodesQuery.data?.nodes ?? []);
 
@@ -90,6 +111,8 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
         onEdit={(c) => navigate(`/nodes/cascades/${c.id}`)}
         onDelete={(c) => deleteMutation.mutate(c.id)}
         onToggleEnabled={(c) => enableMutation.mutate(c)}
+        toggling={pendingId}
+        refusals={refusals}
       />
     </Stack>
   );

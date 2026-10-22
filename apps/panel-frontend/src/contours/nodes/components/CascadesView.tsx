@@ -25,12 +25,18 @@ export function CascadesView({
   onEdit,
   onDelete,
   onToggleEnabled,
+  toggling = null,
+  refusals = {},
 }: {
   rows: CascadeRow[];
   layout: CascadeLayout;
   onEdit: (c: Cascade) => void;
   onDelete: (c: Cascade) => void;
   onToggleEnabled: (c: Cascade) => void;
+  /** Cascade whose switch is waiting for the server. */
+  toggling?: string | null;
+  /** The server's refusal to switch on, by cascade id (A-126). */
+  refusals?: Record<string, { code: string; message: string }>;
 }) {
   const { t } = useTranslation();
 
@@ -85,6 +91,8 @@ export function CascadesView({
           onEdit={() => onEdit(row.cascade)}
           onDelete={() => onDelete(row.cascade)}
           onToggleEnabled={() => onToggleEnabled(row.cascade)}
+          toggling={toggling === row.cascade.id}
+          refusal={refusals[row.cascade.id] ?? null}
         />
       ))}
     </Stack>
@@ -98,11 +106,15 @@ function CascadeCard({
   onEdit,
   onDelete,
   onToggleEnabled,
+  toggling,
+  refusal,
 }: {
   row: CascadeRow;
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: () => void;
+  toggling: boolean;
+  refusal: { code: string; message: string } | null;
 }) {
   const { t } = useTranslation();
   const { cascade, entry, transits, directions } = row;
@@ -117,16 +129,13 @@ function CascadeCard({
     return (
       <Box
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '16px 20px',
           borderRadius: 10,
           backgroundColor: CARD,
           border: `1px solid ${HAIRLINE}`,
-          borderLeft: `3px solid ${DIM}`,
+          borderLeft: `3px solid ${refusal ? RED : DIM}`,
         }}
       >
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px' }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 600, lineHeight: '20px', color: MIST }}>
           {cascade.name}
         </Text>
@@ -158,11 +167,26 @@ function CascadeCard({
           {t('cascades.offHint')}
         </Text>
         <Box style={{ flex: 1, minWidth: 0 }} />
-        <SmallButton icon="power" onClick={onToggleEnabled}>
-          {t('cascades.enable')}
+        {/* Stays «off» until the server says otherwise: the card is drawn from
+            the stored `enabled`, and the button only says it is asking. */}
+        <SmallButton icon="power" onClick={onToggleEnabled} disabled={toggling}>
+          {toggling ? t('cascades.enabling') : t('cascades.enable')}
         </SmallButton>
         <IconButton onClick={onEdit} kind="edit" />
         <IconButton onClick={onDelete} kind="delete" />
+      </Box>
+      {/* The server's own words (A-126): they name the node and the gate, and
+          a retelling would lose exactly that. */}
+      {refusal && (
+        <Box style={{ padding: '0 20px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: RED }}>
+            {t('cascades.enableRefused')} {refusal.message}
+          </Text>
+          {refusal.code && (
+            <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: FAINT }}>{refusal.code}</Text>
+          )}
+        </Box>
+      )}
       </Box>
     );
   }
@@ -1128,16 +1152,20 @@ function SmallButton({
   children,
   icon,
   onClick,
+  disabled = false,
 }: {
   children: React.ReactNode;
   icon?: 'power';
   onClick?: () => void;
+  disabled?: boolean;
 }) {
   return (
     <UnstyledButton
       type="button"
       onClick={onClick}
+      disabled={disabled}
       style={{
+        opacity: disabled ? 0.6 : 1,
         display: 'flex',
         alignItems: 'center',
         gap: 8,

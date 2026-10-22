@@ -511,16 +511,14 @@
     deleteBody:
       'The profile bindings and hosts of this node are removed: users lose this node\'s lines in their subscription. The agent on the VPS keeps running until you stop it yourself.',
     deleteCleanupHint: 'After deleting, run this on the node\'s VPS to clean up the agent:',
-    deleteBlocked_one: 'The node is in cascade {{names}}: deleting is refused while the cascade is on.',
-    deleteBlocked_other: 'The node is in cascades {{names}}: deleting is refused while the cascades are on.',
-    deleteBlockedHint: 'Switch the cascade off or move the way out to another node first',
-    deleteDisabledCascades_one: 'The node is in the disabled cascade {{names}}: deleting goes through, the cascade needs fixing before it is switched on.',
-    deleteDisabledCascades_other: 'The node is in the disabled cascades {{names}}: deleting goes through, the cascades need fixing before they are switched on.',
+    deleteBlocked_one: 'The node is in cascade {{names}}: deleting is refused whether the cascade is on or off.',
+    deleteBlocked_other: 'The node is in cascades {{names}}: deleting is refused whether the cascades are on or off.',
+    deleteBlockedHint: 'Move this node out of the cascade, or delete the cascade, first',
     deleteFailed: 'Delete failed',
     inCascadeTitle_one: 'The node is in cascade {{names}}',
     inCascadeTitle_other: 'The node is in cascades {{names}}',
-    inCascadeTitleUnnamed: 'The node is in an enabled cascade',
-    inCascadeBody: 'Switch the cascade off or move the way out to another node first, then delete.',
+    inCascadeTitleUnnamed: 'The node is in a cascade',
+    inCascadeBody: 'Move this node out of the cascade, or delete the cascade, then delete the node. Switching the cascade off is not enough: one click switches it back on.',
   },
 
   fleetEmpty: {

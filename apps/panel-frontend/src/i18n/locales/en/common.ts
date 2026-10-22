@@ -285,6 +285,8 @@ export const common = {
     disabled: 'Disabled',
     off: 'off',
     enable: 'Enable',
+    enabling: 'Enabling…',
+    enableRefused: 'The server did not switch the cascade on, it stays off:',
     oneWayHint: 'One way out, so every client walks the same path',
     fanHint: 'One entry, {{n}} directions. The client picks one by picking a server',
     offHint: 'Nothing is pushed while it is off. Nodes keep serving their own hosts.',

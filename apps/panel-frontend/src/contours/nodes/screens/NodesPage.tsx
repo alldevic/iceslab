@@ -639,7 +639,7 @@ export function NodesPage() {
     // and an old server cert + CA pair sits around as future drift bait.
     const uninstallCmd =
       'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) --uninstall';
-    // Включённый каскад держит ноду: сервер откажет, и кнопка говорит это
+    // Любой каскад, включённый или нет, держит ноду (1bf18ca): сервер откажет, и кнопка говорит это
     // заранее. Нет поля у ноды: окно как раньше (nodeDeleteFacts).
     const cascades = nodeDeleteFacts(node);
     const blocked = (cascades?.blocked.length ?? 0) > 0;
