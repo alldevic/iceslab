@@ -4,7 +4,8 @@
 # Installs the sing-box engine and a self-signed TLS certificate for the TUIC
 # inbound. Wired into install-iceslab-node.sh when --protocol tuic (singbox-S1).
 #
-#   - downloads the sing-box release binary for the host arch into
+#   - downloads our sing-box build for the host arch (A-212: upstream source
+#     with v2ray_api, released in icecompany-tech/iceslab) into
 #     /usr/local/bin/sing-box
 #   - generates a self-signed cert+key at /etc/sing-box/{cert.pem,key.pem}.
 #     TUIC mandates TLS; for the alpha the client connects with allow_insecure
@@ -20,7 +21,7 @@
 #
 # Env overrides:
 #   SINGBOX_VERSION  release to install instead of the pin, e.g. 1.13.14, and
-#   SINGBOX_SHA256   sha256 of its sing-box-<version>-linux-<arch>.tar.gz: both
+#   SINGBOX_SHA256   sha256 of its sing-box-<version>-iceslab-linux-<arch>.tar.gz: both
 #                    or neither, a version nobody checked has no checksum
 #   SINGBOX_DEST     binary path     (default /usr/local/bin/sing-box)
 #   SINGBOX_DIR      cert/config dir (default /etc/sing-box)
@@ -48,16 +49,17 @@ SINGBOX_SNI="${SINGBOX_SNI:-www.bing.com}"
 # Generated from packages/shared/src/core-versions.ts, do not edit by hand:
 # change the manifest, then run core-pins.test.ts with UPDATE_CORE_PINS=1.
 SINGBOX_PINNED_VERSION="1.13.14"
-SINGBOX_PINNED_TAG="v1.13.14"
+SINGBOX_PINNED_TAG="core-singbox-v1.13.14"
+SINGBOX_PINNED_REPO="icecompany-tech/iceslab"
 declare -A SINGBOX_PINNED_FILE=(
-  [amd64]="sing-box-1.13.14-linux-amd64.tar.gz"
-  [arm64]="sing-box-1.13.14-linux-arm64.tar.gz"
-  [armv7]="sing-box-1.13.14-linux-armv7.tar.gz"
+  [amd64]="sing-box-1.13.14-iceslab-linux-amd64.tar.gz"
+  [arm64]="sing-box-1.13.14-iceslab-linux-arm64.tar.gz"
+  [armv7]="sing-box-1.13.14-iceslab-linux-armv7.tar.gz"
 )
 declare -A SINGBOX_PINNED_SHA256=(
-  [amd64]="f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697"
-  [arm64]="4742df6a4314e8ecc41736849fca6d73b8f9e91b6e8b06ee794ff17ba180579e"
-  [armv7]="e01a58d28512b1447ab6156017afdeeaa306169a95d27abc00e112599e4ae46c"
+  [amd64]="8c982dfa05d5d2bf508a3e282fa3cceb22b0d6e7993b845f4e82df32660ae19e"
+  [arm64]="fe2d649ed6e8f6caad76fbfb88dad6c776a4ada0a50f24d72fc2c849dd56585d"
+  [armv7]="8df14db0c67735b76e49da9e614d4973e9ea9a4eeb3610de38e05ab8e01c3d11"
 )
 # <<< core-pins:singbox <<<
 
@@ -151,7 +153,9 @@ log "installing sing-box ${SINGBOX_VERSION} (${ARCH})"
 # ───── download, check, install binary ─────
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-URL="https://github.com/SagerNet/sing-box/releases/download/${TAG}/${TARBALL}"
+# Our build since A-212, from the repository the pin names; the tag and the
+# file carry the version, so an override fetches our build of that version.
+URL="https://github.com/${SINGBOX_PINNED_REPO}/releases/download/${TAG}/${TARBALL}"
 log "downloading ${URL}"
 curl -fsSL "$URL" -o "$TMP/sb.tar.gz" || fail "download failed: $URL"
 GOT_SHA=$(sha256sum "$TMP/sb.tar.gz" | awk '{print $1}')

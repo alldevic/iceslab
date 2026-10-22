@@ -67,6 +67,12 @@ export interface CoreRelease {
   version: string;
   /** The upstream tag to fetch, e.g. "v26.3.27", "app/v2.12.3". */
   tag: string;
+  /**
+   * The GitHub repository the release is fetched from, "owner/name", when it
+   * is not the component's upstream: a build of ours published in our own
+   * repository (sing-box since A-212). Absent = the bootstrap's own upstream.
+   */
+  repo?: string;
   /** Per arch. An arch that is missing is one upstream does not ship. */
   assets?: Partial<Record<CoreArch, CoreAsset>>;
   commit?: string;
@@ -158,25 +164,30 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
     releases: [
       {
         version: '1.13.14',
-        tag: 'v1.13.14',
+        // A-212 (decisions.md 22.10): our build of the upstream v1.13.14 with
+        // v2ray_api, released in our repository; the archive holds
+        // sing-box-1.13.14-iceslab-linux-<arch>/ with the binary and LICENSE.
+        tag: 'core-singbox-v1.13.14',
+        repo: 'icecompany-tech/iceslab',
         assets: {
           amd64: {
-            file: 'sing-box-1.13.14-linux-amd64.tar.gz',
-            sha256: 'f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697',
+            file: 'sing-box-1.13.14-iceslab-linux-amd64.tar.gz',
+            sha256: '8c982dfa05d5d2bf508a3e282fa3cceb22b0d6e7993b845f4e82df32660ae19e',
           },
           arm64: {
-            file: 'sing-box-1.13.14-linux-arm64.tar.gz',
-            sha256: '4742df6a4314e8ecc41736849fca6d73b8f9e91b6e8b06ee794ff17ba180579e',
+            file: 'sing-box-1.13.14-iceslab-linux-arm64.tar.gz',
+            sha256: 'fe2d649ed6e8f6caad76fbfb88dad6c776a4ada0a50f24d72fc2c849dd56585d',
           },
           armv7: {
-            file: 'sing-box-1.13.14-linux-armv7.tar.gz',
-            sha256: 'e01a58d28512b1447ab6156017afdeeaa306169a95d27abc00e112599e4ae46c',
+            file: 'sing-box-1.13.14-iceslab-linux-armv7.tar.gz',
+            sha256: '8df14db0c67735b76e49da9e614d4973e9ea9a4eeb3610de38e05ab8e01c3d11',
           },
         },
         why:
           'The stable line on 2026-09-21; 1.14 is in beta and drops older config forms. ' +
-          'CI runs the config checks against this binary.',
-        checkedAt: '2026-09-23',
+          'Our build since A-212, so the per-user counters (v2ray_api) are in the binary. ' +
+          'CI runs the config checks against this archive.',
+        checkedAt: '2026-10-22',
       },
     ],
     knownBad: [],

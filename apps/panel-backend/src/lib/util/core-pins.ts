@@ -42,6 +42,7 @@ export function renderPinBlock(component: CoreComponent): string {
     `${p}_PINNED_VERSION="${release.version}"`,
     `${p}_PINNED_TAG="${release.tag}"`,
   ];
+  if (release.repo) lines.push(`${p}_PINNED_REPO="${release.repo}"`);
   if (release.commit) lines.push(`${p}_PINNED_COMMIT="${release.commit}"`);
   if (release.assets) {
     // Every arch appears in both maps, empty where upstream ships nothing, so a

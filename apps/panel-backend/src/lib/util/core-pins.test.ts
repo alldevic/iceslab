@@ -62,6 +62,19 @@ describe('every installer carries the manifest, byte for byte', () => {
     expect(pinned.filter((c) => !reached.has(c))).toEqual([]);
   });
 
+  it('a release kept outside its upstream is fetched from the repository the pin names', () => {
+    // A-212: sing-box is our build in our repository. A script that keeps the
+    // upstream address asks for a tag and a file that exist only with us.
+    for (const site of PIN_SITES) {
+      for (const c of site.components) {
+        const entry = CORE_VERSIONS[c];
+        const release = entry.releases.find((r) => r.version === entry.pinned);
+        if (!release?.repo) continue;
+        expect(read(site.file), `${c}: ${site.file}`).toContain(`https://github.com/\${${PIN_PREFIX[c]}_PINNED_REPO}/releases/download/`);
+      }
+    }
+  });
+
   it('the main installer carries no pin block: every core goes on through its bootstrap', () => {
     // A block here would be a second pin for a core its bootstrap already pins,
     // which is the copy --engines removed (hysteria had one until then).
