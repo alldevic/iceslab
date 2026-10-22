@@ -61,6 +61,12 @@ describe('cascadeMemberships (A-144): v4 по позициям и направл
     expect(cascadeExitWords(v4, () => null)).toEqual(['DE', '#2']);
     expect(cascadeExitWords(old, (id) => (id === 'h3' ? 'nl' : null))).toEqual(['NL']);
   });
+
+  it('нода выхода неизвестна (список нод не пришёл): «?», а не пропавший выход; v4 читает свою страну', () => {
+    expect(cascadeExitWords(old, () => undefined).every((w) => w === '?')).toBe(true);
+    expect(cascadeExitWords(old, () => undefined).length).toBe(cascadeExitWords(old, () => 'de').length);
+    expect(cascadeExitWords(v4, () => undefined)).toEqual(['DE', '#2']);
+  });
 });
 
 describe('cascadeClaims (A-139) на той же функции', () => {

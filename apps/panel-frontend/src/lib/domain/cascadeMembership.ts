@@ -71,7 +71,11 @@ export function cascadeEntryNodeIds(c: Shape): string[] {
 /**
  * The ways out of a cascade as words: a direction's country, else its first
  * node's country, else its tag; for the old hop cascade, the exit nodes'
- * countries. `countryOf` gives a node's country code.
+ * countries. `countryOf` gives a node's country code: `null` when the node
+ * has none, `undefined` when the node is not known (the fleet list did not
+ * arrive). An old-cascade exit with no country is left out, as before; one
+ * whose node is not known stays as `?`, because dropping it read as «this
+ * node feeds fewer exits» (spec frontend-nodes, P5).
  */
 export function cascadeExitWords(c: Shape, countryOf: (nodeId: string) => string | null | undefined): string[] {
   if (c.positions.length > 0 || c.directions.length > 0) {
@@ -83,6 +87,6 @@ export function cascadeExitWords(c: Shape, countryOf: (nodeId: string) => string
   return cascadeMembers(c)
     .filter((m) => m.role === 'exit')
     .map((m) => countryOf(m.nodeId))
-    .filter((code): code is string => Boolean(code))
-    .map((code) => code.toUpperCase());
+    .filter((code): code is string | undefined => code !== null && code !== '')
+    .map((code) => (code === undefined ? '?' : code.toUpperCase()));
 }
