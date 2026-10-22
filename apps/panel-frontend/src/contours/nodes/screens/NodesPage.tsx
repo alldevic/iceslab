@@ -3,9 +3,6 @@ import {
   ActionIcon,
   Badge,
   Box,
-  Button,
-  Code,
-  CopyButton,
   Group,
   Menu,
   SimpleGrid,
@@ -15,7 +12,6 @@ import {
   Tooltip,
   UnstyledButton,
 } from '@mantine/core';
-import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -49,9 +45,11 @@ import { listCascades } from '@/lib/domain/cascades';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { NodePayloadModal } from '@/contours/nodes/components/NodePayloadModal';
-import { NodeDeleteCascades } from '@/contours/nodes/components/NodeDelete';
+import { confirmBootstrapReissue, confirmNodeDelete } from '@/contours/nodes/components/nodeConfirm';
+import { onBootstrapIssued } from '@/contours/nodes/lib/bootstrapIssued';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { showNodeDeleteFailed } from '@/contours/nodes/components/nodeDeleteToast';
-import { nodeDeleteFacts } from '@/contours/nodes/lib/nodeDelete';
 import { cascadeEntryNodeIds, cascadeMemberships } from '@/lib/domain/cascadeMembership';
 import { cardEngineSet } from '@/contours/nodes/lib/nodeCardEngines';
 import { NodeCard } from '@/contours/nodes/components/NodeCard';
@@ -582,7 +580,7 @@ export function NodesPage() {
     mutationFn: deleteNode,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['nodes'] });
-      notifications.show({ color: 'green', message: 'Node deleted' });
+      notifications.show({ color: 'green', message: t('nodeConfirm.deleted') });
     },
     // Тело отказа, а не строка axios: 409 NODE_IN_USE_BY_CASCADE называет
     // каскад и что сделать (E28, стенд 24.09 показал «status code 409»).
@@ -591,77 +589,36 @@ export function NodesPage() {
 
   // Re-issue a bootstrap token for an existing node - used when the original
   // expired / was lost, or when admin changed `node.address` and needs a new
-  // cert with the matching SAN. Reuses the same NodePayloadModal as the create
-  // flow, but `payload` stays empty (panel never re-emits the cert payload -
-  // only the install command + token).
+  // cert with the matching SAN. `payload` stays empty: the panel never
+  // re-emits the cert payload, only the install command and token. The same
+  // window and the same toast as the node
+  // page (nodeConfirm, onBootstrapIssued); the modal shows the install command.
   const refreshBootstrapMutation = useMutation({
     mutationFn: (node: Node) =>
       refreshNodeBootstrap(node.id).then((info) => ({ node, info })),
-    onSuccess: ({ node, info }) => {
-      notifications.show({ color: 'green', message: 'New bootstrap token issued' });
-      setPayload({
-        name: node.name,
-        payload: '',
-        bootstrap: info,
-      });
-    },
+    onSuccess: ({ node, info }) =>
+      onBootstrapIssued(
+        info,
+        (bootstrap) => setPayload({ name: node.name, payload: '', bootstrap }),
+        (n) => notifications.show({ color: 'green', ...n }),
+        t,
+      ),
     onError: (err) =>
       notifications.show({
         color: 'red',
-        title: 'Refresh bootstrap failed',
-        message: err instanceof Error ? err.message : String(err),
+        title: t('nodeConfirm.reBootstrapFailed'),
+        message: apiErrorMessage(err),
       }),
   });
 
   function handleRefreshBootstrap(node: Node) {
-    modals.openConfirmModal({
-      title: t('nodeConfirm.reBootstrapTitle', { name: node.name }),
-      children: (
-        <Text size="sm">{t('nodeConfirm.reBootstrapBody')}</Text>
-      ),
-      labels: { confirm: t('nodeConfirm.reBootstrapConfirm'), cancel: t('common.cancel') },
-      confirmProps: { color: 'blue' },
-      onConfirm: () => refreshBootstrapMutation.mutate(node),
-    });
+    confirmBootstrapReissue(node, t, () => refreshBootstrapMutation.mutate(node));
   }
 
   function handleDelete(node: Node) {
-    // Cleanup command shown post-delete so admins remember to wipe the
-    // VPS - otherwise the orphaned agent keeps occupying the mTLS port
-    // and an old server cert + CA pair sits around as future drift bait.
-    const uninstallCmd =
-      'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) --uninstall';
-    // Любой каскад, включённый или нет, держит ноду (1bf18ca): сервер откажет, и кнопка говорит это
-    // заранее. Нет поля у ноды: окно как раньше (nodeDeleteFacts).
-    const cascades = nodeDeleteFacts(node);
-    const blocked = (cascades?.blocked.length ?? 0) > 0;
-    modals.openConfirmModal({
-      title: t('nodeConfirm.deleteTitle', { name: node.name }),
-      children: (
-        <Stack gap="sm">
-          <NodeDeleteCascades facts={cascades} />
-          <Text size="sm">{t('nodeConfirm.deleteBody')}</Text>
-          <Text size="sm" fw={600}>
-            {t('nodeConfirm.deleteCleanupHint')}
-          </Text>
-          <Group gap="xs" align="flex-start" wrap="nowrap">
-            <Code block style={{ flex: 1, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-              {uninstallCmd}
-            </Code>
-            <CopyButton value={uninstallCmd}>
-              {({ copied, copy }) => (
-                <Button size="xs" variant="light" color={copied ? 'teal' : 'blue'} onClick={copy}>
-                  {copied ? t('common.copied') : t('common.copy')}
-                </Button>
-              )}
-            </CopyButton>
-          </Group>
-        </Stack>
-      ),
-      labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
-      confirmProps: { color: 'red', disabled: blocked, title: blocked ? t('nodeConfirm.deleteBlockedHint') : undefined },
-      onConfirm: () => deleteMutation.mutate(node.id),
-    });
+    // One window with the node page (nodeConfirm): any cascade, on or off,
+    // holds the node (1bf18ca) and locks the button; the cleanup command is in it.
+    confirmNodeDelete(node, t, () => deleteMutation.mutate(node.id));
   }
 
   return (
@@ -925,6 +882,15 @@ export function NodesPage() {
 
       {view === 'nodes' && (
         <>
+      {/* Cascade membership and regions come from their own lists. A failed one
+          is said here: without it the cascade badges and the region filter
+          simply vanish, which reads as «no node is in a cascade». */}
+      {loadView(cascadesQuery) === 'failed' && (
+        <LoadFailedLine message={apiErrorMessage(cascadesQuery.error)} onRetry={() => void cascadesQuery.refetch()} />
+      )}
+      {loadView(regionsQuery) === 'failed' && (
+        <LoadFailedLine message={apiErrorMessage(regionsQuery.error)} onRetry={() => void regionsQuery.refetch()} />
+      )}
 
       {visibleNodes.length === 0 ? (
         /* Four different nothings, told apart before anything is offered. The

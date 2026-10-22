@@ -11,18 +11,28 @@ import { TagButton } from '@/contours/nodes/components/NodeEdit/TagButton';
 import { AMBER, CARD, CYAN, DIM, DISPLAY, EDGE, FAINT, HAIRLINE, MONO, MOSS, RED, SNOW, VIOLET, WELL } from '@/contours/nodes/lib/colors';
 import { Box, Stack, Text } from '@mantine/core';
 import { WarnIcon } from '@/contours/nodes/components/NodeEdit/icons';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
+import type { LoadFailure } from '@/lib/ui/loadView';
 export function ResolvedRoutes({
   node,
   cascade,
   isBalancerEntry,
   policies,
   egressLabel,
+  cascadeUnknown = false,
+  cascadeFailure = null,
+  policiesFailure = null,
 }: {
   node: Node;
   cascade: { cascade: Cascade; role: string; directions: string[] } | null;
   isBalancerEntry: boolean;
   policies: { policy: RoutePolicy; squads: string[] }[];
   egressLabel: string;
+  /** The cascade list has not arrived: «outside every cascade» cannot be said. */
+  cascadeUnknown?: boolean;
+  cascadeFailure?: LoadFailure | null;
+  /** A list the reachable policies come from did not arrive. */
+  policiesFailure?: LoadFailure | null;
 }) {
   const { t } = useTranslation();
   // Tag 0 is the plain profile every user gets; the rest are granted policies.
@@ -30,6 +40,15 @@ export function ResolvedRoutes({
 
   // Only a node outside every cascade has nothing: each hop carries a rule set,
   // it is just a short one everywhere except the balancer entry.
+  if (!cascade && cascadeUnknown) {
+    return cascadeFailure ? (
+      <LoadFailed message={cascadeFailure.message} onRetry={cascadeFailure.onRetry} />
+    ) : (
+      <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
+        <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: FAINT, textAlign: 'center' }}>{t('common.loading')}</Text>
+      </Box>
+    );
+  }
   if (!cascade) {
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
@@ -126,6 +145,11 @@ export function ResolvedRoutes({
   return (
     <Box style={{ borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}`, overflow: 'hidden' }}>
       <RoutesHeader node={node} role="entry" balancer />
+      {policiesFailure && (
+        <Box style={{ padding: '10px 20px', borderBottom: `1px solid ${HAIRLINE}` }}>
+          <LoadFailedLine message={policiesFailure.message} onRetry={policiesFailure.onRetry} />
+        </Box>
+      )}
 
       {/* One node carries every set; the tag in the client's UUID picks one. */}
       <Box

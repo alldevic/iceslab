@@ -1,4 +1,4 @@
-﻿export const nodes = {
+export const nodes = {
   nodes: {
     title: 'Nodes',
     bar: {
@@ -25,12 +25,6 @@
       cascade: 'In cascade',
     },
     empty: 'No nodes yet. Click "Create node".',
-    deleteTitle: 'Delete node "{{name}}"?',
-    deleteBody:
-      'The profile bindings and hosts of this node are removed: users lose this node\'s lines in their subscription. The mTLS payload becomes invalid; a replacement needs a new node.',
-    refreshBootstrapTitle: 'Re-issue bootstrap for "{{name}}"?',
-    refreshBootstrapBody:
-      'The current bootstrap token becomes invalid. Safe on a running agent - it keeps working with the existing cert. The fresh token is for reinstall or after an address change.',
     refreshBootstrap: 'Re-issue bootstrap',
     metricsLoading: 'Metrics not yet collected - first poll within 15s.',
     bindingsCount: '{{count}} bindings',
@@ -232,6 +226,8 @@
     syncPendingBody:
       'The panel wrote it down, the node has not taken it. The push goes on its own, but it should have landed by now: worth a look at the node log.',
     syncWaitingTag: 'NODE NOT ANSWERING',
+    syncUnknownTag: 'APPLIED: UNKNOWN',
+    syncUnknownBody: 'The panel could not ask whether this node took the config.',
     syncWaitingBody:
       'The config is written and waiting. Not stuck: the cron pushes it again once the node is back.',
     syncChangedAt: 'changed {{at}}',
@@ -502,7 +498,7 @@
   nodeConfirm: {
     reBootstrapTitle: 'Re-issue bootstrap for "{{name}}"?',
     reBootstrapBody:
-      'The current bootstrap token and the node\'s mTLS certificate will become invalid. If the agent is already running with the previous cert, it keeps working (we don\'t revoke anything on live nodes), but a fresh token is needed if you reinstall install-iceslab-node.sh or changed the `address` and need a new DNS SAN. Safe action on a running node; if you reinstall the agent with the fresh payload - you\'ll need to retrigger applyInbounds via toggling some profile.',
+      'The old token stops working; the installed node is not affected. The new token is single-use and lives 15 minutes: it is for reinstalling the agent or after the node\'s address changes.',
     reBootstrapConfirm: 'Re-issue',
     bindingsPartialTitle: 'Some bindings failed',
     bindingsPartialMessage:
@@ -516,6 +512,8 @@
     deleteBlocked_other: 'The node is in cascades {{names}}: deleting is refused whether the cascades are on or off.',
     deleteBlockedHint: 'Move this node out of the cascade, or delete the cascade, first',
     deleteFailed: 'Delete failed',
+    deleted: 'Node deleted',
+    reBootstrapFailed: 'Re-issuing the token failed',
     inCascadeTitle_one: 'The node is in cascade {{names}}',
     inCascadeTitle_other: 'The node is in cascades {{names}}',
     inCascadeTitleUnnamed: 'The node is in a cascade',

@@ -75,3 +75,18 @@ export function defaults(node: Node | null): FormValues {
     engines: [...(node?.intendedEngines ?? [])],
   };
 }
+
+/**
+ * Which way traffic leaves the node, as the page may say it. `unknown` while
+ * the cascade list has not arrived: a node is in a cascade or not only by that
+ * list, and reading a missing list as «no cascade» showed a cascade hop as
+ * going straight out (spec frontend-nodes). WARP is a fact on the node, but a
+ * cascade overrides it, so it cannot be said either until the list is in.
+ */
+export type Egress = 'direct' | 'warp' | 'cascade' | 'unknown';
+
+export function egressOf(inCascade: boolean, cascadesKnown: boolean, warpOn: boolean): Egress {
+  if (inCascade) return 'cascade';
+  if (!cascadesKnown) return 'unknown';
+  return warpOn ? 'warp' : 'direct';
+}

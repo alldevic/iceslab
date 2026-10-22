@@ -23,13 +23,12 @@ import { ServerIcon } from '@/contours/nodes/components/NodeCreate/icons';
 import { useEffect } from 'react';
 import { nodeIntentWords } from '@/lib/domain/engines';
 import { useTranslation } from 'react-i18next';
-import { modals } from '@mantine/modals';
+import { notifications } from '@mantine/notifications';
 import {
   deleteNode,
 } from '@/lib/domain/nodes';
-import { NodeDeleteCascades } from '@/contours/nodes/components/NodeDelete';
+import { confirmBootstrapReissue, confirmNodeDelete } from '@/contours/nodes/components/nodeConfirm';
 import { showNodeDeleteFailed } from '@/contours/nodes/components/nodeDeleteToast';
-import { nodeDeleteFacts } from '@/contours/nodes/lib/nodeDelete';
 import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
 import { NodePayloadModal } from '@/contours/nodes/components/NodePayloadModal';
 import { apiErrorMessage } from '@/lib/net/client';
@@ -77,6 +76,11 @@ export function NodeEditPage() {
     enginesKnown,
     enginesRefusal,
     fleetQuery,
+    cascadeFailure,
+    syncFailure,
+    regionsFailure,
+    nodePoliciesFailure,
+    reachFailure,
   } = useNodeEditForm();
 
   // `#cores`: the deploy window and the host form link here for a core the
@@ -215,44 +219,27 @@ export function NodeEditPage() {
           )}
         </Box>
         <Box style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 10, flexShrink: 0 }}>
-          <PlainButton icon="key" strong onClick={() => bootstrapMutation.mutate()}>
+          <PlainButton icon="key" strong onClick={() => confirmBootstrapReissue(node, t, () => bootstrapMutation.mutate())}>
             {t('nodeEdit.reissue')}
           </PlainButton>
           <UnstyledButton
             type="button"
-            onClick={() => {
-              // Любой каскад, включённый или нет, держит ноду (1bf18ca): кнопка недоступна до щелчка, а
-              // отказ, если всё же пришёл, говорит словами (E28). Раньше отказ
-              // здесь терялся вовсе: onConfirm ждал удаления без catch.
-              const cascades = nodeDeleteFacts(node);
-              const blocked = (cascades?.blocked.length ?? 0) > 0;
-              modals.openConfirmModal({
-                title: t('nodes.deleteTitle', { name: node.name }),
-                children: (
-                  <Stack gap="sm">
-                    <NodeDeleteCascades facts={cascades} />
-                    <Text size="sm">{t('nodes.deleteBody')}</Text>
-                  </Stack>
-                ),
-                labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
-                confirmProps: {
-                  color: 'red',
-                  disabled: blocked,
-                  title: blocked ? t('nodeConfirm.deleteBlockedHint') : undefined,
-                },
-                onConfirm: async () => {
-                  try {
-                    await deleteNode(node.id);
-                  } catch (err) {
-                    showNodeDeleteFailed(err, t);
-                    return;
-                  }
-                  qc.invalidateQueries({ queryKey: ['nodes'] });
-                  qc.invalidateQueries({ queryKey: ['node', id] });
-                  navigate('/nodes');
-                },
-              });
-            }}
+            onClick={() =>
+              // One window with the list (spec frontend-nodes): any cascade, on or
+              // off, locks the button (1bf18ca), a refusal is said in words (E28).
+              confirmNodeDelete(node, t, async () => {
+                try {
+                  await deleteNode(node.id);
+                } catch (err) {
+                  showNodeDeleteFailed(err, t);
+                  return;
+                }
+                qc.invalidateQueries({ queryKey: ['nodes'] });
+                qc.invalidateQueries({ queryKey: ['node', id] });
+                notifications.show({ color: 'green', message: t('nodeConfirm.deleted') });
+                navigate('/nodes');
+              })
+            }
             style={{
               width: 38,
               height: 38,
@@ -304,7 +291,7 @@ export function NodeEditPage() {
           Отказ вытесняет «ещё не применено», а не встаёт рядом с ним: это одно
           и то же событие, только с причиной, и две полосы подряд про один пуш
           читаются как две разные беды. */}
-      {refusal ? <SyncRefusalStrip refusal={refusal} /> : <SyncStatusStrip status={syncQuery.data} />}
+      {refusal ? <SyncRefusalStrip refusal={refusal} /> : <SyncStatusStrip status={syncQuery.data} failure={syncFailure} />}
 
       {/* Рядом с отказом ядра, но отдельной сущностью: конфиг и процесс цепи
           ломаются независимо, и объединять их значит прятать одно за другим. */}
@@ -323,9 +310,11 @@ export function NodeEditPage() {
                 policyRefusal={policyRefusal}
                 enginesKnown={enginesKnown}
                 enginesRefusal={enginesRefusal}
+                regionsFailure={regionsFailure}
+                nodePoliciesFailure={nodePoliciesFailure}
               />
 
-              <EgressCard navigate={navigate} cascade={cascade} warpMutation={warpMutation} egress={egress} />
+              <EgressCard navigate={navigate} cascade={cascade} warpMutation={warpMutation} egress={egress} cascadeFailure={cascadeFailure} />
 
               {/* Состав ядер приходит от самой ноды, поэтому секция стоит
                   рядом с параметрами, а не в системной панели справа: это
@@ -357,6 +346,9 @@ export function NodeEditPage() {
           isBalancerEntry={isBalancerEntry}
           policies={reachablePolicies}
           egressLabel={egress === 'warp' ? t('nodeEdit.egressWarp') : t('nodeEdit.egressDirect')}
+          cascadeUnknown={egress === 'unknown'}
+          cascadeFailure={cascadeFailure}
+          policiesFailure={reachFailure}
         />
       )}
     </Stack>

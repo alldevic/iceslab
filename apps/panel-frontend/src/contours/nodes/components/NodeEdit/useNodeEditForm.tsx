@@ -30,7 +30,8 @@ import { listNodePolicies, policyFitRefusal as readPolicyRefusal } from '@/lib/d
 import { listSquads } from '@/lib/domain/squads';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { defaults, nodeEnginesPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { defaults, egressOf, nodeEnginesPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nodeEnginesRefusal, type NodeEnginesRefusal } from '@/contours/nodes/lib/nodeCreateForm';
 import { AMBER, DIM, MOSS } from '@/contours/nodes/lib/colors';
 import { DEFAULT_NODE_PORT } from '@/contours/nodes/lib/nodeProtocols';
@@ -231,7 +232,7 @@ export function useNodeEditForm() {
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       });
     },
   });
@@ -243,7 +244,7 @@ export function useNodeEditForm() {
       notifications.show({
         color: 'red',
         title: t('nodes.form.warpError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -267,7 +268,19 @@ export function useNodeEditForm() {
 
   const statusTone = node?.status === 'online' ? MOSS : node?.status === 'offline' ? DIM : AMBER;
   const warpOn = node?.warpEnabled ?? false;
-  const egress: 'direct' | 'warp' | 'cascade' = cascade ? 'cascade' : warpOn ? 'warp' : 'direct';
+  // Whether the node is in a cascade is known only from the cascade list; a
+  // missing list is said, not read as «straight out» (spec frontend-nodes).
+  const cascadeFailure = loadFailure(cascadesQuery, apiErrorMessage);
+  const egress = egressOf(cascade !== null, loadView(cascadesQuery) === 'ready', warpOn);
+  // Lists a side of the page reads; each failure is said where the list feeds.
+  const syncFailure = loadFailure(syncQuery, apiErrorMessage);
+  const regionsFailure = loadFailure(regionsQuery, apiErrorMessage);
+  const nodePoliciesFailure = loadFailure(nodePoliciesQuery, apiErrorMessage);
+  // The reachable policies come from three lists; any one missing makes the
+  // empty answer a guess.
+  const reachFailure = isBalancerEntry
+    ? ([bindingsQuery, squadsQuery, policiesQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null)
+    : null;
 
   return {
     issuedBootstrap,
@@ -310,6 +323,11 @@ export function useNodeEditForm() {
     statusTone,
     warpOn,
     egress,
+    cascadeFailure,
+    syncFailure,
+    regionsFailure,
+    nodePoliciesFailure,
+    reachFailure,
   };
 }
 

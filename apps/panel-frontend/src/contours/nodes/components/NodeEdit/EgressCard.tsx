@@ -4,6 +4,7 @@ import { Box, Text, UnstyledButton } from '@mantine/core';
 import { CARD, CYAN, DISPLAY, EDGE, FAINT, HAIRLINE, MIST, MONO, SNOW, WELL } from '@/contours/nodes/lib/colors';
 import { useTranslation } from 'react-i18next';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 
 /**
  * How traffic leaves this node: straight out, through WARP, or on into a
@@ -14,7 +15,11 @@ export function EgressCard({
   cascade,
   warpMutation,
   egress,
-}: Pick<NodeEditor, 'navigate' | 'cascade' | 'warpMutation' | 'egress'>) {
+  cascadeFailure,
+}: Pick<NodeEditor, 'navigate' | 'cascade' | 'warpMutation' | 'egress' | 'cascadeFailure'>) {
+  // Unknown until the cascade list is in: no row is ticked and none can be
+  // pressed, because a cascade would override either choice.
+  const unknown = egress === 'unknown';
   const { t } = useTranslation();
 
   return (
@@ -59,14 +64,14 @@ export function EgressCard({
 
                 <EgressRow
                   selected={egress === 'direct'}
-                  disabled={egress === 'cascade' || warpMutation.isPending}
+                  disabled={egress === 'cascade' || unknown || warpMutation.isPending}
                   title={t('nodeEdit.egressDirect')}
                   hint={t('nodeEdit.egressDirectHint')}
                   onClick={() => warpMutation.mutate(false)}
                 />
                 <EgressRow
                   selected={egress === 'warp'}
-                  disabled={egress === 'cascade' || warpMutation.isPending}
+                  disabled={egress === 'cascade' || unknown || warpMutation.isPending}
                   title={t('nodeEdit.egressWarp')}
                   hint={t('nodeEdit.egressWarpHint')}
                   onClick={() => warpMutation.mutate(true)}
@@ -75,7 +80,7 @@ export function EgressCard({
                   selected={egress === 'cascade'}
                   disabled
                   title={t('nodeEdit.egressCascade')}
-                  hint={cascade ? '' : t('nodeEdit.egressCascadeNone')}
+                  hint={cascade || unknown ? '' : t('nodeEdit.egressCascadeNone')}
                   trailing={
                     cascade ? (
                       <>
@@ -116,6 +121,12 @@ export function EgressCard({
                           </Text>
                         </UnstyledButton>
                       </>
+                    ) : unknown ? (
+                      cascadeFailure ? (
+                        <LoadFailedLine message={cascadeFailure.message} onRetry={cascadeFailure.onRetry} />
+                      ) : (
+                        <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>{t('common.loading')}</Text>
+                      )
                     ) : null
                   }
                 />
