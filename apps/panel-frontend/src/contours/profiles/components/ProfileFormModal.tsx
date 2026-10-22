@@ -306,11 +306,7 @@ export function ProfileFormModal({
               // a declarative randomize list. resolveRecipeApply collapses both.
               // Then only the protocol's own recipe keys are written
               // (recipeApplyPlan), and the rest is named on screen.
-              const { apply: fields, skipped } = recipeApplyPlan(
-                form.values.protocol,
-                resolveRecipeApply(recipe),
-                form.values,
-              );
+              const { apply: fields, skipped } = recipeApplyPlan(form.values.protocol, recipe, form.values);
               form.setValues((current) => ({ ...current, ...fields }));
               if (skipped.length > 0) {
                 notifications.show({
