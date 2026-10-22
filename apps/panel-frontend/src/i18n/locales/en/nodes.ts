@@ -207,6 +207,7 @@ export const nodes = {
     multiplierDesc:
       'How much traffic a user is charged for each gigabyte through this node. 1: as is, 0.5: half, 2: double, 0: the node is free. From 0 to 100, step 0.1.',
     multiplierBad: 'The multiplier is from 0 to 100 in steps of 0.1',
+    multiplierRequired: 'Enter a multiplier, 1: as is',
     maxUsers: 'User ceiling',
     maxUsersDesc: 'Empty: no ceiling. Otherwise a whole number from 1',
     policy: 'Node policy',

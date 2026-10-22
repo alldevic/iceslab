@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { multiplierBadge, multiplierInput, parseMaxUsers, parseMultiplier } from '@/contours/nodes/lib/nodeLimits';
+import {
+  multiplierBadge,
+  multiplierFieldError,
+  multiplierInput,
+  multiplierPatch,
+  parseMaxUsers,
+  parseMultiplier,
+} from '@/contours/nodes/lib/nodeLimits';
 import { nodes as ru } from '@/i18n/locales/ru/nodes';
 
 describe('parseMultiplier (A-143)', () => {
@@ -57,5 +64,26 @@ describe('слова у поля (A-143)', () => {
     expect(ru.nodeEdit.multiplierBad).toBe('Множитель от 0 до 100 с шагом 0,1');
     expect(ru.nodeEdit.maxUsers).toBe('Потолок юзеров');
     expect(ru.nodeEdit.maxUsersDesc).toBe('Пусто: без потолка. Иначе целое число от 1');
+  });
+});
+
+describe('пусто на правке и на создании (ARCH 23.10)', () => {
+  it('правка: пустое поле отказывает и в тело не идёт, ноду с 0 молча платной не сделать', () => {
+    expect(multiplierFieldError('', true)).toBe('required');
+    expect(multiplierFieldError('  ', true)).toBe('required');
+    expect(multiplierPatch('', true)).toEqual({});
+    expect(multiplierFieldError('0', true)).toBeNull();
+    expect(multiplierPatch('0,5', true)).toEqual({ consumptionMultiplier: 0.5 });
+    expect(multiplierFieldError('1,25', true)).toBe('bad');
+  });
+
+  it('создание: пустое поле это 1 и уходит единицей', () => {
+    expect(multiplierFieldError('', false)).toBeNull();
+    expect(multiplierPatch('')).toEqual({ consumptionMultiplier: 1 });
+    expect(multiplierPatch('100,1')).toEqual({});
+  });
+
+  it('слова отказа на правке', () => {
+    expect(ru.nodeEdit.multiplierRequired).toBe('Укажите множитель, 1: как есть');
   });
 });

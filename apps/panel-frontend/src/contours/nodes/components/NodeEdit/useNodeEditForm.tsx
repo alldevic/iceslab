@@ -19,7 +19,7 @@ import {
   updateNode,
 } from '@/lib/domain/nodes';
 import { certRotateRefusal } from '@/contours/nodes/lib/nodeCert';
-import { maxUsersPatch, multiplierPatch, parseMaxUsers, parseMultiplier } from '@/contours/nodes/lib/nodeLimits';
+import { maxUsersPatch, multiplierFieldError, multiplierPatch, parseMaxUsers } from '@/contours/nodes/lib/nodeLimits';
 import type { Node } from '@/lib/domain/nodes';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listCascades, type Cascade } from '@/lib/domain/cascades';
@@ -93,7 +93,11 @@ export function useNodeEditForm() {
     validateInputOnBlur: true,
     validate: {
       // A-143: refused at the field, never rounded.
-      consumptionMultiplier: (v) => (parseMultiplier(v).ok ? null : t('nodeEdit.multiplierBad')),
+      // Empty on an edit is refused, not 1: it would make a free node paid.
+      consumptionMultiplier: (v) => {
+        const e = multiplierFieldError(v, true);
+        return e === 'required' ? t('nodeEdit.multiplierRequired') : e === 'bad' ? t('nodeEdit.multiplierBad') : null;
+      },
       maxUsers: (v) => (parseMaxUsers(v).ok ? null : t('nodeEdit.maxUsersDesc')),
       name: (v) => {
         const trimmed = v.trim();
@@ -193,7 +197,7 @@ export function useNodeEditForm() {
         countryCode: form.values.countryCode || null,
         regionId: form.values.regionId || null,
         // Validated before the save is offered; a value that does not parse here is not sent.
-        ...multiplierPatch(form.values.consumptionMultiplier),
+        ...multiplierPatch(form.values.consumptionMultiplier, true),
         ...maxUsersPatch(form.values.maxUsers),
         policyId: form.values.policyId || null,
         // Поколения AWG нет: это факт модуля, не выбор (227054e).

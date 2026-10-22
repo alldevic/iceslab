@@ -28,10 +28,21 @@ export function parseMaxUsers(input: string | number): { ok: true; value: number
   return value >= 1 && Number.isSafeInteger(value) ? { ok: true, value } : { ok: false };
 }
 
+/**
+ * Where the multiplier field stands (ARCH 23.10). On CREATE an empty field is
+ * the default 1. On EDIT it is refused: clearing the field of a node at 0 or
+ * 0,5 would silently make it 1, a paid node, so the operator says 1 in words.
+ */
+export function multiplierFieldError(input: string | number, editing: boolean): 'required' | 'bad' | null {
+  if (editing && String(input).trim() === '') return 'required';
+  return parseMultiplier(input).ok ? null : 'bad';
+}
+
 /** The body keys for a save: the parsed value, or nothing when the input does
- *  not parse (the form refuses it at the field first; this never sends a
- *  guess). */
-export function multiplierPatch(input: string | number): { consumptionMultiplier?: number } {
+ *  not parse or is empty on an edit (the form refuses both at the field
+ *  first; this never sends a guess). */
+export function multiplierPatch(input: string | number, editing = false): { consumptionMultiplier?: number } {
+  if (multiplierFieldError(input, editing) !== null) return {};
   const r = parseMultiplier(input);
   return r.ok ? { consumptionMultiplier: r.value } : {};
 }
