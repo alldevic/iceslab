@@ -263,6 +263,68 @@ func TestEveryAgentBuildWritesItsVersion(t *testing.T) {
 	}
 }
 
+// One Go for the agent: the `toolchain` of go.mod, and every place that builds
+// the agent or puts a Go on a node says the same patch. Before 2026-10-22 there
+// were four answers (1.22 in CI, 1.24 in go lint, 1.22.12 in the release,
+// 1.23.4 on the nodes), and the nodes' archive was not checked at all.
+func TestOneGoForTheAgent(t *testing.T) {
+	mod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// \r? for a Windows checkout of go.mod, which has no eol rule.
+	m := regexp.MustCompile(`(?m)^toolchain go(\d+\.\d+\.\d+)\r?$`).FindSubmatch(mod)
+	if m == nil {
+		t.Fatal("go.mod has no `toolchain goX.Y.Z` line to hold the others to")
+	}
+	want := string(m[1])
+	read := func(path string) string {
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(blob)
+	}
+	ci := read(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	versions := regexp.MustCompile(`(?m)^\s+go-version: '([^']+)'`).FindAllStringSubmatch(ci, -1)
+	if len(versions) < 2 {
+		t.Errorf("ci.yml: %d go-version lines, want the node-agent and go lint jobs", len(versions))
+	}
+	for _, v := range versions {
+		if v[1] != want {
+			t.Errorf("ci.yml go-version %q, go.mod toolchain %s", v[1], want)
+		}
+	}
+	if !strings.Contains(read(filepath.Join("..", "..", ".github", "workflows", "release.yml")), "AGENT_GO_VERSION: '"+want+"'") {
+		t.Errorf("release.yml AGENT_GO_VERSION is not %s", want)
+	}
+	if !strings.Contains(read("Dockerfile"), "ARG GO_VERSION="+want+"-alpine") {
+		t.Errorf("apps/node/Dockerfile does not build on golang:%s-alpine", want)
+	}
+	hex := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	for name, path := range map[string]string{
+		"scripts/install-iceslab-node.sh":      installerPath,
+		"apps/node/scripts/bootstrap-naive.sh": filepath.Join("scripts", "bootstrap-naive.sh"),
+	} {
+		s := read(path)
+		if !strings.Contains(s, "\nGO_PINNED_VERSION="+want+"\n") {
+			t.Errorf("%s: GO_PINNED_VERSION is not %s", name, want)
+		}
+		for _, arch := range []string{"amd64", "arm64"} {
+			sm := regexp.MustCompile(`\[` + arch + `\]=(\S+)`).FindStringSubmatch(s)
+			if sm == nil || !hex.MatchString(sm[1]) {
+				t.Errorf("%s: no sha256 for the %s Go archive", name, arch)
+			}
+		}
+		// The archive is checked before it is unpacked over /usr/local/go.
+		check := strings.Index(s, `if [[ "$GO_GOT_SHA" != "$GO_WANT_SHA" ]]; then`)
+		unpack := strings.Index(s, "tar -C /usr/local -xzf")
+		if check == -1 || unpack == -1 || check > unpack {
+			t.Errorf("%s: the Go archive is unpacked without its sha256 checked first", name)
+		}
+	}
+}
+
 // xray's --remove warns that sing-box loses its traffic counters, true when
 // xray alone goes. Inside the installer's --uninstall sing-box goes right after,
 // and the warning was noise on a clean removal (stand, 26.09).

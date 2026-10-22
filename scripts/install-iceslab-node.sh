@@ -808,7 +808,7 @@ install_engines() {
     warn "  and then for each missing core: sudo bash $dir/bootstrap-<core>.sh --restart-agent"
     warn "  (rebuilding the agent from that checkout by hand needs Go: this installer put it in /usr/local/go;"
     warn "  a node where 'go' is missing gets it back by rerunning this installer,"
-    warn "  or by unpacking go${GO_VERSION:-1.23.4} there and linking /usr/local/go/bin/go into /usr/local/bin)"
+    warn "  or by unpacking go${GO_VERSION:-${GO_PINNED_VERSION:-1.27.3}} there and linking /usr/local/go/bin/go into /usr/local/bin)"
     LEGACY_CHECKOUT=1
     if run_bootstrap "${ENGINES[0]}" "$dir"; then
       legacy_primary_env
@@ -1150,24 +1150,47 @@ log "Installing apt prereqs"
 "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y git curl ca-certificates ufw unzip
 
 # ───── 3. Go ─────
+# The agent's toolchain, the same as `toolchain` in apps/node/go.mod and as
+# CI, release.yml and the agent's Dockerfile; bootstrap_checks_test.go holds
+# all of them to go.mod. A Go older than this would only download it again on
+# the first `go build` (GOTOOLCHAIN=auto), from proxy.golang.org, which a node
+# behind a filtered network may not reach; so the installer puts this one on.
+#
+# The archive is checked against the sha256 go.dev publishes for it (the
+# "sha256" of https://go.dev/dl/?mode=json&include=all). Another version
+# comes only with its sum: GO_VERSION and GO_SHA256 together, or neither.
+GO_PINNED_VERSION=1.27.3
+declare -A GO_PINNED_SHA256=(
+  [amd64]=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+  [arm64]=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+)
+if [[ -n "${GO_VERSION:-}" && -z "${GO_SHA256:-}" ]] || [[ -z "${GO_VERSION:-}" && -n "${GO_SHA256:-}" ]]; then
+  fail "GO_VERSION and GO_SHA256 go together: a Go without its checksum is not installed"
+fi
+GO_VERSION=${GO_VERSION:-$GO_PINNED_VERSION}
 NEED_GO=true
 if command -v go >/dev/null; then
   CUR=$(go version | awk '{print $3}' | sed 's/^go//')
-  if [[ "$(printf '%s\n' "1.22" "$CUR" | sort -V | head -1)" == "1.22" ]]; then
+  if [[ "$(printf '%s\n' "$GO_VERSION" "$CUR" | sort -V | head -1)" == "$GO_VERSION" ]]; then
     NEED_GO=false
   fi
 fi
 if $NEED_GO; then
-  GO_VERSION=${GO_VERSION:-1.23.4}
   ARCH=$(dpkg --print-architecture)
   case "$ARCH" in
     amd64) GO_ARCH=amd64 ;;
     arm64) GO_ARCH=arm64 ;;
     *) fail "Unsupported arch: $ARCH" ;;
   esac
+  GO_WANT_SHA=${GO_SHA256:-${GO_PINNED_SHA256[$GO_ARCH]}}
   log "Installing Go $GO_VERSION"
   TMPDL=$(mktemp -d)
   curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o "${TMPDL}/go.tar.gz"
+  GO_GOT_SHA=$(sha256sum "${TMPDL}/go.tar.gz" | awk '{print $1}')
+  if [[ "$GO_GOT_SHA" != "$GO_WANT_SHA" ]]; then
+    rm -rf "$TMPDL"
+    fail "Go ${GO_VERSION} archive checksum mismatch: got ${GO_GOT_SHA}, expected ${GO_WANT_SHA}"
+  fi
   rm -rf /usr/local/go
   tar -C /usr/local -xzf "${TMPDL}/go.tar.gz"
   rm -rf "$TMPDL"

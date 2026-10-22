@@ -77,7 +77,18 @@ verify_caddy() {
     fail "forward_proxy module not present in the built Caddy; the build was misconfigured"
   fi
 }
-GO_VERSION=${GO_VERSION:-1.23.4}
+# The same Go the node installer puts on, pinned with go.dev's sha256 (see
+# install-iceslab-node.sh, step 3; bootstrap_checks_test.go holds both to
+# apps/node/go.mod). Another version comes only with its sum.
+GO_PINNED_VERSION=1.27.3
+declare -A GO_PINNED_SHA256=(
+  [amd64]=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+  [arm64]=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+)
+if [[ -n "${GO_VERSION:-}" && -z "${GO_SHA256:-}" ]] || [[ -z "${GO_VERSION:-}" && -n "${GO_SHA256:-}" ]]; then
+  fail "GO_VERSION and GO_SHA256 go together: a Go without its checksum is not installed"
+fi
+GO_VERSION=${GO_VERSION:-$GO_PINNED_VERSION}
 
 # ───── 1. Distro check ─────
 if [[ ! -r /etc/os-release ]]; then
@@ -102,8 +113,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 NEED_GO=true
 if command -v go >/dev/null; then
   CUR=$(go version | awk '{print $3}' | sed 's/^go//')
-  if [[ "$(printf '%s\n' "1.22" "$CUR" | sort -V | head -1)" == "1.22" ]]; then
-    log "Go $CUR already meets >= 1.22"
+  if [[ "$(printf '%s\n' "$GO_VERSION" "$CUR" | sort -V | head -1)" == "$GO_VERSION" ]]; then
+    log "Go $CUR already meets >= $GO_VERSION"
     NEED_GO=false
   fi
 fi
@@ -115,9 +126,15 @@ if $NEED_GO; then
     arm64) GO_ARCH=arm64 ;;
     *) fail "Unsupported arch: $ARCH" ;;
   esac
+  GO_WANT_SHA=${GO_SHA256:-${GO_PINNED_SHA256[$GO_ARCH]}}
   TARBALL="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
   TMPDL=$(mktemp -d)
   curl -fsSL "https://go.dev/dl/${TARBALL}" -o "${TMPDL}/${TARBALL}"
+  GO_GOT_SHA=$(sha256sum "${TMPDL}/${TARBALL}" | awk '{print $1}')
+  if [[ "$GO_GOT_SHA" != "$GO_WANT_SHA" ]]; then
+    rm -rf "$TMPDL"
+    fail "Go ${GO_VERSION} archive checksum mismatch: got ${GO_GOT_SHA}, expected ${GO_WANT_SHA}"
+  fi
   rm -rf /usr/local/go
   tar -C /usr/local -xzf "${TMPDL}/${TARBALL}"
   rm -rf "$TMPDL"

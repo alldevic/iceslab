@@ -53,7 +53,7 @@ env:
   # setup-go would take whatever patch is newest that day: the same tag built
   # a month apart would then be different bytes. Moves together with go.mod,
   # ci.yml (node-agent, go lint), apps/node/Dockerfile and the node installer.
-  AGENT_GO_VERSION: '1.22.12'
+  AGENT_GO_VERSION: '1.27.3'
 
 jobs:
   agent-build:
