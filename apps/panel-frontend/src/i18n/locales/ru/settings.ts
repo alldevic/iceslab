@@ -5,6 +5,7 @@ export const settings = {
     factTokens: 'API-токенов',
     factTwofaOn: '2FA включена',
     factTwofaOff: '2FA выключена',
+    factTwofaUnknown: '2FA: нет данных',
     factRegions: 'регионов',
     factSources: 'источников рецептов',
     language: {

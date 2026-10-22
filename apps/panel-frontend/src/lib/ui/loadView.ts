@@ -12,3 +12,27 @@ export function loadView(q: { data: unknown; isError: boolean }): LoadView {
   if (q.data !== undefined && q.data !== null) return 'ready';
   return q.isError ? 'failed' : 'loading';
 }
+
+/**
+ * The gate of an edit screen: the list that holds the item, whether the item
+ * is in it, and the lists the form needs besides. «Gone» is said only when the
+ * list ARRIVED and the item is not in it; a failed or pending list, or a
+ * failed side list, is said as itself (A-141: the cascade screen called a live
+ * cascade gone when the node list had failed). `failed` carries the index of
+ * the query that failed: 0 is the main list, 1.. the others in order.
+ */
+export type GateView = { kind: 'ready' } | { kind: 'loading' } | { kind: 'gone' } | { kind: 'failed'; index: number };
+
+export function editGate(
+  main: { data: unknown; isError: boolean },
+  found: boolean,
+  others: { data: unknown; isError: boolean }[] = [],
+): GateView {
+  const m = loadView(main);
+  if (m === 'failed') return { kind: 'failed', index: 0 };
+  if (m === 'loading') return { kind: 'loading' };
+  if (!found) return { kind: 'gone' };
+  const failed = others.findIndex((q) => loadView(q) === 'failed');
+  if (failed !== -1) return { kind: 'failed', index: failed + 1 };
+  return others.every((q) => loadView(q) === 'ready') ? { kind: 'ready' } : { kind: 'loading' };
+}

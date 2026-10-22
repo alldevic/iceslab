@@ -21,7 +21,7 @@ export function usesWords(uses: GeoUse[], t: (k: string, o?: Record<string, unkn
  * Что показать на экране гео-наборов (Ф9.5, geo-contract §5, §7). Разметка
  * отсюда только красит.
  */
-export type GeoScreenState = 'unavailable' | 'empty' | 'list';
+export type GeoScreenState = 'unavailable' | 'loading' | 'failed' | 'empty' | 'list';
 
 export interface GeoScreenFacts {
   state: GeoScreenState;
@@ -31,12 +31,13 @@ export interface GeoScreenFacts {
   anyChecking: boolean;
 }
 
-export function geoScreenFacts(input: { sets?: GeoSet[]; notImplemented?: boolean }): GeoScreenFacts {
+export function geoScreenFacts(input: { sets?: GeoSet[]; notImplemented?: boolean; failed?: boolean }): GeoScreenFacts {
   const none = { sets: [], total: 0, anyChecking: false };
   if (input.notImplemented) return { state: 'unavailable', ...none };
   const list = input.sets;
-  // Ответа ещё нет: это не «пусто».
-  if (!list) return { state: 'unavailable', ...none };
+  // Ответа ещё нет: это не «пусто». И не «скоро»: «скоро» значит, что сервер
+  // ручки не знает (501), а упавший запрос это ошибка с повтором (A-141).
+  if (!list) return { state: input.failed ? 'failed' : 'loading', ...none };
   if (list.length === 0) return { state: 'empty', ...none };
   // Битые, потом в проверке, потом проверенные: экран открывают, когда что-то
   // не так. Встроенные среди своих по имени.

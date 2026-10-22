@@ -6,6 +6,7 @@ import type { ExpirySpan } from '@/contours/users/lib/userExpiry';
 import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
 import { defaultValues, trafficLimitInput, trafficLimitProblem } from '@/contours/users/lib/userForm';
 import { expiryDays } from '@/contours/users/lib/userExpiry';
+import { endpointsWhy } from '@/contours/users/lib/endpointsWhy';
 import { fetchUserEndpoints, listUsers } from '@/lib/domain/users';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listAllNodes } from '@/lib/domain/nodes';
@@ -218,8 +219,11 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
       protocols: new Set(endpoints.map((e) => e.protocol)).size,
       online: rows.filter((r) => r.online).length,
       estimate: false as const,
+      // Why the list is empty, as the dial card says it (A-141): a 403, a
+      // failed request and a real «nothing» are three different sentences.
+      why: endpointsWhy({ data: endpointsQuery.data, isError: endpointsQuery.isError, error: endpointsQuery.error }),
     };
-  }, [isEdit, estimate, endpointsQuery.data, nodesQuery.data]);
+  }, [isEdit, estimate, endpointsQuery.data, endpointsQuery.isError, endpointsQuery.error, nodesQuery.data]);
 
   /**
    * Which squads name a routing preset, when they name more than one.

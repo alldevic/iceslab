@@ -37,6 +37,9 @@ import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { profilePairLabel, type EngineName } from '@/lib/domain/engines';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { COUNTRIES } from '@/lib/domain/countries';
 import { AMBER, CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/hosts/lib/colors';
 
@@ -280,7 +283,10 @@ export function HostsPage() {
         </Box>
       </Box>
 
-      {rows.length === 0 ? (
+      {/* A list that did not arrive is not an empty one (A-141). */}
+      {rows.length === 0 && loadView(hostsQuery) === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(hostsQuery.error)} onRetry={() => void hostsQuery.refetch()} />
+      ) : rows.length === 0 ? (
         <Box
           style={{
             padding: 40,
@@ -294,7 +300,11 @@ export function HostsPage() {
               <IconWorldOff size={24} />
             </ThemeIcon>
             <Text c="dimmed" size="sm">
-              {total === 0 ? t('hostsPage.empty') : t('common.nothingFound')}
+              {loadView(hostsQuery) === 'loading'
+                ? t('common.loading')
+                : total === 0
+                  ? t('hostsPage.empty')
+                  : t('common.nothingFound')}
             </Text>
           </Stack>
         </Box>

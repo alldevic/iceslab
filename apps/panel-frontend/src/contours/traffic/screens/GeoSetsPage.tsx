@@ -6,6 +6,7 @@ import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import {
@@ -77,6 +78,7 @@ export function GeoSetsPage() {
   const facts = geoScreenFacts({
     sets: setsQuery.data?.geoSets,
     notImplemented: isNotImplemented(setsQuery.error),
+    failed: setsQuery.isError,
   });
 
   // Что требует внимания: битые наборы и ноды, у которых гео отстаёт. Ноды
@@ -187,11 +189,10 @@ export function GeoSetsPage() {
         </Box>
       )}
 
-      {facts.state === 'unavailable' && (
-        <Placeholder
-          title={setsQuery.isLoading ? t('common.loading') : t('geoSets.soonTitle')}
-          body={setsQuery.isLoading ? '' : t('geoSets.soonBody')}
-        />
+      {facts.state === 'unavailable' && <Placeholder title={t('geoSets.soonTitle')} body={t('geoSets.soonBody')} />}
+      {facts.state === 'loading' && <Placeholder title={t('common.loading')} body="" />}
+      {facts.state === 'failed' && (
+        <LoadFailed message={apiErrorMessage(setsQuery.error)} onRetry={() => void setsQuery.refetch()} />
       )}
       {facts.state === 'empty' && <Placeholder title={t('geoSets.emptyTitle')} body={t('geoSets.emptyBody')} />}
 

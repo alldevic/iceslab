@@ -38,6 +38,8 @@ import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { COUNTRIES, countryName } from '@/lib/domain/countries';
 import { ROUTING_PRESET_IDS, presetKey } from '@/lib/domain/routingPresets';
 import { apiErrorMessage } from '@/lib/net/client';
+import { editGate } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import {
   aclIdsOf,
   canonicalAcl,
@@ -517,6 +519,11 @@ export function SquadEditPage() {
         ],
   );
 
+  // «Not found» only when the list arrived without it (A-141).
+  const gate = isNew ? null : editGate(squadsQuery, squad !== null);
+  if (gate?.kind === 'failed') {
+    return <LoadFailed message={apiErrorMessage(squadsQuery.error)} onRetry={() => void squadsQuery.refetch()} />;
+  }
   if (!squad && !isNew) {
     // A stale bookmark or a deleted squad lands here. Say so and offer the way
     // back, instead of leaving a two-word sentence alone on an empty page.
@@ -531,9 +538,9 @@ export function SquadEditPage() {
       >
         <Stack align="center" gap={14}>
           <Text style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 500, color: SNOW }}>
-            {squadsQuery.isLoading ? t('common.loading') : t('squadEdit.notFound')}
+            {gate?.kind === 'gone' ? t('squadEdit.notFound') : t('common.loading')}
           </Text>
-          {!squadsQuery.isLoading && (
+          {gate?.kind === 'gone' && (
             <PageButton onClick={() => navigate('/squads')}>{t('squadEdit.backToList')}</PageButton>
           )}
         </Stack>

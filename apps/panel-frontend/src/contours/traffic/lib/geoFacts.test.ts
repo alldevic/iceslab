@@ -41,7 +41,9 @@ function set(p: Partial<GeoSet> = {}): GeoSet {
 describe('geoScreenFacts', () => {
   it('404 или ответа нет: заглушка, а не «пусто»', () => {
     expect(geoScreenFacts({ notImplemented: true }).state).toBe('unavailable');
-    expect(geoScreenFacts({}).state).toBe('unavailable');
+    expect(geoScreenFacts({}).state).toBe('loading');
+    // A-141: упавший запрос это ошибка, а не «скоро».
+    expect(geoScreenFacts({ failed: true }).state).toBe('failed');
     expect(geoScreenFacts({ sets: [] }).state).toBe('empty');
   });
 

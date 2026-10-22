@@ -5,6 +5,7 @@ export const settings = {
     factTokens: 'API tokens',
     factTwofaOn: '2FA on',
     factTwofaOff: '2FA off',
+    factTwofaUnknown: '2FA: unknown',
     factRegions: 'regions',
     factSources: 'recipe sources',
     language: {

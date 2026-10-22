@@ -39,6 +39,9 @@ import {
   hostPortShared,
 } from '@/lib/domain/hosts';
 import { modals } from '@mantine/modals';
+import { apiErrorMessage } from '@/lib/net/client';
+import { editGate } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
 import { HostFreshnessCard } from '@/contours/hosts/components/HostFreshnessCard';
 import { nodePortClaims } from '@/contours/hosts/lib/portClaims';
@@ -582,21 +585,31 @@ export function HostEditPage() {
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       });
     },
   });
 
   usePageMeta(isNew ? [t('hostEdit.newCrumb')] : [host?.remark ?? '']);
 
-  if (!host && !isNew) {
+  // A-141: «host not found» only when the list arrived without it. The binding
+  // list is part of the gate too: without it the port field seeds empty and a
+  // typed port would not leave on save (hostPortPayload needs the stored one).
+  const gate = isNew
+    ? editGate({ data: true, isError: false }, true, [nodesQuery])
+    : editGate(hostsQuery, host !== null, [bindingsQuery]);
+  if (gate.kind === 'failed') {
+    const q = isNew ? nodesQuery : gate.index === 0 ? hostsQuery : bindingsQuery;
+    return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
+  if (!isNew && gate.kind !== 'ready') {
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Stack align="center" gap={14}>
           <Text style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 500, color: SNOW }}>
-            {hostsQuery.isLoading ? t('common.loading') : t('hostEdit.notFound')}
+            {gate.kind === 'gone' ? t('hostEdit.notFound') : t('common.loading')}
           </Text>
-          {!hostsQuery.isLoading && (
+          {gate.kind === 'gone' && (
             <PageButton onClick={() => navigate('/hosts')}>{t('hostEdit.backToList')}</PageButton>
           )}
         </Stack>

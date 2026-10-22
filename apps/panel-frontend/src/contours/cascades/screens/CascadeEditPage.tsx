@@ -34,7 +34,9 @@ import { ChainStatusLine } from '@/ui/ChainStatusLine';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
 import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
-import { cascadeClaims } from '@/lib/domain/cascadeMembership';
+import { cascadeClaims, cascadeMembers } from '@/lib/domain/cascadeMembership';
+import { editGate } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { useEntryAwg31 } from '@/contours/cascades/lib/useEntryAwg31';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { useOverview } from '@/lib/domain/dashboard';
@@ -469,11 +471,18 @@ export function CascadeEditPage() {
       notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) }),
   });
 
+  // «No such cascade» only when the list arrived without it (A-141): a failed
+  // node list used to read as the cascade being gone.
+  const gate = editGate(cascadesQuery, cascade !== null, [nodesQuery]);
+  if (gate.kind === 'failed') {
+    const q = gate.index === 0 ? cascadesQuery : nodesQuery;
+    return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
   if (!cascade || !draft) {
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>
-          {cascadesQuery.isLoading ? t('common.loading') : t('cascadeEdit.gone')}
+          {gate.kind === 'gone' ? t('cascadeEdit.gone') : t('common.loading')}
         </Text>
       </Box>
     );
@@ -636,7 +645,9 @@ export function CascadeEditPage() {
   function confirmDelete() {
     modals.openConfirmModal({
       title: t('cascadeEdit.deleteTitle', { name: cascade!.name }),
-      children: <Text size="sm">{t('cascadeEdit.deleteBody', { count: cascade!.hops.length })}</Text>,
+      // Nodes by positions and directions (cascadeMembers): a v4 cascade has
+      // `hops: []` and used to ask «delete a cascade of 0 nodes» (A-141).
+      children: <Text size="sm">{t('cascadeEdit.deleteBody', { count: cascadeMembers(cascade!).length })}</Text>,
       labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
       confirmProps: { color: 'red' },
       onConfirm: () => deleteMutation.mutate(),

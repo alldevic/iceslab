@@ -21,6 +21,8 @@ import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { copyToClipboard } from '@/lib/ui/clipboard';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import {
   createApiToken,
   deleteApiToken,
@@ -66,6 +68,8 @@ export function SettingsPage() {
   const sourcesQuery = useQuery({ queryKey: ['recipe-sources'], queryFn: getRecipeSources });
 
   const twofaOn = twofaQuery.data?.enabled ?? false;
+  // «2FA off» without the status is a claim about the account (A-141).
+  const twofaKnown = twofaQuery.data !== undefined;
 
   return (
     <Stack gap={20}>
@@ -95,13 +99,13 @@ export function SettingsPage() {
         <Box style={{ width: 1, height: 26, backgroundColor: HAIRLINE, flexShrink: 0 }} />
 
         <Box className="page-bar-facts">
-          <Fact value={tokensQuery.data?.tokens.length ?? 0} label={t('settings.factTokens')} />
+          <Fact value={tokensQuery.data ? tokensQuery.data.tokens.length : '-'} label={t('settings.factTokens')} />
           <Dot />
           {/* The one fact worth a colour: an admin panel on the open internet
               without a second factor is the thing to notice here. */}
           <Box style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <Box
-              style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: twofaOn ? MOSS : AMBER }}
+              style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: !twofaKnown ? DIM : twofaOn ? MOSS : AMBER }}
             />
             <Text
               style={{
@@ -110,21 +114,21 @@ export function SettingsPage() {
                 letterSpacing: '0.12em',
                 lineHeight: '12px',
                 textTransform: 'uppercase',
-                color: twofaOn ? MOSS : AMBER,
+                color: !twofaKnown ? MIST : twofaOn ? MOSS : AMBER,
               }}
             >
-              {twofaOn ? t('settings.factTwofaOn') : t('settings.factTwofaOff')}
+              {!twofaKnown ? t('settings.factTwofaUnknown') : twofaOn ? t('settings.factTwofaOn') : t('settings.factTwofaOff')}
             </Text>
           </Box>
           <Dot soft="mid" />
           <Fact
-            value={regionsQuery.data?.regions.length ?? 0}
+            value={regionsQuery.data ? regionsQuery.data.regions.length : '-'}
             label={t('settings.factRegions')}
             soft="mid"
           />
           <Dot soft />
           <Fact
-            value={sourcesQuery.data?.sources.length ?? 0}
+            value={sourcesQuery.data ? sourcesQuery.data.sources.length : '-'}
             label={t('settings.factSources')}
             soft="soft"
           />
@@ -340,10 +344,13 @@ function ApiTokensCard() {
           <ColHead width={56}>{t('common.actions')}</ColHead>
         </Box>
 
-        {tokens.length === 0 ? (
+        {/* A list that did not arrive is not «no tokens» (A-141). */}
+        {tokens.length === 0 && loadView(tokensQuery) === 'failed' ? (
+          <LoadFailed message={apiErrorMessage(tokensQuery.error)} onRetry={() => void tokensQuery.refetch()} />
+        ) : tokens.length === 0 ? (
           <Box style={{ padding: '20px 14px', borderTop: `1px solid ${HAIRLINE}` }}>
             <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST, textAlign: 'center' }}>
-              {tokensQuery.isLoading ? t('common.loading') : t('settings.tokens.empty')}
+              {loadView(tokensQuery) === 'loading' ? t('common.loading') : t('settings.tokens.empty')}
             </Text>
           </Box>
         ) : (
@@ -851,6 +858,26 @@ function TwoFactorCard() {
 
   const codeValid = /^\d{6}$/.test(code);
 
+  // Without the status the card cannot say «off» and offer to switch on: that
+  // is a claim about the account (A-141). The error and a retry instead.
+  const statusView = loadView(statusQuery);
+  if (statusView !== 'ready') {
+    return (
+      <SectionCard
+        tone={DIM}
+        icon={<ShieldIcon size={16} color={DIM} />}
+        title={t('settings.twofa.title')}
+        hint={t('settings.twofa.subtitle')}
+      >
+        {statusView === 'failed' ? (
+          <LoadFailed message={apiErrorMessage(statusQuery.error)} onRetry={() => void statusQuery.refetch()} />
+        ) : (
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>{t('common.loading')}</Text>
+        )}
+      </SectionCard>
+    );
+  }
+
   return (
     <SectionCard
       tone={enabled ? MOSS : AMBER}
@@ -1334,7 +1361,8 @@ function Fact({
   accent,
   soft,
 }: {
-  value: number;
+  /** «-» when the list did not arrive: «0» over a failed request is a claim (A-141). */
+  value: number | string;
   label: string;
   accent?: string;
   soft?: 'soft' | 'mid';

@@ -25,6 +25,9 @@ import { listBindings } from '@/lib/domain/profiles';
 import { listCascades } from '@/lib/domain/cascades';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { squadExitsSummary } from '@/contours/squads/lib/squadCascades';
 import { AMBER, CARD, CYAN, DIM, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/squads/lib/colors';
 
@@ -230,7 +233,10 @@ export function SquadsPage() {
         </Box>
       </Box>
 
-      {sortedSquads.length === 0 ? (
+      {/* A list that did not arrive is not an empty one (A-141). */}
+      {sortedSquads.length === 0 && loadView(squadsQuery) === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(squadsQuery.error)} onRetry={() => void squadsQuery.refetch()} />
+      ) : sortedSquads.length === 0 ? (
         <Box
           style={{
             padding: 40,
@@ -244,7 +250,11 @@ export function SquadsPage() {
               <IconUsers size={24} />
             </ThemeIcon>
             <Text c="dimmed" size="sm">
-              {squads.length === 0 ? t('squads.empty') : t('common.nothingFound')}
+              {loadView(squadsQuery) === 'loading'
+                ? t('common.loading')
+                : squads.length === 0
+                  ? t('squads.empty')
+                  : t('common.nothingFound')}
             </Text>
           </Stack>
         </Box>
