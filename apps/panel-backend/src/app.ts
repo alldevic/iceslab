@@ -128,9 +128,14 @@ export async function buildApp(): Promise<FastifyInstance> {
     const errWithCode = error as { statusCode?: number; message?: string };
     const statusCode = errWithCode.statusCode;
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
+      // The wait in the body too, the way ACCOUNT_LOCKED carries it (A-168
+      // tail, 22.10): the plugin puts it only in the Retry-After header, and
+      // a screen reading the body had nothing to count down from.
+      const retryAfter = statusCode === 429 ? Number(reply.getHeader('retry-after')) : NaN;
       return reply.code(statusCode).send({
         error: statusCode === 429 ? 'RATE_LIMITED' : 'REQUEST_REJECTED',
         message: errWithCode.message ?? 'Request rejected',
+        ...(Number.isFinite(retryAfter) && retryAfter >= 0 ? { retryAfterSeconds: Math.ceil(retryAfter) } : {}),
       });
     }
 
