@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chainLinkIngressOf } from './cascade.service.js';
+import { chainLinkIngressOf, linkHostOf } from './cascade.service.js';
 import type { LinkCred, TopologyInput } from './cascade.config.js';
 
 /**
@@ -21,6 +21,15 @@ function topology(links: TopologyInput['links']): TopologyInput {
     ]),
   } as unknown as TopologyInput;
 }
+
+describe('linkHostOf', () => {
+  it('keeps an IPv6 address whole and bare, and strips the agent port elsewhere', () => {
+    expect(linkHostOf('2001:db8::1')).toBe('2001:db8::1');
+    expect(linkHostOf('[2001:db8::1]:1337')).toBe('2001:db8::1');
+    expect(linkHostOf('10.0.0.1:1337')).toBe('10.0.0.1');
+    expect(linkHostOf('nl.example.com')).toBe('nl.example.com');
+  });
+});
 
 describe('chainLinkIngressOf', () => {
   it('one entry per port with every hop that dials it, transports by cell', () => {

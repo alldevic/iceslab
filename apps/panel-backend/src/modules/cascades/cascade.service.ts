@@ -18,6 +18,7 @@ import { prisma } from '../../prisma.js';
 import { xrayGeoEntry } from '../geo-sets/geo-refs.js';
 import { chainNodePolicyOf, chainPoliciesOf } from './chain-policy.js';
 import { assertNodesInNoOtherCascade, CASCADE_OWNERSHIP_ORDER } from './cascade-exclusive.js';
+import { hostFromAddress } from '../subscription/subscription.formats.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { getLogger } from '../../lib/infra/logger.js';
@@ -2627,6 +2628,17 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
 }
 
 /**
+ * The host other hops dial a node by, and the source its firewall rules name:
+ * the address without the agent's port, bare. `address.split(':')[0]` cut an
+ * IPv6 address at its first colon (`2001:db8::1` became `2001`), so a leg
+ * dialled nowhere and the ufw rule named a source that is no address at all.
+ * Brackets go too: sing-box takes `server` and ufw takes `from` unbracketed.
+ */
+export function linkHostOf(address: string): string {
+  return hostFromAddress(address).replace(/^\[(.*)\]$/, '$1');
+}
+
+/**
  * A-111: the ports this node's chain receives legs on over the internet, each
  * with the hops that dial it, for the agent's firewall. One entry per port:
  * the legs of one receiving step share one listener. A leg inside an AWG
@@ -3071,7 +3083,7 @@ async function buildCascadeFragmentsForNode(
     position: h.position,
     // Public host the previous hop dials. node.address is host[:agentPort];
     // the link binds its own port (cred.port), so strip any agent port.
-    nodeHost: h.node.address.split(':')[0]!,
+    nodeHost: linkHostOf(h.node.address),
   }));
 
   // A4 ad-split: emit EVERY defined policy's rules on the entry (policies are
@@ -3246,7 +3258,7 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
     where: { id: { in: [...nodeIds] }, deletedAt: null },
     select: { id: true, address: true },
   });
-  const hosts = new Map(nodeRows.map((n) => [n.id, n.address.split(':')[0]!]));
+  const hosts = new Map(nodeRows.map((n) => [n.id, linkHostOf(n.address)]));
 
   const rows: TopologyLinkRow[] = [];
   for (const l of links) {

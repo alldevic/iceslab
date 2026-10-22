@@ -53,9 +53,11 @@ func transportsOf(ib dto.InboundDto) []string {
 
 // The firewall calls, swappable in tests (ufw is not there).
 var (
-	fwAllow     = firewall.Allow
-	fwClose     = firewall.Close
-	fwAllowFrom = firewall.AllowFrom
+	fwAllow       = firewall.Allow
+	fwClose       = firewall.Close
+	fwResolve     = firewall.ResolveSources
+	fwAllowSource = firewall.AllowSource
+	fwCloseSource = firewall.CloseSource
 )
 
 // protoForInbound returns the L4 protocols the given inbound listens on.
@@ -135,6 +137,11 @@ type Server struct {
 	// one, for /healthz. Nil until then.
 	geoMu      sync.Mutex
 	geoVersion *string
+
+	// chainFwMu covers the chain's link-port rules (A-111): what was opened
+	// for the block in force, kept beside the stored push so a later push, or
+	// a restart, closes what the next block no longer names.
+	chainFwMu sync.Mutex
 
 	// storeMu covers the read of the stored push and the write of the next
 	// one (persistAccepted), so two pushes cannot interleave the two halves.
@@ -1582,28 +1589,6 @@ func (s *Server) ensureCascadeFirewall(ctx context.Context, ib dto.InboundDto) {
 	// either cell works - both stay restricted to the peer source.
 	for _, proto := range []string{"tcp", "udp"} {
 		firewall.AllowFrom(ctx, s.logger, cfg.Cascade.LinkIngressPort, proto, cfg.Cascade.LinkAllowFrom)
-	}
-}
-
-// ensureChainFirewall opens UFW for the ports the chain process receives legs
-// on (A-111), each restricted to the previous hops the panel names. Until this
-// the only opening was ensureCascadeFirewall, which reads the legacy xray
-// fragments a node with a chain does not get, so a hy2 or tuic leg, or any leg
-// into a node whose chain already ran, met a closed port. A port with no
-// source named is not opened: AllowFrom would fall open to anywhere, and the
-// panel never sends one without.
-func (s *Server) ensureChainFirewall(ctx context.Context, chain *dto.NodeChain) {
-	if chain == nil {
-		return
-	}
-	for _, in := range chain.LinkIngress {
-		if len(in.AllowFrom) == 0 {
-			s.logger.Warn("chain: link port with no source named, not opened", "port", in.Port)
-			continue
-		}
-		for _, proto := range in.Transports {
-			fwAllowFrom(ctx, s.logger, in.Port, proto, in.AllowFrom)
-		}
 	}
 }
 
