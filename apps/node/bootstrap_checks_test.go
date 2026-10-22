@@ -325,6 +325,49 @@ func TestOneGoForTheAgent(t *testing.T) {
 	}
 }
 
+// A-216: caddy-naive is built from a pinned set, never from what a branch or
+// `latest` holds that day. The fork's naive branch moved onto a Caddy API no
+// release had and every fresh naive node stopped building. The set is exact
+// versions, and CI builds the very same one for the agent's live test.
+func TestTheNaiveBuildIsAPinnedSet(t *testing.T) {
+	naive := readScript(t, "bootstrap-naive.sh")
+	ciBlob, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := string(ciBlob)
+	exact := map[string]*regexp.Regexp{
+		"XCADDY_VERSION":       regexp.MustCompile(`^v\d+\.\d+\.\d+$`),
+		"CADDY_VERSION":        regexp.MustCompile(`^v\d+\.\d+\.\d+$`),
+		"FORWARDPROXY_VERSION": regexp.MustCompile(`^v0\.0\.0-\d{14}-[0-9a-f]{12}$`),
+	}
+	for name, shape := range exact {
+		m := regexp.MustCompile(`(?m)^` + name + `=(\S+)$`).FindStringSubmatch(naive)
+		if m == nil {
+			t.Errorf("bootstrap-naive.sh: no %s", name)
+			continue
+		}
+		if !shape.MatchString(m[1]) {
+			t.Errorf("bootstrap-naive.sh: %s=%s is not an exact version", name, m[1])
+		}
+		if !strings.Contains(ci, name+": "+m[1]+"\n") {
+			t.Errorf("ci.yml builds caddy-naive with another %s than bootstrap-naive.sh's %s", name, m[1])
+		}
+	}
+	for _, s := range []struct{ name, text string }{{"bootstrap-naive.sh", naive}, {"ci.yml", ci}} {
+		for _, floating := range []string{"forwardproxy@naive", "xcaddy@latest", "@master"} {
+			for i, line := range strings.Split(s.text, "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, floating) {
+					t.Errorf("%s:%d builds from a moving ref (%s): %s", s.name, i+1, floating, strings.TrimSpace(line))
+				}
+			}
+		}
+	}
+	if !strings.Contains(naive, `xcaddy build "$CADDY_VERSION"`) {
+		t.Error("bootstrap-naive.sh: xcaddy build without the pinned Caddy version takes the latest release")
+	}
+}
+
 // xray's --remove warns that sing-box loses its traffic counters, true when
 // xray alone goes. Inside the installer's --uninstall sing-box goes right after,
 // and the warning was noise on a clean removal (stand, 26.09).

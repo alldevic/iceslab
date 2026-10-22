@@ -628,7 +628,8 @@ jobs:
   node-agent:
     name: node-agent (Go)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10: a cold caddy-naive build takes minutes (cached after).
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.node == 'true'
 
@@ -721,6 +722,43 @@ jobs:
           echo "SINGBOX_BIN=/tmp/sing-box-bin/sing-box" >> "$GITHUB_ENV"
           /tmp/sing-box-bin/sing-box version | head -1
 
+      # caddy-naive for the naive adapter's live test (A-118, admin API on a
+      # unix socket). The same pinned set bootstrap-naive.sh builds on a node
+      # (A-216: xcaddy, Caddy and the klzgrad/forwardproxy commit, never a
+      # branch or latest); bootstrap_checks_test.go holds the two to each
+      # other. A build takes minutes, so it is cached under the set and the Go
+      # that built it, and checked for forward_proxy either way.
+      - name: Cache caddy-naive (pinned set)
+        id: caddy-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/caddy-naive-bin
+          key: caddy-naive-xcaddy-v0.4.7-caddy-v2.11.7-forwardproxy-v0.0.0-20261006113151-c096d6a00cb2-go1.27.3
+
+      - name: Build caddy-naive (for the naive adapter's live test)
+        env:
+          XCADDY_VERSION: v0.4.7
+          CADDY_VERSION: v2.11.7
+          FORWARDPROXY_VERSION: v0.0.0-20261006113151-c096d6a00cb2
+          CACHE_HIT: ${{ steps.caddy-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          bin=/tmp/caddy-naive-bin/caddy-naive
+          if [ "$CACHE_HIT" != true ] || [ ! -x "$bin" ]; then
+            GOBIN=/tmp/xcaddy-bin go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+            mkdir -p /tmp/caddy-naive-bin
+            ( cd "$(mktemp -d)" &&
+              XCADDY_GO_BUILD_FLAGS="-trimpath -ldflags='-s -w'" \
+              /tmp/xcaddy-bin/xcaddy build "$CADDY_VERSION" \
+                --with "github.com/caddyserver/forwardproxy@caddy2=github.com/klzgrad/forwardproxy@${FORWARDPROXY_VERSION}" \
+                --output "$bin" )
+          fi
+          "$bin" version
+          mods=$("$bin" list-modules 2>&1)
+          grep -Eq '^[[:space:]]*http\.handlers\.forward_proxy[[:space:]]*$' <<<"$mods" ||
+            { echo "::error::caddy-naive has no forward_proxy module"; exit 1; }
+          echo "CADDY_NAIVE_BIN=$bin" >> "$GITHUB_ENV"
+
       # -json, so the summary can say which tests SKIPPED and why: `ok` on a
       # package says nothing about a test inside it that skipped itself. The
       # log still shows a readable line per package and every failure in full.
@@ -787,7 +825,7 @@ jobs:
             else
               echo "- the suite produced no output, so it did not get as far as running"
             fi
-            echo "- engines asked: hysteria v2.12.3, xray v26.3.27, sing-box v1.13.14"
+            echo "- engines asked: hysteria v2.12.3, xray v26.3.27, sing-box v1.13.14, caddy-naive (caddy v2.11.7 + forwardproxy c096d6a00cb2)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Slice 36 follow-up: build + publish container images to GHCR on every
