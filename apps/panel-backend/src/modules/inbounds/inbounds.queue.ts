@@ -676,10 +676,9 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   // them gets an empty list, which takes them off the node: a squad that lost
   // this node's profile must not leave its members on it. An agent older than
   // the field ignores the list and serves everyone on every inbound, as before.
-  const reach = await reachOfUsers(
-    users.map((u) => u.id),
-    { nodeId },
-  );
+  // Every active user, as a filter (users holds the same set; a list of ids
+  // would run past Postgres's bind-parameter cap on a large roster).
+  const reach = await reachOfUsers(null, { nodeId });
   const inboundIdsOf = (userId: string): string[] => reach.get(userId)?.get(nodeId) ?? [];
   // A-164: an address only for the users who reach that AmneziaWG inbound.
   const awgIpByUser = await allocateAwgAddresses(

@@ -6,6 +6,7 @@ import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { reachOfUsers } from './user-reach.js';
+import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
 import { allocateAwgAddresses, awgBindingsOfNode } from '../amneziawg/awg-addresses.js';
 
 // ───── Job data shapes ─────
@@ -180,6 +181,23 @@ export async function syncAddUser(userId: string): Promise<void> {
     },
     `addUser ${userId}`,
   );
+
+  /**
+   * A-134: the cascade entries this user reaches draw who may take which tag,
+   * and a user they have not seen yet falls into the trap there (closed by
+   * default). So each such entry is pushed again, and the push carries the
+   * user's tags. The jobId folds a wave of these into one push per entry.
+   */
+  const entries = await prisma.cascadePosition.findMany({
+    where: {
+      position: 0,
+      cascade: { enabled: true },
+      nodes: { some: { nodeId: { in: [...reach.keys()] } } },
+    },
+    select: { nodes: { select: { nodeId: true } } },
+  });
+  const toPush = new Set(entries.flatMap((e) => e.nodes.map((n) => n.nodeId)).filter((id) => reach.has(id)));
+  for (const nodeId of toPush) await enqueueNodePush(nodeId);
 }
 
 async function syncRemoveUser(userId: string): Promise<void> {

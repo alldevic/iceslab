@@ -75,6 +75,7 @@ import {
   type ResolvedDirection,
 } from './direction-merge.js';
 import { isConfigApplied } from '../nodes/nodes.sync-status.js';
+import { bindingsReachedBySquads } from '../users/user-reach.js';
 import {
   freeTunnelIndexes,
   legUnderlay,
@@ -3225,7 +3226,57 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
     ...(cascadeRow?.entryPolicy ? { entryPolicyOrdinal: cascadeRow.entryPolicy.ordinal } : {}),
     entryProtocol: positions.find((p) => p.position === 0)?.entryProtocol ?? undefined,
     tunnels,
+    // A-134: who may take which tag at THIS entry, by the subscription's own
+    // rule. Only for an entry the users dial with xray: a hysteria or AWG entry
+    // hands its users over without a tag (and refuses narrowed squads, see
+    // assertNarrowingFitsEntries).
+    ...(await entryGateFor(nodeId, link.cascadeId, positions)),
   };
+}
+
+/**
+ * A-134: the tags each user may take at an xray entry: the same answer the
+ * subscription gives them (getRouteProfilesByEntryNode), turned around into
+ * "user -> allowed tags". Users with the same squads get the same answer, so
+ * it is asked once per squad set, not once per user.
+ *
+ * The users are those who reach the entry at all (user-reach, the A-022
+ * rule); the renderer gates every tag that is not allowed to all of them.
+ */
+async function entryGateFor(
+  nodeId: string,
+  cascadeId: string,
+  positions: { position: number; entryProtocol: string | null; nodes: { nodeId: string }[] }[],
+): Promise<{ entryUserGate?: Map<string, Set<number>> }> {
+  const entry = positions.find((p) => p.position === 0);
+  if (!entry || !entry.nodes.some((n) => n.nodeId === nodeId)) return {};
+  if (entryReachesCascadeOnlyThroughChain(entry.entryProtocol)) return {};
+
+  const memberships = await prisma.groupMember.findMany({
+    where: { user: { deletedAt: null, status: 'active' } },
+    select: { userId: true, groupId: true },
+  });
+  const groupsOf = new Map<string, string[]>();
+  for (const m of memberships) (groupsOf.get(m.userId) ?? groupsOf.set(m.userId, []).get(m.userId)!).push(m.groupId);
+  const reachedBy = await bindingsReachedBySquads([...new Set(memberships.map((m) => m.groupId))], { nodeId });
+  const reaches = (g: string) => (reachedBy.get(g)?.length ?? 0) > 0;
+
+  const bySet = new Map<string, string[]>();
+  for (const [userId, groups] of groupsOf) {
+    if (!groups.some(reaches)) continue;
+    const key = [...groups].sort().join(',');
+    (bySet.get(key) ?? bySet.set(key, []).get(key)!).push(userId);
+  }
+
+  const gate = new Map<string, Set<number>>();
+  for (const [key, users] of bySet) {
+    const groups = key.split(',');
+    const reach = new Map([[nodeId, new Set(groups.filter(reaches))]]);
+    const profiles = (await getRouteProfilesByEntryNode([nodeId], groups, reach)).get(nodeId) ?? [];
+    const tags = new Set(profiles.filter((p) => p.cascadeId === cascadeId).map((p) => p.tag));
+    for (const u of users) gate.set(u, tags);
+  }
+  return { entryUserGate: gate };
 }
 
 /**

@@ -23,17 +23,13 @@ import { prisma } from '../../prisma.js';
  */
 export type UserReach = Map<string, Map<string, string[]>>;
 
-export async function reachOfUsers(userIds: string[], opts: { nodeId?: string } = {}): Promise<UserReach> {
-  const out: UserReach = new Map();
-  if (userIds.length === 0) return out;
-
-  const memberships = await prisma.groupMember.findMany({
-    where: { userId: { in: userIds } },
-    select: { userId: true, groupId: true },
-  });
-  const groupIds = [...new Set(memberships.map((m) => m.groupId))];
-  if (groupIds.length === 0) return out;
-
+/** Per squad, the bindings it reaches (the rule above), on one node or all. */
+export async function bindingsReachedBySquads(
+  groupIds: string[],
+  opts: { nodeId?: string } = {},
+): Promise<Map<string, { id: string; nodeId: string }[]>> {
+  const reachedBy = new Map<string, { id: string; nodeId: string }[]>();
+  if (groupIds.length === 0) return reachedBy;
   const [grants, hostGrants, bindings] = await Promise.all([
     prisma.groupProfile.findMany({ where: { groupId: { in: groupIds } }, select: { groupId: true, profileId: true } }),
     prisma.groupHost.findMany({ where: { groupId: { in: groupIds } }, select: { groupId: true, hostId: true } }),
@@ -53,23 +49,43 @@ export async function reachOfUsers(userIds: string[], opts: { nodeId?: string } 
   const hostsOf = new Map<string, Set<string>>();
   for (const h of hostGrants) (hostsOf.get(h.groupId) ?? hostsOf.set(h.groupId, new Set()).get(h.groupId)!).add(h.hostId);
 
-  // Per squad, the bindings it reaches: computed once per squad, not per user.
-  const reachedBy = new Map<string, typeof bindings>();
   for (const g of groupIds) {
     const profiles = profilesOf.get(g);
     if (!profiles) continue;
     const narrowed = hostsOf.get(g);
     reachedBy.set(
       g,
-      bindings.filter(
-        (b) =>
-          profiles.has(b.profileId) &&
-          b.hosts.length > 0 &&
-          (!narrowed || b.hosts.some((h) => narrowed.has(h.id))),
-      ),
+      bindings
+        .filter(
+          (b) =>
+            profiles.has(b.profileId) &&
+            b.hosts.length > 0 &&
+            (!narrowed || b.hosts.some((h) => narrowed.has(h.id))),
+        )
+        .map((b) => ({ id: b.id, nodeId: b.nodeId })),
     );
   }
+  return reachedBy;
+}
 
+/**
+ * `userIds` null = every active user. Passed as a filter rather than a list on
+ * the paths that cover the whole roster (the push, the entry gate): a list of
+ * 30 000 ids is past Postgres's 32 767 bind parameters once the query adds its
+ * own.
+ */
+export async function reachOfUsers(userIds: string[] | null, opts: { nodeId?: string } = {}): Promise<UserReach> {
+  const out: UserReach = new Map();
+  if (userIds !== null && userIds.length === 0) return out;
+
+  const memberships = await prisma.groupMember.findMany({
+    where:
+      userIds === null
+        ? { user: { deletedAt: null, status: 'active' } }
+        : { userId: { in: userIds } },
+    select: { userId: true, groupId: true },
+  });
+  const reachedBy = await bindingsReachedBySquads([...new Set(memberships.map((m) => m.groupId))], opts);
   for (const m of memberships) {
     for (const b of reachedBy.get(m.groupId) ?? []) {
       const byNode = out.get(m.userId) ?? out.set(m.userId, new Map()).get(m.userId)!;

@@ -85,6 +85,30 @@ const givenList = (e: ExitAclInput[number]): string[] => e.directionIds ?? e.exi
 async function exitAclRows(groupId: string, exitAcl: ExitAclInput): Promise<ExitRow[]> {
   const live = exitAcl.filter((e) => givenList(e).length > 0);
   if (live.length === 0) return [];
+  /**
+   * A-134: narrowing the ways out of a cascade entered through hysteria or
+   * AmneziaWG is refused. Such an entry hands every user to the chain as one
+   * socks user (hysteria) or by its interface (AWG), the chain picks the way
+   * out, and nothing on the node can tell one squad's users from another's:
+   * the narrowing would be words on the squad screen and nothing on the node.
+   * Switching such a cascade off for a squad (an empty list) stays allowed.
+   */
+  const throughChain = await prisma.cascadePosition.findMany({
+    where: {
+      position: 0,
+      cascadeId: { in: live.map((e) => e.cascadeId) },
+      entryProtocol: { in: ['hysteria', 'amneziawg'] },
+    },
+    select: { entryProtocol: true, cascade: { select: { name: true } } },
+  });
+  if (throughChain.length > 0) {
+    const c = throughChain[0]!;
+    throw new SquadExitAclError(
+      `cascade "${c.cascade.name}" is entered through ${c.entryProtocol}, which hands every user to the chain ` +
+        `without telling them apart, so its ways out cannot be narrowed for a squad. Switch the cascade on or off ` +
+        `for the squad instead.`,
+    );
+  }
   const directions = await prisma.cascadeDirection.findMany({
     where: { cascadeId: { in: live.map((e) => e.cascadeId) } },
     select: { id: true, cascadeId: true, nodes: { select: { nodeId: true } } },

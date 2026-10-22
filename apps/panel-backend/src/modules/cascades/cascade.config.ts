@@ -1182,6 +1182,12 @@ export interface TopologyInput {
   /** Phase 9.3: the ordinal of the cascade's entry policy, the route policy
    *  for the entry's users who cannot pick one. Absent = none (plain). */
   entryPolicyOrdinal?: number;
+  /**
+   * A-134: at an xray ENTRY, the tags each user may take (user id = the xray
+   * email -> allowed tags), as the subscription hands them out. Absent = no
+   * gate, the drawing as before. See applyEntryUserGate for what is drawn.
+   */
+  entryUserGate?: Map<string, Set<number>>;
 }
 
 /**
@@ -1305,6 +1311,81 @@ function linkClientEmail(directionTag: number, fromNodeId: string): string {
  * Returns null when the node carries no links at all (not part of this cascade,
  * or a direction with an empty pool).
  */
+/**
+ * A-134: the entry's rules gated by WHO may take each tag.
+ *
+ * The tag in a user's UUID is chosen by the client, and xray lets the client
+ * change it: authentication ignores those bytes, routing reads them. So a
+ * squad narrowed to NL, a policy granted to one squad, a cascade switched off
+ * for a squad, Auto kept from narrowed users: all of that held only in which
+ * UUID the subscription handed out. Rewrite four hex digits and any tag of the
+ * entry was yours.
+ *
+ * Now, for every tag some user of the entry may NOT take:
+ *   - each rule naming it carries `user` = the users who may (the email is the
+ *     panel's user id). A rule naming several tags is split by who may take
+ *     which, so a policy rule or the direction rule keeps its place in the
+ *     list (first match wins, and the policy domains stay ahead of the way out);
+ *   - one trap at the end sends those tags to `blocked`. Whoever is not listed
+ *     falls into it, including a user the push has not seen yet: the gate is
+ *     closed by default, never open. A tag nobody may take loses its rules and
+ *     lands in the trap whole.
+ * A tag every user of the entry may take is drawn as before, without a list.
+ *
+ * ⚠ Never an empty `user` list: xray drops an empty condition, and the rule
+ * would then match EVERYONE. A group with no users is dropped instead.
+ *
+ * Allow lists rather than deny lists, though a deny list can be shorter: a deny
+ * rule has to sit above the policy rules, and an allowed user then has nowhere
+ * to go but the same rules unlisted, which are open to the users the panel has
+ * not pushed yet. Measured for the cost: 30 000 users, five directions all
+ * gated with every user listed: 13.4 MB, xray -test 1.3 s (A-134 estimate).
+ */
+export function applyEntryUserGate(
+  rules: Record<string, unknown>[],
+  allowedTagsOf: Map<string, Set<number>>,
+): Record<string, unknown>[] {
+  const users = [...allowedTagsOf.keys()].sort();
+  const tagsOf = (r: Record<string, unknown>): number[] | null =>
+    typeof r.vlessRoute === 'string' ? r.vlessRoute.split(',').map(Number) : null;
+
+  // Who may take each tag drawn here; null = everybody (no gate).
+  const allowed = new Map<number, string[] | null>();
+  for (const r of rules) {
+    for (const t of tagsOf(r) ?? []) {
+      if (allowed.has(t)) continue;
+      const list = users.filter((u) => allowedTagsOf.get(u)!.has(t));
+      allowed.set(t, list.length === users.length && users.length > 0 ? null : list);
+    }
+  }
+
+  const out: Record<string, unknown>[] = [];
+  for (const r of rules) {
+    const tags = tagsOf(r);
+    if (!tags || tags.every((t) => allowed.get(t) === null)) {
+      out.push(r);
+      continue;
+    }
+    // Split by who may take which tag, keeping the rule's place.
+    const groups = new Map<string, { tags: number[]; users: string[] | null }>();
+    for (const t of tags) {
+      const list = allowed.get(t) ?? null;
+      const key = list === null ? '*' : list.join(',');
+      (groups.get(key) ?? groups.set(key, { tags: [], users: list }).get(key)!).tags.push(t);
+    }
+    for (const g of groups.values()) {
+      if (g.users !== null && g.users.length === 0) continue;
+      out.push({ ...r, vlessRoute: g.tags.join(','), ...(g.users !== null ? { user: g.users } : {}) });
+    }
+  }
+
+  const gatedTags = [...allowed.entries()].filter(([, list]) => list !== null).map(([t]) => t);
+  if (gatedTags.length > 0) {
+    out.push({ type: 'field', vlessRoute: gatedTags.sort((a, b) => a - b).join(','), outboundTag: 'blocked' });
+  }
+  return out;
+}
+
 export function buildTopologyFragmentsForNode(
   nodeId: string,
   input: TopologyInput,
@@ -1576,6 +1657,11 @@ export function buildTopologyFragmentsForNode(
       needsObservatory = true;
       routingRules.push({ ...gate, balancerTag: AUTO_BALANCER_TAG });
     }
+  }
+
+  if (isEntry && input.entryUserGate) {
+    const gated = applyEntryUserGate(routingRules, input.entryUserGate);
+    routingRules.splice(0, routingRules.length, ...gated);
   }
 
   return {
