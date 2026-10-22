@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -89,16 +90,50 @@ echo http.handlers.file_server; ` + big + "\n",
 	}
 }
 
-// No bootstrap pipes into `grep -q` any more: the race of E33 in any of them.
+// No shell script of the project pipes into `grep -q` any more: the race of
+// E33 in any of them. Every script here runs under `set -o pipefail`, so the
+// rule is the tree, not a list: the bootstraps of this agent and, since A-104
+// (22.10, four live cases in the installers and the backup), the repository's
+// own scripts/ too. A new script is covered the day it is added.
 func TestNoBootstrapPipesIntoGrepQ(t *testing.T) {
 	pipe := regexp.MustCompile(`\|\s*grep\s+(-[A-Za-z]*q|-q)`)
+	var files []string
+	for _, root := range []string{"scripts", filepath.Join("..", "..", "scripts")} {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() && strings.HasSuffix(path, ".sh") {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
+		}
+	}
+	// A walk that found nothing would pass for the wrong reason.
 	for _, name := range bootstraps {
-		for i, line := range strings.Split(readScript(t, name), "\n") {
+		if !slices.Contains(files, filepath.Join("scripts", name)) {
+			t.Fatalf("the walk missed %s", name)
+		}
+	}
+	for _, want := range []string{"install-iceslab.sh", "install-iceslab-node.sh", filepath.Join("ops", "iceslab-backup.sh")} {
+		if !slices.Contains(files, filepath.Join("..", "..", "scripts", want)) {
+			t.Fatalf("the walk missed scripts/%s", want)
+		}
+	}
+	for _, path := range files {
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(blob), "\n") {
 			if strings.HasPrefix(strings.TrimSpace(line), "#") {
 				continue
 			}
 			if pipe.MatchString(line) {
-				t.Errorf("%s:%d pipes into grep -q under pipefail: %s", name, i+1, strings.TrimSpace(line))
+				t.Errorf("%s:%d pipes into grep -q under pipefail: %s", filepath.ToSlash(path), i+1, strings.TrimSpace(line))
 			}
 		}
 	}

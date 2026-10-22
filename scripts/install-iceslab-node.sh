@@ -485,9 +485,14 @@ do_uninstall() {
   log "Removing source checkout ($ICESLAB_NODE_DIR)"
   rm -rf "$ICESLAB_NODE_DIR"
 
-  if command -v ufw >/dev/null && ufw status | grep -q "${NODE_PORT}/tcp"; then
-    log "Removing UFW allow rule for ${NODE_PORT}/tcp"
-    ufw --force delete allow "${NODE_PORT}/tcp" >/dev/null || true
+  # The rules into a variable first, never `| grep -q` (E33): under pipefail
+  # grep leaving early can kill ufw with SIGPIPE and the rule is left behind.
+  if command -v ufw >/dev/null; then
+    ufw_rules=$(ufw status 2>/dev/null || true)
+    if grep -q "${NODE_PORT}/tcp" <<<"$ufw_rules"; then
+      log "Removing UFW allow rule for ${NODE_PORT}/tcp"
+      ufw --force delete allow "${NODE_PORT}/tcp" >/dev/null || true
+    fi
   fi
 }
 

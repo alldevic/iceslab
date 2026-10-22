@@ -609,8 +609,12 @@ if ! docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" up -d; the
   fail "docker compose up failed, see the backend log above"
 fi
 for i in $(seq 1 60); do
-  if docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
-       wget -qO- http://127.0.0.1:3000/health 2>/dev/null | grep -q '"status":"ok"'; then
+  # The answer into a variable first, never `| grep -q` (E33): under pipefail
+  # grep leaving at the first match can kill the writer with SIGPIPE, and a
+  # healthy backend then reads as "not yet".
+  health=$(docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
+       wget -qO- http://127.0.0.1:3000/health 2>/dev/null || true)
+  if grep -q '"status":"ok"' <<<"$health"; then
     ok "backend healthy in ${i}s"
     break
   fi
