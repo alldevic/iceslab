@@ -105,10 +105,40 @@ type serverConfig struct {
 // internally as protobuf at `/etc/mita/server.conf.pb`, we never see
 // or touch that file directly.
 func renderConfig(inbound InboundConfig, users []User) ([]byte, error) {
-	if err := inbound.validate(); err != nil {
+	return renderMulti([]InboundConfig{inbound}, inbound, users)
+}
+
+// renderMulti renders every inbound as its own pair of port bindings in ONE
+// mita config: mita 3.37.0 listens on every binding of `portBindings`, and its
+// `users` are the server's, one list for all of them (docs/server-install.md).
+// MTU and the logging level are per process, so they come from `base` and the
+// inbounds, which mtuConflict has already made agree.
+func renderMulti(inbounds []InboundConfig, base InboundConfig, users []User) ([]byte, error) {
+	if len(inbounds) == 0 {
+		return nil, errors.New("mieru: no inbound to render")
+	}
+	for _, in := range inbounds {
+		if err := in.validate(); err != nil {
+			return nil, err
+		}
+	}
+	if err := base.validate(); err != nil {
 		return nil, err
 	}
-	cfg := inbound.withDefaults()
+	cfg := base.withDefaults()
+	cfg.MTU = inbounds[0].withDefaults().MTU
+	seen := make(map[int]bool, len(inbounds))
+	bindings := make([]portBinding, 0, 2*len(inbounds))
+	for _, in := range inbounds {
+		port := in.withDefaults().ListenPort
+		if seen[port] {
+			return nil, fmt.Errorf("mieru: two inbounds on port %d", port)
+		}
+		seen[port] = true
+		bindings = append(bindings,
+			portBinding{Port: port, Protocol: "TCP"},
+			portBinding{Port: port, Protocol: "UDP"})
+	}
 
 	jsonUsers := make([]jsonUser, 0, len(users))
 	for _, u := range users {
@@ -122,10 +152,7 @@ func renderConfig(inbound InboundConfig, users []User) ([]byte, error) {
 	}
 
 	doc := serverConfig{
-		PortBindings: []portBinding{
-			{Port: cfg.ListenPort, Protocol: "TCP"},
-			{Port: cfg.ListenPort, Protocol: "UDP"},
-		},
+		PortBindings: bindings,
 		Users:        jsonUsers,
 		MTU:          cfg.MTU,
 		LoggingLevel: cfg.LoggingLevel,

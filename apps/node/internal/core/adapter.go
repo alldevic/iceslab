@@ -136,6 +136,15 @@ type InboundReconciler interface {
 	RetainInbounds(keep []string) error
 }
 
+// IdentifiedApplier is an OPTIONAL interface for an adapter that holds several
+// inbounds whose wire config carries no id of its own (mieru's is the MTU
+// alone). The server calls it instead of ApplyInbound, with the id it already
+// has from the push, so the adapter keys its inbounds by the same id
+// RetainInbounds later hands it. Agent-internal: the wire is unchanged.
+type IdentifiedApplier interface {
+	ApplyIdentifiedInbound(id string, port int, cfg json.RawMessage) error
+}
+
 // PolicyReceiver is an OPTIONAL interface for adapters that can render the
 // node-level routing policy (see dto.NodePolicy).
 //

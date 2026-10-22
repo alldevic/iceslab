@@ -1097,7 +1097,13 @@ func (s *Server) applyPushOutcome(
 				"protocol", ib.Protocol, "engine", ib.ResolvedEngine())
 			continue
 		}
-		if err := matched.ApplyInbound(ib.Port, ib.Config); err != nil {
+		apply := matched.ApplyInbound
+		if ia, ok := matched.(core.IdentifiedApplier); ok {
+			apply = func(port int, cfg json.RawMessage) error {
+				return ia.ApplyIdentifiedInbound(ib.ID, port, cfg)
+			}
+		}
+		if err := apply(ib.Port, ib.Config); err != nil {
 			s.logger.Error("adapter ApplyInbound failed",
 				"core", matched.Name(), "inboundId", ib.ID, "err", err)
 			o.refused[i] = true
