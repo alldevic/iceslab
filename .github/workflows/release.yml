@@ -1,0 +1,121 @@
+name: Release
+
+# A GitHub release for every `v*` tag, created only after CI passed ON THAT TAG.
+#
+# Why workflow_run and not `on: push: tags`: a push-triggered workflow starts
+# the moment the tag lands, next to CI rather than after it, and a job cannot
+# `needs` a job in another workflow. Waiting by polling would hold a runner for
+# the length of the backend suite. workflow_run fires when CI is DONE and says
+# how it ended, so a red tag never gets a release, and re-running a fixed CI
+# run on the same tag produces it.
+#
+# ⚠ workflow_run uses this file as it is on the DEFAULT branch (main). A change
+# here takes effect once it reaches main, not on develop.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+# Nothing by default; the one job below asks for exactly what it writes.
+permissions: {}
+
+# Two CI completions for one tag (a re-run) must not race each other to create
+# the same release.
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release notes + GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A tag push to THIS repository whose CI run passed. For a tag push
+    # `head_branch` carries the tag name. Pull request runs, fork runs and
+    # branch pushes all stop here.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    permissions:
+      contents: write
+    env:
+      # Through env, never spliced into a script: a ref name is text somebody
+      # typed, and inside `run:` it would be code.
+      TAG: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # Full history and tags: the previous tag and the commit list both come
+      # from git.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # CI passed on the commit the tag pointed at THEN. If the tag has been
+      # moved since, this run is about a commit nobody releases, and the CI run
+      # for the new position will come here on its own.
+      - name: Tag still points at the commit CI tested
+        run: |
+          set -euo pipefail
+          actual=$(git rev-list -n1 "refs/tags/$TAG")
+          if [ "$actual" != "$HEAD_SHA" ]; then
+            echo "::error::$TAG now points at $actual, CI passed on $HEAD_SHA; nothing released"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # The script decides the range, the flags and the text, with nobody
+      # reading it before it is public. Its assertions run first.
+      - name: Test the notes script
+        run: node --test .github/scripts/release-notes.test.mjs
+
+      - name: Release notes
+        id: notes
+        run: node .github/scripts/release-notes.mjs "$TAG" "$RUNNER_TEMP/notes.md"
+
+      # Create, or rewrite on a re-run. `--latest` is decided by the script, not
+      # left to GitHub, whose default hands Latest to whatever was published
+      # last, a hotfix of the previous minor included. A pre-release never gets
+      # it either way.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+          LATEST: ${{ steps.notes.outputs.latest }}
+        run: |
+          set -euo pipefail
+          flags=(--title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+                 "--prerelease=$PRERELEASE" "--latest=$LATEST")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" "${flags[@]}"
+            echo "action=updated" >> "$GITHUB_ENV"
+          else
+            gh release create "$TAG" --verify-tag "${flags[@]}"
+            echo "action=created" >> "$GITHUB_ENV"
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          PREVIOUS: ${{ steps.notes.outputs.previous }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+          LATEST: ${{ steps.notes.outputs.latest }}
+          HEADER: ${{ steps.notes.outputs.header }}
+          FOLDED: ${{ steps.notes.outputs.folded }}
+        run: |
+          {
+            echo "### release $TAG"
+            echo ""
+            echo "- release: ${action:-not published}"
+            echo "- commits since: ${PREVIOUS:-the first commit}"
+            echo "- pre-release: ${PRERELEASE:--}, Latest: ${LATEST:--}"
+            echo "- hand-written header (.github/release-notes/$TAG.md): ${HEADER:--}"
+            echo "- dependency updates folded into one line: ${FOLDED:--}"
+          } >> "$GITHUB_STEP_SUMMARY"
