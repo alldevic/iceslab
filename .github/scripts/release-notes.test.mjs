@@ -7,6 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   IMAGES,
+  agentBlock,
   assemble,
   foldDependencyBumps,
   imageBlock,
@@ -138,6 +139,16 @@ test('9. образы: версия без v и sha из семи знаков, 
   assert.match(rc, /iceslab-node:sha-abcdef1\n/);
   assert.match(rc, /not moved/);
   assert.match(imageBlock('v0.3.0', 'abcdef1', 'o'), /`:0\.3` and `:latest`/);
+});
+
+test('9b. блок бинарей агента: четыре файла тега и сверка подписи ключом из репо', () => {
+  const b = agentBlock('v0.3.0-rc.1', 'icecompany-tech/iceslab');
+  for (const f of ['iceslab-node-linux-amd64', 'iceslab-node-linux-arm64', 'SHA256SUMS', 'SHA256SUMS.sig']) {
+    assert.match(b, new RegExp(f.replace('.', '\\.')));
+  }
+  assert.match(b, /releases\/download\/v0\.3\.0-rc\.1\/SHA256SUMS\.sig/);
+  assert.match(b, /\/icecompany-tech\/iceslab\/v0\.3\.0-rc\.1\/\.github\/agent-keys\/primary\.pub/);
+  assert.match(b, /openssl pkeyutl -verify -pubin -inkey primary\.pub -rawin/);
 });
 
 test('10. имена образов те же, что публикует job docker в ci.yml', () => {

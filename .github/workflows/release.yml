@@ -1,6 +1,7 @@
 name: Release
 
-# A GitHub release for every `v*` tag, created only after CI passed ON THAT TAG.
+# A GitHub release for every `v*` tag, created only after CI passed ON THAT TAG,
+# with the node agent's binaries and their signed checksums attached.
 #
 # Why workflow_run and not `on: push: tags`: a push-triggered workflow starts
 # the moment the tag lands, next to CI rather than after it, and a job cannot
@@ -11,12 +12,27 @@ name: Release
 #
 # ⚠ workflow_run uses this file as it is on the DEFAULT branch (main). A change
 # here takes effect once it reaches main, not on develop.
+#
+# Three jobs, so that the signing key is in exactly one of them:
+#   agent-build  linux/amd64 and linux/arm64, each built twice and compared;
+#   agent-sign   SHA256SUMS over both, signed with the agent key (environment
+#                `release`: the owner approves every tag, and only main may
+#                use it), plus build provenance for people;
+#   release      the notes and the GitHub release, with the four files.
+# A pre-release tag (v0.3.0-rc.1) takes the same path; only the release's
+# pre-release flag differs.
+#
+# The agent key is ed25519. Its private half is the secret AGENT_SIGNING_KEY of
+# the `release` environment; the public halves the agent trusts are
+# .github/agent-keys/primary.pub and backup.pub. The BACKUP private key is
+# never in GitHub: the owner keeps it offline, and it signs only the release
+# that replaces a leaked primary.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
 
-# Nothing by default; the one job below asks for exactly what it writes.
+# Nothing by default; each job asks for exactly what it writes.
 permissions: {}
 
 # Two CI completions for one tag (a re-run) must not race each other to create
@@ -25,26 +41,198 @@ concurrency:
   group: release-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
+env:
+  # Through env, never spliced into a script: a ref name is text somebody
+  # typed, and inside `run:` it would be code.
+  TAG: ${{ github.event.workflow_run.head_branch }}
+  HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+  # The exact Go the agent is built with. go.mod says only the minor, and
+  # setup-go would take whatever patch is newest that day: the same tag built
+  # a month apart would then be different bytes. Moves together with go.mod,
+  # ci.yml (node-agent, go lint), apps/node/Dockerfile and the node installer.
+  AGENT_GO_VERSION: '1.22.12'
+
 jobs:
-  release:
-    name: release notes + GitHub release
+  agent-build:
+    name: agent binary (linux/${{ matrix.arch }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     # A tag push to THIS repository whose CI run passed. For a tag push
     # `head_branch` carries the tag name. Pull request runs, fork runs and
-    # branch pushes all stop here.
+    # branch pushes all stop here, and the jobs below need this one.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'v')
     permissions:
+      contents: read
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      # Full history and tags: the tag check below reads the tag itself.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # CI passed on the commit the tag pointed at THEN. If the tag has been
+      # moved since, this run is about a commit nobody releases, and the CI run
+      # for the new position will come here on its own. The shape check goes
+      # first because the tag ends up inside -ldflags.
+      - name: Tag still points at the commit CI tested
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::\"$TAG\" is not a release tag"
+            exit 1
+          fi
+          actual=$(git rev-list -n1 "refs/tags/$TAG")
+          if [ "$actual" != "$HEAD_SHA" ]; then
+            echo "::error::$TAG now points at $actual, CI passed on $HEAD_SHA; nothing released"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.AGENT_GO_VERSION }}
+          cache: false
+
+      # The flags of apps/node/Dockerfile and the installer, plus the version
+      # and an empty build id. Built twice with the build cache cleared in
+      # between: a release binary that does not come out the same twice from
+      # the same tree cannot be checked by anyone rebuilding it later.
+      - name: Build twice and compare
+        env:
+          ARCH: ${{ matrix.arch }}
+        working-directory: apps/node
+        run: |
+          set -euo pipefail
+          name="iceslab-node-linux-${ARCH}"
+          for pass in a b; do
+            go clean -cache
+            mkdir -p "$RUNNER_TEMP/$pass"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath \
+              -ldflags="-s -w -buildid= -X main.version=${TAG}" \
+              -o "$RUNNER_TEMP/$pass/$name" .
+          done
+          a=$(sha256sum < "$RUNNER_TEMP/a/$name" | cut -d' ' -f1)
+          b=$(sha256sum < "$RUNNER_TEMP/b/$name" | cut -d' ' -f1)
+          if [ "$a" != "$b" ]; then
+            echo "::error::$name differs between two builds of one tree: $a vs $b"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/dist"
+          cp "$RUNNER_TEMP/a/$name" "$RUNNER_TEMP/dist/"
+          {
+            echo "### $name"
+            echo ""
+            echo "- go ${AGENT_GO_VERSION}, version ${TAG}, sha256 \`$a\`, the same on a second build"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-${{ matrix.arch }}
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  agent-sign:
+    name: agent checksums, signature, provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [agent-build]
+    # The key lives in this environment: required reviewer (the owner) and
+    # deployment limited to main, the branch a workflow_run runs from.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # Only the public keys, to check the signature against what the agent
+      # trusts. No history needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          sparse-checkout: .github/agent-keys
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: agent-*
+          path: dist
+          merge-multiple: true
+
+      # SHA256SUMS in the format `sha256sum -c` reads, signed as raw ed25519
+      # (64 bytes, OpenSSL 3 on the runner), which the agent checks with Go's
+      # crypto/ed25519 and nothing else. The key file exists only for the one
+      # command and only for this user.
+      #
+      # Then the signature is checked against .github/agent-keys/primary.pub,
+      # the key the agent has built in: a secret replaced by another key would
+      # otherwise sign releases no node accepts.
+      - name: Checksums and signature
+        env:
+          AGENT_SIGNING_KEY: ${{ secrets.AGENT_SIGNING_KEY }}
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          if [ -z "$AGENT_SIGNING_KEY" ]; then
+            echo "::error::AGENT_SIGNING_KEY is not set in the release environment"
+            exit 1
+          fi
+          sha256sum iceslab-node-linux-amd64 iceslab-node-linux-arm64 > SHA256SUMS
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$AGENT_SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -inkey "$key" -rawin -in SHA256SUMS -out SHA256SUMS.sig
+          rm -f "$key"
+          size=$(stat -c %s SHA256SUMS.sig)
+          if [ "$size" != 64 ]; then
+            echo "::error::the signature is $size bytes, an ed25519 signature is 64"
+            exit 1
+          fi
+          openssl pkeyutl -verify -pubin -inkey "$GITHUB_WORKSPACE/.github/agent-keys/primary.pub" \
+            -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
+          {
+            echo "### agent checksums"
+            echo ""
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+            echo "- SHA256SUMS.sig: ed25519, checked against .github/agent-keys/primary.pub"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # For people: `gh attestation verify <file> --repo <owner>/<repo>`. The
+      # agent does not use it. Attestations exist for public repositories on
+      # every plan and for private ones only on Enterprise, hence the guard
+      # (the release sandbox is private).
+      - name: Build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/iceslab-node-linux-amd64
+            dist/iceslab-node-linux-arm64
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-release
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  release:
+    name: release notes + GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [agent-sign]
+    permissions:
       contents: write
-    env:
-      # Through env, never spliced into a script: a ref name is text somebody
-      # typed, and inside `run:` it would be code.
-      TAG: ${{ github.event.workflow_run.head_branch }}
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       # Full history and tags: the previous tag and the commit list both come
       # from git.
@@ -54,21 +242,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # CI passed on the commit the tag pointed at THEN. If the tag has been
-      # moved since, this run is about a commit nobody releases, and the CI run
-      # for the new position will come here on its own.
-      - name: Tag still points at the commit CI tested
-        run: |
-          set -euo pipefail
-          actual=$(git rev-list -n1 "refs/tags/$TAG")
-          if [ "$actual" != "$HEAD_SHA" ]; then
-            echo "::error::$TAG now points at $actual, CI passed on $HEAD_SHA; nothing released"
-            exit 1
-          fi
-
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-release
+          path: ${{ runner.temp }}/agent
 
       # The script decides the range, the flags and the text, with nobody
       # reading it before it is public. Its assertions run first.
@@ -82,7 +263,8 @@ jobs:
       # Create, or rewrite on a re-run. `--latest` is decided by the script, not
       # left to GitHub, whose default hands Latest to whatever was published
       # last, a hotfix of the previous minor included. A pre-release never gets
-      # it either way.
+      # it either way. The four agent files go up with --clobber, so a re-run
+      # replaces them together with the text.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,6 +282,10 @@ jobs:
             gh release create "$TAG" --verify-tag "${flags[@]}"
             echo "action=created" >> "$GITHUB_ENV"
           fi
+          a="$RUNNER_TEMP/agent"
+          gh release upload "$TAG" --clobber \
+            "$a/iceslab-node-linux-amd64" "$a/iceslab-node-linux-arm64" \
+            "$a/SHA256SUMS" "$a/SHA256SUMS.sig"
 
       - name: Summary
         if: always()
@@ -118,4 +304,5 @@ jobs:
             echo "- pre-release: ${PRERELEASE:--}, Latest: ${LATEST:--}"
             echo "- hand-written header (.github/release-notes/$TAG.md): ${HEADER:--}"
             echo "- dependency updates folded into one line: ${FOLDED:--}"
+            echo "- agent: iceslab-node-linux-amd64, iceslab-node-linux-arm64, SHA256SUMS, SHA256SUMS.sig"
           } >> "$GITHUB_STEP_SUMMARY"
