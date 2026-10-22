@@ -37,7 +37,11 @@ import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { COUNTRIES, countryName } from '@/lib/domain/countries';
 import { ROUTING_PRESET_IDS, presetKey } from '@/lib/domain/routingPresets';
+import { apiErrorMessage } from '@/lib/net/client';
 import {
+  aclIdsOf,
+  canonicalAcl,
+  exitAclInvalid,
   isDuplicateExitAcl,
   setCascadeOn,
   squadCascades,
@@ -84,11 +88,12 @@ function sameSet(a: string[], b: string[]): boolean {
   return a.every((x) => seen.has(x));
 }
 
+/** Compared as the server stores it: the ids an entry allows (aclIdsOf), whichever list carries them. */
 function sameExitAcl(a: SquadExitAclEntry[], b: SquadExitAclEntry[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((entry) => {
     const other = b.find((e) => e.cascadeId === entry.cascadeId);
-    return other ? sameSet(entry.exitNodeIds, other.exitNodeIds) : false;
+    return other ? sameSet(aclIdsOf(entry), aclIdsOf(other)) : false;
   });
 }
 
@@ -215,7 +220,9 @@ export function SquadEditPage() {
     setHwidLimit(squad.hwidDeviceLimit ?? '');
     // Every list defaults to empty rather than trusting the response to carry
     // it: a missing field must not become `undefined` in a comparison below.
-    setExitAcl(squad.exitAcl ?? []);
+    // One list per entry (canonicalAcl): the server answers exitNodeIds beside
+    // directionIds for showing pools, and that list must not go back (A-149).
+    setExitAcl(canonicalAcl(squad.exitAcl ?? []));
     setPolicyIds(squad.policyIds ?? []);
     setProfileIds(squad.profileIds ?? []);
     setHostIds(squad.hostIds ?? []);
@@ -284,11 +291,19 @@ export function SquadEditPage() {
       // One entry per cascade is what setCascadeOn writes, so this 400 means
       // the form and the server disagree: read the squad again and say so.
       const duplicate = isDuplicateExitAcl(err);
-      if (duplicate) qc.invalidateQueries({ queryKey: ['squads'] });
+      // A direction gone while the form was open: the server names it, and
+      // the cascades are read again (A-149).
+      const invalid = exitAclInvalid(err);
+      if (duplicate || invalid !== null) {
+        qc.invalidateQueries({ queryKey: ['squads'] });
+        qc.invalidateQueries({ queryKey: ['cascades'] });
+      }
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
-        message: duplicate ? t('squadEdit.exitAclDuplicate') : err instanceof Error ? err.message : String(err),
+        // The server's words otherwise: a refusal to narrow (an entry on
+        // hysteria or AWG, A-134) says itself.
+        message: duplicate ? t('squadEdit.exitAclDuplicate') : invalid || apiErrorMessage(err),
       });
     },
   });
@@ -533,7 +548,7 @@ export function SquadEditPage() {
    */
   function toggleExit(c: SquadCascade, exit: SquadCascadeExit) {
     if (c.off) return;
-    const next = toggleCascadeExit(exitAcl, c.id, c.exits, exit);
+    const next = toggleCascadeExit(exitAcl, c.id, c.aclField, c.exits, exit);
     if (next === null) {
       setLastExitRefused(c.id);
       return;
@@ -544,12 +559,12 @@ export function SquadEditPage() {
   }
 
   /**
-   * «Выдавать каскад»: off is `exitNodeIds: []`, on drops the entry or puts
-   * back the narrowing the switch parked (setCascadeOn). One entry per cascade
+   * «Выдавать каскад»: off is an empty list, on drops the entry or puts back
+   * the narrowing the switch parked (setCascadeOn). One entry per cascade
    * either way.
    */
   function switchCascade(c: SquadCascade, on: boolean) {
-    const next = setCascadeOn(exitAcl, c.id, on, c.exits.flatMap((e) => e.nodeIds), parkedExits[c.id]);
+    const next = setCascadeOn(exitAcl, c.id, on, c.aclField, c.exits.flatMap((e) => e.aclIds), parkedExits[c.id]);
     setParkedExits((prev) => {
       const rest = { ...prev };
       delete rest[c.id];

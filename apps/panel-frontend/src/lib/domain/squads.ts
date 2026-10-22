@@ -1,10 +1,17 @@
 import type { RoutingPresetId } from '@iceslab/shared';
 import { api } from '@/lib/net/client';
 
-/** A4 increment 2, per-cascade exit allow-list entry. */
+/**
+ * Per-cascade exit allow-list entry, keyed by DIRECTION since 39c266a (A-149):
+ * a node replaced or added under a direction changes nobody's access. The
+ * server answers both lists, `exitNodeIds` only for showing pools; the screen
+ * sends `directionIds`, and `exitNodeIds` only for a legacy hop cascade, which
+ * has no directions to name. An empty list is the cascade switched off.
+ */
 export interface SquadExitAclEntry {
   cascadeId: string;
-  exitNodeIds: string[];
+  directionIds?: string[];
+  exitNodeIds?: string[];
 }
 
 export interface Squad {

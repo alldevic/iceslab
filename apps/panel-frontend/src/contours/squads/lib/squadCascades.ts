@@ -19,11 +19,37 @@ import type { Squad, SquadExitAclEntry } from '@/lib/domain/squads';
  * line to carry a tag.
  *
  * ON OR OFF IS THE SQUAD'S CHOICE, one `exitAcl` entry per cascade, three
- * states (BACK 24.09, squads.schemas.ts):
- *   no entry            every direction;
- *   exitNodeIds [x, …]  only those exits;
- *   exitNodeIds []      off: no line of the cascade is built for the squad.
+ * states (BACK 24.09, squads.schemas.ts), keyed by DIRECTION since 39c266a
+ * (A-149):
+ *   no entry             every direction;
+ *   directionIds [x, …]  only those directions;
+ *   directionIds []      off: no line of the cascade is built for the squad.
+ * A legacy hop cascade has no directions and keeps the node list
+ * (`exitNodeIds`), the only key it has.
  */
+
+/** Which list of an entry names the exits of this cascade. */
+export type AclField = 'directionIds' | 'exitNodeIds';
+
+/** The ids an entry allows, whichever list it carries; empty is «off». */
+export function aclIdsOf(entry: SquadExitAclEntry): string[] {
+  return entry.directionIds && entry.directionIds.length > 0 ? entry.directionIds : (entry.exitNodeIds ?? []);
+}
+
+/**
+ * The acl as the screen keeps and sends it: one list per entry. The server
+ * answers both lists for a direction entry (`exitNodeIds` for showing pools);
+ * kept as is, the node list would go back on the wire and compare as a change.
+ */
+export function canonicalAcl(acl: SquadExitAclEntry[]): SquadExitAclEntry[] {
+  return acl.map((e) =>
+    e.directionIds && e.directionIds.length > 0
+      ? { cascadeId: e.cascadeId, directionIds: e.directionIds }
+      : e.exitNodeIds && e.exitNodeIds.length > 0
+        ? { cascadeId: e.cascadeId, exitNodeIds: e.exitNodeIds }
+        : { cascadeId: e.cascadeId, directionIds: [] },
+  );
+}
 
 export interface SquadCascadeExit {
   key: string;
@@ -31,6 +57,8 @@ export interface SquadCascadeExit {
   countryCode: string | null;
   nodeIds: string[];
   nodeNames: string[];
+  /** What the acl names this exit by: the direction id, or the hop's nodes on a legacy cascade. */
+  aclIds: string[];
   /** Handed out: every direction when the cascade has no acl entry, none when it is off. */
   allowed: boolean;
 }
@@ -61,7 +89,9 @@ export interface SquadCascade {
    */
   entryCountries: string[] | null;
   exits: SquadCascadeExit[];
-  /** Switched off for this squad (`exitNodeIds: []`): nothing of it is built. */
+  /** The acl list this cascade is keyed by: directions, or nodes on a legacy hop cascade. */
+  aclField: AclField;
+  /** Switched off for this squad (an empty list): nothing of it is built. */
   off: boolean;
   /** On, with an acl entry: only `allowed` exits go out. */
   exitsNarrowed: boolean;
@@ -97,10 +127,13 @@ interface World {
 export function cascadeShape(c: Pick<Cascade, 'hops' | 'positions' | 'directions'>): {
   entryNodeIds: string[];
   directions: { key: string; tag: number; countryCode: string | null; nodeIds: string[] }[];
+  /** v4: the directions are rows with ids the acl names; legacy: hops, named by node. */
+  byDirection: boolean;
 } {
   if (c.positions.length > 0) {
     const entry = c.positions.find((p) => p.position === 0);
     return {
+      byDirection: true,
       entryNodeIds: (entry?.nodeIds ?? []).filter(Boolean),
       directions: c.directions.map((d) => ({
         key: d.id,
@@ -112,6 +145,7 @@ export function cascadeShape(c: Pick<Cascade, 'hops' | 'positions' | 'directions
   }
   const hops = [...c.hops].sort((a, b) => a.position - b.position);
   return {
+    byDirection: false,
     entryNodeIds: hops[0] ? [hops[0].nodeId] : [],
     directions: hops.slice(1).map((h, i) => ({ key: h.id, tag: i + 1, countryCode: null, nodeIds: [h.nodeId] })),
   };
@@ -176,16 +210,23 @@ export function squadCascades(squadId: string | null, state: SquadState, world: 
             : 'no-granted-host';
 
       const acl = state.exitAcl.find((e) => e.cascadeId === c.id);
-      const off = acl !== undefined && acl.exitNodeIds.length === 0;
+      const allowedIds = acl ? aclIdsOf(acl) : [];
+      const off = acl !== undefined && allowedIds.length === 0;
       const entryCodes = shape.entryNodeIds.map((id) => nodeById.get(id)?.countryCode ?? null);
-      const exits = shape.directions.map((d) => ({
-        key: d.key,
-        tag: d.tag,
-        countryCode: d.countryCode ?? nodeById.get(d.nodeIds[0] ?? '')?.countryCode ?? null,
-        nodeIds: d.nodeIds,
-        nodeNames: d.nodeIds.map((id) => nodeById.get(id)?.name ?? id.slice(0, 8)),
-        allowed: acl ? d.nodeIds.some((id) => acl.exitNodeIds.includes(id)) : true,
-      }));
+      const exits = shape.directions.map((d) => {
+        // A direction on a named outbound has no nodes; by direction id it is
+        // as grantable as any other (A-149), which by node it never was.
+        const aclIds = shape.byDirection ? [d.key] : d.nodeIds;
+        return {
+          key: d.key,
+          tag: d.tag,
+          countryCode: d.countryCode ?? nodeById.get(d.nodeIds[0] ?? '')?.countryCode ?? null,
+          nodeIds: d.nodeIds,
+          nodeNames: d.nodeIds.map((id) => nodeById.get(id)?.name ?? id.slice(0, 8)),
+          aclIds,
+          allowed: acl ? aclIds.some((id) => allowedIds.includes(id)) : true,
+        };
+      });
 
       // Policies other squads that reach this cascade grant on it, which this
       // squad does not: the offer «grant "No ads" to this squad».
@@ -210,6 +251,7 @@ export function squadCascades(squadId: string | null, state: SquadState, world: 
             ? [...new Set(entryCodes.map((cc) => cc.toUpperCase()))]
             : null,
         exits,
+        aclField: shape.byDirection ? 'directionIds' : 'exitNodeIds',
         off,
         exitsNarrowed: acl !== undefined && !off,
         handedOut,
@@ -225,12 +267,13 @@ export function squadCascades(squadId: string | null, state: SquadState, world: 
 
 /**
  * Narrow or widen a cascade's directions in `exitAcl`, the way the server
- * reads it: no entry = every direction; a list = only those exit nodes.
+ * reads it: no entry = every direction; a list = only those (by direction id,
+ * or by node on a legacy hop cascade: `field`).
  *
  *   - a direction of a cascade with no entry is switched off by writing every
- *     OTHER direction's nodes;
- *   - switching a direction back on adds its nodes; when that makes every
- *     direction allowed, the entry goes (the unrestricted form, not a full list);
+ *     OTHER direction;
+ *   - switching a direction back on adds it; when that makes every direction
+ *     allowed, the entry goes (the unrestricted form, not a full list);
  *   - the last allowed direction cannot be taken off: an empty list means the
  *     whole cascade is off, and that is the switch's job (null = refused, the
  *     caller says why);
@@ -240,30 +283,30 @@ export function squadCascades(squadId: string | null, state: SquadState, world: 
 export function toggleCascadeExit(
   acl: SquadExitAclEntry[],
   cascadeId: string,
-  exits: Pick<SquadCascadeExit, 'nodeIds' | 'allowed'>[],
-  target: Pick<SquadCascadeExit, 'nodeIds' | 'allowed'>,
+  field: AclField,
+  exits: Pick<SquadCascadeExit, 'aclIds' | 'allowed'>[],
+  target: Pick<SquadCascadeExit, 'aclIds' | 'allowed'>,
 ): SquadExitAclEntry[] | null {
-  const allNodes = [...new Set(exits.flatMap((e) => e.nodeIds))];
+  const all = [...new Set(exits.flatMap((e) => e.aclIds))];
   const current = acl.find((e) => e.cascadeId === cascadeId);
-  if (current && current.exitNodeIds.length === 0) return acl;
-  const allowedNodes = new Set(current ? current.exitNodeIds : allNodes);
-  if (target.allowed) target.nodeIds.forEach((id) => allowedNodes.delete(id));
-  else target.nodeIds.forEach((id) => allowedNodes.add(id));
-  if (allowedNodes.size === 0) return null;
+  if (current && aclIdsOf(current).length === 0) return acl;
+  const allowed = new Set(current ? aclIdsOf(current) : all);
+  if (target.allowed) target.aclIds.forEach((id) => allowed.delete(id));
+  else target.aclIds.forEach((id) => allowed.add(id));
+  if (allowed.size === 0) return null;
   const rest = acl.filter((e) => e.cascadeId !== cascadeId);
-  if (allNodes.every((id) => allowedNodes.has(id))) return rest;
-  return [...rest, { cascadeId, exitNodeIds: allNodes.filter((id) => allowedNodes.has(id)) }];
+  if (all.every((id) => allowed.has(id))) return rest;
+  return [...rest, { cascadeId, [field]: all.filter((id) => allowed.has(id)) }];
 }
 
 /**
  * Switch a cascade on or off for a squad: one `exitAcl` entry per cascade,
  * the server refuses two (400 «One exitAcl entry per cascade»).
  *
- *   - off writes `{ cascadeId, exitNodeIds: [] }` in place of whatever was
- *     there, and hands back the narrowed list it replaced as `parked`, so the
- *     form can put it back;
+ *   - off writes an empty list in place of whatever was there, and hands back
+ *     the narrowed list it replaced as `parked`, so the form can put it back;
  *   - on drops the entry (every exit), or returns the parked list when there
- *     is one. The parked list is read against today's exits: nodes that left
+ *     is one. The parked list is read against today's exits: ids that left
  *     the cascade are dropped, and a list that covers every exit, or none, is
  *     no narrowing at all.
  *
@@ -273,21 +316,22 @@ export function setCascadeOn(
   acl: SquadExitAclEntry[],
   cascadeId: string,
   on: boolean,
-  exitNodeIds: string[],
+  field: AclField,
+  allIds: string[],
   parked?: string[],
 ): { acl: SquadExitAclEntry[]; parked?: string[] } {
   const current = acl.find((e) => e.cascadeId === cascadeId);
-  const isOff = current !== undefined && current.exitNodeIds.length === 0;
+  const isOff = current !== undefined && aclIdsOf(current).length === 0;
   const rest = acl.filter((e) => e.cascadeId !== cascadeId);
   if (!on) {
     if (isOff) return { acl, parked };
-    return { acl: [...rest, { cascadeId, exitNodeIds: [] }], parked: current?.exitNodeIds };
+    return { acl: [...rest, { cascadeId, [field]: [] }], parked: current ? aclIdsOf(current) : undefined };
   }
   if (!isOff) return { acl };
-  const all = new Set(exitNodeIds);
+  const all = new Set(allIds);
   const back = [...new Set(parked ?? [])].filter((id) => all.has(id));
   if (back.length === 0 || back.length === all.size) return { acl: rest };
-  return { acl: [...rest, { cascadeId, exitNodeIds: back }] };
+  return { acl: [...rest, { cascadeId, [field]: back }] };
 }
 
 /**
@@ -301,8 +345,24 @@ export function squadExitsSummary(
 ): { off: number; narrowed: number } | 'all' {
   const known = acl.filter((e) => cascadeIds.has(e.cascadeId));
   if (known.length === 0) return 'all';
-  const off = known.filter((e) => e.exitNodeIds.length === 0).length;
+  const off = known.filter((e) => aclIdsOf(e).length === 0).length;
   return { off, narrowed: known.length - off };
+}
+
+/**
+ * 400 EXIT_ACL_INVALID (39c266a): an entry names a direction the cascade does
+ * not have (deleted while the form was open), or a node under none. The
+ * server's sentence, for the screen. Input checked first.
+ */
+export function exitAclInvalid(err: unknown): string | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const res = (err as { response?: unknown }).response;
+  if (typeof res !== 'object' || res === null) return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 400 || typeof data !== 'object' || data === null) return null;
+  const { error, message } = data as { error?: unknown; message?: unknown };
+  if (error !== 'EXIT_ACL_INVALID') return null;
+  return typeof message === 'string' ? message : '';
 }
 
 /** Is this the 400 the server gives for two exitAcl entries of one cascade.
