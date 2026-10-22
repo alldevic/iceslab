@@ -179,6 +179,7 @@ export const hosts = {
     needPort: 'Set a port',
     needNode: 'Pick a node',
     portConflictFallback: 'That port is already taken on this node.',
+    adapterSlotTaken: 'This node already has a {{protocol}} inbound on the {{engine}} engine: "{{heldBy}}". The node holds one such inbound; a second would silently replace the first.',
     goneWhileEditing:
       'The profile or the node is gone. The lists were refreshed, pick again before saving.',
     sniMismatchToast: 'This SNI is not one the node serves.',

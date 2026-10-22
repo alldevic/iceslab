@@ -65,6 +65,7 @@ import {
 } from '@/lib/domain/nodeCoreFit';
 import { NodeCoreLine } from '@/ui/NodeCoreLine';
 import { CoreGateRefusalLine } from '@/ui/CoreGateRefusalLine';
+import { adapterSlotRefusal, type AdapterSlotRefusal } from '@/lib/domain/adapterSlot';
 import {
   checkNodePort,
   portRefusalOf,
@@ -191,6 +192,8 @@ export function HostEditPage() {
   const [dirty, setDirty] = useState(false);
   /** Отказ гейта ядра после «Сохранить» (409 CORE_NOT_ON_NODE / CORE_VERSION_REFUSED). */
   const [coreRefusal, setCoreRefusal] = useState<CoreGateRefusal | null>(null);
+  /** A-055: 409 ADAPTER_SLOT_TAKEN, said under the picked node. */
+  const [slotRefusal, setSlotRefusal] = useState<AdapterSlotRefusal | null>(null);
 
   const currentBinding = bindings.find((b) => b.id === (bindingId ?? host?.bindingId));
   // On create there is no binding yet, so the chosen node is the only source.
@@ -498,6 +501,7 @@ export function HostEditPage() {
       setDirty(false);
       setSniExpected(null);
       setCoreRefusal(null);
+      setSlotRefusal(null);
       notifications.show({
         color: 'green',
         message: isNew ? t('hostEdit.created') : t('hostEdit.saved'),
@@ -558,6 +562,13 @@ export function HostEditPage() {
       const core = coreGateRefusal(err);
       if (core && nodes.some((n) => n.name === core.nodeName)) {
         setCoreRefusal(core);
+        return;
+      }
+      // The adapter already serves another host on this node (A-055). Read
+      // before the port fallback, which takes any 409 for a port clash.
+      const slot = adapterSlotRefusal(err);
+      if (slot) {
+        setSlotRefusal(slot);
         return;
       }
       const conflict = portConflict(err);
@@ -1303,6 +1314,7 @@ export function HostEditPage() {
                         setDirty(true);
                         // Отказ был про прежний выбор ноды.
                         setCoreRefusal(null);
+                        setSlotRefusal(null);
                       }}
                       style={{
                         width: '100%',
@@ -1373,6 +1385,13 @@ export function HostEditPage() {
                   {r.awgWhy && coreRefusal?.nodeName !== r.node.name && (
                     <Box style={{ padding: '0 14px 10px 46px' }}>
                       <Text style={{ fontSize: 11, lineHeight: '15px', color: RED }}>{r.awgWhy}</Text>
+                    </Box>
+                  )}
+                  {r.selected && slotRefusal && (
+                    <Box style={{ padding: '0 14px 12px 46px' }}>
+                      <Text style={{ fontSize: 11, lineHeight: '15px', color: RED }}>
+                        {t('hostEdit.adapterSlotTaken', { ...slotRefusal })}
+                      </Text>
                     </Box>
                   )}
                   {coreRefusal?.nodeName === r.node.name && (

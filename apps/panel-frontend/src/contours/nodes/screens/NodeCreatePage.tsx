@@ -63,6 +63,7 @@ export function NodeCreatePage() {
     fleetFailure,
     profilesFailure,
     watchFailure,
+    slotHeld,
   } = useNodeCreateForm();
 
   return (
@@ -339,7 +340,7 @@ export function NodeCreatePage() {
         />
       )}
 
-      {step === 1 && <StepHosts form={form} installWords={installWords} selected={selected} groupOpen={groupOpen} setGroupOpen={setGroupOpen} profilesQuery={profilesQuery} profilesFailure={profilesFailure} groups={groups} portByProfile={portByProfile} toggle={toggle} toggleAllCan={toggleAllCan} />}
+      {step === 1 && <StepHosts form={form} installWords={installWords} selected={selected} groupOpen={groupOpen} setGroupOpen={setGroupOpen} profilesQuery={profilesQuery} profilesFailure={profilesFailure} groups={groups} slotHeld={slotHeld} portByProfile={portByProfile} toggle={toggle} toggleAllCan={toggleAllCan} />}
 
       {step === 2 && registered && <StepInstall registered={registered} showPayload={showPayload} setShowPayload={setShowPayload} copied={copied} isOnline={isOnline} waited={waited} copy={copy} downloadPayload={downloadPayload} watchFailure={watchFailure} />}
 

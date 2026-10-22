@@ -27,6 +27,7 @@ import {
 import { coreVersionRefusal } from '@/lib/domain/coreVersions';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
+import { adapterSlotRefusal, addOnePerSlot, slotHeldBy } from '@/lib/domain/adapterSlot';
 import { buildHardening } from '@/contours/nodes/lib/nodeInstall';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import { installIntentLabel, nodeIntentWords } from '@/lib/domain/engines';
@@ -220,14 +221,21 @@ export function useNodeCreateForm() {
     return map;
   }, [selected]);
 
+  // A-055: a node holds one inbound per adapter (protocol and engine, AWG by
+  // generation; native xray takes many). A profile whose adapter a picked one
+  // already holds is not offered: the server would refuse the second binding.
+  const slotHeld = useMemo(() => slotHeldBy(groups.can, selected), [groups.can, selected]);
+
   function toggle(id: string) {
+    if (!selected.includes(id) && slotHeld.has(id)) return;
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   function toggleAllCan() {
     const ids = groups.can.map((p) => p.id);
-    const allOn = ids.length > 0 && ids.every((id) => selected.includes(id));
-    setSelected((prev) => (allOn ? prev.filter((x) => !ids.includes(x)) : [...new Set([...prev, ...ids])]));
+    // «All» is all that can stand together: one per adapter.
+    const allOn = ids.length > 0 && ids.every((id) => selected.includes(id) || slotHeld.has(id));
+    setSelected((prev) => (allOn ? prev.filter((x) => !ids.includes(x)) : addOnePerSlot(prev, groups.can)));
   }
 
   function goNext() {
@@ -298,7 +306,8 @@ export function useNodeCreateForm() {
         } catch (err) {
           // The server's reason beside the name: «port taken» and «core
           // refused» are different fixes.
-          failed.push(`${profile.name}: ${apiErrorMessage(err)}`);
+          const slot = adapterSlotRefusal(err);
+          failed.push(`${profile.name}: ${slot ? t('hostEdit.adapterSlotTaken', { ...slot }) : apiErrorMessage(err)}`);
         }
       }
       if (failed.length > 0) {
@@ -395,6 +404,7 @@ export function useNodeCreateForm() {
     setEnginesRefusal,
     groups,
     portByProfile,
+    slotHeld,
     toggle,
     toggleAllCan,
     goNext,

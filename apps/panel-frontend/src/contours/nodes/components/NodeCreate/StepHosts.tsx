@@ -24,11 +24,12 @@ export function StepHosts({
   setGroupOpen,
   profilesQuery,
   profilesFailure,
+  slotHeld,
   groups,
   portByProfile,
   toggle,
   toggleAllCan,
-}: Pick<Wizard, 'form' | 'installWords' | 'selected' | 'groupOpen' | 'setGroupOpen' | 'profilesQuery' | 'profilesFailure' | 'groups' | 'portByProfile' | 'toggle' | 'toggleAllCan'>) {
+}: Pick<Wizard, 'form' | 'installWords' | 'selected' | 'groupOpen' | 'setGroupOpen' | 'profilesQuery' | 'profilesFailure' | 'groups' | 'slotHeld' | 'portByProfile' | 'toggle' | 'toggleAllCan'>) {
   const { t } = useTranslation();
 
   return (
@@ -74,15 +75,18 @@ export function StepHosts({
                   count={`${groups.can.filter((p) => selected.includes(p.id)).length}/${groups.can.length}`}
                   open={groupOpen.can}
                   onToggleOpen={() => setGroupOpen((s) => ({ ...s, can: !s.can }))}
-                  allChecked={groups.can.length > 0 && groups.can.every((p) => selected.includes(p.id))}
+                  allChecked={groups.can.length > 0 && groups.can.every((p) => selected.includes(p.id) || slotHeld.has(p.id))}
                   onToggleAll={toggleAllCan}
                 >
                   {groups.can.map((p) => {
                     const checked = selected.includes(p.id);
+                    // A-055: its adapter is held by a picked profile; the node
+                    // would refuse a second inbound on it, so it is not offered.
+                    const heldBy = checked ? undefined : slotHeld.get(p.id);
                     return (
                       <HostRow
                         key={p.id}
-                        selectable
+                        selectable={heldBy === undefined}
                         checked={checked}
                         onClick={() => toggle(p.id)}
                         name={p.name}
@@ -90,6 +94,8 @@ export function StepHosts({
                         trailing={
                           checked ? (
                             <Chip>{t('nodeCreate.portChip', { port: portByProfile.get(p.id) })}</Chip>
+                          ) : heldBy !== undefined ? (
+                            <Chip color={AMBER}>{t('nodeCreate.slotHeld', { name: heldBy })}</Chip>
                           ) : null
                         }
                       />
