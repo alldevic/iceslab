@@ -21,6 +21,24 @@ import { getProfileKeyImpact } from './profiles.key-impact.js';
 import { coreGateReply } from '../nodes/node-core-gate.js';
 import { AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
 import * as svc from './profiles.service.js';
+import { prisma } from '../../prisma.js';
+import { isRestrictedToken, keepStoredSecrets } from '../auth/token-secrets.js';
+
+/**
+ * The body of a PUT, with the server secrets a restricted token left out of
+ * `field` taken from the stored row (A-109): that token reads without them,
+ * and writing back what it read must not wipe the keys. On the edge of the
+ * request, before validation, so the gates see what will be stored.
+ */
+async function withStoredSecrets(
+  req: import('fastify').FastifyRequest,
+  field: 'config' | 'overrides',
+  stored: () => Promise<unknown>,
+): Promise<unknown> {
+  const body = req.body as Record<string, unknown> | null | undefined;
+  if (!isRestrictedToken(req) || !body || typeof body !== 'object' || !(field in body)) return req.body;
+  return { ...body, [field]: keepStoredSecrets(body[field], await stored()) };
+}
 
 const KeypairQuery = z.object({
   protocol: z.enum(['xray', 'amneziawg']).default('amneziawg'),
@@ -125,7 +143,8 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
 
   app.put('/api/profiles/:id', auth, async (req, reply) => {
     const { id } = ProfileIdParamSchema.parse(req.params);
-    const input = UpdateProfileSchema.parse(req.body);
+    const input = UpdateProfileSchema.parse(await withStoredSecrets(req, 'config', async () =>
+      (await prisma.profile.findUnique({ where: { id }, select: { config: true } }))?.config));
     try {
       return reply.send(await svc.updateProfile(id, input));
     } catch (err) {
@@ -309,7 +328,8 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
 
   app.put('/api/bindings/:id', auth, async (req, reply) => {
     const { id } = BindingIdParamSchema.parse(req.params);
-    const input = UpdateBindingSchema.parse(req.body);
+    const input = UpdateBindingSchema.parse(await withStoredSecrets(req, 'overrides', async () =>
+      (await prisma.profileNodeBinding.findUnique({ where: { id }, select: { overrides: true } }))?.overrides));
     try {
       return reply.send(await svc.updateBinding(id, input));
     } catch (err) {

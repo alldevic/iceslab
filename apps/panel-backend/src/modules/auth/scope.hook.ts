@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { redactRepliesOf } from './token-secrets.js';
 
 /**
  * Map an authenticated API-token request to the scope it requires. Returns null
@@ -21,6 +22,10 @@ export function requiredScopeFor(method: string, url: string | undefined): strin
   if (url === '/api/users/:id/endpoints' && (method === 'GET' || method === 'HEAD')) {
     return 'sub:read';
   }
+  // The chain password is read behind the same right as the bootstrap that
+  // installs it (nodes/chain-secret.ts promises so), which is a POST:
+  // nodes:write, not nodes:read (A-109).
+  if (url === '/api/nodes/:id/chain-secret') return 'nodes:write';
   const resource = url.slice('/api/'.length).split('/')[0];
   if (!resource) return null;
   const verb = method === 'GET' || method === 'HEAD' ? 'read' : 'write';
@@ -111,4 +116,6 @@ export async function enforceScopes(
         : 'API token scope does not grant access to this route',
     });
   }
+  // Let in: what it reads goes out without server secrets (A-109).
+  redactRepliesOf(request, reply);
 }
