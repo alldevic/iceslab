@@ -1,4 +1,4 @@
-import { ACTIONS_COL, SELECT_COL, USER_COLUMNS } from '@/contours/users/lib/usersTable';
+import { ACTIONS_COL, ROW_SELECTION, SELECT_COL, USER_COLUMNS } from '@/contours/users/lib/usersTable';
 import { ColumnsPanel } from '@/contours/users/components/UsersTable/ColumnsPanel';
 import { columnStyles } from '@/contours/users/lib/columnLayout';
 import { UserRow } from '@/contours/users/components/UsersTable/UserRow';
@@ -14,6 +14,7 @@ import { IconChevronLeft, IconChevronRight, IconUserOff } from '@tabler/icons-re
 import { MONO_LABEL } from '@/contours/users/lib/textStyles';
 import { SelectBox } from '@/contours/users/components/UsersTable/SelectBox';
 import { UsersEmpty } from '@/contours/users/components/UsersTable/UsersEmpty';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { IconArrowsMaximize, IconArrowsMinimize, IconBaselineDensityLarge, IconBaselineDensityMedium, IconBaselineDensitySmall } from '@tabler/icons-react';
 import { DENSITY_PADDING } from '@/contours/users/lib/usersTable';
 import { useTranslation } from 'react-i18next';
@@ -27,7 +28,7 @@ import type { UsersPageState } from '@/contours/users/screens/useUsersPage';
  * vertical lanes and a long name cannot shift the traffic bars of its own row.
  */
 export function UsersTable(props: Pick<UsersPageState,
-  'toggleSort' | 'authStatusQuery' | 'squadNameById' | 'pagedUsers' | 'totalUsers' | 'stats'
+  'toggleSort' | 'authStatusQuery' | 'squadNameById' | 'pagedUsers' | 'totalUsers' | 'stats' | 'usersFailure'
   | 'totalPages' | 'safePage' | 'rangeStart' | 'rangeEnd' | 'handleRevoke' | 'handleRotate'
   | 'handleResetTraffic' | 'handleDelete' | 'setEditing' | 'setPage' | 'rowsPerPage'
   | 'setRowsPerPage' | 'sort' | 'order' | 'colFilters' | 'setColFilter' | 'statusFilter'
@@ -139,7 +140,7 @@ export function UsersTable(props: Pick<UsersPageState,
           {t('usersTable.viewSortedBy', { column: t(`users.table.${sort === 'expireAt' ? 'expires' : sort === 'traffic' ? 'used' : 'username'}`) })}
         </Text>
         <Box style={{ flex: 1 }} />
-        {selected.size > 0 && (
+        {ROW_SELECTION && selected.size > 0 && (
           <Text style={{ ...MONO_LABEL, color: SNOW }}>
             {t('usersTable.selectedCount', { count: selected.size })}
           </Text>
@@ -210,32 +211,34 @@ export function UsersTable(props: Pick<UsersPageState,
               ...(fullscreen ? { position: 'sticky', top: 0, zIndex: 4 } : {}),
             }}
           >
-            <Box
-              style={{
-                width: SELECT_COL,
-                flexShrink: 0,
-                display: 'flex',
-                alignItems: 'center',
-                position: 'sticky',
-                left: 0,
-                zIndex: 3,
-                backgroundColor: WELL,
-              }}
-            >
-              <SelectBox
-                checked={allOnPage}
-                onChange={() =>
-                  setSelected((s) => {
-                    const next = new Set(s);
-                    for (const u of pagedUsers) {
-                      if (allOnPage) next.delete(u.id);
-                      else next.add(u.id);
-                    }
-                    return next;
-                  })
-                }
-              />
-            </Box>
+            {ROW_SELECTION && (
+              <Box
+                style={{
+                  width: SELECT_COL,
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  position: 'sticky',
+                  left: 0,
+                  zIndex: 3,
+                  backgroundColor: WELL,
+                }}
+              >
+                <SelectBox
+                  checked={allOnPage}
+                  onChange={() =>
+                    setSelected((s) => {
+                      const next = new Set(s);
+                      for (const u of pagedUsers) {
+                        if (allOnPage) next.delete(u.id);
+                        else next.add(u.id);
+                      }
+                      return next;
+                    })
+                  }
+                />
+              </Box>
+              )}
             {visibleColumns.map((column, i) => (
               <HeadCell key={column.id} column={column} cellStyle={headStyles[i]!} {...props} />
             ))}
@@ -259,7 +262,14 @@ export function UsersTable(props: Pick<UsersPageState,
           {/* Nothing at all and nothing that matched are different answers, so
               they get different screens: the first explains the list, the
               second only says the filter is too narrow. */}
-          {pagedUsers.length === 0 &&
+          {/* The page did not arrive: said with a retry, before either empty
+              screen, which would otherwise claim «nobody» or «no match». */}
+          {props.usersFailure && (
+            <Box style={{ padding: 16 }}>
+              <LoadFailed message={props.usersFailure.message} onRetry={props.usersFailure.onRetry} />
+            </Box>
+          )}
+          {!props.usersFailure && pagedUsers.length === 0 &&
             (stats.total === 0 ? (
               <UsersEmpty openCreate={props.openCreate} />
             ) : (

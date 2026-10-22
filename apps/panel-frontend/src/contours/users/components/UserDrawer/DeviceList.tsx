@@ -1,3 +1,4 @@
+import { apiErrorMessage } from '@/lib/net/client';
 import { IconDeviceDesktop, IconX } from '@tabler/icons-react';
 import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { DISPLAY, GROUND, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contours/users/lib/colors';
@@ -25,7 +26,7 @@ export function DeviceList({ userId, limit }: { userId: string; limit: number | 
       notifications.show({
         color: 'red',
         title: t('common.deleteError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 

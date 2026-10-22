@@ -7,7 +7,9 @@ import { LABEL } from '@/contours/users/lib/userForm';
 import { CopyButton } from '@/ui/CopyButton';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import { fetchAuthStatus } from '@/lib/auth/api';
-import { subscriptionUrl } from '@/lib/domain/users';
+import { subscriptionLink } from '@/contours/users/lib/subscriptionLink';
+import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
@@ -44,7 +46,10 @@ export function SubscriptionCard({
   const protocols = userProtocols(endpoints);
   const [picked, setPicked] = useState<string | null>(null);
   const only = picked && protocols.includes(picked as never) ? picked : null;
-  const url = withProtocols(subscriptionUrl(user.subscriptionToken, status.data?.panel), only ? [only] : []);
+  // No link while the panel's address is unknown (subscriptionLink): a
+  // fallback host in the copy button is the wrong link for the client.
+  const link = subscriptionLink(user.subscriptionToken, status, apiErrorMessage);
+  const url = link.kind === 'ready' ? withProtocols(link.url, only ? [only] : []) : null;
 
   return (
     <Box
@@ -82,6 +87,13 @@ export function SubscriptionCard({
         />
       )}
 
+      {link.kind === 'failed' && (
+        <LoadFailedLine message={`${t('users.linkUnavailable')}: ${link.message}`} onRetry={link.onRetry} />
+      )}
+      {link.kind === 'loading' && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>{t('common.loading')}</Text>
+      )}
+      {url !== null && (
       <Box
         style={{
           display: 'flex',
@@ -114,6 +126,7 @@ export function SubscriptionCard({
         <CopyButton text={url} label={t('userDrawer.copy')} variant="solid" />
 
       </Box>
+      )}
       {only && (
         <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: CYAN }}>
           {t('userDrawer.subOnly', { protocol: only })}
@@ -121,13 +134,15 @@ export function SubscriptionCard({
       )}
 
       <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Action
-          href={url}
-          icon={<IconExternalLink size={12} stroke={1.7} color={MIST} />}
-          label={t('userDrawer.openAsClient')}
-          color="#8A9BB2"
-          edge={HAIRLINE}
-        />
+        {url !== null && (
+          <Action
+            href={url}
+            icon={<IconExternalLink size={12} stroke={1.7} color={MIST} />}
+            label={t('userDrawer.openAsClient')}
+            color="#8A9BB2"
+            edge={HAIRLINE}
+          />
+        )}
         <Action
           onClick={() => onRevoke(user)}
           icon={<IconRefresh size={12} stroke={1.7} color={RED} />}

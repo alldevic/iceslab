@@ -1,4 +1,5 @@
-﻿import { useDebouncedValue } from '@mantine/hooks';
+import { apiErrorMessage } from '@/lib/net/client';
+import { useDebouncedValue } from '@mantine/hooks';
 import { Text } from '@mantine/core';
 import type { StatusFilter } from '@/contours/users/lib/userStatus';
 import type { UpdateUserInput, User, UserFilters, UserSort } from '@/lib/domain/users';
@@ -14,6 +15,7 @@ import { useDisclosure } from '@mantine/hooks';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOverview } from '@/lib/domain/dashboard';
+import { loadFailure } from '@/lib/ui/loadView';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { useTranslation } from 'react-i18next';
 
@@ -234,27 +236,41 @@ export function useUsersPage() {
     return m;
   }, [squadsQuery.data]);
 
-  const pagedUsers = usersQuery.data?.users ?? [];
+  // The page did not arrive (spec frontend-users): said with a retry, not as
+  // «nobody yet» or «nothing matched». A failure under a placeholder counts
+  // too: the rows on screen would be the previous filter's.
+  const usersFailure =
+    usersQuery.isError && (usersQuery.data === undefined || usersQuery.isPlaceholderData)
+      ? { message: apiErrorMessage(usersQuery.error), onRetry: () => void usersQuery.refetch() }
+      : null;
+  const pagedUsers = usersFailure ? [] : (usersQuery.data?.users ?? []);
   const totalUsers = usersQuery.data?.total ?? 0;
+  // Side lists the toolbar and the rows read; a failed one is said once.
+  const sideFailure =
+    [squadsQuery, tagsQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null;
 
+  // Counts come from the dashboard; without it they are unknown, not zero
+  // (spec frontend-users). 	otal falls back to the list's own total.
   const stats = useMemo(() => {
-    const byStatus = dashQuery.data?.users.byStatus ?? {};
+    const users = dashQuery.data?.users;
+    const byStatus = users?.byStatus;
     return {
-      total: dashQuery.data?.users.total ?? totalUsers,
-      active: byStatus.active ?? 0,
-      expired: byStatus.expired ?? 0,
-      limited: byStatus.limited ?? 0,
-      disabled: byStatus.disabled ?? 0,
+      total: users?.total ?? (usersQuery.data ? totalUsers : null),
+      active: byStatus ? (byStatus.active ?? 0) : null,
+      expired: byStatus ? (byStatus.expired ?? 0) : null,
+      limited: byStatus ? (byStatus.limited ?? 0) : null,
+      disabled: byStatus ? (byStatus.disabled ?? 0) : null,
     };
-  }, [dashQuery.data, totalUsers]);
+  }, [dashQuery.data, usersQuery.data, totalUsers]);
 
   // Topbar line: "/ USERS · 36 ACCOUNTS · 21 ACTIVE". `count` drives i18next
   // pluralization (one/few/many/other for RU), otherwise a single user reads
   // as "1 аккаунтов".
-  usePageMeta([
-    t('pageMeta.users', { count: stats.total }),
-    t('pageMeta.usersActive', { count: stats.active }),
-  ]);
+  usePageMeta(
+    stats.total === null || stats.active === null
+      ? [t('pageMeta.noData')]
+      : [t('pageMeta.users', { count: stats.total }), t('pageMeta.usersActive', { count: stats.active })],
+  );
 
   /**
    * Сменился любой серверный фильтр: возвращаемся на первую страницу, иначе
@@ -301,7 +317,7 @@ export function useUsersPage() {
       notifications.show({
         color: 'red',
         title: t('common.createError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -315,7 +331,7 @@ export function useUsersPage() {
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -329,7 +345,7 @@ export function useUsersPage() {
       notifications.show({
         color: 'red',
         title: t('common.deleteError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -342,7 +358,7 @@ export function useUsersPage() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -355,7 +371,7 @@ export function useUsersPage() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -368,7 +384,7 @@ export function useUsersPage() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -439,6 +455,8 @@ export function useUsersPage() {
     serverStatus,
     serverSearch,
     usersQuery,
+    usersFailure,
+    sideFailure,
     squadsQuery,
     tagsQuery,
     knownTags,

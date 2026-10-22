@@ -1,5 +1,5 @@
 import { isRoutingPresetId } from '@/lib/domain/routingPresets';
-import { ACTIONS_COL, SELECT_COL } from '@/contours/users/lib/usersTable';
+import { ACTIONS_COL, ROW_SELECTION, SELECT_COL } from '@/contours/users/lib/usersTable';
 import { AMBER, CARD, HAIRLINE, MIST, MOSS, RED, SNOW, VIOLET } from '@/contours/users/lib/colors';
 import { DISPLAY, MONO } from '@/contours/users/lib/textStyles';
 import { ActionIcon, Box, Menu, Text, Tooltip } from '@mantine/core';
@@ -11,7 +11,8 @@ import { TrafficBar } from '@/contours/users/components/UsersTable/TrafficBar';
 import { copyToClipboard } from '@/lib/ui/clipboard';
 import { expireRelative, formatBytes, trafficPercent } from '@/contours/users/lib/userFormat';
 import { presetKey } from '@/lib/domain/routingPresets';
-import { subscriptionUrl } from '@/lib/domain/users';
+import { subscriptionLink } from '@/contours/users/lib/subscriptionLink';
+import { apiErrorMessage } from '@/lib/net/client';
 import { useTranslation } from 'react-i18next';
 import { SquadPill } from '@/contours/users/components/UsersTable/SquadPill';
 import { relativeTime } from '@/lib/ui/relativeTime';
@@ -54,7 +55,10 @@ export function UserRow({
   const rowTint =
     compStatus === 'expired' ? `${RED}0A` : compStatus === 'limited' ? `${AMBER}0A` : undefined;
   const isPaused = compStatus === 'limited' || compStatus === 'expired';
-  const subUrl = subscriptionUrl(u.subscriptionToken, authStatusQuery.data?.panel);
+  // No link while the panel's address is unknown: a fallback host copied to a
+  // client is worse than none (subscriptionLink, spec frontend-users).
+  const link = subscriptionLink(u.subscriptionToken, authStatusQuery, apiErrorMessage);
+  const subUrl = link.kind === 'ready' ? link.url : null;
   const otherSquads = u.groupIds.filter((id) => id !== '00000000-0000-0000-0000-000000000001');
 
   /**
@@ -257,7 +261,7 @@ export function UserRow({
     description: () => <Plain title={u.description ?? undefined}>{u.description ?? '-'}</Plain>,
     telegramId: () => <Plain>{u.telegramId ?? '-'}</Plain>,
     email: () => <Plain title={u.email ?? undefined}>{u.email ?? '-'}</Plain>,
-    subLink: () => <Plain title={subUrl}>{subUrl}</Plain>,
+    subLink: () => <Plain title={subUrl ?? undefined}>{subUrl ?? t('users.linkUnavailable')}</Plain>,
     routing: () => (
       <Plain>
         {u.routingPreset
@@ -311,20 +315,24 @@ export function UserRow({
         borderBottom: `1px solid ${HAIRLINE}`,
       }}
     >
-      <Box
-        style={{
-          width: SELECT_COL,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          position: 'sticky',
-          left: 0,
-          zIndex: 3,
-          backgroundColor: rowTint ?? CARD,
-        }}
-      >
-        <SelectBox checked={selected.has(u.id)} onChange={() => toggleSelected(u.id)} />
-      </Box>
+      {/* Row selection waits for bulk actions (ROW_SELECTION): a tick that does
+          nothing reads as a promise the screen does not keep. */}
+      {ROW_SELECTION && (
+        <Box
+          style={{
+            width: SELECT_COL,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            position: 'sticky',
+            left: 0,
+            zIndex: 3,
+            backgroundColor: rowTint ?? CARD,
+          }}
+        >
+          <SelectBox checked={selected.has(u.id)} onChange={() => toggleSelected(u.id)} />
+        </Box>
+        )}
 
       {visibleColumns.map((column, i) => (
         <Box
@@ -360,13 +368,18 @@ export function UserRow({
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
-            <Menu.Item leftSection={<IconCopy size={14} />} onClick={() => copyToClipboard(subUrl)}>
-              {t('usersTable.actionCopySubUrl')}
+            <Menu.Item
+              leftSection={<IconCopy size={14} />}
+              disabled={subUrl === null}
+              onClick={() => subUrl && copyToClipboard(subUrl)}
+            >
+              {subUrl === null ? t('users.linkUnavailable') : t('usersTable.actionCopySubUrl')}
             </Menu.Item>
             <Menu.Item
               leftSection={<IconExternalLink size={14} />}
               component="a"
-              href={subUrl}
+              disabled={subUrl === null}
+              href={subUrl ?? undefined}
               target="_blank"
               rel="noopener noreferrer"
             >
