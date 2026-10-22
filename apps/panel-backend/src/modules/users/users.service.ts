@@ -9,7 +9,11 @@ import type {
   UpdateUserInput,
   ListUsersQuery,
   BulkUsersInput,
+  UserStatus as UserStatusSchema,
 } from './users.schemas.js';
+import type { z } from 'zod';
+
+type UserStatus = z.infer<typeof UserStatusSchema>;
 import { mapUserToPublic, type PublicUserDto } from './users.mapper.js';
 
 // ───── Domain errors ─────
@@ -191,8 +195,9 @@ export async function updateUser(
   const data: Prisma.UserUpdateInput = {};
   const changedFields: string[] = [];
 
-  if (input.status !== undefined) {
-    data.status = input.status;
+  const nextStatus = statusAfterEdit(existing, input);
+  if (nextStatus !== undefined) {
+    data.status = nextStatus;
     changedFields.push('status');
   }
   if (input.trafficLimitGb !== undefined) {
@@ -262,15 +267,64 @@ export async function updateUser(
   }
 
   // Status transition is a separate, more specific event
-  if (input.status && input.status !== existing.status) {
+  if (nextStatus && nextStatus !== existing.status) {
     eventBus.emit('user.status-changed', {
       userId: id,
       from: existing.status,
-      to: input.status,
+      to: nextStatus,
     });
   }
 
   return mapUserToPublic(updated, updated.traffic);
+}
+
+/**
+ * The status an edit leaves the user in, or undefined for no change.
+ *
+ * A-048. The status changed only when the input named one, so an extension
+ * (form, bulk extend, API) moved the date into the future and left the user
+ * `expired`: the subscription kept refusing and the crons never bring anyone
+ * back, they only pick active users. The same for a quota raised above what
+ * a `limited` user has used. Now an edit that clears the reason brings the
+ * user back by itself, the date or the quota alone is enough.
+ *
+ * And the other half (A-060, server side). `active` asked for a user whose
+ * date has still passed, or whose quota is still spent, is not active: the
+ * crons would flip it back within a minute, after the user had been rolled
+ * out to every node and taken off again. The screen sends `active` with any
+ * edit of an expired user, so that loop ran on a description change. Such a
+ * request lands on the status the facts give.
+ *
+ * `disabled` is the operator's word and is taken as said, both ways in.
+ */
+export function statusAfterEdit(
+  existing: {
+    status: string;
+    expireAt: Date | null;
+    trafficLimitBytes: bigint | null;
+    traffic?: { usedTrafficBytes: bigint } | null;
+  },
+  input: Pick<UpdateUserInput, 'status' | 'expireAt' | 'trafficLimitGb'>,
+  now: Date = new Date(),
+): UserStatus | undefined {
+  const expireAt =
+    input.expireAt !== undefined ? (input.expireAt ? new Date(input.expireAt) : null) : existing.expireAt;
+  const limit = input.trafficLimitGb !== undefined ? gbToBytes(input.trafficLimitGb) : existing.trafficLimitBytes;
+  const used = existing.traffic?.usedTrafficBytes ?? 0n;
+  const byFacts = (): UserStatus =>
+    expireAt && expireAt < now ? 'expired' : limit !== null && used >= limit ? 'limited' : 'active';
+
+  if (input.status === 'disabled') return 'disabled';
+  if (input.status === 'active') return byFacts();
+  if (input.status !== undefined) return input.status;
+  // Nothing asked: only a user held back by the date or the quota moves, and
+  // only when this edit touched what holds them.
+  const touched =
+    (existing.status === 'expired' && input.expireAt !== undefined) ||
+    (existing.status === 'limited' && input.trafficLimitGb !== undefined);
+  if (!touched) return undefined;
+  const next = byFacts();
+  return next === existing.status ? undefined : next;
 }
 
 export interface BulkResult {
