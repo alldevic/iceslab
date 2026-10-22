@@ -96,6 +96,9 @@ export const users = {
   },
 
   userDrawer: {
+    // A-210: 409 USERNAME_TAKEN и SUBSCRIPTION_TOKEN_TAKEN у своего поля.
+    usernameTaken: 'Имя уже занято другим юзером',
+    tokenTaken: 'Этот токен подписки уже у другого юзера',
     newTitle: 'Новый юзер',
     newSubtitle: 'Токен подписки и креды выпустятся при сохранении',
     editSubtitle: 'Изменения применятся при сохранении, ссылка подписки не поменяется',

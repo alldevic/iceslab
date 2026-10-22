@@ -20,17 +20,48 @@ describe('userSaveRefusal (spec frontend-users)', () => {
     ).toEqual({ fields: { email: 'Invalid email', expireDays: 'Invalid date' }, message: 'Bad' });
   });
 
-  it('409 CONFLICT и 404: словами сервера у формы', () => {
+  it('A-210: 409 USERNAME_TAKEN и SUBSCRIPTION_TOKEN_TAKEN у своего поля, словами панели', () => {
+    const say = (code: string) => `said ${code}`;
+    expect(
+      userSaveRefusal(res(409, { error: 'USERNAME_TAKEN', message: 'User "alice" already exists', field: 'username' }), say),
+    ).toEqual({ fields: { username: 'said USERNAME_TAKEN' }, message: null });
+    expect(
+      userSaveRefusal(res(409, { error: 'SUBSCRIPTION_TOKEN_TAKEN', message: 'taken', field: 'subscriptionToken' }), say),
+    ).toEqual({ fields: { subscriptionToken: 'said SUBSCRIPTION_TOKEN_TAKEN' }, message: null });
+    // Без `say` слова сервера, но у того же поля; поле берётся из кода, не из тела.
+    expect(userSaveRefusal(res(409, { error: 'USERNAME_TAKEN', message: 'taken', field: 'email' }))).toEqual({
+      fields: { username: 'taken' },
+      message: null,
+    });
+  });
+
+  it('неизвестный 409 (и CONFLICT старого сервера) и 404: словами сервера у формы', () => {
     expect(userSaveRefusal(res(409, { error: 'CONFLICT', message: 'User "alice" already exists' }))).toEqual({
       fields: {},
       message: 'User "alice" already exists',
     });
+    expect(userSaveRefusal(res(409, { error: 'SOMETHING_NEW', message: 'other' }), () => 'x')).toEqual({
+      fields: {},
+      message: 'other',
+    });
+    expect(userSaveRefusal(res(409, { error: 'toString', message: 'proto' }), () => 'x')).toEqual({
+      fields: {},
+      message: 'proto',
+    });
     expect(userSaveRefusal(res(404, { error: 'NOT_FOUND', message: 'user not found' }))?.message).toBe('user not found');
+  });
+
+  it('код занятости не с 409 не читается как занятость', () => {
+    expect(userSaveRefusal(res(400, { error: 'USERNAME_TAKEN', message: 'odd' }), () => 'x')).toEqual({
+      fields: {},
+      message: 'odd',
+    });
   });
 
   it('сеть, 5xx, мусор, 4xx без слов: null', () => {
     for (const e of [null, 'x', new Error('Network Error'), { response: null }, res(500, { message: 'boom' }), res(409, { error: 'CONFLICT' }), res(400, null)]) {
       expect(userSaveRefusal(e)).toBeNull();
     }
+    expect(userSaveRefusal(res(409, { error: 'USERNAME_TAKEN' }))).toBeNull();
   });
 });

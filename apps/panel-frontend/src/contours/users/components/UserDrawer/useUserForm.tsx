@@ -319,7 +319,9 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
       await onSubmit(input);
       return true;
     } catch (err) {
-      const refusal = userSaveRefusal(err);
+      const refusal = userSaveRefusal(err, (code) =>
+        t(code === 'USERNAME_TAKEN' ? 'userDrawer.usernameTaken' : 'userDrawer.tokenTaken'),
+      );
       if (refusal) {
         for (const [field, text] of Object.entries(refusal.fields)) form.setFieldError(field, text);
         setSaveRefusal(refusal.message);

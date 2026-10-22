@@ -95,6 +95,8 @@ export const users = {
   },
 
   userDrawer: {
+    usernameTaken: 'This name is taken by another user',
+    tokenTaken: 'This subscription token belongs to another user',
     newTitle: 'New user',
     newSubtitle: 'Subscription token + creds will mint on save',
     editSubtitle: 'Changes apply on save, the subscription URL stays the same',
