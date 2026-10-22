@@ -52,6 +52,7 @@ import { NodePayloadModal } from '@/contours/nodes/components/NodePayloadModal';
 import { NodeDeleteCascades } from '@/contours/nodes/components/NodeDelete';
 import { showNodeDeleteFailed } from '@/contours/nodes/components/nodeDeleteToast';
 import { nodeDeleteFacts } from '@/contours/nodes/lib/nodeDelete';
+import { cascadeEntryNodeIds, cascadeMemberships } from '@/lib/domain/cascadeMembership';
 import { cardEngineSet } from '@/contours/nodes/lib/nodeCardEngines';
 import { NodeCard } from '@/contours/nodes/components/NodeCard';
 import { CascadesPanel } from '@/contours/nodes/components/CascadesPanel';
@@ -487,34 +488,25 @@ export function NodesPage() {
   // держащая его в зависимостях, пересобиралась бы всегда.
   const allCascades = useMemo(() => cascadesQuery.data?.cascades ?? [], [cascadesQuery.data]);
 
-  // nodeId -> the cascade it belongs to + its role (entry/transit/exit). A node
-  // can be in at most one cascade (v1 model).
+  // nodeId -> the cascade it belongs to + its role (entry/transit/exit), v4
+  // positions and directions first (cascadeMemberships, A-144).
   const nodeCascadeMap = useMemo(() => {
     const m = new Map<string, { name: string; role: string }>();
-    for (const c of cascadesQuery.data?.cascades ?? []) {
-      const last = c.hops.length - 1;
-      c.hops.forEach((h, i) => {
-        const role =
-          i === 0
-            ? t('cascades.entry')
-            : i === last
-              ? t('cascades.exit')
-              : t('cascades.transit');
-        m.set(h.nodeId, { name: c.name, role });
-      });
+    for (const [id, { cascade, role }] of cascadeMemberships(allCascades)) {
+      m.set(id, { name: cascade.name, role: t(`cascades.${role}`) });
     }
     return m;
-  }, [cascadesQuery.data, t]);
+  }, [allCascades, t]);
 
-  // What the cascades carried today: the entry node's traffic, because that is
+  // What the cascades carried today: the entry pool's traffic, because that is
   // where a client's bytes enter and everything downstream is the same bytes
   // counted again.
   const cascadeToday = useMemo(() => {
     const byId = new Map((overviewQuery.data?.nodes ?? []).map((n) => [n.id, n.todayBytes] as const));
-    return allCascades.reduce((sum, c) => {
-      const first = [...c.hops].sort((a, b) => a.position - b.position)[0];
-      return sum + (first ? byId.get(first.nodeId) ?? 0 : 0);
-    }, 0);
+    return allCascades.reduce(
+      (sum, c) => sum + cascadeEntryNodeIds(c).reduce((s, id) => s + (byId.get(id) ?? 0), 0),
+      0,
+    );
   }, [allCascades, overviewQuery.data]);
 
   // Merge raw nodes (canonical source for actions / address) with dashboard

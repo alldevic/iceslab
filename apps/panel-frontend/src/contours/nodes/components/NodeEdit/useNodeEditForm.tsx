@@ -18,6 +18,7 @@ import {
 import type { Node } from '@/lib/domain/nodes';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listCascades, type Cascade } from '@/lib/domain/cascades';
+import { cascadeExitWords, cascadeMemberships, type CascadeRole } from '@/lib/domain/cascadeMembership';
 import { listHosts } from '@/lib/domain/hosts';
 import { listRoutePolicies, type RoutePolicy } from '@/lib/domain/routePolicies';
 // Aliased: the state below holds the refusal and wants the plain name. An
@@ -318,27 +319,20 @@ export type NodeEditor = ReturnType<typeof useNodeEditForm>;
 /**
  * Каскад, в котором стоит эта нода, с её ролью и списком направлений.
  *
- * `null`, когда нода не в каскаде. Нода стоит максимум в одном, поэтому первый
- * найденный и есть ответ.
+ * `null`, когда нода не в каскаде. Членство по позициям и направлениям v4,
+ * хопы только у старых каскадов (cascadeMemberships, A-144): по одним хопам
+ * нода v4-каскада выходила одиночной, и экран писал «напрямую».
  */
 function cascadeOfNode(
   cascades: Cascade[],
   fleet: Node[],
   id: string,
-): { cascade: Cascade; role: 'entry' | 'exit' | 'transit'; directions: string[] } | null {
-  for (const c of cascades) {
-    const idx = c.hops.findIndex((h) => h.nodeId === id);
-    if (idx === -1) continue;
-    const role = idx === 0 ? 'entry' : idx === c.hops.length - 1 ? 'exit' : 'transit';
-    // What this node feeds is a set of DIRECTIONS, named by the country a
-    // client picks, not the next machine in a list. The node under a direction
-    // can be swapped without any of this changing.
-    const exits = c.mode === 'balancer' ? c.hops.slice(1) : c.hops.slice(-1);
-    const directions = exits
-      .map((h) => fleet.find((n) => n.id === h.nodeId)?.countryCode)
-      .filter((code): code is string => Boolean(code))
-      .map((code) => code.toUpperCase());
-    return { cascade: c, role, directions: role === 'exit' ? [] : directions };
-  }
-  return null;
+): { cascade: Cascade; role: CascadeRole; directions: string[] } | null {
+  const m = cascadeMemberships(cascades).get(id);
+  if (!m) return null;
+  // What this node feeds is a set of DIRECTIONS, named by the country a
+  // client picks, not the next machine in a list. The node under a direction
+  // can be swapped without any of this changing.
+  const directions = cascadeExitWords(m.cascade, (nodeId) => fleet.find((n) => n.id === nodeId)?.countryCode);
+  return { cascade: m.cascade, role: m.role, directions: m.role === 'exit' ? [] : directions };
 }

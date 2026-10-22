@@ -18,7 +18,7 @@ import { listRoutePolicies } from '@/lib/domain/routePolicies';
 import { linkCellEngines, nodeCarriesCell } from '@/lib/domain/linkCells';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
-import { cascadeClaims } from '@/contours/cascades/lib/cascadeClaims';
+import { cascadeClaims } from '@/lib/domain/cascadeMembership';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import {

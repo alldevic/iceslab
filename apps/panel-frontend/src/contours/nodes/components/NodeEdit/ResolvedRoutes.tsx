@@ -45,7 +45,9 @@ export function ResolvedRoutes({
     );
   }
 
-  const exits = cascade.cascade.hops.slice(1);
+  // The ways out as words (cascadeExitWords): v4 directions, or the old hops.
+  // `hops.slice(1)` read nothing for a v4 cascade, which has `hops: []` (A-144).
+  const exits = cascade.directions;
 
   // Transit and exit hops answer one question only: what arrives on the
   // inter-hop link goes where. No tags, no policies, so the header and the two
@@ -237,7 +239,7 @@ export function ResolvedRoutes({
             <Box style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: VIOLET, flexShrink: 0 }} />
             <Text style={{ fontFamily: DISPLAY, fontSize: 13, fontWeight: 500, lineHeight: '16px', color: SNOW }}>
               {exits.length === 1
-                ? t('nodeEdit.routes.exitOne', { name: exits[0]!.nodeName })
+                ? t('nodeEdit.routes.exitOne', { name: exits[0]! })
                 : t('nodeEdit.routes.exitMany', { count: exits.length })}
             </Text>
           </Box>

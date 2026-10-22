@@ -34,7 +34,7 @@ import { ChainStatusLine } from '@/ui/ChainStatusLine';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
 import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
-import { cascadeClaims } from '@/contours/cascades/lib/cascadeClaims';
+import { cascadeClaims } from '@/lib/domain/cascadeMembership';
 import { useEntryAwg31 } from '@/contours/cascades/lib/useEntryAwg31';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { useOverview } from '@/lib/domain/dashboard';
