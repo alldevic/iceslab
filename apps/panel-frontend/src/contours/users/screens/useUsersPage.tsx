@@ -2,6 +2,7 @@ import { apiErrorMessage } from '@/lib/net/client';
 import { useDebouncedValue } from '@mantine/hooks';
 import { Text } from '@mantine/core';
 import type { StatusFilter } from '@/contours/users/lib/userStatus';
+import { saveToastNeeded } from '@/contours/users/lib/userSaveRefusal';
 import type { UpdateUserInput, User, UserFilters, UserSort } from '@/lib/domain/users';
 import type { ColumnPin, ColumnView, UserColumnId } from '@/contours/users/lib/usersTable';
 import type { RowDensity } from '@/contours/users/lib/usersTable';
@@ -311,12 +312,11 @@ export function useUsersPage() {
       qc.invalidateQueries({ queryKey: ['users'] });
       notifications.show({ color: 'green', message: t('users.notify.created') });
     },
-    onError: (err) =>
-      notifications.show({
-        color: 'red',
-        title: t('common.createError'),
-        message: apiErrorMessage(err),
-      }),
+    // A refusal the drawer puts at a field is said there only (saveToastNeeded).
+    onError: (err) => {
+      if (!saveToastNeeded(err)) return;
+      notifications.show({ color: 'red', title: t('common.createError'), message: apiErrorMessage(err) });
+    },
   });
 
   const updateMutation = useMutation({
@@ -325,12 +325,10 @@ export function useUsersPage() {
       qc.invalidateQueries({ queryKey: ['users'] });
       notifications.show({ color: 'green', message: t('users.notify.updated') });
     },
-    onError: (err) =>
-      notifications.show({
-        color: 'red',
-        title: t('common.saveError'),
-        message: apiErrorMessage(err),
-      }),
+    onError: (err) => {
+      if (!saveToastNeeded(err)) return;
+      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
+    },
   });
 
   const deleteMutation = useMutation({

@@ -46,6 +46,19 @@ const FIELD_OF: Record<string, keyof FormValues> = {
   routingPreset: 'routingPreset',
 };
 
+/**
+ * Whether a refused save still needs the registry's toast (ARCH 23.10): not
+ * when the drawer puts it at a field. One refusal, one place; the server's
+ * English sentence beside the panel's words at the field was noise. Anything
+ * not tied to a field (network, 5xx, a refusal at the form) keeps the toast.
+ */
+export function saveToastNeeded(err: unknown): boolean {
+  // With a `say`, as the drawer reads it: a taken code without a sentence is
+  // still put at its field by the panel's words.
+  const refusal = userSaveRefusal(err, () => 'field');
+  return !refusal || Object.keys(refusal.fields).length === 0;
+}
+
 export function userSaveRefusal(err: unknown, say?: (code: TakenCode) => string): UserSaveRefusal | null {
   if (!err || typeof err !== 'object') return null;
   const res = (err as { response?: unknown }).response;

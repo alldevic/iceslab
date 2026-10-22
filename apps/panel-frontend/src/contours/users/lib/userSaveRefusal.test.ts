@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { userSaveRefusal } from '@/contours/users/lib/userSaveRefusal';
+import { saveToastNeeded, userSaveRefusal } from '@/contours/users/lib/userSaveRefusal';
 
 const res = (status: number, data: unknown) => ({ response: { status, data } });
 
@@ -63,5 +63,21 @@ describe('userSaveRefusal (spec frontend-users)', () => {
       expect(userSaveRefusal(e)).toBeNull();
     }
     expect(userSaveRefusal(res(409, { error: 'USERNAME_TAKEN' }))).toBeNull();
+  });
+});
+
+describe('saveToastNeeded: один отказ, одно место (ARCH 23.10)', () => {
+  it('отказ у поля тоста не даёт: занятое имя, токен, поле валидации', () => {
+    expect(saveToastNeeded(res(409, { error: 'USERNAME_TAKEN', message: 'User "alice" already exists', field: 'username' }))).toBe(false);
+    expect(saveToastNeeded(res(409, { error: 'SUBSCRIPTION_TOKEN_TAKEN', message: 'taken' }))).toBe(false);
+    // Без фразы сервера дровер всё равно ставит слова панели у поля: тоста нет.
+    expect(saveToastNeeded(res(409, { error: 'USERNAME_TAKEN' }))).toBe(false);
+    expect(saveToastNeeded(res(400, { error: 'VALIDATION_ERROR', issues: [{ path: ['email'], message: 'Invalid email' }] }))).toBe(false);
+  });
+
+  it('отказ не у поля тост оставляет: у формы, сеть, 5xx', () => {
+    for (const e of [res(409, { error: 'CONFLICT', message: 'x' }), res(404, { error: 'NOT_FOUND', message: 'gone' }), new Error('Network Error'), res(500, { message: 'boom' }), null]) {
+      expect(saveToastNeeded(e)).toBe(true);
+    }
   });
 });
