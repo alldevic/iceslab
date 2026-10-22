@@ -188,9 +188,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   const sessionAuth = { onRequest: [requireAuth, requireSession] };
 
   // Map twofa service errors to HTTP. Shared by enable/disable/setup.
+  //
+  // A wrong code here is 400, not 401 (A-169, 22.10): the admin is signed in
+  // and only mistyped a digit, and the panel reads any 401 as an expired
+  // session, so a typo while enabling 2FA signed them out and lost the setup.
+  // The login route keeps 401 for its wrong code: there is no session yet.
   function twofaError(reply: FastifyReply, err: unknown): FastifyReply | null {
     if (err instanceof twofa.TotpBadCodeError) {
-      return reply.code(401).send({ error: 'INVALID_TOTP', message: err.message });
+      return reply.code(400).send({ error: 'INVALID_TOTP', message: err.message });
     }
     if (err instanceof twofa.TotpAlreadyEnabledError) {
       return reply.code(409).send({ error: 'CONFLICT', message: err.message });
