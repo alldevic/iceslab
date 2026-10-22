@@ -116,6 +116,13 @@ type Server struct {
 	// one (persistAccepted), so two pushes cannot interleave the two halves.
 	storeMu sync.Mutex
 
+	// pushMu: one push at a time, from the first core it reaches to the copy
+	// on disk (П-1). The panel sends one push per node at a time, but gives up
+	// on a request after 30 s and sends it again a second later, while the
+	// first is still going through the cores; two pushes interleaved could
+	// both stop the old chain process and both start one.
+	pushMu sync.Mutex
+
 	// certsMu guards building cfg.Certs from the payload once.
 	certsMu sync.Mutex
 
@@ -894,6 +901,11 @@ func (s *Server) handleRemoveUser(w http.ResponseWriter, r *http.Request) {
 // reconfiguration yet (that's per-adapter follow-up work). Idempotent: the
 // `applied` / `skipped` counters in the response always reflect "everything
 // was overwritten", so the panel can use it as a generic ack.
+// pushTimeout bounds one push carried past its request (П-1): longer than any
+// push takes (tunnels, a first geo load, the cores' checks), short enough that
+// a wedged one does not hold every later push forever.
+const pushTimeout = 5 * time.Minute
+
 func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
@@ -930,7 +942,16 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	o := s.applyPushOutcome(r.Context(), req)
+	// Not the request's context (П-1): the panel drops the request after 30 s,
+	// and a push cut there stopped the old chain and failed to raise the
+	// tunnels of the new one with "context canceled", leaving the cascade down
+	// until the next push. A push once begun is carried through, bounded by
+	// pushTimeout, and the panel's repeat finds it done and changes nothing.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), pushTimeout)
+	defer cancel()
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	o := s.applyPushOutcome(ctx, req)
 	applied, failed, reasons := o.applied, o.failed, o.reasons
 
 	if s.cfg.InboundsStorePath != "" {
@@ -1543,7 +1564,9 @@ func (s *Server) restoreFromStore(ctx context.Context) {
 		}
 	}
 
+	s.pushMu.Lock()
 	applied, failed, reasons := s.applyPush(ctx, req)
+	s.pushMu.Unlock()
 	if failed > 0 {
 		s.logger.Error("restored from disk with failures",
 			"applied", applied, "failed", failed,

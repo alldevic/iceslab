@@ -106,6 +106,13 @@ type Config struct {
 type Manager struct {
 	cfg Config
 
+	// applyMu: one Apply at a time, end to end (П-1). mu below is taken in
+	// pieces around the IO, and two Applies interleaved both read the same old
+	// process, both stopped it and both started one: the first kept the ports
+	// with nobody holding it, the second crash-looped on "address already in
+	// use". Never taken under mu.
+	applyMu sync.Mutex
+
 	mu sync.Mutex
 	// proc is the running engine, nil when no chain is in force.
 	proc *subprocess.Subprocess
@@ -292,6 +299,8 @@ a typo the panel could have refused in a sentence. So a refused config leaves
 the previous one exactly where it was and hands the engine's own words back.
 */
 func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	if block == nil {
 		return m.stop("no chain block in this push")
 	}
