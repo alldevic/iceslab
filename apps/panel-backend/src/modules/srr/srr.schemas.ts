@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FORMAT_NAMES } from '@iceslab/shared';
+import { compileLinearRule } from './linear-regex.js';
 
 /**
  * Which format a rule may serve.
@@ -14,62 +15,37 @@ import { FORMAT_NAMES } from '@iceslab/shared';
  */
 export const SrrFormat = z.enum(FORMAT_NAMES);
 
-/** Does the pattern compile as a RegExp? Mirrors the runtime matcher's
- *  inline-flag handling (`(?i)` prefix) in srr.service.ts. */
-function compiles(value: string): boolean {
-  const m = value.match(/^\(\?([imsux]+)\)([\s\S]*)$/);
-  try {
-    new RegExp(m ? m[2]! : value, m ? m[1]!.replace(/[^ims]/g, '') : '');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** The regex body without the inline-flag prefix, for the safety check. */
-function patternBody(value: string): string {
-  const m = value.match(/^\(\?[imsux]+\)([\s\S]*)$/);
-  return m ? m[1]! : value;
-}
-
 /**
- * Reject patterns that risk catastrophic backtracking (ReDoS). V8's regex
- * engine backtracks, so a nested quantifier like `(a+)+` or `(.*)*` takes
- * exponential time on a short crafted input, and Node has no per-regex timeout,
- * so the UA-length cap does NOT defang it. This runs on the public `/sub` path
- * for every request, so a bad rule is a DoS vector; refuse it at save time.
+ * Why a pattern cannot be a rule, or null when it can. It is compiled exactly as
+ * a request compiles it (compileLinearRule, A-019): on V8's linear engine, so a
+ * rule saved here runs in time linear in the User-Agent whatever its shape.
+ * The engine refuses at compile time what it cannot run that way, and that is
+ * the refusal here, in words an operator can act on.
  *
- * Best-effort heuristic (a full detector needs a parser): collapse innermost
- * groups and flag a quantified group whose body is itself quantified. Bounded
- * `{n,m}` counts too (nested repetition is slow even when not strictly
- * exponential). Existing pre-fix rules are not re-validated, so re2 / a worker
- * timeout remains the fully-robust future fix.
+ * The heuristic that stood here (a quantifier inside a quantified group) is
+ * gone with the backtracking it guarded against: it let `^(\w|\d)+$` through,
+ * which did not finish in two minutes on 31 characters, and refused
+ * `(\d+\.)+`, which the linear engine runs in microseconds.
  */
-export function hasNestedQuantifier(pattern: string): boolean {
-  // Neutralise escaped chars and char classes so `\+` / `[+]` don't false-fire.
-  let s = pattern.replace(/\\./g, 'x').replace(/\[[^\]]*\]/g, 'C');
-  const QUANT = /[*+]|\{\d*,\d*\}/;
-  const INNER = /\(([^()]*)\)([*+]|\{\d*,\d*\})?/;
-  for (let i = 0; i < 200; i++) {
-    const m = s.match(INNER);
-    if (!m) break;
-    const bodyHasQuant = QUANT.test(m[1]!);
-    if (m[2] && bodyHasQuant) return true; // quantified group with inner quantifier
-    // Collapse this group, keeping a `+` marker when it carried any repetition
-    // so an enclosing group still sees the nested quantifier after the collapse.
-    s = s.replace(INNER, bodyHasQuant || m[2] ? '+' : 'x');
+export function ruleProblem(value: string): string | null {
+  try {
+    compileLinearRule(value);
+    return null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes('linear time')
+      ? 'Pattern uses a backreference or a lookahead, which User-Agent rules do not support; rewrite it without'
+      : 'Invalid regex pattern';
   }
-  return false;
 }
 
 const UaPatternField = z
   .string()
   .min(1)
   .max(512)
-  .refine(compiles, { message: 'Invalid regex pattern' })
-  .refine((v) => !hasNestedQuantifier(patternBody(v)), {
-    message:
-      'Pattern risks catastrophic backtracking (a nested quantifier like (a+)+); simplify it',
+  .superRefine((v, ctx) => {
+    const problem = ruleProblem(v);
+    if (problem) ctx.addIssue({ code: 'custom', message: problem });
   });
 
 export const CreateSrrSchema = z.object({

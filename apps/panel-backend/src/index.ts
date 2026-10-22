@@ -20,6 +20,8 @@ import { buildApp } from './app.js';
 import { setBaseLogger } from './lib/infra/logger.js';
 import { startMetricsRefreshLoop } from './lib/infra/metrics-refresh.js';
 import { startTelegramBot } from './lib/notify/telegram-bot.js';
+import { assertLinearRegexEngine } from './modules/srr/linear-regex.js';
+import { checkStoredRules } from './modules/srr/srr.service.js';
 
 let app: FastifyInstance | null = null;
 let nodeUsersWorker: Worker | null = null;
@@ -31,6 +33,10 @@ let stopTelegramBot: (() => void) | null = null;
 
 async function start() {
   try {
+    // A-019: the User-Agent rules on the public /sub run on V8's linear
+    // engine; without it one rule could hold the event loop, so no start.
+    assertLinearRegexEngine();
+
     const dbOk = await pingDatabase();
     if (!dbOk) {
       console.error('Cannot connect to database at startup');
@@ -66,6 +72,10 @@ async function start() {
 
     await registerCronJobs();
     app.log.info('Cron jobs registered');
+
+    // A-019: a stored rule the linear engine cannot run is no longer served;
+    // say which, once, rather than let it stop matching in silence.
+    await checkStoredRules().catch((err) => app?.log.error({ err }, 'srr: stored rule check failed'));
 
     // Phase 9: the built-in geo sets fetch their pinned release in the
     // background. A failure is the set's `broken`, never the panel's start.

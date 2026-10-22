@@ -7,6 +7,7 @@ import {
   type ClientId,
 } from '@iceslab/shared';
 import { compileRule } from '../modules/srr/srr.service.js';
+import { testLinearRule } from '../modules/srr/linear-regex.js';
 import { APPS } from '../modules/subscription/subscription.page-apps.js';
 
 /**
@@ -20,7 +21,7 @@ import { APPS } from '../modules/subscription/subscription.page-apps.js';
  */
 
 const ordered = [...CLIENT_RULES].sort((a, b) => a.priority - b.priority);
-const firstMatch = (ua: string) => ordered.find((r) => compileRule(r.pattern).test(ua));
+const firstMatch = (ua: string) => ordered.find((r) => testLinearRule(compileRule(r.pattern), ua));
 const entries = Object.entries(CLIENTS) as [ClientId, ClientDef][];
 
 describe('every User-Agent sample lands on its client format', () => {

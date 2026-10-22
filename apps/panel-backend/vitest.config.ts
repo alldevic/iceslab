@@ -44,6 +44,10 @@ export default defineConfig({
     // thread waits for them. If the handles are ever closed properly this line
     // can go; until then removing it brings the hang back.
     pool: 'forks',
+    // A-019: the User-Agent rules compile with V8's linear-engine flag `l`,
+    // as in production (Dockerfile CMD). linear-regex.ts also sets it from
+    // inside the process; passing it here tests the way the panel runs.
+    execArgv: ['--enable-experimental-regexp-engine'],
     // First beforeEach in each file pays the buildApp() cold-start (~5-12s on
     // WSL: dotenv + Prisma client warmup + Fastify plugins). 30s gives slack.
     hookTimeout: 30_000,
