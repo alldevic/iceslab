@@ -22,7 +22,7 @@ import (
 func TestTheAdminAPIIsOnTheSocketAndReloadReachesIt(t *testing.T) {
 	bin := os.Getenv("CADDY_NAIVE_BIN")
 	if bin == "" {
-		t.Skip("CADDY_NAIVE_BIN not set")
+		t.Skip("CADDY_NAIVE_BIN not set: the admin socket is not asked of the real caddy here")
 	}
 	// Short: a unix socket path has ~108 bytes.
 	dir, err := os.MkdirTemp("", "cn")
