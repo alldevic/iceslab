@@ -90,6 +90,9 @@ export function SubscriptionCard({
       {link.kind === 'failed' && (
         <LoadFailedLine message={`${t('users.linkUnavailable')}: ${link.message}`} onRetry={link.onRetry} />
       )}
+      {link.kind === 'absent' && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>{t('users.linkNoAddress')}</Text>
+      )}
       {link.kind === 'loading' && (
         <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>{t('common.loading')}</Text>
       )}

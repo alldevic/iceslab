@@ -67,6 +67,7 @@ export const users = {
     resetTrafficTitle: 'Reset traffic for "{{name}}"?',
     resetTrafficBody: 'Used traffic is zeroed and a traffic limit (if any) is lifted - the account goes back to valid.',
     linkUnavailable: 'Link unavailable',
+    linkNoAddress: 'Link unavailable: the server did not name the subscription address',
     notify: {
       created: 'User created',
       updated: 'User updated',

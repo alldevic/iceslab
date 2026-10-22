@@ -216,11 +216,9 @@ export function useUsersPage() {
     staleTime: 5 * 60 * 1000,
   });
   const knownTags = tagsQuery.data?.tags ?? [];
-  // Wave-14 #16: subscriptionUrl(token) without a second arg falls back to
-  // API_BASE_URL, which defaults to http://localhost:3000, so a prod SPA
-  // built without VITE_API_BASE_URL silently copies a localhost link to the
-  // operator's clipboard. Hence the panel host from /auth/status, which is
-  // where the row's copy-link action and the drawer both read it from.
+  // The subscription address comes from /auth/status only (A-207): a link
+  // built on the API base copied a localhost host on a prod build (Wave-14
+  // #16). The row's copy-link action and the drawer both read it from here.
   const authStatusQuery = useQuery({
     queryKey: ['auth', 'status'],
     queryFn: fetchAuthStatus,

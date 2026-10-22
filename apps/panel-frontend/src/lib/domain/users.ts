@@ -1,5 +1,5 @@
 import type { RoutingPresetId, XraySubprotocol } from '@iceslab/shared';
-import { api, API_BASE_URL } from '@/lib/net/client';
+import { api } from '@/lib/net/client';
 import type { ProtocolName } from '@/lib/domain/protocols';
 
 export type TrafficLimitStrategy = 'no_reset' | 'day' | 'week' | 'month' | 'rolling';
@@ -198,20 +198,6 @@ export async function rotateUserSubscription(id: string): Promise<User> {
 export async function resetUserTraffic(id: string): Promise<User> {
   const { data } = await api.post<User>(`/api/users/${id}/reset-traffic`);
   return data;
-}
-
-/** Helper to build a copy-pasteable subscription URL for a user.
- *  Pass `panel` (from /api/auth/status) to substitute the configured
- *  public URL + path prefix; falls back to API_BASE_URL + /sub when
- *  the metadata isn't available (dev / status endpoint failed). */
-export function subscriptionUrl(
-  token: string,
-  panel?: { publicUrl: string; subscriptionPathPrefix: string },
-): string {
-  if (panel?.publicUrl) {
-    return `${panel.publicUrl}${panel.subscriptionPathPrefix}/${token}`;
-  }
-  return `${API_BASE_URL}/sub/${token}`;
 }
 
 // ───── Per-user subscription endpoints (admin view) ─────

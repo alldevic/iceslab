@@ -261,7 +261,7 @@ export function UserRow({
     description: () => <Plain title={u.description ?? undefined}>{u.description ?? '-'}</Plain>,
     telegramId: () => <Plain>{u.telegramId ?? '-'}</Plain>,
     email: () => <Plain title={u.email ?? undefined}>{u.email ?? '-'}</Plain>,
-    subLink: () => <Plain title={subUrl ?? undefined}>{subUrl ?? t('users.linkUnavailable')}</Plain>,
+    subLink: () => <Plain title={subUrl ?? undefined}>{subUrl ?? t(link.kind === 'absent' ? 'users.linkNoAddress' : 'users.linkUnavailable')}</Plain>,
     routing: () => (
       <Plain>
         {u.routingPreset
@@ -373,7 +373,9 @@ export function UserRow({
               disabled={subUrl === null}
               onClick={() => subUrl && copyToClipboard(subUrl)}
             >
-              {subUrl === null ? t('users.linkUnavailable') : t('usersTable.actionCopySubUrl')}
+              {subUrl !== null
+                ? t('usersTable.actionCopySubUrl')
+                : t(link.kind === 'absent' ? 'users.linkNoAddress' : 'users.linkUnavailable')}
             </Menu.Item>
             <Menu.Item
               leftSection={<IconExternalLink size={14} />}

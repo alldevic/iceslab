@@ -3,9 +3,9 @@ import { api } from '@/lib/net/client';
 export interface AuthStatusResponse {
   authentication: { password: { enabled: boolean } };
   registration: { enabled: boolean };
-  /** Panel public URL + subscription path prefix, used by the SPA to
-   *  show admins the FULL copy-paste subscription URL on the user form,
-   *  rather than just the path. Both come from backend env. */
+  /** Subscription origin + path prefix, the only source of the copy-paste
+   *  subscription link (users/lib/subscriptionLink). The origin is the host
+   *  the operator set in the panel, else the environment's (A-171). */
   panel?: {
     publicUrl: string;
     subscriptionPathPrefix: string;
