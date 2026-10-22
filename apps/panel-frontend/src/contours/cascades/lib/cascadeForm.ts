@@ -1,4 +1,4 @@
-import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS } from '@iceslab/shared';
+import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS } from '@iceslab/shared';
 import type { CascadeDirectionInput, CascadeProtocol } from '@/lib/domain/cascades';
 import { linkCellPair, nativeEngineOfIntent, type EnginePair, type EngineName } from '@/lib/domain/engines';
 import { DEFAULT_LINK_CONGESTION, DEFAULT_LINK_UNDERLAY, LINK_CONGESTIONS } from '@/lib/domain/cascades';
@@ -16,11 +16,9 @@ import { AMBER, CYAN, DIM, MIST, MOSS, RED } from '@/contours/cascades/lib/color
  * module.
  */
 
-// Mirrors the backend cap (cascade.schemas MAX_CASCADE_HOPS); keep the two in
-// sync. Each hop adds latency and one more inter-hop link port to open.
-export const MAX_HOPS = 5;
-
-export const MAX_POSITIONS = MAX_HOPS;
+// The server's cap, read from the contract (A-175): each step adds latency and
+// one more inter-hop link port to open.
+export const MAX_POSITIONS = MAX_CASCADE_HOPS;
 
 /** Entries multiplied by directions, each pair being one link with its own
  *  credentials. Mirrors the backend ceiling. */
