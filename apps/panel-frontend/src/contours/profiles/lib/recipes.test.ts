@@ -16,6 +16,7 @@ import {
   hiddenAfter,
   importSaved,
   isCuratedRecipe,
+  recipeApplyPlan,
   recipeNotFound,
   registryRecipePath,
   registrySkips,
@@ -53,6 +54,46 @@ describe('рецепты снимка у каждой плитки', () => {
     expect(onTile('hysteria').every((r) => r.engine === 'native')).toBe(true);
     expect(onTile('hysteria#singbox').every((r) => r.engine === 'singbox')).toBe(true);
     expect(onTile('socks5').map((r) => r.id)).toEqual(['telegram-socks5']);
+  });
+});
+
+describe('recipeApplyPlan: рецепт пишет в форму только разрешённые поля', () => {
+  const base = { ...defaults(null), protocol: 'shadowsocks' };
+
+  it('поле протокола из RECIPE_APPLY_KEYS пишется', () => {
+    expect(recipeApplyPlan('shadowsocks', { ssMethod: '2022-blake3-aes-256-gcm' }, base)).toEqual({
+      apply: { ssMethod: '2022-blake3-aes-256-gcm' },
+      skipped: [],
+    });
+  });
+
+  it('поле формы вне списка не пишется и называется: ключ сервера, порт, общие поля', () => {
+    const plan = recipeApplyPlan(
+      'shadowsocks',
+      { ssMethod: '2022-blake3-aes-128-gcm', ssServerKey: 'AAAA', name: 'x', enabled: false },
+      base,
+    );
+    expect(plan.apply).toEqual({ ssMethod: '2022-blake3-aes-128-gcm' });
+    expect(plan.skipped).toEqual(['ssServerKey', 'name', 'enabled']);
+  });
+
+  it('поле чужого протокола не пишется, даже если оно есть в плоской форме', () => {
+    const plan = recipeApplyPlan('shadowsocks', { xrayDest: 'evil.example:443' }, base);
+    expect(plan.apply).toEqual({});
+    expect(plan.skipped).toEqual(['xrayDest']);
+  });
+
+  it('у протокола без рецептов в снимке не пишется ничего', () => {
+    expect(recipeApplyPlan('nope', { ssMethod: 'x' }, base).skipped).toEqual(['ssMethod']);
+  });
+
+  it('каждый рецепт снимка ложится на свою плитку целиком, без пропусков', () => {
+    for (const kind of PROFILE_KINDS) {
+      for (const recipe of onTile(kind.key)) {
+        const form = { ...defaults(null), protocol: kind.protocol };
+        expect(recipeApplyPlan(kind.protocol, resolveRecipeApply(recipe), form).skipped, recipe.id).toEqual([]);
+      }
+    }
   });
 });
 

@@ -23,9 +23,10 @@ import { RecipePicker } from '@/contours/profiles/components/RecipePicker';
 import { RecipeExportModal } from '@/contours/profiles/components/RecipeExportModal';
 import { ProfileRecipeExportModal } from '@/contours/profiles/components/ProfileRecipeExportModal';
 import {
+  recipeApplyPlan,
   resolveRecipeApply,
-  RECIPE_COMMON_FIELDS,
 } from '@/contours/profiles/lib/recipes';
+import { notifications } from '@mantine/notifications';
 import { protocolLabel } from '@/lib/domain/protocols';
 import { useProfileForm } from '@/contours/profiles/components/ProfileForm/useProfileForm';
 import type { FormValues, Mode } from '@/contours/profiles/lib/profileFormValues';
@@ -303,19 +304,21 @@ export function ProfileFormModal({
               // (fresh randomness per click: Salamander password, AWG H1-H4,
               // REALITY+xhttp path); registry recipes carry a plain object plus
               // a declarative randomize list. resolveRecipeApply collapses both.
-              // We then merge only keys that are real form fields, so an
-              // imported recipe can never inject an unknown key into the form.
-              const fields = resolveRecipeApply(recipe);
-              form.setValues((current) => {
-                const safe: Record<string, string | number | boolean> = {};
-                for (const [k, v] of Object.entries(fields)) {
-                  // Only protocol-specific fields: never let a recipe touch a
-                  // common field (protocol/engine/name/description/enabled),
-                  // even though they exist on the flat FormValues.
-                  if (k in current && !RECIPE_COMMON_FIELDS.has(k)) safe[k] = v;
-                }
-                return { ...current, ...safe };
-              });
+              // Then only the protocol's own recipe keys are written
+              // (recipeApplyPlan), and the rest is named on screen.
+              const { apply: fields, skipped } = recipeApplyPlan(
+                form.values.protocol,
+                resolveRecipeApply(recipe),
+                form.values,
+              );
+              form.setValues((current) => ({ ...current, ...fields }));
+              if (skipped.length > 0) {
+                notifications.show({
+                  color: 'yellow',
+                  title: t('profiles.form.recipeSkippedTitle'),
+                  message: t('profiles.form.recipeSkipped', { keys: skipped.join(', ') }),
+                });
+              }
 
               // Auto-fill missing crypto material so admin doesn't have to
               // chase 4 separate buttons (private key, public key, shortIds,
@@ -422,7 +425,7 @@ export function ProfileFormModal({
 
           {form.values.protocol === 'naive' && <NaiveSection form={form} />}
 
-          {form.values.protocol === 'shadowsocks' && <ShadowsocksSection form={form} />}
+          {form.values.protocol === 'shadowsocks' && <ShadowsocksSection form={form} isEdit={isEdit} storedConfig={profile?.config} />}
 
           {form.values.protocol === 'mtproto' && <MtprotoSection form={form} />}
 

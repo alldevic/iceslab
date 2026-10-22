@@ -409,6 +409,30 @@ export const RECIPE_APPLY_KEYS: Record<string, string[]> = (() => {
   return out;
 })();
 
+/**
+ * What a recipe may write into the form, by allowlist: only the keys
+ * RECIPE_APPLY_KEYS knows for the form's protocol. It used to be a denylist
+ * (any form field except the five common ones), and a recipe from someone
+ * else's registry could set whatever the flat form carries: the server key,
+ * the port, the listen address. A key outside the list is not written and is
+ * named in `skipped`, so the screen can say what it left out instead of
+ * dropping it in silence.
+ */
+export function recipeApplyPlan(
+  protocol: string,
+  fields: Record<string, string | number | boolean>,
+  current: object,
+): { apply: Record<string, string | number | boolean>; skipped: string[] } {
+  const allowed = new Set(RECIPE_APPLY_KEYS[protocol] ?? []);
+  const apply: Record<string, string | number | boolean> = {};
+  const skipped: string[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (allowed.has(k) && k in current && !RECIPE_COMMON_FIELDS.has(k)) apply[k] = v;
+    else skipped.push(k);
+  }
+  return { apply, skipped };
+}
+
 export interface RecipeExportMeta {
   id: string;
   name: string;

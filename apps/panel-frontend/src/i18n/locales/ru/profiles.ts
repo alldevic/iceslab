@@ -142,6 +142,8 @@ export const profiles = {
       descriptionPlaceholder: 'Для чего этот шаблон',
       submitCreate: 'Создать профиль',
       submitEdit: 'Сохранить',
+      recipeSkippedTitle: 'Рецепт применён не целиком',
+      recipeSkipped: 'Эти поля рецепт задавать не может, форма их не тронула: {{keys}}',
       plain: {
         onXray: 'на ядре xray: тот же процесс, что у остальных xray-профилей ноды, нового бинаря нет',
         fixed: 'Без TLS, REALITY и транспорта: клиенты Telegram говорят с таким прокси напрямую по TCP, выбирать здесь нечего.',
@@ -251,6 +253,11 @@ export const profiles = {
         naiveTlsEmailLabel: 'Email для TLS-сертификата',
         naiveMasqueradeLabel: 'Корень маскировки',
         ssCipherLabel: 'Метод шифрования',
+        ssKey: {
+          set: 'Ключ сервера задан. Сохранение его не трогает.',
+          new: 'Ключ сервера под этот метод не подходит или его нет: сохранение выпустит новый, у клиентов сменятся ссылки.',
+          server: 'Ключ сервера выпустит панель при создании.',
+        },
         ssNote:
           'Пароль на пользователя = его xrayUuid. Включи у юзера протокол shadowsocks в списке протоколов.',
         mtprotoDomain: 'Domain для маскировки',

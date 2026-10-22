@@ -23,6 +23,7 @@ import { ENGINE_CHOICE_PROTOCOLS } from '@/contours/profiles/lib/profileKinds';
 import { isPlainSubprotocol, plainXrayConfig } from '@/contours/profiles/lib/plainSubprotocol';
 import { saveThen } from '@/contours/profiles/lib/saveThen';
 import { profileAwgCreate, profileAwgPatch } from '@/lib/domain/awg';
+import { ssConfigPatch } from '@/contours/profiles/lib/ssServerKey';
 
 /**
  * Everything the profile form owns that is not markup: the Mantine form, the
@@ -252,6 +253,7 @@ export function useProfileForm({
         };
         break;
       case 'shadowsocks':
+        // The real payload is ssConfigPatch below; this is only the create shape.
         config = { method: values.ssMethod };
         break;
       case 'mtproto':
@@ -286,13 +288,19 @@ export function useProfileForm({
 
     // Поколение AWG (227054e): в PUT только при смене, в POST только 3.
     const isAwg = values.protocol === 'amneziawg';
+    // Shadowsocks: an edit that keeps the cipher sends no config, so the
+    // server key it cannot show is not erased (A-028).
+    const configPart =
+      values.protocol === 'shadowsocks'
+        ? ssConfigPatch(profile?.config, isEdit, values.ssMethod)
+        : { config };
     const input: CreateProfileInput | UpdateProfileInput = isEdit
       ? {
           name: values.name,
           description: values.description.trim() || null,
           enabled: values.enabled,
           engine,
-          config: config as never,
+          ...(configPart as { config?: never }),
           ...(isAwg ? profileAwgPatch(profile.awgProtocol, values.awgGeneration) : {}),
         }
       : {

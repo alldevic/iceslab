@@ -137,6 +137,8 @@ export const profiles = {
       descriptionPlaceholder: 'What this template is for',
       submitCreate: 'Create profile',
       submitEdit: 'Save',
+      recipeSkippedTitle: 'Recipe applied in part',
+      recipeSkipped: 'A recipe may not set these fields, the form left them alone: {{keys}}',
       plain: {
         onXray: 'on the xray core: the same process as the node\'s other xray profiles, no new binary',
         fixed: 'No TLS, REALITY or transport: Telegram clients talk to such a proxy directly over TCP, there is nothing to pick here.',
@@ -244,6 +246,11 @@ export const profiles = {
         naiveTlsEmailLabel: 'TLS contact email',
         naiveMasqueradeLabel: 'Masquerade root',
         ssCipherLabel: 'Cipher method',
+        ssKey: {
+          set: 'The server key is set. Saving leaves it alone.',
+          new: 'The server key does not fit this method, or there is none: saving issues a new one, and clients get new links.',
+          server: 'The panel issues the server key on create.',
+        },
         ssNote:
           "Per-user password = the user's xrayUuid. Enable the shadowsocks protocol on the user.",
         mtprotoDomain: 'Masquerade domain',
