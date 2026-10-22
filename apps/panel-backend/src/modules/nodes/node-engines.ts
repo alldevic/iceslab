@@ -1,32 +1,14 @@
-import { ENGINE_NAMES, type EngineName, type NodeCores, type ProtocolName } from '@iceslab/shared';
+import { ENGINE_NAMES, nativeEngineFor, type EngineName, type NodeCores, type ProtocolName } from '@iceslab/shared';
 
 /**
- * Which engine serves a protocol when nothing pins one.
- *
- * ⚠ This mirrors `dto.NativeEngine` in the agent (apps/node/internal/dto). Two
- * copies of one table, and they have to agree, so there is exactly ONE on this
- * side: everything in the panel and everything the panel serves to the frontend
- * resolves through here. A third copy in the browser is what this function
- * exists to prevent, which is why the profile DTO carries the resolved value
- * rather than leaving the null for somebody else to interpret.
+ * Which engine serves a protocol when nothing pins one: the table lives in
+ * packages/shared (adapters.ts) since A-175, beside the adapter key built
+ * from it, and is re-exported here for the callers that import it from nodes.
+ * ⚠ It mirrors `dto.NativeEngine` in the agent. Defaulting to 'xray' instead
+ * would judge an AmneziaWG profile as needing xray and refuse it on an
+ * AmneziaWG node, a gate that rejects correct configuration.
  */
-export function nativeEngineFor(protocol: string): EngineName {
-  switch (protocol) {
-    case 'shadowsocks':
-      return 'xray';
-    case 'tuic':
-    case 'anytls':
-    case 'shadowtls':
-      return 'singbox';
-    default:
-      // Every other protocol IS its own core: hysteria, amneziawg, naive,
-      // mieru, mtproto. The agent says the same thing (dto.NativeEngine returns
-      // EngineName(p) here). Defaulting to 'xray' instead would judge an
-      // AmneziaWG profile as needing xray and refuse it on an AmneziaWG node,
-      // which is a gate that rejects correct configuration.
-      return protocol as EngineName;
-  }
-}
+export { nativeEngineFor };
 
 /** The engine that will actually render this profile: the pinned one, or the
  *  protocol's native core. Never null, which is the whole point. */

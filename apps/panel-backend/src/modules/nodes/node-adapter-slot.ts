@@ -1,6 +1,5 @@
+import { adapterSlot, MULTI_INBOUND_ADAPTERS } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
-import { effectiveEngineOf } from './node-engines.js';
-import { profileAwgProtocol } from './node-core-gate.js';
 
 /**
  * A-055: one inbound per adapter on a node, where the agent holds one.
@@ -14,17 +13,39 @@ import { profileAwgProtocol } from './node-core-gate.js';
  *   - AmneziaWG: one per generation, 1.x and 3.1 apart;
  *   - sing-box: one per protocol (tuic, anytls, the xray family, hysteria,
  *     shadowsocks, shadowtls);
- *   - many: xray on xray only.
+ *   - many: xray on xray, and mieru since the agent's f8bac16.
  *
  * Refused here, by name, until the agent ships multi-inbound for a pair; then
- * that pair joins MULTI and the refusal lifts for it alone.
+ * that pair joins MULTI_INBOUND_ADAPTERS (packages/shared, adapters.ts, one
+ * line, read by the screen too) and the refusal lifts for it alone.
  */
-const MULTI = new Set(['xray|xray']);
+const MULTI = new Set(MULTI_INBOUND_ADAPTERS);
 
-export function adapterSlot(profile: { protocol: string; engine: string | null; awgProtocol?: number | null }): string {
-  const gen = profileAwgProtocol(profile);
-  if (gen !== null) return `amneziawg|${gen}`;
-  return `${profile.protocol}|${effectiveEngineOf(profile)}`;
+export { adapterSlot };
+
+/** mieru's MTU as the node would get it: the profile merged with the
+ *  binding's overrides (resolveBindingConfig, shallow), 1400 by default. */
+const MIERU_DEFAULT_MTU = 1400;
+function mieruMtu(config: unknown, overrides?: unknown): number {
+  const merged = { ...((config ?? {}) as object), ...((overrides ?? {}) as object) } as { mtu?: unknown };
+  return typeof merged.mtu === 'number' ? merged.mtu : MIERU_DEFAULT_MTU;
+}
+
+export class MieruMtuMismatchError extends Error {
+  readonly code = 'MIERU_MTU_MISMATCH';
+  constructor(
+    public nodeName: string,
+    public mtu: number,
+    public wanted: number,
+    public heldBy: string,
+  ) {
+    super(
+      `mieru on node "${nodeName}" already runs with MTU ${mtu} ("${heldBy}"); a second mieru inbound ` +
+        `there must use the same MTU, not ${wanted}. One mita process holds one MTU, and the agent ` +
+        `would refuse the push.`,
+    );
+    this.name = 'MieruMtuMismatchError';
+  }
 }
 
 export class AdapterSlotTakenError extends Error {
@@ -47,19 +68,31 @@ export class AdapterSlotTakenError extends Error {
  *  serves another binding there. The binding's own row is not counted. */
 export async function assertAdapterSlotFree(
   node: { id: string; name: string },
-  profile: { id: string; protocol: string; engine: string | null; awgProtocol?: number | null },
+  profile: { id: string; protocol: string; engine: string | null; awgProtocol?: number | null; config?: unknown },
+  overrides?: unknown,
 ): Promise<void> {
   const slot = adapterSlot(profile);
-  if (MULTI.has(slot)) return;
   const others = await prisma.profileNodeBinding.findMany({
     where: { nodeId: node.id, profileId: { not: profile.id } },
     select: {
-      profile: { select: { name: true, protocol: true, engine: true, awgProtocol: true } },
+      overrides: true,
+      profile: { select: { name: true, protocol: true, engine: true, awgProtocol: true, config: true } },
       hosts: { select: { remark: true }, orderBy: { priority: 'asc' }, take: 1 },
     },
   });
   const held = others.find((b) => adapterSlot(b.profile) === slot);
   if (!held) return;
+  if (MULTI.has(slot)) {
+    // P2: what the agent would refuse on the push is refused at the save.
+    if (slot === 'mieru|mieru') {
+      const mtu = mieruMtu(held.profile.config, held.overrides);
+      const wanted = mieruMtu(profile.config, overrides);
+      if (mtu !== wanted) {
+        throw new MieruMtuMismatchError(node.name, mtu, wanted, held.hosts[0]?.remark ?? held.profile.name);
+      }
+    }
+    return;
+  }
   const [protocol, engine] = slot.split('|') as [string, string];
   throw new AdapterSlotTakenError(
     node.name,

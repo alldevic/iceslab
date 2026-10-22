@@ -6,7 +6,9 @@ import { LINK_CELLS, LINK_CONGESTIONS, LINK_UNDERLAYS } from '@iceslab/shared';
 // edge (early 400) AND in validateCascadeHops (defensive), and mirrored in the
 // frontend cascade builder (the "Add hop" button stops here). Positions are
 // 0..MAX_CASCADE_HOPS-1.
-export const MAX_CASCADE_HOPS = 5;
+// A-175: the one value lives in packages/shared, which the screen reads too.
+export { MAX_CASCADE_HOPS } from '@iceslab/shared';
+import { MAX_CASCADE_HOPS } from '@iceslab/shared';
 
 // ───── v4 limits ─────
 //

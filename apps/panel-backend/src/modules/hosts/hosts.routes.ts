@@ -71,6 +71,9 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
           .send({ error: err.code, message: err.message, conflicts: err.conflicts });
       }
       // A-055: the adapter holds one inbound and serves another host already.
+      if (err instanceof svc.MieruMtuMismatchError) {
+        return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });
+      }
       if (err instanceof svc.AdapterSlotTakenError) {
         return reply.code(409).send({
           error: err.code,

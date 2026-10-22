@@ -20,7 +20,7 @@ import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
 import { hostConfigChangedAt } from './hosts.freshness.js';
 import { getHiddenCascadeNodes, type HidingCascade } from '../cascades/cascade.service.js';
 import { assertAwgSubnetFree, assertCoreOnNode } from '../nodes/node-core-gate.js';
-import { assertAdapterSlotFree, AdapterSlotTakenError } from '../nodes/node-adapter-slot.js';
+import { assertAdapterSlotFree, AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
 import type {
   CreateHostInput,
   ListHostsQuery,
@@ -65,6 +65,7 @@ export class BindingNotFoundError extends Error {
 // module, which it otherwise has no business knowing about.
 export {
   AdapterSlotTakenError,
+  MieruMtuMismatchError,
   NodeNotFoundError,
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,

@@ -19,7 +19,7 @@ import { resolveHostFields } from './host-fields.js';
 import { profileFormats } from './profile-formats.js';
 import { getProfileKeyImpact } from './profiles.key-impact.js';
 import { coreGateReply } from '../nodes/node-core-gate.js';
-import { AdapterSlotTakenError } from '../nodes/node-adapter-slot.js';
+import { AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
 import * as svc from './profiles.service.js';
 
 const KeypairQuery = z.object({
@@ -141,6 +141,21 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof svc.ProfileAwgProtocolNotAwgError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: err.path });
       }
+      // A-055 on an edit: the adapter the profile moves onto is taken on one of
+      // its nodes. The same body as a binding gets.
+      if (err instanceof MieruMtuMismatchError) {
+        return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });
+      }
+      if (err instanceof AdapterSlotTakenError) {
+        return reply.code(409).send({
+          error: err.code,
+          message: err.message,
+          nodeName: err.nodeName,
+          protocol: err.protocol,
+          engine: err.engine,
+          heldBy: err.heldBy,
+        });
+      }
       // Moving the profile to 3.1 while a node it is on runs a 1.x module:
       // AWG_PROTOCOL_MISMATCH, the answer a binding gets.
       const core = coreGateReply(err);
@@ -223,6 +238,9 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
       }
       // A-055: the same body as the host route.
+      if (err instanceof MieruMtuMismatchError) {
+        return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });
+      }
       if (err instanceof AdapterSlotTakenError) {
         return reply.code(409).send({
           error: err.code,

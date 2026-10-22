@@ -97,11 +97,15 @@ async function bind(profileId: string, nodeId: string, port: number): Promise<st
 /** The node's revision once the event handlers of the last request have run:
  *  they bump it asynchronously, after the response. */
 async function settledRevision(nodeId: string): Promise<bigint> {
+  // Unchanged across three looks 100 ms apart: under a full run a handler can
+  // land well after a single short pause.
   let last = -1n;
+  let still = 0;
   for (;;) {
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     const now = (await prisma.node.findUniqueOrThrow({ where: { id: nodeId } })).desiredRevision;
-    if (now === last) return now;
+    still = now === last ? still + 1 : 0;
+    if (still >= 2) return now;
     last = now;
   }
 }

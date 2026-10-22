@@ -118,6 +118,49 @@ describe('one inbound per adapter where the agent holds one', () => {
     expect(r1.body).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'amneziawg', engine: 'AmneziaWG 1.x' });
   });
 
+  it('a bound profile moved onto a taken adapter (engine switch) is refused, naming the node', async () => {
+    const n = await node();
+    const onSingbox = await profile('xray', VLESS, { engine: 'singbox' });
+    const onXray = await profile('xray', VLESS);
+    expect((await post('/api/hosts', { profileId: onSingbox, nodeId: n, port: 443, remark: 'SB' })).status).toBe(201);
+    expect((await post('/api/hosts', { profileId: onXray, nodeId: n, port: 8443, remark: 'XR' })).status).toBe(201);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${onXray}`,
+      headers: auth(),
+      payload: { engine: 'singbox' },
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    const nodeName = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).name;
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', nodeName, heldBy: 'SB' });
+    expect((await prisma.profile.findUniqueOrThrow({ where: { id: onXray } })).engine).toBeNull();
+  });
+
+  it('mieru takes several inbounds (agent f8bac16), all on one MTU', async () => {
+    const n = await node();
+    const a = await profile('mieru', { mtu: 1400 });
+    const b = await profile('mieru', {});
+    const c = await profile('mieru', { mtu: 1280 });
+    expect((await post('/api/bindings', { profileId: a, nodeId: n, port: 2012 })).status).toBe(201);
+    // No MTU given is the default, 1400: the same.
+    expect((await post('/api/hosts', { profileId: b, nodeId: n, port: 2013 })).status).toBe(201);
+    const other = await post('/api/bindings', { profileId: c, nodeId: n, port: 2014 });
+    expect(other.status).toBe(409);
+    expect(other.body).toMatchObject({ error: 'MIERU_MTU_MISMATCH', mtu: 1400, wanted: 1280 });
+  });
+
+  it('an MTU edit of a bound mieru profile beside another is refused too', async () => {
+    const n = await node();
+    const a = await profile('mieru', { mtu: 1400 });
+    const b = await profile('mieru', { mtu: 1400 });
+    expect((await post('/api/bindings', { profileId: a, nodeId: n, port: 2012 })).status).toBe(201);
+    expect((await post('/api/bindings', { profileId: b, nodeId: n, port: 2013 })).status).toBe(201);
+    const res = await app.inject({ method: 'PUT', url: `/api/profiles/${b}`, headers: auth(), payload: { config: { mtu: 1280 } } });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body).error).toBe('MIERU_MTU_MISMATCH');
+  });
+
   it('a second hysteria on its native core is refused', async () => {
     const n = await node();
     const a = await profile('hysteria', {});

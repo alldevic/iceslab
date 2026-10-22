@@ -12,7 +12,7 @@ import {
   generateSsServerPsk,
   pskFitsMethod,
 } from './ss-helpers.js';
-import { assertAdapterSlotFree } from '../nodes/node-adapter-slot.js';
+import { adapterSlot, assertAdapterSlotFree } from '../nodes/node-adapter-slot.js';
 import {
   AWG_PROTOCOL_NOT_AWG_MESSAGE,
   engineServesSubprotocol,
@@ -463,6 +463,31 @@ export async function updateProfile(
     }
   }
 
+  /**
+   * The adapter slot again (A-055), for a profile that MOVES to another
+   * adapter: a new engine, or another AmneziaWG generation. On every node it
+   * is bound to, the adapter it moves onto may already serve another binding,
+   * and the agent would silently replace one with the other. Asked of each
+   * node, before anything is written.
+   */
+  const nextSlotOf = {
+    id,
+    protocol: existing.protocol,
+    engine: input.engine !== undefined ? input.engine : existing.engine,
+    awgProtocol: input.awgProtocol !== undefined ? input.awgProtocol : existing.awgProtocol,
+    config: input.config !== undefined ? input.config : existing.config,
+  };
+  // mieru shares its adapter, but one MTU per process: an MTU edit on a
+  // node with another mieru inbound is the same question.
+  const mieruRetuned = existing.protocol === 'mieru' && input.config !== undefined;
+  if (adapterSlot(nextSlotOf) !== adapterSlot(existing) || mieruRetuned) {
+    const deployed = await prisma.profileNodeBinding.findMany({
+      where: { profileId: id, node: { deletedAt: null } },
+      select: { overrides: true, node: { select: { id: true, name: true } } },
+    });
+    for (const b of deployed) await assertAdapterSlotFree(b.node, nextSlotOf, b.overrides);
+  }
+
   if (input.config !== undefined) {
     const schema = PROTOCOL_CONFIG_SCHEMAS[
       existing.protocol as keyof typeof PROTOCOL_CONFIG_SCHEMAS
@@ -827,7 +852,7 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
   await assertAwgSubnetFree(node, profile);
   // A-055: the adapter this profile lands on holds one inbound, and already
   // serves another binding here.
-  await assertAdapterSlotFree(node, profile);
+  await assertAdapterSlotFree(node, profile, input.overrides);
 
   const created = await prisma.profileNodeBinding.create({
     data: {

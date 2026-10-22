@@ -332,8 +332,12 @@ describe('the AmneziaWG generation gate (t07-1)', () => {
     expect(onto.statusCode, onto.body).toBe(409);
     expect(JSON.parse(onto.body)).toMatchObject({ error: 'AWG_SUBNET_OVERLAP', otherSubnet: '10.66.66.0/24' });
     expect((await put({ config: { ...AWG, subnet: '10.69.69.0/24' } })).statusCode).toBe(200);
-    // Back to 1.x on its own subnet: the same generation as the other, not asked.
-    expect((await put({ awgProtocol: null })).statusCode).toBe(200);
+    // Back to 1.x on its own subnet: the subnet gate does not ask (same
+    // generation as the other), and the adapter slot refuses it, since the
+    // node's 1.x interface already serves the other profile (A-055 on edit).
+    const back = await put({ awgProtocol: null });
+    expect(back.statusCode, back.body).toBe(409);
+    expect(JSON.parse(back.body).error).toBe('ADAPTER_SLOT_TAKEN');
   });
 
   it('refuses moving a deployed profile to 3.1 while one of its nodes runs 1.x, and back is free', async () => {
