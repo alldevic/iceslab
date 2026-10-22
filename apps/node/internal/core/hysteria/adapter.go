@@ -10,10 +10,12 @@
 //     server with the supplied password; we look it up in the map.
 //
 // Adding/removing users does NOT restart Hysteria, the state map is updated
-// live and the next auth callback uses the new state.
+// live and the next auth callback uses the new state; a removed user's open
+// sessions are kicked over the traffic stats API.
 package hysteria
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -122,6 +124,9 @@ type Adapter struct {
 	mu      sync.RWMutex
 	users   map[string]userEntry // key: HysteriaPassword
 	inbound InboundConfig        // last applied panel config; zero value = none
+
+	// kickPending: removed users whose kick failed (RemoveUser), by user id.
+	kickPending map[string]bool
 
 	// The node-level hand-off to the chain, phase 6. nil = this node is not a
 	// hysteria entry of a cascade, and the config carries no outbounds at all,
@@ -344,16 +349,72 @@ func (a *Adapter) AddUser(user core.User) error {
 		UserID:   user.UserID,
 		Username: user.Username,
 	}
+	delete(a.kickPending, user.UserID)
 	return nil
 }
 
+// RemoveUser forgets the user's password, so the auth callback refuses the
+// next connection, and kicks the sessions already open (A-120, 22.10).
+// hysteria asks the callback only when a client connects, and a QUIC session
+// of a router that never reconnects lived on for hours: a disabled, expired or
+// over-limit user kept going and kept counting. The kick goes through the
+// traffic stats API (POST /kick), after the password is gone, so the client's
+// reconnect is refused. A kick that fails fails the call and is remembered,
+// so the panel's retry kicks again although the password is already gone.
 func (a *Adapter) RemoveUser(userID string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	held := a.kickPending[userID]
 	for password, entry := range a.users {
 		if entry.UserID == userID {
 			delete(a.users, password)
+			held = true
 		}
+	}
+	listen, secret, client := a.cfg.TrafficStatsListen, a.cfg.TrafficStatsSecret, a.cfg.HTTPClient
+	a.mu.Unlock()
+	if !held || listen == "" || secret == "" || !a.serving() {
+		return nil
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
+	err := kickUsers(client, listen, secret, []string{userID})
+	a.mu.Lock()
+	if err != nil {
+		if a.kickPending == nil {
+			a.kickPending = make(map[string]bool)
+		}
+		a.kickPending[userID] = true
+	} else {
+		delete(a.kickPending, userID)
+	}
+	a.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("hysteria: kick the removed user's open sessions: %w", err)
+	}
+	return nil
+}
+
+// kickUsers closes the open sessions of these users (hysteria's traffic stats
+// API, POST /kick with a JSON list of the ids the auth callback returned).
+func kickUsers(client HTTPClient, listen, secret string, ids []string) error {
+	body, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/kick", listen), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("traffic API /kick HTTP %d", resp.StatusCode)
 	}
 	return nil
 }
