@@ -66,6 +66,7 @@ export const users = {
     rotateBody: 'A new link is issued; the old link stops working immediately. Any revoke is cleared.',
     resetTrafficTitle: 'Reset traffic for "{{name}}"?',
     resetTrafficBody: 'Used traffic is zeroed and a traffic limit (if any) is lifted - the account goes back to valid.',
+    linkUnavailable: 'Link unavailable',
     notify: {
       created: 'User created',
       updated: 'User updated',
@@ -102,6 +103,7 @@ export const users = {
     usernamePlaceholder: 'kate_m',
     nameFree: 'FREE',
     nameTaken: 'TAKEN',
+    nameUnchecked: 'NOT CHECKED',
     generateName: 'Generate a name',
     squads: 'Squads',
     previewTitle: 'What the client gets',

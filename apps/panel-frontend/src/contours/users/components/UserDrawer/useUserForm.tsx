@@ -1,12 +1,13 @@
-﻿import type { CreateUserInput, UpdateUserInput } from '@/lib/domain/users';
+import type { CreateUserInput, UpdateUserInput } from '@/lib/domain/users';
 import type { FormValues } from '@/contours/users/lib/userForm';
 import type { Preset } from '@/contours/users/lib/userPresets';
 import type { PreviewData, PreviewRowData } from '@/contours/users/components/UserDrawer/PreviewCard';
 import type { ExpirySpan } from '@/contours/users/lib/userExpiry';
 import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
-import { defaultValues, trafficLimitInput, trafficLimitProblem } from '@/contours/users/lib/userForm';
+import { defaultValues, trafficLimitInput, trafficLimitProblem, userUpdatePatch } from '@/contours/users/lib/userForm';
 import { expiryDays } from '@/contours/users/lib/userExpiry';
 import { endpointsWhy } from '@/contours/users/lib/endpointsWhy';
+import { userSaveRefusal } from '@/contours/users/lib/userSaveRefusal';
 import { fetchUserEndpoints, listUsers } from '@/lib/domain/users';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listAllNodes } from '@/lib/domain/nodes';
@@ -16,6 +17,8 @@ import { useMemo, useState } from 'react';
 import { useNow } from '@/lib/ui/useNow';
 import { useForm } from '@mantine/form';
 import { useQuery } from '@tanstack/react-query';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { useTranslation } from 'react-i18next';
 import type { Props } from '@/contours/users/components/UserDrawer';
 
@@ -75,6 +78,10 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
    */
   const seedKey = opened ? `${user?.id ?? 'new'}:${user?.updatedAt ?? ''}` : null;
   const [seededFor, setSeededFor] = useState<string | null>(null);
+  /** The values the drawer opened with: the base an edit is diffed against. */
+  const [seedValues, setSeedValues] = useState<FormValues | null>(null);
+  /** A refused save in the server's words, said at the form (userSaveRefusal). */
+  const [saveRefusal, setSaveRefusal] = useState<string | null>(null);
   if (seedKey !== null && seedKey !== seededFor) {
     setSeededFor(seedKey);
     {
@@ -82,6 +89,8 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
       // empty form offers unlimited traffic and no expiry, which is the one
       // combination an operator almost never means.
       const seed = defaultValues(user);
+      setSeedValues(seed);
+      setSaveRefusal(null);
       const first = user === null ? presets[0] : undefined;
       form.setValues(
         first
@@ -130,7 +139,12 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
   });
   const nameTaken =
     nameQuery.data?.users.some((u) => u.username.toLowerCase() === nameProbe.toLowerCase()) ?? false;
-  const nameFree = !isEdit && nameProbe.length >= 3 && !nameQuery.isFetching && !nameTaken;
+  // «Free» only on an answer: a failed probe used to read as free, and the
+  // operator then met CONFLICT on create (spec frontend-users).
+  const nameFree = !isEdit && nameProbe.length >= 3 && nameQuery.isSuccess && !nameQuery.isFetching && !nameTaken;
+  const nameUnchecked = !isEdit && nameProbe.length >= 3 && nameQuery.isError && !nameQuery.isFetching;
+  /** The squad list did not arrive: said at the squads, not an empty choice. */
+  const squadsFailure = loadFailure(squadsQuery, apiErrorMessage);
 
   /**
    * The real answer for a user who already exists: the endpoints endpoint runs
@@ -192,8 +206,11 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
       protocols: protocols.size,
       online: rows.filter((r) => r.online).length,
       estimate: true as const,
+      // A list the estimate is built from did not arrive: «0 configs» would
+      // be a claim (spec frontend-users), so the card says it failed.
+      why: [squadsQuery, profilesQuery, bindingsQuery, nodesQuery].some((q) => loadView(q) === 'failed') ? ('failed' as const) : null,
     };
-  }, [form.values.groupIds, squads, profilesQuery.data, bindingsQuery.data, nodesQuery.data]);
+  }, [form.values.groupIds, squads, squadsQuery, profilesQuery, bindingsQuery, nodesQuery]);
 
   const preview: PreviewData = useMemo(() => {
     if (!isEdit) return estimate;
@@ -291,6 +308,26 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     );
   }
 
+  /**
+   * A refused save, read where it belongs (userSaveRefusal): fields the
+   * server names are marked on the field, the rest is said at the form. The
+   * drawer stays open on the draft; nothing is thrown out of the submit.
+   */
+  async function submit(input: CreateUserInput | UpdateUserInput): Promise<boolean> {
+    setSaveRefusal(null);
+    try {
+      await onSubmit(input);
+      return true;
+    } catch (err) {
+      const refusal = userSaveRefusal(err);
+      if (refusal) {
+        for (const [field, text] of Object.entries(refusal.fields)) form.setFieldError(field, text);
+        setSaveRefusal(refusal.message);
+      }
+      return false;
+    }
+  }
+
   async function handleSubmit(values: FormValues) {
     const chosenExpiry =
       values.expireDays === ''
@@ -298,22 +335,15 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
         : new Date(now.getTime() + Number(values.expireDays) * 86_400_000);
 
     if (isEdit) {
-      const input: UpdateUserInput = {
-        // Sent only when this session picked a span. An untouched edit leaves
-        // the field out entirely rather than restating the stored date.
-        ...(values.expirySet ? { expireAt: chosenExpiry?.toISOString() ?? null } : {}),
-        status: values.status,
-        trafficLimitGb: trafficLimitInput(values.trafficLimitGb),
-        trafficLimitStrategy: values.trafficLimitStrategy,
-        description: values.description || null,
-        tag: values.tag || null,
-        email: values.email || null,
-        telegramId: values.telegramId || null,
-        hwidDeviceLimit: values.hwidDeviceLimit === '' ? null : Number(values.hwidDeviceLimit),
-        groupIds: values.groupIds,
-        routingPreset: values.routingPreset ? (values.routingPreset as never) : null,
-      };
-      await onSubmit(input);
+      // Only what changed against the seed (userUpdatePatch): a field the
+      // operator did not touch is not restated, so a change made meanwhile by
+      // the bot or another tab stands. Nothing changed: nothing is sent.
+      const input: UpdateUserInput = userUpdatePatch(seedValues ?? defaultValues(user), values, chosenExpiry);
+      if (Object.keys(input).length === 0) {
+        onClose();
+        return;
+      }
+      if (!(await submit(input))) return;
     } else {
       const input: CreateUserInput = {
         username: values.username.trim(),
@@ -329,7 +359,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
         ...(values.subscriptionToken ? { subscriptionToken: values.subscriptionToken.trim() } : {}),
         ...(values.routingPreset ? { routingPreset: values.routingPreset as never } : {}),
       };
-      await onSubmit(input);
+      if (!(await submit(input))) return;
     }
 
     // "Create and next" keeps the modal up and hands back a blank draft on the
@@ -382,6 +412,8 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     nameQuery,
     nameTaken,
     nameFree,
+    nameUnchecked,
+    squadsFailure,
     endpointsQuery,
     estimate,
     preview,
@@ -397,6 +429,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     setAdvancedOpen,
     presetId,
     setPresetId,
+    saveRefusal,
   };
 }
 

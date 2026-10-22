@@ -1,5 +1,6 @@
 import { IconCheck, IconDice5, IconPlus } from '@tabler/icons-react';
-import { EDGE, CARD, CYAN, DIM, DISPLAY, GROUND, HAIRLINE, MIST, MONO, MOSS, RED, SNOW } from '@/contours/users/lib/colors';
+import { AMBER, EDGE, CARD, CYAN, DIM, DISPLAY, GROUND, HAIRLINE, MIST, MONO, MOSS, RED, SNOW } from '@/contours/users/lib/colors';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { PlanRow } from '@/contours/users/components/UserDrawer/PlanRow';
 import { Section } from '@/contours/users/components/UserDrawer/Section';
@@ -19,6 +20,8 @@ export function FormColumn({
   squads,
   nameTaken,
   nameFree,
+  nameUnchecked,
+  squadsFailure,
   applyPreset,
   toggleSquad,
   presetId,
@@ -34,6 +37,8 @@ export function FormColumn({
   | 'squads'
   | 'nameTaken'
   | 'nameFree'
+  | 'nameUnchecked'
+  | 'squadsFailure'
   | 'applyPreset'
   | 'toggleSquad'
   | 'presetId'
@@ -138,6 +143,11 @@ export function FormColumn({
                 </Text>
               </Box>
             )}
+            {nameUnchecked && (
+              <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em', color: AMBER }}>
+                {t('userDrawer.nameUnchecked')}
+              </Text>
+            )}
             {nameTaken && (
               <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em', color: RED }}>
                 {t('userDrawer.nameTaken')}
@@ -170,6 +180,7 @@ export function FormColumn({
       )}
 
       <Section label={t('userDrawer.squads')}>
+        {squadsFailure && <LoadFailedLine message={squadsFailure.message} onRetry={squadsFailure.onRetry} />}
         <Box style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {squads.map((s) => {
             const active = form.values.groupIds.includes(s.id);

@@ -90,6 +90,7 @@ export function UserDrawer({
           onClose={onClose}
           loading={loading}
           setCreateNext={ui.setCreateNext}
+          saveRefusal={ui.saveRefusal}
         />
       </form>
     </Modal>

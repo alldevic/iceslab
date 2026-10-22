@@ -1,4 +1,4 @@
-import type { TrafficLimitStrategy, User } from '@/lib/domain/users';
+import type { TrafficLimitStrategy, UpdateUserInput, User } from '@/lib/domain/users';
 import { MIST, MONO } from '@/contours/users/lib/colors';
 export const LABEL = {
   fontFamily: MONO,
@@ -81,4 +81,35 @@ export function defaultValues(user: User | null): FormValues {
     groupIds: user?.groupIds ?? [],
     routingPreset: user?.routingPreset ?? '',
   };
+}
+
+/**
+ * The PUT of an edit: only what the operator changed against the values the
+ * drawer was seeded with (spec frontend-users, the PUT rule after the 31.07
+ * incident). Restating every field rolled back what the operator's bot did
+ * while the drawer was open: a renewal or a switch-on came back as the old
+ * status and limit on save. Squads compare as a set; the expiry goes only when
+ * this session picked one (`expirySet`), as before.
+ */
+export function userUpdatePatch(seed: FormValues, values: FormValues, chosenExpiry: Date | null): UpdateUserInput {
+  const out: UpdateUserInput = {};
+  if (values.expirySet) out.expireAt = chosenExpiry?.toISOString() ?? null;
+  if (values.status !== seed.status) out.status = values.status;
+  if (trafficLimitInput(values.trafficLimitGb) !== trafficLimitInput(seed.trafficLimitGb)) {
+    out.trafficLimitGb = trafficLimitInput(values.trafficLimitGb);
+  }
+  if (values.trafficLimitStrategy !== seed.trafficLimitStrategy) out.trafficLimitStrategy = values.trafficLimitStrategy;
+  const text = (v: string) => v || null;
+  if (text(values.description) !== text(seed.description)) out.description = text(values.description);
+  if (text(values.tag) !== text(seed.tag)) out.tag = text(values.tag);
+  if (text(values.email) !== text(seed.email)) out.email = text(values.email);
+  if (text(values.telegramId) !== text(seed.telegramId)) out.telegramId = text(values.telegramId);
+  const limit = (v: number | '') => (v === '' ? null : Number(v));
+  if (limit(values.hwidDeviceLimit) !== limit(seed.hwidDeviceLimit)) out.hwidDeviceLimit = limit(values.hwidDeviceLimit);
+  const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  if (!sameSet(values.groupIds, seed.groupIds)) out.groupIds = [...values.groupIds];
+  if (text(values.routingPreset) !== text(seed.routingPreset)) {
+    out.routingPreset = (text(values.routingPreset) as UpdateUserInput['routingPreset']) ?? null;
+  }
+  return out;
 }
