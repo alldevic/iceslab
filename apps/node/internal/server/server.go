@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/certstore"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/chain"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
@@ -86,6 +87,11 @@ type Config struct {
 	// (E49), synced at the end of every applied push. Nil guards nothing,
 	// which is what tests get.
 	HopGuard *hopguard.Guard
+	// Certs holds the mTLS server pair and renews it (A-124). Nil builds one
+	// from the payload with nothing on disk, which is what tests get.
+	Certs *certstore.Store
+	// AgentVersion is main.version, reported on /healthz.
+	AgentVersion string
 }
 
 type Server struct {
@@ -109,6 +115,9 @@ type Server struct {
 	// storeMu covers the read of the stored push and the write of the next
 	// one (persistAccepted), so two pushes cannot interleave the two halves.
 	storeMu sync.Mutex
+
+	// certsMu guards building cfg.Certs from the payload once.
+	certsMu sync.Mutex
 }
 
 func New(cfg Config) (*Server, error) {
@@ -140,12 +149,9 @@ func (s *Server) Run(ctx context.Context) error {
 	// and waited for a panel that could not always speak.
 	s.restoreFromStore(ctx)
 
-	cert, err := tls.X509KeyPair(
-		[]byte(s.cfg.Payload.NodeCertPem),
-		[]byte(s.cfg.Payload.NodeKeyPem),
-	)
+	certs, err := s.certs()
 	if err != nil {
-		return fmt.Errorf("load node keypair: %w", err)
+		return err
 	}
 
 	caPool := x509.NewCertPool()
@@ -193,7 +199,9 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:    s.cfg.Host + ":" + s.cfg.Port,
 		Handler: s.routes(),
 		TLSConfig: &tls.Config{
-			Certificates:          []tls.Certificate{cert},
+			// Asked on every handshake, so a rotated pair (A-124) is served to
+			// the next connection without a restart.
+			GetCertificate:        certs.GetCertificate,
 			ClientCAs:             caPool,
 			ClientAuth:            tls.RequireAndVerifyClientCert,
 			MinVersion:            tls.VersionTLS12,
@@ -221,6 +229,92 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// certs is the store the TLS server and /rotateCert share, built from the
+// payload when main gave none.
+func (s *Server) certs() (*certstore.Store, error) {
+	s.certsMu.Lock()
+	defer s.certsMu.Unlock()
+	if s.cfg.Certs != nil {
+		return s.cfg.Certs, nil
+	}
+	st, err := certstore.Open(certstore.Config{
+		CACertPEM:      s.cfg.Payload.CACertPem,
+		PayloadCertPEM: s.cfg.Payload.NodeCertPem,
+		PayloadKeyPEM:  s.cfg.Payload.NodeKeyPem,
+		Logger:         s.logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.cfg.Certs = st
+	return st, nil
+}
+
+// handleRotateCert answers POST /rotateCert (A-124): a new server pair over
+// the live channel. 400 CERT_INVALID for a pair the checks refuse, 409
+// CERT_ROTATION_PENDING while an earlier one waits for its confirm. The key
+// is not logged.
+func (s *Server) handleRotateCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.RotateCertRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	certs, err := s.certs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CERT_STORE", err.Error())
+		return
+	}
+	fp, confirmBy, err := certs.Rotate(req.CertPEM, req.KeyPEM)
+	switch {
+	case errors.Is(err, certstore.ErrPending):
+		writeError(w, http.StatusConflict, "CERT_ROTATION_PENDING", err.Error())
+		return
+	case errors.Is(err, certstore.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "CERT_INVALID", err.Error())
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "CERT_WRITE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, dto.RotateCertResponse{
+		OK:          true,
+		Fingerprint: fp,
+		ConfirmBy:   confirmBy.UTC().Format(time.RFC3339),
+	})
+}
+
+// handleConfirmCert answers POST /rotateCert/confirm: the panel reached the
+// node on the new pair. 409 CERT_NOT_PENDING when no rotation with that
+// fingerprint waits (already confirmed, rolled back, or never made).
+func (s *Server) handleConfirmCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.ConfirmCertRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	certs, err := s.certs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CERT_STORE", err.Error())
+		return
+	}
+	if err := certs.Confirm(req.Fingerprint); err != nil {
+		if errors.Is(err, certstore.ErrNotPending) {
+			writeError(w, http.StatusConflict, "CERT_NOT_PENDING", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "CERT_WRITE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, dto.ConfirmCertResponse{OK: true})
 }
 
 // maxRequestBodyBytes caps every panel→agent request body. Even though the
@@ -260,6 +354,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/ufwPorts", s.handleUfwPorts)
 	mux.HandleFunc("/assets", s.handleAssetsList)
 	mux.HandleFunc("/assets/", s.handleAssetPut)
+	mux.HandleFunc("/rotateCert", s.handleRotateCert)
+	mux.HandleFunc("/rotateCert/confirm", s.handleConfirmCert)
 	return mux
 }
 
@@ -559,7 +655,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// since the agent started shows on the next healthcheck (E42).
 		DeclaredEngines: declaredEngines(s.cfg.EnvFile),
 		ChainEngine:     s.chainEngine(),
+		CertNotAfter:    s.certNotAfter(),
+		AgentVersion:    s.cfg.AgentVersion,
 	})
+}
+
+// certNotAfter of the pair in force, RFC3339, for the panel to renew ahead of
+// it (A-124). Empty when the store cannot be built, which Run refuses anyway.
+func (s *Server) certNotAfter() string {
+	certs, err := s.certs()
+	if err != nil {
+		return ""
+	}
+	return certs.NotAfter().UTC().Format(time.RFC3339)
 }
 
 // chainEngine: the engine the chain process runs when this agent has one,
