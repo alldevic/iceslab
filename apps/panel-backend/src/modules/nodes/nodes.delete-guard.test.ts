@@ -108,7 +108,9 @@ describe('deleting a node a cascade runs through', () => {
     const shared = await makeNode('nl-exit');
     const other = await makeNode('se-exit');
     await makeCascade('ru-a', entryA, [shared, other]);
-    await makeCascade('ru-b', entryB, [shared, other]);
+    // Switched off: a node carries one ENABLED cascade (A-101), and the guard
+    // names a switched-off one too (A-126).
+    await makeCascade('ru-b', entryB, [shared, other], false);
 
     const body = JSON.parse((await del(shared)).body);
     expect(body.cascades.sort()).toEqual(['ru-a', 'ru-b']);

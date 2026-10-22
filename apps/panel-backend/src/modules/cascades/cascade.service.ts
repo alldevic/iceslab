@@ -17,6 +17,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { xrayGeoEntry } from '../geo-sets/geo-refs.js';
 import { chainNodePolicyOf, chainPoliciesOf } from './chain-policy.js';
+import { assertNodesInNoOtherCascade, CASCADE_OWNERSHIP_ORDER } from './cascade-exclusive.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { getLogger } from '../../lib/infra/logger.js';
@@ -1490,7 +1491,9 @@ export function applyExitAcl(
 export async function listCascades(): Promise<CascadeDto[]> {
   const rows = await prisma.cascade.findMany({
     include: hopInclude,
-    orderBy: { createdAt: 'desc' },
+    // A-101: the ownership order (oldest first), so the screen that takes the
+    // first cascade a node is in names the one the node actually runs.
+    orderBy: CASCADE_OWNERSHIP_ORDER,
   });
   return rows.map(mapCascade);
 }
@@ -2157,6 +2160,9 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // process, so its nodes must be able to run one.
   await assertEntryCanChain(positions);
   await assertEntryPolicyExists(input.entryPolicyId);
+  // A-101: one enabled cascade per node. A switched-off one is not drawn and
+  // takes no node.
+  if (input.enabled) await assertNodesInNoOtherCascade(null, allNodeIds);
   // v4 topology, validated separately from the fold: the fold answers "can the
   // old storage hold this", these rules answer "is this a sane cascade at all".
   const topology =
@@ -2381,6 +2387,19 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   await assertEntryChangeConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryNodesDropConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryPolicyExists(input.entryPolicyId);
+  // A-101: one enabled cascade per node, asked when this save changes the
+  // members or switches the cascade on. A rename of a cascade stored before
+  // the rule is not refused for a pair it did not make.
+  if (willBeEnabled && (switchingOn || hops || positions || directions)) {
+    const target = [
+      ...new Set([
+        ...(hops ?? []).map((h) => h.nodeId),
+        ...(gatePositions ?? []).flatMap((p) => p.nodeIds),
+        ...(gateDirections ?? []).flatMap((d) => d.nodeIds),
+      ]),
+    ];
+    await assertNodesInNoOtherCascade(id, target.length > 0 ? target : oldNodeIds);
+  }
 
   try {
     const c = await prisma.$transaction(async (tx) => {
@@ -3021,9 +3040,11 @@ async function buildCascadeFragmentsForNode(
     if (mine) return toWireFragments(mine);
   }
 
-  // A node belongs to at most one cascade in the v1 model; first enabled match.
+  // A node belongs to at most one enabled cascade (A-101: the save refuses a
+  // second); for a pair stored before the rule, the oldest holds it.
   const member = await prisma.cascadeHop.findFirst({
     where: { nodeId, cascade: { enabled: true } },
+    orderBy: [{ cascade: { createdAt: 'asc' } }, { cascadeId: 'asc' }],
     select: { cascadeId: true },
   });
   if (!member) return null;
@@ -3125,24 +3146,26 @@ async function buildCascadeFragmentsForNode(
  * consistent and wrong together, which is the hardest kind of wrong to see.
  */
 async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null> {
-  const link =
-    (await prisma.cascadeLink.findFirst({
-      where: {
-        cascade: { enabled: true },
-        OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }],
-      },
-      select: { cascadeId: true },
-    })) ??
-    // Phase 10: an entry whose only ways out are named outbounds has no link
-    // at all, and is in the cascade all the same. Found by its position, in
-    // a cascade that has an outbound direction to draw.
-    (await prisma.cascadePosition.findFirst({
-      where: {
-        nodes: { some: { nodeId } },
-        cascade: { enabled: true, directions: { some: { outboundId: { not: null } } } },
-      },
-      select: { cascadeId: true },
-    }));
+  // The enabled cascade whose legs touch this node or, phase 10, whose position
+  // holds it with a named outbound to dial (an entry with only such ways out
+  // has no link and is in the cascade all the same). A-101: one query, in the
+  // ownership order, so a node stored in two enabled cascades always gets the
+  // oldest, here and in every other read of a node's cascade.
+  const owner = await prisma.cascade.findFirst({
+    where: {
+      enabled: true,
+      OR: [
+        { links: { some: { OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }] } } },
+        {
+          positions: { some: { nodes: { some: { nodeId } } } },
+          directions: { some: { outboundId: { not: null } } },
+        },
+      ],
+    },
+    orderBy: CASCADE_OWNERSHIP_ORDER,
+    select: { id: true },
+  });
+  const link = owner ? { cascadeId: owner.id } : null;
   if (!link) return null;
 
   const [cascadeRow, positions, directions, links, policyRows, tunnelRows] = await Promise.all([

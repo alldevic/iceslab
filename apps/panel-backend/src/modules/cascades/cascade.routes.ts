@@ -8,6 +8,7 @@ import {
 } from './cascade.schemas.js';
 import { CASCADE_DTO_FIELDS } from './cascade.mapper.js';
 import * as svc from './cascade.service.js';
+import { CascadeNodeInOtherCascadeError } from './cascade-exclusive.js';
 import {
   CascadeDirectionShapeError,
   CascadeEntryNotChainableError,
@@ -61,6 +62,16 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   }
   if (err instanceof svc.CascadeNotFoundError) {
     return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+  }
+  // A-101: the node already carries another enabled cascade.
+  if (err instanceof CascadeNodeInOtherCascadeError) {
+    return reply.code(409).send({
+      error: err.code,
+      message: err.message,
+      nodeName: err.nodeName,
+      cascadeId: err.cascadeId,
+      cascadeName: err.cascadeName,
+    });
   }
   if (err instanceof svc.CascadeNameTakenError) {
     return reply.code(409).send({ error: 'CONFLICT', message: err.message });

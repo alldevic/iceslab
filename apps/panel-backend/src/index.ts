@@ -22,6 +22,7 @@ import { startMetricsRefreshLoop } from './lib/infra/metrics-refresh.js';
 import { startTelegramBot } from './lib/notify/telegram-bot.js';
 import { assertLinearRegexEngine } from './modules/srr/linear-regex.js';
 import { checkStoredRules } from './modules/srr/srr.service.js';
+import { reportCascadeNodeConflicts } from './modules/cascades/cascade-exclusive.js';
 
 let app: FastifyInstance | null = null;
 let nodeUsersWorker: Worker | null = null;
@@ -76,6 +77,8 @@ async function start() {
     // A-019: a stored rule the linear engine cannot run is no longer served;
     // say which, once, rather than let it stop matching in silence.
     await checkStoredRules().catch((err) => app?.log.error({ err }, 'srr: stored rule check failed'));
+    // A-101: nodes stored in two enabled cascades, named; nothing switched off.
+    await reportCascadeNodeConflicts().catch((err) => app?.log.error({ err }, 'cascades: conflict check failed'));
 
     // Phase 9: the built-in geo sets fetch their pinned release in the
     // background. A failure is the set's `broken`, never the panel's start.
