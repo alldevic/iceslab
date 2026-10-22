@@ -426,15 +426,18 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 //
 // Derived from the id rather than random for that same reason, and prefixed
 // with the base tag so a human reading the config still sees what it is.
+//
+// The WHOLE id (A-131, 22.10): the first 8 characters were taken, and two
+// bindings whose ids share them (1 in about 4 billion per pair with random
+// uuids, every pair of fixtures like ...0001 and ...0002 that differ at the
+// end) got one tag, and xray refused the node's whole config. The tags of a
+// running core change once with this, which costs nothing extra: the agent's
+// update restarts xray, and its counters start over then anyway.
 func inboundTagFor(inboundID, baseTag string) string {
-	short := inboundID
-	if len(short) > 8 {
-		short = short[:8]
-	}
 	if baseTag == "" {
 		baseTag = "vless-in"
 	}
-	return baseTag + "-" + short
+	return baseTag + "-" + inboundID
 }
 
 // recordRestart accumulates what the supervisor did. Called from the
