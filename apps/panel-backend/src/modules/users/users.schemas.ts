@@ -208,8 +208,10 @@ export const ListUsersQuerySchema = z.object({
    *  who is visible. */
   usedOver: z.coerce.number().int().nonnegative().optional(),
   usedUnder: z.coerce.number().int().nonnegative().optional(),
-  /** Per-user device cap, set or inherited. */
-  deviceLimit: z.enum(['set', 'unset']).optional(),
+  /** The user's own device limit (A-148): `set` a limit of one or more,
+   *  `unlimited` the explicit no-limit (0), `unset` none of their own, so as
+   *  the squads say (null). */
+  deviceLimit: z.enum(['set', 'unlimited', 'unset']).optional(),
   /** Telegram account linked to the user. */
   telegram: z.enum(['linked', 'none']).optional(),
   /** Email filled in. */

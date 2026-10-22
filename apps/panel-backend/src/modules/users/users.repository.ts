@@ -55,7 +55,7 @@ export interface ListParams {
   trafficLimit?: 'limited' | 'unlimited';
   usedOver?: number;
   usedUnder?: number;
-  deviceLimit?: 'set' | 'unset';
+  deviceLimit?: 'set' | 'unlimited' | 'unset';
   telegram?: 'linked' | 'none';
   email?: 'set' | 'none';
   revoked?: 'yes' | 'no';
@@ -273,10 +273,14 @@ export async function list(params: ListParams): Promise<{
     );
   }
   if (params.deviceLimit) {
+    // A-148: 0 is an explicit no-limit, not "a limit is set"; it was, and an
+    // operator looking for who is capped got the uncapped ones too.
     and.push(
       params.deviceLimit === 'set'
-        ? { hwidDeviceLimit: { not: null } }
-        : { hwidDeviceLimit: null },
+        ? { hwidDeviceLimit: { gte: 1 } }
+        : params.deviceLimit === 'unlimited'
+          ? { hwidDeviceLimit: 0 }
+          : { hwidDeviceLimit: null },
     );
   }
   if (params.telegram) {
