@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MULTI_INBOUND_ADAPTERS } from '@iceslab/shared';
 import { adapterRefusal, adapterRefusalWords, addOnePerSlot, slotHeldBy, slotShared } from '@/lib/domain/adapterSlot';
 
 const p = (id: string, protocol: string, engine: string | null, awgProtocol?: 1 | 3) => ({
@@ -10,11 +11,14 @@ const p = (id: string, protocol: string, engine: string | null, awgProtocol?: 1 
 });
 
 describe('общий слот читается из @iceslab/shared (A-196)', () => {
-  it('много входов держат xray на xray и mieru', () => {
+  // The list moves as the agent learns multi-inbound per adapter (f4dc7aa8
+  // added the six sing-box protocols): the screen follows the contract, so
+  // the test checks the reading, not a copy of today's list.
+  it('slotShared отвечает ровно по MULTI_INBOUND_ADAPTERS', () => {
+    for (const slot of ['xray|xray', 'mieru|mieru', 'xray|singbox', 'hysteria|hysteria', 'amneziawg|1', 'naive|naive']) {
+      expect(slotShared(slot)).toBe(MULTI_INBOUND_ADAPTERS.includes(slot));
+    }
     expect(slotShared('xray|xray')).toBe(true);
-    expect(slotShared('mieru|mieru')).toBe(true);
-    expect(slotShared('xray|singbox')).toBe(false);
-    expect(slotShared('hysteria|hysteria')).toBe(false);
   });
 });
 
