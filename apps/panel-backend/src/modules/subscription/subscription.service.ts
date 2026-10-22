@@ -1118,6 +1118,7 @@ export async function generateSubscription(
         subprotocol?: 'vless' | 'trojan' | 'vmess';
         security?: 'reality' | 'none' | 'tls';
         tlsServerName?: string;
+        xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
       };
       // Slice 30: per-host overrides on the most-used REALITY knobs. Each
       // null falls through to the profile-level config, so back-compat with
@@ -1240,6 +1241,9 @@ export async function generateSubscription(
         path: xrayPath,
         hostHeader: xrayHostHeader,
         serviceName: cfg.serviceName,
+        // The XHTTP mode the node waits for (A-133): a client that goes its
+        // own default against a non-auto server does not connect.
+        ...(network === 'xhttp' && cfg.xhttpMode ? { xhttpMode: cfg.xhttpMode } : {}),
         subprotocol,
         uri,
         // A4: set only when this node is a balancer-cascade entry. Undefined

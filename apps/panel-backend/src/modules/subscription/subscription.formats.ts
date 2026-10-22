@@ -241,6 +241,9 @@ export interface XraySubscriptionEndpoint extends SubscriptionEndpointBase {
   path?: string;
   hostHeader?: string;
   serviceName?: string;
+  /** The profile's XHTTP mode, only on an xhttp endpoint (A-133). Absent =
+   *  the profile says nothing, which the node renders as auto. */
+  xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
   /** Slice 24c part 3: controls URI scheme (`vless://` vs `trojan://`)
    *  and downstream singbox/clash outbound type. */
   subprotocol?: 'vless' | 'trojan' | 'vmess';

@@ -378,6 +378,11 @@ export function buildClashYaml(
         const opts: string[] = [];
         if (e.path) opts.push(`      path: ${yamlString(e.path)}`);
         if (e.hostHeader) opts.push(`      host: ${yamlString(e.hostHeader)}`);
+        // The node's mode when it is not auto: mihomo takes the same four
+        // values ("auto, stream-one, stream-up, or packet-up", transport page,
+        // read 22.10), and a client on its own default against a non-auto
+        // server does not connect.
+        if (e.xhttpMode && e.xhttpMode !== 'auto') opts.push(`      mode: ${e.xhttpMode}`);
         if (opts.length > 0) {
           block.push(`    xhttp-opts:`);
           block.push(...opts);

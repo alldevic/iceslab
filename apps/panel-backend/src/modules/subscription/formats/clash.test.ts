@@ -251,6 +251,15 @@ describe('buildClashYaml', () => {
     expect(out).toContain('v2ray-http-upgrade: true');
   });
 
+  it('carries a non-auto XHTTP mode, and no mode key for auto (A-133)', () => {
+    const one = buildClashYaml([{ ...xrayEp, network: 'xhttp' as const, xhttpMode: 'stream-one' as const }]);
+    expect(one).toContain('mode: stream-one');
+    for (const mode of ['auto', undefined] as const) {
+      const out = buildClashYaml([{ ...xrayEp, network: 'xhttp' as const, path: '/xh', xhttpMode: mode }]);
+      expect(out, String(mode)).not.toMatch(/^\s+mode:/m);
+    }
+  });
+
   // A-133: a network mihomo does not know is read as TCP there, so it is left out.
   it('writes xhttp for vless with xhttp-opts, and leaves out what mihomo would dial as TCP', () => {
     const xhttp = buildClashYaml([{ ...xrayEp, network: 'xhttp' as const, path: '/xh', hostHeader: 'cdn.example.com' }]);
