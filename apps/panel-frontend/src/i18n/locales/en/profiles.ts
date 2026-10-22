@@ -175,7 +175,7 @@ export const profiles = {
         realityModeDesc: 'How REALITY borrows a TLS identity',
         realityModeStealOthers: 'steal-from-others (external decoy)',
         realityModeSelfSteal: 'self-steal (local fallback, RU-2026)',
-        singboxXrayOnly: 'On sing-box only REALITY (steal-others) over raw; TLS, self-steal and other transports are on the xray core.',
+        singboxXrayOnly: 'On sing-box only REALITY (steal-others) over raw with one server name; TLS, self-steal, several names and other transports are on the xray core.',
         realityModeSelfStealHint:
           'Self-steal: the node runs a local TLS fallback and REALITY dest points at it. Set the domain below to one that resolves to THIS node IP, so SNI and IP match (survives RU whitelist-shutdown). dest is ignored.',
         realityFallbackUpstreamLabel: 'Realistic fallback (G1, optional)',
@@ -278,12 +278,13 @@ export const profiles = {
     newCrumb: 'NEW',
     engineRefused: 'The server refused: this protocol does not run on the chosen engine. SOCKS5 and HTTP are served by the xray core only.',
     // The BACK gate (0c7dcc7): an xray-family profile on sing-box, wrong field.
-    singboxXrayRefused: 'On sing-box only REALITY (steal-others) over raw: field "{{field}}".',
-    singboxXrayRefusedBinding: 'On sing-box only REALITY (steal-others) over raw: field "{{field}}" in the binding overrides.',
+    singboxXrayRefused: 'On sing-box only REALITY (steal-others) over raw with one server name: field "{{field}}".',
+    singboxXrayRefusedBinding: 'On sing-box only REALITY (steal-others) over raw with one server name: field "{{field}}" in the binding overrides.',
     singboxXrayField: {
       network: 'transport',
       security: 'security',
       realityMode: 'REALITY mode',
+      realityServerNames: 'REALITY server names',
     },
     newSubtitle: 'PICK A PROTOCOL AND DEFINE THE TEMPLATE',
     editSubtitle: 'CHANGES REDEPLOY TO EVERY NODE RUNNING THIS PROFILE',

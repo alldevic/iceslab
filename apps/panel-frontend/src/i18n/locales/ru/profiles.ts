@@ -181,7 +181,7 @@ export const profiles = {
         realityModeDesc: 'Как REALITY заимствует TLS-личность',
         realityModeStealOthers: 'steal-from-others (внешний декой)',
         realityModeSelfSteal: 'self-steal (локальный fallback, РФ-2026)',
-        singboxXrayOnly: 'На sing-box только REALITY (steal-others) по raw; TLS, self-steal и другие транспорты на ядре xray.',
+        singboxXrayOnly: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера; TLS, self-steal, несколько имён и другие транспорты на ядре xray.',
         realityModeSelfStealHint:
           'Self-steal: нода поднимает локальный TLS-fallback, dest REALITY смотрит на него. В поле ниже укажите домен, резолвящийся в IP ЭТОЙ ноды, чтобы SNI и IP совпадали (переживает whitelist-shutdown в РФ). dest игнорируется.',
         realityFallbackUpstreamLabel: 'Реалистичный fallback (G1, опц.)',
@@ -286,12 +286,13 @@ export const profiles = {
     newCrumb: 'НОВЫЙ',
     engineRefused: 'Сервер отказал: этот протокол не работает на выбранном движке. SOCKS5 и HTTP обслуживает только ядро xray.',
     // Отказ гейта BACK (0c7dcc7): xray-семейство на sing-box, поле не то.
-    singboxXrayRefused: 'На sing-box только REALITY (steal-others) по raw: поле «{{field}}».',
-    singboxXrayRefusedBinding: 'На sing-box только REALITY (steal-others) по raw: поле «{{field}}» в переопределениях привязки.',
+    singboxXrayRefused: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера: поле «{{field}}».',
+    singboxXrayRefusedBinding: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера: поле «{{field}}» в переопределениях привязки.',
     singboxXrayField: {
       network: 'транспорт',
       security: 'защита',
       realityMode: 'режим REALITY',
+      realityServerNames: 'имена серверов REALITY',
     },
     newSubtitle: 'ВЫБЕРИТЕ ПРОТОКОЛ И ОПИШИТЕ ШАБЛОН',
     editSubtitle: 'ИЗМЕНЕНИЯ УЕДУТ НА КАЖДУЮ НОДУ С ЭТИМ ПРОФИЛЕМ',
