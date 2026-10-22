@@ -50,6 +50,7 @@ import {
   movePosition,
   removePosition,
   appendPosition,
+  refusedPositionMoved,
   type DirectionDraft,
   type PositionDraft,
 } from '@/contours/cascades/lib/cascadeForm';
@@ -1249,6 +1250,17 @@ describe('A-140: позиция, сменившая номер, шлёт сво�
     const out = toPositionInputs(appendPosition(removePosition([entry, a, b], 2), 9));
     expect(out[2]).toMatchObject({ nodeIds: [], position: 2, linkProtocol: 'xray', linkParams: null });
     expect('linkParams' in out[2]!).toBe(true);
+  });
+
+  it('отказ POSITION_MOVED_WITHOUT_LINK_PARAMS: номера с единицы, вход проверяется первым', () => {
+    const r = (status: number, data: unknown) => ({ response: { status, data } });
+    expect(
+      refusedPositionMoved(r(400, { error: 'POSITION_MOVED_WITHOUT_LINK_PARAMS', message: 'm', position: 2, storedPosition: 1 })),
+    ).toEqual({ position: 3, stored: 2 });
+    for (const e of [null, 'x', new Error('Network Error'), { response: null }]) expect(refusedPositionMoved(e)).toBeNull();
+    expect(refusedPositionMoved(r(400, { error: 'POSITION_MOVED_WITHOUT_LINK_PARAMS', position: '2', storedPosition: 1 }))).toBeNull();
+    expect(refusedPositionMoved(r(400, { error: 'INVALID', position: 2, storedPosition: 1 }))).toBeNull();
+    expect(refusedPositionMoved(r(409, { error: 'POSITION_MOVED_WITHOUT_LINK_PARAMS', position: 2, storedPosition: 1 }))).toBeNull();
   });
 
   it('за край не двигает', () => {

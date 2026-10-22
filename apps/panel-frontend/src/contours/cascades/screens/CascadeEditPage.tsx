@@ -120,6 +120,7 @@ import {
   movePosition,
   removePosition,
   appendPosition,
+  refusedPositionMoved,
   withEntryConfirm,
   withUnderlay,
   isOneLegCascade,
@@ -431,6 +432,12 @@ export function CascadeEditPage() {
       if (entryPolicyRefusal(err)) {
         setEntryPolicyGone(true);
         qc.invalidateQueries({ queryKey: ['route-policies'] });
+        return;
+      }
+      // Позиция переехала без настроек ноги (8072de8): словами, на экране.
+      const moved = refusedPositionMoved(err);
+      if (moved) {
+        setSaveRefusal(t('cascadeEdit.positionMoved', moved));
         return;
       }
       // The form blocks both unstorable shapes, so a 400 means the API saw

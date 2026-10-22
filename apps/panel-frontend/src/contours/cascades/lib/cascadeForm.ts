@@ -408,6 +408,25 @@ export function poolRoleAt(index: number): HopRole {
 }
 
 /**
+ * 400 POSITION_MOVED_WITHOUT_LINK_PARAMS (8072de8): позиция пришла на другом
+ * номере, чем хранится, без `linkParams`, и сервер не стал подставлять их по
+ * номеру. После `reorderedPositions` экран его получать не должен; если всё же
+ * пришёл, номера для слов. Вход проверяется первым; номера с сервера с нуля,
+ * на экран с единицы (вход первый).
+ */
+export function refusedPositionMoved(err: unknown): { position: number; stored: number } | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 400 || !data || typeof data !== 'object') return null;
+  const d = data as { error?: unknown; position?: unknown; storedPosition?: unknown };
+  if (d.error !== 'POSITION_MOVED_WITHOUT_LINK_PARAMS') return null;
+  if (!Number.isInteger(d.position) || !Number.isInteger(d.storedPosition)) return null;
+  return { position: (d.position as number) + 1, stored: (d.storedPosition as number) + 1 };
+}
+
+/**
  * Позиции после перестановки или удаления (A-140).
  *
  * Сервер подставляет неприсланный `linkParams` из хранимой позиции С ТЕМ ЖЕ
