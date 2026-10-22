@@ -16,6 +16,7 @@ import {
 import {
   createCoreVersions,
   enginesPayload,
+  freshNodeReason,
   legacyEngines,
   nodeEnginesRefusal,
   pickFreePort,
@@ -25,6 +26,7 @@ import {
   type Registered,
 } from '@/contours/nodes/lib/nodeCreateForm';
 import { coreVersionRefusal } from '@/lib/domain/coreVersions';
+import { awgGateText, coreGateRefusal } from '@/lib/domain/nodeCoreFit';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { adapterRefusal, adapterRefusalWords, addOnePerSlot, slotHeldBy } from '@/lib/domain/adapterSlot';
@@ -187,15 +189,18 @@ export function useNodeCreateForm() {
     const can: Profile[] = [];
     const cannot: { profile: Profile; reason: string }[] = [];
     for (const p of all) {
-      if (carried.has(p.effectiveEngine)) {
+      const why = freshNodeReason(p, carried);
+      if (why === null) {
         can.push(p);
       } else {
         cannot.push({
           profile: p,
           reason:
-            p.effectiveEngine === 'singbox'
+            why === 'noSingbox'
               ? t('nodeCreate.reasonNoSingbox')
-              : t('nodeCreate.reasonNoCore', { protocol: p.protocol }),
+              : why === 'awg31NotReported'
+                ? t('nodeCreate.reasonAwg31NotReported')
+                : t('nodeCreate.reasonNoCore', { protocol: p.protocol }),
         });
       }
     }
@@ -306,8 +311,14 @@ export function useNodeCreateForm() {
         } catch (err) {
           // The server's reason beside the name: «port taken» and «core
           // refused» are different fixes.
+          // A-160: a 3.1 refusal on a node that has not reported says to wait
+          // for the first poll, not to rebuild the agent.
           const slot = adapterRefusal(err);
-          failed.push(`${profile.name}: ${slot ? adapterRefusalWords({ ...slot, nodeName: null }, t) : apiErrorMessage(err)}`);
+          const gate = coreGateRefusal(err);
+          const awg = gate ? awgGateText(gate, t) : null;
+          failed.push(
+            `${profile.name}: ${slot ? adapterRefusalWords({ ...slot, nodeName: null }, t) : (awg ?? apiErrorMessage(err))}`,
+          );
         }
       }
       if (failed.length > 0) {

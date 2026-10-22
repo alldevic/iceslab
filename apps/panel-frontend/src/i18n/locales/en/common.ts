@@ -134,6 +134,7 @@ export const common = {
       'The port is inside this node\'s hysteria port hopping range; hopping is turned off for this port, and hysteria clients will not connect on it.',
     gateAwgAgent:
       'The agent on node {{node}} is older than the AmneziaWG 3.1 interface: rebuild the agent on the node, then bind the 3.1 profile.',
+    gateAwgNotReported: 'Node {{node}} has not reported yet: an AmneziaWG 3.1 profile binds after the first poll.',
     gateAwgSubnet:
       'On node {{node}} subnet {{subnet}} overlaps {{otherSubnet}} of profile {{other}}: 1.x and 3.1 profiles on one node need different subnets.',
     gateAfterInstall: 'The panel runs nothing on the machine. Once installed, the node reports the core by itself and the save goes through.',

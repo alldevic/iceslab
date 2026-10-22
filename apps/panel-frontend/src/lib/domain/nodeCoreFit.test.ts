@@ -181,11 +181,20 @@ describe('coreGateRefusal: the 409 of the BACK core gate', () => {
     ).toBeNull();
   });
 
-  it('AWG_AGENT_TOO_OLD (24b59b9): only the node', () => {
+  it('AWG_AGENT_TOO_OLD (24b59b9): the node, and neverReported only when true (A-160)', () => {
     expect(coreGateRefusal(res({ error: 'AWG_AGENT_TOO_OLD', message: 'm', nodeName: 'se-01' }))).toEqual({
       kind: 'awgAgent',
       nodeName: 'se-01',
+      neverReported: false,
     });
+    expect(coreGateRefusal(res({ error: 'AWG_AGENT_TOO_OLD', nodeName: 'n', neverReported: true }))).toMatchObject({
+      neverReported: true,
+    });
+    for (const v of [false, 'true', 1, null]) {
+      expect(coreGateRefusal(res({ error: 'AWG_AGENT_TOO_OLD', nodeName: 'n', neverReported: v }))).toMatchObject({
+        neverReported: false,
+      });
+    }
     expect(coreGateRefusal(res({ error: 'AWG_AGENT_TOO_OLD' }))).toBeNull();
   });
 
@@ -206,7 +215,9 @@ describe('coreGateRefusal: the 409 of the BACK core gate', () => {
 
   it('awgGateText: the three AmneziaWG refusals in words, others null', () => {
     const t = (k: string, o?: Record<string, unknown>) => `${k} ${JSON.stringify(o ?? {})}`;
-    expect(awgGateText({ kind: 'awgAgent', nodeName: 'se-01' }, t)).toBe('nodeCore.gateAwgAgent {"node":"se-01"}');
+    expect(awgGateText({ kind: 'awgAgent', nodeName: 'se-01', neverReported: false }, t)).toBe('nodeCore.gateAwgAgent {"node":"se-01"}');
+    // A-160: a node that has not reported is not told to rebuild its agent.
+    expect(awgGateText({ kind: 'awgAgent', nodeName: 'se-01', neverReported: true }, t)).toBe('nodeCore.gateAwgNotReported {"node":"se-01"}');
     expect(
       awgGateText({ kind: 'awgSubnet', nodeName: 'n', subnet: 'a', otherProfileName: 'p', otherSubnet: 'b' }, t),
     ).toBe('nodeCore.gateAwgSubnet {"node":"n","subnet":"a","otherSubnet":"b","other":"p"}');
@@ -224,8 +235,8 @@ describe('coreGateRefusal: the 409 of the BACK core gate', () => {
       kind: 'awg', nodeName: 'n', profileAwgProtocol: 3, nodeAwgProtocol: 1,
     });
     // Module 3.1, agent without 3 (or without the key): too old.
-    expect(awgProfilePrediction(p3, { name: 'n', awgProtocol: 3, ...row([1]) }, true)).toEqual({ kind: 'awgAgent', nodeName: 'n' });
-    expect(awgProfilePrediction(p3, { name: 'n', awgProtocol: 3, ...row(undefined) }, true)).toEqual({ kind: 'awgAgent', nodeName: 'n' });
+    expect(awgProfilePrediction(p3, { name: 'n', awgProtocol: 3, ...row([1]) }, true)).toEqual({ kind: 'awgAgent', nodeName: 'n', neverReported: false });
+    expect(awgProfilePrediction(p3, { name: 'n', awgProtocol: 3, ...row(undefined) }, true)).toEqual({ kind: 'awgAgent', nodeName: 'n', neverReported: false });
     // Both fine: offered.
     expect(awgProfilePrediction(p3, { name: 'n', awgProtocol: 3, ...row([1, 3]) }, true)).toBeNull();
   });

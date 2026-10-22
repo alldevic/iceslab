@@ -45,6 +45,25 @@ export function selectedThatCan(selected: string[], canIds: readonly string[] | 
   return selected.filter((id) => can.has(id));
 }
 
+/**
+ * Why a profile cannot stand on the node the wizard is creating, or null when
+ * it can. The node has not reported yet, by construction: so a profile whose
+ * engine is carried still cannot be an AmneziaWG 3.1 one (A-146 p. 3.1,
+ * A-160). The server binds 3.1 only after a poll shows the agent brings up a
+ * 3.1 interface, and refuses it before that with AWG_AGENT_TOO_OLD
+ * { neverReported: true }; the wizard says so up front instead.
+ */
+export type FreshNodeReason = 'noSingbox' | 'noCore' | 'awg31NotReported';
+
+export function freshNodeReason(
+  profile: { effectiveEngine: string; protocol: string; awgProtocol?: number | null },
+  carried: ReadonlySet<string>,
+): FreshNodeReason | null {
+  if (!carried.has(profile.effectiveEngine)) return profile.effectiveEngine === 'singbox' ? 'noSingbox' : 'noCore';
+  if (profile.protocol === 'amneziawg' && profile.awgProtocol === 3) return 'awg31NotReported';
+  return null;
+}
+
 /** Next candidate port not already handed to another host on this node. */
 export function pickFreePort(used: number[]): number {
   const taken = new Set(used);

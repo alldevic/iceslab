@@ -169,8 +169,11 @@ export type CoreGateRefusal =
   /** AWG_PROTOCOL_MISMATCH (227054e): профиль 3.1 на ноде с модулем 1.x. Без
    *  `engine` в теле: ядро одно, amneziawg. */
   | { kind: 'awg'; nodeName: string; profileAwgProtocol: AwgProtocol; nodeAwgProtocol: AwgProtocol }
-  /** AWG_AGENT_TOO_OLD (24b59b9): агент на ноде старше интерфейса 3.1. */
-  | { kind: 'awgAgent'; nodeName: string }
+  /** AWG_AGENT_TOO_OLD (24b59b9): агент на ноде старше интерфейса 3.1.
+   *  `neverReported` (A-160, 9d607513): нода ещё не отчиталась вовсе, и о
+   *  возрасте агента сказать нечего; совет «ждать первого опроса», а не
+   *  «пересобрать агент». Только `true` из тела это true. */
+  | { kind: 'awgAgent'; nodeName: string; neverReported: boolean }
   /** AWG_SUBNET_OVERLAP (24b59b9): профили 1.x и 3.1 одной ноды с
    *  пересекающимися подсетями. */
   | { kind: 'awgSubnet'; nodeName: string; subnet: string; otherProfileName: string; otherSubnet: string };
@@ -205,7 +208,7 @@ export function awgProfilePrediction(
   const row = node.cores?.cores.find((c) => c.engine === 'amneziawg' || c.name === 'amneziawg');
   if (!row) return null;
   const gens = row.awgGenerations;
-  return Array.isArray(gens) && gens.includes(3) ? null : { kind: 'awgAgent', nodeName: node.name };
+  return Array.isArray(gens) && gens.includes(3) ? null : { kind: 'awgAgent', nodeName: node.name, neverReported: false };
 }
 
 /**
@@ -221,7 +224,9 @@ export function awgGateText(refusal: CoreGateRefusal, t: T): string | null {
         profileGen: refusal.profileAwgProtocol === 3 ? '3.1' : '1.x',
       });
     case 'awgAgent':
-      return t('nodeCore.gateAwgAgent', { node: refusal.nodeName });
+      return t(refusal.neverReported ? 'nodeCore.gateAwgNotReported' : 'nodeCore.gateAwgAgent', {
+        node: refusal.nodeName,
+      });
     case 'awgSubnet':
       return t('nodeCore.gateAwgSubnet', {
         node: refusal.nodeName,
@@ -253,7 +258,9 @@ export function coreGateRefusal(err: unknown): CoreGateRefusal | null {
     if (profileAwgProtocol === null || nodeAwgProtocol === null) return null;
     return { kind: 'awg', nodeName: d.nodeName, profileAwgProtocol, nodeAwgProtocol };
   }
-  if (d.error === 'AWG_AGENT_TOO_OLD') return { kind: 'awgAgent', nodeName: d.nodeName };
+  if (d.error === 'AWG_AGENT_TOO_OLD') {
+    return { kind: 'awgAgent', nodeName: d.nodeName, neverReported: d.neverReported === true };
+  }
   // Все три строки обязательны: фраза без подсети или без имени профиля
   // назвала бы не то, что пересеклось.
   if (d.error === 'AWG_SUBNET_OVERLAP') {

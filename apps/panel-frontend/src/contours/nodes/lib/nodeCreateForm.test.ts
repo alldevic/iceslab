@@ -5,6 +5,7 @@ import {
   createCoreVersions,
   engineListForLabel,
   enginesPayload,
+  freshNodeReason,
   legacyEngines,
   nodeEnginesRefusal,
   sameEngines,
@@ -185,5 +186,20 @@ describe('createCoreVersions: ключ только с выбором', () => {
 
   it('сервер старше поля: не шлём, даже если выбрано', () => {
     expect(createCoreVersions(false, { singbox: '1.13.14' })).toBeUndefined();
+  });
+});
+
+describe('freshNodeReason (A-146 p. 3.1, A-160)', () => {
+  const carried = new Set(['xray', 'amneziawg']);
+  it('a carried engine stands, except AmneziaWG 3.1: the new node has not reported', () => {
+    expect(freshNodeReason({ effectiveEngine: 'xray', protocol: 'xray' }, carried)).toBeNull();
+    expect(freshNodeReason({ effectiveEngine: 'amneziawg', protocol: 'amneziawg', awgProtocol: 1 }, carried)).toBeNull();
+    expect(freshNodeReason({ effectiveEngine: 'amneziawg', protocol: 'amneziawg', awgProtocol: null }, carried)).toBeNull();
+    expect(freshNodeReason({ effectiveEngine: 'amneziawg', protocol: 'amneziawg', awgProtocol: 3 }, carried)).toBe('awg31NotReported');
+  });
+  it('an engine not carried: the core reason comes first', () => {
+    expect(freshNodeReason({ effectiveEngine: 'singbox', protocol: 'tuic' }, carried)).toBe('noSingbox');
+    expect(freshNodeReason({ effectiveEngine: 'hysteria', protocol: 'hysteria' }, carried)).toBe('noCore');
+    expect(freshNodeReason({ effectiveEngine: 'amneziawg', protocol: 'amneziawg', awgProtocol: 3 }, new Set(['xray']))).toBe('noCore');
   });
 });
