@@ -5,11 +5,17 @@ import { useNavigate } from 'react-router-dom';
 import { Stack } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listCascades, updateCascade, deleteCascade, type Cascade } from '@/lib/domain/cascades';
+import {
+  cascadeDeleteRefusal,
+  deleteCascade,
+  listCascades,
+  setCascadeEnabled,
+  type Cascade,
+} from '@/lib/domain/cascades';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { apiErrorMessage } from '@/lib/net/client';
 import { FleetEmpty } from '@/contours/nodes/components/FleetEmpty';
-import { CascadesView, type CascadeLayout } from '@/contours/nodes/components/CascadesView';
+import { CascadesView, type CascadeCardRefusal, type CascadeLayout } from '@/contours/nodes/components/CascadesView';
 import { useCascadeRows } from '@/contours/nodes/lib/cascadeRows';
 
 /**
@@ -39,36 +45,47 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
     notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
   };
 
+  /**
+   * Refusals to switch on or to delete, by cascade id (A-126). The card is
+   * drawn from the server's `enabled` only, so it never shows «on» before the
+   * answer; a refusal the server explained stays under the card in its words
+   * instead of a toast that is gone in four seconds. The next try clears it.
+   */
+  const [refusals, setRefusals] = useState<Record<string, CascadeCardRefusal>>({});
+  const clearRefusal = (id: string) =>
+    setRefusals((r) => {
+      const next = { ...r };
+      delete next[id];
+      return next;
+    });
+
   const deleteMutation = useMutation({
     mutationFn: deleteCascade,
+    onMutate: clearRefusal,
     onSuccess: () => {
       invalidate();
       notifications.show({ color: 'green', message: t('cascades.deleted') });
     },
-    onError,
+    // Already gone is what the operator asked for, said as such; any other
+    // refusal the server explained goes under the card (cascadeDeleteRefusal).
+    onError: (err, id) => {
+      const refusal = cascadeDeleteRefusal(err);
+      if (!refusal) return onError(err);
+      invalidate();
+      if (refusal.kind === 'gone') notifications.show({ message: t('cascades.alreadyDeleted') });
+      else setRefusals((r) => ({ ...r, [id]: { action: 'delete', code: refusal.code, message: refusal.message } }));
+    },
   });
 
-  /**
-   * Refusals to switch on, by cascade id (A-126). The card is drawn from the
-   * server's `enabled` only, so it never shows «on» before the answer; a
-   * refusal the server explained stays under the card in its words instead of
-   * a toast that is gone in four seconds. The next try clears it.
-   */
-  const [refusals, setRefusals] = useState<Record<string, { code: string; message: string }>>({});
   const enableMutation = useMutation({
-    mutationFn: (c: Cascade) => updateCascade(c.id, { enabled: !c.enabled }),
-    onMutate: (c) =>
-      setRefusals((r) => {
-        const next = { ...r };
-        delete next[c.id];
-        return next;
-      }),
+    mutationFn: (c: Cascade) => setCascadeEnabled(c.id, !c.enabled),
+    onMutate: (c) => clearRefusal(c.id),
     onSuccess: invalidate,
     onError: (err, c) => {
       const refusal = cascadeToggleRefusal(err);
       if (!refusal) return onError(err);
       invalidate();
-      setRefusals((r) => ({ ...r, [c.id]: refusal }));
+      setRefusals((r) => ({ ...r, [c.id]: { action: 'enable', ...refusal } }));
     },
   });
   const pendingId = enableMutation.isPending ? enableMutation.variables.id : null;

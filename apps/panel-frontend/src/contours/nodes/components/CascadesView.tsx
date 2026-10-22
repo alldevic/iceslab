@@ -1,9 +1,12 @@
-﻿import { useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { getCascadeStatus, type Cascade } from '@/lib/domain/cascades';
 import { cascadeNodeChips, type CascadeLegs } from '@/lib/domain/cascadeChips';
 import { CoreChips } from '@/ui/CoreChips';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
 import { countryFlag } from '@/lib/domain/countries';
 import { directionWhere, type CascadeRow, type DirectionView, type HopView } from '@/contours/nodes/lib/cascadeRows';
 import { AMBER, CARD, CYAN, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, RED, SNOW, WELL } from '@/contours/nodes/lib/colors';
@@ -18,6 +21,9 @@ const DISPLAY = "'Inter Variable', Inter, ui-sans-serif, -apple-system, BlinkMac
 const MONO = "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace";
 
 export type CascadeLayout = 'cards' | 'rows';
+
+/** What the server refused on a card, and in which words. */
+export type CascadeCardRefusal = { action: 'enable' | 'delete'; code: string; message: string };
 
 export function CascadesView({
   rows,
@@ -35,8 +41,8 @@ export function CascadesView({
   onToggleEnabled: (c: Cascade) => void;
   /** Cascade whose switch is waiting for the server. */
   toggling?: string | null;
-  /** The server's refusal to switch on, by cascade id (A-126). */
-  refusals?: Record<string, { code: string; message: string }>;
+  /** The server's refusal to switch or to delete, by cascade id (A-126). */
+  refusals?: Record<string, CascadeCardRefusal>;
 }) {
   const { t } = useTranslation();
 
@@ -76,6 +82,7 @@ export function CascadesView({
             row={row}
             onEdit={() => onEdit(row.cascade)}
             onDelete={() => onDelete(row.cascade)}
+            refusal={refusals[row.cascade.id] ?? null}
           />
         ))}
       </Box>
@@ -114,7 +121,7 @@ function CascadeCard({
   onDelete: () => void;
   onToggleEnabled: () => void;
   toggling: boolean;
-  refusal: { code: string; message: string } | null;
+  refusal: CascadeCardRefusal | null;
 }) {
   const { t } = useTranslation();
   const { cascade, entry, transits, directions } = row;
@@ -175,18 +182,7 @@ function CascadeCard({
         <IconButton onClick={onEdit} kind="edit" />
         <IconButton onClick={onDelete} kind="delete" />
       </Box>
-      {/* The server's own words (A-126): they name the node and the gate, and
-          a retelling would lose exactly that. */}
-      {refusal && (
-        <Box style={{ padding: '0 20px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: RED }}>
-            {t('cascades.enableRefused')} {refusal.message}
-          </Text>
-          {refusal.code && (
-            <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: FAINT }}>{refusal.code}</Text>
-          )}
-        </Box>
-      )}
+      <RefusalLines refusal={refusal} />
       </Box>
     );
   }
@@ -380,6 +376,27 @@ function CascadeCard({
         <Box style={{ flex: 1, minWidth: 0 }} />
         <PushState cascadeId={cascade.id} />
       </Box>
+      <RefusalLines refusal={refusal} />
+    </Box>
+  );
+}
+
+/**
+ * The server's own words under a card (A-126): they name the node and the gate,
+ * and a retelling would lose exactly that. On every card, on or off: a refusal
+ * to delete or to switch off lands on a card that is on.
+ */
+function RefusalLines({ refusal }: { refusal: CascadeCardRefusal | null }) {
+  const { t } = useTranslation();
+  if (!refusal) return null;
+  return (
+    <Box style={{ padding: '0 20px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: RED }}>
+        {t(refusal.action === 'delete' ? 'cascades.deleteRefused' : 'cascades.enableRefused')} {refusal.message}
+      </Text>
+      {refusal.code && (
+        <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: FAINT }}>{refusal.code}</Text>
+      )}
     </Box>
   );
 }
@@ -713,7 +730,17 @@ function DirectionTile({ direction }: { direction: DirectionView }) {
 
 /* ───── Rows ────────────────────────────────────────────────────────────── */
 
-function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () => void; onDelete: () => void }) {
+function CascadeLine({
+  row,
+  onEdit,
+  onDelete,
+  refusal,
+}: {
+  row: CascadeRow;
+  onEdit: () => void;
+  onDelete: () => void;
+  refusal: CascadeCardRefusal | null;
+}) {
   const { t } = useTranslation();
   const { cascade, entry, transits, directions } = row;
   const fan = directions.length > 1;
@@ -721,6 +748,7 @@ function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () =>
   const accent = off ? DIM : fan ? CYAN : MOSS;
 
   return (
+    <>
     <Box
       style={{
         display: 'flex',
@@ -835,6 +863,8 @@ function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () =>
         <IconButton onClick={onDelete} kind="delete" bare />
       </Box>
     </Box>
+    <RefusalLines refusal={refusal} />
+    </>
   );
 }
 
@@ -947,6 +977,11 @@ function PushState({ cascadeId, compact }: { cascadeId: string; compact?: boolea
     queryFn: () => getCascadeStatus(cascadeId),
     refetchInterval: (q) => (q.state.data?.done ? false : 10_000),
   });
+  // A status that did not arrive is said with its words, not left blank: a blank
+  // reads as «nothing pushed yet» (spec frontend-cascades).
+  if (loadView(query) === 'failed') {
+    return <LoadFailedLine message={apiErrorMessage(query.error)} onRetry={() => void query.refetch()} />;
+  }
   if (!query.data) return null;
 
   // The status endpoint can answer without a per-node list (nothing pushed

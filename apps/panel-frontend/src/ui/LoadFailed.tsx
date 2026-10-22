@@ -40,3 +40,25 @@ export function LoadFailed({ message, onRetry }: { message: string; onRetry: () 
     </Box>
   );
 }
+
+/**
+ * The same fact one line high, for a request that feeds a part of a screen (a
+ * selector, a status rail) rather than all of it: the rest of the form stays
+ * usable, and the part says that its list did not arrive instead of looking
+ * empty.
+ */
+export function LoadFailedLine({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED, overflowWrap: 'anywhere' }}>
+      {t('common.loadFailed')}: {message}{' '}
+      <UnstyledButton
+        type="button"
+        onClick={onRetry}
+        style={{ display: 'inline', fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: CYAN }}
+      >
+        ↻ {t('common.loadRetry')}
+      </UnstyledButton>
+    </Text>
+  );
+}

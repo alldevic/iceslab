@@ -1,11 +1,11 @@
 import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS } from '@iceslab/shared';
-import type { CascadeDirectionInput, CascadeMode, CascadeProtocol } from '@/lib/domain/cascades';
+import type { CascadeDirectionInput, CascadeProtocol } from '@/lib/domain/cascades';
 import { linkCellPair, nativeEngineOfIntent, type EnginePair, type EngineName } from '@/lib/domain/engines';
 import { DEFAULT_LINK_CONGESTION, DEFAULT_LINK_UNDERLAY, LINK_CONGESTIONS } from '@/lib/domain/cascades';
 import type { LinkCell, LinkCongestion, LinkParams, LinkUnderlay } from '@/lib/domain/cascades';
 import type { Node } from '@/lib/domain/nodes';
 import { nodeCoreFit } from '@/lib/domain/nodeCoreFit';
-import { AMBER, CYAN, DIM, MIST, MOSS, RED, VIOLET } from '@/contours/cascades/lib/colors';
+import { AMBER, CYAN, DIM, MIST, MOSS, RED } from '@/contours/cascades/lib/colors';
 
 /**
  * The shape of a cascade draft and the small functions that read it.
@@ -248,46 +248,6 @@ export const ROLE_TONE: Record<HopRole, string> = {
   transit: MIST,
   exit: MOSS,
 };
-
-/** A chain is one fixed path, a balancer is a choice, and the panel colours
- *  them apart wherever a mode is named. */
-export const MODE_TONE: Record<CascadeMode, string> = {
-  chain: CYAN,
-  balancer: VIOLET,
-};
-
-/** One hop of the draft, before it becomes a CascadeHopInput. */
-export interface HopDraft {
-  /** Stable across reorder and delete, so React keeps the right field focused. */
-  key: number;
-  nodeId: string;
-  entryProtocol: CascadeProtocol;
-  linkProtocol: CascadeProtocol;
-}
-
-/** entry, then in a chain the last hop is the exit; in a balancer everything
- *  past the entry is a parallel exit. */
-export function roleAt(index: number, count: number, mode: CascadeMode): HopRole {
-  if (index === 0) return 'entry';
-  return mode === 'balancer' || index === count - 1 ? 'exit' : 'transit';
-}
-
-/** chain: every hop but the last forwards to the next. balancer: only the entry
- *  carries a link, and it is the one protocol every exit link uses. */
-export function carriesLinkAt(index: number, count: number, mode: CascadeMode): boolean {
-  return mode === 'balancer' ? index === 0 : index < count - 1;
-}
-
-/** The hops as the API wants them: entryProtocol only on the entry, and a link
- *  protocol only where the role actually carries one. */
-export function toHopInputs(hops: HopDraft[], mode: CascadeMode) {
-  return hops.map((h, i) => ({
-    nodeId: h.nodeId,
-    position: i,
-    ...(i === 0 ? { entryProtocol: h.entryProtocol } : {}),
-    ...(carriesLinkAt(i, hops.length, mode) ? { linkProtocol: h.linkProtocol } : {}),
-  }));
-}
 
 /** The cascade list's status palette, so a node keeps its colour between the
  *  picker here and the card it appears on afterwards. */

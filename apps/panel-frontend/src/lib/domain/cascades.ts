@@ -192,29 +192,6 @@ export interface CascadeTunnel {
   publicLinkPortOpen: boolean;
 }
 
-export interface CascadeHopInput {
-  nodeId: string;
-  position: number;
-  entryProtocol?: CascadeProtocol;
-  linkProtocol?: CascadeProtocol;
-}
-
-export interface CreateCascadeInput {
-  name: string;
-  enabled?: boolean;
-  mode?: CascadeMode;
-  hideHopsFromSub?: boolean;
-  hops: CascadeHopInput[];
-}
-
-export interface UpdateCascadeInput {
-  name?: string;
-  enabled?: boolean;
-  mode?: CascadeMode;
-  hideHopsFromSub?: boolean;
-  hops?: CascadeHopInput[];
-}
-
 /* ───── Cascades, v4 shape ──────────────────────────────────────────────────
  * The panel describes a cascade as positions and directions rather than hops:
  * a position is a POOL of nodes that all do the same job, and a direction is a
@@ -312,11 +289,37 @@ export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input> & {
   confirmEntryChange?: true;
 };
 
-/** The API's own sentence when it refuses a shape it cannot store. */
+/** The API's own sentence when it refuses a shape it cannot store. Input
+ *  checked first: whatever onError hands over, null included, is not trusted. */
 export function cascadeShapeError(err: unknown): string | null {
-  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
-  if (res?.status !== 400) return null;
-  return res.data?.message ?? null;
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 400 || !data || typeof data !== 'object') return null;
+  const { message } = data as { message?: unknown };
+  return typeof message === 'string' && message !== '' ? message : null;
+}
+
+/**
+ * Why a delete did not happen (spec frontend-cascades). The server refuses one
+ * way today, 404 NOT_FOUND: someone else deleted the cascade first, so what the
+ * operator wanted is already true and is said as such, not as a failure. Any
+ * other 4xx with a sentence is said in the server's words. Null: nothing the
+ * server explained (network, 5xx), which stays a toast.
+ */
+export type CascadeDeleteRefusal = { kind: 'gone' } | { kind: 'refused'; code: string; message: string };
+
+export function cascadeDeleteRefusal(err: unknown): CascadeDeleteRefusal | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (typeof status !== 'number' || status < 400 || status >= 500) return null;
+  const { error, message } = (data && typeof data === 'object' ? data : {}) as { error?: unknown; message?: unknown };
+  if (status === 404 && error === 'NOT_FOUND') return { kind: 'gone' };
+  if (typeof message !== 'string' || message === '') return null;
+  return { kind: 'refused', code: typeof error === 'string' ? error : '', message };
 }
 
 export async function createCascadeV4(input: CreateCascadeV4Input): Promise<Cascade> {
@@ -339,13 +342,13 @@ export async function listCascades(): Promise<{ cascades: Cascade[]; fields?: st
   return data;
 }
 
-export async function createCascade(input: CreateCascadeInput): Promise<Cascade> {
-  const { data } = await api.post<Cascade>('/api/cascades', input);
-  return data;
-}
-
-export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<Cascade> {
-  const { data } = await api.put<Cascade>(`/api/cascades/${id}`, input);
+/**
+ * The switch on the cascade list: one key, nothing else. A narrow call with an
+ * honest body rather than the whole update input, so the list cannot send what
+ * it does not edit.
+ */
+export async function setCascadeEnabled(id: string, enabled: boolean): Promise<Cascade> {
+  const { data } = await api.put<Cascade>(`/api/cascades/${id}`, { enabled });
   return data;
 }
 
