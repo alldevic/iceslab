@@ -150,6 +150,30 @@ export function imageBlock(tag, sha, owner) {
 // минор упрётся в потолок. Запас на шапку и образы.
 export const BODY_LIMIT = 120_000;
 
+/**
+ * Бинари агента, которые release.yml кладёт в тот же релиз, и как их сверить
+ * руками: checksums, подпись ключом из .github/agent-keys, provenance.
+ */
+export function agentBlock(tag, repo) {
+  const base = `https://github.com/${repo}/releases/download/${tag}`;
+  return [
+    '## Node agent binaries',
+    '',
+    '`iceslab-node-linux-amd64`, `iceslab-node-linux-arm64`, `SHA256SUMS` and `SHA256SUMS.sig` are attached below.',
+    '',
+    '```',
+    `curl -fsSLO ${base}/iceslab-node-linux-amd64`,
+    `curl -fsSLO ${base}/SHA256SUMS`,
+    `curl -fsSLO ${base}/SHA256SUMS.sig`,
+    'sha256sum -c --ignore-missing SHA256SUMS',
+    `curl -fsSL https://raw.githubusercontent.com/${repo}/${tag}/.github/agent-keys/primary.pub -o primary.pub`,
+    'openssl pkeyutl -verify -pubin -inkey primary.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig',
+    '```',
+    '',
+    `Build provenance: \`gh attestation verify iceslab-node-linux-amd64 --repo ${repo}\`.`,
+  ].join('\n');
+}
+
 export function assemble({ header, changes, previous, images, limit = BODY_LIMIT }) {
   const head = header && header.trim() ? [header.trim()] : [];
   const since = previous ? ` since ${previous}` : '';
@@ -199,7 +223,9 @@ function main() {
   const headerPath = join(cwd, '.github', 'release-notes', `${tag}.md`);
   const header = existsSync(headerPath) ? readFileSync(headerPath, 'utf8') : '';
 
-  writeFileSync(outFile, assemble({ header, changes, previous, images: imageBlock(tag, sha, owner) }), 'utf8');
+  const repo = process.env.GITHUB_REPOSITORY || 'icecompany-tech/iceslab';
+  const images = `${imageBlock(tag, sha, owner)}\n\n${agentBlock(tag, repo)}`;
+  writeFileSync(outFile, assemble({ header, changes, previous, images }), 'utf8');
 
   const allTags = git(['tag', '--list', 'v*'], cwd).split('\n').filter(Boolean);
   const answers = {
