@@ -179,6 +179,34 @@ func TestTheMieruInstallerLeavesMitaIdle(t *testing.T) {
 	}
 }
 
+// A-124: the agent keeps its mTLS pair in /etc/iceslab-node/tls and prefers it
+// to NODE_PAYLOAD at start when it chains to the node's CA. Every road to a new
+// identity must take that directory away first:
+//   - the wipe (--reset, the prompt's yes, --uninstall) removes all of
+//     /etc/iceslab-node;
+//   - writing a new payload removes tls/ before the env file is written, which
+//     covers an install that finds no env and no binary but an old tls/.
+func TestEveryNewIdentityTakesTheAgentsDiskPairAway(t *testing.T) {
+	wipe := installerFunc(t, "do_uninstall")
+	if !strings.Contains(wipe, "rm -rf /etc/iceslab-node\n") {
+		t.Error("do_uninstall no longer removes /etc/iceslab-node whole: tls/ would survive --reset")
+	}
+	blob, err := os.ReadFile(installerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(blob)
+	write := strings.Index(s, "cat > \"$ENV_FILE\" <<EOF\nNODE_PAYLOAD=")
+	if write == -1 {
+		t.Fatal("no NODE_PAYLOAD write found in the installer")
+	}
+	// Inside the same branch, before the write: from the branch's `if` to it.
+	branch := strings.LastIndex(s[:write], "if [[ -n \"$PAYLOAD\" || ! -f \"$ENV_FILE\" ]]; then")
+	if branch == -1 || !strings.Contains(s[branch:write], "rm -rf \"$ENV_DIR/tls\"") {
+		t.Error("a new payload is written while an old tls/ may stay: the agent's disk pair would win over it")
+	}
+}
+
 // xray's --remove warns that sing-box loses its traffic counters, true when
 // xray alone goes. Inside the installer's --uninstall sing-box goes right after,
 // and the warning was noise on a clean removal (stand, 26.09).

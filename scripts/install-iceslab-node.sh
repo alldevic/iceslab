@@ -1243,6 +1243,14 @@ if [[ -n "$PAYLOAD" || ! -f "$ENV_FILE" ]]; then
       fail "First-time install needs --payload <base64-blob> from panel (no /dev/tty for interactive prompt)"
     fi
   fi
+  # A new payload is a new identity. The agent keeps its mTLS pair on disk
+  # (tls/: node.crt, node.key, their .prev, pending.json) and prefers it to
+  # NODE_PAYLOAD at start whenever it chains to the node's CA, so a pair left
+  # from an earlier install against the same panel would override the payload
+  # written here (A-124). --reset, the wipe prompt and --uninstall already
+  # remove all of /etc/iceslab-node; this covers the install that finds no env
+  # file and no binary but an old tls/ beside them.
+  rm -rf "$ENV_DIR/tls"
   log "Writing $ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 NODE_PAYLOAD=${PAYLOAD}
