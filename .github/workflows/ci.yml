@@ -146,12 +146,30 @@ jobs:
         run: pnpm audit --prod --audit-level high
         continue-on-error: false
 
+  # ⚠ FOUR PARTS, each with its own Postgres and Redis. The suite runs its
+  # files strictly one after another (`fileParallelism: false` in
+  # vitest.config.ts: every file calls cleanDatabase() on the one test
+  # database), so one job spent ~530 s on tests on one core while three sat
+  # idle. Split by `vitest --shard`, the same 202 files take ~140 s a part
+  # (simulated on the per-file times of run 39718422205; N=6 gained nothing,
+  # one part collects the heaviest files). A database shared between parts
+  # is exactly the collision the serial run exists to avoid, so each part
+  # gets its own service containers, which a matrix gives for free.
+  #
+  # `backend-files` below adds the parts up: a file that no part ran would
+  # otherwise be a green tick over a test that never happened.
   backend:
-    name: backend (panel)
+    name: backend (panel, ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.backend == 'true'
+    strategy:
+      # One red part must not cancel the others: the point of the run page is
+      # to show every failing file at once.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     # Real Postgres + Redis. The backend's vitest suite mostly mocks Prisma
     # but `subscription.routes.test.ts` and a handful of others import the
@@ -371,39 +389,113 @@ jobs:
           echo "GEO_DLC_DAT=/tmp/geo/dlc.dat" >> "$GITHUB_ENV"
           echo "SING_GEOSITE_DB=/tmp/geo/geosite.db" >> "$GITHUB_ENV"
 
+      # Once, in the first part: the types are the same in all four.
       - name: Typecheck backend
+        if: matrix.shard == 1
         working-directory: apps/panel-backend
         run: pnpm exec tsc --noEmit
 
       # `github-actions` puts a failing assertion on the diff as an annotation,
       # so a red suite is readable without opening the log; `json` is what the
-      # summary below counts. The default reporter stays, because the log is
-      # still where a human looks when the annotation is not enough.
-      - name: Test backend
+      # summary below counts and what `backend-files` adds up. The default
+      # reporter stays, because the log is still where a human looks when the
+      # annotation is not enough.
+      - name: Test backend (part ${{ matrix.shard }} of 4)
         working-directory: apps/panel-backend
         run: >-
-          pnpm exec vitest run --passWithNoTests
+          pnpm exec vitest run --passWithNoTests --shard=${{ matrix.shard }}/4
           --reporter=default --reporter=github-actions
-          --reporter=json --outputFile=/tmp/backend-vitest.json
+          --reporter=json --outputFile=/tmp/backend-vitest-${{ matrix.shard }}.json
+
+      # The report even from a red part: a part that failed still ran its files,
+      # and the count is about which files ran, not whether they passed.
+      - name: Keep the report for the file count
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-vitest-${{ matrix.shard }}
+          path: /tmp/backend-vitest-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "### backend (panel)"
+            echo "### backend (panel), part ${{ matrix.shard }} of 4"
             echo ""
-            if [ -f /tmp/backend-vitest.json ]; then
+            report=/tmp/backend-vitest-${{ matrix.shard }}.json
+            if [ -f "$report" ]; then
               jq -r '"- tests: \(.numPassedTests) passed, \(.numPendingTests) skipped, " +
-                     "\(.numFailedTests) failed, over \(.numTotalTestSuites) files"' \
-                /tmp/backend-vitest.json
-              jq -r '"- suite ran in \(((.testResults | map(.endTime - .startTime) | add) / 1000 | floor))s"' \
-                /tmp/backend-vitest.json
+                     "\(.numFailedTests) failed, over \(.testResults | length) files"' "$report"
+              jq -r '"- this part ran in \(((.testResults | map(.endTime - .startTime) | add // 0) / 1000 | floor))s"' "$report"
             else
-              echo "- tests: no report, so the suite did not get as far as running"
+              echo "- tests: no report, so the part did not get as far as running"
             fi
             echo "- config validity asked of the pinned engines: xray v26.3.27, sing-box v1.13.14"
             echo "- geo rule-sets compared on the release pair ${{ steps.geo.outputs.tag || '-' }} (dlc.dat and sing-geosite of one tag)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # The four backend parts, added up. Each part is green about ITS files, and
+  # nothing in a part knows whether another part ran at all: a shard that
+  # came out empty, or a file that fell between two, would leave four green
+  # ticks over tests nobody ran. So the files every part reports are counted
+  # against the test files in the tree, and a difference fails this job. The
+  # tree is counted with the include globs of vitest.config.ts.
+  # ───────────────────────────────────────────────────────────────────────
+  backend-files:
+    name: backend (all parts, file count)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, backend]
+    if: "!cancelled() && needs.changes.outputs.backend == 'true'"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: backend-vitest-*
+          path: /tmp/reports
+          merge-multiple: true
+
+      - name: Every test file ran in exactly one part
+        run: |
+          set -euo pipefail
+          cd apps/panel-backend
+          # vitest.config.ts: include ['src/**/*.test.ts', 'tests/**/*.test.ts'].
+          tree=$( { find src tests -name '*.test.ts' -type f 2>/dev/null || true; } | sed 's#^#/#' | sort)
+          expected=$(printf '%s\n' "$tree" | grep -c . || true)
+          ran=$(jq -r '.testResults[].name' /tmp/reports/backend-vitest-*.json 2>/dev/null \
+            | sed 's#^.*/apps/panel-backend##' | sort)
+          got=$(printf '%s\n' "$ran" | grep -c . || true)
+          dup=$(printf '%s\n' "$ran" | uniq -d)
+          missing=$(comm -23 <(printf '%s\n' "$tree") <(printf '%s\n' "$ran" | sort -u))
+          parts=$(ls /tmp/reports/backend-vitest-*.json 2>/dev/null | wc -l)
+          {
+            echo "### backend (all parts)"
+            echo ""
+            echo "- reports from parts: ${parts} of 4"
+            echo "- test files in the tree: ${expected}, run across the parts: ${got}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          verdict=0
+          if [ "$parts" != 4 ]; then
+            echo "::error::only ${parts} of 4 backend parts left a report"
+            verdict=1
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::test files no part ran: $(echo $missing)"
+            verdict=1
+          fi
+          if [ -n "$dup" ]; then
+            echo "::error::test files run by more than one part: $(echo $dup)"
+            verdict=1
+          fi
+          if [ "$got" != "$expected" ]; then
+            echo "::error::${got} files ran, the tree has ${expected}"
+            verdict=1
+          fi
+          exit "$verdict"
 
   # No Postgres, no Redis, no Prisma: the SPA never touches them. Its own job
   # so a backend test failure and a frontend type error stop sharing one red
@@ -607,7 +699,7 @@ jobs:
     # server pulled it. A pipeline that ships past its own alarm is not a
     # pipeline. go-lint is in the list for the same reason while it is still
     # report-only: the day it starts failing is the day it must stop a publish.
-    needs: [changes, audit, backend, frontend, node-agent, secrets-scan, go-lint]
+    needs: [changes, audit, backend, backend-files, frontend, node-agent, secrets-scan, go-lint]
     # Runs on a pull request too, but only BUILDS there (see `push:` below).
     # A Dockerfile break used to surface after merge, when the job first ran on
     # develop - which is also the branch the operator's test server pulls from,
@@ -993,7 +1085,7 @@ jobs:
     timeout-minutes: 5
     if: always()
     needs:
-      [changes, audit, secrets-scan, backend, frontend, node-agent, go-lint, docker, smoke]
+      [changes, audit, secrets-scan, backend, backend-files, frontend, node-agent, go-lint, docker, smoke]
     steps:
       - name: Every check accounted for
         env:
@@ -1030,7 +1122,10 @@ jobs:
           # Filtered by area. A skip is legitimate exactly when the filter said
           # the area was untouched, which is why the outputs are read here
           # instead of assumed.
+          # A matrix job reports one result for all its parts: failure if any
+          # part failed. backend-files is what says no file fell between them.
           check backend "$([ "$RUNS_BACKEND" = "true" ] && echo no || echo yes)"
+          check backend-files "$([ "$RUNS_BACKEND" = "true" ] && echo no || echo yes)"
           check frontend "$([ "$RUNS_FRONTEND" = "true" ] && echo no || echo yes)"
           check node-agent "$([ "$RUNS_NODE" = "true" ] && echo no || echo yes)"
           check go-lint "$([ "$RUNS_NODE" = "true" ] && echo no || echo yes)"
