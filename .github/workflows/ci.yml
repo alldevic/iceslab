@@ -495,6 +495,24 @@ jobs:
             echo "::error::${got} files ran, the tree has ${expected}"
             verdict=1
           fi
+
+          # A-191, the backend side. Its engine tests skip with
+          # it.skipIf(!XRAY_BIN) and print no reason, so the guard is a list:
+          # a skipped test that is not on it fails the job. CI installs every
+          # engine and sets GEO_COMPARE_TAG, so the only skip expected here is
+          # the placeholder geo-dat.test.ts prints when that tag is SET. A new
+          # skip that is meant goes on this list in the commit that adds it.
+          allowed='oracle tag not set'
+          skipped=$(jq -r '.testResults[].assertionResults[]
+                           | select(.status == "skipped" or .status == "pending")
+                           | .fullName' /tmp/reports/backend-vitest-*.json | sort -u)
+          unexpected=$(printf '%s\n' "$skipped" | grep -v -e '^$' -e "$allowed" || true)
+          echo "- skipped tests: $(printf '%s\n' "$skipped" | grep -c . || true), outside the allowed list: $(printf '%s\n' "$unexpected" | grep -c . || true)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$unexpected" ]; then
+            echo "::error::tests skipped in CI that are not on the allowed list (an engine binary missing?):"
+            printf '%s\n' "$unexpected"
+            verdict=1
+          fi
           exit "$verdict"
 
   # No Postgres, no Redis, no Prisma: the SPA never touches them. Its own job
@@ -658,9 +676,89 @@ jobs:
           echo "HYSTERIA_BIN=/tmp/hysteria" >> "$GITHUB_ENV"
           /tmp/hysteria version | grep '^Version:'
 
+      # ⚠ xray and sing-box here too, not only in the backend job. Until
+      # 2026-10-22 this job installed hysteria alone, so every agent test that
+      # asks xray or sing-box (the live REALITY client of A-129, `xray -test`,
+      # `sing-box check`, the direct-resolver live tests) skipped itself on
+      # XRAY_BIN / SINGBOX_BIN unset, and a green node-agent said nothing about
+      # them. Same releases and sha256 as the backend job's steps, which
+      # core-pins.test.ts holds to the version manifest; retried on the
+      # download only, as there.
+      - name: Install xray (for the agent's engine tests)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/xray.zip \
+              https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+            then break; fi
+            echo "xray download failed (attempt ${attempt}/3)"
+            [ "$attempt" = 3 ] && exit 1
+            sleep $(( attempt * 5 ))
+          done
+          echo "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae  /tmp/xray.zip" | sha256sum -c -
+          unzip -o /tmp/xray.zip xray -d /tmp/xray-bin
+          chmod +x /tmp/xray-bin/xray
+          echo "XRAY_BIN=/tmp/xray-bin/xray" >> "$GITHUB_ENV"
+          /tmp/xray-bin/xray version | head -1
+
+      - name: Install sing-box (for the agent's engine tests)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/sing-box.tar.gz \
+              https://github.com/SagerNet/sing-box/releases/download/v1.13.14/sing-box-1.13.14-linux-amd64.tar.gz
+            then break; fi
+            echo "sing-box download failed (attempt ${attempt}/3)"
+            [ "$attempt" = 3 ] && exit 1
+            sleep $(( attempt * 5 ))
+          done
+          echo "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697  /tmp/sing-box.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          mkdir -p /tmp/sing-box-bin
+          install -m 0755 /tmp/sing-box-1.13.14-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
+          echo "SINGBOX_BIN=/tmp/sing-box-bin/sing-box" >> "$GITHUB_ENV"
+          /tmp/sing-box-bin/sing-box version | head -1
+
+      # -json, so the summary can say which tests SKIPPED and why: `ok` on a
+      # package says nothing about a test inside it that skipped itself. The
+      # log still shows a readable line per package and every failure in full.
       - name: Test
         working-directory: apps/node
-        run: go test ./... | tee /tmp/go-test.txt
+        run: |
+          set -o pipefail
+          status=0
+          go test -json ./... > /tmp/go-test.json || status=$?
+          jq -r 'select(.Action == "output" and .Test == null) | .Output' /tmp/go-test.json | grep -E '^(ok|FAIL|---|\?)' || true
+          if [ "$status" != 0 ]; then
+            echo "== failing tests, full output:"
+            jq -r 'select(.Action == "fail" and .Test != null) | "\(.Package) \(.Test)"' /tmp/go-test.json | sort -u |
+              while read -r pkg test; do
+                jq -r --arg p "$pkg" --arg t "$test" \
+                  'select(.Package == $p and .Test == $t and .Action == "output") | .Output' /tmp/go-test.json
+              done
+          fi
+          exit "$status"
+
+      # A-191. An engine test skips itself when its binary is missing, which is
+      # right on a laptop and wrong here: in CI it turns a removed install step
+      # into green. The agent's tests say so in one shape,
+      # t.Skip("XRAY_BIN not set...") / t.Skip("HYSTERIA_BIN not set"), so any
+      # skip line of that shape fails the job, whatever the tests themselves
+      # concluded.
+      - name: No engine test skipped for want of its binary
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          [ -f /tmp/go-test.json ] || { echo "no test report, nothing to check"; exit 0; }
+          missing=$(jq -r 'select(.Test != null and .Action == "output" and (.Output | test("[A-Z]+_BIN not set")))
+                           | "\(.Package | sub(".*/apps/node/"; "")) \(.Test): \(.Output | sub("^\\s+"; "") | rtrimstr("\n"))"' \
+                      /tmp/go-test.json)
+          if [ -n "$missing" ]; then
+            echo "::error::engine tests skipped because a binary was not set; CI installs every engine, so this is a missing step, not a pass"
+            printf '%s\n' "$missing"
+            exit 1
+          fi
+          echo "no engine test skipped for want of its binary"
 
       - name: Summary
         if: always()
@@ -668,14 +766,26 @@ jobs:
           {
             echo "### node-agent (Go)"
             echo ""
-            if [ -f /tmp/go-test.txt ]; then
-              echo "- packages ok: $(grep -c '^ok' /tmp/go-test.txt || true)"
-              echo "- packages failed: $(grep -c '^FAIL' /tmp/go-test.txt || true)"
-              echo "- packages with no test files: $(grep -c 'no test files' /tmp/go-test.txt || true)"
+            if [ -f /tmp/go-test.json ]; then
+              count() { jq -r --arg a "$1" 'select(.Action == $a and .Test != null) | .Test' /tmp/go-test.json | wc -l; }
+              echo "- tests: $(count pass) passed, $(count skip) skipped, $(count fail) failed"
+              echo ""
+              echo "<details><summary>skipped, with the reason each gave</summary>"
+              echo ""
+              # The reason is the last line the test printed before its skip,
+              # not counting go test's own === RUN / --- SKIP lines.
+              jq -r 'select(.Test != null and (.Action == "output" or .Action == "skip"))
+                     | [.Action, .Package, .Test, (.Output // "")] | @tsv' /tmp/go-test.json |
+                awk -F'\t' '$1 == "output" && $4 !~ /^ *(=== |--- )/ { last[$2" "$3] = $4 }
+                            $1 == "skip" { r = last[$2" "$3]; gsub(/^ +| +$|\\n/, "", r);
+                                           sub(/.*github.com\/icecompany-tech\/iceslab\/apps\/node\//, "", $2);
+                                           print "- `" $2 "` " $3 ": " r }'
+              echo ""
+              echo "</details>"
             else
               echo "- the suite produced no output, so it did not get as far as running"
             fi
-            echo "- config validity asked of the pinned engine: hysteria v2.12.3"
+            echo "- engines asked: hysteria v2.12.3, xray v26.3.27, sing-box v1.13.14"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Slice 36 follow-up: build + publish container images to GHCR on every
