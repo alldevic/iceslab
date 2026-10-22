@@ -34,6 +34,7 @@ import { subscriptionRequests } from '../../lib/infra/metrics.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
 import { redis } from '../../lib/infra/redis.js';
 import { isPublicRoutableIp } from '../../lib/util/ip.js';
+import { headerSafeUrl } from '../../lib/util/header-url.js';
 
 const TokenParamSchema = z.object({
   token: z.string().min(8).max(128),
@@ -188,7 +189,13 @@ async function applySubscriptionHeaders(
   const title = settings.profileTitle ?? settings.brandName;
   if (title) reply.header('Profile-Title', `base64:${Buffer.from(title, 'utf8').toString('base64')}`);
   reply.header('Profile-Update-Interval', String(settings.updateIntervalHours));
-  if (settings.supportUrl) reply.header('Support-URL', settings.supportUrl);
+  // A-168: normalised on the way out too, for a value stored before the
+  // schema did it. A raw non-ASCII URL here threw ERR_INVALID_CHAR and took
+  // /sub down for every user; one that cannot be made safe is left out.
+  // The other operator-set headers are base64 (Profile-Title, Announce) or a
+  // number (Profile-Update-Interval).
+  const supportUrl = headerSafeUrl(settings.supportUrl);
+  if (supportUrl) reply.header('Support-URL', supportUrl);
 
   // Subscription-Userinfo. `upload+download === used`. We don't track
   // upload separately yet (per-user xray stats sum both directions),

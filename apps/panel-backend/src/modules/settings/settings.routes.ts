@@ -7,6 +7,7 @@ import { DEFAULT_FORMAT_NAMES, ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
 import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/infra/redis.js';
+import { headerSafeUrl } from '../../lib/util/header-url.js';
 import { config, subscriptionOrigin } from '../../config.js';
 import { buildSubscriptionPage } from '../subscription/subscription.page.js';
 import {
@@ -94,7 +95,23 @@ const UpsertInput = z.object({
   brandName: z.string().min(1).max(64).optional(),
   subscriptionProfileTitle: z.string().min(1).max(128).nullable().optional(),
   subscriptionUpdateIntervalHours: z.number().int().min(1).max(168).optional(),
-  subscriptionSupportUrl: z.string().url().max(255).nullable().optional(),
+  // A-168: stored in the form a header carries (punycode host, percent-
+  // encoded path and query), so the value the operator sees back is the one
+  // clients get. The 255 cap is checked on that form.
+  subscriptionSupportUrl: z
+    .string()
+    .url()
+    .transform((v, ctx) => {
+      const safe = headerSafeUrl(v);
+      if (!safe) {
+        ctx.addIssue({ code: 'custom', message: 'not a URL an HTTP header can carry' });
+        return z.NEVER;
+      }
+      return safe;
+    })
+    .pipe(z.string().max(255))
+    .nullable()
+    .optional(),
   subscriptionAnnounceTemplate: z.string().max(512).nullable().optional(),
   subscriptionRoutingPreset: z.enum(ROUTING_PRESET_IDS).optional(),
   // Entry pool cap. 0 = hand out every node the subscriber is entitled to,
