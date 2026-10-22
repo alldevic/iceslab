@@ -13,6 +13,8 @@ import {
   InboundIdParamSchema,
 } from './inbounds.schemas.js';
 import * as inboundsService from './inbounds.service.js';
+import { prisma } from '../../prisma.js';
+import { withStoredSecrets } from '../auth/token-secrets.js';
 
 export async function inboundsRoutes(app: FastifyInstance): Promise<void> {
   // Wave-14 #15: per-route auth (see users.routes.ts header comment).
@@ -63,7 +65,11 @@ export async function inboundsRoutes(app: FastifyInstance): Promise<void> {
 
   app.put('/api/inbounds/:id', auth, async (request, reply) => {
     const params = InboundIdParamSchema.parse(request.params);
-    const input = UpdateInboundSchema.parse(request.body);
+    // Not mounted since slice 27 (app.ts), and safe if it ever is again: a
+    // restricted token reads without the server keys and must not wipe them
+    // by writing the config back (A-109; realityPrivateKey defaults to '').
+    const input = UpdateInboundSchema.parse(await withStoredSecrets(request, 'config', async () =>
+      (await prisma.inbound.findUnique({ where: { id: params.id }, select: { config: true } }))?.config));
     try {
       return reply.send(await inboundsService.updateInbound(params.id, input));
     } catch (err) {

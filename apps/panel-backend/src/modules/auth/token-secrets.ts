@@ -66,14 +66,40 @@ export function redactRepliesOf(request: FastifyRequest, reply: FastifyReply): v
  * and its absence is not an edit (the rule for PUT payloads). A key it sends
  * is its edit and stands. Non-objects come back as they are.
  */
-export function keepStoredSecrets(sent: unknown, stored: unknown): unknown {
+export function keepStoredSecrets(
+  sent: unknown,
+  stored: unknown,
+  keys: ReadonlySet<string> = SERVER_SECRET_KEYS,
+): unknown {
   if (!sent || typeof sent !== 'object' || Array.isArray(sent)) return sent;
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return sent;
   const out: Record<string, unknown> = { ...(sent as Record<string, unknown>) };
-  for (const key of SERVER_SECRET_KEYS) {
+  for (const key of keys) {
     if (!(key in out) && key in (stored as Record<string, unknown>)) {
       out[key] = (stored as Record<string, unknown>)[key];
     }
   }
   return out;
+}
+
+/**
+ * The body of a PUT, with the secrets a restricted token left out of `field`
+ * taken from the stored row: that token reads without them, and writing back
+ * what it read must not wipe them. On the edge of the request, before
+ * validation, so the gates see what will be stored. Every PUT whose body
+ * carries a config or overrides goes through this (create has nothing stored).
+ * `stored` returns undefined when there is nothing to keep (no row, or a
+ * stored value that would not belong under the new body).
+ *
+ * In the routes for now, reading prisma there (P9): in the queue after Э4.
+ */
+export async function withStoredSecrets(
+  req: FastifyRequest,
+  field: string,
+  stored: () => Promise<unknown>,
+  keys: ReadonlySet<string> = SERVER_SECRET_KEYS,
+): Promise<unknown> {
+  const body = req.body as Record<string, unknown> | null | undefined;
+  if (!isRestrictedToken(req) || !body || typeof body !== 'object' || !(field in body)) return req.body;
+  return { ...body, [field]: keepStoredSecrets(body[field], await stored(), keys) };
 }

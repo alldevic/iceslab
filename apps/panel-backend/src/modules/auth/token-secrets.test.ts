@@ -101,6 +101,48 @@ describe('server secrets and restricted tokens', () => {
     expect(stored.realityShortIds).toEqual(['89abcdef']);
   });
 
+  it('the legacy inbounds PUT is not mounted, so no restricted token writes an inbound config at all', async () => {
+    // inbounds.routes.ts carries the same keep-the-stored-keys guard for the
+    // day it is mounted again (slice 27 retired it in app.ts).
+    const writer = await mint('inb', ['inbounds:read', 'inbounds:write']);
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/inbounds/00000000-0000-4000-8000-000000000001',
+      headers: { authorization: `Bearer ${writer}` },
+      payload: { config: {} },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(app.hasRoute({ method: 'PUT', url: '/api/inbounds/:id' })).toBe(false);
+  });
+
+  it('a named-outbounds token reads a socks way out without its upstream password, and a write keeps it', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/named-outbounds',
+      headers: { authorization: `Bearer ${session}` },
+      payload: { name: 'up', type: 'socks', config: { server: '203.0.113.5', port: 1080, username: 'u', password: 'upstream-secret' } },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = JSON.parse(created.body).id as string;
+    const bot = await mint('no-bot', ['named-outbounds:read', 'named-outbounds:write']);
+    for (const url of [`/api/named-outbounds/${id}`, '/api/named-outbounds']) {
+      expect((await get(url, bot)).body, url).not.toContain('upstream-secret');
+    }
+    expect((await get(`/api/named-outbounds/${id}`, session)).body).toContain('upstream-secret');
+
+    const read = JSON.parse((await get(`/api/named-outbounds/${id}`, bot)).body) as { config: Record<string, unknown> };
+    const put = await app.inject({
+      method: 'PUT',
+      url: `/api/named-outbounds/${id}`,
+      headers: { authorization: `Bearer ${bot}` },
+      payload: { config: { ...read.config, port: 1081 } },
+    });
+    expect(put.statusCode, put.body).toBe(200);
+    const stored = (await prisma.namedOutbound.findUniqueOrThrow({ where: { id } })).config as Record<string, unknown>;
+    expect(stored.password).toBe('upstream-secret');
+    expect(stored.port).toBe(1081);
+  });
+
   it('the chain password needs nodes:write, as the bootstrap does', async () => {
     const node = await app.inject({
       method: 'POST',
