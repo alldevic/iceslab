@@ -14,6 +14,7 @@ import {
 } from '@/lib/domain/cascades';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { apiErrorMessage } from '@/lib/net/client';
+import { confirmCascadeDelete } from '@/ui/confirmCascadeDelete';
 import { FleetEmpty } from '@/contours/nodes/components/FleetEmpty';
 import { CascadesView, type CascadeCardRefusal, type CascadeLayout } from '@/contours/nodes/components/CascadesView';
 import { useCascadeRows } from '@/contours/nodes/lib/cascadeRows';
@@ -126,7 +127,7 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
         rows={rows}
         layout={layout}
         onEdit={(c) => navigate(`/nodes/cascades/${c.id}`)}
-        onDelete={(c) => deleteMutation.mutate(c.id)}
+        onDelete={(c) => confirmCascadeDelete(c, t, () => deleteMutation.mutate(c.id))}
         onToggleEnabled={(c) => enableMutation.mutate(c)}
         toggling={pendingId}
         refusals={refusals}
