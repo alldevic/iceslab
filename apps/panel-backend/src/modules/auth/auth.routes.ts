@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { requireAuth } from './auth.hook.js';
+import { requireAuth, requireSession } from './auth.hook.js';
 import { findAdminById } from '../admin/admin.service.js';
 import { LoginSchema, RegisterSchema, TotpCodeSchema } from './auth.schemas.js';
 import * as authService from './auth.service.js';
@@ -184,6 +184,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   // ───── K8: 2FA (TOTP) management, all protected ─────
 
+  // A-123: a session only, never an API token (requireSession says why).
+  const sessionAuth = { onRequest: [requireAuth, requireSession] };
+
   // Map twofa service errors to HTTP. Shared by enable/disable/setup.
   function twofaError(reply: FastifyReply, err: unknown): FastifyReply | null {
     if (err instanceof twofa.TotpBadCodeError) {
@@ -200,7 +203,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.get(
     '/api/auth/2fa/status',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => reply.send(await twofa.getTotpStatus(request.admin!.id)),
   );
 
@@ -208,7 +211,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   // until /enable confirms a code.
   app.post(
     '/api/auth/2fa/setup',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => {
       try {
         return reply.send(await twofa.setupTotp(request.admin!.id));
@@ -220,7 +223,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     '/api/auth/2fa/enable',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => {
       const { code } = TotpCodeSchema.parse(request.body);
       try {
@@ -234,7 +237,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     '/api/auth/2fa/disable',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => {
       const { code } = TotpCodeSchema.parse(request.body);
       try {
