@@ -79,8 +79,12 @@ Installs the upstream PPA (Ubuntu/Debian only), pulls `amneziawg`, `amneziawg-to
 
 ```bash
 cd apps/node
-go build -o iceslab-node .
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always)" -o iceslab-node .
 ```
+
+The `-X main.version` part is the version the agent reports to the panel: a
+release tag, or the short commit between releases. Without it the agent says
+`dev`. The installer builds it the same way.
 
 ## Run
 

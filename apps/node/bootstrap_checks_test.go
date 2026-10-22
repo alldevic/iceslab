@@ -243,6 +243,24 @@ func TestEveryAgentBuildWritesItsVersion(t *testing.T) {
 			t.Errorf("%s: no -ldflags line found, the build moved and this check no longer sees it", name)
 		}
 	}
+	// The written recipes too: an operator who updates by hand copies these.
+	// A command that builds the agent binary must carry the version, and the
+	// bare "`go build`" shorthand an upgrade note once used must not come back.
+	for name, path := range map[string]string{
+		"CHANGELOG.md":        filepath.Join("..", "..", "CHANGELOG.md"),
+		"apps/node/README.md": "README.md",
+	} {
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(blob), "\n") {
+			builds := strings.Contains(line, "go build") && strings.Contains(line, "iceslab-node")
+			if (builds && !strings.Contains(line, "-X main.version=")) || strings.Contains(line, "`go build`") {
+				t.Errorf("%s:%d tells to build the agent without its version: %s", name, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
 }
 
 // xray's --remove warns that sing-box loses its traffic counters, true when
