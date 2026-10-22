@@ -201,6 +201,58 @@ func TestRefusedChangeKeepsTheServedVersion(t *testing.T) {
 	}
 }
 
+// The other side of the rule: -test accepted, the config went to disk, and the
+// process would not start. Memory keeps the new inbound because the disk has it,
+// and the failure is not swallowed: the push answers with it, and the core
+// reports not running while it stays provisioned, which is what the panel reads
+// as "configured and down" (P1).
+func TestACoreThatWillNotStartAfterTheWriteIsReported(t *testing.T) {
+	const idA = "aaaaaaaa-1111-4000-8000-000000000001"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	// Not executable: exec fails at spawn, after validation and the write.
+	bin := filepath.Join(dir, "xray-not-executable")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 60\n"), 0o644); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+	c := &pickyCore{}
+	a := New(Config{
+		ConfigPath: path,
+		BinaryPath: bin,
+		RunCmd:     c.run,
+		Inbound:    validInbound(),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
+
+	err := a.ApplyInbound(443, inboundWire(t, idA, 443))
+	if err == nil || !strings.Contains(err.Error(), "start xray") {
+		t.Fatalf("the push must answer with the start failure, got: %v", err)
+	}
+	if isRefused(err) {
+		t.Fatal("a start failure after the write must not read as a refusal")
+	}
+	onDisk, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatalf("read config: %v", rerr)
+	}
+	tagA := inboundTagFor(idA, validInbound().Tag)
+	if !strings.Contains(string(onDisk), tagA) {
+		t.Fatal("expected the accepted config on disk")
+	}
+	a.mu.Lock()
+	_, held := a.inbounds[idA]
+	a.mu.Unlock()
+	if !held {
+		t.Fatal("memory dropped an inbound the disk has")
+	}
+	if a.Healthy() {
+		t.Fatal("a core whose process did not start reports healthy")
+	}
+	if !a.Provisioned() {
+		t.Fatal("a configured core that is down must stay provisioned, or it reads as never configured")
+	}
+}
+
 // The node-level blocks go the same way: a resolver the core refused is not
 // the one the next render starts from.
 func TestRefusedDnsIsNotKept(t *testing.T) {
