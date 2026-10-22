@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cascadePath, directionWhere } from '@/contours/nodes/lib/cascadeRows';
+import { cascadePath, cascadeReach, directionWhere } from '@/lib/domain/cascadePath';
 import type { Cascade } from '@/lib/domain/cascades';
 import type { Node } from '@/lib/domain/nodes';
 
@@ -126,5 +126,44 @@ describe('cascadePath: путь по positions и directions, hops только 
       [1, 'n-d', 'xray'],
       [2, 'n-e', 'xray'],
     ]);
+  });
+
+  it('список выходов не пришёл: выход неизвестен, а не «не найден» (spec frontend-nodes)', () => {
+    const p = cascadePath(
+      v4(
+        [{ position: 0, nodeIds: ['a'], entryProtocol: 'xray', linkProtocol: 'vless' }],
+        [{ id: 'd1', tag: 1, countryCode: 'NL', nodeIds: [], outboundId: 'o1' }],
+      ),
+      byId,
+      overview,
+      null,
+    );
+    expect(p.directions.map(directionWhere)).toEqual([{ kind: 'outboundUnknown' }]);
+  });
+});
+
+describe('cascadeReach (spec frontend-nodes)', () => {
+  const squads = [
+    { name: 'A', memberCount: 3, profileIds: ['p1'], policyIds: ['pol1'] },
+    { name: 'B', memberCount: 5, profileIds: ['p9'], policyIds: ['pol2'] },
+  ];
+  const policies = [
+    { id: 'pol1', name: 'ads', ordinal: 1 },
+    { id: 'pol2', name: 'ru', ordinal: 2 },
+  ];
+
+  it('сквады с профилем на ноде входа и их политики', () => {
+    expect(cascadeReach(['a'], [{ nodeId: 'a', profileId: 'p1' }, { nodeId: 'z', profileId: 'p9' }], squads, policies)).toEqual({
+      squads: [{ name: 'A', members: 3 }],
+      policies: [{ name: 'ads', ordinal: 1 }],
+      users: 3,
+    });
+  });
+
+  it('любой из трёх списков не пришёл: null, а не «никого»', () => {
+    expect(cascadeReach(['a'], undefined, squads, policies)).toBeNull();
+    expect(cascadeReach(['a'], [], undefined, policies)).toBeNull();
+    expect(cascadeReach(['a'], [], squads, undefined)).toBeNull();
+    expect(cascadeReach(['a'], [], [], [])).toEqual({ squads: [], policies: [], users: 0 });
   });
 });

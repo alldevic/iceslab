@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cascadeToggleRefusal } from '@/contours/nodes/lib/cascadeToggle';
 import { useNavigate } from 'react-router-dom';
 import { Stack } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   cascadeDeleteRefusal,
+  cascadeToggleRefusal,
   deleteCascade,
   listCascades,
   setCascadeEnabled,
@@ -15,6 +15,7 @@ import {
 import { listAllNodes } from '@/lib/domain/nodes';
 import { apiErrorMessage } from '@/lib/net/client';
 import { confirmCascadeDelete } from '@/ui/confirmCascadeDelete';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { FleetEmpty } from '@/contours/nodes/components/FleetEmpty';
 import { CascadesView, type CascadeCardRefusal, type CascadeLayout } from '@/contours/nodes/components/CascadesView';
 import { useCascadeRows } from '@/contours/nodes/lib/cascadeRows';
@@ -91,7 +92,7 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
   });
   const pendingId = enableMutation.isPending ? enableMutation.variables.id : null;
 
-  const rows = useCascadeRows(cascadesQuery.data?.cascades ?? [], nodesQuery.data?.nodes ?? []);
+  const { rows, failure: sideFailure } = useCascadeRows(cascadesQuery.data?.cascades ?? [], nodesQuery.data?.nodes ?? []);
 
   // Nothing to draw has three causes here and they are not interchangeable:
   // the request failed, the request has not answered yet, or there really are
@@ -123,6 +124,9 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
       {/* The list itself: one component, two densities. The explainer strip
           that used to sit here is gone: the cards say what a cascade is by
           drawing one, and the action lives in the page bar. */}
+      {/* A list that explains the cards (squads, policies, bindings, outbounds)
+          did not arrive: said once here, the cards show a dash for it. */}
+      {sideFailure && <LoadFailedLine message={sideFailure.message} onRetry={sideFailure.onRetry} />}
       <CascadesView
         rows={rows}
         layout={layout}

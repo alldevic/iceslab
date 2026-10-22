@@ -343,6 +343,8 @@ export const common = {
     // E57: направление на именованном выходе.
     directionViaOutbound: 'выход',
     directionOutboundGone: 'выход не найден',
+    // Список выходов не пришёл: неизвестно, а не «не найден».
+    directionOutboundUnknown: 'выход: список не загрузился',
     directionDown: 'вне',
     outShort: 'вне',
     reaches: 'Доступен',

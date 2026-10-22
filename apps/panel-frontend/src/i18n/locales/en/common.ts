@@ -305,6 +305,7 @@ export const common = {
     directionNoNode: 'no node yet',
     directionViaOutbound: 'outbound',
     directionOutboundGone: 'outbound not found',
+    directionOutboundUnknown: 'outbound: list did not load',
     directionDown: 'out',
     outShort: 'out',
     reaches: 'Reaches',

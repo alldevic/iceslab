@@ -9,7 +9,8 @@ import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
 import { cascadeStatusView } from '@/lib/domain/cascadeStatus';
 import { countryFlag } from '@/lib/domain/countries';
-import { directionWhere, type CascadeRow, type DirectionView, type HopView } from '@/contours/nodes/lib/cascadeRows';
+import type { CascadeRow } from '@/contours/nodes/lib/cascadeRows';
+import { directionWhere, type DirectionView, type HopView } from '@/lib/domain/cascadePath';
 import { AMBER, CARD, CYAN, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, RED, SNOW, WELL } from '@/contours/nodes/lib/colors';
 
 /**
@@ -219,7 +220,7 @@ function CascadeCard({
             panel has no per-squad member list to dedupe against, so a summed
             user count would overstate reach. The footer chips carry the real
             per-squad numbers. */}
-        <Fact value={String(row.squads.length)} label={t('cascades.bar.squads')} />
+        <Fact value={row.reach ? String(row.reach.squads.length) : '-'} label={t('cascades.bar.squads')} />
         <IconButton onClick={onEdit} kind="edit" />
         <IconButton onClick={onDelete} kind="delete" />
       </Box>
@@ -307,12 +308,16 @@ function CascadeCard({
         }}
       >
         <Caption>{t('cascades.reaches')}</Caption>
-        {row.squads.length === 0 ? (
+        {/* Unknown while a list it is read from is missing: a dash, not «nobody»;
+            the list above says which request failed. */}
+        {!row.reach ? (
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>-</Text>
+        ) : row.reach.squads.length === 0 ? (
           <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>
             {t('cascades.reachesNobody')}
           </Text>
         ) : (
-          row.squads.map((s) => (
+          row.reach.squads.map((s) => (
             <Box
               key={s.name}
               style={{
@@ -336,7 +341,9 @@ function CascadeCard({
         )}
         <Divider />
         <Caption>{t('cascades.policies')}</Caption>
-        {row.policies.length === 0 ? (
+        {!row.reach ? (
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>-</Text>
+        ) : row.reach.policies.length === 0 ? (
           <Box
             style={{
               display: 'flex',
@@ -353,7 +360,7 @@ function CascadeCard({
             </Text>
           </Box>
         ) : (
-          row.policies.map((p) => (
+          row.reach.policies.map((p) => (
             <Box
               key={p.name}
               style={{
@@ -545,6 +552,7 @@ function whereWords(d: DirectionView, t: (k: string) => string): string {
   const w = directionWhere(d);
   if (w.kind === 'outbound') return w.address ? `${w.name} · ${w.address}` : w.name;
   if (w.kind === 'outboundGone') return t('cascades.directionOutboundGone');
+  if (w.kind === 'outboundUnknown') return t('cascades.directionOutboundUnknown');
   if (w.kind === 'pool') return poolName(d);
   return t('cascades.directionNoNode');
 }
@@ -825,13 +833,17 @@ function CascadeLine({
             fontFamily: DISPLAY,
             fontSize: 12,
             lineHeight: '16px',
-            color: row.squads.length === 0 ? FAINT : SNOW,
+            color: !row.reach || row.reach.squads.length === 0 ? FAINT : SNOW,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}
         >
-          {row.squads.length === 0 ? t('cascades.reachesNobody') : row.squads.map((s) => s.name).join(', ')}
+          {!row.reach
+            ? '-'
+            : row.reach.squads.length === 0
+              ? t('cascades.reachesNobody')
+              : row.reach.squads.map((s) => s.name).join(', ')}
         </Text>
       </Box>
 
