@@ -32,7 +32,7 @@ export function ShadowsocksSection({
               />
               {/* The key itself is never shown: it is the server's secret, and
                   the form only has to say whether the save keeps it. */}
-              <Text size="sm" c={keyState === 'new' ? 'yellow' : 'dimmed'}>
+              <Text size="sm" c={keyState === 'set' || keyState === 'server' ? 'dimmed' : 'yellow'}>
                 {t(`profiles.form.cfg.ssKey.${keyState}`)}
               </Text>
               <Alert color="blue" variant="light">

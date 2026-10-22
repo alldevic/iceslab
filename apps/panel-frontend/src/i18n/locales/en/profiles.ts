@@ -248,7 +248,8 @@ export const profiles = {
         ssCipherLabel: 'Cipher method',
         ssKey: {
           set: 'The server key is set. Saving leaves it alone.',
-          new: 'The server key does not fit this method, or there is none: saving issues a new one, and clients get new links.',
+          change: 'The method changed: the server keeps the key if it fits the new method, or issues a new one, and then clients get new links.',
+          new: 'There is no server key: saving issues one, and clients get new links.',
           server: 'The panel issues the server key on create.',
         },
         ssNote:

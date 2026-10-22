@@ -2,21 +2,13 @@
  * The shadowsocks server key (`serverPsk`) on the profile form (A-028).
  *
  * The form has no field for the key, and every edit used to send
- * `config: { method }` as the whole config. The server stores what it is
- * given, so renaming a profile erased the key the node runs with, and the next
- * push was refused ("serverPsk is required"). The rule here is the one the
- * rest of the panel keeps: an absent key is no edit.
+ * `config: { method }` as the whole config, which erased the stored key. Since
+ * 2a09844 the server keeps the stored key when a config arrives without one,
+ * and issues a new one only when the cipher changes to another key length
+ * (`pskFitsMethod`, panel-backend `profiles/ss-helpers.ts`). So the form sends
+ * the cipher alone and never a key: the length rule lives in one place, on the
+ * server.
  */
-
-/**
- * Bytes a 2022 cipher wants in its server key; null for a legacy AEAD cipher,
- * which carries a key the node needs but does not size it. Mirrors
- * `generateSsServerPsk` (panel-backend `profiles/ss-helpers.ts:10`).
- */
-export function ssKeyBytes(method: string): number | null {
-  if (!method.startsWith('2022-')) return null;
-  return method === '2022-blake3-aes-128-gcm' ? 16 : 32;
-}
 
 /** The stored key, read from the config the server sent. Input checked first. */
 export function storedSsKey(config: unknown): string | null {
@@ -32,68 +24,33 @@ export function storedSsMethod(config: unknown): string | null {
   return typeof m === 'string' && m !== '' ? m : null;
 }
 
-/** Decoded length of a base64 key, or null if it is not base64 at all. */
-function base64Bytes(key: string): number | null {
-  try {
-    return atob(key).length;
-  } catch {
-    return null;
-  }
-}
-
-/** Whether a key can serve a cipher as it stands. */
-export function ssKeyFits(key: string, method: string): boolean {
-  const need = ssKeyBytes(method);
-  return need === null || base64Bytes(key) === need;
-}
-
-/** A fresh key for a cipher, from the browser's CSPRNG. */
-export function newSsKey(method: string, random: (n: number) => Uint8Array = randomBytes): string {
-  const bytes = random(ssKeyBytes(method) ?? 32);
-  return btoa(String.fromCharCode(...bytes));
-}
-
-function randomBytes(n: number): Uint8Array {
-  return crypto.getRandomValues(new Uint8Array(n));
-}
-
 /**
  * What the form says about the key.
  *
- *   set     there is a stored key and it serves the chosen cipher;
- *   new     the cipher changed and the stored key does not fit it (or there is
- *           none): a new key goes with the save, and clients get new links;
+ *   set     there is a stored key and the cipher is the stored one: the save
+ *           leaves the key alone;
+ *   change  the cipher changed: the server keeps the key if it fits the new
+ *           cipher and issues a new one if not (then clients get new links);
+ *   new     there is no stored key: the save issues one;
  *   server  a profile being created: the server issues the key.
  */
-export type SsKeyState = 'set' | 'new' | 'server';
+export type SsKeyState = 'set' | 'change' | 'new' | 'server';
 
 export function ssKeyState(storedConfig: unknown, isEdit: boolean, method: string): SsKeyState {
   if (!isEdit) return 'server';
-  const key = storedSsKey(storedConfig);
-  return key !== null && ssKeyFits(key, method) ? 'set' : 'new';
+  if (storedSsKey(storedConfig) === null) return 'new';
+  return storedSsMethod(storedConfig) === method ? 'set' : 'change';
 }
 
 /**
- * The config an edit sends.
- *
- * Nothing at all while the cipher is the stored one and its key fits: the key
- * and everything else in the config stay as the server has them. A profile
- * the old save already left keyless gets a new key on its next save, which is
- * what brings it back to the node. A changed cipher sends the
- * stored key with it when the key still fits (aes-256 and chacha20 both want
- * 32 bytes), and a new one when it does not, so the save never leaves the
- * profile without a key. A create sends the cipher alone, the server fills
- * the key in (`profiles.service.ts:327`).
+ * The config an edit sends: nothing while the cipher is the stored one and a
+ * key is stored, the cipher alone otherwise. A create sends the cipher alone
+ * too; the server fills the key in on both paths.
  */
 export function ssConfigPatch(
   storedConfig: unknown,
   isEdit: boolean,
   method: string,
-  fresh: (method: string) => string = newSsKey,
-): { config?: { method: string; serverPsk?: string } } {
-  if (!isEdit) return { config: { method } };
-  const key = storedSsKey(storedConfig);
-  const fits = key !== null && ssKeyFits(key, method);
-  if (fits && storedSsMethod(storedConfig) === method) return {};
-  return { config: { method, serverPsk: fits ? key : fresh(method) } };
+): { config?: { method: string } } {
+  return isEdit && ssKeyState(storedConfig, isEdit, method) === 'set' ? {} : { config: { method } };
 }
