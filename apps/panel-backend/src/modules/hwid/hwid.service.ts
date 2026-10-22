@@ -136,6 +136,21 @@ export function resolveSquadHwidLimit(squadDefaults: (number | null)[]): number 
 }
 
 /**
+ * The device limit a user is held to, null for none (A-148, decisions.md
+ * 2026-10-22). The user's own value has three meanings:
+ *   null   as the squads say (resolveSquadHwidLimit);
+ *   0      an explicit no-limit over any squad: devices are recorded, never
+ *          blocked (there was no way to say this, `null` inherited the squad's);
+ *   N >= 1 the limit.
+ * Pure, for the subscription route and anything else that has to agree.
+ */
+export function effectiveHwidLimit(userLimit: number | null, squadDefaults: (number | null)[]): number | null {
+  if (userLimit === 0) return null;
+  if (userLimit !== null) return userLimit;
+  return resolveSquadHwidLimit(squadDefaults);
+}
+
+/**
  * Admin-facing: list all devices currently registered for a user. Sorted
  * newest-first so the recently-added entry sits on top of the UI list.
  */

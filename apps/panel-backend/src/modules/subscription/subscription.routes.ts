@@ -27,7 +27,7 @@ import {
   getSubscriptionSettings,
   renderAnnounce,
 } from '../settings/settings.service.js';
-import { enforceHwid, resolveSquadHwidLimit } from '../hwid/hwid.service.js';
+import { effectiveHwidLimit, enforceHwid } from '../hwid/hwid.service.js';
 import { prisma } from '../../prisma.js';
 import { config } from '../../config.js';
 import { subscriptionRequests } from '../../lib/infra/metrics.js';
@@ -509,12 +509,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         },
       });
       if (userMin) {
-        // K7 - explicit per-user limit wins; otherwise fall back to the
-        // most-permissive squad default.
-        const effectiveHwidLimit =
-          userMin.hwidDeviceLimit ??
-          resolveSquadHwidLimit(userMin.groupMembers.map((m) => m.group.hwidDeviceLimit));
-        const hwidResult = await enforceHwid(userMin.id, hwid, effectiveHwidLimit);
+        // K7 - explicit per-user limit wins, 0 there is an explicit no-limit
+        // (A-148); otherwise the most-permissive squad default.
+        const hwidLimit = effectiveHwidLimit(
+          userMin.hwidDeviceLimit,
+          userMin.groupMembers.map((m) => m.group.hwidDeviceLimit),
+        );
+        const hwidResult = await enforceHwid(userMin.id, hwid, hwidLimit);
         // Always emit the gauge header so the client can render "2/3" in
         // its profile detail UI, even on success, even when no limit set.
         // HTTP headers are ISO-8859-1; use ASCII-only "unlimited" instead

@@ -65,7 +65,9 @@ export const CreateUserSchema = z.object({
   // Provenance, see the sourceId column. Set by the importer, never by a human;
   // it is what makes a second run a delta instead of a duplicate.
   sourceId: z.string().max(128).optional(),
-  hwidDeviceLimit: z.number().int().positive().nullish(),
+  // A-148: null = as the squads say, 0 = explicit no-limit, N >= 1 = the limit
+  // (effectiveHwidLimit in hwid.service.ts).
+  hwidDeviceLimit: z.number().int().nonnegative().nullish(),
   description: z.string().max(1000).nullish(),
   tag: z.string().max(64).nullish(),
   telegramId: z.union([
@@ -129,7 +131,9 @@ export const UpdateUserSchema = z.object({
   trafficLimitGb: z.number().int().positive().nullish(),
   trafficLimitStrategy: TrafficLimitStrategy.optional(),
   expireAt: z.iso.datetime().nullish(),                          // ISO 8601 string OR null
-  hwidDeviceLimit: z.number().int().positive().nullish(),
+  // A-148: null = as the squads say, 0 = explicit no-limit, N >= 1 = the limit
+  // (effectiveHwidLimit in hwid.service.ts).
+  hwidDeviceLimit: z.number().int().nonnegative().nullish(),
   description: z.string().max(1000).nullish(),
   tag: z.string().max(64).nullish(),
   telegramId: z.union([
