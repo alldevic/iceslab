@@ -49,6 +49,7 @@ import {
   refusedDirection,
   movePosition,
   removePosition,
+  appendPosition,
   type DirectionDraft,
   type PositionDraft,
 } from '@/contours/cascades/lib/cascadeForm';
@@ -1242,6 +1243,12 @@ describe('A-140: позиция, сменившая номер, шлёт сво�
     const out = toPositionInputs(movePosition([entry, a, blind], 2, -1));
     expect('linkParams' in out[1]!).toBe(false);
     expect(out[2]).toMatchObject({ linkParams: { underlay: 'awg' } });
+  });
+
+  it('удалить позицию с подложкой и добавить новую: у новой в пейлоаде linkParams: null', () => {
+    const out = toPositionInputs(appendPosition(removePosition([entry, a, b], 2), 9));
+    expect(out[2]).toMatchObject({ nodeIds: [], position: 2, linkProtocol: 'xray', linkParams: null });
+    expect('linkParams' in out[2]!).toBe(true);
   });
 
   it('за край не двигает', () => {

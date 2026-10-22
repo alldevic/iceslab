@@ -432,6 +432,16 @@ export function movePosition(pools: PositionDraft[], idx: number, dir: -1 | 1): 
   return reorderedPositions(pools, next);
 }
 
+/**
+ * A new transit at the end. It carries `linkParams: null` and counts as
+ * touched, so the save says "nothing" for it out loud: left absent, the server
+ * fills it from the stored position with the same number, and after "delete
+ * B, add C" that is B's AWG underlay handed to C.
+ */
+export function appendPosition(pools: PositionDraft[], key: number): PositionDraft[] {
+  return [...pools, { key, nodeIds: [''], entryProtocol: 'xray', linkProtocol: 'xray', linkParams: null, linkTouched: true }];
+}
+
 export function removePosition(pools: PositionDraft[], idx: number): PositionDraft[] {
   return reorderedPositions(pools, pools.filter((_, j) => j !== idx));
 }

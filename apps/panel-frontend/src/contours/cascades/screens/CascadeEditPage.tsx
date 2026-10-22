@@ -119,6 +119,7 @@ import {
   toPositionInputs,
   movePosition,
   removePosition,
+  appendPosition,
   withEntryConfirm,
   withUnderlay,
   isOneLegCascade,
@@ -1114,14 +1115,7 @@ export function CascadeEditPage() {
               label={t('cascadeCreate.addPosition')}
               note={t('cascadeCreate.positionsLeft', { n: MAX_POSITIONS - positionCount })}
               disabled={positionCount >= MAX_POSITIONS}
-              onClick={() =>
-                patch({
-                  pools: [
-                    ...pools,
-                    { key: nextFreeKey(pools), nodeIds: [''], entryProtocol: 'xray', linkProtocol: 'xray' },
-                  ],
-                })
-              }
+              onClick={() => patch({ pools: appendPosition(pools, nextFreeKey(pools)) })}
             />
           </Stack>
         </Box>
