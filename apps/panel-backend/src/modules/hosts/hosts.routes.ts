@@ -78,6 +78,7 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({
           error: err.code,
           message: err.message,
+          nodeName: err.nodeName,
           protocol: err.protocol,
           engine: err.engine,
           heldBy: err.heldBy,

@@ -151,7 +151,7 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
           error: err.code,
           message: err.message,
           nodeName: err.nodeName,
-          protocol: err.protocol,
+            protocol: err.protocol,
           engine: err.engine,
           heldBy: err.heldBy,
         });
@@ -245,6 +245,7 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({
           error: err.code,
           message: err.message,
+          nodeName: err.nodeName,
           protocol: err.protocol,
           engine: err.engine,
           heldBy: err.heldBy,

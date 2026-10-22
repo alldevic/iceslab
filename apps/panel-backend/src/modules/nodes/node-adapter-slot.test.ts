@@ -86,6 +86,10 @@ describe('one inbound per adapter where the agent holds one', () => {
     const viaBinding = await post('/api/bindings', { profileId: c, nodeId: n, port: 9443 });
     expect(viaBinding.status).toBe(409);
     expect(viaBinding.body.error).toBe('ADAPTER_SLOT_TAKEN');
+    // One body on every route, so the screen parses it once.
+    const nodeName = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).name;
+    expect(viaHost.body.nodeName).toBe(nodeName);
+    expect(viaBinding.body.nodeName).toBe(nodeName);
   });
 
   it('vless on native xray takes as many as the operator wants', async () => {
