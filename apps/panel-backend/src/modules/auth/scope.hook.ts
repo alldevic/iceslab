@@ -34,8 +34,13 @@ export function requiredScopeFor(method: string, url: string | undefined): strin
  * `auth` and `internal` are omitted on purpose: tokens can never reach those
  * (blockApiTokenAccess / login / node-only), so granting them would be a
  * dead scope.
+ *
+ * "By hand" went wrong (A-040, 22.10): route-policies, node-policies,
+ * named-outbounds and geo-sets were never added, so no scoped token could be
+ * given them and KNOWN_SCOPES refused them at mint. scope.routes.test.ts now
+ * reads every `/api/<segment>` in the source and fails on one missing here.
  */
-const SCOPEABLE_RESOURCES = [
+export const SCOPEABLE_RESOURCES = [
   'users',
   'nodes',
   'profiles',
@@ -51,7 +56,14 @@ const SCOPEABLE_RESOURCES = [
   'recipes',
   'dashboard',
   'system',
+  'route-policies',
+  'node-policies',
+  'named-outbounds',
+  'geo-sets',
 ] as const;
+
+/** First segments a token can never reach, so no scope is offered for them. */
+export const UNSCOPED_RESOURCES = ['api-tokens', 'auth', 'internal'] as const;
 
 /**
  * The set of scopes a token may carry: `*` (full), the special `sub:read`
