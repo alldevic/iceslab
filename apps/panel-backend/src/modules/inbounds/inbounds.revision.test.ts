@@ -6,6 +6,7 @@ import { closeRedis, redis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import {
+  applyInboundsForNode,
   enqueueNodePush,
   inboundSyncQueue,
   reconcileNodeRevisions,
@@ -152,6 +153,23 @@ describe('a push of a node edited while it runs', () => {
   }, 40_000);
 });
 
+describe('a refusal of the node policy or dns (agent 22.10: 500 ADAPTER_FAILED, before: 200)', () => {
+  it('lands on the node as an error and leaves it not applied', async () => {
+    const id = await node();
+    await enqueueNodePush(id);
+    await inboundSyncQueue.obliterate({ force: true });
+    const reason = '1/1 sections failed to apply: policy (xray): core rejected the config: exit status 23';
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockRejectedValue(
+      new NodeRequestError(`Node rev returned 500: ${reason}`, 500, { error: 'ADAPTER_FAILED', message: reason }),
+    );
+    await expect(applyInboundsForNode(id)).rejects.toThrow();
+    const n = await prisma.node.findUniqueOrThrow({ where: { id } });
+    expect((n.lastInboundSyncError as { message: string }).message).toContain('policy (xray)');
+    expect(n.appliedRevision).toBe(0n);
+    expect((await getNodeSyncStatus(id))!.applied).toBe(false);
+  });
+});
+
 describe('the poll cron brings a node back to its revision (P1)', () => {
   it('queues a push for an online node behind its revision, once per revision', async () => {
     const id = await node();
@@ -161,6 +179,13 @@ describe('the poll cron brings a node back to its revision (P1)', () => {
     expect(await reconcileNodeRevisions()).toBe(0);
     const offline = await node();
     await prisma.node.update({ where: { id: offline }, data: { status: 'unreachable', desiredRevision: 2n } });
+    expect(await reconcileNodeRevisions()).toBe(0);
+  });
+
+  it('takes a degraded node too, once an hour like an online one', async () => {
+    const id = await node();
+    await prisma.node.update({ where: { id }, data: { status: 'degraded', desiredRevision: 2n, appliedRevision: 1n } });
+    expect(await reconcileNodeRevisions()).toBe(1);
     expect(await reconcileNodeRevisions()).toBe(0);
   });
 });

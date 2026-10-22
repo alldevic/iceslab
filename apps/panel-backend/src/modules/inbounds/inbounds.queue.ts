@@ -796,10 +796,14 @@ export async function requeueIfMoved(nodeId: string, readRevision: bigint | null
 }
 
 /**
- * A-162, principle P1: a node converges by itself. Online, and its applied
- * revision behind the desired one (the last attempt failed and nothing has
- * been edited since): queue its push. Run from the status poll; one query on
- * a small table, and the jobId folds a push already queued.
+ * A-162, principle P1: a node converges by itself. Online or degraded, and
+ * its applied revision behind the desired one (the last attempt failed and
+ * nothing has been edited since): queue its push. Degraded counts, by the
+ * same rule as the re-push on coming back (nodes.cron.ts): a node whose core
+ * will not start is the one that needs the config, and a degraded node with
+ * a failed push and no status change would otherwise never converge. Run
+ * from the status poll; one query on a small table, and the jobId folds a
+ * push already queued.
  *
  * ⚠ At most once an hour per (node, revision). A config the agent REFUSES
  * stays behind too, and that refusal restarts the node's cores on every try:
@@ -812,7 +816,7 @@ const RECONCILE_EVERY_S = 3600;
 export async function reconcileNodeRevisions(): Promise<number> {
   const behind = await prisma.$queryRaw<{ id: string; desired: bigint }[]>`
     SELECT id::text AS id, desired_revision AS desired FROM nodes
-    WHERE deleted_at IS NULL AND status = 'online' AND applied_revision < desired_revision`;
+    WHERE deleted_at IS NULL AND status IN ('online', 'degraded') AND applied_revision < desired_revision`;
   let queued = 0;
   for (const n of behind) {
     const first = await redis.set(`inbound-sync:reconciled:${n.id}:${n.desired}`, '1', 'EX', RECONCILE_EVERY_S, 'NX');
