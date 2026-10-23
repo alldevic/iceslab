@@ -1,9 +1,14 @@
 import {
   XRAY_TRANSPORT_SUBPROTOCOLS,
-  isRoutingPresetId,
   transportServed,
   type RoutingPresetId,
 } from '@iceslab/shared';
+import {
+  PRESET_COLUMNS_SELECT,
+  presetOf,
+  resolveSquadPreset,
+  type ResolvedPreset,
+} from '../routing-presets/routing-presets.resolve.js';
 import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
@@ -138,28 +143,27 @@ export interface SubscriptionResult {
   endpoints: SubscriptionEndpoint[];
   textPlain: string;
   json: SubscriptionJsonResponse;
-  // R3-a - effective routing override from the user's squads, or null to
-  // inherit the panel-wide default. The single distinct non-null preset across
-  // the user's squads; null when no squad overrides OR they conflict.
-  squadRoutingPreset: RoutingPresetId | null;
-  // R3 - the user's explicit per-user routing override, or null to inherit
+  // R3-a + A-229 - effective routing override from the user's squads, a
+  // built-in key or an own preset, or null to inherit the panel-wide default.
+  // The single distinct preset across the user's squads; null when no squad
+  // overrides OR they conflict (resolveSquadPreset).
+  squadPreset: ResolvedPreset | null;
+  // R3 + A-229 - the user's explicit per-user override, or null to inherit
   // (squad -> global -> default). Highest precedence below the ?routing= query.
-  userRoutingPreset: RoutingPresetId | null;
+  userPreset: ResolvedPreset | null;
 }
 
 /**
- * R3-a - reduce a user's per-squad routing overrides to one effective preset.
- * Rule: the single distinct VALID preset across their squads wins; zero
- * overrides, or a conflict (>1 distinct), returns null = inherit the panel-wide
- * default. Invalid/garbage values are ignored. Pure (no DB) for testing.
+ * R3-a - reduce a user's per-squad built-in overrides to one effective preset.
+ * The rule itself is resolveSquadPreset's (one distinct wins, zero or a
+ * conflict is null, garbage ignored); this is its built-in-only face, kept for
+ * the callers and tests that speak in keys.
  */
 export function resolveSquadRouting(
   overrides: (string | null)[],
 ): RoutingPresetId | null {
-  const distinct = [
-    ...new Set(overrides.filter((p): p is RoutingPresetId => p !== null && isRoutingPresetId(p))),
-  ];
-  return distinct.length === 1 ? distinct[0]! : null;
+  const { preset } = resolveSquadPreset(overrides.map((routingPreset) => ({ routingPreset, customRoutingPreset: null })));
+  return preset?.kind === 'builtin' ? preset.id : null;
 }
 
 // ───── Per-protocol config shapes (mirror inbounds.schemas.ts) ─────
@@ -610,7 +614,7 @@ export async function generateSubscription(
 ): Promise<SubscriptionResult> {
   const user = await prisma.user.findFirst({
     where: { subscriptionToken: token, deletedAt: null },
-    include: { traffic: true },
+    include: { traffic: true, customRoutingPreset: PRESET_COLUMNS_SELECT.customRoutingPreset },
   });
   if (!user) throw new SubscriptionNotFoundError();
 
@@ -645,7 +649,7 @@ export async function generateSubscription(
   // identical squad set, i.e. a redundant round-trip on every /sub poll.
   const memberships = await prisma.groupMember.findMany({
     where: { userId: user.id },
-    select: { groupId: true, group: { select: { routingPreset: true } } },
+    select: { groupId: true, group: { select: PRESET_COLUMNS_SELECT } },
   });
   const groupIds = memberships.map((g) => g.groupId);
 
@@ -1560,17 +1564,15 @@ export async function generateSubscription(
 
   // R3-a - resolve the per-squad routing override across the user's squads,
   // reusing the memberships already loaded above (no extra query).
-  const squadRoutingPreset = resolveSquadRouting(
-    memberships.map((m) => m.group.routingPreset),
-  );
+  const { preset: squadPreset } = resolveSquadPreset(memberships.map((m) => m.group));
 
   return {
     endpoints,
     textPlain: encodePlainList(endpoints.flatMap((e) => expandEndpointUris(e))),
     json: buildSubscriptionJson(user, endpoints),
-    squadRoutingPreset,
-    // R3 - per-user override (scalar already loaded on `user`). Garbage / unset
-    // values fall through to null so the route's chain drops to the next tier.
-    userRoutingPreset: isRoutingPresetId(user.routingPreset) ? user.routingPreset : null,
+    squadPreset,
+    // R3 - per-user override (loaded with the user). Garbage / unset values
+    // fall through to null so the route's chain drops to the next tier.
+    userPreset: presetOf(user),
   };
 }

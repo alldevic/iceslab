@@ -22,6 +22,7 @@ import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
 import { endpointsForFormat, isPlainXray } from './subscription.formats.js';
 import { matchFormatForUserAgent } from '../srr/srr.service.js';
+import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
 import {
   formatBytes,
   getSubscriptionSettings,
@@ -725,6 +726,11 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // per-user override, then their per-squad override, then the panel-wide
       // setting. plain/json/wgconf carry no routing section, so we skip the
       // read there.
+      // A-229: the resolved preset, a built-in key or an own preset's rules.
+      // `routingPreset` stays the built-in key the format builders read; an
+      // own preset is its rules over the proxy-all base, rendered by each
+      // format from `preset` (A-229 part 4).
+      let preset: ResolvedPreset = { kind: 'builtin', id: 'proxy-all' };
       let routingPreset: RoutingPresetId = 'proxy-all';
       let customRoutingRules: Record<string, unknown>[] | undefined;
       // R3 - operator-defined custom domain lists (direct/proxy/block), emitted
@@ -742,11 +748,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         format === 'xkeen'
       ) {
         const settings = await getSubscriptionSettings();
-        routingPreset =
-          query.routing ??
-          result.userRoutingPreset ??
-          result.squadRoutingPreset ??
-          settings.routingPreset;
+        preset =
+          (query.routing ? { kind: 'builtin', id: query.routing } : null) ??
+          result.userPreset ??
+          result.squadPreset ??
+          { kind: 'builtin', id: settings.routingPreset };
+        routingPreset = preset.kind === 'builtin' ? preset.id : 'proxy-all';
         // R3-b custom rules apply only to xray-routing formats (xray/xkeen).
         customRoutingRules = settings.customRoutingRules ?? undefined;
         // R3 custom domain lists apply to xray/xkeen + clash.
