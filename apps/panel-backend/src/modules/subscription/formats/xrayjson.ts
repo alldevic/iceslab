@@ -1,6 +1,13 @@
-import type { RoutingPresetId } from '@iceslab/shared';
+import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
+
+/** An xray endpoint this format writes. The socks/http doors always; the rest
+ *  as the shared table says (A-224), the same question the other formats ask,
+ *  so a cell narrowed there is obeyed here too. */
+function carriedXray(e: SubscriptionEndpoint): boolean {
+  return e.protocol === 'xray' && (isPlainXray(e) || transportServed('xrayjson', e));
+}
 
 /**
  * Xray-core client JSON subscription formatter.
@@ -341,7 +348,7 @@ export function buildXrayJson(
   endpoints: SubscriptionEndpoint[],
   opts: XrayJsonBuildOpts = {},
 ): string {
-  const xrayEps = endpoints.filter((e) => e.protocol === 'xray');
+  const xrayEps = endpoints.filter(carriedXray);
   const proxyTags: string[] = [];
   const bundle = opts.bundle ?? 'flat';
   // Routing preset (R1a + H2). Each split preset selects its own rule array +
@@ -514,7 +521,7 @@ export function buildXrayJsonArray(
   // matches the эталон. hy2 is FIELD-PENDING (see buildHysteriaOutbound). Other
   // protocols are skipped, this is an xray/hy2 surface.
   const supported = endpoints.filter(
-    (e) => e.protocol === 'xray' || e.protocol === 'hysteria',
+    (e) => carriedXray(e) || e.protocol === 'hysteria',
   );
   const preset = opts.routingPreset ?? 'proxy-all';
   const splitRules = splitRulesFor(preset);

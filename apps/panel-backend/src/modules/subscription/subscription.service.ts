@@ -1,4 +1,9 @@
-import { isRoutingPresetId, transportServed, type RoutingPresetId } from '@iceslab/shared';
+import {
+  XRAY_TRANSPORT_SUBPROTOCOLS,
+  isRoutingPresetId,
+  transportServed,
+  type RoutingPresetId,
+} from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
@@ -1143,6 +1148,17 @@ export async function generateSubscription(
       const realityPublicKey = cfg.realityPublicKey ?? '';
       const network = cfg.network ?? 'raw';
       const subprotocol = cfg.subprotocol ?? 'vless';
+      // The cast above trusts the jsonb; a stored subprotocol the panel does
+      // not speak (an old or hand-written row) is skipped here, like the
+      // broken configs below, instead of riding into every builder.
+      if (!(XRAY_TRANSPORT_SUBPROTOCOLS as readonly string[]).includes(subprotocol)) {
+        warnBrokenProfileOnce(
+          ib.profileId,
+          `[subscription] profile ${ib.profileId} (xray) has subprotocol ` +
+            `"${String(subprotocol)}", which no format carries; skipping this endpoint.`,
+        );
+        continue;
+      }
       const fingerprint =
         hostOverrides?.fingerprintOverride ?? cfg.fingerprint;
       const xrayPath = hostOverrides?.pathOverride ?? cfg.path;

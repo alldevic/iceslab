@@ -87,25 +87,37 @@ export const TRANSPORT_SUPPORT: Table = {
   'trojan-link': { vless: NONE, vmess: NONE, trojan: ALL },
 };
 
-/** The column an endpoint falls in. */
-export function transportColumn(network: string | undefined, xhttpMode?: string): XrayTransportColumn {
-  const n = network || 'raw';
+/**
+ * The column an endpoint falls in, or null for a network the table does not
+ * know. No network at all is raw (the schema's default), and `tcp` is raw's
+ * old name (inbounds.schemas.ts normalises it on write; a row written before
+ * that still says it). Anything else is NOT raw: reading it as raw is what
+ * hands a client bare TCP to a node that listens on something else.
+ */
+export function transportColumn(network: string | undefined, xhttpMode?: string): XrayTransportColumn | null {
+  const n = !network || network === 'tcp' ? 'raw' : network;
   if (n === 'xhttp') return xhttpMode && xhttpMode !== 'auto' ? 'xhttp-mode' : 'xhttp';
-  return (XRAY_TRANSPORT_COLUMNS as readonly string[]).includes(n) ? (n as XrayTransportColumn) : 'raw';
+  return (XRAY_TRANSPORT_COLUMNS as readonly string[]).includes(n) ? (n as XrayTransportColumn) : null;
 }
 
 /**
  * Does `format` carry this xray endpoint? `security` is the endpoint's layer:
- * 'default' (REALITY), 'tls' or 'none'. An unknown subprotocol is not carried.
+ * 'default' (REALITY), 'tls' or 'none'. What the table does not know is not
+ * carried: an unknown format, subprotocol or network answers false, never a
+ * throw. The subprotocol and network come from stored jsonb through a cast, so
+ * an old or hand-written value reaches here, and one bad profile must not
+ * take the whole subscription down with it.
  */
 export function transportServed(
   format: SubscriptionTransportFormat,
   e: { subprotocol?: string; network?: string; xhttpMode?: string; securityLayer?: string },
 ): boolean {
   const sub = (e.subprotocol ?? 'vless') as XrayTransportSubprotocol;
-  const row = TRANSPORT_SUPPORT[format][sub];
+  const row = TRANSPORT_SUPPORT[format]?.[sub];
   if (!row) return false;
-  const cell = row[transportColumn(e.network, e.xhttpMode)];
+  const column = transportColumn(e.network, e.xhttpMode);
+  if (column === null) return false;
+  const cell = row[column];
   const sec = e.securityLayer ?? 'default';
   switch (cell) {
     case 'served':

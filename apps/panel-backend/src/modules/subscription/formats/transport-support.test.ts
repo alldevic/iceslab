@@ -4,6 +4,8 @@ import {
   TRANSPORT_SUPPORT,
   XRAY_TRANSPORT_COLUMNS,
   XRAY_TRANSPORT_SUBPROTOCOLS,
+  transportColumn,
+  transportServed,
   type SubscriptionTransportFormat,
   type TransportSupportCell,
   type XrayTransportColumn,
@@ -11,7 +13,7 @@ import {
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
 import { buildClashYaml } from './clash.js';
 import { buildSingboxJson } from './singbox.js';
-import { buildXrayJson } from './xrayjson.js';
+import { buildXrayJson, buildXrayJsonArray } from './xrayjson.js';
 import { buildQuantumultXConf } from './quantumultx.js';
 import { buildLoonConf } from './loon.js';
 import { buildSurgeConf } from './surge.js';
@@ -115,6 +117,53 @@ describe('the shared transport table against the formats', () => {
       }
     }
   }
+
+  it('a network the table does not know is carried by no format, not read as raw', () => {
+    for (const format of SUBSCRIPTION_TRANSPORT_FORMATS) {
+      for (const sub of XRAY_TRANSPORT_SUBPROTOCOLS) {
+        expect(transportServed(format, { subprotocol: sub, network: 'quic', securityLayer: 'tls' }), `${format}/${sub}`).toBe(false);
+      }
+    }
+    expect(transportColumn('quic')).toBeNull();
+    expect(transportColumn(undefined)).toBe('raw');
+    expect(transportColumn('tcp')).toBe('raw');
+    for (const format of ['clash', 'singbox', 'xrayjson', 'quantumultx', 'loon', 'surge'] as const) {
+      const e = { ...endpoint('vless', 'raw', 'tls'), network: 'quic', nodeName: 'cell-unknown-net' } as SubscriptionEndpoint;
+      expect(present(format, e), format).toBe(false);
+    }
+  });
+
+  it('a format or subprotocol the table does not know answers false, not a throw', () => {
+    expect(transportServed('no-such-format' as SubscriptionTransportFormat, { subprotocol: 'vless' })).toBe(false);
+    expect(transportServed('wireguard-link' as SubscriptionTransportFormat, { subprotocol: 'wireguard' })).toBe(false);
+    expect(transportServed('clash', { subprotocol: 'wireguard', network: 'raw' })).toBe(false);
+  });
+
+  it('xray-json obeys a narrowed cell on every path: the flat file, the array and xkeen', () => {
+    const ws = endpoint('vless', 'ws', 'tls');
+    const raw = endpoint('vless', 'raw', 'tls');
+    const protocols = (json: string) => {
+      const parsed = JSON.parse(json) as unknown;
+      const cfgs = (Array.isArray(parsed) ? parsed : [parsed]) as Array<{ outbounds?: Array<{ protocol?: string }> }>;
+      return cfgs.flatMap((c) => (c.outbounds ?? []).filter((o) => o.protocol === 'vless'));
+    };
+    const paths = {
+      flat: () => buildXrayJson([ws, raw]),
+      array: () => buildXrayJsonArray([ws, raw]),
+      xkeen: () => buildXrayJson([ws, raw], { forRouter: true }),
+    };
+    for (const build of Object.values(paths)) expect(protocols(build())).toHaveLength(2);
+
+    const saved = TRANSPORT_SUPPORT.xrayjson.vless;
+    TRANSPORT_SUPPORT.xrayjson.vless = { ...saved, ws: 'skipped' };
+    try {
+      for (const [name, build] of Object.entries(paths)) {
+        expect(protocols(build()), name).toHaveLength(1);
+      }
+    } finally {
+      TRANSPORT_SUPPORT.xrayjson.vless = saved;
+    }
+  });
 
   it('the link builders write every network of their subprotocol, the XHTTP mode included', () => {
     for (const column of XRAY_TRANSPORT_COLUMNS) {
