@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { apiErrorMessage } from '@/lib/net/client';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { useMutation } from '@tanstack/react-query';
@@ -83,8 +84,9 @@ export function useProfileForm({
     onError: (err) =>
       notifications.show({
         color: 'red',
-        title: 'Generate failed',
-        message: err instanceof Error ? err.message : String(err),
+        title: t('common.error'),
+        // The server's words, not axios's (A-227).
+        message: apiErrorMessage(err),
       }),
   });
 

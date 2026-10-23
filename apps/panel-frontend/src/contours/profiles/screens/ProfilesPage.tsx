@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { apiErrorMessage } from '@/lib/net/client';
 import { useNavigate } from 'react-router-dom';
 import {
   ActionIcon,
@@ -119,7 +120,8 @@ export function ProfilesPage() {
       notifications.show({
         color: 'red',
         title: t('common.deleteError'),
-        message: err instanceof Error ? err.message : String(err),
+        // The server's words, not axios's (A-227).
+        message: apiErrorMessage(err),
       }),
   });
 

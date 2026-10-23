@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { apiErrorMessage } from '@/lib/net/client';
 import { Box, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { modals } from '@mantine/modals';
@@ -102,7 +103,8 @@ export function NodePolicyEditor({
         notifications.show({
           color: 'red',
           title: t('common.saveError'),
-          message: err instanceof Error ? err.message : String(err),
+          // The server's words, not axios's (A-227).
+          message: apiErrorMessage(err),
         });
       }
     },
