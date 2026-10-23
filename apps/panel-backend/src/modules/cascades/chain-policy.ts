@@ -205,6 +205,14 @@ export function chainNodePolicyOf(rules: ChainNodePolicyRule[]): {
     if (r.action.kind === 'warp') usesWarp = true;
     const hasDom = !chainMatchIsEmpty(dom);
     const hasIp = Object.keys(ip).length > 0;
+    // A-103: a rule that names conditions and keeps none in translation is
+    // left out. Only a rule written with no condition at all is a catch-all;
+    // one whose conditions were lost must not become a rule on everything.
+    const wrote =
+      (r.match.domain?.length ?? 0) + (r.match.ip?.length ?? 0) + (r.match.protocol?.length ?? 0) > 0 ||
+      !!r.match.port ||
+      (!!r.match.network && r.match.network !== 'tcp,udp');
+    if (wrote && !hasDom && !hasIp && Object.keys(rest).length === 0) continue;
     if (hasIp && !resolved) {
       out.push({ action: 'resolve' });
       resolved = true;

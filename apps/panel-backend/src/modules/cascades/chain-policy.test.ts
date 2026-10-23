@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chainPoliciesOf } from './chain-policy.js';
+import { chainNodePolicyOf, chainPoliciesOf } from './chain-policy.js';
 import { renderChainConfig } from './chain.config.js';
 import { LINK_PORT_BASE } from './cascade.config.js';
 
@@ -118,5 +118,30 @@ describe('route policy entries into sing-box matchers', () => {
     const file = join(dir, 'config.json');
     writeFileSync(file, JSON.stringify(cfg));
     expect(() => execFileSync(SINGBOX_BIN, ['check', '-c', file], { encoding: 'utf8' })).not.toThrow();
+  });
+});
+
+/**
+ * A-103: a node-policy rule whose conditions do not survive translation is
+ * left out, never turned into a rule on every connection. Before, a port
+ * written as `http` or a `geoip:` in the domain list vanished, the rule had no
+ * condition left, and an exit's chain dropped all of its traffic (block) or
+ * sent all of it to WARP.
+ */
+describe('a node-policy rule that loses its conditions', () => {
+  it('is left out rather than matching everything', () => {
+    for (const match of [{ port: 'http' }, { port: '1000–2000' }, { domain: ['geoip:ru'] }]) {
+      const { rules } = chainNodePolicyOf([{ match, action: { kind: 'block' } }]);
+      expect(rules, JSON.stringify(match)).toEqual([]);
+    }
+  });
+
+  it('a rule written with no condition is still the catch-all, and a readable one stays', () => {
+    expect(chainNodePolicyOf([{ match: {}, action: { kind: 'block' } }]).rules).toEqual([
+      { network: ['tcp', 'udp'], action: 'reject', method: 'drop' },
+    ]);
+    expect(chainNodePolicyOf([{ match: { port: '1000-2000' }, action: { kind: 'block' } }]).rules).toEqual([
+      { port_range: ['1000:2000'], action: 'reject', method: 'drop' },
+    ]);
   });
 });

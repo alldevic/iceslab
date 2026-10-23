@@ -213,6 +213,48 @@ describe('a policy has to fit the node it is attached to', () => {
   });
 });
 
+describe('matchers no engine reads are refused at the save (A-103)', () => {
+  it('refuses an en-dash range, a port with a transport, a protocol name as a port, an address among domains, a domain among addresses, an unknown protocol', async () => {
+    for (const match of [
+      { port: '1000–2000' },
+      { port: '443/tcp' },
+      { port: 'http' },
+      { port: '0' },
+      { domain: ['geoip:ru'] },
+      { domain: ['10.0.0.0/8'] },
+      { ip: ['example.com'] },
+      { ip: ['cidr:10.0.0.0/8'] },
+      { protocol: ['ssh'] },
+    ]) {
+      const res = await createPolicy([{ match, action: { kind: 'block' } }], 400);
+      expect(JSON.stringify(res), JSON.stringify(match)).toMatch(/not a|goes in the/);
+    }
+  });
+
+  it('takes what both engines read', async () => {
+    await createPolicy([
+      { match: { port: '80,443,1000-2000' }, action: { kind: 'block' } },
+      { match: { domain: ['geosite:category-ads-all', 'domain:example.com', 'example.org'] }, action: { kind: 'block' } },
+      { match: { ip: ['geoip:ru', '10.0.0.0/8', '2001:db8::1'] }, action: { kind: 'direct' } },
+      { match: { protocol: ['bittorrent'] }, action: { kind: 'block' } },
+    ]);
+  });
+
+  it('a stored rule whose every matcher is unreadable is not sent, and does not become a rule on everything', async () => {
+    const nodeId = await makeNode();
+    const p = await createPolicy([
+      { match: { port: '443' }, action: { kind: 'block' } },
+      { match: { domain: ['ads.example'] }, action: { kind: 'block' } },
+    ]);
+    await attach(nodeId, p.id);
+    // As a row from before the check holds it.
+    const [first] = await prisma.nodePolicyRule.findMany({ where: { policyId: p.id }, orderBy: { position: 'asc' } });
+    await prisma.nodePolicyRule.update({ where: { id: first!.id }, data: { matchPort: '1000–2000' } });
+    const wire = await resolvePolicyForNode(nodeId);
+    expect(wire?.rules).toEqual([{ match: { domain: ['ads.example'] }, action: { kind: 'block' } }]);
+  });
+});
+
 describe('what the node is actually sent', () => {
   it('sends nothing at all for a node with no policy', async () => {
     // undefined, not an empty policy: the node renders byte-identically to

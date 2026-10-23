@@ -4,6 +4,9 @@ import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { mapPolicy, type NodePolicyDto } from './node-policies.mapper.js';
 import { policyCascadeOutTag, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
+import { splitPolicyEntries } from '../cascades/policy-entries.js';
+import { isPortList, POLICY_PROTOCOLS } from './node-policies.schemas.js';
+import { getLogger } from '../../lib/infra/logger.js';
 import type {
   CreateNodePolicyInput,
   PolicyRuleInput,
@@ -292,11 +295,30 @@ export async function resolvePolicyForNode(
 
   const rules: WireRule[] = [];
   for (const r of node.policy.rules) {
+    // A-103: only what an engine reads goes out, each entry in its own list. A
+    // row saved before the save checked its matchers can hold a `geoip:` among
+    // the domains or a port with an en dash; xray refused the whole config on
+    // it, the chain dropped it. A rule whose every condition is unreadable is
+    // left out entirely: dropping its conditions would make it a rule on all
+    // traffic, the opposite of what the operator wrote.
+    const domain = splitPolicyEntries(r.matchDomain).domain;
+    const ip = splitPolicyEntries(r.matchIp).ip;
+    const port = r.matchPort && isPortList(r.matchPort) ? r.matchPort : undefined;
+    const protocol = r.matchProtocol.filter((p) => (POLICY_PROTOCOLS as readonly string[]).includes(p));
+    const wrote = r.matchDomain.length + r.matchIp.length + r.matchProtocol.length > 0 || !!r.matchPort;
+    const kept = domain.length + ip.length + protocol.length > 0 || !!port;
+    if (wrote && !kept) {
+      getLogger().warn(
+        { nodeId, ruleId: r.id },
+        '[node-policy] a rule whose every matcher is unreadable is left out, not turned into a rule on all traffic',
+      );
+      continue;
+    }
     const match: WireRule['match'] = {};
-    if (r.matchDomain.length) match.domain = r.matchDomain;
-    if (r.matchIp.length) match.ip = r.matchIp;
-    if (r.matchPort) match.port = r.matchPort;
-    if (r.matchProtocol.length) match.protocol = r.matchProtocol;
+    if (domain.length) match.domain = domain;
+    if (ip.length) match.ip = ip;
+    if (port) match.port = port;
+    if (protocol.length) match.protocol = protocol;
     if (r.matchNetwork) match.network = r.matchNetwork as WireRule['match']['network'];
 
     if (r.actionKind === 'cascade') {
