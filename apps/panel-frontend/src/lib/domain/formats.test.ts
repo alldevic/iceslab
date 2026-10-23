@@ -5,6 +5,7 @@ import {
   formatGapGroups,
   formatGapKey,
   formatLabelKey,
+  formatReasonKey,
   hostFormatFacts,
   type HostFormatRow,
   type ProfileFormats,
@@ -129,8 +130,35 @@ describe('hostFormatFacts: три состояния формата на хос�
     expect(outline).toEqual(
       formatCarries('outline', 'shadowsocks').carried
         ? { format: 'outline', state: 'on' }
-        : { format: 'outline', state: 'cannot', why: formatCarries('outline', 'shadowsocks').why },
+        : { format: 'outline', state: 'cannot', why: formatCarries('outline', 'shadowsocks').why, reason: null },
     );
+  });
+
+  it('A-231: причина «дверь» или «транспорт» из ответа сервера, одним чипом на формат', () => {
+    // Ответы как у ba3fdf5c: trojan+REALITY+raw (Surge не возит REALITY: дверь)
+    // и vless+REALITY+xhttp (sing-box не возит xhttp: транспорт).
+    const trojan: ProfileFormats = {
+      door: 'trojan',
+      formats: [{ format: 'surge', carried: false, why: 'client-lacks-protocol', reason: 'door' }],
+    };
+    const vless: ProfileFormats = {
+      door: 'vless',
+      formats: [{ format: 'singbox', carried: false, why: 'client-lacks-transport', reason: 'transport' }],
+    };
+    const surge = hostFormatFacts(trojan, []).rows.filter((r) => r.state === 'cannot');
+    expect(surge).toEqual([{ format: 'surge', state: 'cannot', why: 'client-lacks-protocol', reason: 'door' }]);
+    expect(formatGapGroups(hostFormatFacts(trojan, []).rows)).toEqual([
+      { why: 'client-lacks-protocol', reason: 'door', formats: ['surge'] },
+    ]);
+    const sb = hostFormatFacts(vless, []).rows.filter((r) => r.state === 'cannot');
+    expect(sb).toEqual([{ format: 'singbox', state: 'cannot', why: 'client-lacks-transport', reason: 'transport' }]);
+    expect(formatReasonKey('door')).toBe('hostEdit.formatReason.door');
+    expect(formatReasonKey('transport')).toBe('hostEdit.formatReason.transport');
+    expect(formatReasonKey(null)).toBeNull();
+    for (const key of ['hostEdit.formatReason.door', 'hostEdit.formatReason.transport', formatGapKey('client-lacks-transport')!]) {
+      expect(typeof label(ru as Dict, key), `ru ${key}`).toBe('string');
+      expect(typeof label(en as Dict, key), `en ${key}`).toBe('string');
+    }
   });
 
   it('формат, про который сервер промолчал, не выдаётся за «не несёт»', () => {

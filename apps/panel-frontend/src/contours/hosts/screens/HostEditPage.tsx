@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { clientsLeftOut } from '@/lib/domain/formatReach';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Box,
@@ -82,8 +81,10 @@ import {
   formatGapGroups,
   formatGapKey,
   formatLabel,
+  formatReasonKey,
   getProfileFormats,
   hostFormatFacts,
+  type FormatReason,
 } from '@/lib/domain/formats';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
@@ -240,6 +241,11 @@ export function HostEditPage() {
   const whyLabel = (why: string) => {
     const key = formatGapKey(why);
     return key ? t(key) : t('hostEdit.formatWhyUnknown', { code: why });
+  };
+  /** «Дверь: …» or «Транспорт: …» (A-231); a server older than the reason says the why alone. */
+  const reasonLabel = (reason: FormatReason | null, why: string) => {
+    const key = formatReasonKey(reason);
+    return key ? `${t(key)}: ${why}` : why;
   };
   /** No answer yet, or none coming: every control stays visible. */
   const can = (f: string) => (fields ? fields[f]?.supported === true : true);
@@ -660,19 +666,9 @@ export function HostEditPage() {
           : null;
 
   const selectedProfile = profiles.find((p) => p.id === profileId);
-  // A-224: the clients that will not get this host, by the host's own security
-  // when it sets one, else the profile's: the same function as the profile page.
-  const hostLeftOut = (() => {
-    if (!selectedProfile || selectedProfile.protocol !== 'xray') return [];
-    const cfg = (selectedProfile.config ?? {}) as { subprotocol?: string; network?: string; security?: string; xhttpMode?: string };
-    return clientsLeftOut({
-      subprotocol: cfg.subprotocol ?? 'vless',
-      network: cfg.network ?? 'raw',
-      security: cfg.security ?? 'reality',
-      xhttpMode: cfg.xhttpMode,
-      hostSecurity: can('securityLayer') ? securityLayer : 'default',
-    });
-  })();
+  // A-231: the format chips are the one answer to «who will not get this
+  // host» (the server's /formats, door or transport); the line that said it a
+  // second time from the client side is gone.
   // Only fields this profile can actually serve are counted. A leftover SNI on
   // a Hysteria host is not an override, it is a value nobody reads, and saving
   // clears it anyway.
@@ -1195,13 +1191,6 @@ export function HostEditPage() {
                     ? t('hostEdit.formatsCount', formatFacts.counts)
                     : t('hostEdit.formatsCaption')}
                 </Text>
-                {hostLeftOut.length > 0 && (
-                  <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER, marginTop: 4 }}>
-                    {t('hostEdit.clientsLeftOut', {
-                      clients: hostLeftOut.map((c) => t(`profiles.form.cfg.client.${c}`)).join(', '),
-                    })}
-                  </Text>
-                )}
                 {/* Три состояния: несёт (галочка, можно выключить), выключен
                     оператором, и не несёт вовсе (серым, недоступно): там
                     выключатель ничего бы не менял, а причина ниже.
@@ -1219,7 +1208,7 @@ export function HostEditPage() {
                         key={f}
                         active={on}
                         disabled={cannot}
-                        title={row.state === 'cannot' ? whyLabel(row.why) : undefined}
+                        title={row.state === 'cannot' ? reasonLabel(row.reason, whyLabel(row.why)) : undefined}
                         onClick={() => {
                           if (cannot) return;
                           setDisabledFormats((prev) =>
@@ -1237,12 +1226,12 @@ export function HostEditPage() {
                 {/* Почему серые серые: по причине строка, в ней форматы.
                     Причины из ответа, а не из списка здесь: незнакомая этой
                     сборке тоже получает строку, с кодом. */}
-                {formatGapGroups(formatFacts.rows).map(({ why, formats }) => (
+                {formatGapGroups(formatFacts.rows).map(({ why, reason, formats }) => (
                   <Text
-                    key={why}
+                    key={`${reason ?? ''}:${why}`}
                     style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT, marginTop: 6 }}
                   >
-                    {whyLabel(why)}: {formats.map((f) => formatLabel(f, t)).join(', ')}
+                    {reasonLabel(reason, whyLabel(why))}: {formats.map((f) => formatLabel(f, t)).join(', ')}
                   </Text>
                 ))}
               </Stack>

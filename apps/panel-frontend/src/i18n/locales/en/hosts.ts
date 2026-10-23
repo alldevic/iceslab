@@ -170,7 +170,6 @@ export const hosts = {
     // the list is the host's manual opt-outs, nothing is computed. Whether a
     // format carries the protocol comes from the server later
     // (GET /api/profiles/:id/formats).
-    clientsLeftOut: 'By transport, will not get it: {{clients}}.',
     formatsCaption:
       'Everything is on unless the operator turned it off. Whether a client handles this protocol, the page does not know yet.',
     formatsCount: 'Carried by {{carried}} of {{total}}, turned off {{off}}',
@@ -179,8 +178,14 @@ export const hosts = {
       'client-lacks-cipher': 'This client does not speak this cipher',
       'no-uri-standard': 'The protocol has no share link',
       'not-yet': 'The panel does not build it yet, the client can',
+      'client-lacks-transport': 'The client does not carry this transport',
     },
     formatWhyUnknown: 'Not carried by the client: {{code}}',
+    // A-231: which side keeps the format out.
+    formatReason: {
+      door: 'Door',
+      transport: 'Transport',
+    },
     optional: 'OPTIONAL',
     needName: 'Name it first',
     needProfile: 'Pick a profile',

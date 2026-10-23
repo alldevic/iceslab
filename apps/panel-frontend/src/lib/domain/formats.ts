@@ -33,10 +33,26 @@ export function formatLabel(
   return t(formatLabelKey(name), { defaultValue: name });
 }
 
-/** Ответ GET /api/profiles/:id/formats: несёт ли каждый формат дверь профиля. */
+/**
+ * Почему формат не несёт профиль (A-231, BACK ba3fdf5c): `door` это протокол
+ * или его слой защиты, `transport` это сеть двери (общая таблица shared).
+ * Одна причина на формат, дверь спрашивается первой. `null` у несущего.
+ */
+export type FormatReason = 'door' | 'transport';
+
+/** Причина «клиент не возит этот транспорт» (A-231), сверх FormatWhy двери. */
+export type HostFormatWhy = FormatWhy | 'client-lacks-transport';
+
+/** Ответ GET /api/profiles/:id/formats: несёт ли каждый формат профиль. */
 export interface ProfileFormats {
   door: Door;
-  formats: { format: SubscriptionFormat; carried: boolean; why: FormatWhy }[];
+  formats: {
+    format: SubscriptionFormat;
+    carried: boolean;
+    why: HostFormatWhy;
+    /** Нет у сервера старше A-231: причина тогда не названа, а не выдумана. */
+    reason?: FormatReason | null;
+  }[];
 }
 
 /**
@@ -69,19 +85,25 @@ export async function getProfileFormats(
  */
 export type HostFormatRow =
   | { format: SubscriptionFormat; state: 'on' | 'off' }
-  | { format: SubscriptionFormat; state: 'cannot'; why: FormatGap };
+  | { format: SubscriptionFormat; state: 'cannot'; why: FormatGap | 'client-lacks-transport'; reason: FormatReason | null };
 
 /**
  * Подпись причины, по которой формат не несёт хост. Record по типу контракта:
  * новая причина в FormatGap роняет сборку здесь, пока у неё нет слов (так
  * молча выпал client-lacks-cipher, когда причины перебирались списком).
  */
-const FORMAT_GAP_KEY: Record<FormatGap, string> = {
+const FORMAT_GAP_KEY: Record<FormatGap | 'client-lacks-transport', string> = {
   'client-lacks-protocol': 'hostEdit.formatWhy.client-lacks-protocol',
   'client-lacks-cipher': 'hostEdit.formatWhy.client-lacks-cipher',
   'no-uri-standard': 'hostEdit.formatWhy.no-uri-standard',
   'not-yet': 'hostEdit.formatWhy.not-yet',
+  'client-lacks-transport': 'hostEdit.formatWhy.client-lacks-transport',
 };
+
+/** Слово для стороны, которая не пускает формат (A-231): дверь или транспорт. */
+export function formatReasonKey(reason: FormatReason | null): string | null {
+  return reason === 'door' ? 'hostEdit.formatReason.door' : reason === 'transport' ? 'hostEdit.formatReason.transport' : null;
+}
 
 /** Ключ подписи причины, или null для причины, которой эта сборка не знает
  *  (сервер новее экрана): её экран называет кодом, но не молчит. */
@@ -94,13 +116,18 @@ export function formatGapKey(why: string): string | null {
  * из строк, а не из списка на экране: какую бы ни прислал сервер, у неё будет
  * своя строка.
  */
-export function formatGapGroups(rows: readonly HostFormatRow[]): { why: string; formats: SubscriptionFormat[] }[] {
-  const groups = new Map<string, SubscriptionFormat[]>();
+export function formatGapGroups(
+  rows: readonly HostFormatRow[],
+): { why: string; reason: FormatReason | null; formats: SubscriptionFormat[] }[] {
+  const groups = new Map<string, { why: string; reason: FormatReason | null; formats: SubscriptionFormat[] }>();
   for (const r of rows) {
     if (r.state !== 'cannot') continue;
-    groups.set(r.why, [...(groups.get(r.why) ?? []), r.format]);
+    const key = `${r.reason ?? ''}:${r.why}`;
+    const g = groups.get(key) ?? { why: r.why, reason: r.reason, formats: [] };
+    g.formats.push(r.format);
+    groups.set(key, g);
   }
-  return [...groups].map(([why, formats]) => ({ why, formats }));
+  return [...groups.values()];
 }
 
 export interface HostFormatFacts {
@@ -123,7 +150,8 @@ export function hostFormatFacts(formats: ProfileFormats | null, disabled: readon
     // не выдаём за «не несёт»: неполный факт фактом не считается.
     // Так же «не несёт» без причины: причину не придумываем.
     if (!f || f.carried || f.why === 'native') return { format, state: disabled.includes(format) ? 'off' : 'on' };
-    return { format, state: 'cannot', why: f.why };
+    const reason = f.reason === 'door' || f.reason === 'transport' ? f.reason : null;
+    return { format, state: 'cannot', why: f.why, reason };
   });
   return {
     rows,

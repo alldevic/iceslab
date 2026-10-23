@@ -1,4 +1,10 @@
-import { transportServed, XRAY_TRANSPORT_SUBPROTOCOLS, type SubscriptionTransportFormat } from '@iceslab/shared';
+import {
+  clientSecurityLayer,
+  transportServed,
+  XRAY_TRANSPORT_SUBPROTOCOLS,
+  type ClientSecurityLayer,
+  type SubscriptionTransportFormat,
+} from '@iceslab/shared';
 
 /**
  * Which subscription clients will not get an xray endpoint (A-224), read from
@@ -25,28 +31,11 @@ const CLIENTS: { client: ClientFormat; format: (sub: string) => SubscriptionTran
   { client: 'v2rayn', format: (sub) => `${sub}-link` as SubscriptionTransportFormat },
 ];
 
-export type HostSecurity = 'default' | 'tls' | 'none';
-
-/**
- * The layer a client sees, the way the subscription works it out
- * (subscription.service.ts, effectiveSecurityLayer; profile-formats.ts,
- * clientSecurityLayer): a host override of tls or none wins, else the
- * profile's own (REALITY is the table's `default`), and vmess never rides
- * REALITY. The backend keeps this in two of its own files; it is not in
- * shared yet, so this is the third copy (said in the report to ARCH).
- */
-export function clientSecurityLayer(profileSecurity: string, subprotocol: string, host?: HostSecurity | null): HostSecurity {
-  let layer: HostSecurity =
-    host === 'tls' || host === 'none'
-      ? host
-      : profileSecurity === 'none'
-        ? 'none'
-        : profileSecurity === 'tls'
-          ? 'tls'
-          : 'default';
-  if (subprotocol === 'vmess' && layer === 'default') layer = 'none';
-  return layer;
-}
+// The layer a client sees is the shared rule (A-230, BACK ba3fdf5c,
+// packages/shared/src/transport-support.ts `clientSecurityLayer`): a host
+// override of tls or none wins, else the profile's own, and vmess over
+// REALITY or with no security is none. The copy that stood here is gone.
+export type HostSecurity = ClientSecurityLayer;
 
 export function clientsLeftOut(endpoint: {
   subprotocol: string;
@@ -62,7 +51,10 @@ export function clientsLeftOut(endpoint: {
     subprotocol: endpoint.subprotocol,
     network: endpoint.network,
     xhttpMode: endpoint.xhttpMode,
-    securityLayer: clientSecurityLayer(endpoint.security, endpoint.subprotocol, endpoint.hostSecurity),
+    securityLayer: clientSecurityLayer(
+      { subprotocol: endpoint.subprotocol, security: endpoint.security },
+      endpoint.hostSecurity,
+    ),
   };
   return CLIENTS.filter(({ format }) => !transportServed(format(endpoint.subprotocol), e)).map((c) => c.client);
 }

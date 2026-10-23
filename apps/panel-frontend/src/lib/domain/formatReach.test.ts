@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { transportServed } from '@iceslab/shared';
-import { clientSecurityLayer, clientsLeftOut, hostsMaySecureOtherwise } from '@/lib/domain/formatReach';
+import { clientSecurityLayer } from '@iceslab/shared';
+import { clientsLeftOut, hostsMaySecureOtherwise } from '@/lib/domain/formatReach';
 
 describe('clientsLeftOut (A-224), по общей таблице shared', () => {
   it('vless + REALITY + xhttp: sing-box, Surge, Quantumult X, Loon', () => {
@@ -54,12 +55,16 @@ describe('защита хоста против защиты профиля (за
     expect(clientsLeftOut({ ...profile, hostSecurity: 'default' })).toEqual(clientsLeftOut(profile));
   });
 
-  it('слой как у подписки: хост tls/none сильнее, vmess REALITY не возит', () => {
-    expect(clientSecurityLayer('reality', 'vless')).toBe('default');
-    expect(clientSecurityLayer('reality', 'vless', 'tls')).toBe('tls');
-    expect(clientSecurityLayer('tls', 'vless', 'none')).toBe('none');
-    expect(clientSecurityLayer('reality', 'vmess')).toBe('none');
-    expect(clientSecurityLayer('none', 'trojan', 'default')).toBe('none');
+  it('A-230: слой из shared, как у подписки: хост tls/none сильнее, vmess с REALITY и без security даёт none', () => {
+    const at = (security: string, subprotocol: string, hostSecurity?: 'default' | 'tls' | 'none') =>
+      clientsLeftOut({ subprotocol, network: 'ws', security, hostSecurity });
+    // Списки клиентов равны спискам по слою из общей функции, не по своей копии.
+    expect(at('reality', 'vless', 'tls')).toEqual(at('tls', 'vless'));
+    expect(at('tls', 'vless', 'none')).toEqual(at('none', 'vless'));
+    expect(clientSecurityLayer({ subprotocol: 'vmess', security: 'reality' })).toBe('none');
+    expect(clientSecurityLayer({ subprotocol: 'vmess', security: null })).toBe('none');
+    expect(clientSecurityLayer({ subprotocol: 'vless', security: 'reality' }, 'tls')).toBe('tls');
+    expect(clientSecurityLayer({ subprotocol: 'trojan', security: 'none' }, 'default')).toBe('none');
   });
 
   it('оговорка на профиле: только если хост переопределяет; список не пришёл: оговорка остаётся', () => {
