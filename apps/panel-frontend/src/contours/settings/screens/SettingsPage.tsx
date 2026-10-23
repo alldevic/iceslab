@@ -23,6 +23,7 @@ import { copyToClipboard } from '@/lib/ui/clipboard';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
+import { brandNameSave, listState } from '@/contours/settings/lib/settingsView';
 import {
   createApiToken,
   deleteApiToken,
@@ -165,8 +166,16 @@ function CustomizationCard() {
   if (brandName === null && settingsQuery.data) setBrandName(settingsQuery.data.brandName ?? '');
   const value = brandName ?? '';
 
+  // Only with the server's answer in hand, and never an empty name (A-237,
+  // brandNameSave): an unseeded or emptied field used to save as «Iceslab»
+  // over the operator's own name.
+  const save = brandNameSave(settingsQuery.data, brandName);
+  const write = save && 'write' in save ? save.write : null;
   const saveMutation = useMutation({
-    mutationFn: () => updateSettings({ brandName: value.trim() || 'Iceslab' }),
+    mutationFn: () => {
+      if (!write) throw new Error('nothing to save');
+      return updateSettings(write);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
       notifications.show({ color: 'green', message: t('settingsNotify.savedOk') });
@@ -201,21 +210,23 @@ function CustomizationCard() {
     >
       <Stack gap={6}>
         <FieldLabel>{t('settings.customization.brandName')}</FieldLabel>
-        <Box style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
-          <TextInput
-            style={{ flex: 1, minWidth: 0 }}
-            placeholder="Iceslab"
-            value={value}
-            onChange={(e) => setBrandName(e.currentTarget.value)}
-          />
-          <Action
-            icon="tick"
-            disabled={settingsQuery.isLoading || saveMutation.isPending}
-            onClick={() => saveMutation.mutate()}
-          >
-            {t('common.save')}
-          </Action>
-        </Box>
+        {loadView(settingsQuery) === 'failed' ? (
+          <LoadFailed message={apiErrorMessage(settingsQuery.error)} onRetry={() => void settingsQuery.refetch()} />
+        ) : (
+          <Box style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+            <TextInput
+              style={{ flex: 1, minWidth: 0 }}
+              placeholder={save ? 'Iceslab' : t('common.loading')}
+              value={value}
+              disabled={!save}
+              error={save && 'error' in save ? t('settings.customization.brandNameEmpty') : undefined}
+              onChange={(e) => setBrandName(e.currentTarget.value)}
+            />
+            <Action icon="tick" disabled={!write || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+              {t('common.save')}
+            </Action>
+          </Box>
+        )}
         <Hint>{t('settings.customization.brandNameDesc')}</Hint>
       </Stack>
 
@@ -627,6 +638,7 @@ function RegionsCard() {
   }
 
   const regions = regionsQuery.data?.regions ?? [];
+  const regionsState = listState(regionsQuery, regions.length);
 
   return (
     <SectionCard
@@ -635,7 +647,12 @@ function RegionsCard() {
       title={t('regions.title')}
       hint={t('regions.description')}
     >
-      {regions.length === 0 ? (
+      {/* A list that did not arrive is not «no regions» (g). */}
+      {regionsState === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(regionsQuery.error)} onRetry={() => void regionsQuery.refetch()} />
+      ) : regionsState === 'loading' ? (
+        <Hint>{t('common.loading')}</Hint>
+      ) : regionsState === 'empty' ? (
         <Hint>{t('regions.empty')}</Hint>
       ) : (
         <Box className="settings-regions">
@@ -1090,6 +1107,7 @@ function RecipeSourcesCard() {
   }
 
   const sources = sourcesQuery.data?.sources ?? [];
+  const sourcesState = listState(sourcesQuery, sources.length);
 
   return (
     <SectionCard
@@ -1098,7 +1116,12 @@ function RecipeSourcesCard() {
       title={t('settings.recipeSources.title')}
       hint={t('settings.recipeSources.description')}
     >
-      {sources.length === 0 ? (
+      {/* A list that did not arrive is not «no sources» (h). */}
+      {sourcesState === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(sourcesQuery.error)} onRetry={() => void sourcesQuery.refetch()} />
+      ) : sourcesState === 'loading' ? (
+        <Hint>{t('common.loading')}</Hint>
+      ) : sourcesState === 'empty' ? (
         <Hint>{t('settings.recipeSources.empty')}</Hint>
       ) : (
         <Stack gap={8}>
