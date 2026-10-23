@@ -38,8 +38,8 @@ import { profilePairLabel, type EngineName } from '@/lib/domain/engines';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { apiErrorMessage } from '@/lib/net/client';
-import { loadView } from '@/lib/ui/loadView';
-import { LoadFailed } from '@/ui/LoadFailed';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
 import { COUNTRIES } from '@/lib/domain/countries';
 import { AMBER, CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/hosts/lib/colors';
 
@@ -69,6 +69,7 @@ export function HostsPage() {
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
 
   const rows = useMemo(() => {
+    const nodesKnown = bindingsQuery.data !== undefined && nodesQuery.data !== undefined;
     const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
     const nodeById = new Map((nodesQuery.data?.nodes ?? []).map((n) => [n.id, n]));
     const profileById = new Map((profilesQuery.data?.profiles ?? []).map((p) => [p.id, p]));
@@ -98,8 +99,14 @@ export function HostsPage() {
           // each squad's member count, which counted one person in two squads
           // twice, and cannot be fixed here: the squad list carries totals, not
           // user ids, so there is nothing to deduplicate against.
-          squadCount: h.reach?.squads ?? 0,
-          userCount: h.reach?.users ?? 0,
+          // A-234: no reach in the answer is «unknown», not «nobody».
+          squadCount: h.reach?.squads ?? null,
+          userCount: h.reach?.users ?? null,
+          // Which node carries the host is known only with both lists in
+          // hand; without them «no node» would be a claim (A-234).
+          nodesKnown,
+          // The same for the profile: «unbound» only with both lists in hand.
+          profileKnown: bindingsQuery.data !== undefined && profilesQuery.data !== undefined,
         };
       })
       .filter((r) => {
@@ -136,9 +143,13 @@ export function HostsPage() {
       children: (
         <Stack gap={8}>
           <Text size="sm">{t('hostsPage.deleteBody')}</Text>
-          {row.lastOfBinding && row.nodeName && (
+          {/* The last host of its binding restarts the core whether or not the
+              node list arrived: without the name it is said without it (A-234). */}
+          {row.lastOfBinding && (
             <Text size="sm" style={{ color: AMBER }}>
-              {t('hostsPage.deleteLast', { node: row.nodeName })}
+              {row.nodeName
+                ? t('hostsPage.deleteLast', { node: row.nodeName })
+                : t('hostsPage.deleteLastUnknownNode')}
             </Text>
           )}
         </Stack>
@@ -151,10 +162,11 @@ export function HostsPage() {
           qc.invalidateQueries({ queryKey: ['hosts'] });
           notifications.show({ color: 'green', message: t('hostsPage.deleted') });
         } catch (err) {
+          // A-235: the server's sentence, not axios's «status code 404».
           notifications.show({
             color: 'red',
-            title: t('common.saveError'),
-            message: err instanceof Error ? err.message : String(err),
+            title: t('common.deleteError'),
+            message: apiErrorMessage(err),
           });
         }
       },
@@ -168,7 +180,11 @@ export function HostsPage() {
     r.host.enabled && r.nodes.length > 0 && r.nodes.some((n) => n.status !== 'online');
   const live = rows.filter((r) => r.host.enabled && r.nodes.length > 0 && !isDegraded(r)).length;
   const degraded = rows.filter(isDegraded).length;
-  const orphaned = rows.filter((r) => r.nodes.length === 0).length;
+  // A-234: «no node» is counted only when the node lists arrived.
+  const orphaned = rows.filter((r) => r.nodesKnown && r.nodes.length === 0).length;
+  const nodesKnown = bindingsQuery.data !== undefined && nodesQuery.data !== undefined;
+  // The node lists that did not arrive, said above the cards with a retry.
+  const nodesFailure = loadFailure(bindingsQuery, apiErrorMessage) ?? loadFailure(nodesQuery, apiErrorMessage);
   const countries = [...new Set(rows.map((r) => r.countryCode).filter(Boolean))] as string[];
 
   usePageMeta([
@@ -209,7 +225,7 @@ export function HostsPage() {
           <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Fact value={total} label={t('hostsPage.bar.hosts')} />
             <Dot />
-            <Fact value={live} label={t('hostsPage.bar.live')} accent={MOSS} />
+            <Fact value={nodesKnown ? live : '-'} label={t('hostsPage.bar.live')} accent={MOSS} />
             {degraded > 0 && (
               <>
                 <Dot />
@@ -283,6 +299,10 @@ export function HostsPage() {
         </Box>
       </Box>
 
+      {nodesFailure && rows.length > 0 && (
+        <LoadFailedLine message={nodesFailure.message} onRetry={nodesFailure.onRetry} />
+      )}
+
       {/* A list that did not arrive is not an empty one (A-141). */}
       {rows.length === 0 && loadView(hostsQuery) === 'failed' ? (
         <LoadFailed message={apiErrorMessage(hostsQuery.error)} onRetry={() => void hostsQuery.refetch()} />
@@ -336,8 +356,13 @@ type Row = {
   port: number | null;
   address: string | null;
   countryCode: string | null;
-  squadCount: number;
-  userCount: number;
+  /** Null: the server sent no reach (unknown, not «nobody»). */
+  squadCount: number | null;
+  userCount: number | null;
+  /** Whether the binding and node lists arrived, so «no node» is a fact. */
+  nodesKnown: boolean;
+  /** Whether the binding and profile lists arrived, so «unbound» is a fact. */
+  profileKnown: boolean;
 };
 
 function HostCard({
@@ -350,14 +375,16 @@ function HostCard({
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
-  const orphaned = row.nodes.length === 0;
+  // A-234: without the node lists the node is unknown, not missing.
+  const unknown = !row.nodesKnown;
+  const orphaned = !unknown && row.nodes.length === 0;
   // A host with nodes is not automatically serving: the state used to read
   // "a node exists" and never looked at whether the node answers. Between LIVE
   // and NO NODES there is a third state, still handing out URLs but through a
   // node that is not online, and it is the one worth catching early.
   const down = row.nodes.filter((n) => n.status !== 'online');
   const degraded = row.host.enabled && !orphaned && down.length > 0;
-  const live = row.host.enabled && !orphaned && !degraded;
+  const live = row.host.enabled && !unknown && !orphaned && !degraded;
   const accent = orphaned ? AMBER : degraded ? AMBER : row.host.enabled ? VIOLET : DIM;
 
   return (
@@ -469,13 +496,15 @@ function HostCard({
           </Box>
         ) : (
           <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
-            {t('hostsPage.unbound')}
+            {row.profileKnown ? t('hostsPage.unbound') : t('hostsPage.card.profileUnknown')}
           </Text>
         )}
       </FieldRow>
 
       <FieldRow label={t('hostsPage.card.nodes')}>
-        {orphaned ? (
+        {unknown ? (
+          <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>{t('hostsPage.card.nodesUnknown')}</Text>
+        ) : orphaned ? (
           <Box
             style={{
               display: 'inline-flex',
@@ -534,13 +563,13 @@ function HostCard({
         <Box style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <IconUser size={13} stroke={1.8} color={FAINT} />
           <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
-            {t('hostsPage.card.squads', { count: row.squadCount })}
+            {row.squadCount === null ? t('hostsPage.card.reachUnknown') : t('hostsPage.card.squads', { count: row.squadCount })}
           </Text>
         </Box>
         <Box style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <IconList size={13} stroke={1.8} color={FAINT} />
           <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
-            {t('hostsPage.card.reach', { count: row.userCount })}
+            {row.userCount === null ? t('hostsPage.card.reachUnknown') : t('hostsPage.card.reach', { count: row.userCount })}
           </Text>
         </Box>
         <Box style={{ flex: 1 }} />
@@ -564,7 +593,9 @@ function HostCard({
             // Which node is down, since the card lists several by name.
             title={degraded ? down.map((n) => n.name).join(', ') : undefined}
           >
-            {live
+            {unknown
+              ? '-'
+              : live
               ? t('hostsPage.card.live')
               : orphaned
                 ? t('hostsPage.card.noNodes')
@@ -600,7 +631,7 @@ function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Fact({ value, label, accent }: { value: number; label: string; accent?: string }) {
+function Fact({ value, label, accent }: { value: number | string; label: string; accent?: string }) {
   return (
     <>
       <Text style={{ fontFamily: MONO, fontSize: 13, fontWeight: 500, color: accent ?? SNOW }}>

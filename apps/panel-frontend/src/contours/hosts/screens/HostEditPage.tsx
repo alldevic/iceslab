@@ -35,10 +35,12 @@ import {
   hostHiddenFacts,
   listHosts,
   portConflict,
+  profileNotOnNode,
   updateHost,
   hostPortPayload,
   hostPortShared,
 } from '@/lib/domain/hosts';
+import { profileNotOnNodeWords } from '@/contours/hosts/lib/hostRefusals';
 import { modals } from '@mantine/modals';
 import { apiErrorMessage } from '@/lib/net/client';
 import { editGate } from '@/lib/ui/loadView';
@@ -572,6 +574,13 @@ export function HostEditPage() {
         setSlotRefusal(slot);
         return;
       }
+      // The node runs no core for this profile (A-235): its own words, with
+      // the needed and the reported engines, not «port taken».
+      const notOnNode = profileNotOnNode(err);
+      if (notOnNode) {
+        notifications.show({ color: 'red', title: t('common.saveError'), message: profileNotOnNodeWords(notOnNode, t) });
+        return;
+      }
       const conflict = portConflict(err);
       if (conflict !== null) {
         setPortConflictMsg(conflict || t('hostEdit.portConflictFallback'));
@@ -607,11 +616,15 @@ export function HostEditPage() {
   // A-141: «host not found» only when the list arrived without it. The binding
   // list is part of the gate too: without it the port field seeds empty and a
   // typed port would not leave on save (hostPortPayload needs the stored one).
+  // A-234: the node and profile lists are the form's too. Without them a new
+  // host offered an empty profile choice and said «pick a node first», and an
+  // existing one drew «nothing found» under its nodes.
+  const gateLists = isNew ? [nodesQuery, profilesQuery] : [bindingsQuery, nodesQuery, profilesQuery];
   const gate = isNew
-    ? editGate({ data: true, isError: false }, true, [nodesQuery])
-    : editGate(hostsQuery, host !== null, [bindingsQuery]);
+    ? editGate({ data: true, isError: false }, true, gateLists)
+    : editGate(hostsQuery, host !== null, gateLists);
   if (gate.kind === 'failed') {
-    const q = isNew ? nodesQuery : gate.index === 0 ? hostsQuery : bindingsQuery;
+    const q = gate.index === 0 ? hostsQuery : gateLists[gate.index - 1]!;
     return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
   }
   if (!isNew && gate.kind !== 'ready') {

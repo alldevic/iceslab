@@ -64,6 +64,8 @@ export const hosts = {
     deleteBody: 'The line disappears from every subscription on the next fetch.',
     deleteLast:
       'This is the last host on {{node}}, so the inbound comes off that node and the port is freed. The node config is rewritten and xray restarts there, which drops live sessions on every inbound of that machine, not only this one.',
+    deleteLastUnknownNode:
+      'This is the last host of its binding: the inbound comes off the node and the core restarts there, dropping live sessions on every inbound of that machine. Which node it is cannot be shown: the node list did not load.',
     deleted: 'Host deleted',
     empty: 'No hosts yet. A host is one entry in the user\'s client: a name, a port and the nodes behind it.',
     unbound: 'binding missing',
@@ -79,6 +81,9 @@ export const hosts = {
       profile: 'Profile',
       nodes: 'Nodes',
       noNodesAttached: 'no nodes attached, serves nobody',
+      nodesUnknown: 'unknown: the node list did not load',
+      profileUnknown: 'unknown: the list did not load',
+      reachUnknown: 'reach unknown',
       squads_one: '{{count}} squad',
       squads_other: '{{count}} squads',
       reach_one: '{{count}} user reaches it',
@@ -184,6 +189,11 @@ export const hosts = {
     adapterSlotTaken: 'This node already has a {{protocol}} inbound on the {{engine}} engine: "{{heldBy}}". The node holds one such inbound; a second would silently replace the first.',
     mieruMtuMismatch: 'mieru on this node already runs with MTU {{mtu}} ("{{heldBy}}"). A second mieru inbound here must use the same MTU, not {{wanted}}.',
     onNode: 'Node "{{name}}":',
+    // 409 PROFILE_DOES_NOT_RUN_ON_NODE (A-235).
+    notOnNode: 'Node "{{node}}" cannot serve this profile: it needs {{needed}}, and the node reports: {{reported}}.',
+    notOnNodeNothing: 'no core at all',
+    notOnNodeWait:
+      'The node agent declares {{needed}} but reports no such core. If its bootstrap has just run, the next poll will show it; otherwise run the {{needed}} bootstrap on the node again.',
     goneWhileEditing:
       'The profile or the node is gone. The lists were refreshed, pick again before saving.',
     sniMismatchToast: 'This SNI is not one the node serves.',

@@ -165,6 +165,38 @@ export function hostPortPayload(
   };
 }
 
+/**
+ * 409 PROFILE_DOES_NOT_RUN_ON_NODE (A-161, A-235): the node reported its cores
+ * and the profile's engine is not among them. Read before `portConflict`,
+ * which takes any 409 for a port clash. The input is checked first; an
+ * engine list with anything but strings, or a missing needed engine, is not
+ * this refusal. `reportedEngines: []` means «reported, runs nothing».
+ */
+export interface ProfileNotOnNode {
+  nodeName: string;
+  neededEngine: string;
+  reportedEngines: string[];
+  canWait: boolean;
+}
+
+export function profileNotOnNode(err: unknown): ProfileNotOnNode | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 409 || !data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.error !== 'PROFILE_DOES_NOT_RUN_ON_NODE') return null;
+  if (typeof d.nodeName !== 'string' || typeof d.neededEngine !== 'string') return null;
+  if (!Array.isArray(d.reportedEngines) || !d.reportedEngines.every((e) => typeof e === 'string')) return null;
+  return {
+    nodeName: d.nodeName,
+    neededEngine: d.neededEngine,
+    reportedEngines: d.reportedEngines as string[],
+    canWait: d.canWait === true,
+  };
+}
+
 /** The port is taken on that node. The message names the profile holding it, so
  *  it is worth showing verbatim rather than replacing with "port busy". */
 export function portConflict(err: unknown): string | null {
