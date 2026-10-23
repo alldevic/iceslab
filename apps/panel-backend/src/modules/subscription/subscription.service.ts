@@ -1,4 +1,4 @@
-import { isRoutingPresetId, type RoutingPresetId } from '@iceslab/shared';
+import { isRoutingPresetId, transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
@@ -1226,6 +1226,19 @@ export async function generateSubscription(
           allowInsecure: hostAllowInsecure,
           securityLayer: effectiveSecurityLayer,
         });
+      }
+      // The share link too is the shared table's to give or not (A-224); no
+      // link is no line in the plain formats, the JSON formats still carry it.
+      const linkFormat = `${subprotocol}-link` as const;
+      if (
+        !transportServed(linkFormat, {
+          subprotocol,
+          network,
+          xhttpMode: cfg.xhttpMode,
+          securityLayer: effectiveSecurityLayer,
+        })
+      ) {
+        uri = '';
       }
       endpoints.push({
         protocol: 'xray',

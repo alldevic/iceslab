@@ -1,4 +1,4 @@
-import type { RoutingPresetId } from '@iceslab/shared';
+import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 
@@ -258,7 +258,8 @@ export function buildSingboxJson(
       // transport block, that is bare TCP: a line that looked fine and never
       // connected, the REALITY-over-XHTTP default among them (A-133). Left
       // out, as the proxy-line formats leave out what their client lacks.
-      if (e.network === 'xhttp' || e.network === 'kcp') continue;
+      // The shared table decides (A-224).
+      if (!transportServed('singbox', e)) continue;
       proxyTags.push(tag);
       const sub = e.subprotocol ?? 'vless';
       // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none'

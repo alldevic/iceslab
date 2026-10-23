@@ -1,4 +1,4 @@
-import type { RoutingPresetId } from '@iceslab/shared';
+import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 
@@ -305,10 +305,8 @@ export function buildClashYaml(
       //   `ws-opts.v2ray-http-upgrade: true`, not a network of its own.
       // Anything else (kcp everywhere, xhttp off vless) is left out, as the
       // other proxy-line formats leave out what their client does not speak.
-      const speaks =
-        e.network === 'raw' || !e.network || e.network === 'ws' || e.network === 'grpc' ||
-        e.network === 'httpupgrade' || (e.network === 'xhttp' && sub === 'vless');
-      if (!speaks) continue;
+      // The shared table decides (A-224).
+      if (!transportServed('clash', e)) continue;
       proxyNames.push(name);
       // Clash Meta `network` uses "tcp" for our "raw", "ws" for httpupgrade.
       const network =

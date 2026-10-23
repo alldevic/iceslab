@@ -1,3 +1,4 @@
+import { transportServed } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
@@ -35,10 +36,9 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
       const tls = sec !== 'none';
       const sub = e.subprotocol ?? 'vless';
       const ws = e.network === 'ws';
-      // A transport QX does not speak: leave the endpoint out (A-133).
-      if (e.network !== 'raw' && !ws) continue;
-      // WebSocket rides `obfs=ws|wss`; REALITY is not a WebSocket security.
-      if (ws && reality) continue;
+      // What QX carries is the shared table's to say (A-224): raw, WebSocket
+      // as obfs=ws|wss (never REALITY), trojan's WebSocket over TLS only.
+      if (!transportServed('quantumultx', e)) continue;
       const wsParts = ws
         ? [
             tls ? 'obfs=wss' : 'obfs=ws',
@@ -59,8 +59,7 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
         const p = [`vmess=${e.host}:${e.port}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts, 'udp-relay=true', `tag=${tag}`];
         lines.push(p.join(', '));
       } else if (sub === 'trojan') {
-        // "trojan: over-tls=true or obfs=wss": WebSocket only over TLS.
-        if (ws && !tls) continue;
+        // "trojan: over-tls=true or obfs=wss": WebSocket only over TLS (the table).
         const transport = ws ? wsParts : ['over-tls=true', `tls-host=${e.sni}`];
         const p = [`trojan=${e.host}:${e.port}`, `password=${e.uuid}`, ...transport, ...realityParts, 'udp-relay=true', `tag=${tag}`];
         lines.push(p.join(', '));

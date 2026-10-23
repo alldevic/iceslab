@@ -1,3 +1,4 @@
+import { transportServed } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
@@ -36,14 +37,11 @@ export function buildSurgeConf(endpoints: SubscriptionEndpoint[]): string {
       // socks/http (the Telegram doors) are carried by plain, clash, sing-box and
       // xray-json only, by decision of 23.09; this format leaves them out.
       const sec = e.securityLayer ?? 'default';
-      // Surge cannot do REALITY; only emit xray endpoints over real TLS.
-      if (sec === 'default') continue;
+      // What Surge carries is the shared table's to say (A-224): no VLESS, no
+      // REALITY, and WebSocket the one transport (`ws=true`, `ws-path=`,
+      // `ws-headers=Host:<name>`, manual.nssurge.com policies/vmess|trojan).
+      if (!transportServed('surge', e)) continue;
       const tls = sec === 'tls';
-      // A-133 (manual.nssurge.com policies/vmess and policies/trojan, read
-      // 22.10): WebSocket is the one transport, `ws=true`, `ws-path=`,
-      // `ws-headers=Host:<name>`. gRPC, XHTTP, httpupgrade and kcp went out as
-      // a bare line; such an endpoint is left out now.
-      if (e.network !== 'raw' && e.network !== 'ws') continue;
       const ws = e.network === 'ws';
       const wsParts = ws
         ? ['ws=true', `ws-path=${e.path ?? '/'}`, ...(e.hostHeader ? [`ws-headers=Host:${e.hostHeader}`] : [])]

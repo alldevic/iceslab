@@ -1,3 +1,4 @@
+import { transportServed } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
@@ -43,8 +44,8 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
       const reality = sec === 'default';
       const tls = sec !== 'none';
       const sub = e.subprotocol ?? 'vless';
-      // A transport Loon does not speak: leave the endpoint out (A-133).
-      if (e.network !== 'raw' && e.network !== 'ws') continue;
+      // What Loon carries is the shared table's to say (A-224): tcp and ws.
+      if (!transportServed('loon', e)) continue;
       const ws = e.network === 'ws';
       const net = ws ? 'ws' : 'tcp';
       const wsParts = ws ? [`path=${e.path ?? '/'}`, `host=${e.hostHeader ?? (tls ? e.sni : e.host)}`] : [];
