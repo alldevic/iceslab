@@ -22,6 +22,16 @@ export function brandNameSave(settings: { brandName?: string | null } | undefine
 }
 
 /**
+ * Whether the field says «cannot be empty» (A-237 tail): only once the
+ * operator edited it. A panel without its own name seeds the field empty, and
+ * the refusal used to show before any typing; untouched, the placeholder says
+ * the default instead, and Save stays closed by `brandNameSave` either way.
+ */
+export function brandNameFieldError(save: BrandNameSave, touched: boolean): 'empty' | null {
+  return touched && save !== null && 'error' in save ? save.error : null;
+}
+
+/**
  * A list card's state (A-241): «none» only when the list arrived empty.
  * A list that did not arrive is said with the server's words and a retry.
  */

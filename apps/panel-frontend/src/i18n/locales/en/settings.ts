@@ -93,6 +93,7 @@ export const settings = {
         'Shown as the login page title, and as the subscription name when Profile title is left empty.',
       // A-237: an empty name is refused, not replaced with «Iceslab».
       brandNameEmpty: 'The name cannot be empty.',
+      brandNameEmptyHint: 'Empty: the panel is called Iceslab.',
     },
   },
 

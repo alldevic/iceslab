@@ -23,7 +23,7 @@ import { copyToClipboard } from '@/lib/ui/clipboard';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
-import { brandNameSave, listState } from '@/contours/settings/lib/settingsView';
+import { brandNameFieldError, brandNameSave, listState } from '@/contours/settings/lib/settingsView';
 import {
   createApiToken,
   deleteApiToken,
@@ -171,6 +171,10 @@ function CustomizationCard() {
   // over the operator's own name.
   const save = brandNameSave(settingsQuery.data, brandName);
   const write = save && 'write' in save ? save.write : null;
+  // The refusal shows only after an edit: a panel without its own name seeds
+  // the field empty, and the words used to greet the operator before typing.
+  const [touched, setTouched] = useState(false);
+  const fieldError = brandNameFieldError(save, touched);
   const saveMutation = useMutation({
     mutationFn: () => {
       if (!write) throw new Error('nothing to save');
@@ -219,8 +223,12 @@ function CustomizationCard() {
               placeholder={save ? 'Iceslab' : t('common.loading')}
               value={value}
               disabled={!save}
-              error={save && 'error' in save ? t('settings.customization.brandNameEmpty') : undefined}
-              onChange={(e) => setBrandName(e.currentTarget.value)}
+              description={t('settings.customization.brandNameEmptyHint')}
+              error={fieldError ? t('settings.customization.brandNameEmpty') : undefined}
+              onChange={(e) => {
+                setTouched(true);
+                setBrandName(e.currentTarget.value);
+              }}
             />
             <Action icon="tick" disabled={!write || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
               {t('common.save')}

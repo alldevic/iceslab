@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { brandNameSave, listState } from '@/contours/settings/lib/settingsView';
+import { brandNameFieldError, brandNameSave, listState } from '@/contours/settings/lib/settingsView';
 
 describe('brandNameSave (A-237)', () => {
   it('сбой /settings: сохранять нечего, «Iceslab» не уходит', () => {
@@ -18,6 +18,19 @@ describe('brandNameSave (A-237)', () => {
 
   it('с ответом и названием: обрезанное название', () => {
     expect(brandNameSave({ brandName: 'Мой VPN' }, '  Новый  ')).toEqual({ write: { brandName: 'Новый' } });
+  });
+});
+
+describe('brandNameFieldError (хвост A-237)', () => {
+  it('нетронутое пустое поле ошибку не показывает; стёртое показывает', () => {
+    const empty = brandNameSave({ brandName: null }, '');
+    expect(brandNameFieldError(empty, false)).toBeNull();
+    expect(brandNameFieldError(empty, true)).toBe('empty');
+  });
+
+  it('с названием или без ответа ошибки нет', () => {
+    expect(brandNameFieldError(brandNameSave({ brandName: 'x' }, 'x'), true)).toBeNull();
+    expect(brandNameFieldError(brandNameSave(undefined, ''), true)).toBeNull();
   });
 });
 

@@ -16,6 +16,8 @@ export const login = {
     topbarStatusNormal: 'Backend reachable',
     topbarStatusDegraded: 'Backend degraded',
     topbarStatusDown: 'Backend unreachable',
+    // A-240: before /health first answers.
+    topbarStatusChecking: 'Checking backend',
     signInBadge: 'Sign in',
     heroLine1: 'Operator',
     heroLine2: 'console.',

@@ -15,6 +15,8 @@ export const login = {
     topbarStatusNormal: 'Backend доступен',
     topbarStatusDegraded: 'Backend деградирует',
     topbarStatusDown: 'Backend недоступен',
+    // A-240: до первого ответа /health.
+    topbarStatusChecking: 'Проверяю backend',
     signInBadge: 'Вход',
     heroLine1: 'Консоль',
     heroLine2: 'оператора.',
