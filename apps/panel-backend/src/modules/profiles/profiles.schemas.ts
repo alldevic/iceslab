@@ -186,6 +186,8 @@ const ProfileBaseFields = z.object({
  * refusal), and one that names reality is refused in words. Both on create
  * (CreateProfileSchema) and on a config edit (profiles.service), and a recipe
  * goes the same way: it fills the form, the form posts here.
+ * Not in XrayConfigSchema (inbounds.schemas.ts): binding overrides read that
+ * schema through .partial(), which a preprocess there would break.
  */
 export const VMESS_REALITY_MESSAGE =
   'vmess has no REALITY: choose security tls or none (a vmess profile that names no security is none)';
