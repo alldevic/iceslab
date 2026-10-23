@@ -56,6 +56,9 @@ export const XrayConfigSchema = z.object({
    * inbound with missing keys). Kept as a plain ZodObject (no .refine) so it
    * participates in the InboundConfigByProtocol discriminated union.
    */
+  // vmess has no REALITY: its default (none) and the refusal of an explicit
+  // reality live in CreateProfileSchema and updateProfile (A-230), not here,
+  // because binding overrides read this schema through .partial().
   security: z.enum(['reality', 'none', 'tls']).default('reality'),
   /** TLS (security='tls'): SNI the node serves + operator-supplied PEM cert
    *  chain and private key (embedded inline in the xray config; no ACME). The

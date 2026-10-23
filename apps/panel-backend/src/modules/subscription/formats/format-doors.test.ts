@@ -153,6 +153,7 @@ const SAMPLES: SubscriptionEndpoint[] = [
 
 const BUILD: Record<SubscriptionFormat, (eps: SubscriptionEndpoint[]) => string> = {
   plain: (eps) => eps.flatMap(expandEndpointUris).join('\n'),
+  raw: (eps) => eps.flatMap(expandEndpointUris).join('\n'),
   json: (eps) => JSON.stringify(eps),
   clash: (eps) => buildClashYaml(eps),
   singbox: (eps) => buildSingboxJson(eps),

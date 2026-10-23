@@ -588,15 +588,20 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         lineShape === 'per-node'
           ? service.collapseToOneLinePerNode(result.endpoints)
           : result.endpoints;
-      const filteredPlain = endpointsForFormat(
-        'plain',
-        plainSource.filter((e) => !(e.disableForFormats ?? []).includes('plain')),
-      )
-        // A4: a balancer-cascade entry expands into one re-tagged URI per exit;
-        // other endpoints pass through. (This note used to claim the JSON array
-        // is not pingable in Happ. It is - checked in the field 2026-08-16 - and
-        // the claim had been steering design decisions.)
-        .flatMap((e) => service.expandEndpointUris(e));
+      // The share links of a links format: `plain` (base64) and `raw` (the
+      // same lines unwrapped, A-236), each gated and switched off per host by
+      // its own name.
+      const linksFor = (fmt: 'plain' | 'raw') =>
+        endpointsForFormat(
+          fmt,
+          plainSource.filter((e) => !(e.disableForFormats ?? []).includes(fmt)),
+        )
+          // A4: a balancer-cascade entry expands into one re-tagged URI per exit;
+          // other endpoints pass through. (This note used to claim the JSON array
+          // is not pingable in Happ. It is - checked in the field 2026-08-16 - and
+          // the claim had been steering design decisions.)
+          .flatMap((e) => service.expandEndpointUris(e));
+      const filteredPlain = linksFor('plain');
 
       // Slice S1: emit subscription-metadata HTTP headers every client
       // app reads to set its profile name, refresh interval, quota gauge,
@@ -791,6 +796,8 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         const carriesNothing =
           format === 'plain'
             ? filteredPlain.every((u) => u.length === 0)
+            : format === 'raw'
+              ? linksFor('raw').every((u) => u.length === 0)
             : format === 'wgconf'
               ? buildWgQuickConf(served, query.node) === ''
               : format === 'amneziavpn'
@@ -944,6 +951,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // Loon proxy lines (best-effort; verify import in-app). ss/vmess/vless/
           // trojan/hy2 incl REALITY.
           return reply.type('text/plain; charset=utf-8').send(buildLoonConf(served));
+        case 'raw':
+          // A-236: the plain list without the base64, one link per line, for
+          // clients and scripts that take links as text.
+          return reply
+            .type('text/plain; charset=utf-8')
+            .send(linksFor('raw').filter((u) => u.length > 0).join('\n'));
         case 'plain':
         default:
           return reply

@@ -18,11 +18,21 @@
  *     httpupgrade; "No mKCP transport", no XHTTP.
  *   - xray-json and the share links: xray itself; the vmess link's XHTTP mode
  *     rides `type` (v2rayN VmessFmt.cs, ResolveVmess).
+ *   - Stash (A-236, stash.wiki/en/proxy-protocols/proxy-types, read
+ *     2026-10-23): vless over tcp, ws, h2, http, grpc and xhttp (xhttp-opts
+ *     carries the mode; "iOS/tvOS3.6+ macOS4.3+"), vmess over ws, h2, http,
+ *     grpc, trojan over ws, grpc, REALITY "on every transport" of all three;
+ *     no httpupgrade, no kcp.
+ *   - legacy Clash (A-236, clash.wiki/configuration/outbound.html, read
+ *     2026-10-23): ss, ssr, vmess, socks5, http, snell, trojan; vmess over
+ *     tcp, ws, h2, http, grpc, trojan over tcp, ws, grpc; no vless, no REALITY.
  *
  * A cell is a rule, not only yes or no, because the security layer decides
  * some of them: Surge has no REALITY, QX writes WebSocket as obfs=ws|wss
  * (never REALITY), and QX trojan takes WebSocket over TLS only.
  */
+
+import { FORMAT_DOORS, type Door, type FormatDoor, type SubscriptionFormat } from './transport.js';
 
 export const SUBSCRIPTION_TRANSPORT_FORMATS = [
   'clash',
@@ -34,6 +44,10 @@ export const SUBSCRIPTION_TRANSPORT_FORMATS = [
   'vless-link',
   'vmess-link',
   'trojan-link',
+  // The two YAML dialects of the template types (A-236): no `?format=` of
+  // their own yet, the clash builder frames them until step 4 of the plan.
+  'stash',
+  'clash-legacy',
 ] as const;
 export type SubscriptionTransportFormat = (typeof SUBSCRIPTION_TRANSPORT_FORMATS)[number];
 
@@ -85,7 +99,106 @@ export const TRANSPORT_SUPPORT: Table = {
   'vless-link': { vless: ALL, vmess: NONE, trojan: NONE },
   'vmess-link': { vless: NONE, vmess: ALL, trojan: NONE },
   'trojan-link': { vless: NONE, vmess: NONE, trojan: ALL },
+  stash: {
+    vless: { ...NONE, raw: 'served', ws: 'served', grpc: 'served', xhttp: 'served', 'xhttp-mode': 'served' },
+    vmess: { ...NONE, raw: 'served', ws: 'served', grpc: 'served' },
+    trojan: { ...NONE, raw: 'served', ws: 'served', grpc: 'served' },
+  },
+  'clash-legacy': {
+    vless: NONE,
+    vmess: { ...NONE, raw: 'served', ws: 'served', grpc: 'served' },
+    // Trojan in legacy Clash is TLS: no REALITY, and nothing without a TLS layer.
+    trojan: { ...NONE, raw: 'tls-only', ws: 'tls-only', grpc: 'tls-only' },
+  },
 };
+
+// ---------------------------------------------------------------- templates
+
+/**
+ * The kinds of operator template (A-236, docs/plan/subscription-templates
+ * 4.1 and the API contract 4.5a), the format each one frames, and what each
+ * one carries: the doors and the transports. One table with the transport
+ * table above, not a second one.
+ *
+ * A template is a frame the operator writes and the panel fills: their
+ * `proxy-groups`, their rules, our nodes. The TYPE is what the operator picked
+ * in the editor; the FORMAT is what `/sub` answers with when that template is
+ * in force.
+ *
+ * ⚠ `stash` and `clash` (legacy) frame the `clash` format until their own
+ * answers ship (step 4 of the plan): neither is a `?format=` yet, and naming
+ * one in TEMPLATE_FORMATS would be a promise this build cannot serve. What
+ * they CARRY is already theirs (TEMPLATE_DOORS, TEMPLATE_TRANSPORT), so step 4
+ * has only to point the builder at it.
+ */
+export const TEMPLATE_TYPES = ['mihomo', 'stash', 'clash', 'singbox', 'xray-json-array', 'xray-json'] as const;
+export type TemplateType = (typeof TEMPLATE_TYPES)[number];
+
+export const TEMPLATE_FORMATS: Record<TemplateType, SubscriptionFormat> = {
+  mihomo: 'clash',
+  stash: 'clash',
+  clash: 'clash',
+  singbox: 'singbox',
+  'xray-json-array': 'xrayjson-array',
+  'xray-json': 'xrayjson',
+};
+
+/** The row of the transport table a template type reads. */
+export const TEMPLATE_TRANSPORT: Record<TemplateType, SubscriptionTransportFormat> = {
+  mihomo: 'clash',
+  stash: 'stash',
+  clash: 'clash-legacy',
+  singbox: 'singbox',
+  'xray-json-array': 'xrayjson',
+  'xray-json': 'xrayjson',
+};
+
+const DOOR_YES: FormatDoor = { carried: true };
+const DOOR_LACKS: FormatDoor = { carried: false, why: 'client-lacks-protocol' };
+
+/**
+ * The doors of the two dialects with no format of their own, every door said
+ * (a new door is a type error here, and the composition test asks for it). The
+ * other types carry what their format carries, FORMAT_DOORS, and are not
+ * written twice.
+ *   - Stash: ss, socks5, http, vmess, trojan, vless, hysteria2, tuic, anytls,
+ *     mieru; no ShadowTLS, NaiveProxy, MTProto; wireguard without the
+ *     AmneziaWG obfuscation.
+ *   - legacy Clash: ss, socks5, http, vmess, trojan; nothing newer.
+ */
+const DIALECT_DOORS: Record<'stash' | 'clash', Record<Door, FormatDoor>> = {
+  stash: {
+    vless: DOOR_YES, vmess: DOOR_YES, trojan: DOOR_YES, socks: DOOR_YES, http: DOOR_YES,
+    hysteria: DOOR_YES, shadowsocks: DOOR_YES, tuic: DOOR_YES, anytls: DOOR_YES, mieru: DOOR_YES,
+    shadowtls: DOOR_LACKS, naive: DOOR_LACKS, amneziawg: DOOR_LACKS, mtproto: DOOR_LACKS,
+  },
+  clash: {
+    vmess: DOOR_YES, trojan: DOOR_YES, socks: DOOR_YES, http: DOOR_YES, shadowsocks: DOOR_YES,
+    vless: DOOR_LACKS, hysteria: DOOR_LACKS, tuic: DOOR_LACKS, anytls: DOOR_LACKS, mieru: DOOR_LACKS,
+    shadowtls: DOOR_LACKS, naive: DOOR_LACKS, amneziawg: DOOR_LACKS, mtproto: DOOR_LACKS,
+  },
+};
+
+/** The doors a template type carries. */
+export function templateDoors(type: TemplateType): Record<Door, FormatDoor> {
+  return type === 'stash' || type === 'clash' ? DIALECT_DOORS[type] : FORMAT_DOORS[TEMPLATE_FORMATS[type]];
+}
+
+/**
+ * Does a template type carry this endpoint: its door (and the door's security
+ * layer, Surge-style), then, for an xray door, its transport. One answer, the
+ * door asked first, as /formats asks it (A-231).
+ */
+export function templateCarries(
+  type: TemplateType,
+  e: { door: Door; network?: string; xhttpMode?: string; securityLayer?: ClientSecurityLayer },
+): boolean {
+  const cell = templateDoors(type)[e.door];
+  if (!cell.carried) return false;
+  if (cell.exceptReality && (e.securityLayer ?? 'default') === 'default') return false;
+  if (!(XRAY_TRANSPORT_SUBPROTOCOLS as readonly string[]).includes(e.door)) return true;
+  return transportServed(TEMPLATE_TRANSPORT[type], { subprotocol: e.door, ...e });
+}
 
 /**
  * The security layer a client sees on an xray endpoint (A-230): 'default' is
