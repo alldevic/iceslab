@@ -6,6 +6,8 @@ import { IconChevronDown } from '@tabler/icons-react';
 import type { EngineName } from '@iceslab/shared';
 import type { Node } from '@/lib/domain/nodes';
 import { coreVersionFleet, type CoreVersionFleet } from '@/lib/domain/coreVersions';
+import type { LoadFailure, LoadView } from '@/lib/ui/loadView';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { coreVersionScope } from '@/contours/profiles/lib/coreVersionScope';
 import { uncountedNodes } from '@/lib/domain/coreReport';
 import type { PreviewKindKey } from '@/contours/profiles/lib/profileKinds';
@@ -29,10 +31,15 @@ const MONO = "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace";
 export function CoreVersionStrip({
   engine,
   nodes,
+  view = 'ready',
+  failure = null,
 }: {
   /** The tile's engine, or a preview view (WEB) whose core is not built yet. */
   engine: EngineName | PreviewKindKey;
   nodes: readonly Node[];
+  /** Whether the fleet arrived (A-226): counted only when it did. */
+  view?: LoadView;
+  failure?: LoadFailure | null;
 }) {
   const { t } = useTranslation();
   const scope = coreVersionScope(engine);
@@ -59,6 +66,9 @@ export function CoreVersionStrip({
       </Stack>
     );
   }
+  // A fleet that did not arrive is not an empty fleet (A-226).
+  if (failure) return <LoadFailedLine message={failure.message} onRetry={failure.onRetry} />;
+  if (view !== 'ready') return <Text style={{ fontSize: 11, lineHeight: '16px', color: MIST }}>{t('common.loading')}</Text>;
   const fleets = scope.components.map((c) => coreVersionFleet(c, nodes));
   // Nodes where this engine counts no traffic per user (countsUsers: false,
   // 49699f88): user limits on this profile are not enforced there.

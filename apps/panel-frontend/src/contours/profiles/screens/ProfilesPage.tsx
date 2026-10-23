@@ -41,6 +41,9 @@ import {
 } from '@/lib/domain/profiles';
 import { type ProtocolName } from '@/lib/domain/protocols';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
+import { profileBindings } from '@/contours/profiles/lib/profileList';
 import { ProfilesEmpty } from '@/contours/profiles/components/ProfilesEmpty';
 import { profilePairLabel } from '@/lib/domain/engines';
 import { AwgGenerationBadge } from '@/ui/AwgGenerationBadge';
@@ -96,17 +99,22 @@ export function ProfilesPage() {
 
   // The crumb carries what this page counts: how many templates exist, and how
   // many distinct protocols are actually deployed rather than merely defined.
+  // A-226: a list that did not arrive is said as such, never as an empty
+  // library; the crumb says «no data» instead of «0 templates».
+  const listView = loadView(profilesQuery);
+  const bindingsArrived = loadView(bindingsQuery) === 'ready';
   const allProfiles = profilesQuery.data?.profiles ?? [];
-  usePageMeta([
-    t('pageMeta.profiles', { count: allProfiles.length }),
-    t('pageMeta.profileProtocols', {
-      count: new Set(
-        allProfiles
-          .filter((p) => (bindingsByProfile.get(p.id) ?? p.bindingCount) > 0)
-          .map((p) => p.protocol),
-      ).size,
-    }),
-  ]);
+  const bindingsOf = (p: Profile) => profileBindings(p, bindingsByProfile, bindingsArrived);
+  usePageMeta(
+    listView !== 'ready'
+      ? [t('pageMeta.noData')]
+      : [
+          t('pageMeta.profiles', { count: allProfiles.length }),
+          t('pageMeta.profileProtocols', {
+            count: new Set(allProfiles.filter((p) => bindingsOf(p) > 0).map((p) => p.protocol)).size,
+          }),
+        ],
+  );
 
 
   const deleteMutation = useMutation({
@@ -126,7 +134,7 @@ export function ProfilesPage() {
   });
 
   function handleDelete(profile: Profile) {
-    const bindings = bindingsByProfile.get(profile.id) ?? 0;
+    const bindings = bindingsOf(profile);
     modals.openConfirmModal({
       title: t('profiles.deleteTitle', { name: profile.name }),
       children: (
@@ -327,7 +335,13 @@ export function ProfilesPage() {
       {/* An empty library and a filter that matched nothing are different
           answers: the first explains what a profile is and offers both ways in,
           the second only says the filter is too narrow. */}
-      {filtered.length === 0 && profiles.length === 0 ? (
+      {listView === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(profilesQuery.error)} onRetry={() => void profilesQuery.refetch()} />
+      ) : listView === 'loading' ? (
+        <Text size="sm" style={{ color: MIST }}>
+          {t('common.loading')}
+        </Text>
+      ) : filtered.length === 0 && profiles.length === 0 ? (
         <ProfilesEmpty
           onRecipe={() => navigate('/profiles/new?from=recipe')}
           onBlank={() => navigate('/profiles/new')}
@@ -354,7 +368,7 @@ export function ProfilesPage() {
             <ProfileCard
               key={p.id}
               profile={p}
-              bindingCount={bindingsByProfile.get(p.id) ?? p.bindingCount}
+              bindingCount={bindingsOf(p)}
               onEdit={() => navigate(`/profiles/${p.id}`)}
               onDelete={() => handleDelete(p)}
               onDeploy={() => navigate(`/hosts/new?profileId=${p.id}`)}

@@ -32,6 +32,8 @@ import { adapterRefusalWords, type AdapterRefusal } from '@/lib/domain/adapterSl
 import { plainDefaultPort } from '@/contours/profiles/lib/plainSubprotocol';
 import { hostHiddenFacts, listHosts, type Host } from '@/lib/domain/hosts';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import { loadFailure } from '@/lib/ui/loadView';
 import { listAllNodes, type Node as PanelNode } from '@/lib/domain/nodes';
 import { nodeStatusText } from '@/lib/domain/nodeStatusText';
 import {
@@ -275,6 +277,8 @@ export function DeployProfileModal({ profile, onClose }: Props) {
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['bindings'] });
       qc.invalidateQueries({ queryKey: ['profiles'] });
+      // The key-impact warning on the same page counts what now stands (A-225).
+      qc.invalidateQueries({ queryKey: ['profile-key-impact'] });
       const c = result?.created ?? 0;
       const d = result?.deleted ?? 0;
       if (c === 0 && d === 0) {
@@ -294,6 +298,8 @@ export function DeployProfileModal({ profile, onClose }: Props) {
       if (failure instanceof DeployIncomplete) {
         qc.invalidateQueries({ queryKey: ['bindings'] });
         qc.invalidateQueries({ queryKey: ['profiles'] });
+        // The key-impact warning on the same page counts what now stands (A-225).
+        qc.invalidateQueries({ queryKey: ['profile-key-impact'] });
         setAdapterRefusals(failure.outcome.refused);
         if (failure.outcome.other === null) return;
         err = failure.outcome.other;
@@ -354,6 +360,10 @@ export function DeployProfileModal({ profile, onClose }: Props) {
   }, [selected, seeded]);
 
   const loading = nodesQuery.isLoading || bindingsQuery.isLoading;
+  // A-226: a node or binding list that did not arrive is said, not drawn as
+  // «no nodes»; without the bindings the diff would re-create what stands,
+  // so the save waits for both.
+  const listFailure = [nodesQuery, bindingsQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null;
 
   return (
     <Modal
@@ -419,7 +429,9 @@ export function DeployProfileModal({ profile, onClose }: Props) {
           </Stack>
         ))}
 
-        {loading ? (
+        {listFailure ? (
+          <LoadFailedLine message={listFailure.message} onRetry={listFailure.onRetry} />
+        ) : loading ? (
           <Group justify="center" py="xl">
             <Loader size="sm" />
           </Group>
@@ -495,7 +507,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
           <Button
             onClick={() => saveMutation.mutate()}
             loading={saveMutation.isPending}
-            disabled={!dirty || loading}
+            disabled={!dirty || loading || listFailure !== null}
             leftSection={<IconRocket size={14} />}
           >
             {t('common.save')}
