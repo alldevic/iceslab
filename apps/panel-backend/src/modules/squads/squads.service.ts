@@ -3,7 +3,11 @@ import { prisma } from '../../prisma.js';
 import { ALL_SQUAD_ID } from './squads.constants.js';
 import type { CreateSquadInput, UpdateSquadInput } from './squads.schemas.js';
 import { mapSquadToPublic, type PublicSquadDto } from './squads.mapper.js';
-import { assertCustomPresetExists, presetUpdateData } from '../routing-presets/routing-presets.assign.js';
+import {
+  assertCustomPresetExists,
+  presetUpdateData,
+  rethrowPresetGone,
+} from '../routing-presets/routing-presets.assign.js';
 
 // ───── Domain errors ─────
 
@@ -205,7 +209,7 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
       },
     },
     include: includeRelations,
-  });
+  }).catch((err: unknown) => rethrowPresetGone(err, input.customRoutingPresetId));
   eventBus.emit('squad.changed', { squadId: row.id });
   return mapSquadToPublic(row);
 }
@@ -290,7 +294,7 @@ export async function updateSquad(
       },
       include: includeRelations,
     });
-  });
+  }).catch((err: unknown) => rethrowPresetGone(err, presetFields.customRoutingPresetId));
 
   // A squad edit changes what its members are handed, and the binding cache is
   // keyed by squad SET rather than by contents, so nothing else would notice.

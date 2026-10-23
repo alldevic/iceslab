@@ -15,7 +15,11 @@ import type { z } from 'zod';
 
 type UserStatus = z.infer<typeof UserStatusSchema>;
 import { mapUserToPublic, type PublicUserDto } from './users.mapper.js';
-import { assertCustomPresetExists, presetUpdateData } from '../routing-presets/routing-presets.assign.js';
+import {
+  assertCustomPresetExists,
+  presetUpdateData,
+  rethrowPresetGone,
+} from '../routing-presets/routing-presets.assign.js';
 
 // ───── Domain errors ─────
 
@@ -168,7 +172,7 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       }
       throw new UserAlreadyExistsError(input.username);
     }
-    throw err;
+    rethrowPresetGone(err, input.customRoutingPresetId);
   }
 
   eventBus.emit('user.created', {
@@ -289,7 +293,9 @@ export async function updateUser(
   // The same repair as on create: falling back to "All" on a database that
   // lost the row would fail on the foreign key.
   const intoAll = input.groupIds !== undefined && input.groupIds.length === 0;
-  const updated = await repo.updateById(id, data, intoAll ? ensureAllSquad : undefined);
+  const updated = await repo
+    .updateById(id, data, intoAll ? ensureAllSquad : undefined)
+    .catch((err: unknown) => rethrowPresetGone(err, preset.customRoutingPresetId));
 
   if (changedFields.length > 0) {
     eventBus.emit('user.updated', {

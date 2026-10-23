@@ -39,6 +39,26 @@ export async function assertCustomPresetExists(id: string | null | undefined): P
 }
 
 /**
+ * The existence check and the write are two statements: a preset deleted in
+ * between makes the write fail on the foreign key (P2003). That is the same
+ * fact as the check would have found, so it gets the same refusal, not a 500.
+ * Rethrows anything else.
+ */
+export function rethrowPresetGone(err: unknown, id: string | null | undefined): never {
+  const e = err as { code?: unknown; meta?: unknown; message?: unknown };
+  if (id != null) {
+    const said = `${JSON.stringify(e?.meta ?? {})} ${String(e?.message ?? '')}`;
+    // A scalar write fails on the foreign key (P2003, naming the column); a
+    // nested `connect` finds no row (P2025, naming the model). Either one that
+    // names the preset is the preset gone; any other is not ours to rename.
+    const fk = e?.code === 'P2003' && said.includes('custom_routing_preset');
+    const connect = e?.code === 'P2025' && said.includes('RoutingPreset');
+    if (fk || connect) throw new RoutingPresetNotFoundError(id);
+  }
+  throw err;
+}
+
+/**
  * The columns an UPDATE writes for the preset choice. An absent key is not an
  * edit; a value written to one side clears the other, so the pair never ends
  * up holding both; null clears only its own side.

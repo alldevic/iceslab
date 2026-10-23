@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -141,6 +141,52 @@ describe('a squad', () => {
     expect(await put({ customRoutingPresetId: own })).toMatchObject({ customRoutingPresetId: own, routingPreset: null });
     expect(await put({ description: 'unrelated' })).toMatchObject({ customRoutingPresetId: own, routingPreset: null });
     expect(await put({ routingPreset: 'cn-split' })).toMatchObject({ routingPreset: 'cn-split', customRoutingPresetId: null });
+  });
+});
+
+describe('a preset deleted between the check and the write', () => {
+  // The check is passed by a stand-in that says the row exists; the write then
+  // meets the database without it, as after a delete in between.
+  let spy: ReturnType<typeof vi.spyOn> | undefined;
+  const passCheckOnce = () => {
+    spy?.mockRestore();
+    spy = vi.spyOn(prisma.routingPreset, 'findUnique').mockResolvedValueOnce({ id: MISSING } as never);
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  it('is the same 400 ROUTING_PRESET_NOT_FOUND, not a 500, on every write of a user and a squad', async () => {
+    const expectGone = (res: { statusCode: number; body: string }, what: string) => {
+      // The stand-in answered the check, so this refusal came from the write.
+      expect(spy!.mock.calls.length, `${what}: the check was not the stand-in`).toBe(1);
+      expect(res.statusCode, `${what}: ${res.body}`).toBe(400);
+      expect(JSON.parse(res.body), what).toMatchObject({ error: 'ROUTING_PRESET_NOT_FOUND', field: 'customRoutingPresetId' });
+    };
+
+    passCheckOnce();
+    expectGone(
+      await app.inject({ method: 'POST', url: '/api/users', headers: auth(), payload: { username: 'race-1', customRoutingPresetId: MISSING } }),
+      'user create',
+    );
+
+    const user = await app.inject({ method: 'POST', url: '/api/users', headers: auth(), payload: { username: 'race-2' } });
+    passCheckOnce();
+    expectGone(
+      await app.inject({ method: 'PUT', url: `/api/users/${JSON.parse(user.body).id}`, headers: auth(), payload: { customRoutingPresetId: MISSING } }),
+      'user edit',
+    );
+
+    passCheckOnce();
+    expectGone(
+      await app.inject({ method: 'POST', url: '/api/squads', headers: auth(), payload: { name: 'race-sq', customRoutingPresetId: MISSING } }),
+      'squad create',
+    );
+
+    const squad = await app.inject({ method: 'POST', url: '/api/squads', headers: auth(), payload: { name: 'race-sq-2' } });
+    passCheckOnce();
+    expectGone(
+      await app.inject({ method: 'PUT', url: `/api/squads/${JSON.parse(squad.body).id}`, headers: auth(), payload: { customRoutingPresetId: MISSING } }),
+      'squad edit',
+    );
   });
 });
 
