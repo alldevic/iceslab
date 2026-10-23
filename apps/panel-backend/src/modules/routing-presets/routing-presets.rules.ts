@@ -1,47 +1,24 @@
 import { z } from 'zod';
-import { GEO_BUILTIN_NAMES, type RoutingPresetId } from '@iceslab/shared';
+import { GEO_BUILTIN_NAMES } from '@iceslab/shared';
 import { classifyPolicyEntry } from '../cascades/policy-entries.js';
 import { parseGeoRef } from '../geo-sets/geo-names.js';
 import { setTagNames } from '../geo-sets/geo-sets.service.js';
+import { DEVICE_ROUTE_ACTIONS } from './routing-presets.builtins.js';
 
 /**
- * A-229: the rules of a device routing preset, the set written into the
- * client's own config.
- *
- * One rule = an ordered list of matchers and what to do with a match. First
- * match wins. A device can only go direct, block or tunnel: WARP is a node
- * egress and has no meaning on a phone, so it is refused here rather than
+ * A-229: the checks on a device routing preset's rules, the set written into
+ * the client's own config. The shape and the built-ins are in
+ * routing-presets.builtins.ts, which the format renderers read without the
+ * database; this half reads the geo sets. WARP is refused here rather than
  * dropped later.
  */
 
-export const DEVICE_ROUTE_ACTIONS = ['direct', 'block', 'proxy'] as const;
-export type DeviceRouteAction = (typeof DEVICE_ROUTE_ACTIONS)[number];
-
-export interface DeviceRouteRule {
-  match: string[];
-  action: DeviceRouteAction;
-  note: string;
-}
-
-/**
- * The built-in presets in the same shape. They are what the three formats
- * render today (xrayjson.ts RU_SPLIT_RULES / CN_SPLIT_RULES and the Clash and
- * sing-box twins), written once as data so the list endpoint can show them
- * and the screen stops holding its own copy.
- */
-export const BUILTIN_PRESET_RULES: Record<RoutingPresetId, readonly DeviceRouteRule[]> = {
-  'proxy-all': [],
-  'ru-split': [
-    { match: ['geosite:category-ads-all'], action: 'block', note: '' },
-    { match: ['geosite:category-ru', 'geosite:category-gov-ru'], action: 'direct', note: '' },
-    { match: ['geoip:private', 'geoip:ru'], action: 'direct', note: '' },
-  ],
-  'cn-split': [
-    { match: ['geosite:category-ads-all'], action: 'block', note: '' },
-    { match: ['geosite:cn'], action: 'direct', note: '' },
-    { match: ['geoip:private', 'geoip:cn'], action: 'direct', note: '' },
-  ],
-};
+export {
+  BUILTIN_PRESET_RULES,
+  DEVICE_ROUTE_ACTIONS,
+  type DeviceRouteAction,
+  type DeviceRouteRule,
+} from './routing-presets.builtins.js';
 
 export const MAX_PRESET_RULES = 256;
 export const MAX_RULE_MATCHERS = 256;

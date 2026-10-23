@@ -23,6 +23,7 @@ import { subscriptionUrl } from './subscription.link.js';
 import { endpointsForFormat, isPlainXray } from './subscription.formats.js';
 import { matchFormatForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
+import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import {
   formatBytes,
   getSubscriptionSettings,
@@ -727,11 +728,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // setting. plain/json/wgconf carry no routing section, so we skip the
       // read there.
       // A-229: the resolved preset, a built-in key or an own preset's rules.
-      // `routingPreset` stays the built-in key the format builders read; an
-      // own preset is its rules over the proxy-all base, rendered by each
-      // format from `preset` (A-229 part 4).
+      // A built-in goes to the builders as its key; an own preset as its
+      // rules (`ownPresetRules`), over the proxy-all base for everything the
+      // key decides besides the rules (DNS).
       let preset: ResolvedPreset = { kind: 'builtin', id: 'proxy-all' };
       let routingPreset: RoutingPresetId = 'proxy-all';
+      let ownPresetRules: DeviceRouteRule[] | undefined;
       let customRoutingRules: Record<string, unknown>[] | undefined;
       // R3 - operator-defined custom domain lists (direct/proxy/block), emitted
       // into xray + clash routing rules. Undefined = none = byte-identical.
@@ -754,6 +756,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           result.squadPreset ??
           { kind: 'builtin', id: settings.routingPreset };
         routingPreset = preset.kind === 'builtin' ? preset.id : 'proxy-all';
+        ownPresetRules = preset.kind === 'custom' ? preset.rules : undefined;
         // R3-b custom rules apply only to xray-routing formats (xray/xkeen).
         customRoutingRules = settings.customRoutingRules ?? undefined;
         // R3 custom domain lists apply to xray/xkeen + clash.
@@ -850,7 +853,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         case 'clash':
           return reply
             .type('text/yaml; charset=utf-8')
-            .send(buildClashYaml(served, { routingPreset, customDomainLists }));
+            .send(buildClashYaml(served, { routingPreset, ownPresetRules, customDomainLists }));
         case 'singbox': {
           // TLS-fragment is intentionally NOT emitted for sing-box: the
           // upstream field is unstable across 1.12/1.14 (same rationale as the
@@ -864,7 +867,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset }));
+            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules }));
         }
         case 'wgconf': {
           // Filename = `<username>-<node>.conf` so a user with several AWG
@@ -896,7 +899,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per
@@ -905,7 +908,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // `bundle` (no balancer: the client picks a server, not an outbound).
           return reply
             .type('application/json')
-            .send(buildXrayJsonArray(served, { routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment }));
         }
         case 'xkeen': {
           // XKeen (xray-core on Keenetic routers): outbounds + routing +
@@ -922,7 +925,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               'Content-Disposition',
               `attachment; filename="${sanitizeFilename(result.json.user.username)}-xkeen.json"`,
             )
-            .send(buildXrayJson(served, { bundle: xkBundle, routingPreset, forRouter: true, customRules: customRoutingRules, customDomainLists }));
+            .send(buildXrayJson(served, { bundle: xkBundle, routingPreset, ownPresetRules, forRouter: true, customRules: customRoutingRules, customDomainLists }));
         }
         case 'outline':
           // Outline dynamic key: one Shadowsocks server, `?node=` picks which,

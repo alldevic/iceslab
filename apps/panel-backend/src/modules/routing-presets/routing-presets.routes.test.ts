@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -203,5 +203,34 @@ describe('writes', () => {
     const gone = await app.inject({ method: 'DELETE', url: `/api/routing-presets/${made.id}`, headers: auth() });
     expect(gone.statusCode, gone.body).toBe(204);
     expect(await prisma.routingPreset.count()).toBe(0);
+  });
+
+  it('assigned between the in-use check and the delete: the same 409 with the holders read again, not a 500', async () => {
+    const made = JSON.parse((await create({ name: 'office', rules: RULES })).body) as { id: string };
+    const user = await app.inject({
+      method: 'POST', url: '/api/users', headers: auth(), payload: { username: 'late-holder', customRoutingPresetId: made.id },
+    });
+    expect(user.statusCode, user.body).toBe(201);
+
+    // The check reads nobody, as if the assignment came right after it.
+    const spies = [
+      vi.spyOn(prisma.user, 'findMany').mockResolvedValueOnce([] as never),
+      vi.spyOn(prisma.user, 'count').mockResolvedValueOnce(0 as never),
+      vi.spyOn(prisma.group, 'findMany').mockResolvedValueOnce([] as never),
+      vi.spyOn(prisma.group, 'count').mockResolvedValueOnce(0 as never),
+    ];
+    try {
+      const res = await app.inject({ method: 'DELETE', url: `/api/routing-presets/${made.id}`, headers: auth() });
+      expect(spies.every((s) => s.mock.calls.length >= 1), 'the check was not the stand-in').toBe(true);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(JSON.parse(res.body)).toMatchObject({
+        error: 'ROUTING_PRESET_IN_USE',
+        users: [{ username: 'late-holder' }],
+        userCount: 1,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(await prisma.routingPreset.count()).toBe(1);
   });
 });

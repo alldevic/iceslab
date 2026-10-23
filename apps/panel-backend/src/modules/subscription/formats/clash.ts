@@ -1,6 +1,8 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
+import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
+import { clashDeviceRuleLines, clashNeedsGeo } from '../subscription.device-rules.js';
 
 /**
  * Clash YAML subscription formatter (targets Clash Meta / Mihomo, covers
@@ -52,6 +54,8 @@ function yamlString(value: string): string {
  */
 export interface ClashBuildOpts {
   routingPreset?: RoutingPresetId;
+  /** A-229: an own preset's rules, in place of the built-in preset's. */
+  ownPresetRules?: readonly DeviceRouteRule[];
   /**
    * R3 - operator-defined custom domain lists (direct/proxy/block). Each domain
    * becomes a `DOMAIN-SUFFIX` rule emitted at the head of the `rules:` section
@@ -180,60 +184,29 @@ const PROXY_ALL_DNS_LINES: readonly string[] = [
   '',
 ];
 
-const RU_SPLIT_RULE_LINES: readonly string[] = [
-  '  - GEOSITE,category-ads-all,REJECT',
-  '  - GEOSITE,category-ru,DIRECT',
-  '  - GEOSITE,category-gov-ru,DIRECT',
-  '  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve',
-  '  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
-  '  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
-  '  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
-  '  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve',
-  '  - IP-CIDR6,fc00::/7,DIRECT,no-resolve',
-  '  - IP-CIDR6,fe80::/10,DIRECT,no-resolve',
-  '  - IP-CIDR6,::1/128,DIRECT,no-resolve',
-  '  - GEOIP,RU,DIRECT',
-];
-
-// H2 - the China mirror of RU_SPLIT_RULE_LINES. The private-CIDR block is
-// verbatim; only the geo lines change (one GEOSITE,cn instead of the two RU
-// categories, and GEOIP,CN instead of GEOIP,RU). GEOIP,CN stays last and
-// without `no-resolve`: it is the resolve-then-decide fallback for a domain
-// that missed every GEOSITE rule.
-const CN_SPLIT_RULE_LINES: readonly string[] = [
-  '  - GEOSITE,category-ads-all,REJECT',
-  '  - GEOSITE,cn,DIRECT',
-  '  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve',
-  '  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
-  '  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
-  '  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
-  '  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve',
-  '  - IP-CIDR6,fc00::/7,DIRECT,no-resolve',
-  '  - IP-CIDR6,fe80::/10,DIRECT,no-resolve',
-  '  - IP-CIDR6,::1/128,DIRECT,no-resolve',
-  '  - GEOIP,CN,DIRECT',
-];
+// The rule lines of a preset are rendered from its DeviceRouteRule list
+// (subscription.device-rules.ts, A-229): the built-ins' and an own preset's alike. The
+// RU/CN line arrays that lived here rendered the same lines, the private
+// ranges as explicit CIDRs with no-resolve and GEOIP last without it.
 
 export function buildClashYaml(
   endpoints: SubscriptionEndpoint[],
   buildOpts: ClashBuildOpts = {},
 ): string {
-  // Routing preset (R1c + H2). Each split preset selects its own DNS + rule
-  // lines (the geo-db block is shared); proxy-all leaves them null so the
-  // output stays byte-identical to pre-R1 builds.
+  // Routing preset (R1c + H2 + A-229). The DNS block stays per built-in: the
+  // split ones name the resolver of the country whose domains go direct. An
+  // own preset names no country, so it takes the proxy-all block, which is
+  // there for the TUN case and holds for any rule set.
   const preset = buildOpts.routingPreset ?? 'proxy-all';
-  const dnsLines =
-    preset === 'ru-split'
+  const own = buildOpts.ownPresetRules;
+  const deviceRules = own ?? BUILTIN_PRESET_RULES[preset];
+  const dnsLines = own
+    ? PROXY_ALL_DNS_LINES
+    : preset === 'ru-split'
       ? RU_SPLIT_DNS_LINES
       : preset === 'cn-split'
         ? CN_SPLIT_DNS_LINES
         : PROXY_ALL_DNS_LINES;
-  const splitRuleLines =
-    preset === 'ru-split'
-      ? RU_SPLIT_RULE_LINES
-      : preset === 'cn-split'
-        ? CN_SPLIT_RULE_LINES
-        : null;
   const proxies: string[] = [];
   const proxyNames: string[] = [];
 
@@ -492,10 +465,13 @@ export function buildClashYaml(
     }
   }
 
+  // A `proxy` rule goes to the Auto group; with no proxy it is left out.
+  const splitRuleLines = clashDeviceRuleLines(deviceRules, proxyNames.length > 0 ? 'Auto' : null);
+
   const lines: string[] = [];
-  // The geo databases are only fetched by the split presets, which are the only
-  // ones with GEOSITE/GEOIP rules to resolve. DNS is emitted for every preset.
-  if (splitRuleLines) {
+  // The geo databases are fetched only when the rules name them (GEOSITE /
+  // GEOIP). DNS is emitted for every preset.
+  if (clashNeedsGeo(deviceRules)) {
     lines.push(...SPLIT_GEO_LINES);
   }
   lines.push(...dnsLines);
@@ -544,9 +520,7 @@ export function buildClashYaml(
   // lines, then the MATCH catch-all. When the lists are empty this spread is a
   // no-op.
   lines.push(...customDomainLines);
-  if (splitRuleLines) {
-    lines.push(...splitRuleLines);
-  }
+  lines.push(...splitRuleLines);
   lines.push(proxyNames.length > 0 ? '  - MATCH,Auto' : '  - MATCH,DIRECT');
 
   return lines.join('\n') + '\n';

@@ -172,11 +172,21 @@ export async function deleteRoutingPreset(id: string): Promise<void> {
   if (!existing) throw new RoutingPresetMissingError(id);
   const use = await presetUse(id);
   if (use.userCount > 0 || use.squadCount > 0) throw new RoutingPresetInUseError(use);
-  await prisma.$transaction(async (tx) => {
-    await tx.user.updateMany({
-      where: { customRoutingPresetId: id, deletedAt: { not: null } },
-      data: { customRoutingPresetId: null },
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.user.updateMany({
+        where: { customRoutingPresetId: id, deletedAt: { not: null } },
+        data: { customRoutingPresetId: null },
+      });
+      await tx.routingPreset.delete({ where: { id } });
     });
-    await tx.routingPreset.delete({ where: { id } });
-  });
+  } catch (err) {
+    // Assigned between the check above and the delete: RESTRICT refuses, and
+    // that is the same fact the check would have found. Said the same way,
+    // with the holders read again.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
+      throw new RoutingPresetInUseError(await presetUse(id));
+    }
+    throw err;
+  }
 }

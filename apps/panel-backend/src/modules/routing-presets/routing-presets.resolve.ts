@@ -1,5 +1,5 @@
 import { isRoutingPresetId, type RoutingPresetId } from '@iceslab/shared';
-import type { DeviceRouteRule } from './routing-presets.rules.js';
+import type { DeviceRouteRule } from './routing-presets.builtins.js';
 
 /**
  * A-229 part 3: which preset a subscription is built with, the built-in key or

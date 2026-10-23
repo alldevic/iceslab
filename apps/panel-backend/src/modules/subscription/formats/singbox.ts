@@ -1,6 +1,8 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
+import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
+import { singboxDeviceRoute } from '../subscription.device-rules.js';
 
 /**
  * Sing-box JSON subscription formatter (sing-box 1.10+).
@@ -42,6 +44,8 @@ export interface SingboxBuildOpts {
   urltestIntervalSec?: number;
   urltestProbeUrl?: string;
   routingPreset?: RoutingPresetId;
+  /** A-229: an own preset's rules, in place of the built-in preset's. */
+  ownPresetRules?: readonly DeviceRouteRule[];
 }
 
 /**
@@ -70,80 +74,10 @@ export interface SingboxBuildOpts {
  * split by destination; resolution stays with the client app's own DNS
  * config (clash/xrayjson formats do carry split DNS, see R2 in ROADMAP).
  */
-const RU_SPLIT_RULE_SETS: ReadonlyArray<Record<string, unknown>> = [
-  {
-    type: 'remote',
-    tag: 'geosite-category-ads-all',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geosite-category-ru',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geosite-category-gov-ru',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-gov-ru.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geoip-ru',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs',
-  },
-];
-
-const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { rule_set: ['geosite-category-ads-all'], action: 'reject' },
-  { ip_is_private: true, action: 'route', outbound: 'direct' },
-  {
-    rule_set: ['geosite-category-ru', 'geosite-category-gov-ru', 'geoip-ru'],
-    action: 'route',
-    outbound: 'direct',
-  },
-];
-
-/**
- * H2 - the China mirror of the RU rule-sets. `geosite-cn.srs` (SagerNet/
- * sing-geosite) is the single comprehensive mainland category, so one geosite
- * set, not two; `geoip-cn.srs` from SagerNet/sing-geoip. Same `.srs` URL
- * pattern as RU. As with ru-split, split DNS is deliberately omitted (the
- * sing-box DNS server format churned across 1.12/1.14).
- */
-const CN_SPLIT_RULE_SETS: ReadonlyArray<Record<string, unknown>> = [
-  {
-    type: 'remote',
-    tag: 'geosite-category-ads-all',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geosite-cn',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geoip-cn',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs',
-  },
-];
-
-const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { rule_set: ['geosite-category-ads-all'], action: 'reject' },
-  { ip_is_private: true, action: 'route', outbound: 'direct' },
-  {
-    rule_set: ['geosite-cn', 'geoip-cn'],
-    action: 'route',
-    outbound: 'direct',
-  },
-];
+// The route rules and rule-sets of a preset are rendered from its
+// DeviceRouteRule list (subscription.device-rules.ts, A-229): the built-ins' and an own
+// preset's alike, geo names as the SagerNet `.srs` rule-sets the built-ins
+// have always used. The RU/CN arrays that lived here rendered the same.
 
 export function buildSingboxJson(
   endpoints: SubscriptionEndpoint[],
@@ -151,22 +85,9 @@ export function buildSingboxJson(
 ): string {
   const outbounds: Record<string, unknown>[] = [];
   const proxyTags: string[] = [];
-  // Routing preset (R1b + H2). Each split preset selects its own route rules +
-  // remote rule-sets; proxy-all leaves them null so the output stays
-  // byte-identical to pre-R1 builds.
-  const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules =
-    preset === 'ru-split'
-      ? RU_SPLIT_RULES
-      : preset === 'cn-split'
-        ? CN_SPLIT_RULES
-        : null;
-  const splitRuleSets =
-    preset === 'ru-split'
-      ? RU_SPLIT_RULE_SETS
-      : preset === 'cn-split'
-        ? CN_SPLIT_RULE_SETS
-        : null;
+  // Routing preset (R1b + H2 + A-229); proxy-all has no rules, so the output
+  // stays byte-identical to pre-R1 builds.
+  const deviceRules = opts.ownPresetRules ?? BUILTIN_PRESET_RULES[opts.routingPreset ?? 'proxy-all'];
 
   // A sing-box tag is what the selector shows and what a client remembers as
   // "the proxy I picked", so it cannot become an opaque id the way an xray
@@ -448,6 +369,10 @@ export function buildSingboxJson(
   }
   outbounds.push({ type: 'direct', tag: 'direct' });
 
+  // A `proxy` rule routes to the group the catch-all uses; with no proxy it is
+  // left out.
+  const route = singboxDeviceRoute(deviceRules, proxyTags.length > 0 ? primaryTag : null);
+
   // R3 - operator custom domain lists are intentionally NOT emitted for
   // sing-box: there is no portable inline-domain route-rule vehicle post-1.12
   // (same rationale as the skipped sing-box DNS split in R2 and the skipped
@@ -471,8 +396,8 @@ export function buildSingboxJson(
     ],
     outbounds,
     route: {
-      ...(splitRules
-        ? { rules: splitRules, rule_set: splitRuleSets }
+      ...(route.rules.length > 0
+        ? { rules: route.rules, ...(route.ruleSets.length > 0 ? { rule_set: route.ruleSets } : {}) }
         : {}),
       final: primaryTag,
       auto_detect_interface: true,

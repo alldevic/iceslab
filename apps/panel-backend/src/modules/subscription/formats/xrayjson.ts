@@ -1,6 +1,8 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
+import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
+import { xrayDeviceRules } from '../subscription.device-rules.js';
 
 /** An xray endpoint this format writes. The socks/http doors always; the rest
  *  as the shared table says (A-224), the same question the other formats ask,
@@ -69,6 +71,11 @@ export interface XrayJsonBuildOpts {
   probeIntervalSec?: number;
   routingPreset?: RoutingPresetId;
   /**
+   * A-229: an own preset's rules. When set they replace the built-in
+   * preset's, and no split DNS is written (see splitDnsFor).
+   */
+  ownPresetRules?: readonly DeviceRouteRule[];
+  /**
    * XKeen / router target (`?format=xkeen`). XKeen runs xray-core on a Keenetic
    * router via a confdir split (01_log / 02_dns / 03_inbounds / 04_outbounds /
    * 05_routing ...). The router supplies its own log + transparent inbound, so
@@ -110,16 +117,6 @@ const TLS_FRAGMENT_SETTINGS: Record<string, string> = {
   interval: '10-20',
 };
 
-const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'block' },
-  {
-    type: 'field',
-    domain: ['geosite:category-ru', 'geosite:category-gov-ru'],
-    outboundTag: 'direct',
-  },
-  { type: 'field', ip: ['geoip:private', 'geoip:ru'], outboundTag: 'direct' },
-];
-
 /**
  * Split DNS (R2). RU domains resolve via Yandex DNS (77.88.8.8) so RU CDNs
  * return geo-correct answers; `skipFallback` keeps those queries off the
@@ -139,18 +136,6 @@ const RU_SPLIT_DNS: Record<string, unknown> = {
     '8.8.8.8',
   ],
 };
-
-/**
- * Routing Templates (H2) - `cn-split` is the China-direct mirror of `ru-split`.
- * China is comprehensively covered by the single `geosite:cn` / `geoip:cn`
- * category (no second gov category like RU), so one domain rule, not two.
- * Ads-block, private-range-direct and the catch-all stay identical in shape.
- */
-const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'block' },
-  { type: 'field', domain: ['geosite:cn'], outboundTag: 'direct' },
-  { type: 'field', ip: ['geoip:private', 'geoip:cn'], outboundTag: 'direct' },
-];
 
 /**
  * Split DNS (H2). China domains resolve via AliDNS (223.5.5.5) so CN CDNs
@@ -173,13 +158,20 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
 };
 
 // Preset selectors, shared by the single-config builder and the array (T2) so
-// both pick the same split rules / DNS from one place.
-function splitRulesFor(
-  preset: RoutingPresetId,
-): ReadonlyArray<Record<string, unknown>> | null {
-  return preset === 'ru-split' ? RU_SPLIT_RULES : preset === 'cn-split' ? CN_SPLIT_RULES : null;
+// both pick the same rules / DNS from one place.
+//
+// A-229: the rules are the preset's DeviceRouteRule list, the built-ins'
+// (BUILTIN_PRESET_RULES) or an own preset's, rendered by subscription.device-rules.ts; the
+// built-in rule arrays that lived here rendered byte for byte the same and are
+// gone. The split DNS stays per built-in: it names the resolver of the country
+// whose domains go direct, and an own preset says nothing about a country, so
+// it gets none (the client's resolver, as under proxy-all).
+function presetRules(opts: XrayJsonBuildOpts): readonly DeviceRouteRule[] {
+  return opts.ownPresetRules ?? BUILTIN_PRESET_RULES[opts.routingPreset ?? 'proxy-all'];
 }
-function splitDnsFor(preset: RoutingPresetId): Record<string, unknown> | null {
+function splitDnsFor(opts: XrayJsonBuildOpts): Record<string, unknown> | null {
+  if (opts.ownPresetRules) return null;
+  const preset = opts.routingPreset ?? 'proxy-all';
   return preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
 }
 
@@ -351,12 +343,10 @@ export function buildXrayJson(
   const xrayEps = endpoints.filter(carriedXray);
   const proxyTags: string[] = [];
   const bundle = opts.bundle ?? 'flat';
-  // Routing preset (R1a + H2). Each split preset selects its own rule array +
-  // split-DNS block; proxy-all leaves both null so the output stays
-  // byte-identical to pre-R1 builds.
-  const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules = splitRulesFor(preset);
-  const splitDns = splitDnsFor(preset);
+  // Routing preset (R1a + H2 + A-229). The preset's rules and split DNS;
+  // proxy-all has neither, so the output stays byte-identical to pre-R1 builds.
+  const deviceRules = presetRules(opts);
+  const splitDns = splitDnsFor(opts);
 
   // TLS-fragment - the fragment outbound's tag must not collide with any proxy,
   // `direct`, or `block` tag, and must exactly equal the dialerProxy value we
@@ -414,6 +404,17 @@ export function buildXrayJson(
       ]
     : [];
 
+  // A `proxy` rule goes where the catch-all goes: the balancer, else the first
+  // proxy; with no proxy at all it is left out (the catch-all is direct).
+  const splitRules = xrayDeviceRules(
+    deviceRules,
+    balancerActive
+      ? { balancerTag: 'balancer-auto' }
+      : proxyTags.length > 0
+        ? { outboundTag: proxyTags[0]! }
+        : null,
+  );
+
   // forRouter (XKeen): drop log + the client SOCKS inbound; the router owns
   // those. Keep dns (split presets), outbounds and routing.
   const config: Record<string, unknown> = {
@@ -452,14 +453,14 @@ export function buildXrayJson(
       // Split presets need IPIfNonMatch so a domain-typed destination that
       // missed every domain rule gets a second, IP-based pass (otherwise
       // geoip:ru / geoip:cn never matches). proxy-all keeps AsIs.
-      domainStrategy: splitRules ? 'IPIfNonMatch' : 'AsIs',
+      domainStrategy: splitRules.length > 0 ? 'IPIfNonMatch' : 'AsIs',
       ...(balancers ? { balancers } : {}),
       rules: [
         // R3-b custom rules win over presets + catch-all.
         ...(opts.customRules ?? []),
         // R3 custom domain lists sit below raw rules, above the preset rules.
         ...customDomainRules,
-        ...(splitRules ?? []),
+        ...splitRules,
         balancerActive
           ? { type: 'field', network: 'tcp,udp', balancerTag: 'balancer-auto' }
           : proxyTags.length > 0
@@ -523,9 +524,8 @@ export function buildXrayJsonArray(
   const supported = endpoints.filter(
     (e) => carriedXray(e) || e.protocol === 'hysteria',
   );
-  const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules = splitRulesFor(preset);
-  const splitDns = splitDnsFor(preset);
+  const deviceRules = presetRules(opts);
+  const splitDns = splitDnsFor(opts);
   const tlsFragment = opts.tlsFragment === true;
   const cdl = opts.customDomainLists;
 
@@ -566,13 +566,15 @@ export function buildXrayJsonArray(
         ]
       : [];
 
+    // A `proxy` rule goes to this config's own proxy.
+    const splitRules = xrayDeviceRules(deviceRules, { outboundTag: tag });
     const rules: Record<string, unknown>[] = [
       // Precedence mirrors buildXrayJson: raw custom rules, then domain lists,
       // then the split preset. Then the per-config contract (эталон Remnawave):
       // torrent off the tunnel, everything else through this proxy.
       ...(opts.customRules ?? []),
       ...customDomainRules,
-      ...(splitRules ?? []),
+      ...splitRules,
       { type: 'field', protocol: ['bittorrent'], outboundTag: 'direct' },
       { type: 'field', network: 'tcp,udp', outboundTag: tag },
     ];
@@ -592,7 +594,7 @@ export function buildXrayJsonArray(
       ],
       outbounds,
       routing: {
-        domainStrategy: splitRules ? 'IPIfNonMatch' : 'AsIs',
+        domainStrategy: splitRules.length > 0 ? 'IPIfNonMatch' : 'AsIs',
         rules,
       },
     };

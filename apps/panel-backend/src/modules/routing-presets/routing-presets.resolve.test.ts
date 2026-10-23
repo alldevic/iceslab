@@ -101,6 +101,22 @@ describe('through the subscription and the user card', () => {
     });
   });
 
+  it('the own preset\'s rules are what xray-json, Clash and sing-box carry for that user (A-229 part 4)', async () => {
+    const p = await preset('office');
+    const u = await user({ username: 'served-own', customRoutingPresetId: p });
+    const xray = await app.inject({ method: 'GET', url: `/sub/${u.sub}?format=xrayjson` });
+    expect(xray.statusCode).toBe(200);
+    expect(xray.body.replace(/\s+/g, '')).toContain('"ip":["geoip:private"],"outboundTag":"direct"');
+    expect(xray.body).not.toContain('geosite:category-ru');
+    const clash = await app.inject({ method: 'GET', url: `/sub/${u.sub}?format=clash` });
+    expect(clash.body).toContain('  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve');
+    const sb = await app.inject({ method: 'GET', url: `/sub/${u.sub}?format=singbox` });
+    expect(sb.body).toContain('"ip_is_private": true');
+    // ?routing= on the request still wins over the user's own preset.
+    const forced = await app.inject({ method: 'GET', url: `/sub/${u.sub}?format=xrayjson&routing=ru-split` });
+    expect(forced.body).toContain('geosite:category-ru');
+  });
+
   it('a squad\'s own preset reaches its members; the user\'s built-in still wins over it', async () => {
     const p = await preset('squad-rules');
     const s = await squad('with-own', { customRoutingPresetId: p });
