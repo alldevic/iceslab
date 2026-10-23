@@ -40,6 +40,9 @@ export const TABLES = [
   'subscription_events',
   'subscription_request_history',
   'subscription_response_rules',
+  // A-236. Unique on (type, name): a template left behind would refuse the
+  // next test's create of the same name.
+  'subscription_templates',
   'node_user_usage_history',
   'node_usage_history',
   'group_members',
