@@ -94,11 +94,13 @@ echo http.handlers.file_server; ` + big + "\n",
 // E33 in any of them. Every script here runs under `set -o pipefail`, so the
 // rule is the tree, not a list: the bootstraps of this agent and, since A-104
 // (22.10, four live cases in the installers and the backup), the repository's
-// own scripts/ too. A new script is covered the day it is added.
+// own scripts/ too, and the dev container's two (local-ci.sh, post-create.sh,
+// both under pipefail). A new script is covered the day it is added.
 func TestNoBootstrapPipesIntoGrepQ(t *testing.T) {
 	pipe := regexp.MustCompile(`\|\s*grep\s+(-[A-Za-z]*q|-q)`)
 	var files []string
-	for _, root := range []string{"scripts", filepath.Join("..", "..", "scripts")} {
+	devcontainer := filepath.Join("..", "..", ".devcontainer")
+	for _, root := range []string{"scripts", filepath.Join("..", "..", "scripts"), devcontainer} {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -121,6 +123,11 @@ func TestNoBootstrapPipesIntoGrepQ(t *testing.T) {
 	for _, want := range []string{"install-iceslab.sh", "install-iceslab-node.sh", filepath.Join("ops", "iceslab-backup.sh")} {
 		if !slices.Contains(files, filepath.Join("..", "..", "scripts", want)) {
 			t.Fatalf("the walk missed scripts/%s", want)
+		}
+	}
+	for _, want := range []string{"local-ci.sh", "post-create.sh"} {
+		if !slices.Contains(files, filepath.Join(devcontainer, want)) {
+			t.Fatalf("the walk missed .devcontainer/%s", want)
 		}
 	}
 	for _, path := range files {
