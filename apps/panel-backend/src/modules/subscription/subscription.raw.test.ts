@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { FORMAT_DOORS } from '@iceslab/shared';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
@@ -60,6 +61,10 @@ async function subscriber(): Promise<string> {
 }
 
 describe('?format=raw', () => {
+  it('carries what plain carries: one door table for both, not a copy', () => {
+    expect(FORMAT_DOORS.raw).toBe(FORMAT_DOORS.plain);
+  });
+
   it('answers the plain list unwrapped: the same lines, as text', async () => {
     const sub = await subscriber();
     const plain = await app.inject({ method: 'GET', url: `/sub/${sub}?format=plain` });

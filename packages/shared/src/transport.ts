@@ -244,6 +244,21 @@ function formatTable(cells: Partial<Record<Door, FormatDoor>>): Record<Door, For
 
 const XRAY_DOORS = { vless: YES, vmess: YES, trojan: YES, socks: YES, http: YES } as const;
 
+/** The share links: what `plain` wraps in base64 and `raw` hands out as is.
+ *  One object for both, so the two cannot drift. */
+const LINK_DOORS = formatTable({
+  ...XRAY_DOORS,
+  hysteria: YES,
+  shadowsocks: YES,
+  tuic: YES,
+  anytls: YES,
+  mieru: YES,
+  naive: YES,
+  mtproto: YES,
+  shadowtls: NO_URI,
+  amneziawg: NO_URI,
+});
+
 /**
  * Which door each format carries, and why not where it does not.
  *
@@ -260,31 +275,9 @@ const XRAY_DOORS = { vless: YES, vmess: YES, trojan: YES, socks: YES, http: YES 
  * `json` is this panel's own dump and carries every door by construction.
  */
 export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> = {
-  plain: formatTable({
-    ...XRAY_DOORS,
-    hysteria: YES,
-    shadowsocks: YES,
-    tuic: YES,
-    anytls: YES,
-    mieru: YES,
-    naive: YES,
-    mtproto: YES,
-    shadowtls: NO_URI,
-    amneziawg: NO_URI,
-  }),
+  plain: LINK_DOORS,
   // The same links as plain, unwrapped.
-  raw: formatTable({
-    ...XRAY_DOORS,
-    hysteria: YES,
-    shadowsocks: YES,
-    tuic: YES,
-    anytls: YES,
-    mieru: YES,
-    naive: YES,
-    mtproto: YES,
-    shadowtls: NO_URI,
-    amneziawg: NO_URI,
-  }),
+  raw: LINK_DOORS,
   json: formatTable(Object.fromEntries(DOORS.map((d) => [d, YES]))),
   clash: formatTable({
     ...XRAY_DOORS,
