@@ -259,7 +259,10 @@ jobs:
           # The manifest's sha256 (packages/shared/src/core-versions.ts);
           # core-pins.test.ts holds this line and the URL to it.
           echo "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae  /tmp/xray.zip" | sha256sum -c -
-          unzip -o /tmp/xray.zip xray -d /tmp/xray-bin
+          # The two .dat files from the same archive: xray looks for them next
+          # to its binary, and a rule naming geosite:/geoip: cannot be judged
+          # without them (the own-preset xray -test skips itself then).
+          unzip -o /tmp/xray.zip xray geosite.dat geoip.dat -d /tmp/xray-bin
           chmod +x /tmp/xray-bin/xray
           echo "XRAY_BIN=/tmp/xray-bin/xray" >> "$GITHUB_ENV"
           /tmp/xray-bin/xray version | head -1
