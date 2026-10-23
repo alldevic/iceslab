@@ -100,6 +100,8 @@ export const TRANSPORT_SUPPORT: Table = {
   'vmess-link': { vless: NONE, vmess: ALL, trojan: NONE },
   'trojan-link': { vless: NONE, vmess: NONE, trojan: ALL },
   stash: {
+    // XHTTP needs Stash iOS/tvOS 3.6+ or macOS 4.3+ (stash.wiki proxy-types,
+    // the XHTTP subsection); older Stash does not dial it.
     vless: { ...NONE, raw: 'served', ws: 'served', grpc: 'served', xhttp: 'served', 'xhttp-mode': 'served' },
     vmess: { ...NONE, raw: 'served', ws: 'served', grpc: 'served' },
     trojan: { ...NONE, raw: 'served', ws: 'served', grpc: 'served' },
