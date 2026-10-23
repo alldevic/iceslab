@@ -5,6 +5,7 @@ export const hosts = {
   // copies would drift. The cascade name in the line links to it.
   hostHidden: {
     before: 'Node {{node}} is not the entry of cascade ',
+    beforeUnknown: 'The node of this host (unknown which: the node list did not load) is not the entry of cascade ',
     after: ': no subscription will hand this host out while the cascade is on.',
   },
 

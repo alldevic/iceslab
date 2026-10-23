@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { Box, Text } from '@mantine/core';
-import type { HostHiddenFacts } from '@/lib/domain/hosts';
+import { hiddenLineStart, type HostHiddenFacts } from '@/lib/domain/hosts';
 import { AMBER } from '@/lib/ui/tokens';
 
 const DISPLAY = "'Inter Variable', Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
@@ -25,7 +25,7 @@ export function HostHiddenLine({ facts, compact = false }: { facts: HostHiddenFa
         style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: AMBER, flexShrink: 0, marginTop: compact ? 5 : 6 }}
       />
       <Text style={{ fontFamily: DISPLAY, fontSize: compact ? 11 : 12, lineHeight: compact ? '15px' : '17px', color: AMBER }}>
-        {t('hostHidden.before', { node: facts.nodeName })}
+        {hiddenLineStart(facts, t)}
         <Link
           to={`/nodes/cascades/${facts.cascadeId}`}
           onClick={(e) => e.stopPropagation()}

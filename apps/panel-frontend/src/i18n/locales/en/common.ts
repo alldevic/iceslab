@@ -127,6 +127,8 @@ export const common = {
     updateLink: 'How to update',
     blockedShort: 'a host will not land here',
     gateMissing: 'The server refused: {{node}} has no {{core}} core. Install it on the machine over ssh:',
+    // A toast, where no command line follows: the way to it instead (A-235).
+    gateMissingToast: 'The server refused: {{node}} has no {{core}} core. The install line is on the node page, under Cores.',
     gateRefused: 'The server refused: {{core}} {{version}} on {{node}} is refused by the panel.',
     gateAwg: 'Node {{node}} runs the {{nodeGen}} module, the profile needs {{profileGen}}.',
     gateAwgHow: 'The 3.1 module comes with a rerun of the AmneziaWG bootstrap on the node; it carries 1.x profiles too.',

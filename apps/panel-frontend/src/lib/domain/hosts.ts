@@ -66,16 +66,23 @@ export interface Host {
  * о скрытии как раз дешевле всего.
  */
 export interface HostHiddenFacts {
-  nodeName: string;
+  /** Null: the node list did not arrive. The fact is the host's and stands;
+   *  only the name is unknown, and it is said so, never as «?» (A-234). */
+  nodeName: string | null;
   cascadeId: string;
   cascadeName: string;
 }
 
 type HiddenBy = { cascadeId: string; cascadeName: string };
 
+/** The opening of the hidden line: the node by name, or said unknown. */
+export function hiddenLineStart(facts: Pick<HostHiddenFacts, 'nodeName'>, t: (key: string, vars?: Record<string, unknown>) => string): string {
+  return facts.nodeName === null ? t('hostHidden.beforeUnknown') : t('hostHidden.before', { node: facts.nodeName });
+}
+
 export function hostHiddenFacts(
   host: { hiddenByCascade?: HiddenBy | null } | null | undefined,
-  nodeName: string,
+  nodeName: string | null,
   node?: { hiddenByCascade?: HiddenBy | null } | null,
 ): HostHiddenFacts | null {
   const h =
@@ -197,12 +204,22 @@ export function profileNotOnNode(err: unknown): ProfileNotOnNode | null {
   };
 }
 
+/**
+ * The codes of a port clash: the three the save refuses with today (read
+ * first by `portRefusalOf`, with their conflicts) and PORT_IN_USE of a server
+ * older than the split. Only these are a port (A-235): any other 409 used to
+ * land in the port field as «port taken».
+ */
+const PORT_CODES = new Set(['PORT_IN_USE', 'PORT_TAKEN_PROFILE', 'PORT_TAKEN_CASCADE', 'PORT_TAKEN_CORE_SERVICE']);
+
 /** The port is taken on that node. The message names the profile holding it, so
- *  it is worth showing verbatim rather than replacing with "port busy". */
+ *  it is worth showing verbatim rather than replacing with "port busy". Null
+ *  for anything that is not a port clash. */
 export function portConflict(err: unknown): string | null {
-  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
-  if (res?.status !== 409) return null;
-  return res.data?.message ?? '';
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: { status?: unknown; data?: { error?: unknown; message?: unknown } } }).response;
+  if (res?.status !== 409 || typeof res.data?.error !== 'string' || !PORT_CODES.has(res.data.error)) return null;
+  return typeof res.data.message === 'string' ? res.data.message : '';
 }
 
 /** The profile or the node disappeared while the form was open. */

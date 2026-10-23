@@ -31,9 +31,8 @@ describe('profileNotOnNode (A-235)', () => {
     expect(profileNotOnNode(null)).toBeNull();
   });
 
-  it('the screen reads it before portConflict, which takes any 409 as a port', () => {
-    // Why the order matters: the port fallback would claim this one too.
-    expect(portConflict(res(409, body))).toBe(body.message);
+  it('portConflict no longer claims it as a port (it reads port codes only)', () => {
+    expect(portConflict(res(409, body))).toBeNull();
     expect(profileNotOnNode(res(409, body))).not.toBeNull();
   });
 });

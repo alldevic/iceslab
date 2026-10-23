@@ -239,6 +239,24 @@ export function awgGateText(refusal: CoreGateRefusal, t: T): string | null {
   }
 }
 
+/**
+ * Any core refusal in one sentence, for where it cannot sit under its node
+ * row (the node is not in the screen's list): AWG ones by awgGateText, a
+ * missing core with the way to its install line (no line follows a toast),
+ * a refused version by the row's words (A-235).
+ */
+export function coreGateText(refusal: CoreGateRefusal, t: T): string {
+  const awg = awgGateText(refusal, t);
+  if (awg !== null) return awg;
+  if (refusal.kind === 'missing' || refusal.kind === 'refused') {
+    const core = refusal.engine === 'singbox' ? 'sing-box' : refusal.engine;
+    return refusal.kind === 'missing'
+      ? t('nodeCore.gateMissingToast', { node: refusal.nodeName, core })
+      : t('nodeCore.gateRefused', { node: refusal.nodeName, core, version: refusal.version });
+  }
+  return '';
+}
+
 function awgGeneration(v: unknown): AwgProtocol | null {
   return (AWG_PROTOCOLS as readonly unknown[]).includes(v) ? (v as AwgProtocol) : null;
 }

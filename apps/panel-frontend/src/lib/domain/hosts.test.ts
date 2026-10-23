@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hostHiddenFacts, hostPortPayload, hostPortShared } from '@/lib/domain/hosts';
+import { hiddenLineStart, hostHiddenFacts, hostPortPayload, hostPortShared } from '@/lib/domain/hosts';
 
 describe('hostPortPayload (A-150)', () => {
   const stored = { listenPort: 443, clientPort: null };
@@ -86,5 +86,13 @@ describe('hostHiddenFacts', () => {
     expect(hostHiddenFacts({}, 'de-01', byNode)?.cascadeId).toBe('c2');
     expect(hostHiddenFacts({}, 'de-01', {})).toBeNull();
     expect(hostHiddenFacts(undefined, 'de-01', { hiddenByCascade: null })).toBeNull();
+  });
+
+  it('8. A-234: нода неизвестна (список не пришёл): факт хоста стоит, имя null, и строка говорит «неизвестно», а не «?»', () => {
+    const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ' ' + JSON.stringify(vars) : ''}`;
+    const facts = hostHiddenFacts({ hiddenByCascade: { cascadeId: 'c1', cascadeName: 'relay' } }, null);
+    expect(facts).toEqual({ nodeName: null, cascadeId: 'c1', cascadeName: 'relay' });
+    expect(hiddenLineStart(facts!, t)).toBe('hostHidden.beforeUnknown');
+    expect(hiddenLineStart({ nodeName: 'de-01' }, t)).toBe('hostHidden.before {"node":"de-01"}');
   });
 });

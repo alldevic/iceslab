@@ -39,6 +39,7 @@ import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
+import { hostsBarCounts } from '@/contours/hosts/lib/hostsView';
 import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
 import { COUNTRIES } from '@/lib/domain/countries';
 import { AMBER, CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/hosts/lib/colors';
@@ -91,7 +92,7 @@ export function HostsPage() {
           nodeName: node?.name ?? null,
           // Нода в каскаде не вход: подписка этот хост не выдаёт. Факт сервера,
           // здесь только имя ноды к нему.
-          hidden: hostHiddenFacts(h, node?.name ?? '?', node),
+          hidden: hostHiddenFacts(h, node?.name ?? null, node),
           port: h.portOverride ?? binding?.publicPort ?? binding?.port ?? null,
           address: h.addressOverride ?? binding?.publicHost ?? null,
           countryCode: node?.countryCode ? node.countryCode.toUpperCase() : null,
@@ -176,13 +177,9 @@ export function HostsPage() {
   const total = hostsQuery.data?.hosts.length ?? 0;
   // The bar counts the same three states the cards show, so a degraded host is
   // not filed under LIVE where it would go unnoticed.
-  const isDegraded = (r: Row) =>
-    r.host.enabled && r.nodes.length > 0 && r.nodes.some((n) => n.status !== 'online');
-  const live = rows.filter((r) => r.host.enabled && r.nodes.length > 0 && !isDegraded(r)).length;
-  const degraded = rows.filter(isDegraded).length;
-  // A-234: «no node» is counted only when the node lists arrived.
-  const orphaned = rows.filter((r) => r.nodesKnown && r.nodes.length === 0).length;
+  // A-234: «no node» and «live» only when the node lists arrived (hostsBarCounts).
   const nodesKnown = bindingsQuery.data !== undefined && nodesQuery.data !== undefined;
+  const { live, degraded, orphaned } = hostsBarCounts(rows, nodesKnown);
   // The node lists that did not arrive, said above the cards with a retry.
   const nodesFailure = loadFailure(bindingsQuery, apiErrorMessage) ?? loadFailure(nodesQuery, apiErrorMessage);
   const countries = [...new Set(rows.map((r) => r.countryCode).filter(Boolean))] as string[];
@@ -225,7 +222,7 @@ export function HostsPage() {
           <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Fact value={total} label={t('hostsPage.bar.hosts')} />
             <Dot />
-            <Fact value={nodesKnown ? live : '-'} label={t('hostsPage.bar.live')} accent={MOSS} />
+            <Fact value={live} label={t('hostsPage.bar.live')} accent={MOSS} />
             {degraded > 0 && (
               <>
                 <Dot />

@@ -43,7 +43,7 @@ import {
 import { profileNotOnNodeWords } from '@/contours/hosts/lib/hostRefusals';
 import { modals } from '@mantine/modals';
 import { apiErrorMessage } from '@/lib/net/client';
-import { editGate } from '@/lib/ui/loadView';
+import { hostEditGate } from '@/contours/hosts/lib/hostsView';
 import { LoadFailed } from '@/ui/LoadFailed';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
 import { HostFreshnessCard } from '@/contours/hosts/components/HostFreshnessCard';
@@ -59,6 +59,7 @@ import { profileTransport } from '@/lib/domain/profileTransport';
 import { singboxXrayMessage, singboxXrayRefusal } from '@/lib/domain/singboxXray';
 import {
   coreGateRefusal,
+  coreGateText,
   awgGateText,
   awgProfilePrediction,
   nodeCoreBlocks,
@@ -567,8 +568,14 @@ export function HostEditPage() {
         setCoreRefusal(core);
         return;
       }
-      // The adapter already serves another host on this node (A-055). Read
-      // before the port fallback, which takes any 409 for a port clash.
+      // A node this list does not show: the same words in a toast (A-235),
+      // it used to fall through to the port field as «port taken».
+      if (core) {
+        qc.invalidateQueries({ queryKey: ['nodes'] });
+        notifications.show({ color: 'red', title: t('common.saveError'), message: coreGateText(core, t) });
+        return;
+      }
+      // The adapter already serves another host on this node (A-055).
       const slot = adapterRefusal(err);
       if (slot) {
         setSlotRefusal(slot);
@@ -619,12 +626,10 @@ export function HostEditPage() {
   // A-234: the node and profile lists are the form's too. Without them a new
   // host offered an empty profile choice and said «pick a node first», and an
   // existing one drew «nothing found» under its nodes.
-  const gateLists = isNew ? [nodesQuery, profilesQuery] : [bindingsQuery, nodesQuery, profilesQuery];
-  const gate = isNew
-    ? editGate({ data: true, isError: false }, true, gateLists)
-    : editGate(hostsQuery, host !== null, gateLists);
-  if (gate.kind === 'failed') {
-    const q = gate.index === 0 ? hostsQuery : gateLists[gate.index - 1]!;
+  const gateQueries = { hosts: hostsQuery, bindings: bindingsQuery, nodes: nodesQuery, profiles: profilesQuery };
+  const { view: gate, failed } = hostEditGate(isNew, gateQueries, host !== null);
+  if (failed) {
+    const q = gateQueries[failed];
     return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
   }
   if (!isNew && gate.kind !== 'ready') {
@@ -763,7 +768,7 @@ export function HostEditPage() {
       {/* Хост есть, а подписка его не отдаёт: нода в каскаде не вход. Над
           формой, потому что правка полей ниже этого не изменит: решается это
           на странице каскада, куда и ведёт ссылка. */}
-      {!isNew && <HostHiddenLine facts={hostHiddenFacts(host, currentNode?.name ?? '?', currentNode)} />}
+      {!isNew && <HostHiddenLine facts={hostHiddenFacts(host, currentNode?.name ?? null, currentNode)} />}
 
       {/* Who is still holding the previous link. Above the form, because the
           fields below are what will make that number grow. */}
