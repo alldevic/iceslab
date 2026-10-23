@@ -37,6 +37,7 @@ import { systemRoutes } from './modules/system/system.routes.js';
 import { recipesRoutes } from './modules/recipes/recipes.routes.js';
 import { geoSetsRoutes } from './modules/geo-sets/geo-sets.routes.js';
 import { routingPresetsRoutes } from './modules/routing-presets/routing-presets.routes.js';
+import { subscriptionTemplatesRoutes } from './modules/subscription-templates/templates.routes.js';
 import { registerSecurityGate } from './lib/auth/security-gate.js';
 import { registry as metricsRegistry, httpRequestDuration, routeLabel } from './lib/infra/metrics.js';
 import { requireAuth } from './modules/auth/auth.hook.js';
@@ -305,6 +306,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(recipesRoutes);
   await app.register(geoSetsRoutes);
   await app.register(routingPresetsRoutes);
+  await app.register(subscriptionTemplatesRoutes);
 
   return app;
 }

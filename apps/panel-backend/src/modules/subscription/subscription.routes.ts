@@ -23,6 +23,7 @@ import { subscriptionUrl } from './subscription.link.js';
 import { endpointsForFormat, isPlainXray } from './subscription.formats.js';
 import { matchFormatForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
+import { findTemplate, templateTypeForFormat } from '../subscription-templates/templates.service.js';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import {
   formatBytes,
@@ -68,6 +69,9 @@ const QuerySchema = z.object({
   // on one client before flipping it for everyone (same idea as `bundle`).
   // Only meaningful for full-config formats (clash/singbox/xrayjson).
   routing: z.enum(ROUTING_PRESET_IDS).optional(),
+  // A-236: the operator template the file is framed by, by name (same idea as
+  // `?routing=`). Default when absent.
+  template: z.string().trim().min(1).max(64).optional(),
   // TLS-fragment - per-request override of the panel-wide
   // `subscriptionTlsFragment` setting (same idea as `?routing=`). `1` forces
   // it on, `0` forces it off. Only meaningful for the xrayjson format - the
@@ -464,6 +468,27 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       userAgent,
     );
     subscriptionRequests.inc({ format });
+
+    // A-236: `?template=<name>` picks the operator template the file is framed
+    // by. Checked here, by name, before any work: a format no template frames,
+    // or a name the type does not have, is a refusal in words, not a silent
+    // Default. The frame changes the output with step 3 (the builders filling
+    // the frame); until then the check is all it does.
+    if (query.template !== undefined) {
+      const type = templateTypeForFormat(format);
+      if (!type) {
+        return reply.code(400).send({
+          error: 'TEMPLATE_NOT_FOR_FORMAT',
+          message: `the ${format} format takes no template; templates frame clash, singbox, xrayjson and xrayjson-array`,
+        });
+      }
+      if (!(await findTemplate(type, query.template))) {
+        return reply.code(404).send({
+          error: 'TEMPLATE_NOT_FOUND',
+          message: `no ${type} template named ${JSON.stringify(query.template)}`,
+        });
+      }
+    }
 
     // Tier-1 honey-user tripwire. If the requested token is on the admin's
     // canary list, the token by definition was leaked from where it was

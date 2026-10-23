@@ -52,7 +52,12 @@ model SubscriptionResponseRule {
 // A-236: the operator's subscription templates, a client config frame per
 // type (TEMPLATE_TYPES in @iceslab/shared, held by a CHECK in the migration)
 // that the panel fills with the nodes. "Default" in each type is the built-in
-// one: never deleted, restored from the code.
+// one, and it lives in the CODE (subscription-templates/templates.defaults.ts):
+// a row named Default exists only while the operator has edited it, and
+// "restore default" deletes that row. The header of the migration
+// 20261023163439 says the Default is put here on the first read; that was
+// the plan before ARCH's decision of 23.10 and is not what the code does (an
+// applied migration is not edited: its checksum is recorded).
 model SubscriptionTemplate {
   id        String   @id @default(uuid()) @db.Uuid
   type      String   @db.VarChar(32)
