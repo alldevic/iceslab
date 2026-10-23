@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
@@ -549,6 +550,58 @@ type CascadeFragments struct {
 	Balancers []json.RawMessage `json:"balancers,omitempty"`
 }
 
+// The two names one direction's way out has in xray (A-108): the legacy
+// drawing, where xray dials the leg itself, and the hand-over, where it passes
+// the direction to the chain process over loopback socks. Mirrors dirOutTag and
+// chainOutTag in the panel's cascade.config.ts.
+var (
+	legacyExitRe   = regexp.MustCompile(`^cascade-link-out-d(\d+)-0$`)
+	handoverExitRe = regexp.MustCompile(`^cascade-link-out-chain-d(\d+)$`)
+)
+
+// fitCascadeExits gives every cascade rule of the policy the name of the way
+// out THIS render draws, by what is in the cascade outbounds rather than by
+// what the push said (A-108). The panel names the hand-over when it sends a
+// chain; a chain the agent refused with none accepted before leaves xray on
+// the legacy drawing, and the rule would point at an outbound the config does
+// not have: `xray -test` then refuses the whole push, the users' inbounds with
+// it. So the name the panel sent is kept when it is drawn, swapped for the
+// same direction's other name when that one is, and the rule is dropped when
+// neither is, as the panel drops a rule into a direction the node does not
+// dial. The other actions pass untouched.
+func fitCascadeExits(rules []dto.NodePolicyRule, cascade *CascadeFragments) []dto.NodePolicyRule {
+	drawn := map[string]bool{}
+	if cascade != nil {
+		for _, raw := range cascade.Outbounds {
+			var ob struct {
+				Tag string `json:"tag"`
+			}
+			if json.Unmarshal(raw, &ob) == nil && ob.Tag != "" {
+				drawn[ob.Tag] = true
+			}
+		}
+	}
+	out := make([]dto.NodePolicyRule, 0, len(rules))
+	for _, r := range rules {
+		if r.Action.Kind != dto.PolicyActionCascade || r.Action.Exit == "" || drawn[r.Action.Exit] {
+			out = append(out, r)
+			continue
+		}
+		other := ""
+		if m := legacyExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+			other = "cascade-link-out-chain-d" + m[1]
+		} else if m := handoverExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+			other = "cascade-link-out-d" + m[1] + "-0"
+		}
+		if other == "" || !drawn[other] {
+			continue
+		}
+		r.Action.Exit = other
+		out = append(out, r)
+	}
+	return out
+}
+
 // cutCascadeRulesAtTheFirstDoor splits the panel's cascade fragments where the
 // operator's policy has to go.
 //
@@ -811,7 +864,7 @@ func renderMultiConfig(
 	//
 	// Nil or empty appends nothing, so a node without a policy renders
 	// byte-identically to before this existed.
-	policyRules, err := buildPolicyRules(policy)
+	policyRules, err := buildPolicyRules(fitCascadeExits(policy, cascade))
 	if err != nil {
 		return nil, err
 	}
