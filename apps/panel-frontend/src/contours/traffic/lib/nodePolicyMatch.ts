@@ -12,7 +12,11 @@ import { extTokenKind } from '@/contours/traffic/lib/geoTagHint';
  * is the same one the node uses, not a guess about what the text means.
  */
 
-const IP_PREFIXES = ['geoip:', 'ip:', 'cidr:'];
+// The address prefixes the server reads (A-103, BACK eb8efe55): a geoip set
+// and a panel geo set of addresses. `ip:` and `cidr:` are refused with 400 by
+// the server, so they are not addresses here either: an address or a CIDR is
+// written bare.
+const IP_PREFIXES = ['geoip:', 'ext-ip:'];
 
 /** An address-shaped token: a geoip set, a CIDR, or a bare v4/v6 literal.
  *  Everything else is a domain matcher, including bare hostnames.
