@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer as createTcpServer, connect, type AddressInfo, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
+import { lookup } from 'node:dns/promises';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -349,6 +350,16 @@ describe('a leg carries a request between two engines', () => {
    * arrives; the control pinned to IPv6 does not, which proves the pin is what
    * the engine dials by and not a lucky resolver order.
    */
+  /**
+   * The name has to carry BOTH families, or the positive half proves only that
+   * IPv4 arrives anyway. Fails rather than skips: a machine without ::1 for
+   * localhost cannot run this test, and saying so is the answer.
+   */
+  const assertDualStackLocalhost = async () => {
+    const families = new Set((await lookup('localhost', { all: true })).map((a) => a.family));
+    expect([...families].sort(), 'localhost must resolve to both 127.0.0.1 and ::1 for this test').toEqual([4, 6]);
+  };
+
   const pinnedPair = async (selfHost: string) => {
     const socksPort = await freePort();
     const password = randomBytes(12).toString('hex');
@@ -368,6 +379,7 @@ describe('a leg carries a request between two engines', () => {
   it.skipIf(!SINGBOX_BIN)(
     'a sing-box leg from an IPv4 literal to a dual-stack name dials IPv4, and an IPv6 pin does not arrive',
     async () => {
+      await assertDualStackLocalhost();
       const v4 = await pinnedPair('127.0.0.1');
       expect(JSON.stringify(v4.entry)).toContain('ipv4_only');
       expect(await through('pin-v4', v4.entry, v4.exit, v4.socksPort, v4.password)).toContain(nonce);
@@ -381,7 +393,8 @@ describe('a leg carries a request between two engines', () => {
   it.skipIf(!SINGBOX_BIN || !XRAY_BIN)(
     'a legacy xray shadowsocks leg from an IPv4 literal to a dual-stack name dials IPv4, and an IPv6 pin does not arrive',
     async () => {
-      const legacyEntry = (selfHost: string, cred: LinkCred, socksPort: number, password: string) => {
+      await assertDualStackLocalhost();
+      const legacyEntry =(selfHost: string, cred: LinkCred, socksPort: number, password: string) => {
         const [entry, exitHop] = buildCascadeConfigs(
           [
             { nodeId: 'e', position: 0, nodeHost: selfHost },

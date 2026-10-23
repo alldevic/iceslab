@@ -1099,7 +1099,10 @@ function linkInbound(cred: LinkCred): Record<string, unknown> {
 }
 
 /** `selfHost`: this node's own address in the panel, which the next hop's
- *  firewall names; the dial is pinned to its family (dial-family.ts). */
+ *  firewall names; the dial is pinned to its family (dial-family.ts).
+ *  ⚠ This leg carries xray mux, which a sing-box link-in refuses ("global
+ *  multiplex (v2ray legacy) not supported since sing-box v1.7.0", live test
+ *  23.10): a legacy leg goes into a legacy (xray) link-in, never into a chain. */
 function linkOutbound(host: string, cred: LinkCred, selfHost?: string): Record<string, unknown> {
   const family = dialFamilyOf(selfHost, host);
   switch (cred.protocol) {
