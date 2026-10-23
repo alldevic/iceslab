@@ -1,7 +1,10 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
@@ -63,7 +66,15 @@ func TestACascadeRuleWithNeitherNameDrawnIsDroppedAndTheRestRenders(t *testing.T
 		Match:  dto.NodePolicyMatch{Domain: []string{"ads.example"}},
 		Action: dto.NodePolicyAction{Kind: dto.PolicyActionBlock},
 	}
+	var journal bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&journal, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	rules := renderedRules(t, []dto.NodePolicyRule{cascadeRule("cascade-link-out-chain-d7"), block}, nil)
+	// Not silent (A-232): the drop names the way out and its direction.
+	if !strings.Contains(journal.String(), "exit=cascade-link-out-chain-d7") || !strings.Contains(journal.String(), "direction=7") {
+		t.Fatalf("no warning for the dropped rule, journal: %q", journal.String())
+	}
 	if got := outboundOfDomainRule(rules); got != nil {
 		t.Fatalf("a rule to a way out nothing draws was rendered to %v", got)
 	}

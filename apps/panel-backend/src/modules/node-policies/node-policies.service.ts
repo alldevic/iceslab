@@ -277,6 +277,35 @@ export async function resolvePolicyForNode(
   nodeId: string,
   drawing: CascadeXrayDrawing = 'legacy',
 ): Promise<WireNodePolicy | undefined> {
+  return (await explainPolicyForNode(nodeId, drawing)).policy;
+}
+
+/**
+ * Why a rule of the node's policy does not reach the node (A-232):
+ *   - `lost-condition`: a whole kind of its matchers is unreadable (A-103);
+ *   - `direction-not-dialled`: the node dials the rule's direction by no leg,
+ *     or by more than one (a pooled direction, not supported by a rule);
+ *   - `no-cascade-drawing`: the push gives xray no way out of the cascade (a
+ *     transit or exit under a chain, an entry on hysteria or AmneziaWG).
+ */
+export type PolicyNotDrawnReason = 'lost-condition' | 'direction-not-dialled' | 'no-cascade-drawing';
+export interface PolicyRuleNotDrawn {
+  ruleId: string;
+  reason: PolicyNotDrawnReason;
+}
+
+/**
+ * The policy as the push sends it, and every rule left out with why. ONE loop:
+ * the read that shows the operator which rules do not act here and the push
+ * cannot tell two stories. ⚠ By the drawing the panel SENDS (cascadeXrayDrawingOf);
+ * an agent whose chain was refused draws another one and may rename or drop a
+ * cascade rule there (fitCascadeExits), which only its journal shows.
+ */
+export async function explainPolicyForNode(
+  nodeId: string,
+  drawing: CascadeXrayDrawing = 'legacy',
+): Promise<{ policy: WireNodePolicy | undefined; notDrawn: PolicyRuleNotDrawn[] }> {
+  const notDrawn: PolicyRuleNotDrawn[] = [];
   const node = await prisma.node.findFirst({
     where: { id: nodeId, deletedAt: null },
     select: {
@@ -291,7 +320,7 @@ export async function resolvePolicyForNode(
       },
     },
   });
-  if (!node?.policy) return undefined;
+  if (!node?.policy) return { policy: undefined, notDrawn };
 
   const rules: WireRule[] = [];
   for (const r of node.policy.rules) {
@@ -322,6 +351,7 @@ export async function resolvePolicyForNode(
         { nodeId, ruleId: r.id, lost },
         '[node-policy] a rule that lost a whole kind of condition is left out, not widened to more traffic',
       );
+      notDrawn.push({ ruleId: r.id, reason: 'lost-condition' });
       continue;
     }
     const match: WireRule['match'] = {};
@@ -332,7 +362,10 @@ export async function resolvePolicyForNode(
     if (r.matchNetwork) match.network = r.matchNetwork as WireRule['match']['network'];
 
     if (r.actionKind === 'cascade') {
-      if (!r.direction) continue;
+      if (!r.direction) {
+        notDrawn.push({ ruleId: r.id, reason: 'direction-not-dialled' });
+        continue;
+      }
       const legs = await prisma.cascadeLink.findMany({
         where: {
           cascadeId: r.direction.cascadeId,
@@ -345,9 +378,15 @@ export async function resolvePolicyForNode(
       // Saving already refuses this, so reaching it means the topology changed
       // underneath; naming an outbound that is not in the config would make the
       // core reject the WHOLE push and take the node's other inbounds with it.
-      if (legs.length !== 1) continue;
+      if (legs.length !== 1) {
+        notDrawn.push({ ruleId: r.id, reason: 'direction-not-dialled' });
+        continue;
+      }
       const exit = policyCascadeOutTag(r.direction.tag, drawing);
-      if (!exit) continue;
+      if (!exit) {
+        notDrawn.push({ ruleId: r.id, reason: 'no-cascade-drawing' });
+        continue;
+      }
       rules.push({ match, action: { kind: 'cascade', exit } });
       continue;
     }
@@ -357,5 +396,5 @@ export async function resolvePolicyForNode(
     });
   }
 
-  return { rules };
+  return { policy: { rules }, notDrawn };
 }

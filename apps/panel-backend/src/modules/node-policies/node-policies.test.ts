@@ -318,6 +318,34 @@ describe('what the node is actually sent', () => {
     expect(outbounds.map((o) => o.tag)).toContain(exitTag);
   });
 
+  it('says which rules the push leaves out on a node, and why (A-232)', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { cascadeId, direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+      { match: { domain: ['ads.example'] }, action: { kind: 'block' } },
+    ]);
+    await attach(entry, p.id);
+    const read = async () => {
+      const res = await app.inject({ method: 'GET', url: `/api/nodes/${entry}/policy-drawing`, headers: auth() });
+      expect(res.statusCode, res.body).toBe(200);
+      return JSON.parse(res.body) as { policyId: string; drawing: string; notDrawn: { ruleId: string; reason: string }[] };
+    };
+
+    // An xray entry under a chain: the hand-over, every rule goes out.
+    expect(await read()).toEqual({ policyId: p.id, drawing: 'handover', notDrawn: [] });
+
+    // The same entry on hysteria: xray draws no way out, the cascade rule stays home.
+    await prisma.cascadePosition.updateMany({ where: { cascadeId, position: 0 }, data: { entryProtocol: 'hysteria' } });
+    const cascadeRule = p.rules.find((r: PolicyRuleDto) => r.action.kind === 'cascade');
+    expect(await read()).toEqual({
+      policyId: p.id,
+      drawing: 'none',
+      notDrawn: [{ ruleId: cascadeRule.id, reason: 'no-cascade-drawing' }],
+    });
+  });
+
   it('drops a cascade rule where the push draws no way out in xray', async () => {
     const entry = await makeNode();
     const exit = await makeNode();

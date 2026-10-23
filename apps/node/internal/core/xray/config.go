@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -587,13 +588,19 @@ func fitCascadeExits(rules []dto.NodePolicyRule, cascade *CascadeFragments) []dt
 			out = append(out, r)
 			continue
 		}
-		other := ""
+		other, direction := "", ""
 		if m := legacyExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
-			other = "cascade-link-out-chain-d" + m[1]
+			other, direction = "cascade-link-out-chain-d"+m[1], m[1]
 		} else if m := handoverExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
-			other = "cascade-link-out-d" + m[1] + "-0"
+			other, direction = "cascade-link-out-d"+m[1]+"-0", m[1]
 		}
 		if other == "" || !drawn[other] {
+			// Not silent (A-232): the panel counts what it SENT, and only this
+			// render knows the rule did not make it into the config. The render
+			// is pure and has no logger of its own; the default one lands in
+			// the agent's journal.
+			slog.Default().Warn("xray: node policy rule into a cascade way out this config does not draw is left out",
+				"exit", r.Action.Exit, "direction", direction)
 			continue
 		}
 		r.Action.Exit = other

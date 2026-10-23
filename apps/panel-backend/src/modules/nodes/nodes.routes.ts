@@ -16,7 +16,9 @@ import { checkNodePortExposure } from './nodes.exposure.js';
 import { getNodeSyncStatus } from './nodes.sync-status.js';
 import { portClaimsOnNode } from './node-ports.js';
 import { readChainSecret } from './chain-secret.js';
-import { PolicyDoesNotFitNodeError } from '../node-policies/node-policies.service.js';
+import { PolicyDoesNotFitNodeError, explainPolicyForNode } from '../node-policies/node-policies.service.js';
+import { cascadeXrayDrawingForNode } from '../cascades/cascade.service.js';
+import { prisma } from '../../prisma.js';
 import * as bootstrap from './bootstrap.service.js';
 import { getPanelPublicIp } from './panel-ip.js';
 import { NodeCertRotationError, rotateNodeCert } from './node-cert-rotation.js';
@@ -326,6 +328,20 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+  });
+
+  // A-232: which rules of the node's policy the push leaves out here, and why.
+  // 200 { policyId, drawing, notDrawn: [{ ruleId, reason }] }; notDrawn empty
+  // when every rule goes out, policyId null when the node has none. By the
+  // drawing the panel SENDS; an agent whose chain was refused may draw another
+  // and rename or drop a cascade rule there (its journal says so).
+  app.get('/api/nodes/:id/policy-drawing', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    const node = await prisma.node.findFirst({ where: { id: params.id, deletedAt: null }, select: { policyId: true } });
+    if (!node) return reply.code(404).send({ error: 'NOT_FOUND' });
+    const drawing = await cascadeXrayDrawingForNode(params.id);
+    const { notDrawn } = await explainPolicyForNode(params.id, drawing);
+    return reply.send({ policyId: node.policyId, drawing, notDrawn });
   });
 
   // Did the last save reach this machine? The node card draws "saved, not

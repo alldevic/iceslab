@@ -1301,6 +1301,27 @@ function dirOutTag(directionTag: number, idx: number): string {
 export type CascadeXrayDrawing = 'legacy' | 'handover' | 'none';
 
 /**
+ * Which drawing a push gives the node's xray (A-108, A-232): ONE function for
+ * the push (buildApplyInboundsRequest) and for the read that says which node
+ * policy rules are not drawn, so the two cannot disagree.
+ *   - a chain block whose user core is xray: the hand-over;
+ *   - a chain block for anything else (a transit, an exit, an entry whose users
+ *     come in on hysteria or AmneziaWG): xray draws no way out of the cascade;
+ *   - no chain, legacy fragments: xray dials the legs itself;
+ *   - neither: no cascade in xray at all.
+ * ⚠ The drawing the panel SENDS. An agent whose chain is refused with none
+ * accepted before draws the legacy one instead (fitCascadeExits renames or
+ * drops the rule there, and says so in its journal).
+ */
+export function cascadeXrayDrawingOf(
+  chain: { userCore?: { engine: string } } | null | undefined,
+  legacyFragments: unknown,
+): CascadeXrayDrawing {
+  if (chain) return chain.userCore?.engine === 'xray' ? 'handover' : 'none';
+  return legacyFragments ? 'legacy' : 'none';
+}
+
+/**
  * The outbound a node-policy rule "into this direction" names in the node's
  * xray, from the SAME drawing the push carries, or null when that drawing has
  * none. One function beside both taggers: the policy used to mirror

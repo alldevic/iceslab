@@ -39,6 +39,8 @@ import {
 } from './cascade.validation.js';
 import {
   autoRouteTag,
+  cascadeXrayDrawingOf,
+  type CascadeXrayDrawing,
   buildCascadeConfigs,
   buildBalancerCascadeConfigs,
   buildTopologyFragmentsForNode,
@@ -2563,6 +2565,16 @@ export function toWireFragments(mine: HopConfig): XrayCascadeFragments {
  * guess is worse than a line that tells us. The line names the cascade and the
  * node, which is what a search needs.
  */
+/**
+ * A-232: the drawing a push gives this node's xray, read without pushing. The
+ * same inputs the push takes (its chain block and, without one, the legacy
+ * fragments) through the same cascadeXrayDrawingOf.
+ */
+export async function cascadeXrayDrawingForNode(nodeId: string): Promise<CascadeXrayDrawing> {
+  const chain = await getChainForNode(nodeId);
+  return cascadeXrayDrawingOf(chain, chain ? null : await getCascadeFragmentsForNode(nodeId));
+}
+
 export async function getCascadeFragmentsForNode(
   nodeId: string,
 ): Promise<XrayCascadeFragments | null> {
