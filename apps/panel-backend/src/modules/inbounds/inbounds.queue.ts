@@ -16,6 +16,7 @@ import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
 import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
+import type { CascadeXrayDrawing } from '../cascades/cascade.config.js';
 import { layOutGeo } from '../geo-sets/geo-push.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
@@ -408,7 +409,6 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
  */
 async function buildApplyInboundsRequest(node: NodeRow): Promise<ApplyInboundsRequest> {
   const inbounds = await fetchEnabledInbounds(node.id);
-  const policy = await resolvePolicyForNode(node.id);
   const dns = (node.dns as DnsCfg | null) ?? undefined;
   // Э3 шаг 1: the cascade is a node-level block now, next to the policy and the
   // resolver. Read back off the xray inbound rather than fetched a second time,
@@ -446,6 +446,17 @@ async function buildApplyInboundsRequest(node: NodeRow): Promise<ApplyInboundsRe
   // the agent stops holding a chain and hands its core the legacy fragments
   // again. Nobody logs in to the box.
   const chain = await getChainForNode(node.id);
+  // A-108: the node policy names the cascade's outbounds of the drawing THIS
+  // push gives the node's xray. Under a chain an xray entry hands over (socks
+  // outbounds), and a node whose users are not on xray draws no way out at all.
+  const drawing: CascadeXrayDrawing = chain
+    ? chain.userCore?.engine === 'xray'
+      ? 'handover'
+      : 'none'
+    : fragments
+      ? 'legacy'
+      : 'none';
+  const policy = await resolvePolicyForNode(node.id, drawing);
   return {
     inbounds,
     ...(policy ? { policy } : {}),

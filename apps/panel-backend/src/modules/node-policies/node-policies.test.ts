@@ -6,6 +6,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { resolvePolicyForNode } from './node-policies.service.js';
+import { applyInboundsRequestForNode } from '../inbounds/inbounds.queue.js';
 import { markShadowed, type PolicyRuleDto } from './node-policies.mapper.js';
 
 /**
@@ -236,6 +237,40 @@ describe('what the node is actually sent', () => {
       exit: `cascade-link-out-d${direction.tag}-0`,
     });
     expect(wire!.rules[0]!.match).toEqual({ domain: ['youtube.com'] });
+  });
+
+  it('names an outbound the push actually draws, on an entry under a chain and on a transit (A-108)', async () => {
+    // The rule used to mirror the legacy drawing alone (cascade-link-out-d<t>-0),
+    // which an entry under a chain does not get: its xray hands over to the
+    // chain through cascade-link-out-chain-d<t>.
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+    ]);
+    await attach(entry, p.id);
+
+    const req = await applyInboundsRequestForNode(entry);
+    const exitTag = (req?.policy?.rules[0]?.action as { exit?: string } | undefined)?.exit;
+    expect(exitTag).toBe(`cascade-link-out-chain-d${direction.tag}`);
+    const handover = req?.chain?.userCore;
+    expect(handover?.engine).toBe('xray');
+    const outbounds = (handover as { fragments: { outbounds: { tag?: string }[] } }).fragments.outbounds;
+    expect(outbounds.map((o) => o.tag)).toContain(exitTag);
+  });
+
+  it('drops a cascade rule where the push draws no way out in xray', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+      { match: { domain: ['ads.example'] }, action: { kind: 'block' } },
+    ]);
+    await attach(entry, p.id);
+    const wire = await resolvePolicyForNode(entry, 'none');
+    expect(wire?.rules.map((r) => r.action.kind)).toEqual(['block']);
   });
 
   it('leaves a disabled rule out of the push', async () => {

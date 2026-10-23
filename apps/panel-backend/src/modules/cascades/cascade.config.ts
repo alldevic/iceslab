@@ -1290,6 +1290,32 @@ function dirOutTag(directionTag: number, idx: number): string {
   return `${LINK_OUT_TAG}-d${directionTag}-${idx}`;
 }
 
+/**
+ * Which drawing of the cascade a node's xray gets in a push (A-108):
+ *   - `legacy`: xray dials the legs itself, outbounds `dirOutTag`;
+ *   - `handover`: the chain process holds the legs and xray hands each
+ *     direction to it over loopback socks, outbounds `chainOutTag`;
+ *   - `none`: xray draws no way out of the cascade at all (a transit or an exit
+ *     under a chain, an entry whose users come in on hysteria or AmneziaWG).
+ */
+export type CascadeXrayDrawing = 'legacy' | 'handover' | 'none';
+
+/**
+ * The outbound a node-policy rule "into this direction" names in the node's
+ * xray, from the SAME drawing the push carries, or null when that drawing has
+ * none. One function beside both taggers: the policy used to mirror
+ * `dirOutTag` alone, and on every entry under a chain it named an outbound
+ * the config did not have.
+ *
+ * The plain profile's (ordinal 0): a node policy applies to all of the node's
+ * traffic, which is handed over as the plain profile.
+ */
+export function policyCascadeOutTag(directionTag: number, drawing: CascadeXrayDrawing): string | null {
+  if (drawing === 'legacy') return dirOutTag(directionTag, 0);
+  if (drawing === 'handover') return chainOutTag(directionTag, 0);
+  return null;
+}
+
 /** Email given to a link's inbound client. It is how a TRANSIT tells directions
  *  apart: the transit sees an internal link rather than a user, so the only
  *  thing that says "this traffic is headed for direction 7" is which credential

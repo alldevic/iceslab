@@ -3,6 +3,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { mapPolicy, type NodePolicyDto } from './node-policies.mapper.js';
+import { policyCascadeOutTag, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
 import type {
   CreateNodePolicyInput,
   PolicyRuleInput,
@@ -251,13 +252,6 @@ export async function assertPolicyFitsNode(policyId: string, nodeId: string): Pr
   }
 }
 
-/** Per-direction outbound tag, mirroring cascade.config's dirOutTag. Kept in one
- *  place: the panel prints both the fragments and this rule in the same push, so
- *  they cannot disagree, but two copies of the format string could. */
-export function directionOutboundTag(directionTag: number, idx: number): string {
-  return `cascade-link-out-d${directionTag}-${idx}`;
-}
-
 /**
  * The policy this node should be running, in wire shape.
  *
@@ -265,10 +259,21 @@ export function directionOutboundTag(directionTag: number, idx: number): string 
  * cascade fragments those outbounds come from. That is the whole reason the id
  * is what gets stored: the name is only true relative to one rendering.
  *
+ * A-108: and relative to WHICH rendering. `drawing` is the one this push gives
+ * the node's xray (policyCascadeOutTag); the name came from the legacy one
+ * alone, and every entry under a chain got a rule to an outbound its config did
+ * not have. A drawing with no way out of the cascade drops the rule, as a
+ * direction the node does not dial does: naming an outbound that is not in the
+ * config would make the core reject the whole push. Default `legacy`: a caller
+ * that renders no xray cascade (the exit's chain) skips these rules anyway.
+ *
  * Returns undefined when the node has no policy, which is the normal state and
  * renders on the node exactly as before the field existed.
  */
-export async function resolvePolicyForNode(nodeId: string): Promise<WireNodePolicy | undefined> {
+export async function resolvePolicyForNode(
+  nodeId: string,
+  drawing: CascadeXrayDrawing = 'legacy',
+): Promise<WireNodePolicy | undefined> {
   const node = await prisma.node.findFirst({
     where: { id: nodeId, deletedAt: null },
     select: {
@@ -309,7 +314,9 @@ export async function resolvePolicyForNode(nodeId: string): Promise<WireNodePoli
       // underneath; naming an outbound that is not in the config would make the
       // core reject the WHOLE push and take the node's other inbounds with it.
       if (legs.length !== 1) continue;
-      rules.push({ match, action: { kind: 'cascade', exit: directionOutboundTag(r.direction.tag, 0) } });
+      const exit = policyCascadeOutTag(r.direction.tag, drawing);
+      if (!exit) continue;
+      rules.push({ match, action: { kind: 'cascade', exit } });
       continue;
     }
     rules.push({
