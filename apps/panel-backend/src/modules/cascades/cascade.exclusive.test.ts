@@ -7,7 +7,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { getChainForNode, getRouteProfilesByEntryNode, invalidateHiddenCascadeNodeCache } from './cascade.service.js';
-import { deadCascadeIds, findCascadeNodeConflicts } from './cascade-exclusive.js';
+import { deadCascadeIds, findBlindTransitCascades, findCascadeNodeConflicts } from './cascade-exclusive.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 
 /**
@@ -133,6 +133,52 @@ describe('one enabled cascade per node', () => {
  * nodes and none of its lines reach a subscription; switching the owner off
  * brings it back, and its own nodes are pushed for that.
  */
+/**
+ * A-102: a cascade stored before the save refused a blind transit step now
+ * drops its traffic at the transit. The start-up check names it with the
+ * position and the cell, so the operator hears it before the users do.
+ */
+describe('the start-up report of blind transits', () => {
+  it('names an enabled cascade whose transit takes a shadowsocks leg with two directions, and nothing else', async () => {
+    const ru = await node('ru-entry', 'RU', '10.0.0.1');
+    const tr = await node('tr', 'DE', '10.0.0.2');
+    const nl = await node('nl-exit', 'NL', '10.0.0.3');
+    const se = await node('se-exit', 'SE', '10.0.0.4');
+    const two = {
+      name: 'blind',
+      enabled: true,
+      positions: [
+        { position: 0, nodeIds: [ru], entryProtocol: 'xray', linkProtocol: 'vless' },
+        { position: 1, nodeIds: [tr], linkProtocol: 'vless' },
+      ],
+      directions: [
+        { countryCode: 'NL', nodeIds: [nl] },
+        { countryCode: 'SE', nodeIds: [se] },
+      ],
+    };
+    const saved = await send('POST', '/api/cascades', two);
+    expect(saved.status, JSON.stringify(saved.body)).toBe(201);
+    expect(await findBlindTransitCascades()).toEqual([]);
+    // Stored past the gate, as a database from before A-102 holds it.
+    await prisma.cascadePosition.updateMany({
+      where: { cascadeId: saved.body.id as string, position: 0 },
+      data: { linkProtocol: 'shadowsocks' },
+    });
+    expect(await findBlindTransitCascades()).toEqual([
+      { cascadeName: 'blind', fromPosition: 0, transitPosition: 1, cell: 'shadowsocks' },
+    ]);
+    // The save itself refuses the shape now.
+    const again = await send('POST', '/api/cascades', {
+      ...two,
+      name: 'blind-2',
+      enabled: false,
+      positions: [{ ...two.positions[0]!, linkProtocol: 'shadowsocks' }, two.positions[1]!],
+    });
+    expect(again.status).toBe(400);
+    expect(String(again.body.message)).toContain('cannot tell them apart');
+  });
+});
+
 // The bus has no `off`: one listener for the file, emptied by the test.
 const pushed: string[][] = [];
 eventBus.on('cascade.changed', ({ nodeIds }) => {

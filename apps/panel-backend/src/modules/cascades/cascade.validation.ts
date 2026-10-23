@@ -265,17 +265,13 @@ export function validateCascadeTopology(
    * outbound: NL and DE both out of NL, `check` green on both ends. With one
    * direction there is nothing to tell apart and any cell does.
    */
-  if (directions.length > 1) {
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const cell = linkCellFor(sorted[i]!.linkProtocol);
-      if (cell && cell !== 'vless') {
-        throw new CascadeValidationError(
-          `position ${sorted[i + 1]!.position} is a transit carrying ${directions.length} directions, and the ` +
-            `${cell} leg into it from position ${sorted[i]!.position} cannot tell them apart: every direction ` +
-            `would leave through the first. Use vless for that step, or keep one direction.`,
-        );
-      }
-    }
+  const blind = blindTransitSteps(sorted, directions.length)[0];
+  if (blind) {
+    throw new CascadeValidationError(
+      `position ${blind.transitPosition} is a transit carrying ${directions.length} directions, and the ` +
+        `${blind.cell} leg into it from position ${blind.fromPosition} cannot tell them apart: every direction ` +
+        `would leave through the first. Use vless for that step, or keep one direction.`,
+    );
   }
 
   assertDirectionShapes(directions);
@@ -334,6 +330,29 @@ export function validateCascadeTopology(
   }
 
   return { positions: sorted, directions, linkCount };
+}
+
+/**
+ * A-102: the steps into a transit whose cell cannot tell the directions apart
+ * (anything but vless), when there is more than one direction to tell apart.
+ * ONE rule for the save, which refuses them, and for the start-up report,
+ * which names the ones stored before the refusal (their transit now drops
+ * the traffic instead of sending it out of the first direction).
+ */
+export function blindTransitSteps(
+  positions: { position: number; linkProtocol?: string | null }[],
+  directionCount: number,
+): { fromPosition: number; transitPosition: number; cell: string }[] {
+  if (directionCount <= 1) return [];
+  const sorted = [...positions].sort((a, b) => a.position - b.position);
+  const out: { fromPosition: number; transitPosition: number; cell: string }[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const cell = linkCellFor(sorted[i]!.linkProtocol);
+    if (cell && cell !== 'vless') {
+      out.push({ fromPosition: sorted[i]!.position, transitPosition: sorted[i + 1]!.position, cell });
+    }
+  }
+  return out;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
+import { blindTransitSteps } from './cascade.validation.js';
 
 /**
  * A-101: a node is in at most one ENABLED cascade.
@@ -173,6 +174,63 @@ export async function findCascadeNodeConflicts(): Promise<CascadeNodeConflict[]>
   });
   const nameOf = new Map(nodes.map((n) => [n.id, n.name]));
   return pairs.map((p) => ({ nodeName: nameOf.get(p.nodeId) ?? p.nodeId, ownerCascade: p.ownerName, deadCascade: p.deadName }));
+}
+
+export interface BlindTransitCascade {
+  cascadeName: string;
+  transitPosition: number;
+  fromPosition: number;
+  cell: string;
+}
+
+/**
+ * A-102: enabled cascades stored before the save refused a step that cannot
+ * tell directions apart. Their transit now DROPS what it cannot route; before,
+ * it sent every direction out through the first. Same rule as the save
+ * (blindTransitSteps), read off the stored positions.
+ */
+export async function findBlindTransitCascades(): Promise<BlindTransitCascade[]> {
+  const rows = await prisma.cascade.findMany({
+    where: { enabled: true },
+    orderBy: CASCADE_OWNERSHIP_ORDER,
+    select: {
+      name: true,
+      positions: { select: { position: true, linkProtocol: true } },
+      _count: { select: { directions: true } },
+    },
+  });
+  return rows.flatMap((c) =>
+    blindTransitSteps(c.positions, c._count.directions).map((s) => ({ cascadeName: c.name, ...s })),
+  );
+}
+
+/** At start, A-102: name those cascades. Nothing is switched off. */
+export async function reportBlindTransitCascades(): Promise<BlindTransitCascade[]> {
+  const blind = await findBlindTransitCascades();
+  if (blind.length === 0) return blind;
+  getLogger().warn(
+    { blind },
+    '[cascades] enabled cascades whose transit cannot tell their directions apart: it now drops their ' +
+      'traffic instead of sending every direction out through the first; switch that step to vless',
+  );
+  notifyTelegramAsync(
+    `⚠️ *Cascade transits that drop traffic*\n` +
+      blind
+        .map(
+          (b) =>
+            `\`${escapeMarkdown(b.cascadeName)}\`: position ${b.transitPosition} takes a ${escapeMarkdown(b.cell)} ` +
+            `leg from position ${b.fromPosition}`,
+        )
+        .join('\n') +
+      `\nThese transits cannot tell the directions apart and drop the traffic. Switch that step to vless.`,
+  );
+  return blind;
+}
+
+/** Everything the start-up check says about stored cascades (A-101, A-223, A-102). */
+export async function reportStoredCascadeProblems(): Promise<void> {
+  await reportCascadeNodeConflicts();
+  await reportBlindTransitCascades();
 }
 
 /** At start: name the shared nodes, in the log and to the operator. Nothing is switched off. */

@@ -382,24 +382,57 @@ describe('a leg carries a request between two engines', () => {
       });
       const exitOf = (cred: LinkCred) =>
         renderChainConfig({ role: 'exit', socksPassword: password, in: { cred, clients: [{ tag: 1 }] } });
-      const runs = [
-        run('a102-exit-a', exitOf(outA)),
-        run('a102-exit-b', exitOf(outB)),
-        run('a102-transit', transit),
-        run('a102-entry', entry),
-      ];
-      try {
-        await new Promise((r) => setTimeout(r, 2500));
-        expect(socksPorts).toHaveLength(2);
-        for (const port of socksPorts) {
-          const body = await getThroughSocks(port, password, httpPort).catch(() => '');
-          expect(body, runs.map((r) => r.log()).join('\n')).not.toContain(nonce);
+      // Exit B lets nothing out: a request that arrives went out through A.
+      const exitB = exitOf(outB) as { route: { rules: Record<string, unknown>[] } };
+      exitB.route.rules.unshift({ network: ['tcp', 'udp'], action: 'reject', method: 'drop' });
+      expect(socksPorts).toHaveLength(2);
+
+      /** One run of the four engines; the bodies each direction's socks got. */
+      const once = async (name: string, transitConfig: unknown, wait: (port: number) => Promise<string>) => {
+        const runs = [
+          run(`${name}-exit-a`, exitOf(outA)),
+          run(`${name}-exit-b`, exitB),
+          run(`${name}-transit`, transitConfig),
+          run(`${name}-entry`, entry),
+        ];
+        try {
+          const bodies: string[] = [];
+          for (const port of socksPorts) bodies.push(await wait(port));
+          return { bodies, logs: () => runs.map((r) => r.log()).join('\n') };
+        } finally {
+          await stopAll();
         }
-      } finally {
-        await stopAll();
-      }
+      };
+      const arrives = (port: number) =>
+        eventually(async () => {
+          const body = await getThroughSocks(port, password, httpPort);
+          if (!body.includes(nonce)) throw new Error('reply without the nonce');
+          return body;
+        }, 15000);
+
+      // The control first, with the closing rule cut out of the transit: the
+      // defect itself. Both directions arrive, and since exit B lets nothing
+      // out, both went through A. This also proves the four engines, the ports
+      // and the legs are up, so the real run below fails for the rule alone.
+      const blind = structuredClone(transit) as { route: { rules: Record<string, unknown>[] } };
+      blind.route.rules = blind.route.rules.filter((r) => !(r.action === 'reject' && 'network' in r));
+      expect(blind.route.rules.length).toBe((transit as typeof blind).route.rules.length - 1);
+      const control = await once('a102-control', blind, arrives);
+      for (const body of control.bodies) expect(body, control.logs()).toContain(nonce);
+
+      // With the rule: neither direction gets through.
+      // The same engines came up in the control within seconds; give them that.
+      let settled = false;
+      const real = await once('a102', transit, async (port) => {
+        if (!settled) {
+          await new Promise((r) => setTimeout(r, 4000));
+          settled = true;
+        }
+        return getThroughSocks(port, password, httpPort).catch(() => '');
+      });
+      for (const body of real.bodies) expect(body, real.logs()).not.toContain(nonce);
     },
-    40000,
+    60000,
   );
 
   /**
