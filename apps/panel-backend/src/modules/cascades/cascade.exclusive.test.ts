@@ -6,8 +6,9 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
-import { getChainForNode } from './cascade.service.js';
-import { findCascadeNodeConflicts } from './cascade-exclusive.js';
+import { getChainForNode, getRouteProfilesByEntryNode, invalidateHiddenCascadeNodeCache } from './cascade.service.js';
+import { deadCascadeIds, findCascadeNodeConflicts } from './cascade-exclusive.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
 
 /**
  * A-101: a node carries one ENABLED cascade. The second one on a node was not
@@ -123,5 +124,52 @@ describe('one enabled cascade per node', () => {
     const list = await app.inject({ method: 'GET', url: '/api/cascades', headers: auth() });
     const names = (JSON.parse(list.body) as { cascades: { name: string }[] }).cascades.map((c) => c.name);
     expect(names).toEqual(['first', 'second-renamed']);
+  });
+});
+
+/**
+ * A-223: the cascade that loses a shared node is dead as a WHOLE. Its legs end
+ * in a node that takes only the owner's legs, so it is drawn on none of its
+ * nodes and none of its lines reach a subscription; switching the owner off
+ * brings it back, and its own nodes are pushed for that.
+ */
+// The bus has no `off`: one listener for the file, emptied by the test.
+const pushed: string[][] = [];
+eventBus.on('cascade.changed', ({ nodeIds }) => {
+  pushed.push(nodeIds);
+});
+
+describe('a dead cascade, and one that comes back to life', () => {
+  it('is drawn nowhere and offers no line, until the owner goes; the dead set and the start-up report agree', async () => {
+    const ru = await node('ru-entry', 'RU', '10.0.0.1');
+    const de = await node('de-entry', 'DE', '10.0.0.2');
+    const nl = await node('nl-exit', 'NL', '10.0.0.3');
+    const a = await send('POST', '/api/cascades', cascadeBody('first', ru, nl));
+    const b = await send('POST', '/api/cascades', cascadeBody('second', de, nl, false));
+    const first = a.body.id as string;
+    const second = b.body.id as string;
+    await prisma.cascade.update({ where: { id: second }, data: { enabled: true } });
+    invalidateHiddenCascadeNodeCache();
+
+    // One reading, two projections.
+    const dead = await deadCascadeIds();
+    expect([...dead]).toEqual([second]);
+    const reported = (await findCascadeNodeConflicts()).map((c) => c.deadCascade);
+    const names = new Map((await prisma.cascade.findMany({ select: { id: true, name: true } })).map((c) => [c.id, c.name]));
+    expect(new Set(reported)).toEqual(new Set([...dead].map((id) => names.get(id))));
+
+    // No line of the dead cascade on its entry; the owner's lines on its own.
+    expect((await getRouteProfilesByEntryNode([de])).get(de) ?? []).toEqual([]);
+    expect(((await getRouteProfilesByEntryNode([ru])).get(ru) ?? []).length).toBeGreaterThan(0);
+    // And its own entry draws no chain into a way out that is not there.
+    expect(await getChainForNode(de)).toBeNull();
+    expect(await getChainForNode(ru)).not.toBeNull();
+
+    // The owner switched off: the dead one lives, its own nodes are pushed.
+    pushed.length = 0;
+    expect((await send('PUT', `/api/cascades/${first}`, { enabled: false })).status).toBe(200);
+    await expect.poll(() => pushed.flat(), { timeout: 3000 }).toContain(de);
+    expect(await getChainForNode(de)).not.toBeNull();
+    expect(((await getRouteProfilesByEntryNode([de])).get(de) ?? []).length).toBeGreaterThan(0);
   });
 });

@@ -93,29 +93,86 @@ export interface CascadeNodeConflict {
   deadCascade: string;
 }
 
-/** Every node stored in more than one enabled cascade, by the ownership order. */
-export async function findCascadeNodeConflicts(): Promise<CascadeNodeConflict[]> {
+interface OwnershipPair {
+  nodeId: string;
+  ownerId: string;
+  ownerName: string;
+  deadId: string;
+  deadName: string;
+}
+
+/**
+ * ONE reading of who holds which node, by the ownership order. The start-up
+ * report and deadCascadeIds are two projections of it, so they cannot name
+ * different cascades (A-223: AUDT checks that they are one set).
+ */
+async function ownershipPairs(): Promise<OwnershipPair[]> {
   const cascades = await prisma.cascade.findMany({
     where: { enabled: true },
     orderBy: CASCADE_OWNERSHIP_ORDER,
     select: memberSelect,
   });
-  const owner = new Map<string, string>();
-  const pairs: { nodeId: string; ownerCascade: string; deadCascade: string }[] = [];
+  const owner = new Map<string, { id: string; name: string }>();
+  const pairs: OwnershipPair[] = [];
   for (const c of cascades) {
     for (const nodeId of membersOf(c)) {
       const held = owner.get(nodeId);
-      if (held === undefined) owner.set(nodeId, c.name);
-      else pairs.push({ nodeId, ownerCascade: held, deadCascade: c.name });
+      if (held === undefined) owner.set(nodeId, { id: c.id, name: c.name });
+      else pairs.push({ nodeId, ownerId: held.id, ownerName: held.name, deadId: c.id, deadName: c.name });
     }
   }
+  return pairs;
+}
+
+/**
+ * A-223: the enabled cascades that are DEAD, whole: at least one of their nodes
+ * is held by an older enabled cascade. Such a cascade is not drawn on that
+ * node, and a cascade is a path: its legs end in a node that takes only the
+ * owner's legs, so every entry of it leads nowhere. The panel therefore treats
+ * it as switched off everywhere it reads cascades: the node's chain
+ * (readTopologyForNode), the subscription's lines (getRouteProfilesByEntryNode,
+ * getHysteriaEntryLabels), the hidden hops, the entry gate and the users' reach.
+ *
+ * Cached for a minute and dropped on every cascade change, as the hidden-node
+ * set is: the subscription asks on every request.
+ */
+let deadCache: { ids: Set<string>; expiresAt: number } | null = null;
+const DEAD_TTL_MS = 60_000;
+
+export function invalidateDeadCascadeCache(): void {
+  deadCache = null;
+}
+
+export async function deadCascadeIds(): Promise<Set<string>> {
+  if (deadCache && Date.now() < deadCache.expiresAt) return deadCache.ids;
+  const ids = new Set((await ownershipPairs()).map((p) => p.deadId));
+  deadCache = { ids, expiresAt: Date.now() + DEAD_TTL_MS };
+  return ids;
+}
+
+/** Uncached, for a save that has to compare before and after its own write. */
+export async function deadCascadeIdsNow(): Promise<Set<string>> {
+  return new Set((await ownershipPairs()).map((p) => p.deadId));
+}
+
+/** The member nodes of the given cascades, for a push to them. */
+export async function nodesOfCascades(ids: Iterable<string>): Promise<string[]> {
+  const list = [...ids];
+  if (list.length === 0) return [];
+  const rows = await prisma.cascade.findMany({ where: { id: { in: list } }, select: memberSelect });
+  return [...new Set(rows.flatMap((r) => [...membersOf(r)]))];
+}
+
+/** Every node stored in more than one enabled cascade, by the ownership order. */
+export async function findCascadeNodeConflicts(): Promise<CascadeNodeConflict[]> {
+  const pairs = await ownershipPairs();
   if (pairs.length === 0) return [];
   const nodes = await prisma.node.findMany({
     where: { id: { in: [...new Set(pairs.map((p) => p.nodeId))] } },
     select: { id: true, name: true },
   });
   const nameOf = new Map(nodes.map((n) => [n.id, n.name]));
-  return pairs.map((p) => ({ nodeName: nameOf.get(p.nodeId) ?? p.nodeId, ownerCascade: p.ownerCascade, deadCascade: p.deadCascade }));
+  return pairs.map((p) => ({ nodeName: nameOf.get(p.nodeId) ?? p.nodeId, ownerCascade: p.ownerName, deadCascade: p.deadName }));
 }
 
 /** At start: name the shared nodes, in the log and to the operator. Nothing is switched off. */
@@ -124,7 +181,8 @@ export async function reportCascadeNodeConflicts(): Promise<CascadeNodeConflict[
   if (conflicts.length === 0) return conflicts;
   getLogger().warn(
     { conflicts },
-    '[cascades] nodes in more than one enabled cascade: the oldest cascade holds each, the other is not drawn there',
+    '[cascades] nodes in more than one enabled cascade: the oldest cascade holds each; the other is dead ' +
+      'as a whole, it runs on none of its nodes and its users get none of its lines in their subscription',
   );
   notifyTelegramAsync(
     `⚠️ *Nodes in two enabled cascades*\n` +
@@ -132,9 +190,10 @@ export async function reportCascadeNodeConflicts(): Promise<CascadeNodeConflict[
         .map(
           (c) =>
             `\`${escapeMarkdown(c.nodeName)}\`: held by \`${escapeMarkdown(c.ownerCascade)}\`, ` +
-            `\`${escapeMarkdown(c.deadCascade)}\` does not run there`,
+            `\`${escapeMarkdown(c.deadCascade)}\` does not run`,
         )
-        .join('\n'),
+        .join('\n') +
+      `\nA dead cascade runs on none of its nodes, and its users get none of its lines in their subscription.`,
   );
   return conflicts;
 }

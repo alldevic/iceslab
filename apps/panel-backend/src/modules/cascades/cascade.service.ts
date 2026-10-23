@@ -17,7 +17,14 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { xrayGeoEntry } from '../geo-sets/geo-refs.js';
 import { chainNodePolicyOf, chainPoliciesOf } from './chain-policy.js';
-import { assertNodesInNoOtherCascade, CASCADE_OWNERSHIP_ORDER } from './cascade-exclusive.js';
+import {
+  assertNodesInNoOtherCascade,
+  CASCADE_OWNERSHIP_ORDER,
+  deadCascadeIds,
+  deadCascadeIdsNow,
+  invalidateDeadCascadeCache,
+  nodesOfCascades,
+} from './cascade-exclusive.js';
 import { hostFromAddress } from '../subscription/subscription.formats.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
@@ -882,6 +889,8 @@ const HIDDEN_NODES_TTL_MS = 60_000;
 
 export function invalidateHiddenCascadeNodeCache(): void {
   hiddenNodesCache = null;
+  // The dead set moves with the same changes (A-223), and the hidden set reads it.
+  invalidateDeadCascadeCache();
 }
 
 export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
@@ -911,20 +920,23 @@ async function readHiddenCascadeNodes(): Promise<{ ids: Set<string>; byNode: Map
   // direct subscription picks (they still work standalone; the cascade just
   // additionally offers them behind its "Auto" entry).
   const cascade = { select: { id: true, name: true } } as const;
+  // A-223: a dead cascade is treated as switched off, and a switched-off one
+  // hides nothing.
+  const dead = [...(await deadCascadeIds())];
   const [hops, positions, directionNodes] = await Promise.all([
     prisma.cascadeHop.findMany({
-      where: { cascade: { enabled: true, hideHopsFromSub: true } },
+      where: { cascade: { enabled: true, hideHopsFromSub: true, id: { notIn: dead } } },
       select: { nodeId: true, position: true, cascade },
     }),
     // v4: the same rule, read from the topology tables. Without this a v4-only
     // cascade would leak its transits and exits into subscriptions as direct
     // endpoints, which is exactly the bypass this function exists to stop.
     prisma.cascadePosition.findMany({
-      where: { cascade: { enabled: true, hideHopsFromSub: true } },
+      where: { cascade: { enabled: true, hideHopsFromSub: true, id: { notIn: dead } } },
       select: { position: true, nodes: { select: { nodeId: true } }, cascade },
     }),
     prisma.cascadeDirectionNode.findMany({
-      where: { direction: { cascade: { enabled: true, hideHopsFromSub: true } } },
+      where: { direction: { cascade: { enabled: true, hideHopsFromSub: true, id: { notIn: dead } } } },
       select: { nodeId: true, direction: { select: { cascade } } },
     }),
   ]);
@@ -1011,6 +1023,8 @@ export async function getHysteriaEntryLabels(
   const cascades = await prisma.cascade.findMany({
     where: {
       enabled: true,
+      // A-223: a dead cascade does not chain its entry; its host is a plain one.
+      id: { notIn: [...(await deadCascadeIds())] },
       positions: {
         some: { position: 0, entryProtocol: protocol, nodes: { some: { nodeId: { in: nodeIds } } } },
       },
@@ -1097,6 +1111,9 @@ export async function getRouteProfilesByEntryNode(
   const cascades = await prisma.cascade.findMany({
     where: {
       enabled: true,
+      // A-223: a dead cascade runs on none of its nodes; its lines would lead
+      // a client to a way out the entry does not draw.
+      id: { notIn: [...(await deadCascadeIds())] },
       OR: [
         { hops: { some: { nodeId: { in: nodeIds }, position: 0 } } },
         { positions: { some: { position: 0, nodes: { some: { nodeId: { in: nodeIds } } } } } },
@@ -2401,6 +2418,8 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
     ];
     await assertNodesInNoOtherCascade(id, target.length > 0 ? target : oldNodeIds);
   }
+  // A-223: read before the write, compared after it (nodesOfDeadMoved).
+  const deadBefore = await deadCascadeIdsNow();
 
   try {
     const c = await prisma.$transaction(async (tx) => {
@@ -2463,7 +2482,9 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
       ...(positions ?? []).flatMap((p) => p.nodeIds),
       ...(directions ?? []).flatMap((d) => d.nodeIds),
     ];
-    emitCascadeChanged(id, [...new Set([...oldNodeIds, ...newNodeIds])], 'update');
+    // A-223: and the nodes of every cascade this save revived or killed.
+    const moved = await nodesOfDeadMoved(deadBefore);
+    emitCascadeChanged(id, [...new Set([...oldNodeIds, ...newNodeIds, ...moved])], 'update');
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
@@ -3065,7 +3086,7 @@ async function buildCascadeFragmentsForNode(
   // A node belongs to at most one enabled cascade (A-101: the save refuses a
   // second); for a pair stored before the rule, the oldest holds it.
   const member = await prisma.cascadeHop.findFirst({
-    where: { nodeId, cascade: { enabled: true } },
+    where: { nodeId, cascade: { enabled: true, id: { notIn: [...(await deadCascadeIds())] } } },
     orderBy: [{ cascade: { createdAt: 'asc' } }, { cascadeId: 'asc' }],
     select: { cascadeId: true },
   });
@@ -3176,6 +3197,9 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
   const owner = await prisma.cascade.findFirst({
     where: {
       enabled: true,
+      // A-223: a dead cascade is drawn nowhere, its own nodes included: its
+      // chain would lead into a node that takes only the owner's legs.
+      id: { notIn: [...(await deadCascadeIds())] },
       OR: [
         { links: { some: { OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }] } } },
         {
@@ -3445,6 +3469,7 @@ export async function deleteCascade(id: string): Promise<void> {
       directions: { select: { nodes: { select: { nodeId: true } } } },
     },
   });
+  const deadBefore = await deadCascadeIdsNow();
   try {
     await prisma.cascade.delete({ where: { id } });
   } catch (err) {
@@ -3454,6 +3479,21 @@ export async function deleteCascade(id: string): Promise<void> {
     throw err;
   }
   const members = existing ? cascadeMemberNodeIds(existing) : [];
-  emitCascadeChanged(id, members, 'delete');
+  // A-223: deleting the owner revives the cascade it held dead.
+  const moved = await nodesOfDeadMoved(deadBefore);
+  emitCascadeChanged(id, [...new Set([...members, ...moved])], 'delete');
   invalidateHiddenCascadeNodeCache();
+}
+
+/**
+ * A-223: the nodes of the cascades whose "dead" changed across one save, the
+ * symmetric difference of deadCascadeIds before and after it. A cascade can
+ * come back to life, or die, without anyone saving it: the owner of its shared
+ * node is switched off, deleted, or loses that node. Its own nodes have to be
+ * pushed then, or they wait without a chain until the revision reconcile.
+ */
+async function nodesOfDeadMoved(before: Set<string>): Promise<string[]> {
+  const after = await deadCascadeIdsNow();
+  const moved = [...before].filter((x) => !after.has(x)).concat([...after].filter((x) => !before.has(x)));
+  return nodesOfCascades(moved);
 }
