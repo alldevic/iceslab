@@ -56,6 +56,9 @@ export const subscription = {
     pathPrefix: 'Path prefix · read only',
     pathPrefixWhy:
       'Set in the environment: the route is registered with this prefix at boot, and the panel cannot change it.',
+    activeCountUnknown:
+      'The server did not say how many live subscriptions point at this address. Every link on the old host will lose its connection.',
+    previewNoUrl: 'The server gave no preview link.',
     activeCountWarn:
       'subscriptions in force were issued on this address. Changing the domain does not rewrite their links: they keep going to the old host for as long as it points at the panel.',
 

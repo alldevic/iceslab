@@ -25,6 +25,8 @@ import {
   shadowedBy,
 } from '@/contours/subscription/lib/srrMatch';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { editGate } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import {
   BarButton,
   BoltIcon,
@@ -161,11 +163,18 @@ export function SrrRulePage() {
       }),
   });
 
-  if (!isNew && !existing) {
+  // A-233: «rule gone» only when the list ARRIVED without it. A list that
+  // failed is said with a retry; a new rule needs the list too, its priority
+  // is seeded from the others.
+  const gate = editGate(rulesQuery, isNew || existing !== null);
+  if (gate.kind === 'failed') {
+    return <LoadFailed message={apiErrorMessage(rulesQuery.error)} onRetry={() => void rulesQuery.refetch()} />;
+  }
+  if (gate.kind !== 'ready') {
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>
-          {rulesQuery.isLoading ? t('common.loading') : t('delivery.gone')}
+          {gate.kind === 'loading' ? t('common.loading') : t('delivery.gone')}
         </Text>
       </Box>
     );

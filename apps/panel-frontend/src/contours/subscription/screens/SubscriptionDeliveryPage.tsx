@@ -6,6 +6,7 @@ import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SettingsTabs } from '@/contours/subscription/components/SettingsTabs';
 import { probeVerdict } from '@/contours/subscription/lib/probeVerdict';
+import { activeCountOf, previewView } from '@/contours/subscription/lib/deliveryView';
 import { formatLabel } from '@/lib/domain/formats';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
@@ -160,7 +161,9 @@ export function SubscriptionDeliveryPage() {
 
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
   const s = settingsQuery.data;
-  const activeCount = s?.subscriptionActiveCount ?? 0;
+  // A-233: null is «the server did not say», not «nobody».
+  const activeCount = activeCountOf(s);
+  const preview = previewView(previewQuery);
 
   return (
     <Stack gap={20}>
@@ -370,7 +373,12 @@ export function SubscriptionDeliveryPage() {
             {/* Число выдано ДО сохранения, а не после: каждый из этих людей
                 держит ссылку на старом хосте, и никакой редирект их не спасёт,
                 потому что старое имя может вообще перестать резолвиться в нас. */}
-            {hostChanged && activeCount > 0 && (
+            {hostChanged && activeCount === null && (
+              <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '17px', color: AMBER }}>
+                {t('deliverySetup.activeCountUnknown')}
+              </Text>
+            )}
+            {hostChanged && activeCount !== null && activeCount > 0 && (
               <Box
                 style={{
                   display: 'flex',
@@ -444,12 +452,18 @@ export function SubscriptionDeliveryPage() {
                 border: `1px solid ${HAIRLINE}`,
               }}
             >
-              {previewQuery.data?.url ? (
+              {preview === 'ready' && previewQuery.data ? (
                 <iframe
                   key={previewQuery.data.url}
                   src={previewQuery.data.url}
                   title={t('deliverySetup.previewTitle')}
                   style={{ width: '100%', height: '100%', border: 0 }}
+                />
+              ) : preview === 'failed' ? (
+                // A-233: the link did not come, said with a retry.
+                <LoadFailed
+                  message={previewQuery.isError ? apiErrorMessage(previewQuery.error) : t('deliverySetup.previewNoUrl')}
+                  onRetry={() => void previewQuery.refetch()}
                 />
               ) : (
                 <Box style={{ padding: 20 }}>
