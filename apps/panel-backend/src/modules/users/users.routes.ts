@@ -19,6 +19,7 @@ import {
   SubscriptionNotFoundError,
 } from '../subscription/subscription.service.js';
 import { awgConfUrl, subscriptionUrl } from '../subscription/subscription.link.js';
+import { RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
 
 // B12-tail - response schema for the paginated users list (Users page keeps it
 // warm via placeholderData). Compiles a fast-json-stringify serializer over the
@@ -93,6 +94,9 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
         return reply
           .code(409)
           .send({ error: 'SUBSCRIPTION_TOKEN_TAKEN', message: err.message, field: 'subscriptionToken' });
+      }
+      if (err instanceof RoutingPresetNotFoundError) {
+        return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
       throw err;
     }
@@ -421,6 +425,9 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       if (err instanceof usersService.UserNotFoundError) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+      }
+      if (err instanceof RoutingPresetNotFoundError) {
+        return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
       throw err;
     }

@@ -156,7 +156,7 @@ export async function create(
 /** `before` as in `create`: run first, in the same transaction. */
 export async function updateById(
   id: string,
-  data: Prisma.UserUpdateInput,
+  data: Prisma.UserUncheckedUpdateInput,
   before?: (tx: Prisma.TransactionClient) => Promise<void>,
 ): Promise<UserWithTraffic> {
   if (!before) {

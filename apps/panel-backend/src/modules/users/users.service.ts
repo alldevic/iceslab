@@ -15,6 +15,7 @@ import type { z } from 'zod';
 
 type UserStatus = z.infer<typeof UserStatusSchema>;
 import { mapUserToPublic, type PublicUserDto } from './users.mapper.js';
+import { assertCustomPresetExists, presetUpdateData } from '../routing-presets/routing-presets.assign.js';
 
 // ───── Domain errors ─────
 
@@ -90,6 +91,8 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
     }
   }
 
+  await assertCustomPresetExists(input.customRoutingPresetId);
+
   const creds = generateUserCredentials();
 
   let user;
@@ -129,6 +132,10 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       hwidDeviceLimit: input.hwidDeviceLimit ?? null,
       // R3 - per-user routing override; null = inherit (squad -> global -> default).
       routingPreset:   input.routingPreset ?? null,
+      // A-229 - or an own preset (the schema refused both at once).
+      ...(input.customRoutingPresetId
+        ? { customRoutingPreset: { connect: { id: input.customRoutingPresetId } } }
+        : {}),
       description:     input.description ?? null,
       tag:             input.tag ?? null,
       telegramId:      toBigIntOrNull(input.telegramId),
@@ -204,7 +211,10 @@ export async function updateUser(
     throw new UserNotFoundError(id);
   }
 
-  const data: Prisma.UserUpdateInput = {};
+  // Unchecked: the preset pair is written as two scalar columns in ONE UPDATE.
+  // A relation `disconnect` runs as its own statement after the scalars, and
+  // in between the row would hold both, which the CHECK refuses.
+  const data: Prisma.UserUncheckedUpdateInput = {};
   const changedFields: string[] = [];
 
   const nextStatus = statusAfterEdit(existing, input);
@@ -228,10 +238,20 @@ export async function updateUser(
     data.hwidDeviceLimit = input.hwidDeviceLimit;
     changedFields.push('hwidDeviceLimit');
   }
-  if (input.routingPreset !== undefined) {
-    // R3 - null clears the override (back to inherit squad -> global -> default).
-    data.routingPreset = input.routingPreset;
-    changedFields.push('routingPreset');
+  // R3 + A-229: the preset choice, a built-in key or an own preset, never both.
+  // A value written to one side clears the other; null clears only its own
+  // side (back to inherit squad -> global -> default); an absent key is no edit.
+  const preset = presetUpdateData(input);
+  if (preset.customRoutingPresetId) await assertCustomPresetExists(preset.customRoutingPresetId);
+  if (preset.routingPreset !== undefined) {
+    data.routingPreset = preset.routingPreset;
+    if (input.routingPreset !== undefined || existing.routingPreset !== null) changedFields.push('routingPreset');
+  }
+  if (preset.customRoutingPresetId !== undefined) {
+    data.customRoutingPresetId = preset.customRoutingPresetId;
+    if (input.customRoutingPresetId !== undefined || existing.customRoutingPresetId !== null) {
+      changedFields.push('customRoutingPresetId');
+    }
   }
   if (input.description !== undefined) {
     data.description = input.description;

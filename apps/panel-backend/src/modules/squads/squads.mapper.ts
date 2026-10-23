@@ -37,6 +37,8 @@ export interface PublicSquadDto {
   policyIds: string[];
   /** R3-a: per-squad routing-preset override, or null to inherit the panel default. */
   routingPreset: string | null;
+  /** A-229: or the operator's own preset, by id. At most one of the two is set. */
+  customRoutingPresetId: string | null;
   /** K7: per-squad HWID device-limit default (applies when user has no explicit limit). */
   hwidDeviceLimit: number | null;
   memberCount: number;
@@ -86,6 +88,7 @@ export function mapSquadToPublic(squad: SquadWithRelations): PublicSquadDto {
     exitAcl: groupExitAcl(squad.cascadeExits ?? [], squad.cascadesOff ?? []),
     policyIds: (squad.routePolicies ?? []).map((rp) => rp.policyId),
     routingPreset: squad.routingPreset,
+    customRoutingPresetId: squad.customRoutingPresetId ?? null,
     hwidDeviceLimit: squad.hwidDeviceLimit,
     memberCount: squad._count?.members ?? 0,
     createdAt: squad.createdAt.toISOString(),

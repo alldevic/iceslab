@@ -50,6 +50,10 @@ model Group {
   // inherit the panel-wide default. A user's effective preset is the single
   // distinct non-null override across their squads (see subscription.service).
   routingPreset   String?  @map("routing_preset") @db.VarChar(32)
+  // A-229 - or the operator's own preset instead. Never both (CHECK
+  // groups_one_routing_preset); RESTRICT keeps a preset in use from deletion.
+  customRoutingPresetId String? @map("custom_routing_preset_id") @db.Uuid
+  customRoutingPreset   RoutingPreset? @relation(fields: [customRoutingPresetId], references: [id], onDelete: Restrict)
   // K7 - optional per-squad HWID device-limit default. Used only when the user
   // has no explicit hwidDeviceLimit; the effective default is the MAX across
   // the user's squads (most-permissive cohort wins). Null = no squad default.
@@ -70,6 +74,7 @@ model Group {
   // A4 ad-split: per-squad grant of extra route-policies. See GroupRoutePolicy.
   routePolicies GroupRoutePolicy[]
 
+  @@index([customRoutingPresetId])
   @@map("groups")
 }
 

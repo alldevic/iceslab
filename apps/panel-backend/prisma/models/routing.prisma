@@ -1,3 +1,21 @@
+// A-229: the operator's own device routing preset, the rule set written into
+// the client's config. The three built-ins (ROUTING_PRESET_IDS) are code, not
+// rows. `rules` = ordered [{ match, action, note }], validated by the API.
+// A user or squad points here through customRoutingPresetId, never together
+// with its built-in routingPreset key (CHECK in the migration).
+model RoutingPreset {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(64)
+  rules     Json     @default("[]")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  users  User[]
+  groups Group[]
+
+  @@map("routing_presets")
+}
+
 // A4 ad-split: a named route-policy = a set of direct/block domain lists layered
 // onto a chosen cascade exit at the ENTRY node. A route-profile the client sees =
 // (cascade exit) x (plain OR this policy). `ordinal` is the tag band: the vlessRoute

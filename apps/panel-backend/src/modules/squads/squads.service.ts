@@ -3,6 +3,7 @@ import { prisma } from '../../prisma.js';
 import { ALL_SQUAD_ID } from './squads.constants.js';
 import type { CreateSquadInput, UpdateSquadInput } from './squads.schemas.js';
 import { mapSquadToPublic, type PublicSquadDto } from './squads.mapper.js';
+import { assertCustomPresetExists, presetUpdateData } from '../routing-presets/routing-presets.assign.js';
 
 // ───── Domain errors ─────
 
@@ -169,12 +170,17 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
   if (existing) throw new SquadAlreadyExistsError(input.name);
   // Resolved before the write: a refusal must not leave half a squad.
   const exitRows = await exitAclRows('', input.exitAcl);
+  await assertCustomPresetExists(input.customRoutingPresetId);
 
   const row = await prisma.group.create({
     data: {
       name: input.name,
       description: input.description ?? null,
       routingPreset: input.routingPreset ?? null,
+      // A-229 - or an own preset (the schema refused both at once).
+      ...(input.customRoutingPresetId
+        ? { customRoutingPreset: { connect: { id: input.customRoutingPresetId } } }
+        : {}),
       hwidDeviceLimit: input.hwidDeviceLimit ?? null,
       groupProfiles: {
         create: input.profileIds.map((profileId) => ({ profileId })),
@@ -224,6 +230,8 @@ export async function updateSquad(
   }
 
   const exitRows = input.exitAcl !== undefined ? await exitAclRows(id, input.exitAcl) : [];
+  const presetFields = presetUpdateData(input);
+  await assertCustomPresetExists(presetFields.customRoutingPresetId);
 
   // Profile set replacement, done via tx so concurrent updates can't leave
   // half-applied state. Wipe the join rows, write the new ones.
@@ -275,7 +283,9 @@ export async function updateSquad(
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.description !== undefined ? { description: input.description } : {}),
-        ...(input.routingPreset !== undefined ? { routingPreset: input.routingPreset } : {}),
+        // R3-a + A-229: one preset, a built-in key or an own one; a value on
+        // one side clears the other (presetUpdateData).
+        ...presetFields,
         ...(input.hwidDeviceLimit !== undefined ? { hwidDeviceLimit: input.hwidDeviceLimit } : {}),
       },
       include: includeRelations,

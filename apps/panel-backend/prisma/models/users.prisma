@@ -41,6 +41,10 @@ model User {
   // global -> default). Highest precedence: wins over squad and global, loses
   // only to the per-request ?routing= query.
   routingPreset String? @map("routing_preset") @db.VarChar(32)
+  // A-229 - or the operator's own preset instead. Never both (CHECK
+  // users_one_routing_preset); RESTRICT keeps a preset in use from deletion.
+  customRoutingPresetId String?        @map("custom_routing_preset_id") @db.Uuid
+  customRoutingPreset   RoutingPreset? @relation(fields: [customRoutingPresetId], references: [id], onDelete: Restrict)
 
   // Slice 27.5: sticky-affinity hint for subscription generator.
   // NULL = no preference (current behaviour). When set, the generator
@@ -75,6 +79,7 @@ model User {
   @@index([deletedAt])
   @@index([telegramId])
   @@index([email])
+  @@index([customRoutingPresetId])
   @@map("users")
 }
 

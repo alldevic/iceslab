@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { PermissiveUuid } from '../../lib/util/uuid-schema.js';
+import { BOTH_PRESETS_MESSAGE, bothPresetsGiven } from '../routing-presets/routing-presets.assign.js';
 
 const NameSchema = z
   .string()
@@ -10,6 +11,10 @@ const NameSchema = z
 
 // R3-a - optional per-squad routing-preset override (null = inherit panel default).
 const RoutingPresetField = z.enum(ROUTING_PRESET_IDS).nullish();
+// A-229 - or the operator's own preset, by id. Never together with the
+// built-in key: both values in one request are refused, a value on one side
+// clears the other on write.
+const CustomRoutingPresetField = z.uuid().nullish();
 
 // A4 increment 2 - per-cascade exit allow-list. Each entry names a cascade and
 // the exit nodes this squad grants for it. Three states per cascade:
@@ -45,6 +50,7 @@ export const CreateSquadSchema = z.object({
   name: NameSchema,
   description: z.string().max(1000).nullish(),
   routingPreset: RoutingPresetField,
+  customRoutingPresetId: CustomRoutingPresetField,
   // K7 - per-squad HWID device-limit default (null = none).
   hwidDeviceLimit: z.number().int().positive().nullish(),
   /** Slice 27: squad ACL is now profile-level. Initial profile assignment;
@@ -58,13 +64,14 @@ export const CreateSquadSchema = z.object({
   /** A4 ad-split: extra route-policies this squad grants its members. Empty =
    *  only the plain profile. */
   policyIds: z.array(z.uuid()).default([]),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type CreateSquadInput = z.infer<typeof CreateSquadSchema>;
 
 export const UpdateSquadSchema = z.object({
   name: NameSchema.optional(),
   description: z.string().max(1000).nullish(),
   routingPreset: RoutingPresetField,
+  customRoutingPresetId: CustomRoutingPresetField,
   hwidDeviceLimit: z.number().int().positive().nullish(),
   /** When provided, replaces the full profile set (set semantics). */
   profileIds: z.array(z.uuid()).optional(),
@@ -76,7 +83,7 @@ export const UpdateSquadSchema = z.object({
   exitAcl: ExitAcl.optional(),
   /** When provided, replaces the full route-policy grant set (set semantics). */
   policyIds: z.array(z.uuid()).optional(),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type UpdateSquadInput = z.infer<typeof UpdateSquadSchema>;
 
 // PermissiveUuid: SquadIdParamSchema accepts the seeded "All" squad

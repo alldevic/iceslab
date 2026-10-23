@@ -56,6 +56,8 @@ export interface PublicUserDto {
 
   // R3 - per-user routing-preset override; null = inherit (squad -> global -> default).
   routingPreset: string | null;
+  // A-229 - or the operator's own preset, by id. At most one of the two is set.
+  customRoutingPresetId: string | null;
 
   // Metadata
   description: string | null;
@@ -118,6 +120,7 @@ export function mapUserToPublic(
     hwidDeviceLimit: user.hwidDeviceLimit,
 
     routingPreset: user.routingPreset,
+    customRoutingPresetId: user.customRoutingPresetId ?? null,
 
     description: user.description,
     tag: user.tag,

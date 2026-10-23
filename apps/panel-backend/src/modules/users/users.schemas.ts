@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { PermissiveUuid } from '../../lib/util/uuid-schema.js';
+import { BOTH_PRESETS_MESSAGE, bothPresetsGiven } from '../routing-presets/routing-presets.assign.js';
 
 // ───── Reusable atoms ─────
 
@@ -79,6 +80,9 @@ export const CreateUserSchema = z.object({
   // R3 - optional per-user routing-preset override. Null = inherit (squad ->
   // global -> default). Wins over squad/global, loses only to ?routing= query.
   routingPreset: z.enum(ROUTING_PRESET_IDS).nullable().optional(),
+  // A-229 - or the operator's own preset, by id. Never together with
+  // routingPreset (refused below; the database CHECK says the same).
+  customRoutingPresetId: z.uuid().nullable().optional(),
   // Slice 27 follow-up: enabledProtocols accepted for back-compat with API
   // clients but no longer affects subscription output. Squad ACL alone
   // determines visibility. Empty/missing → defaults to all 7 (was previously
@@ -86,7 +90,7 @@ export const CreateUserSchema = z.object({
   enabledProtocols: z
     .array(ProtocolName)
     .default(['hysteria', 'xray', 'amneziawg', 'naive', 'shadowsocks', 'mtproto', 'mieru']),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 
 // ───── POST /api/users/bulk ─────
@@ -144,9 +148,12 @@ export const UpdateUserSchema = z.object({
   groupIds: z.array(PermissiveUuid).optional(),
   // R3 - per-user routing-preset override. Null clears it (back to inherit).
   routingPreset: z.enum(ROUTING_PRESET_IDS).nullable().optional(),
+  // A-229 - the operator's own preset instead. A value on one side clears the
+  // other (presetUpdateData); both values in one request are refused.
+  customRoutingPresetId: z.uuid().nullable().optional(),
   // Slice 27 follow-up: kept for back-compat, ignored by subscription.
   enabledProtocols: z.array(ProtocolName).optional(),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;
 
 // ───── GET /api/users (query params) ─────
