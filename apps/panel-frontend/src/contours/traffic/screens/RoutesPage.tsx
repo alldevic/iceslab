@@ -18,6 +18,9 @@ import { ROUTING_PRESET_WRITES_LIVE, listRoutePolicies, listRoutingPresets, type
 import { getSettings } from '@/lib/domain/settings';
 import { listSquads } from '@/lib/domain/squads';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
+import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { blankPolicy, importedPolicy } from '@/contours/traffic/lib/routeRules';
 import { blankPreset } from '@/contours/traffic/lib/devicePresets';
 
@@ -83,7 +86,9 @@ export function RoutesPage() {
 
   const policies = policiesQuery.data?.policies ?? [];
   const squads = squadsQuery.data?.squads ?? [];
-  const defaultPreset = settingsQuery.data?.subscriptionRoutingPreset ?? 'proxy-all';
+  // The panel default is proxy-all only when the settings ANSWERED without one;
+  // settings that did not arrive are not «proxy-all» (A-228).
+  const defaultPreset = settingsQuery.data ? (settingsQuery.data.subscriptionRoutingPreset ?? 'proxy-all') : null;
 
   // The presets as the subscription builder emits them. They live here rather
   // than in the pane so Export can reach them.
@@ -113,13 +118,23 @@ export function RoutesPage() {
   // The preset clients are actually handed today. It stands on the tab in place
   // of a count, and it is a real answer to «which one is on» without a click.
   const activePresetName =
-    presets.find((p) => p.id === defaultPreset)?.name ?? t('routes.presetUnknown');
+    (defaultPreset && presets.find((p) => p.id === defaultPreset)?.name) || t('routes.presetUnknown');
 
-  usePageMeta([
-    t('routes.factNodePolicies', { count: nodePolicies.length }),
-    t('routes.factPolicies', { count: policies.length }),
-    t('routes.factPresets', { count: presets.length }),
-  ]);
+  usePageMeta(
+    loadView(nodePoliciesQuery) !== 'ready' || loadView(policiesQuery) !== 'ready'
+      ? [t('pageMeta.noData')]
+      : [
+          t('routes.factNodePolicies', { count: nodePolicies.length }),
+          t('routes.factPolicies', { count: policies.length }),
+          t('routes.factPresets', { count: presets.length }),
+        ],
+  );
+
+  // A list the open pane is drawn from that did not arrive: said with a retry
+  // in place of the pane, never as «no policies» (A-228).
+  const paneFailure = (pane === 'node' ? [policiesQuery, squadsQuery] : pane === 'device' ? [settingsQuery, squadsQuery] : [])
+    .map((q) => loadFailure(q, apiErrorMessage))
+    .find((f) => f !== null) ?? null;
 
   const onPolicy = pane === 'policy';
   const onNode = pane === 'node';
@@ -209,14 +224,14 @@ export function RoutesPage() {
             active={onPolicy}
             icon={<ServerIcon size={13} color={onPolicy ? CYAN : MIST} />}
             label={t('routes.panePolicy')}
-            badge={String(nodePolicies.length)}
+            badge={loadView(nodePoliciesQuery) === 'ready' ? String(nodePolicies.length) : '-'}
             onClick={() => setPane('policy')}
           />
           <PaneTab
             active={onNode}
             icon={<ServerIcon size={13} color={onNode ? CYAN : MIST} />}
             label={t('routes.paneNode')}
-            badge={String(policies.length)}
+            badge={loadView(policiesQuery) === 'ready' ? String(policies.length) : '-'}
             onClick={() => setPane('node')}
           />
           <PaneTab
@@ -342,7 +357,9 @@ export function RoutesPage() {
         </Text>
       </Stack>
 
-      {onPolicy ? (
+      {paneFailure ? (
+        <LoadFailed message={paneFailure.message} onRetry={paneFailure.onRetry} />
+      ) : onPolicy ? (
         <PolicyPane
           draft={policyDraft}
           draftKey={draftSeq}
@@ -358,6 +375,8 @@ export function RoutesPage() {
           onDraftDone={() => setNodeDraft(null)}
           onOpenNodePolicies={() => setPane('policy')}
         />
+      ) : defaultPreset === null ? (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>{t('common.loading')}</Text>
       ) : (
         <DevicePane
           presets={presets}

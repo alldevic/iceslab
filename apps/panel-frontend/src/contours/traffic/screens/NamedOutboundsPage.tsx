@@ -17,6 +17,7 @@ import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { COUNTRY_OPTIONS, countryFlag } from '@/lib/domain/countries';
 import {
@@ -129,6 +130,10 @@ export function NamedOutboundsPage() {
         />
       )}
 
+      {/* A-228: a list that did not arrive is said, not left blank. */}
+      {listQuery.isError && !listQuery.data && (
+        <LoadFailed message={apiErrorMessage(listQuery.error)} onRetry={() => void listQuery.refetch()} />
+      )}
       {listQuery.isLoading && <Placeholder title={t('common.loading')} body="" />}
       {listQuery.data && outbounds.length === 0 && (
         <Placeholder title={t('namedOutbounds.emptyTitle')} body={t('namedOutbounds.emptyBody')} />
