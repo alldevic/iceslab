@@ -23,7 +23,7 @@ import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 import { XrayAdvanced } from '@/contours/profiles/components/ProfileForm/XrayAdvanced';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
-import { useGenerateImpact } from '@/contours/profiles/lib/generateImpact';
+import { showGenerateWarning, useGenerateImpact } from '@/contours/profiles/lib/generateImpact';
 import { isPlainSubprotocol } from '@/contours/profiles/lib/plainSubprotocol';
 import { PlainXraySection } from '@/contours/profiles/components/ProfileForm/PlainXraySection';
 import { RED } from '@/contours/profiles/lib/colors';
@@ -215,7 +215,8 @@ export function XraySection({
                       <UnstyledButton
                         type="button"
                         onClick={() => confirmGenerate(impact, t, () => void generateXrayKeys())}
-                        disabled={keypairPending}
+                        // The cost has to be known (or known to be unknown) first: A-225.
+                        disabled={keypairPending || impact.kind === 'loading'}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -247,7 +248,7 @@ export function XraySection({
               )}
               {/* A profile nobody has deployed yet cannot break anything, so
                   the warning appears only once there is a fleet behind it. */}
-              {form.values.xraySecurity === 'reality' && (impact.hosts > 0 || impact.nodes > 0) && (
+              {form.values.xraySecurity === 'reality' && showGenerateWarning(impact) && (
                 <GenerateWarning impact={impact} />
               )}
               {form.values.xraySecurity === 'tls' && (

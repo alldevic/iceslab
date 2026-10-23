@@ -12,7 +12,9 @@ const DISPLAY = "'Inter Variable', Inter, ui-sans-serif, -apple-system, BlinkMac
  * The key belongs to the profile, and every node of every host on that profile
  * serves it. One click therefore invalidates the whole fleet at once and there
  * is no way back: the old key is gone. The three numbers say how wide the blast
- * is, and the confirmation repeats them so the decision is made twice.
+ * is, and the confirmation repeats them so the decision is made twice. The
+ * numbers are the server's (key-impact, A-225); without them the warning says
+ * the cost is not known rather than showing zeros.
  */
 export function GenerateWarning({ impact }: { impact: GenerateImpact }) {
   const { t } = useTranslation();
@@ -29,17 +31,17 @@ export function GenerateWarning({ impact }: { impact: GenerateImpact }) {
         border: `1px solid ${AMBER}33`,
       }}
     >
-      <Box style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
-        <Fact value={impact.hosts} label={t('profiles.generate.hosts', { count: impact.hosts })} />
-        <Fact value={impact.nodes} label={t('profiles.generate.nodes', { count: impact.nodes })} />
-        {/* Named, not guessed: the count of configs that go stale needs the
-            subscription pipeline, which no endpoint exposes. */}
-        <Fact
-          value={impact.configs}
-          label={t('profiles.generate.configs')}
-          hint={t('profiles.generate.configsPending')}
-        />
-      </Box>
+      {impact.kind === 'ready' ? (
+        <Box style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
+          <Fact value={impact.hosts} label={t('profiles.generate.hosts', { count: impact.hosts })} />
+          <Fact value={impact.nodes} label={t('profiles.generate.nodes', { count: impact.nodes })} />
+          <Fact value={impact.configs} label={t('profiles.generate.configs')} />
+        </Box>
+      ) : (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: SNOW }}>
+          {t('profiles.generate.confirmUnknown')}
+        </Text>
+      )}
       <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
         {t('profiles.generate.body')}
       </Text>

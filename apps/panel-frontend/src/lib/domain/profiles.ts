@@ -225,6 +225,25 @@ export interface TestConnectResult {
   notes?: string;
 }
 
+/**
+ * What a new key pair on a profile would cost, counted by the server
+ * (GET /api/profiles/:id/key-impact, a04ec07e): enabled hosts of enabled
+ * bindings, distinct nodes, subscribers holding a config, and the client
+ * configs that stop working (folded per user through squad ACL). A-225.
+ */
+export interface ProfileKeyImpact {
+  hosts: number;
+  nodes: number;
+  bindings: number;
+  users: number;
+  configs: number;
+}
+
+export async function getProfileKeyImpact(id: string): Promise<ProfileKeyImpact> {
+  const { data } = await api.get<ProfileKeyImpact>(`/api/profiles/${id}/key-impact`);
+  return data;
+}
+
 export async function testConnectProfile(profileId: string): Promise<{ results: TestConnectResult[] }> {
   const { data } = await api.post<{ results: TestConnectResult[] }>(
     `/api/profiles/${profileId}/test-connect`,

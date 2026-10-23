@@ -55,10 +55,11 @@ export const profiles = {
       nodes_one: 'node rebuilds',
       nodes_other: 'nodes rebuild',
       configs: 'configs go stale',
-      configsPending: 'The panel cannot count these yet: it would have to run the subscription pipeline for every member of every squad that reaches this profile.',
       body: 'The key belongs to the profile, so every node of every host on it serves the same one. Replacing it takes effect everywhere at once and the old key is gone.',
       confirmTitle: 'Replace the key pair?',
-      confirmBody: 'This profile is served by {{hosts}} hosts on {{nodes}} nodes. All of them get the new key and every config already handed out stops working.',
+      confirmBody: 'This profile is served by {{hosts}} hosts on {{nodes}} nodes. All of them get the new key, and {{configs}} configs already handed out stop working.',
+      // A-225: the server's count did not arrive.
+      confirmUnknown: 'The cost could not be found out. The key changes on every node of the profile, and clients holding the current key are cut off.',
       confirmAction: 'Replace',
     },    bar: {
       profiles: 'PROFILES',
