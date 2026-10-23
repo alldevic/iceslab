@@ -65,6 +65,7 @@ export const SCOPEABLE_RESOURCES = [
   'node-policies',
   'named-outbounds',
   'geo-sets',
+  'routing-presets',
 ] as const;
 
 /** First segments a token can never reach, so no scope is offered for them. */

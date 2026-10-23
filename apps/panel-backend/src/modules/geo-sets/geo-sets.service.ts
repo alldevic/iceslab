@@ -238,6 +238,18 @@ export async function listTags(
   return { version: s.current.version, total: all.length, tags: all.slice(0, limit) };
 }
 
+/**
+ * The tag names of a set's verified version, by the set's name, or null while
+ * it has none (never fetched, or broken). A-229 checks a device preset's
+ * `geosite:`/`geoip:` against them; null is an unknown list, and an unknown
+ * list does not refuse.
+ */
+export async function setTagNames(name: string): Promise<Set<string> | null> {
+  const s = await prisma.geoSet.findUnique({ where: { name }, select: SET_SELECT });
+  if (!s?.current) return null;
+  return new Set(tagsOf(s).map((t) => t.name.toLowerCase()));
+}
+
 // ---------------------------------------------------------------- writing
 
 function checkName(name: string): void {
