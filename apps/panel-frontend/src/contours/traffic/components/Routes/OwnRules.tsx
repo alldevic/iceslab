@@ -7,6 +7,7 @@ import { SaveButton } from '@/contours/traffic/components/Routes/SaveButton';
 import { Verdict } from '@/contours/traffic/components/Routes/Verdict';
 import { apiErrorMessage } from '@/lib/net/client';
 import { LoadFailedLine } from '@/ui/LoadFailed';
+import { loadFailure } from '@/lib/ui/loadView';
 import { getSettings, updateSettings } from '@/lib/domain/settings';
 import { notifications } from '@mantine/notifications';
 import { parseRules, splitLines } from '@/contours/traffic/lib/routeExchange';
@@ -74,9 +75,8 @@ export function OwnRules() {
   // A-228: settings that did not arrive are said with a retry; the section
   // used to vanish. While they are on their way there is nothing to draw yet.
   if (!draft) {
-    return settingsQuery.isError ? (
-      <LoadFailedLine message={apiErrorMessage(settingsQuery.error)} onRetry={() => void settingsQuery.refetch()} />
-    ) : null;
+    const failure = loadFailure(settingsQuery, apiErrorMessage);
+    return failure ? <LoadFailedLine message={failure.message} onRetry={failure.onRetry} /> : null;
   }
   const patch = (p: Partial<typeof draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
 

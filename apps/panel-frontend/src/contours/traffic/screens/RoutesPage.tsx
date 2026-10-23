@@ -18,7 +18,8 @@ import { ROUTING_PRESET_WRITES_LIVE, listRoutePolicies, listRoutingPresets, type
 import { getSettings } from '@/lib/domain/settings';
 import { listSquads } from '@/lib/domain/squads';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { loadFailure, loadView } from '@/lib/ui/loadView';
+import { loadView } from '@/lib/ui/loadView';
+import { defaultPresetOf, routesPaneFailure } from '@/contours/traffic/lib/routesView';
 import { apiErrorMessage } from '@/lib/net/client';
 import { LoadFailed } from '@/ui/LoadFailed';
 import { blankPolicy, importedPolicy } from '@/contours/traffic/lib/routeRules';
@@ -88,7 +89,7 @@ export function RoutesPage() {
   const squads = squadsQuery.data?.squads ?? [];
   // The panel default is proxy-all only when the settings ANSWERED without one;
   // settings that did not arrive are not «proxy-all» (A-228).
-  const defaultPreset = settingsQuery.data ? (settingsQuery.data.subscriptionRoutingPreset ?? 'proxy-all') : null;
+  const defaultPreset = defaultPresetOf(settingsQuery.data);
 
   // The presets as the subscription builder emits them. They live here rather
   // than in the pane so Export can reach them.
@@ -132,9 +133,11 @@ export function RoutesPage() {
 
   // A list the open pane is drawn from that did not arrive: said with a retry
   // in place of the pane, never as «no policies» (A-228).
-  const paneFailure = (pane === 'node' ? [policiesQuery, squadsQuery] : pane === 'device' ? [settingsQuery, squadsQuery] : [])
-    .map((q) => loadFailure(q, apiErrorMessage))
-    .find((f) => f !== null) ?? null;
+  const paneFailure = routesPaneFailure(
+    pane,
+    { routePolicies: policiesQuery, squads: squadsQuery, settings: settingsQuery },
+    apiErrorMessage,
+  );
 
   const onPolicy = pane === 'policy';
   const onNode = pane === 'node';
