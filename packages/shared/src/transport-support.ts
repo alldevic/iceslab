@@ -88,6 +88,33 @@ export const TRANSPORT_SUPPORT: Table = {
 };
 
 /**
+ * The security layer a client sees on an xray endpoint (A-230): 'default' is
+ * REALITY. One rule for the subscription, the profile's /formats answer and
+ * the panel's screens, which each held a copy until they drifted:
+ *   - a host override of tls or none wins over the profile;
+ *   - else the profile's own security, REALITY when it names none;
+ *   - vmess has no REALITY: a vmess row stored as REALITY (written before the
+ *     schema refused it) is served as none, which is what its share link
+ *     already said.
+ */
+export type ClientSecurityLayer = 'default' | 'tls' | 'none';
+
+export function clientSecurityLayer(
+  config: { subprotocol?: string | null; security?: string | null } | null | undefined,
+  hostOverride?: string | null,
+): ClientSecurityLayer {
+  const layer: ClientSecurityLayer =
+    hostOverride === 'tls' || hostOverride === 'none'
+      ? hostOverride
+      : config?.security === 'none'
+        ? 'none'
+        : config?.security === 'tls'
+          ? 'tls'
+          : 'default';
+  return config?.subprotocol === 'vmess' && layer === 'default' ? 'none' : layer;
+}
+
+/**
  * The column an endpoint falls in, or null for a network the table does not
  * know. No network at all is raw (the schema's default), and `tcp` is raw's
  * old name (inbounds.schemas.ts normalises it on write; a row written before

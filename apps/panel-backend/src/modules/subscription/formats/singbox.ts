@@ -373,10 +373,13 @@ export function buildSingboxJson(
   // left out.
   const route = singboxDeviceRoute(deviceRules, proxyTags.length > 0 ? primaryTag : null);
 
-  // R3 - operator custom domain lists are intentionally NOT emitted for
-  // sing-box: there is no portable inline-domain route-rule vehicle post-1.12
-  // (same rationale as the skipped sing-box DNS split in R2 and the skipped
-  // R3-b custom rules). xray/xkeen + clash carry the lists instead.
+  // R3 - operator custom domain lists are not emitted for sing-box: a choice,
+  // not a limit. The reason once written here ("no portable inline-domain
+  // route-rule vehicle post-1.12") is wrong: 1.12 dropped geosite:/geoip:,
+  // not inline matchers, and route rules with domain_suffix, domain_keyword,
+  // ip_cidr and port pass `sing-box check` on 1.13.14 (A-229 part 4, the
+  // own-preset config in subscription.device-rules.test.ts). Carrying the
+  // lists here is open work; until then xray/xkeen + clash carry them.
   const config = {
     log: { level: 'info', timestamp: true },
     // A single minimal tun inbound. Happ and the sing-box CLI reject a config

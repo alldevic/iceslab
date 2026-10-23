@@ -1,5 +1,6 @@
 import {
   XRAY_TRANSPORT_SUBPROTOCOLS,
+  clientSecurityLayer,
   transportServed,
   type RoutingPresetId,
 } from '@iceslab/shared';
@@ -1175,19 +1176,11 @@ export async function generateSubscription(
       // falls through (URI builder skips the param), so back-compat is exact.
       const hostAlpn = hostMeta.alpn;
       const hostAllowInsecure = hostMeta.allowInsecure;
-      // Base security comes from the profile: 'none' (a CDN-fronted / plain
-      // inbound, rendered as security:"none" on the node) maps to a 'none'
-      // client-URI layer; otherwise reality. A per-host override (tls/none)
-      // still wins over the profile base.
-      const profileSecurity = cfg.security ?? 'reality';
-      const effectiveSecurityLayer: 'default' | 'tls' | 'none' =
-        hostMeta.securityLayer === 'tls' || hostMeta.securityLayer === 'none'
-          ? hostMeta.securityLayer
-          : profileSecurity === 'none'
-            ? 'none'
-            : profileSecurity === 'tls'
-              ? 'tls'
-              : 'default';
+      // The layer a client sees: the shared rule (A-230), the same one the
+      // profile's /formats answer and the panel's screens read. A host
+      // override of tls/none wins, else the profile's own, and vmess has no
+      // REALITY.
+      const effectiveSecurityLayer = clientSecurityLayer(cfg, hostMeta.securityLayer);
       let uri: string;
       if (subprotocol === 'trojan') {
         uri = buildTrojanRealityUri({

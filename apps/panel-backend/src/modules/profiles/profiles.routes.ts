@@ -107,7 +107,7 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Which subscription formats carry this profile, and why not where they do
-  // not: { door, formats: [{ format, carried, why }] }, one entry per
+  // not: { door, formats: [{ format, carried, why, reason }] }, one entry per
   // FORMAT_NAMES. `?securityLayer=` is the host screen's own override (tls /
   // none), because a REALITY profile fronted by a TLS host reaches formats the
   // bare profile does not; 'default' or absent means the profile's own.

@@ -21,7 +21,11 @@ import {
   SINGBOX_XRAY_FAMILY_MESSAGE,
   singboxRefusesXrayField,
   type SingboxXrayField,
+  VMESS_REALITY_MESSAGE,
+  vmessOnReality,
+  withXraySecurityDefault,
 } from './profiles.schemas.js';
+import { ZodError } from 'zod';
 import {
   effectiveEngineOf,
   nodeRendersProfile,
@@ -493,7 +497,13 @@ export async function updateProfile(
       existing.protocol as keyof typeof PROTOCOL_CONFIG_SCHEMAS
     ];
     if (!schema) throw new Error(`Unknown protocol ${existing.protocol}`);
-    const parsed = schema.parse(input.config);
+    // A-230: the same vmess rule as on create (profiles.schemas.ts): no
+    // security is none, an explicit reality is refused in words.
+    const isXray = existing.protocol === 'xray';
+    const parsed = schema.parse(isXray ? withXraySecurityDefault(input.config) : input.config);
+    if (isXray && vmessOnReality(parsed)) {
+      throw new ZodError([{ code: 'custom', message: VMESS_REALITY_MESSAGE, path: ['config', 'security'], input: input.config }]);
+    }
     /**
      * ShadowTLS keeps its inner key across an edit.
      *
