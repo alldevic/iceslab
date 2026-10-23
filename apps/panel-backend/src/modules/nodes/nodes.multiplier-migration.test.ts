@@ -134,4 +134,58 @@ describe('20261022234055_node_consumption_multiplier_tenths', () => {
     const after = await prisma.node.findMany({ where: { id: { in: ids } }, select: { consumptionMultiplierTenths: true } });
     expect(after.map((n) => n.consumptionMultiplierTenths)).toEqual([10, 10, 10]);
   });
+
+  async function threeNodes(): Promise<string[]> {
+    const ids: string[] = [];
+    for (const n of [1, 2, 3]) {
+      const res = await app.inject({
+        method: 'POST', url: '/api/nodes', headers: { authorization: `Bearer ${token}` },
+        payload: { name: `mx-${n}`, address: `mx-${n}.test`, protocol: 'xray' },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      ids.push(JSON.parse(res.body).id as string);
+    }
+    return ids;
+  }
+
+  it('a row above 100 stops the forward run on the range check, it is not clamped', async () => {
+    const ids = await threeNodes();
+    let reached = false;
+    const run = prisma.$transaction(async (tx) => {
+      const t = tx as unknown as typeof prisma;
+      for (const s of rollback) await t.$executeRawUnsafe(s);
+      await t.$executeRawUnsafe(`UPDATE "nodes" SET "consumption_multiplier" = 101 WHERE id = $1::uuid`, ids[0]);
+      for (const s of forward) await t.$executeRawUnsafe(s);
+      reached = true;
+      throw new Rollback();
+    }, { timeout: 30_000 });
+    await expect(run).rejects.toThrow(/nodes_consumption_multiplier_tenths_range/);
+    expect(reached, 'the forward run went through with 101').toBe(false);
+    const after = await prisma.node.findMany({ where: { id: { in: ids } }, select: { consumptionMultiplierTenths: true } });
+    expect(after.map((n) => n.consumptionMultiplierTenths)).toEqual([10, 10, 10]);
+  });
+
+  it('the rollback loses the tenths as its header says: 0 and 0.5 become 1, 1.5 rounds to 2', async () => {
+    const ids = await threeNodes();
+    let back: (number | undefined)[] = [];
+    await expect(
+      prisma.$transaction(async (tx) => {
+        const t = tx as unknown as typeof prisma;
+        for (const [i, v] of [0, 5, 15].entries()) {
+          await t.$executeRawUnsafe(`UPDATE "nodes" SET "consumption_multiplier_tenths" = $1 WHERE id = $2::uuid`, v, ids[i]);
+        }
+        for (const s of rollback) await t.$executeRawUnsafe(s);
+        const rows = await t.$queryRawUnsafe<{ id: string; v: number | bigint }[]>(
+          `SELECT id::text AS id, "consumption_multiplier" AS v FROM "nodes" WHERE id = ANY($1::uuid[])`,
+          ids,
+        );
+        const by = new Map(rows.map((r) => [r.id, Number(r.v)]));
+        back = ids.map((id) => by.get(id));
+        throw new Rollback();
+      }, { timeout: 30_000 }),
+    ).rejects.toBeInstanceOf(Rollback);
+    expect(back).toEqual([1, 1, 2]);
+    const after = await prisma.node.findMany({ where: { id: { in: ids } }, select: { consumptionMultiplierTenths: true } });
+    expect(after.map((n) => n.consumptionMultiplierTenths)).toEqual([10, 10, 10]);
+  });
 });
