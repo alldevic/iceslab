@@ -253,6 +253,22 @@ describe('matchers no engine reads are refused at the save (A-103)', () => {
     const wire = await resolvePolicyForNode(nodeId);
     expect(wire?.rules).toEqual([{ match: { domain: ['ads.example'] }, action: { kind: 'block' } }]);
   });
+
+  it('a stored rule that lost a whole kind of condition is not sent; one that lost part of a kind goes out narrower', async () => {
+    const nodeId = await makeNode();
+    const p = await createPolicy([
+      { match: { domain: ['a.example'], port: '443' }, action: { kind: 'block' } },
+      { match: { domain: ['b.example'], port: '443' }, action: { kind: 'block' } },
+    ]);
+    await attach(nodeId, p.id);
+    const [first, second] = await prisma.nodePolicyRule.findMany({ where: { policyId: p.id }, orderBy: { position: 'asc' } });
+    // "block, domain: [geoip:xx], port: 443": the domains gone, would block all of 443.
+    await prisma.nodePolicyRule.update({ where: { id: first!.id }, data: { matchDomain: ['geoip:xx'] } });
+    // Two domains, one unreadable: narrower, still sent.
+    await prisma.nodePolicyRule.update({ where: { id: second!.id }, data: { matchDomain: ['geoip:xx', 'b.example'] } });
+    const wire = await resolvePolicyForNode(nodeId);
+    expect(wire?.rules).toEqual([{ match: { domain: ['b.example'], port: '443' }, action: { kind: 'block' } }]);
+  });
 });
 
 describe('what the node is actually sent', () => {

@@ -205,14 +205,17 @@ export function chainNodePolicyOf(rules: ChainNodePolicyRule[]): {
     if (r.action.kind === 'warp') usesWarp = true;
     const hasDom = !chainMatchIsEmpty(dom);
     const hasIp = Object.keys(ip).length > 0;
-    // A-103: a rule that names conditions and keeps none in translation is
-    // left out. Only a rule written with no condition at all is a catch-all;
-    // one whose conditions were lost must not become a rule on everything.
-    const wrote =
-      (r.match.domain?.length ?? 0) + (r.match.ip?.length ?? 0) + (r.match.protocol?.length ?? 0) > 0 ||
-      !!r.match.port ||
-      (!!r.match.network && r.match.network !== 'tcp,udp');
-    if (wrote && !hasDom && !hasIp && Object.keys(rest).length === 0) continue;
+    // A-103: the kinds of condition AND together, so a rule that lost a WHOLE
+    // kind it was written with matches more than the operator wrote (all of
+    // them lost is the extreme: a rule on everything). Left out. Losing some
+    // entries inside one kind (they OR) only narrows it, and stays. Only a rule
+    // written with no condition at all is the catch-all.
+    const lostKind =
+      ((r.match.domain?.length ?? 0) > 0 && !hasDom) ||
+      ((r.match.ip?.length ?? 0) > 0 && !hasIp) ||
+      (!!r.match.port && !('port' in rest) && !('port_range' in rest)) ||
+      ((r.match.protocol?.length ?? 0) > 0 && !('protocol' in rest));
+    if (lostKind) continue;
     if (hasIp && !resolved) {
       out.push({ action: 'resolve' });
       resolved = true;

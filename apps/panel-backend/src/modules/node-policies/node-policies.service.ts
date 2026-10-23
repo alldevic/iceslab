@@ -305,12 +305,22 @@ export async function resolvePolicyForNode(
     const ip = splitPolicyEntries(r.matchIp).ip;
     const port = r.matchPort && isPortList(r.matchPort) ? r.matchPort : undefined;
     const protocol = r.matchProtocol.filter((p) => (POLICY_PROTOCOLS as readonly string[]).includes(p));
-    const wrote = r.matchDomain.length + r.matchIp.length + r.matchProtocol.length > 0 || !!r.matchPort;
-    const kept = domain.length + ip.length + protocol.length > 0 || !!port;
-    if (wrote && !kept) {
+    // The kinds of condition AND together (domains AND addresses AND port AND
+    // protocol), in xray's rule and in the chain's. So losing a WHOLE kind
+    // widens the rule as much as losing all of them: "block, domain:
+    // [geoip:xx], port: 443" would go out as "block all of 443". A rule that
+    // lost any kind it was written with is left out; losing some entries
+    // inside one kind (they OR) only narrows it, and that stays.
+    const lost = [
+      r.matchDomain.length > 0 && domain.length === 0 ? 'domain' : null,
+      r.matchIp.length > 0 && ip.length === 0 ? 'ip' : null,
+      r.matchPort && !port ? 'port' : null,
+      r.matchProtocol.length > 0 && protocol.length === 0 ? 'protocol' : null,
+    ].filter((k): k is string => k !== null);
+    if (lost.length > 0) {
       getLogger().warn(
-        { nodeId, ruleId: r.id },
-        '[node-policy] a rule whose every matcher is unreadable is left out, not turned into a rule on all traffic',
+        { nodeId, ruleId: r.id, lost },
+        '[node-policy] a rule that lost a whole kind of condition is left out, not widened to more traffic',
       );
       continue;
     }

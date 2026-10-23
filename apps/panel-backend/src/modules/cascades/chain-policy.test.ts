@@ -136,6 +136,18 @@ describe('a node-policy rule that loses its conditions', () => {
     }
   });
 
+  it('is left out when it loses a whole kind of condition, and kept narrower when it loses part of one', () => {
+    // Domains all unreadable, port readable: would go out as "block all of 443".
+    expect(
+      chainNodePolicyOf([{ match: { domain: ['geoip:xx'], port: '443' }, action: { kind: 'block' } }]).rules,
+    ).toEqual([]);
+    // One domain of two readable, port readable: kept with what it has.
+    expect(
+      chainNodePolicyOf([{ match: { domain: ['geoip:xx', 'full:a.example'], port: '443' }, action: { kind: 'block' } }])
+        .rules,
+    ).toEqual([{ domain: ['a.example'], port: [443], action: 'reject', method: 'drop' }]);
+  });
+
   it('a rule written with no condition is still the catch-all, and a readable one stays', () => {
     expect(chainNodePolicyOf([{ match: {}, action: { kind: 'block' } }]).rules).toEqual([
       { network: ['tcp', 'udp'], action: 'reject', method: 'drop' },
