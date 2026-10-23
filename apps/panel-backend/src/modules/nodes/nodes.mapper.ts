@@ -108,7 +108,9 @@ export interface PublicNodeDto {
    * `chainSentAt` and no chain is a process that should be running and is not.
    */
   chainSentAt: string | null;
-  consumptionMultiplier: string;
+  /** A-143: the multiplier as a number with one decimal, 0 = a free node.
+   *  It was the BigInt as a string. */
+  consumptionMultiplier: number;
   // Slice 27.5: region grouping + capacity hint.
   regionId: string | null;
   maxUsers: number | null;
@@ -279,7 +281,7 @@ export function mapNodeToPublic(node: Node): PublicNodeDto {
       (node.lastInboundSyncError as { at: string; message: string } | null) ?? null,
     chainStatus: (node.chainStatus as ChainStatus | null) ?? null,
     chainSentAt: node.chainSentAt?.toISOString() ?? null,
-    consumptionMultiplier: node.consumptionMultiplier.toString(),
+    consumptionMultiplier: node.consumptionMultiplierTenths / 10,
     regionId: node.regionId,
     maxUsers: node.maxUsers,
     domain: node.domain,

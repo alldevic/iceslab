@@ -128,7 +128,7 @@ export async function createNode(
       protocol: engines.protocol,
       intendedEngines: engines.intendedEngines,
       countryCode: input.countryCode ?? null,
-      consumptionMultiplier: BigInt(input.consumptionMultiplier),
+      consumptionMultiplierTenths: Math.round(input.consumptionMultiplier * 10),
       regionId: input.regionId ?? null,
       maxUsers: input.maxUsers ?? null,
       domain: input.domain ?? null,
@@ -466,7 +466,8 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   // (intendedFromReport). `protocol` in a body is no edit either (25.09).
   if (input.countryCode !== undefined) data.countryCode = input.countryCode;
   if (input.consumptionMultiplier !== undefined) {
-    data.consumptionMultiplier = BigInt(input.consumptionMultiplier);
+    // A-143: the schema let only steps of 0.1 through; stored in tenths.
+    data.consumptionMultiplierTenths = Math.round(input.consumptionMultiplier * 10);
   }
   if (input.regionId !== undefined) data.regionId = input.regionId;
   if (input.maxUsers !== undefined) data.maxUsers = input.maxUsers;

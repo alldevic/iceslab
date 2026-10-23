@@ -78,7 +78,7 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
     // it is read per entry off `protocol` (the inbound the user came through);
     // `protocol` here, the node's label, is only the fallback for an agent that
     // does not tag its entries.
-    select: { id: true, address: true, consumptionMultiplier: true, protocol: true },
+    select: { id: true, address: true, consumptionMultiplierTenths: true, protocol: true },
   });
   if (nodes.length === 0) return { ok: 0, failed: 0 };
 
@@ -179,7 +179,8 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         // delta agents pass their totals through for the presence-only fallback.
         const w = computeNodeStatsWrites({
           users: userList,
-          multiplier: Number(node.consumptionMultiplier ?? 1) || 1,
+          // A-143: tenths to the multiplier; 0 is a free node and stays 0.
+          multiplier: node.consumptionMultiplierTenths / 10,
           isPresenceOnlyProtocol: node.protocol === 'mtproto',
           totalBytesIn: res.totalBytesIn,
           totalBytesOut: res.totalBytesOut,

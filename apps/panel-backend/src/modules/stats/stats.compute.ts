@@ -57,7 +57,8 @@ const PRESENCE_ONLY_PROTOCOLS: ReadonlySet<string> = new Set(['mtproto']);
 
 export interface NodeStatsInput {
   users: StatsUserEntry[];
-  /** node.consumptionMultiplier; <=0/NaN falls back to 1. */
+  /** The node's consumption multiplier, 0 to 100 in steps of 0.1; 0 is a free
+   *  node (A-143). NaN or absent falls back to 1. */
   multiplier: number;
   /**
    * The fallback for entries WITHOUT `protocol` (an agent older than the field):
@@ -277,9 +278,14 @@ export function computeNodeTotalsFromCores(
 }
 
 export function computeNodeStatsWrites(input: NodeStatsInput): NodeStatsWrites {
-  const multiplier = Number(input.multiplier ?? 1) || 1;
-  const scale = (v: bigint): bigint =>
-    multiplier === 1 ? v : BigInt(Math.round(Number(v) * multiplier));
+  // A-143: the multiplier in whole tenths, and the bytes scaled in integers:
+  // bytes * tenths / 10, rounded half up, the one rounding of this sum. A free
+  // node (0) counts 0 bytes against quotas; the node's own usage stays raw
+  // below. Only NaN or an absent value means 1: `|| 1` turned 0 into 1 too,
+  // and a free node was billed in full.
+  const m = Number(input.multiplier);
+  const tenths = BigInt(Number.isFinite(m) && m >= 0 ? Math.round(m * 10) : 10);
+  const scale = (v: bigint): bigint => (tenths === 10n ? v : (v * tenths + 5n) / 10n);
 
   // Aggregate by userId BEFORE producing rows. A node can report the same user
   // more than once per poll (a user with multiple inbounds on one node, e.g.

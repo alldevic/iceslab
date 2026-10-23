@@ -125,7 +125,7 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
 
   it('scales per-user billing by the node multiplier; node usage stays raw', async () => {
     const nodeId = await createNode('eu-3', '10.0.0.3:8443');
-    await prisma.node.update({ where: { id: nodeId }, data: { consumptionMultiplier: 2 } });
+    await prisma.node.update({ where: { id: nodeId }, data: { consumptionMultiplierTenths: 20 } });
     const u1 = await createUser('dave');
 
     mockStats(stats([{ userId: u1, bytesIn: 100, bytesOut: 0 }]));
@@ -136,6 +136,27 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
 
     const usage = await prisma.nodeUsageHistory.findMany({ where: { nodeId } });
     expect(usage[0]!.uploadBytes).toBe(100n); // raw, unscaled
+  });
+
+  // A-143: a fractional multiplier and a free node, through the poller.
+  it('bills 0.5 of 1001 bytes as 501 (half up) and a free node as 0, node usage raw', async () => {
+    const half = await createNode('eu-h', '10.0.0.31:8443');
+    await prisma.node.update({ where: { id: half }, data: { consumptionMultiplierTenths: 5 } });
+    const u1 = await createUser('half');
+    mockStats(stats([{ userId: u1, bytesIn: 1001, bytesOut: 0 }]));
+    await pollNodeStats();
+    expect((await prisma.userTraffic.findUnique({ where: { userId: u1 } }))?.usedTrafficBytes).toBe(501n);
+  });
+
+  it('a free node (0) bills nothing and still records its raw usage', async () => {
+    const free = await createNode('eu-f', '10.0.0.32:8443');
+    await prisma.node.update({ where: { id: free }, data: { consumptionMultiplierTenths: 0 } });
+    const u1 = await createUser('free');
+    mockStats(stats([{ userId: u1, bytesIn: 1000, bytesOut: 0 }]));
+    await pollNodeStats();
+    expect((await prisma.userTraffic.findUnique({ where: { userId: u1 } }))?.usedTrafficBytes).toBe(0n);
+    const usage = await prisma.nodeUsageHistory.findMany({ where: { nodeId: free } });
+    expect(usage[0]!.uploadBytes).toBe(1000n);
   });
 
   it('leaves a zero-delta user untouched (no billing, no online flip)', async () => {

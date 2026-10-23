@@ -137,7 +137,9 @@ model Node {
   // NodeGeoFact in shared. NULL = the node has not said (an agent older than
   // geo, or not polled yet).
   geo                   Json?
-  consumptionMultiplier BigInt    @default(1) @map("consumption_multiplier")
+  // A-143: whole tenths, 10 = 1.0, 0 = a free node, up to 1000 = 100.0
+  // (CHECK in the migration). The API speaks the multiplier itself.
+  consumptionMultiplierTenths Int @default(10) @map("consumption_multiplier_tenths")
 
   // Slice 27.5: region grouping + capacity hint. Both NULL by default
   // so existing nodes need no backfill; UI shows them under "Без региона"
