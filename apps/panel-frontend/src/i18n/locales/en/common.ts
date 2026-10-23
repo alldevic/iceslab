@@ -382,6 +382,8 @@ export const common = {
   // called, but what it gives the client.
   formatName: {
     plain: 'Links (plain)',
+    // A-236 step 1 (fe676097): the same links without base64.
+    raw: 'Links without base64 (raw)',
     json: 'JSON',
     clash: 'Clash / Mihomo',
     singbox: 'sing-box',

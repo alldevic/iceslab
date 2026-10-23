@@ -427,6 +427,8 @@ export const common = {
   // «что это даёт клиенту».
   formatName: {
     plain: 'Ссылки (plain)',
+    // A-236 шаг 1 (fe676097): те же ссылки без base64.
+    raw: 'Ссылки без base64 (raw)',
     json: 'JSON',
     clash: 'Clash / Mihomo',
     singbox: 'sing-box',
