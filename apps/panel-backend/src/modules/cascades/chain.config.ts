@@ -802,6 +802,17 @@ export function renderChainConfig(input: ChainRenderInput): Json {
     if (tproxy && outbounds.some((o) => o.tag === outTag(AUTO_TAG))) {
       rules.push({ inbound: [TPROXY_IN_TAG], action: 'route', outbound: outTag(AUTO_TAG) });
     }
+  } else if (
+    input.role === 'transit' &&
+    input.in &&
+    input.in.cred.protocol !== 'vless' &&
+    new Set([...(input.out ?? []).map((l) => l.tag), ...(input.foreign ?? []).map((f) => f.tag)]).size > 1
+  ) {
+    // A-102: a leg that carries no credential per direction, into a transit
+    // with several ways out. The save refuses this shape now; one stored
+    // before fails CLOSED here: route's default is the first outbound, which
+    // is somebody else's country.
+    rules.push({ network: ['tcp', 'udp'], action: 'reject', method: 'drop' });
   } else if (input.role === 'transit' && input.in?.cred.protocol === 'vless') {
     // A transit sees links, not users: which credential the traffic arrived on
     // is the only thing that says which way out it was headed for.

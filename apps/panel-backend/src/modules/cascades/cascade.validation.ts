@@ -256,6 +256,28 @@ export function validateCascadeTopology(
     }
   });
 
+  /**
+   * A-102: a transit tells the directions apart by the credential each leg
+   * arrives on, and only the vless cell carries one per direction (a user per
+   * direction, routed by `auth_user`). Shadowsocks, hy2 and tuic land every
+   * direction on one listener with one secret, so the transit cannot say which
+   * way a connection was headed, and every direction left through the first
+   * outbound: NL and DE both out of NL, `check` green on both ends. With one
+   * direction there is nothing to tell apart and any cell does.
+   */
+  if (directions.length > 1) {
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const cell = linkCellFor(sorted[i]!.linkProtocol);
+      if (cell && cell !== 'vless') {
+        throw new CascadeValidationError(
+          `position ${sorted[i + 1]!.position} is a transit carrying ${directions.length} directions, and the ` +
+            `${cell} leg into it from position ${sorted[i]!.position} cannot tell them apart: every direction ` +
+            `would leave through the first. Use vless for that step, or keep one direction.`,
+        );
+      }
+    }
+  }
+
   assertDirectionShapes(directions);
   for (const d of directions) {
     if (new Set(d.nodeIds).size !== d.nodeIds.length) {

@@ -343,6 +343,66 @@ describe('a leg carries a request between two engines', () => {
   );
 
   /**
+   * A-102, for real: a shadowsocks leg into a transit with two ways out. The
+   * leg carries one secret for both directions, so the transit cannot tell
+   * them apart; route's default would send both out through the first. The
+   * fallback for a shape stored before the save refused it drops both instead.
+   * Without it, both requests below arrive.
+   */
+  it.skipIf(!SINGBOX_BIN)(
+    'a transit that cannot tell two directions apart drops both instead of sending them out of the first',
+    async () => {
+      const password = randomBytes(12).toString('hex');
+      const legIn = await newLinkCred('shadowsocks', await freePort());
+      const outA = await newLinkCred('shadowsocks', await freePort());
+      const outB = await newLinkCred('shadowsocks', await freePort());
+      const entry = renderChainConfig({
+        role: 'entry',
+        socksPassword: password,
+        directionTags: [1, 2],
+        out: [
+          { tag: 1, host: '127.0.0.1', cred: legIn },
+          { tag: 2, host: '127.0.0.1', cred: legIn },
+        ],
+      }) as { inbounds: { type: string; tag: string; listen_port: number }[] };
+      const socksPorts: number[] = [];
+      for (const i of entry.inbounds) {
+        if (i.type !== 'socks') continue;
+        i.listen_port = await freePort();
+        socksPorts.push(i.listen_port);
+      }
+      const transit = renderChainConfig({
+        role: 'transit',
+        socksPassword: password,
+        in: { cred: legIn, clients: [{ tag: 1 }, { tag: 2 }] },
+        out: [
+          { tag: 1, host: '127.0.0.1', cred: outA },
+          { tag: 2, host: '127.0.0.1', cred: outB },
+        ],
+      });
+      const exitOf = (cred: LinkCred) =>
+        renderChainConfig({ role: 'exit', socksPassword: password, in: { cred, clients: [{ tag: 1 }] } });
+      const runs = [
+        run('a102-exit-a', exitOf(outA)),
+        run('a102-exit-b', exitOf(outB)),
+        run('a102-transit', transit),
+        run('a102-entry', entry),
+      ];
+      try {
+        await new Promise((r) => setTimeout(r, 2500));
+        expect(socksPorts).toHaveLength(2);
+        for (const port of socksPorts) {
+          const body = await getThroughSocks(port, password, httpPort).catch(() => '');
+          expect(body, runs.map((r) => r.log()).join('\n')).not.toContain(nonce);
+        }
+      } finally {
+        await stopAll();
+      }
+    },
+    40000,
+  );
+
+  /**
    * A-111, the dial family, for real. The entry is addressed by an IPv4 literal
    * in the panel, the next hop by a name with both an A and an AAAA record
    * (`localhost`: 127.0.0.1 and ::1), and the exit listens on 127.0.0.1 only,
@@ -394,7 +454,7 @@ describe('a leg carries a request between two engines', () => {
     'a legacy xray shadowsocks leg from an IPv4 literal to a dual-stack name dials IPv4, and an IPv6 pin does not arrive',
     async () => {
       await assertDualStackLocalhost();
-      const legacyEntry =(selfHost: string, cred: LinkCred, socksPort: number, password: string) => {
+      const legacyEntry = (selfHost: string, cred: LinkCred, socksPort: number, password: string) => {
         const [entry, exitHop] = buildCascadeConfigs(
           [
             { nodeId: 'e', position: 0, nodeHost: selfHost },

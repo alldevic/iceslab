@@ -269,6 +269,24 @@ describe('which inter-hop link protocols are carried', () => {
     expect(() => validateCascadeTopology([position('shadowsocks')], directions)).not.toThrow();
   });
 
+  it('refuses a cell that cannot tell directions apart into a transit carrying several (A-102)', () => {
+    const N3 = '33333333-3333-4333-8333-333333333333';
+    const N4 = '44444444-4444-4444-8444-444444444444';
+    const withTransit = (cell: string) => [
+      { nodeIds: [N1], position: 0, entryProtocol: 'xray' as const, linkProtocol: cell },
+      { nodeIds: [N2], position: 1, linkProtocol: 'vless' },
+    ];
+    const two = [{ nodeIds: [N3] }, { nodeIds: [N4] }];
+    for (const cell of ['shadowsocks', 'hy2', 'tuic']) {
+      expect(() => validateCascadeTopology(withTransit(cell), two), cell).toThrow(/cannot tell them apart/);
+      // One direction has nothing to tell apart.
+      expect(() => validateCascadeTopology(withTransit(cell), [two[0]!]), cell).not.toThrow();
+    }
+    expect(() => validateCascadeTopology(withTransit('vless'), two)).not.toThrow();
+    // The step into the directions is per direction, and not a transit's.
+    expect(() => validateCascadeTopology([position('shadowsocks')], two)).not.toThrow();
+  });
+
   it('refuses one nothing carries, and says which', () => {
     // The operator has to read their own choice back, not a rule number.
     expect(() => validateCascadeTopology([position('hysteria')], directions)).toThrow(
