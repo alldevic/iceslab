@@ -149,19 +149,30 @@ export const traffic = {
       proxy: 'Into the tunnel',
     },
     extra: 'Extra',
-    writesDisabledPresets: 'Available once presets are data: the write endpoints do not exist yet.',
     presetNamePlaceholder: 'Preset name',
     presetSaved: 'Preset saved',
     presetDeleted: 'Preset deleted',
     presetDeleteTitle: 'Delete preset "{{name}}"?',
-    presetDeleteBody: 'Squads on it fall back to the default preset the next time a config is issued.',
+    presetDeleteBody: 'Only a preset nobody holds is deleted. One in use is refused, and the server names who holds it.',
+    presetEntryUnknown: 'A device rule cannot carry these: {{entries}}. The rows are marked.',
+    presetGeoTagUnknown: 'The panel geo set has no such tags: {{entries}}. The rows are marked.',
+    presetEntryRow: 'Refused by the server: {{entries}}.',
+    presetBuiltInRefused: 'A built-in preset is not changed or deleted.',
+    presetGone: 'This preset is gone: the list was read again.',
+    presetNameTaken: 'A preset with this name already exists.',
+    presetInUse: 'The preset is assigned to {{holders}}. Take it off there, then delete.',
+    presetHeldUsers_one: '{{count}} user ({{names}})',
+    presetHeldUsers_other: '{{count}} users ({{names}})',
+    presetHeldSquads_one: '{{count}} squad ({{names}})',
+    presetHeldSquads_other: '{{count}} squads ({{names}})',
+    presetHeldMore: '{{names}} and {{count}} more',
     // Stands where the delete button stands on the two neighbouring tabs. An
     // empty corner reads as a button somebody forgot, so the absence is said.
     presetNoDelete: 'built in, cannot be deleted',
     presetBuiltInWhy:
       'The three ready-made presets are compiled into the subscription builder rather than stored as data, so there is nothing to delete. Your own layer of rules is edited below.',
-    presetWritesNotLive:
-      'Saving needs the preset endpoints, which the API does not ship yet: today these are three rule sets compiled into the builder rather than data. Everything else on this screen is live, and Save will start working the moment they land.',
+    presetOwnNote:
+      'Your own preset: its rules go into the client config of whoever holds it (a user or a squad, set on their card). Like the built-ins, it reaches the full formats only.',
     actionDirect: 'Straight out',
     actionBlock: 'Dropped',
     actionDrop: 'Blocked',
@@ -185,7 +196,7 @@ export const traffic = {
     nodeReadOnly:
       'Read-only for now. The API ships route policies as a list, with no create or edit, so the panel shows what exists rather than pretending to write it.',
     presetReadOnly:
-      'Read-only: the three presets are compiled into the subscription builder, not stored as data. What you can change is your own layer below, which runs ahead of them.',
+      'Read-only: the three built-in presets are compiled into the subscription builder. Your own preset is made with "New preset"; your own layer below runs ahead of any preset.',
     ownTitle: 'Your own rules',
     ownHint: 'Applied before the preset, so these win over it.',
     unsaved: 'unsaved',

@@ -1,5 +1,6 @@
 import type { TrafficLimitStrategy, UpdateUserInput, User } from '@/lib/domain/users';
 import { MIST, MONO } from '@/contours/users/lib/colors';
+import { presetChoiceOf, presetChoicePatch } from '@/lib/domain/routingPresets';
 export const LABEL = {
   fontFamily: MONO,
   fontSize: 10,
@@ -79,7 +80,9 @@ export function defaultValues(user: User | null): FormValues {
     telegramId: user?.telegramId ?? '',
     hwidDeviceLimit: user?.hwidDeviceLimit ?? '',
     groupIds: user?.groupIds ?? [],
-    routingPreset: user?.routingPreset ?? '',
+    // One picker value for the pair: '' inherits, a built-in key or an own
+    // preset's id (A-229).
+    routingPreset: presetChoiceOf(user),
   };
 }
 
@@ -108,8 +111,5 @@ export function userUpdatePatch(seed: FormValues, values: FormValues, chosenExpi
   if (limit(values.hwidDeviceLimit) !== limit(seed.hwidDeviceLimit)) out.hwidDeviceLimit = limit(values.hwidDeviceLimit);
   const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
   if (!sameSet(values.groupIds, seed.groupIds)) out.groupIds = [...values.groupIds];
-  if (text(values.routingPreset) !== text(seed.routingPreset)) {
-    out.routingPreset = (text(values.routingPreset) as UpdateUserInput['routingPreset']) ?? null;
-  }
-  return out;
+  return { ...out, ...presetChoicePatch(seed.routingPreset, values.routingPreset) };
 }

@@ -34,6 +34,8 @@ export interface User {
   hwidDeviceLimit: number | null;
   /** R3, per-user routing-preset override; null = inherit (squad -> global -> default). */
   routingPreset: RoutingPresetId | null;
+  /** A-229, the operator's own preset instead of a built-in one, never both. Absent: a server older than own presets. */
+  customRoutingPresetId?: string | null;
   description: string | null;
   tag: string | null;
   telegramId: string | null;
@@ -67,6 +69,8 @@ export interface CreateUserInput {
   hwidDeviceLimit?: number | null;
   /** R3, per-user routing-preset override; null = inherit. */
   routingPreset?: RoutingPresetId | null;
+  /** A-229, an own preset by id; the server takes one of the two, never both. */
+  customRoutingPresetId?: string | null;
   enabledProtocols?: ProtocolName[];
   /** Slice 26, squad membership. Empty/undefined → backend auto-adds to All. */
   groupIds?: string[];
@@ -84,6 +88,8 @@ export interface UpdateUserInput {
   hwidDeviceLimit?: number | null;
   /** R3, per-user routing-preset override; null clears it (back to inherit). */
   routingPreset?: RoutingPresetId | null;
+  /** A-229, an own preset by id: a value clears the built-in on the server, null clears only this side. */
+  customRoutingPresetId?: string | null;
   enabledProtocols?: ProtocolName[];
   /** Slice 26, replaces the full squad set when provided. */
   groupIds?: string[];
@@ -219,6 +225,54 @@ export interface UserEndpoint {
   host: string;
   port: number;
   uri: string;
+}
+
+/** A preset as the delivery endpoint names it: a built-in key or an own one. */
+export interface PresetRef {
+  builtIn: boolean;
+  id: string;
+  name: string;
+}
+
+/** Which preset this user is served and where it comes from (A-229). */
+export interface DeliveryRouting {
+  effective: PresetRef;
+  user: PresetRef | null;
+  squad: PresetRef | null;
+  squadConflict: boolean;
+}
+
+/** GET /api/users/:id/delivery. Raw: `deliveryRouting` reads it. */
+export async function getUserDelivery(id: string): Promise<unknown> {
+  const { data } = await api.get<unknown>(`/api/users/${id}/delivery`);
+  return data;
+}
+
+function presetRef(v: unknown): PresetRef | null {
+  if (!v || typeof v !== 'object') return null;
+  const { builtIn, id, name } = v as Record<string, unknown>;
+  return typeof builtIn === 'boolean' && typeof id === 'string' && typeof name === 'string' ? { builtIn, id, name } : null;
+}
+
+/**
+ * The routing of the delivery answer, with the operator's own presets in it
+ * (`effectivePreset`, `userPreset`, `squadPreset`). The older fields speak in
+ * built-in keys only: with an own preset `user` is null while the user does
+ * hold one, so they are not read here. A server without the three fields, or
+ * with one malformed, is null: the card says it does not know rather than
+ * «no preset». The input is checked first.
+ */
+export function deliveryRouting(data: unknown): DeliveryRouting | null {
+  if (!data || typeof data !== 'object') return null;
+  const routing = (data as { routing?: unknown }).routing;
+  if (!routing || typeof routing !== 'object') return null;
+  const r = routing as Record<string, unknown>;
+  const effective = presetRef(r.effectivePreset);
+  if (!effective || !('userPreset' in r) || !('squadPreset' in r)) return null;
+  const user = r.userPreset === null ? null : presetRef(r.userPreset);
+  const squad = r.squadPreset === null ? null : presetRef(r.squadPreset);
+  if ((r.userPreset !== null && !user) || (r.squadPreset !== null && !squad)) return null;
+  return { effective, user, squad, squadConflict: r.squadConflict === true };
 }
 
 export async function fetchUserEndpoints(id: string): Promise<{ endpoints: UserEndpoint[] }> {

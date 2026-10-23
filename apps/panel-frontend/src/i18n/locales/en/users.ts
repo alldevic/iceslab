@@ -9,6 +9,7 @@ export const users = {
       'Every subscriber lives here. Create the first one and its subscription link is minted on save.',
     emptyImport: 'OR IMPORT AN EXISTING PANEL · ICESLAB-MIGRATE',
     routingOverrideHint: 'This user overrides the routing preset their squad would give them.',
+    routingOwn: 'own preset',
     filters: {
       button: 'Filters',
       squad: 'Squad',
@@ -155,6 +156,14 @@ export const users = {
     formatFromRules: 'set by the delivery rules',
     routing: 'Routing',
     routingFromSquad: 'from squad {{squad}}',
+    routingFromSquads: 'from squads',
+    routingFromPanel: 'panel default',
+    routingOwn: 'set on the user',
+    routingFailed: 'could not load',
+    routingUnknown: 'unknown',
+    routingOwnUnnamed: 'own preset (name did not load)',
+    routingPresetsFailed: 'Own presets did not load: {{message}}. The built-ins are available.',
+    routingPresetGone: 'This preset is gone: pick another one.',
     // How the preview says a reset period, where the sentence is "50 GiB,
     // resets monthly" rather than a setting called "Every month".
     resets: {

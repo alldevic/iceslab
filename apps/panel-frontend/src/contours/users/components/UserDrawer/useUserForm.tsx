@@ -3,13 +3,15 @@ import type { FormValues } from '@/contours/users/lib/userForm';
 import type { Preset } from '@/contours/users/lib/userPresets';
 import type { PreviewData, PreviewRowData } from '@/contours/users/components/UserDrawer/PreviewCard';
 import type { ExpirySpan } from '@/contours/users/lib/userExpiry';
-import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
+import { ALL_SQUAD_ID, listRoutingPresets } from '@/lib/domain/routePolicies';
+import { isRoutingPresetId, presetChoiceName, presetChoiceOf, presetChoicePatch, presetKey } from '@/lib/domain/routingPresets';
+import { routingRow, type DeliveryView } from '@/contours/users/lib/routingRow';
 import { defaultValues, trafficLimitInput, trafficLimitProblem, userUpdatePatch } from '@/contours/users/lib/userForm';
 import { expiryDays } from '@/contours/users/lib/userExpiry';
 import { endpointsWhy } from '@/contours/users/lib/endpointsWhy';
 import { effectiveDeviceCap } from '@/contours/users/lib/deviceLimit';
 import { userSaveRefusal } from '@/contours/users/lib/userSaveRefusal';
-import { fetchUserEndpoints, listUsers } from '@/lib/domain/users';
+import { deliveryRouting, fetchUserEndpoints, getUserDelivery, listUsers } from '@/lib/domain/users';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { listSquads } from '@/lib/domain/squads';
@@ -17,7 +19,7 @@ import { loadPresets } from '@/contours/users/lib/userPresets';
 import { useMemo, useState } from 'react';
 import { useNow } from '@/lib/ui/useNow';
 import { useForm } from '@mantine/form';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { useTranslation } from 'react-i18next';
@@ -123,6 +125,17 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     enabled: opened,
   });
   const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes(), enabled: opened });
+  // The operator's own presets for the routing picker and for naming a squad's
+  // choice (A-229).
+  const presetsQuery = useQuery({ queryKey: ['routing-presets'], queryFn: listRoutingPresets, enabled: opened });
+  // What the server resolves this person's routing to, own presets included:
+  // the card reads it rather than the form's guess (A-229).
+  const deliveryQuery = useQuery({
+    queryKey: ['user-delivery', user?.id],
+    queryFn: () => getUserDelivery(user!.id),
+    enabled: opened && isEdit,
+  });
+  const qc = useQueryClient();
 
   // Memoised because two derived blocks below key off it: a fresh [] per render
   // would recompute the estimate and the routing check on every keystroke.
@@ -272,15 +285,23 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     [form.values.hwidDeviceLimit, form.values.groupIds, squads, squadsQuery],
   );
 
+  /** A picker value's name: a built-in in panel words, an own preset by the list. */
+  const ownPresets = presetsQuery.data?.presets;
+  const choiceName = useMemo(
+    () => (choice: string) => presetChoiceName(choice, ownPresets, (id) => t(`metadata.preset${presetKey(id)}`)),
+    [ownPresets, t],
+  );
+
+  // A squad's choice is one value too, a built-in or an own preset (A-229).
   const squadRoutingClash = useMemo(() => {
     const named = squads.filter(
-      (s) =>
-        s.routingPreset !== null &&
-        (s.id === ALL_SQUAD_ID || form.values.groupIds.includes(s.id)),
+      (s) => presetChoiceOf(s) !== '' && (s.id === ALL_SQUAD_ID || form.values.groupIds.includes(s.id)),
     );
-    const distinct = new Set(named.map((s) => s.routingPreset));
-    return distinct.size > 1 ? named.map((s) => ({ name: s.name, preset: s.routingPreset! })) : null;
-  }, [squads, form.values.groupIds]);
+    const distinct = new Set(named.map((s) => presetChoiceOf(s)));
+    return distinct.size > 1
+      ? named.map((s) => ({ name: s.name, preset: choiceName(presetChoiceOf(s)) ?? t('userDrawer.routingOwnUnnamed') }))
+      : null;
+  }, [squads, form.values.groupIds, choiceName, t]);
 
   /**
    * Where the routing this person gets comes from, when it comes from a squad.
@@ -293,15 +314,36 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
   const squadRoutingSource = useMemo(() => {
     if (form.values.routingPreset) return null;
     const named = squads.filter(
-      (s) =>
-        s.routingPreset !== null &&
-        (s.id === ALL_SQUAD_ID || form.values.groupIds.includes(s.id)),
+      (s) => presetChoiceOf(s) !== '' && (s.id === ALL_SQUAD_ID || form.values.groupIds.includes(s.id)),
     );
-    const distinct = new Set(named.map((s) => s.routingPreset));
-    return distinct.size === 1 && named[0]
-      ? { preset: named[0].routingPreset!, squad: named[0].name }
-      : null;
-  }, [squads, form.values.groupIds, form.values.routingPreset]);
+    const distinct = new Set(named.map((s) => presetChoiceOf(s)));
+    if (distinct.size !== 1 || !named[0]) return null;
+    const choice = presetChoiceOf(named[0]);
+    return { choice, preset: choiceName(choice) ?? t('userDrawer.routingOwnUnnamed'), squad: named[0].name };
+  }, [squads, form.values.groupIds, form.values.routingPreset, choiceName, t]);
+
+  // The card's routing row: the server's resolution for an untouched edit,
+  // the form's reading for a draft (routingRow).
+  const deliveryView: DeliveryView =
+    loadView(deliveryQuery) === 'failed'
+      ? { kind: 'failed' }
+      : deliveryQuery.data === undefined
+        ? { kind: 'loading' }
+        : { kind: 'ready', routing: deliveryRouting(deliveryQuery.data) };
+  const routing = routingRow({
+    draft: form.values.routingPreset,
+    seed: isEdit ? (seedValues?.routingPreset ?? null) : null,
+    delivery: deliveryView,
+    squads: { source: squadRoutingSource, clash: squadRoutingClash !== null },
+    choiceName,
+    refName: (ref) => (ref.builtIn && isRoutingPresetId(ref.id) ? t(`metadata.preset${presetKey(ref.id)}`) : ref.name),
+    words: {
+      inherits: t('userDrawer.inheritsSquad'),
+      unnamed: t('userDrawer.routingOwnUnnamed'),
+      unknown: t('userDrawer.routingUnknown'),
+      loading: t('common.loading'),
+    },
+  });
 
   function applyPreset(p: Preset) {
     setPresetId(p.id);
@@ -337,8 +379,20 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
       return true;
     } catch (err) {
       const refusal = userSaveRefusal(err, (code) =>
-        t(code === 'USERNAME_TAKEN' ? 'userDrawer.usernameTaken' : 'userDrawer.tokenTaken'),
+        t(
+          code === 'USERNAME_TAKEN'
+            ? 'userDrawer.usernameTaken'
+            : code === 'SUBSCRIPTION_TOKEN_TAKEN'
+              ? 'userDrawer.tokenTaken'
+              : 'userDrawer.routingPresetGone',
+        ),
       );
+      // The own preset picked was deleted meanwhile: the picker reads the
+      // list again (A-229).
+      if (refusal?.fields.routingPreset) {
+        qc.invalidateQueries({ queryKey: ['routing-presets'] });
+        setAdvancedOpen(true);
+      }
       if (refusal) {
         for (const [field, text] of Object.entries(refusal.fields)) form.setFieldError(field, text);
         setSaveRefusal(refusal.message);
@@ -376,7 +430,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
         hwidDeviceLimit: values.hwidDeviceLimit === '' ? null : Number(values.hwidDeviceLimit),
         groupIds: values.groupIds,
         ...(values.subscriptionToken ? { subscriptionToken: values.subscriptionToken.trim() } : {}),
-        ...(values.routingPreset ? { routingPreset: values.routingPreset as never } : {}),
+        ...presetChoicePatch('', values.routingPreset),
       };
       if (!(await submit(input))) return;
     }
@@ -439,6 +493,9 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     deviceCap,
     squadRoutingClash,
     squadRoutingSource,
+    presetsQuery,
+    choiceName,
+    routing,
     setCreateNext,
     applyPreset,
     setExpiry,

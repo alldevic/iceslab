@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultPresetOf, routesPaneFailure } from '@/contours/traffic/lib/routesView';
+import { defaultPresetOf, presetsFromList, routesPaneFailure } from '@/contours/traffic/lib/routesView';
 
 const ok = (data: unknown) => ({ data, isError: false, error: null, refetch: () => undefined });
 const failed = { data: undefined, isError: true, error: 'boom', refetch: () => undefined };
@@ -18,14 +18,29 @@ describe('defaultPresetOf (A-228)', () => {
   });
 });
 
+describe('presetsFromList (A-229)', () => {
+  it('встроенные пресеты приходят с сервера как есть; до ответа null, а не своя копия', () => {
+    const builtIn = { id: 'ru-split', name: 'ru-split', builtIn: true, rules: [{ id: 'r0', match: ['geoip:ru'], action: 'direct', note: '' }] };
+    const own = { id: '7f1c0000-0000-4000-8000-000000000001', name: 'Мой', builtIn: false, rules: [] };
+    expect(presetsFromList({ presets: [builtIn, own] })).toEqual([builtIn, own]);
+    expect(presetsFromList(undefined)).toBeNull();
+    expect(presetsFromList({} as { presets?: never[] })).toBeNull();
+  });
+});
+
 describe('routesPaneFailure (A-228)', () => {
-  const lists = { routePolicies: ok({ policies: [] }), squads: ok({ squads: [] }), settings: ok({}) };
+  const lists = { routePolicies: ok({ policies: [] }), squads: ok({ squads: [] }), settings: ok({}), presets: ok({ presets: [] }) };
 
   it('сбой списка открытой вкладки даёт отказ с повтором, а не пусто', () => {
     const node = routesPaneFailure('node', { ...lists, routePolicies: failed }, say);
     expect(node?.message).toBe('said boom');
     expect(routesPaneFailure('device', { ...lists, settings: failed }, say)?.message).toBe('said boom');
     expect(routesPaneFailure('device', { ...lists, squads: failed }, say)).not.toBeNull();
+  });
+
+  it('A-229: сбой списка пресетов даёт «не удалось загрузить» на вкладке устройства, а не встроенную копию', () => {
+    expect(routesPaneFailure('device', { ...lists, presets: failed }, say)?.message).toBe('said boom');
+    expect(routesPaneFailure('node', { ...lists, presets: failed }, say)).toBeNull();
   });
 
   it('пустой ответ это не сбой; чужой список вкладку не роняет; ожидание не сбой', () => {

@@ -67,19 +67,6 @@ export function toPolicyInput(name: string, rules: Pick<RouteRule, 'match' | 'ac
 }
 
 /**
- * Whether the preset write surface exists yet. It does not: there is no
- * /api/routing-presets route on the backend AT ALL, not even a GET, so the
- * controls stay disabled and say why rather than offering a button that
- * answers 404.
- *
- * The policy flag that used to stand beside this one is gone. Policy writes
- * shipped on 2026-07-30, the constant stayed `true` for six weeks, and the
- * banner it guarded went on telling operators the endpoints were missing. A
- * flag that cannot be false is not a guard, it is a thing to forget.
- */
-export const ROUTING_PRESET_WRITES_LIVE = false;
-
-/**
  * Policy writes. Saving reaches the fleet on its own: the API re-pushes the
  * config to every enabled cascade entry, so there is no separate apply step.
  */
@@ -171,17 +158,9 @@ export function policyEntryOf(
 /**
  * A routing preset: the rule set written into the client's own config.
  *
- * ⚠ NOTHING is behind this on the backend. Not the writes, not the list: there
- * is no /api/routing-presets route at all, so the four calls below answer 404
- * to the last one. The screen does not depend on them, it reads the three ids
- * out of `devicePresets.ts`, and the list call is made once with `retry: false`
- * precisely so it can lose.
- *
- * Kept, not deleted, because this is the shape the editor is already written
- * against and the call sites are behind ROUTING_PRESET_WRITES_LIVE. The line
- * that used to stand here said «presets are still list-only», which was one
- * word away from the truth and would have let the next reader assume a GET
- * exists.
+ * /api/routing-presets (A-229, BACK-2): the list carries the three built-ins
+ * (`builtIn: true`, read-only, refused with 403 on write) and the operator's
+ * own presets, which are stored rows with full CRUD.
  *
  * A device can only bypass, block or tunnel. WARP is a node egress and has no
  * meaning here, which is why `RouteAction` is narrowed at the call site.
@@ -210,7 +189,7 @@ export async function createRoutingPreset(input: RoutingPresetInput): Promise<Ro
 
 export async function updateRoutingPreset(
   id: string,
-  input: RoutingPresetInput,
+  input: Partial<RoutingPresetInput>,
 ): Promise<RoutingPreset> {
   const { data } = await api.put<RoutingPreset>(`/api/routing-presets/${id}`, input);
   return data;
@@ -218,4 +197,66 @@ export async function updateRoutingPreset(
 
 export async function deleteRoutingPreset(id: string): Promise<void> {
   await api.delete(`/api/routing-presets/${id}`);
+}
+
+/**
+ * A refused preset write, read by code (A-229, BACK-2). Null: not one of
+ * these, the caller says the server's sentence. The input is checked first;
+ * entries and holders that are not strings or named rows are skipped.
+ *
+ *   400 ROUTING_PRESET_ENTRY_UNKNOWN / ROUTING_PRESET_GEO_TAG_UNKNOWN {entries}
+ *   403 ROUTING_PRESET_BUILT_IN
+ *   404 NOT_FOUND (the preset went away)
+ *   409 NAME_TAKEN {field: 'name'}
+ *   409 ROUTING_PRESET_IN_USE {users, squads, userCount, squadCount}
+ */
+export type RoutingPresetRefusal =
+  | { code: 'ROUTING_PRESET_ENTRY_UNKNOWN' | 'ROUTING_PRESET_GEO_TAG_UNKNOWN'; entries: string[] }
+  | { code: 'ROUTING_PRESET_BUILT_IN' | 'NOT_FOUND' | 'NAME_TAKEN' }
+  | {
+      code: 'ROUTING_PRESET_IN_USE';
+      users: string[];
+      squads: string[];
+      userCount: number;
+      squadCount: number;
+    };
+
+const PRESET_STATUS: Record<string, number> = {
+  ROUTING_PRESET_ENTRY_UNKNOWN: 400,
+  ROUTING_PRESET_GEO_TAG_UNKNOWN: 400,
+  ROUTING_PRESET_BUILT_IN: 403,
+  NOT_FOUND: 404,
+  NAME_TAKEN: 409,
+  ROUTING_PRESET_IN_USE: 409,
+};
+
+export function routingPresetRefusal(err: unknown): RoutingPresetRefusal | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  const code = d.error;
+  if (typeof code !== 'string' || !Object.hasOwn(PRESET_STATUS, code) || PRESET_STATUS[code] !== status) return null;
+  const strings = (v: unknown) => (Array.isArray(v) ? v.filter((e): e is string => typeof e === 'string') : []);
+  const named = (v: unknown, key: 'username' | 'name') =>
+    Array.isArray(v)
+      ? v.flatMap((e) => {
+          const n = e && typeof e === 'object' ? (e as Record<string, unknown>)[key] : undefined;
+          return typeof n === 'string' ? [n] : [];
+        })
+      : [];
+  if (code === 'ROUTING_PRESET_ENTRY_UNKNOWN' || code === 'ROUTING_PRESET_GEO_TAG_UNKNOWN') {
+    return { code, entries: strings(d.entries) };
+  }
+  if (code === 'ROUTING_PRESET_IN_USE') {
+    const users = named(d.users, 'username');
+    const squads = named(d.squads, 'name');
+    // The counts are the whole truth (the lists are capped); a count missing
+    // or below its list is read from the list, never as zero.
+    const count = (v: unknown, floor: number) => (typeof v === 'number' && v >= floor ? v : floor);
+    return { code, users, squads, userCount: count(d.userCount, users.length), squadCount: count(d.squadCount, squads.length) };
+  }
+  return { code: code as 'ROUTING_PRESET_BUILT_IN' | 'NOT_FOUND' | 'NAME_TAKEN' };
 }

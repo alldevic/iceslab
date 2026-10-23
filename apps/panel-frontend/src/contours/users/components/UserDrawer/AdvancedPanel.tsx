@@ -1,7 +1,9 @@
-import { ROUTING_PRESET_IDS } from '@/lib/domain/routingPresets';
+import { presetChoiceRows } from '@/lib/domain/routingPresets';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
 import { IconChevronDown, IconChevronRight, IconDeviceDesktop, IconMail, IconNote, IconRoute, IconTag } from '@tabler/icons-react';
 import { AdvancedGroup } from '@/contours/users/components/UserDrawer/AdvancedGroup';
-import { ROW, CARD, DISPLAY, HAIRLINE, MIST, MONO, SNOW } from '@/contours/users/lib/colors';
+import { AMBER, ROW, CARD, DISPLAY, HAIRLINE, MIST, MONO, SNOW } from '@/contours/users/lib/colors';
 import { Box, NumberInput, Select, Stack, Text, TextInput, Textarea, UnstyledButton } from '@mantine/core';
 import { Hint } from '@/contours/users/components/UserDrawer/Hint';
 import { RoutingPrecedence } from '@/contours/users/components/UserDrawer/RoutingPrecedence';
@@ -26,9 +28,18 @@ export function AdvancedPanel({
   setAdvancedOpen,
   squadRoutingClash,
   squadRoutingSource,
+  presetsQuery,
+  choiceName,
 }: Pick<
   UserForm,
-  'isEdit' | 'form' | 'advancedOpen' | 'setAdvancedOpen' | 'squadRoutingClash' | 'squadRoutingSource'
+  | 'isEdit'
+  | 'form'
+  | 'advancedOpen'
+  | 'setAdvancedOpen'
+  | 'squadRoutingClash'
+  | 'squadRoutingSource'
+  | 'presetsQuery'
+  | 'choiceName'
 > & { user: Props['user'] }) {
   const { t } = useTranslation();
 
@@ -174,20 +185,24 @@ export function AdvancedPanel({
             badge={t('userDrawer.supportTool')}
           >
             <Select
-              // Built from the shared list the backend validates against, not
-              // from a copy of it.
-              data={[
-                { value: '', label: t('userDrawer.routingInherit') },
-                ...ROUTING_PRESET_IDS.map((id) => ({
-                  value: id,
-                  label: t(`metadata.preset${presetKey(id)}`),
-                })),
-              ]}
+              // The built-ins from the shared list the backend validates
+              // against, then the operator's own presets (A-229).
+              data={presetChoiceRows(form.values.routingPreset, presetsQuery.data?.presets, {
+                inherit: t('userDrawer.routingInherit'),
+                unnamed: t('userDrawer.routingOwnUnnamed'),
+                builtInName: (id) => t(`metadata.preset${presetKey(id)}`),
+              })}
               allowDeselect={false}
               {...form.getInputProps('routingPreset')}
             />
+            {/* Own presets that did not arrive are not «none» (A-141). */}
+            {loadView(presetsQuery) === 'failed' && (
+              <Text style={{ fontSize: 12, color: AMBER }}>
+                {t('userDrawer.routingPresetsFailed', { message: apiErrorMessage(presetsQuery.error) })}
+              </Text>
+            )}
             <RoutingPrecedence
-              userPreset={form.values.routingPreset || null}
+              userPreset={form.values.routingPreset ? (choiceName(form.values.routingPreset) ?? t('userDrawer.routingOwnUnnamed')) : null}
               squads={squadRoutingClash ? squadRoutingClash.map((s) => `${s.name}: ${s.preset}`).join(', ') : (squadRoutingSource ? `${squadRoutingSource.squad}: ${squadRoutingSource.preset}` : null)}
               clash={squadRoutingClash !== null}
             />

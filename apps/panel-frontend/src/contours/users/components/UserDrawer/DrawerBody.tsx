@@ -118,9 +118,8 @@ export function DrawerBody({
             strategy={ui.form.values.trafficLimitStrategy}
             expiresAt={ui.expiresAt}
             expireDays={ui.form.values.expireDays}
-            routingPreset={ui.form.values.routingPreset}
+            routing={ui.routing}
             routingClash={routingClash}
-            routingSource={ui.squadRoutingSource}
             isEdit={ui.isEdit}
             onEditTraffic={() => trafficRef.current?.focus()}
           />

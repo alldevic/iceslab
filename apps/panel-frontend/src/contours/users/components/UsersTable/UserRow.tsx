@@ -1,4 +1,4 @@
-import { isRoutingPresetId } from '@/lib/domain/routingPresets';
+import { presetChoiceName, presetChoiceOf } from '@/lib/domain/routingPresets';
 import { ACTIONS_COL, ROW_SELECTION, SELECT_COL } from '@/contours/users/lib/usersTable';
 import { AMBER, CARD, HAIRLINE, MIST, MOSS, RED, SNOW, VIOLET } from '@/contours/users/lib/colors';
 import { DISPLAY, MONO } from '@/contours/users/lib/textStyles';
@@ -45,6 +45,13 @@ export function UserRow({
 }: { u: User; cellStyles: CSSProperties[]; pad: number } & Pick<UsersPageState, 'authStatusQuery' | 'squadNameById' | 'visibleColumns' | 'handleRevoke' | 'handleRotate' | 'handleResetTraffic' | 'handleDelete' | 'setEditing' | 'selected' | 'toggleSelected'>) {
   const { t } = useTranslation();
 
+  // The override as one value, a built-in or an own preset (A-229). The row
+  // has no preset list, so an own one is named as such, never by its id.
+  const routingChoice = presetChoiceOf(u);
+  const routingLabel = routingChoice
+    ? (presetChoiceName(routingChoice, undefined, (id) => t(`metadata.preset${presetKey(id)}`)) ?? t('users.routingOwn'))
+    : null;
+
   const exp = expireRelative(u.expireAt, t);
   const trafficPct = trafficPercent(u.trafficUsedBytes, u.trafficLimitBytes);
   const trafficColor =
@@ -88,7 +95,7 @@ export function UserRow({
           {/* An override changes what this user gets without changing anything
               else in the row, so without a mark it is invisible until you open
               the form. */}
-          {u.routingPreset && (
+          {routingChoice && (
             <Box
               title={t('users.routingOverrideHint')}
               style={{
@@ -104,9 +111,7 @@ export function UserRow({
             >
               <IconRoute size={10} stroke={2} color={VIOLET} />
               <Text style={{ ...MONO, fontSize: 10, lineHeight: '13px', color: VIOLET }}>
-                {isRoutingPresetId(u.routingPreset)
-                  ? t(`metadata.preset${presetKey(u.routingPreset)}`)
-                  : u.routingPreset}
+                {routingLabel}
               </Text>
             </Box>
           )}
@@ -265,11 +270,7 @@ export function UserRow({
     subLink: () => <Plain title={subUrl ?? undefined}>{subUrl ?? t(link.kind === 'absent' ? 'users.linkNoAddress' : 'users.linkUnavailable')}</Plain>,
     routing: () => (
       <Plain>
-        {u.routingPreset
-          ? isRoutingPresetId(u.routingPreset)
-            ? t(`metadata.preset${presetKey(u.routingPreset)}`)
-            : u.routingPreset
-          : t('userDrawer.inheritsSquad')}
+        {routingLabel ?? t('userDrawer.inheritsSquad')}
       </Plain>
     ),
     // A-148: null is «as the squad», not «no limit»; 0 is the explicit no-limit.

@@ -53,4 +53,13 @@ describe('userUpdatePatch: PUT дровера несёт только измен
       ),
     ).toEqual({ status: 'active', trafficLimitGb: null, tag: null, groupIds: ['g1'], expireAt: at.toISOString() });
   });
+
+  it('A-229: свой пресет засевается в выбор и уходит своим ключом только при правке', () => {
+    const own = '7f1c0000-0000-4000-8000-000000000001';
+    const seed = defaultValues({ ...user, customRoutingPresetId: own } as User);
+    expect(seed.routingPreset).toBe(own);
+    expect(userUpdatePatch(seed, { ...seed, description: 'x' }, null)).toEqual({ description: 'x' });
+    expect(userUpdatePatch(seed, { ...seed, routingPreset: 'ru-split' }, null)).toEqual({ routingPreset: 'ru-split' });
+    expect(userUpdatePatch(seed, { ...seed, routingPreset: '' }, null)).toEqual({ customRoutingPresetId: null });
+  });
 });

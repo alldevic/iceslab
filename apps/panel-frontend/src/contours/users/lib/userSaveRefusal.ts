@@ -10,6 +10,8 @@ import type { FormValues } from '@/contours/users/lib/userForm';
  *   409 USERNAME_TAKEN { field: 'username' }, 409 SUBSCRIPTION_TOKEN_TAKEN
  *       { field: 'subscriptionToken' } (A-210, BACK e15eb494): at that field,
  *       in the panel's words when `say` is given (the server's are English);
+ *   400 ROUTING_PRESET_NOT_FOUND { field: 'customRoutingPresetId' } (A-229):
+ *       at the routing picker, the same way;
  *   409 of any other code (CONFLICT from a server older than the split), 404
  *   NOT_FOUND (the user went away), any other 4xx with a sentence: at the
  *   form, in the server's words.
@@ -20,13 +22,18 @@ export interface UserSaveRefusal {
   message: string | null;
 }
 
-/** The two taken-value codes and the field each one belongs to. */
-const TAKEN = {
-  USERNAME_TAKEN: 'username',
-  SUBSCRIPTION_TOKEN_TAKEN: 'subscriptionToken',
-} as const satisfies Record<string, keyof FormValues>;
+/**
+ * The codes that belong to one field, the status each comes under, and the
+ * field: the two taken values (409), and an own routing preset deleted while
+ * the drawer was open (400 ROUTING_PRESET_NOT_FOUND, A-229).
+ */
+const AT_FIELD = {
+  USERNAME_TAKEN: { status: 409, field: 'username' },
+  SUBSCRIPTION_TOKEN_TAKEN: { status: 409, field: 'subscriptionToken' },
+  ROUTING_PRESET_NOT_FOUND: { status: 400, field: 'routingPreset' },
+} as const satisfies Record<string, { status: number; field: keyof FormValues }>;
 
-export type TakenCode = keyof typeof TAKEN;
+export type FieldCode = keyof typeof AT_FIELD;
 
 /** API field -> the form field that edits it. */
 const FIELD_OF: Record<string, keyof FormValues> = {
@@ -44,6 +51,7 @@ const FIELD_OF: Record<string, keyof FormValues> = {
   hwidDeviceLimit: 'hwidDeviceLimit',
   groupIds: 'groupIds',
   routingPreset: 'routingPreset',
+  customRoutingPresetId: 'routingPreset',
 };
 
 /**
@@ -59,7 +67,7 @@ export function saveToastNeeded(err: unknown): boolean {
   return !refusal || Object.keys(refusal.fields).length === 0;
 }
 
-export function userSaveRefusal(err: unknown, say?: (code: TakenCode) => string): UserSaveRefusal | null {
+export function userSaveRefusal(err: unknown, say?: (code: FieldCode) => string): UserSaveRefusal | null {
   if (!err || typeof err !== 'object') return null;
   const res = (err as { response?: unknown }).response;
   if (!res || typeof res !== 'object') return null;
@@ -67,12 +75,12 @@ export function userSaveRefusal(err: unknown, say?: (code: TakenCode) => string)
   if (typeof status !== 'number' || status < 400 || status >= 500 || !data || typeof data !== 'object') return null;
   const d = data as { error?: unknown; message?: unknown; issues?: unknown };
   const message = typeof d.message === 'string' && d.message !== '' ? d.message : null;
-  if (status === 409 && typeof d.error === 'string' && Object.hasOwn(TAKEN, d.error)) {
-    const code = d.error as TakenCode;
+  if (typeof d.error === 'string' && Object.hasOwn(AT_FIELD, d.error) && AT_FIELD[d.error as FieldCode].status === status) {
+    const code = d.error as FieldCode;
     const text = say ? say(code) : message;
     // The field is the code's, whatever `field` says: a body naming another
     // one would put the words on a control that has nothing to fix.
-    if (text) return { fields: { [TAKEN[code]]: text }, message: null };
+    if (text) return { fields: { [AT_FIELD[code].field]: text }, message: null };
   }
   if (d.error === 'VALIDATION_ERROR' && Array.isArray(d.issues)) {
     const fields: UserSaveRefusal['fields'] = {};

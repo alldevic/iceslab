@@ -4,6 +4,7 @@ export const users = {
     create: 'Создать юзера',
     searchPlaceholder: 'Поиск по имени, email, тегу, короткому id и telegram id…',
     routingOverrideHint: 'У этого юзера свой пресет маршрутов, он перебивает то, что даёт сквад.',
+    routingOwn: 'свой пресет',
     empty: 'Пользователей нет.',
     emptyTitle: 'Аккаунтов пока нет',
     emptyBody:
@@ -167,6 +168,14 @@ export const users = {
     formatFromRules: 'решают правила выдачи',
     routing: 'Маршрутизация',
     routingFromSquad: 'из сквада {{squad}}',
+    routingFromSquads: 'из сквадов',
+    routingFromPanel: 'умолчание панели',
+    routingOwn: 'свой у юзера',
+    routingFailed: 'не удалось загрузить',
+    routingUnknown: 'неизвестно',
+    routingOwnUnnamed: 'свой пресет (имя не загрузилось)',
+    routingPresetsFailed: 'Свои пресеты не загрузились: {{message}}. Встроенные доступны.',
+    routingPresetGone: 'Этого пресета больше нет: выберите другой.',
     // Как предпросмотр называет период сброса: фраза «50 GiB, сбрасывается
     // ежемесячно», а не настройка с именем «Каждый месяц».
     resets: {

@@ -7,6 +7,7 @@ import { ListHead, ListRow } from '@/contours/traffic/components/Routes/RuleList
 import { OwnRules } from '@/contours/traffic/components/Routes/OwnRules';
 import { PRESET_DNS } from '@/contours/traffic/lib/devicePresets';
 import { useState } from 'react';
+import { presetChoiceOf } from '@/lib/domain/routingPresets';
 import { useTranslation } from 'react-i18next';
 export function DevicePane({
   presets,
@@ -27,7 +28,8 @@ export function DevicePane({
   const [selected, setSelected] = useState<string>(defaultPreset);
 
   const preset = draft ?? presets.find((p) => p.id === selected) ?? presets[0]!;
-  const usedBy = (id: string) => squads.filter((s) => s.routingPreset === id).length;
+  // A squad holds one preset, a built-in or an own one (A-229).
+  const usedBy = (id: string) => squads.filter((s) => presetChoiceOf(s) === id).length;
 
   return (
     <Box className="routes-panes">
@@ -57,7 +59,7 @@ export function DevicePane({
               ]
                 .filter(Boolean)
                 .join(' · ')}
-              badge={t('routes.builtIn')}
+              badge={p.builtIn ? t('routes.builtIn') : undefined}
               onClick={() => {
                 onDraftDone();
                 setSelected(p.id);
@@ -72,7 +74,11 @@ export function DevicePane({
         preset={preset}
         isDefault={!draft && preset.id === defaultPreset}
         dns={draft ? undefined : PRESET_DNS[preset.id as RoutingPresetId]}
-        onSaved={onDraftDone}
+        onSaved={(id) => {
+          // A preset just created opens as itself, not as the row before it.
+          if (draft && id) setSelected(id);
+          onDraftDone();
+        }}
       />
 
       <Box className="routes-full">

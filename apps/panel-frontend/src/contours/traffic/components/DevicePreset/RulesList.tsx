@@ -1,5 +1,7 @@
 import { ACTION_TONE, ACTION_W, DEVICE_ACTIONS } from '@/contours/traffic/lib/routeActions';
-import { AMBER, DIM, DISPLAY, EDGE, FAINT, HAIRLINE, MIST, MONO, ROW, RULE_EDGE, SHADOW_BG, SHADOW_INK, SHADOW_NOTE, SNOW, WARN_BG, WARN_EDGE, WELL } from '@/contours/traffic/lib/colors';
+import { AMBER, DIM, DISPLAY, EDGE, FAINT, HAIRLINE, MIST, MONO, RED, ROW, RULE_EDGE, SHADOW_BG, SHADOW_INK, SHADOW_NOTE, SNOW, WARN_BG, WARN_EDGE, WELL } from '@/contours/traffic/lib/colors';
+import { Fragment } from 'react';
+import { unknownInMatch } from '@/lib/domain/routePolicies';
 import { ActionSelect } from '@/contours/traffic/components/RoutePolicy/ActionSelect';
 import { Box, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { ColHead } from '@/contours/traffic/components/RoutePolicy/ColHead';
@@ -27,7 +29,11 @@ export function RulesList({
   rules,
   dragging,
   setDragging,
-}: Pick<DevicePresetForm, 'locked' | 'shadows' | 'setRule' | 'addRule' | 'removeRule' | 'move' | 'rules' | 'dragging' | 'setDragging'>) {
+  unknownEntries,
+}: Pick<
+  DevicePresetForm,
+  'locked' | 'shadows' | 'setRule' | 'addRule' | 'removeRule' | 'move' | 'rules' | 'dragging' | 'setDragging' | 'unknownEntries'
+>) {
   const { t } = useTranslation();
 
   return (
@@ -88,9 +94,11 @@ export function RulesList({
 
       {rules.map((rule, i) => {
         const shadowedBy = shadows.get(rule.id);
+        // Matchers of this row the server refused on the last save (A-229).
+        const bad = unknownInMatch(rule.match, unknownEntries);
         return (
+          <Fragment key={rule.id}>
           <Box
-            key={rule.id}
             className="routes-rule"
             onDragOver={(e) => {
               if (locked) return;
@@ -153,7 +161,7 @@ export function RulesList({
                     borderRadius: 6,
                     paddingInline: 10,
                     backgroundColor: WELL,
-                    borderColor: HAIRLINE,
+                    borderColor: bad.length > 0 ? RED : HAIRLINE,
                     color: shadowedBy ? SHADOW_INK : SNOW,
                     textDecoration: shadowedBy ? 'line-through' : undefined,
                   },
@@ -226,6 +234,12 @@ export function RulesList({
               </IconAction>
             )}
           </Box>
+          {bad.length > 0 && (
+            <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: RED, padding: '0 24px 10px 49px' }}>
+              {t('routes.presetEntryRow', { entries: bad.join(', ') })}
+            </Text>
+          )}
+          </Fragment>
         );
       })}
 

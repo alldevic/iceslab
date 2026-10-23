@@ -20,6 +20,14 @@ describe('userSaveRefusal (spec frontend-users)', () => {
     ).toEqual({ fields: { email: 'Invalid email', expireDays: 'Invalid date' }, message: 'Bad' });
   });
 
+  it('A-229: 400 ROUTING_PRESET_NOT_FOUND у выбора пресета; под другим статусом не он', () => {
+    const say = (code: string) => `said ${code}`;
+    expect(
+      userSaveRefusal(res(400, { error: 'ROUTING_PRESET_NOT_FOUND', message: 'gone', field: 'customRoutingPresetId' }), say),
+    ).toEqual({ fields: { routingPreset: 'said ROUTING_PRESET_NOT_FOUND' }, message: null });
+    expect(userSaveRefusal(res(409, { error: 'ROUTING_PRESET_NOT_FOUND', message: 'odd' }), say)).toEqual({ fields: {}, message: 'odd' });
+  });
+
   it('A-210: 409 USERNAME_TAKEN и SUBSCRIPTION_TOKEN_TAKEN у своего поля, словами панели', () => {
     const say = (code: string) => `said ${code}`;
     expect(

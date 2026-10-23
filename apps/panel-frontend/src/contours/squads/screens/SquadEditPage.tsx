@@ -21,7 +21,7 @@ import {
   IconSearch,
   IconShield,
 } from '@tabler/icons-react';
-import { ALL_SQUAD_ID, listRoutePolicies } from '@/lib/domain/routePolicies';
+import { ALL_SQUAD_ID, listRoutePolicies, listRoutingPresets } from '@/lib/domain/routePolicies';
 import {
   createSquad,
   listSquads,
@@ -36,9 +36,9 @@ import { listHosts } from '@/lib/domain/hosts';
 import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { COUNTRIES, countryName } from '@/lib/domain/countries';
-import { ROUTING_PRESET_IDS, presetKey } from '@/lib/domain/routingPresets';
+import { assignedPresetGone, presetChoiceOf, presetChoicePatch, presetChoiceRows, presetKey } from '@/lib/domain/routingPresets';
 import { apiErrorMessage } from '@/lib/net/client';
-import { editGate } from '@/lib/ui/loadView';
+import { editGate, loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
 import {
   aclIdsOf,
@@ -112,6 +112,8 @@ export function SquadEditPage() {
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
   const policiesQuery = useQuery({ queryKey: ['route-policies'], queryFn: listRoutePolicies });
+  // The operator's own presets for the routing picker (A-229).
+  const presetsQuery = useQuery({ queryKey: ['routing-presets'], queryFn: listRoutingPresets });
 
   // "/squads/new" is the same page in draft state: same layout, same controls,
   // nothing persisted until Create.
@@ -218,7 +220,7 @@ export function SquadEditPage() {
     setSeededFor(seedKey);
     setName(squad.name);
     setDescription(squad.description ?? '');
-    setRoutingPreset(squad.routingPreset ?? '');
+    setRoutingPreset(presetChoiceOf(squad));
     setHwidLimit(squad.hwidDeviceLimit ?? '');
     // Every list defaults to empty rather than trusting the response to carry
     // it: a missing field must not become `undefined` in a comparison below.
@@ -243,7 +245,9 @@ export function SquadEditPage() {
       const base = {
         name: name.trim(),
         description: description.trim() || null,
-        routingPreset: routingPreset ? (routingPreset as never) : null,
+        // One preset, a built-in or an own one, sent only when it moved: the
+        // server clears the other side itself (A-229).
+        ...presetChoicePatch(isNew ? '' : presetChoiceOf(squad), routingPreset),
         hwidDeviceLimit: hwidLimit === '' ? null : Number(hwidLimit),
       };
       // The one state the screen refuses to send. `[]` on the wire lifts the
@@ -300,12 +304,20 @@ export function SquadEditPage() {
         qc.invalidateQueries({ queryKey: ['squads'] });
         qc.invalidateQueries({ queryKey: ['cascades'] });
       }
+      // The own preset picked here was deleted meanwhile: the list is read
+      // again and the picker says it (A-229).
+      const presetGone = assignedPresetGone(err);
+      if (presetGone) qc.invalidateQueries({ queryKey: ['routing-presets'] });
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
         // The server's words otherwise: a refusal to narrow (an entry on
         // hysteria or AWG, A-134) says itself.
-        message: duplicate ? t('squadEdit.exitAclDuplicate') : invalid || apiErrorMessage(err),
+        message: duplicate
+          ? t('squadEdit.exitAclDuplicate')
+          : presetGone
+            ? t('squadEdit.routingPresetGone')
+            : invalid || apiErrorMessage(err),
       });
     },
   });
@@ -817,16 +829,20 @@ export function SquadEditPage() {
                     setDirty(true);
                   }}
                   allowDeselect={false}
-                  // Built from the shared list the backend validates against,
-                  // so a fourth preset cannot appear here and be rejected there.
-                  data={[
-                    { value: '', label: t('squadEdit.routingInherit') },
-                    ...ROUTING_PRESET_IDS.map((id) => ({
-                      value: id,
-                      label: t(`metadata.preset${presetKey(id)}`),
-                    })),
-                  ]}
+                  // The built-ins from the shared list the backend validates
+                  // against, then the operator's own presets (A-229).
+                  data={presetChoiceRows(routingPreset, presetsQuery.data?.presets, {
+                    inherit: t('squadEdit.routingInherit'),
+                    unnamed: t('squadEdit.routingOwnUnnamed'),
+                    builtInName: (id) => t(`metadata.preset${presetKey(id)}`),
+                  })}
                 />
+                {/* Own presets that did not arrive are not «none» (A-141). */}
+                {loadView(presetsQuery) === 'failed' && (
+                  <Text style={{ fontSize: 12, color: AMBER, marginTop: 4 }}>
+                    {t('squadEdit.routingPresetsFailed', { message: apiErrorMessage(presetsQuery.error) })}
+                  </Text>
+                )}
                 <Hint>{t('squadEdit.routingHint')}</Hint>
               </Box>
               <Box style={{ flex: 1 }}>

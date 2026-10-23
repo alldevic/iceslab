@@ -33,6 +33,8 @@ export interface Squad {
   hostIds: string[];
   /** R3-a, per-squad routing-preset override; null = inherit panel default. */
   routingPreset: RoutingPresetId | null;
+  /** A-229, the operator's own preset instead of a built-in one, never both. Absent: a server older than own presets. */
+  customRoutingPresetId?: string | null;
   /** K7, per-squad HWID device-limit default; null = none. */
   hwidDeviceLimit: number | null;
   memberCount: number;
@@ -44,6 +46,8 @@ export interface CreateSquadInput {
   name: string;
   description?: string | null;
   routingPreset?: RoutingPresetId | null;
+  /** A-229, an own preset by id; the server takes one of the two, never both. */
+  customRoutingPresetId?: string | null;
   hwidDeviceLimit?: number | null;
   profileIds?: string[];
   exitAcl?: SquadExitAclEntry[];
@@ -55,6 +59,8 @@ export interface UpdateSquadInput {
   name?: string;
   description?: string | null;
   routingPreset?: RoutingPresetId | null;
+  /** A-229, an own preset by id: a value clears the built-in on the server, null clears only this side. */
+  customRoutingPresetId?: string | null;
   hwidDeviceLimit?: number | null;
   /** Replaces the full profile set when provided. */
   profileIds?: string[];
