@@ -164,6 +164,7 @@ export const hosts = {
     // the list is the host's manual opt-outs, nothing is computed. Whether a
     // format carries the protocol comes from the server later
     // (GET /api/profiles/:id/formats).
+    clientsLeftOut: 'By transport, will not get it: {{clients}}.',
     formatsCaption:
       'Everything is on unless the operator turned it off. Whether a client handles this protocol, the page does not know yet.',
     formatsCount: 'Carried by {{carried}} of {{total}}, turned off {{off}}',

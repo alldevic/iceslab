@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { clientsLeftOut } from '@/lib/domain/formatReach';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Box,
@@ -641,6 +642,19 @@ export function HostEditPage() {
           : null;
 
   const selectedProfile = profiles.find((p) => p.id === profileId);
+  // A-224: the clients that will not get this host, by the host's own security
+  // when it sets one, else the profile's: the same function as the profile page.
+  const hostLeftOut = (() => {
+    if (!selectedProfile || selectedProfile.protocol !== 'xray') return [];
+    const cfg = (selectedProfile.config ?? {}) as { subprotocol?: string; network?: string; security?: string; xhttpMode?: string };
+    return clientsLeftOut({
+      subprotocol: cfg.subprotocol ?? 'vless',
+      network: cfg.network ?? 'raw',
+      security: cfg.security ?? 'reality',
+      xhttpMode: cfg.xhttpMode,
+      hostSecurity: can('securityLayer') ? securityLayer : 'default',
+    });
+  })();
   // Only fields this profile can actually serve are counted. A leftover SNI on
   // a Hysteria host is not an override, it is a value nobody reads, and saving
   // clears it anyway.
@@ -1163,6 +1177,13 @@ export function HostEditPage() {
                     ? t('hostEdit.formatsCount', formatFacts.counts)
                     : t('hostEdit.formatsCaption')}
                 </Text>
+                {hostLeftOut.length > 0 && (
+                  <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER, marginTop: 4 }}>
+                    {t('hostEdit.clientsLeftOut', {
+                      clients: hostLeftOut.map((c) => t(`profiles.form.cfg.client.${c}`)).join(', '),
+                    })}
+                  </Text>
+                )}
                 {/* Три состояния: несёт (галочка, можно выключить), выключен
                     оператором, и не несёт вовсе (серым, недоступно): там
                     выключатель ничего бы не менял, а причина ниже.

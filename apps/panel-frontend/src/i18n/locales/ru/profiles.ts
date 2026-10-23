@@ -184,10 +184,12 @@ export const profiles = {
         realityModeSelfSteal: 'self-steal (локальный fallback, РФ-2026)',
         singboxXrayOnly: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера; TLS, self-steal, несколько имён и другие транспорты на ядре xray.',
         // A-224: кого подписка не накормит этим профилем (общая таблица shared).
-        clientsLeftOut: 'Не получат: {{clients}}.',
+        clientsLeftOut: 'Не получат (по защите профиля): {{clients}}.',
+        clientsHostCaveat: 'Хост с другой защитой может отличаться.',
         client: {
           singbox: 'sing-box (Hiddify)',
           clash: 'Clash (Mihomo)',
+          xrayjson: 'Xray JSON',
           surge: 'Surge',
           quantumultx: 'Quantumult X',
           loon: 'Loon',

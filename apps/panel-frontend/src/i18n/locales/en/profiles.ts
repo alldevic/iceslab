@@ -177,10 +177,12 @@ export const profiles = {
         realityModeStealOthers: 'steal-from-others (external decoy)',
         realityModeSelfSteal: 'self-steal (local fallback, RU-2026)',
         singboxXrayOnly: 'On sing-box only REALITY (steal-others) over raw with one server name; TLS, self-steal, several names and other transports are on the xray core.',
-        clientsLeftOut: 'Will not get it: {{clients}}.',
+        clientsLeftOut: 'Will not get it (by the profile security): {{clients}}.',
+        clientsHostCaveat: 'A host with its own security may differ.',
         client: {
           singbox: 'sing-box (Hiddify)',
           clash: 'Clash (Mihomo)',
+          xrayjson: 'Xray JSON',
           surge: 'Surge',
           quantumultx: 'Quantumult X',
           loon: 'Loon',

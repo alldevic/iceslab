@@ -27,7 +27,9 @@ import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/ge
 import { isPlainSubprotocol } from '@/contours/profiles/lib/plainSubprotocol';
 import { PlainXraySection } from '@/contours/profiles/components/ProfileForm/PlainXraySection';
 import { AMBER, RED } from '@/contours/profiles/lib/colors';
-import { clientsLeftOut } from '@/contours/profiles/lib/formatReach';
+import { clientsLeftOut, hostsMaySecureOtherwise } from '@/lib/domain/formatReach';
+import { listHosts } from '@/lib/domain/hosts';
+import { useQuery } from '@tanstack/react-query';
 
 export function XraySection({
   generateXrayKeys,
@@ -57,6 +59,16 @@ export function XraySection({
     security: form.values.xraySecurity,
     xhttpMode: form.values.xrayXhttpMode,
   });
+  // Said by the profile's own security; a host may override it (tls/none), and
+  // then its own line on the host page is the one that holds (A-224, AUDT).
+  const hostsQuery = useQuery({
+    queryKey: ['hosts', { profileId }],
+    queryFn: () => listHosts({ profileId: profileId! }),
+    enabled: profileId !== null,
+    staleTime: 30_000,
+  });
+  const hostsMayDiffer =
+    profileId !== null && hostsMaySecureOtherwise(hostsQuery.data ? hostsQuery.data.hosts : hostsQuery.isError ? null : []);
   // SOCKS5 / HTTP have no subprotocol pill, transport, security or REALITY to
   // offer: the server takes them plain only.
   if (isPlainSubprotocol(form.values.xraySubprotocol)) {
@@ -143,6 +155,7 @@ export function XraySection({
                   {t('profiles.form.cfg.clientsLeftOut', {
                     clients: leftOut.map((c) => t(`profiles.form.cfg.client.${c}`)).join(', '),
                   })}
+                  {hostsMayDiffer && ` ${t('profiles.form.cfg.clientsHostCaveat')}`}
                 </Text>
               )}
               {onSingbox && (
