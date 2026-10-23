@@ -150,6 +150,49 @@ describe('an own preset of every kind of matcher', () => {
   });
 });
 
+describe('a bare hostname reads the same in the three formats', () => {
+  // Each format's own reading of what it was handed, as its docs state it:
+  //   xray: domain: = the domain or a subdomain, keyword: and a bare string =
+  //         a substring (Xray-docs-next config/routing.md, RuleObject.domain);
+  //   mihomo: DOMAIN-SUFFIX = the domain or a subdomain;
+  //   sing-box: domain_suffix = the same.
+  const suffix = (rule: string, host: string) => host === rule || host.endsWith(`.${rule}`);
+  const xrayMatches = (entry: string, host: string) =>
+    entry.startsWith('domain:')
+      ? suffix(entry.slice(7), host)
+      : entry.startsWith('full:')
+        ? host === entry.slice(5)
+        : host.includes(entry.replace(/^keyword:/, ''));
+
+  const rules: DeviceRouteRule[] = [{ match: ['google.com'], action: 'direct', note: '' }];
+  const eps = SETS[0]!;
+  const xrayEntries = (JSON.parse(buildXrayJson(eps, { ownPresetRules: rules })) as {
+    routing: { rules: { domain?: string[] }[] };
+  }).routing.rules.flatMap((r) => r.domain ?? []);
+  const clashSuffixes = [...buildClashYaml(eps, { ownPresetRules: rules }).matchAll(/ {2}- DOMAIN-SUFFIX,([^,]+),DIRECT/g)].map((m) => m[1]!);
+  const sbSuffixes = (JSON.parse(buildSingboxJson(eps, { ownPresetRules: rules })) as {
+    route: { rules: { domain_suffix?: string[] }[] };
+  }).route.rules.flatMap((r) => r.domain_suffix ?? []);
+
+  it('is written as the domain and its subdomains in each', () => {
+    expect(xrayEntries).toEqual(['domain:google.com']);
+    expect(clashSuffixes).toEqual(['google.com']);
+    expect(sbSuffixes).toEqual(['google.com']);
+  });
+
+  for (const [host, hit] of [
+    ['google.com', true],
+    ['mail.google.com', true],
+    ['notgoogle.com.example', false],
+  ] as const) {
+    it(`${host}: ${hit ? 'matched' : 'not matched'} by all three`, () => {
+      expect(xrayEntries.some((e) => xrayMatches(e, host)), 'xray').toBe(hit);
+      expect(clashSuffixes.some((s) => suffix(s, host)), 'clash').toBe(hit);
+      expect(sbSuffixes.some((s) => suffix(s, host)), 'sing-box').toBe(hit);
+    });
+  }
+});
+
 // ------------------------------------------------------------ the binaries
 
 const XRAY_BIN = process.env.XRAY_BIN ?? ['/usr/local/bin/xray', '/usr/bin/xray'].find((p) => existsSync(p)) ?? '';

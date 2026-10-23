@@ -44,9 +44,24 @@ const port = (m: string): string => m.slice('port:'.length);
 export type XrayProxyTarget = { outboundTag: string } | { balancerTag: string } | null;
 
 /**
- * xray routing rules. Every spelling of a name or an address is xray's own
- * (geosite:, geoip:, domain:, full:, keyword:, regexp:, CIDR), so they pass as
- * written; ports join into xray's "a,b-c" string.
+ * A bare hostname as xray must spell it to mean what Clash (DOMAIN-SUFFIX) and
+ * sing-box (domain_suffix) mean by it: the domain and its subdomains. xray
+ * reads a string with no prefix as a substring ("Same as substring below, but
+ * the keyword: prefix can be omitted", Xray-docs-next config/routing.md,
+ * RuleObject.domain, read 2026-10-23), so a bare "google.com" there would also
+ * catch "notgoogle.com.example". `domain:` is xray's "the target domain or its
+ * subdomain".
+ */
+const XRAY_DOMAIN_PREFIXES = ['geosite:', 'domain:', 'full:', 'keyword:', 'regexp:'];
+function xrayDomain(m: string): string {
+  return XRAY_DOMAIN_PREFIXES.some((p) => m.startsWith(p)) ? m : `domain:${m}`;
+}
+
+/**
+ * xray routing rules. The prefixed names and the addresses are xray's own
+ * spelling (geosite:, geoip:, domain:, full:, keyword:, regexp:, CIDR) and pass
+ * as written; a bare hostname becomes domain:<name> (xrayDomain); ports join
+ * into xray's "a,b-c" string.
  */
 export function xrayDeviceRules(rules: readonly DeviceRouteRule[], proxy: XrayProxyTarget): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
@@ -55,7 +70,7 @@ export function xrayDeviceRules(rules: readonly DeviceRouteRule[], proxy: XrayPr
       r.action === 'direct' ? { outboundTag: 'direct' } : r.action === 'block' ? { outboundTag: 'block' } : proxy;
     if (!target) continue;
     const k = byKind(r.match);
-    if (k.domain.length) out.push({ type: 'field', domain: k.domain, ...target });
+    if (k.domain.length) out.push({ type: 'field', domain: k.domain.map(xrayDomain), ...target });
     if (k.ip.length) out.push({ type: 'field', ip: k.ip, ...target });
     if (k.port.length) out.push({ type: 'field', port: k.port.map(port).join(','), ...target });
   }
