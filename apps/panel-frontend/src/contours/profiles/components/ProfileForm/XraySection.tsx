@@ -23,7 +23,7 @@ import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 import { XrayAdvanced } from '@/contours/profiles/components/ProfileForm/XrayAdvanced';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
-import { showGenerateWarning, useGenerateImpact } from '@/contours/profiles/lib/generateImpact';
+import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
 import { isPlainSubprotocol } from '@/contours/profiles/lib/plainSubprotocol';
 import { PlainXraySection } from '@/contours/profiles/components/ProfileForm/PlainXraySection';
 import { RED } from '@/contours/profiles/lib/colors';
@@ -44,7 +44,8 @@ export function XraySection({
   profileId: string | null;
 }) {
   const { t } = useTranslation();
-  const impact = useGenerateImpact(profileId);
+  // The warning reads the cached count; the press asks the server again (A-225).
+  const { impact, checking, press } = useGenerateGate(profileId);
   // На sing-box xray-семейство это только REALITY steal-others по raw: всё
   // прочее агент отказывает, поэтому здесь оно недоступно с причиной.
   const onSingbox = form.values.engine === 'singbox';
@@ -214,9 +215,9 @@ export function XraySection({
                       />
                       <UnstyledButton
                         type="button"
-                        onClick={() => confirmGenerate(impact, t, () => void generateXrayKeys())}
+                        onClick={() => press((fresh) => confirmGenerate(fresh, t, () => void generateXrayKeys()))}
                         // The cost has to be known (or known to be unknown) first: A-225.
-                        disabled={keypairPending || impact.kind === 'loading'}
+                        disabled={keypairPending || impact.kind === 'loading' || checking}
                         style={{
                           display: 'flex',
                           alignItems: 'center',

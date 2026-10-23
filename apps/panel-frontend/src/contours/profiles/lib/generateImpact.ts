@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { getProfileKeyImpact, type ProfileKeyImpact } from '@/lib/domain/profiles';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 /**
  * What a new key pair would cost, as the server counts it (A-225).
@@ -24,7 +25,7 @@ export type GenerateImpact =
 
 export function useGenerateImpact(profileId: string | null): GenerateImpact {
   const query = useQuery({
-    queryKey: ['profile-key-impact', profileId],
+    queryKey: keyImpactKey(profileId),
     queryFn: () => getProfileKeyImpact(profileId!),
     enabled: profileId !== null,
     staleTime: 30_000,
@@ -33,6 +34,57 @@ export function useGenerateImpact(profileId: string | null): GenerateImpact {
   if (query.data) return { kind: 'ready', ...query.data };
   if (query.isError) return { kind: 'failed' };
   return { kind: 'loading' };
+}
+
+/** The cache address of a profile's key impact; the deploy window resets it. */
+export function keyImpactKey(profileId: string | null) {
+  return ['profile-key-impact', profileId] as const;
+}
+
+/**
+ * The press of Generate decides on a FRESH count, never on the cached one
+ * (A-225 tail): the warning above the button is a cached read, and a profile
+ * deployed on the same page, a host edited elsewhere or another admin's change
+ * would leave «0/0/0/0» there and let the key change with no question asked.
+ * `fetchFresh` asks the server now; its failure is «unknown», which still asks.
+ */
+export async function pressGenerate(
+  fetchFresh: () => Promise<ProfileKeyImpact>,
+  decide: (impact: GenerateImpact) => void,
+): Promise<void> {
+  let fresh: GenerateImpact;
+  try {
+    fresh = { kind: 'ready', ...(await fetchFresh()) };
+  } catch {
+    fresh = { kind: 'failed' };
+  }
+  decide(fresh);
+}
+
+/**
+ * The cached count for the warning, and the press that asks the server again.
+ * `checking` keeps the button waiting while the fresh count is on its way.
+ */
+export function useGenerateGate(profileId: string | null): {
+  impact: GenerateImpact;
+  checking: boolean;
+  press: (decide: (impact: GenerateImpact) => void) => void;
+} {
+  const qc = useQueryClient();
+  const impact = useGenerateImpact(profileId);
+  const [checking, setChecking] = useState(false);
+  const press = (decide: (impact: GenerateImpact) => void) => {
+    if (profileId === null) {
+      decide({ kind: 'none' });
+      return;
+    }
+    setChecking(true);
+    void pressGenerate(
+      () => qc.fetchQuery({ queryKey: keyImpactKey(profileId), queryFn: () => getProfileKeyImpact(profileId), staleTime: 0 }),
+      decide,
+    ).finally(() => setChecking(false));
+  };
+  return { impact, checking, press };
 }
 
 /**
