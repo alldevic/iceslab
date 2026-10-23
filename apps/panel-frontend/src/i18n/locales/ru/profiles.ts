@@ -183,6 +183,16 @@ export const profiles = {
         realityModeStealOthers: 'steal-from-others (внешний декой)',
         realityModeSelfSteal: 'self-steal (локальный fallback, РФ-2026)',
         singboxXrayOnly: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера; TLS, self-steal, несколько имён и другие транспорты на ядре xray.',
+        // A-224: кого подписка не накормит этим профилем (общая таблица shared).
+        clientsLeftOut: 'Не получат: {{clients}}.',
+        client: {
+          singbox: 'sing-box (Hiddify)',
+          clash: 'Clash (Mihomo)',
+          surge: 'Surge',
+          quantumultx: 'Quantumult X',
+          loon: 'Loon',
+          v2rayn: 'ссылки v2rayN',
+        },
         realityModeSelfStealHint:
           'Self-steal: нода поднимает локальный TLS-fallback, dest REALITY смотрит на него. В поле ниже укажите домен, резолвящийся в IP ЭТОЙ ноды, чтобы SNI и IP совпадали (переживает whitelist-shutdown в РФ). dest игнорируется.',
         realityFallbackUpstreamLabel: 'Реалистичный fallback (G1, опц.)',

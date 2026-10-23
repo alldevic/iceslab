@@ -26,7 +26,8 @@ import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
 import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
 import { isPlainSubprotocol } from '@/contours/profiles/lib/plainSubprotocol';
 import { PlainXraySection } from '@/contours/profiles/components/ProfileForm/PlainXraySection';
-import { RED } from '@/contours/profiles/lib/colors';
+import { AMBER, RED } from '@/contours/profiles/lib/colors';
+import { clientsLeftOut } from '@/contours/profiles/lib/formatReach';
 
 export function XraySection({
   generateXrayKeys,
@@ -50,6 +51,12 @@ export function XraySection({
   // прочее агент отказывает, поэтому здесь оно недоступно с причиной.
   const onSingbox = form.values.engine === 'singbox';
   const singboxWhy = t('profiles.form.cfg.singboxXrayOnly');
+  const leftOut = clientsLeftOut({
+    subprotocol: form.values.xraySubprotocol,
+    network: form.values.xrayNetwork,
+    security: form.values.xraySecurity,
+    xhttpMode: form.values.xrayXhttpMode,
+  });
   // SOCKS5 / HTTP have no subprotocol pill, transport, security or REALITY to
   // offer: the server takes them plain only.
   if (isPlainSubprotocol(form.values.xraySubprotocol)) {
@@ -129,6 +136,15 @@ export function XraySection({
 
               {/* Почему половина пилюль серая: одна строка под рядом, а не
                   только в подсказке при наведении. */}
+              {/* A-224: which subscription clients will not get this profile,
+                  by the shared table the format builders use. */}
+              {leftOut.length > 0 && (
+                <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+                  {t('profiles.form.cfg.clientsLeftOut', {
+                    clients: leftOut.map((c) => t(`profiles.form.cfg.client.${c}`)).join(', '),
+                  })}
+                </Text>
+              )}
               {onSingbox && (
                 <Text style={{ fontSize: 12, lineHeight: '17px', color: '#7A8BA3' }}>{singboxWhy}</Text>
               )}

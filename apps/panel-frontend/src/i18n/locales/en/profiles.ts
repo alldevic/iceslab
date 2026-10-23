@@ -177,6 +177,15 @@ export const profiles = {
         realityModeStealOthers: 'steal-from-others (external decoy)',
         realityModeSelfSteal: 'self-steal (local fallback, RU-2026)',
         singboxXrayOnly: 'On sing-box only REALITY (steal-others) over raw with one server name; TLS, self-steal, several names and other transports are on the xray core.',
+        clientsLeftOut: 'Will not get it: {{clients}}.',
+        client: {
+          singbox: 'sing-box (Hiddify)',
+          clash: 'Clash (Mihomo)',
+          surge: 'Surge',
+          quantumultx: 'Quantumult X',
+          loon: 'Loon',
+          v2rayn: 'v2rayN links',
+        },
         realityModeSelfStealHint:
           'Self-steal: the node runs a local TLS fallback and REALITY dest points at it. Set the domain below to one that resolves to THIS node IP, so SNI and IP match (survives RU whitelist-shutdown). dest is ignored.',
         realityFallbackUpstreamLabel: 'Realistic fallback (G1, optional)',
