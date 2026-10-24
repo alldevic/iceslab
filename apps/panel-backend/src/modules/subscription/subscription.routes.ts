@@ -4,6 +4,7 @@ import {
   FORMAT_NAMES,
   PROTOCOL_NAMES,
   ROUTING_PRESET_IDS,
+  formatDisabledForHost,
   type ProtocolName,
   type RoutingPresetId,
 } from '@iceslab/shared';
@@ -629,8 +630,11 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // optional `disableForFormats[]` from its originating host row; we
       // filter before invoking the format-specific formatter so each
       // formatter can stay agnostic of host presence.
+      // A-249: clash and mihomo are one format under two names here
+      // (formatDisabledForHost), so a host switched off for Clash before the
+      // family was split by core stays off for its mihomo clients.
       const filtered = result.endpoints.filter(
-        (e) => !(e.disableForFormats ?? []).includes(format),
+        (e) => !formatDisabledForHost(e.disableForFormats, format),
       );
       // What THIS format carries, by FORMAT_DOORS: every builder below is
       // handed this list and no other, so the table the screens read and the
@@ -650,7 +654,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       const linksFor = (fmt: 'plain' | 'raw') =>
         endpointsForFormat(
           fmt,
-          plainSource.filter((e) => !(e.disableForFormats ?? []).includes(fmt)),
+          plainSource.filter((e) => !formatDisabledForHost(e.disableForFormats, fmt)),
         )
           // A4: a balancer-cascade entry expands into one re-tagged URI per exit;
           // other endpoints pass through. (This note used to claim the JSON array
@@ -742,7 +746,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         const ssSeen = new Set<string>();
         const outlineNodes = endpointsForFormat(
           'outline',
-          result.endpoints.filter((e) => !(e.disableForFormats ?? []).includes('outline')),
+          result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, 'outline')),
         )
           .filter((e) => !ssSeen.has(e.nodeName) && !!ssSeen.add(e.nodeName))
           .flatMap((e) => {
@@ -771,7 +775,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               (f) =>
                 endpointsForFormat(
                   f,
-                  result.endpoints.filter((e) => !(e.disableForFormats ?? []).includes(f)),
+                  result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, f)),
                 ).length > 0,
             ),
             awgNodes,

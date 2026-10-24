@@ -142,6 +142,30 @@ export const TEMPLATE_FORMATS: Record<TemplateType, SubscriptionFormat> = {
   'xray-json': 'xrayjson',
 };
 
+/**
+ * The template type a subscription format is framed by (for `?template=` and
+ * an SRR rule's templateName), or null for a format no template frames.
+ * `clash` is the alias of mihomo for good, so mihomo templates frame it. One
+ * function for the server and the panel (A-249).
+ */
+export function templateTypeForFormat(format: SubscriptionFormat): TemplateType | null {
+  if (format === 'clash') return 'mihomo';
+  return TEMPLATE_TYPES.find((t) => TEMPLATE_FORMATS[t] === format) ?? null;
+}
+
+/**
+ * Whether a host's `disableForFormats` keeps it out of `format` (A-249).
+ * `clash` and `mihomo` are one format under two names: either in the list
+ * closes both, so a host an operator switched off for Clash before the
+ * Clash family was split stays off for the clients that now get mihomo.
+ */
+export function formatDisabledForHost(disableForFormats: readonly string[] | null | undefined, format: SubscriptionFormat): boolean {
+  const list = disableForFormats ?? [];
+  if (list.includes(format)) return true;
+  if (format === 'clash' || format === 'mihomo') return list.includes('clash') || list.includes('mihomo');
+  return false;
+}
+
 /** The row of the transport table a template type reads. */
 export const TEMPLATE_TRANSPORT: Record<TemplateType, SubscriptionTransportFormat> = {
   mihomo: 'clash',

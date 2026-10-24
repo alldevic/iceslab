@@ -1,4 +1,4 @@
-import { TEMPLATE_FORMATS, TEMPLATE_TYPES, type SubscriptionFormat, type TemplateType } from '@iceslab/shared';
+import { TEMPLATE_TYPES, type TemplateType } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import {
@@ -153,16 +153,9 @@ export async function frameFor(type: TemplateType, name: string): Promise<{ foun
   return { found: name === DEFAULT_TEMPLATE_NAME };
 }
 
-/**
- * The template type a subscription format is framed by, for `?template=` and
- * an SRR rule's templateName. `clash` is the alias of mihomo forever (step
- * 4), so it is framed by mihomo templates; a format no template frames
- * answers null.
- */
-export function templateTypeForFormat(format: SubscriptionFormat): TemplateType | null {
-  if (format === 'clash') return 'mihomo';
-  return TEMPLATE_TYPES.find((t) => TEMPLATE_FORMATS[t] === format) ?? null;
-}
+/** The template type a format is framed by: the shared rule (A-249), kept
+ *  importable from here for the callers that read it with the service. */
+export { templateTypeForFormat } from '@iceslab/shared';
 
 // ---------------------------------------------------------------- writing
 
