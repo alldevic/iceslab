@@ -77,9 +77,9 @@ export async function subscriptionTemplatesRoutes(app: FastifyInstance): Promise
     return reply.send(await dryRun(input.type, input.body));
   }));
 
-  // Step 8: a template from the panel operators move from, its service key
-  // renamed. A draft, not saved: the editor shows it, the operator runs it
-  // dry and saves. `name` is empty, the screen takes the file's.
+  // Step 8: a template file, checked and handed back as a draft, not saved:
+  // the editor shows it, the operator runs it dry and saves. `name` is empty,
+  // the screen takes the file's.
   app.post('/api/subscription-templates/import', auth, guarded(async (req, reply) => {
     const input = ImportSchema.parse(req.body);
     const draft = importTemplate(input.body, input.type);
