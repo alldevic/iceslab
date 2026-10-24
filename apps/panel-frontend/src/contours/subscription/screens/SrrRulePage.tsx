@@ -2,16 +2,20 @@ import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Box, NumberInput, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { Box, NumberInput, Select, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
 import {
   createSrrRule,
   listSrrRules,
+  srrTemplateRefusal,
   updateSrrRule,
+  type SrrTemplateRefusal,
   type SubscriptionFormat,
 } from '@/lib/domain/srr';
+import { isNotImplemented, listTemplates, type SubscriptionTemplate } from '@/lib/domain/subscriptionTemplates';
+import { srrTemplateChoices, srrTemplatePatch } from '@/contours/subscription/lib/srrTemplate';
 import {
   CASCADE_AWARE_FORMATS,
   SRR_FORMATS,
@@ -25,8 +29,8 @@ import {
   shadowedBy,
 } from '@/contours/subscription/lib/srrMatch';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { editGate } from '@/lib/ui/loadView';
-import { LoadFailed } from '@/ui/LoadFailed';
+import { editGate, loadFailure } from '@/lib/ui/loadView';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
 import {
   BarButton,
   BoltIcon,
@@ -55,6 +59,8 @@ interface Draft {
   priority: number | '';
   format: SubscriptionFormat;
   enabled: boolean;
+  /** A-236 step 4: the template the rule's clients get; null = the Default. */
+  templateName: string | null;
 }
 
 const BLANK: Draft = {
@@ -63,6 +69,7 @@ const BLANK: Draft = {
   priority: 100,
   format: 'plain',
   enabled: true,
+  templateName: null,
 };
 
 export function SrrRulePage() {
@@ -97,8 +104,20 @@ export function SrrRulePage() {
       priority: existing.priority,
       format: existing.format,
       enabled: existing.enabled,
+      templateName: existing.templateName ?? null,
     });
   }
+
+  // The template field (A-236 step 4). A server older than step 4 sends no
+  // templateName on the rules, and then the field is not drawn at all.
+  const templatesKnown = isNew ? rules.every((r) => r.templateName !== undefined) : existing?.templateName !== undefined;
+  const templatesQuery = useQuery({
+    queryKey: ['subscription-templates'],
+    queryFn: listTemplates,
+    enabled: templatesKnown,
+    retry: (count, err) => !isNotImplemented(err) && count < 2,
+  });
+  const [templateRefused, setTemplateRefused] = useState<SrrTemplateRefusal | null>(null);
 
   // The section is already in the breadcrumb prefix; this only adds the rule.
   usePageMeta([isNew ? t('delivery.crumbNew') : (existing?.name ?? '')]);
@@ -144,6 +163,8 @@ export function SrrRulePage() {
         format: draft.format,
         priority,
         enabled: draft.enabled,
+        // Only a chosen or changed template (srrTemplatePatch).
+        ...(templatesKnown ? srrTemplatePatch(existing?.templateName, draft.templateName, !existing) : {}),
       };
       return existing ? updateSrrRule(existing.id, payload) : createSrrRule(payload);
     },
@@ -155,12 +176,18 @@ export function SrrRulePage() {
       });
       navigate('/subscription/delivery');
     },
-    onError: (err) =>
+    onError: (err) => {
+      // A template the format does not take, or one the type does not have:
+      // said at the template field, not as a toast that scrolls away.
+      const refused = srrTemplateRefusal(err);
+      setTemplateRefused(refused);
+      if (refused) return;
       notifications.show({
         color: 'red',
         title: existing ? t('common.saveError') : t('common.createError'),
         message: apiErrorMessage(err),
-      }),
+      });
+    },
   });
 
   // A-233: «rule gone» only when the list ARRIVED without it. A list that
@@ -468,6 +495,18 @@ export function SrrRulePage() {
                 </UnstyledButton>
               );
             })}
+            {templatesKnown && !isNotImplemented(templatesQuery.error) && (
+              <TemplateField
+                format={draft.format}
+                value={draft.templateName}
+                templatesQuery={templatesQuery}
+                refused={templateRefused}
+                onChange={(templateName) => {
+                  setTemplateRefused(null);
+                  patch({ templateName });
+                }}
+              />
+            )}
           </Stack>
         </Box>
 
@@ -599,6 +638,56 @@ function nextPriority(rules: { priority: number; uaPattern: string }[]): number 
 }
 
 /* ───── Pieces ──────────────────────────────────────────────────────────── */
+
+/**
+ * The template the rule's clients are framed by (A-236 step 4): the Default
+ * or an operator template of the type the format is framed by. A refusal of
+ * the save (SRR_TEMPLATE_NOT_FOR_FORMAT, SRR_TEMPLATE_NOT_FOUND) stands under
+ * this field in words; a template list that did not arrive is said with a
+ * retry, and the stored name stays chosen.
+ */
+function TemplateField({
+  format,
+  value,
+  templatesQuery,
+  refused,
+  onChange,
+}: {
+  format: SubscriptionFormat;
+  value: string | null;
+  templatesQuery: { data: { templates: SubscriptionTemplate[] } | undefined; isError: boolean; error: unknown; refetch: () => unknown };
+  refused: SrrTemplateRefusal | null;
+  onChange: (templateName: string | null) => void;
+}) {
+  const { t } = useTranslation();
+  const { takesTemplate, names } = srrTemplateChoices(format, templatesQuery.data?.templates ?? [], value);
+  const failure = loadFailure(templatesQuery, apiErrorMessage);
+  const DEFAULT = '\u0000default';
+  return (
+    <Stack gap={6} style={{ padding: '14px 20px 18px', borderTop: `1px solid ${HAIRLINE}` }}>
+      <FieldLabel>{t('delivery.fieldTemplate')}</FieldLabel>
+      <Select
+        data={[{ value: DEFAULT, label: t('delivery.templateDefault') }, ...names.map((n) => ({ value: n, label: n }))]}
+        value={value ?? DEFAULT}
+        allowDeselect={false}
+        disabled={!takesTemplate && value === null}
+        error={refused !== null}
+        onChange={(v) => onChange(v === null || v === DEFAULT ? null : v)}
+      />
+      {refused ? (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED }}>
+          {refused.code === 'SRR_TEMPLATE_NOT_FOR_FORMAT'
+            ? t('delivery.templateNotForFormat', { format: formatLabel(format, t), name: value ?? '' })
+            : t('delivery.templateNotFound', { name: value ?? '' })}
+        </Text>
+      ) : failure ? (
+        <LoadFailedLine message={failure.message} onRetry={failure.onRetry} />
+      ) : (
+        <Hint>{takesTemplate ? t('delivery.fieldTemplateHint') : t('delivery.templateNoneForFormat', { format: formatLabel(format, t) })}</Hint>
+      )}
+    </Stack>
+  );
+}
 
 function CardCaption({ children }: { children: ReactNode }) {
   return (
