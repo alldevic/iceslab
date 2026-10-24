@@ -447,11 +447,48 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
   };
   const serve = async (request: FastifyRequest, reply: FastifyReply) => {
     const params = TokenParamSchema.parse(request.params);
+    const userAgent = typeof request.headers['user-agent'] === 'string'
+      ? request.headers['user-agent']
+      : null;
+    const client = (request.params as { client?: string }).client;
+
+    // Tier-1 honey-user tripwire. If the requested token is on the admin's
+    // canary list, the token by definition was leaked from where it was
+    // planted (pastebin, screenshot, dropped USB, …). Alert immediately,
+    // blacklist the source IP (same Redis key as the path-honeypot), and
+    // return a plausible-empty 200, making the attacker believe their
+    // exfiltrated token is "just empty subscription" instead of "this is
+    // a panel that knows it was leaked."
+    // First, before the client segment, the format and the protocols are
+    // read: ANY use of a canary trips it, a typo in the rest included (A-243,
+    // step 5 follow-up). So the alert names what was asked, not the format
+    // resolved.
+    if (config.HONEY_USER_TOKENS.includes(params.token)) {
+      const ip = request.ip;
+      const ttl = config.HONEYPOT_BLACKLIST_TTL_SEC;
+      const askedFormat = (request.query as { format?: unknown } | undefined)?.format;
+      const asked = client !== undefined ? `/${client}` : typeof askedFormat === 'string' ? askedFormat : 'auto';
+      // Only blacklist real public IPs. If TRUST_PROXY_HOPS is misconfigured
+      // an attacker can spoof X-Forwarded-For with a private/loopback IP and
+      // get arbitrary legit users DoS'd via this honeypot. Skip the blacklist
+      // for any IP we can identify as non-routable; still alert + return empty.
+      if (isPublicRoutableIp(ip)) {
+        await redis.set(`sec:blacklist:${ip}`, '1', 'EX', ttl, 'NX').catch(() => null);
+      }
+      notifyTelegramAsync(
+        `🪤 *Honey-user token used*\nip: \`${escapeMarkdown(ip)}\`\nua: \`${escapeMarkdown(userAgent ?? '?')}\`\nformat: \`${escapeMarkdown(asked)}\`\ntoken: \`${escapeMarkdown(params.token.slice(0, 6))}...\``,
+      );
+      // Plausible empty subscription. Mirror the same content-type the
+      // legit path would use for `?format=plain`.
+      reply.type('text/plain; charset=utf-8');
+      return reply.send('');
+    }
+
     // A-236 step 5: /sub/<token>/<client>. The segment IS an explicit
     // format, the same as `?format=` and winning over the User-Agent rules,
     // for the clients that cannot set a User-Agent and for a QR made for one
-    // client. A slug nobody knows is answered by name.
-    const client = (request.params as { client?: string }).client;
+    // client. A slug nobody knows is answered by name. The path segment wins
+    // over ?format= when both are given.
     if (client !== undefined) {
       const slugFormat = CLIENT_SLUGS[client];
       if (!slugFormat) {
@@ -491,41 +528,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
     }
     const onlyProtocols = protocolFilter.kind === 'some' ? protocolFilter.protocols : null;
     const query = QuerySchema.parse(request.query);
-    const userAgent = typeof request.headers['user-agent'] === 'string'
-      ? request.headers['user-agent']
-      : null;
     const { format, ruleTemplate } = await resolveFormat(
       query,
       (request.headers.accept ?? '').toString(),
       userAgent,
     );
     subscriptionRequests.inc({ format });
-
-    // Tier-1 honey-user tripwire. If the requested token is on the admin's
-    // canary list, the token by definition was leaked from where it was
-    // planted (pastebin, screenshot, dropped USB, …). Alert immediately,
-    // blacklist the source IP (same Redis key as the path-honeypot), and
-    // return a plausible-empty 200, making the attacker believe their
-    // exfiltrated token is "just empty subscription" instead of "this is
-    // a panel that knows it was leaked."
-    if (config.HONEY_USER_TOKENS.includes(params.token)) {
-      const ip = request.ip;
-      const ttl = config.HONEYPOT_BLACKLIST_TTL_SEC;
-      // Only blacklist real public IPs. If TRUST_PROXY_HOPS is misconfigured
-      // an attacker can spoof X-Forwarded-For with a private/loopback IP and
-      // get arbitrary legit users DoS'd via this honeypot. Skip the blacklist
-      // for any IP we can identify as non-routable; still alert + return empty.
-      if (isPublicRoutableIp(ip)) {
-        await redis.set(`sec:blacklist:${ip}`, '1', 'EX', ttl, 'NX').catch(() => null);
-      }
-      notifyTelegramAsync(
-        `🪤 *Honey-user token used*\nip: \`${escapeMarkdown(ip)}\`\nua: \`${escapeMarkdown(userAgent ?? '?')}\`\nformat: \`${format}\`\ntoken: \`${escapeMarkdown(params.token.slice(0, 6))}...\``,
-      );
-      // Plausible empty subscription. Mirror the same content-type the
-      // legit path would use for `?format=plain`.
-      reply.type('text/plain; charset=utf-8');
-      return reply.send('');
-    }
 
     try {
       // Slice S2: HWID enforcement runs BEFORE generateSubscription so

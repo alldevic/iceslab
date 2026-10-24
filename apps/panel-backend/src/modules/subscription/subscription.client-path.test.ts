@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
-import { closeRedis } from '../../lib/infra/redis.js';
+import { closeRedis, redis } from '../../lib/infra/redis.js';
 import { config } from '../../config.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
@@ -71,10 +71,32 @@ describe('/sub/<token>/<client>', () => {
   it('an unknown client is answered by name, a bad token stays 404 as without a client', async () => {
     const res = await app.inject({ method: 'GET', url: `${P}/${sub}/surfboardx` });
     expect(res.statusCode).toBe(404);
-    expect(JSON.parse(res.body)).toMatchObject({ error: 'UNKNOWN_CLIENT' });
+    const body = JSON.parse(res.body) as { error: string; message: string };
+    expect(body.error).toBe('UNKNOWN_CLIENT');
+    for (const slug of Object.keys(CLIENT_SLUGS)) expect(body.message).toContain(slug);
     const bare = await app.inject({ method: 'GET', url: `${P}/not-a-token-12345?format=singbox` });
     const pathed = await app.inject({ method: 'GET', url: `${P}/not-a-token-12345/singbox` });
     expect(pathed.statusCode).toBe(bare.statusCode);
     expect(pathed.body).toBe(bare.body);
+  });
+
+  it('a honey token trips the trap whatever follows it: an unknown client, format or protocol', async () => {
+    const honey = 'honey-token-step5-xxxxxxx';
+    config.HONEY_USER_TOKENS.push(honey);
+    const ip = '8.8.4.4';
+    try {
+      for (const url of [`${P}/${honey}/surfboardx`, `${P}/${honey}?format=nope`, `${P}/${honey}?protocols=nope`]) {
+        await redis.del(`sec:blacklist:${ip}`);
+        const res = await app.inject({ method: 'GET', url, remoteAddress: ip });
+        // The trap's answer: a plausible empty 200 and a ban, not a 404 or a
+        // 400 that tells the holder the token is live.
+        expect(res.statusCode, url).toBe(200);
+        expect(res.body, url).toBe('');
+        expect(await redis.get(`sec:blacklist:${ip}`), url).toBe('1');
+      }
+    } finally {
+      config.HONEY_USER_TOKENS.splice(config.HONEY_USER_TOKENS.indexOf(honey), 1);
+      await redis.del(`sec:blacklist:${ip}`);
+    }
   });
 });
