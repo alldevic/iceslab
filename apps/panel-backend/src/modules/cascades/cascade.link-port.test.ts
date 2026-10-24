@@ -316,6 +316,41 @@ describe('a cascade leg and a profile on one port', () => {
     });
   });
 
+  /**
+   * A-117: a shadowsocks leg holds BOTH sockets. Its listener is rendered
+   * without `network`, which sing-box reads as tcp and udp, and the agent opens
+   * both for it. As 'tcp' alone a hysteria profile on the leg's port saved, and
+   * one of the two then failed to bind on the node.
+   */
+  describe('a shadowsocks leg', () => {
+    it('blocks a UDP profile on its port as well as a TCP one', async () => {
+      const entry = await makeNode('ru-entry');
+      const nl = await makeNode('nl-exit');
+      const se = await makeNode('se-exit');
+      await makeCascade(entry, [nl, se], 201, ['shadowsocks', 'shadowsocks']);
+
+      const hy = await bind(await makeProfile('hy2-nl', 'hysteria', {}), nl, LINK_PORT_BASE, 409);
+      expect(hy.error).toBe('PORT_TAKEN_CASCADE');
+      expect(hy.message).toContain('ru-out');
+      const reality = await bind(await makeProfile('reality-nl'), nl, LINK_PORT_BASE, 409);
+      expect(reality.message).toContain('ru-out');
+    });
+
+    it('is refused by a UDP profile that was there first', async () => {
+      const entry = await makeNode('ru-entry');
+      const nl = await makeNode('nl-exit');
+      const se = await makeNode('se-exit');
+
+      await bind(await makeProfile('hy2-nl', 'hysteria', {}), nl, LINK_PORT_BASE);
+      const refused = await makeCascade(entry, [nl, se], 409, ['shadowsocks', 'shadowsocks']);
+      expect(refused.error).toBe('LINK_PORT_IN_USE');
+      expect(refused.conflicts).toEqual([
+        { nodeName: 'nl-exit', port: LINK_PORT_BASE, transport: 'udp', profileName: 'hy2-nl' },
+      ]);
+      expect(await prisma.cascade.count()).toBe(0);
+    });
+  });
+
   it('counts the port the LEGACY storage assigns, which is not always the v4 one', async () => {
     /**
      * A finding, pinned here so it is not lost: for a balancer the two

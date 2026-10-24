@@ -467,7 +467,10 @@ function linkInbound(leg: ChainLegIn): Json {
 
 /** SS2022 carries one key per listener, so a shadowsocks leg cannot tell
  *  directions apart by credential. It is the cell the operator chose, and the
- *  routing falls back to the default way out for it. */
+ *  routing falls back to the default way out for it.
+ *
+ *  No `network`: tcp and udp both, so UDP through the cascade rides the leg.
+ *  The port check holds both sockets for it (LINK_CELL_TRANSPORTS, A-117). */
 function ssInbound(cred: Extract<LinkCred, { protocol: 'shadowsocks' }>): Json {
   return {
     type: 'shadowsocks',

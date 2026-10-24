@@ -1,6 +1,6 @@
 import {
   LINK_CELL_ENGINES,
-  LINK_CELL_TRANSPORT,
+  LINK_CELL_TRANSPORTS,
   TRANSPORTS,
   type ChainLinkIngress,
   type ChainStatus,
@@ -228,22 +228,19 @@ function receivingLinkPorts(
   hops: { nodeId: string }[],
   creds: LinkCred[],
 ): { nodeId: string; port: number; transport: Transport }[] {
-  return hops
-    .slice(1)
-    .map((h, i) =>
-      creds[i]
-        ? {
-            nodeId: h.nodeId,
-            port: creds[i]!.port,
-            // From the cred's own cell. The legacy storage only ever holds
-            // vless and SS2022, so this is tcp today and reads it rather than
-            // saying it: the day a QUIC cell folds into hops, a constant here
-            // would be a silent lie about which socket is taken.
-            transport: LINK_CELL_TRANSPORT[creds[i]!.protocol],
-          }
-        : null,
-    )
-    .filter((x): x is { nodeId: string; port: number; transport: Transport } => x !== null);
+  return hops.slice(1).flatMap((h, i) =>
+    creds[i]
+      ? // From the cred's own cell. The legacy storage only ever holds vless
+        // and SS2022, and reads the table rather than saying it: SS2022 holds
+        // udp beside tcp (A-117), and the day a QUIC cell folds into hops, a
+        // constant here would be a silent lie about which socket is taken.
+        LINK_CELL_TRANSPORTS[creds[i]!.protocol].map((transport) => ({
+          nodeId: h.nodeId,
+          port: creds[i]!.port,
+          transport,
+        }))
+      : [],
+  );
 }
 
 /**
@@ -2663,8 +2660,8 @@ export function linkHostOf(address: string): string {
  * A-111: the ports this node's chain receives legs on over the internet, each
  * with the hops that dial it, for the agent's firewall. One entry per port:
  * the legs of one receiving step share one listener. A leg inside an AWG
- * tunnel is left out, it arrives on the tunnel's interface. Shadowsocks gets
- * both transports, as its listener takes both; the other cells their one.
+ * tunnel is left out, it arrives on the tunnel's interface. Each cell gets
+ * the sockets its listener takes (LINK_CELL_TRANSPORTS): shadowsocks both.
  * A leg whose peer has no address is not here, and chainInputFor renders no
  * chain for it either.
  */
@@ -2675,11 +2672,7 @@ export function chainLinkIngressOf(nodeId: string, t: TopologyInput): ChainLinkI
     const from = t.hosts.get(l.fromNodeId);
     if (!from) continue;
     const e = byPort.get(l.cred.port) ?? { transports: new Set<Transport>(), allowFrom: new Set<string>() };
-    if (l.cred.protocol === 'shadowsocks') {
-      e.transports.add('tcp').add('udp');
-    } else {
-      e.transports.add(LINK_CELL_TRANSPORT[l.cred.protocol]);
-    }
+    for (const x of LINK_CELL_TRANSPORTS[l.cred.protocol]) e.transports.add(x);
     e.allowFrom.add(from);
     byPort.set(l.cred.port, e);
   }

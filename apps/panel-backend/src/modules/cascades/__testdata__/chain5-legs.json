@@ -2,16 +2,23 @@
   {
     "cell": "hy2",
     "port": 24000,
-    "transport": "udp"
+    "transports": [
+      "udp"
+    ]
   },
   {
     "cell": "tuic",
     "port": 24001,
-    "transport": "udp"
+    "transports": [
+      "udp"
+    ]
   },
   {
     "cell": "shadowsocks",
     "port": 24002,
-    "transport": "tcp"
+    "transports": [
+      "tcp",
+      "udp"
+    ]
   }
 ]

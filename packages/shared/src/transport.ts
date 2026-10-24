@@ -86,12 +86,18 @@ export const LINK_CELL_ENGINES: Record<LinkCell, readonly EngineName[]> = {
  * from a TCP one is which cell it is. The port check compares (port, transport)
  * pairs, and a leg that arrived without a transport would be compared against
  * the wrong half of every binding.
+ *
+ * A LIST, because one cell holds two (A-117): a shadowsocks leg's listener is
+ * rendered without `network` (chain.config.ts ssInbound), which sing-box reads
+ * as tcp AND udp, so the leg carries UDP too, and the agent opens both for it.
+ * As 'tcp' alone the port check let a UDP profile onto 24000+step, and one of
+ * the two then failed to bind on the node.
  */
-export const LINK_CELL_TRANSPORT: Record<LinkCell, Transport> = {
-  vless: 'tcp',
-  shadowsocks: 'tcp',
-  hy2: 'udp',
-  tuic: 'udp',
+export const LINK_CELL_TRANSPORTS: Record<LinkCell, readonly Transport[]> = {
+  vless: ['tcp'],
+  shadowsocks: ['tcp', 'udp'],
+  hy2: ['udp'],
+  tuic: ['udp'],
 };
 
 /**
@@ -1107,7 +1113,7 @@ export type LinkCongestion = (typeof LINK_CONGESTIONS)[number];
  *           the tunnel carries the leg, it does not replace it.
  *
  * ⚠ Named `underlay`, not `transport`. `Transport` in this file is already the
- * socket kind ('tcp' | 'udp', LINK_CELL_TRANSPORT, every port check), and a
+ * socket kind ('tcp' | 'udp', LINK_CELL_TRANSPORTS, every port check), and a
  * leg's transport of 'awg' beside its cell's transport of 'udp' is the one-name
  * two-meanings trap the cells were split from the protocols to escape.
  */

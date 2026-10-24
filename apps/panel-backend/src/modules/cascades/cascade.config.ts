@@ -3,7 +3,7 @@ import { generateRealityKeyPair } from '../../lib/auth/credentials.js';
 import {
   DEFAULT_LINK_CONGESTION,
   LINK_CELLS,
-  LINK_CELL_TRANSPORT,
+  LINK_CELL_TRANSPORTS,
   LINK_CONGESTIONS,
   type LinkCell,
   type LinkCongestion,
@@ -640,11 +640,13 @@ export function topologyReceivingPorts(
     // 24000 shares nothing with a profile on 24000/TCP, and refusing that pair
     // would refuse a legal configuration, which is the same untruth the
     // binding-against-binding check was fixed of.
-    const transport = LINK_CELL_TRANSPORT[leg.cell];
-    const key = `${leg.nodeId}:${port}:${transport}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ nodeId: leg.nodeId, port, transport });
+    // A shadowsocks leg holds both (A-117).
+    for (const transport of LINK_CELL_TRANSPORTS[leg.cell]) {
+      const key = `${leg.nodeId}:${port}:${transport}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ nodeId: leg.nodeId, port, transport });
+    }
   }
   return out;
 }
