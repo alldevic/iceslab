@@ -536,9 +536,9 @@ export function TemplateEditPage() {
               >
                 {t('templates.warnings')}
               </Text>
-              {dry.warnings.map((w) => (
-                <Text key={w} style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '17px', color: SNOW }}>
-                  {w}
+              {dry.warnings.map((w, i) => (
+                <Text key={`${i}-${w.message}`} style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '17px', color: SNOW }}>
+                  {w.message}
                 </Text>
               ))}
               <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>

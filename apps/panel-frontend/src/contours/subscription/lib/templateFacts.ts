@@ -1,3 +1,4 @@
+import { DRY_RUN_WARNING_CODES, type DryRunWarningCode } from '@iceslab/shared';
 import {
   TEMPLATE_TYPES,
   type SubscriptionTemplate,
@@ -94,7 +95,8 @@ export interface DryRunFacts {
   rendered: string;
   /** `ok: null`: ядро не запускалось. */
   check: { ok: boolean | null; message: string | null };
-  warnings: string[];
+  /** `code: null`: сервер старше кодов (строка) или код, которого нет в контракте. */
+  warnings: DryRunWarning[];
   /**
    * Итог прогона (A-236 шаг 3, решение ARCH и AUDT 24.10):
    *   checked    ядро приняло, жалоб нет: «проверено ядром»;
@@ -207,17 +209,32 @@ export function importFacts(result: {
   };
 }
 
+export type DryRunWarning = { code: DryRunWarningCode | null; message: string };
+
+/**
+ * Одна жалоба прогона, вход первым (BACK-2 20f07677): объект `{ code, message }`
+ * или строка старого сервера (фраза без кода). Код вне контракта читается как
+ * `null`, а не выбрасывает жалобу; без фразы жалоба пропускается.
+ */
+export function dryRunWarningOf(w: unknown): DryRunWarning | null {
+  if (typeof w === 'string') return { code: null, message: w };
+  if (!w || typeof w !== 'object') return null;
+  const { code, message } = w as { code?: unknown; message?: unknown };
+  if (typeof message !== 'string') return null;
+  const known = typeof code === 'string' && (DRY_RUN_WARNING_CODES as readonly string[]).includes(code);
+  return { code: known ? (code as DryRunWarningCode) : null, message };
+}
+
 /**
  * Сухой прогон сказал, что узлы не попали ни в одну группу: так выглядит файл
  * из другой панели, чьи служебные ключи Iceslab не узнаёт. Рядом с жалобой
- * подсказка про `iceslab-migrate templates`.
- *
- * ⚠ Жалобы сервера это фразы без кода (`templates.dryrun.ts`: «no proxy group
- * holds a node», «no selector or urltest group holds a node»), поэтому узнаём
- * по общей части фразы. Тест держит обе.
+ * подсказка про `iceslab-migrate templates`. По коду из контракта, не по
+ * фразе; у строки старого сервера кода нет, и подсказки там нет.
  */
-export function nodesInNoGroup(warnings: readonly string[]): boolean {
-  return warnings.some((w) => /group holds a node/.test(w));
+const NO_GROUP_CODES: readonly DryRunWarningCode[] = ['NO_GROUP_HOLDS_NODE', 'NO_SELECTOR_HOLDS_NODE'];
+
+export function nodesInNoGroup(warnings: readonly DryRunWarning[]): boolean {
+  return warnings.some((w) => w.code !== null && NO_GROUP_CODES.includes(w.code));
 }
 
 /**
@@ -296,7 +313,9 @@ export async function saveAfterRun<T>(calls: {
 
 export function dryRunFacts(run: TemplateDryRun | null | undefined): DryRunFacts | null {
   if (!run) return null;
-  const warnings = Array.isArray(run.warnings) ? run.warnings.filter((w): w is string => typeof w === 'string') : [];
+  const warnings = Array.isArray(run.warnings)
+    ? run.warnings.map(dryRunWarningOf).filter((w): w is DryRunWarning => w !== null)
+    : [];
   // Только true и false это ответ ядра; null, отсутствие и мусор: не запускалось.
   const checkOk = run.check?.ok === true ? true : run.check?.ok === false ? false : null;
   // Общий итог сервера, если он булев или null; ответ без него (старый сервер)

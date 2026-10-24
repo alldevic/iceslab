@@ -62,8 +62,12 @@ export interface TemplateDryRun {
   rendered: string;
   /** Ответ ядра: `sing-box check` или `xray -test`. */
   check: { ok: boolean | null; message?: string };
-  /** «Слот пуст», «группа без узлов» и подобное. Не отказ, но повод спросить. */
-  warnings: string[];
+  /**
+   * «Слот пуст», «группа без узлов» и подобное. Не отказ, но повод спросить.
+   * С BACK-2 20f07677 объект с кодом из `DRY_RUN_WARNING_CODES` (shared) и
+   * фразой; сервер старше отвечает строкой. Разбор `dryRunFacts` принимает оба.
+   */
+  warnings: ({ code: string; message: string } | string)[];
 }
 
 /**

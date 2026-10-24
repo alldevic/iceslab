@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   dryRunFacts,
   dryRunForBody,
+  dryRunWarningOf,
   importFacts,
   nodesInNoGroup,
+  type DryRunWarning,
   saveAfterRun,
   singleFlight,
   templateActions,
@@ -184,14 +186,34 @@ describe('importFacts', () => {
   });
 });
 
-describe('nodesInNoGroup: когда рядом с жалобой прогона подсказка про iceslab-migrate', () => {
-  it('узлы не попали ни в одну группу (обе фразы сервера): да', () => {
-    expect(nodesInNoGroup(['no proxy group holds a node: rules have nothing to send traffic through'])).toBe(true);
-    expect(nodesInNoGroup(['no selector or urltest group holds a node: the client cannot pick a server'])).toBe(true);
+describe('nodesInNoGroup: подсказка про iceslab-migrate по коду жалобы (BACK-2 20f07677)', () => {
+  const w = (code: string | null, message = 'x') => ({ code, message }) as DryRunWarning;
+  it('NO_GROUP_HOLDS_NODE и NO_SELECTOR_HOLDS_NODE: да', () => {
+    expect(nodesInNoGroup([w('NO_GROUP_HOLDS_NODE')])).toBe(true);
+    expect(nodesInNoGroup([w('NO_SELECTOR_HOLDS_NODE')])).toBe(true);
   });
-  it('прочие жалобы и их отсутствие: нет', () => {
-    expect(nodesInNoGroup(['no node reached `proxies`: every client would get an empty list'])).toBe(false);
+  it('NO_NODE_IN_PROXIES, строка старого сервера без кода и пусто: нет (по фразе не узнаём)', () => {
+    expect(nodesInNoGroup([w('NO_NODE_IN_PROXIES')])).toBe(false);
+    expect(nodesInNoGroup([w(null, 'no proxy group holds a node')])).toBe(false);
     expect(nodesInNoGroup([])).toBe(false);
+  });
+});
+
+describe('dryRunWarningOf: жалоба прогона, вход первым', () => {
+  it('объект нового сервера: код из контракта и фраза', () => {
+    expect(dryRunWarningOf({ code: 'NO_GROUP_HOLDS_NODE', message: 'no proxy group holds a node' })).toEqual({
+      code: 'NO_GROUP_HOLDS_NODE',
+      message: 'no proxy group holds a node',
+    });
+  });
+  it('строка старого сервера: фраза без кода; чужой код: null, жалоба не теряется', () => {
+    expect(dryRunWarningOf('слот пуст')).toEqual({ code: null, message: 'слот пуст' });
+    expect(dryRunWarningOf({ code: 'SOMETHING_NEW', message: 'm' })).toEqual({ code: null, message: 'm' });
+  });
+  it('без фразы или не объект: пропускается', () => {
+    expect(dryRunWarningOf({ code: 'NO_GROUP_HOLDS_NODE' })).toBeNull();
+    expect(dryRunWarningOf(null)).toBeNull();
+    expect(dryRunWarningOf(3)).toBeNull();
   });
 });
 
@@ -333,7 +355,19 @@ describe('dryRunFacts', () => {
     })!;
     expect(f.verdict).toBe('refused');
     expect(f.canSave).toBe(false);
-    expect(f.warnings).toEqual(['ни один узел не дошёл до групп']);
+    expect(f.warnings).toEqual([{ code: null, message: 'ни один узел не дошёл до групп' }]);
+  });
+
+  it('5а. ответ нового сервера объектами рисуется фразами и несёт код (20f07677)', () => {
+    const f = dryRunFacts({
+      ok: false,
+      rendered: 'x',
+      check: { ok: null },
+      warnings: [{ code: 'NO_GROUP_HOLDS_NODE', message: 'no proxy group holds a node' }],
+    })!;
+    expect(f.verdict).toBe('refused');
+    expect(f.warnings).toEqual([{ code: 'NO_GROUP_HOLDS_NODE', message: 'no proxy group holds a node' }]);
+    expect(nodesInNoGroup(f.warnings)).toBe(true);
   });
 
   it('6. старый сервер без ok и без check: «не проверило», не «ок» и не отказ', () => {
