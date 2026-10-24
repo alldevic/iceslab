@@ -260,6 +260,9 @@ export async function getUserById(id: string): Promise<PublicUserDto> {
   return mapUserToPublic(user, user.traffic);
 }
 
+// No unique column is written here (UpdateUserSchema takes none of username,
+// subscriptionToken, shortId, sourceId), so no P2002 to read; a rename or a
+// token edit added later gets userUniqueField on its write, with a test (A-257).
 export async function updateUser(
   id: string,
   input: UpdateUserInput,
