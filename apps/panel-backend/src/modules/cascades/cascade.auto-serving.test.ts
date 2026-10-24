@@ -3,8 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
-import { getRouteProfilesByEntryNode } from './cascade.service.js';
-import { autoRouteTag } from './cascade.config.js';
+import { exitAllowAt, getRouteProfilesByEntryNode } from './cascade.service.js';
+import { autoRouteTag, routeTag } from './cascade.config.js';
 
 /**
  * Who gets the Auto line, and who must not.
@@ -183,5 +183,101 @@ describe('the Auto line in a subscription', () => {
     });
     const profiles = (await getRouteProfilesByEntryNode([entry])).get(entry)!;
     expect(new Set(tags(profiles)).size).toBe(profiles.length);
+  });
+});
+
+/**
+ * A-128: squads grant, they do not take away from each other, and only the
+ * squads that hand an entry out speak about its exits.
+ */
+describe('the exits of a user in several squads', () => {
+  const twoWays = () =>
+    cascade({
+      autoProfile: true,
+      directions: [
+        { tag: 1, nodeIds: [exitNl] },
+        { tag: 2, nodeIds: [exitSe] },
+      ],
+    });
+
+  it('a narrow squad beside an open one takes nothing away: both countries and Auto', async () => {
+    const id = await twoWays();
+    const narrow = await restrictedSquad(id, [exitNl]);
+    const open = (await prisma.group.create({ data: { name: 'open' }, select: { id: true } })).id;
+    const reach = new Map([[entry, new Set([narrow, open])]]);
+
+    const out = await getRouteProfilesByEntryNode([entry], [narrow, open], reach);
+    expect(tags(out.get(entry))).toEqual([autoRouteTag(0), 1, 2]);
+  });
+
+  it('two narrow squads grant the union of their exits, still without Auto', async () => {
+    const id = await twoWays();
+    const nl = await restrictedSquad(id, [exitNl]);
+    const se = await restrictedSquad(id, [exitSe]);
+    const out = await getRouteProfilesByEntryNode([entry], [nl, se], new Map([[entry, new Set([nl, se])]]));
+    expect(tags(out.get(entry))).toEqual([1, 2]);
+  });
+
+  it('a squad that does not hand this entry out does not narrow it', async () => {
+    const id = await twoWays();
+    const narrowElsewhere = await restrictedSquad(id, [exitNl]);
+    const open = (await prisma.group.create({ data: { name: 'open' }, select: { id: true } })).id;
+    // Only `open` hands out the entry; the narrow squad's rows are about a
+    // cascade it reaches somewhere else, if anywhere.
+    const out = await getRouteProfilesByEntryNode([entry], [narrowElsewhere, open], new Map([[entry, new Set([open])]]));
+    expect(tags(out.get(entry))).toEqual([autoRouteTag(0), 1, 2]);
+  });
+
+  it('a narrow squad alone at the entry still narrows it', async () => {
+    const id = await twoWays();
+    const narrow = await restrictedSquad(id, [exitNl]);
+    const open = (await prisma.group.create({ data: { name: 'open' }, select: { id: true } })).id;
+    // `open` does not hand out this entry, so it grants nothing here.
+    const out = await getRouteProfilesByEntryNode([entry], [narrow, open], new Map([[entry, new Set([narrow])]]));
+    expect(tags(out.get(entry))).toEqual([1]);
+  });
+});
+
+describe('the exits of a user in several squads, on the legacy balancer shape', () => {
+  it('a narrow squad beside an open one takes nothing away there either', async () => {
+    const c = await prisma.cascade.create({
+      data: { name: 'ru-legacy', enabled: true, mode: 'balancer', autoProfile: true },
+      select: { id: true },
+    });
+    for (const [position, nodeId] of [entry, exitNl, exitSe].entries()) {
+      await prisma.cascadeHop.create({ data: { cascadeId: c.id, nodeId, position } });
+    }
+    const narrow = (await prisma.group.create({ data: { name: 'nl-only' }, select: { id: true } })).id;
+    await prisma.groupCascadeExit.create({ data: { groupId: narrow, cascadeId: c.id, exitNodeId: exitNl } });
+    const open = (await prisma.group.create({ data: { name: 'open' }, select: { id: true } })).id;
+    const reach = new Map([[entry, new Set([narrow, open])]]);
+
+    const both = await getRouteProfilesByEntryNode([entry], [narrow, open], reach);
+    expect(tags(both.get(entry))).toEqual([autoRouteTag(0), routeTag(0, 0), routeTag(0, 1)]);
+    // And the narrow squad alone still narrows: NL, no Auto.
+    const alone = await getRouteProfilesByEntryNode([entry], [narrow], new Map([[entry, new Set([narrow])]]));
+    expect(tags(alone.get(entry))).toEqual([routeTag(0, 0)]);
+  });
+});
+
+describe('exitAllowAt', () => {
+  const allow = new Map([['narrow', new Set(['d-nl'])]]);
+  it('is every exit for no squad, an open squad, or no squad speaking', () => {
+    expect(exitAllowAt({ groupIds: [], entryNodeId: 'e', allowByGroup: allow })).toBeUndefined();
+    expect(exitAllowAt({ groupIds: ['narrow', 'open'], entryNodeId: 'e', allowByGroup: allow })).toBeUndefined();
+    expect(
+      exitAllowAt({ groupIds: ['narrow'], entryNodeId: 'e', entryReach: new Map(), allowByGroup: allow }),
+    ).toBeUndefined();
+  });
+
+  it('leaves out a squad that switched the cascade off', () => {
+    // `open` switched it off: it grants no exit, so it cannot make `narrow` open.
+    const got = exitAllowAt({
+      groupIds: ['narrow', 'open'],
+      entryNodeId: 'e',
+      offGroups: new Set(['open']),
+      allowByGroup: allow,
+    });
+    expect(got).toEqual(new Set(['d-nl']));
   });
 });
