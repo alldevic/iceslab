@@ -76,8 +76,10 @@ export function XraySection({
     enabled: profileId !== null,
     staleTime: 30_000,
   });
+  // A list on its way is «cannot tell» as much as a failed one (A-248): the
+  // caveat stays until the hosts are known, it does not appear late.
   const hostsMayDiffer =
-    profileId !== null && hostsMaySecureOtherwise(hostsQuery.data ? hostsQuery.data.hosts : hostsQuery.isError ? null : []);
+    profileId !== null && hostsMaySecureOtherwise(hostsQuery.data ? hostsQuery.data.hosts : null);
   // SOCKS5 / HTTP have no subprotocol pill, transport, security or REALITY to
   // offer: the server takes them plain only.
   if (isPlainSubprotocol(form.values.xraySubprotocol)) {
