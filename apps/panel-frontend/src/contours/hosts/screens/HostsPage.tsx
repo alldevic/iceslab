@@ -39,7 +39,7 @@ import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
-import { hostsBarCounts } from '@/contours/hosts/lib/hostsView';
+import { hostsBarCounts, listsArrived } from '@/contours/hosts/lib/hostsView';
 import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
 import { COUNTRIES } from '@/lib/domain/countries';
 import { AMBER, CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/hosts/lib/colors';
@@ -69,8 +69,12 @@ export function HostsPage() {
   const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
 
+  // Once for the cards and the bar (A-247): «no node» and «unbound» only with
+  // both of their lists in hand (A-234).
+  const nodesKnown = listsArrived(bindingsQuery, nodesQuery);
+  const profileKnown = listsArrived(bindingsQuery, profilesQuery);
+
   const rows = useMemo(() => {
-    const nodesKnown = bindingsQuery.data !== undefined && nodesQuery.data !== undefined;
     const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
     const nodeById = new Map((nodesQuery.data?.nodes ?? []).map((n) => [n.id, n]));
     const profileById = new Map((profilesQuery.data?.profiles ?? []).map((p) => [p.id, p]));
@@ -107,7 +111,7 @@ export function HostsPage() {
           // hand; without them «no node» would be a claim (A-234).
           nodesKnown,
           // The same for the profile: «unbound» only with both lists in hand.
-          profileKnown: bindingsQuery.data !== undefined && profilesQuery.data !== undefined,
+          profileKnown,
         };
       })
       .filter((r) => {
@@ -124,6 +128,8 @@ export function HostsPage() {
     bindingsQuery.data,
     nodesQuery.data,
     profilesQuery.data,
+    nodesKnown,
+    profileKnown,
     search,
     country,
   ]);
@@ -178,10 +184,13 @@ export function HostsPage() {
   // The bar counts the same three states the cards show, so a degraded host is
   // not filed under LIVE where it would go unnoticed.
   // A-234: «no node» and «live» only when the node lists arrived (hostsBarCounts).
-  const nodesKnown = bindingsQuery.data !== undefined && nodesQuery.data !== undefined;
   const { live, degraded, orphaned } = hostsBarCounts(rows, nodesKnown);
-  // The node lists that did not arrive, said above the cards with a retry.
-  const nodesFailure = loadFailure(bindingsQuery, apiErrorMessage) ?? loadFailure(nodesQuery, apiErrorMessage);
+  // The lists that did not arrive, said above the cards with a retry; the
+  // profile list too, the cards say «profile unknown» without it (A-247).
+  const listFailure =
+    loadFailure(bindingsQuery, apiErrorMessage) ??
+    loadFailure(nodesQuery, apiErrorMessage) ??
+    loadFailure(profilesQuery, apiErrorMessage);
   const countries = [...new Set(rows.map((r) => r.countryCode).filter(Boolean))] as string[];
 
   usePageMeta([
@@ -286,7 +295,10 @@ export function HostsPage() {
           />
           <BarButton
             title={t('common.refresh')}
-            onClick={() => qc.invalidateQueries({ queryKey: ['hosts'] })}
+            // Every list the cards read, not the hosts alone (A-247).
+            onClick={() => {
+              for (const key of ['hosts', 'bindings', 'nodes', 'profiles']) void qc.invalidateQueries({ queryKey: [key] });
+            }}
           >
             <IconRefresh size={16} stroke={1.8} color={MIST} />
           </BarButton>
@@ -296,8 +308,8 @@ export function HostsPage() {
         </Box>
       </Box>
 
-      {nodesFailure && rows.length > 0 && (
-        <LoadFailedLine message={nodesFailure.message} onRetry={nodesFailure.onRetry} />
+      {listFailure && rows.length > 0 && (
+        <LoadFailedLine message={listFailure.message} onRetry={listFailure.onRetry} />
       )}
 
       {/* A list that did not arrive is not an empty one (A-141). */}

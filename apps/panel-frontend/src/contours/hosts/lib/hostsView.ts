@@ -3,6 +3,15 @@ import { editGate, type GateView } from '@/lib/ui/loadView';
 type Q = { data: unknown; isError: boolean };
 
 /**
+ * Whether every list a fact rests on has arrived (A-234, A-247). «No node»
+ * needs the binding and node lists, «unbound» the binding and profile lists;
+ * one function so the cards and the bar cannot read it two ways.
+ */
+export function listsArrived(...lists: readonly { data: unknown }[]): boolean {
+  return lists.every((q) => q.data !== undefined);
+}
+
+/**
  * The three counts of the hosts bar (A-234). «Live» and «no node» are facts
  * only with the binding and node lists in hand: without them «live» is «-»
  * and an orphan is not counted, instead of every host reading as having no

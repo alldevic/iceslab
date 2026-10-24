@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { hostEditGate, hostsBarCounts } from '@/contours/hosts/lib/hostsView';
+import { hostEditGate, hostsBarCounts, listsArrived } from '@/contours/hosts/lib/hostsView';
 import { portConflict } from '@/lib/domain/hosts';
 import { coreGateRefusal, coreGateText } from '@/lib/domain/nodeCoreFit';
+
+describe('listsArrived (A-247)', () => {
+  it('факт есть, только когда пришли все списки; пустой список это пришедший', () => {
+    expect(listsArrived({ data: { bindings: [] } }, { data: { nodes: [] } })).toBe(true);
+    expect(listsArrived({ data: { bindings: [] } }, { data: undefined })).toBe(false);
+    expect(listsArrived({ data: undefined }, { data: { profiles: [] } })).toBe(false);
+  });
+});
 
 describe('coreGateText (A-235): отказ ядра для ноды не из списка словами, не «порт занят»', () => {
   const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ' ' + JSON.stringify(vars) : ''}`;
