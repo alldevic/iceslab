@@ -9,3 +9,4 @@ export * from './clients.js';
 export * from './reality.js';
 export * from './geo.js';
 export * from './adapters.js';
+export * from './hosts.js';
