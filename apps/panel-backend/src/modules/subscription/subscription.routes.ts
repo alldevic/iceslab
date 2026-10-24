@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, RouteShorthandOptions } from 'fastify';
 import { z } from 'zod';
 import {
   FORMAT_NAMES,
@@ -429,7 +429,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
   // Path prefix is admin-configurable via SUBSCRIPTION_PATH_PREFIX env
   // (default `/sub`). Lets operators mask Iceslab signature on the
   // wire, e.g. `/v` so user links look like https://panel/v/<token>.
-  app.get(`${config.SUBSCRIPTION_PATH_PREFIX}/:token`, {
+  const subOptions: RouteShorthandOptions = {
     onRequest: [ipRateLimitHook],
     config: {
       rateLimit: {
@@ -437,14 +437,31 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         timeWindow: '1 minute',
         // Per-token bucket so one client polling on the same token doesn't
         // share rate-budget with unrelated subscriptions on shared CGNAT.
-        keyGenerator: (req) => {
+        // The client segment does not split it: one token, one bucket.
+        keyGenerator: (req: FastifyRequest) => {
           const t = (req.params as { token?: string })?.token ?? 'unknown';
           return `${req.ip}:${t}`;
         },
       },
     },
-  }, async (request, reply) => {
+  };
+  const serve = async (request: FastifyRequest, reply: FastifyReply) => {
     const params = TokenParamSchema.parse(request.params);
+    // A-236 step 5: /sub/<token>/<client>. The segment IS an explicit
+    // format, the same as `?format=` and winning over the User-Agent rules,
+    // for the clients that cannot set a User-Agent and for a QR made for one
+    // client. A slug nobody knows is answered by name.
+    const client = (request.params as { client?: string }).client;
+    if (client !== undefined) {
+      const slugFormat = CLIENT_SLUGS[client];
+      if (!slugFormat) {
+        return reply.code(404).send({
+          error: 'UNKNOWN_CLIENT',
+          message: `unknown client ${JSON.stringify(client)} in the path. This build answers: ${Object.keys(CLIENT_SLUGS).join(', ')}`,
+        });
+      }
+      (request.query as Record<string, unknown>).format = slugFormat;
+    }
     // A format nobody serves is answered by NAME. `QuerySchema.parse` throws a
     // Zod error that the handler turns into a bare 400, so a client asking for
     // a format this build does not have got "Bad Request" and no way to tell a
@@ -1066,5 +1083,24 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
-  });
+  };
+
+  app.get(`${config.SUBSCRIPTION_PATH_PREFIX}/:token`, subOptions, serve);
+  app.get(`${config.SUBSCRIPTION_PATH_PREFIX}/:token/:client`, subOptions, serve);
 }
+
+/**
+ * The client segment of /sub/<token>/<client> (A-236 step 5,
+ * docs/plan/subscription-templates.md 4.4) and the format it is. `base64` is
+ * the plain list (the `plain` format), named as clients know it; `raw` the
+ * same unwrapped; the rest are the format names.
+ */
+export const CLIENT_SLUGS: Record<string, Format> = {
+  mihomo: 'mihomo',
+  stash: 'stash',
+  clash: 'clash',
+  singbox: 'singbox',
+  json: 'json',
+  base64: 'plain',
+  raw: 'raw',
+};
