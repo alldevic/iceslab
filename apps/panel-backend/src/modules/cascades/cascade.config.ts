@@ -340,6 +340,36 @@ function newLinkReality(): NonNullable<VlessLinkCred['reality']> {
 }
 
 /**
+ * A-157: REALITY for the stored vless legs that have none, one keypair per
+ * RECEIVING node (the rule generateTopologyLinks keeps), each leg its own
+ * short id. A node that already receives a leg with a block keeps that pair,
+ * so the legs landing there agree with the one already serving. Answers the
+ * creds in the order given, or null when no leg is plain and nothing is to be
+ * written.
+ *
+ * Legs minted before phase 5b carry no block and ran as open VLESS between
+ * the nodes until the cascade was saved again; the push calls this instead of
+ * waiting for an operator who has no way to see it.
+ */
+export function giveRealityToPlainVless(legs: { to: string; cred: LinkCred }[]): LinkCred[] | null {
+  const plain = (c: LinkCred): boolean => c.protocol === 'vless' && !c.reality;
+  if (!legs.some((l) => plain(l.cred))) return null;
+  const keyByNode = new Map<string, NonNullable<VlessLinkCred['reality']>>();
+  for (const l of legs) {
+    if (l.cred.protocol === 'vless' && l.cred.reality && !keyByNode.has(l.to)) keyByNode.set(l.to, l.cred.reality);
+  }
+  return legs.map((l) => {
+    if (!plain(l.cred)) return l.cred;
+    let key = keyByNode.get(l.to);
+    if (!key) {
+      key = newLinkReality();
+      keyByNode.set(l.to, key);
+    }
+    return { ...(l.cred as VlessLinkCred), reality: { ...key, shortId: randomBytes(8).toString('hex') } };
+  });
+}
+
+/**
  * The site a REALITY leg pretends to be talking to.
  *
  * ⚠ Not any big site will do, and the rule is not visible from outside: the

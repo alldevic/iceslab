@@ -15,7 +15,7 @@ import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
 import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
 import { reachOfUsers } from '../users/user-reach.js';
-import { getCascadeFragmentsForNode, getChainForNode } from '../cascades/cascade.service.js';
+import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { cascadeXrayDrawingOf, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
 import { layOutGeo } from '../geo-sets/geo-push.js';
@@ -546,6 +546,9 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   const transport = new NodeTransport(node);
 
   try {
+    // A-157: a vless leg stored without REALITY gets it before anything reads
+    // the cascade, here and on the other end (which this queues).
+    await giveCascadeLegsReality(node.id);
     req = await buildApplyInboundsRequest(node);
     inbounds = req.inbounds;
     // Phase 9.2: the geo files go out before the push that names them, since

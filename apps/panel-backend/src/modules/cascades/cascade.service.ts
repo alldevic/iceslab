@@ -47,6 +47,7 @@ import {
   generateLinkCreds,
   LINK_PORT_BASE,
   generateTopologyLinks,
+  giveRealityToPlainVless,
   normalizeLinkProtocol,
   parseLinkCred,
   routeTag,
@@ -3495,6 +3496,98 @@ export async function rotateCascadeTunnels(
     emitCascadeChanged(id, [...new Set(tunnels.flatMap((t) => [t.fromNodeId, t.toNodeId]))], 'rotate-tunnels');
   }
   return getCascade(id);
+}
+
+/**
+ * A-157: a vless leg stored without REALITY gets it on the next push of any
+ * node of its cascade, without an operator.
+ *
+ * Such legs date from before phase 5b, when the block was minted and not
+ * stored; only a save of the topology wrote it after, so a cascade nobody
+ * saved since ran open VLESS between its nodes (the leg's UUID and the users'
+ * destinations in clear) under a green card.
+ *
+ * Written to the storage that draws it: `cascade_links` when the cascade has
+ * the v4 rows, else the legacy `cascade_hops` creds (on a chain the cred of
+ * hop i is received by hop i+1, on a balancer by the exit hop that holds it).
+ * Under a per-cascade advisory lock and re-read inside it, so two pushes at
+ * once cannot mint two pairs for one listener. Both ends must change together:
+ * the other nodes of the cascade are pushed, this one is being pushed now.
+ */
+export async function giveCascadeLegsReality(nodeId: string): Promise<void> {
+  const cascades = await prisma.cascade.findMany({
+    where: {
+      enabled: true,
+      OR: [{ links: { some: { OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }] } } }, { hops: { some: { nodeId } } }],
+    },
+    select: { id: true, name: true },
+  });
+  for (const c of cascades) {
+    const healed = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cascade-leg-reality:${c.id}`}))`;
+      const links = await tx.cascadeLink.findMany({
+        where: { cascadeId: c.id },
+        select: { id: true, toNodeId: true, config: true },
+      });
+      if (links.length > 0) {
+        const legs = links.flatMap((l) => {
+          const cred = parseLinkCred(l.config);
+          return cred ? [{ id: l.id, to: l.toNodeId, cred }] : [];
+        });
+        const next = giveRealityToPlainVless(legs);
+        if (!next) return 0;
+        let n = 0;
+        for (let i = 0; i < legs.length; i++) {
+          if (next[i] === legs[i]!.cred) continue;
+          await tx.cascadeLink.update({
+            where: { id: legs[i]!.id },
+            data: { config: serializeLinkCred(next[i]!) as unknown as Prisma.InputJsonValue },
+          });
+          n++;
+        }
+        return n;
+      }
+      const cascade = await tx.cascade.findUniqueOrThrow({
+        where: { id: c.id },
+        select: { mode: true, hops: { orderBy: { position: 'asc' }, select: { id: true, nodeId: true, linkConfig: true } } },
+      });
+      const hops = cascade.hops;
+      const legs = hops.flatMap((h, i) => {
+        const cred = parseLinkCred(h.linkConfig);
+        if (!cred) return [];
+        const to = cascade.mode === 'balancer' ? (i > 0 ? h.nodeId : null) : hops[i + 1]?.nodeId;
+        return to ? [{ id: h.id, to, cred }] : [];
+      });
+      const next = giveRealityToPlainVless(legs);
+      if (!next) return 0;
+      let n = 0;
+      for (let i = 0; i < legs.length; i++) {
+        if (next[i] === legs[i]!.cred) continue;
+        await tx.cascadeHop.update({
+          where: { id: legs[i]!.id },
+          data: { linkConfig: serializeLinkCred(next[i]!) as unknown as Prisma.InputJsonValue },
+        });
+        n++;
+      }
+      return n;
+    });
+    if (healed === 0) continue;
+    getLogger().info(
+      { cascadeId: c.id },
+      `[cascade] "${c.name}": ${healed} vless leg(s) stored without REALITY have been given it; ` +
+        `the legs reconnect once, as both ends are pushed`,
+    );
+    const members = await prisma.cascade.findUnique({
+      where: { id: c.id },
+      select: {
+        hops: { select: { nodeId: true } },
+        positions: { select: { nodes: { select: { nodeId: true } } } },
+        directions: { select: { nodes: { select: { nodeId: true } } } },
+      },
+    });
+    const others = (members ? cascadeMemberNodeIds(members) : []).filter((id) => id !== nodeId);
+    if (others.length > 0) emitCascadeChanged(c.id, others, 'leg-reality');
+  }
 }
 
 export async function deleteCascade(id: string): Promise<void> {
