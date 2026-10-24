@@ -42,6 +42,12 @@ export function ruleLabel(rule: Pick<PolicyRule, 'position' | 'match'> | undefin
   return `#${rule.position + 1}${first ? ` ${first}` : ''}`;
 }
 
+/** A time that does not parse is not «seen just now»: NaN would compare false and read fresh. */
+function seenStale(observedAt: string, now: number): boolean {
+  const seen = Date.parse(observedAt);
+  return !Number.isFinite(seen) || now - seen > POLICY_SEEN_STALE_MS;
+}
+
 export function policyDrawingView(
   d: PolicyDrawing,
   rules: readonly Pick<PolicyRule, 'id' | 'position' | 'match'>[] | undefined,
@@ -61,7 +67,7 @@ export function policyDrawingView(
           orphanExits: a.notDrawn.filter((n) => n.ruleIds.length === 0).map((n) => ({ exit: n.exit, direction: n.direction })),
           renderedAt: a.renderedAt,
           observedAt: a.observedAt,
-          stale: now - Date.parse(a.observedAt) > POLICY_SEEN_STALE_MS,
+          stale: seenStale(a.observedAt, now),
         }
       : null,
   };

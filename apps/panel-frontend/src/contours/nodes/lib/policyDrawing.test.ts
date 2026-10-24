@@ -73,6 +73,15 @@ describe('policyDrawingView (A-232)', () => {
     expect(v.agent?.notDrawn).toEqual([{ ruleId: 'gone', label: null }]);
   });
 
+  it('неразборчивое время отчёта это «давно не видели», а не свежий', () => {
+    const v = policyDrawingView(
+      answer({ drawing: 'handover', notDrawn: [], renderedAt: '2026-10-24T11:58:00Z', observedAt: 'вчера' }),
+      rules,
+      now,
+    );
+    expect(v.agent?.stale).toBe(true);
+  });
+
   it('незнакомая причина называется кодом, а не молчит', () => {
     expect(notDrawnReasonKey('lost-condition')).toBe('nodeEdit.policyDrawing.reason.lost-condition');
     expect(notDrawnReasonKey('something-new')).toBeNull();
