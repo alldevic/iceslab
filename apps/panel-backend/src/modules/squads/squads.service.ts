@@ -1,5 +1,6 @@
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { ALL_SQUAD_ID } from './squads.constants.js';
 import type { CreateSquadInput, UpdateSquadInput } from './squads.schemas.js';
 import { mapSquadToPublic, type PublicSquadDto } from './squads.mapper.js';
@@ -209,7 +210,11 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
       },
     },
     include: includeRelations,
-  }).catch((err: unknown) => rethrowPresetGone(err, input.customRoutingPresetId));
+  }).catch((err: unknown) => {
+    // The check above is read-then-insert: a create racing it loses here.
+    if (isUniqueViolationOn(err, 'groups_name_key', ['name'])) throw new SquadAlreadyExistsError(input.name);
+    return rethrowPresetGone(err, input.customRoutingPresetId);
+  });
   eventBus.emit('squad.changed', { squadId: row.id });
   return mapSquadToPublic(row);
 }
@@ -294,7 +299,13 @@ export async function updateSquad(
       },
       include: includeRelations,
     });
-  }).catch((err: unknown) => rethrowPresetGone(err, presetFields.customRoutingPresetId));
+  }).catch((err: unknown) => {
+    // A rename racing the check above (A-257).
+    if (input.name !== undefined && isUniqueViolationOn(err, 'groups_name_key', ['name'])) {
+      throw new SquadAlreadyExistsError(input.name);
+    }
+    return rethrowPresetGone(err, presetFields.customRoutingPresetId);
+  });
 
   // A squad edit changes what its members are handed, and the binding cache is
   // keyed by squad SET rather than by contents, so nothing else would notice.

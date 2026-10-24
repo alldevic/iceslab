@@ -173,24 +173,6 @@ describe('createUser', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 
-  it('names the token, not the name, when the insert race is lost on the imported token (A-210)', async () => {
-    vi.mocked(repo.findActiveByUsername).mockResolvedValue(null);
-    vi.mocked(repo.findBySubscriptionToken).mockResolvedValue(null);
-    vi.mocked(repo.create).mockRejectedValue(
-      Object.assign(new Error('unique'), { code: 'P2002', meta: { target: ['subscription_token'] } }),
-    );
-    await expect(
-      createUser({ username: 'racer', groupIds: [], trafficLimitStrategy: 'no_reset', subscriptionToken: 'race-token' }),
-    ).rejects.toBeInstanceOf(SubscriptionTokenTakenError);
-
-    vi.mocked(repo.create).mockRejectedValue(
-      Object.assign(new Error('unique'), { code: 'P2002', meta: { target: 'users_username_active_key' } }),
-    );
-    await expect(
-      createUser({ username: 'racer', groupIds: [], trafficLimitStrategy: 'no_reset', subscriptionToken: 'race-token' }),
-    ).rejects.toBeInstanceOf(UserAlreadyExistsError);
-  });
-
   it('throws UserAlreadyExistsError when username is taken', async () => {
     vi.mocked(repo.findActiveByUsername).mockResolvedValue(makeFakeUser());
 

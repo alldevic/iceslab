@@ -2,6 +2,7 @@ import type { EngineName, Transport } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import {
@@ -382,6 +383,11 @@ export async function createProfile(input: CreateProfileInput): Promise<PublicPr
       update: {},
     });
     return p;
+  }).catch((err: unknown) => {
+    // The check above is read-then-insert: a create racing it loses here
+    // (A-257), a 409 in words instead of a 500.
+    if (isUniqueViolationOn(err, 'profiles_name_key', ['name'])) throw new ProfileNameTakenError(input.name);
+    throw err;
   });
 
   eventBus.emit('profile.created', { profileId: created.id });
@@ -659,6 +665,12 @@ export async function updateProfile(
       data,
       include: { _count: { select: { bindings: true } } },
     });
+  }).catch((err: unknown) => {
+    // A rename racing the check above (A-257).
+    if (input.name !== undefined && isUniqueViolationOn(err, 'profiles_name_key', ['name'])) {
+      throw new ProfileNameTakenError(input.name);
+    }
+    throw err;
   });
   eventBus.emit('profile.updated', { profileId: id });
   return mapProfile(updated, await userReachForProfile(id));

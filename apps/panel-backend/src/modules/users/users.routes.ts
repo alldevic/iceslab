@@ -95,6 +95,17 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
           .code(409)
           .send({ error: 'SUBSCRIPTION_TOKEN_TAKEN', message: err.message, field: 'subscriptionToken' });
       }
+      // A-257: the other two constraints, and one this code does not know,
+      // each by its own name.
+      if (err instanceof usersService.SourceIdTakenError) {
+        return reply.code(409).send({ error: 'SOURCE_ID_TAKEN', message: err.message, field: 'sourceId' });
+      }
+      if (err instanceof usersService.ShortIdTakenError) {
+        return reply.code(409).send({ error: 'SHORT_ID_TAKEN', message: err.message });
+      }
+      if (err instanceof usersService.UserUniqueConflictError) {
+        return reply.code(409).send({ error: 'UNIQUE_CONFLICT', message: err.message });
+      }
       if (err instanceof RoutingPresetNotFoundError) {
         return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }

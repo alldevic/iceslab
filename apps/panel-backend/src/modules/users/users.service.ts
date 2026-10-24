@@ -1,6 +1,7 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 import { generateUserCredentials, generateSubscriptionToken } from '../../lib/auth/credentials.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { uniqueViolationOf, type UniqueViolation } from '../../lib/util/unique-violation.js';
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import * as repo from './users.repository.js';
@@ -44,6 +45,34 @@ export class SubscriptionTokenTakenError extends Error {
   }
 }
 
+/** A user imported twice: the source panel's id is already here (A-257). The
+ *  importer reads this to tell a re-run from a new user. */
+export class SourceIdTakenError extends Error {
+  constructor(public sourceId: string) {
+    super(`a user imported from source id ${JSON.stringify(sourceId)} already exists`);
+    this.name = 'SourceIdTakenError';
+  }
+}
+
+/** The short id the panel generated met another user's (A-257). Ours, not the
+ *  caller's: the same request again draws a new one. */
+export class ShortIdTakenError extends Error {
+  constructor() {
+    super('the generated short id is already in use; send the request again');
+    this.name = 'ShortIdTakenError';
+  }
+}
+
+/** A unique constraint this code does not know (A-257): said as such, not as
+ *  a taken name. */
+export class UserUniqueConflictError extends Error {
+  constructor(public violation: UniqueViolation | null) {
+    const what = violation?.index ?? (violation?.fields.length ? violation.fields.join(', ') : 'unnamed');
+    super(`the user collides with another on a unique constraint (${what})`);
+    this.name = 'UserUniqueConflictError';
+  }
+}
+
 // ───── Helpers ─────
 
 const BYTES_PER_GB = 1_073_741_824n;
@@ -69,12 +98,28 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
-/** The columns or constraint a P2002 names (`meta.target`: a list of fields,
- *  or the constraint's name), as strings; empty when it names none. */
-function uniqueTargetNames(err: unknown): string[] {
-  const target = (err as { meta?: { target?: unknown } }).meta?.target;
-  if (Array.isArray(target)) return target.map(String);
-  return typeof target === 'string' ? [target] : [];
+/**
+ * Which of the user's four unique constraints a P2002 hit, or null for one
+ * this code does not know (A-257). Read with uniqueViolationOf: through the pg
+ * driver adapter the error names the INDEX and carries no `meta.target`, so
+ * the old reading of `target` found nothing and every lost race read as a
+ * taken name.
+ */
+export type UserUniqueField = 'username' | 'subscriptionToken' | 'shortId' | 'sourceId';
+
+const USER_UNIQUE: { field: UserUniqueField; index: string; columns: string[] }[] = [
+  { field: 'username', index: 'users_username_active_key', columns: ['username'] },
+  { field: 'subscriptionToken', index: 'users_subscription_token_key', columns: ['subscription_token', 'subscriptionToken'] },
+  { field: 'shortId', index: 'users_short_id_key', columns: ['short_id', 'shortId'] },
+  { field: 'sourceId', index: 'users_source_id_key', columns: ['source_id', 'sourceId'] },
+];
+
+export function userUniqueField(err: unknown): UserUniqueField | null {
+  const v = uniqueViolationOf(err);
+  if (!v) return null;
+  if (v.index !== null) return USER_UNIQUE.find((u) => u.index === v.index)?.field ?? null;
+  if (v.fields.length !== 1) return null;
+  return USER_UNIQUE.find((u) => u.columns.includes(v.fields[0]!))?.field ?? null;
 }
 
 // ───── Service methods ─────
@@ -165,12 +210,21 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
     // so two concurrent creates can both pass it and race on the INSERT; the
     // loser surfaces here as P2002 instead of a raw 500. Mirrors
     // nodes.service.ts createNode.
+    // The race can be lost on any of the four (A-210, A-257): say which, and
+    // name none for a constraint this code does not know.
     if (isUniqueViolation(err)) {
-      // The race can be lost on the imported token as well (A-210): say which.
-      if (input.subscriptionToken && uniqueTargetNames(err).some((t) => /subscription_?token/i.test(t))) {
-        throw new SubscriptionTokenTakenError(input.subscriptionToken);
+      switch (userUniqueField(err)) {
+        case 'username':
+          throw new UserAlreadyExistsError(input.username);
+        case 'subscriptionToken':
+          throw new SubscriptionTokenTakenError(input.subscriptionToken ?? '');
+        case 'shortId':
+          throw new ShortIdTakenError();
+        case 'sourceId':
+          throw new SourceIdTakenError(input.sourceId ?? '');
+        default:
+          throw new UserUniqueConflictError(uniqueViolationOf(err));
       }
-      throw new UserAlreadyExistsError(input.username);
     }
     rethrowPresetGone(err, input.customRoutingPresetId);
   }

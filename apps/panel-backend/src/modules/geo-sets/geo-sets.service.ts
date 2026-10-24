@@ -10,6 +10,7 @@ import {
   type NodeGeoFact,
 } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { assertPublicHttpUrl } from '../../lib/util/guarded-fetch.js';
 import { reportedEngines } from '../nodes/node-engines.js';
@@ -285,6 +286,15 @@ async function nameFree(name: string, exceptId?: string): Promise<void> {
   if (other && other.id !== exceptId) throw new GeoSetNameTakenError(name);
 }
 
+/** nameFree reads, then the write inserts: a write racing it loses on the
+ *  index, and that is the same refusal, not a 500 (A-257). */
+function nameTakenOnWrite(name: string) {
+  return (err: unknown): never => {
+    if (isUniqueViolationOn(err, 'geo_sets_name_key', ['name'])) throw new GeoSetNameTakenError(name);
+    throw err;
+  };
+}
+
 export interface CreateUrlSetInput {
   name: string;
   kind: GeoSetKind;
@@ -310,7 +320,7 @@ export async function createUrlSet(input: CreateUrlSetInput): Promise<GeoSetDto>
       status: 'checking',
     },
     select: { id: true },
-  });
+  }).catch(nameTakenOnWrite(input.name));
   await enqueueUrlFetch(row.id);
   return getGeoSet(row.id);
 }
@@ -346,7 +356,7 @@ export async function createUploadSet(input: UploadInput & { name: string; kind:
   const row = await prisma.geoSet.create({
     data: { name: input.name, kind: input.kind, sourceType: 'upload', filename: input.filename.slice(0, 255) },
     select: { id: true },
-  });
+  }).catch(nameTakenOnWrite(input.name));
   await ingestGeoFile(row.id, { bytes: input.bytes, expectedSha256: expected });
   return getGeoSet(row.id);
 }
@@ -413,7 +423,7 @@ export async function patchSet(id: string, input: PatchSetInput): Promise<GeoSet
     data.sha256Manual = checkSha(source, input.sha256);
   }
   if (input.refreshHours !== undefined) data.refreshHours = input.refreshHours;
-  await prisma.geoSet.update({ where: { id }, data });
+  await prisma.geoSet.update({ where: { id }, data }).catch(nameTakenOnWrite(data.name ?? s.name));
   if (data.url !== undefined || data.sha256Source !== undefined) {
     await prisma.geoSet.update({ where: { id }, data: { status: 'checking' } });
     await enqueueUrlFetch(id);
