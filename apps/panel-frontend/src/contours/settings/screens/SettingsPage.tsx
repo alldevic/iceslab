@@ -24,6 +24,7 @@ import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
 import { brandNameFieldError, brandNameSave, listState, regionNodeWords } from '@/contours/settings/lib/settingsView';
+import { conflictField } from '@/lib/domain/conflictField';
 import {
   createApiToken,
   deleteApiToken,
@@ -593,9 +594,17 @@ function RegionsCard() {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [editing, setEditing] = useState<Region | null>(null);
+  // A-257 tail: a taken name or code stands at its field (create and edit apart).
+  const [createTaken, setCreateTaken] = useState<RegionTaken | null>(null);
+  const [editTaken, setEditTaken] = useState<RegionTaken | null>(null);
 
   const fail = (title: string) => (err: unknown) =>
     notifications.show({ color: 'red', title, message: apiErrorMessage(err) });
+  const failAt = (title: string, set: (r: RegionTaken | null) => void) => (err: unknown) => {
+    const taken = conflictField(err, REGION_FIELDS);
+    set(taken);
+    if (!taken) fail(title)(err);
+  };
 
   const createMutation = useMutation({
     mutationFn: createRegion,
@@ -603,9 +612,10 @@ function RegionsCard() {
       qc.invalidateQueries({ queryKey: ['regions'] });
       setName('');
       setCode('');
+      setCreateTaken(null);
       notifications.show({ color: 'green', message: t('regions.notify.created') });
     },
-    onError: fail(t('common.createError')),
+    onError: failAt(t('common.createError'), setCreateTaken),
   });
 
   const updateMutation = useMutation({
@@ -614,9 +624,10 @@ function RegionsCard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['regions'] });
       setEditing(null);
+      setEditTaken(null);
       notifications.show({ color: 'green', message: t('regions.notify.updated') });
     },
-    onError: fail(t('common.saveError')),
+    onError: failAt(t('common.saveError'), setEditTaken),
   });
 
   const deleteMutation = useMutation({
@@ -668,7 +679,12 @@ function RegionsCard() {
                 key={r.id}
                 region={r}
                 loading={updateMutation.isPending}
-                onCancel={() => setEditing(null)}
+                taken={editTaken}
+                onEdit={() => setEditTaken(null)}
+                onCancel={() => {
+                  setEditing(null);
+                  setEditTaken(null);
+                }}
                 onSave={(input) => updateMutation.mutate({ id: r.id, input })}
               />
             ) : (
@@ -758,7 +774,11 @@ function RegionsCard() {
           <TextInput
             placeholder={t('regions.namePlaceholder')}
             value={name}
-            onChange={(e) => setName(e.currentTarget.value)}
+            error={createTaken?.field === 'name' ? createTaken.message || true : undefined}
+            onChange={(e) => {
+              setName(e.currentTarget.value);
+              setCreateTaken(null);
+            }}
           />
         </Stack>
         <Stack gap={6} style={{ width: 150, flexShrink: 0 }}>
@@ -767,7 +787,11 @@ function RegionsCard() {
             placeholder={t('regions.codePlaceholder')}
             value={code}
             maxLength={16}
-            onChange={(e) => setCode(e.currentTarget.value.toUpperCase())}
+            error={createTaken?.field === 'code' ? createTaken.message || true : undefined}
+            onChange={(e) => {
+              setCode(e.currentTarget.value.toUpperCase());
+              setCreateTaken(null);
+            }}
             styles={{ input: { fontFamily: MONO } }}
           />
         </Stack>
@@ -783,14 +807,22 @@ function RegionsCard() {
   );
 }
 
+type RegionTaken = { field: 'name' | 'code'; message: string };
+const REGION_FIELDS = ['name', 'code'] as const;
+
 function RegionEditRow({
   region,
   loading,
+  taken,
+  onEdit,
   onSave,
   onCancel,
 }: {
   region: Region;
   loading: boolean;
+  /** A-257 tail: the field the server says is taken, with its words. */
+  taken: RegionTaken | null;
+  onEdit: () => void;
   onSave: (input: { name: string; code: string }) => void;
   onCancel: () => void;
 }) {
@@ -801,7 +833,7 @@ function RegionEditRow({
     <Box
       style={{
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 8,
         padding: '8px 10px',
         borderRadius: 10,
@@ -814,13 +846,21 @@ function RegionEditRow({
         style={{ width: 88, flexShrink: 0 }}
         value={code}
         maxLength={16}
-        onChange={(e) => setCode(e.currentTarget.value.toUpperCase())}
+        error={taken?.field === 'code' ? taken.message || true : undefined}
+        onChange={(e) => {
+          setCode(e.currentTarget.value.toUpperCase());
+          onEdit();
+        }}
         styles={{ input: { fontFamily: MONO, height: 30, minHeight: 30 } }}
       />
       <TextInput
         style={{ flex: 1, minWidth: 0 }}
         value={name}
-        onChange={(e) => setName(e.currentTarget.value)}
+        error={taken?.field === 'name' ? taken.message || true : undefined}
+        onChange={(e) => {
+          setName(e.currentTarget.value);
+          onEdit();
+        }}
         styles={{ input: { height: 30, minHeight: 30 } }}
       />
       <UnstyledButton

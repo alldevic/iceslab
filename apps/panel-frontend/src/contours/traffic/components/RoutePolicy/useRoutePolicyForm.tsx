@@ -20,6 +20,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { RoutePolicy } from '@/lib/domain/routePolicies';
 import type { Squad } from '@/lib/domain/squads';
+import { conflictField } from '@/lib/domain/conflictField';
+
+const ROUTE_POLICY_FIELDS = ['name', 'ordinal'] as const;
 
 /**
  * The draft a policy is edited as: its name, its rules in order, what is dirty,
@@ -41,6 +44,8 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
   const [loadedFor, setLoadedFor] = useState(policy.id);
   /** Записи из отказа ROUTE_POLICY_ENTRY_UNKNOWN: подсветка до правки строки. */
   const [unknownEntries, setUnknownEntries] = useState<string[]>([]);
+  /** A-257 tail: 409 CONFLICT `field: 'name'`, the server's words at the name. */
+  const [nameTaken, setNameTaken] = useState<string | null>(null);
 
   // Re-seed when the operator picks a different policy in the list.
   if (loadedFor !== policy.id) {
@@ -48,6 +53,7 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
     setName(policy.name);
     setRules(toRules(policy));
     setUnknownEntries([]);
+    setNameTaken(null);
   }
 
   // A policy that has never been saved is dirty by definition, even straight
@@ -83,6 +89,13 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
           title: t('common.saveError'),
           message: t('routes.entryUnknown', { entries: unknown.join(', ') }),
         });
+        return;
+      }
+      // A taken name stands at the name (A-257 tail). The band has no field
+      // here (the API assigns it), so its clash stays a toast in the API's words.
+      const taken = conflictField(err, ROUTE_POLICY_FIELDS);
+      if (taken?.field === 'name') {
+        setNameTaken(taken.message || apiErrorMessage(err));
         return;
       }
       // A name or band collision, or a policy with no domains at all: the API
@@ -177,7 +190,11 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
     removeRule,
     confirmDelete,
     name,
-    setName,
+    setName: (v: string) => {
+      setName(v);
+      setNameTaken(null);
+    },
+    nameTaken,
     rules,
     setRules,
     loadedFor,

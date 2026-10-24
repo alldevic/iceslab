@@ -49,6 +49,7 @@ export function RoutePolicyEditor({
     confirmDelete,
     name,
     setName,
+    nameTaken,
     rules,
     unknownEntries,
   } = useRoutePolicyForm(policy, squads, onCreated);
@@ -61,6 +62,7 @@ export function RoutePolicyEditor({
         <TextInput
           value={name}
           onChange={(e) => setName(e.currentTarget.value)}
+          error={nameTaken ?? undefined}
           placeholder={t('routes.policyNamePlaceholder')}
           styles={{
             input: {
