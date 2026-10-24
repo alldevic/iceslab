@@ -269,14 +269,39 @@ describe('the subscription and the dry run', () => {
   it('dry-run: the Default is ok with the nodes in it; a frame without a slot is not, and says why', async () => {
     const run = (type: string, body: string) =>
       app.inject({ method: 'POST', url: '/api/subscription-templates/dry-run', headers: auth(), payload: { type, body } });
+    type Answer = { ok: boolean | null; rendered: string; check: { ok: boolean | null; message?: string }; warnings: string[] };
     for (const type of TEMPLATE_TYPES) {
       const res = await run(type, DEFAULT_TEMPLATE_BODIES[type]);
       expect(res.statusCode, `${type}: ${res.body}`).toBe(200);
-      const r = JSON.parse(res.body) as { ok: boolean; rendered: string; check: { ok: boolean; message?: string }; warnings: string[] };
+      const r = JSON.parse(res.body) as Answer;
       expect(r.rendered, type).toContain('node-1.example.com');
       expect(r.warnings, type).toEqual([]);
-      expect(r.check.ok, `${type}: ${r.check.message}`).toBe(true);
-      expect(r.ok, type).toBe(true);
+      const clashFamily = type === 'mihomo' || type === 'stash' || type === 'clash';
+      const ran = clashFamily ? false : type === 'singbox' ? !!SINGBOX_BIN : !!XRAY_BIN;
+      // null is not yes: with no core to ask, nothing says the file is good.
+      expect(r.check.ok, `${type}: ${r.check.message}`).toBe(ran ? true : null);
+      expect(r.ok, type).toBe(ran ? true : null);
+    }
+
+    // No binary on the panel (as in the image today): null, not true.
+    const saved = { s: process.env.SINGBOX_BIN, x: process.env.XRAY_BIN };
+    process.env.SINGBOX_BIN = '';
+    process.env.XRAY_BIN = '';
+    try {
+      const sb = JSON.parse((await run('singbox', DEFAULT_TEMPLATE_BODIES.singbox)).body) as Answer;
+      expect(sb.check).toEqual({ ok: null, message: 'not checked: no sing-box binary on the panel' });
+      expect(sb.ok).toBeNull();
+      const xa = JSON.parse((await run('xray-json-array', DEFAULT_TEMPLATE_BODIES['xray-json-array'])).body) as Answer;
+      expect(xa.ok).toBeNull();
+      // A warning with no core to ask is still a no.
+      const unslotted = JSON.parse((await run('singbox', JSON.stringify({ outbounds: [{ type: 'direct', tag: 'direct' }] }))).body) as Answer;
+      expect(unslotted.check.ok).toBeNull();
+      expect(unslotted.ok).toBe(false);
+    } finally {
+      if (saved.s === undefined) delete process.env.SINGBOX_BIN;
+      else process.env.SINGBOX_BIN = saved.s;
+      if (saved.x === undefined) delete process.env.XRAY_BIN;
+      else process.env.XRAY_BIN = saved.x;
     }
     const noGroup = JSON.parse((await run('mihomo', 'rules:\n  - MATCH,DIRECT\n')).body) as { ok: boolean; warnings: string[] };
     expect(noGroup.ok).toBe(false);

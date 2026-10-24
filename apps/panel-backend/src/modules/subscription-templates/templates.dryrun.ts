@@ -26,15 +26,25 @@ const run = promisify(execFile);
  *     panel to ask, and a core the panel does not have is said so;
  *   - `warnings`: no node reached the file, or no group holds a node (the
  *     operator saved a frame without a slot and every client gets nothing).
- * `ok` is false when the core refuses or a warning means an empty
- * subscription.
+ * `check.ok` is true when the core took the file, false when it refused it,
+ * and null when it did not run (no binary on the panel, no Clash core at
+ * all): null is not yes: the core did not run. The overall `ok` is false on a
+ * refusal or any warning, null when nothing was refused and nothing checked,
+ * true only when the core took it and there is no warning.
  */
 
+export type CheckAnswer = { ok: boolean | null; message?: string };
+
 export interface DryRun {
-  ok: boolean;
+  ok: boolean | null;
   rendered: string;
-  check: { ok: boolean; message?: string };
+  check: CheckAnswer;
   warnings: string[];
+}
+
+function overall(check: CheckAnswer, warnings: string[]): boolean | null {
+  if (check.ok === false || warnings.length > 0) return false;
+  return check.ok === null ? null : true;
 }
 
 const KEY = 'Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBLjyFlw';
@@ -59,8 +69,8 @@ function binary(env: string | undefined, paths: string[]): string {
   return env ?? paths.find((p) => existsSync(p)) ?? '';
 }
 
-async function coreCheck(bin: string, args: (f: string) => string[], configs: string[], name: string): Promise<{ ok: boolean; message?: string }> {
-  if (!bin) return { ok: true, message: `not checked: no ${name} binary on the panel` };
+async function coreCheck(bin: string, args: (f: string) => string[], configs: string[], name: string): Promise<CheckAnswer> {
+  if (!bin) return { ok: null, message: `not checked: no ${name} binary on the panel` };
   const dir = await mkdtemp(join(tmpdir(), 'iceslab-dry-'));
   try {
     for (const [i, c] of configs.entries()) {
@@ -95,12 +105,8 @@ export async function dryRun(type: TemplateType, body: string): Promise<DryRun> 
     if (!(doc['proxy-groups'] ?? []).some((g) => (g?.proxies ?? []).some((m) => names.some((n) => String(m).startsWith(n))))) {
       warnings.push('no proxy group holds a node: rules have nothing to send traffic through');
     }
-    return {
-      ok: warnings.length === 0,
-      rendered,
-      check: { ok: true, message: 'not checked: the panel carries no mihomo core' },
-      warnings,
-    };
+    const check: CheckAnswer = { ok: null, message: 'not checked: the panel carries no mihomo core' };
+    return { ok: overall(check, warnings), rendered, check, warnings };
   }
 
   if (type === 'singbox') {
@@ -112,7 +118,7 @@ export async function dryRun(type: TemplateType, body: string): Promise<DryRun> 
     }
     const bin = binary(process.env.SINGBOX_BIN, ['/usr/local/bin/sing-box', '/usr/bin/sing-box']);
     const check = await coreCheck(bin, (f) => ['check', '-c', f], [rendered], 'sing-box');
-    return { ok: check.ok && warnings.length === 0, rendered, check, warnings };
+    return { ok: overall(check, warnings), rendered, check, warnings };
   }
 
   const rendered = type === 'xray-json' ? buildXrayJson(DRY_RUN_NODES, { frame }) : buildXrayJsonArray(DRY_RUN_NODES, { frame });
@@ -120,5 +126,5 @@ export async function dryRun(type: TemplateType, body: string): Promise<DryRun> 
   const configs = (Array.isArray(parsed) ? parsed : [parsed]).map((c) => JSON.stringify(c));
   const bin = binary(process.env.XRAY_BIN, ['/usr/local/bin/xray', '/usr/bin/xray']);
   const check = await coreCheck(bin, (f) => ['-test', '-c', f], configs, 'xray');
-  return { ok: check.ok && warnings.length === 0, rendered, check, warnings };
+  return { ok: overall(check, warnings), rendered, check, warnings };
 }
