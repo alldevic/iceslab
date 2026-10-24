@@ -3,6 +3,7 @@ import {
   dryRunFacts,
   dryRunForBody,
   importFacts,
+  nodesInNoGroup,
   saveAfterRun,
   singleFlight,
   templateActions,
@@ -11,7 +12,7 @@ import {
   templateSavePatch,
   templatesScreenFacts,
 } from '@/contours/subscription/lib/templateFacts';
-import { FOREIGN_TEMPLATE_KEY, type SubscriptionTemplate } from '@/lib/domain/subscriptionTemplates';
+import type { SubscriptionTemplate } from '@/lib/domain/subscriptionTemplates';
 
 /**
  * Экран шаблонов выдачи, фаза 11.
@@ -164,47 +165,48 @@ describe('templateEditorFacts', () => {
 describe('importFacts', () => {
   const ok = {
     template: { id: 'x', type: 'mihomo' as const, name: 'ru-split', body: 'iceslab: {}', isDefault: false, updatedAt: '' },
-    rewrittenKeys: 3,
   };
 
   it('1. ответа нет или он без шаблона: показывать нечего', () => {
     expect(importFacts(null)).toBeNull();
     expect(importFacts(undefined)).toBeNull();
-    expect(importFacts({ rewrittenKeys: 3 })).toBeNull();
+    expect(importFacts({})).toBeNull();
   });
 
-  it('2. сервер разобрал файл: тело, тип, имя и число переписанных ключей', () => {
+  it('2. сервер разобрал файл: тело, тип, имя', () => {
     const f = importFacts(ok)!;
-    expect(f.type).toBe('mihomo');
-    expect(f.name).toBe('ru-split');
-    expect(f.rewrittenKeys).toBe(3);
-    expect(f.needsType).toBe(false);
+    expect(f).toEqual({ body: 'iceslab: {}', type: 'mihomo', name: 'ru-split', needsType: false });
   });
 
   it('3. тип не определён или незнакомый: спрашиваем оператора', () => {
     expect(importFacts({ template: { body: 'x' } })!.needsType).toBe(true);
     expect(importFacts({ template: { type: 'v2rayN' as never, body: 'x' } })!.needsType).toBe(true);
   });
+});
 
-  it('4. числа ключей нет: это «неизвестно», а не ноль', () => {
-    // Сервер не прислал поле: «переписано 0» утверждало бы то, чего он не говорил.
-    expect(importFacts({ template: { type: 'clash', body: 'x' } })!.rewrittenKeys).toBeNull();
-    expect(importFacts({ template: { type: 'clash', body: 'x' }, rewrittenKeys: NaN })!.rewrittenKeys).toBeNull();
-    expect(importFacts({ template: { type: 'clash', body: 'x' }, rewrittenKeys: 0 })!.rewrittenKeys).toBe(0);
+describe('nodesInNoGroup: когда рядом с жалобой прогона подсказка про iceslab-migrate', () => {
+  it('узлы не попали ни в одну группу (обе фразы сервера): да', () => {
+    expect(nodesInNoGroup(['no proxy group holds a node: rules have nothing to send traffic through'])).toBe(true);
+    expect(nodesInNoGroup(['no selector or urltest group holds a node: the client cannot pick a server'])).toBe(true);
   });
-
-  it('5. ЧУЖОЙ КЛЮЧ ОСТАЛСЯ В ТЕЛЕ: это видно, а не проходит молча', () => {
-    // Проверка за сервером. Такого быть не должно, но если случилось, шаблон
-    // уедет в подписку с ключом, которого наш сборщик не понимает.
-    const f = importFacts({
-      template: { type: 'mihomo', body: `${FOREIGN_TEMPLATE_KEY}\n  label: x` },
-      rewrittenKeys: 0,
-    })!;
-    expect(f.foreignKeysLeft).toEqual([FOREIGN_TEMPLATE_KEY]);
+  it('прочие жалобы и их отсутствие: нет', () => {
+    expect(nodesInNoGroup(['no node reached `proxies`: every client would get an empty list'])).toBe(false);
+    expect(nodesInNoGroup([])).toBe(false);
   });
+});
 
-  it('6. чистое тело: чужих ключей нет', () => {
-    expect(importFacts(ok)!.foreignKeysLeft).toEqual([]);
+describe('имени чужой панели нет в коде фронта (решение владельца 25.10)', () => {
+  const FILES = import.meta.glob('/src/**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+  it('ни одного литерала, ни в коде, ни в словарях', () => {
+    // The names are spelled through character codes so this file is not its own hit.
+    const names = [[114, 101, 109, 110, 97, 119, 97, 118, 101], [109, 97, 114, 122, 98, 97, 110], [51, 120, 45, 117, 105]].map((c) =>
+      String.fromCharCode(...c),
+    );
+    const guilty = Object.entries(FILES)
+      .filter(([, code]) => names.some((n) => code.toLowerCase().includes(n)))
+      .map(([path]) => path);
+    expect(Object.keys(FILES).length).toBeGreaterThan(100);
+    expect(guilty).toEqual([]);
   });
 });
 

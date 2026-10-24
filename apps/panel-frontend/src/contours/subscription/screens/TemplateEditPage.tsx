@@ -32,6 +32,7 @@ import {
   templateSavePatch,
   saveAfterRun,
   singleFlight,
+  nodesInNoGroup,
   type ImportFacts,
 } from '@/contours/subscription/lib/templateFacts';
 import { LoadFailed } from '@/ui/LoadFailed';
@@ -374,10 +375,8 @@ export function TemplateEditPage() {
             border: `1px solid ${CYAN}33`,
           }}
         >
-          <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: CYAN }}>
-            {imported.rewrittenKeys === null
-              ? t('templates.importedKeysUnknown')
-              : t('templates.importedKeys', { n: imported.rewrittenKeys })}
+          <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: CYAN }}>
+            {t('templates.migrateHint')}
           </Text>
           <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
             {dry === null ? t('templates.importNeedsDryRun') : t('templates.importReady')}
@@ -385,14 +384,6 @@ export function TemplateEditPage() {
           {imported.needsType && (
             <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: AMBER }}>
               {t('templates.importNeedsType')}
-            </Text>
-          )}
-          {/* Проверка ЗА сервером: после импорта чужого ключа остаться не
-              должно. Если остался, шаблон уедет в подписку с ключом, которого
-              наш сборщик не понимает, и молчать об этом нельзя. */}
-          {imported.foreignKeysLeft.length > 0 && (
-            <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: RED }}>
-              {t('templates.importForeignLeft', { keys: imported.foreignKeysLeft.join(', ') })}
             </Text>
           )}
         </Stack>
@@ -553,6 +544,12 @@ export function TemplateEditPage() {
               <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
                 {t('templates.warningsBlock')}
               </Text>
+              {/* Nodes in no group is how a file from another panel looks. */}
+              {nodesInNoGroup(dry.warnings) && (
+                <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: CYAN }}>
+                  {t('templates.migrateHint')}
+                </Text>
+              )}
             </Stack>
           )}
 

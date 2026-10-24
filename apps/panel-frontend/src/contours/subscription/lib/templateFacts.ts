@@ -1,5 +1,4 @@
 import {
-  FOREIGN_TEMPLATE_KEY,
   TEMPLATE_TYPES,
   type SubscriptionTemplate,
   type TemplateDryRun,
@@ -181,48 +180,44 @@ export function templateSavePatch(
 }
 
 /**
- * Что панель получила из импортированного файла.
- *
- * Сервер переписывает чужой служебный ключ (`FOREIGN_TEMPLATE_KEY`) в наш (`iceslab:`) и
- * говорит, сколько раз это понадобилось. Число показывается не ради статистики:
- * оно объясняет, почему тело на экране отличается от файла, который человек
- * только что выбрал.
- *
- * ⚠ `foreignKeysLeft` это проверка ЗА сервером. После импорта чужого ключа в
- * теле остаться не должно; если он остался, шаблон молча уедет в подписку с
- * ключом, которого наш сборщик не понимает, и вместо этого экран скажет прямо.
+ * Что панель получила из импортированного файла. Чужих служебных ключей
+ * панель не узнаёт (решение владельца 25.10): файл из другой панели сначала
+ * идёт через `iceslab-migrate templates`, об этом подсказка на экране.
  */
 export interface ImportFacts {
   body: string;
   /** Тип, который определил сервер. `null` = не смог, спрашиваем оператора. */
   type: TemplateType | null;
   name: string;
-  /** `null`: сервер числа не прислал, это «неизвестно», а не «ничего не переписано». */
-  rewrittenKeys: number | null;
   /** Тип придётся выбрать руками. */
   needsType: boolean;
-  /** Чужие ключи, которые сервер не переписал. Пусто это норма. */
-  foreignKeysLeft: string[];
 }
-
-const FOREIGN_KEYS = [FOREIGN_TEMPLATE_KEY];
 
 export function importFacts(result: {
   template?: Partial<SubscriptionTemplate> | null;
-  rewrittenKeys?: number;
 } | null | undefined): ImportFacts | null {
   if (!result?.template) return null;
   const tpl = result.template;
   const type = tpl.type && TEMPLATE_TYPES.includes(tpl.type) ? tpl.type : null;
-  const body = tpl.body ?? '';
   return {
-    body,
+    body: tpl.body ?? '',
     type,
     name: tpl.name ?? '',
-    rewrittenKeys: Number.isFinite(result.rewrittenKeys) ? Number(result.rewrittenKeys) : null,
     needsType: type === null,
-    foreignKeysLeft: FOREIGN_KEYS.filter((k) => body.includes(k)),
   };
+}
+
+/**
+ * Сухой прогон сказал, что узлы не попали ни в одну группу: так выглядит файл
+ * из другой панели, чьи служебные ключи Iceslab не узнаёт. Рядом с жалобой
+ * подсказка про `iceslab-migrate templates`.
+ *
+ * ⚠ Жалобы сервера это фразы без кода (`templates.dryrun.ts`: «no proxy group
+ * holds a node», «no selector or urltest group holds a node»), поэтому узнаём
+ * по общей части фразы. Тест держит обе.
+ */
+export function nodesInNoGroup(warnings: readonly string[]): boolean {
+  return warnings.some((w) => /group holds a node/.test(w));
 }
 
 /**

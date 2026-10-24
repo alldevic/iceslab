@@ -120,8 +120,9 @@ export function TemplatesPage() {
         {/* Кнопки живут и на заглушке, но выключены: прятать их значило бы
             скрыть, что экран вообще про это. */}
         {/* Файл читается ЗДЕСЬ, на клиенте, и уходит телом: сервер отвечает
-            разобранным шаблоном и числом переписанных чужих ключей, а экран
-            открывает его как черновик, который ещё надо прогнать и сохранить. */}
+            разобранным шаблоном, а экран открывает его как черновик, который
+            ещё надо прогнать и сохранить. Файл из другой панели сначала идёт
+            через iceslab-migrate templates (подсказка у кнопки и на черновике). */}
         <input
           ref={fileRef}
           type="file"
@@ -136,6 +137,7 @@ export function TemplatesPage() {
           }}
         />
         <GhostButton
+          title={t('templates.migrateHint')}
           disabled={facts.state === 'unavailable' || facts.state === 'failed' || importing.isPending}
           onClick={() => fileRef.current?.click()}
         >
@@ -167,16 +169,19 @@ export function TemplatesPage() {
 /** Тихая кнопка рядом с основной. Своя, а не из чужого контура. */
 function GhostButton({
   children,
+  title,
   disabled,
   onClick,
 }: {
   children: string;
+  title?: string;
   disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <UnstyledButton
       type="button"
+      title={title}
       disabled={disabled}
       onClick={onClick}
       style={{

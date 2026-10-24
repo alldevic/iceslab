@@ -210,13 +210,13 @@ export const subscription = {
     importing: 'Parsing...',
     importFailed: 'The import did not happen',
     importUnavailable: 'Import arrives with phase 11, together with the template store.',
-    importedKeys: 'Foreign keys rewritten: {{n}}',
-    importedKeysUnknown: 'The server did not say how many foreign keys it rewrote',
+    // Owner's decision 25.10: no other panel is named, not even in the hint.
+    migrateHint: 'Run a file from another panel through iceslab-migrate templates first: it renames the service key for Iceslab.',
     importNoTemplate: 'The server did not return a template: the import answer has none.',
     importNeedsDryRun: 'A dry run is required before saving: the file was not written here, and nobody has asked yet what comes out of it.',
     importReady: 'The dry run is done, it can be saved.',
     importNeedsType: 'The server could not tell the type, pick it yourself.',
-    importForeignLeft: 'Foreign keys are still in the body: {{keys}}. Our builder does not understand them.',    // Default: never deleted or renamed, but it can be restored.
+    // Default: never deleted or renamed, but it can be restored.
     restoreAction: 'Restore Default',
     restoring: 'Restoring...',
     restored: 'Default restored',
@@ -263,6 +263,6 @@ export const subscription = {
     },
     emptyTitle: 'No templates yet',
     emptyBody:
-      'Without a template the subscription serves the default config. Create one to decide everything else for the client: groups, rules, profile name. A template from elsewhere can be imported as a file, and its keys are rewritten to ours.',
+      'Without a template the subscription serves the default config. Create one to decide everything else for the client: groups, rules, profile name. A ready template can be imported as a file; run a file from another panel through iceslab-migrate templates first.',
   },
 } as const;
