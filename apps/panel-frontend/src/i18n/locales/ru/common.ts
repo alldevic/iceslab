@@ -430,7 +430,12 @@ export const common = {
     // A-236 шаг 1 (fe676097): те же ссылки без base64.
     raw: 'Ссылки без base64 (raw)',
     json: 'JSON',
-    clash: 'Clash / Mihomo',
+    // A-236 шаг 4 (51e2d152): клеш-семейство по ядру; `clash` остаётся
+    // адресом mihomo для уже выданных ссылок.
+    clash: 'Clash (то же, что Mihomo)',
+    mihomo: 'Mihomo',
+    stash: 'Stash',
+    'clash-legacy': 'Clash (старое ядро)',
     singbox: 'sing-box',
     wgconf: 'WireGuard .conf',
     amneziavpn: 'AmneziaVPN',

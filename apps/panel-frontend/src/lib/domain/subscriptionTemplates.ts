@@ -24,10 +24,9 @@ export { TEMPLATE_TYPES };
  * ⚠ Таблица приехала в `@iceslab/shared` 2026-09-22, временный мост снят:
  * теперь обычный именованный импорт, и расхождение ловит сборка.
  *
- * Локальная копия говорила `stash: 'stash'`, и контракт с ней разошёлся:
- * диалектов без `xhttp` и без `vless` у `/sub` пока нет, поэтому `stash` и
- * `clash` обрамляют тот же формат `clash`, что и `mihomo`. Ровно то, ради чего
- * копию и убирали.
+ * С шага 4 A-236 (BACK-2 51e2d152) клеш-семейство по ядру: `mihomo`
+ * обрамляет `mihomo`, `stash` свой `stash`, тип `clash` старое ядро
+ * `clash-legacy`. Адрес `clash` остался псевдонимом mihomo.
  */
 export function templateFormat(type: TemplateType): string {
   return TEMPLATE_FORMATS[type];

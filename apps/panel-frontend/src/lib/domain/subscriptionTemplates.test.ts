@@ -78,13 +78,12 @@ describe('тип шаблона', () => {
     );
   });
 
-  it('3. stash и clash обрамляют тот же формат clash, что и mihomo', () => {
-    // Локальная копия говорила stash -> 'stash', и контракт с ней разошёлся:
-    // диалектов без xhttp и без vless у /sub пока нет. Копия снята, значение
-    // теперь одно, и вот оно.
-    expect(templateFormat('mihomo')).toBe('clash');
-    expect(templateFormat('stash')).toBe('clash');
-    expect(templateFormat('clash')).toBe('clash');
+  it('3. A-236 шаг 4: каждый тип клеш-семейства обрамляет свой ответ, по ядру', () => {
+    // До шага 4 все три обрамляли `clash`. Теперь у Stash и старого Clash свои
+    // форматы, а `clash` остался адресом mihomo для уже выданных ссылок.
+    expect(templateFormat('mihomo')).toBe('mihomo');
+    expect(templateFormat('stash')).toBe('stash');
+    expect(templateFormat('clash')).toBe('clash-legacy');
     expect(templateFormat('singbox')).toBe('singbox');
     expect(templateFormat('xray-json-array')).toBe('xrayjson-array');
     expect(templateFormat('xray-json')).toBe('xrayjson');
