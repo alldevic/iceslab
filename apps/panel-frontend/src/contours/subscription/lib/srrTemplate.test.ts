@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { TEMPLATE_FORMATS, TEMPLATE_TYPES } from '@iceslab/shared';
-import { srrTemplateChoices, srrTemplatePatch, templateTypeForFormat } from '@/contours/subscription/lib/srrTemplate';
+import { FORMAT_NAMES, TEMPLATE_TYPES, templateTypeForFormat } from '@iceslab/shared';
+import { srrTemplateChoices, srrTemplatePatch } from '@/contours/subscription/lib/srrTemplate';
 import { srrTemplateRefusal } from '@/lib/domain/srr';
 
 const tpl = (type: (typeof TEMPLATE_TYPES)[number], name: string, isDefault = false) => ({ type, name, isDefault });
 
 describe('шаблон правила выдачи (A-236 шаг 4)', () => {
-  it('1. тип по формату как у сервера: clash это mihomo, остальное по контракту, plain без шаблона', () => {
-    expect(templateTypeForFormat('clash')).toBe('mihomo');
-    for (const t of TEMPLATE_TYPES) expect(templateTypeForFormat(TEMPLATE_FORMATS[t])).toBe(t);
-    expect(templateTypeForFormat('plain')).toBeNull();
+  it('1. поле берёт тип по формату из контракта (A-249): шаблоны того типа, формат без типа без шаблонов', () => {
+    const list = TEMPLATE_TYPES.map((t) => tpl(t, `own-${t}`));
+    for (const f of FORMAT_NAMES) {
+      const type = templateTypeForFormat(f);
+      expect(srrTemplateChoices(f, list, null)).toEqual(
+        type ? { takesTemplate: true, names: [`own-${type}`] } : { takesTemplate: false, names: [] },
+      );
+    }
   });
 
   it('2. выбор: шаблоны своего типа без Default; хранимое имя не пропадает', () => {

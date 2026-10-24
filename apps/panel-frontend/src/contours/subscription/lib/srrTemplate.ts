@@ -1,15 +1,4 @@
-import { TEMPLATE_FORMATS, TEMPLATE_TYPES, type SubscriptionFormat, type TemplateType } from '@iceslab/shared';
-
-/**
- * The template type a format is framed by, as the server reads it
- * (`templateTypeForFormat`, templates.service.ts, 51e2d152): `clash` is the
- * mihomo address, the rest by TEMPLATE_FORMATS. `null`: the format takes no
- * template.
- */
-export function templateTypeForFormat(format: SubscriptionFormat): TemplateType | null {
-  if (format === 'clash') return 'mihomo';
-  return TEMPLATE_TYPES.find((t) => TEMPLATE_FORMATS[t] === format) ?? null;
-}
+import { templateTypeForFormat, type SubscriptionFormat, type TemplateType } from '@iceslab/shared';
 
 /**
  * The choices of the rule's template field (A-236 step 4).
@@ -22,6 +11,8 @@ export function templateTypeForFormat(format: SubscriptionFormat): TemplateType 
  *                     and the operator sees what is stored instead of it
  *                     vanishing from the picker.
  * `takesTemplate` false: the format frames no template, said beside the field.
+ * The type by format is the contract's `templateTypeForFormat` (shared, A-249),
+ * the one the server refuses by, not a copy.
  */
 export function srrTemplateChoices(
   format: SubscriptionFormat,
