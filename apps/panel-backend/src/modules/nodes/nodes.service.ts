@@ -34,6 +34,7 @@ import { publicHysteriaTls, rotateHysteriaTls, type PublicHysteriaTls } from './
 import { collectGeoUses } from '../geo-sets/geo-refs.js';
 import { nodeGeoFor, publicIntended } from '../geo-sets/geo-push.js';
 import { intendedEngines } from './node-engines.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 export { CoreVersionIntentError } from './node-core-versions.js';
 export { NodeEnginesError } from './node-intended-engines.js';
 
@@ -96,6 +97,27 @@ function buildSans(address: string): { type: 'dns' | 'ip'; value: string }[] {
   return [{ type: IPV4_RE.test(host) ? 'ip' : 'dns', value: host }];
 }
 
+/**
+ * A write that passed the app-level checks and met a unique index: two saves
+ * at once. The indexes are partial (`WHERE deleted_at IS NULL`, 20260506), so
+ * a soft-deleted node holds neither its name nor its address.
+ *
+ * ⚠ Read from what the error NAMES (A-127, A-257). meta.target is absent
+ * through the pg adapter, and reading it made every clash "name", an address
+ * clash included. `nodes_source_id_key` is not here on purpose: no panel path
+ * writes `source_id` (the import tool does), so a clash on it, like any other
+ * index, is not worded as a name and goes up as it is.
+ */
+function nodeClashOf(err: unknown, input: { name?: string; address?: string }): NodeAlreadyExistsError | null {
+  if (isUniqueViolationOn(err, 'nodes_address_active_key', ['address'])) {
+    return new NodeAlreadyExistsError('address', input.address ?? '');
+  }
+  if (isUniqueViolationOn(err, 'nodes_name_active_key', ['name'])) {
+    return new NodeAlreadyExistsError('name', input.name ?? '');
+  }
+  return null;
+}
+
 // ───── Service methods ─────
 
 export interface CreateNodeContext {
@@ -149,21 +171,7 @@ export async function createNode(
       heartbeatSecret: randomBytes(32),
     });
   } catch (err) {
-    // Catch DB-level UNIQUE violation. Soft-deleted rows still hold the
-    // unique value at the DB level, the app-level checks above only see
-    // active rows, so a soft-deleted node with the same name/address
-    // surfaces here as P2002. Slice 24 will replace these with partial
-    // unique indexes (`WHERE deleted_at IS NULL`); until then we map the
-    // raw error to a friendly 409.
-    if (isUniqueViolation(err)) {
-      const target = ((err as { meta?: { target?: string[] | string } }).meta?.target ?? '') as
-        | string
-        | string[];
-      const flat = Array.isArray(target) ? target.join(',') : target;
-      const field: 'name' | 'address' = flat.includes('address') ? 'address' : 'name';
-      throw new NodeAlreadyExistsError(field, field === 'address' ? input.address : input.name);
-    }
-    throw err;
+    throw nodeClashOf(err, input) ?? err;
   }
 
   const cert = await issueNodeCert({
@@ -329,15 +337,6 @@ async function renderBootstrapCommand(
     acmeEmail: (process.env.ACME_DEFAULT_EMAIL ?? '').trim(),
   });
 }
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code?: string }).code === 'P2002'
-  );
-}
-
 export async function listNodes(query: ListNodesQuery): Promise<{
   nodes: PublicNodeDto[];
   total: number;
@@ -528,7 +527,12 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   const policyChanged =
     input.policyId !== undefined && input.policyId !== existing.policyId;
 
-  const updated = await repo.updateById(id, data);
+  let updated;
+  try {
+    updated = await repo.updateById(id, data);
+  } catch (err) {
+    throw nodeClashOf(err, input) ?? err;
+  }
 
   if (domainChanged || addressChanged || dnsChanged) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../auth/auth.hook.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { MAX_DIRECTION_ORDINAL } from '../cascades/cascade.config.js';
 import { classifyPolicyEntry } from '../cascades/policy-entries.js';
@@ -150,6 +151,28 @@ async function repushCascadeEntries(): Promise<void> {
   eventBus.emit('cascade.changed', { nodeIds });
 }
 
+/**
+ * Which of the two unique fields a save collided on (A-257), read from the
+ * index the error names (meta.target is empty through the pg adapter). The
+ * fixes differ, rename or pick another band. Any other P2002 goes up as is.
+ */
+function policyClash(
+  err: unknown,
+  input: { name?: string; ordinal?: number | null },
+): { error: 'CONFLICT'; field: 'name' | 'ordinal'; message: string } | null {
+  if (isUniqueViolationOn(err, 'route_policies_name_key', ['name'])) {
+    return { error: 'CONFLICT', field: 'name', message: `a policy named "${input.name ?? ''}" already exists` };
+  }
+  if (isUniqueViolationOn(err, 'route_policies_ordinal_key', ['ordinal'])) {
+    return {
+      error: 'CONFLICT',
+      field: 'ordinal',
+      message: `policy band ${input.ordinal ?? ''} was taken while saving, pick another or try again`,
+    };
+  }
+  return null;
+}
+
 export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
   // Per-route auth (see users.routes.ts header for the Fastify v5 rationale).
   const auth = { onRequest: [requireAuth] };
@@ -195,11 +218,8 @@ export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
       }
       // Still possible under a race between the check above and this insert.
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        return reply
-          .code(409)
-          .send({ error: 'CONFLICT', message: 'name or band was taken while saving, try again' });
-      }
+      const taken = policyClash(err, input);
+      if (taken) return reply.code(409).send(taken);
       throw err;
     }
   });
@@ -218,12 +238,9 @@ export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
         if (err.code === 'P2025') {
           return reply.code(404).send({ error: 'NOT_FOUND', message: `policy ${id} not found` });
         }
-        if (err.code === 'P2002') {
-          return reply
-            .code(409)
-            .send({ error: 'CONFLICT', message: `a policy named "${input.name}" already exists` });
-        }
       }
+      const taken = policyClash(err, input);
+      if (taken) return reply.code(409).send(taken);
       throw err;
     }
   });
