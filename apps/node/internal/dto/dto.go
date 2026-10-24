@@ -549,11 +549,11 @@ type UserStats struct {
 	// ignore this field and fall back to the response-level flag.
 	Cumulative bool `json:"cumulative,omitempty"`
 	// Protocol is the Name() of the adapter that reported this entry, i.e. the
-	// protocol of the inbound the user came through (25.09). The panel reads
-	// presence-only accounting (mtproto: the user being listed is the online
-	// signal, there are no bytes) off it per entry, where it used to read the
-	// node's label, which on a node with xray beside mtproto said "xray" and
-	// left every mtproto user offline. Omitted by older agents.
+	// protocol of the inbound the user came through (25.09), read per entry
+	// rather than off the node's label. The panel reads online from bytes alone
+	// (A-121): an mtproto entry carries none per user, so being listed is not
+	// being online, and an mtg that serves no inbound lists nobody. Omitted by
+	// older agents.
 	Protocol string `json:"protocol,omitempty"`
 	// Engine (A-163) is the engine of the adapter that counted this entry. With
 	// Protocol it names the ADAPTER, the pair adapterFor dispatches on: the

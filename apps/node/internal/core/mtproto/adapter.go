@@ -265,7 +265,13 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	// attribute, so skip the HTTP scrape of the mtg metrics endpoint. On a node
 	// where mtproto is registered defensively but unused, this stops a pointless
 	// GET (and its warn-spam when the endpoint is down) every cron tick.
-	if len(users) == 0 || !serving {
+	// A-121: an mtg that is not serving has nobody on it, and its report says
+	// so: no users, rather than the cached roster with zero bytes, which read
+	// as every user present on an inbound that does not exist.
+	if !serving {
+		return &core.Stats{}, nil
+	}
+	if len(users) == 0 {
 		return &core.Stats{Users: users}, nil
 	}
 

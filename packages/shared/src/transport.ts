@@ -1640,9 +1640,10 @@ export interface UserStats {
   cumulative?: boolean;
   /**
    * The protocol of the adapter that reported this entry: the inbound the user
-   * came through (25.09). Presence-only accounting (mtproto) is read off it
-   * per entry, not off the node's label. Absent on older agents, in which case
-   * the panel falls back to the label.
+   * came through (25.09), read per entry rather than off the node's label.
+   * Online is read from bytes alone (A-121): an mtproto entry carries none per
+   * user, so being listed does not make a user online. Absent on older agents,
+   * in which case the panel falls back to the label.
    */
   protocol?: string;
   /**
