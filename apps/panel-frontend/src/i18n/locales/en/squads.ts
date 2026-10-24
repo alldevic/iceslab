@@ -122,6 +122,13 @@ export const squads = {
     noProfiles: 'No profiles configured yet.',
     noProfilesGranted:
       'No profiles granted. Members of this squad get an empty subscription until you tick at least one.',
+    // A-204: a property of the cores, not fixable; said at the profile.
+    scopeGap: {
+      'shared-users':
+        'The squad limit by inbound does not hold on the node: mieru keeps one user list per process, so a user of any mieru inbound on that node gets through all of its mieru inbounds.',
+      'shared-secret':
+        'A limit by user does not hold on the node: MTProto has one secret per node, so a secret from any subscription lets anyone in, a disabled or expired user included.',
+    },
     profileNodes_one: '{{count}} node',
     profileNodes_other: '{{count}} nodes',
     hosts: 'Hosts',

@@ -31,6 +31,7 @@ import {
 } from '@/lib/domain/squads';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { profilePairLabel } from '@/lib/domain/engines';
+import { userScopeGap } from '@/lib/domain/userScope';
 import { listCascades } from '@/lib/domain/cascades';
 import { listHosts } from '@/lib/domain/hosts';
 import { listAllNodes } from '@/lib/domain/nodes';
@@ -951,6 +952,13 @@ export function SquadEditPage() {
                       <Text style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>
                         {profilePairLabel(p, t)}
                       </Text>
+                      {/* A-204: where the core does not hold the squad's limit
+                          on a user, said at the profile that hands it out. */}
+                      {checked && userScopeGap(p) && (
+                        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER, marginTop: 4 }}>
+                          {t(`squadEdit.scopeGap.${userScopeGap(p)}`)}
+                        </Text>
+                      )}
                     </Box>
                     <Chip accent={p.bindingCount > 0 ? FAINT : AMBER}>
                       {t('squadEdit.profileNodes', { count: p.bindingCount })}
