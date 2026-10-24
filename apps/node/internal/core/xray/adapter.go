@@ -151,9 +151,20 @@ type Adapter struct {
 	geo        string
 	geoRunning string
 
+	// policyDrawn (A-232): the policy report of the last render in force.
+	policyDrawn *dto.PolicyDrawn
+
 	// restartMu serializes regenerateAndRestart so concurrent config changes
 	// can't race the subprocess swap. Never held together with mu across IO.
 	restartMu sync.Mutex
+}
+
+// PolicyDrawn implements core.PolicyDrawnReporter (A-232): what the last render
+// in force did with the node policy; nil until one is.
+func (a *Adapter) PolicyDrawn() *dto.PolicyDrawn {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.policyDrawn
 }
 
 // ApplyPolicy implements core.PolicyReceiver: store the node-level policy and
@@ -1599,9 +1610,22 @@ func isRefused(err error) bool {
 // held. restartMu serializes restarts; a.mu is taken only for the fast
 // snapshot of state and the final proc swap, so Healthy()/GetStats never
 // block behind the multi-second Stop/Start.
-func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
+func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
+
+	// A-232: the policy report of THIS render, kept only once the render is in
+	// force (accepted by xray and applied); a refused one leaves the last.
+	var report *dto.PolicyDrawn
+	defer func() {
+		if retErr != nil || report == nil {
+			return
+		}
+		report.RenderedAt = time.Now().UTC().Format(time.RFC3339)
+		a.mu.Lock()
+		a.policyDrawn = report
+		a.mu.Unlock()
+	}()
 
 	// Snapshot the inputs under a.mu (fast), then do all IO with a.mu free.
 	a.mu.Lock()
@@ -1642,8 +1666,9 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	if len(pushed) == 0 && inbound.RealityPrivateKey != "" {
 		pushed = []InboundConfig{inbound}
 	}
-	blob, err := renderMultiConfig(pushed, clients, cascade, inbound.withDefaults().ApiPort, policy, dns)
+	blob, err := renderMultiConfigInto(pushed, clients, cascade, inbound.withDefaults().ApiPort, policy, dns, &report)
 	if err != nil {
+		report = nil
 		return &refusedError{fmt.Errorf("render xray config: %w", err)}
 	}
 

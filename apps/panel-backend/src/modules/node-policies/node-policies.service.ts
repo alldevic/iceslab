@@ -280,6 +280,65 @@ export async function resolvePolicyForNode(
   return (await explainPolicyForNode(nodeId, drawing)).policy;
 }
 
+/** A-232: the node's own report about the policy, as /policy-drawing shows it. */
+export interface AgentPolicyReport {
+  drawing: 'legacy' | 'handover' | 'none';
+  /** Each rule the node's xray left out, with the policy rules it stands for;
+   *  `ruleIds` empty when no rule of the current policy names that way out
+   *  (the policy changed since): the exit is kept, not lost. */
+  notDrawn: { exit: string; direction: number; ruleIds: string[] }[];
+  /** When xray accepted the render, by the node's clock. */
+  renderedAt: string;
+  /** When the panel last saw the report, by its own clock. */
+  observedAt: string;
+}
+
+/**
+ * The agent's report stored by the poll (nodes.policy_drawn), its exits put
+ * back on the rules of the node's policy by the names the panel prints
+ * (policyCascadeOutTag, either drawing). null for a node whose agent has not
+ * reported: an older agent, never "nothing left out".
+ */
+export async function agentPolicyReportForNode(nodeId: string): Promise<AgentPolicyReport | null> {
+  const node = await prisma.node.findFirst({
+    where: { id: nodeId, deletedAt: null },
+    select: {
+      policyDrawn: true,
+      policy: {
+        select: {
+          rules: {
+            where: { actionKind: 'cascade' },
+            select: { id: true, direction: { select: { tag: true } } },
+          },
+        },
+      },
+    },
+  });
+  const stored = node?.policyDrawn as
+    | { drawing: AgentPolicyReport['drawing']; notDrawn: { exit: string; direction: number }[]; renderedAt: string; observedAt: string }
+    | null
+    | undefined;
+  if (!stored) return null;
+  const rules = node?.policy?.rules ?? [];
+  return {
+    drawing: stored.drawing,
+    notDrawn: (stored.notDrawn ?? []).map((d) => ({
+      exit: d.exit,
+      direction: d.direction,
+      ruleIds: rules
+        .filter(
+          (r) =>
+            r.direction &&
+            (policyCascadeOutTag(r.direction.tag, 'legacy') === d.exit ||
+              policyCascadeOutTag(r.direction.tag, 'handover') === d.exit),
+        )
+        .map((r) => r.id),
+    })),
+    renderedAt: stored.renderedAt,
+    observedAt: stored.observedAt,
+  };
+}
+
 /**
  * Why a rule of the node's policy does not reach the node (A-232):
  *   - `lost-condition`: a whole kind of its matchers is unreadable (A-103);

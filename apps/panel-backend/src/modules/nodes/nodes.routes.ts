@@ -16,7 +16,11 @@ import { checkNodePortExposure } from './nodes.exposure.js';
 import { getNodeSyncStatus } from './nodes.sync-status.js';
 import { portClaimsOnNode } from './node-ports.js';
 import { readChainSecret } from './chain-secret.js';
-import { PolicyDoesNotFitNodeError, explainPolicyForNode } from '../node-policies/node-policies.service.js';
+import {
+  PolicyDoesNotFitNodeError,
+  agentPolicyReportForNode,
+  explainPolicyForNode,
+} from '../node-policies/node-policies.service.js';
 import { cascadeXrayDrawingForNode } from '../inbounds/inbounds.queue.js';
 import { prisma } from '../../prisma.js';
 import * as bootstrap from './bootstrap.service.js';
@@ -331,7 +335,9 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // A-232: which rules of the node's policy the push leaves out here, and why.
-  // 200 { policyId, drawing, notDrawn: [{ ruleId, reason }] }; notDrawn empty
+  // 200 { policyId, drawing, notDrawn: [{ ruleId, reason }], agent: { drawing,
+  // notDrawn: [{ exit, direction, ruleIds }], renderedAt, observedAt } | null };
+  // notDrawn empty
   // when every rule goes out, policyId null when the node has none. By the
   // drawing the panel SENDS; an agent whose chain was refused may draw another
   // and rename or drop a cascade rule there (its journal says so).
@@ -341,7 +347,10 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
     if (!node) return reply.code(404).send({ error: 'NOT_FOUND' });
     const drawing = await cascadeXrayDrawingForNode(params.id);
     const { notDrawn } = await explainPolicyForNode(params.id, drawing);
-    return reply.send({ policyId: node.policyId, drawing, notDrawn });
+    // Beside it, what the node's xray says it did with the last render it
+    // accepted; null from an agent that does not report it.
+    const agent = await agentPolicyReportForNode(params.id);
+    return reply.send({ policyId: node.policyId, drawing, notDrawn, agent });
   });
 
   // Did the last save reach this machine? The node card draws "saved, not

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
@@ -570,19 +571,14 @@ var (
 // same direction's other name when that one is, and the rule is dropped when
 // neither is, as the panel drops a rule into a direction the node does not
 // dial. The other actions pass untouched.
-func fitCascadeExits(rules []dto.NodePolicyRule, cascade *CascadeFragments) []dto.NodePolicyRule {
-	drawn := map[string]bool{}
-	if cascade != nil {
-		for _, raw := range cascade.Outbounds {
-			var ob struct {
-				Tag string `json:"tag"`
-			}
-			if json.Unmarshal(raw, &ob) == nil && ob.Tag != "" {
-				drawn[ob.Tag] = true
-			}
-		}
-	}
+//
+// It returns the rules it left out too (A-232): the render logs them and hands
+// them to the node's report from this one call, so the journal, the report and
+// the config cannot disagree.
+func fitCascadeExits(rules []dto.NodePolicyRule, cascade *CascadeFragments) ([]dto.NodePolicyRule, []dto.PolicyNotDrawn) {
+	drawn := drawnOutboundTags(cascade)
 	out := make([]dto.NodePolicyRule, 0, len(rules))
+	var dropped []dto.PolicyNotDrawn
 	for _, r := range rules {
 		if r.Action.Kind != dto.PolicyActionCascade || r.Action.Exit == "" || drawn[r.Action.Exit] {
 			out = append(out, r)
@@ -595,18 +591,61 @@ func fitCascadeExits(rules []dto.NodePolicyRule, cascade *CascadeFragments) []dt
 			other, direction = "cascade-link-out-d"+m[1]+"-0", m[1]
 		}
 		if other == "" || !drawn[other] {
-			// Not silent (A-232): the panel counts what it SENT, and only this
-			// render knows the rule did not make it into the config. The render
-			// is pure and has no logger of its own; the default one lands in
-			// the agent's journal.
-			slog.Default().Warn("xray: node policy rule into a cascade way out this config does not draw is left out",
-				"exit", r.Action.Exit, "direction", direction)
+			n, _ := strconv.Atoi(direction)
+			dropped = append(dropped, dto.PolicyNotDrawn{Exit: r.Action.Exit, Direction: n})
 			continue
 		}
 		r.Action.Exit = other
 		out = append(out, r)
 	}
-	return out
+	return out, dropped
+}
+
+func logDroppedCascadeRules(dropped []dto.PolicyNotDrawn) {
+	for _, d := range dropped {
+		// Not silent (A-232): the panel counts what it SENT, and only this
+		// render knows the rule did not make it into the config. The render is
+		// pure and has no logger of its own; the default one lands in the
+		// agent's journal. The node's report carries the same list.
+		slog.Default().Warn("xray: node policy rule into a cascade way out this config does not draw is left out",
+			"exit", d.Exit, "direction", d.Direction)
+	}
+}
+
+func drawnOutboundTags(cascade *CascadeFragments) map[string]bool {
+	drawn := map[string]bool{}
+	if cascade == nil {
+		return drawn
+	}
+	for _, raw := range cascade.Outbounds {
+		var ob struct {
+			Tag string `json:"tag"`
+		}
+		if json.Unmarshal(raw, &ob) == nil && ob.Tag != "" {
+			drawn[ob.Tag] = true
+		}
+	}
+	return drawn
+}
+
+// cascadeDrawingOf names the drawing these fragments are, by their outbounds:
+// the chain hand-over, the legacy legs, or no way out of a cascade at all.
+// The panel's cascadeXrayDrawingOf answers the same question about what it
+// sends; this answers it about what this render took.
+func cascadeDrawingOf(cascade *CascadeFragments) string {
+	legacy := false
+	for tag := range drawnOutboundTags(cascade) {
+		if handoverExitRe.MatchString(tag) {
+			return dto.PolicyDrawingHandover
+		}
+		if legacyExitRe.MatchString(tag) {
+			legacy = true
+		}
+	}
+	if legacy {
+		return dto.PolicyDrawingLegacy
+	}
+	return dto.PolicyDrawingNone
 }
 
 // cutCascadeRulesAtTheFirstDoor splits the panel's cascade fragments where the
@@ -729,6 +768,22 @@ func renderMultiConfig(
 	apiPort int,
 	policy []dto.NodePolicyRule,
 	dns *dto.DnsCfg,
+) ([]byte, error) {
+	return renderMultiConfigInto(inboundCfgs, users, cascade, apiPort, policy, dns, nil)
+}
+
+// renderMultiConfigInto is renderMultiConfig that also hands back, through
+// `report`, what the render did with the node policy (A-232): the drawing and
+// the cascade rules it left out, from the very call that left them out. The
+// caller keeps it only once xray has accepted the config.
+func renderMultiConfigInto(
+	inboundCfgs []InboundConfig,
+	users []xrayClient,
+	cascade *CascadeFragments,
+	apiPort int,
+	policy []dto.NodePolicyRule,
+	dns *dto.DnsCfg,
+	report **dto.PolicyDrawn,
 ) ([]byte, error) {
 	inbounds := make([]any, 0, len(inboundCfgs)+1)
 	seenTags := make(map[string]struct{}, len(inboundCfgs))
@@ -871,7 +926,15 @@ func renderMultiConfig(
 	//
 	// Nil or empty appends nothing, so a node without a policy renders
 	// byte-identically to before this existed.
-	policyRules, err := buildPolicyRules(fitCascadeExits(policy, cascade))
+	kept, dropped := fitCascadeExits(policy, cascade)
+	logDroppedCascadeRules(dropped)
+	if report != nil {
+		if dropped == nil {
+			dropped = []dto.PolicyNotDrawn{}
+		}
+		*report = &dto.PolicyDrawn{Drawing: cascadeDrawingOf(cascade), NotDrawn: dropped}
+	}
+	policyRules, err := buildPolicyRules(kept)
 	if err != nil {
 		return nil, err
 	}

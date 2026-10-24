@@ -728,7 +728,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		ChainEngine:     s.chainEngine(),
 		CertNotAfter:    s.certNotAfter(),
 		AgentVersion:    s.cfg.AgentVersion,
+		Policy:          s.policyDrawn(),
 	})
+}
+
+// policyDrawnReporter is the core that renders the node policy into its own
+// config and can say what the last render in force did with it (A-232).
+type policyDrawnReporter interface {
+	PolicyDrawn() *dto.PolicyDrawn
+}
+
+// policyDrawn is the router's report, nil when no core has one (an older
+// core, or xray not rendered yet): the panel keeps what it had then.
+func (s *Server) policyDrawn() *dto.PolicyDrawn {
+	for _, adapter := range s.cfg.Adapters {
+		if r, ok := adapter.(policyDrawnReporter); ok {
+			if p := r.PolicyDrawn(); p != nil {
+				return p
+			}
+		}
+	}
+	return nil
 }
 
 // certNotAfter of the pair in force, RFC3339, for the panel to renew ahead of

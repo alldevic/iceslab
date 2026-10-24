@@ -112,6 +112,12 @@ model Node {
   // handshake, because its agent does not report it: an agent older than
   // rotation, which cannot be renewed in place and has to be updated first.
   certFromHandshake     Boolean   @default(false) @map("cert_from_handshake")
+  // A-232: what the node's xray did with the node policy in the last render it
+  // accepted, as /healthz reports it: { drawing, notDrawn: [{ exit, direction }],
+  // renderedAt (the node's clock), observedAt (the panel's, at the poll) }.
+  // Null until an agent that reports it is polled; a poll without the field
+  // keeps what is stored (chainStatus's rule).
+  policyDrawn           Json?     @map("policy_drawn")
   // What the agent reported about this node's CHAIN process (phase 4).
   //
   // Shape (ChainStatus in packages/shared): { running, version?, error? }.

@@ -812,6 +812,34 @@ type HealthcheckResponse struct {
 	// AgentVersion: main.version, set with -X at release, "dev" for a local
 	// build. Absent from an agent older than the field.
 	AgentVersion string `json:"agentVersion,omitempty"`
+	// Policy (A-232): what the last config xray ACCEPTED did with the node
+	// policy: the cascade drawing it took and the cascade rules it left out.
+	// Mirrors HealthcheckResponse.policy. Absent from an agent older than the
+	// field, or one whose xray has not rendered yet: not "nothing left out".
+	Policy *PolicyDrawn `json:"policy,omitempty"`
+}
+
+// The cascade drawings of a node's xray, as the panel names them.
+const (
+	PolicyDrawingLegacy   = "legacy"
+	PolicyDrawingHandover = "handover"
+	PolicyDrawingNone     = "none"
+)
+
+// PolicyDrawn mirrors NodePolicyDrawn in shared/transport.ts.
+type PolicyDrawn struct {
+	Drawing  string           `json:"drawing"`
+	NotDrawn []PolicyNotDrawn `json:"notDrawn"`
+	// RenderedAt, RFC3339: when xray accepted the render this report is about,
+	// by the node's clock. The panel stamps its own observedAt beside it.
+	RenderedAt string `json:"renderedAt"`
+}
+
+// PolicyNotDrawn is a cascade rule the render left out: the way out the panel
+// named, and its direction's tag.
+type PolicyNotDrawn struct {
+	Exit      string `json:"exit"`
+	Direction int    `json:"direction"`
 }
 
 // ───── POST /rotateCert, POST /rotateCert/confirm (A-124) ─────

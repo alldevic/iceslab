@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { NodeTransport } from '../nodes/nodes.transport.js';
+import { pollNodeStatuses } from '../nodes/nodes.cron.js';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -334,7 +336,7 @@ describe('what the node is actually sent', () => {
     };
 
     // An xray entry under a chain: the hand-over, every rule goes out.
-    expect(await read()).toEqual({ policyId: p.id, drawing: 'handover', notDrawn: [] });
+    expect(await read()).toEqual({ policyId: p.id, drawing: 'handover', notDrawn: [], agent: null });
 
     // The same entry on hysteria: xray draws no way out, the cascade rule stays home.
     await prisma.cascadePosition.updateMany({ where: { cascadeId, position: 0 }, data: { entryProtocol: 'hysteria' } });
@@ -343,6 +345,7 @@ describe('what the node is actually sent', () => {
       policyId: p.id,
       drawing: 'none',
       notDrawn: [{ ruleId: cascadeRule.id, reason: 'no-cascade-drawing' }],
+      agent: null,
     });
   });
 
@@ -404,6 +407,59 @@ describe('what the node is actually sent', () => {
     expect(bind.statusCode, bind.body).toBe(201);
     expect((await applyInboundsRequestForNode(entry))?.cascade).toBeDefined();
     expect(await read()).toBe('legacy');
+  });
+
+  it("shows the node's own report beside the drawing sent: the poll keeps it, maps its exits to rules, and an old agent is null", async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+    ]);
+    await attach(entry, p.id);
+    await prisma.node.updateMany({ data: { status: 'online' } });
+    const read = async () =>
+      JSON.parse((await app.inject({ method: 'GET', url: `/api/nodes/${entry}/policy-drawing`, headers: auth() })).body) as {
+        drawing: string;
+        agent: null | { drawing: string; notDrawn: { exit: string; direction: number; ruleIds: string[] }[]; renderedAt: string; observedAt: string };
+      };
+
+    // An agent that does not report: null, not "nothing left out".
+    // The certificate end of an agent without the field is read off a
+    // handshake (A-221); these nodes have no address to shake hands with.
+    vi.spyOn(NodeTransport.prototype, 'presentedCert').mockRejectedValue(new Error('no node here'));
+    const health = vi.spyOn(NodeTransport.prototype, 'healthcheck');
+    health.mockResolvedValue({ status: 'ok', cores: [] } as never);
+    await pollNodeStatuses();
+    expect((await read()).agent).toBeNull();
+
+    // The chain refused on the node: it drew the legacy legs and left the rule out.
+    const exitTag = `cascade-link-out-chain-d${direction.tag}`;
+    health.mockResolvedValue({
+      status: 'ok',
+      cores: [],
+      policy: { drawing: 'legacy', notDrawn: [{ exit: exitTag, direction: direction.tag }, { exit: 'cascade-link-out-chain-d99', direction: 99 }], renderedAt: '2026-10-24T10:00:00Z' },
+    } as never);
+    await pollNodeStatuses();
+    const got = await read();
+    expect(got.drawing).toBe('handover');
+    const rule = p.rules[0] as PolicyRuleDto;
+    expect(got.agent).toMatchObject({
+      drawing: 'legacy',
+      renderedAt: '2026-10-24T10:00:00Z',
+      notDrawn: [
+        { exit: exitTag, direction: direction.tag, ruleIds: [rule.id] },
+        // A way out no rule of the current policy names: kept, not lost.
+        { exit: 'cascade-link-out-chain-d99', direction: 99, ruleIds: [] },
+      ],
+    });
+    expect(Number.isFinite(Date.parse(got.agent!.observedAt))).toBe(true);
+
+    // A poll without the field keeps the fact.
+    health.mockResolvedValue({ status: 'ok', cores: [] } as never);
+    await pollNodeStatuses();
+    expect((await read()).agent?.drawing).toBe('legacy');
+    vi.restoreAllMocks();
   });
 
   it('drops a cascade rule where the push draws no way out in xray', async () => {

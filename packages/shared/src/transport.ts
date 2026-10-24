@@ -1956,6 +1956,25 @@ export interface HealthcheckResponse {
   /** The agent's build: main.version, set with -X at release, "dev" for a
    *  local build. Absent from an older agent. */
   agentVersion?: string;
+  /**
+   * A-232: what the last config the node's xray ACCEPTED did with the node
+   * policy: the cascade drawing it took and the cascade rules it left out. The
+   * panel's /policy-drawing shows it beside the drawing the panel sent; they
+   * differ when the agent refused a chain and drew the legacy legs instead.
+   * ⚠ ABSENT is not "nothing left out": an agent older than the field, or an
+   * xray that has not rendered yet.
+   */
+  policy?: NodePolicyDrawn;
+}
+
+/** A-232. Mirrors dto.PolicyDrawn. */
+export interface NodePolicyDrawn {
+  drawing: 'legacy' | 'handover' | 'none';
+  /** The cascade rules the render left out, by the way out the panel named. */
+  notDrawn: { exit: string; direction: number }[];
+  /** RFC3339, by the node's clock: when xray accepted the render reported on.
+   *  The panel's own observedAt says when it last saw the report. */
+  renderedAt: string;
 }
 
 // ───── POST /rotateCert, POST /rotateCert/confirm (A-124) ─────

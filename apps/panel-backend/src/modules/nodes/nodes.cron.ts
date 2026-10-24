@@ -1,4 +1,11 @@
-import type { ChainStatus, EngineName, GeoStatus, HostMetricsResponse, NodeGeoFact } from '@iceslab/shared';
+import type {
+  ChainStatus,
+  EngineName,
+  GeoStatus,
+  HostMetricsResponse,
+  NodeGeoFact,
+  NodePolicyDrawn,
+} from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/infra/redis.js';
 import { NodeTransport, NodeRequestError } from './nodes.transport.js';
@@ -65,6 +72,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       singboxEngine: true,
       certNotAfter: true,
       certFromHandshake: true,
+      policyDrawn: true,
     },
   });
 
@@ -140,7 +148,14 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
         result.certNotAfter !== undefined &&
         (result.certNotAfter.getTime() !== node.certNotAfter?.getTime() ||
           result.certFromHandshake !== node.certFromHandshake);
+      // A-232: what xray did with the node policy. undefined keeps the stored
+      // fact (unreachable, or an agent that does not report it); a report is
+      // written when it changed, and on the heartbeat so observedAt stays true.
+      const storedPolicy = (node.policyDrawn as NodePolicyDrawnFact | null) ?? null;
+      const policyChanged =
+        result.policyDrawn !== undefined && policyDrawnWorthWriting(storedPolicy, result.policyDrawn, Date.now());
       if (
+        policyChanged ||
         certChanged ||
         statusChanged ||
         messageChanged ||
@@ -157,6 +172,14 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
             ...(intended ?? {}),
             ...(certChanged
               ? { certNotAfter: result.certNotAfter, certFromHandshake: result.certFromHandshake === true }
+              : {}),
+            ...(policyChanged
+              ? {
+                  policyDrawn: {
+                    ...result.policyDrawn!,
+                    observedAt: new Date().toISOString(),
+                  } satisfies NodePolicyDrawnFact as unknown as Prisma.InputJsonValue,
+                }
               : {}),
             status: result.status,
             lastStatusChange: statusChanged ? new Date() : undefined,
@@ -277,6 +300,8 @@ interface PollResult {
   certNotAfter?: Date;
   /** A-221: certNotAfter came off the handshake, the agent does not report it. */
   certFromHandshake?: boolean;
+  /** A-232: the policy report of /healthz; undefined keeps the stored one. */
+  policyDrawn?: NodePolicyDrawn;
   /**
    * `online`   - the agent answers and every configured core is serving.
    * `degraded`   - the agent answers, a configured core is not running. Still
@@ -554,6 +579,7 @@ async function checkOne(node: {
       geo: res.geo ?? null,
       declaredEngines: res.declaredEngines,
       ...(await certEndOf(transport, node, res.certNotAfter)),
+      ...(res.policy ? { policyDrawn: res.policy } : {}),
     };
   } catch (err) {
     if (err instanceof NodeRequestError) {
@@ -564,6 +590,20 @@ async function checkOne(node: {
       message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
     };
   }
+}
+
+/** A-232: the policy report as the panel keeps it: the agent's, plus when the
+ *  panel last saw it (its own clock, beside the node's renderedAt). */
+export type NodePolicyDrawnFact = NodePolicyDrawn & { observedAt: string };
+
+/** Changed in content, or older than the heartbeat (observedAt must mean
+ *  "seen recently"), the same rule as the core inventory. */
+export function policyDrawnWorthWriting(stored: NodePolicyDrawnFact | null, fresh: NodePolicyDrawn, nowMs: number): boolean {
+  if (!stored) return true;
+  const { observedAt, ...was } = stored;
+  if (JSON.stringify(was) !== JSON.stringify(fresh)) return true;
+  const at = Date.parse(observedAt);
+  return !Number.isFinite(at) || nowMs - at >= RESTARTS_HEARTBEAT_MS;
 }
 
 /** How often the end of an old agent's certificate is read off a handshake. */

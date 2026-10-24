@@ -8,6 +8,7 @@ import {
   LINK_TUNNEL_IFACE_PREFIX,
   PROTOCOL_NAMES,
   XRAY_SUBPROTOCOLS,
+  type NodePolicyDrawn,
 } from '@iceslab/shared';
 
 /**
@@ -186,6 +187,17 @@ describe('the chain block against the agent that will decode it', () => {
     // decoded into 0 there is a leg the firewall never opens.
     expect(keys).toEqual(['engine', 'config', 'socks', 'socksPassword', 'userCore', 'tunnels', 'linkIngress']);
     expect(jsonKeysOf('ChainLinkIngress')).toEqual(['port', 'transports', 'allowFrom']);
+  });
+
+  it('carries the node policy report on both sides (A-232)', () => {
+    // A key renamed on one side decodes into nothing on the other, and the
+    // panel then reads "no report" from an agent that sent one.
+    expect(jsonKeysOf('HealthcheckResponse')).toContain('policy');
+    expect(jsonKeysOf('PolicyDrawn')).toEqual(['drawing', 'notDrawn', 'renderedAt']);
+    expect(jsonKeysOf('PolicyNotDrawn')).toEqual(['exit', 'direction']);
+    const drawn: NodePolicyDrawn = { drawing: 'none', notDrawn: [{ exit: 'x', direction: 1 }], renderedAt: '' };
+    expect(Object.keys(drawn)).toEqual(['drawing', 'notDrawn', 'renderedAt']);
+    expect(Object.keys(drawn.notDrawn[0]!)).toEqual(['exit', 'direction']);
   });
 
   it('carries the three tunnel keys on both sides, and one interface prefix', () => {
