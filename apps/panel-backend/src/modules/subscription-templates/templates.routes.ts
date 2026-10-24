@@ -5,11 +5,11 @@ import { requireAuth } from '../auth/auth.hook.js';
 import { TemplateInvalidError } from './templates.parse.js';
 import * as service from './templates.service.js';
 import { dryRun } from './templates.dryrun.js';
+import { importTemplate } from './templates.import.js';
 
 /**
  * A-236 step 2: /api/subscription-templates, the API contract 4.5a
- * (docs/plan/subscription-templates.md). The import (POST /import) comes with
- * step 8; until then it answers 404, which the screen reads as "not here yet".
+ * (docs/plan/subscription-templates.md); POST /import since step 8.
  */
 
 /** 256 KiB: a big operator template is a few hundred lines. */
@@ -23,6 +23,7 @@ const CreateSchema = z.object({ type: z.enum(TEMPLATE_TYPES), name: Name, body: 
 const UpdateSchema = z.object({ name: Name.optional(), body: Body.optional() });
 const IdParam = z.object({ id: z.uuid() });
 const DryRunSchema = z.object({ type: z.enum(TEMPLATE_TYPES), body: Body });
+const ImportSchema = z.object({ body: Body, type: z.enum(TEMPLATE_TYPES).optional() });
 
 function refusal(reply: FastifyReply, err: unknown): FastifyReply | null {
   if (err instanceof TemplateInvalidError) {
@@ -74,6 +75,18 @@ export async function subscriptionTemplatesRoutes(app: FastifyInstance): Promise
   app.post('/api/subscription-templates/dry-run', auth, guarded(async (req, reply) => {
     const input = DryRunSchema.parse(req.body);
     return reply.send(await dryRun(input.type, input.body));
+  }));
+
+  // Step 8: a template from the panel operators move from, its service key
+  // renamed. A draft, not saved: the editor shows it, the operator runs it
+  // dry and saves. `name` is empty, the screen takes the file's.
+  app.post('/api/subscription-templates/import', auth, guarded(async (req, reply) => {
+    const input = ImportSchema.parse(req.body);
+    const draft = importTemplate(input.body, input.type);
+    return reply.send({
+      template: { type: draft.type, name: '', body: draft.body, isDefault: false },
+      rewrittenKeys: draft.rewrittenKeys,
+    });
   }));
 
   app.put('/api/subscription-templates/:id', auth, guarded(async (req, reply) => {
