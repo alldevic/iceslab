@@ -4,7 +4,7 @@ export type TFn = (key: string, opts?: Record<string, unknown>) => string;
 
 /** `fresh` means inside the online window, so a caller can colour on presence
  *  without recomputing it. Callers that only need the words ignore it. */
-export type RelativeTone = 'fresh' | 'stale' | 'never';
+export type RelativeTone = 'fresh' | 'stale' | 'never' | 'unknown';
 
 /**
  * How long ago a timestamp was, in words.
@@ -25,13 +25,20 @@ export type RelativeTone = 'fresh' | 'stale' | 'never';
  * which says "just now" under a minute instead of counting seconds. That is
  * right for a config push and would need a flag here, which would cost more
  * than the duplication it removes.
+ *
+ * The input is checked first. `null` is the server saying the event never
+ * happened, so it reads «never». A string that does not parse is not a time
+ * at all: «-», not «NaN ago». A time ahead of the clock (the server's clock
+ * runs ahead of the browser's) is «0 s ago», not a negative count.
  */
 export function relativeTime(
   iso: string | null,
   t: TFn,
 ): { text: string; tone: RelativeTone } {
-  if (!iso) return { text: t('userTime.never'), tone: 'never' };
-  const diffMs = Date.now() - new Date(iso).getTime();
+  if (iso === null) return { text: t('userTime.never'), tone: 'never' };
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return { text: '-', tone: 'unknown' };
+  const diffMs = Math.max(0, Date.now() - at);
   const sec = Math.floor(diffMs / 1000);
   // The same window the presence dot and the dashboard's "online now" use, so
   // none of the three can disagree about the same user.
