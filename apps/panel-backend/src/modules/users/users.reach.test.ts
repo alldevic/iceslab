@@ -84,6 +84,13 @@ function capture() {
     added.push({ node: (this as unknown as { node: { name: string } }).node?.name ?? '', req });
     return { ok: true };
   });
+  // A-112: the roster after a push goes over /addUsers; each entry is
+  // recorded exactly as one /addUser.
+  vi.spyOn(NodeTransport.prototype, 'addUsers').mockImplementation(async function (this: unknown, batch) {
+    const node = (this as { node?: { name?: string } }).node?.name ?? '';
+    for (const req of batch.users) added.push({ node, req });
+    return { results: batch.users.map((u) => ({ userId: u.userId, ok: true })) };
+  });
   vi.spyOn(NodeTransport.prototype, 'removeUser').mockImplementation(async function (this: unknown) {
     removed.push((this as { node: { name: string } }).node?.name ?? '');
     return { ok: true };
