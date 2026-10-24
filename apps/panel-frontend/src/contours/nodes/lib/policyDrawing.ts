@@ -1,4 +1,37 @@
-import type { PolicyDrawing, PolicyRule } from '@/lib/domain/nodePolicies';
+import { policyDrawingOf, type PolicyDrawing, type PolicyRule } from '@/lib/domain/nodePolicies';
+import { loadView } from '@/lib/ui/loadView';
+
+/**
+ * Where the drawing request stands, each case in its own words (A-232 tail):
+ *   checking    the answer is on its way, said, not a blank;
+ *   old-server  404: a server older than A-232 has no such route;
+ *   failed      any other failure, the server's words and a retry;
+ *   unknown     an answer that did not parse;
+ *   ready       the drawing.
+ */
+export type PolicyDrawingLoad =
+  | { kind: 'checking' }
+  | { kind: 'old-server' }
+  | { kind: 'unknown' }
+  | { kind: 'failed'; message: string; onRetry: () => void }
+  | { kind: 'ready'; drawing: PolicyDrawing };
+
+export function policyDrawingLoad(
+  q: { data: unknown; isError: boolean; error: unknown; refetch: () => unknown },
+  say: (err: unknown) => string,
+): PolicyDrawingLoad {
+  // `null` is an answer (loadView would read it as still on its way).
+  if (q.data === null) return { kind: 'unknown' };
+  const view = loadView(q);
+  if (view === 'loading') return { kind: 'checking' };
+  if (view === 'failed') {
+    const status = (q.error as { response?: { status?: unknown } } | null)?.response?.status;
+    if (status === 404) return { kind: 'old-server' };
+    return { kind: 'failed', message: say(q.error), onRetry: () => void q.refetch() };
+  }
+  const drawing = policyDrawingOf(q.data);
+  return drawing ? { kind: 'ready', drawing } : { kind: 'unknown' };
+}
 
 /** observedAt is written on a change and every 10 min (BACK): older than 15 min is «not seen for a while». */
 export const POLICY_SEEN_STALE_MS = 15 * 60_000;

@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { policyDrawingOf } from '@/lib/domain/nodePolicies';
-import { notDrawnReasonKey, policyDrawingView } from '@/contours/nodes/lib/policyDrawing';
+import { notDrawnReasonKey, policyDrawingLoad, policyDrawingView } from '@/contours/nodes/lib/policyDrawing';
+
+describe('policyDrawingLoad (хвост A-232): у каждого состояния запроса свои слова', () => {
+  const say = (err: unknown) => `сказал: ${(err as { response?: { data?: { message?: string } } }).response?.data?.message}`;
+  const q = (data: unknown, error: unknown = null) => ({ data, isError: error !== null, error, refetch: () => undefined });
+  it('в пути это «проверяется», а не пусто', () => {
+    expect(policyDrawingLoad(q(undefined), say)).toEqual({ kind: 'checking' });
+  });
+  it('404 это сервер старше A-232, отдельно от сбоя', () => {
+    expect(policyDrawingLoad(q(undefined, { response: { status: 404 } }), say)).toEqual({ kind: 'old-server' });
+  });
+  it('прочий сбой словами сервера с повтором', () => {
+    const r = policyDrawingLoad(q(undefined, { response: { status: 500, data: { message: 'db down' } } }), say);
+    expect(r.kind).toBe('failed');
+    expect(r.kind === 'failed' && r.message).toBe('сказал: db down');
+  });
+  it('ответ, который не разобрался, и null это «неизвестно»; разобранный это рисунок', () => {
+    expect(policyDrawingLoad(q({ drawing: 'other' }), say)).toEqual({ kind: 'unknown' });
+    expect(policyDrawingLoad(q(null), say)).toEqual({ kind: 'unknown' });
+    const ok = policyDrawingLoad(q({ policyId: 'p', drawing: 'handover', notDrawn: [], agent: null }), say);
+    expect(ok.kind).toBe('ready');
+  });
+});
 
 const now = Date.parse('2026-10-24T12:00:00Z');
 const rule = (id: string, position: number, domain: string[]) => ({

@@ -232,7 +232,10 @@ export const nodes = {
       agentAgrees: 'The agent drew the same ({{drawing}}) and left no rule out.',
       times: 'The agent rendered it {{rendered}}; the panel saw the report no later than {{observed}} (written on a change and every 10 min).',
       stale: 'The agent report has not been seen for a while: over 15 minutes.',
-      unknown: 'What reaches the node is not known: the server answer did not arrive.',
+      unknown: 'What reaches the node is not known: the server answer could not be read.',
+      checking: 'Checking what of the policy reaches the node…',
+      oldServer: 'The server predates this check (A-232): it does not say what of the policy reaches the node.',
+      failed: 'what of the policy reaches the node',
     },
     policyReachUnknown:
       'Whether this node applies the policy is not known: its agent predates the field and reports nothing about it for {{cores}}. This is not "does not apply": update the agent to get an answer.',

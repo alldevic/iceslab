@@ -1,18 +1,19 @@
 import { useTranslation } from 'react-i18next';
 import { Stack, Text } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
-import { getPolicyDrawing, policyDrawingOf, type NodePolicy } from '@/lib/domain/nodePolicies';
-import { loadView } from '@/lib/ui/loadView';
+import { getPolicyDrawing, type NodePolicy } from '@/lib/domain/nodePolicies';
+import { apiErrorMessage } from '@/lib/net/client';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import { useNow } from '@/lib/ui/useNow';
-import { notDrawnReasonKey, policyDrawingView, type RuleRef } from '@/contours/nodes/lib/policyDrawing';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import { notDrawnReasonKey, policyDrawingLoad, policyDrawingView, type RuleRef } from '@/contours/nodes/lib/policyDrawing';
 import { AMBER, MIST, RED } from '@/contours/nodes/lib/colors';
 
 /**
  * Which rules of the node's saved policy reach the node (A-232), by the
  * drawing the panel SENDS, and beside it what the node's xray reports it drew.
- * The agent's silence is said as silence, never as «everything goes out»; a
- * request that failed is «unknown».
+ * The agent's silence is said as silence, never as «everything goes out»;
+ * the request's own states each in their words (policyDrawingLoad).
  */
 export function PolicyDrawingLines({ nodeId, policy }: { nodeId: string; policy: NodePolicy | undefined }) {
   const { t } = useTranslation();
@@ -25,9 +26,14 @@ export function PolicyDrawingLines({ nodeId, policy }: { nodeId: string; policy:
   const line = (text: string, color = MIST) => (
     <Text style={{ fontSize: 12, lineHeight: '17px', color }}>{text}</Text>
   );
-  if (loadView(q) === 'loading') return null;
-  const parsed = q.data !== undefined ? policyDrawingOf(q.data) : null;
-  if (!parsed) return line(t('nodeEdit.policyDrawing.unknown'));
+  const load = policyDrawingLoad(q, apiErrorMessage);
+  if (load.kind === 'checking') return line(t('nodeEdit.policyDrawing.checking'));
+  if (load.kind === 'old-server') return line(t('nodeEdit.policyDrawing.oldServer'));
+  if (load.kind === 'failed') {
+    return <LoadFailedLine message={`${t('nodeEdit.policyDrawing.failed')}: ${load.message}`} onRetry={load.onRetry} />;
+  }
+  if (load.kind === 'unknown') return line(t('nodeEdit.policyDrawing.unknown'));
+  const parsed = load.drawing;
   if (parsed.policyId === null) return null;
   const v = policyDrawingView(parsed, policy?.rules, now);
   const name = (r: RuleRef) => r.label ?? r.ruleId.slice(0, 8);
