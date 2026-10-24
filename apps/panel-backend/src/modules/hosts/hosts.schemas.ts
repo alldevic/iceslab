@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FORMAT_NAMES } from '@iceslab/shared';
+import { FORMAT_NAMES, SERVER_DESCRIPTION_WORDS, serverDescriptionProblem } from '@iceslab/shared';
 
 // Format names accepted in `disableForFormats[]`.
 //
@@ -12,6 +12,12 @@ import { FORMAT_NAMES } from '@iceslab/shared';
 const FormatEnum = z.enum(FORMAT_NAMES);
 
 const SecurityLayerEnum = z.enum(['default', 'tls', 'none']);
+
+/** A-236 step 6: the shared rule, its words as the refusal. Null clears. */
+const ServerDescription = z.string().superRefine((s, ctx) => {
+  const problem = serverDescriptionProblem(s);
+  if (problem) ctx.addIssue({ code: 'custom', message: SERVER_DESCRIPTION_WORDS[problem] });
+});
 
 export const HostIdParamSchema = z.object({ id: z.uuid() });
 
@@ -64,6 +70,8 @@ export const CreateHostSchema = z
     allowInsecure: z.boolean().default(false),
     securityLayer: SecurityLayerEnum.default('default'),
     disableForFormats: z.array(FormatEnum).default([]),
+    serverDescription: ServerDescription.nullable().optional(),
+    isHidden: z.boolean().default(false),
   })
   .superRefine((val, ctx) => {
     if (val.bindingId) return;
@@ -111,6 +119,9 @@ export const UpdateHostSchema = z
     allowInsecure: z.boolean().optional(),
     securityLayer: SecurityLayerEnum.optional(),
     disableForFormats: z.array(FormatEnum).optional(),
+    // Absent is no edit; null clears (A-236 step 6).
+    serverDescription: ServerDescription.nullable().optional(),
+    isHidden: z.boolean().optional(),
   });
 
 export const ReorderHostsSchema = z.object({

@@ -45,7 +45,9 @@ export type HostFieldName =
   | 'alpn'
   | 'allowInsecure'
   | 'securityLayer'
-  | 'disableForFormats';
+  | 'disableForFormats'
+  | 'serverDescription'
+  | 'isHidden';
 
 export interface HostFieldSupport {
   /** False = the value cannot reach the client for this profile. The form
@@ -80,6 +82,10 @@ const UNIVERSAL: HostFieldName[] = [
   'addressOverride',
   'portOverride',
   'disableForFormats',
+  // A-236 step 6: no protocol decides these. The description reaches only the
+  // apps that show one, whatever the protocol.
+  'serverDescription',
+  'isHidden',
 ];
 
 /** Fields that exist only where a client-side TLS/transport layer does. */

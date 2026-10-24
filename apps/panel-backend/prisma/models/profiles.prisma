@@ -154,6 +154,15 @@ model Host {
   // canonical lowercase format name array: ["plain","clash","singbox","xrayjson","wgconf"].
   disableForFormats String[] @default([]) @map("disable_for_formats")
 
+  // A-236 step 6. A line the client apps that show one put under the server
+  // name (DESCRIPTION_CLIENTS in @iceslab/shared); one line, at most 200 code
+  // points, checked by serverDescriptionProblem. NULL = none.
+  serverDescription String? @map("server_description")
+  // A host in no public output (every subscription format, the page, the
+  // format list) unless a template asks for hidden hosts
+  // (iceslab.includeHiddenHosts), and then only in its own format.
+  isHidden          Boolean @default(false) @map("is_hidden")
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

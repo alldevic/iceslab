@@ -188,6 +188,14 @@ interface SubscriptionEndpointBase {
    *  handler filters by this before invoking the format-specific formatter,
    *  so each formatter can stay format-agnostic. */
   disableForFormats?: string[];
+  /** A-236 step 6: the host's line under the server name. Carried for every
+   *  client; the route hands it on (`describe`) only to the apps that show
+   *  one, and the builders write it only then. */
+  serverDescription?: string;
+  /** A-236 step 6: the operator kept this host out of every public output.
+   *  The route drops it before any builder, unless the template asks for
+   *  hidden hosts in its own format. */
+  hidden?: boolean;
 
   // ───── A4: route-profiles (exit x policy selection) ─────────────────
   /** When this endpoint's node is the ENTRY of an enabled balancer cascade, the
@@ -439,6 +447,14 @@ export interface SubscriptionJsonResponse {
  * Includes user-state metadata so clients can show quota/expiry without a
  * second request.
  */
+/** The endpoint without its host's description, for a client that shows none
+ *  (A-236 step 6). The same object when there is nothing to take off. */
+export function withoutDescription(e: SubscriptionEndpoint): SubscriptionEndpoint {
+  if (e.serverDescription === undefined) return e;
+  const { serverDescription: _drop, ...rest } = e;
+  return rest as SubscriptionEndpoint;
+}
+
 export function buildSubscriptionJson(
   user: User & { traffic: UserTraffic | null },
   endpoints: SubscriptionEndpoint[],

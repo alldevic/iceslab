@@ -1032,6 +1032,10 @@ export async function generateSubscription(
       allowInsecure: hostOverrides?.allowInsecure ?? false,
       securityLayer,
       disableForFormats: hostOverrides?.disableForFormats ?? [],
+      // A-236 step 6. Spread only when set, so an endpoint of a host without
+      // them is the object it always was (the golden files compare it).
+      ...(hostOverrides?.serverDescription ? { serverDescription: hostOverrides.serverDescription } : {}),
+      ...(hostOverrides?.isHidden ? { hidden: true } : {}),
       // Carried on every endpoint, not just the ones that read it today: the
       // question "which core serves this" is asked by the link builder, by the
       // admin endpoints view and, before long, by anything drawing a pair.

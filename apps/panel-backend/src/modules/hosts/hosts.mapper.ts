@@ -36,6 +36,12 @@ export interface PublicHostDto {
   allowInsecure: boolean;
   securityLayer: string;
   disableForFormats: string[];
+  /** A-236 step 6: the line under the server name in the apps that show one;
+   *  null = none. */
+  serverDescription: string | null;
+  /** A-236 step 6: kept out of every public output by the operator. Not the
+   *  same fact as hiddenByCascade, which the cascade decides. */
+  isHidden: boolean;
   createdAt: string;
   updatedAt: string;
   /** Only the list endpoint computes this; absent elsewhere. See HostReach. */
@@ -89,6 +95,8 @@ export function mapHost(
     allowInsecure: h.allowInsecure,
     securityLayer: h.securityLayer,
     disableForFormats: h.disableForFormats,
+    serverDescription: h.serverDescription,
+    isHidden: h.isHidden,
     createdAt: h.createdAt.toISOString(),
     updatedAt: h.updatedAt.toISOString(),
   };

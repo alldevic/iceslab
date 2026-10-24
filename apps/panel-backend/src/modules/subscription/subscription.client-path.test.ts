@@ -1,4 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+
+// The trap's alert is read here, not sent.
+const alerts = vi.hoisted(() => [] as string[]);
+vi.mock('../../lib/notify/telegram-notify.js', async (real) => ({
+  ...(await real<typeof import('../../lib/notify/telegram-notify.js')>()),
+  notifyTelegramAsync: (text: string) => {
+    alerts.push(text);
+  },
+}));
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -97,6 +106,21 @@ describe('/sub/<token>/<client>', () => {
     } finally {
       config.HONEY_USER_TOKENS.splice(config.HONEY_USER_TOKENS.indexOf(honey), 1);
       await redis.del(`sec:blacklist:${ip}`);
+    }
+  });
+
+  it('the alert names the format asked for, cut to 64 characters', async () => {
+    const honey = 'honey-token-a255-xxxxxxxx';
+    config.HONEY_USER_TOKENS.push(honey);
+    alerts.length = 0;
+    try {
+      const res = await app.inject({ method: 'GET', url: `${P}/${honey}?format=${'x'.repeat(500)}`, remoteAddress: '10.0.0.9' });
+      expect(res.statusCode).toBe(200);
+      expect(alerts).toHaveLength(1);
+      const asked = /format: `([^`]*)`/.exec(alerts[0]!)![1]!;
+      expect(asked).toBe('x'.repeat(64));
+    } finally {
+      config.HONEY_USER_TOKENS.splice(config.HONEY_USER_TOKENS.indexOf(honey), 1);
     }
   });
 });

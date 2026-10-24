@@ -47,6 +47,12 @@ export function openFrame(frame: Frame): { cfg: Frame; routing: boolean } {
   return { cfg, routing: service?.routing === 'preset' };
 }
 
+/** Whether the frame asks for the hosts the operator hid (A-236 step 6):
+ *  `iceslab: { includeHiddenHosts: true }` at its top. */
+export function frameIncludesHidden(frame: Frame): boolean {
+  return asObject(frame.iceslab).includeHiddenHosts === true;
+}
+
 /** `obj` with `key: value` placed right after `after` (or first when `after`
  *  is absent), the other keys in their order. Key order is output order. */
 export function insertAfter(obj: Frame, after: string, key: string, value: unknown): Frame {

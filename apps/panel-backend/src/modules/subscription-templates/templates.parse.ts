@@ -11,6 +11,8 @@ import type { TemplateType } from '@iceslab/shared';
  *   - at the top of the frame: `iceslab: { routing: preset }`, the parts the
  *     routing preset in force decides (DNS, geo databases, rules). `preset` is
  *     the one value: it names the preset in force, not a preset of its own;
+ *     and `includeHiddenHosts` (boolean), the hosts the operator hid go into
+ *     this frame's format, and only there (A-236 step 6);
  *   - in a Clash-family proxy group: `include-proxies`, `select-random-proxy`,
  *     `shuffle-proxies-order` (booleans), how the panel fills that group;
  *   - in a Clash-family proxy provider: `include-proxies` (boolean), the nodes
@@ -103,10 +105,12 @@ export function checkTemplateBody(type: TemplateType, body: string): void {
     );
   }
 
-  checkServiceKey(root, ['routing'], at, (key, value) => {
+  checkServiceKey(root, ['routing', 'includeHiddenHosts'], at, (key, value) => {
     if (key === 'routing' && !(isScalar(value) && value.value === 'preset')) {
       return 'iceslab.routing takes one value, "preset" (the routing preset in force)';
     }
+    // A-236 step 6: the hosts the operator hid go into this frame's format.
+    if (key === 'includeHiddenHosts') return booleanValue(key, value);
     return null;
   });
 

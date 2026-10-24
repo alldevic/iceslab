@@ -234,6 +234,7 @@ export function buildClashYaml(
     // A socks/http door is named by what it is: "-xray" on a SOCKS5 proxy
     // would tell the person picking it from the list the wrong thing.
     const name = nameOf(e, `${e.nodeName}-${isPlainXray(e) ? e.subprotocol : e.protocol}`);
+    const before = proxies.length;
     if (e.protocol === 'hysteria') {
       proxyNames.push(name);
       const lines = [
@@ -490,6 +491,12 @@ export function buildClashYaml(
           `    password: ${yamlString(e.password)}`,
         ].join('\n'),
       );
+    }
+    // A-236 step 6: the host's line under the server name, for the apps that
+    // show one (the route leaves it on the endpoint only for them). The
+    // operator's text, so through the YAML writer, never spliced in.
+    if (proxies.length > before && e.serverDescription) {
+      proxies[proxies.length - 1] += `\n${keyLines('serverDescription', e.serverDescription, '    ').join('\n')}`;
     }
   }
 

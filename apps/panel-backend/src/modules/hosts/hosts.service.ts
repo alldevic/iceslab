@@ -293,6 +293,8 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
     allowInsecure: input.allowInsecure,
     securityLayer: input.securityLayer,
     disableForFormats: input.disableForFormats,
+    serverDescription: input.serverDescription ?? null,
+    isHidden: input.isHidden,
   };
 
   const { created, newBinding } = await prisma.$transaction(async (tx) => {
@@ -479,6 +481,8 @@ export async function updateHost(
   if (input.disableForFormats !== undefined) {
     data.disableForFormats = input.disableForFormats;
   }
+  if (input.serverDescription !== undefined) data.serverDescription = input.serverDescription;
+  if (input.isHidden !== undefined) data.isHidden = input.isHidden;
 
   const updated = await prisma.host.update({ where: { id }, data });
   eventBus.emit('host.changed', { nodeId: await nodeOfBinding(updated.bindingId) });

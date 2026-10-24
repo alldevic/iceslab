@@ -5,6 +5,8 @@ import {
   PROTOCOL_NAMES,
   ROUTING_PRESET_IDS,
   formatDisabledForHost,
+  isHappUserAgent,
+  showsServerDescription,
   type ProtocolName,
   type RoutingPresetId,
 } from '@iceslab/shared';
@@ -21,11 +23,12 @@ import { buildQuantumultXConf } from './formats/quantumultx.js';
 import { buildLoonConf } from './formats/loon.js';
 import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
-import { endpointsForFormat, isPlainXray } from './subscription.formats.js';
+import { linkWithDescription } from './subscription.description.js';
+import { endpointsForFormat, isPlainXray, withoutDescription, type SubscriptionEndpoint } from './subscription.formats.js';
 import { matchRuleForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
 import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
-import type { Frame } from './subscription.frames.js';
+import { frameIncludesHidden, type Frame } from './subscription.frames.js';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import {
   formatBytes,
@@ -467,7 +470,8 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       const ip = request.ip;
       const ttl = config.HONEYPOT_BLACKLIST_TTL_SEC;
       const askedFormat = (request.query as { format?: unknown } | undefined)?.format;
-      const asked = client !== undefined ? `/${client}` : typeof askedFormat === 'string' ? askedFormat : 'auto';
+      // Cut to 64: the string is the requester's, of any length (AUDT, A-255).
+      const asked = (client !== undefined ? `/${client}` : typeof askedFormat === 'string' ? askedFormat : 'auto').slice(0, 64);
       // Only blacklist real public IPs. If TRUST_PROXY_HOPS is misconfigured
       // an attacker can spoof X-Forwarded-For with a private/loopback IP and
       // get arbitrary legit users DoS'd via this honeypot. Skip the blacklist
@@ -646,10 +650,21 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // whole subscription and one person's narrowed link cannot become
       // another's answer. A cascade line goes with its endpoint, whose
       // protocol is the cascade entry's.
-      const availableProtocols = protocolsOf(generated.endpoints);
-      const result = onlyProtocols
-        ? { ...generated, endpoints: generated.endpoints.filter((e) => onlyProtocols.includes(e.protocol as ProtocolName)) }
-        : generated;
+      // A-236 step 6. A host's description goes only to the apps that show one
+      // (DESCRIPTION_CLIENTS); for every other client it is taken off here, so
+      // no builder and no `json` answer carries it. A hidden host is in no
+      // public output below, the page and its format list included, unless
+      // the template asks for hidden hosts, and then only in this format's
+      // file (`framed`).
+      const describe = showsServerDescription(userAgent);
+      const happ = isHappUserAgent(userAgent);
+      const every = describe ? generated.endpoints : generated.endpoints.map(withoutDescription);
+      const visible = every.filter((e) => !e.hidden);
+      const narrow = (eps: SubscriptionEndpoint[]) =>
+        onlyProtocols ? eps.filter((e) => onlyProtocols.includes(e.protocol as ProtocolName)) : eps;
+      const availableProtocols = protocolsOf(visible);
+      const result = { ...generated, endpoints: narrow(visible) };
+      const framed = frame && frameIncludesHidden(frame) ? narrow(every) : result.endpoints;
 
       // Slice 30: host-level format gating. Each endpoint carries an
       // optional `disableForFormats[]` from its originating host row; we
@@ -658,7 +673,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // A-249: clash and mihomo are one format under two names here
       // (formatDisabledForHost), so a host switched off for Clash before the
       // family was split by core stays off for its mihomo clients.
-      const filtered = result.endpoints.filter(
+      const filtered = framed.filter(
         (e) => !formatDisabledForHost(e.disableForFormats, format),
       );
       // What THIS format carries, by FORMAT_DOORS: every builder below is
@@ -685,7 +700,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // other endpoints pass through. (This note used to claim the JSON array
           // is not pingable in Happ. It is - checked in the field 2026-08-16 - and
           // the claim had been steering design decisions.)
-          .flatMap((e) => service.expandEndpointUris(e));
+          .flatMap((e) => {
+            const uris = service.expandEndpointUris(e);
+            // A-236 step 6: Happ reads the description in the link itself.
+            const d = happ ? e.serverDescription : undefined;
+            return d ? uris.map((u) => (u ? linkWithDescription(u, d) : u)) : uris;
+          });
       const filteredPlain = linksFor('plain');
 
       // Slice S1: emit subscription-metadata HTTP headers every client
@@ -698,6 +718,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // of the base64 `plain` dump. Uses the same generated data; emits no
       // config, just links + copy + per-format download buttons.
       if (wantsHtmlPage(query, (request.headers.accept ?? '').toString())) {
+        // The page is public whatever template the format has: no hidden host
+        // on it, even when a frame above asked for them (A-236 step 6).
+        const filtered = result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, format));
         const settings = await getSubscriptionSettings();
         // The narrowing travels in every link the page prints, so what a
         // person copies, scans or adds is what this page lists.

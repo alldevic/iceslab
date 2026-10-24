@@ -586,8 +586,18 @@ export function buildXrayJsonArray(
     // frame's own (the Default's torrent rule).
     const { cfg, routing } = openFrame(frame);
     delete cfg.remarks;
+    // A-236 step 6: the host's line under the server name, `meta` beside
+    // `remarks` as Happ reads it (happ.su dev-docs/app-management, read 24.10),
+    // as text; only on the endpoints the route left it on (the apps that show
+    // one). A frame's own `meta` keeps its other keys.
+    let meta: Record<string, unknown> | undefined;
+    if (e.serverDescription) {
+      const own = cfg.meta && typeof cfg.meta === 'object' && !Array.isArray(cfg.meta) ? (cfg.meta as Record<string, unknown>) : {};
+      meta = { ...own, serverDescription: e.serverDescription };
+      delete cfg.meta;
+    }
     return fillXrayFrame(
-      { remarks: remark, ...cfg },
+      { remarks: remark, ...(meta ? { meta } : {}), ...cfg },
       {
         dns: routing ? splitDns : null,
         head: [primary],
