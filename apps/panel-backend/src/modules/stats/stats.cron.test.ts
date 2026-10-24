@@ -245,11 +245,12 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
     expect(del?.usedTrafficBytes).toBe(200n); // 100 + 100 (was 100 pre-fix: unbilled)
   });
 
-  // 25.09: presence-only accounting by the inbound a user came through, not by
-  // the node's label. A node carrying xray beside mtproto is labelled xray (the
-  // label is derived from its cores), and its mtproto users used to stay
-  // offline forever; with the old label mtproto, its idle xray users read online.
-  describe('presence by the inbound, on a node with xray beside mtproto', () => {
+  // A-121: an mtproto listing is not an online signal. mtg lists every user the
+  // panel sent it, connected or not, so taking the listing as "online" marked
+  // the whole roster online on every poll, moved everyone's last node and gave
+  // a first-connected date to people who never connected. Whatever the node's
+  // label, and whether or not the agent tags its entries.
+  describe('an mtproto listing, on a node with xray beside mtproto', () => {
     async function mixedNode(label: string): Promise<string> {
       const res = await app.inject({
         method: 'POST',
@@ -265,7 +266,7 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
       return id;
     }
 
-    it.each(['xray', 'mtproto'])('label %s: mtproto online, idle xray not, xray bytes billed', async (label) => {
+    it.each(['xray', 'mtproto'])('label %s: the listed mtproto user untouched, idle xray not, xray bytes billed', async (label) => {
       await mixedNode(label);
       const tg = await createUser(`tg-${label}`); // on mtproto: listed, no bytes
       const idle = await createUser(`idle-${label}`); // on xray, moved nothing
@@ -291,19 +292,22 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
       const [t, i, b] = await Promise.all(
         [tg, idle, busy].map((userId) => prisma.userTraffic.findUnique({ where: { userId } })),
       );
-      expect(t?.onlineAt, 'the mtproto user is online').not.toBeNull();
-      expect(t?.usedTrafficBytes).toBe(0n);
+      // No online time, no last node, no first-connected date.
+      expect(t?.onlineAt ?? null, 'the listed mtproto user is not online').toBeNull();
+      expect(t?.lastConnectedNodeId ?? null).toBeNull();
+      expect(t?.firstConnectedAt ?? null).toBeNull();
+      expect(t?.usedTrafficBytes ?? 0n).toBe(0n);
       expect(i?.onlineAt, 'the idle xray user is not').toBeNull();
       expect(b?.usedTrafficBytes).toBe(300n);
       expect(b?.onlineAt).not.toBeNull();
     });
 
-    it('an agent that does not tag its entries still goes by the label', async () => {
+    it('an agent that does not tag its entries: a node labelled mtproto marks nobody online either', async () => {
       await mixedNode('mtproto');
       const tg = await createUser('tg-legacy');
       mockStats(stats([{ userId: tg, bytesIn: 0, bytesOut: 0 }]));
       await pollNodeStats();
-      expect((await prisma.userTraffic.findUnique({ where: { userId: tg } }))?.onlineAt).not.toBeNull();
+      expect((await prisma.userTraffic.findUnique({ where: { userId: tg } }))?.onlineAt ?? null).toBeNull();
     });
   });
 });

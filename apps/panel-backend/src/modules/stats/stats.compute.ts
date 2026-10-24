@@ -1,7 +1,7 @@
 /**
  * Pure traffic-delta math for the node-stats cron (B3). Extracted from
- * stats.cron so the bug-prone part - scaling, zero-delta skips, the
- * presence-only (mtproto) signal, and the single-counter cumulative fallback -
+ * stats.cron so the bug-prone part - scaling, zero-delta skips and the
+ * single-counter cumulative fallback -
  * can be unit-tested without a database. The cron feeds the returned arrays
  * straight into one bulk `unnest`-based upsert per table instead of N
  * per-user upserts.
@@ -25,8 +25,8 @@ export interface StatsUserEntry {
   cumulative?: boolean;
   /**
    * The protocol of the inbound this entry came through (wire field
-   * `protocol`, the reporting adapter). Decides presence-only accounting per
-   * entry; absent on older agents.
+   * `protocol`, the reporting adapter); absent on older agents. With `engine`
+   * it keys the snapshot below.
    */
   protocol?: string;
   /**
@@ -48,26 +48,22 @@ export function snapshotKey(userId: string, a: { protocol: string; engine: strin
   return `${userId}|${a.protocol}|${a.engine}`;
 }
 
-/**
- * Protocols whose adapter reports who is connected but no per-user bytes: the
- * user being listed IS the online signal. mtproto (mtg) has one secret, so its
- * traffic cannot be attributed to a user.
+/*
+ * A-121: no protocol's listing is an online signal any more. mtproto (mtg) has
+ * one secret, so its traffic cannot be attributed to a user, and its adapter
+ * lists not who connected but every user the panel sent it, that is every
+ * active user, served or not. Taking the listing as "online" marked the whole
+ * roster online every 30 seconds, moved everyone's last node to that one, gave
+ * a first-connected date to people who never connected, and upserted every
+ * user_traffic row per node per poll. A user is online by bytes they moved;
+ * an mtproto user is not shown online at all until mtg can tell users apart.
  */
-const PRESENCE_ONLY_PROTOCOLS: ReadonlySet<string> = new Set(['mtproto']);
 
 export interface NodeStatsInput {
   users: StatsUserEntry[];
   /** The node's consumption multiplier, 0 to 100 in steps of 0.1; 0 is a free
    *  node (A-143). NaN or absent falls back to 1. */
   multiplier: number;
-  /**
-   * The fallback for entries WITHOUT `protocol` (an agent older than the field):
-   * the node's label says mtproto. An entry that names its protocol is judged by
-   * it alone, which is what counts both kinds of user right on a node carrying
-   * xray beside mtproto; the label, derived from the set of cores since 25.09,
-   * says "xray" there.
-   */
-  isPresenceOnlyProtocol: boolean;
   /** Cumulative node counters, used only when there are no per-user bytes. */
   totalBytesIn?: number;
   totalBytesOut?: number;
@@ -102,7 +98,7 @@ export interface NodeStatsInput {
   nodeTotals?: { upload: bigint; download: bigint };
 }
 
-/** One per-user `user_traffic` increment (used+lifetime). 0 = presence touch. */
+/** One per-user `user_traffic` increment (used+lifetime). Never 0 (A-121). */
 export interface UserTrafficRow {
   userId: string;
   scaled: bigint;
@@ -116,9 +112,9 @@ export interface UserHistoryRow {
 }
 
 export interface NodeStatsWrites {
-  /** Real-byte users (scaled>0) plus presence-only users (scaled=0). */
+  /** Users who moved bytes this poll. */
   userTrafficRows: UserTrafficRow[];
-  /** Real-byte users only - nothing to bucket for a zero-byte presence touch. */
+  /** The same users' daily buckets. */
   historyRows: UserHistoryRow[];
   /** Raw (unscaled) bytes for node_usage_history. */
   nodeDownload: bigint;
@@ -215,7 +211,7 @@ export function computeUserDeltas(
     const dIn = p ? (g.cumIn >= p.cumIn ? g.cumIn - p.cumIn : 0n) : 0n;
     const dOut = p ? (g.cumOut >= p.cumOut ? g.cumOut - p.cumOut : 0n) : 0n;
     // The protocol survives the merge, so the entry is still judged by its
-    // inbound downstream; none of these cumulative cores is presence-only.
+    // inbound downstream.
     const protocol = [...g.protocols].find((x) => x !== undefined);
     deltas.push({
       userId: g.userId,
@@ -295,7 +291,6 @@ export function computeNodeStatsWrites(input: NodeStatsInput): NodeStatsWrites {
   // one increment per entry) and keeps userIds unique in the unnest array.
   const usedByUser = new Map<string, bigint>();
   const histByUser = new Map<string, { in: bigint; out: bigint }>();
-  const presenceOnly = new Set<string>();
   const clamped: { userId: string; bytesIn: number; bytesOut: number }[] = [];
   const ceiling =
     input.maxUserDeltaBytes !== undefined ? BigInt(input.maxUserDeltaBytes) : null;
@@ -324,18 +319,9 @@ export function computeNodeStatsWrites(input: NodeStatsInput): NodeStatsWrites {
       nodeDownload += outB;
     }
     const delta = inB + outB;
-    if (delta === 0n) {
-      // Presence-only adapters (mtproto): the user appearing in the response is
-      // the only "online" signal we get. Record a zero-increment touch (so the
-      // upsert refreshes online_at/last_connected_node_id) without billing; skip
-      // the daily history. Non-presence protocols drop the zero-delta user.
-      // Judged per entry by the inbound it came through; the node flag only for
-      // an agent that does not say.
-      const presence =
-        u.protocol !== undefined ? PRESENCE_ONLY_PROTOCOLS.has(u.protocol) : input.isPresenceOnlyProtocol;
-      if (presence) presenceOnly.add(u.userId);
-      continue;
-    }
+    // A user who moved nothing is not written: no row, no online touch, on
+    // every protocol (A-121, see above).
+    if (delta === 0n) continue;
     usedByUser.set(u.userId, (usedByUser.get(u.userId) ?? 0n) + scale(delta));
     const h = histByUser.get(u.userId) ?? { in: 0n, out: 0n };
     h.in += scale(inB);
@@ -343,17 +329,9 @@ export function computeNodeStatsWrites(input: NodeStatsInput): NodeStatsWrites {
     histByUser.set(u.userId, h);
   }
 
-  // A userId that moved real bytes on one inbound and zero on another is billed
-  // (it's in usedByUser); drop it from the presence-only touch set to avoid a
-  // duplicate user_traffic row in the unnest.
-  for (const id of usedByUser.keys()) presenceOnly.delete(id);
-
   const userTrafficRows: UserTrafficRow[] = [];
   for (const [userId, scaled] of usedByUser) {
     userTrafficRows.push({ userId, scaled });
-  }
-  for (const userId of presenceOnly) {
-    userTrafficRows.push({ userId, scaled: 0n });
   }
   const historyRows: UserHistoryRow[] = [];
   for (const [userId, h] of histByUser) {

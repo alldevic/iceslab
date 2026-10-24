@@ -71,14 +71,11 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
       deletedAt: null,
       status: { notIn: ['disabled', 'unreachable'] },
     },
-    // Single-secret protocols (mtproto via mtg) can't attribute traffic to a
-    // specific userId, so the bytes-delta loop never touches user.onlineAt for
-    // them and the UI shows OFFLINE forever. We patch around that by treating
-    // "user is tracked by the adapter" as the online signal. Which entries get
-    // it is read per entry off `protocol` (the inbound the user came through);
-    // `protocol` here, the node's label, is only the fallback for an agent that
-    // does not tag its entries.
-    select: { id: true, address: true, consumptionMultiplierTenths: true, protocol: true },
+    // A-121: an mtproto (mtg) user is not shown online. mtg has one secret and
+    // cannot attribute traffic to a user, and the adapter's listing is every
+    // active user, not who connected; taking it as the online signal marked
+    // the whole roster online on every poll (stats.compute.ts).
+    select: { id: true, address: true, consumptionMultiplierTenths: true },
   });
   if (nodes.length === 0) return { ok: 0, failed: 0 };
 
@@ -170,18 +167,17 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
           newAdapterTotals = new Map([...(adapterTotalSnapshot.get(node.id) ?? new Map()), ...t.snapshots]);
         }
 
-        // All the delta math (scaling, zero-delta skip, presence-only signal,
-        // node-total delta) lives in the pure, unit-tested helper. Cumulative
+        // All the delta math (scaling, zero-delta skip, node-total delta) lives
+        // in the pure, unit-tested helper. Cumulative
         // agents (xray) report the node total as a cumulative inbound counter:
         // pass it through with nodeTotalIsCumulative so node-level history counts
         // ALL inbound traffic, including a cascade link-in that has no per-user
         // email, while per-user billing still comes from the deltas above. Legacy
-        // delta agents pass their totals through for the presence-only fallback.
+        // delta agents pass their totals through for the single-counter fallback.
         const w = computeNodeStatsWrites({
           users: userList,
           // A-143: tenths to the multiplier; 0 is a free node and stays 0.
           multiplier: node.consumptionMultiplierTenths / 10,
-          isPresenceOnlyProtocol: node.protocol === 'mtproto',
           totalBytesIn: res.totalBytesIn,
           totalBytesOut: res.totalBytesOut,
           nodeTotalIsCumulative: !!res.cumulative,
@@ -204,8 +200,8 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         // user_traffic: bulk upsert. used+lifetime increment by the scaled
         // delta; online_at/last_connected_node_id always refreshed;
         // first_connected_at only set on insert (absent from the SET list, so
-        // preserved on conflict). Presence-only rows carry scaled=0 - a no-op
-        // on traffic that still touches online_at. Values bound as text[] and
+        // preserved on conflict). Only users who moved bytes get a row (A-121).
+        // Values bound as text[] and
         // cast in-SQL so bigints serialize unambiguously through the pg driver.
         if (w.userTrafficRows.length > 0) {
           const ids = w.userTrafficRows.map((r) => r.userId);

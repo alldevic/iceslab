@@ -13,7 +13,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [{ userId: 'u1', bytesIn: 100, bytesOut: 50 }],
       multiplier: 2,
-      isPresenceOnlyProtocol: false,
     });
     // used+lifetime increment = scale(150) = 300
     expect(w.userTrafficRows).toEqual([{ userId: 'u1', scaled: 300n }]);
@@ -29,17 +28,15 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [{ userId: 'u1', bytesIn: 7, bytesOut: 3 }],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
     });
     expect(w.userTrafficRows).toEqual([{ userId: 'u1', scaled: 10n }]);
     expect(w.historyRows[0]).toEqual({ userId: 'u1', bytesIn: 7n, bytesOut: 3n });
   });
 
-  it('drops zero-delta users on non-presence protocols', () => {
+  it('drops zero-delta users', () => {
     const w = computeNodeStatsWrites({
       users: [{ userId: 'u1', bytesIn: 0, bytesOut: 0 }],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
     });
     expect(w.userTrafficRows).toEqual([]);
     expect(w.historyRows).toEqual([]);
@@ -47,13 +44,11 @@ describe('computeNodeStatsWrites (B3)', () => {
     expect(w.nodeDownload).toBe(0n);
   });
 
-  it('presence-only protocol emits a zero-increment touch, no history row', () => {
-    const w = computeNodeStatsWrites({
-      users: [{ userId: 'u1', bytesIn: 0, bytesOut: 0 }],
-      multiplier: 1,
-      isPresenceOnlyProtocol: true,
-    });
-    expect(w.userTrafficRows).toEqual([{ userId: 'u1', scaled: 0n }]);
+  it('A-121: an mtproto listing is not an online touch; the node answer for the whole roster writes nothing', () => {
+    // mtg lists every user the panel sent it, connected or not.
+    const roster = Array.from({ length: 1000 }, (_, i) => ({ userId: `u${i}`, bytesIn: 0, bytesOut: 0, protocol: 'mtproto' }));
+    const w = computeNodeStatsWrites({ users: roster, multiplier: 1 });
+    expect(w.userTrafficRows).toEqual([]);
     expect(w.historyRows).toEqual([]);
   });
 
@@ -61,7 +56,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 1000,
       totalBytesOut: 400,
       prevSnapshot: { in: 600n, out: 100n },
@@ -75,7 +69,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 200,
       totalBytesOut: 0,
       prevSnapshot: { in: 1000n, out: 0n },
@@ -89,7 +82,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [{ userId: 'u1', bytesIn: 10, bytesOut: 0 }],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 9999,
       totalBytesOut: 9999,
       prevSnapshot: { in: 0n, out: 0n },
@@ -113,7 +105,6 @@ describe('computeNodeStatsWrites (B3)', () => {
         { userId: 'u2', bytesIn: 10, bytesOut: 0 },
       ],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
     });
     expect(w.userTrafficRows).toEqual([
       { userId: 'u1', scaled: 175n }, // (150) + (25)
@@ -134,7 +125,6 @@ describe('computeNodeStatsWrites (B3)', () => {
         { userId: 'u1', bytesIn: 4, bytesOut: 0 },
       ],
       multiplier: 2,
-      isPresenceOnlyProtocol: false,
     });
     // scale(3)+scale(4) = 6+8 = 14 (matches the old two-increment behaviour)
     expect(w.userTrafficRows).toEqual([{ userId: 'u1', scaled: 14n }]);
@@ -153,7 +143,6 @@ describe('computeNodeStatsWrites (B3)', () => {
         { userId: 'runaway', bytesIn: 250 * TiB, bytesOut: 0 }, // re-billed lifetime
       ],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       maxUserDeltaBytes: TiB,
     });
     // sane user billed normally; runaway dropped from every accumulator
@@ -168,28 +157,22 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [{ userId: 'u1', bytesIn: 9_999_999_999_999, bytesOut: 0 }],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
     });
     expect(w.clamped).toEqual([]);
     expect(w.nodeUpload).toBe(9_999_999_999_999n);
   });
 
-  it('dedups presence-only touches and never duplicates a billed user', () => {
+  it('bills a user once across inbounds, and writes nothing for one who moved nothing', () => {
     const w = computeNodeStatsWrites({
       users: [
-        { userId: 'u1', bytesIn: 0, bytesOut: 0 }, // zero on one inbound
-        { userId: 'u1', bytesIn: 5, bytesOut: 0 }, // bytes on another
-        { userId: 'u2', bytesIn: 0, bytesOut: 0 }, // pure presence
-        { userId: 'u2', bytesIn: 0, bytesOut: 0 }, // duplicate presence
+        { userId: 'u1', bytesIn: 0, bytesOut: 0, protocol: 'mtproto' }, // listed on mtg
+        { userId: 'u1', bytesIn: 5, bytesOut: 0, protocol: 'xray' }, // bytes on xray
+        { userId: 'u2', bytesIn: 0, bytesOut: 0, protocol: 'mtproto' }, // listed only
+        { userId: 'u2', bytesIn: 0, bytesOut: 0, protocol: 'mtproto' },
       ],
       multiplier: 1,
-      isPresenceOnlyProtocol: true,
     });
-    // u1 is billed once (not also a presence touch); u2 is a single zero touch.
-    expect(w.userTrafficRows).toEqual([
-      { userId: 'u1', scaled: 5n },
-      { userId: 'u2', scaled: 0n },
-    ]);
+    expect(w.userTrafficRows).toEqual([{ userId: 'u1', scaled: 5n }]);
     expect(w.historyRows).toEqual([{ userId: 'u1', bytesIn: 5n, bytesOut: 0n }]);
   });
 
@@ -200,7 +183,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [{ userId: 'u1', bytesIn: 100, bytesOut: 50 }], // already a per-poll delta
       multiplier: 2,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 5000, // cumulative inbound counter
       totalBytesOut: 2000,
       prevSnapshot: { in: 4200n, out: 1500n },
@@ -220,7 +202,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [], // pure relay: no direct users, only the link-in inbound
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 700,
       totalBytesOut: 1200,
       prevSnapshot: { in: 200n, out: 200n },
@@ -236,7 +217,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 9_000_000, // big since-start lifetime counter
       totalBytesOut: 4_000_000,
       prevSnapshot: undefined, // first poll after a backend restart
@@ -252,7 +232,6 @@ describe('computeNodeStatsWrites (B3)', () => {
     const w = computeNodeStatsWrites({
       users: [],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 300,
       totalBytesOut: 0,
       prevSnapshot: { in: 10_000n, out: 0n },
@@ -409,7 +388,6 @@ describe('computeNodeTotalsFromCores (A-152)', () => {
     const old = computeNodeStatsWrites({
       users: [],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       totalBytesIn: 106 * MB,
       totalBytesOut: 0,
       nodeTotalIsCumulative: true,
@@ -432,7 +410,6 @@ describe('computeNodeTotalsFromCores (A-152)', () => {
     const w = computeNodeStatsWrites({
       users: [{ userId: 'u', bytesIn: 1 * MB, bytesOut: 0 }],
       multiplier: 1,
-      isPresenceOnlyProtocol: false,
       nodeTotals: { upload: BigInt(6 * MB), download: 0n },
     });
     expect(w.nodeUpload).toBe(BigInt(6 * MB));
