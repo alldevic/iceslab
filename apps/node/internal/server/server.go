@@ -405,6 +405,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/addUser", s.handleAddUser)
+	mux.HandleFunc("/addUsers", s.handleAddUsers)
 	mux.HandleFunc("/removeUser", s.handleRemoveUser)
 	mux.HandleFunc("/applyInbounds", s.handleApplyInbounds)
 	mux.HandleFunc("/stats", s.handleStats)
@@ -848,7 +849,47 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		return
 	}
+	if healthyFailed := s.addUser(req); len(healthyFailed) > 0 {
+		writeError(w, http.StatusInternalServerError, "ADAPTER_FAILED",
+			fmt.Sprintf("active adapters failed: %s", strings.Join(healthyFailed, ", ")))
+		return
+	}
+	s.logger.Info("addUser ok", "userId", req.UserID, "username", req.Username)
+	writeJSON(w, http.StatusOK, dto.AddUserResponse{OK: true})
+}
 
+// handleAddUsers is /addUser for many users in one request (A-112): the
+// panel re-sends its whole roster after every push, and one request per user
+// was thirty thousand TLS round trips for an operator that size. Each entry
+// is applied exactly as /addUser applies it, in order; a refusal is that
+// entry's result, not the request's.
+func (s *Server) handleAddUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.AddUsersRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	results := make([]dto.AddUsersResult, 0, len(req.Users))
+	failed := 0
+	for _, u := range req.Users {
+		res := dto.AddUsersResult{UserID: u.UserID, OK: true}
+		if healthyFailed := s.addUser(u); len(healthyFailed) > 0 {
+			res.OK = false
+			res.Error = fmt.Sprintf("active adapters failed: %s", strings.Join(healthyFailed, ", "))
+			failed++
+		}
+		results = append(results, res)
+	}
+	s.logger.Info("addUsers done", "users", len(req.Users), "failed", failed)
+	writeJSON(w, http.StatusOK, dto.AddUsersResponse{Results: results})
+}
+
+// addUser puts one user onto the cores, and returns the names of the healthy
+// ones that refused (none: done).
+func (s *Server) addUser(req dto.AddUserRequest) []string {
 	coreUser := core.User{
 		UserID:              req.UserID,
 		ShortID:             req.ShortID,
@@ -903,14 +944,7 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if len(healthyFailed) > 0 {
-		writeError(w, http.StatusInternalServerError, "ADAPTER_FAILED",
-			fmt.Sprintf("active adapters failed: %s", strings.Join(healthyFailed, ", ")))
-		return
-	}
-
-	s.logger.Info("addUser ok", "userId", req.UserID, "username", req.Username)
-	writeJSON(w, http.StatusOK, dto.AddUserResponse{OK: true})
+	return healthyFailed
 }
 
 func (s *Server) handleRemoveUser(w http.ResponseWriter, r *http.Request) {

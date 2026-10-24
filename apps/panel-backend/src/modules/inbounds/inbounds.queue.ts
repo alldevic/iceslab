@@ -1,5 +1,6 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import type {
+  AddUserRequest,
   ApplyInboundsRequest,
   DnsCfg,
   InboundDto,
@@ -727,50 +728,88 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
     users.filter((u) => awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id)),
   );
 
-  // Chunked parallel fanout. 25 is a balance between throughput and not
-  // hammering the node-agent's HTTP server (default Node http.Agent
-  // maxSockets = Infinity but the node-agent runs single-process Go,
-  // 25 concurrent in-flight is comfortably below typical default ulimits).
-  const ADD_USER_CHUNK = 25;
-  let chunkFailed = 0;
-  for (let i = 0; i < users.length; i += ADD_USER_CHUNK) {
-    const chunk = users.slice(i, i + ADD_USER_CHUNK);
-    const results = await Promise.allSettled(
-      chunk.map((u) =>
-        transport.addUser({
-          userId: u.id,
-          shortId: u.shortId,
-          username: u.username,
-          inboundIds: inboundIdsOf(u.id),
-          credentials: {
-            xrayUuid: u.xrayUuid,
-            hysteriaPassword: u.hysteriaPassword,
-            amneziawgPublicKey: u.amneziawgPublicKey,
-            amneziawgAllowedIp: awgIpByUser.get(u.id),
-            amneziawgAllowedIp3: awg3IpByUser.get(u.id),
-            naivePassword: u.naivePassword,
-            tuicUuid: u.xrayUuid,
-            tuicPassword: deriveTuicPassword(u.xrayUuid),
-            anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
-            shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
-          },
-        }),
-      ),
-    );
+  const requests: AddUserRequest[] = users.map((u) => ({
+    userId: u.id,
+    shortId: u.shortId,
+    username: u.username,
+    inboundIds: inboundIdsOf(u.id),
+    credentials: {
+      xrayUuid: u.xrayUuid,
+      hysteriaPassword: u.hysteriaPassword,
+      amneziawgPublicKey: u.amneziawgPublicKey,
+      amneziawgAllowedIp: awgIpByUser.get(u.id),
+      amneziawgAllowedIp3: awg3IpByUser.get(u.id),
+      naivePassword: u.naivePassword,
+      tuicUuid: u.xrayUuid,
+      tuicPassword: deriveTuicPassword(u.xrayUuid),
+      anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
+      shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
+    },
+  }));
+  const failed = await sendRoster(transport, node.name, requests);
+  getLogger().info(
+    `[worker:inbound-sync] user sync to ${node.name} done (${users.length - failed}/${users.length} ok)`,
+  );
+}
+
+/**
+ * A-112: users per /addUsers request. Sized against the agent's 1 MiB body
+ * cap (maxRequestBodyBytes in server.go) with room to spare; the guard test
+ * builds a batch of this size from the longest values each field takes.
+ */
+export const ADD_USERS_BATCH = 250;
+
+/** The old fanout, for an agent without /addUsers: 25 /addUser at a time. */
+const ADD_USER_CHUNK = 25;
+
+/**
+ * The roster to one node, ADD_USERS_BATCH users per request: thirty thousand
+ * users were thirty thousand requests on every push (A-112). An agent older
+ * than /addUsers answers 404, and the rest goes one by one as before. Answers
+ * how many users did not land; a failed request counts all of its users and
+ * the rest still goes, as a failed /addUser did before.
+ */
+export async function sendRoster(
+  transport: Pick<NodeTransport, 'addUser' | 'addUsers'>,
+  nodeName: string,
+  requests: AddUserRequest[],
+): Promise<number> {
+  let failed = 0;
+  let i = 0;
+  for (; i < requests.length; i += ADD_USERS_BATCH) {
+    const batch = requests.slice(i, i + ADD_USERS_BATCH);
+    try {
+      const res = await transport.addUsers({ users: batch });
+      for (const r of res.results) {
+        if (r.ok) continue;
+        failed++;
+        getLogger().info(`[worker:inbound-sync] addUser ${r.userId} to ${nodeName} FAILED: ${r.error ?? 'refused'}`);
+      }
+      // An entry the agent did not answer for did not land either.
+      failed += Math.max(0, batch.length - res.results.length);
+    } catch (err) {
+      if (err instanceof NodeRequestError && err.status === 404) break;
+      failed += batch.length;
+      const detail = err instanceof Error ? err.message : String(err);
+      getLogger().info(`[worker:inbound-sync] addUsers (${batch.length}) to ${nodeName} FAILED: ${detail}`);
+    }
+  }
+  if (i >= requests.length) return failed;
+
+  getLogger().info(`[worker:inbound-sync] ${nodeName} has no /addUsers (older agent), sending users one by one`);
+  for (; i < requests.length; i += ADD_USER_CHUNK) {
+    const chunk = requests.slice(i, i + ADD_USER_CHUNK);
+    const results = await Promise.allSettled(chunk.map((r) => transport.addUser(r)));
     for (let j = 0; j < results.length; j++) {
       const r = results[j]!;
       if (r.status === 'rejected') {
-        chunkFailed++;
+        failed++;
         const detail = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        getLogger().info(
-          `[worker:inbound-sync] addUser ${chunk[j]!.username} to ${node.name} FAILED: ${detail}`,
-        );
+        getLogger().info(`[worker:inbound-sync] addUser ${chunk[j]!.username} to ${nodeName} FAILED: ${detail}`);
       }
     }
   }
-  getLogger().info(
-    `[worker:inbound-sync] user sync to ${node.name} done (${users.length - chunkFailed}/${users.length} ok)`,
-  );
+  return failed;
 }
 
 /**

@@ -84,6 +84,10 @@ describe('the push of a node with both generations', () => {
     const one = awg.find((i) => i.port === 51820)!.config as AmneziawgInboundCfg;
     const three = awg.find((i) => i.port === 51830)!.config as AmneziawgInboundCfg;
 
+    // A-105: read through the wire type, the stored keys arrive as declared.
+    expect(one.serverPrivateKey).toBeTruthy();
+    expect(one.obfuscation.h1).toBeGreaterThan(4);
+    expect(one.listenPort).toBe(51820);
     expect(one.awgProtocol).toBeUndefined();
     expect(one.geometry3).toBeUndefined();
     expect(one.inboundId).toBe(awg.find((i) => i.port === 51820)!.id);

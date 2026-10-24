@@ -5,6 +5,8 @@ import type {
   RotateCertRequest,
   RotateCertResponse,
   AddUserRequest,
+  AddUsersRequest,
+  AddUsersResponse,
   RemoveUserRequest,
   GetStatsResponse,
   HealthcheckResponse,
@@ -19,6 +21,7 @@ import type {
 import { bootstrapCa, getPanelClientCert } from '../keygen/keygen.service.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const ADD_USERS_TIMEOUT_MS = 60_000;
 
 // Shared HTTPS agent for ALL panel→node calls. undici reuses TCP+TLS
 // connections within an Agent's pool, so /healthz and /metrics polls hit
@@ -307,6 +310,16 @@ export class NodeTransport {
 
   async addUser(req: AddUserRequest): Promise<void> {
     await this.request<void>('POST', '/addUser', req);
+  }
+
+  /**
+   * A-112: many users in one request. An agent older than the route answers
+   * 404 (NodeRequestError), which the caller takes as "send them one by one".
+   * A longer timeout than one user: a user the cores do not hold yet costs a
+   * live add or a restart on the node, and a batch is many of those.
+   */
+  async addUsers(req: AddUsersRequest): Promise<AddUsersResponse> {
+    return this.request<AddUsersResponse>('POST', '/addUsers', req, { timeoutMs: ADD_USERS_TIMEOUT_MS });
   }
 
   async removeUser(req: RemoveUserRequest): Promise<void> {

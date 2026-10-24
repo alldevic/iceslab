@@ -576,6 +576,29 @@ export interface AddUserResponse {
   ok: true;
 }
 
+// ───── POST /addUsers ─────
+//
+// A-112: the roster after a push, many users per request. Each entry is one
+// /addUser, applied in order with the same semantics; one user's failure does
+// not stop the others. An agent older than the route answers 404, and the
+// panel then falls back to /addUser per user.
+
+export interface AddUsersRequest {
+  users: AddUserRequest[];
+}
+
+export interface AddUsersResponse {
+  /** One per request entry, in its order. */
+  results: AddUsersResult[];
+}
+
+export interface AddUsersResult {
+  userId: string;
+  ok: boolean;
+  /** Why not, when !ok: the cores that refused, as /addUser's 500 says it. */
+  error?: string;
+}
+
 // ───── POST /applyInbounds ─────
 //
 // Panel pushes the FULL set of inbounds bound to this node every time any
@@ -855,13 +878,12 @@ export interface HysteriaInboundCfg {
   tlsKeyPem?: string;
 }
 
-export interface AmneziawgInboundCfg {
-  /** Server WG private key (base64-standard, like `wg genkey`). */
-  privateKey: string;
-  /** Subnet in CIDR notation (e.g. "10.0.0.0/24"). Server takes .1, peers
-   *  .2..N. Panel-side `amneziawg.service` does the per-user allocation. */
-  subnet: string;
-  /** AmneziaWG obfuscation params, see reference_amneziawg.md for ranges. */
+/**
+ * The 1.x obfuscation of an AmneziaWG inbound, as the panel stores it
+ * (ObfuscationSchema in inbounds.schemas.ts) and the agent decodes it
+ * (obfuscationCfg in apps/node/internal/core/amneziawg/inbound.go).
+ */
+export interface AmneziawgObfuscation {
   jc: number;
   jmin: number;
   jmax: number;
@@ -873,8 +895,35 @@ export interface AmneziawgInboundCfg {
   h2: number;
   h3: number;
   h4: number;
-  postUp?: string;                // optional iptables / sysctl tweaks
-  postDown?: string;
+  /** Mimicry packets, '' disables the slot. */
+  i1: string;
+  i2: string;
+  i3: string;
+  i4: string;
+  i5: string;
+}
+
+/**
+ * The AmneziaWG inbound on the wire (A-105): the profile config as stored,
+ * plus the keys the push injects (listenPort, inboundId, awgProtocol,
+ * geometry3). Mirrors inboundCfgWire in apps/node/internal/core/amneziawg/
+ * inbound.go. The stored part is held equal to AmneziawgConfigSchema at
+ * compile time in inbounds.schemas.ts, the Go keys by contract-mirror.test.ts.
+ *
+ * No postUp/postDown: the agent takes those from its install-time config,
+ * never from the panel.
+ */
+export interface AmneziawgInboundCfg {
+  /** Subnet in CIDR notation (e.g. "10.66.66.0/24"). Server takes .1, peers
+   *  .2..N. Panel-side `amneziawg.service` does the per-user allocation. */
+  subnet: string;
+  /** Server WG private key (base64-standard, like `wg genkey`). */
+  serverPrivateKey: string;
+  /** Its public half. The agent ignores it; clients get it in their config. */
+  serverPublicKey: string;
+  obfuscation: AmneziawgObfuscation;
+  /** The binding's port, injected on every push. */
+  listenPort: number;
   /** Which binding this is (the binding id), so the agent can drop the
    *  interface of a binding the push no longer carries (RetainInbounds). */
   inboundId?: string;

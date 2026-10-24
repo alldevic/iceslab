@@ -95,6 +95,28 @@ type AddUserResponse struct {
 	OK bool `json:"ok"`
 }
 
+// ───── POST /addUsers ─────
+//
+// A-112: the roster after a push, many users per request instead of one
+// /addUser each. Every entry goes through exactly what /addUser does, in
+// order, and one entry's failure does not stop the rest.
+
+type AddUsersRequest struct {
+	Users []AddUserRequest `json:"users"`
+}
+
+type AddUsersResponse struct {
+	// Results: one per request entry, in its order.
+	Results []AddUsersResult `json:"results"`
+}
+
+type AddUsersResult struct {
+	UserID string `json:"userId"`
+	OK     bool   `json:"ok"`
+	// Error: the cores that refused, the message /addUser's 500 carries.
+	Error string `json:"error,omitempty"`
+}
+
 // ───── POST /applyInbounds ─────
 //
 // Panel pushes the FULL set of enabled inbounds bound to this node. Slice 24:
