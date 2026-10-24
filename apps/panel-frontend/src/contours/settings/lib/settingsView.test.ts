@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { brandNameFieldError, brandNameSave, listState } from '@/contours/settings/lib/settingsView';
+import { brandNameFieldError, brandNameSave, listState, regionNodeWords } from '@/contours/settings/lib/settingsView';
+
+describe('regionNodeWords (A-256): число нод региона без ответа это не 0', () => {
+  const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ' ' + JSON.stringify(vars) : ''}`;
+  it('нет поля или не целое неотрицательное: строка «-», окно удаления «неизвестно», не «безопасно»', () => {
+    for (const r of [{}, { nodeCount: '2' }, { nodeCount: -1 }, { nodeCount: 1.5 }]) {
+      expect(regionNodeWords(r, t)).toEqual({ cell: '-', deleteBody: 'regions.deleteUnknownNodes' });
+    }
+  });
+  it('ответ 0 это «безопасно», N это «потеряют привязку»', () => {
+    expect(regionNodeWords({ nodeCount: 0 }, t)).toEqual({ cell: 'regions.nodesCount {"count":0}', deleteBody: 'regions.deleteSafe' });
+    expect(regionNodeWords({ nodeCount: 3 }, t).deleteBody).toBe('regions.deleteWithNodes {"count":3}');
+  });
+});
 
 describe('brandNameSave (A-237)', () => {
   it('сбой /settings: сохранять нечего, «Iceslab» не уходит', () => {

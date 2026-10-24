@@ -35,6 +35,25 @@ export function brandNameFieldError(save: BrandNameSave, touched: boolean): 'emp
  * A list card's state (A-241): «none» only when the list arrived empty.
  * A list that did not arrive is said with the server's words and a retry.
  */
+/**
+ * How many nodes sit in a region. The field is optional (`Region.nodeCount`):
+ * a server that did not send it has not said «0», so the row reads «-» and the
+ * delete dialog says unknown, instead of «0 nodes» and «safe to delete» (A-256).
+ */
+export function regionNodeWords(
+  region: { nodeCount?: unknown },
+  t: (key: string, vars?: Record<string, unknown>) => string,
+): { cell: string; deleteBody: string } {
+  const n = region.nodeCount;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) {
+    return { cell: '-', deleteBody: t('regions.deleteUnknownNodes') };
+  }
+  return {
+    cell: t('regions.nodesCount', { count: n }),
+    deleteBody: n > 0 ? t('regions.deleteWithNodes', { count: n }) : t('regions.deleteSafe'),
+  };
+}
+
 export type ListState = 'loading' | 'failed' | 'empty' | 'list';
 
 export function listState(q: { data: unknown; isError: boolean }, count: number): ListState {

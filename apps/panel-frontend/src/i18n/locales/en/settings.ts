@@ -116,6 +116,8 @@ export const settings = {
     deleteTitle: 'Delete region "{{name}}"?',
     deleteWithNodes: '{{count}} nodes will remain but lose their region link (field cleared).',
     deleteSafe: 'No node attached - safe to delete.',
+    // A-256: the server sent no node count, that is not «0».
+    deleteUnknownNodes: 'The server did not say how many nodes are attached: those that are stay, but lose their region (field cleared).',
     notify: {
       created: 'Region created',
       updated: 'Region updated',

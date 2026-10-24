@@ -23,7 +23,7 @@ import { copyToClipboard } from '@/lib/ui/clipboard';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
-import { brandNameFieldError, brandNameSave, listState } from '@/contours/settings/lib/settingsView';
+import { brandNameFieldError, brandNameSave, listState, regionNodeWords } from '@/contours/settings/lib/settingsView';
 import {
   createApiToken,
   deleteApiToken,
@@ -634,9 +634,7 @@ function RegionsCard() {
       title: t('regions.deleteTitle', { name: r.name }),
       children: (
         <Text size="sm">
-          {r.nodeCount && r.nodeCount > 0
-            ? t('regions.deleteWithNodes', { count: r.nodeCount })
-            : t('regions.deleteSafe')}
+          {regionNodeWords(r, t).deleteBody}
         </Text>
       ),
       labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
@@ -730,7 +728,7 @@ function RegionsCard() {
                 <Text
                   style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: FAINT, flexShrink: 0 }}
                 >
-                  {t('regions.nodesCount', { count: r.nodeCount ?? 0 })}
+                  {regionNodeWords(r, t).cell}
                 </Text>
                 <UnstyledButton
                   type="button"
