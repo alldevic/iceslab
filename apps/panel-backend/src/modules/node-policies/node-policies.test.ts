@@ -168,6 +168,47 @@ describe('storing a policy', () => {
   });
 });
 
+/**
+ * A-155: deleting a whole cascade drops every direction of it, and a rule that
+ * routes through one is RESTRICT. Left to the key, that was a 500 about a
+ * foreign key; the edit that removes one direction already named the policy.
+ */
+describe('deleting a cascade a policy routes through', () => {
+  it('is refused naming the policy, and the cascade stays', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { cascadeId, direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([{ action: { kind: 'cascade', directionId: direction.id } }]);
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/cascades/${cascadeId}`, headers: auth() });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'DIRECTION_IN_USE_BY_POLICY', policies: [p.name] });
+    expect(await prisma.cascade.count({ where: { id: cascadeId } })).toBe(1);
+
+    // Without the rule the delete goes through.
+    await app.inject({ method: 'PUT', url: `/api/node-policies/${p.id}`, headers: auth(), payload: { rules: [] } });
+    const ok = await app.inject({ method: 'DELETE', url: `/api/cascades/${cascadeId}`, headers: auth() });
+    expect(ok.statusCode, ok.body).toBe(204);
+  });
+
+  it('a foreign key refusing a write no route checked first is a 409, not a 500', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    await createPolicy([{ action: { kind: 'cascade', directionId: direction.id } }]);
+    // A route that writes without asking: the case the general handler is for.
+    const bare = await buildApp();
+    bare.delete('/__test/direction/:id', async (req) => {
+      await prisma.cascadeDirection.delete({ where: { id: (req.params as { id: string }).id } });
+      return { ok: true };
+    });
+    const res = await bare.inject({ method: 'DELETE', url: `/__test/direction/${direction.id}` });
+    await bare.close();
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body).error).toBe('REFERENCED');
+  });
+});
+
 describe('a policy has to fit the node it is attached to', () => {
   it('refuses a WARP rule on a node without WARP, at the save', async () => {
     // The core would refuse it too, minutes later, in a worker log attached to

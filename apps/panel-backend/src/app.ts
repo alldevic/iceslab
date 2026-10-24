@@ -141,6 +141,18 @@ export async function buildApp(): Promise<FastifyInstance> {
       });
     }
 
+    // A-155: a foreign key that refused the write (RESTRICT). Nothing is broken:
+    // the row is still in use, and the route that should have asked first did
+    // not. 409, not 500, so the next such case is a refusal the screen can show
+    // rather than "Internal error"; logged, since that route wants its own check.
+    if ((error as { code?: unknown }).code === 'P2003') {
+      request.log.warn({ err: error, url: request.url }, 'Foreign key refused the write, no route check before it');
+      return reply.code(409).send({
+        error: 'REFERENCED',
+        message: 'This record is still used by another one, remove that use first',
+      });
+    }
+
     request.log.error({ err: error }, 'Unhandled error');
     return reply.code(500).send({
       error: 'INTERNAL_ERROR',
