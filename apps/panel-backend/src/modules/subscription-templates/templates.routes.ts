@@ -83,10 +83,7 @@ export async function subscriptionTemplatesRoutes(app: FastifyInstance): Promise
   app.post('/api/subscription-templates/import', auth, guarded(async (req, reply) => {
     const input = ImportSchema.parse(req.body);
     const draft = importTemplate(input.body, input.type);
-    return reply.send({
-      template: { type: draft.type, name: '', body: draft.body, isDefault: false },
-      rewrittenKeys: draft.rewrittenKeys,
-    });
+    return reply.send({ template: { type: draft.type, name: '', body: draft.body, isDefault: false } });
   }));
 
   app.put('/api/subscription-templates/:id', auth, guarded(async (req, reply) => {

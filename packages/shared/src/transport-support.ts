@@ -166,6 +166,20 @@ export function formatDisabledForHost(disableForFormats: readonly string[] | nul
   return false;
 }
 
+/**
+ * What a template's dry run can warn of, by code (POST
+ * /api/subscription-templates/dry-run, `warnings[].code`). The screen reads
+ * the code, never the sentence beside it, so a sentence may be reworded:
+ *   - NO_NODE_IN_PROXIES: no node reached `proxies` (Clash family), every
+ *     client would get an empty list;
+ *   - NO_GROUP_HOLDS_NODE: no proxy group holds a node (Clash family), rules
+ *     have nothing to send traffic through;
+ *   - NO_SELECTOR_HOLDS_NODE: no selector or urltest outbound holds a node
+ *     (sing-box), the client cannot pick a server.
+ */
+export const DRY_RUN_WARNING_CODES = ['NO_NODE_IN_PROXIES', 'NO_GROUP_HOLDS_NODE', 'NO_SELECTOR_HOLDS_NODE'] as const;
+export type DryRunWarningCode = (typeof DRY_RUN_WARNING_CODES)[number];
+
 /** The row of the transport table a template type reads. */
 export const TEMPLATE_TRANSPORT: Record<TemplateType, SubscriptionTransportFormat> = {
   mihomo: 'clash',

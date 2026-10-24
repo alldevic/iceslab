@@ -77,7 +77,7 @@ const refusal = (fn: () => unknown): TemplateInvalidError => {
 describe('importTemplate', () => {
   it('hands the body back byte for byte, comments, anchors and the merge key included', () => {
     const d = importTemplate(MIHOMO, 'mihomo');
-    expect(d).toEqual({ body: MIHOMO, type: 'mihomo', rewrittenKeys: 0 });
+    expect(d).toEqual({ body: MIHOMO, type: 'mihomo' });
   });
 
   it('a YAML without a type comes back with none: mihomo, stash and clash read the same text', () => {
@@ -139,8 +139,8 @@ describe('POST /api/subscription-templates/import', () => {
   it('answers the draft and saves nothing; the draft then saves as any template', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/subscription-templates/import', headers: auth(), payload: { body: MIHOMO, type: 'stash' } });
     expect(res.statusCode, res.body).toBe(200);
-    const out = JSON.parse(res.body) as { template: { type: string; name: string; body: string; isDefault: boolean }; rewrittenKeys: number };
-    expect(out).toEqual({ template: { type: 'stash', name: '', body: MIHOMO, isDefault: false }, rewrittenKeys: 0 });
+    const out = JSON.parse(res.body) as { template: { type: string; name: string; body: string; isDefault: boolean } };
+    expect(out).toEqual({ template: { type: 'stash', name: '', body: MIHOMO, isDefault: false } });
     expect(await prisma.subscriptionTemplate.count()).toBe(0);
     const saved = await app.inject({
       method: 'POST', url: '/api/subscription-templates', headers: auth(),

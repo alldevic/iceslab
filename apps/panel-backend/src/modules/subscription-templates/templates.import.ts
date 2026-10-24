@@ -18,9 +18,6 @@ export interface ImportDraft {
    *  a Clash-family YAML is the same text for mihomo, stash and clash, and an
    *  xray JSON for xray-json and xray-json-array. */
   type: TemplateType | null;
-  /** Keys rewritten on the way in: none, the panel rewrites nothing. Kept in
-   *  the answer for the screen that shows it. */
-  rewrittenKeys: number;
 }
 
 export function importTemplate(body: string, type?: TemplateType): ImportDraft {
@@ -36,7 +33,7 @@ export function importTemplate(body: string, type?: TemplateType): ImportDraft {
   // Clash-family YAML, the JSON of sing-box and xray), so a broken file or a
   // service key we do not read is said now, not after the operator picks.
   checkTemplateBody(resolved ?? (json ? 'singbox' : 'mihomo'), body);
-  return { body, type: resolved, rewrittenKeys: 0 };
+  return { body, type: resolved };
 }
 
 /** sing-box names an outbound's kind `type`. An xray outbound names it

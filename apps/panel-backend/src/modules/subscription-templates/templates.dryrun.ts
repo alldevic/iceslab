@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parse as parseYaml } from 'yaml';
-import type { TemplateType } from '@iceslab/shared';
+import type { DryRunWarningCode, TemplateType } from '@iceslab/shared';
 import type { SubscriptionEndpoint } from '../subscription/subscription.formats.js';
 import { readFrame } from '../subscription/subscription.frames.js';
 import { buildClashYaml } from '../subscription/formats/clash.js';
@@ -24,8 +24,9 @@ const run = promisify(execFile);
  *   - `check`: `sing-box check` for sing-box, `xray -test` for the xray
  *     types (every element of the array); the Clash family has no core on the
  *     panel to ask, and a core the panel does not have is said so;
- *   - `warnings`: no node reached the file, or no group holds a node (the
- *     operator saved a frame without a slot and every client gets nothing).
+ *   - `warnings`: `{ code, message }`, no node reached the file, or no group
+ *     holds a node (the operator saved a frame without a slot and every client
+ *     gets nothing); the codes are DRY_RUN_WARNING_CODES in shared.
  * `check.ok` is true when the core took the file, false when it refused it,
  * and null when it did not run (no binary on the panel, no Clash core at
  * all): null is not yes: the core did not run. The overall `ok` is false on a
@@ -35,14 +36,21 @@ const run = promisify(execFile);
 
 export type CheckAnswer = { ok: boolean | null; message?: string };
 
+/** A warning by its code (DRY_RUN_WARNING_CODES, shared) and the sentence for
+ *  a person; the screen goes by the code. */
+export interface DryRunWarning {
+  code: DryRunWarningCode;
+  message: string;
+}
+
 export interface DryRun {
   ok: boolean | null;
   rendered: string;
   check: CheckAnswer;
-  warnings: string[];
+  warnings: DryRunWarning[];
 }
 
-function overall(check: CheckAnswer, warnings: string[]): boolean | null {
+function overall(check: CheckAnswer, warnings: DryRunWarning[]): boolean | null {
   if (check.ok === false || warnings.length > 0) return false;
   return check.ok === null ? null : true;
 }
@@ -97,16 +105,16 @@ export async function dryRun(type: TemplateType, body: string): Promise<DryRun> 
   checkTemplateBody(type, body);
   const frame = readFrame(type, body);
   const names = DRY_RUN_NODES.map((n) => n.nodeName);
-  const warnings: string[] = [];
+  const warnings: DryRunWarning[] = [];
 
   if (type === 'mihomo' || type === 'stash' || type === 'clash') {
     const rendered = buildClashYaml(DRY_RUN_NODES, { frame });
     const doc = (parseYaml(rendered) ?? {}) as { proxies?: { name?: string }[]; 'proxy-groups'?: { proxies?: string[] }[] };
     if (!(doc.proxies ?? []).some((p) => names.some((n) => String(p?.name ?? '').startsWith(n)))) {
-      warnings.push('no node reached `proxies`: every client would get an empty list');
+      warnings.push({ code: 'NO_NODE_IN_PROXIES', message: 'no node reached `proxies`: every client would get an empty list' });
     }
     if (!(doc['proxy-groups'] ?? []).some((g) => (g?.proxies ?? []).some((m) => names.some((n) => String(m).startsWith(n))))) {
-      warnings.push('no proxy group holds a node: rules have nothing to send traffic through');
+      warnings.push({ code: 'NO_GROUP_HOLDS_NODE', message: 'no proxy group holds a node: rules have nothing to send traffic through' });
     }
     const check: CheckAnswer = { ok: null, message: 'not checked: the panel carries no mihomo core' };
     return { ok: overall(check, warnings), rendered, check, warnings };
@@ -117,7 +125,7 @@ export async function dryRun(type: TemplateType, body: string): Promise<DryRun> 
     const cfg = JSON.parse(rendered) as { outbounds?: { type?: string; outbounds?: string[] }[] };
     const groups = (cfg.outbounds ?? []).filter((o) => o.type === 'selector' || o.type === 'urltest');
     if (!groups.some((g) => (g.outbounds ?? []).some((m) => names.some((n) => m.startsWith(n))))) {
-      warnings.push('no selector or urltest group holds a node: the client cannot pick a server');
+      warnings.push({ code: 'NO_SELECTOR_HOLDS_NODE', message: 'no selector or urltest group holds a node: the client cannot pick a server' });
     }
     const bin = binary(process.env.SINGBOX_BIN, ['/usr/local/bin/sing-box', '/usr/bin/sing-box']);
     const check = await coreCheck(bin, (f) => ['check', '-c', f], [rendered], 'sing-box');

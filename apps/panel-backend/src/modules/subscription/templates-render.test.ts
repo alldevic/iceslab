@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { FastifyInstance } from 'fastify';
-import { TEMPLATE_TYPES } from '@iceslab/shared';
+import { DRY_RUN_WARNING_CODES, TEMPLATE_TYPES } from '@iceslab/shared';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
@@ -269,7 +269,7 @@ describe('the subscription and the dry run', () => {
   it('dry-run: the Default is ok with the nodes in it; a frame without a slot is not, and says why', async () => {
     const run = (type: string, body: string) =>
       app.inject({ method: 'POST', url: '/api/subscription-templates/dry-run', headers: auth(), payload: { type, body } });
-    type Answer = { ok: boolean | null; rendered: string; check: { ok: boolean | null; message?: string }; warnings: string[] };
+    type Answer = { ok: boolean | null; rendered: string; check: { ok: boolean | null; message?: string }; warnings: { code: string }[] };
     for (const type of TEMPLATE_TYPES) {
       const res = await run(type, DEFAULT_TEMPLATE_BODIES[type]);
       expect(res.statusCode, `${type}: ${res.body}`).toBe(200);
@@ -303,14 +303,18 @@ describe('the subscription and the dry run', () => {
       if (saved.x === undefined) delete process.env.XRAY_BIN;
       else process.env.XRAY_BIN = saved.x;
     }
-    const noGroup = JSON.parse((await run('mihomo', 'rules:\n  - MATCH,DIRECT\n')).body) as { ok: boolean; warnings: string[] };
+    // By code (DRY_RUN_WARNING_CODES): the screen reads the code, the sentence
+    // beside it may be reworded.
+    type Warned = { ok: boolean; warnings: { code: string; message: string }[] };
+    const noGroup = JSON.parse((await run('mihomo', 'rules:\n  - MATCH,DIRECT\n')).body) as Warned;
     expect(noGroup.ok).toBe(false);
-    expect(noGroup.warnings.join(' ')).toContain('no proxy group holds a node');
-    const noSelector = JSON.parse((await run('singbox', JSON.stringify({ outbounds: [{ type: 'direct', tag: 'direct' }] }))).body) as {
-      ok: boolean; warnings: string[];
-    };
+    expect(noGroup.warnings.map((w) => w.code)).toContain('NO_GROUP_HOLDS_NODE');
+    expect(noGroup.warnings.every((w) => (DRY_RUN_WARNING_CODES as readonly string[]).includes(w.code) && w.message.length > 0)).toBe(true);
+    const noSelector = JSON.parse((await run('singbox', JSON.stringify({ outbounds: [{ type: 'direct', tag: 'direct' }] }))).body) as Warned;
     expect(noSelector.ok).toBe(false);
-    expect(noSelector.warnings.join(' ')).toContain('selector or urltest');
+    expect(noSelector.warnings).toEqual([
+      { code: 'NO_SELECTOR_HOLDS_NODE', message: expect.stringContaining('selector or urltest') },
+    ]);
     const invalid = await run('singbox', '{ "log": ');
     expect(invalid.statusCode).toBe(400);
     expect(JSON.parse(invalid.body).error).toBe('TEMPLATE_INVALID');
