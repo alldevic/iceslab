@@ -164,8 +164,8 @@ export const CLIENTS = {
     name: 'NekoBox',
     site: 'https://github.com/MatsuriDayo/NekoBoxForAndroid/releases',
     platforms: ['android'],
-    // It asks for this in its own User-Agent.
-    format: 'clash',
+    // It asks for this in its own User-Agent ("ClashMeta Format": mihomo).
+    format: 'mihomo',
     uaSamples: [
       {
         ua: 'NekoBox/Android/1.4.2 (Prefer ClashMeta Format)',
@@ -196,7 +196,7 @@ export const CLIENTS = {
     name: 'Clash Verge',
     site: 'https://github.com/clash-verge-rev/clash-verge-rev/releases',
     platforms: ['windows', 'macos', 'linux'],
-    format: 'clash',
+    format: 'mihomo',
     uaSamples: [
       { ua: 'clash-verge/v2.4.3', source: 'clash-verge-rev@afc32f5 src-tauri/src/utils/network.rs:247-253' },
     ],
@@ -205,7 +205,7 @@ export const CLIENTS = {
     name: 'FlClash',
     site: 'https://github.com/chen08209/FlClash/releases',
     platforms: ['android', 'windows', 'macos', 'linux'],
-    format: 'clash',
+    format: 'mihomo',
     uaSamples: [
       {
         ua: 'FlClash/v0.8.90 clash-verge Platform/android',
@@ -217,7 +217,7 @@ export const CLIENTS = {
     name: 'Clash Meta for Android',
     site: 'https://github.com/MetaCubeX/ClashMetaForAndroid/releases',
     platforms: ['android'],
-    format: 'clash',
+    format: 'mihomo',
     uaSamples: [
       {
         ua: 'ClashMetaForAndroid/2.11.17',
@@ -228,7 +228,7 @@ export const CLIENTS = {
   stash: {
     name: 'Stash',
     platforms: ['ios', 'macos', 'appletv'],
-    format: 'clash',
+    format: 'stash',
     uaSamples: [
       {
         ua: 'Stash/3.1.1',
@@ -363,20 +363,22 @@ export interface ClientRule {
 export const CLIENT_RULES: ClientRule[] = [
   { name: 'Hiddify', pattern: 'Hiddify', format: 'singbox', priority: 10, clients: ['hiddify'] },
   // Before Clash: its UA says "Prefer ClashMeta Format", and gets exactly that.
-  { name: 'NekoBox/NekoRay', pattern: 'NekoBox|NekoRay', format: 'clash', priority: 20, clients: ['nekobox'] },
+  { name: 'NekoBox/NekoRay', pattern: 'NekoBox|NekoRay', format: 'mihomo', priority: 20, clients: ['nekobox'] },
   { name: 'sing-box', pattern: 'sing-box|SFI|SFA|SFM|SFT', format: 'singbox', priority: 30, clients: ['singbox'] },
   // Case-insensitive now: Clash Verge Rev sends `clash-verge/...` in lower case
   // and matched nothing under the old case-sensitive `Clash`.
   {
     name: 'Clash',
     pattern: '(?i)clash|mihomo',
-    format: 'clash',
+    // A-236 step 4: by core. Every client this rule serves runs mihomo; the
+    // legacy Clash core has no client in the catalog (?format=clash-legacy).
+    format: 'mihomo',
     priority: 40,
     clients: ['clashVerge', 'flclash', 'clashMetaAndroid'],
   },
   // Its own rule: the old `stash` sat inside the Clash rule in lower case, and
   // the app sends `Stash`.
-  { name: 'Stash', pattern: '(?i)stash', format: 'clash', priority: 45, clients: ['stash'] },
+  { name: 'Stash', pattern: '(?i)stash', format: 'stash', priority: 45, clients: ['stash'] },
   { name: 'v2rayN', pattern: 'v2rayN|v2rayNG', format: 'xrayjson', priority: 50, clients: ['v2rayn', 'v2rayng'] },
   // No AmneziaWG client fetches by link (see CLIENTS.amneziavpn); the rule stays
   // because operators have had it since the first seed.

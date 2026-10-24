@@ -61,9 +61,11 @@ describe('the catalog keeps its own rules', () => {
   it('carries the fixes the recon asked for', () => {
     const rule = (name: string) => CLIENT_RULES.find((r) => r.name === name);
     expect(rule('Clash')?.pattern).toBe('(?i)clash|mihomo');
-    expect(rule('Stash')).toMatchObject({ pattern: '(?i)stash', format: 'clash' });
+    // By core since A-236 step 4: Stash its own dialect, the rest mihomo.
+    expect(rule('Stash')).toMatchObject({ pattern: '(?i)stash', format: 'stash' });
     expect(rule('Loon')?.pattern).toBe('(?i)loon|decar');
-    expect(rule('NekoBox/NekoRay')?.format).toBe('clash');
+    expect(rule('NekoBox/NekoRay')?.format).toBe('mihomo');
+    expect(rule('Clash')?.format).toBe('mihomo');
   });
 });
 

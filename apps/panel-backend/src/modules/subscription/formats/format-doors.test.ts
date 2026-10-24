@@ -156,6 +156,9 @@ const BUILD: Record<SubscriptionFormat, (eps: SubscriptionEndpoint[]) => string>
   raw: (eps) => eps.flatMap(expandEndpointUris).join('\n'),
   json: (eps) => JSON.stringify(eps),
   clash: (eps) => buildClashYaml(eps),
+  mihomo: (eps) => buildClashYaml(eps, { dialect: 'mihomo' }),
+  stash: (eps) => buildClashYaml(eps, { dialect: 'stash' }),
+  'clash-legacy': (eps) => buildClashYaml(eps, { dialect: 'clash-legacy' }),
   singbox: (eps) => buildSingboxJson(eps),
   wgconf: (eps) => buildWgQuickConf(eps),
   amneziavpn: (eps) => {
@@ -243,7 +246,8 @@ describe('the table itself', () => {
     expect(formatCarries('outline', 'shadowsocks', undefined, 'aes-256-gcm').carried).toBe(true);
     // A cipher nobody told us is not a fact to refuse on.
     expect(formatCarries('outline', 'shadowsocks').carried).toBe(true);
-    for (const format of FORMAT_NAMES.filter((f) => f !== 'outline')) {
+    // The legacy Clash core has no 2022-blake3 either (clash.wiki, A-236).
+    for (const format of FORMAT_NAMES.filter((f) => f !== 'outline' && f !== 'clash-legacy')) {
       expect(formatCarries(format, 'shadowsocks', undefined, '2022-blake3-aes-128-gcm'), format).toEqual(
         formatCarries(format, 'shadowsocks'),
       );

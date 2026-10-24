@@ -149,7 +149,13 @@ export const FORMAT_NAMES = [
   // read).
   'raw',
   'json',
+  // `clash` is the alias of `mihomo` for good: the address is in clients'
+  // configs and answers byte for byte as it always did. The Clash family by
+  // core (A-236 step 4): mihomo, Stash, and the legacy Clash core.
   'clash',
+  'mihomo',
+  'stash',
+  'clash-legacy',
   'singbox',
   'wgconf',
   'amneziavpn',
@@ -244,6 +250,20 @@ function formatTable(cells: Partial<Record<Door, FormatDoor>>): Record<Door, For
 
 const XRAY_DOORS = { vless: YES, vmess: YES, trojan: YES, socks: YES, http: YES } as const;
 
+/** mihomo, the core of the `clash` answer and its own `mihomo` one. */
+const MIHOMO_DOORS = formatTable({
+  ...XRAY_DOORS,
+  hysteria: YES,
+  shadowsocks: YES,
+  tuic: YES,
+  anytls: YES,
+  shadowtls: YES,
+  mieru: YES,
+  // mihomo's wireguard proxy takes `amnezia-wg-option` (jc, jmin, jmax, s1,
+  // s2, h1-h4 for 1.x): wiki.metacubex.one/en/config/proxies/wg/. No naive.
+  amneziawg: NOT_YET,
+});
+
 /** The share links: what `plain` wraps in base64 and `raw` hands out as is.
  *  One object for both, so the two cannot drift. */
 const LINK_DOORS = formatTable({
@@ -279,7 +299,14 @@ export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> 
   // The same links as plain, unwrapped.
   raw: LINK_DOORS,
   json: formatTable(Object.fromEntries(DOORS.map((d) => [d, YES]))),
-  clash: formatTable({
+  // `clash` is the alias of `mihomo` (A-236 step 4): one table for both.
+  clash: MIHOMO_DOORS,
+  mihomo: MIHOMO_DOORS,
+  // stash.wiki/en/proxy-protocols/proxy-types, read 2026-10-24: ss (with the
+  // shadow-tls plugin, versions 2 and 3), socks5, http, vmess, trojan, vless,
+  // hysteria2, tuic, anytls, mieru; no NaiveProxy, no MTProto; wireguard
+  // without the AmneziaWG obfuscation.
+  stash: formatTable({
     ...XRAY_DOORS,
     hysteria: YES,
     shadowsocks: YES,
@@ -287,9 +314,17 @@ export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> 
     anytls: YES,
     shadowtls: YES,
     mieru: YES,
-    // mihomo's wireguard proxy takes `amnezia-wg-option` (jc, jmin, jmax, s1,
-    // s2, h1-h4 for 1.x): wiki.metacubex.one/en/config/proxies/wg/. No naive.
-    amneziawg: NOT_YET,
+  }),
+  // clash.wiki/configuration/outbound.html, read 2026-10-24: ss, ssr, vmess,
+  // socks5, http, snell, trojan. No vless, no REALITY (the transport table
+  // holds trojan to TLS), nothing newer; no 2022-blake3 cipher in the open
+  // core.
+  'clash-legacy': formatTable({
+    vmess: YES_NO_REALITY,
+    trojan: YES_NO_REALITY,
+    socks: YES,
+    http: YES,
+    shadowsocks: { carried: true, exceptSs2022: true },
   }),
   singbox: formatTable({
     ...XRAY_DOORS,

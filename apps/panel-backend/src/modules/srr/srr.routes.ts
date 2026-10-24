@@ -8,6 +8,8 @@ import {
   TestSrrSchema,
 } from './srr.schemas.js';
 import { matchFormatForUserAgent, invalidateSrrCache } from './srr.service.js';
+import { FORMAT_NAMES, type SubscriptionFormat } from '@iceslab/shared';
+import { findTemplate, templateTypeForFormat } from '../subscription-templates/templates.service.js';
 
 export async function srrRoutes(app: FastifyInstance): Promise<void> {
   // Wave-14 #15: per-route auth (see users.routes.ts header comment).
@@ -24,6 +26,8 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/srr
   app.post('/api/srr', auth, async (request, reply) => {
     const input = CreateSrrSchema.parse(request.body);
+    const refusal = await templateRefusal(input.format, input.templateName);
+    if (refusal) return reply.code(400).send(refusal);
     try {
       const rule = await prisma.subscriptionResponseRule.create({
         data: input,
@@ -45,6 +49,20 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
   app.put('/api/srr/:id', auth, async (request, reply) => {
     const params = SrrIdParamSchema.parse(request.params);
     const input = UpdateSrrSchema.parse(request.body);
+    if (input.format !== undefined || input.templateName !== undefined) {
+      // The pair as it will stand: what the request changes over what is stored.
+      const stored = await prisma.subscriptionResponseRule.findUnique({
+        where: { id: params.id },
+        select: { format: true, templateName: true },
+      });
+      if (stored) {
+        const refusal = await templateRefusal(
+          input.format ?? stored.format,
+          input.templateName !== undefined ? input.templateName : stored.templateName,
+        );
+        if (refusal) return reply.code(400).send(refusal);
+      }
+    }
     try {
       const rule = await prisma.subscriptionResponseRule.update({
         where: { id: params.id },
@@ -89,6 +107,38 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
     const matched = await matchFormatForUserAgent(input.userAgent);
     return reply.send({ format: matched, userAgent: input.userAgent });
   });
+}
+
+/**
+ * A-236: a rule names a template of the type its format is framed by, and one
+ * that exists, or it is refused in words. (A template deleted later is not
+ * refused at serve time: the clients fall back to the Default.)
+ */
+async function templateRefusal(
+  format: string,
+  templateName: string | null | undefined,
+): Promise<{ error: string; message: string; field: string } | null> {
+  if (templateName == null) return null;
+  const type = isFormatName(format) ? templateTypeForFormat(format) : null;
+  if (!type) {
+    return {
+      error: 'SRR_TEMPLATE_NOT_FOR_FORMAT',
+      message: `the ${format} format takes no template; templates frame mihomo, clash, stash, clash-legacy, singbox, xrayjson and xrayjson-array`,
+      field: 'templateName',
+    };
+  }
+  if (!(await findTemplate(type, templateName))) {
+    return {
+      error: 'SRR_TEMPLATE_NOT_FOUND',
+      message: `no ${type} template named ${JSON.stringify(templateName)}`,
+      field: 'templateName',
+    };
+  }
+  return null;
+}
+
+function isFormatName(v: string): v is SubscriptionFormat {
+  return (FORMAT_NAMES as readonly string[]).includes(v);
 }
 
 function isUniqueConstraintError(err: unknown): boolean {

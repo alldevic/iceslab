@@ -30,7 +30,6 @@ import { buildTrojanRealityUri } from '../../../core-adapters/xray/trojan-uri.js
  */
 
 const SECURITIES = ['default', 'tls', 'none'] as const;
-const NO_BUILDER_YET = ['stash', 'clash-legacy'] as const;
 
 function expected(cell: TransportSupportCell, sec: (typeof SECURITIES)[number]): boolean {
   if (cell === 'served') return true;
@@ -70,6 +69,10 @@ function present(format: SubscriptionTransportFormat, e: SubscriptionEndpoint): 
   switch (format) {
     case 'clash':
       return buildClashYaml([e]).includes(e.nodeName);
+    // A-236 step 4: the same builder in the Stash and legacy Clash dialects.
+    case 'stash':
+    case 'clash-legacy':
+      return buildClashYaml([e], { dialect: format }).includes(e.nodeName);
     case 'singbox':
       return buildSingboxJson([e]).includes(e.nodeName);
     case 'xrayjson': {
@@ -103,11 +106,6 @@ describe('the shared transport table against the formats', () => {
           expect(row, `no row for ${format}/${sub}`).toBeDefined();
           const cell = row![column];
           expect(cell, `no cell for ${format}/${sub}/${column}`).toBeDefined();
-          // The template dialects with no builder of their own yet (A-236): the
-          // clash builder frames them until step 4, so there is no file to hold
-          // the cell against. Their cells are held to the client docs in
-          // template-support.test.ts; this entry goes when the builder comes.
-          if ((NO_BUILDER_YET as readonly string[]).includes(format)) return;
           if (format.endsWith('-link')) {
             // A link family carries only its own subprotocol, and xray's links
             // carry every network.

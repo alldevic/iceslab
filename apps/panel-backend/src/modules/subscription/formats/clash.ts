@@ -60,6 +60,9 @@ export interface ClashBuildOpts {
   ownPresetRules?: readonly DeviceRouteRule[];
   /** A-236: the operator template to fill; absent = the mihomo Default. */
   frame?: Frame;
+  /** A-236 step 4: the core the file is written for. `clash` (the format) is
+   *  mihomo. Default mihomo. */
+  dialect?: 'mihomo' | 'stash' | 'clash-legacy';
   /**
    * R3 - operator-defined custom domain lists (direct/proxy/block). Each domain
    * becomes a `DOMAIN-SUFFIX` rule emitted at the head of the `rules:` section
@@ -213,6 +216,15 @@ export function buildClashYaml(
         : PROXY_ALL_DNS_LINES;
   const proxies: string[] = [];
   const proxyNames: string[] = [];
+  // A-236 step 4: the dialect. One builder, the fields the three cores spell
+  // differently branched where they differ (Stash: stash.wiki/en/proxy-
+  // protocols/proxy-types; legacy Clash: clash.wiki/configuration/
+  // outbound.html; both read 2026-10-24). Which doors and transports each
+  // dialect carries is the shared tables' (FORMAT_DOORS, TRANSPORT_SUPPORT).
+  const dialect = buildOpts.dialect ?? 'mihomo';
+  const stash = dialect === 'stash';
+  const legacy = dialect === 'clash-legacy';
+  const transportRow = dialect === 'mihomo' ? 'clash' : dialect;
 
   // A Clash proxy name is both the row a person taps and the string every
   // proxy-group and rule points at, so it stays readable and is made unique
@@ -229,7 +241,8 @@ export function buildClashYaml(
         `    type: hysteria2`,
         `    server: ${e.host}`,
         `    port: ${e.port}`,
-        `    password: ${yamlString(e.password)}`,
+        // Stash spells the password `auth`.
+        `    ${stash ? 'auth' : 'password'}: ${yamlString(e.password)}`,
       ];
       if (e.obfsPassword) {
         lines.push(
@@ -251,7 +264,10 @@ export function buildClashYaml(
       // mihomo's `fingerprint` is the sha256 of the certificate DER (colons
       // optional); a leaf that matches is accepted with no other check, so no
       // skip-cert-verify (component/ca/fingerprint.go, read 2026-09-25).
-      if (e.tlsPin) lines.push(`    fingerprint: ${e.tlsPin.certSha256}`);
+      // Stash spells it `server-cert-fingerprint`, a common TLS parameter:
+      // "the SHA256 fingerprint of the server certificate in Hex format"
+      // (stash.wiki/en/proxy-protocols/proxy-types, read 2026-10-24).
+      if (e.tlsPin) lines.push(`    ${stash ? 'server-cert-fingerprint' : 'fingerprint'}: ${e.tlsPin.certSha256}`);
       proxies.push(lines.join('\n'));
     } else if (isPlainXray(e)) {
       // The Telegram doors: mihomo `socks5` / `http` with the user's login.
@@ -283,7 +299,7 @@ export function buildClashYaml(
       // Anything else (kcp everywhere, xhttp off vless) is left out, as the
       // other proxy-line formats leave out what their client does not speak.
       // The shared table decides (A-224).
-      if (!transportServed('clash', e)) continue;
+      if (!transportServed(transportRow, e)) continue;
       proxyNames.push(name);
       // Clash Meta `network` uses "tcp" for our "raw", "ws" for httpupgrade.
       const network =
@@ -309,7 +325,10 @@ export function buildClashYaml(
       }
       block.push(`    network: ${network}`, `    tls: ${useTls}`, `    udp: true`);
       if (useTls && e.sni) {
-        block.push(`    servername: ${yamlString(e.sni)}`);
+        // Stash and legacy Clash name the SNI of vless and trojan `sni`; vmess
+        // keeps `servername` in all three.
+        const sniKey = (stash && sub !== 'vmess') || (legacy && sub === 'trojan') ? 'sni' : 'servername';
+        block.push(`    ${sniKey}: ${yamlString(e.sni)}`);
       }
       // Vision flow needs a TLS-like layer (reality or tls), not plain none.
       if (sub === 'vless' && useTls && e.flow) {
@@ -321,7 +340,8 @@ export function buildClashYaml(
       if (e.allowInsecure) {
         block.push(`    skip-cert-verify: true`);
       }
-      if (useTls && e.fingerprint) {
+      // legacy Clash has no uTLS fingerprint.
+      if (useTls && e.fingerprint && !legacy) {
         block.push(`    client-fingerprint: ${yamlString(e.fingerprint)}`);
       }
       // REALITY material only for the reality layer.
@@ -394,12 +414,15 @@ export function buildClashYaml(
           `    type: tuic`,
           `    server: ${e.host}`,
           `    port: ${e.port}`,
+          // Stash takes v4 and v5 and wants the version said.
+          ...(stash ? ['    version: 5'] : []),
           `    uuid: ${yamlString(e.uuid)}`,
           `    password: ${yamlString(e.password)}`,
           `    congestion-controller: ${yamlString(e.congestionControl || 'bbr')}`,
           `    alpn: [h3]`,
           `    sni: ${yamlString(e.serverName)}`,
-          `    udp-relay-mode: native`,
+          // Not in Stash's documented TUIC fields.
+          ...(stash ? [] : ['    udp-relay-mode: native']),
           `    skip-cert-verify: true`,
         ].join('\n'),
       );
@@ -461,7 +484,8 @@ export function buildClashYaml(
           `    type: mieru`,
           `    server: ${e.host}`,
           `    port: ${e.port}`,
-          `    transport: TCP`,
+          // Stash writes the transport in lower case (`tcp` or `udp`).
+          `    transport: ${stash ? 'tcp' : 'TCP'}`,
           `    username: ${yamlString(e.username)}`,
           `    password: ${yamlString(e.password)}`,
         ].join('\n'),
@@ -472,7 +496,7 @@ export function buildClashYaml(
   // A-236 step 3: the nodes and the panel's routing go into the frame, the
   // operator's template or the Default (templates.defaults.ts, the shape this
   // builder always wrote).
-  return renderClashFrame(buildOpts.frame ?? defaultFrame('mihomo'), {
+  return renderClashFrame(buildOpts.frame ?? defaultFrame(stash ? 'stash' : legacy ? 'clash' : 'mihomo'), {
     proxies,
     proxyNames,
     deviceRules,

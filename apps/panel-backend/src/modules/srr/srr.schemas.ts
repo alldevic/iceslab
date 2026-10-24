@@ -48,12 +48,18 @@ const UaPatternField = z
     if (problem) ctx.addIssue({ code: 'custom', message: problem });
   });
 
+const TemplateNameField = z.string().trim().min(1).max(64);
+
 export const CreateSrrSchema = z.object({
   name: z.string().min(1).max(64),
   uaPattern: UaPatternField,
   format: SrrFormat,
   priority: z.number().int().min(0).max(10000).optional().default(100),
   enabled: z.boolean().optional().default(true),
+  /** A-236: the operator template the matched clients are framed by, of the
+   *  type the format is framed by; null or absent = the Default. Checked
+   *  against the templates in the route. */
+  templateName: TemplateNameField.nullish(),
 });
 
 export type CreateSrrInput = z.infer<typeof CreateSrrSchema>;
@@ -64,6 +70,8 @@ export const UpdateSrrSchema = z.object({
   format: SrrFormat.optional(),
   priority: z.number().int().min(0).max(10000).optional(),
   enabled: z.boolean().optional(),
+  // Absent = not an edit; null = back to the Default.
+  templateName: TemplateNameField.nullable().optional(),
 });
 
 export type UpdateSrrInput = z.infer<typeof UpdateSrrSchema>;

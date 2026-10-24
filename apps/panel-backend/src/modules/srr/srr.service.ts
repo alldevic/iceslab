@@ -23,6 +23,8 @@ interface CompiledRule {
   re: LinearRule;
   format: string;
   name: string;
+  /** A-236: the template the rule's clients are framed by; null = Default. */
+  templateName: string | null;
 }
 let srrCache: { rules: CompiledRule[]; expiresAt: number } | null = null;
 
@@ -39,12 +41,12 @@ async function getCompiledRules(): Promise<CompiledRule[]> {
     // The name rides along for the admin side: "this user gets singbox" is an
     // assertion nobody can check, "rule Happ matched their User-Agent" is one
     // an operator can act on. The serving path ignores it.
-    select: { name: true, uaPattern: true, format: true },
+    select: { name: true, uaPattern: true, format: true, templateName: true },
   });
   const rules: CompiledRule[] = [];
   for (const r of raw) {
     try {
-      rules.push({ re: compileRule(r.uaPattern), format: r.format, name: r.name });
+      rules.push({ re: compileRule(r.uaPattern), format: r.format, name: r.name, templateName: r.templateName });
     } catch {
       // Bad regex, or one the linear engine cannot run (a rule stored before
       // A-019): not served. checkStoredRules names it at start.
@@ -78,12 +80,12 @@ export async function matchFormatForUserAgent(
  */
 export async function matchRuleForUserAgent(
   userAgent: string | null | undefined,
-): Promise<{ name: string; format: string } | null> {
+): Promise<{ name: string; format: string; templateName: string | null } | null> {
   if (!userAgent) return null;
   const ua = userAgent.slice(0, UA_MAX_LENGTH);
   for (const rule of await getCompiledRules()) {
     if (testLinearRule(rule.re, ua)) {
-      return { name: rule.name, format: rule.format };
+      return { name: rule.name, format: rule.format, templateName: rule.templateName };
     }
   }
   return null;

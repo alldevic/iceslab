@@ -42,6 +42,10 @@ model SubscriptionResponseRule {
   // Lower priority = evaluated first. Drag-and-drop UI mutates this.
   priority  Int      @default(100)
   enabled   Boolean  @default(true)
+  // A-236: the operator template the matched client is framed by, by name,
+  // of the type the format is framed by. Null = the Default; a name that no
+  // longer exists falls back to the Default too (not a foreign key).
+  templateName String? @map("template_name") @db.VarChar(64)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 

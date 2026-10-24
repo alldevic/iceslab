@@ -154,14 +154,14 @@ export async function frameFor(type: TemplateType, name: string): Promise<{ foun
 }
 
 /**
- * The template type a subscription format is framed by, for `?template=`.
- * `clash` answers mihomo until the stash and legacy clash answers ship (step
- * 4); a format no template frames answers null.
+ * The template type a subscription format is framed by, for `?template=` and
+ * an SRR rule's templateName. `clash` is the alias of mihomo forever (step
+ * 4), so it is framed by mihomo templates; a format no template frames
+ * answers null.
  */
 export function templateTypeForFormat(format: SubscriptionFormat): TemplateType | null {
   if (format === 'clash') return 'mihomo';
-  const hit = TEMPLATE_TYPES.find((t) => TEMPLATE_FORMATS[t] === format && t !== 'stash' && t !== 'clash');
-  return hit ?? null;
+  return TEMPLATE_TYPES.find((t) => TEMPLATE_FORMATS[t] === format) ?? null;
 }
 
 // ---------------------------------------------------------------- writing

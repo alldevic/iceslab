@@ -51,17 +51,18 @@ describe('the template matrix', () => {
   });
 
   it('writes no door twice: a type with a format of its own reads that format', () => {
-    for (const type of ['mihomo', 'singbox', 'xray-json', 'xray-json-array'] as const) {
+    for (const type of TEMPLATE_TYPES) {
       expect(templateDoors(type)).toBe(FORMAT_DOORS[TEMPLATE_FORMATS[type]]);
     }
   });
 
-  it('Stash: vless with XHTTP and REALITY, no httpupgrade, no ShadowTLS (stash.wiki, 23.10)', () => {
+  it('Stash: vless with XHTTP and REALITY, no httpupgrade, ShadowTLS as an ss plugin (stash.wiki, 24.10)', () => {
     expect(templateCarries('stash', { door: 'vless', network: 'xhttp', xhttpMode: 'stream-one', securityLayer: 'default' })).toBe(true);
     expect(templateCarries('stash', { door: 'trojan', network: 'grpc', securityLayer: 'default' })).toBe(true);
     expect(templateCarries('stash', { door: 'vless', network: 'httpupgrade', securityLayer: 'tls' })).toBe(false);
     expect(templateCarries('stash', { door: 'vmess', network: 'xhttp', securityLayer: 'none' })).toBe(false);
-    expect(templateCarries('stash', { door: 'shadowtls' })).toBe(false);
+    expect(templateCarries('stash', { door: 'shadowtls' })).toBe(true);
+    expect(templateCarries('stash', { door: 'naive' })).toBe(false);
     expect(templateCarries('stash', { door: 'hysteria' })).toBe(true);
   });
 

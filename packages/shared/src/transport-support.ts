@@ -127,19 +127,16 @@ export const TRANSPORT_SUPPORT: Table = {
  * in the editor; the FORMAT is what `/sub` answers with when that template is
  * in force.
  *
- * ⚠ `stash` and `clash` (legacy) frame the `clash` format until their own
- * answers ship (step 4 of the plan): neither is a `?format=` yet, and naming
- * one in TEMPLATE_FORMATS would be a promise this build cannot serve. What
- * they CARRY is already theirs (TEMPLATE_DOORS, TEMPLATE_TRANSPORT), so step 4
- * has only to point the builder at it.
+ * Each type frames its own answer (step 4): mihomo the `mihomo` format (and
+ * its alias `clash`), stash `stash`, the legacy clash type `clash-legacy`.
  */
 export const TEMPLATE_TYPES = ['mihomo', 'stash', 'clash', 'singbox', 'xray-json-array', 'xray-json'] as const;
 export type TemplateType = (typeof TEMPLATE_TYPES)[number];
 
 export const TEMPLATE_FORMATS: Record<TemplateType, SubscriptionFormat> = {
-  mihomo: 'clash',
-  stash: 'clash',
-  clash: 'clash',
+  mihomo: 'mihomo',
+  stash: 'stash',
+  clash: 'clash-legacy',
   singbox: 'singbox',
   'xray-json-array': 'xrayjson-array',
   'xray-json': 'xrayjson',
@@ -155,35 +152,10 @@ export const TEMPLATE_TRANSPORT: Record<TemplateType, SubscriptionTransportForma
   'xray-json': 'xrayjson',
 };
 
-const DOOR_YES: FormatDoor = { carried: true };
-const DOOR_LACKS: FormatDoor = { carried: false, why: 'client-lacks-protocol' };
-
-/**
- * The doors of the two dialects with no format of their own, every door said
- * (a new door is a type error here, and the composition test asks for it). The
- * other types carry what their format carries, FORMAT_DOORS, and are not
- * written twice.
- *   - Stash: ss, socks5, http, vmess, trojan, vless, hysteria2, tuic, anytls,
- *     mieru; no ShadowTLS, NaiveProxy, MTProto; wireguard without the
- *     AmneziaWG obfuscation.
- *   - legacy Clash: ss, socks5, http, vmess, trojan; nothing newer.
- */
-const DIALECT_DOORS: Record<'stash' | 'clash', Record<Door, FormatDoor>> = {
-  stash: {
-    vless: DOOR_YES, vmess: DOOR_YES, trojan: DOOR_YES, socks: DOOR_YES, http: DOOR_YES,
-    hysteria: DOOR_YES, shadowsocks: DOOR_YES, tuic: DOOR_YES, anytls: DOOR_YES, mieru: DOOR_YES,
-    shadowtls: DOOR_LACKS, naive: DOOR_LACKS, amneziawg: DOOR_LACKS, mtproto: DOOR_LACKS,
-  },
-  clash: {
-    vmess: DOOR_YES, trojan: DOOR_YES, socks: DOOR_YES, http: DOOR_YES, shadowsocks: DOOR_YES,
-    vless: DOOR_LACKS, hysteria: DOOR_LACKS, tuic: DOOR_LACKS, anytls: DOOR_LACKS, mieru: DOOR_LACKS,
-    shadowtls: DOOR_LACKS, naive: DOOR_LACKS, amneziawg: DOOR_LACKS, mtproto: DOOR_LACKS,
-  },
-};
-
-/** The doors a template type carries. */
+/** The doors a template type carries: its format's, FORMAT_DOORS, not
+ *  written twice (the Stash and legacy Clash rows live there since step 4). */
 export function templateDoors(type: TemplateType): Record<Door, FormatDoor> {
-  return type === 'stash' || type === 'clash' ? DIALECT_DOORS[type] : FORMAT_DOORS[TEMPLATE_FORMATS[type]];
+  return FORMAT_DOORS[TEMPLATE_FORMATS[type]];
 }
 
 /**

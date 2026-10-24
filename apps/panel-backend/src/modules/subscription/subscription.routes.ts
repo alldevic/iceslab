@@ -21,7 +21,7 @@ import { buildLoonConf } from './formats/loon.js';
 import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
 import { endpointsForFormat, isPlainXray } from './subscription.formats.js';
-import { matchFormatForUserAgent } from '../srr/srr.service.js';
+import { matchRuleForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
 import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
 import type { Frame } from './subscription.frames.js';
@@ -107,7 +107,16 @@ const QuerySchema = z.object({
  * words: JSON has no comments, and a base64 list or a key with a stray line in
  * it is a broken subscription rather than an empty one.
  */
-const COMMENTED_FORMATS: ReadonlySet<Format> = new Set<Format>(['clash', 'wgconf', 'surge', 'quantumultx', 'loon']);
+const COMMENTED_FORMATS: ReadonlySet<Format> = new Set<Format>([
+  'clash',
+  'mihomo',
+  'stash',
+  'clash-legacy',
+  'wgconf',
+  'surge',
+  'quantumultx',
+  'loon',
+]);
 
 /** Formats that carry ONE server, picked by `?node=`, and the protocol it is. */
 const SINGLE_SERVER_FORMATS: Partial<Record<Format, string>> = {
@@ -254,19 +263,23 @@ async function applySubscriptionHeaders(
   }
 }
 
+/**
+ * The format, and the template the SRR rule that chose it names (A-236 step
+ * 4; null when no rule chose, or the rule names none).
+ */
 async function resolveFormat(
   query: z.infer<typeof QuerySchema>,
   acceptHeader: string,
   userAgent: string | null,
-): Promise<Format> {
-  if (query.format) return query.format;
-  const matched = await matchFormatForUserAgent(userAgent);
-  if (matched && isFormat(matched)) return matched;
-  if (acceptHeader.toLowerCase().includes('application/json')) return 'json';
+): Promise<{ format: Format; ruleTemplate: string | null }> {
+  if (query.format) return { format: query.format, ruleTemplate: null };
+  const matched = await matchRuleForUserAgent(userAgent);
+  if (matched && isFormat(matched.format)) return { format: matched.format, ruleTemplate: matched.templateName };
+  if (acceptHeader.toLowerCase().includes('application/json')) return { format: 'json', ruleTemplate: null };
   // Last resort, and since 2026-09-21 the operator's choice rather than ours.
   // plain stays the default of that setting: it is the one form every
   // client can read, so an operator who has not decided keeps what worked.
-  return (await getSubscriptionSettings()).defaultFormat;
+  return { format: (await getSubscriptionSettings()).defaultFormat, ruleTemplate: null };
 }
 
 // Wave-14 #6: a browser navigating to /sub/<token> should see a human page,
@@ -463,7 +476,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
     const userAgent = typeof request.headers['user-agent'] === 'string'
       ? request.headers['user-agent']
       : null;
-    const format = await resolveFormat(
+    const { format, ruleTemplate } = await resolveFormat(
       query,
       (request.headers.accept ?? '').toString(),
       userAgent,
@@ -533,11 +546,17 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       if (userMin && query.template !== undefined && !templateType) {
         return reply.code(400).send({
           error: 'TEMPLATE_NOT_FOR_FORMAT',
-          message: `the ${format} format takes no template; templates frame clash, singbox, xrayjson and xrayjson-array`,
+          message: `the ${format} format takes no template; templates frame mihomo, clash, stash, clash-legacy, singbox, xrayjson and xrayjson-array`,
         });
       }
       if (userMin && templateType) {
-        const picked = await frameFor(templateType, query.template ?? 'Default');
+        // Step 4: an explicit ?template= first, then the template the SRR
+        // rule that chose the format names. A rule's template that was deleted
+        // since falls back to the Default instead of failing every client the
+        // rule serves; only an explicit name is refused.
+        const named = query.template ?? ruleTemplate ?? 'Default';
+        let picked = await frameFor(templateType, named);
+        if (!picked.found && query.template === undefined) picked = await frameFor(templateType, 'Default');
         if (!picked.found) {
           return reply.code(404).send({
             error: 'TEMPLATE_NOT_FOUND',
@@ -786,6 +805,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       let tlsFragment = false;
       if (
         format === 'clash' ||
+        format === 'mihomo' ||
+        format === 'stash' ||
+        format === 'clash-legacy' ||
         format === 'singbox' ||
         format === 'xrayjson' ||
         format === 'xrayjson-array' ||
@@ -894,10 +916,24 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           return reply
             .type('application/json')
             .send({ ...result.json, endpoints: served });
+        // A-236 step 4: three Clash-family answers by core. `clash` is the
+        // alias of mihomo for good (the address is in clients' configs), byte
+        // for byte what it always answered.
         case 'clash':
+        case 'mihomo':
+        case 'stash':
+        case 'clash-legacy':
           return reply
             .type('text/yaml; charset=utf-8')
-            .send(buildClashYaml(served, { routingPreset, ownPresetRules, customDomainLists, frame }));
+            .send(
+              buildClashYaml(served, {
+                routingPreset,
+                ownPresetRules,
+                customDomainLists,
+                frame,
+                dialect: format === 'clash' ? 'mihomo' : format,
+              }),
+            );
         case 'singbox': {
           // TLS-fragment is intentionally NOT emitted for sing-box: the
           // upstream field is unstable across 1.12/1.14 (same rationale as the

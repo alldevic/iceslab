@@ -44,7 +44,13 @@ async function run(stmts: string[]) {
 
 /** The old seeds: only their INSERTs, the table itself exists already. */
 const seed = () => run(SEEDS.flatMap((d) => statements(d, /^INSERT INTO/)));
-const migrate = () => run(statements(CATALOG));
+// The catalog migration, then A-236's move to the core families (its data
+// statement only: the column it adds is already in the test database).
+const FAMILIES = '20261024183834_srr_core_families';
+const migrate = async () => {
+  await run(statements(CATALOG));
+  await run(statements(FAMILIES, /^UPDATE/));
+};
 
 async function rules() {
   return prisma.subscriptionResponseRule.findMany({
@@ -91,8 +97,10 @@ describe('the seed migrations and the catalog', () => {
 
     // Still as seeded in pattern and format: rewritten, the operator's order kept.
     expect(byName.Clash).toMatchObject({ uaPattern: '(?i)clash|mihomo', priority: 35 });
-    expect(byName['NekoBox/NekoRay']).toMatchObject({ format: 'clash' });
-    expect(byName.Stash).toMatchObject({ uaPattern: '(?i)stash', format: 'clash' });
+    // ...and then moved to their core families (A-236 step 4).
+    expect(byName.Clash).toMatchObject({ format: 'mihomo' });
+    expect(byName['NekoBox/NekoRay']).toMatchObject({ format: 'mihomo' });
+    expect(byName.Stash).toMatchObject({ uaPattern: '(?i)stash', format: 'stash' });
     // Edited by the operator: left as the operator left it.
     expect(byName.Surge).toMatchObject({ uaPattern: '(?i)surge|my-surge' });
     expect(byName.Loon).toMatchObject({ uaPattern: '(?i)loon', format: 'plain' });

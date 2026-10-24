@@ -105,7 +105,12 @@ function transportFormatOf(format: SubscriptionFormat, door: Door): Subscription
     case 'xrayjson-array':
     case 'xkeen':
       return 'xrayjson';
+    // clash is the alias of mihomo; the transport table's `clash` row is mihomo.
     case 'clash':
+    case 'mihomo':
+      return 'clash';
+    case 'stash':
+    case 'clash-legacy':
     case 'singbox':
     case 'quantumultx':
     case 'loon':
