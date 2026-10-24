@@ -28,6 +28,7 @@ import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
+import { cardCountries } from '@/contours/squads/lib/squadView';
 import { squadExitsSummary } from '@/contours/squads/lib/squadCascades';
 import { AMBER, CARD, CYAN, DIM, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/squads/lib/colors';
 
@@ -71,7 +72,8 @@ export function SquadsPage() {
       notifications.show({
         color: 'red',
         title: t('common.deleteError'),
-        message: err instanceof Error ? err.message : String(err),
+        // A-239, c: the server's words (403 PROTECTED on «All»), not axios's.
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -264,7 +266,7 @@ export function SquadsPage() {
             <SquadCard
               key={squad.id}
               squad={squad}
-              countries={countriesOf(squad)}
+              countries={cardCountries(countriesOf(squad), bindingsQuery, nodesQuery)}
               cascadeIds={cascadeIds}
               onEdit={() => navigate(`/squads/${squad.id}`)}
               onDelete={() => handleDelete(squad)}
@@ -342,7 +344,8 @@ function SquadCard({
   onDelete,
 }: {
   squad: Squad;
-  countries: string[];
+  /** Null: the binding or node list did not arrive, the countries are unknown (A-239, b). */
+  countries: readonly string[] | null;
   cascadeIds: ReadonlySet<string>;
   onEdit: () => void;
   onDelete: () => void;
@@ -496,7 +499,9 @@ function SquadCard({
           <Text style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '0.12em', color: FAINT }}>
             {t('squads.card.hosts')}
           </Text>
-          {countries.length === 0 ? (
+          {countries === null ? (
+            <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>-</Text>
+          ) : countries.length === 0 ? (
             <Box style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <IconAlertTriangle size={12} stroke={2} color={AMBER} />
               <Text style={{ fontFamily: MONO, fontSize: 11, color: AMBER }}>

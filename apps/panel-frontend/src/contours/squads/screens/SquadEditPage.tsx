@@ -39,7 +39,8 @@ import { COUNTRIES, countryName } from '@/lib/domain/countries';
 import { assignedPresetGone, presetChoiceOf, presetChoicePatch, presetChoiceRows, presetKey } from '@/lib/domain/routingPresets';
 import { apiErrorMessage } from '@/lib/net/client';
 import { editGate, loadView } from '@/lib/ui/loadView';
-import { LoadFailed } from '@/ui/LoadFailed';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
+import { sectionState } from '@/contours/squads/lib/squadView';
 import {
   aclIdsOf,
   canonicalAcl,
@@ -890,9 +891,7 @@ export function SquadEditPage() {
               </Chip>
             </Box>
             <Hint>{isAll ? t('squadEdit.profilesAll') : t('squadEdit.profilesHint')}</Hint>
-            {allProfiles.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noProfiles')}</Text>
-            )}
+            <SectionLists lists={[profilesQuery]} count={allProfiles.length} empty={t('squadEdit.noProfiles')} />
             {!isAll && profileIds.length === 0 && allProfiles.length > 0 && (
               // A squad with no profiles hands out an empty subscription. That is
               // a valid state to pass through while editing and a bad one to
@@ -1034,9 +1033,11 @@ export function SquadEditPage() {
               </Box>
             </Box>
 
-            {groups.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noHosts')}</Text>
-            )}
+            <SectionLists
+              lists={[hostsQuery, bindingsQuery, nodesQuery, profilesQuery]}
+              count={groups.length}
+              empty={t('squadEdit.noHosts')}
+            />
 
             {/* No restriction is a state, not an empty selection, and it needs
                 saying out loud: a wall of ticked boxes with no explanation
@@ -1227,9 +1228,11 @@ export function SquadEditPage() {
               {isNew && <Chip accent={FAINT}>{t('squadEdit.optional')}</Chip>}
             </Box>
             <Hint>{isAll ? t('squadEdit.cascadeDirectionsAll') : t('squadEdit.cascadeDirectionsHint')}</Hint>
-            {cascadeRows.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noDirections')}</Text>
-            )}
+            <SectionLists
+              lists={[cascadesQuery, hostsQuery, bindingsQuery, nodesQuery]}
+              count={cascadeRows.length}
+              empty={t('squadEdit.noDirections')}
+            />
             {cascadeRows.map((c) => {
               // The grants stay exactly as they are when the entry is not
               // handed out; only the showing goes quiet. Put the entry host
@@ -1423,9 +1426,7 @@ export function SquadEditPage() {
               {isNew && <Chip accent={FAINT}>{t('squadEdit.optional')}</Chip>}
             </Box>
             <Hint>{isAll ? t('squadEdit.routePoliciesAll') : t('squadEdit.routePoliciesHint')}</Hint>
-            {policies.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('routes.empty')}</Text>
-            )}
+            <SectionLists lists={[policiesQuery]} count={policies.length} empty={t('routes.empty')} />
             {isAll && policies.length > 0 && (
               <Box
                 style={{
@@ -1578,6 +1579,30 @@ export function SquadEditPage() {
 }
 
 // ───── Pieces ─────
+
+/**
+ * What a section says when it has nothing to draw (A-239): a list it is drawn
+ * from failed (the server's words and a retry), is on its way, or arrived and
+ * the section is empty. Nothing when the section has rows.
+ */
+function SectionLists({
+  lists,
+  count,
+  empty,
+}: {
+  lists: { data: unknown; isError: boolean; error: unknown; refetch: () => unknown }[];
+  count: number;
+  empty: string;
+}) {
+  const { t } = useTranslation();
+  const state = sectionState(lists, count);
+  if (state.kind === 'failed') {
+    const q = lists[state.index]!;
+    return <LoadFailedLine message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
+  if (state.kind === 'list') return null;
+  return <Text style={{ fontSize: 12, color: MIST }}>{state.kind === 'loading' ? t('common.loading') : empty}</Text>;
+}
 
 function Card({ children }: { children: ReactNode }) {
   return (
