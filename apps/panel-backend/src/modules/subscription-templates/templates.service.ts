@@ -10,6 +10,7 @@ import {
   isReservedName,
 } from './templates.defaults.js';
 import { checkTemplateBody } from './templates.parse.js';
+import { readFrame, type Frame } from '../subscription/subscription.frames.js';
 
 /**
  * A-236 step 2: subscription templates, the API contract 4.5a
@@ -93,6 +94,9 @@ function codeDefault(type: TemplateType): PublicTemplate {
  * subscription reads a template on every request, the operator writes one a
  * day. Dropped on every write here; a write through another process (a raw
  * SQL edit) is seen when the entry ages out.
+ * With several panel processes a write in one reaches the others only when
+ * their entry ages out, up to the TTL; after the api/worker/sub split (E4) the
+ * drop goes over a shared channel.
  */
 const CACHE_TTL_MS = 60_000;
 let cache: { at: number; rows: Row[] } | null = null;
@@ -134,6 +138,19 @@ export async function findTemplate(type: TemplateType, name: string): Promise<Pu
   const row = all.find((r) => r.type === type && r.name === name);
   if (row) return toDto(row);
   return name === DEFAULT_TEMPLATE_NAME ? codeDefault(type) : null;
+}
+
+/**
+ * The frame a subscription is built with: the template of `type` named
+ * `name`, read. `frame` is absent for the code Default, so the builders take
+ * their own Default (and the bundles that only the Default knows); `found`
+ * is false for a name the type does not have.
+ */
+export async function frameFor(type: TemplateType, name: string): Promise<{ found: boolean; frame?: Frame }> {
+  const all = await rows();
+  const row = all.find((r) => r.type === type && r.name === name);
+  if (row) return { found: true, frame: readFrame(type, row.body) };
+  return { found: name === DEFAULT_TEMPLATE_NAME };
 }
 
 /**

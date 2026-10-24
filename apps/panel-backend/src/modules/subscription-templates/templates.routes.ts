@@ -4,12 +4,12 @@ import { TEMPLATE_TYPES } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
 import { TemplateInvalidError } from './templates.parse.js';
 import * as service from './templates.service.js';
+import { dryRun } from './templates.dryrun.js';
 
 /**
  * A-236 step 2: /api/subscription-templates, the API contract 4.5a
- * (docs/plan/subscription-templates.md). The dry run (POST /dry-run) comes
- * with the rendering in step 3, the import (POST /import) with step 8; until
- * then they answer 404, which the screen reads as "not here yet".
+ * (docs/plan/subscription-templates.md). The import (POST /import) comes with
+ * step 8; until then it answers 404, which the screen reads as "not here yet".
  */
 
 /** 256 KiB: a big operator template is a few hundred lines. */
@@ -22,6 +22,7 @@ const CreateSchema = z.object({ type: z.enum(TEMPLATE_TYPES), name: Name, body: 
 // format is not a frame of another).
 const UpdateSchema = z.object({ name: Name.optional(), body: Body.optional() });
 const IdParam = z.object({ id: z.uuid() });
+const DryRunSchema = z.object({ type: z.enum(TEMPLATE_TYPES), body: Body });
 
 function refusal(reply: FastifyReply, err: unknown): FastifyReply | null {
   if (err instanceof TemplateInvalidError) {
@@ -67,6 +68,12 @@ export async function subscriptionTemplatesRoutes(app: FastifyInstance): Promise
   app.post('/api/subscription-templates', auth, guarded(async (req, reply) => {
     const input = CreateSchema.parse(req.body);
     return reply.code(201).send(await service.createTemplate(input));
+  }));
+
+  // Step 3: the body filled with three synthetic nodes, with the core's answer.
+  app.post('/api/subscription-templates/dry-run', auth, guarded(async (req, reply) => {
+    const input = DryRunSchema.parse(req.body);
+    return reply.send(await dryRun(input.type, input.body));
   }));
 
   app.put('/api/subscription-templates/:id', auth, guarded(async (req, reply) => {

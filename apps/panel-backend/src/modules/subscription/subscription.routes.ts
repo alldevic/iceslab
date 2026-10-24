@@ -23,7 +23,8 @@ import { subscriptionUrl } from './subscription.link.js';
 import { endpointsForFormat, isPlainXray } from './subscription.formats.js';
 import { matchFormatForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
-import { findTemplate, templateTypeForFormat } from '../subscription-templates/templates.service.js';
+import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
+import type { Frame } from './subscription.frames.js';
 import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import {
   formatBytes,
@@ -469,27 +470,6 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
     );
     subscriptionRequests.inc({ format });
 
-    // A-236: `?template=<name>` picks the operator template the file is framed
-    // by. Checked here, by name, before any work: a format no template frames,
-    // or a name the type does not have, is a refusal in words, not a silent
-    // Default. The frame changes the output with step 3 (the builders filling
-    // the frame); until then the check is all it does.
-    if (query.template !== undefined) {
-      const type = templateTypeForFormat(format);
-      if (!type) {
-        return reply.code(400).send({
-          error: 'TEMPLATE_NOT_FOR_FORMAT',
-          message: `the ${format} format takes no template; templates frame clash, singbox, xrayjson and xrayjson-array`,
-        });
-      }
-      if (!(await findTemplate(type, query.template))) {
-        return reply.code(404).send({
-          error: 'TEMPLATE_NOT_FOUND',
-          message: `no ${type} template named ${JSON.stringify(query.template)}`,
-        });
-      }
-    }
-
     // Tier-1 honey-user tripwire. If the requested token is on the admin's
     // canary list, the token by definition was leaked from where it was
     // planted (pastebin, screenshot, dropped USB, …). Alert immediately,
@@ -535,6 +515,38 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           groupMembers: { select: { group: { select: { hwidDeviceLimit: true } } } },
         },
       });
+
+      // A-236: `?template=<name>` picks the operator template the file is
+      // framed by; a format no template frames, or a name the type does not
+      // have, is a refusal in words, not a silent Default. Asked only here
+      // (A-243): after the honey-token trap above, so a leaked canary with a
+      // made-up template still trips it, and only for a token that exists, so
+      // the operator's template names cannot be probed with any string in
+      // place of a token (an unknown token answers 404 the same with or
+      // without a template, below). Before the HWID check, so a refused
+      // request does not register a device.
+      // The frame itself (step 3): the named template, or the type's Default
+      // (absent while it is the code's, so the builders' own Default and its
+      // bundles stand).
+      let frame: Frame | undefined;
+      const templateType = templateTypeForFormat(format);
+      if (userMin && query.template !== undefined && !templateType) {
+        return reply.code(400).send({
+          error: 'TEMPLATE_NOT_FOR_FORMAT',
+          message: `the ${format} format takes no template; templates frame clash, singbox, xrayjson and xrayjson-array`,
+        });
+      }
+      if (userMin && templateType) {
+        const picked = await frameFor(templateType, query.template ?? 'Default');
+        if (!picked.found) {
+          return reply.code(404).send({
+            error: 'TEMPLATE_NOT_FOUND',
+            message: `no ${templateType} template named ${JSON.stringify(query.template)}`,
+          });
+        }
+        frame = picked.frame;
+      }
+
       if (userMin) {
         // K7 - explicit per-user limit wins, 0 there is an explicit no-limit
         // (A-148); otherwise the most-permissive squad default.
@@ -885,7 +897,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         case 'clash':
           return reply
             .type('text/yaml; charset=utf-8')
-            .send(buildClashYaml(served, { routingPreset, ownPresetRules, customDomainLists }));
+            .send(buildClashYaml(served, { routingPreset, ownPresetRules, customDomainLists, frame }));
         case 'singbox': {
           // TLS-fragment is intentionally NOT emitted for sing-box: the
           // upstream field is unstable across 1.12/1.14 (same rationale as the
@@ -899,7 +911,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules }));
+            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame }));
         }
         case 'wgconf': {
           // Filename = `<username>-<node>.conf` so a user with several AWG
@@ -931,7 +943,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per
@@ -940,7 +952,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // `bundle` (no balancer: the client picks a server, not an outbound).
           return reply
             .type('application/json')
-            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame }));
         }
         case 'xkeen': {
           // XKeen (xray-core on Keenetic routers): outbounds + routing +

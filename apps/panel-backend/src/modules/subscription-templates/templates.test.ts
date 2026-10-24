@@ -7,7 +7,8 @@ import type { FastifyInstance } from 'fastify';
 import { TEMPLATE_TYPES, type TemplateType } from '@iceslab/shared';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
-import { closeRedis } from '../../lib/infra/redis.js';
+import { closeRedis, redis } from '../../lib/infra/redis.js';
+import { config } from '../../config.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { DEFAULT_TEMPLATE_BODIES, DEFAULT_TEMPLATE_IDS } from './templates.defaults.js';
@@ -186,6 +187,38 @@ describe('/api/subscription-templates', () => {
     expect(JSON.parse(restore.body).error).toBe('TEMPLATE_NOT_DEFAULT');
     expect((await app.inject({ method: 'DELETE', url: `/api/subscription-templates/${made.id}`, headers: auth() })).statusCode).toBe(204);
     expect((await app.inject({ method: 'DELETE', url: `/api/subscription-templates/${made.id}`, headers: auth() })).statusCode).toBe(404);
+  });
+
+  it('A-243: a honey token with a made-up template still trips the trap, alert and ban', async () => {
+    const honey = 'honey-token-a243-xxxxxxxx';
+    config.HONEY_USER_TOKENS.push(honey);
+    const ip = '8.8.4.4';
+    await redis.del(`sec:blacklist:${ip}`);
+    try {
+      const res = await app.inject({
+        method: 'GET', url: `/sub/${honey}?format=singbox&template=no-such-template`, remoteAddress: ip,
+      });
+      // The trap's answer: a plausible empty 200, not a 404 about the template.
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe('');
+      expect(await redis.get(`sec:blacklist:${ip}`)).toBe('1');
+    } finally {
+      config.HONEY_USER_TOKENS.splice(config.HONEY_USER_TOKENS.indexOf(honey), 1);
+      await redis.del(`sec:blacklist:${ip}`);
+    }
+  });
+
+  it('A-243: an unknown token answers the same with a template that exists and one that does not', async () => {
+    await app.inject({
+      method: 'POST', url: '/api/subscription-templates', headers: auth(),
+      payload: { type: 'singbox', name: 'exists', body: '{}' },
+    });
+    const ask = (name: string) => app.inject({ method: 'GET', url: `/sub/not-a-real-token-123456?format=singbox&template=${name}` });
+    const [known, unknown] = await Promise.all([ask('exists'), ask('does-not-exist')]);
+    expect(known.statusCode).toBe(unknown.statusCode);
+    expect(known.body).toBe(unknown.body);
+    expect(known.statusCode).toBe(404);
+    expect(JSON.parse(known.body).error).not.toBe('TEMPLATE_NOT_FOUND');
   });
 
   it('?template= on /sub: a name the type has passes, an unknown one and a format without templates are refused', async () => {

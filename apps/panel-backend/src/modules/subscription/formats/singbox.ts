@@ -3,6 +3,7 @@ import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { singboxDeviceRoute } from '../subscription.device-rules.js';
+import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
 
 /**
  * Sing-box JSON subscription formatter (sing-box 1.10+).
@@ -46,6 +47,8 @@ export interface SingboxBuildOpts {
   routingPreset?: RoutingPresetId;
   /** A-229: an own preset's rules, in place of the built-in preset's. */
   ownPresetRules?: readonly DeviceRouteRule[];
+  /** A-236: the operator template to fill; absent = the Default in the code. */
+  frame?: Frame;
 }
 
 /**
@@ -341,70 +344,87 @@ export function buildSingboxJson(
     }
   }
 
-  // Slice 29: `url-test` group (auto-failover by latency). Default still
-  // emits the legacy `selector` so manual-pick UIs (Hiddify "Connect to:")
-  // keep working; admins flip to url-test via `?bundle=url-test`.
-  const bundle = opts.bundle ?? 'selector';
-  let primaryTag = 'direct';
-  if (proxyTags.length > 0) {
-    if (bundle === 'url-test') {
-      outbounds.push({
-        type: 'urltest',
-        tag: 'Auto-URLTest',
-        outbounds: proxyTags,
-        url: opts.urltestProbeUrl ?? 'https://www.gstatic.com/generate_204',
-        interval: `${opts.urltestIntervalSec ?? 300}s`,
-        tolerance: 50,
-      });
-      primaryTag = 'Auto-URLTest';
-    } else {
-      outbounds.push({
-        type: 'selector',
-        tag: 'Auto',
-        outbounds: [...proxyTags, 'direct'],
-        default: proxyTags[0],
-      });
-      primaryTag = 'Auto';
+  // A-236 step 3: the nodes go into the frame, the operator's template or the
+  // Default (templates.defaults.ts, the shape this builder always wrote: a
+  // single tun inbound, a selector, direct, route.final; no `dns`, no
+  // `experimental`, no mixed/socks/http inbound, which would open a localhost
+  // proxy port). Slice 29's `?bundle=url-test` swaps the Default's selector
+  // for a url-test group; a template of the operator's has its own groups and
+  // the bundle does not touch them.
+  const frame =
+    opts.frame ?? (opts.bundle === 'url-test' ? urltestDefault(opts) : defaultFrame('singbox'));
+  return fillSingboxFrame(frame, outbounds, proxyTags, deviceRules) + '\n';
+}
+
+const GROUP_TYPES = new Set(['selector', 'urltest']);
+
+/** The Default with Slice 29's url-test group in place of the selector. */
+function urltestDefault(opts: SingboxBuildOpts): Frame {
+  const f = structuredClone(defaultFrame('singbox'));
+  f.outbounds = asArray(f.outbounds).map((o) =>
+    asObject(o).type === 'selector'
+      ? {
+          type: 'urltest',
+          tag: 'Auto-URLTest',
+          outbounds: [],
+          url: opts.urltestProbeUrl ?? 'https://www.gstatic.com/generate_204',
+          interval: `${opts.urltestIntervalSec ?? 300}s`,
+          tolerance: 50,
+        }
+      : o,
+  );
+  f.route = { ...asObject(f.route), final: 'Auto-URLTest' };
+  return f;
+}
+
+/**
+ * The nodes into a sing-box frame:
+ *   - their outbounds go first in `outbounds`;
+ *   - every `selector` and `urltest` group gets the node tags in front of its
+ *     own members, and a selector with no `default` gets the first node;
+ *   - with no node at all, the groups that would hold them go, and every
+ *     reference to one (route.final, a rule's outbound) becomes `direct`;
+ *   - `iceslab.routing: preset` puts the preset's rules and rule-sets ahead of
+ *     the frame's own; a `proxy` rule goes where route.final goes.
+ * JSON.stringify with two spaces, as this builder always wrote.
+ */
+function fillSingboxFrame(
+  frame: Frame,
+  proxyOutbounds: Record<string, unknown>[],
+  proxyTags: string[],
+  deviceRules: readonly DeviceRouteRule[],
+): string {
+  const { cfg, routing } = openFrame(frame);
+  const own = asArray(cfg.outbounds).map(asObject);
+  const gone = new Set<string>();
+  const groups = own.flatMap((o) => {
+    if (!GROUP_TYPES.has(String(o.type))) return [o];
+    if (proxyTags.length === 0) {
+      gone.add(String(o.tag));
+      return [];
     }
+    o.outbounds = [...proxyTags, ...asArray(o.outbounds)];
+    if (o.type === 'selector' && o.default === undefined) o.default = proxyTags[0];
+    return [o];
+  });
+  cfg.outbounds = [...proxyOutbounds, ...groups];
+
+  const route = asObject(cfg.route);
+  if (typeof route.final === 'string' && gone.has(route.final)) route.final = 'direct';
+  const ownRules = asArray(route.rules).map((r) => {
+    const rule = asObject(r);
+    return typeof rule.outbound === 'string' && gone.has(rule.outbound) ? { ...rule, outbound: 'direct' } : rule;
+  });
+  const target = proxyTags.length > 0 && typeof route.final === 'string' ? route.final : null;
+  const preset = routing ? singboxDeviceRoute(deviceRules, target) : { rules: [], ruleSets: [] };
+  const rules = [...preset.rules, ...ownRules];
+  const ruleSets = [...preset.ruleSets, ...asArray(route.rule_set)];
+  const rest = Object.fromEntries(Object.entries(route).filter(([k]) => k !== 'rules' && k !== 'rule_set'));
+  if (cfg.route !== undefined || rules.length > 0) {
+    cfg.route = {
+      ...(rules.length > 0 ? { rules, ...(ruleSets.length > 0 ? { rule_set: ruleSets } : {}) } : {}),
+      ...rest,
+    };
   }
-  outbounds.push({ type: 'direct', tag: 'direct' });
-
-  // A `proxy` rule routes to the group the catch-all uses; with no proxy it is
-  // left out.
-  const route = singboxDeviceRoute(deviceRules, proxyTags.length > 0 ? primaryTag : null);
-
-  // R3 - operator custom domain lists are not emitted for sing-box: a choice,
-  // not a limit. The reason once written here ("no portable inline-domain
-  // route-rule vehicle post-1.12") is wrong: 1.12 dropped geosite:/geoip:,
-  // not inline matchers, and route rules with domain_suffix, domain_keyword,
-  // ip_cidr and port pass `sing-box check` on 1.13.14 (A-229 part 4, the
-  // own-preset config in subscription.device-rules.test.ts). Carrying the
-  // lists here is open work; until then xray/xkeen + clash carry them.
-  const config = {
-    log: { level: 'info', timestamp: true },
-    // A single minimal tun inbound. Happ and the sing-box CLI reject a config
-    // with no `inbounds` as invalid and fall back to the routing-less plain
-    // format; Hiddify/NekoBox inject their own OS-managed tun and override this,
-    // so they are unaffected. Deliberately NO mixed/socks/http inbound: that
-    // would open a listening localhost proxy port (a leak surface). tun only.
-    inbounds: [
-      {
-        type: 'tun',
-        tag: 'tun-in',
-        address: ['172.18.0.1/30', 'fdfe:dcba:9876::1/126'],
-        auto_route: true,
-        strict_route: false,
-        stack: 'mixed',
-      },
-    ],
-    outbounds,
-    route: {
-      ...(route.rules.length > 0
-        ? { rules: route.rules, ...(route.ruleSets.length > 0 ? { rule_set: route.ruleSets } : {}) }
-        : {}),
-      final: primaryTag,
-      auto_detect_interface: true,
-    },
-  };
-  return JSON.stringify(config, null, 2) + '\n';
+  return JSON.stringify(cfg, null, 2);
 }

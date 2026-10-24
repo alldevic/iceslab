@@ -3,6 +3,8 @@ import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { clashDeviceRuleLines, clashNeedsGeo } from '../subscription.device-rules.js';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
 
 /**
  * Clash YAML subscription formatter (targets Clash Meta / Mihomo, covers
@@ -56,6 +58,8 @@ export interface ClashBuildOpts {
   routingPreset?: RoutingPresetId;
   /** A-229: an own preset's rules, in place of the built-in preset's. */
   ownPresetRules?: readonly DeviceRouteRule[];
+  /** A-236: the operator template to fill; absent = the mihomo Default. */
+  frame?: Frame;
   /**
    * R3 - operator-defined custom domain lists (direct/proxy/block). Each domain
    * becomes a `DOMAIN-SUFFIX` rule emitted at the head of the `rules:` section
@@ -465,63 +469,180 @@ export function buildClashYaml(
     }
   }
 
-  // A `proxy` rule goes to the Auto group; with no proxy it is left out.
-  const splitRuleLines = clashDeviceRuleLines(deviceRules, proxyNames.length > 0 ? 'Auto' : null);
+  // A-236 step 3: the nodes and the panel's routing go into the frame, the
+  // operator's template or the Default (templates.defaults.ts, the shape this
+  // builder always wrote).
+  return renderClashFrame(buildOpts.frame ?? defaultFrame('mihomo'), {
+    proxies,
+    proxyNames,
+    deviceRules,
+    dnsLines,
+    customDomainLists: buildOpts.customDomainLists,
+  });
+}
+
+/** A scalar the way the YAML library writes it plain or quoted. */
+function scalar(v: unknown): string {
+  return stringifyYaml(v, { lineWidth: 0 }).trimEnd();
+}
+
+/** `key: value` lines of any value, each prefixed. */
+function keyLines(key: string, value: unknown, prefix: string): string[] {
+  return stringifyYaml({ [key]: value }, { lineWidth: 0 }).trimEnd().split('\n').map((l) => prefix + l);
+}
+
+/**
+ * The nodes and the panel's routing into a Clash-family frame (mihomo; stash
+ * and legacy clash with step 4). The frame is written back key by key, in its
+ * order, in the style this builder always wrote, so the Default comes out byte
+ * for byte as before (golden):
+ *   - where `iceslab:` stood, under `routing: preset`: the geo databases (when
+ *     the rules name them and the frame has no geox-url of its own) and the
+ *     preset's DNS (when the frame has no `dns` of its own);
+ *   - `proxies`: the frame's own, then the nodes;
+ *   - `proxy-groups`: each group gets the node names after its own members,
+ *     as its `iceslab:` says (include-proxies false: none; select-random-proxy:
+ *     one; shuffle-proxies-order: shuffled). A group left with no member at
+ *     all is dropped, and a rule or group that named it gets DIRECT / loses it;
+ *   - `proxy-providers` with `iceslab: { include-proxies: true }` get the nodes
+ *     as their payload;
+ *   - `rules`: under `routing: preset` the operator's custom domain lists and
+ *     the preset's lines first, then the frame's own;
+ *   - anything else as the YAML library writes it.
+ * A frame with no `proxies` key gets one at the end: the nodes always go out.
+ */
+export function renderClashFrame(
+  frame: Frame,
+  p: {
+    proxies: string[];
+    proxyNames: string[];
+    deviceRules: readonly DeviceRouteRule[];
+    dnsLines: readonly string[];
+    customDomainLists?: { direct: string[]; proxy: string[]; block: string[] };
+  },
+): string {
+  const { cfg, routing } = openFrame(frame);
+  const nodeNames = new Set(p.proxyNames);
+
+  // Groups first: which receive nodes, which go.
+  const groups = asArray(cfg['proxy-groups']).map((g) => {
+    const group = asObject(g);
+    const svc = asObject(group.iceslab);
+    delete group.iceslab;
+    let nodes = [...p.proxyNames];
+    if (svc['include-proxies'] === false) nodes = [];
+    else if (svc['select-random-proxy'] === true) nodes = nodes.length ? [nodes[Math.floor(Math.random() * nodes.length)]!] : [];
+    else if (svc['shuffle-proxies-order'] === true) nodes = nodes.sort(() => Math.random() - 0.5);
+    group.proxies = [...asArray(group.proxies).map(String), ...nodes];
+    return group;
+  });
+  // A group with no member and nothing that fills it in the client (`use`,
+  // `include-all*`; wiki.metacubex.one/en/config/proxy-groups, read 24.10) is
+  // left out: mihomo would route it to its empty-fallback, which is not what a
+  // rule naming the group meant. Today's Default with no node drops its Auto
+  // group and says MATCH,DIRECT, as the builder always did.
+  const fedByClient = (g: Frame) =>
+    asArray(g.use).length > 0 || g['include-all'] === true || g['include-all-proxies'] === true || g['include-all-providers'] === true;
+  const dropped = new Set(
+    groups.filter((g) => asArray(g.proxies).length === 0 && !fedByClient(g)).map((g) => String(g.name)),
+  );
+  const kept = groups
+    .filter((g) => !dropped.has(String(g.name)))
+    .map((g): Frame => ({ ...g, proxies: asArray(g.proxies).filter((m) => !dropped.has(String(m))) }));
+  // Where the panel's `proxy` rules go: the first group that holds a node.
+  const target =
+    kept.find((g) => asArray(g.proxies).some((m) => nodeNames.has(String(m))))?.name as string | undefined;
 
   const lines: string[] = [];
-  // The geo databases are fetched only when the rules name them (GEOSITE /
-  // GEOIP). DNS is emitted for every preset.
-  if (clashNeedsGeo(deviceRules)) {
-    lines.push(...SPLIT_GEO_LINES);
-  }
-  lines.push(...dnsLines);
-  lines.push('proxies:');
-  if (proxies.length === 0) {
-    lines.push('  []');
-  } else {
-    lines.push(...proxies);
-  }
-  lines.push('');
-
-  lines.push('proxy-groups:');
-  if (proxyNames.length > 0) {
-    lines.push('  - name: Auto');
-    lines.push('    type: url-test');
-    lines.push('    url: http://www.gstatic.com/generate_204');
-    lines.push('    interval: 300');
-    lines.push('    proxies:');
-    for (const n of proxyNames) {
-      lines.push(`      - ${yamlString(n)}`);
+  const keys = Object.keys(frame);
+  if (!keys.includes('proxies')) keys.push('proxies');
+  for (const key of keys) {
+    if (key === 'iceslab') {
+      if (!routing) continue;
+      // The geo databases are fetched only when the rules name them (GEOSITE /
+      // GEOIP). DNS is emitted for every preset.
+      if (clashNeedsGeo(p.deviceRules) && cfg['geox-url'] === undefined) lines.push(...SPLIT_GEO_LINES);
+      if (cfg.dns === undefined) lines.push(...p.dnsLines);
+    } else if (key === 'proxies') {
+      lines.push('proxies:');
+      const own = asArray(cfg.proxies);
+      const ownLines = own.length ? stringifyYaml(own, { lineWidth: 0 }).trimEnd().split('\n').map((l) => `  ${l}`) : [];
+      if (ownLines.length === 0 && p.proxies.length === 0) lines.push('  []');
+      lines.push(...ownLines, ...p.proxies);
+      lines.push('');
+    } else if (key === 'proxy-groups') {
+      lines.push('proxy-groups:');
+      if (kept.length === 0) lines.push('  []');
+      for (const g of kept) lines.push(...groupLines(g, nodeNames));
+      lines.push('');
+    } else if (key === 'proxy-providers') {
+      const providers = asObject(cfg['proxy-providers']);
+      for (const prov of Object.values(providers)) {
+        const pv = asObject(prov);
+        const svc = asObject(pv.iceslab);
+        delete pv.iceslab;
+        if (svc['include-proxies'] === true) pv.payload = parseYaml(p.proxies.join('\n') || '[]');
+      }
+      lines.push(...keyLines(key, providers, ''));
+    } else if (key === 'rules') {
+      // R3 - operator custom domain lists -> DOMAIN-SUFFIX rules. Order
+      // block -> direct -> proxy so a block listing wins over a direct/proxy
+      // listing of an overlapping domain. Strip xray geosite-style prefixes
+      // Clash cannot parse. The proxy bucket goes where the panel's proxy
+      // rules go, and only when there is such a group.
+      const cdl = routing ? p.customDomainLists : undefined;
+      const stripPfx = (d: string): string => d.replace(/^(domain|full|regexp|keyword):/, '');
+      const panel = routing
+        ? [
+            ...(cdl
+              ? [
+                  ...cdl.block.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},REJECT`),
+                  ...cdl.direct.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},DIRECT`),
+                  ...(target ? cdl.proxy.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},${target}`) : []),
+                ]
+              : []),
+            ...clashDeviceRuleLines(p.deviceRules, target ?? null),
+          ]
+        : [];
+      const own = asArray(cfg.rules).map((r) => `  - ${retarget(String(r), dropped)}`);
+      if (panel.length + own.length === 0) lines.push('rules: []');
+      else lines.push('rules:', ...panel, ...own);
+    } else {
+      lines.push(...keyLines(key, cfg[key], ''));
     }
-  } else {
-    lines.push('  []');
   }
-  lines.push('');
-
-  // R3 - operator custom domain lists -> DOMAIN-SUFFIX rules. Order
-  // block -> direct -> proxy so a block listing wins over a direct/proxy
-  // listing of an overlapping domain. Strip xray geosite-style prefixes Clash
-  // cannot parse. The proxy bucket targets the existing `Auto` proxy-group, so
-  // it is only emitted when at least one proxy exists.
-  const cdl = buildOpts.customDomainLists;
-  const stripPfx = (d: string): string => d.replace(/^(domain|full|regexp|keyword):/, '');
-  const customDomainLines: string[] = cdl
-    ? [
-        ...cdl.block.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},REJECT`),
-        ...cdl.direct.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},DIRECT`),
-        ...(proxyNames.length > 0
-          ? cdl.proxy.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},Auto`)
-          : []),
-      ]
-    : [];
-
-  lines.push('rules:');
-  // Custom-domain lines first (highest precedence), then the split-preset
-  // lines, then the MATCH catch-all. When the lists are empty this spread is a
-  // no-op.
-  lines.push(...customDomainLines);
-  lines.push(...splitRuleLines);
-  lines.push(proxyNames.length > 0 ? '  - MATCH,Auto' : '  - MATCH,DIRECT');
-
   return lines.join('\n') + '\n';
+}
+
+/** A rule whose target is a dropped group goes DIRECT. The target is the last
+ *  field, or the one before `no-resolve`. */
+function retarget(rule: string, dropped: Set<string>): string {
+  const parts = rule.split(',');
+  const at = parts[parts.length - 1]?.trim() === 'no-resolve' ? parts.length - 2 : parts.length - 1;
+  if (at >= 1 && dropped.has(parts[at]!.trim())) parts[at] = 'DIRECT';
+  return parts.join(',');
+}
+
+/** One proxy group as this builder always wrote it: node names quoted the way
+ *  their blocks are, the frame's own values as the YAML library writes them,
+ *  `proxies` where the frame has it or last. */
+function groupLines(g: Frame, nodeNames: Set<string>): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(g)) {
+    if (k === 'proxies') {
+      const members = asArray(v).map(String);
+      if (members.length === 0) {
+        out.push('    proxies: []');
+        continue;
+      }
+      out.push('    proxies:');
+      for (const m of members) out.push(`      - ${nodeNames.has(m) ? yamlString(m) : scalar(m)}`);
+    } else if (v === null || typeof v !== 'object') {
+      out.push(`    ${k}: ${scalar(v)}`);
+    } else {
+      out.push(...keyLines(k, v, '    '));
+    }
+  }
+  if (out.length > 0) out[0] = `  - ${out[0]!.slice(4)}`;
+  return out;
 }
