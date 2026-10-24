@@ -147,4 +147,16 @@ regexes = [
   '''HTmCZ5CiQzsSYyxTi4E5\+\+iyaBf7fiUYZZ\+eL7FrH2c=''',
   '''mRiVJ/GPtJW3K7gDFf\+WDwvgLcQHQPzZ8e6/mnTr5zY=''',
   '''3ueLgucjhP\+q4AuhvRGy7iWu/3IHYN25HcwBgHhVqYM=''',
+  # The REALITY public key of the synthetic nodes the template dry run fills
+  # (subscription-templates/templates.dryrun.ts, A-236) and of the
+  # core-loading own-preset test: key-shaped, 32 bytes base64url, so xray
+  # and sing-box load the node. It says what it is: base64 of
+  # "iceslab-dryrun-reality-fixture-0". Allowed by the prefix of that phrase,
+  # base64 of "iceslab-dryrun-reality-fixture", which a real key does not
+  # start with.
+  '''aWNlc2xhYi1kcnlydW4tcmVhbGl0eS1maXh0dXJl''',
+  # History, guarding nothing: the random key-shaped value the same fixtures
+  # carried before (09326d9a and the A-229 part 4 test). The scan reads
+  # history, so it stays allowed for good.
+  '''Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBLjyFlw''',
 ]

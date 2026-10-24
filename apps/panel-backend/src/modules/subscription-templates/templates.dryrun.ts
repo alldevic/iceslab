@@ -47,7 +47,10 @@ function overall(check: CheckAnswer, warnings: string[]): boolean | null {
   return check.ok === null ? null : true;
 }
 
-const KEY = 'Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBLjyFlw';
+// A REALITY public key that says what it is: base64url of the 32 bytes
+// "iceslab-dryrun-reality-fixture-0", key-shaped so the cores load the
+// synthetic node. Guards nothing (.gitleaks.toml allows it by value).
+const KEY = 'aWNlc2xhYi1kcnlydW4tcmVhbGl0eS1maXh0dXJlLTA';
 const UUID = '11111111-1111-4111-8111-111111111111';
 
 /** Three nodes of the kinds most subscriptions carry. */

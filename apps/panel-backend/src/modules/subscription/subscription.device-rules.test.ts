@@ -200,7 +200,7 @@ const SINGBOX_BIN = process.env.SINGBOX_BIN ?? ['/usr/local/bin/sing-box', '/usr
 
 /** Two endpoints the cores load: a real-shaped x25519 key and a hex short id
  *  (the golden's placeholders are refused before the routing is read). */
-const KEY = 'Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBLjyFlw';
+const KEY = 'aWNlc2xhYi1kcnlydW4tcmVhbGl0eS1maXh0dXJlLTA';
 const LOADABLE = [
   { ...ep, publicKey: KEY, shortId: '0123abcd' },
   { ...ep, nodeName: 'n2', uuid: '22222222-2222-4222-8222-222222222222', publicKey: KEY, shortId: '0123abcd' },
