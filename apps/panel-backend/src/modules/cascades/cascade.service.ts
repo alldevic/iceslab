@@ -3510,6 +3510,17 @@ export async function deleteCascade(id: string): Promise<void> {
       directions: { select: { nodes: { select: { nodeId: true } } } },
     },
   });
+  // A-155: the same question writeTopologyV4 asks before it drops a direction.
+  // Deleting the cascade drops all of them, and a node-policy rule routing
+  // through one is RESTRICT: left to the key, that was a 500 about a foreign
+  // key, with nothing naming the policy that holds the cascade.
+  const blocking = await prisma.nodePolicyRule.findMany({
+    where: { direction: { cascadeId: id } },
+    select: { policy: { select: { name: true } } },
+  });
+  if (blocking.length > 0) {
+    throw new DirectionInUseByPolicyError([...new Set(blocking.map((r) => r.policy.name))].sort());
+  }
   const deadBefore = await deadCascadeIdsNow();
   try {
     await prisma.cascade.delete({ where: { id } });
