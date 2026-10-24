@@ -346,6 +346,66 @@ describe('what the node is actually sent', () => {
     });
   });
 
+  it('a node in a cascade with no chain and no xray inbound reads "none", as the push sends nothing to it', async () => {
+    // A hop-only cascade: no chain block, the legacy fragments only. The push
+    // puts them on the node's xray inbound and has none to put them on.
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/cascades',
+      headers: auth(),
+      payload: {
+        name: 'hops-only',
+        enabled: true,
+        hops: [
+          { nodeId: entry, position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
+          { nodeId: exit, position: 1 },
+        ],
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const read = async () =>
+      (JSON.parse((await app.inject({ method: 'GET', url: `/api/nodes/${entry}/policy-drawing`, headers: auth() })).body) as {
+        drawing: string;
+      }).drawing;
+
+    const req = await applyInboundsRequestForNode(entry);
+    expect(req?.chain).toBeUndefined();
+    expect(req?.cascade).toBeUndefined();
+    expect(await read()).toBe('none');
+
+    // With an enabled xray inbound the push carries the fragments, and the read agrees.
+    const profile = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      headers: auth(),
+      payload: {
+        name: 'hops-vless',
+        protocol: 'xray',
+        config: {
+          security: 'reality',
+          realityDest: 'www.microsoft.com:443',
+          realityServerNames: ['www.microsoft.com'],
+          realityPrivateKey: 'k'.repeat(43),
+          realityPublicKey: 'p'.repeat(43),
+          realityShortIds: ['0123abcd'],
+          network: 'raw',
+        },
+      },
+    });
+    expect(profile.statusCode, profile.body).toBe(201);
+    const bind = await app.inject({
+      method: 'POST',
+      url: '/api/bindings',
+      headers: auth(),
+      payload: { profileId: JSON.parse(profile.body).id, nodeId: entry, port: 443 },
+    });
+    expect(bind.statusCode, bind.body).toBe(201);
+    expect((await applyInboundsRequestForNode(entry))?.cascade).toBeDefined();
+    expect(await read()).toBe('legacy');
+  });
+
   it('drops a cascade rule where the push draws no way out in xray', async () => {
     const entry = await makeNode();
     const exit = await makeNode();

@@ -17,7 +17,7 @@ import { getNodeSyncStatus } from './nodes.sync-status.js';
 import { portClaimsOnNode } from './node-ports.js';
 import { readChainSecret } from './chain-secret.js';
 import { PolicyDoesNotFitNodeError, explainPolicyForNode } from '../node-policies/node-policies.service.js';
-import { cascadeXrayDrawingForNode } from '../cascades/cascade.service.js';
+import { cascadeXrayDrawingForNode } from '../inbounds/inbounds.queue.js';
 import { prisma } from '../../prisma.js';
 import * as bootstrap from './bootstrap.service.js';
 import { getPanelPublicIp } from './panel-ip.js';

@@ -16,7 +16,7 @@ import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
 import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
-import { cascadeXrayDrawingOf } from '../cascades/cascade.config.js';
+import { cascadeXrayDrawingOf, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
 import { layOutGeo } from '../geo-sets/geo-push.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
@@ -159,6 +159,45 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
       naivePassword: true,
     },
   });
+}
+
+/**
+ * The legacy cascade fragments as a push carries them (A-232): the node's
+ * fragments, and only when it has an enabled xray inbound to carry them, which
+ * is where the push puts them. A node in a cascade without one gets none, and
+ * its xray draws no way out. ONE function for the push and for the read of the
+ * drawing (cascadeXrayDrawingForNode), so the read cannot say "drawn" about a
+ * node the push sends nothing to. `inbounds`: the push's own list; without it
+ * the enabled bindings are asked, by the same filter fetchEnabledInbounds uses.
+ */
+export async function legacyCascadeAsPushed(
+  nodeId: string,
+  inbounds?: { protocol: string }[],
+): Promise<XrayCascadeFragments | null> {
+  const fragments = await getCascadeFragmentsForNode(nodeId);
+  if (!fragments) return null;
+  const hasXray = inbounds
+    ? inbounds.some((i) => i.protocol === 'xray')
+    : (await prisma.profileNodeBinding.count({
+        where: { nodeId, enabled: true, profile: { enabled: true, protocol: 'xray' } },
+      })) > 0;
+  if (!hasXray) {
+    getLogger().info(
+      `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound; cascade not applied`,
+    );
+    return null;
+  }
+  return fragments;
+}
+
+/**
+ * A-232: the drawing a push gives this node's xray, read without pushing: the
+ * push's inputs (its chain block and, without one, legacyCascadeAsPushed)
+ * through the same cascadeXrayDrawingOf.
+ */
+export async function cascadeXrayDrawingForNode(nodeId: string): Promise<CascadeXrayDrawing> {
+  const chain = await getChainForNode(nodeId);
+  return cascadeXrayDrawingOf(chain, chain ? null : await legacyCascadeAsPushed(nodeId));
 }
 
 export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]> {
@@ -332,21 +371,15 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // xray inbound. The node-agent merges them into the xray config and forwards
   // entry->exit. Non-cascade nodes: getCascadeFragmentsForNode returns null and
   // this is a no-op, so the wire stays byte-identical to before.
-  const cascade = await getCascadeFragmentsForNode(nodeId);
+  const cascade = await legacyCascadeAsPushed(nodeId, inbounds);
   if (cascade) {
     // A node runs a single xray config.json, so the first xray inbound is the
     // one (and only one) that carries the cascade.
-    const xrayInbound = inbounds.find((i) => i.protocol === 'xray');
-    if (xrayInbound) {
-      xrayInbound.config = {
-        ...(xrayInbound.config as Record<string, unknown>),
-        cascade,
-      } as InboundDto['config'];
-    } else {
-      getLogger().info(
-        `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound; cascade not applied`,
-      );
-    }
+    const xrayInbound = inbounds.find((i) => i.protocol === 'xray')!;
+    xrayInbound.config = {
+      ...(xrayInbound.config as Record<string, unknown>),
+      cascade,
+    } as InboundDto['config'];
   }
 
   // WARP egress (feat/warp-native) - if this node has WARP enabled, attach the
