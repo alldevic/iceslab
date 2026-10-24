@@ -4,6 +4,7 @@ import type { Worker } from 'bullmq';
 import { prisma } from '../../prisma.js';
 import { closeRedis, redis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
+import { stubNodeRoster } from '../../../tests/helpers/node-roster.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import {
   applyInboundsForNode,
@@ -60,6 +61,8 @@ beforeEach(async () => {
   if (keys.length > 0) await redis.del(...keys);
   // These nodes answer as an agent older than geo: the push goes straight on.
   vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+  // Every test here stubs applyInbounds; the roster after it is answered too.
+  stubNodeRoster();
 });
 
 afterEach(async () => {

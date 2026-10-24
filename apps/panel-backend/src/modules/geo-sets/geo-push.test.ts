@@ -6,6 +6,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { ROOT, datFile, domain, site } from '../../../tests/helpers/geo-dat.js';
+import { stubNodeRoster } from '../../../tests/helpers/node-roster.js';
 import { NodeRequestError, NodeTransport } from '../nodes/nodes.transport.js';
 import { ensureBuiltinSets, ingestGeoFile, sha256Hex } from './geo-sets.store.js';
 import { geoVersionOf, layOutGeo, nodeGeoFor } from './geo-push.js';
@@ -160,6 +161,7 @@ describe('the push itself', () => {
       sent = req;
       return { ok: true, applied: 0, skipped: 0 };
     });
+    stubNodeRoster();
     await applyInboundsForNode(node);
     expect(order).toEqual(['list', 'put iceslab-mine.dat', 'push']);
     expect(sent!.geo!.files.map((f) => f.name)).toEqual(['iceslab-mine.dat']);

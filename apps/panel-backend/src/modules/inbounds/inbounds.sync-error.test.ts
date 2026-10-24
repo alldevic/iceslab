@@ -5,6 +5,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { stubNodeRoster } from '../../../tests/helpers/node-roster.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { applyInboundsForNode } from './inbounds.queue.js';
 import { createCascade } from '../cascades/cascade.service.js';
@@ -37,9 +38,11 @@ beforeEach(async () => {
  * are stand-ins with no address behind them: they answer as an agent older
  * than geo, which gets its push exactly as before. Set again by the two
  * helpers below, since a test that restores its mocks takes this one too.
+ * The roster after the push is answered with it (A-112), for the same reason.
  */
 function olderThanGeo(): void {
   vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+  stubNodeRoster();
 }
 
 afterEach(async () => {
