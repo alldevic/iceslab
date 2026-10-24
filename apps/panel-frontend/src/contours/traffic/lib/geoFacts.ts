@@ -109,10 +109,13 @@ export function geoSetActions(set: Pick<GeoSet, 'source' | 'status' | 'current' 
  */
 export function geoAttention(
   sets: Pick<GeoSet, 'name' | 'status'>[],
-  nodesBehind: number,
-): { broken: string[]; nodesBehind: number } | null {
+  nodesBehind: number | 'loading' | 'failed',
+): { broken: string[]; nodesBehind: number; nodesFailed: boolean } | null {
   const broken = sets.filter((s) => s.status === 'broken').map((s) => s.name);
-  return broken.length === 0 && nodesBehind === 0 ? null : { broken, nodesBehind };
+  // A-252: a node list that did not arrive is said, not counted as «none behind».
+  const nodesFailed = nodesBehind === 'failed';
+  const behind = typeof nodesBehind === 'number' ? nodesBehind : 0;
+  return broken.length === 0 && behind === 0 && !nodesFailed ? null : { broken, nodesBehind: behind, nodesFailed };
 }
 
 /**

@@ -6,7 +6,8 @@ import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
-import { LoadFailed } from '@/ui/LoadFailed';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import {
@@ -86,7 +87,12 @@ export function GeoSetsPage() {
   // списка нод. Отдельного ящика внимания в панели пока нет.
   const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const geoKnown = nodeFieldKnown(nodesQuery.data, 'geo');
-  const nodesBehind = (nodesQuery.data?.nodes ?? []).filter((n) => nodeGeoFacts(n, geoKnown)?.state === 'behind').length;
+  const nodesView = loadView(nodesQuery);
+  const nodesBehind =
+    nodesView === 'ready'
+      ? (nodesQuery.data?.nodes ?? []).filter((n) => nodeGeoFacts(n, geoKnown)?.state === 'behind').length
+      : nodesView;
+  const nodesFailure = loadFailure(nodesQuery, apiErrorMessage);
   const attention = facts.state === 'list' ? geoAttention(facts.sets, nodesBehind) : null;
 
   const [adding, setAdding] = useState<'url' | 'upload' | null>(null);
@@ -185,6 +191,12 @@ export function GeoSetsPage() {
             <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '18px', color: AMBER }}>
               {t('geoSets.attention.behind', { count: attention.nodesBehind })}
             </Text>
+          )}
+          {attention.nodesFailed && nodesFailure && (
+            <LoadFailedLine
+              message={`${t('geoSets.attention.nodesFailed')}: ${nodesFailure.message}`}
+              onRetry={nodesFailure.onRetry}
+            />
           )}
         </Box>
       )}

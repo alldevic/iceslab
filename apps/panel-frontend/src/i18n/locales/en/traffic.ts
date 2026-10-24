@@ -312,6 +312,8 @@ export const traffic = {
       used_other: 'Cannot delete: the set is in {{count}} rules, detach it there first',
     },
     attention: {
+      // A-252: without the node list we cannot tell whether geo lags on any node.
+      nodesFailed: 'the node list that shows where geo is behind',
       broken_one: 'Broken set: {{names}}.',
       broken_other: 'Broken sets: {{names}}.',
       behind_one: 'Geo is behind the intent on {{count}} node: roll the set out or look at the node card.',

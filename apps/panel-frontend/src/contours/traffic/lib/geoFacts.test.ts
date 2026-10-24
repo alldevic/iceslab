@@ -112,8 +112,14 @@ describe('geoAttention: строка над списком', () => {
     expect(geoAttention([set({ name: 'a', status: 'broken' }), set({ name: 'b' })], 2)).toEqual({
       broken: ['a'],
       nodesBehind: 2,
+      nodesFailed: false,
     });
     expect(geoAttention([set()], 0)).toBeNull();
+  });
+
+  it('A-252: список нод не пришёл, это сказано, а не «никто не отстаёт»; в пути тишина', () => {
+    expect(geoAttention([set()], 'failed')).toEqual({ broken: [], nodesBehind: 0, nodesFailed: true });
+    expect(geoAttention([set()], 'loading')).toBeNull();
   });
 });
 
