@@ -11,6 +11,7 @@ import {
   type GeoSet,
 } from '@/lib/domain/geoSets';
 import { geoRolloutFacts, usesWords } from '@/contours/traffic/lib/geoFacts';
+import { rolloutSilent } from '@/contours/traffic/lib/geoRolloutSilent';
 import { AMBER, DIM, DISPLAY, FAINT, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contours/traffic/lib/colors';
 
 /**
@@ -32,7 +33,8 @@ export function GeoRolloutModal({ set, onClose }: { set: GeoSet | null; onClose:
   });
   // Ноды без отчёта о ядрах: рестарт xray у них «возможно», а не факт.
   const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes(), enabled: set !== null });
-  const silent = new Set((nodesQuery.data?.nodes ?? []).filter((n) => !n.cores).map((n) => n.id));
+  // A-253: without the node list every restart is «maybe» (rolloutSilent).
+  const silent = rolloutSilent((planQuery.data?.nodes ?? []).map((n) => n.id), nodesQuery.data?.nodes);
   const facts = planQuery.data ? geoRolloutFacts(planQuery.data, silent) : null;
 
   const rollout = useMutation({
