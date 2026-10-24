@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { hiddenLineStart, hostHiddenFacts, hostPortPayload, hostPortShared } from '@/lib/domain/hosts';
+import { hiddenLineStart, hostHiddenFacts, hostPortPayload, hostPortShared, hostsMaySecureOtherwise } from '@/lib/domain/hosts';
+
+describe('hostsMaySecureOtherwise (оговорка строки профиля)', () => {
+  it('только если хост переопределяет защиту; список не пришёл: оговорка остаётся', () => {
+    expect(hostsMaySecureOtherwise([{ securityLayer: 'default' }])).toBe(false);
+    expect(hostsMaySecureOtherwise([{ securityLayer: 'default' }, { securityLayer: 'tls' }])).toBe(true);
+    expect(hostsMaySecureOtherwise([])).toBe(false);
+    expect(hostsMaySecureOtherwise(null)).toBe(true);
+  });
+});
 
 describe('hostPortPayload (A-150)', () => {
   const stored = { listenPort: 443, clientPort: null };

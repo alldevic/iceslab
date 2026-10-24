@@ -75,6 +75,14 @@ export interface HostHiddenFacts {
 
 type HiddenBy = { cascadeId: string; cascadeName: string };
 
+/** Whether any host of a profile sets its own security; `null` hosts (the
+ *  list did not arrive) is «cannot tell», which keeps the caveat on. Moved
+ *  here from formatReach.ts when the profile line went to /formats. */
+export function hostsMaySecureOtherwise(hosts: readonly { securityLayer?: string | null }[] | null): boolean {
+  if (hosts === null) return true;
+  return hosts.some((h) => h.securityLayer === 'tls' || h.securityLayer === 'none');
+}
+
 /** The opening of the hidden line: the node by name, or said unknown. */
 export function hiddenLineStart(facts: Pick<HostHiddenFacts, 'nodeName'>, t: (key: string, vars?: Record<string, unknown>) => string): string {
   return facts.nodeName === null ? t('hostHidden.beforeUnknown') : t('hostHidden.before', { node: facts.nodeName });

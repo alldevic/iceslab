@@ -118,6 +118,8 @@ export function ProfileEditPage() {
     mutationFn: (input: UpdateProfileInput) => updateProfile(profile!.id, input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['profiles'] });
+      // The «will not get it» line reads the saved profile's /formats.
+      qc.invalidateQueries({ queryKey: ['profile-formats'] });
       notifications.show({ color: 'green', message: t('profiles.notify.updated') });
     },
     onError: (err) =>

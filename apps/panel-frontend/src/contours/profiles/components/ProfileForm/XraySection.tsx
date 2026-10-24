@@ -27,8 +27,10 @@ import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/ge
 import { isPlainSubprotocol } from '@/contours/profiles/lib/plainSubprotocol';
 import { PlainXraySection } from '@/contours/profiles/components/ProfileForm/PlainXraySection';
 import { AMBER, RED } from '@/contours/profiles/lib/colors';
-import { clientsLeftOut, hostsMaySecureOtherwise } from '@/lib/domain/formatReach';
-import { listHosts } from '@/lib/domain/hosts';
+import { MIST } from '@/lib/ui/tokens';
+import { hostsMaySecureOtherwise, listHosts } from '@/lib/domain/hosts';
+import { formatGapKey, formatLabel, formatReasonKey, getProfileFormats } from '@/lib/domain/formats';
+import { profileFormatsLine } from '@/contours/profiles/lib/profileFormatsLine';
 import { useQuery } from '@tanstack/react-query';
 
 export function XraySection({
@@ -53,12 +55,19 @@ export function XraySection({
   // прочее агент отказывает, поэтому здесь оно недоступно с причиной.
   const onSingbox = form.values.engine === 'singbox';
   const singboxWhy = t('profiles.form.cfg.singboxXrayOnly');
-  const leftOut = clientsLeftOut({
-    subprotocol: form.values.xraySubprotocol,
-    network: form.values.xrayNetwork,
-    security: form.values.xraySecurity,
-    xhttpMode: form.values.xrayXhttpMode,
+  // Who will not get the saved profile: the server's /formats at the profile's
+  // own security, the answer the host chips read (no copy of the table here).
+  const formatsQuery = useQuery({
+    queryKey: ['profile-formats', profileId, 'default'],
+    queryFn: () => getProfileFormats(profileId!, 'default'),
+    enabled: profileId !== null,
+    retry: false,
   });
+  const line = profileFormatsLine(profileId, formatsQuery);
+  const whyWords = (why: string) => {
+    const key = formatGapKey(why);
+    return key ? t(key) : t('hostEdit.formatWhyUnknown', { code: why });
+  };
   // Said by the profile's own security; a host may override it (tls/none), and
   // then its own line on the host page is the one that holds (A-224, AUDT).
   const hostsQuery = useQuery({
@@ -150,14 +159,32 @@ export function XraySection({
                   только в подсказке при наведении. */}
               {/* A-224: which subscription clients will not get this profile,
                   by the shared table the format builders use. */}
-              {leftOut.length > 0 && (
-                <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
-                  {t('profiles.form.cfg.clientsLeftOut', {
-                    clients: leftOut.map((c) => t(`profiles.form.cfg.client.${c}`)).join(', '),
+              {line.kind === 'gaps' ? (
+                <Stack gap={2}>
+                  <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+                    {t('profiles.form.cfg.clientsLeftOut')}
+                    {hostsMayDiffer && ` ${t('profiles.form.cfg.clientsHostCaveat')}`}
+                  </Text>
+                  {line.groups.map((g) => {
+                    const side = formatReasonKey(g.reason);
+                    return (
+                      <Text key={`${g.reason ?? ''}:${g.why}`} style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+                        {side ? `${t(side)}: ` : ''}
+                        {whyWords(g.why)}: {g.formats.map((f) => formatLabel(f, t)).join(', ')}
+                      </Text>
+                    );
                   })}
-                  {hostsMayDiffer && ` ${t('profiles.form.cfg.clientsHostCaveat')}`}
+                </Stack>
+              ) : line.kind !== 'none' ? (
+                <Text style={{ fontSize: 12, lineHeight: '17px', color: MIST }}>
+                  {t('profiles.form.cfg.clientsLeftOut')}{' '}
+                  {line.kind === 'loading'
+                    ? t('common.loading')
+                    : line.kind === 'unknown'
+                      ? t('profiles.form.cfg.clientsUnknown')
+                      : '-'}
                 </Text>
-              )}
+              ) : null}
               {onSingbox && (
                 <Text style={{ fontSize: 12, lineHeight: '17px', color: '#7A8BA3' }}>{singboxWhy}</Text>
               )}
