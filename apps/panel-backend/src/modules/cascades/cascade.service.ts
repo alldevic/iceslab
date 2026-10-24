@@ -29,6 +29,7 @@ import { hostFromAddress } from '../subscription/subscription.formats.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import {
   assertDirectionShapes,
   CascadeValidationError,
@@ -2012,6 +2013,8 @@ async function writeTopologyV4(
  * allocation, and the port check against profiles is asked here too: a
  * refusal throws and the transaction takes the whole save back.
  */
+const TUNNEL_INDEX_LOCK = 'cascade-tunnel-index';
+
 async function writeTunnels(
   tx: Prisma.TransactionClient,
   cascadeId: string,
@@ -2037,6 +2040,11 @@ async function writeTunnels(
   const missing = wanted.filter((p) => !have.has(key(p.fromNodeId, p.toNodeId)));
   if (missing.length === 0) return;
 
+  // A-127: the index is unique panel-wide and chosen by reading what is
+  // taken; under read committed two saves would read the same free one and
+  // the second fail on the key. One at a time from here to the commit: the
+  // read after the lock sees what the save before it wrote.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TUNNEL_INDEX_LOCK}))`;
   const used = new Set((await tx.cascadeTunnel.findMany({ select: { index: true } })).map((t) => t.index));
   const indexes = freeTunnelIndexes(used, missing.length);
   const created = missing.map((p, i) => ({
@@ -2227,11 +2235,15 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new CascadeNameTakenError(input.name);
-    }
+    // A-127: "name taken" only for the name. Any other unique key on the way
+    // (a tunnel index, a link) is not something the operator can rename away.
+    if (isCascadeNameClash(err)) throw new CascadeNameTakenError(input.name);
     throw err;
   }
+}
+
+function isCascadeNameClash(err: unknown): boolean {
+  return isUniqueViolationOn(err, 'cascades_name_key', ['name']);
 }
 
 /**
@@ -2485,9 +2497,7 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new CascadeNameTakenError(input.name ?? '');
-    }
+    if (isCascadeNameClash(err)) throw new CascadeNameTakenError(input.name ?? '');
     throw err;
   }
 }

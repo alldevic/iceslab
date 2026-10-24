@@ -301,3 +301,33 @@ describe('the underlay gate', () => {
     await expect(createCascade(cascadeInput(entry, [nl], 'awg'))).resolves.toBeDefined();
   });
 });
+
+/**
+ * A-127: the tunnel index is unique panel-wide and picked by reading what is
+ * taken. Two saves at once read the same free index; the second failed on the
+ * key, and the operator read "the cascade name is taken" about a name nobody
+ * had.
+ */
+describe('two saves with tunnels at once', () => {
+  it('both land, on different indexes', async () => {
+    const pairs = await Promise.all(
+      [1, 2, 3].map(async (i) => [await makeNode(`ru-${i}`), await makeNode(`nl-${i}`)] as const),
+    );
+    const saved = await Promise.allSettled(pairs.map(([e, x]) => createCascade(cascadeInput(e, [x], 'awg'))));
+    expect(saved.map((s) => (s.status === 'rejected' ? String(s.reason) : 'ok'))).toEqual(['ok', 'ok', 'ok']);
+    const indexes = (await prisma.cascadeTunnel.findMany({ select: { index: true } })).map((t) => t.index).sort();
+    expect(indexes).toEqual([0, 1, 2]);
+  });
+
+  it('still calls a real name clash a name clash', async () => {
+    // Two saves of one name at once, on nodes of their own: the clash reaches
+    // the key, not a check before it.
+    const a = cascadeInput(await makeNode('ru-a'), [await makeNode('nl-a')], 'awg') as { name: string };
+    const b = cascadeInput(await makeNode('ru-b'), [await makeNode('nl-b')], 'awg') as { name: string };
+    b.name = a.name;
+    const saved = await Promise.allSettled([createCascade(a as never), createCascade(b as never)]);
+    const refused = saved.filter((s): s is PromiseRejectedResult => s.status === 'rejected');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.reason).toMatchObject({ name: 'CascadeNameTakenError' });
+  });
+});
