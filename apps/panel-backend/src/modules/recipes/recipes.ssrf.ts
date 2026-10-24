@@ -10,36 +10,8 @@
  * admin-trusted setting in v1.
  */
 
-const BLOCKED_HOST_PATTERNS: RegExp[] = [
-  /^127\./, // IPv4 loopback
-  /^10\./, // IPv4 private
-  /^192\.168\./, // IPv4 private
-  /^172\.(1[6-9]|2\d|3[01])\./, // IPv4 private 172.16-31
-  /^169\.254\./, // IPv4 link-local + cloud metadata (169.254.169.254)
-  /^0\./, // this-network
-];
-
-function isBlockedHost(host: string): boolean {
-  // URL.hostname keeps the [] around an IPv6 literal, so strip them and the
-  // bare-address checks below match (e.g. "[::1]" -> "::1").
-  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
-  if (
-    h === 'localhost' ||
-    h.endsWith('.localhost') ||
-    h.endsWith('.internal') ||
-    h.endsWith('.local') ||
-    h === '0.0.0.0'
-  ) {
-    return true;
-  }
-  // IPv6 literals only (they contain a colon; a domain like "fc-cdn.com"
-  // must not be blocked): loopback ::1, unique-local fc00::/7, link-local
-  // fe80::/10.
-  if (h.includes(':') && (h === '::1' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h))) {
-    return true;
-  }
-  return BLOCKED_HOST_PATTERNS.some((re) => re.test(h));
-}
+// The host check is shared with the geo sets (A-115): lib/util/guarded-fetch.ts.
+import { isBlockedHost } from '../../lib/util/guarded-fetch.js';
 
 /**
  * Validate a recipe-source URL and return the parsed URL. Throws with a

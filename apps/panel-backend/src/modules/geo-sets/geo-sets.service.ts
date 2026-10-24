@@ -11,6 +11,7 @@ import {
 } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { assertPublicHttpUrl } from '../../lib/util/guarded-fetch.js';
 import { reportedEngines } from '../nodes/node-engines.js';
 import { collectGeoUses, usesOf, type GeoUseSite } from './geo-refs.js';
 import { chainTagsFor, filesOfSet } from './geo-push.js';
@@ -261,15 +262,13 @@ function checkName(name: string): void {
   }
 }
 
+/** http(s) to a public host (A-115: no loopback, private or metadata
+ *  address; the same check runs again on every fetch and redirect). */
 function checkUrl(url: string): void {
-  let u: URL;
   try {
-    u = new URL(url);
-  } catch {
-    throw new GeoSetInvalidError('url', `"${url}" is not a URL`);
-  }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') {
-    throw new GeoSetInvalidError('url', `only http and https are fetched, not ${u.protocol}`);
+    assertPublicHttpUrl(url);
+  } catch (err) {
+    throw new GeoSetInvalidError('url', err instanceof Error ? err.message : String(err));
   }
 }
 
