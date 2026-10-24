@@ -135,23 +135,41 @@ export async function importTemplate(input: {
  * оператор ищет ошибку глазами по всему конфигу.
  */
 export interface TemplateRefusal {
-  code: 'TEMPLATE_INVALID' | 'TEMPLATE_NAME_TAKEN' | 'TEMPLATE_DEFAULT_PROTECTED';
+  code: 'TEMPLATE_INVALID' | 'TEMPLATE_NAME_TAKEN' | 'TEMPLATE_DEFAULT_PROTECTED' | 'TEMPLATE_NOT_DEFAULT';
   message?: string;
+  /** TEMPLATE_INVALID: строка и столбец, когда сервер их знает (A-236, 29d1f62c). */
   line?: number;
+  column?: number;
 }
+
+/** Код и статус, с которым сервер его отдаёт (templates.routes.ts). */
+const TEMPLATE_REFUSAL_STATUS: Record<TemplateRefusal['code'], number> = {
+  TEMPLATE_INVALID: 400,
+  TEMPLATE_NAME_TAKEN: 409,
+  TEMPLATE_DEFAULT_PROTECTED: 409,
+  TEMPLATE_NOT_DEFAULT: 409,
+};
 
 export function templateRefusal(err: unknown): TemplateRefusal | null {
   // ⚠ `err` бывает `null`: у react-query это обычное значение «ошибки нет», и
   // читать у него поле значит уронить весь экран на первом же рендере.
   if (!err || typeof err !== 'object') return null;
-  const res = (err as {
-    response?: { status?: number; data?: { error?: string; message?: string; line?: number } };
-  }).response;
-  const code = res?.data?.error;
-  if (code !== 'TEMPLATE_INVALID' && code !== 'TEMPLATE_NAME_TAKEN' && code !== 'TEMPLATE_DEFAULT_PROTECTED') {
-    return null;
-  }
-  return { code, message: res?.data?.message, line: res?.data?.line };
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  const code = d.error;
+  if (typeof code !== 'string' || !Object.hasOwn(TEMPLATE_REFUSAL_STATUS, code)) return null;
+  const c = code as TemplateRefusal['code'];
+  if (TEMPLATE_REFUSAL_STATUS[c] !== status) return null;
+  const pos = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : undefined);
+  return {
+    code: c,
+    message: typeof d.message === 'string' ? d.message : undefined,
+    line: pos(d.line),
+    column: pos(d.column),
+  };
 }
 
 /**

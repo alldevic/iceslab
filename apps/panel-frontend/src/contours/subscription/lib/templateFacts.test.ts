@@ -4,7 +4,9 @@ import {
   dryRunForBody,
   importFacts,
   templateActions,
+  templateEditGate,
   templateEditorFacts,
+  templateSavePatch,
   templatesScreenFacts,
 } from '@/contours/subscription/lib/templateFacts';
 import { FOREIGN_TEMPLATE_KEY, type SubscriptionTemplate } from '@/lib/domain/subscriptionTemplates';
@@ -30,13 +32,47 @@ function tpl(p: Partial<SubscriptionTemplate>): SubscriptionTemplate {
   };
 }
 
+describe('templateEditGate (A-236, из A-233 п.d)', () => {
+  const ok = { data: { templates: [] }, isError: false };
+  it('при сбое редактор не открывается пустым: сбой; до ответа загрузка', () => {
+    expect(templateEditGate(false, { data: undefined, isError: true }, false, false)).toBe('failed');
+    expect(templateEditGate(false, { data: undefined, isError: false }, false, false)).toBe('loading');
+  });
+  it('«удалён» только при пришедшем списке без шаблона; 404 это «ещё не выпущено»; новый сразу', () => {
+    expect(templateEditGate(false, ok, false, false)).toBe('gone');
+    expect(templateEditGate(false, ok, false, true)).toBe('ready');
+    expect(templateEditGate(false, { data: undefined, isError: true }, true, false)).toBe('unavailable');
+    expect(templateEditGate(true, { data: undefined, isError: true }, false, false)).toBe('ready');
+  });
+});
+
+describe('templateSavePatch (A-236)', () => {
+  const own = { name: 'Мой', body: 'a: 1', isDefault: false };
+  it('новый целиком, имя обрезано', () => {
+    expect(templateSavePatch(null, ' Мой ', 'b')).toEqual({ name: 'Мой', body: 'b' });
+  });
+  it('существующий только изменённое; ничего не изменено: null', () => {
+    expect(templateSavePatch(own, 'Мой', 'a: 1')).toBeNull();
+    expect(templateSavePatch(own, 'Новый', 'a: 1')).toEqual({ name: 'Новый' });
+    expect(templateSavePatch(own, 'Мой', 'a: 2')).toEqual({ body: 'a: 2' });
+  });
+  it('у Default имя не уходит вовсе', () => {
+    expect(templateSavePatch({ ...own, name: 'Default', isDefault: true }, 'Default', 'x')).toEqual({ body: 'x' });
+  });
+});
+
 describe('templatesScreenFacts', () => {
   it('1. сервер отвечает 404: экран заглушка, а не ошибка и не пустота', () => {
     expect(templatesScreenFacts({ notImplemented: true }).state).toBe('unavailable');
   });
 
-  it('2. ответа ещё нет: тоже не «пусто», иначе врём на каждое открытие', () => {
-    expect(templatesScreenFacts({}).state).toBe('unavailable');
+  it('2. ответа ещё нет: загрузка, а не «пусто» и не «ещё не выпущено»', () => {
+    expect(templatesScreenFacts({}).state).toBe('loading');
+  });
+
+  it('2а. A-236 (из A-233 п.d): сбой не 404 это сбой; 404 остаётся «ещё не выпущено»', () => {
+    expect(templatesScreenFacts({ failed: true }).state).toBe('failed');
+    expect(templatesScreenFacts({ failed: true, notImplemented: true }).state).toBe('unavailable');
   });
 
   it('3. сервер ответил пустым списком: это ПУСТО, приглашение создать', () => {

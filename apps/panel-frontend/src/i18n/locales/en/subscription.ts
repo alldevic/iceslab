@@ -213,6 +213,9 @@ export const subscription = {
     restoreBody:
       'The body is replaced with the built-in one. Your edits to it are gone, and there is nowhere to get them back from: the panel keeps no copy.',
     defaultProtected: 'Default cannot be deleted: everyone without a template of their own runs on it.',
+    // A-236: 409 TEMPLATE_DEFAULT_PROTECTED on a rename and TEMPLATE_NOT_DEFAULT on a restore.
+    defaultKeepsName: 'Default is not renamed: subscriptions find it by this name.',
+    notDefault: 'Only a Default can be restored: an own template has no built-in body.',
     deleteTitle: 'Delete {{name}}?',
     deleteBody:
       'Delivery rules that named this template start serving the Default of their type. The template itself cannot be brought back.',
@@ -234,6 +237,7 @@ export const subscription = {
     confirmBody: 'The core accepts the config. The notes above stay, and they are visible only here.',
     invalid: 'The server refused the template:',
     invalidAtLine: 'Line {{line}}:',
+    invalidAtLineColumn: 'Line {{line}}, column {{column}}:',
     invalidNoMessage: 'no explanation given',
     // The first thing missing, not a list of complaints.
     blocker: {

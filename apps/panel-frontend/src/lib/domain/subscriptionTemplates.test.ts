@@ -37,17 +37,28 @@ describe('разбор ошибок шаблонов', () => {
     ).toEqual({ code: 'TEMPLATE_INVALID', message: 'bad yaml', line: 12 });
   });
 
+  it('3а. A-236: TEMPLATE_INVALID несёт и столбец; позиция не числом пропускается', () => {
+    expect(
+      templateRefusal({
+        response: { status: 400, data: { error: 'TEMPLATE_INVALID', message: 'bad', line: 3, column: 7 } },
+      }),
+    ).toEqual({ code: 'TEMPLATE_INVALID', message: 'bad', line: 3, column: 7 });
+    expect(
+      templateRefusal({ response: { status: 400, data: { error: 'TEMPLATE_INVALID', line: '3', column: 0 } } }),
+    ).toEqual({ code: 'TEMPLATE_INVALID', message: undefined, line: undefined, column: undefined });
+  });
+
   it('4. чужой код не выдаётся за свой', () => {
     expect(templateRefusal({ response: { status: 409, data: { error: 'PORT_TAKEN_PROFILE' } } })).toBeNull();
   });
 
-  it('5. Default защищён и имя занято это ОТДЕЛЬНЫЕ коды', () => {
-    expect(templateRefusal({ response: { data: { error: 'TEMPLATE_DEFAULT_PROTECTED' } } })?.code).toBe(
-      'TEMPLATE_DEFAULT_PROTECTED',
-    );
-    expect(templateRefusal({ response: { data: { error: 'TEMPLATE_NAME_TAKEN' } } })?.code).toBe(
-      'TEMPLATE_NAME_TAKEN',
-    );
+  it('5. Default защищён, имя занято и «не Default» это ОТДЕЛЬНЫЕ коды, каждый со своим статусом', () => {
+    const res = (status: number, error: string) => ({ response: { status, data: { error } } });
+    expect(templateRefusal(res(409, 'TEMPLATE_DEFAULT_PROTECTED'))?.code).toBe('TEMPLATE_DEFAULT_PROTECTED');
+    expect(templateRefusal(res(409, 'TEMPLATE_NAME_TAKEN'))?.code).toBe('TEMPLATE_NAME_TAKEN');
+    expect(templateRefusal(res(409, 'TEMPLATE_NOT_DEFAULT'))?.code).toBe('TEMPLATE_NOT_DEFAULT');
+    expect(templateRefusal(res(400, 'TEMPLATE_NAME_TAKEN'))).toBeNull();
+    expect(templateRefusal(res(409, 'toString'))).toBeNull();
   });
 });
 

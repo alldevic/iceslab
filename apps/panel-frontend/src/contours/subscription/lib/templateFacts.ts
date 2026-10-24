@@ -15,7 +15,7 @@ import {
  * «сервер ещё не умеет» выглядит как потерянные данные; ошибка вместо обоих
  * зовёт чинить исправное.
  */
-export type TemplatesScreenState = 'unavailable' | 'empty' | 'list';
+export type TemplatesScreenState = 'unavailable' | 'loading' | 'failed' | 'empty' | 'list';
 
 export interface TemplatesScreenFacts {
   state: TemplatesScreenState;
@@ -30,12 +30,14 @@ export function templatesScreenFacts(input: {
   templates?: SubscriptionTemplate[];
   /** Сервер ответил «такого маршрута нет», то есть фаза 11 не доехала. */
   notImplemented?: boolean;
+  /** Запрос упал не 404 (сеть, 5xx): сбой, а не «ещё не выпущено» (A-233 п.d). */
+  failed?: boolean;
 }): TemplatesScreenFacts {
   if (input.notImplemented) return { state: 'unavailable', groups: [], total: 0 };
   const list = input.templates;
-  // Ответа ещё нет: это не «пусто». Экран в этот момент показывает загрузку, и
-  // сказать «шаблонов нет» значило бы соврать на полсекунды каждому открытию.
-  if (!list) return { state: 'unavailable', groups: [], total: 0 };
+  // Ответа нет: это не «пусто» и не «сервер не умеет». Пока идёт, загрузка;
+  // упал не 404, сбой с повтором (A-236, из A-233 п.d).
+  if (!list) return { state: input.failed ? 'failed' : 'loading', groups: [], total: 0 };
   if (list.length === 0) return { state: 'empty', groups: [], total: 0 };
 
   const groups = TEMPLATE_TYPES.map((type) => ({
@@ -131,6 +133,44 @@ export function templateEditorFacts(input: {
   const blocker: TemplateEditorFacts['blocker'] =
     input.name.trim() === '' ? 'name' : input.body.trim() === '' ? 'body' : !input.dirty ? 'clean' : null;
   return { ...base, canSave: blocker === null, blocker };
+}
+
+/**
+ * Ворота редактора шаблона (A-236, из A-233 п.d). Новый шаблон открывается
+ * сразу. Существующий ждёт список: при сбое не открывается пустым, а говорит
+ * сбой с повтором; «удалён» только когда список пришёл без него; 404 списка
+ * это «ещё не выпущено», как на экране списка.
+ */
+export type TemplateEditGate = 'ready' | 'loading' | 'failed' | 'gone' | 'unavailable';
+
+export function templateEditGate(
+  isNew: boolean,
+  q: { data: unknown; isError: boolean },
+  notImplemented: boolean,
+  found: boolean,
+): TemplateEditGate {
+  if (isNew) return 'ready';
+  if (notImplemented) return 'unavailable';
+  if (q.data === undefined || q.data === null) return q.isError ? 'failed' : 'loading';
+  return found ? 'ready' : 'gone';
+}
+
+/**
+ * Что уходит при сохранении (A-236). Новый шаблон целиком; существующий
+ * только изменённое, отсутствие ключа на сервере это отсутствие правки. Имя
+ * Default не уходит вовсе: оно не меняется. Нечего слать: null.
+ */
+export function templateSavePatch(
+  template: Pick<SubscriptionTemplate, 'name' | 'body' | 'isDefault'> | null,
+  name: string,
+  body: string,
+): { name?: string; body?: string } | null {
+  const typed = name.trim();
+  if (!template) return { name: typed, body };
+  const out: { name?: string; body?: string } = {};
+  if (!template.isDefault && typed !== template.name) out.name = typed;
+  if (body !== template.body) out.body = body;
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 /**

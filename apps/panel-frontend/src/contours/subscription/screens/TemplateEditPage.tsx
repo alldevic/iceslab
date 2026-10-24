@@ -27,9 +27,12 @@ import {
   dryRunFacts,
   dryRunForBody,
   templateActions,
+  templateEditGate,
   templateEditorFacts,
+  templateSavePatch,
   type ImportFacts,
 } from '@/contours/subscription/lib/templateFacts';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { CodeArea } from '@/contours/subscription/components/CodeArea';
 import { AMBER, CARD, CYAN, DIM, FAINT, HAIRLINE, MIST, MOSS, RED, SNOW } from '@/contours/subscription/lib/colors';
 
@@ -77,6 +80,8 @@ export function TemplateEditPage() {
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   /** Строка, на которую указал сервер в TEMPLATE_INVALID. */
   const [errorLine, setErrorLine] = useState<number | null>(null);
+  /** Столбец там же (A-236, 29d1f62c), когда сервер его знает. */
+  const [errorColumn, setErrorColumn] = useState<number | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [nameTaken, setNameTaken] = useState(false);
 
@@ -127,10 +132,14 @@ export function TemplateEditPage() {
   });
 
   const save = useMutation({
-    mutationFn: () =>
-      isNew
-        ? createTemplate({ type, name: name.trim(), body })
-        : updateTemplate(id, { name: name.trim(), body }),
+    mutationFn: () => {
+      // Only what changed; the name of a Default never goes (templateSavePatch).
+      const patch = templateSavePatch(isNew ? null : template, name, body);
+      if (!patch) throw new Error('nothing changed');
+      return isNew
+        ? createTemplate({ type, name: patch.name ?? name.trim(), body: patch.body ?? body })
+        : updateTemplate(id, patch);
+    },
     onSuccess: (saved) => {
       qc.invalidateQueries({ queryKey: ['subscription-templates'] });
       notifications.show({ color: 'green', message: t('common.saved') });
@@ -138,6 +147,7 @@ export function TemplateEditPage() {
     },
     onError: (err) => {
       setErrorLine(null);
+      setErrorColumn(null);
       setNameTaken(false);
       setRefusal(null);
       const r = templateRefusal(err);
@@ -145,11 +155,16 @@ export function TemplateEditPage() {
       // рядом с телом, занятое имя рядом с именем. Тост унёс бы и то и другое.
       if (r?.code === 'TEMPLATE_INVALID') {
         setErrorLine(r.line ?? null);
+        setErrorColumn(r.column ?? null);
         setRefusal(r.message ?? t('templates.invalidNoMessage'));
         return;
       }
       if (r?.code === 'TEMPLATE_NAME_TAKEN') {
         setNameTaken(true);
+        return;
+      }
+      if (r?.code === 'TEMPLATE_DEFAULT_PROTECTED') {
+        notifications.show({ color: 'red', title: t('common.saveError'), message: t('templates.defaultKeepsName') });
         return;
       }
       notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
@@ -168,14 +183,17 @@ export function TemplateEditPage() {
       setRun(null);
       setRanForBody(null);
       setErrorLine(null);
+      setErrorColumn(null);
       setRefusal(null);
       notifications.show({ color: 'green', message: t('templates.restored') });
     },
     onError: (err) =>
       notifications.show({
-        color: isNotImplemented(err) ? 'yellow' : 'red',
+        color: 'red',
         title: t('templates.restoreFailed'),
-        message: isNotImplemented(err) ? t('templates.dryRunUnavailable') : apiErrorMessage(err),
+        // Only a Default has a built-in body to go back to (409 TEMPLATE_NOT_DEFAULT).
+        message:
+          templateRefusal(err)?.code === 'TEMPLATE_NOT_DEFAULT' ? t('templates.notDefault') : apiErrorMessage(err),
       }),
   });
 
@@ -258,8 +276,19 @@ export function TemplateEditPage() {
     save.mutate();
   }
 
-  if (!isNew && query.isSuccess && !template) {
-    return <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST }}>{t('templates.gone')}</Text>;
+  // A-236 (from A-233 d): an existing template waits for the list. A failed
+  // list is said with a retry instead of opening an empty editor whose save
+  // would write empty fields over the template.
+  const gate = templateEditGate(isNew, query, isNotImplemented(query.error), template !== null);
+  if (gate === 'failed') {
+    return <LoadFailed message={apiErrorMessage(query.error)} onRetry={() => void query.refetch()} />;
+  }
+  if (gate !== 'ready') {
+    return (
+      <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST }}>
+        {gate === 'gone' ? t('templates.gone') : gate === 'unavailable' ? t('templates.soonTitle') : t('common.loading')}
+      </Text>
+    );
   }
 
   return (
@@ -420,7 +449,11 @@ export function TemplateEditPage() {
             }}
           >
             <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: RED }}>
-              {errorLine ? t('templates.invalidAtLine', { line: errorLine }) : t('templates.invalid')}
+              {errorLine && errorColumn
+                ? t('templates.invalidAtLineColumn', { line: errorLine, column: errorColumn })
+                : errorLine
+                  ? t('templates.invalidAtLine', { line: errorLine })
+                  : t('templates.invalid')}
             </Text>
             <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: SNOW, flex: 1 }}>
               {refusal}
