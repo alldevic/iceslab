@@ -133,7 +133,7 @@ export const users = {
     devicesEmpty:
       'No devices, which is normal: a row appears the first time a client sends its identifier.',
     devicesFull: 'Every slot is taken. A new device cannot connect until one of these is reset.',
-    devicesError: 'Could not load the device list.',
+    devicesError: 'the device list',
     deviceReset: 'Device reset',
     deviceResetHint: 'Reset this device and free its slot',
     traffic: 'Traffic',

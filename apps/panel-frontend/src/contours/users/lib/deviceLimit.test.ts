@@ -1,7 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { deviceLimitCell, effectiveDeviceCap } from '@/contours/users/lib/deviceLimit';
+import { deviceLimitCell, deviceListView, effectiveDeviceCap } from '@/contours/users/lib/deviceLimit';
 import { USER_COLUMN_BY_ID } from '@/contours/users/lib/usersTable';
 import { users as ru } from '@/i18n/locales/ru/users';
+import { loadFailure } from '@/lib/ui/loadView';
+
+describe('deviceListView (A-254): список устройств не пришёл', () => {
+  const say = (err: unknown) => (err as Error).message;
+  const q = (data: { devices: unknown[] } | undefined, error: Error | null = null) => ({
+    data,
+    isError: error !== null,
+    error,
+    refetch: () => undefined,
+  });
+  const failureOf = (x: Parameters<typeof loadFailure>[0]) => loadFailure(x, say);
+  it('сбой это «-» в счётчике и слова сервера с повтором, а не 0 из N', () => {
+    const v = deviceListView(q(undefined, new Error('db down')), failureOf);
+    expect(v.used).toBeNull();
+    expect(v.failure?.message).toBe('db down');
+    expect(typeof v.failure?.onRetry).toBe('function');
+  });
+  it('в пути «-» без сбоя; пришёл пустым это 0', () => {
+    expect(deviceListView(q(undefined), failureOf)).toEqual({ used: null, failure: null });
+    expect(deviceListView(q({ devices: [] }), failureOf)).toEqual({ used: 0, failure: null });
+    expect(deviceListView(q({ devices: [1, 2] }), failureOf).used).toBe(2);
+  });
+});
 
 describe('effectiveDeviceCap (A-148), как effectiveHwidLimit сервера', () => {
   it('0: явно без лимита, поверх сквада', () => {

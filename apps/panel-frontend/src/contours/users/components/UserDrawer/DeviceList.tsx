@@ -4,7 +4,9 @@ import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { DISPLAY, GROUND, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contours/users/lib/colors';
 import { LABEL } from '@/contours/users/lib/userForm';
 import { deleteHwidDevice, listUserDevices } from '@/lib/domain/users';
-import type { DeviceCap } from '@/contours/users/lib/deviceLimit';
+import { deviceListView, type DeviceCap } from '@/contours/users/lib/deviceLimit';
+import { loadFailure } from '@/lib/ui/loadView';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { notifications } from '@mantine/notifications';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -34,8 +36,10 @@ export function DeviceList({ userId, cap }: { userId: string; cap: DeviceCap }) 
   });
 
   const devices = devicesQuery.data?.devices ?? [];
-  const used = devices.length;
-  const full = cap.kind === 'limit' && used >= cap.limit;
+  // A-254: a list that did not arrive counts «-», not 0, and says why with a retry.
+  const view = deviceListView(devicesQuery, (q) => loadFailure(q, apiErrorMessage));
+  const used = view.used ?? '-';
+  const full = cap.kind === 'limit' && view.used !== null && view.used >= cap.limit;
   const counter =
     cap.kind === 'limit'
       ? t(cap.from === 'squad' ? 'userDrawer.devicesCounterSquad' : 'userDrawer.devicesCounter', { used, limit: cap.limit })
@@ -64,8 +68,11 @@ export function DeviceList({ userId, cap }: { userId: string; cap: DeviceCap }) 
       {devicesQuery.isLoading && (
         <Text style={{ fontSize: 11, color: MIST }}>{t('common.loading')}</Text>
       )}
-      {devicesQuery.isError && (
-        <Text style={{ fontSize: 11, color: RED }}>{t('userDrawer.devicesError')}</Text>
+      {view.failure && (
+        <LoadFailedLine
+          message={`${t('userDrawer.devicesError')}: ${view.failure.message}`}
+          onRetry={view.failure.onRetry}
+        />
       )}
 
       <Stack gap={5}>
