@@ -49,8 +49,41 @@ export interface Host {
    * нет по контракту.
    */
   hiddenByCascade?: { cascadeId: string; cascadeName: string } | null;
+  /**
+   * A-236 step 6. The line a client app that understands it shows under the
+   * server name (one line, up to HOST_SERVER_DESCRIPTION_MAX code points);
+   * `null` = none. No key: a server older than step 6, which has not said.
+   */
+  serverDescription?: string | null;
+  /**
+   * The operator hid the host: no subscription hands it out, except a
+   * template with includeHiddenHosts. Not `hiddenByCascade`, which is the
+   * cascade's doing. No key: a server older than step 6, never read as «no».
+   */
+  isHidden?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * 400 VALIDATION_ERROR at `serverDescription` (A-236 step 6): the server's
+ * sentence from `issues[].message`, said at the field. The input is checked
+ * first; any other refusal is not this one.
+ */
+export function serverDescriptionRefusal(err: unknown): string | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 400 || !data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.error !== 'VALIDATION_ERROR' || !Array.isArray(d.issues)) return null;
+  for (const i of d.issues) {
+    if (!i || typeof i !== 'object') continue;
+    const { path, message } = i as { path?: unknown; message?: unknown };
+    if (Array.isArray(path) && path[0] === 'serverDescription' && typeof message === 'string') return message;
+  }
+  return null;
 }
 
 /**
@@ -128,6 +161,9 @@ export interface CreateHostInput {
   allowInsecure?: boolean;
   securityLayer?: 'default' | 'tls' | 'none';
   disableForFormats?: string[];
+  /** A-236 step 6: sent only when set or changed (visibilityPatch); null clears. */
+  serverDescription?: string | null;
+  isHidden?: boolean;
 }
 
 // The binding is immutable: moving a host to another node is a delete plus a

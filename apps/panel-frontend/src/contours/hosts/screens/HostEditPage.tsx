@@ -26,7 +26,10 @@ import {
   IconServer2,
   IconShield,
   IconStack2,
+  IconX,
 } from '@tabler/icons-react';
+import { HOST_SERVER_DESCRIPTION_MAX } from '@iceslab/shared';
+import { descriptionProblem, visibilityKnown, visibilityPatch } from '@/contours/hosts/lib/hostVisibility';
 import {
   createHost,
   getHostFreshness,
@@ -38,6 +41,7 @@ import {
   updateHost,
   hostPortPayload,
   hostPortShared,
+  serverDescriptionRefusal,
 } from '@/lib/domain/hosts';
 import { profileNotOnNodeWords } from '@/lib/domain/profileNotOnNodeWords';
 import { modals } from '@mantine/modals';
@@ -191,6 +195,10 @@ export function HostEditPage() {
   const [alpn, setAlpn] = useState<string[]>([]);
   const [securityLayer, setSecurityLayer] = useState<'default' | 'tls' | 'none'>('default');
   const [disabledFormats, setDisabledFormats] = useState<string[]>([]);
+  // A-236 step 6: the host's own line for clients that show it, and «hidden».
+  const [description, setDescription] = useState('');
+  const [hidden, setHidden] = useState(false);
+  const [descriptionRefusal, setDescriptionRefusal] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [nodeSearch, setNodeSearch] = useState('');
   const [onlyAttachable, setOnlyAttachable] = useState(false);
@@ -372,6 +380,9 @@ export function HostEditPage() {
     setAlpn(host.alpn);
     setSecurityLayer(host.securityLayer);
     setDisabledFormats(host.disableForFormats);
+    setDescription(host.serverDescription ?? '');
+    setHidden(host.isHidden ?? false);
+    setDescriptionRefusal(null);
     setDirty(false);
   }
 
@@ -466,6 +477,10 @@ export function HostEditPage() {
     t,
   ]);
 
+  // Drawn and sent only when the server carries the keys (visibilityKnown).
+  const visibilityOn = visibilityKnown(isNew, host ? { isHidden: host.isHidden } : null, hostsQuery.data?.hosts);
+  const descriptionIssue = visibilityOn ? descriptionProblem(description) : null;
+
   const saveMutation = useMutation({
     // `confirmSharedPort`: the second try after HOST_PORT_SHARED, when the
     // operator agreed to move the other hosts of the inbound as well.
@@ -486,6 +501,14 @@ export function HostEditPage() {
         alpn: can('alpn') ? alpn : [],
         securityLayer: can('securityLayer') ? securityLayer : ('default' as const),
         disableForFormats: disabledFormats,
+        // Only what was set or changed; clearing is null (visibilityPatch).
+        ...(visibilityOn
+          ? visibilityPatch(
+              isNew ? null : { serverDescription: host?.serverDescription, isHidden: host?.isHidden },
+              description,
+              hidden,
+            )
+          : {}),
       };
       if (isNew) {
         // Say what the operator means: serve this profile from this node on this
@@ -512,6 +535,7 @@ export function HostEditPage() {
       setSniExpected(null);
       setCoreRefusal(null);
       setSlotRefusal(null);
+      setDescriptionRefusal(null);
       notifications.show({
         color: 'green',
         message: isNew ? t('hostEdit.created') : t('hostEdit.saved'),
@@ -519,6 +543,12 @@ export function HostEditPage() {
       if (isNew && saved) navigate(`/hosts/${saved.id}`, { replace: true });
     },
     onError: (err) => {
+      // A-236 step 6: the server's sentence about the description, at its field.
+      const described = serverDescriptionRefusal(err);
+      if (described) {
+        setDescriptionRefusal(described);
+        return;
+      }
       // The API refuses an SNI the node would not serve, and says which names it
       // does. Naming them on the field beats a red toast the operator has to
       // translate into an action.
@@ -663,7 +693,9 @@ export function HostEditPage() {
         ? t('hostEdit.needPort')
         : isNew && !nodeId
           ? t('hostEdit.needNode')
-          : null;
+          : descriptionIssue
+            ? t('hostEdit.needDescription')
+            : null;
 
   const selectedProfile = profiles.find((p) => p.id === profileId);
   // A-231: the format chips are the one answer to «who will not get this
@@ -878,6 +910,69 @@ export function HostEditPage() {
                 <Hint>{t('hostEdit.stateHint')}</Hint>
               </Box>
             </Box>
+
+            {/* A-236 step 6: drawn only when the server carries the keys; an
+                older server has said nothing about either. */}
+            {visibilityOn && (
+              <Box style={{ display: 'flex', gap: 16 }}>
+                <Box style={{ flex: 2 }}>
+                  <TextInput
+                    label={t('hostEdit.description')}
+                    placeholder={t('hostEdit.descriptionPlaceholder')}
+                    value={description}
+                    error={descriptionIssue || descriptionRefusal ? true : undefined}
+                    onChange={(e) => {
+                      setDescription(e.currentTarget.value);
+                      setDescriptionRefusal(null);
+                      setDirty(true);
+                    }}
+                    rightSection={
+                      description !== '' ? (
+                        <UnstyledButton
+                          type="button"
+                          aria-label={t('hostEdit.descriptionClear')}
+                          onClick={() => {
+                            setDescription('');
+                            setDescriptionRefusal(null);
+                            setDirty(true);
+                          }}
+                        >
+                          <IconX size={14} stroke={1.8} color={MIST} />
+                        </UnstyledButton>
+                      ) : undefined
+                    }
+                  />
+                  {descriptionRefusal ? (
+                    <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED }}>
+                      {descriptionRefusal}
+                    </Text>
+                  ) : descriptionIssue ? (
+                    <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED }}>
+                      {t(`hostEdit.descriptionProblem.${descriptionIssue}`, { max: HOST_SERVER_DESCRIPTION_MAX })}
+                    </Text>
+                  ) : (
+                    <Hint>
+                      {t('hostEdit.descriptionHint', {
+                        used: [...description].length,
+                        max: HOST_SERVER_DESCRIPTION_MAX,
+                      })}
+                    </Hint>
+                  )}
+                </Box>
+                <Box style={{ flex: 1 }}>
+                  <Text style={{ ...LABEL, marginBottom: 8 }}>{t('hostEdit.hiddenLabel')}</Text>
+                  <Switch
+                    checked={hidden}
+                    onChange={(e) => {
+                      setHidden(e.currentTarget.checked);
+                      setDirty(true);
+                    }}
+                    label={hidden ? t('hostEdit.hiddenOn') : t('hostEdit.hiddenOff')}
+                  />
+                  <Hint>{t('hostEdit.hiddenHint')}</Hint>
+                </Box>
+              </Box>
+            )}
 
             {/* The address is one line for however many nodes stand behind the
                 host, so it belongs here rather than under Advanced: with one

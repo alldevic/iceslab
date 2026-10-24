@@ -40,6 +40,7 @@ import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { apiErrorMessage } from '@/lib/net/client';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { hostsBarCounts, listsArrived } from '@/contours/hosts/lib/hostsView';
+import { hiddenByOperator } from '@/contours/hosts/lib/hostVisibility';
 import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
 import { COUNTRIES } from '@/lib/domain/countries';
 import { AMBER, CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/hosts/lib/colors';
@@ -354,7 +355,7 @@ export function HostsPage() {
 }
 
 type Row = {
-  host: { id: string; remark: string; enabled: boolean; priority: number };
+  host: { id: string; remark: string; enabled: boolean; priority: number; isHidden?: boolean };
   // `effectiveEngine` rides along: a profile row names the pair, and the engine
   // half is not derivable here on purpose.
   profile?: { name: string; protocol: string; effectiveEngine: EngineName };
@@ -430,6 +431,25 @@ function HostCard({
         {row.port !== null && (
           <Text style={{ fontFamily: MONO, fontSize: 14, fontWeight: 500, color: CYAN_HI }}>
             {row.port}
+          </Text>
+        )}
+        {/* A-236 step 6: the operator hid it; apart from the cascade's line below. */}
+        {hiddenByOperator(row.host) && (
+          <Text
+            title={t('hostEdit.hiddenHint')}
+            style={{
+              fontFamily: MONO,
+              fontSize: 10,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              color: AMBER,
+              padding: '2px 7px',
+              borderRadius: 5,
+              border: `1px solid ${AMBER}55`,
+              flexShrink: 0,
+            }}
+          >
+            {t('hostEdit.hiddenOn')}
           </Text>
         )}
         {row.address && (
