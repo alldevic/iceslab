@@ -12,7 +12,8 @@ function engineName(e: string, t: T): string {
 /**
  * 409 PROFILE_DOES_NOT_RUN_ON_NODE in the panel's words (A-235): which node,
  * which core the profile needs, what the node reported, and whether waiting
- * helps. It used to be read as «port taken» with the server's English.
+ * helps. One function for the host page and the deploy window (A-246): the
+ * same refusal is said the same way wherever a binding is written.
  */
 export function profileNotOnNodeWords(r: ProfileNotOnNode, t: T): string {
   const reported = r.reportedEngines.length

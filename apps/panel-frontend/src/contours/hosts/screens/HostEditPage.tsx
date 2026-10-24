@@ -39,7 +39,7 @@ import {
   hostPortPayload,
   hostPortShared,
 } from '@/lib/domain/hosts';
-import { profileNotOnNodeWords } from '@/contours/hosts/lib/hostRefusals';
+import { profileNotOnNodeWords } from '@/lib/domain/profileNotOnNodeWords';
 import { modals } from '@mantine/modals';
 import { apiErrorMessage } from '@/lib/net/client';
 import { hostEditGate } from '@/contours/hosts/lib/hostsView';

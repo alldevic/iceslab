@@ -27,10 +27,10 @@ import {
   type Profile,
 } from '@/lib/domain/profiles';
 import { deployDiff } from '@/contours/profiles/lib/deployDiff';
-import { deployOutcome, DeployIncomplete } from '@/contours/profiles/lib/deployResult';
+import { deployFailed, deployOutcome, DeployIncomplete } from '@/contours/profiles/lib/deployResult';
 import { adapterRefusalWords, type AdapterRefusal } from '@/lib/domain/adapterSlot';
 import { plainDefaultPort } from '@/contours/profiles/lib/plainSubprotocol';
-import { hostHiddenFacts, listHosts, type Host } from '@/lib/domain/hosts';
+import { hostHiddenFacts, listHosts, type Host, type ProfileNotOnNode } from '@/lib/domain/hosts';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
 import { LoadFailedLine } from '@/ui/LoadFailed';
 import { loadFailure } from '@/lib/ui/loadView';
@@ -58,6 +58,7 @@ import {
   awgGateText,
   awgProfilePrediction,
   coreGateRefusal,
+  coreGateText,
   nodeCoreBlocks,
   nodeCoreFit,
   nodeCoreFitText,
@@ -65,6 +66,7 @@ import {
 } from '@/lib/domain/nodeCoreFit';
 import { NodeCoreLine } from '@/ui/NodeCoreLine';
 import { CoreGateRefusalLine } from '@/ui/CoreGateRefusalLine';
+import { profileNotOnNodeWords } from '@/lib/domain/profileNotOnNodeWords';
 
 interface Props {
   profile: Profile | null;
@@ -250,12 +252,15 @@ export function DeployProfileModal({ profile, onClose }: Props) {
   const [coreRefusal, setCoreRefusal] = useState<CoreGateRefusal | null>(null);
   /** A-055: ADAPTER_SLOT_TAKEN / MIERU_MTU_MISMATCH by the node the binding was sent for. */
   const [adapterRefusals, setAdapterRefusals] = useState<Map<string, AdapterRefusal>>(new Map());
+  /** A-246: PROFILE_DOES_NOT_RUN_ON_NODE by the node the binding was sent for, in the host page's words. */
+  const [notOnNode, setNotOnNode] = useState<Map<string, ProfileNotOnNode>>(new Map());
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!profile) return;
       setCoreRefusal(null);
       setAdapterRefusals(new Map());
+      setNotOnNode(new Map());
       // Поштучно: POST на новую галку, DELETE на снятую. Снимается только то,
       // что оператор снял сам (`deployDiff`).
       const { create: toCreate, remove: toDelete } = deployDiff(
@@ -271,7 +276,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
         Promise.allSettled(toDelete.map((id) => deleteBinding(id))),
       ]);
       const outcome = deployOutcome(toCreate, creates, deletes);
-      if (outcome.refused.size > 0 || outcome.other !== null) throw new DeployIncomplete(outcome);
+      if (deployFailed(outcome)) throw new DeployIncomplete(outcome);
       return { created: outcome.created, deleted: outcome.deleted };
     },
     onSuccess: (result) => {
@@ -301,6 +306,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
         // The key-impact warning on the same page counts what now stands (A-225).
         qc.invalidateQueries({ queryKey: ['profile-key-impact'] });
         setAdapterRefusals(failure.outcome.refused);
+        setNotOnNode(failure.outcome.notOnNode);
         if (failure.outcome.other === null) return;
         err = failure.outcome.other;
       }
@@ -325,6 +331,12 @@ export function DeployProfileModal({ profile, onClose }: Props) {
         setCoreRefusal(core);
         return;
       }
+      // A node not in this window: the toast says it in the same words as the
+      // host page (coreGateText), not the server's sentence (A-246).
+      if (core) {
+        notifications.show({ color: 'red', title: t('common.saveError'), message: coreGateText(core, t) });
+        return;
+      }
       // A profile saved on sing-box before the form locked its tile: the node
       // would not render it, and the binding is refused naming the field.
       const sb = singboxXrayRefusal(err);
@@ -340,6 +352,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
     // Отказ был про прежний набор нод.
     setCoreRefusal(null);
     setAdapterRefusals(new Map());
+    setNotOnNode(new Map());
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(nodeId)) next.delete(nodeId);
@@ -482,6 +495,11 @@ export function DeployProfileModal({ profile, onClose }: Props) {
                   {adapterRefusals.has(node.id) && (
                     <Text size="xs" c="red" style={{ lineHeight: '15px' }}>
                       {adapterRefusalWords({ ...adapterRefusals.get(node.id)!, nodeName: null }, t)}
+                    </Text>
+                  )}
+                  {notOnNode.has(node.id) && (
+                    <Text size="xs" c="red" style={{ lineHeight: '15px' }}>
+                      {profileNotOnNodeWords(notOnNode.get(node.id)!, t)}
                     </Text>
                   )}
                   {coreRefusal?.nodeName === node.name && (

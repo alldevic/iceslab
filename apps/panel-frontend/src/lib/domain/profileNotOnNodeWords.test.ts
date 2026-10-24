@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { portConflict, profileNotOnNode } from '@/lib/domain/hosts';
-import { profileNotOnNodeWords } from '@/contours/hosts/lib/hostRefusals';
+import { profileNotOnNodeWords } from '@/lib/domain/profileNotOnNodeWords';
 
 const res = (status: number, data: unknown) => ({ response: { status, data } });
 const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ' ' + JSON.stringify(vars) : ''}`;
