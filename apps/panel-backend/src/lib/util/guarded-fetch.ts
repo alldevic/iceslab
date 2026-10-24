@@ -35,6 +35,12 @@ export function isBlockedHost(host: string): boolean {
   // must not be blocked): loopback ::1, unique-local fc00::/7, link-local
   // fe80::/10.
   if (h.includes(':') && (h === '::1' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h))) return true;
+  // An IPv4 written as IPv6 is refused whole, whatever the IPv4: the
+  // IPv4-mapped form (`[::ffff:127.0.0.1]` reaches here as `::ffff:7f00:1`)
+  // and the NAT64 prefix 64:ff9b::/96 are both a road to an internal IPv4.
+  if (h.includes(':') && (/^(0{0,4}:){0,5}:?ffff:/.test(h) || h.startsWith('::ffff:') || /^64:ff9b:(0{0,4}:){0,4}:?/.test(h))) {
+    return true;
+  }
   return BLOCKED_HOST_PATTERNS.some((re) => re.test(h));
 }
 

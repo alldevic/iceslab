@@ -98,4 +98,13 @@ describe('the addresses', () => {
     }
     expect(isBlockedHost('lists.example.com')).toBe(false);
   });
+
+  it('an IPv4 written as IPv6 is refused whole: mapped ::ffff: and NAT64 64:ff9b::/96', () => {
+    for (const url of ['http://[::ffff:127.0.0.1]/x', 'http://[::ffff:10.0.0.5]/x', 'http://[64:ff9b::7f00:1]/x', 'http://[::ffff:8.8.8.8]/x']) {
+      expect(isBlockedHost(new URL(url).hostname), url).toBe(true);
+    }
+    // Ordinary public IPv6 stays allowed.
+    expect(isBlockedHost(new URL('http://[2001:db8::1]/x').hostname)).toBe(false);
+    expect(isBlockedHost(new URL('http://[2606:4700::1111]/x').hostname)).toBe(false);
+  });
 });
