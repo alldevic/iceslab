@@ -215,6 +215,25 @@ export const nodes = {
       'The ordered rules this node uses to decide which door traffic leaves by. One policy can sit on several nodes.',
     policyNone: 'No policy',
     policyReachAll: 'Every core on this node applies the policy: {{cores}}.',
+    // A-232: which rules of the saved policy reach the node.
+    policyDrawing: {
+      bySent: 'By the drawing the panel sends to the node ({{drawing}}):',
+      allSent: 'every rule goes out to the node.',
+      notSent: 'rule {{rule}} does not go out to the node: {{reason}}.',
+      reason: {
+        'lost-condition': 'a whole kind of its conditions cannot be read',
+        'direction-not-dialled': 'the node dials its direction by no leg, or by more than one',
+        'no-cascade-drawing': 'the push gives xray no way out into the cascade (a transit or exit under a chain, an entry on hysteria or AmneziaWG)',
+      },
+      agentSilent: 'The agent does not report what it drew: an older agent, or not asked yet. This is not «everything goes out».',
+      mismatch: 'The panel sent {{sent}}, the agent drew {{drawn}}.',
+      agentNotDrawn: 'The agent did not draw rule {{rule}}.',
+      orphanExit: 'Exit d{{direction}} ({{exit}}) has no rule in the current policy.',
+      agentAgrees: 'The agent drew the same ({{drawing}}) and left no rule out.',
+      times: 'The agent rendered it {{rendered}}; the panel saw the report no later than {{observed}} (written on a change and every 10 min).',
+      stale: 'The agent report has not been seen for a while: over 15 minutes.',
+      unknown: 'What reaches the node is not known: the server answer did not arrive.',
+    },
     policyReachUnknown:
       'Whether this node applies the policy is not known: its agent predates the field and reports nothing about it for {{cores}}. This is not "does not apply": update the agent to get an answer.',
     policyReachSomeUnknown:

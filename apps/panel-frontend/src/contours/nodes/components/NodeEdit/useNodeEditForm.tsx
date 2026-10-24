@@ -217,6 +217,8 @@ export function useNodeEditForm() {
       qc.invalidateQueries({ queryKey: ['node', id] });
       qc.invalidateQueries({ queryKey: ['node-policies'] });
       qc.invalidateQueries({ queryKey: ['node-sync', id] });
+      // A-232: the drawing lines read the saved policy.
+      qc.invalidateQueries({ queryKey: ['policy-drawing', id] });
       form.resetDirty(form.values);
       notifications.show({ color: 'green', message: t('nodes.notify.updated') });
     },

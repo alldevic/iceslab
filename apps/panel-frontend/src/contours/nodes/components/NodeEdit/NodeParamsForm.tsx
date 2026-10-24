@@ -4,6 +4,7 @@ import { CARD, CYAN, HAIRLINE } from '@/contours/nodes/lib/colors';
 import { COUNTRY_OPTIONS } from '@/lib/domain/countries';
 import { FIELD } from '@/contours/nodes/lib/fieldStyles';
 import { PolicyReach } from '@/contours/nodes/components/NodeEdit/PolicyReach';
+import { PolicyDrawingLines } from '@/contours/nodes/components/NodeEdit/PolicyDrawingLines';
 import { PROTOCOL_OPTIONS } from '@/contours/nodes/lib/nodeProtocols';
 import { ServerIcon } from '@/contours/nodes/components/NodeEdit/icons';
 import { useTranslation } from 'react-i18next';
@@ -208,6 +209,14 @@ export function NodeParamsForm({
                   <PolicyReach
                     cores={node?.cores?.cores}
                     hasPolicy={Boolean(form.values.policyId)}
+                  />
+                )}
+                {/* A-232: which rules of the SAVED policy reach the node, and
+                    what the agent says it drew. */}
+                {node?.policyId && (
+                  <PolicyDrawingLines
+                    nodeId={node.id}
+                    policy={nodePoliciesQuery.data?.policies.find((p) => p.id === node.policyId)}
                   />
                 )}
                 {/* Пояснение у ВСЕХ трёх состояний, и это не многословие: в

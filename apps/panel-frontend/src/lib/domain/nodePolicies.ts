@@ -86,6 +86,66 @@ export interface NodePolicyInput {
   rules: PolicyRuleInput[];
 }
 
+/**
+ * GET /api/nodes/:id/policy-drawing (A-232, BACK 4c8cac67): which rules of the
+ * node's policy the push leaves out, by the drawing the panel SENDS, and
+ * beside it what the node's xray reports it drew (`agent`, null from an agent
+ * that does not report it). Read by `policyDrawingOf`, input checked first.
+ */
+export type PolicyDrawingKind = 'legacy' | 'handover' | 'none';
+export type PolicyNotDrawnReason = 'lost-condition' | 'direction-not-dialled' | 'no-cascade-drawing';
+
+export interface PolicyDrawing {
+  policyId: string | null;
+  drawing: PolicyDrawingKind;
+  /** Rules the push leaves out; a reason this build does not know stays as its code. */
+  notDrawn: { ruleId: string; reason: string }[];
+  agent: {
+    drawing: PolicyDrawingKind;
+    /** `ruleIds` empty: no rule of the current policy names that way out. */
+    notDrawn: { exit: string; direction: number; ruleIds: string[] }[];
+    renderedAt: string;
+    observedAt: string;
+  } | null;
+}
+
+export async function getPolicyDrawing(nodeId: string): Promise<unknown> {
+  const { data } = await api.get<unknown>(`/api/nodes/${nodeId}/policy-drawing`);
+  return data;
+}
+
+const DRAWINGS: readonly string[] = ['legacy', 'handover', 'none'];
+
+/** The answer, or null when it is not one (missing or malformed fields). */
+export function policyDrawingOf(data: unknown): PolicyDrawing | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d.drawing !== 'string' || !DRAWINGS.includes(d.drawing) || !Array.isArray(d.notDrawn)) return null;
+  if (!(d.policyId === null || typeof d.policyId === 'string') || !('agent' in d)) return null;
+  const notDrawn = d.notDrawn.flatMap((n) => {
+    const r = n && typeof n === 'object' ? (n as Record<string, unknown>) : null;
+    return r && typeof r.ruleId === 'string' && typeof r.reason === 'string' ? [{ ruleId: r.ruleId, reason: r.reason }] : [];
+  });
+  let agent: PolicyDrawing['agent'] = null;
+  if (d.agent !== null) {
+    const a = d.agent && typeof d.agent === 'object' ? (d.agent as Record<string, unknown>) : null;
+    if (!a || typeof a.drawing !== 'string' || !DRAWINGS.includes(a.drawing) || !Array.isArray(a.notDrawn)) return null;
+    if (typeof a.renderedAt !== 'string' || typeof a.observedAt !== 'string') return null;
+    agent = {
+      drawing: a.drawing as PolicyDrawingKind,
+      notDrawn: a.notDrawn.flatMap((n) => {
+        const r = n && typeof n === 'object' ? (n as Record<string, unknown>) : null;
+        if (!r || typeof r.exit !== 'string' || typeof r.direction !== 'number') return [];
+        const ruleIds = Array.isArray(r.ruleIds) ? r.ruleIds.filter((x): x is string => typeof x === 'string') : [];
+        return [{ exit: r.exit, direction: r.direction, ruleIds }];
+      }),
+      renderedAt: a.renderedAt,
+      observedAt: a.observedAt,
+    };
+  }
+  return { policyId: d.policyId as string | null, drawing: d.drawing as PolicyDrawingKind, notDrawn, agent };
+}
+
 export async function listNodePolicies(): Promise<{ policies: NodePolicy[] }> {
   const { data } = await api.get<{ policies: NodePolicy[] }>('/api/node-policies');
   return data;
