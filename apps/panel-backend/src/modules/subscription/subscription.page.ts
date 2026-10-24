@@ -98,6 +98,10 @@ export interface SubscriptionPageData {
    */
   awgNodes?: Array<{
     nodeName: string;
+    /** The endpoint's id (endpointId), what the per-node links carry in
+     *  `node=` (A-107): the label moves when a neighbour profile lands on the
+     *  node, the id does not. Absent: the label, as before. */
+    id?: string;
     /** The wg-quick config this node hands out. */
     conf?: string;
     /** Raw AmneziaVPN vpn:// key. Also what the copy button hands over, since
@@ -521,7 +525,7 @@ function renderSteps(
     const confs = (data.awgNodes ?? [])
       .map(
         (n) =>
-          `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&node=${encodeURIComponent(n.nodeName)}`))}">` +
+          `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&node=${encodeURIComponent(n.id ?? n.nodeName)}`))}">` +
           `<span class="conf-row__name">${esc(n.nodeName)}</span>` +
           `<span class="conf-row__file">awg-${esc(n.nodeName)}.conf</span></a>`,
       )
@@ -683,7 +687,7 @@ function renderDownloads(
   const perNode = (fmt: string): Row[] =>
     (data.awgNodes ?? []).map((n) => ({
       fmt,
-      q: `&amp;node=${encodeURIComponent(n.nodeName)}`,
+      q: `&amp;node=${encodeURIComponent(n.id ?? n.nodeName)}`,
       label: n.nodeName,
     }));
   const router: Row[] = [

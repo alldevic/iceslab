@@ -25,6 +25,7 @@ import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
 import { linkWithDescription } from './subscription.description.js';
 import { endpointsForFormat, isPlainXray, withoutDescription, type SubscriptionEndpoint } from './subscription.formats.js';
+import { endpointId, pickServer } from './endpoint-identity.js';
 import { matchRuleForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
 import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
@@ -85,8 +86,8 @@ const QuerySchema = z.object({
   // Node selector for single-node formats (wgconf, amneziavpn, outline).
   // wg-quick holds one tunnel per file and an Outline key one server, so a user
   // with several such nodes gets one link per node, each pinned with
-  // `?node=<node name>`. Matched against the endpoint's nodeName (unique among
-  // active nodes). Omitted = the first one.
+  // `?node=<endpoint id>` (endpointId, A-107); the label the links carried
+  // before is still taken when no id matches (pickServer). Omitted = the first.
   node: z.string().min(1).max(64).optional(),
   // Human landing-page language override. The page renders an in-page RU/EN
   // selector that links here; it wins over the panel default and the
@@ -736,10 +737,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           .filter((e) => e.protocol === 'amneziawg')
           .filter((e) => !awgSeen.has(e.nodeName) && !!awgSeen.add(e.nodeName))
           .map((e) => {
-            const conf = buildWgQuickConf(filtered, e.nodeName);
-            const vpn = buildAwgVpnLink(filtered, e.nodeName);
+            // By the endpoint's id, the key the per-node links carry (A-107).
+            const id = endpointId(e);
+            const conf = buildWgQuickConf(filtered, id);
+            const vpn = buildAwgVpnLink(filtered, id);
             return {
               nodeName: e.nodeName,
+              id,
               // The PAYLOADS, not pictures of them. The codes are drawn in the
               // browser now: three server-rendered SVGs cost about 49 KB gzip
               // on this page, the encoder costs 4.3 KB once, and the code on
@@ -798,7 +802,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         )
           .filter((e) => !ssSeen.has(e.nodeName) && !!ssSeen.add(e.nodeName))
           .flatMap((e) => {
-            const key = outlineAccessKey(subUrl, e.nodeName);
+            const key = outlineAccessKey(subUrl, endpointId(e), e.nodeName);
             return key ? [{ nodeName: e.nodeName, key }] : [];
           });
         return reply.type('text/html; charset=utf-8').send(
@@ -887,10 +891,15 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // link, and it must keep behaving exactly as it always has. `wgconf` and
       // `xkeen` set their own, better, filename further down and win by
       // writing the header after this.
+      // The one server a single-server file is for, by id or label (A-107),
+      // and the label it is saved under: an id in a file name reads as noise.
+      const singleServerProtocol = SINGLE_SERVER_FORMATS[format];
+      const singleServers = singleServerProtocol ? served.filter((e) => e.protocol === singleServerProtocol) : [];
+      const nodeLabel = query.node ? (pickServer(singleServers, query.node)?.nodeName ?? query.node) : undefined;
       if (query.dl === '1' && format !== 'plain') {
         reply.header(
           'Content-Disposition',
-          `attachment; filename="${downloadFilename(format, result.json.user.username, query.node)}"`,
+          `attachment; filename="${downloadFilename(format, result.json.user.username, nodeLabel)}"`,
         );
       }
 
@@ -942,15 +951,16 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
        *
        * Only with `node=`: without it these formats keep their contract (the
        * first server, or an empty body when there is none).
+       * A-107: `node=` is the endpoint's id in the links the panel hands out;
+       * a label is still taken, and the refusal names the labels.
        */
-      const singleServerProtocol = SINGLE_SERVER_FORMATS[format];
       if (query.node && singleServerProtocol) {
-        const names = [...new Set(served.filter((e) => e.protocol === singleServerProtocol).map((e) => e.nodeName))];
-        if (!names.includes(query.node)) {
+        const names = [...new Set(singleServers.map((e) => e.nodeName))];
+        if (!pickServer(singleServers, query.node)) {
           reply.removeHeader('Content-Disposition');
           // The server may exist and be one this format cannot read (an
           // SS2022 cipher for Outline): that is a different sentence.
-          const exists = filtered.some((e) => e.protocol === singleServerProtocol && e.nodeName === query.node);
+          const exists = !!pickServer(filtered.filter((e) => e.protocol === singleServerProtocol), query.node);
           const has = names.length > 0 ? `it has: ${names.map((n) => JSON.stringify(n)).join(', ')}` : 'it has none';
           return reply.code(404).send({
             error: 'SUBSCRIPTION_NODE_UNKNOWN',
@@ -1007,7 +1017,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // saves test.conf, test(1).conf, ...). The .conf suffix matters: the
           // AmneziaWG / wg-quick / Hiddify file-pickers filter by *.conf, so an
           // extensionless name fails the picker on Windows / macOS.
-          const nodePart = query.node ? `-${sanitizeFilename(query.node)}` : '';
+          const nodePart = nodeLabel ? `-${sanitizeFilename(nodeLabel)}` : '';
           const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}.conf`;
           return reply
             .type('text/plain; charset=utf-8')

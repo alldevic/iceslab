@@ -94,19 +94,19 @@ describe('buildOutlineJson: an Outline dynamic key', () => {
 });
 
 describe('outlineAccessKey', () => {
-  it('turns the https subscription address into ssconf://, node in query and name', () => {
-    expect(outlineAccessKey('https://panel.example.com/sub/abc123', 'de-1')).toBe(
-      'ssconf://panel.example.com/sub/abc123?format=outline&node=de-1#de-1',
+  it('turns the https subscription address into ssconf://, the id in the query and the label as the name (A-107)', () => {
+    expect(outlineAccessKey('https://panel.example.com/sub/abc123', '0a1b2c3d', 'de-1')).toBe(
+      'ssconf://panel.example.com/sub/abc123?format=outline&node=0a1b2c3d#de-1',
     );
   });
 
   it('encodes a node name that is not URL-safe', () => {
-    expect(outlineAccessKey('https://p.example/sub/t', 'Франкфурт 1')).toBe(
+    expect(outlineAccessKey('https://p.example/sub/t', 'Франкфурт 1', 'Франкфурт 1')).toBe(
       'ssconf://p.example/sub/t?format=outline&node=%D0%A4%D1%80%D0%B0%D0%BD%D0%BA%D1%84%D1%83%D1%80%D1%82%201#%D0%A4%D1%80%D0%B0%D0%BD%D0%BA%D1%84%D1%83%D1%80%D1%82%201',
     );
   });
 
   it('has no key for a panel on plain http: the app fetches ssconf over https only', () => {
-    expect(outlineAccessKey('http://panel.example.com/sub/abc123', 'de-1')).toBeUndefined();
+    expect(outlineAccessKey('http://panel.example.com/sub/abc123', '0a1b2c3d', 'de-1')).toBeUndefined();
   });
 });

@@ -3,6 +3,7 @@ import type {
   SubscriptionEndpoint,
   AmneziawgSubscriptionEndpoint,
 } from '../subscription.formats.js';
+import { pickServer } from '../endpoint-identity.js';
 
 /**
  * wg-quick / awg-quick `.conf` subscription formatter (AmneziaWG-only).
@@ -15,7 +16,8 @@ import type {
  *   - **Single node per file.** wg-quick is one [Interface] per file; a client
  *     can't merge several AmneziaWG tunnels into one config. A user with more
  *     than one AmneziaWG node therefore needs one link per node: pass
- *     `nodeName` to pick which endpoint to emit. Without it (the legacy
+ *     `node` (the endpoint's id, or its label as older links carry) to pick
+ *     which endpoint to emit. Without it (the legacy
  *     whole-subscription link) we emit the first AmneziaWG endpoint, so every
  *     per-node link MUST carry `?node=` or they all resolve to the same node.
  *   - **AmneziaWG-only.** hysteria/xray/naive endpoints are skipped silently.
@@ -28,15 +30,14 @@ import type {
  */
 export function buildWgQuickConf(
   endpoints: SubscriptionEndpoint[],
-  nodeName?: string,
+  node?: string,
 ): string {
   const awgEndpoints = endpoints.filter(
     (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
   );
-  // nodeName selects which node's tunnel; absent = first (legacy whole-sub link).
-  const awg = nodeName
-    ? awgEndpoints.find((e) => e.nodeName === nodeName)
-    : awgEndpoints[0];
+  // `node` selects which tunnel, by its id or its label; absent = first
+  // (legacy whole-sub link). See pickServer.
+  const awg = pickServer(awgEndpoints, node);
   if (!awg) return '';
 
   return buildAmneziawgClientConfig({

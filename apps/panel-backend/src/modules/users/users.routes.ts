@@ -19,6 +19,7 @@ import {
   SubscriptionNotFoundError,
 } from '../subscription/subscription.service.js';
 import { awgConfUrl, subscriptionUrl } from '../subscription/subscription.link.js';
+import { endpointId } from '../subscription/endpoint-identity.js';
 import { RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
 
 // B12-tail - response schema for the paginated users list (Users page keeps it
@@ -410,7 +411,8 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
           // and only here, it gets the link to that node's .conf: the file an
           // operator actually hands over. The formats keep "" on purpose, a
           // subscriber's client has no use for a link to itself.
-          uri: e.protocol === 'amneziawg' ? awgConfUrl(subUrl, e.nodeName) : e.uri,
+          // By the endpoint's id, which a neighbour profile does not move (A-107).
+          uri: e.protocol === 'amneziawg' ? awgConfUrl(subUrl, endpointId(e)) : e.uri,
         })),
       });
     } catch (err) {

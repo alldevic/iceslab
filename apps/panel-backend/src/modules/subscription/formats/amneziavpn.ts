@@ -3,6 +3,7 @@ import type {
   SubscriptionEndpoint,
   AmneziawgSubscriptionEndpoint,
 } from '../subscription.formats.js';
+import { pickServer } from '../endpoint-identity.js';
 
 /**
  * AmneziaVPN-app "vpn://" connection key for an AmneziaWG endpoint.
@@ -10,20 +11,19 @@ import type {
  * Distinct from buildWgQuickConf (raw .conf, for the AmneziaWG app / wg-quick):
  * the flagship AmneziaVPN app only imports its own vpn:// keys, so this is what
  * its QR scanner and "paste key" accept. Single tunnel per key (like wgconf),
- * so `nodeName` selects which AmneziaWG node; absent = first.
+ * so `node` (id or label, pickServer) selects which AmneziaWG node; absent =
+ * first.
  *
  * Returns '' when no matching AmneziaWG endpoint exists.
  */
 export function buildAwgVpnLink(
   endpoints: SubscriptionEndpoint[],
-  nodeName?: string,
+  node?: string,
 ): string {
   const awgEndpoints = endpoints.filter(
     (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
   );
-  const awg = nodeName
-    ? awgEndpoints.find((e) => e.nodeName === nodeName)
-    : awgEndpoints[0];
+  const awg = pickServer(awgEndpoints, node);
   if (!awg) return '';
 
   return buildAmneziaVpnLink({

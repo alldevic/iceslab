@@ -31,18 +31,18 @@ export async function subscriptionUrl(token: string): Promise<string> {
  * The link to ONE node's AmneziaWG config.
  *
  * AmneziaWG has no URI scheme: a client takes a file, one [Interface] per file.
- * The wgconf format picks the node by `node=`, matched against the endpoint's
- * `nodeName` EXACTLY (formats/wgconf.ts), so the name passed here must be the
- * one the endpoint carries, flag and dedupe suffix included, not the node row's
- * name. The same shape the public page links to.
+ * The wgconf format picks the tunnel by `node=`: the endpoint's id first
+ * (endpointId), its label only for older links (pickServer, A-107). The id is
+ * what goes here: the label moves when a neighbour profile lands on the node,
+ * the id does not. The same shape the public page links to.
  *
  * The client fetches it with its own User-Agent, and an SRR rule that picks a
  * FORMAT by UA cannot touch it: an explicit ?format= wins before SRR is asked
  * (subscription.routes.ts, resolveFormat). Only a rule that drops ENDPOINTS
  * could make it come back empty.
  */
-export function awgConfUrl(subUrl: string, nodeName: string): string {
+export function awgConfUrl(subUrl: string, id: string): string {
   // Joined, not appended: a subscription address may already carry a query
   // (`?protocols=`, the page's own).
-  return withQuery(subUrl, `format=wgconf&node=${encodeURIComponent(nodeName)}`);
+  return withQuery(subUrl, `format=wgconf&node=${encodeURIComponent(id)}`);
 }
