@@ -10,6 +10,7 @@ import { LoadFailed } from '@/ui/LoadFailed';
 import { ListEmpty, ListHead, ListRow } from '@/contours/traffic/components/Routes/RuleList';
 import { NodePolicyEditor } from '@/contours/traffic/components/NodePolicy/NodePolicyEditor';
 import type { DirectionOption } from '@/contours/traffic/components/NodePolicy/RuleRow';
+import { nodeCountOf, nodeCountWords } from '@/contours/traffic/lib/nodePolicyCount';
 
 /**
  * Layer B: the policies a node runs, and the one being edited.
@@ -79,9 +80,8 @@ export function PolicyPane({
             title={p.name}
             sub={[
               t('routes.ruleCount', { count: p.rules.length }),
-              p.nodeCount
-                ? t('routes.nodeOnNodes', { count: p.nodeCount })
-                : t('routes.nodeOnNoNodes'),
+              // A count the server did not send is unknown, not «on no nodes» (A-251).
+              nodeCountWords(nodeCountOf(p), t).chip,
             ].join(' · ')}
             onClick={() => {
               onDraftDone();

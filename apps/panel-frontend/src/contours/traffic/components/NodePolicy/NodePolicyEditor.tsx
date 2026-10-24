@@ -30,6 +30,7 @@ import {
 } from '@/contours/traffic/lib/colors';
 import { LockIcon, PlusIcon, TickIcon } from '@/contours/traffic/components/Routes/icons';
 import { GlobeIcon, TrashIcon } from '@/contours/traffic/components/NodePolicy/icons';
+import { nodeCountOf, nodeCountWords } from '@/contours/traffic/lib/nodePolicyCount';
 import {
   ACTION_W,
   MATCH_W,
@@ -132,10 +133,15 @@ export function NodePolicyEditor({
    * in the sentence, because that is the part an operator has not got in mind
    * while looking at a rule list.
    */
+  // A count the server did not send is unknown, not 0 (A-251).
+  const nodeCount = nodeCountOf(policy);
+  const countWords = nodeCountWords(nodeCount, t);
+  const carried = nodeCount !== null && nodeCount > 0;
+
   function confirmDelete() {
     modals.openConfirmModal({
       title: t('routes.nodeDeleteTitle', { name: policy.name }),
-      children: <Text size="sm">{t('routes.nodeDeleteBody', { count: nodeCount })}</Text>,
+      children: <Text size="sm">{countWords.deleteBody}</Text>,
       labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
       confirmProps: { color: 'red' },
       onConfirm: () => deleteMutation.mutate(),
@@ -209,7 +215,6 @@ export function NodePolicyEditor({
     });
   }
 
-  const nodeCount = policy.nodeCount ?? 0;
 
   return (
     <Stack
@@ -266,8 +271,8 @@ export function NodePolicyEditor({
             gap: 7,
             padding: '4px 9px',
             borderRadius: 5,
-            border: `1px solid ${nodeCount > 0 ? `${CYAN}59` : EDGE}`,
-            backgroundColor: nodeCount > 0 ? `${CYAN}14` : 'transparent',
+            border: `1px solid ${carried ? `${CYAN}59` : EDGE}`,
+            backgroundColor: carried ? `${CYAN}14` : 'transparent',
             flexShrink: 0,
           }}
         >
@@ -277,12 +282,10 @@ export function NodePolicyEditor({
               fontSize: 10,
               letterSpacing: '0.1em',
               textTransform: 'uppercase',
-              color: nodeCount > 0 ? CYAN : MIST,
+              color: carried ? CYAN : MIST,
             }}
           >
-            {nodeCount > 0
-              ? t('routes.nodeOnNodes', { count: nodeCount })
-              : t('routes.nodeOnNoNodes')}
+            {countWords.chip}
           </Text>
         </Box>
 

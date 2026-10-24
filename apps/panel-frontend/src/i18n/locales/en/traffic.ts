@@ -24,6 +24,10 @@ export const traffic = {
     nodeOnNodes_one: 'on {{count}} node',
     nodeOnNodes_other: 'on {{count}} nodes',
     nodeOnNoNodes: 'on no nodes',
+    // A-251: the server sent no node count.
+    nodeOnUnknown: 'on an unknown number of nodes',
+    nodeDeleteBodyUnknown:
+      'The server did not say how many nodes carry it: if any do, their configs are rewritten without these rules.',
     nodeCountHint:
       'This is one policy, not copies. Saving changes it at once on every node carrying it.',
     nodeColIf: 'If this',
