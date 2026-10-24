@@ -93,12 +93,19 @@ export function templateActions(template: Pick<SubscriptionTemplate, 'isDefault'
  */
 export interface DryRunFacts {
   rendered: string;
-  check: { ok: boolean; message: string | null };
+  /** `ok: null`: ядро не запускалось. */
+  check: { ok: boolean | null; message: string | null };
   warnings: string[];
-  /** Сохранение разрешено: ядро не возражает. */
+  /**
+   * Итог прогона (A-236 шаг 3, решение ARCH и AUDT 24.10):
+   *   checked    ядро приняло, жалоб нет: «проверено ядром»;
+   *   unchecked  ничего не отказано, но ядро не запускалось: сохранять можно,
+   *              а сказать «ок» нельзя;
+   *   refused    ядро отказало или панель жалуется: сохранение закрыто, причина
+   *              словами (слова ядра и жалобы).
+   */
+  verdict: 'checked' | 'unchecked' | 'refused';
   canSave: boolean;
-  /** Сохранение разрешено, но спросив: есть жалобы панели. */
-  needsConfirm: boolean;
 }
 
 /**
@@ -237,13 +244,21 @@ export function dryRunForBody(
 
 export function dryRunFacts(run: TemplateDryRun | null | undefined): DryRunFacts | null {
   if (!run) return null;
-  const warnings = run.warnings ?? [];
-  const checkOk = run.check?.ok === true;
+  const warnings = Array.isArray(run.warnings) ? run.warnings.filter((w): w is string => typeof w === 'string') : [];
+  // Только true и false это ответ ядра; null, отсутствие и мусор: не запускалось.
+  const checkOk = run.check?.ok === true ? true : run.check?.ok === false ? false : null;
+  // Общий итог сервера, если он булев или null; ответ без него (старый сервер)
+  // складывается тем же правилом, что у сервера: отказ или жалоба ложны.
+  const derived = checkOk === false || warnings.length > 0 ? false : checkOk;
+  const overall = run.ok === true || run.ok === false || run.ok === null ? run.ok : derived;
+  // Отказ ядра или жалоба главнее «ок» общего итога: на экране не может быть
+  // зелёного над словами отказа.
+  const verdict = overall === false || derived === false ? 'refused' : overall === true && checkOk === true ? 'checked' : 'unchecked';
   return {
-    rendered: run.rendered ?? '',
-    check: { ok: checkOk, message: run.check?.message ?? null },
+    rendered: typeof run.rendered === 'string' ? run.rendered : '',
+    check: { ok: checkOk, message: typeof run.check?.message === 'string' ? run.check.message : null },
     warnings,
-    canSave: checkOk,
-    needsConfirm: checkOk && warnings.length > 0,
+    verdict,
+    canSave: verdict !== 'refused',
   };
 }

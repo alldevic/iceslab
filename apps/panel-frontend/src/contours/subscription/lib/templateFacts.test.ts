@@ -235,43 +235,51 @@ describe('dryRunFacts', () => {
     expect(dryRunFacts(undefined)).toBeNull();
   });
 
-  it('2. ядро согласно, жалоб нет: сохранять можно без вопросов', () => {
+  it('2. ok true: «проверено ядром», сохранять можно', () => {
     const f = dryRunFacts({ ok: true, rendered: 'proxies: []', check: { ok: true }, warnings: [] })!;
+    expect(f.verdict).toBe('checked');
     expect(f.canSave).toBe(true);
-    expect(f.needsConfirm).toBe(false);
     expect(f.check).toEqual({ ok: true, message: null });
   });
 
-  it('3. ядро возражает: сохранять НЕЛЬЗЯ, и на экране его слова', () => {
+  it('3. ok false от ядра: сохранять НЕЛЬЗЯ, и на экране его слова', () => {
     const f = dryRunFacts({
       ok: false, rendered: '', check: { ok: false, message: 'yaml: line 12: mapping values not allowed' },
       warnings: [],
     })!;
+    expect(f.verdict).toBe('refused');
     expect(f.canSave).toBe(false);
     expect(f.check.message).toBe('yaml: line 12: mapping values not allowed');
   });
 
-  it('4. ядро согласно, но панель жалуется: сохранять можно, СПРОСИВ', () => {
+  it('4. ok null, «not checked: …»: это не «ок», а «ядро не проверяло»; сохранять можно', () => {
     const f = dryRunFacts({
-      ok: true, rendered: 'x', check: { ok: true }, warnings: ['слот proxies остался пуст'],
+      ok: null, rendered: 'x', check: { ok: null, message: 'not checked: the panel carries no mihomo core' }, warnings: [],
     })!;
+    expect(f.verdict).toBe('unchecked');
     expect(f.canSave).toBe(true);
-    expect(f.needsConfirm).toBe(true);
-    expect(f.warnings).toEqual(['слот proxies остался пуст']);
+    expect(f.check).toEqual({ ok: null, message: 'not checked: the panel carries no mihomo core' });
   });
 
-  it('5. ядро возражает И панель жалуется: подтверждать нечего, отказ главнее', () => {
+  it('5. жалобы панели не теряются и закрывают сохранение (план 4.6), даже при согласии ядра', () => {
     const f = dryRunFacts({
-      ok: false, rendered: '', check: { ok: false, message: 'нет' }, warnings: ['группа без узлов'],
+      ok: false, rendered: 'x', check: { ok: true }, warnings: ['ни один узел не дошёл до групп'],
     })!;
+    expect(f.verdict).toBe('refused');
     expect(f.canSave).toBe(false);
-    expect(f.needsConfirm).toBe(false);
+    expect(f.warnings).toEqual(['ни один узел не дошёл до групп']);
   });
 
-  it('6. полей нет вовсе: отсутствие ответа ядра это НЕ согласие', () => {
-    const f = dryRunFacts({ ok: true, rendered: '', check: undefined as never, warnings: undefined as never })!;
-    expect(f.check.ok).toBe(false);
-    expect(f.canSave).toBe(false);
+  it('6. старый сервер без ok и без check: «не проверило», не «ок» и не отказ', () => {
+    const f = dryRunFacts({ ok: undefined as never, rendered: '', check: undefined as never, warnings: undefined as never })!;
+    expect(f.check.ok).toBeNull();
+    expect(f.verdict).toBe('unchecked');
+    expect(f.canSave).toBe(true);
     expect(f.warnings).toEqual([]);
+  });
+
+  it('7. общий ok true над отказом ядра зелёным не становится', () => {
+    const f = dryRunFacts({ ok: true, rendered: '', check: { ok: false, message: 'нет' }, warnings: [] })!;
+    expect(f.verdict).toBe('refused');
   });
 });

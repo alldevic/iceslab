@@ -245,36 +245,15 @@ export function TemplateEditPage() {
   }
 
   /**
-   * Сохранение с оглядкой на прогон.
-   *
-   * Отказ ядра сохранять не даёт вовсе (кнопка выключена). Жалобы панели
-   * сохранять не запрещают, но спрашивают: шаблон без слота это пустая
-   * подписка у всех, кто попал на это правило, и узнать об этом от клиентов
-   * дороже, чем ответить на один вопрос.
+   * Сохранение с оглядкой на прогон (план 4.6). Отказ ядра или жалоба панели
+   * (шаблон без слота это пустая подписка у всех на этом правиле) закрывают
+   * кнопку, причина стоит у неё словами. «Ядро не проверило» не закрывает.
    */
   function attemptSave() {
-    if (dry?.needsConfirm) {
-      modals.openConfirmModal({
-        title: t('templates.confirmTitle'),
-        children: (
-          <Stack gap={6}>
-            {dry.warnings.map((w) => (
-              <Text key={w} style={{ fontFamily: DISPLAY, fontSize: 13, color: SNOW }}>
-                {w}
-              </Text>
-            ))}
-            <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>
-              {t('templates.confirmBody')}
-            </Text>
-          </Stack>
-        ),
-        labels: { confirm: t('common.save'), cancel: t('common.cancel') },
-        onConfirm: () => save.mutate(),
-      });
-      return;
-    }
+    if (dry && !dry.canSave) return;
     save.mutate();
   }
+  const verdictTone = dry?.verdict === 'checked' ? MOSS : dry?.verdict === 'unchecked' ? MIST : RED;
 
   // A-236 (from A-233 d): an existing template waits for the list. A failed
   // list is said with a retry instead of opening an empty editor whose save
@@ -312,11 +291,14 @@ export function TemplateEditPage() {
           {templateBodyLanguage(type).toUpperCase()}
         </Text>
         <Box style={{ flex: 1 }} />
-        {facts.blocker && (
+        {facts.blocker ? (
           <Text style={{ fontFamily: DISPLAY, fontSize: 11, color: FAINT }}>
             {t(`templates.blocker.${facts.blocker}`)}
           </Text>
-        )}
+        ) : dry?.verdict === 'refused' ? (
+          // Why Save is closed, at the button (plan 4.6): the run refused it.
+          <Text style={{ fontFamily: DISPLAY, fontSize: 11, color: RED }}>{t('templates.blocker.dryRunRefused')}</Text>
+        ) : null}
         {/* Действия над готовым шаблоном. У Default кнопки удаления НЕТ, а не
             выключенная: выключенная кнопка обещает, что когда-нибудь можно.
             Вместо неё стоит строка с причиной. */}
@@ -477,8 +459,8 @@ export function TemplateEditPage() {
               gap: 10,
               padding: '10px 14px',
               borderRadius: 10,
-              backgroundColor: dry.check.ok ? `${MOSS}0F` : `${RED}0F`,
-              border: `1px solid ${dry.check.ok ? MOSS : RED}33`,
+              backgroundColor: `${verdictTone}0F`,
+              border: `1px solid ${verdictTone}33`,
             }}
           >
             <Box
@@ -486,7 +468,7 @@ export function TemplateEditPage() {
                 width: 6,
                 height: 6,
                 borderRadius: 999,
-                backgroundColor: dry.check.ok ? MOSS : RED,
+                backgroundColor: verdictTone,
                 flexShrink: 0,
               }}
             />
@@ -496,10 +478,15 @@ export function TemplateEditPage() {
                 fontSize: 11,
                 letterSpacing: '0.1em',
                 textTransform: 'uppercase',
-                color: dry.check.ok ? MOSS : RED,
+                color: verdictTone,
               }}
             >
-              {dry.check.ok ? t('templates.checkOk') : t('templates.checkFailed')}
+              {/* «Не проверило» нейтральным, не зелёным: ядро не запускалось. */}
+              {dry.verdict === 'checked'
+                ? t('templates.checkOk')
+                : dry.verdict === 'unchecked'
+                  ? t('templates.checkSkipped')
+                  : t('templates.checkFailed')}
             </Text>
             {/* Слова ядра, не наши: они и есть то, ради чего прогон делается. */}
             {dry.check.message && (
@@ -536,7 +523,7 @@ export function TemplateEditPage() {
                 </Text>
               ))}
               <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
-                {t('templates.warningsNote')}
+                {t('templates.warningsBlock')}
               </Text>
             </Stack>
           )}

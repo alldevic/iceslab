@@ -51,13 +51,18 @@ export interface SubscriptionTemplate {
   updatedAt: string;
 }
 
-/** Ответ сухого прогона: что вышло, что сказало ядро и на что жалуется панель. */
+/**
+ * Ответ сухого прогона (A-236 шаг 3, BACK-2 09326d9a): что вышло, что сказало
+ * ядро и на что жалуется панель. `null` у `check.ok` и у общего `ok` значит
+ * «ядро не запускалось» (на панели нет бинаря, у Clash ядра нет вовсе): это
+ * не «да». Общий `ok` ложен при отказе ядра или любой жалобе панели.
+ */
 export interface TemplateDryRun {
-  ok: boolean;
+  ok: boolean | null;
   /** Вывод на синтетических трёх узлах. */
   rendered: string;
   /** Ответ ядра: `sing-box check` или `xray -test`. */
-  check: { ok: boolean; message?: string };
+  check: { ok: boolean | null; message?: string };
   /** «Слот пуст», «группа без узлов» и подобное. Не отказ, но повод спросить. */
   warnings: string[];
 }

@@ -225,16 +225,16 @@ export const subscription = {
     dryRun: 'Dry run',
     dryRunning: 'Building...',
     dryRunFailed: 'The dry run did not happen',
-    dryRunUnavailable: 'The dry run arrives with phase 11, together with the template store.',
-    checkOk: 'the core accepted the config',
-    checkFailed: 'the core refused the config',
+    dryRunUnavailable: 'This server has no dry run yet.',
+    // A-236 step 3: the three outcomes of a run.
+    checkOk: 'checked by the core',
+    checkSkipped: 'the core on the panel did not check it',
+    checkFailed: 'will not save: the run refused it',
     warnings: 'The panel noticed',
-    warningsNote:
-      'This is not a refusal from the core: such a config loads. But if a slot stayed empty, everyone caught by this rule gets an empty subscription.',
+    warningsBlock:
+      'Such a template is not saved: with an empty slot, or nodes that never reached a group, everyone caught by this rule gets an empty subscription.',
     rendered: 'What the client gets',
     renderedHint: 'Built over three synthetic nodes. Your servers take their place.',
-    confirmTitle: 'Save with these notes?',
-    confirmBody: 'The core accepts the config. The notes above stay, and they are visible only here.',
     invalid: 'The server refused the template:',
     invalidAtLine: 'Line {{line}}:',
     invalidAtLineColumn: 'Line {{line}}, column {{column}}:',
@@ -244,6 +244,7 @@ export const subscription = {
       name: 'name it',
       body: 'the body is empty',
       clean: 'nothing changed',
+      dryRunRefused: 'the run refused it: the reason is below',
     },
     emptyTitle: 'No templates yet',
     emptyBody:
