@@ -375,7 +375,9 @@ export function TemplateEditPage() {
           }}
         >
           <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: CYAN }}>
-            {t('templates.importedKeys', { n: imported.rewrittenKeys })}
+            {imported.rewrittenKeys === null
+              ? t('templates.importedKeysUnknown')
+              : t('templates.importedKeys', { n: imported.rewrittenKeys })}
           </Text>
           <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
             {dry === null ? t('templates.importNeedsDryRun') : t('templates.importReady')}

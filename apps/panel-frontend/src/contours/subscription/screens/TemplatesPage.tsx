@@ -77,7 +77,11 @@ export function TemplatesPage() {
     mutationFn: ({ body }: { body: string; name: string }) => importTemplate({ body }),
     onSuccess: (result, vars) => {
       const imported = importFacts(result);
-      if (!imported) return;
+      // An answer without a template is said, not a press that did nothing.
+      if (!imported) {
+        notifications.show({ color: 'red', title: t('templates.importFailed'), message: t('templates.importNoTemplate') });
+        return;
+      }
       // Черновик едет в редактор, а не сохраняется молча: импорт это начало
       // правки, а не готовый шаблон. Имя берём из файла, если сервер своего не
       // предложил: оно хотя бы напоминает, откуда шаблон взялся.

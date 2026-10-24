@@ -197,7 +197,8 @@ export interface ImportFacts {
   /** Тип, который определил сервер. `null` = не смог, спрашиваем оператора. */
   type: TemplateType | null;
   name: string;
-  rewrittenKeys: number;
+  /** `null`: сервер числа не прислал, это «неизвестно», а не «ничего не переписано». */
+  rewrittenKeys: number | null;
   /** Тип придётся выбрать руками. */
   needsType: boolean;
   /** Чужие ключи, которые сервер не переписал. Пусто это норма. */
@@ -218,7 +219,7 @@ export function importFacts(result: {
     body,
     type,
     name: tpl.name ?? '',
-    rewrittenKeys: Number.isFinite(result.rewrittenKeys) ? Number(result.rewrittenKeys) : 0,
+    rewrittenKeys: Number.isFinite(result.rewrittenKeys) ? Number(result.rewrittenKeys) : null,
     needsType: type === null,
     foreignKeysLeft: FOREIGN_KEYS.filter((k) => body.includes(k)),
   };

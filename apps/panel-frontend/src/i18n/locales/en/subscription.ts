@@ -211,6 +211,8 @@ export const subscription = {
     importFailed: 'The import did not happen',
     importUnavailable: 'Import arrives with phase 11, together with the template store.',
     importedKeys: 'Foreign keys rewritten: {{n}}',
+    importedKeysUnknown: 'The server did not say how many foreign keys it rewrote',
+    importNoTemplate: 'The server did not return a template: the import answer has none.',
     importNeedsDryRun: 'A dry run is required before saving: the file was not written here, and nobody has asked yet what comes out of it.',
     importReady: 'The dry run is done, it can be saved.',
     importNeedsType: 'The server could not tell the type, pick it yourself.',

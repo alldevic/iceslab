@@ -186,11 +186,11 @@ describe('importFacts', () => {
     expect(importFacts({ template: { type: 'v2rayN' as never, body: 'x' } })!.needsType).toBe(true);
   });
 
-  it('4. числа ключей нет: это ноль, а не «неизвестно»', () => {
-    // Сервер не прислал поле, значит переписывать было нечего: строка «ключей
-    // переписано: 0» честнее пустого места, из которого ничего не следует.
-    expect(importFacts({ template: { type: 'clash', body: 'x' } })!.rewrittenKeys).toBe(0);
-    expect(importFacts({ template: { type: 'clash', body: 'x' }, rewrittenKeys: NaN })!.rewrittenKeys).toBe(0);
+  it('4. числа ключей нет: это «неизвестно», а не ноль', () => {
+    // Сервер не прислал поле: «переписано 0» утверждало бы то, чего он не говорил.
+    expect(importFacts({ template: { type: 'clash', body: 'x' } })!.rewrittenKeys).toBeNull();
+    expect(importFacts({ template: { type: 'clash', body: 'x' }, rewrittenKeys: NaN })!.rewrittenKeys).toBeNull();
+    expect(importFacts({ template: { type: 'clash', body: 'x' }, rewrittenKeys: 0 })!.rewrittenKeys).toBe(0);
   });
 
   it('5. ЧУЖОЙ КЛЮЧ ОСТАЛСЯ В ТЕЛЕ: это видно, а не проходит молча', () => {
