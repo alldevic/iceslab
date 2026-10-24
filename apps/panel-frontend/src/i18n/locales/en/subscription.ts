@@ -226,6 +226,9 @@ export const subscription = {
     dryRunning: 'Building...',
     dryRunFailed: 'The dry run did not happen',
     dryRunUnavailable: 'This server has no dry run yet.',
+    // A-236 tail: saving runs the dry run itself; without an answer it saves, marked.
+    savedRunNoAnswer: 'Saved. Not checked: the dry run did not answer.',
+    savedNoRunHere: 'Saved. Not checked: this server has no dry run yet.',
     // A-236 step 3: the three outcomes of a run.
     checkOk: 'checked by the core',
     checkSkipped: 'the core on the panel did not check it',

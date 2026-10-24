@@ -242,6 +242,62 @@ export function dryRunForBody(
   return ranForBody === body ? run : null;
 }
 
+/**
+ * Save with the run first (A-236 tail, AUDT on f604fb58). Without a verdict
+ * for this very body the save asks the dry run itself:
+ *   refused       nothing is sent, the reason stays at the button;
+ *   checked or unchecked   the save goes;
+ *   the run did not answer (network, 5xx) or the server has none (404): the
+ *                 save goes, said «not checked». An incomplete fact refuses
+ *                 nothing.
+ * The calls come in, so a test drives it without a network.
+ */
+/**
+ * One save at a time (AUDT on f604fb58): a second press while the run or the
+ * save is still going is dropped, not queued, so a double click sends one run
+ * and one save. The button is closed too; this holds even between two clicks
+ * in one frame, before the closed button is drawn.
+ */
+export function singleFlight() {
+  let busy = false;
+  return async function <T>(fn: () => Promise<T>): Promise<T | undefined> {
+    if (busy) return undefined;
+    busy = true;
+    try {
+      return await fn();
+    } finally {
+      busy = false;
+    }
+  };
+}
+
+export type SaveAfterRun<T> =
+  | { kind: 'saved'; result: T; note: null | 'no-answer' | 'not-here' }
+  | { kind: 'refused'; run: TemplateDryRun };
+
+export async function saveAfterRun<T>(calls: {
+  /** The run already shown for this body (dryRunForBody), or null. */
+  shown: TemplateDryRun | null;
+  runDry: () => Promise<TemplateDryRun>;
+  save: () => Promise<T>;
+  notImplemented: (err: unknown) => boolean;
+  /** The fresh run, so the screen shows what the save was decided on. */
+  onRun?: (run: TemplateDryRun) => void;
+}): Promise<SaveAfterRun<T>> {
+  let run = calls.shown;
+  let note: null | 'no-answer' | 'not-here' = null;
+  if (!run) {
+    try {
+      run = await calls.runDry();
+      calls.onRun?.(run);
+    } catch (err) {
+      note = calls.notImplemented(err) ? 'not-here' : 'no-answer';
+    }
+  }
+  if (run && dryRunFacts(run)?.verdict === 'refused') return { kind: 'refused', run };
+  return { kind: 'saved', result: await calls.save(), note };
+}
+
 export function dryRunFacts(run: TemplateDryRun | null | undefined): DryRunFacts | null {
   if (!run) return null;
   const warnings = Array.isArray(run.warnings) ? run.warnings.filter((w): w is string => typeof w === 'string') : [];

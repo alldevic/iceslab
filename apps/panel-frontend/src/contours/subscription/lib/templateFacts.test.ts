@@ -3,6 +3,8 @@ import {
   dryRunFacts,
   dryRunForBody,
   importFacts,
+  saveAfterRun,
+  singleFlight,
   templateActions,
   templateEditGate,
   templateEditorFacts,
@@ -226,6 +228,68 @@ describe('dryRunForBody', () => {
 
   it('4. вернули тело обратно посимвольно: прогон снова годится', () => {
     expect(dryRunForBody(run, 'proxies: []', 'proxies: []')).toBe(run);
+  });
+});
+
+describe('saveAfterRun (хвост A-236, замечание AUDT)', () => {
+  const refused = { ok: false, rendered: '', check: { ok: null }, warnings: ['no proxy group holds a node'] };
+  const good = { ok: null, rendered: 'x', check: { ok: null, message: 'not checked: …' }, warnings: [] };
+  const res404 = { response: { status: 404 } };
+
+  it('без ручного прогона тело без слота: PUT не уходит', async () => {
+    let puts = 0;
+    const r = await saveAfterRun({ shown: null, runDry: async () => refused, save: async () => ++puts, notImplemented: () => false });
+    expect(r.kind).toBe('refused');
+    expect(puts).toBe(0);
+  });
+
+  it('годное тело: уходит', async () => {
+    let puts = 0;
+    const r = await saveAfterRun({ shown: null, runDry: async () => good, save: async () => ++puts, notImplemented: () => false });
+    expect(r).toEqual({ kind: 'saved', result: 1, note: null });
+  });
+
+  it('сбой прогона и 404 не закрывают сохранение, а помечают его', async () => {
+    let puts = 0;
+    const down = await saveAfterRun({
+      shown: null,
+      runDry: async () => {
+        throw new Error('net');
+      },
+      save: async () => ++puts,
+      notImplemented: (e) => e === res404,
+    });
+    expect(down).toEqual({ kind: 'saved', result: 1, note: 'no-answer' });
+    const old = await saveAfterRun({
+      shown: null,
+      runDry: async () => {
+        throw res404;
+      },
+      save: async () => ++puts,
+      notImplemented: (e) => e === res404,
+    });
+    expect(old).toEqual({ kind: 'saved', result: 2, note: 'not-here' });
+  });
+
+  it('двойное нажатие: один прогон и одно сохранение', async () => {
+    let runs = 0;
+    let puts = 0;
+    const once = singleFlight();
+    const press = () =>
+      once(() => saveAfterRun({ shown: null, runDry: async () => (++runs, good), save: async () => ++puts, notImplemented: () => false }));
+    const [a, b] = await Promise.all([press(), press()]);
+    expect(runs).toBe(1);
+    expect(puts).toBe(1);
+    expect([a?.kind, b]).toEqual(['saved', undefined]);
+    await press();
+    expect(puts).toBe(2);
+  });
+
+  it('прогон для этого тела уже на экране: второй не зовётся', async () => {
+    let runs = 0;
+    const r = await saveAfterRun({ shown: good, runDry: async () => (++runs, good), save: async () => 'ok', notImplemented: () => false });
+    expect(runs).toBe(0);
+    expect(r.kind).toBe('saved');
   });
 });
 

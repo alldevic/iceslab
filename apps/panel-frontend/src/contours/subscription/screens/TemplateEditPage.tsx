@@ -30,6 +30,8 @@ import {
   templateEditGate,
   templateEditorFacts,
   templateSavePatch,
+  saveAfterRun,
+  singleFlight,
   type ImportFacts,
 } from '@/contours/subscription/lib/templateFacts';
 import { LoadFailed } from '@/ui/LoadFailed';
@@ -113,6 +115,7 @@ export function TemplateEditPage() {
   /** Тело, по которому сделан показанный прогон. `null` = прогона не было. */
   const [ranForBody, setRanForBody] = useState<string | null>(null);
   const [run, setRun] = useState<TemplateDryRun | null>(null);
+  const [once] = useState(() => singleFlight());
   const dry = dryRunFacts(dryRunForBody(run, ranForBody, body));
 
   const dryRun = useMutation({
@@ -132,18 +135,39 @@ export function TemplateEditPage() {
   });
 
   const save = useMutation({
-    mutationFn: () => {
-      // Only what changed; the name of a Default never goes (templateSavePatch).
-      const patch = templateSavePatch(isNew ? null : template, name, body);
-      if (!patch) throw new Error('nothing changed');
-      return isNew
-        ? createTemplate({ type, name: patch.name ?? name.trim(), body: patch.body ?? body })
-        : updateTemplate(id, patch);
+    // The run first, unless this body already has a verdict on screen
+    // (saveAfterRun): a body without a slot no longer saves silently.
+    mutationFn: async () => {
+      const bodyNow = body;
+      return saveAfterRun({
+        shown: dryRunForBody(run, ranForBody, bodyNow),
+        runDry: () => dryRunTemplate({ type, body: bodyNow }),
+        onRun: (fresh) => {
+          setRun(fresh);
+          setRanForBody(bodyNow);
+        },
+        notImplemented: isNotImplemented,
+        save: () => {
+          // Only what changed; the name of a Default never goes (templateSavePatch).
+          const patch = templateSavePatch(isNew ? null : template, name, bodyNow);
+          if (!patch) throw new Error('nothing changed');
+          return isNew
+            ? createTemplate({ type, name: patch.name ?? name.trim(), body: patch.body ?? bodyNow })
+            : updateTemplate(id, patch);
+        },
+      });
     },
-    onSuccess: (saved) => {
+    onSuccess: (outcome) => {
+      // Refused by the run: nothing went, the verdict and its reason are on screen.
+      if (outcome.kind === 'refused') return;
       qc.invalidateQueries({ queryKey: ['subscription-templates'] });
-      notifications.show({ color: 'green', message: t('common.saved') });
-      navigate(`/subscription/templates/${saved.id}`);
+      notifications.show({
+        color: outcome.note ? 'yellow' : 'green',
+        message: outcome.note
+          ? t(outcome.note === 'not-here' ? 'templates.savedNoRunHere' : 'templates.savedRunNoAnswer')
+          : t('common.saved'),
+      });
+      navigate(`/subscription/templates/${outcome.result.id}`);
     },
     onError: (err) => {
       setErrorLine(null);
@@ -251,7 +275,8 @@ export function TemplateEditPage() {
    */
   function attemptSave() {
     if (dry && !dry.canSave) return;
-    save.mutate();
+    // One run and one save per press, a double click included (singleFlight).
+    void once(() => save.mutateAsync().catch(() => undefined));
   }
   const verdictTone = dry?.verdict === 'checked' ? MOSS : dry?.verdict === 'unchecked' ? MIST : RED;
 
@@ -324,6 +349,7 @@ export function TemplateEditPage() {
           disabled={
             !facts.canSave ||
             save.isPending ||
+            dryRun.isPending ||
             dry?.canSave === false ||
             // Импортированный черновик сохраняется только после прогона: файл
             // писали не здесь и не мы, и «загрузится ли это вообще» пока не
