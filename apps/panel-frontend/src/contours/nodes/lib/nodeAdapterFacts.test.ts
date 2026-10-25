@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest';
+import { slotConflictsOf, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
+
+describe('slotConflictsOf (A-195): несколько профилей на одном адаптере ноды', () => {
+  it('нода обслуживает один, остальные названы', () => {
+    expect(
+      slotConflictsOf([
+        {
+          protocol: 'shadowsocks',
+          engine: 'xray',
+          bindings: [
+            { bindingId: 'a', profileName: 'ss-low', port: 8388 },
+            { bindingId: 'b', profileName: 'ss-high', port: 9388 },
+          ],
+          servedBindingId: 'b',
+        },
+      ]),
+    ).toEqual([{ protocol: 'shadowsocks', served: { profileName: 'ss-high', port: 9388 }, others: [{ profileName: 'ss-low', port: 8388 }] }]);
+  });
+  it('поля нет (старый сервер): null, не «нет»; пустой массив: нет; мусор пропускается', () => {
+    expect(slotConflictsOf(undefined)).toBeNull();
+    expect(slotConflictsOf([])).toEqual([]);
+    expect(slotConflictsOf([null, { protocol: 1 }])).toEqual([]);
+  });
+});
+
+describe('userScopeGapsOf (A-204): где ограничение сквада по юзеру на ноде не действует', () => {
+  it('профиль, порт и почему', () => {
+    expect(
+      userScopeGapsOf([{ bindingId: 'x', profileId: 'p', profileName: 'mieru-2', protocol: 'mieru', port: 2999, gap: 'shared-users' }]),
+    ).toEqual([{ profileName: 'mieru-2', port: 2999, gap: 'shared-users' }]);
+  });
+  it('поля нет: null; пусто: нет; незнакомый gap и мусор пропускаются', () => {
+    expect(userScopeGapsOf(undefined)).toBeNull();
+    expect(userScopeGapsOf([])).toEqual([]);
+    expect(userScopeGapsOf([{ profileName: 'x', port: 1, gap: 'other' }, 3])).toEqual([]);
+  });
+});

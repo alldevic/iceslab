@@ -279,6 +279,12 @@ export const nodes = {
     syncChangedAt: 'изменено {{at}}',
     syncLastApplied: 'последнее применение {{at}}',
     syncNever: 'нода ещё ни разу не брала конфиг',
+    // A-195 и A-204: что делают адаптеры ноды, из статуса синхронизации.
+    slotConflict:
+      'На одном адаптере {{protocol}} несколько профилей: нода обслуживает {{served}}, остальные ({{others}}) не работают, но выдаются в подписке.',
+    slotConflictNoServed:
+      'На одном адаптере {{protocol}} несколько профилей ({{others}}): работает только один из них, остальные выдаются в подписке впустую.',
+    scopeGapLine: '{{profile}}: {{words}}',
     coresTitle: 'Ядра · что стоит на машине',
     coresReportedAt: 'нода сообщила {{at}}',
     coresUnknown:

@@ -11,6 +11,7 @@ import { ResolvedRoutes } from '@/contours/nodes/components/NodeEdit/ResolvedRou
 import { Sep } from '@/contours/nodes/components/NodeEdit/Separators';
 import { SyncRefusalStrip } from '@/ui/SyncRefusalStrip';
 import { SyncStatusStrip } from '@/contours/nodes/components/NodeEdit/SyncStatusStrip';
+import { NodeAdapterLines } from '@/contours/nodes/components/NodeEdit/NodeAdapterLines';
 import { SystemPanel } from '@/contours/nodes/components/NodeEdit/SystemPanel';
 import { TabButton } from '@/contours/nodes/components/NodeEdit/TabButton';
 import { useNodeEditForm } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
@@ -293,6 +294,7 @@ export function NodeEditPage() {
           и то же событие, только с причиной, и две полосы подряд про один пуш
           читаются как две разные беды. */}
       {refusal ? <SyncRefusalStrip refusal={refusal} /> : <SyncStatusStrip status={syncQuery.data} failure={syncFailure} />}
+      <NodeAdapterLines status={syncQuery.data} />
 
       {/* Рядом с отказом ядра, но отдельной сущностью: конфиг и процесс цепи
           ломаются независимо, и объединять их значит прятать одно за другим. */}

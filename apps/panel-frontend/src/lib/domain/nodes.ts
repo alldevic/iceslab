@@ -411,6 +411,18 @@ export interface NodeSyncStatus {
    * apart.
    */
   online: boolean;
+  /**
+   * A-195 (BACK cbc08d4f): bindings that share a single-inbound adapter on
+   * this node, and the one the node serves. Raw: `nodeAdapterFacts` reads it
+   * with the input checked first. No key: a server older than the field.
+   */
+  slotConflicts?: unknown;
+  /**
+   * A-204 part 2 (BACK-2): bindings where a squad's limit on a user does not
+   * hold on this node (`NodeUserScopeGap`). Raw, read the same way; no key: a
+   * server older than the field.
+   */
+  userScopeGaps?: unknown;
 }
 
 export async function getNodeSyncStatus(id: string): Promise<NodeSyncStatus> {

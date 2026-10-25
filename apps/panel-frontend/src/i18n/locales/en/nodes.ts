@@ -262,6 +262,12 @@ export const nodes = {
     syncChangedAt: 'changed {{at}}',
     syncLastApplied: 'last applied {{at}}',
     syncNever: 'this node has never taken a config',
+    // A-195 and A-204: what the node's adapters do, from the sync status.
+    slotConflict:
+      'Several profiles on one {{protocol}} adapter: the node serves {{served}}, the others ({{others}}) do not work but are handed out in the subscription.',
+    slotConflictNoServed:
+      'Several profiles on one {{protocol}} adapter ({{others}}): only one of them works, the others are handed out in the subscription for nothing.',
+    scopeGapLine: '{{profile}}: {{words}}',
     coresTitle: 'Cores · what is on the machine',
     coresReportedAt: 'node reported {{at}}',
     coresUnknown:
