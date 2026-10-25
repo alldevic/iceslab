@@ -130,7 +130,7 @@ func assertRewritten(t *testing.T, what string, r caddyRefresh, prefix string) {
 		"panel.example.com {",
 		"reverse_proxy 127.0.0.1:8080",
 		"log iceslab_secret_paths",
-		"@secret_paths path " + prefix + "/* /api/internal/bootstrap/*",
+		"@secret_paths path " + prefix + "/* /api/internal/bootstrap/* /api/users/by-subscription-token/* /api/settings/subscription/preview/*",
 		"include http.log.error",
 	} {
 		if !strings.Contains(r.file, want) {

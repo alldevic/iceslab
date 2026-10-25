@@ -282,7 +282,7 @@ write_caddyfile() {
     include http.log.error
     format filter {
       wrap json
-      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/|/api/users/by-subscription-token/|/api/settings/subscription/preview/)[^/?]+" "\${1}<token>"
       request>client_ip ip_mask 24 48
       request>remote_ip ip_mask 24 48
     }
@@ -298,7 +298,7 @@ ${PANEL_DOMAIN} {
     }
     format filter {
       wrap json
-      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/|/api/users/by-subscription-token/|/api/settings/subscription/preview/)[^/?]+" "\${1}<token>"
       request>client_ip ip_mask 24 48
       request>remote_ip ip_mask 24 48
     }
@@ -307,8 +307,8 @@ ${PANEL_DOMAIN} {
     output file /var/log/caddy/access.log
     format json
   }
-  @secret_paths path ${prefix}/* /api/internal/bootstrap/*
-  @other_paths not path ${prefix}/* /api/internal/bootstrap/*
+  @secret_paths path ${prefix}/* /api/internal/bootstrap/* /api/users/by-subscription-token/* /api/settings/subscription/preview/*
+  @other_paths not path ${prefix}/* /api/internal/bootstrap/* /api/users/by-subscription-token/* /api/settings/subscription/preview/*
   log_name @secret_paths iceslab_secret_paths
   log_name @other_paths iceslab_access
   reverse_proxy 127.0.0.1:${FRONTEND_PORT}

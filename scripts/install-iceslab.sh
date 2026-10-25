@@ -637,8 +637,10 @@ done
 # Two access logs (A-267). The default one, /var/log/caddy/access.log, is what
 # fail2ban reads (iceslab-auth-bf: /api/auth/login, iceslab-probe-bf: scanner
 # paths), so it keeps every field as it is. The paths that carry a secret in
-# the URL, the subscription (SUB_PREFIX, default /sub) and the node bootstrap
-# (/api/internal/bootstrap/<token>), go to their own log instead (log_name),
+# the URL, the subscription (SUB_PREFIX, default /sub), the node bootstrap
+# (/api/internal/bootstrap/<token>) and the two admin routes that take a
+# subscription token in the path (/api/users/by-subscription-token/<token>,
+# /api/settings/subscription/preview/<token>), go to their own log (log_name),
 # where the token is replaced by <token> and the client's address is cut to
 # its /24 (IPv6: /48). Neither jail matches those paths, so fail2ban loses
 # nothing. Both loggers are named and every request is sent to one of them by
@@ -678,7 +680,7 @@ write_caddyfile() {
     include http.log.error
     format filter {
       wrap json
-      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/|/api/users/by-subscription-token/|/api/settings/subscription/preview/)[^/?]+" "\${1}<token>"
       request>client_ip ip_mask 24 48
       request>remote_ip ip_mask 24 48
     }
@@ -694,7 +696,7 @@ ${PANEL_DOMAIN} {
     }
     format filter {
       wrap json
-      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/|/api/users/by-subscription-token/|/api/settings/subscription/preview/)[^/?]+" "\${1}<token>"
       request>client_ip ip_mask 24 48
       request>remote_ip ip_mask 24 48
     }
@@ -703,8 +705,8 @@ ${PANEL_DOMAIN} {
     output file /var/log/caddy/access.log
     format json
   }
-  @secret_paths path ${prefix}/* /api/internal/bootstrap/*
-  @other_paths not path ${prefix}/* /api/internal/bootstrap/*
+  @secret_paths path ${prefix}/* /api/internal/bootstrap/* /api/users/by-subscription-token/* /api/settings/subscription/preview/*
+  @other_paths not path ${prefix}/* /api/internal/bootstrap/* /api/users/by-subscription-token/* /api/settings/subscription/preview/*
   log_name @secret_paths iceslab_secret_paths
   log_name @other_paths iceslab_access
   reverse_proxy 127.0.0.1:${FRONTEND_PORT}
