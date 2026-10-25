@@ -653,12 +653,34 @@ done
 # Rotation is Caddy's own for `output file`: 100MiB per file, 10 files, 90
 # days (https://caddyserver.com/docs/caddyfile/directives/log, roll_size /
 # roll_keep / roll_keep_for). The masked log is smaller and keeps 7 days.
+# The error logger is the global `log` option, include / exclude by namespace
+# (https://caddyserver.com/docs/caddyfile/options#log); it stays on stderr,
+# that is journald, where it was.
 write_caddyfile() {
   local prefix="${SUB_PREFIX:-/sub}"
   # The backend's own rule for the prefix (config.ts): anything else and the
   # backend refuses to start, so falling back cannot hide a working setup.
   [[ "$prefix" =~ ^/[A-Za-z0-9_-]+$ ]] || prefix=/sub
   cat > "$1" <<EOF
+# Caddy's error log (http.log.error, a failed upstream and the like) carries
+# the request, uri and address included, into journald. Not silenced, the
+# upstream's diagnostics are needed: taken out of the default logger and
+# written by its own, with the same mask as the access log below.
+{
+  log default {
+    exclude http.log.error
+  }
+  log iceslab_errors {
+    include http.log.error
+    format filter {
+      wrap json
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>client_ip ip_mask 24 48
+      request>remote_ip ip_mask 24 48
+    }
+  }
+}
+
 ${PANEL_DOMAIN} {
   log iceslab_secret_paths {
     output file /var/log/caddy/access-masked.log {
