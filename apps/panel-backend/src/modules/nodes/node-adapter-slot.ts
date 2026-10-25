@@ -64,6 +64,55 @@ export class AdapterSlotTakenError extends Error {
   }
 }
 
+/** Two or more pushed bindings on one single-inbound adapter of a node. */
+export interface AdapterSlotConflict {
+  protocol: string;
+  /** The engine, or for AmneziaWG its generation ('1' or '3'). */
+  engine: string;
+  /** Port order, the order the push sends them in. */
+  bindings: { bindingId: string; profileName: string; port: number }[];
+  /** The one the node serves: the agent keeps the last it is pushed. */
+  servedBindingId: string;
+}
+
+/**
+ * A-195: the nodes A-055 came too late for. Its refusal stops a NEW second
+ * binding on an adapter that holds one; bindings that stood before it stay,
+ * the agent serves one of them (the last by port, the order of the push), and
+ * the subscription hands out both. Answered so the sync status can say it;
+ * the bindings themselves are not touched. Pushed bindings only, by the push's
+ * own filter: a disabled one takes no slot on the node.
+ */
+export async function adapterSlotConflicts(nodeId: string): Promise<AdapterSlotConflict[]> {
+  const rows = await prisma.profileNodeBinding.findMany({
+    where: { nodeId, enabled: true, profile: { enabled: true } },
+    orderBy: { port: 'asc' },
+    select: {
+      id: true,
+      port: true,
+      profile: { select: { name: true, protocol: true, engine: true, awgProtocol: true } },
+    },
+  });
+  const bySlot = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const slot = adapterSlot(r.profile);
+    if (MULTI.has(slot)) continue;
+    bySlot.set(slot, [...(bySlot.get(slot) ?? []), r]);
+  }
+  const out: AdapterSlotConflict[] = [];
+  for (const [slot, held] of bySlot) {
+    if (held.length < 2) continue;
+    const [protocol, engine] = slot.split('|') as [string, string];
+    out.push({
+      protocol,
+      engine,
+      bindings: held.map((b) => ({ bindingId: b.id, profileName: b.profile.name, port: b.port })),
+      servedBindingId: held.at(-1)!.id,
+    });
+  }
+  return out;
+}
+
 /** Refuses a new binding of `profile` on the node when its adapter already
  *  serves another binding there. The binding's own row is not counted. */
 export async function assertAdapterSlotFree(

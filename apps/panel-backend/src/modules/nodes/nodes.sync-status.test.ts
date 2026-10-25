@@ -228,6 +228,36 @@ describe('node sync status', () => {
     expect(JSON.parse(res.body).lastInboundSyncAt).toBe(when.toISOString());
   });
 
+  /**
+   * A-195: two bindings that stood on one single-inbound adapter before A-055
+   * refused the second. The node serves one, the last by port; the status says
+   * so instead of nothing. Written past the API, which refuses them now.
+   */
+  it('names the bindings that share a single-inbound adapter, and the one the node serves', async () => {
+    const nodeId = await makeNode();
+    const ss = async (name: string) =>
+      (await prisma.profile.create({
+        data: { name, protocol: 'shadowsocks', config: { method: '2022-blake3-aes-128-gcm' } },
+        select: { id: true },
+      })).id;
+    const low = await prisma.profileNodeBinding.create({ data: { nodeId, profileId: await ss('ss-a'), port: 8388, transport: 'tcp' } });
+    const high = await prisma.profileNodeBinding.create({ data: { nodeId, profileId: await ss('ss-b'), port: 8389, transport: 'tcp' } });
+    // xray takes many: two of them are no conflict.
+    await bind(await makeProfile(), nodeId, 443);
+    await bind(await makeProfile(), nodeId, 8443);
+
+    const s = (await syncStatus(nodeId)) as unknown as {
+      slotConflicts: { protocol: string; engine: string; bindings: { bindingId: string; port: number }[]; servedBindingId: string }[];
+    };
+    expect(s.slotConflicts).toHaveLength(1);
+    expect(s.slotConflicts[0]).toMatchObject({ protocol: 'shadowsocks', servedBindingId: high.id });
+    expect(s.slotConflicts[0]!.bindings.map((b) => b.bindingId)).toEqual([low.id, high.id]);
+
+    // A disabled binding takes no slot on the node.
+    await prisma.profileNodeBinding.update({ where: { id: low.id }, data: { enabled: false } });
+    expect(((await syncStatus(nodeId)) as unknown as { slotConflicts: unknown[] }).slotConflicts).toEqual([]);
+  });
+
   it('404s for a node that does not exist', async () => {
     const res = await app.inject({
       method: 'GET',

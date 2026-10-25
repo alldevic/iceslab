@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma.js';
+import { adapterSlotConflicts, type AdapterSlotConflict } from './node-adapter-slot.js';
 
 /**
  * "Saved, but not applied yet" for one node.
@@ -39,6 +40,9 @@ export interface NodeSyncStatusDto {
    *  cron re-pushes when it comes back. The card says different things about
    *  the two, so the answer travels with the flag. */
   online: boolean;
+  /** A-195: single-inbound adapters this node is pushed two bindings for;
+   *  it serves one. Empty is none. */
+  slotConflicts: AdapterSlotConflict[];
 }
 
 /**
@@ -74,5 +78,6 @@ export async function getNodeSyncStatus(nodeId: string): Promise<NodeSyncStatusD
     configChangedAt: (node.configChangedAt ?? node.createdAt).toISOString(),
     applied: node.lastInboundSyncAt !== null && node.appliedRevision >= node.desiredRevision,
     online: node.status === 'online',
+    slotConflicts: await adapterSlotConflicts(nodeId),
   };
 }
