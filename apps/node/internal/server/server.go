@@ -854,7 +854,9 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("active adapters failed: %s", strings.Join(healthyFailed, ", ")))
 		return
 	}
-	s.logger.Info("addUser ok", "userId", req.UserID, "username", req.Username)
+	// Debug and without the username (A-265): a line per user per push in the
+	// journal at info told anyone reading it who is on this node.
+	s.logger.Debug("addUser ok", "userId", req.UserID)
 	writeJSON(w, http.StatusOK, dto.AddUserResponse{OK: true})
 }
 
