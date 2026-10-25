@@ -6,6 +6,7 @@ import { X509Certificate, webcrypto } from 'node:crypto';
 import { isIP } from 'node:net';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { bustBindingsCache } from '../subscription/subscription.bindings-cache.js';
 import { readHysteriaTls, selfSignedHostFor, type StoredHysteriaTls } from './hysteria-tls-shape.js';
 
 export {
@@ -107,6 +108,9 @@ export async function ensureHysteriaTls(nodeId: string): Promise<StoredHysteriaT
     where: { id: nodeId },
     data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
   });
+  // A-165: the subscription caches the node row; the next one must carry the
+  // new pin, not the old one for a minute.
+  bustBindingsCache();
   return fresh;
 }
 
@@ -124,6 +128,7 @@ export async function rotateHysteriaTls(nodeId: string): Promise<StoredHysteriaT
     where: { id: nodeId },
     data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
   });
+  bustBindingsCache();
   return fresh;
 }
 

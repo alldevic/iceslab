@@ -41,7 +41,8 @@ interface Entry<T> {
 }
 
 const store = new Map<string, Entry<unknown>>();
-const inflight = new Map<string, Promise<unknown>>();
+/** A load under way, with the version it started under (A-165). */
+const inflight = new Map<string, { version: number; p: Promise<unknown> }>();
 
 /** Stable cache key for a set of group ids (order-independent). */
 export function bindingsCacheKey(groupIds: string[]): string {
@@ -67,13 +68,17 @@ export async function getCachedBindings<T>(
   if (hit && hit.version === version && hit.expiresAt > nowMs) {
     return hit.value as T;
   }
+  // A-165: a load started BEFORE a bust is not shared with a request that came
+  // after it: that request would get the rows from before the change (the
+  // old hysteria pin, say) while the cache already counts as busted.
   const pending = inflight.get(key);
-  if (pending) return pending as Promise<T>;
+  if (pending && pending.version === version) return pending.p as Promise<T>;
 
   // Capture the version BEFORE loading. If a bust lands while the query is in
   // flight, the stored entry keeps the older version and the next read misses
   // - we never serve data loaded before a config change as if it were current.
   const loadedVersion = version;
+  const flight = { version: loadedVersion } as { version: number; p: Promise<unknown> };
   const p = (async () => {
     try {
       const value = await loader();
@@ -83,13 +88,20 @@ export async function getCachedBindings<T>(
         const oldest = store.keys().next().value;
         if (oldest !== undefined) store.delete(oldest);
       }
-      store.set(key, { version: loadedVersion, expiresAt: nowMs + TTL_MS, value });
+      // A newer entry (a load started after a bust that finished first) is not
+      // overwritten by this older one.
+      const current = store.get(key);
+      if (!current || current.version <= loadedVersion) {
+        store.set(key, { version: loadedVersion, expiresAt: nowMs + TTL_MS, value });
+      }
       return value;
     } finally {
-      inflight.delete(key);
+      // Only our own: a newer load for the key may have replaced it.
+      if (inflight.get(key) === flight) inflight.delete(key);
     }
   })();
-  inflight.set(key, p);
+  flight.p = p;
+  inflight.set(key, flight);
   return p as Promise<T>;
 }
 
@@ -114,6 +126,13 @@ export function registerBindingsCacheBust(): void {
   //                     squad SET, so an edit changes contents, not the key
   eventBus.on('squad.changed', bust);
   eventBus.on('node.changed', bust);
+  //   node.updated    → what the node's config is pushed from changed: its
+  //                     domain, address or resolver, and the hysteria pin on a
+  //                     rotation (A-165). The pin and the 3.1 geometry minted
+  //                     by a push bust where they are written
+  //                     (hysteria-tls.ts, awg3-geometry.ts), not through here:
+  //                     node.updated starts a push.
+  eventBus.on('node.updated', bust);
   // A node going down changes WHICH endpoints a subscription may hand out, so
   // the cached binding set is stale the moment liveness flips. The poller
   // writes status straight to the database (bypassing the service that emits
