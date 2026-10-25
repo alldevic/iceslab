@@ -5,6 +5,9 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS } from '@iceslab/shared';
 import { pruneHistory } from './retention.cron.js';
+import { sourceIdSha256 } from '../users/erased-sources.js';
+import { createUser, SourceIdErasedError } from '../users/users.service.js';
+import { CreateUserSchema } from '../users/users.schemas.js';
 
 /**
  * A-268 and A-269 (owner, 26.10): a deleted user is erased with everything
@@ -78,6 +81,52 @@ describe('the deleted user window (A-268)', () => {
     await user(daysAgo(40));
     expect((await pruneHistory()).deletedUsers).toBe(1);
     expect((await pruneHistory()).deletedUsers).toBe(0);
+  });
+});
+
+/**
+ * The tombstone (ARCH 26.10): an imported user leaves the sha256 of their
+ * source id and nothing else, and the same source id is refused afterwards.
+ * Source ids here are random and the table is cleared by this file itself
+ * (cleanDatabase does not list it), so nothing leaks into another file.
+ */
+describe('the tombstone of an erased imported user (A-268)', () => {
+  const sid = () => `rw-${randomUUID()}`;
+  beforeEach(async () => {
+    await prisma.erasedUserSource.deleteMany({});
+  });
+
+  async function imported(sourceId: string, deletedAt: Date | null): Promise<string> {
+    const id = await user(deletedAt);
+    await prisma.user.update({ where: { id }, data: { sourceId } });
+    return id;
+  }
+
+  it('erasing an imported user keeps the hash of the source id, never the id itself', async () => {
+    const sourceId = sid();
+    await imported(sourceId, daysAgo(DELETED_USER_RETENTION_DAYS + 1));
+    await pruneHistory();
+    const rows = await prisma.erasedUserSource.findMany();
+    expect(rows.map((r) => r.sourceIdSha256)).toEqual([sourceIdSha256(sourceId)]);
+    const raw = JSON.stringify(await prisma.$queryRawUnsafe('SELECT * FROM erased_user_sources'));
+    expect(raw).not.toContain(sourceId);
+  });
+
+  it('a user created by hand leaves no tombstone', async () => {
+    await user(daysAgo(DELETED_USER_RETENTION_DAYS + 1));
+    expect((await pruneHistory()).deletedUsers).toBe(1);
+    expect(await prisma.erasedUserSource.count()).toBe(0);
+  });
+
+  it('the same source id is refused afterwards with SOURCE_ID_ERASED, and a user without one is created', async () => {
+    const sourceId = sid();
+    await imported(sourceId, daysAgo(DELETED_USER_RETENTION_DAYS + 1));
+    await pruneHistory();
+
+    const again = createUser(CreateUserSchema.parse({ username: 'reimported', sourceId }));
+    await expect(again).rejects.toBeInstanceOf(SourceIdErasedError);
+    const fresh = await createUser(CreateUserSchema.parse({ username: 'reimported' }));
+    expect(fresh.id).toBeTruthy();
   });
 });
 

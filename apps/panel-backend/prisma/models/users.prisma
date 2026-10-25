@@ -83,6 +83,17 @@ model User {
   @@map("users")
 }
 
+/// A-268 tombstone (ARCH 26.10): the source id of an imported user erased for
+/// good, as sha256 hex and nothing else, so a later import run of the same
+/// source does not bring the erased user back with their old link. Kept
+/// forever; no source id itself and nothing about the person.
+model ErasedUserSource {
+  sourceIdSha256 String   @id @map("source_id_sha256") @db.Char(64)
+  erasedAt       DateTime @default(now()) @map("erased_at") @db.Timestamptz(6)
+
+  @@map("erased_user_sources")
+}
+
 model UserTraffic {
   userId               String    @id @map("user_id") @db.Uuid
   usedTrafficBytes     BigInt    @default(0) @map("used_traffic_bytes")

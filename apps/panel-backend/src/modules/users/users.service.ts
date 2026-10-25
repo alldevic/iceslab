@@ -5,6 +5,7 @@ import { uniqueViolationOf, type UniqueViolation } from '../../lib/util/unique-v
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import * as repo from './users.repository.js';
+import { isSourceIdErased } from './erased-sources.js';
 import type {
   CreateUserInput,
   UpdateUserInput,
@@ -51,6 +52,19 @@ export class SourceIdTakenError extends Error {
   constructor(public sourceId: string) {
     super(`a user imported from source id ${JSON.stringify(sourceId)} already exists`);
     this.name = 'SourceIdTakenError';
+  }
+}
+
+/** A-268 tombstone: the user this source id stood for was deleted and, after
+ *  the retention window, erased for good. An import run of the same source
+ *  does not bring them back. */
+export class SourceIdErasedError extends Error {
+  constructor(public sourceId: string) {
+    super(
+      `the user imported from source id ${JSON.stringify(sourceId)} was deleted and erased; ` +
+        `an import does not bring them back`,
+    );
+    this.name = 'SourceIdErasedError';
   }
 }
 
@@ -138,6 +152,12 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
     if (tokenClash) {
       throw new SubscriptionTokenTakenError(input.subscriptionToken);
     }
+  }
+
+  // A-268 tombstone: a source id whose user was erased stays refused, or a
+  // later import run would recreate them with their old subscription link.
+  if (input.sourceId && (await isSourceIdErased(input.sourceId))) {
+    throw new SourceIdErasedError(input.sourceId);
   }
 
   await assertCustomPresetExists(input.customRoutingPresetId);

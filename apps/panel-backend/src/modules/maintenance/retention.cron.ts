@@ -1,6 +1,7 @@
 import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { purgeExpiredBootstrapTokens } from '../nodes/bootstrap.service.js';
+import { sourceIdSha256 } from '../users/erased-sources.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -59,15 +60,21 @@ export async function purgeDeletedUsers(now = Date.now()): Promise<number> {
   const cutoff = new Date(now - RETENTION_DAYS.deletedUsers * DAY_MS);
   let total = 0;
   for (;;) {
-    const ids = (
-      await prisma.user.findMany({
-        where: { deletedAt: { lt: cutoff } },
-        select: { id: true },
-        take: USER_PURGE_BATCH,
-      })
-    ).map((u) => u.id);
+    const rows = await prisma.user.findMany({
+      where: { deletedAt: { lt: cutoff } },
+      select: { id: true, sourceId: true },
+      take: USER_PURGE_BATCH,
+    });
+    const ids = rows.map((u) => u.id);
     if (ids.length === 0) return total;
-    const [, users] = await prisma.$transaction([
+    // The tombstone (ARCH 26.10): an imported user leaves the hash of their
+    // source id, so the next import run of that source is refused with
+    // SOURCE_ID_ERASED instead of bringing them back with their old link.
+    const tombstones = rows
+      .filter((u): u is { id: string; sourceId: string } => u.sourceId !== null)
+      .map((u) => ({ sourceIdSha256: sourceIdSha256(u.sourceId) }));
+    const [, , users] = await prisma.$transaction([
+      prisma.erasedUserSource.createMany({ data: tombstones, skipDuplicates: true }),
       prisma.nodeUserTrafficSnapshot.deleteMany({ where: { userId: { in: ids } } }),
       prisma.user.deleteMany({ where: { id: { in: ids }, deletedAt: { lt: cutoff } } }),
     ]);

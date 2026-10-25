@@ -101,6 +101,10 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof usersService.SourceIdTakenError) {
         return reply.code(409).send({ error: 'SOURCE_ID_TAKEN', message: err.message, field: 'sourceId' });
       }
+      // A-268 tombstone: the source's user was erased; an import skips it.
+      if (err instanceof usersService.SourceIdErasedError) {
+        return reply.code(409).send({ error: 'SOURCE_ID_ERASED', message: err.message, field: 'sourceId' });
+      }
       if (err instanceof usersService.ShortIdTakenError) {
         return reply.code(409).send({ error: 'SHORT_ID_TAKEN', message: err.message });
       }
