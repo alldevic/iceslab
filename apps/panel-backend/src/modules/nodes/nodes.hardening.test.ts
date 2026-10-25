@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EngineName } from '@iceslab/shared';
-import { appendHardeningFlags, buildInstallCommand, enginesFlag } from './nodes.service.js';
+import { appendHardeningFlags, buildInstallCommand, enginesFlag, installRefOf } from './nodes.service.js';
+import { readCurrentVersion } from '../system/system.service.js';
 import { HardeningSchema } from './nodes.schemas.js';
 
 // The render functions build the install command as an array of lines and join
@@ -229,6 +230,40 @@ describe('buildInstallCommand: no # inside the command, whatever the placeholder
     ]);
   });
 });
+
+/**
+ * A-270: a node created on a panel gets the agent of that panel's release. The
+ * command takes the installer from the tag v<version> and passes
+ * ICESLAB_NODE_REF=v<version>, which the installer clones. A version that names
+ * no tag keeps the old command.
+ */
+describe('buildInstallCommand: the release a node is installed from', () => {
+  const first = (panelVersion?: string) =>
+    buildInstallCommand({ panelUrl: 'https://p', token: 't', engines: [], panelIp: '198.51.100.7', acmeEmail: '', panelVersion })
+      .split('\n')[0];
+
+  it('a candidate and a final pin the installer and the agent to their own tag', () => {
+    expect(first('0.3.0-rc.1')).toBe(
+      'ICESLAB_NODE_REF=v0.3.0-rc.1 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0-rc.1/scripts/install-iceslab-node.sh) \\',
+    );
+    expect(first('0.3.0')).toBe(
+      'ICESLAB_NODE_REF=v0.3.0 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0/scripts/install-iceslab-node.sh) \\',
+    );
+    expect(first('v0.3.0')).toContain('ICESLAB_NODE_REF=v0.3.0 ');
+  });
+
+  it('a version that names no tag keeps main and no ref', () => {
+    const main = 'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\';
+    for (const v of [undefined, '', 'unknown', 'dev', '0.3.0+build.7', '0.3', 'main']) {
+      expect(first(v), String(v)).toBe(main);
+    }
+  });
+
+  it('the panel reads its version where the update check does', () => {
+    expect(installRefOf(readCurrentVersion())).toBe(`v${readCurrentVersion()}`);
+  });
+});
+
 describe('HardeningSchema (validation contract)', () => {
   it('accepts a valid blob', () => {
     const parsed = HardeningSchema.parse({

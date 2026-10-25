@@ -12,6 +12,7 @@ import {
 } from './nodes.schemas.js';
 import * as nodesService from './nodes.service.js';
 import { buildInstallCommand } from './nodes.service.js';
+import { readCurrentVersion } from '../system/system.service.js';
 import { checkNodePortExposure } from './nodes.exposure.js';
 import { getNodeSyncStatus } from './nodes.sync-status.js';
 import { portClaimsOnNode } from './node-ports.js';
@@ -65,6 +66,8 @@ async function renderRefreshBootstrapCommand(
     engines,
     panelIp: await getPanelPublicIp(),
     acmeEmail: (process.env.ACME_DEFAULT_EMAIL ?? '').trim(),
+    // A-270: the agent of this panel's release, as on node create.
+    panelVersion: readCurrentVersion(),
   });
 }
 

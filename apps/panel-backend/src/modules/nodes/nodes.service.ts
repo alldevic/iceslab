@@ -37,6 +37,7 @@ import { collectGeoUses } from '../geo-sets/geo-refs.js';
 import { nodeGeoFor, publicIntended } from '../geo-sets/geo-push.js';
 import { intendedEngines } from './node-engines.js';
 import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
+import { readCurrentVersion } from '../system/system.service.js';
 export { CoreVersionIntentError } from './node-core-versions.js';
 export { NodeEnginesError } from './node-intended-engines.js';
 
@@ -264,6 +265,28 @@ export interface InstallCommandInput {
   panelIp: string | null;
   /** ACME_DEFAULT_EMAIL, trimmed; empty when unset. */
   acmeEmail: string;
+  /** The panel's own version (readCurrentVersion). A release version pins
+   *  the installer and the agent it installs to that tag (A-270). */
+  panelVersion?: string;
+}
+
+/**
+ * The git tag a panel version installs its nodes from (A-270), or null.
+ *
+ * A node created on a panel gets the agent of that panel's release: the
+ * installer from the tag v<version> and ICESLAB_NODE_REF=v<version>, which the
+ * installer clones (install-iceslab-node.sh: ICESLAB_NODE_REF, its own default
+ * pinned to an older release). Before, the command took the installer from
+ * main with no ref, and a node made on a 0.3.0-rc.1 panel came up on v0.2.1.
+ *
+ * Only a release version names a tag: major.minor.patch with an optional
+ * pre-release ("0.3.0", "0.3.0-rc.1"). Anything else (unknown, a dev build,
+ * empty, build metadata "+...") has no tag to point at and keeps the old
+ * command: the installer from main, its own default ref.
+ */
+export function installRefOf(panelVersion: string | undefined): string | null {
+  const v = (panelVersion ?? '').trim().replace(/^v/i, '');
+  return /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(v) ? `v${v}` : null;
 }
 
 /**
@@ -315,9 +338,11 @@ export function buildInstallCommand(input: InstallCommandInput): string {
 
   flags.push(...hardeningFlags(input.hardening));
 
+  const ref = installRefOf(input.panelVersion);
+  const installer = `https://raw.githubusercontent.com/icecompany-tech/iceslab/${ref ?? 'main'}/scripts/install-iceslab-node.sh`;
   return [
     ...notes,
-    'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\',
+    `${ref ? `ICESLAB_NODE_REF=${ref} ` : ''}bash <(curl -fsSL ${installer}) \\`,
     ...flags.map((f, i) => `  ${f}${i < flags.length - 1 ? ' \\' : ''}`),
   ].join('\n');
 }
@@ -337,6 +362,7 @@ async function renderBootstrapCommand(
     engines,
     panelIp: await getPanelPublicIp(),
     acmeEmail: (process.env.ACME_DEFAULT_EMAIL ?? '').trim(),
+    panelVersion: readCurrentVersion(),
   });
 }
 export async function listNodes(query: ListNodesQuery): Promise<{
