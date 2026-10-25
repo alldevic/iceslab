@@ -347,6 +347,15 @@ export function buildInstallCommand(input: InstallCommandInput): string {
   ].join('\n');
 }
 
+/**
+ * The command a panel shows, its own version read where the update check
+ * reads it (readCurrentVersion): one place, for node create and for a
+ * refreshed bootstrap alike (A-270).
+ */
+export function panelInstallCommand(input: Omit<InstallCommandInput, 'panelVersion'>): string {
+  return buildInstallCommand({ ...input, panelVersion: readCurrentVersion() });
+}
+
 async function renderBootstrapCommand(
   panelUrl: string,
   token: string,
@@ -354,7 +363,7 @@ async function renderBootstrapCommand(
   hardening: HardeningInput | null | undefined,
   engines: readonly EngineName[],
 ): Promise<string> {
-  return buildInstallCommand({
+  return panelInstallCommand({
     panelUrl,
     token,
     nodeAddress,
@@ -362,7 +371,6 @@ async function renderBootstrapCommand(
     engines,
     panelIp: await getPanelPublicIp(),
     acmeEmail: (process.env.ACME_DEFAULT_EMAIL ?? '').trim(),
-    panelVersion: readCurrentVersion(),
   });
 }
 export async function listNodes(query: ListNodesQuery): Promise<{

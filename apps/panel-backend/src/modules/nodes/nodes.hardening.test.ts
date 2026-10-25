@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { EngineName } from '@iceslab/shared';
-import { appendHardeningFlags, buildInstallCommand, enginesFlag, installRefOf } from './nodes.service.js';
+import { appendHardeningFlags, buildInstallCommand, enginesFlag, installRefOf, panelInstallCommand } from './nodes.service.js';
 import { readCurrentVersion } from '../system/system.service.js';
 import { HardeningSchema } from './nodes.schemas.js';
 
@@ -254,13 +254,19 @@ describe('buildInstallCommand: the release a node is installed from', () => {
 
   it('a version that names no tag keeps main and no ref', () => {
     const main = 'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\';
-    for (const v of [undefined, '', 'unknown', 'dev', '0.3.0+build.7', '0.3', 'main']) {
+    // 0.3.0-rc.1+dev: develop after the tag (RELEASING 4b) builds from main.
+    for (const v of [undefined, '', 'unknown', 'dev', '0.3.0+build.7', '0.3.0-rc.1+dev', '0.3', 'main']) {
       expect(first(v), String(v)).toBe(main);
     }
   });
 
-  it('the panel reads its version where the update check does', () => {
-    expect(installRefOf(readCurrentVersion())).toBe(`v${readCurrentVersion()}`);
+  // Whatever the panel's version is today, release or not: the command the
+  // panel shows is built from readCurrentVersion, the update check's reader.
+  it('the panel builds its command from the version the update check reads', () => {
+    const input = { panelUrl: 'https://p', token: 't', engines: [] as EngineName[], panelIp: '198.51.100.7', acmeEmail: '' };
+    expect(panelInstallCommand(input)).toBe(buildInstallCommand({ ...input, panelVersion: readCurrentVersion() }));
+    const ref = installRefOf(readCurrentVersion());
+    expect(panelInstallCommand(input).split('\n')[0]!.startsWith(ref ? `ICESLAB_NODE_REF=${ref} ` : 'bash <(')).toBe(true);
   });
 });
 
