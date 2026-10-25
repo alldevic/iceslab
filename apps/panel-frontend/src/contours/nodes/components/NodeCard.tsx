@@ -422,7 +422,7 @@ export function NodeCard({
         )}
 
         <Group gap="sm" wrap="nowrap" pt={2} style={{ borderTop: `1px solid ${HAIRLINE}` }}>
-          <Tooltip label="Traffic today">
+          <Tooltip label={t('nodeCard.todayTip')}>
             <Group gap={4} wrap="nowrap">
               <IconDownload size={12} style={{ color: CYAN }} />
               <Text
@@ -433,14 +433,14 @@ export function NodeCard({
               </Text>
             </Group>
           </Tooltip>
-          <Tooltip label="Inbound bindings on this node">
+          <Tooltip label={t('nodeCard.bindingsTip')}>
             <Group gap={4} wrap="nowrap">
               <IconUpload size={12} style={{ color: VIOLET }} />
               <Text
                 size="xs"
                 style={{ color: SNOW, fontFamily: "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace" }}
               >
-                {node.inboundCount} bindings
+                {t('nodeCard.bindings', { count: node.inboundCount })}
               </Text>
             </Group>
           </Tooltip>
