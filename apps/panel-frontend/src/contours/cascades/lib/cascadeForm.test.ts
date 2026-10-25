@@ -1043,6 +1043,17 @@ describe('entryBystanders', () => {
     ]);
     expect(entryBystanders('xray', nodes, [bind('x-vless', 'n1'), bind('x-unknown', 'n1')], xray)).toEqual([]);
   });
+
+  it('8. хвост A-264: xray socks и http (вход по логину, без UUID) тоже названы, vless нет', () => {
+    const xray = [
+      { id: 'x-vless', protocol: 'xray', config: { subprotocol: 'vless' } },
+      { id: 'x-socks', protocol: 'xray', config: { subprotocol: 'socks' } },
+      { id: 'x-http', protocol: 'xray', config: { subprotocol: 'http' } },
+    ];
+    expect(entryBystanders('xray', nodes, xray.map((p) => bind(p.id, 'n1')), xray)).toEqual([
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['http', 'socks'] },
+    ]);
+  });
 });
 
 describe('entryNoteKind', () => {

@@ -214,10 +214,14 @@ export function entryNoteKind(facts: EntryChainFacts | null): EntryNoteKind | nu
  * конфига профиля в списке; профиль без известного subprotocol не назван:
  * неполный факт фактом не считается.
  */
-/** Подпротоколы xray, которые вход каскада не раскладывает (A-264). */
-const OFF_ROUTE_SUBPROTOCOLS: readonly XraySubprotocol[] = ['trojan', 'vmess'];
+/**
+ * Подпротоколы xray, которые вход каскада не раскладывает (A-264): у них нет
+ * UUID vless, по которому vlessRoute выбирает выход. socks и http входят по
+ * логину и тоже идут мимо.
+ */
+const OFF_ROUTE_SUBPROTOCOLS: readonly XraySubprotocol[] = ['trojan', 'vmess', 'socks', 'http'];
 
-/** trojan или vmess у профиля xray, по его конфигу; иначе null (vless или не известно). */
+/** Подпротокол xray мимо vlessRoute, по конфигу профиля; иначе null (vless или не известно). */
 function xrayOffRouteSubprotocol(profile: { protocol: string; config?: unknown }): XraySubprotocol | null {
   if (profile.protocol !== 'xray' || !profile.config || typeof profile.config !== 'object') return null;
   const sub = (profile.config as { subprotocol?: unknown }).subprotocol;
