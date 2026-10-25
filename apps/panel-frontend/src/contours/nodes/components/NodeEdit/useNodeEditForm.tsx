@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { syncPoll } from '@/contours/nodes/lib/syncPoll';
 import { apiErrorMessage } from '@/lib/net/client';
 import { onBootstrapIssued, type BootstrapInfo } from '@/contours/nodes/lib/bootstrapIssued';
 import { useTranslation } from 'react-i18next';
@@ -83,8 +84,16 @@ export function useNodeEditForm() {
     enabled: !!id,
     // A push is asynchronous and lands seconds later; without this the card
     // says "not applied yet" until the operator reloads the page themselves.
-    refetchInterval: 15_000,
+    // How often, and when to stop, is syncPoll's: 5 s while a push is pending,
+    // none after it times out.
+    refetchInterval: (q) => syncPoll(q.state.data, Date.now()).intervalMs,
   });
+  // The drawing the agent reports is read once; when the config lands, it is
+  // read again, or the policy lines keep the answer from before the save.
+  const applied = syncQuery.data?.applied;
+  useEffect(() => {
+    if (applied) void qc.invalidateQueries({ queryKey: ['policy-drawing', id] });
+  }, [applied, qc, id]);
   const [policyRefusal, setPolicyRefusal] = useState<string | null>(null);
   const overviewQuery = useOverview();
 

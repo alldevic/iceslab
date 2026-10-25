@@ -4,6 +4,8 @@ import type { NodeSyncStatus } from '@/lib/domain/nodes';
 import { AMBER, MIST, SNOW } from '@/contours/nodes/lib/colors';
 import { LoadFailedLine } from '@/ui/LoadFailed';
 import type { LoadFailure } from '@/lib/ui/loadView';
+import { useNow } from '@/lib/ui/useNow';
+import { SYNC_CONFIRM_MINUTES, syncPoll } from '@/contours/nodes/lib/syncPoll';
 
 const MONO = "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace";
 
@@ -30,6 +32,9 @@ export function SyncStatusStrip({
   failure?: LoadFailure | null;
 }) {
   const { t } = useTranslation();
+  // Polling stops after the confirm window (syncPoll); the strip says so
+  // instead of waiting in silence.
+  const now = useNow(15_000);
   if (failure && !status) {
     return (
       <Stack
@@ -47,6 +52,7 @@ export function SyncStatusStrip({
   const waiting = !status.online;
   const tone = waiting ? MIST : AMBER;
   const never = status.lastInboundSyncAt === null;
+  const { timedOut } = syncPoll(status, now);
 
   return (
     <Box
@@ -81,6 +87,11 @@ export function SyncStatusStrip({
             ? t('nodeEdit.syncNever')
             : t('nodeEdit.syncLastApplied', { at: when(status.lastInboundSyncAt!) })}
         </Text>
+        {timedOut && (
+          <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+            {t('nodeEdit.syncTimedOut', { minutes: SYNC_CONFIRM_MINUTES })}
+          </Text>
+        )}
       </Stack>
     </Box>
   );

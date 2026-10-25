@@ -261,6 +261,7 @@ export const nodes = {
       'The config is written and waiting. Not stuck: the cron pushes it again once the node is back.',
     syncChangedAt: 'changed {{at}}',
     syncLastApplied: 'last applied {{at}}',
+    syncTimedOut: 'The node did not confirm the change within {{minutes}} min. The panel stopped asking by itself: reload the page to check again.',
     syncNever: 'this node has never taken a config',
     // A-195 and A-204: what the node's adapters do, from the sync status.
     slotConflict:
