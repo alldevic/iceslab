@@ -24,7 +24,7 @@ export const cascades = {
     mode: 'Mode',
     modeChain: 'Chain (sequential)',
     modeChainHint: 'Entry, then transits in order, then one exit. Every hop forwards to the next.',
-    modeBalancer: 'Balancer (auto exit)',
+    modeBalancer: 'Balancer (several exits)',
     modeBalancerHint: 'One entry, several parallel exits. The client picks an exit by picking a server.',
     hideHops: 'Hide exit nodes from subscription',
     hideHopsHint:

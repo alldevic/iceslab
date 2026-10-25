@@ -332,7 +332,7 @@ export const common = {
     provisionWaiting: 'Still no answer from: {{nodes}}',
     provisionBroken: 'Cascade is broken: {{broken}}',
     provisionUnknown: 'Saved, but the panel could not read the provisioning status.',
-    modeBalancer: 'Balancer (auto exit)',
+    modeBalancer: 'Balancer (several exits)',
   },
   // The subscription-metadata page: everything /sub/:token says about itself.
   metadata: {
