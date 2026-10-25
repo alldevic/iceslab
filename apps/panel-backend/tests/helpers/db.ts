@@ -53,6 +53,9 @@ export const TABLES = [
   'hwid_user_devices',
   'user_traffic',
   'users',
+  // A-268 tombstone: no foreign key; a hash left by one test would refuse the
+  // same source id in the next.
+  'erased_user_sources',
   // A-229. After users and groups, which point at it with RESTRICT; the name is
   // unique, so a row left behind would refuse the next test's create.
   'routing_presets',
