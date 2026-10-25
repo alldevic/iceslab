@@ -15,6 +15,7 @@
 #   - on_err trap installer  (prints which line + command failed)
 #   - require_compose_root  (ensures we're in /opt/iceslab or equivalent)
 #   - git_short_sha  (current HEAD hash, "no-git" if not a repo)
+#   - write_caddyfile / refresh_host_caddyfile  (the host Caddy's file, A-267)
 #
 # Install scripts (install-iceslab.sh, install-iceslab-node.sh) deliberately
 # do not source this: they're curl-piped standalone and must work without
@@ -251,4 +252,160 @@ git_sync_to_ref() {
         git checkout --force "$SYNC_TARGET"                    # tag/sha: pinned checkout
     fi
     SHA_AFTER=$(git_short_sha)
+}
+
+# ───── Host Caddy (A-267) ─────
+# The installer writes /etc/caddy/Caddyfile once, in domain mode. A fix to that
+# file (the masked logs of A-267) would otherwise never reach a panel that is
+# already installed: every operator who updated would keep a Caddy writing
+# subscription tokens into access.log. deploy.sh calls refresh_host_caddyfile,
+# which renders the file again with write_caddyfile below.
+
+# write_caddyfile <path>: a copy of the installer's, byte for byte (the
+# installer runs curl-piped and cannot source this file); the reasons for every
+# line are written out there. bootstrap_checks_test.go holds the two together.
+write_caddyfile() {
+  local prefix="${SUB_PREFIX:-/sub}"
+  # The backend's own rule for the prefix (config.ts): anything else and the
+  # backend refuses to start, so falling back cannot hide a working setup.
+  [[ "$prefix" =~ ^/[A-Za-z0-9_-]+$ ]] || prefix=/sub
+  cat > "$1" <<EOF
+# Caddy's error log (http.log.error, a failed upstream and the like) carries
+# the request, uri and address included, into journald. Not silenced, the
+# upstream's diagnostics are needed: taken out of the default logger and
+# written by its own, with the same mask as the access log below.
+{
+  log default {
+    exclude http.log.error
+  }
+  log iceslab_errors {
+    include http.log.error
+    format filter {
+      wrap json
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>client_ip ip_mask 24 48
+      request>remote_ip ip_mask 24 48
+    }
+  }
+}
+
+${PANEL_DOMAIN} {
+  log iceslab_secret_paths {
+    output file /var/log/caddy/access-masked.log {
+      roll_size 10MiB
+      roll_keep 5
+      roll_keep_for 168h
+    }
+    format filter {
+      wrap json
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>client_ip ip_mask 24 48
+      request>remote_ip ip_mask 24 48
+    }
+  }
+  log iceslab_access {
+    output file /var/log/caddy/access.log
+    format json
+  }
+  @secret_paths path ${prefix}/* /api/internal/bootstrap/*
+  @other_paths not path ${prefix}/* /api/internal/bootstrap/*
+  log_name @secret_paths iceslab_secret_paths
+  log_name @other_paths iceslab_access
+  reverse_proxy 127.0.0.1:${FRONTEND_PORT}
+}
+
+# Anti-probing: bare-IP / unknown hostname requests on :443 get a silent 204
+# so scanners can't fingerprint Iceslab.
+:443 {
+  tls internal
+  respond 204
+}
+EOF
+}
+
+# The file every installer up to v0.2.1 wrote, for a domain and a port. A
+# panel installed then has no stamp, and a file equal to this is still ours.
+legacy_caddyfile_v1() {
+    cat <<EOF
+$1 {
+  log {
+    output file /var/log/caddy/access.log
+    format json
+  }
+  reverse_proxy 127.0.0.1:$2
+}
+
+# Anti-probing: bare-IP / unknown hostname requests on :443 get a silent 204
+# so scanners can't fingerprint Iceslab.
+:443 {
+  tls internal
+  respond 204
+}
+EOF
+}
+
+# refresh_host_caddyfile: render the host Caddyfile again and reload Caddy,
+# only when the file there is still the one we wrote. Ours is a file whose
+# sha256 matches the stamp the installer (or a previous refresh) left beside
+# it, or, with no stamp, exactly the v0.2.1 file for its own domain and port.
+# Anything else was edited by the operator and is left alone, in words. The
+# domain and the port come from the file in place (that is what serves today),
+# the subscription prefix from .env.production. Every refusal is a warning,
+# never a failed deploy: the panel itself is already up by now.
+#
+#   CADDYFILE_PATH  default /etc/caddy/Caddyfile
+#   ENV_FILE        the deploy's own, for SUBSCRIPTION_PATH_PREFIX
+refresh_host_caddyfile() {
+    local file="${CADDYFILE_PATH:-/etc/caddy/Caddyfile}"
+    local stamp domain port have prefix tmp backup
+    stamp="$(dirname "$file")/.iceslab-caddyfile.sha256"
+    if [[ ! -f "$file" ]] || ! command -v caddy >/dev/null 2>&1; then
+        log_info "no host Caddy here (bare-IP install), nothing to refresh"
+        return 0
+    fi
+    # The first site address: the global block is a bare `{`, :443 starts with
+    # a colon. `q` stops at the first match, so no pipe into head.
+    domain="$(sed -nE '/^[^:{#[:space:]][^[:space:]]* \{$/{s/ \{$//p;q}' "$file")"
+    port="$(sed -nE '/^[[:space:]]*reverse_proxy 127\.0\.0\.1:[0-9]+$/{s/.*://p;q}' "$file")"
+    if [[ -z "$domain" || -z "$port" ]]; then
+        log_warn "$file has no site and reverse_proxy of ours; not touched"
+        return 0
+    fi
+    have="$(sha256sum "$file" | cut -d' ' -f1)"
+    if ! { [[ -f "$stamp" && "$(cat "$stamp")" == "$have" ]] ||
+           [[ "$(cat "$file")" == "$(legacy_caddyfile_v1 "$domain" "$port")" ]]; }; then
+        log_warn "$file was edited by hand since the installer wrote it; not rewritten."
+        log_warn "  The panel's version masks subscription and bootstrap tokens in Caddy's logs (A-267):"
+        log_warn "  see write_caddyfile in scripts/ops/_lib.sh and carry it over by hand."
+        return 0
+    fi
+    if [[ ! -w "$(dirname "$file")" ]]; then
+        log_warn "cannot write $file (run deploy.sh as root); Caddy keeps its old file"
+        return 0
+    fi
+    prefix="$(sed -n 's/^SUBSCRIPTION_PATH_PREFIX=//p' "${ENV_FILE:-.env.production}" 2>/dev/null | tail -n 1 || true)"
+    tmp="$(mktemp)"
+    PANEL_DOMAIN="$domain" FRONTEND_PORT="$port" SUB_PREFIX="$prefix" write_caddyfile "$tmp"
+    if cmp -s "$tmp" "$file"; then
+        rm -f "$tmp"
+        log_info "host Caddyfile already current"
+        return 0
+    fi
+    if ! caddy validate --config "$tmp" --adapter caddyfile >/dev/null 2>&1; then
+        rm -f "$tmp"
+        log_warn "the new Caddyfile does not validate; Caddy keeps its old file"
+        return 0
+    fi
+    backup="${file}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -p "$file" "$backup"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+    if systemctl reload caddy; then
+        sha256sum "$file" | cut -d' ' -f1 > "$stamp"
+        log_ok "host Caddyfile re-rendered for ${domain} and Caddy reloaded (previous kept as ${backup})"
+    else
+        cp -p "$backup" "$file"
+        systemctl reload caddy || true
+        log_warn "Caddy refused the new file on reload; the previous one is back in place"
+    fi
 }

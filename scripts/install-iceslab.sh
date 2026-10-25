@@ -647,8 +647,12 @@ done
 # took every request, the login and the probes too (seen 26.10 in a local
 # run: access.log stayed empty). The plain one is still last, so anything
 # that skips routing lands there, not in the masked file.
-# A prefix changed in .env.production later is not followed here:
-# rerun the installer or edit the matcher by hand.
+# A prefix changed in .env.production later is followed by the next deploy.sh,
+# which re-renders this file (refresh_host_caddyfile in scripts/ops/_lib.sh).
+#
+# ⚠ The same function, byte for byte, is in scripts/ops/_lib.sh: this
+# installer runs curl-piped, without the rest of scripts/, so it cannot source
+# it. bootstrap_checks_test.go holds the two copies to each other.
 #
 # Rotation is Caddy's own for `output file`: 100MiB per file, 10 files, 90
 # days (https://caddyserver.com/docs/caddyfile/directives/log, roll_size /
@@ -728,6 +732,9 @@ if [[ -n "$PANEL_DOMAIN" ]]; then
   fi
   SUB_PREFIX="$(sed -n 's/^SUBSCRIPTION_PATH_PREFIX=//p' "$ENV_FILE" 2>/dev/null | tail -n 1 || true)"
   write_caddyfile /etc/caddy/Caddyfile
+  # What we wrote, so deploy.sh can tell this file from one the operator has
+  # edited since, and rewrite only the former.
+  sha256sum /etc/caddy/Caddyfile | cut -d' ' -f1 > /etc/caddy/.iceslab-caddyfile.sha256
   systemctl enable --now caddy >/dev/null 2>&1 || true
   systemctl reload caddy || systemctl restart caddy
   ok "TLS will be issued by Let's Encrypt on first request"

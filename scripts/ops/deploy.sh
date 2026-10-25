@@ -58,7 +58,7 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 DC=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
-STEP_TOTAL=5
+STEP_TOTAL=6
 
 # ───── Step 1: sync source to ICESLAB_REF ─────
 # Honors ICESLAB_REF (branch like `main`, or pinned tag like v0.1.4); defaults
@@ -117,8 +117,18 @@ step 4 "restart all services"
 "${DC[@]}" up -d --build
 step_done
 
-# ───── Step 5: status + backend tail ─────
-step 5 "status + backend tail"
+# ───── Step 5: the host Caddy's file ─────
+# The installer writes /etc/caddy/Caddyfile once; without this step a fix to
+# it never reaches an installed panel (A-267: the masked logs, so Caddy stops
+# writing subscription tokens into access.log). Rewritten only while it is
+# still the file we wrote, then `systemctl reload caddy`; an edited one is
+# named and left alone. No host Caddy (bare-IP install): nothing to do.
+step 5 "host Caddy"
+refresh_host_caddyfile
+step_done
+
+# ───── Step 6: status + backend tail ─────
+step 6 "status + backend tail"
 "${DC[@]}" ps
 echo
 log_info "backend tail (last 30 lines):"
