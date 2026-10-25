@@ -28,6 +28,25 @@
 # networks don't ship IPv6 records and lookups would block on AAAA.
 resolver 127.0.0.11 valid=10s ipv6=off;
 
+# A-267: the subscription location logs no token and no full address. The
+# default access log wrote every `GET <prefix>/<token>` with the caller's
+# address into the container's log, which is a list of who holds which
+# subscription. Kept, not switched off: its status codes and timings are what
+# a broken subscription is debugged with, and nothing reads it (fail2ban reads
+# the host Caddy's log, not this one). The token becomes <token>, whatever
+# follows it (a format, a query) stays; an IPv4 address becomes its /24, any
+# other address a dash. Outside server{}: this file is included at http level.
+map $request_uri $iceslab_sub_uri {
+    "~^(${SUBSCRIPTION_PATH_PREFIX}/)[^/?]+(.*)$" "$1<token>$2";
+    default "<masked>";
+}
+map $remote_addr $iceslab_addr_24 {
+    "~^(\d+\.\d+\.\d+)\.\d+$" "$1.0/24";
+    default "-";
+}
+log_format iceslab_sub '$iceslab_addr_24 [$time_local] "$request_method $iceslab_sub_uri $server_protocol" '
+                       '$status $body_bytes_sent $request_time "$http_user_agent"';
+
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -119,6 +138,11 @@ server {
     # Default /sub; checked against the backend's own rule before rendering
     # (docker-entrypoint.d/15-subscription-prefix.sh).
     location ${SUBSCRIPTION_PATH_PREFIX}/ {
+        access_log /var/log/nginx/access.log iceslab_sub;
+        # The error log prints the request line as it came, token included,
+        # when the backend cannot be reached; that failure shows on /api too,
+        # so here only crit and above.
+        error_log /var/log/nginx/error.log crit;
         proxy_pass http://$backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

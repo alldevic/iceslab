@@ -631,6 +631,68 @@ for i in $(seq 1 60); do
   fi
 done
 
+# write_caddyfile <path>: the host Caddy in front of the panel, for
+# PANEL_DOMAIN, proxying to FRONTEND_PORT.
+#
+# Two access logs (A-267). The default one, /var/log/caddy/access.log, is what
+# fail2ban reads (iceslab-auth-bf: /api/auth/login, iceslab-probe-bf: scanner
+# paths), so it keeps every field as it is. The paths that carry a secret in
+# the URL, the subscription (SUB_PREFIX, default /sub) and the node bootstrap
+# (/api/internal/bootstrap/<token>), go to their own log instead (log_name),
+# where the token is replaced by <token> and the client's address is cut to
+# its /24 (IPv6: /48). Neither jail matches those paths, so fail2ban loses
+# nothing. Both loggers are named and every request is sent to one of them by
+# path: with an unnamed `log` beside a named one, Caddy 2.11's adapter makes
+# the LAST block the site's default logger, and the named one written last
+# took every request, the login and the probes too (seen 26.10 in a local
+# run: access.log stayed empty). The plain one is still last, so anything
+# that skips routing lands there, not in the masked file.
+# A prefix changed in .env.production later is not followed here:
+# rerun the installer or edit the matcher by hand.
+#
+# Rotation is Caddy's own for `output file`: 100MiB per file, 10 files, 90
+# days (https://caddyserver.com/docs/caddyfile/directives/log, roll_size /
+# roll_keep / roll_keep_for). The masked log is smaller and keeps 7 days.
+write_caddyfile() {
+  local prefix="${SUB_PREFIX:-/sub}"
+  # The backend's own rule for the prefix (config.ts): anything else and the
+  # backend refuses to start, so falling back cannot hide a working setup.
+  [[ "$prefix" =~ ^/[A-Za-z0-9_-]+$ ]] || prefix=/sub
+  cat > "$1" <<EOF
+${PANEL_DOMAIN} {
+  log iceslab_secret_paths {
+    output file /var/log/caddy/access-masked.log {
+      roll_size 10MiB
+      roll_keep 5
+      roll_keep_for 168h
+    }
+    format filter {
+      wrap json
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/)[^/?]+" "\${1}<token>"
+      request>client_ip ip_mask 24 48
+      request>remote_ip ip_mask 24 48
+    }
+  }
+  log iceslab_access {
+    output file /var/log/caddy/access.log
+    format json
+  }
+  @secret_paths path ${prefix}/* /api/internal/bootstrap/*
+  @other_paths not path ${prefix}/* /api/internal/bootstrap/*
+  log_name @secret_paths iceslab_secret_paths
+  log_name @other_paths iceslab_access
+  reverse_proxy 127.0.0.1:${FRONTEND_PORT}
+}
+
+# Anti-probing: bare-IP / unknown hostname requests on :443 get a silent 204
+# so scanners can't fingerprint Iceslab.
+:443 {
+  tls internal
+  respond 204
+}
+EOF
+}
+
 if [[ -n "$PANEL_DOMAIN" ]]; then
   step "Caddy + TLS for ${PANEL_DOMAIN}"
   if ! command -v caddy >/dev/null; then
@@ -642,26 +704,8 @@ if [[ -n "$PANEL_DOMAIN" ]]; then
     "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
     "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y caddy
   fi
-  # Access log emitted to /var/log/caddy/access.log so fail2ban can read it
-  # (next step). JSON format keeps client_ip / status / uri reliably parsable
-  # for the iceslab-auth-bf and iceslab-probe-bf jails. /var/log/caddy is
-  # created by the caddy deb package; mode 0755 is its default.
-  cat > /etc/caddy/Caddyfile <<EOF
-${PANEL_DOMAIN} {
-  log {
-    output file /var/log/caddy/access.log
-    format json
-  }
-  reverse_proxy 127.0.0.1:${FRONTEND_PORT}
-}
-
-# Anti-probing: bare-IP / unknown hostname requests on :443 get a silent 204
-# so scanners can't fingerprint Iceslab.
-:443 {
-  tls internal
-  respond 204
-}
-EOF
+  SUB_PREFIX="$(sed -n 's/^SUBSCRIPTION_PATH_PREFIX=//p' "$ENV_FILE" 2>/dev/null | tail -n 1 || true)"
+  write_caddyfile /etc/caddy/Caddyfile
   systemctl enable --now caddy >/dev/null 2>&1 || true
   systemctl reload caddy || systemctl restart caddy
   ok "TLS will be issued by Let's Encrypt on first request"
