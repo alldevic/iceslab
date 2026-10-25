@@ -249,14 +249,25 @@ APT_WAIT_SECONDS="${APT_WAIT_SECONDS:-300}"
 # enough: a package-manager process, a lock `lslocks` lists (util-linux, on
 # every such system; it sees fcntl locks, which `flock -n` does not), a holder
 # `fuser` names where psmisc is installed.
+#
+# unattended-upgrades by its command line, not by name: the kernel cuts a name
+# to 15 characters, and `unattended-upgr` is also unattended-upgrade-shutdown
+# --wait-for-signal, which idles on every stock Ubuntu for as long as the
+# machine is up. Matched by name, it kept every install waiting its 300 s and
+# failing (25.10, a stock Ubuntu with automatic updates on). The real run is
+# `.../unattended-upgrade` with nothing after the name but arguments.
 apt_busy() {
   local p locks f holders
-  for p in apt apt-get aptitude dpkg unattended-upgr; do
+  for p in apt apt-get aptitude dpkg; do
     if pgrep -x "$p" >/dev/null 2>&1; then
       printf '%s is running' "$p"
       return 0
     fi
   done
+  if pgrep -f '(^|[/ ])unattended-upgrade( |$)' >/dev/null 2>&1; then
+    printf 'unattended-upgrade is running'
+    return 0
+  fi
   locks="$(lslocks -n -o PATH 2>/dev/null || true)"
   for f in $APT_LOCKS; do
     if grep -qxF "$f" <<<"$locks"; then
