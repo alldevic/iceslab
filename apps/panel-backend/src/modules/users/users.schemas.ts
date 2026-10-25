@@ -64,7 +64,10 @@ export const CreateUserSchema = z.object({
   // in every other number on the page.
   createdAt: z.iso.datetime().optional(),
   // Provenance, see the sourceId column. Set by the importer, never by a human;
-  // it is what makes a second run a delta instead of a duplicate.
+  // it is what makes a second run a delta instead of a duplicate. It is the
+  // source's RANDOM id (a UUID): never a username, email, telegram id or phone,
+  // since an erased user leaves the sha256 of this value behind (A-268
+  // tombstone), and such values are guessed back from it by trying them.
   sourceId: z.string().max(128).optional(),
   // A-148: null = as the squads say, 0 = explicit no-limit, N >= 1 = the limit
   // (effectiveHwidLimit in hwid.service.ts).
