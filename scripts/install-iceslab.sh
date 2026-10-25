@@ -161,15 +161,20 @@ APT_LOCKS="/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/loc
 APT_WAIT_SECONDS="${APT_WAIT_SECONDS:-300}"
 
 # apt_busy / wait_for_apt: the same as in install-iceslab-node.sh, where the
-# reasons are written out.
+# reasons are written out (unattended-upgrades by its command line, so the
+# idle unattended-upgrade-shutdown does not count).
 apt_busy() {
   local p locks f holders
-  for p in apt apt-get aptitude dpkg unattended-upgr; do
+  for p in apt apt-get aptitude dpkg; do
     if pgrep -x "$p" >/dev/null 2>&1; then
       printf '%s is running' "$p"
       return 0
     fi
   done
+  if pgrep -f '(^|[/ ])unattended-upgrade( |$)' >/dev/null 2>&1; then
+    printf 'unattended-upgrade is running'
+    return 0
+  fi
   locks="$(lslocks -n -o PATH 2>/dev/null || true)"
   for f in $APT_LOCKS; do
     if grep -qxF "$f" <<<"$locks"; then

@@ -45,15 +45,27 @@ type aptRun struct {
 	locks      []string
 }
 
-// runAptWait: busyProc is a process pgrep finds; locked is how many calls of
-// lslocks list the first lock file (-1: every call); holder is what fuser
-// names for it.
-func runAptWait(t *testing.T, installer, busyProc string, locked int, holder string) aptRun {
+// Process table rows for the pgrep stub, "comm|cmdline", the way the kernel
+// has them: comm cut to 15 characters, so the idle shutdown helper and a real
+// run share one name and only the command line tells them apart.
+const (
+	uuShutdownIdle = "unattended-upgr|/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal"
+	uuRunning      = "unattended-upgr|/usr/bin/python3 /usr/bin/unattended-upgrade"
+)
+
+// runAptWait: procs is the process table pgrep sees (-x by comm, -f by an ERE
+// over the command line); locked is how many calls of lslocks list the first
+// lock file (-1: every call); holder is what fuser names for it.
+func runAptWait(t *testing.T, installer string, procs []string, locked int, holder string) aptRun {
 	t.Helper()
 	bash := needBash(t)
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
 	count := filepath.Join(dir, "lslocks-count")
+	table := filepath.Join(dir, "procs")
+	if err := os.WriteFile(table, []byte(strings.Join(procs, "\n")+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
 	var locks []string
 	for _, n := range []string{"lock-frontend", "lock", "lists-lock", "archives-lock"} {
 		p := filepath.Join(dir, n)
@@ -64,7 +76,15 @@ func runAptWait(t *testing.T, installer, busyProc string, locked int, holder str
 	}
 	note := `echo "$(basename "$0") $*" >>'` + calls + "'\n"
 	bin := stubs(t, map[string]string{
-		"pgrep": note + `[ "$2" = '` + busyProc + `' ] && exit 0; exit 1` + "\n",
+		"pgrep": note + `while IFS='|' read -r comm cmd; do
+  [ -n "$comm" ] || continue
+  case "$1" in
+    -x) [ "$comm" = "$2" ] && exit 0 ;;
+    -f) echo "$cmd" | grep -Eq -- "$2" && exit 0 ;;
+  esac
+done <'` + table + `'
+exit 1
+`,
 		"lslocks": `n=$(cat '` + count + `' 2>/dev/null || echo 0); n=$((n+1)); echo $n >'` + count + "'\n" +
 			`if [ ` + strconv.Itoa(locked) + ` -lt 0 ] || [ $n -le ` + strconv.Itoa(locked) + ` ]; then echo '` + locks[0] + "'; fi\n",
 		"fuser": `[ "$1" = '` + locks[0] + `' ] && [ -n '` + holder + `' ] && echo ' ` + holder + "'; exit 0\n",
@@ -97,7 +117,7 @@ func assertLocksKept(t *testing.T, r aptRun) {
 
 func TestAnUnheldAptLockIsLeftAloneAndDpkgFinishesItsWork(t *testing.T) {
 	for name := range aptInstallers {
-		r := runAptWait(t, name, "", 0, "")
+		r := runAptWait(t, name, nil, 0, "")
 		if r.err != nil || !strings.Contains(r.out, "DONE") {
 			t.Fatalf("%s: %v\n%s", name, r.err, r.out)
 		}
@@ -111,18 +131,39 @@ func TestAnUnheldAptLockIsLeftAloneAndDpkgFinishesItsWork(t *testing.T) {
 	}
 }
 
+// 25.10, a stock Ubuntu with automatic updates on: unattended-upgrade-shutdown
+// --wait-for-signal idles there from boot to shutdown, its name cut to the same
+// `unattended-upgr` as a real run, and the name check kept both installers
+// waiting 300 s and failing on a machine where apt was quiet.
+func TestTheIdleUnattendedUpgradeShutdownIsNotABusyApt(t *testing.T) {
+	for name := range aptInstallers {
+		r := runAptWait(t, name, []string{uuShutdownIdle, "sshd|sshd: /usr/sbin/sshd -D"}, 0, "")
+		if r.err != nil || !strings.Contains(r.out, "DONE") {
+			t.Fatalf("%s: %v\n%s", name, r.err, r.out)
+		}
+		if strings.Contains(r.out, "busy") {
+			t.Errorf("%s: the idle shutdown helper read as a busy apt:\n%s", name, r.out)
+		}
+		if !strings.Contains(r.calls, "dpkg --configure -a") {
+			t.Errorf("%s: dpkg --configure -a did not run on a quiet machine:\n%s", name, r.calls)
+		}
+	}
+}
+
 func TestAHeldAptLockIsWaitedForAndNeverRemoved(t *testing.T) {
 	for name := range aptInstallers {
 		for _, c := range []struct {
-			what, proc, holder string
-			locked             int
-			says               string
+			what, holder string
+			procs        []string
+			locked       int
+			says         string
 		}{
-			{"lslocks", "", "", -1, "lock-frontend is locked"},
-			{"a running unattended-upgrades", "unattended-upgr", "", 0, "unattended-upgr is running"},
-			{"fuser", "", "4242", 0, "is held by pid 4242"},
+			{"lslocks", "", nil, -1, "lock-frontend is locked"},
+			{"a running unattended-upgrades", "", []string{uuShutdownIdle, uuRunning}, 0, "unattended-upgrade is running"},
+			{"a running dpkg", "", []string{"dpkg|/usr/bin/dpkg --configure -a"}, 0, "dpkg is running"},
+			{"fuser", "4242", nil, 0, "is held by pid 4242"},
 		} {
-			r := runAptWait(t, name, c.proc, c.locked, c.holder)
+			r := runAptWait(t, name, c.procs, c.locked, c.holder)
 			if r.err == nil || !strings.Contains(r.out, "fail: apt busy") || !strings.Contains(r.out, c.says) {
 				t.Errorf("%s, %s: want a refusal naming %q, got %v\n%s", name, c.what, c.says, r.err, r.out)
 			}
@@ -139,7 +180,7 @@ func TestAHeldAptLockIsWaitedForAndNeverRemoved(t *testing.T) {
 
 func TestAnAptThatFinishesWhileWaitedForLetsTheInstallGoOn(t *testing.T) {
 	for name := range aptInstallers {
-		r := runAptWait(t, name, "", 1, "") // locked on the first look only
+		r := runAptWait(t, name, nil, 1, "") // locked on the first look only
 		if r.err != nil || !strings.Contains(r.out, "DONE") || !strings.Contains(r.out, "waiting up to 10s") {
 			t.Fatalf("%s: %v\n%s", name, r.err, r.out)
 		}
