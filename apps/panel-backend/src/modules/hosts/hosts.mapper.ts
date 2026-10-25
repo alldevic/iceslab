@@ -47,8 +47,8 @@ export interface PublicHostDto {
   /** Only the list endpoint computes this; absent elsewhere. See HostReach. */
   reach?: HostReach;
   /**
-   * When the config behind this host last changed: the newest of the host, its
-   * binding and its profile.
+   * When the link behind this host last changed: the newest `linkChangedAt` of
+   * the host, its binding, its profile and its node (A-122, hostConfigChangedAt).
    *
    * Not `updatedAt`. Moving the port is an edit to the BINDING and it rewrites
    * the link every subscriber holds, while the host row sits untouched, so the

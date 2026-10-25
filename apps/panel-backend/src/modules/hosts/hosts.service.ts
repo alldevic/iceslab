@@ -18,7 +18,8 @@ import {
   updateBinding,
 } from '../profiles/profiles.service.js';
 import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
-import { hostConfigChangedAt } from './hosts.freshness.js';
+import { HOST_LINK_FIELDS, hostConfigChangedAt } from './hosts.freshness.js';
+import { anyChanged } from '../../lib/util/same-value.js';
 import { getHiddenCascadeNodes, type HidingCascade } from '../cascades/cascade.service.js';
 import { assertCoreOnNode } from '../nodes/node-core-gate.js';
 import { AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
@@ -157,6 +158,26 @@ async function hidingCascadeOfBinding(bindingId: string): Promise<HidingCascade 
   return (await getHiddenCascadeNodes()).get(b.nodeId) ?? null;
 }
 
+/** A-122: the four rows a host's link is made of, by their link stamps. */
+const LINK_STAMPS = {
+  nodeId: true,
+  linkChangedAt: true,
+  profile: { select: { linkChangedAt: true } },
+  node: { select: { linkChangedAt: true } },
+} as const;
+
+function linkStampsOf(h: {
+  linkChangedAt: Date;
+  binding: { linkChangedAt: Date; profile: { linkChangedAt: Date }; node: { linkChangedAt: Date } };
+}) {
+  return {
+    host: h.linkChangedAt,
+    binding: h.binding.linkChangedAt,
+    profile: h.binding.profile.linkChangedAt,
+    node: h.binding.node.linkChangedAt,
+  };
+}
+
 export async function listHosts(q: ListHostsQuery): Promise<PublicHostDto[]> {
   const where: Prisma.HostWhereInput = {};
   if (q.bindingId) where.bindingId = q.bindingId;
@@ -172,9 +193,7 @@ export async function listHosts(q: ListHostsQuery): Promise<PublicHostDto[]> {
     where,
     // The two rows under the host are part of its config: an operator who moved
     // the port edited the BINDING, and every client's link changed with it.
-    include: {
-      binding: { select: { updatedAt: true, nodeId: true, profile: { select: { updatedAt: true } } } },
-    },
+    include: { binding: { select: LINK_STAMPS } },
     orderBy: [{ bindingId: 'asc' }, { priority: 'asc' }, { createdAt: 'asc' }],
   });
   const [reach, hidden] = await Promise.all([reachByHost(rows.map((r) => r.id)), getHiddenCascadeNodes()]);
@@ -182,11 +201,7 @@ export async function listHosts(q: ListHostsQuery): Promise<PublicHostDto[]> {
     mapHost(
       r,
       reach.get(r.id) ?? { squads: 0, users: 0 },
-      hostConfigChangedAt({
-        host: r.updatedAt,
-        binding: r.binding.updatedAt,
-        profile: r.binding.profile.updatedAt,
-      }).toISOString(),
+      hostConfigChangedAt(linkStampsOf(r)).toISOString(),
       hidden.get(r.binding.nodeId) ?? null,
     ),
   );
@@ -234,19 +249,13 @@ async function reachByHost(hostIds: string[]): Promise<Map<string, HostReach>> {
 export async function getHostById(id: string): Promise<PublicHostDto> {
   const h = await prisma.host.findUnique({
     where: { id },
-    include: {
-      binding: { select: { updatedAt: true, nodeId: true, profile: { select: { updatedAt: true } } } },
-    },
+    include: { binding: { select: LINK_STAMPS } },
   });
   if (!h) throw new HostNotFoundError(id);
   return mapHost(
     h,
     undefined,
-    hostConfigChangedAt({
-      host: h.updatedAt,
-      binding: h.binding.updatedAt,
-      profile: h.binding.profile.updatedAt,
-    }).toISOString(),
+    hostConfigChangedAt(linkStampsOf(h)).toISOString(),
     (await getHiddenCascadeNodes()).get(h.binding.nodeId) ?? null,
   );
 }
@@ -483,6 +492,9 @@ export async function updateHost(
   }
   if (input.serverDescription !== undefined) data.serverDescription = input.serverDescription;
   if (input.isHidden !== undefined) data.isHidden = input.isHidden;
+  // A-122: the stamp moves when a value that reaches the client really
+  // changed, every host field but priority (HOST_LINK_FIELDS).
+  if (anyChanged(existing, data as Partial<typeof existing>, HOST_LINK_FIELDS)) data.linkChangedAt = new Date();
 
   const updated = await prisma.host.update({ where: { id }, data });
   eventBus.emit('host.changed', { nodeId: await nodeOfBinding(updated.bindingId) });

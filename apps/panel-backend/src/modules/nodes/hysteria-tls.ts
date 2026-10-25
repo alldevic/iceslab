@@ -101,7 +101,12 @@ export async function ensureHysteriaTls(nodeId: string): Promise<StoredHysteriaT
   const stored = readHysteriaTls(node.hysteriaTls);
   if (stored && stored.host === host) return stored;
   const fresh = await mintHysteriaTls(host);
-  await prisma.node.update({ where: { id: nodeId }, data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue } });
+  // A-122: a new pin is in every hysteria link of the node. Minted only when
+  // none matched, so this write is always a real change.
+  await prisma.node.update({
+    where: { id: nodeId },
+    data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
+  });
   return fresh;
 }
 
@@ -115,7 +120,10 @@ export async function rotateHysteriaTls(nodeId: string): Promise<StoredHysteriaT
   const host = selfSignedHostFor(node?.address);
   if (!node || !host) return null;
   const fresh = await mintHysteriaTls(host);
-  await prisma.node.update({ where: { id: nodeId }, data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue } });
+  await prisma.node.update({
+    where: { id: nodeId },
+    data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
+  });
   return fresh;
 }
 

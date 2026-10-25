@@ -219,9 +219,11 @@ export async function ensureAwg3Geometry(nodeId: string): Promise<AwgGeometry3 |
   // Written only where none is stored, then read back: two pushes minting at
   // once must end on ONE geometry, or the node runs one and a key carries the
   // other.
+  // A-122: the geometry is in every 3.1 key of the node; the guarded write
+  // lands only where none was stored, so it is always a real change.
   await prisma.node.updateMany({
     where: { id: nodeId, awg3Geometry: { equals: Prisma.DbNull } },
-    data: { awg3Geometry: mintAwg3Geometry() as unknown as Prisma.InputJsonValue },
+    data: { awg3Geometry: mintAwg3Geometry() as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
   });
   const after = await prisma.node.findUnique({ where: { id: nodeId }, select: { awg3Geometry: true } });
   return readAwg3Geometry(after?.awg3Geometry);

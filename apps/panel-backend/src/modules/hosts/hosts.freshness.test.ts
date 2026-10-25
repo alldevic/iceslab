@@ -208,7 +208,7 @@ describe('host freshness', () => {
     expect(f.stale).toBe(1);
   });
 
-  it('editing the PROFILE does the same', async () => {
+  it('editing what the PROFILE puts into the link does the same; its description does not (A-122)', async () => {
     const profileId = await makeProfile();
     const nodeId = await makeNode();
     const host = await addHost(profileId, nodeId, 443, 'Direct');
@@ -217,11 +217,21 @@ describe('host freshness', () => {
     await polled(userId, new Date());
     expect((await freshness(host.id)).current).toBe(1);
 
-    const res = await app.inject({
+    const notes = await app.inject({
       method: 'PUT',
       url: `/api/profiles/${profileId}`,
       headers: auth(),
       payload: { description: 'edited' },
+    });
+    expect(notes.statusCode, notes.body).toBe(200);
+    // A description is no part of any link: before A-122 this read stale.
+    expect((await freshness(host.id)).stale).toBe(0);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${profileId}`,
+      headers: auth(),
+      payload: { config: { ...(await prisma.profile.findUniqueOrThrow({ where: { id: profileId } })).config as object, realityShortIds: ['89abcdef'] } },
     });
     expect(res.statusCode, res.body).toBe(200);
 

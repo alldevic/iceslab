@@ -3,6 +3,8 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
 import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
+import { anyChanged } from '../../lib/util/same-value.js';
+import { BINDING_LINK_FIELDS, PROFILE_LINK_FIELDS } from '../hosts/hosts.freshness.js';
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import {
@@ -653,11 +655,15 @@ export async function updateProfile(
     }
   }
 
+  // A-122: the profile's link stamp moves only when a value that reaches the
+  // client really changed (PROFILE_LINK_FIELDS); a rename or a description
+  // does not. A moved binding's transport is in its link too.
+  if (anyChanged(existing, data as Partial<typeof existing>, PROFILE_LINK_FIELDS)) data.linkChangedAt = new Date();
   const updated = await prisma.$transaction(async (tx) => {
     for (const m of moves) {
       await tx.profileNodeBinding.update({
         where: { id: m.id },
-        data: { transport: m.transport },
+        data: { transport: m.transport, linkChangedAt: new Date() },
       });
     }
     return tx.profile.update({
@@ -1029,6 +1035,17 @@ export async function updateBinding(
   // uniqueness key, and a row whose transport drifted from its config is a row
   // the key is protecting the wrong way round.
   data.transport = transport;
+
+  // A-122: every binding field reaches the client; the stamp moves when one
+  // really changed. Read from the input, not `data`, where a cleared override
+  // is Prisma.JsonNull rather than null.
+  const nextLink: Record<string, unknown> = { transport };
+  if (data.port !== undefined) nextLink.port = data.port;
+  if (data.publicHost !== undefined) nextLink.publicHost = data.publicHost;
+  if (data.publicPort !== undefined) nextLink.publicPort = data.publicPort;
+  if (data.enabled !== undefined) nextLink.enabled = data.enabled;
+  if (input.overrides !== undefined) nextLink.overrides = input.overrides;
+  if (anyChanged(existing, nextLink as Partial<typeof existing>, BINDING_LINK_FIELDS)) data.linkChangedAt = new Date();
 
   const updated = await prisma.profileNodeBinding.update({ where: { id }, data });
   eventBus.emit('binding.updated', {

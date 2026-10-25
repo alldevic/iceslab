@@ -3,6 +3,8 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { issueNodeCert, encodeNodePayload } from '../keygen/keygen.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
+import { anyChanged } from '../../lib/util/same-value.js';
+import { NODE_LINK_FIELDS } from '../hosts/hosts.freshness.js';
 import * as repo from './nodes.repository.js';
 import { getPanelPublicIp } from './panel-ip.js';
 import { issueBootstrapToken } from './bootstrap.service.js';
@@ -526,6 +528,10 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   // operator has just taken off it.
   const policyChanged =
     input.policyId !== undefined && input.policyId !== existing.policyId;
+
+  // A-122: the address and the self-steal SNI are in every link of this node;
+  // name and country only in its label (NODE_LINK_FIELDS).
+  if (anyChanged(existing, data as Partial<typeof existing>, NODE_LINK_FIELDS)) data.linkChangedAt = new Date();
 
   let updated;
   try {

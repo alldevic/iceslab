@@ -40,6 +40,8 @@ model Profile {
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // A-122: when what goes into a client's link last changed (not any write to the row, as updatedAt is); the host card's "who holds the old link" reads it.
+  linkChangedAt DateTime @default(now()) @map("link_changed_at") @db.Timestamptz(6)
 
   bindings       ProfileNodeBinding[]
   groupProfiles  GroupProfile[]
@@ -77,6 +79,8 @@ model ProfileNodeBinding {
   enabled    Boolean  @default(true)
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // A-122: when what goes into a client's link last changed (not any write to the row, as updatedAt is); the host card's "who holds the old link" reads it.
+  linkChangedAt DateTime @default(now()) @map("link_changed_at") @db.Timestamptz(6)
 
   profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
   node    Node    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
@@ -165,6 +169,8 @@ model Host {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // A-122: when what goes into a client's link last changed (not any write to the row, as updatedAt is); the host card's "who holds the old link" reads it.
+  linkChangedAt DateTime @default(now()) @map("link_changed_at") @db.Timestamptz(6)
 
   binding    ProfileNodeBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
   // Squads that narrow their handout to this specific host. See GroupHost.

@@ -9,31 +9,59 @@ import { SUBSCRIPTION_REQUEST_RETENTION_DAYS } from '../maintenance/retention.cr
  * on the old config until it stops authenticating, and then finds out on their
  * own, which is the failure this screen exists to get ahead of.
  *
- * No column and no migration. The panel already writes a row per `/sub` poll
+ * One stamp column per row (link_changed_at, A-122), nothing more. The panel already writes a row per `/sub` poll
  * (SubscriptionRequestHistory), so "has this person re-read since the change"
  * is a question the existing data answers, and a monotonic v3/v4 number on the
  * host would add nothing the timestamps do not already say.
  */
 
 /**
- * When the config behind this host last changed.
+ * When the link behind this host last changed.
  *
- * A host is a set of overrides on top of `binding + profile`, so the two rows
- * under it are part of its config: moving the port is an edit to the BINDING and
- * it changes the link every client holds without touching the host row. Same
- * shape as the node's `configChangedAt`, for the same reason - the unit of
- * editing and the unit of config are different things.
+ * A host is a set of overrides on top of `binding + profile + node`, so the
+ * rows under it are part of its link: moving the port is an edit to the
+ * BINDING and it changes the link every client holds without touching the host
+ * row. Same shape as the node's `configChangedAt`, for the same reason - the
+ * unit of editing and the unit of config are different things.
+ *
+ * A-122: by each row's `linkChangedAt`, not `updatedAt`. updatedAt moves on
+ * any write: dragging hosts rewrites every host's priority, renaming a profile
+ * changes nothing a client holds, and after either this card said every
+ * subscriber held the old link. The stamp moves only when a value that goes
+ * into the link really changes; the fields are listed below, and each write
+ * compares the new value with the stored one (sameValue).
  */
 export function hostConfigChangedAt(parts: {
   host: Date;
   binding: Date;
   profile: Date;
+  node: Date;
 }): Date {
-  return [parts.binding, parts.profile].reduce(
+  return [parts.binding, parts.profile, parts.node].reduce(
     (latest, d) => (d > latest ? d : latest),
     parts.host,
   );
 }
+
+/** Host fields that reach the client: all but `priority` (the order in the
+ *  panel's list). `remark` is the line's name in the client. */
+export const HOST_LINK_FIELDS = [
+  'remark', 'enabled', 'addressOverride', 'portOverride', 'sniOverride', 'hostHeaderOverride',
+  'pathOverride', 'fingerprintOverride', 'alpn', 'allowInsecure', 'securityLayer',
+  'disableForFormats', 'serverDescription', 'isHidden',
+] as const;
+
+/** Binding fields that reach the client: all of them. */
+export const BINDING_LINK_FIELDS = ['port', 'publicHost', 'publicPort', 'overrides', 'transport', 'enabled'] as const;
+
+/** Profile fields that reach the client; `name` and `description` do not. */
+export const PROFILE_LINK_FIELDS = ['config', 'engine', 'awgProtocol', 'enabled'] as const;
+
+/** Node fields that reach the client and are edited on the node: the address
+ *  and the self-steal SNI. The hysteria pin and the AmneziaWG 3.1 geometry
+ *  are written at push time and stamp there (hysteria-tls.ts,
+ *  awg3-geometry.ts). `name` and `countryCode` are only in the label. */
+export const NODE_LINK_FIELDS = ['address', 'domain'] as const;
 
 export interface HostFreshnessDto {
   configChangedAt: string;
@@ -59,18 +87,23 @@ export async function getHostFreshness(hostId: string): Promise<HostFreshnessDto
   const host = await prisma.host.findUnique({
     where: { id: hostId },
     select: {
-      updatedAt: true,
+      linkChangedAt: true,
       binding: {
-        select: { updatedAt: true, profile: { select: { updatedAt: true } } },
+        select: {
+          linkChangedAt: true,
+          profile: { select: { linkChangedAt: true } },
+          node: { select: { linkChangedAt: true } },
+        },
       },
     },
   });
   if (!host) return null;
 
   const changedAt = hostConfigChangedAt({
-    host: host.updatedAt,
-    binding: host.binding.updatedAt,
-    profile: host.binding.profile.updatedAt,
+    host: host.linkChangedAt,
+    binding: host.binding.linkChangedAt,
+    profile: host.binding.profile.linkChangedAt,
+    node: host.binding.node.linkChangedAt,
   });
 
   // The audience is the same join `reachByHost` uses, including the squad
@@ -103,6 +136,9 @@ export async function getHostFreshness(hostId: string): Promise<HostFreshnessDto
     JOIN group_profiles gp       ON gp.profile_id = b.profile_id
     JOIN group_members gm        ON gm.group_id = gp.group_id
     JOIN users u                 ON u.id = gm.user_id AND u.deleted_at IS NULL
+                                 -- A-122: a disabled, expired or limited user
+                                 -- has no use for the link either way.
+                                 AND u.status = 'active'
     WHERE h.id = ${hostId}::uuid
       AND (
         NOT EXISTS (SELECT 1 FROM group_hosts x WHERE x.group_id = gp.group_id)
