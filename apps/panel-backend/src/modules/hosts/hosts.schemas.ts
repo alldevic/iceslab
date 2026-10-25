@@ -102,7 +102,14 @@ export const UpdateHostSchema = z
      * on the old port while the subscription handed out the new one.
      */
     port: z.number().int().min(1).max(65535).optional(),
-    /** A-150: the binding carries other hosts too; `true` moves them all. */
+    /**
+     * A-259: what a new `port` moves. `host` (the default): this host alone,
+     * onto the profile's binding of that port on the node, a new one when there
+     * is none; a host alone on its binding moves the binding itself. `binding`:
+     * the whole binding, every host on it with it.
+     */
+    portMove: z.enum(['host', 'binding']).optional(),
+    /** A-150, kept for the screens that send it: `true` is portMove 'binding'. */
     confirmSharedPort: z.boolean().optional(),
     addressOverride: z.string().min(1).max(253).nullable().optional(),
     /** The port CLIENTS dial when it differs from the one the node listens on

@@ -133,17 +133,63 @@ describe('the listen port on the host screen', () => {
     expect(await subscribedPorts(user.subscriptionToken)).toEqual([2053]);
   });
 
-  it('a second host on the binding refuses the move by name, and moves with consent', async () => {
+  // A-259: one profile may sit on a node on several ports, so a host on a
+  // binding it shares moves alone by default ('host'), or takes the whole
+  // binding with it ('binding'). HOST_PORT_SHARED is not answered any more.
+  it('portMove host (the default): the host goes onto a binding of its own, the other host stays on the old port', async () => {
     const { host, profile, node } = await seed();
     const cdn = (await call('POST', '/api/hosts', { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' })).body;
-    const refused = await call('PUT', `/api/hosts/${host.id}`, { port: 8443 });
-    expect(refused.status).toBe(409);
-    expect(refused.body).toMatchObject({ error: 'HOST_PORT_SHARED', hosts: ['CDN'] });
-    expect((await bindingOf(host.id)).port).toBe(443);
+    const old = await bindingOf(host.id);
+    await prisma.host.update({ where: { id: host.id }, data: { linkChangedAt: new Date('2020-01-01T00:00:00Z') } });
 
-    const moved = await call('PUT', `/api/hosts/${host.id}`, { port: 8443, confirmSharedPort: true });
+    const moved = await call('PUT', `/api/hosts/${host.id}`, { port: 8443 });
     expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+    const mine = await bindingOf(host.id);
+    expect(mine.id).not.toBe(old.id);
+    expect(mine.port).toBe(8443);
+    expect(mine.publicPort).toBeNull();
+    expect((await bindingOf(cdn.id)).id).toBe(old.id);
+    expect((await bindingOf(cdn.id)).port).toBe(443);
+    // Its link changed: the stamp moved (A-122).
+    expect((await prisma.host.findUniqueOrThrow({ where: { id: host.id } })).linkChangedAt.getTime()).toBeGreaterThan(
+      new Date('2020-01-01T00:00:00Z').getTime(),
+    );
+
+    // Back to 443: onto the binding there, and the one it leaves empty is removed.
+    const back = await call('PUT', `/api/hosts/${host.id}`, { port: 443 });
+    expect(back.status, JSON.stringify(back.body)).toBe(200);
+    expect((await bindingOf(host.id)).id).toBe(old.id);
+    expect(await prisma.profileNodeBinding.findUnique({ where: { id: mine.id } })).toBeNull();
+  });
+
+  it('portMove binding, and confirmSharedPort as the older screens send it: every host of the binding moves', async () => {
+    const { host, profile, node } = await seed();
+    const cdn = (await call('POST', '/api/hosts', { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' })).body;
+    const old = await bindingOf(host.id);
+
+    const moved = await call('PUT', `/api/hosts/${host.id}`, { port: 8443, portMove: 'binding' });
+    expect(moved.status, JSON.stringify(moved.body)).toBe(200);
+    expect((await bindingOf(host.id)).id).toBe(old.id);
     expect((await bindingOf(cdn.id)).port).toBe(8443);
+
+    const legacy = await call('PUT', `/api/hosts/${host.id}`, { port: 9443, confirmSharedPort: true });
+    expect(legacy.status, JSON.stringify(legacy.body)).toBe(200);
+    expect((await bindingOf(cdn.id)).port).toBe(9443);
+    expect(await prisma.profileNodeBinding.count({ where: { profileId: profile.id, nodeId: node.id } })).toBe(1);
+  });
+
+  it('two hosts on two bindings of one profile are two endpoints in the subscription, with their own ids and ports', async () => {
+    const { host, profile, node, user } = await seed();
+    await call('POST', '/api/hosts', { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' });
+    expect((await call('PUT', `/api/hosts/${host.id}`, { port: 8443 })).status).toBe(200);
+
+    const res = await app.inject({ method: 'GET', url: `/sub/${user.subscriptionToken}?format=json` });
+    expect(res.statusCode).toBe(200);
+    const eps = (JSON.parse(res.body) as { endpoints: { key: string; port: number; hostId: string }[] }).endpoints;
+    expect(eps).toHaveLength(2);
+    expect(new Set(eps.map((e) => e.key)).size).toBe(2);
+    expect(eps.map((e) => e.port).sort()).toEqual([443, 8443]);
+    expect(await subscribedPorts(user.subscriptionToken)).toEqual(expect.arrayContaining([443, 8443]));
   });
 
   it('a port another profile holds on the node is refused with the same answer as create', async () => {

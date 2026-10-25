@@ -20,6 +20,8 @@ import {
 import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
 import { HOST_LINK_FIELDS, hostConfigChangedAt } from './hosts.freshness.js';
 import { anyChanged } from '../../lib/util/same-value.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
+import type { Transport } from '@iceslab/shared';
 import { getHiddenCascadeNodes, type HidingCascade } from '../cascades/cascade.service.js';
 import { assertCoreOnNode } from '../nodes/node-core-gate.js';
 import { AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
@@ -47,23 +49,6 @@ export class HostNotFoundError extends Error {
  */
 async function nodeOfBinding(bindingId: string): Promise<string | undefined> {
   return (await prisma.profileNodeBinding.findUnique({ where: { id: bindingId }, select: { nodeId: true } }))?.nodeId;
-}
-
-/** A-150: moving the listen port would move the other hosts of the binding. */
-export class HostPortSharedError extends Error {
-  readonly code = 'HOST_PORT_SHARED';
-  constructor(
-    public port: number,
-    public hosts: string[],
-  ) {
-    super(
-      `the port belongs to the inbound on the node, and ${hosts.length === 1 ? 'host' : 'hosts'} ` +
-        `${hosts.map((h) => `"${h}"`).join(', ')} ${hosts.length === 1 ? 'uses' : 'use'} it too. ` +
-        `Moving it to ${port} moves ${hosts.length === 1 ? 'that host' : 'them'} as well: send ` +
-        `confirmSharedPort to do that.`,
-    );
-    this.name = 'HostPortSharedError';
-  }
 }
 
 export class BindingNotFoundError extends Error {
@@ -441,32 +426,42 @@ export async function updateHost(
 
   /**
    * A-150: the port on this screen is the port the node LISTENS on, and it
-   * belongs to the binding. Moving it goes through updateBinding: the same
-   * port checks as creating one, then the push. Before this the field wrote
-   * portOverride, the node kept the old port, and every client was handed a
-   * port nothing listened on.
+   * belongs to the binding. Before that the field wrote portOverride, the node
+   * kept the old port, and every client was handed a port nothing listened on.
    *
-   * The binding may carry other hosts (a CDN variant beside the direct one);
-   * they all move with it, so that takes `confirmSharedPort` and is refused
-   * by name otherwise.
+   * A-259: what moves is said by `portMove` (confirmSharedPort true reads as
+   * 'binding'):
+   *   - 'binding': the binding, every host on it with it (updateBinding: the
+   *     port checks of a binding, then the push);
+   *   - 'host', the default: this host alone. Onto the profile's binding of
+   *     the new port on this node when there is one; a host alone on its
+   *     binding with no such binding moves the binding itself; otherwise a new
+   *     binding of the profile on that port (the checks of a new binding; its
+   *     public host and overrides copied, no public port), and the host goes
+   *     onto it. A binding left without a host is removed, as a host's delete
+   *     removes it. The host's move is one transaction.
+   * HOST_PORT_SHARED is not answered any more: a host moves alone unless asked.
    */
   const binding = await prisma.profileNodeBinding.findUniqueOrThrow({
     where: { id: existing.bindingId },
-    select: { port: true, publicPort: true, hosts: { select: { id: true, remark: true } } },
+    select: { port: true, publicPort: true, hosts: { select: { id: true } } },
   });
   const moving = input.port !== undefined && input.port !== binding.port;
-  if (moving) {
-    const others = binding.hosts.filter((h) => h.id !== id).map((h) => h.remark);
-    if (others.length > 0 && input.confirmSharedPort !== true) {
-      throw new HostPortSharedError(input.port!, others);
-    }
-    await updateBinding(existing.bindingId, { port: input.port! });
+  const mode = input.portMove ?? (input.confirmSharedPort === true ? 'binding' : 'host');
+  let hostMove: HostMovePlan | null = null;
+  if (moving && mode === 'host') {
+    hostMove = await planHostMove(existing.bindingId, input.port!, binding.hosts.length === 1);
   }
+  if (moving && !hostMove) await updateBinding(existing.bindingId, { port: input.port! });
   // What clients get without an override: the binding's public port, else the
-  // port the node listens on (subscription.service.ts, basePort).
-  // A public port equal to the old listen port was a copy, and updateBinding
-  // dropped it with the move (A-150 tail).
-  const publicPort = moving && binding.publicPort === binding.port ? null : binding.publicPort;
+  // port the node listens on (subscription.service.ts, basePort). A public port
+  // equal to the old listen port was a copy, and updateBinding dropped it with
+  // the move (A-150 tail). A host moved to another binding takes that one's.
+  const publicPort = hostMove
+    ? hostMove.publicPort
+    : moving && binding.publicPort === binding.port
+      ? null
+      : binding.publicPort;
   const listenPort = publicPort ?? (moving ? input.port! : binding.port);
 
   const data: Prisma.HostUpdateInput = {};
@@ -501,10 +496,120 @@ export async function updateHost(
   // A-122: the stamp moves when a value that reaches the client really
   // changed, every host field but priority (HOST_LINK_FIELDS).
   if (anyChanged(existing, data as Partial<typeof existing>, HOST_LINK_FIELDS)) data.linkChangedAt = new Date();
+  // A host on another binding is on another port: its link changed (A-122).
+  if (hostMove) data.linkChangedAt = new Date();
 
-  const updated = await prisma.host.update({ where: { id }, data });
-  eventBus.emit('host.changed', { nodeId: await nodeOfBinding(updated.bindingId) });
+  if (!hostMove) {
+    const updated = await prisma.host.update({ where: { id }, data });
+    eventBus.emit('host.changed', { nodeId: await nodeOfBinding(updated.bindingId) });
+    return mapHost(updated, undefined, undefined, await hidingCascadeOfBinding(updated.bindingId));
+  }
+
+  const plan = hostMove;
+  const { updated, createdBinding, removedBinding } = await prisma
+    .$transaction(async (tx) => {
+      let targetId = plan.targetBindingId;
+      let createdBinding: { id: string; profileId: string; nodeId: string } | null = null;
+      if (!targetId) {
+        createdBinding = await tx.profileNodeBinding.create({ data: plan.newBinding!, select: { id: true, profileId: true, nodeId: true } });
+        targetId = createdBinding.id;
+      }
+      const updated = await tx.host.update({ where: { id }, data: { ...data, binding: { connect: { id: targetId } } } });
+      const left = await tx.host.count({ where: { bindingId: existing.bindingId } });
+      let removedBinding: { id: string; profileId: string; nodeId: string } | null = null;
+      if (left === 0) {
+        removedBinding = await tx.profileNodeBinding.delete({
+          where: { id: existing.bindingId },
+          select: { id: true, profileId: true, nodeId: true },
+        });
+      }
+      return { updated, createdBinding, removedBinding };
+    })
+    .catch((err: unknown) => {
+      // The port checked free above and taken before the insert: the same
+      // answer the check gives (A-257).
+      if (isUniqueViolationOn(err, 'profile_node_bindings_node_id_port_transport_key', ['node_id', 'port', 'transport'])) {
+        throw new PortInUseError(plan.port, plan.nodeName, plan.profileName, plan.transport);
+      }
+      throw err;
+    });
+
+  // The host first, then the bindings: binding.* re-push the node, by then
+  // the subscription caches (dropped by host.changed, A-165) know the move.
+  eventBus.emit('host.changed', { nodeId: plan.nodeId });
+  if (createdBinding) eventBus.emit('binding.created', { bindingId: createdBinding.id, profileId: createdBinding.profileId, nodeId: createdBinding.nodeId });
+  if (removedBinding) eventBus.emit('binding.deleted', { bindingId: removedBinding.id, profileId: removedBinding.profileId, nodeId: removedBinding.nodeId });
   return mapHost(updated, undefined, undefined, await hidingCascadeOfBinding(updated.bindingId));
+}
+
+/** A-259: where a host moved alone to another port goes, checked, unwritten. */
+interface HostMovePlan {
+  port: number;
+  nodeId: string;
+  nodeName: string;
+  profileName: string;
+  transport: Transport;
+  /** The profile's binding of that port on the node, when there is one. */
+  targetBindingId: string | null;
+  /** Otherwise the binding to create. */
+  newBinding: Prisma.ProfileNodeBindingUncheckedCreateInput | null;
+  /** What the host's clients dial without an override, on the target. */
+  publicPort: number | null;
+}
+
+/**
+ * Where a host moved alone to `port` goes (portMove 'host'), or null when it
+ * is the binding that moves: a host alone on its binding with no binding of
+ * the profile on that port moves its binding, nothing to split.
+ */
+async function planHostMove(bindingId: string, port: number, alone: boolean): Promise<HostMovePlan | null> {
+  const from = await prisma.profileNodeBinding.findUniqueOrThrow({
+    where: { id: bindingId },
+    select: {
+      profileId: true,
+      nodeId: true,
+      publicHost: true,
+      overrides: true,
+      enabled: true,
+      profile: { select: { id: true, name: true, protocol: true, engine: true, config: true, awgProtocol: true } },
+      node: true,
+    },
+  });
+  const target = await prisma.profileNodeBinding.findFirst({
+    where: { profileId: from.profileId, nodeId: from.nodeId, port },
+    select: { id: true, port: true, publicPort: true },
+  });
+  const transport = transportForBinding(from.profile, from.overrides);
+  const base = { port, nodeId: from.nodeId, nodeName: from.node.name, profileName: from.profile.name, transport };
+  if (target) {
+    return { ...base, targetBindingId: target.id, newBinding: null, publicPort: target.publicPort };
+  }
+  if (alone) return null;
+
+  // A new binding of the profile on this node: the checks every new binding
+  // goes through (planHostCreate, createBinding).
+  const clash = await prisma.profileNodeBinding.findUnique({
+    where: { nodeId_port_transport: { nodeId: from.nodeId, port, transport } },
+    select: { profile: { select: { name: true } } },
+  });
+  if (clash) throw new PortInUseError(port, from.node.name, clash.profile.name, transport);
+  await assertPortFreeOfOthers(from.nodeId, port, transport, from.node.name);
+  await assertBindingFitsNode(from.node, from.profile, from.overrides);
+  return {
+    ...base,
+    targetBindingId: null,
+    newBinding: {
+      profileId: from.profileId,
+      nodeId: from.nodeId,
+      port,
+      transport,
+      enabled: from.enabled,
+      publicHost: from.publicHost,
+      publicPort: null,
+      overrides: from.overrides === null ? Prisma.JsonNull : (from.overrides as Prisma.InputJsonValue),
+    },
+    publicPort: null,
+  };
 }
 
 /**
