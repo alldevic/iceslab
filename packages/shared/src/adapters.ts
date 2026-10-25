@@ -63,5 +63,41 @@ export const MULTI_INBOUND_ADAPTERS: readonly string[] = [
   'shadowtls|singbox',
 ];
 
+/**
+ * A-204: where a squad's limit on a user does not hold on the node. A
+ * property of the cores, not a fault the panel can fix, so it is said: on the
+ * squad screen and in the node's sync status, by this one rule.
+ *
+ * The agent puts a user on the inbounds the squad names only through an
+ * adapter that implements `core.ScopedUserAdder` (`AddUserOn`, A-022); any
+ * other adapter gets the user on all of its inbounds. Those engines are listed
+ * here, and a test reads the agent's sources so the list cannot drift.
+ */
+export const SCOPED_USER_ENGINES: readonly string[] = ['amneziawg', 'singbox', 'xray'];
+
+/**
+ *   shared-secret  mtproto: mtg serves one secret for every user (its
+ *                  adapter: "single-secret upstream"; AddUser and RemoveUser
+ *                  only count for stats), so a secret from any subscription
+ *                  lets anyone in, a disabled or expired user included;
+ *   shared-users   an adapter that holds several inbounds on one node
+ *                  (MULTI_INBOUND_ADAPTERS) without AddUserOn: one user list
+ *                  per process (mieru), so a user the squad lets onto one of
+ *                  them gets through any of them on that node.
+ */
+export type UserScopeGap = 'shared-secret' | 'shared-users';
+
+export function userScopeGap(profile: {
+  protocol: string;
+  /** The engine that serves it (the profile's, or the protocol's own). */
+  effectiveEngine: string;
+  awgProtocol?: number | null;
+}): UserScopeGap | null {
+  if (profile.protocol === 'mtproto') return 'shared-secret';
+  const slot = adapterSlot({ protocol: profile.protocol, engine: profile.effectiveEngine, awgProtocol: profile.awgProtocol });
+  if (MULTI_INBOUND_ADAPTERS.includes(slot) && !SCOPED_USER_ENGINES.includes(profile.effectiveEngine)) return 'shared-users';
+  return null;
+}
+
 /** Steps of a cascade, entry to exit (A-175: was copied into the screen). */
 export const MAX_CASCADE_HOPS = 5;
