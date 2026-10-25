@@ -362,7 +362,7 @@ export function NodeCard({
             />
             <MetricBar
               icon={<IconDeviceFloppy size={12} />}
-              label="Disk"
+              label={t('nodeCard.disk')}
               value={m.disk.usedPercent}
               tooltip={`${formatBytes(m.disk.usedBytes)} / ${formatBytes(m.disk.totalBytes)}`}
             />

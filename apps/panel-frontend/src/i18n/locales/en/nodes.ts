@@ -526,6 +526,7 @@ export const nodes = {
     },
     metricsPending: 'Metrics pending - first poll within 15s',
     loadLabel: 'Load',
+    disk: 'Disk',
     todayTip: 'Traffic today',
     bindings_one: '{{count}} binding',
     bindings_other: '{{count}} bindings',
