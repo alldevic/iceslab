@@ -1,4 +1,5 @@
 import { apiErrorMessage } from '@/lib/net/client';
+import { deleteRetentionText } from '@/contours/users/lib/retentionWords';
 import { useDebouncedValue } from '@mantine/hooks';
 import { Text } from '@mantine/core';
 import type { StatusFilter } from '@/contours/users/lib/userStatus';
@@ -417,7 +418,7 @@ export function useUsersPage() {
       title: t('users.deleteTitle', { name: user.username }),
       children: (
         <Text size="sm">
-          {t('users.deleteBody')}
+          {t('users.deleteBody')} {deleteRetentionText(t)}
         </Text>
       ),
       labels: { confirm: t('common.delete'), cancel: t('common.cancel') },

@@ -5,6 +5,7 @@ import { DISPLAY, GROUND, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contou
 import { LABEL } from '@/contours/users/lib/userForm';
 import { deleteHwidDevice, listUserDevices } from '@/lib/domain/users';
 import { deviceListView, type DeviceCap } from '@/contours/users/lib/deviceLimit';
+import { deviceForgetText } from '@/contours/users/lib/retentionWords';
 import { loadFailure } from '@/lib/ui/loadView';
 import { LoadFailedLine } from '@/ui/LoadFailed';
 import { notifications } from '@mantine/notifications';
@@ -137,6 +138,10 @@ export function DeviceList({ userId, cap }: { userId: string; cap: DeviceCap }) 
           {t('userDrawer.devicesEmpty')}
         </Text>
       )}
+      {/* A-269: a device the client stopped sending frees its slot by itself. */}
+      <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST, marginTop: 8 }}>
+        {deviceForgetText(t)}
+      </Text>
       {full && devices.length > 0 && (
         <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED, marginTop: 8 }}>
           {t('userDrawer.devicesFull')}

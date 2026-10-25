@@ -4,6 +4,7 @@ import { AMBER, CARD, FAINT, DISPLAY, HAIRLINE, RED, SNOW } from '@/contours/use
 import { LABEL } from '@/contours/users/lib/userForm';
 import { useTranslation } from 'react-i18next';
 import type { User } from '@/lib/domain/users';
+import { deleteRetentionText } from '@/contours/users/lib/retentionWords';
 
 /**
  * The three actions that change what the person on the other end experiences,
@@ -63,7 +64,7 @@ export function DangerZone({
       />
       <Row
         title={t('userDrawer.deleteTitle')}
-        body={t('userDrawer.deleteBody')}
+        body={`${t('userDrawer.deleteBody')} ${deleteRetentionText(t)}`}
         action={t('common.delete')}
         accent={RED}
         onClick={() => onDelete(user)}

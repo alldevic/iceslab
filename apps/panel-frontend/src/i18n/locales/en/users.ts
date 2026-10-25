@@ -60,7 +60,9 @@ export const users = {
       disabled: 'Off',
     },
     deleteTitle: 'Delete user "{{name}}"?',
-    deleteBody: 'Irreversible. The subscription becomes invalid; credentials are revoked on every node.',
+    deleteBody: 'The subscription becomes invalid; credentials are revoked on every node.',
+    deleteRetention_one: 'The user leaves the panel at once and is erased for good after {{count}} day, with traffic history, devices and keys.',
+    deleteRetention_other: 'The user leaves the panel at once and is erased for good after {{count}} days, with traffic history, devices and keys.',
     revokeTitle: 'Revoke subscription for "{{name}}"?',
     revokeBody: 'The current subscription link stops working (403). Rotate to hand out a fresh link.',
     rotateTitle: 'Rotate subscription for "{{name}}"?',
@@ -132,6 +134,8 @@ export const users = {
     devicesCounterUnknown: 'registered: {{used}}, squad limit unknown',
     devicesEmpty:
       'No devices, which is normal: a row appears the first time a client sends its identifier.',
+    devicesForget_one: 'A device not seen for {{count}} day is forgotten and frees its slot.',
+    devicesForget_other: 'A device not seen for {{count}} days is forgotten and frees its slot.',
     devicesFull: 'Every slot is taken. A new device cannot connect until one of these is reset.',
     devicesError: 'the device list',
     deviceReset: 'Device reset',
@@ -245,7 +249,7 @@ export const users = {
       'The current link starts answering 403. Configs already imported keep working until the client refreshes.',
     deleteTitle: 'Delete user',
     deleteBody:
-      'Irreversible. Credentials are pulled from every node, the link dies, devices and traffic history go with it.',
+      'Credentials are pulled from every node, the link dies.',
     tierQuery: 'link query',
     tierQueryHint: '?routing= in the subscription URL wins over everything, including this field',
     tierUser: 'this user',
