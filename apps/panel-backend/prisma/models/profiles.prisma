@@ -93,7 +93,9 @@ model ProfileNodeBinding {
   // used to be [nodeId, port] and refused it, which is not caution, it is a
   // refusal of a standard configuration.
   @@unique([nodeId, port, transport])
-  @@unique([profileId, nodeId])
+  // No [profileId, nodeId] since 25.10: one profile may sit on a node on
+  // several ports, each binding its own inbound (a single-inbound adapter
+  // still takes one, assertAdapterSlotFree).
   @@index([profileId])
   @@index([nodeId])
   @@map("profile_node_bindings")

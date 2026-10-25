@@ -237,9 +237,6 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
           .code(409)
           .send({ error: err.code, message: err.message, conflicts: err.conflicts });
       }
-      if (err instanceof svc.NodeAlreadyBoundError) {
-        return reply.code(409).send({ error: 'CONFLICT', message: err.message });
-      }
       // A-055: the same body as the host route.
       if (err instanceof MieruMtuMismatchError) {
         return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });

@@ -281,12 +281,6 @@ export async function nextFreePortForNode(nodeId: string): Promise<number> {
   });
   return pickFreePort(bindings.map((b) => b.port));
 }
-export class NodeAlreadyBoundError extends Error {
-  constructor(public profileId: string, public nodeId: string) {
-    super(`Node ${nodeId} is already bound to profile ${profileId}`);
-    this.name = 'NodeAlreadyBoundError';
-  }
-}
 export class NodeNotFoundError extends Error {
   constructor(public id: string) {
     super(`Node ${id} not found`);
@@ -495,9 +489,11 @@ export async function updateProfile(
   if (adapterSlot(nextSlotOf) !== adapterSlot(existing) || mieruRetuned) {
     const deployed = await prisma.profileNodeBinding.findMany({
       where: { profileId: id, node: { deletedAt: null } },
-      select: { overrides: true, node: { select: { id: true, name: true } } },
+      select: { id: true, overrides: true, node: { select: { id: true, name: true } } },
     });
-    for (const b of deployed) await assertAdapterSlotFree(b.node, nextSlotOf, b.overrides);
+    // A-259: each binding against the rest of its node, the profile's own other
+    // bindings there included, all of them counted in the slot they move to.
+    for (const b of deployed) await assertAdapterSlotFree(b.node, nextSlotOf, b.overrides, b.id);
   }
 
   if (input.config !== undefined) {
@@ -898,12 +894,9 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
     throw new PortInUseError(input.port, node.name, portConflict.profile.name, transport);
   }
   await assertPortFreeOfOthers(input.nodeId, input.port, transport, node.name);
-  const dupBinding = await prisma.profileNodeBinding.findUnique({
-    where: {
-      profileId_nodeId: { profileId: input.profileId, nodeId: input.nodeId },
-    },
-  });
-  if (dupBinding) throw new NodeAlreadyBoundError(input.profileId, input.nodeId);
+  // A-259: a second binding of the profile on this node is allowed, on its own
+  // port, as its own inbound. What still refuses it is the adapter (a
+  // single-inbound core holds one), inside the gate below.
   // The node's facts, the same gate as the host form's (assertBindingFitsNode).
   await assertBindingFitsNode(node, profile, input.overrides);
 
@@ -987,7 +980,7 @@ export async function updateBinding(
   // different MTU is refused here, or the agent answers 500 on every push.
   if (existing.profile.protocol === 'mieru' && input.overrides !== undefined) {
     const node = await prisma.node.findUniqueOrThrow({ where: { id: existing.nodeId }, select: { id: true, name: true } });
-    await assertAdapterSlotFree(node, { ...existing.profile, id: existing.profileId }, nextOverrides);
+    await assertAdapterSlotFree(node, { ...existing.profile, id: existing.profileId }, nextOverrides, existing.id);
   }
   const transport = transportForBinding(existing.profile, nextOverrides);
   const nextPort = input.port ?? existing.port;

@@ -115,28 +115,41 @@ export async function adapterSlotConflicts(nodeId: string): Promise<AdapterSlotC
   return out;
 }
 
-/** Refuses a new binding of `profile` on the node when its adapter already
- *  serves another binding there. The binding's own row is not counted. */
+/**
+ * Refuses a binding of `profile` on the node when its adapter already serves
+ * another binding there. `exceptBindingId` is the binding being saved, left
+ * out of the count; a new binding has none.
+ *
+ * A-259: by BINDING, not by profile. Since one profile may sit on a node on
+ * several ports, the profile's own other bindings are bindings like any other:
+ * a second hysteria of the same profile takes the one slot the first holds.
+ * Leaving out every binding of the profile let exactly that through. They are
+ * counted with the slot and config given here, which is the profile as it is
+ * about to be (an engine switch, A-194, moves all of them at once).
+ */
 export async function assertAdapterSlotFree(
   node: { id: string; name: string },
   profile: { id: string; protocol: string; engine: string | null; awgProtocol?: number | null; config?: unknown },
   overrides?: unknown,
+  exceptBindingId?: string,
 ): Promise<void> {
   const slot = adapterSlot(profile);
   const others = await prisma.profileNodeBinding.findMany({
-    where: { nodeId: node.id, profileId: { not: profile.id } },
+    where: { nodeId: node.id, ...(exceptBindingId ? { id: { not: exceptBindingId } } : {}) },
     select: {
+      profileId: true,
       overrides: true,
       profile: { select: { name: true, protocol: true, engine: true, awgProtocol: true, config: true } },
       hosts: { select: { remark: true }, orderBy: { priority: 'asc' }, take: 1 },
     },
   });
-  const held = others.find((b) => adapterSlot(b.profile) === slot);
+  const own = (b: (typeof others)[number]) => b.profileId === profile.id;
+  const held = others.find((b) => (own(b) ? slot : adapterSlot(b.profile)) === slot);
   if (!held) return;
   if (MULTI.has(slot)) {
     // P2: what the agent would refuse on the push is refused at the save.
     if (slot === 'mieru|mieru') {
-      const mtu = mieruMtu(held.profile.config, held.overrides);
+      const mtu = mieruMtu(own(held) ? profile.config : held.profile.config, held.overrides);
       const wanted = mieruMtu(profile.config, overrides);
       if (mtu !== wanted) {
         throw new MieruMtuMismatchError(node.name, mtu, wanted, held.hosts[0]?.remark ?? held.profile.name);
