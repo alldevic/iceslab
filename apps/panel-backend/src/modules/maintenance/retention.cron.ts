@@ -27,7 +27,58 @@ const RETENTION_DAYS = {
   // Growth is slow but unbounded (review M7). 180d matches nodeUserUsage audit
   // headroom while keeping the table from filling a 2 GB VPS disk over years.
   subscriptionEvents: 180,
+  // A-268 (owner, 26.10): a user deleted from the panel (deleted_at) is gone
+  // for good after this many days, with everything that is theirs. Before, the
+  // row and its keys stayed forever.
+  deletedUsers: 30,
+  // A-269 (owner, 26.10): a device not seen for this many days is forgotten,
+  // so it stops counting towards the user's device limit.
+  hwidDevices: 90,
 } as const;
+
+/** A-268: days a deleted user is kept before being erased. */
+export const DELETED_USER_RETENTION_DAYS = RETENTION_DAYS.deletedUsers;
+/** A-269: days an unseen device is kept. */
+export const HWID_DEVICE_RETENTION_DAYS = RETENTION_DAYS.hwidDevices;
+
+/** Users erased per transaction, so one huge backlog is never one huge lock. */
+const USER_PURGE_BATCH = 500;
+
+/**
+ * A-268: erase users deleted more than DELETED_USER_RETENTION_DAYS ago.
+ *
+ * Every table that holds a user's rows, read from prisma/models 26.10:
+ *   user_traffic, amneziawg_peers, hwid_user_devices (users.prisma:95, :119,
+ *   :150), group_members (squads.prisma:100), subscription_events,
+ *   subscription_request_history (subscription.prisma:20, :84),
+ *   node_user_usage_history (nodes.prisma:324): FK ON DELETE CASCADE, they go
+ *   with the user row.
+ *   node_user_traffic_snapshot (nodes.prisma:357) has NO foreign key on purpose
+ *   (the hot stats write), so its rows are deleted here, in the same
+ *   transaction, before the user.
+ * Nothing restores a deleted user (no route sets deleted_at back), so within
+ * the window the row simply stays as it was.
+ */
+export async function purgeDeletedUsers(now = Date.now()): Promise<number> {
+  const cutoff = new Date(now - RETENTION_DAYS.deletedUsers * DAY_MS);
+  let total = 0;
+  for (;;) {
+    const ids = (
+      await prisma.user.findMany({
+        where: { deletedAt: { lt: cutoff } },
+        select: { id: true },
+        take: USER_PURGE_BATCH,
+      })
+    ).map((u) => u.id);
+    if (ids.length === 0) return total;
+    const [, users] = await prisma.$transaction([
+      prisma.nodeUserTrafficSnapshot.deleteMany({ where: { userId: { in: ids } } }),
+      prisma.user.deleteMany({ where: { id: { in: ids }, deletedAt: { lt: cutoff } } }),
+    ]);
+    total += users.count;
+    if (ids.length < USER_PURGE_BATCH) return total;
+  }
+}
 
 /** How long a `/sub` poll stays on record. See the note above. */
 export const SUBSCRIPTION_REQUEST_RETENTION_DAYS = RETENTION_DAYS.subscriptionRequests;
@@ -38,6 +89,8 @@ export interface PruneResult {
   nodeUsage: number;
   subscriptionEvents: number;
   bootstrapTokens: number;
+  deletedUsers: number;
+  hwidDevices: number;
 }
 
 /**
@@ -51,7 +104,7 @@ export interface PruneResult {
  */
 export async function pruneHistory(): Promise<PruneResult> {
   const now = Date.now();
-  const [subscriptionRequests, nodeUserUsage, nodeUsage, subscriptionEvents, bootstrapTokens] =
+  const [subscriptionRequests, nodeUserUsage, nodeUsage, subscriptionEvents, bootstrapTokens, deletedUsers, hwidDevices] =
     await Promise.all([
       prisma.subscriptionRequestHistory.deleteMany({
         where: { requestedAt: { lt: new Date(now - RETENTION_DAYS.subscriptionRequests * DAY_MS) } },
@@ -66,6 +119,11 @@ export async function pruneHistory(): Promise<PruneResult> {
         where: { createdAt: { lt: new Date(now - RETENTION_DAYS.subscriptionEvents * DAY_MS) } },
       }),
       purgeExpiredBootstrapTokens(),
+      purgeDeletedUsers(now),
+      // A-269: the device limit counts these rows, so one gone is a slot freed.
+      prisma.hwidUserDevice.deleteMany({
+        where: { lastSeenAt: { lt: new Date(now - RETENTION_DAYS.hwidDevices * DAY_MS) } },
+      }),
     ]);
   return {
     subscriptionRequests: subscriptionRequests.count,
@@ -73,5 +131,7 @@ export async function pruneHistory(): Promise<PruneResult> {
     nodeUsage: nodeUsage.count,
     subscriptionEvents: subscriptionEvents.count,
     bootstrapTokens,
+    deletedUsers,
+    hwidDevices: hwidDevices.count,
   };
 }

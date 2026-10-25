@@ -11,7 +11,7 @@ import {
 import { pollNodeStatuses, pollNodeMetrics } from '../nodes/nodes.cron.js';
 import { renewExpiringNodeCerts } from '../nodes/node-cert-rotation.js';
 import { pollNodeStats } from '../stats/stats.cron.js';
-import { pruneHistory } from '../maintenance/retention.cron.js';
+import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS, pruneHistory } from '../maintenance/retention.cron.js';
 import { queueDueUrlFetches } from '../geo-sets/geo-sets.queue.js';
 import { getLogger } from '../../lib/infra/logger.js';
 
@@ -154,10 +154,11 @@ export function startCronTasksWorker(): Worker {
         case 'prune-history': {
           const r = await pruneHistory();
           const total =
-            r.subscriptionRequests + r.nodeUserUsage + r.nodeUsage + r.subscriptionEvents + r.bootstrapTokens;
+            r.subscriptionRequests + r.nodeUserUsage + r.nodeUsage + r.subscriptionEvents + r.bootstrapTokens +
+            r.deletedUsers + r.hwidDevices;
           if (total > 0) {
             getLogger().info(
-              `[cron] prune-history - deleted ${r.subscriptionRequests} sub-req, ${r.nodeUserUsage} user-usage, ${r.nodeUsage} node-usage, ${r.subscriptionEvents} sub-event, ${r.bootstrapTokens} bootstrap-token rows`,
+              `[cron] prune-history - deleted ${r.subscriptionRequests} sub-req, ${r.nodeUserUsage} user-usage, ${r.nodeUsage} node-usage, ${r.subscriptionEvents} sub-event, ${r.bootstrapTokens} bootstrap-token rows, ${r.deletedUsers} users deleted over ${DELETED_USER_RETENTION_DAYS} days ago, ${r.hwidDevices} devices unseen for ${HWID_DEVICE_RETENTION_DAYS} days`,
             );
           }
           break;
