@@ -15,7 +15,7 @@ import { eventBus } from '../../lib/infra/event-bus.js';
 import { assertPublicHttpUrl } from '../../lib/util/guarded-fetch.js';
 import { reportedEngines } from '../nodes/node-engines.js';
 import { collectGeoUses, usesOf, type GeoUseSite } from './geo-refs.js';
-import { chainTagsFor, filesOfSet } from './geo-push.js';
+import { chainTagsFor, filesOfSet, isCascadeExit } from './geo-push.js';
 import { enqueueBuiltinFetch, enqueueUrlFetch } from './geo-sets.queue.js';
 import { builtinNeedsFetch, ensureBuiltinSets, ingestGeoFile } from './geo-sets.store.js';
 
@@ -159,9 +159,10 @@ async function nodesOf(s: SetRow, sites: GeoUseSite[]) {
 
 /** The files of this set a node is to hold at version `v`: the `.dat`, and
  *  the chain's rule-sets when the node is a cascade entry whose route
- *  policies name tags of the set. */
-function wantedOn(s: SetRow, v: { version: string; sha256: string; sizeBytes: number }, nodeId: string, sites: GeoUseSite[]) {
-  return filesOfSet(s, v, chainTagsFor(nodeId, sites).get(s.name) ?? []);
+ *  policies name tags of the set, or an exit whose node policy does. The
+ *  same reading as nodeGeoFor, which is what the push lays out. */
+async function wantedOn(s: SetRow, v: { version: string; sha256: string; sizeBytes: number }, nodeId: string, sites: GeoUseSite[]) {
+  return filesOfSet(s, v, chainTagsFor(nodeId, sites, await isCascadeExit(nodeId)).get(s.name) ?? []);
 }
 
 /** The names of `wanted` the node's own report does not show with that sha;
@@ -496,7 +497,7 @@ export async function rolloutPlan(id: string): Promise<GeoRolloutPlan> {
     const row = byId.get(n.id);
     if (!row) continue;
     // What the node must hold of this set at current: the `.dat`, and at a
-    // cascade entry the chain's rule-sets (phase 9.3).
+    // cascade entry or exit the chain's rule-sets (phase 9.3, E53).
     const filesToSend = missingOnDisk(await wantedOn(s, current, n.id, sites), n.fact);
     const engines = reportedEngines(row);
     planNodes.push({

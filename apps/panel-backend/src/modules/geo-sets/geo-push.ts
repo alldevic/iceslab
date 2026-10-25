@@ -86,6 +86,18 @@ export async function chainRuleSet(
 }
 
 /**
+ * Behind a direction of an enabled cascade: its chain reads its node policy
+ * (E53). One answer for the push and for the set's plan and count, so the
+ * two never disagree about which files the exit is to hold.
+ */
+export async function isCascadeExit(nodeId: string): Promise<boolean> {
+  const n = await prisma.cascadeDirectionNode.count({
+    where: { nodeId, direction: { cascade: { enabled: true } } },
+  });
+  return n > 0;
+}
+
+/**
  * The tags the chain of `nodeId` reads, by set: those its route policies name
  * in their domain lists. Route policies reach exactly the entries of enabled
  * cascades (geo-refs.ts), which is where the chain carries them out.
@@ -163,12 +175,7 @@ export async function nodeGeoFor(
   const sites = opts.sites ?? (await collectGeoUses());
   const names = [...new Set(sites.filter((s) => s.nodeIds.includes(nodeId)).map((s) => s.ref.set))];
   if (names.length === 0) return null;
-  // Behind a direction of an enabled cascade: its chain reads its node policy.
-  const cascadeExit =
-    (await prisma.cascadeDirectionNode.count({
-      where: { nodeId, direction: { cascade: { enabled: true } } },
-    })) > 0;
-  const chainTags = chainTagsFor(nodeId, sites, cascadeExit);
+  const chainTags = chainTagsFor(nodeId, sites, await isCascadeExit(nodeId));
 
   const sets = await prisma.geoSet.findMany({
     where: { name: { in: names } },
