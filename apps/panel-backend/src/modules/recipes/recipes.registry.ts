@@ -37,10 +37,14 @@ const MAX_REDIRECTS = 3;
  * Hide recipes the running panel is too old to honour: a recipe may set a
  * field only a newer panel has. `minPanelVersion` absent means "any version".
  */
-function versionAllows(recipe: Recipe, current: string): boolean {
+export function versionAllows(recipe: Pick<Recipe, 'minPanelVersion'>, current: string): boolean {
   if (!recipe.minPanelVersion) return true;
   if (current === 'unknown') return true; // cannot compare, do not hide
-  return !isNewer(recipe.minPanelVersion, current);
+  // minPanelVersion means "needs what this version has", and X.Y.Z-rc.N
+  // carries what X.Y.Z has (ARCH 26.10): the panel's own pre-release (and
+  // build metadata) is left out here, so a candidate shows the recipes of its
+  // release. isNewer orders pre-releases by semver for the update check.
+  return !isNewer(recipe.minPanelVersion, current.replace(/[-+].*$/, ''));
 }
 
 /**
