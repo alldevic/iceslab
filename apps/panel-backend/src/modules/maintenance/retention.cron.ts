@@ -1,3 +1,4 @@
+import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { purgeExpiredBootstrapTokens } from '../nodes/bootstrap.service.js';
 
@@ -27,19 +28,14 @@ const RETENTION_DAYS = {
   // Growth is slow but unbounded (review M7). 180d matches nodeUserUsage audit
   // headroom while keeping the table from filling a 2 GB VPS disk over years.
   subscriptionEvents: 180,
-  // A-268 (owner, 26.10): a user deleted from the panel (deleted_at) is gone
-  // for good after this many days, with everything that is theirs. Before, the
-  // row and its keys stayed forever.
-  deletedUsers: 30,
-  // A-269 (owner, 26.10): a device not seen for this many days is forgotten,
-  // so it stops counting towards the user's device limit.
-  hwidDevices: 90,
+  // A-268, A-269 (owner, 26.10): a deleted user is erased, an unseen device
+  // forgotten. The numbers live in @iceslab/shared (retention.ts): the delete
+  // dialog and the device list say them too, from the same constant.
+  deletedUsers: DELETED_USER_RETENTION_DAYS,
+  hwidDevices: HWID_DEVICE_RETENTION_DAYS,
 } as const;
 
-/** A-268: days a deleted user is kept before being erased. */
-export const DELETED_USER_RETENTION_DAYS = RETENTION_DAYS.deletedUsers;
-/** A-269: days an unseen device is kept. */
-export const HWID_DEVICE_RETENTION_DAYS = RETENTION_DAYS.hwidDevices;
+export { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS };
 
 /** Users erased per transaction, so one huge backlog is never one huge lock. */
 const USER_PURGE_BATCH = 500;

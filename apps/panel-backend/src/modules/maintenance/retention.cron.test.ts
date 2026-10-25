@@ -3,7 +3,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
-import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS, pruneHistory } from './retention.cron.js';
+import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS } from '@iceslab/shared';
+import { pruneHistory } from './retention.cron.js';
 
 /**
  * A-268 and A-269 (owner, 26.10): a deleted user is erased with everything
