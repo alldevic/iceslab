@@ -1,4 +1,4 @@
-import { FORMAT_NAMES, type Door, type FormatGap, type FormatWhy, type SubscriptionFormat } from '@iceslab/shared';
+import { FORMAT_NAMES, formatDisabledForHost, type Door, type FormatGap, type FormatWhy, type SubscriptionFormat } from '@iceslab/shared';
 import { api } from '@/lib/net/client';
 
 /**
@@ -136,10 +136,30 @@ export interface HostFormatFacts {
   counts: { carried: number; total: number; off: number } | null;
 }
 
+/**
+ * Clash and Mihomo are one format under two names (A-249): the server closes
+ * both when either is in the list (`formatDisabledForHost`, shared). The chips
+ * read that rule, not the list, so a host off for Clash never shows Mihomo lit.
+ */
+const CLASH_FAMILY: readonly SubscriptionFormat[] = ['clash', 'mihomo'];
+
+/**
+ * A chip click on the host's format list. A Clash-family name turns both off
+ * or both on, and both names are written, as the A-249 migration writes them,
+ * so the saved list says what the screen shows.
+ */
+export function toggleHostFormat(disabled: readonly string[], format: SubscriptionFormat): string[] {
+  const group: readonly string[] = CLASH_FAMILY.includes(format) ? CLASH_FAMILY : [format];
+  const off = formatDisabledForHost(disabled, format);
+  const rest = disabled.filter((x) => !group.includes(x));
+  return off ? rest : [...rest, ...group];
+}
+
 export function hostFormatFacts(formats: ProfileFormats | null, disabled: readonly string[]): HostFormatFacts {
+  const isOff = (format: SubscriptionFormat) => formatDisabledForHost(disabled, format);
   if (!formats) {
     return {
-      rows: HOST_FORMATS.map((format) => ({ format, state: disabled.includes(format) ? 'off' : 'on' })),
+      rows: HOST_FORMATS.map((format) => ({ format, state: isOff(format) ? 'off' : 'on' })),
       counts: null,
     };
   }
@@ -149,7 +169,7 @@ export function hostFormatFacts(formats: ProfileFormats | null, disabled: readon
     // Формат, про который сервер не сказал (новый в контракте, старый ответ),
     // не выдаём за «не несёт»: неполный факт фактом не считается.
     // Так же «не несёт» без причины: причину не придумываем.
-    if (!f || f.carried || f.why === 'native') return { format, state: disabled.includes(format) ? 'off' : 'on' };
+    if (!f || f.carried || f.why === 'native') return { format, state: isOff(format) ? 'off' : 'on' };
     const reason = f.reason === 'door' || f.reason === 'transport' ? f.reason : null;
     return { format, state: 'cannot', why: f.why, reason };
   });

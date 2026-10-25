@@ -7,11 +7,33 @@ import {
   formatLabelKey,
   formatReasonKey,
   hostFormatFacts,
+  toggleHostFormat,
   type HostFormatRow,
   type ProfileFormats,
 } from '@/lib/domain/formats';
 import ru from '@/i18n/locales/ru';
 import en from '@/i18n/locales/en';
+
+describe('Clash и Mihomo один формат на экране хоста (A-249)', () => {
+  const state = (disabled: string[], f: string) => hostFormatFacts(null, disabled).rows.find((r) => r.format === f)?.state;
+  it('выключение clash гасит mihomo и наоборот, в список уходят оба имени', () => {
+    expect(toggleHostFormat([], 'clash')).toEqual(['clash', 'mihomo']);
+    expect(toggleHostFormat(['singbox'], 'mihomo')).toEqual(['singbox', 'clash', 'mihomo']);
+    expect(state(['clash', 'mihomo'], 'mihomo')).toBe('off');
+  });
+  it('включение одного включает оба, и у старого списка с одним именем тоже', () => {
+    expect(toggleHostFormat(['clash', 'mihomo', 'singbox'], 'mihomo')).toEqual(['singbox']);
+    expect(toggleHostFormat(['clash'], 'mihomo')).toEqual([]);
+  });
+  it('старый список с одним clash: mihomo на экране выключен, как у сервера', () => {
+    expect(state(['clash'], 'mihomo')).toBe('off');
+    expect(state(['mihomo'], 'clash')).toBe('off');
+  });
+  it('прочие форматы по одному', () => {
+    expect(toggleHostFormat([], 'singbox')).toEqual(['singbox']);
+    expect(toggleHostFormat(['singbox', 'clash', 'mihomo'], 'singbox')).toEqual(['clash', 'mihomo']);
+  });
+});
 
 /**
  * Форматы подписки: список из контракта, подпись на каждое имя.
@@ -70,9 +92,20 @@ describe('hostFormatFacts: три состояния формата на хос�
   });
 
   it('без контракта (старый сервер): прежний список, только вкл/выкл, без счёта', () => {
-    const f = hostFormatFacts(null, ['clash']);
+    const f = hostFormatFacts(null, ['singbox']);
     expect(f.counts).toBeNull();
-    expect(f.rows.map((r) => r.state)).toEqual(FORMAT_NAMES.map((n) => (n === 'clash' ? 'off' : 'on')));
+    expect(f.rows.map((r) => r.state)).toEqual(FORMAT_NAMES.map((n) => (n === 'singbox' ? 'off' : 'on')));
+  });
+
+  it('A-260: состояние по formatDisabledForHost, как у сервера: clash или mihomo гасит оба, stash нет, «выключено 2»', () => {
+    const door: Door = 'vless';
+    expect(['clash', 'mihomo', 'stash'].every((n) => formatCarries(n as never, door).carried)).toBe(true);
+    for (const disabled of [['clash'], ['mihomo']]) {
+      const f = hostFormatFacts(answer(door), disabled);
+      const state = (n: string) => f.rows.find((r) => r.format === n)?.state;
+      expect([state('clash'), state('mihomo'), state('stash')]).toEqual(['off', 'off', 'on']);
+      expect(f.counts?.off).toBe(2);
+    }
   });
 
   it('AmneziaWG: несут ровно те, кого считает контракт, остальные с причиной', () => {

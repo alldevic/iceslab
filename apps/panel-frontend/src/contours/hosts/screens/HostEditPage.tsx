@@ -89,6 +89,7 @@ import {
   formatReasonKey,
   getProfileFormats,
   hostFormatFacts,
+  toggleHostFormat,
   type FormatReason,
 } from '@/lib/domain/formats';
 import { listAllNodes } from '@/lib/domain/nodes';
@@ -1373,9 +1374,8 @@ export function HostEditPage() {
                         title={row.state === 'cannot' ? reasonLabel(row.reason, whyLabel(row.why)) : undefined}
                         onClick={() => {
                           if (cannot) return;
-                          setDisabledFormats((prev) =>
-                            prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f],
-                          );
+                          // Clash and Mihomo go off and on together (A-249).
+                          setDisabledFormats((prev) => toggleHostFormat(prev, f));
                           setDirty(true);
                         }}
                       >
