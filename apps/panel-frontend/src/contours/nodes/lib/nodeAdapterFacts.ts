@@ -12,14 +12,23 @@ type Served = { profileName: string; port: number };
  * the subscription. `null`: the server is older than the field, say nothing;
  * `[]`: none. The input is checked first; a malformed entry is skipped.
  */
-export function slotConflictsOf(raw: unknown): { protocol: string; served: Served | null; others: Served[] }[] | null {
+export function slotConflictsOf(
+  raw: unknown,
+): { protocol: string; engine: string; served: Served | null; others: Served[] }[] | null {
   if (raw === undefined) return null;
   if (!Array.isArray(raw)) return null;
-  const out: { protocol: string; served: Served | null; others: Served[] }[] = [];
+  const out: { protocol: string; engine: string; served: Served | null; others: Served[] }[] = [];
   for (const c of raw) {
     if (!c || typeof c !== 'object') continue;
-    const { protocol, bindings, servedBindingId } = c as { protocol?: unknown; bindings?: unknown; servedBindingId?: unknown };
-    if (typeof protocol !== 'string' || !Array.isArray(bindings)) continue;
+    const { protocol, engine, bindings, servedBindingId } = c as {
+      protocol?: unknown;
+      engine?: unknown;
+      bindings?: unknown;
+      servedBindingId?: unknown;
+    };
+    // The slot is the pair (protocol, engine): shadowsocks on xray and on
+    // sing-box are two adapters, so the engine is part of the fact.
+    if (typeof protocol !== 'string' || typeof engine !== 'string' || !Array.isArray(bindings)) continue;
     const rows = bindings.filter(
       (b): b is { bindingId: string; profileName: string; port: number } =>
         !!b &&
@@ -28,9 +37,12 @@ export function slotConflictsOf(raw: unknown): { protocol: string; served: Serve
         typeof (b as { profileName?: unknown }).profileName === 'string' &&
         typeof (b as { port?: unknown }).port === 'number',
     );
+    // Fewer than two well-formed bindings left is no conflict to name.
+    if (rows.length < 2) continue;
     const served = rows.find((b) => b.bindingId === servedBindingId) ?? null;
     out.push({
       protocol,
+      engine,
       served: served ? { profileName: served.profileName, port: served.port } : null,
       others: rows.filter((b) => b !== served).map((b) => ({ profileName: b.profileName, port: b.port })),
     });

@@ -21,9 +21,10 @@ export function NodeAdapterLines({ status }: { status: NodeSyncStatus | undefine
   return (
     <Stack gap={6} style={{ padding: '12px 16px', borderRadius: 10, backgroundColor: `${AMBER}0D`, border: `1px solid ${AMBER}33` }}>
       {conflicts.map((c) => (
-        <Text key={`slot-${c.protocol}-${c.served?.port ?? ''}`} style={line}>
+        <Text key={`slot-${c.protocol}-${c.engine}`} style={line}>
           {t(c.served ? 'nodeEdit.slotConflict' : 'nodeEdit.slotConflictNoServed', {
             protocol: c.protocol,
+            engine: c.engine,
             served: c.served ? at(c.served) : '',
             others: c.others.map(at).join(', '),
           })}
