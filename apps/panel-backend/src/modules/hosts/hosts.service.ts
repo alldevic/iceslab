@@ -348,11 +348,12 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
  * satisfiable, without writing anything.
  *
  * Returns either an existing `bindingId` (given directly, or found for the
- * profile/node pair) or the pieces needed to create one. An existing binding
- * for the pair is REUSED rather than rejected: a second host on the same node
- * is an ordinary thing to want (a CDN-fronted variant next to the direct one),
- * and erroring there would push the operator back into the dead end this whole
- * change exists to remove.
+ * profile, node and port) or the pieces needed to create one. An existing
+ * binding on that port is REUSED rather than rejected: a second host on the
+ * same node and port is an ordinary thing to want (a CDN-fronted variant next
+ * to the direct one), and erroring there would push the operator back into the
+ * dead end this whole change exists to remove. Another port is another binding
+ * of the same pair (A-259).
  */
 async function planHostCreate(input: CreateHostInput): Promise<{
   bindingId: string | null;
@@ -379,8 +380,13 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   const node = await prisma.node.findFirst({ where: { id: nodeId, deletedAt: null } });
   if (!node) throw new NodeNotFoundError(nodeId);
 
-  const existing = await prisma.profileNodeBinding.findUnique({
-    where: { profileId_nodeId: { profileId, nodeId } },
+  // A-259: a profile may sit on one node on several ports, one binding each.
+  // The host goes onto the binding of THIS port when there is one; a port the
+  // pair does not have yet is a new binding (the checks below). Before, the
+  // pair's one binding was reused whatever port was asked, and a host asked for
+  // on 8443 landed silently on 443.
+  const existing = await prisma.profileNodeBinding.findFirst({
+    where: { profileId, nodeId, port },
     select: { id: true },
   });
   // A second host on a binding that already exists is still a host put on this
