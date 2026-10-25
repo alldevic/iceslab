@@ -258,6 +258,27 @@ describe('node sync status', () => {
     expect(((await syncStatus(nodeId)) as unknown as { slotConflicts: unknown[] }).slotConflicts).toEqual([]);
   });
 
+  it('A-204: names where a squad\'s limit on a user does not hold, and not for a disabled profile', async () => {
+    const nodeId = await makeNode();
+    const raw = async (name: string, protocol: string, port: number) => {
+      const p = await prisma.profile.create({ data: { name, protocol, config: {} }, select: { id: true } });
+      return prisma.profileNodeBinding.create({ data: { nodeId, profileId: p.id, port, transport: 'tcp' } });
+    };
+    const m1 = await raw('mi-a', 'mieru', 2001);
+    const m2 = await raw('mi-b', 'mieru', 2002);
+    const mt = await raw('mt-a', 'mtproto', 4443);
+    type Gaps = { userScopeGaps: { bindingId: string; gap: string; profileName: string }[] };
+    const gaps = ((await syncStatus(nodeId)) as unknown as Gaps).userScopeGaps;
+    expect(gaps.map((g) => [g.bindingId, g.gap]).sort()).toEqual(
+      [[m1.id, 'shared-users'], [m2.id, 'shared-users'], [mt.id, 'shared-secret']].sort(),
+    );
+
+    // A disabled profile is not pushed: its mtproto names no secret, and the
+    // mieru left alone has nothing to cross into.
+    await prisma.profile.updateMany({ where: { id: { in: [m2.profileId, mt.profileId] } }, data: { enabled: false } });
+    expect(((await syncStatus(nodeId)) as unknown as Gaps).userScopeGaps).toEqual([]);
+  });
+
   it('404s for a node that does not exist', async () => {
     const res = await app.inject({
       method: 'GET',

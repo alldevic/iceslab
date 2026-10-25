@@ -1,5 +1,6 @@
 import { adapterSlot, MULTI_INBOUND_ADAPTERS } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
+import { pushedBindingsWhere } from './pushed-bindings.js';
 
 /**
  * A-055: one inbound per adapter on a node, where the agent holds one.
@@ -85,7 +86,8 @@ export interface AdapterSlotConflict {
  */
 export async function adapterSlotConflicts(nodeId: string): Promise<AdapterSlotConflict[]> {
   const rows = await prisma.profileNodeBinding.findMany({
-    where: { nodeId, enabled: true, profile: { enabled: true } },
+    // The push's own filter, one function for the push and every report (A-204).
+    where: pushedBindingsWhere(nodeId),
     orderBy: { port: 'asc' },
     select: {
       id: true,

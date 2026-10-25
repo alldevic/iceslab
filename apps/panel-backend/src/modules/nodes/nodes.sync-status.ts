@@ -1,5 +1,6 @@
 import { prisma } from '../../prisma.js';
 import { adapterSlotConflicts, type AdapterSlotConflict } from './node-adapter-slot.js';
+import { nodeUserScopeGaps, type NodeUserScopeGap } from './node-user-scope.js';
 
 /**
  * "Saved, but not applied yet" for one node.
@@ -43,6 +44,10 @@ export interface NodeSyncStatusDto {
   /** A-195: single-inbound adapters this node is pushed two bindings for;
    *  it serves one. Empty is none. */
   slotConflicts: AdapterSlotConflict[];
+  /** A-204: bindings where a squad's limit on a user does not hold on this
+   *  node (mtproto's one secret, two or more mieru inbounds). A property of
+   *  the cores, said, not fixed. Empty is none. */
+  userScopeGaps: NodeUserScopeGap[];
 }
 
 /**
@@ -79,5 +84,6 @@ export async function getNodeSyncStatus(nodeId: string): Promise<NodeSyncStatusD
     applied: node.lastInboundSyncAt !== null && node.appliedRevision >= node.desiredRevision,
     online: node.status === 'online',
     slotConflicts: await adapterSlotConflicts(nodeId),
+    userScopeGaps: await nodeUserScopeGaps(nodeId),
   };
 }
