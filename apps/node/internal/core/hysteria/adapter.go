@@ -251,6 +251,15 @@ func (a *Adapter) Engine() string { return "hysteria" }
 //	ServiceUnit empty  → "spawn mode", agent owns the subprocess. Used
 //	                     in tests + setups that don't want systemd in
 //	                     the lifecycle loop.
+//
+// LogLevelEnv (A-265): hysteria logs "client connected/disconnected" with the
+// client's IP and the user's id at info, its default (hysteria 2.12.3,
+// app/cmd/server.go:1805 and :1809; the default in app/cmd/root.go:120), and
+// its config has no log key: only HYSTERIA_LOG_LEVEL or -l set it. warn keeps
+// those lines out of the journal. The spawned process gets it here; the systemd
+// unit gets it from its installer (bootstrap-hysteria.sh).
+const LogLevelEnv = "HYSTERIA_LOG_LEVEL=warn"
+
 func (a *Adapter) Start(ctx context.Context) error {
 	if err := validateTrafficStatsListen(a.cfg.TrafficStatsListen); err != nil {
 		return fmt.Errorf("invalid TrafficStatsListen: %w", err)
@@ -275,6 +284,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		Name:           Name,
 		Binary:         a.cfg.BinaryPath,
 		Args:           []string{"server", "-c", a.cfg.ConfigPath},
+		Env:            []string{LogLevelEnv},
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,

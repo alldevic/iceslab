@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -97,6 +98,10 @@ type Config struct {
 	Binary string
 	// Args are passed verbatim after the binary name.
 	Args []string
+	// Env is added to the agent's own environment for the child, "KEY=value"
+	// each (A-265: a core whose log level is set only through its environment).
+	// Empty keeps the agent's environment as it is.
+	Env []string
 	// Logger receives one entry per line of stdout/stderr (Info/Error level).
 	Logger *slog.Logger
 	// N9 - restart-on-crash policy. MaxRestarts == 0 (the default) disables
@@ -197,6 +202,9 @@ func (s *Subprocess) Start(ctx context.Context) error {
 // kills it).
 func (s *Subprocess) spawnLocked(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, s.cfg.Binary, s.cfg.Args...)
+	if len(s.cfg.Env) > 0 {
+		cmd.Env = append(os.Environ(), s.cfg.Env...)
+	}
 	cmd.Stdout = newLogWriter(s.cfg.Logger, slog.LevelInfo, s.cfg.Name)
 	stderr := &logWriter{logger: s.cfg.Logger, level: slog.LevelError, source: s.cfg.Name}
 	cmd.Stderr = stderr
