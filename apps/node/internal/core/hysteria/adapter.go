@@ -86,6 +86,14 @@ type Config struct {
 	// Tests inject a fake to assert which commands fire without spawning anything.
 	RunCmd RunCmdFunc
 
+	// CmdOutput runs a command for its output (`systemctl show`, A-265).
+	// Defaults to os/exec; tests inject a fake.
+	CmdOutput CmdOutputFunc
+
+	// RuntimeUnitDir is where the log level drop-in of ServiceUnit goes
+	// (A-265). Default: RuntimeUnitDir, /run/systemd/system.
+	RuntimeUnitDir string
+
 	// TrafficStatsListen is the `host:port` where hysteria-server's traffic
 	// API listens (e.g. "127.0.0.1:9999"). When set, renderConfig emits a
 	// `trafficStats:` block in /etc/hysteria/config.yaml and GetStats polls
@@ -172,6 +180,12 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 	if cfg.RunCmd == nil {
 		cfg.RunCmd = defaultRunCmd
 	}
+	if cfg.CmdOutput == nil {
+		cfg.CmdOutput = defaultCmdOutput
+	}
+	if cfg.RuntimeUnitDir == "" {
+		cfg.RuntimeUnitDir = RuntimeUnitDir
+	}
 	return &Adapter{
 		cfg:    cfg,
 		logger: logger,
@@ -257,7 +271,8 @@ func (a *Adapter) Engine() string { return "hysteria" }
 // app/cmd/server.go:1805 and :1809; the default in app/cmd/root.go:120), and
 // its config has no log key: only HYSTERIA_LOG_LEVEL or -l set it. warn keeps
 // those lines out of the journal. The spawned process gets it here; the systemd
-// unit gets it from its installer (bootstrap-hysteria.sh).
+// unit from its installer (bootstrap-hysteria.sh) on new nodes, and from the
+// agent's runtime drop-in where it lacks it (log_dropin.go).
 const LogLevelEnv = "HYSTERIA_LOG_LEVEL=warn"
 
 func (a *Adapter) Start(ctx context.Context) error {
@@ -277,6 +292,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		a.logger.Info("hysteria managed by systemd, skipping in-process spawn",
 			"unit", a.cfg.ServiceUnit,
 		)
+		a.ensureUnitLogLevel(ctx)
 		return nil
 	}
 
