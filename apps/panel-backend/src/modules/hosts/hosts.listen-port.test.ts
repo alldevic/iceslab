@@ -162,6 +162,28 @@ describe('the listen port on the host screen', () => {
     expect(await prisma.profileNodeBinding.findUnique({ where: { id: mine.id } })).toBeNull();
   });
 
+  it('portMove host onto a port the profile already has: the host joins that binding, no third one, and the emptied one goes', async () => {
+    const { host: a, profile, node } = await seed();
+    const c = (await call('POST', '/api/hosts', { profileId: profile.id, nodeId: node.id, port: 443, remark: 'C' })).body;
+    const b = (await call('POST', '/api/hosts', { profileId: profile.id, nodeId: node.id, port: 8443, remark: 'B' })).body;
+    const old = await bindingOf(a.id);
+    const target = await bindingOf(b.id);
+    const count = () => prisma.profileNodeBinding.count({ where: { profileId: profile.id, nodeId: node.id } });
+    expect(await count()).toBe(2);
+
+    // A leaves 443 (C stays there) for 8443, where B is: it sits on B's binding.
+    expect((await call('PUT', `/api/hosts/${a.id}`, { port: 8443 })).status).toBe(200);
+    expect((await bindingOf(a.id)).id).toBe(target.id);
+    expect((await bindingOf(c.id)).id).toBe(old.id);
+    expect(await count()).toBe(2);
+
+    // C, the last host on 443, follows: 443 is left empty and removed.
+    expect((await call('PUT', `/api/hosts/${c.id}`, { port: 8443 })).status).toBe(200);
+    expect((await bindingOf(c.id)).id).toBe(target.id);
+    expect(await prisma.profileNodeBinding.findUnique({ where: { id: old.id } })).toBeNull();
+    expect(await count()).toBe(1);
+  });
+
   it('portMove binding, and confirmSharedPort as the older screens send it: every host of the binding moves', async () => {
     const { host, profile, node } = await seed();
     const cdn = (await call('POST', '/api/hosts', { profileId: profile.id, nodeId: node.id, port: 443, remark: 'CDN' })).body;
