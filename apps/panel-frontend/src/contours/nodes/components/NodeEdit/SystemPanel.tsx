@@ -5,7 +5,7 @@ import { ExposureNote } from '@/contours/nodes/components/NodeEdit/ExposureNote'
 import { FactRow } from '@/contours/nodes/components/NodeEdit/FactRow';
 import { Meter } from '@/contours/nodes/components/NodeEdit/Meter';
 import { PlainButton } from '@/contours/nodes/components/NodeEdit/PlainButton';
-import { formatBytes, uptime } from '@/contours/nodes/lib/nodeFormat';
+import { bytesOrDash, countOrDash, formatBytes, uptime } from '@/contours/nodes/lib/nodeFormat';
 import { Box, Stack, Text } from '@mantine/core';
 import { CARD, CYAN, DISPLAY, HAIRLINE, MIST, MONO, MOSS, WELL } from '@/contours/nodes/lib/colors';
 import { useTranslation } from 'react-i18next';
@@ -105,13 +105,14 @@ export function SystemPanel({
                 </Stack>
 
                 <Divider />
-                <FactRow label={t('nodeEdit.today')} value={formatBytes(dashNode?.todayBytes ?? 0)} />
+                {/* No overview: «-», not «0 B» (bytesOrDash). */}
+                <FactRow label={t('nodeEdit.today')} value={bytesOrDash(dashNode?.todayBytes)} />
                 {/* «-» without the list: «0 hosts» over a failed request is a claim (A-141). */}
                 <FactRow label={t('nodeEdit.hosts')} value={hostsQuery.data ? String(hostsQuery.data.hosts.length) : '-'} />
-                <FactRow
-                  label={t('nodeEdit.userReach')}
-                  value={dashNode ? `~${dashNode.inboundCount}` : '-'}
-                />
+                {/* A-261: the overview's inboundCount is the node's bindings
+                    (dashboard.service `_count.profileBindings`), said as such; it
+                    was labelled «user reach», which the answer does not carry. */}
+                <FactRow label={t('nodeEdit.bindings')} value={countOrDash(dashNode?.inboundCount)} />
                 <Divider />
 
                 <Box style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>

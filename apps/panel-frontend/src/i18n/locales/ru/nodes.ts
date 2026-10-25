@@ -432,7 +432,7 @@ export const nodes = {
     cpuDetail: '{{cores}} ядра · LA {{la}}',
     today: 'Сегодня',
     hosts: 'Хосты',
-    userReach: 'Доступна юзерам',
+    bindings: 'Привязки',
     exposure: 'Открытые порты',
     exposureCheck: 'Проверить порты',
     // A-124: сертификат mTLS, которым панель говорит с агентом.

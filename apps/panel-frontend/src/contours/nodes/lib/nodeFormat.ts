@@ -21,6 +21,20 @@ export function shapeOf(protocol: string, cfg: Record<string, unknown>): string 
   return `${sub} ${net === 'raw' ? 'tcp' : net} ${sec}`;
 }
 
+/**
+ * The System block's counts, read with the input checked first: a value that
+ * is not a finite non-negative number (missing overview, the -1 a stand
+ * showed under «user reach») is «-», never a number and never 0.
+ */
+export function countOrDash(v: unknown): string {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? String(v) : '-';
+}
+
+/** Bytes the same way: no answer is «-», not «0 B». */
+export function bytesOrDash(v: unknown): string {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? formatBytes(v) : '-';
+}
+
 export function formatBytes(n: number): string {
   if (!n || n === 0) return '0 B';
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];

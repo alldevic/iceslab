@@ -398,7 +398,7 @@ export const nodes = {
     cpuDetail: '{{cores}} cores · LA {{la}}',
     today: 'Today',
     hosts: 'Hosts',
-    userReach: 'User reach',
+    bindings: 'Bindings',
     exposure: 'Probe exposure',
     exposureCheck: 'Check open ports',
     // A-124: the mTLS certificate the panel talks to the agent with.
