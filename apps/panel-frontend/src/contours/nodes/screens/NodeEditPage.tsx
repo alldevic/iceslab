@@ -356,6 +356,7 @@ export function NodeEditPage() {
           isBalancerEntry={isBalancerEntry}
           policies={reachablePolicies}
           egressLabel={egress === 'warp' ? t('nodeEdit.egressWarp') : t('nodeEdit.egressDirect')}
+          nodePoliciesQuery={nodePoliciesQuery}
           cascadeUnknown={egress === 'unknown'}
           cascadeFailure={cascadeFailure}
           policiesFailure={reachFailure}

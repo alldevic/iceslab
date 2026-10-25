@@ -430,11 +430,24 @@ export const nodes = {
     detachTitle: 'Detach "{{name}}"?',
     detachBody: 'The agent stops serving this port on the next push. The profile itself is untouched.',
     routes: {
-      noneTitle: 'This node carries no route set',
-      noneBody:
-        'Rule sets are built only for the entry of a balancer cascade. Here everything leaves the way the Parameters tab says: {{egress}}.',
+      policyBand: 'Node policy "{{name}}"',
+      policyNone: 'Node policy: -',
+      policyLoading: 'Node policy: loading',
+      policyMissing: 'Node policy: the node names a policy the list does not hold',
+      policyFailed: 'The node policy did not load',
+      policyDrawingUnknown: 'whether the rules reached the node is not known',
+      policyAny: 'Anything',
+      policyAction: {
+        block: 'To nowhere',
+        direct: 'From our IP',
+        warp: 'Via WARP',
+        cascade: 'To direction {{direction}}',
+      },
+      policyWhy: 'node policy "{{name}}"',
+      policyNotDrawn: 'Not drawn: this rule of policy "{{name}}" did not reach the node and will not fire',
       entryChip: 'Cascade entry',
       chip: {
+        none: 'Outside cascades',
         entry: 'Cascade entry',
         transit: 'Cascade transit',
         exit: 'Cascade exit',
