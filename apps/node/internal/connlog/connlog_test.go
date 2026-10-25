@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +75,27 @@ func TestJournalReadsEveryUnitAndStopsAtTheOldestConnectionLine(t *testing.T) {
 	}
 	if got.Checks[1].State != "absent" {
 		t.Fatalf("syslog with no files: %+v", got.Checks[1])
+	}
+}
+
+// The line as the stand's journal holds it (aeza-de-01, 25.10): the agent's
+// slog JSON around xray's access line, a cascade link out. The address and
+// the user are made up; the shape is the stand's, byte for byte.
+func TestTheStandsXrayLineInTheAgentsJSONIsFound(t *testing.T) {
+	msg := `{"time":"2026-10-25T21:32:08.245Z","level":"INFO","msg":"2026/10/25 21:32:08.245335 from 198.51.100.115:43694 accepted tcp:geo.example.com:443 [vless-in-7f3a -> cascade-link-out-chain-d1] email: u-1","source":"xray"}`
+	at := time.Date(2026, 10, 25, 21, 32, 8, 245335000, time.UTC)
+	entry, err := json.Marshal(map[string]string{
+		"__CURSOR":             "s=1",
+		"__REALTIME_TIMESTAMP": strconv.FormatInt(at.UnixMicro(), 10),
+		"MESSAGE":              msg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := checker(t, &fakeJournal{lines: []string{otherLine, string(entry)}}, found)
+	got := c.Trace(context.Background())
+	if got.Present == nil || !*got.Present || got.Since == nil || *got.Since != "2026-10-25T21:32:08Z" {
+		t.Fatalf("present %v since %v", got.Present, got.Since)
 	}
 }
 
