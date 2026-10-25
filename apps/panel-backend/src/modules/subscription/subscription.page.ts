@@ -549,7 +549,7 @@ function renderSteps(
         'ExternalLink',
         { cls: 'ic' },
       )}<span>${esc(t.stepGet)} <b data-app-label>${esc(first.name)}</b></span></a></div>`
-    : `<div class="step__buttons" hidden><a class="step-btn" data-app-get href="#">${icons.draw('ExternalLink', { cls: 'ic' })}<span>${esc(t.stepGet)} <b data-app-label></b></span></a></div>`;
+    : `<div class="step__buttons" hidden><a class="step-btn" data-app-get href="#" target="_blank" rel="noopener noreferrer">${icons.draw('ExternalLink', { cls: 'ic' })}<span>${esc(t.stepGet)} <b data-app-label></b></span></a></div>`;
   const addBtn =
     first && first.action.kind === 'deeplink'
       ? `<div class="step__buttons"><a class="step-btn" data-app-put href="${esc(deeplinkHref(first.action.scheme, data.subUrl))}">${icons.draw(
@@ -1245,7 +1245,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     : '';
 
   const supportRow = data.supportUrl
-    ? `<a class="support" href="${esc(data.supportUrl)}">${esc(t.support)} -&gt;</a>`
+    ? `<a class="support" href="${esc(data.supportUrl)}" rel="noopener noreferrer">${esc(t.support)} -&gt;</a>`
     : '';
 
   /**

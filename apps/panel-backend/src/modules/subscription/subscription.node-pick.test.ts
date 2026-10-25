@@ -63,7 +63,10 @@ describe('?node= after a neighbour profile lands on the node', () => {
     expect(set.statusCode, set.body).toBe(200);
     invalidateSubscriptionSettingsCache();
 
-    const page = (await app.inject({ method: 'GET', url: `/sub/${sub}`, headers: { accept: 'text/html' } })).body;
+    const pageRes = await app.inject({ method: 'GET', url: `/sub/${sub}`, headers: { accept: 'text/html' } });
+    // The page's URL is the subscription: not handed on in Referer (A-267, AUDT).
+    expect(pageRes.headers['referrer-policy']).toBe('no-referrer');
+    const page = pageRes.body;
     const key = /ssconf:\/\/panel\.example\.com(\/sub\/[^"#<\s]+)/.exec(page.replaceAll('&amp;', '&'))?.[1];
     expect(key, 'an Outline key on the page').toBeDefined();
     const before = await labels(sub);

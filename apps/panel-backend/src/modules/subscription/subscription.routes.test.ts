@@ -659,6 +659,7 @@ describe('a subscription that is not in force', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.headers['content-type']).toContain('text/html');
+    expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.body).toContain('<!DOCTYPE html>');
     expect(res.body).toContain('lapsed');
     // It says what happened and what to do, not "FORBIDDEN".

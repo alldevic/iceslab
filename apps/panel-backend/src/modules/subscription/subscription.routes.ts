@@ -808,7 +808,10 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             const key = outlineAccessKey(subUrl, endpointId(e), e.nodeName);
             return key ? [{ nodeName: e.nodeName, key }] : [];
           });
-        return reply.type('text/html; charset=utf-8').send(
+        // The page's URL is the subscription: a link out of it must not carry
+        // it in Referer, on an install with no frontend nginx setting the
+        // header either (A-267, AUDT).
+        return reply.type('text/html; charset=utf-8').header('referrer-policy', 'no-referrer').send(
           buildSubscriptionPage({
             brandTitle: settings.profileTitle ?? settings.brandName ?? 'Iceslab',
             // Language priority: in-page ?lang selector (per visitor) > panel
@@ -1117,7 +1120,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // any difference.
         if (wantsHtmlPage(query, (request.headers.accept ?? '').toString())) {
           const page = await refusalPage(params.token, err.reason, query, request);
-          if (page) return reply.code(403).type('text/html; charset=utf-8').send(page);
+          if (page) return reply.code(403).type('text/html; charset=utf-8').header('referrer-policy', 'no-referrer').send(page);
         }
         return reply.code(403).send({
           error: 'FORBIDDEN',
