@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   Box,
   NumberInput,
+  Radio,
   Select,
   Stack,
   Switch,
@@ -40,11 +41,11 @@ import {
   profileNotOnNode,
   updateHost,
   hostPortPayload,
-  hostPortShared,
   serverDescriptionRefusal,
+  type HostPortMove,
 } from '@/lib/domain/hosts';
+import { hostPortPlan } from '@/contours/hosts/lib/hostPortPlan';
 import { profileNotOnNodeWords } from '@/lib/domain/profileNotOnNodeWords';
-import { modals } from '@mantine/modals';
 import { apiErrorMessage } from '@/lib/net/client';
 import { hostEditGate } from '@/contours/hosts/lib/hostsView';
 import { LoadFailed } from '@/ui/LoadFailed';
@@ -160,6 +161,8 @@ export function HostEditPage() {
   const [port, setPort] = useState<number | ''>('');
   /** The port clients dial when it differs (NAT, CDN): the host's override. */
   const [clientPort, setClientPort] = useState<number | ''>('');
+  /** A-259: a new listen port takes this host only (default) or the whole inbound. */
+  const [portMove, setPortMove] = useState<HostPortMove>('host');
   const [enabled, setEnabled] = useState(true);
   /**
    * Arriving from a profile: /hosts/new?profileId=... starts with it chosen.
@@ -368,6 +371,7 @@ export function HostEditPage() {
     // node kept the old port while clients were sent the new one.
     setPort(binding?.port ?? '');
     setClientPort(host.portOverride ?? '');
+    setPortMove('host');
     setEnabled(host.enabled);
     setProfileId(binding?.profileId ?? null);
     setBindingId(host.bindingId);
@@ -396,7 +400,16 @@ export function HostEditPage() {
     // Порт занят парой (порт, транспорт), как у сервера (E40): hy2 на 443/udp
     // не закрыт vless на 443/tcp. Привязка без транспорта (сервер старше)
     // закрывает по номеру, как раньше.
-    const takenPort = nodePortClaims(bindings, hostsQuery.data?.hosts ?? [], port, portCheckTransport, host?.id);
+    // A-259: the profile's own inbound on this port is not «taken», the host
+    // joins it; unless the whole inbound moves, which a sibling would block.
+    const takenPort = nodePortClaims(
+      bindings,
+      hostsQuery.data?.hosts ?? [],
+      port,
+      portCheckTransport,
+      host?.id,
+      isNew || portMove === 'host' ? profileId : null,
+    );
     const q = nodeSearch.trim().toLowerCase();
 
     return nodes
@@ -474,6 +487,8 @@ export function HostEditPage() {
     hostsQuery.data,
     portCheckTransport,
     genKnown,
+    isNew,
+    portMove,
     t,
   ]);
 
@@ -481,10 +496,21 @@ export function HostEditPage() {
   const visibilityOn = visibilityKnown(isNew, host ? { isHidden: host.isHidden } : null, hostsQuery.data?.hosts);
   const descriptionIssue = visibilityOn ? descriptionProblem(description) : null;
 
+  // A-259: what the port means on the node, said before the save. The host is
+  // placed by its binding id, never by the profile and node pair.
+  const portPlan = hostPortPlan({
+    bindings,
+    hosts: hostsQuery.data?.hosts ?? [],
+    profileId,
+    nodeId,
+    port,
+    self: isNew || !host ? null : { hostId: host.id, bindingId: host.bindingId },
+    move: portMove,
+  });
+  const names = (list: string[]) => list.map((n) => `«${n}»`).join(', ');
+
   const saveMutation = useMutation({
-    // `confirmSharedPort`: the second try after HOST_PORT_SHARED, when the
-    // operator agreed to move the other hosts of the inbound as well.
-    mutationFn: (confirmSharedPort: boolean) => {
+    mutationFn: () => {
       // A field the profile cannot serve is sent as NULL rather than as whatever
       // an earlier profile left in the form. Otherwise switching a host from an
       // xray profile to a Hysteria one would keep writing a dead SNI.
@@ -521,16 +547,18 @@ export function HostEditPage() {
         return createHost({ profileId, nodeId, ...payload, ...hostPortPayload(null, { port, clientPort }) });
       }
       // Ports only when changed (hostPortPayload): restating the listen port
-      // would read as a move, and an override equal to it is no override.
+      // would read as a move, and an override equal to it is no override. A
+      // moved port says what moves (A-259).
       const stored = currentBinding ? { listenPort: currentBinding.port, clientPort: host!.portOverride } : null;
       return updateHost(host!.id, {
         ...payload,
-        ...(stored ? hostPortPayload(stored, { port, clientPort }) : {}),
-        ...(confirmSharedPort ? { confirmSharedPort: true } : {}),
+        ...(stored ? hostPortPayload(stored, { port, clientPort }, portMove) : {}),
       });
     },
     onSuccess: (saved) => {
       qc.invalidateQueries({ queryKey: ['hosts'] });
+      // A-259: a port move may put the host on another binding, or a new one.
+      qc.invalidateQueries({ queryKey: ['bindings'] });
       setDirty(false);
       setSniExpected(null);
       setCoreRefusal(null);
@@ -569,25 +597,6 @@ export function HostEditPage() {
        * Английская фраза сервера остаётся запасной для кодов, которых панель
        * ещё не знает: показать её как есть честнее, чем промолчать.
        */
-      // The listen port belongs to the inbound, and other hosts ride it: they
-      // are named, and «move for all» repeats the save with consent (A-150).
-      const shared = hostPortShared(err);
-      if (shared) {
-        modals.openConfirmModal({
-          title: t('hostEdit.portSharedTitle', { port: shared.port }),
-          children: (
-            <Text size="sm">
-              {t('hostEdit.portSharedBody', {
-                count: shared.hosts.length,
-                names: shared.hosts.map((h) => `«${h}»`).join(', '),
-              })}
-            </Text>
-          ),
-          labels: { confirm: t('hostEdit.portSharedConfirm'), cancel: t('common.cancel') },
-          onConfirm: () => saveMutation.mutate(true),
-        });
-        return;
-      }
       const refusal = portRefusalOf(err);
       if (refusal) {
         setPortRefusal(refusal);
@@ -785,7 +794,7 @@ export function HostEditPage() {
           <PageButton onClick={() => navigate('/hosts')}>{t('common.cancel')}</PageButton>
           <PageButton
             primary
-            onClick={() => saveMutation.mutate(false)}
+            onClick={() => saveMutation.mutate()}
             disabled={saveMutation.isPending || blocker !== null}
           >
             {isNew ? t('hostEdit.create') : t('common.save')}
@@ -853,6 +862,7 @@ export function HostEditPage() {
                     // про прошлое число.
                     setPortCheck(null);
                     setPortRefusal(null);
+                    setSlotRefusal(null);
                     setDirty(true);
                   }}
                   onBlur={() => void runPortCheck()}
@@ -874,12 +884,69 @@ export function HostEditPage() {
                 {portRefusal && (
                   <PortRefusalLine code={portRefusal.code} conflicts={portRefusal.conflicts} />
                 )}
-                <PortCheckHint
-                  result={portCheck}
-                  checking={portChecking}
-                  port={port === '' ? 0 : port}
-                  transport={portCheckTransport}
-                />
+                {/* The server's check counts the profile's own inbound on this
+                    port as a holder; the plan says the host joins it (A-259). */}
+                {portPlan?.kind !== 'join' && (
+                  <PortCheckHint
+                    result={portCheck}
+                    checking={portChecking}
+                    port={port === '' ? 0 : port}
+                    transport={portCheckTransport}
+                  />
+                )}
+                {portPlan?.kind === 'join' && (
+                  <Hint>
+                    {portPlan.hosts.length > 0
+                      ? t('hostEdit.portJoin', { port: portPlan.port, names: names(portPlan.hosts) })
+                      : t('hostEdit.portJoinAlone', { port: portPlan.port })}
+                  </Hint>
+                )}
+                {portPlan?.kind === 'newInbound' && (
+                  <Hint>{t('hostEdit.portNewInbound', { port: portPlan.port, ports: portPlan.ports.join(', ') })}</Hint>
+                )}
+                {/* A-259: other hosts ride this inbound. By default only this
+                    one leaves for its own port; the whole inbound is the other
+                    choice. */}
+                {(portPlan?.kind === 'split' || portPlan?.kind === 'moveAll') && (
+                  <Radio.Group
+                    value={portMove}
+                    onChange={(v) => {
+                      setPortMove(v === 'binding' ? 'binding' : 'host');
+                      setPortRefusal(null);
+                      setSlotRefusal(null);
+                      setDirty(true);
+                    }}
+                    style={{ marginTop: 8 }}
+                  >
+                    <Stack gap={6}>
+                      <Radio
+                        value="host"
+                        label={t('hostEdit.portMoveHost')}
+                        description={t('hostEdit.portMoveHostWhy', {
+                          port: portPlan.port,
+                          from: portPlan.from,
+                          names: names(portPlan.others),
+                        })}
+                      />
+                      <Radio
+                        value="binding"
+                        label={t('hostEdit.portMoveBinding')}
+                        description={t('hostEdit.portMoveBindingWhy', {
+                          port: portPlan.port,
+                          from: portPlan.from,
+                          names: names(portPlan.others),
+                        })}
+                      />
+                    </Stack>
+                  </Radio.Group>
+                )}
+                {/* On an edit the node list is far below: the adapter's refusal
+                    of the new port stands at the port (A-259). */}
+                {!isNew && slotRefusal && (
+                  <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED, marginTop: 6 }}>
+                    {adapterRefusalWords({ ...slotRefusal, nodeName: null }, t, selectedProfile?.name)}
+                  </Text>
+                )}
               </Box>
               {/* A-150: the port clients dial when it is not the one the node
                   listens on. Empty means they dial the listen port. */}
@@ -1510,10 +1577,10 @@ export function HostEditPage() {
                       <Text style={{ fontSize: 11, lineHeight: '15px', color: RED }}>{r.awgWhy}</Text>
                     </Box>
                   )}
-                  {r.selected && slotRefusal && (
+                  {isNew && r.selected && slotRefusal && (
                     <Box style={{ padding: '0 14px 12px 46px' }}>
                       <Text style={{ fontSize: 11, lineHeight: '15px', color: RED }}>
-                        {adapterRefusalWords({ ...slotRefusal, nodeName: null }, t)}
+                        {adapterRefusalWords({ ...slotRefusal, nodeName: null }, t, selectedProfile?.name)}
                       </Text>
                     </Box>
                   )}

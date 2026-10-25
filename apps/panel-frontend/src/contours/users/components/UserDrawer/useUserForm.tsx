@@ -208,7 +208,9 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
         key: b.id,
         title: node.name,
         protocol: profile.protocol,
-        note: node.countryCode ? node.countryCode.toUpperCase() : null,
+        // With the port: a profile stands on a node once per port (A-259), and
+        // two rows with one node name would read as a duplicate.
+        note: [node.countryCode?.toUpperCase(), String(b.port)].filter(Boolean).join(' · '),
         online: node.status === 'online',
       });
     }

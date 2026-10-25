@@ -268,7 +268,10 @@ export const profiles = {
     },
     deploy: {
       title: 'Deploy "{{name}}" to nodes',
-      hint: 'Tick the nodes you want this profile on. Unticking deletes existing bindings (cascade - users lose URLs for that node). Port for new bindings: {{port}}.',
+      hint: 'Tick the nodes you want this profile on. Unticking takes every inbound of the profile off the node, on all its ports (users lose URLs for that node). Port for new bindings: {{port}}. A second port on the same node is set from a host.',
+      boundPorts: 'Listens on ports: {{ports}}',
+      removesPorts_one: 'Takes off the inbound on port {{ports}}',
+      removesPorts_other: 'Takes off {{count}} inbounds, ports {{ports}}',
       port: 'Port for new bindings',
       portAutoHint: 'Auto-picked free port on the selected node. Override if needed.',
       portPlainHint: '{{port}}: the port clients expect. It is checked, not picked: the line under each ticked node says whether it is free there.',

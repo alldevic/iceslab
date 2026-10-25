@@ -38,3 +38,19 @@ export function deployDiff(
     .map((b) => b.id);
   return { create, remove };
 }
+
+/**
+ * A-259: the ports the profile listens on, per node. A profile stands on a node
+ * once per port, so a row of this window is a node with a LIST of inbounds:
+ * the tick takes all of them off, and the row says which before it does.
+ */
+export function portsByNode(bindings: readonly { nodeId: string; port: number }[]): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  for (const b of bindings) {
+    const list = out.get(b.nodeId) ?? [];
+    if (!list.includes(b.port)) list.push(b.port);
+    out.set(b.nodeId, list);
+  }
+  for (const list of out.values()) list.sort((a, b) => a - b);
+  return out;
+}

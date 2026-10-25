@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hiddenLineStart, hostHiddenFacts, hostPortPayload, hostPortShared, hostsMaySecureOtherwise } from '@/lib/domain/hosts';
+import { hiddenLineStart, hostHiddenFacts, hostPortPayload, hostsMaySecureOtherwise } from '@/lib/domain/hosts';
 
 describe('hostsMaySecureOtherwise (оговорка строки профиля)', () => {
   it('только если хост переопределяет защиту; список не пришёл: оговорка остаётся', () => {
@@ -34,18 +34,15 @@ describe('hostPortPayload (A-150)', () => {
   });
 });
 
-describe('hostPortShared (A-150)', () => {
-  const res = (status: number, data: unknown) => ({ response: { status, data } });
-  it('409 HOST_PORT_SHARED: порт и имена других хостов', () => {
-    expect(hostPortShared(res(409, { error: 'HOST_PORT_SHARED', message: 'm', port: 8443, hosts: ['cdn', 7, ''] }))).toEqual({
-      port: 8443,
-      hosts: ['cdn'],
-    });
+describe('hostPortPayload: portMove (A-259)', () => {
+  const stored = { listenPort: 443, clientPort: null };
+  it('правка: portMove едет только вместе с port', () => {
+    expect(hostPortPayload(stored, { port: 8443, clientPort: '' }, 'host')).toEqual({ port: 8443, portMove: 'host' });
+    expect(hostPortPayload(stored, { port: 8443, clientPort: '' }, 'binding')).toEqual({ port: 8443, portMove: 'binding' });
+    expect(hostPortPayload(stored, { port: 443, clientPort: 2053 }, 'binding')).toEqual({ portOverride: 2053 });
   });
-  it('вход проверяется первым, чужие 409 не этот отказ', () => {
-    for (const e of [null, 'x', new Error('x'), { response: null }]) expect(hostPortShared(e)).toBeNull();
-    expect(hostPortShared(res(409, { error: 'PORT_IN_USE', port: 1, hosts: [] }))).toBeNull();
-    expect(hostPortShared(res(400, { error: 'HOST_PORT_SHARED', port: 1, hosts: [] }))).toBeNull();
+  it('создание portMove не шлёт: привязку выбирает порт', () => {
+    expect(hostPortPayload(null, { port: 443, clientPort: '' }, 'binding')).toEqual({ port: 443 });
   });
 });
 

@@ -44,6 +44,7 @@ import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { loadView } from '@/lib/ui/loadView';
 import { LoadFailed } from '@/ui/LoadFailed';
 import { profileBindings } from '@/contours/profiles/lib/profileList';
+import { nodesByProfile } from '@/lib/domain/profileNodes';
 import { ProfilesEmpty } from '@/contours/profiles/components/ProfilesEmpty';
 import { profilePairLabel } from '@/lib/domain/engines';
 import { AwgGenerationBadge } from '@/ui/AwgGenerationBadge';
@@ -89,13 +90,8 @@ export function ProfilesPage() {
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
 
-  const bindingsByProfile = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const b of bindingsQuery.data?.bindings ?? []) {
-      m.set(b.profileId, (m.get(b.profileId) ?? 0) + 1);
-    }
-    return m;
-  }, [bindingsQuery.data]);
+  // Nodes, not bindings: a profile stands on a node once per port (A-259).
+  const bindingsByProfile = useMemo(() => nodesByProfile(bindingsQuery.data?.bindings ?? []), [bindingsQuery.data]);
 
   // The crumb carries what this page counts: how many templates exist, and how
   // many distinct protocols are actually deployed rather than merely defined.

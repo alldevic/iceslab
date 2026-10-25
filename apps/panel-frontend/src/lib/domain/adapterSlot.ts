@@ -93,11 +93,24 @@ export function adapterRefusal(err: unknown): AdapterRefusal | null {
   return null;
 }
 
-/** The refusal in the panel's words; the node is named when the server named it. */
-export function adapterRefusalWords(r: AdapterRefusal, t: (key: string, opts?: Record<string, unknown>) => string): string {
+/**
+ * The refusal in the panel's words; the node is named when the server named it.
+ * A-259: when the holder is the very profile being placed (`profileName`), the
+ * profile stands on the node on another port and the adapter takes one inbound,
+ * so a second port for it is what is refused, not a stranger's inbound.
+ */
+export function adapterRefusalWords(
+  r: AdapterRefusal,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  profileName?: string,
+): string {
   const body =
     r.kind === 'slot'
-      ? t('hostEdit.adapterSlotTaken', { protocol: r.protocol, engine: r.engine, heldBy: r.heldBy })
+      ? t(r.heldBy !== '' && r.heldBy === profileName ? 'hostEdit.adapterSlotSelf' : 'hostEdit.adapterSlotTaken', {
+          protocol: r.protocol,
+          engine: r.engine,
+          heldBy: r.heldBy,
+        })
       : t('hostEdit.mieruMtuMismatch', { mtu: r.mtu ?? '?', wanted: r.wanted ?? '?', heldBy: r.heldBy });
   return r.nodeName ? `${t('hostEdit.onNode', { name: r.nodeName })} ${body}` : body;
 }

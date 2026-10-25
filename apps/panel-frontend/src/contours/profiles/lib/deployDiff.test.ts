@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deployDiff } from '@/contours/profiles/lib/deployDiff';
+import { deployDiff, portsByNode } from '@/contours/profiles/lib/deployDiff';
 
 describe('deployDiff', () => {
   const b = (id: string, nodeId: string) => ({ id, nodeId });
@@ -32,5 +32,25 @@ describe('deployDiff', () => {
 
   it('5. ничего не меняли: ни одного запроса', () => {
     expect(deployDiff(new Set(['n1']), new Set(['n1']), [b('b1', 'n1')])).toEqual({ create: [], remove: [] });
+  });
+
+  it('6. A-259: профиль на ноде на двух портах; снятая галка снимает обе привязки, по id', () => {
+    expect(deployDiff(new Set(['n1']), new Set(), [b('b443', 'n1'), b('b8443', 'n1')])).toEqual({
+      create: [],
+      remove: ['b443', 'b8443'],
+    });
+  });
+});
+
+describe('portsByNode (A-259)', () => {
+  it('порты профиля по нодам, без повторов, по возрастанию', () => {
+    const m = portsByNode([
+      { nodeId: 'n1', port: 8443 },
+      { nodeId: 'n1', port: 443 },
+      { nodeId: 'n2', port: 2053 },
+    ]);
+    expect(m.get('n1')).toEqual([443, 8443]);
+    expect(m.get('n2')).toEqual([2053]);
+    expect(m.has('n3')).toBe(false);
   });
 });

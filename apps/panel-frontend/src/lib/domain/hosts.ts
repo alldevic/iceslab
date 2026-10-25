@@ -166,29 +166,20 @@ export interface CreateHostInput {
   isHidden?: boolean;
 }
 
-// The binding is immutable: moving a host to another node is a delete plus a
-// create, not an edit. Its listen port is not (A-150, 328fc8d): `port` moves
-// the inbound on the node, `portOverride` is only what clients dial.
-export type UpdateHostInput = Partial<Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId'>> & {
-  /** The binding carries other hosts too; `true` moves them all (HOST_PORT_SHARED). */
-  confirmSharedPort?: boolean;
-};
-
 /**
- * 409 HOST_PORT_SHARED (A-150): moving the listen port would move the other
- * hosts of the same inbound, named here. Input checked first; null when the
- * refusal is another one.
+ * A-259: what a new listen port moves. 'host' (the server's default) takes
+ * this host to the inbound on that port, a new one when the profile does not
+ * listen there yet; 'binding' moves the whole inbound with all its hosts.
  */
-export function hostPortShared(err: unknown): { port: number; hosts: string[] } | null {
-  if (!err || typeof err !== 'object') return null;
-  const res = (err as { response?: unknown }).response;
-  if (!res || typeof res !== 'object') return null;
-  const { status, data } = res as { status?: unknown; data?: unknown };
-  if (status !== 409 || !data || typeof data !== 'object') return null;
-  const d = data as { error?: unknown; port?: unknown; hosts?: unknown };
-  if (d.error !== 'HOST_PORT_SHARED' || typeof d.port !== 'number' || !Array.isArray(d.hosts)) return null;
-  return { port: d.port, hosts: d.hosts.filter((h): h is string => typeof h === 'string' && h !== '') };
-}
+export type HostPortMove = 'host' | 'binding';
+
+// The node is not edited here: moving a host to another node is a delete plus
+// a create. Its listen port is (A-150, A-259): `port` with `portMove`, and the
+// answer may carry another `bindingId`; `portOverride` is only what clients dial.
+export type UpdateHostInput = Partial<Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId'>> & {
+  /** Sent with `port` only. */
+  portMove?: HostPortMove;
+};
 
 /**
  * The port fields of a host save (A-150). The «Port» field is the port the
@@ -198,11 +189,15 @@ export function hostPortShared(err: unknown): { port: number; hosts: string[] } 
  * An edit sends each only when it changed: an absent key is no edit, and
  * restating the listen port would be read as a move. A create sends the listen
  * port always and the client port only when one was typed.
+ *
+ * A-259: an edit that moves the listen port says what moves (`portMove`),
+ * and only then; a create sends none, the port itself picks the binding.
  */
 export function hostPortPayload(
   stored: { listenPort: number; clientPort: number | null } | null,
   form: { port: number | ''; clientPort: number | '' },
-): { port?: number; portOverride?: number | null } {
+  move?: HostPortMove,
+): { port?: number; portOverride?: number | null; portMove?: HostPortMove } {
   const client = form.clientPort === '' ? null : form.clientPort;
   if (stored === null) {
     return {
@@ -210,8 +205,10 @@ export function hostPortPayload(
       ...(client !== null ? { portOverride: client } : {}),
     };
   }
+  const moved = form.port !== '' && form.port !== stored.listenPort;
   return {
-    ...(form.port !== '' && form.port !== stored.listenPort ? { port: form.port } : {}),
+    ...(moved ? { port: form.port as number } : {}),
+    ...(moved && move ? { portMove: move } : {}),
     ...(client !== stored.clientPort ? { portOverride: client } : {}),
   };
 }

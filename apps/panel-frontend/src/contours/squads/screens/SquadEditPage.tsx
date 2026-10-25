@@ -30,6 +30,7 @@ import {
   type UpdateSquadInput,
 } from '@/lib/domain/squads';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
+import { nodesByProfile } from '@/lib/domain/profileNodes';
 import { profilePairLabel } from '@/lib/domain/engines';
 // A-204: the rule is the contract's (BACK-2 7ec8c912), the one the server uses.
 import { userScopeGap } from '@iceslab/shared';
@@ -181,6 +182,13 @@ export function SquadEditPage() {
       })
       .map((h) => h.id);
   }, [hostsQuery.data, bindingsQuery.data, profileIds]);
+
+  // A-259: «N nodes» under a profile counts nodes, not bindings (a profile
+  // stands on a node once per port). Without the list the server's
+  // bindingCount stands in, which may say more, never fewer.
+  const nodeCounts = useMemo(() => nodesByProfile(bindingsQuery.data?.bindings ?? []), [bindingsQuery.data]);
+  const nodesOf = (p: { id: string; bindingCount: number }) =>
+    bindingsQuery.data ? (nodeCounts.get(p.id) ?? 0) : p.bindingCount;
 
   // What leaves for the members, which is what the header states. Counted off
   // `reachableIds` so neither the search box nor a dead id in the list can
@@ -961,8 +969,8 @@ export function SquadEditPage() {
                         </Text>
                       )}
                     </Box>
-                    <Chip accent={p.bindingCount > 0 ? FAINT : AMBER}>
-                      {t('squadEdit.profileNodes', { count: p.bindingCount })}
+                    <Chip accent={nodesOf(p) > 0 ? FAINT : AMBER}>
+                      {t('squadEdit.profileNodes', { count: nodesOf(p) })}
                     </Chip>
                   </UnstyledButton>
                 );

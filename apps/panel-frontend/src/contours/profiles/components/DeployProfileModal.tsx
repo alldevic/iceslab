@@ -26,7 +26,7 @@ import {
   listBindings,
   type Profile,
 } from '@/lib/domain/profiles';
-import { deployDiff } from '@/contours/profiles/lib/deployDiff';
+import { deployDiff, portsByNode } from '@/contours/profiles/lib/deployDiff';
 import { deployFailed, deployOutcome, DeployIncomplete } from '@/contours/profiles/lib/deployResult';
 import { adapterRefusalWords, type AdapterRefusal } from '@/lib/domain/adapterSlot';
 import { plainDefaultPort } from '@/contours/profiles/lib/plainSubprotocol';
@@ -102,15 +102,20 @@ export function DeployProfileModal({ profile, onClose }: Props) {
     queryFn: () => listHosts({ profileId: profile!.id }),
     enabled: opened && profile !== null,
   });
-  const hostOfNode = useMemo(() => {
+  // A-259: a node holds the profile once per port, so it is a LIST of hosts,
+  // each found by its binding id. The cascade fact is the node's, the same on
+  // all of them; the first host that carries the key speaks.
+  const hostsOfNode = useMemo(() => {
     const nodeOfBinding = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b.nodeId] as const));
-    const m = new Map<string, Pick<Host, 'hiddenByCascade'>>();
+    const m = new Map<string, Pick<Host, 'hiddenByCascade'>[]>();
     for (const h of hostsQuery.data?.hosts ?? []) {
       const nodeId = nodeOfBinding.get(h.bindingId);
-      if (nodeId) m.set(nodeId, h);
+      if (nodeId) m.set(nodeId, [...(m.get(nodeId) ?? []), h]);
     }
     return m;
   }, [bindingsQuery.data, hostsQuery.data]);
+  /** The ports the profile listens on, per node: the tick takes all of them. */
+  const boundPorts = useMemo(() => portsByNode(bindingsQuery.data?.bindings ?? []), [bindingsQuery.data]);
 
   const initialSelected = useMemo(() => {
     const set = new Set<string>();
@@ -505,11 +510,30 @@ export function DeployProfileModal({ profile, onClose }: Props) {
                   {coreRefusal?.nodeName === node.name && (
                     <CoreGateRefusalLine refusal={coreRefusal} nodeId={node.id} arch={node.cores?.arch} />
                   )}
+                  {/* A-259: what taking the tick off takes with it, and the
+                      ports when the profile stands here more than once. */}
+                  {boundPorts.has(node.id) && !checked && seeded.has(node.id) && (
+                    <Text size="xs" c="yellow" style={{ lineHeight: '15px' }}>
+                      {t('profiles.deploy.removesPorts', {
+                        count: boundPorts.get(node.id)!.length,
+                        ports: boundPorts.get(node.id)!.join(', '),
+                      })}
+                    </Text>
+                  )}
+                  {checked && (boundPorts.get(node.id)?.length ?? 0) > 1 && (
+                    <Text size="xs" c="dimmed" style={{ lineHeight: '15px' }}>
+                      {t('profiles.deploy.boundPorts', { ports: boundPorts.get(node.id)!.join(', ') })}
+                    </Text>
+                  )}
                   {/* Нода в каскаде не вход: хост профиля на ней подписка не
                       отдаст. Под именем ноды, и у ноды без хоста тоже: до
                       развёртывания это дешевле всего узнать. */}
                   <HostHiddenLine
-                    facts={hostHiddenFacts(hostOfNode.get(node.id), node.name, node)}
+                    facts={hostHiddenFacts(
+                      (hostsOfNode.get(node.id) ?? []).find((h) => h.hiddenByCascade !== undefined),
+                      node.name,
+                      node,
+                    )}
                     compact
                   />
                 </Stack>

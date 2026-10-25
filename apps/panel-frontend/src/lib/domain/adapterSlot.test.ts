@@ -79,8 +79,15 @@ describe('adapterRefusal', () => {
     expect(adapterRefusalWords({ kind: 'slot', nodeName: null, protocol: 'p', engine: 'e', heldBy: 'h' }, t)).toMatch(/^hostEdit\.adapterSlotTaken/);
   });
 
+  it('A-259: держит тот же профиль на другом порту, это отказ второму порту, а не чужой вход', () => {
+    const slot = { kind: 'slot' as const, nodeName: null, protocol: 'p', engine: 'e', heldBy: 'ss-main' };
+    expect(adapterRefusalWords(slot, t, 'ss-main')).toMatch(/^hostEdit\.adapterSlotSelf/);
+    expect(adapterRefusalWords(slot, t, 'other')).toMatch(/^hostEdit\.adapterSlotTaken/);
+    expect(adapterRefusalWords({ ...slot, heldBy: '' }, t, '')).toMatch(/^hostEdit\.adapterSlotTaken/);
+  });
+
   it('мусор и чужие отказы: null', () => {
-    for (const e of [null, 'x', new Error('x'), { response: null }, res(409, { error: 'PORT_TAKEN_PROFILE' }), res(400, { error: 'ADAPTER_SLOT_TAKEN' }), res(409, null)]) {
+    for (const e of [null, 'x', new Error('x'), { response: null }, res(409, { error: 'PORT_TAKEN_PROFILE' }), res(400, { error: 'ADAPTER_SLOT_TAKEN' }), res(409, null), res(409, 'ADAPTER_SLOT_TAKEN'), { response: { status: '409', data: { error: 'ADAPTER_SLOT_TAKEN' } } }]) {
       expect(adapterRefusal(e)).toBeNull();
     }
   });
