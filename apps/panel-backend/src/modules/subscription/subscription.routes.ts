@@ -644,6 +644,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         userAgent,
         topN: query.topN,
         cfCountry,
+        // A-167: a client's fetch is history; the page in a browser is not,
+        // nothing there carries a config to a client.
+        recordFetch: !wantsHtmlPage(query, (request.headers.accept ?? '').toString()),
       });
       // ?protocols=: narrowed HERE, once, on what the subscription hands out,
       // before any format or the page sees it. After the generation and not

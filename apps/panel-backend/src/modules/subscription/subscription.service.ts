@@ -138,6 +138,15 @@ export interface RequestContext {
    *  is treated as "country unknown" and the ranker falls back to
    *  utilization-only ordering. */
   cfCountry?: string;
+  /**
+   * A-167: write this request into subscription_request_history. Only a
+   * client's `/sub/<token>` fetch is one: the operator opening a user in the
+   * panel (`/api/users/:id/endpoints`) and a person opening the subscription
+   * page in a browser receive no config. Written as fetches, they made the
+   * host card count a user as holding the new link and gave the delivery card
+   * an empty User-Agent. Off unless asked.
+   */
+  recordFetch?: boolean;
 }
 
 export interface SubscriptionResult {
@@ -1527,16 +1536,18 @@ export async function generateSubscription(
     } // host-row loop
   }
 
-  try {
-    await prisma.subscriptionRequestHistory.create({
-      data: {
-        userId: user.id,
-        requestIp: ctx.ip ?? null,
-        userAgent: ctx.userAgent ?? null,
-      },
-    });
-  } catch {
-    // Audit failure must not block the subscription response.
+  if (ctx.recordFetch) {
+    try {
+      await prisma.subscriptionRequestHistory.create({
+        data: {
+          userId: user.id,
+          requestIp: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+        },
+      });
+    } catch {
+      // Audit failure must not block the subscription response.
+    }
   }
 
   // Two ways in that read the same are two rows a subscriber cannot choose
