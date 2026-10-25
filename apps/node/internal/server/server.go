@@ -1075,8 +1075,17 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 	// pushTimeout, and the panel's repeat finds it done and changes nothing.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), pushTimeout)
 	defer cancel()
+	started := time.Now()
 	s.pushMu.Lock()
 	defer s.pushMu.Unlock()
+	// One line per push, how long it took and what it was handed (A-265: the
+	// cores by protocol and engine, never a user, a key or an address). The
+	// stand reads it for the panel's applyInbounds timeout.
+	waited := time.Since(started)
+	defer func() {
+		s.logger.Info(fmt.Sprintf("applyInbounds done in %d ms", time.Since(started).Milliseconds()),
+			"waitedMs", waited.Milliseconds(), "cores", pushedCores(req), "chain", req.Chain != nil)
+	}()
 	o := s.applyPushOutcome(ctx, req)
 	applied, failed, reasons := o.applied, o.failed, o.reasons
 
@@ -1117,6 +1126,26 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		Applied: applied,
 		Skipped: len(req.Inbounds) - applied,
 	})
+}
+
+// pushedCores names the cores a push hands inbounds to, "protocol/engine"
+// once each, sorted; an inbound without an engine goes to the protocol's own.
+func pushedCores(req dto.ApplyInboundsRequest) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, in := range req.Inbounds {
+		engine := string(in.Engine)
+		if engine == "" {
+			engine = string(in.Protocol)
+		}
+		key := string(in.Protocol) + "/" + engine
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 /*
