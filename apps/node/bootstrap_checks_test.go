@@ -159,6 +159,43 @@ func TestTheAwgRemoveTakesTheStateWithTheConfigs(t *testing.T) {
 	}
 }
 
+// A-267: the hysteria unit the bootstrap writes runs at warn, so the server
+// does not journal every "client connected" with the client's address and the
+// user's id. Checked on the unit write_unit actually writes, in its [Service]
+// section: a line elsewhere, or only in a comment, would not reach hysteria.
+// Nodes installed before this get the same from the agent at runtime (BACK).
+func TestTheHysteriaUnitRunsAtWarn(t *testing.T) {
+	dir := t.TempDir()
+	unit := filepath.Join(dir, "hysteria.service")
+	bin := stubs(t, map[string]string{"systemctl": "exit 0\n"})
+	prog := "set -euo pipefail\nlog() { :; }\nwarn() { :; }\n" +
+		"INSTALL_PATH=/usr/local/bin/hysteria\nHYSTERIA_CONFIG_PATH='" + filepath.Join(dir, "config.yaml") + "'\n" +
+		"HYSTERIA_UNIT='" + unit + "'\n" +
+		fnBody(t, readScript(t, "bootstrap-hysteria.sh"), "write_unit") + "\nwrite_unit\n"
+	if out, err := runBash(t, bin, prog); err != nil {
+		t.Fatalf("write_unit: %v\n%s", err, out)
+	}
+	blob, err := os.ReadFile(unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := ""
+	found := false
+	for _, line := range strings.Split(string(blob), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			section = line
+			continue
+		}
+		if section == "[Service]" && line == "Environment=HYSTERIA_LOG_LEVEL=warn" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the hysteria unit has no Environment=HYSTERIA_LOG_LEVEL=warn in [Service]:\n%s", blob)
+	}
+}
+
 // The mieru installer leaves mita IDLE: it enables the daemon the agent talks
 // to and nothing more. Per mieru's own docs, mita listens only after
 // `mita start`, on what `mita apply config` stored. A port open before the
