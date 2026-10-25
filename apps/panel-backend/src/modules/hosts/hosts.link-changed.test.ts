@@ -143,6 +143,28 @@ describe('the profile stamp', () => {
     expect(moved(await stampOf.profile(bare.id as string)), 'engine').toBe(true);
     expect(PROFILE_LINK_FIELDS).toEqual(['config', 'engine', 'awgProtocol', 'enabled']);
   });
+
+  it('awgProtocol moves it', async () => {
+    const awg = await prisma.profile.create({ data: { name: 'lc-awg', protocol: 'amneziawg', config: { subnet: '10.66.66.0/24' } } });
+    await age();
+    await updateProfile(awg.id, { awgProtocol: 3 });
+    expect(moved(await stampOf.profile(awg.id)), 'awgProtocol').toBe(true);
+  });
+
+  it('a binding\'s transport moved by its profile\'s config moves the binding\'s stamp', async () => {
+    const node = await prisma.node.create({
+      data: { name: 'lc-kcp', address: 'kcp.test', protocol: 'xray', heartbeatSecret: Buffer.alloc(32) },
+      select: { id: true },
+    });
+    const config = { security: 'none', subprotocol: 'vless', network: 'raw' };
+    const xr = await prisma.profile.create({ data: { name: 'lc-raw', protocol: 'xray', config } });
+    const b = await prisma.profileNodeBinding.create({ data: { nodeId: node.id, profileId: xr.id, port: 9000, transport: 'tcp' } });
+    await age();
+    await updateProfile(xr.id, { config: { ...config, network: 'kcp' } } as never);
+    const after = await prisma.profileNodeBinding.findUniqueOrThrow({ where: { id: b.id } });
+    expect(after.transport).not.toBe('tcp');
+    expect(moved(after.linkChangedAt), 'transport').toBe(true);
+  });
 });
 
 describe('the node stamp', () => {
