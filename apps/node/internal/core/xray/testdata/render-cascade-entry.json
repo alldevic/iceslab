@@ -67,6 +67,8 @@
     }
   ],
   "log": {
+    "access": "none",
+    "dnsLog": false,
     "loglevel": "warning"
   },
   "observatory": {

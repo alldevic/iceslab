@@ -1013,18 +1013,28 @@ func renderMultiConfigInto(
 	dnsSection := renderDnsSection(dns)
 
 	doc := map[string]any{
-		// ⚠ `warning`, not `info`, and this is a disk-space decision rather than
-		// a taste in verbosity. At info xray writes a line PER CONNECTION;
-		// journald mirrors it into syslog, and our journald limits in the
-		// installer do not cap syslog at all. Reported from an operator's own
-		// exit node (PR #43, 2026-08-17): 3 GB of logs, the disk full, and
-		// nothing in them anybody had ever read.
+		// ⚠ xray keeps TWO logs, and `loglevel` governs only one of them.
 		//
-		// What is lost is the per-connection trace, which is not how anything
-		// here is diagnosed: a refused config, a failed start and a dead leg all
-		// print at warning or above.
+		//   - The error log: `loglevel` `warning`, not `info`. A refused config,
+		//     a failed start and a dead leg all print at warning or above.
+		//   - The ACCESS log: a line per connection with the client's IP, the
+		//     destination and the user's email. `loglevel` does not touch it; an
+		//     empty `access` sends it to stdout, which is journald (xray-core
+		//     v26.3.27 infra/conf/log.go, LogConfig.Build: "none" disables, ""
+		//     keeps the console). So `access: none`, always.
+		//   - The DNS log: off unless `dnsLog` is true; said so here too.
+		//
+		// Two reasons, both found in the field. Disk: journald mirrors into
+		// syslog, which our installer does not cap (3 GB on an operator's exit
+		// node, PR #43, 2026-08-17). And privacy: who connected from where to
+		// what, kept on the box for anyone who reads the journal (aeza-de-01,
+		// 26.10, with loglevel already at warning). Until then this comment
+		// promised that warning alone kept the per-connection lines out; it did
+		// not.
 		"log": map[string]any{
 			"loglevel": "warning",
+			"access":   "none",
+			"dnsLog":   false,
 		},
 		"stats": map[string]any{},
 		"api": map[string]any{
