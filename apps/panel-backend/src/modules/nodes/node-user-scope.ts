@@ -1,6 +1,7 @@
 import { adapterSlot, userScopeGap, type UserScopeGap } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { effectiveEngineOf } from './node-engines.js';
+import { pushedBindingsWhere } from './pushed-bindings.js';
 
 /**
  * A-204: the bindings on this node where a squad's limit on a user does not
@@ -9,7 +10,9 @@ import { effectiveEngineOf } from './node-engines.js';
  *   - shared-users (mieru): only where the node carries TWO or more inbounds
  *     on that adapter. With one there is nothing to cross into: a user the
  *     squad does not grant it is not put on the adapter at all.
- * Disabled bindings are not pushed and are left out. Empty is none.
+ * What the push does not send (a disabled binding, a disabled profile's
+ * binding) is left out, by the push's filter (pushedBindingsWhere). Empty is
+ * none.
  */
 export interface NodeUserScopeGap {
   bindingId: string;
@@ -22,7 +25,9 @@ export interface NodeUserScopeGap {
 
 export async function nodeUserScopeGaps(nodeId: string): Promise<NodeUserScopeGap[]> {
   const bindings = await prisma.profileNodeBinding.findMany({
-    where: { nodeId, enabled: true },
+    // What the push sends, by the push's own filter: a disabled binding or a
+    // binding of a disabled profile is not on the node.
+    where: pushedBindingsWhere(nodeId),
     select: {
       id: true,
       port: true,

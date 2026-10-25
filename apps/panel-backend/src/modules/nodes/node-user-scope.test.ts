@@ -7,6 +7,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { nodeUserScopeGaps } from './node-user-scope.js';
+import { pushedBindingsWhere } from './pushed-bindings.js';
 
 /**
  * A-204: where a squad's limit on a user does not hold on the node, by the
@@ -86,5 +87,17 @@ describe('nodeUserScopeGaps', () => {
     await bind(n, 'mi-on', 'mieru', 2001);
     await bind(n, 'mi-off', 'mieru', 2002, false);
     expect(await nodeUserScopeGaps(n)).toEqual([]);
+  });
+
+  it('a binding of a disabled profile is not pushed either: no shared secret, no second mieru', async () => {
+    const n = await node('us-d');
+    await bind(n, 'mi-live', 'mieru', 2001);
+    const second = await bind(n, 'mi-dead', 'mieru', 2002);
+    const mt = await bind(n, 'mt-dead', 'mtproto', 443);
+    await prisma.profile.updateMany({ where: { id: { in: [second.profileId, mt.profileId] } }, data: { enabled: false } });
+    expect(await nodeUserScopeGaps(n)).toEqual([]);
+    // The push reads the same filter: what it would send is the one live mieru.
+    const pushed = await prisma.profileNodeBinding.findMany({ where: pushedBindingsWhere(n), select: { profileId: true } });
+    expect(pushed).toHaveLength(1);
   });
 });

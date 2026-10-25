@@ -24,6 +24,7 @@ import { getLogger } from '../../lib/infra/logger.js';
 import { acmeHostnameFor } from './acme-hostname.js';
 import { ensureHysteriaTls } from '../nodes/hysteria-tls.js';
 import { ensureAwg3Geometry } from '../nodes/awg3-geometry.js';
+import { pushedBindingsWhere } from '../nodes/pushed-bindings.js';
 
 // Moved to its own module (E30) so the install command reads the address the
 // same way; re-exported for the callers that import it from here.
@@ -180,7 +181,7 @@ export async function legacyCascadeAsPushed(
   const hasXray = inbounds
     ? inbounds.some((i) => i.protocol === 'xray')
     : (await prisma.profileNodeBinding.count({
-        where: { nodeId, enabled: true, profile: { enabled: true, protocol: 'xray' } },
+        where: { AND: [pushedBindingsWhere(nodeId), { profile: { protocol: 'xray' } }] },
       })) > 0;
   if (!hasXray) {
     getLogger().info(
@@ -207,11 +208,8 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // table read while keeping the wire format identical (the node-agent
   // doesn't know about profile/binding split, it just gets a flat list).
   const bindings = await prisma.profileNodeBinding.findMany({
-    where: {
-      nodeId,
-      enabled: true,
-      profile: { enabled: true },
-    },
+    // The one filter of what a push sends, shared with the reports (A-204).
+    where: pushedBindingsWhere(nodeId),
     include: {
       profile: {
         select: { id: true, name: true, protocol: true, engine: true, config: true, awgProtocol: true },
