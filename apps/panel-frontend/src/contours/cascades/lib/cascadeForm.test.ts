@@ -1028,6 +1028,21 @@ describe('entryBystanders', () => {
   it('6. профиль, которого нет в списке, чужим не называется', () => {
     expect(entryBystanders('xray', nodes, [bind('p-gone', 'n1')], profiles)).toEqual([]);
   });
+
+  it('7. A-264: xray trojan и vmess на входе xray мимо vlessRoute названы, vless нет, без известного subprotocol не назван', () => {
+    const xray = [
+      { id: 'x-vless', protocol: 'xray', config: { subprotocol: 'vless' } },
+      { id: 'x-trojan', protocol: 'xray', config: { subprotocol: 'trojan' } },
+      { id: 'x-vmess', protocol: 'xray', config: { subprotocol: 'vmess' } },
+      { id: 'x-unknown', protocol: 'xray', config: {} },
+      { id: 'x-noconfig', protocol: 'xray' },
+    ];
+    const all = xray.map((p) => bind(p.id, 'n1'));
+    expect(entryBystanders('xray', nodes, all, xray)).toEqual([
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['trojan', 'vmess'] },
+    ]);
+    expect(entryBystanders('xray', nodes, [bind('x-vless', 'n1'), bind('x-unknown', 'n1')], xray)).toEqual([]);
+  });
 });
 
 describe('entryNoteKind', () => {

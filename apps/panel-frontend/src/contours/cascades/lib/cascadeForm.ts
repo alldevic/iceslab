@@ -1,4 +1,4 @@
-import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS } from '@iceslab/shared';
+import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS, type XraySubprotocol } from '@iceslab/shared';
 import type { CascadeDirectionInput, CascadeProtocol } from '@/lib/domain/cascades';
 import { linkCellPair, nativeEngineOfIntent, type EnginePair, type EngineName } from '@/lib/domain/engines';
 import { DEFAULT_LINK_CONGESTION, DEFAULT_LINK_UNDERLAY, LINK_CONGESTIONS } from '@/lib/domain/cascades';
@@ -206,7 +206,24 @@ export function entryNoteKind(facts: EntryChainFacts | null): EntryNoteKind | nu
  * Сравнение идёт по ПРОТОКОЛУ профиля, тем же правилом, что у сервера: при
  * смене входа он снимал с каскада профиль `hy2` именно как hysteria-профиль.
  * Выключенная привязка в счёт не идёт: пользователей через неё нет.
+ *
+ * A-264: протокол xray на входе xray ещё не значит «в каскаде». Вход
+ * раскладывает юзеров по выходам только через vlessRoute (UUID vless), и
+ * профиль xray с subprotocol trojan или vmess мимо него выходит из страны
+ * входа. Такой профиль назван своим subprotocol. Subprotocol берётся из
+ * конфига профиля в списке; профиль без известного subprotocol не назван:
+ * неполный факт фактом не считается.
  */
+/** Подпротоколы xray, которые вход каскада не раскладывает (A-264). */
+const OFF_ROUTE_SUBPROTOCOLS: readonly XraySubprotocol[] = ['trojan', 'vmess'];
+
+/** trojan или vmess у профиля xray, по его конфигу; иначе null (vless или не известно). */
+function xrayOffRouteSubprotocol(profile: { protocol: string; config?: unknown }): XraySubprotocol | null {
+  if (profile.protocol !== 'xray' || !profile.config || typeof profile.config !== 'object') return null;
+  const sub = (profile.config as { subprotocol?: unknown }).subprotocol;
+  return OFF_ROUTE_SUBPROTOCOLS.find((s) => s === sub) ?? null;
+}
+
 export interface EntryBystander {
   nodeId: string;
   nodeName: string;
@@ -218,19 +235,25 @@ export function entryBystanders(
   entryProtocol: string | null | undefined,
   entryNodes: { id: string; name: string; countryCode: string | null }[],
   bindings: { profileId: string; nodeId: string; enabled: boolean }[] | undefined,
-  profiles: { id: string; protocol: string }[] | undefined,
+  profiles: { id: string; protocol: string; config?: unknown }[] | undefined,
 ): EntryBystander[] | undefined {
   if (!entryProtocol || !bindings || !profiles) return undefined;
-  const protocolOf = new Map(profiles.map((p) => [p.id, p.protocol]));
+  const byId = new Map(profiles.map((p) => [p.id, p]));
   const out: EntryBystander[] = [];
   for (const node of entryNodes) {
     const foreign = new Set<string>();
     for (const b of bindings) {
       if (b.nodeId !== node.id || !b.enabled) continue;
-      const proto = protocolOf.get(b.profileId);
+      const profile = byId.get(b.profileId);
       // Профиль, которого нет в списке, ничего не говорит о протоколе: его не
       // считаем, чтобы не назвать чужим то, чего мы просто не видим.
-      if (proto && proto !== entryProtocol) foreign.add(proto);
+      if (!profile) continue;
+      if (profile.protocol !== entryProtocol) {
+        foreign.add(profile.protocol);
+        continue;
+      }
+      const sub = xrayOffRouteSubprotocol(profile);
+      if (sub) foreign.add(sub);
     }
     if (foreign.size > 0) {
       out.push({ nodeId: node.id, nodeName: node.name, countryCode: node.countryCode, protocols: [...foreign].sort() });
