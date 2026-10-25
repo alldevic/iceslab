@@ -209,6 +209,9 @@ interface SubscriptionEndpointBase {
    *  single plain config (the pre-A4 behaviour, non-balancer-entry endpoints).
    *  Only the xrayjson-array + plain formats consume this. */
   cascadeExits?: { label: string; tag: number; cascadeId?: string }[];
+  /** Set on one route of a cascade entry (expandCascadeEntry): the line's
+   *  name exactly, where formats would otherwise build one from the node's. */
+  routeLabel?: string;
 }
 
 export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {

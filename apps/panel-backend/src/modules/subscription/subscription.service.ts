@@ -65,7 +65,7 @@ import { hysteriaPinFor } from '../nodes/hysteria-tls-shape.js';
 import { ensureAwg3Geometry, readAwg3Geometry } from '../nodes/awg3-geometry.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { endpointId } from './endpoint-identity.js';
-import { withVlessRouteTag } from './formats/xrayjson.js';
+import { expandCascadeEntry } from './cascade-entries.js';
 
 // ───── Domain errors ─────
 
@@ -292,8 +292,9 @@ export function collapseToOneLinePerNode(
  * This used to say the JSON array cannot be pinged in Happ, so URIs were the
  * only format that showed latency. Not true, checked in the field 2026-08-16.
  *
- * vmess is skipped (its UUID lives inside a base64 blob, not the userinfo, so a
- * plain string swap can't reach it) and returned as its single original URI.
+ * VLESS only since 26.10 (expandCascadeEntry): vlessRoute is a VLESS field,
+ * and a trojan password or a vmess UUID with two bytes changed was a credential
+ * the entry refused, so those entries go out as their one original URI.
  * Every non-entry endpoint returns its one original URI unchanged.
  */
 /**
@@ -581,26 +582,9 @@ export function disambiguateCascadeLabels(endpoints: SubscriptionEndpoint[]): vo
 }
 
 export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
-  if (
-    e.protocol !== 'xray' ||
-    // A socks/http login carries no UUID to put a route into.
-    isPlainXray(e) ||
-    !e.cascadeExits ||
-    e.cascadeExits.length === 0 ||
-    e.subprotocol === 'vmess'
-  ) {
-    return e.uri ? [e.uri] : [];
-  }
-  // vless:// and trojan:// both put the UUID in the userinfo, so replacing the
-  // first occurrence of it retargets the link. Strip the original #remark first.
-  const hashIdx = e.uri.indexOf('#');
-  const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
-  return e.cascadeExits.map((profile) => {
-    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, profile.tag));
-    // The label is already unique across this subscription (see
-    // disambiguateCascadeLabels); nothing to append here.
-    return `${tagged}#${encodeURIComponent(profile.label)}`;
-  });
+  // The routes arrive expanded (generateSubscription, A-262); through the same
+  // rule for a caller that hands in an entry as it was, a no-op otherwise.
+  return expandCascadeEntry(e).flatMap((x) => (x.uri ? [x.uri] : []));
 }
 
 /**
@@ -1569,6 +1553,16 @@ export async function generateSubscription(
   // Same idea one level down: whatever cascade lines remain must still be
   // distinguishable from each other, and from any non-cascade endpoint.
   disambiguateCascadeLabels(endpoints);
+
+  // A-262: the routes of a balancer-cascade entry, one endpoint each, HERE and
+  // nowhere else: every format below (links, Clash, sing-box, the xray-json
+  // array, Loon, Quantumult X, Surge, json) is handed the expanded list, so a
+  // format cannot forget it. Until 26.10 only the links and the array expanded,
+  // Clash and sing-box drew the entry with its bare UUID, and a client there
+  // left from the entry itself. After the deal and the labels above, so what is
+  // expanded is the list already narrowed (A-128, A-134). VLESS only, see
+  // expandCascadeEntry.
+  endpoints.splice(0, endpoints.length, ...endpoints.flatMap(expandCascadeEntry));
 
   // R3-a - resolve the per-squad routing override across the user's squads,
   // reusing the memberships already loaded above (no extra query).

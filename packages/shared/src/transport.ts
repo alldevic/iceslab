@@ -366,8 +366,9 @@ export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> 
     // Checked against manual.nssurge.com/policies/ on 2026-09-23: `socks5` and
     // `http` with a login, `tuic-v5`, `anytls` (iOS 5.17.0+, Mac 6.4.3+),
     // ShadowTLS v3 as `shadow-tls-*` parameters on a proxy line. No vless, so
-    // no REALITY. Left out of the builder (the Telegram doors by decision of
-    // 23.09).
+    // no REALITY, and no route of a balancer-cascade entry either: a route is
+    // VLESS by definition (A-262), Surge hands out none of them. Left out of
+    // the builder (the Telegram doors by decision of 23.09).
     socks: NOT_YET,
     http: NOT_YET,
     tuic: NOT_YET,

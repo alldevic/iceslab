@@ -100,7 +100,9 @@ export function buildSingboxJson(
   // endpoints that never passed through the service.
   const tagOf = makeTagger();
   for (const e of endpoints) {
-    const tag = tagOf(e, `${e.nodeName}-${e.protocol}`);
+    // A route of a cascade entry (A-262, expanded before any format) is named
+    // by its label, as in the links.
+    const tag = tagOf(e, e.routeLabel ?? `${e.nodeName}-${e.protocol}`);
     if (e.protocol === 'hysteria') {
       proxyTags.push(tag);
       // sing-box requires `tls.enabled: true` for hysteria2 outbounds,

@@ -4,6 +4,7 @@ import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtin
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
+import { expandCascadeEntry } from './cascade-entries.js';
 
 /**
  * A-236 step 3: the cases the Default-template golden is taken over. The
@@ -45,13 +46,16 @@ const ALL = [
     shortId: '', sni: 'pl.example.com', flow: '', fingerprint: 'chrome', network: 'grpc', serviceName: 'svc',
     subprotocol: 'trojan', securityLayer: 'tls', allowInsecure: true,
   },
+  // A-262: a balancer-cascade entry. VLESS, the only kind a route goes into
+  // (a trojan one here until 26.10, whose re-tagged password the entry
+  // refused), with labels as disambiguateCascadeLabels leaves them.
   {
-    ...base, protocol: 'xray', nodeName: 'cz-trojan', host: 'cz.example.com', uri: '', uuid: UUID, publicKey: 'PUB3',
-    shortId: 'ef', sni: 'www.example.net', flow: '', fingerprint: 'chrome', network: 'raw', subprotocol: 'trojan',
+    ...base, protocol: 'xray', nodeName: 'cz-cascade', host: 'cz.example.com', uri: '', uuid: UUID, publicKey: 'PUB3',
+    shortId: 'ef', sni: 'www.example.net', flow: 'xtls-rprx-vision', fingerprint: 'chrome', network: 'raw', subprotocol: 'vless',
     securityLayer: 'default',
     cascadeExits: [
-      { name: 'exit-a', tag: 1 },
-      { name: 'exit-b', tag: 2 },
+      { label: 'stand-cascade → SE', tag: 1 },
+      { label: 'stand-cascade → DE', tag: 2 },
     ],
   },
   {
@@ -75,7 +79,9 @@ const ALL = [
   { ...base, protocol: 'xray', subprotocol: 'http', nodeName: 'tg-http', host: 'tg.example.com', uri: '', username: 'bob', password: 'pw' },
 ] as unknown as SubscriptionEndpoint[];
 
-const SETS: Record<string, SubscriptionEndpoint[]> = { all: ALL, none: [], one: [ALL[0]!] };
+// Through the expansion every format is handed in production
+// (generateSubscription, A-262): a cascade entry arrives as its routes.
+const SETS: Record<string, SubscriptionEndpoint[]> = { all: ALL.flatMap(expandCascadeEntry), none: [], one: [ALL[0]!] };
 
 const OWN: DeviceRouteRule[] = [
   { match: ['geosite:google', 'example.io'], action: 'direct', note: '' },

@@ -491,17 +491,9 @@ function fillXrayFrame(
   return cfg;
 }
 
-/** A4: overwrite UUID bytes 7-8 (the 3rd hyphen-group) with a big-endian uint16
- *  route tag, e.g. tag 1 -> "...-0001-...". Xray reads those two bytes as
- *  `vlessRoute` and ignores them for authentication (documented + verified in
- *  field 2026-07-25), so the result authenticates as the SAME user but is
- *  pinned to a specific cascade exit. A malformed UUID is returned untouched. */
-export function withVlessRouteTag(uuid: string, tag: number): string {
-  const parts = uuid.split('-');
-  if (parts.length !== 5 || parts[2]!.length !== 4) return uuid;
-  parts[2] = (tag & 0xffff).toString(16).padStart(4, '0');
-  return parts.join('-');
-}
+/** A4: the route tag in UUID bytes 7-8; lives with the one expansion rule
+ *  (cascade-entries.ts), kept importable from here. */
+export { withVlessRouteTag } from '../cascade-entries.js';
 
 // `cascadeExitLabel` lived here until 2026-08-15. It suffixed a label with the
 // host remark whenever the host was named, which it did per endpoint, blind to
@@ -614,16 +606,8 @@ export function buildXrayJsonArray(
   // A4: an xray endpoint fronting a balancer cascade expands into one config per
   // exit (tag in UUID bytes 7-8), each labelled by its exit. Everything else
   // (hy2, or an xray endpoint with no exits) stays a single config as before.
-  const configs = supported.flatMap((e) => {
-    if (e.protocol === 'xray' && !isPlainXray(e) && e.cascadeExits && e.cascadeExits.length > 0) {
-      return e.cascadeExits.map((profile) =>
-        // The label is already unique across the subscription, made so once for
-        // every format rather than guessed per format (see
-        // disambiguateCascadeLabels in subscription.service).
-        makeConfig({ ...e, uuid: withVlessRouteTag(e.uuid, profile.tag) }, profile.label),
-      );
-    }
-    return [makeConfig(e, e.nodeName)];
-  });
+  // A-262: the routes of a cascade entry come in expanded, one endpoint each,
+  // before any format (expandCascadeEntry in generateSubscription).
+  const configs = supported.map((e) => makeConfig(e, e.routeLabel ?? e.nodeName));
   return JSON.stringify(configs, null, 2) + '\n';
 }

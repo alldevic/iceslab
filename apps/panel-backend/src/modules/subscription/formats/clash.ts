@@ -232,8 +232,10 @@ export function buildClashYaml(
   const nameOf = makeTagger();
   for (const e of endpoints) {
     // A socks/http door is named by what it is: "-xray" on a SOCKS5 proxy
-    // would tell the person picking it from the list the wrong thing.
-    const name = nameOf(e, `${e.nodeName}-${isPlainXray(e) ? e.subprotocol : e.protocol}`);
+    // would tell the person picking it from the list the wrong thing. A route
+    // of a cascade entry (A-262, expanded before any format) is named by its
+    // label, as in the links.
+    const name = nameOf(e, e.routeLabel ?? `${e.nodeName}-${isPlainXray(e) ? e.subprotocol : e.protocol}`);
     const before = proxies.length;
     if (e.protocol === 'hysteria') {
       proxyNames.push(name);
