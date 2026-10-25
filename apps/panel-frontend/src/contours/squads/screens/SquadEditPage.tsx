@@ -31,7 +31,8 @@ import {
 } from '@/lib/domain/squads';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { profilePairLabel } from '@/lib/domain/engines';
-import { userScopeGap } from '@/lib/domain/userScope';
+// A-204: the rule is the contract's (BACK-2 7ec8c912), the one the server uses.
+import { userScopeGap } from '@iceslab/shared';
 import { listCascades } from '@/lib/domain/cascades';
 import { listHosts } from '@/lib/domain/hosts';
 import { listAllNodes } from '@/lib/domain/nodes';
