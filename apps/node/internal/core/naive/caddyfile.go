@@ -148,6 +148,18 @@ func renderCaddyfile(inbound InboundConfig, users []User, adminSocket string) (s
 	fmt.Fprintln(&b, "{")
 	fmt.Fprintf(&b, "\tadmin unix/%s\n", adminSocket)
 	fmt.Fprintln(&b, "\tstorage file_system /etc/caddy")
+	// A-265: no handler errors in the journal. forward_proxy answers a failed
+	// dial as an error, and Caddy writes errors of 500 and up to the logger
+	// http.log.error at ERROR with the request: the client's remote_ip and the
+	// destination host (caddyhttp/app.go:211 names it, server.go logs it at
+	// ERROR for errStatus >= 500, below that at DEBUG; read on v2.10.2). The
+	// default logger keeps everything else (start, ACME, reloads) at INFO; it
+	// only leaves that one name out ("exclude" in the global log option,
+	// https://caddyserver.com/docs/caddyfile/options#log). No `log` in the site
+	// block either, so Caddy writes no access log.
+	fmt.Fprintln(&b, "\tlog default {")
+	fmt.Fprintln(&b, "\t\texclude http.log.error")
+	fmt.Fprintln(&b, "\t}")
 	fmt.Fprintln(&b, "}")
 	fmt.Fprintf(&b, ":%d, %s {\n", cfg.ListenPort, cfg.Hostname)
 	fmt.Fprintf(&b, "\ttls %s\n", cfg.TLSEmail)

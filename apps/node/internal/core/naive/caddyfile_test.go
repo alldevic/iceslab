@@ -96,6 +96,27 @@ func TestRenderCaddyfileShape(t *testing.T) {
 	}
 }
 
+// A-265: Caddy writes handler errors of 500 and up (a forward_proxy dial that
+// failed) to http.log.error with the client's remote_ip and the destination
+// host. The global block leaves that logger out of the default one, and the
+// site writes no access log.
+func TestRenderCaddyfileKeepsClientsOutOfTheLog(t *testing.T) {
+	out, err := renderCaddyfile(validInbound(), []User{{Username: "alice", Password: "secret-a"}}, DefaultAdminSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := out[:strings.Index(out, "\n}\n")+3]
+	if !strings.Contains(global, "\tlog default {\n\t\texclude http.log.error\n\t}\n") {
+		t.Errorf("the global block does not leave http.log.error out:\n%s", global)
+	}
+	site := out[len(global):]
+	for _, line := range strings.Split(site, "\n") {
+		if strings.TrimSpace(line) == "log" || strings.HasPrefix(strings.TrimSpace(line), "log ") {
+			t.Errorf("the site block turns an access log on: %q\n%s", line, out)
+		}
+	}
+}
+
 func TestRenderCaddyfileSortsUsers(t *testing.T) {
 	// Same users in different order should produce byte-identical output,
 	// otherwise `caddy reload` flaps even on no-op user-set changes.
