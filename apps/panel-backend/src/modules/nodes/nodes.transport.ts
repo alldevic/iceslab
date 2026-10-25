@@ -362,10 +362,14 @@ export class NodeTransport {
    */
   async applyInbounds(req: ApplyInboundsRequest): Promise<ApplyInboundsResponse> {
     return this.request<ApplyInboundsResponse>('POST', '/applyInbounds', req, {
-      // Re-generating an Xray config + restart can take ~3-5 s; AmneziaWG
-      // syncconf is faster but Caddy reload occasionally hits the LE rate
-      // limiter. 30 s gives slack without making admin clicks feel hung.
-      timeoutMs: 30_000,
+      // 120 s, not 30 (ARCH 26.10). The agent carries a push through on its
+      // own once begun (server.go handleApplyInbounds: WithoutCancel, its own
+      // pushTimeout of 5 min, one push at a time under pushMu), so a long wait
+      // here holds no core. A short one only made a heavy push (a cascade
+      // entry: xray -test, the chain, AWG tunnels, sing-box check, caddy
+      // reload, ufw per port) read as a failure, and the retries restarted the
+      // cores again. The agent logs "applyInbounds done in N ms" per push.
+      timeoutMs: 120_000,
     });
   }
 
