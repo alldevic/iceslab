@@ -11,10 +11,25 @@
 #   docker compose -f docker-compose.prod.yml --env-file .env.production \
 #     run --rm migrate
 
+# A-267: every container's log is capped. Docker's json-file keeps a log with
+# no limit by default, and these logs carry what a panel sees (subscription
+# requests, client addresses), so the cap is both the disk and how long that
+# stays on the host. 10 MB x 3 files is up to 30 MB a container, about 150 MB
+# for the whole panel: nothing on a 2 GB box's disk, and still days of backend
+# history at LOG_LEVEL=info for whoever is debugging. The setting reaches a
+# container when it is (re)created; `up -d` does that by itself when this
+# block changes. The same block is in docker-compose.ghcr.yml.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: iceslab-prod-postgres
+    logging: *default-logging
     # Memory ceilings sized for a 2 GB / 1 CPU control-plane VPS. These are caps
     # (a runaway container is killed + restarted, not the whole host), not
     # reservations, so their sum can exceed RAM; steady-state usage is far lower.
@@ -38,6 +53,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: iceslab-prod-redis
+    logging: *default-logging
     mem_limit: 384m
     # --maxmemory caps the dataset so a runaway can't OOM a small host;
     # noeviction makes Redis reject writes instead of silently dropping keys,
@@ -62,6 +78,7 @@ services:
       dockerfile: apps/panel-backend/Dockerfile
     image: iceslab-backend:latest
     container_name: iceslab-prod-migrate
+    logging: *default-logging
     mem_limit: 384m
     # The backend image runs as the unprivileged `node` user (see Dockerfile).
     # This one-shot shells out to pnpm/corepack for `prisma migrate deploy`,
@@ -81,6 +98,7 @@ services:
       dockerfile: apps/panel-backend/Dockerfile
     image: iceslab-backend:latest
     container_name: iceslab-prod-backend
+    logging: *default-logging
     # Heap is already capped at 512m via NODE_OPTIONS below; this leaves headroom
     # for non-heap RSS (native modules, buffers). If the backend is OOM-killed
     # under normal load, raise this (and consider the heap cap together).
@@ -183,6 +201,7 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     image: iceslab-frontend:latest
     container_name: iceslab-prod-frontend
+    logging: *default-logging
     mem_limit: 96m
     environment:
       # The same value the backend gets: nginx proxies subscriptions at this
