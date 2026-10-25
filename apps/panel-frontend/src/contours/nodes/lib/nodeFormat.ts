@@ -23,8 +23,8 @@ export function shapeOf(protocol: string, cfg: Record<string, unknown>): string 
 
 /**
  * The System block's counts, read with the input checked first: a value that
- * is not a finite non-negative number (missing overview, the -1 a stand
- * showed under «user reach») is «-», never a number and never 0.
+ * is not a finite non-negative number (missing overview) is «-», never a
+ * number and never 0.
  */
 export function countOrDash(v: unknown): string {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? String(v) : '-';
