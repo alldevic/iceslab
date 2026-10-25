@@ -146,6 +146,42 @@ func TestNoBootstrapPipesIntoGrepQ(t *testing.T) {
 	}
 }
 
+// The same race in the workflows, and `| head` with it (A-271, 26.10): the
+// node-agent job ran `xray version | head -1` under `set -euo pipefail`, head
+// left after one line, xray took SIGPIPE, the step exited 141 and the agent's
+// tests never ran. Every run: block that sets pipefail, and most do, is a
+// script like the bootstraps; a reader that stops early is the bug whatever
+// the block says, so the rule is the line, not the block. sed -n 1p, or the
+// output in a variable, reads to the end.
+func TestNoWorkflowPipesIntoAnEarlyReader(t *testing.T) {
+	pipe := regexp.MustCompile(`\|\s*(head\b|grep\s+(-[A-Za-z]*q|-q))`)
+	dir := filepath.Join("..", "..", ".github", "workflows")
+	files, err := filepath.Glob(filepath.Join(dir, "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A glob that found nothing would pass for the wrong reason.
+	for _, want := range []string{"ci.yml", "cores.yml", "release.yml"} {
+		if !slices.Contains(files, filepath.Join(dir, want)) {
+			t.Fatalf("the glob missed .github/workflows/%s", want)
+		}
+	}
+	for _, path := range files {
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(blob), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+			if pipe.MatchString(line) {
+				t.Errorf("%s:%d pipes into a reader that stops early: %s", filepath.ToSlash(path), i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 // The agent keeps <iface>.state.json beside each AmneziaWG config
 // (core/amneziawg/state.go statePath: the server key and the peers). --remove
 // that took the configs and left the state brought the old key and peers back

@@ -265,7 +265,7 @@ jobs:
           unzip -o /tmp/xray.zip xray geosite.dat geoip.dat -d /tmp/xray-bin
           chmod +x /tmp/xray-bin/xray
           echo "XRAY_BIN=/tmp/xray-bin/xray" >> "$GITHUB_ENV"
-          /tmp/xray-bin/xray version | head -1
+          /tmp/xray-bin/xray version | sed -n 1p
 
       # A sing-box binary, for the same reason and with the same shape as xray
       # above: phase 4 moves the chain into a sing-box process whose config the
@@ -709,7 +709,7 @@ jobs:
           unzip -o /tmp/xray.zip xray -d /tmp/xray-bin
           chmod +x /tmp/xray-bin/xray
           echo "XRAY_BIN=/tmp/xray-bin/xray" >> "$GITHUB_ENV"
-          /tmp/xray-bin/xray version | head -1
+          /tmp/xray-bin/xray version | sed -n 1p
 
       - name: Install sing-box (for the agent's engine tests)
         run: |
