@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { TRANSPORTS, type EngineName } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
@@ -26,6 +26,7 @@ import { prisma } from '../../prisma.js';
 import * as bootstrap from './bootstrap.service.js';
 import { getPanelPublicIp } from './panel-ip.js';
 import { NodeCertRotationError, rotateNodeCert } from './node-cert-rotation.js';
+import { NodeConnLogError, clearNodeConnLog, readNodeConnLog } from './node-conn-log.js';
 
 /**
  * Derive the panel URL the admin is currently using to talk to the API.
@@ -164,6 +165,34 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(status).send({ error: `CERT_${err.code}`, message: err.message });
       }
       throw err;
+    }
+  });
+
+  // A-265: the connection lines an older agent left in the node's journal and
+  // syslog. GET 200 ConnLogTraceResponse, POST .../clear 200
+  // ConnLogClearResponse (a step that failed is in its results, not a code).
+  // 404 unknown node; 409 UPDATE_AGENT, the agent has no /connLog; 502
+  // CONN_LOG_NODE_FAILED when the node did not answer or refused.
+  const connLogRefusal = (err: unknown, reply: FastifyReply) => {
+    if (!(err instanceof NodeConnLogError)) throw err;
+    if (err.code === 'NODE_NOT_FOUND') return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+    if (err.code === 'UPDATE_AGENT') return reply.code(409).send({ error: 'UPDATE_AGENT', message: err.message });
+    return reply.code(502).send({ error: 'CONN_LOG_NODE_FAILED', message: err.message });
+  };
+  app.get('/api/nodes/:id/conn-log', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    try {
+      return reply.send(await readNodeConnLog(params.id));
+    } catch (err) {
+      return connLogRefusal(err, reply);
+    }
+  });
+  app.post('/api/nodes/:id/conn-log/clear', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    try {
+      return reply.send(await clearNodeConnLog(params.id, request.admin?.id ?? null));
+    } catch (err) {
+      return connLogRefusal(err, reply);
     }
   });
 

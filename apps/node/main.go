@@ -12,6 +12,7 @@ import (
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/certstore"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/chain"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/connlog"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/amneziawg"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
@@ -153,6 +154,10 @@ func main() {
 		HopGuard:          hopguard.New(logger),
 		Certs:             certs,
 		AgentVersion:      version,
+		ConnLog: connlog.New(connlog.Config{
+			Units: connlog.Units(os.Getenv("HYSTERIA_SERVICE_UNIT")),
+			Tags:  []string{"iceslab-node", "hysteria"},
+		}),
 	})
 	if err != nil {
 		logger.Error("build server", "err", err)

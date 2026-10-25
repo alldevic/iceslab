@@ -957,6 +957,53 @@ type UfwPortsResponse struct {
 	Ports   []UfwPortDto `json:"ports"`
 }
 
+// ───── Connection log trace (GET /connLog, POST /connLog/clear) ─────
+//
+// A-265, mirror of packages/shared/src/transport.ts: where lines a previous
+// agent left behind (one per client connection, with its address) lie, and
+// since when; never the lines themselves.
+
+type ConnLogSource string
+
+const (
+	ConnLogJournal ConnLogSource = "journal"
+	ConnLogSyslog  ConnLogSource = "syslog"
+)
+
+type ConnLogSourceCheck struct {
+	Source ConnLogSource `json:"source"`
+	// found | clean | absent | failed
+	State string  `json:"state"`
+	Since *string `json:"since"`
+	Error string  `json:"error,omitempty"`
+}
+
+type ConnLogTraceResponse struct {
+	// Nil: none found, but a source could not be read.
+	Present *bool                `json:"present"`
+	Since   *string              `json:"since"`
+	Sources []ConnLogSource      `json:"sources"`
+	Checks  []ConnLogSourceCheck `json:"checks"`
+}
+
+type ConnLogClearStep struct {
+	Command string `json:"command"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+}
+
+type ConnLogClearResult struct {
+	Source ConnLogSource `json:"source"`
+	// cleared | absent | failed
+	State string             `json:"state"`
+	Steps []ConnLogClearStep `json:"steps"`
+}
+
+type ConnLogClearResponse struct {
+	Results []ConnLogClearResult `json:"results"`
+	After   ConnLogTraceResponse `json:"after"`
+}
+
 // ───── Common error shape ─────
 
 type ErrorResponse struct {

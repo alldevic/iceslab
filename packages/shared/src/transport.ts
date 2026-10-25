@@ -2240,6 +2240,59 @@ export interface UfwPortsResponse {
   ports: UfwPortDto[];
 }
 
+// ───── Connection log trace (GET /connLog, POST /connLog/clear) ─────
+//
+// A-265: lines a previous agent left behind, one per client connection with
+// its address (xray "accepted tcp:/udp:", hysteria "client connected /
+// disconnected"), in journald (the agent's and hysteria's units) and in
+// /var/log/syslog*. The answer says where and since when, never the lines.
+
+export type ConnLogSource = 'journal' | 'syslog';
+
+export interface ConnLogSourceCheck {
+  source: ConnLogSource;
+  /**
+   * found: such lines are there. clean: read through, none. absent: the
+   * source is not on this machine (no journalctl, no /var/log/syslog*).
+   * failed: it could not be read, `error` says why.
+   */
+  state: 'found' | 'clean' | 'absent' | 'failed';
+  /** ISO time of the oldest line found; only with found. */
+  since: string | null;
+  error?: string;
+}
+
+export interface ConnLogTraceResponse {
+  /** true: a source holds such lines. false: every source clean or absent.
+   *  null: none found, but a source could not be read (not a "no"). */
+  present: boolean | null;
+  /** The oldest line over all sources. */
+  since: string | null;
+  /** Where lines were found. */
+  sources: ConnLogSource[];
+  /** One per source, always both. */
+  checks: ConnLogSourceCheck[];
+}
+
+export interface ConnLogClearStep {
+  /** What was done, e.g. "journalctl --rotate", "truncate /var/log/syslog". */
+  command: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface ConnLogClearResult {
+  source: ConnLogSource;
+  state: 'cleared' | 'absent' | 'failed';
+  steps: ConnLogClearStep[];
+}
+
+export interface ConnLogClearResponse {
+  results: ConnLogClearResult[];
+  /** The check again, right after. */
+  after: ConnLogTraceResponse;
+}
+
 // ───── Common error shape ─────
 
 export interface NodeErrorResponse {

@@ -17,6 +17,8 @@ import type {
   UfwPortsResponse,
   GeoAssetsResponse,
   GeoFileDto,
+  ConnLogTraceResponse,
+  ConnLogClearResponse,
 } from '@iceslab/shared';
 import { bootstrapCa, getPanelClientCert } from '../keygen/keygen.service.js';
 
@@ -365,6 +367,18 @@ export class NodeTransport {
       // limiter. 30 s gives slack without making admin clicks feel hung.
       timeoutMs: 30_000,
     });
+  }
+
+  /** A-265: whether the host's logs hold a previous agent's connection lines.
+   *  The agent reads the journal through, hence the long timeout. 404 from
+   *  an agent older than the route. */
+  async getConnLog(): Promise<ConnLogTraceResponse> {
+    return this.request<ConnLogTraceResponse>('GET', '/connLog', undefined, { timeoutMs: 60_000 });
+  }
+
+  /** A-265: clear the journal and syslog of them, the operator's choice. */
+  async clearConnLog(): Promise<ConnLogClearResponse> {
+    return this.request<ConnLogClearResponse>('POST', '/connLog/clear', {}, { timeoutMs: 120_000 });
   }
 
   /** Phase 9: the geo files the agent holds. 404 from an agent older than

@@ -26,6 +26,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/certstore"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/chain"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/connlog"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/firewall"
@@ -118,6 +119,9 @@ type Config struct {
 	Certs *certstore.Store
 	// AgentVersion is main.version, reported on /healthz.
 	AgentVersion string
+	// ConnLog finds and clears the connection lines a previous agent left in
+	// the host's logs (A-265). Nil answers 404 on /connLog, as an older agent.
+	ConnLog *connlog.Checker
 }
 
 type Server struct {
@@ -415,7 +419,42 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/assets/", s.handleAssetPut)
 	mux.HandleFunc("/rotateCert", s.handleRotateCert)
 	mux.HandleFunc("/rotateCert/confirm", s.handleConfirmCert)
+	mux.HandleFunc("/connLog", s.handleConnLog)
+	mux.HandleFunc("/connLog/clear", s.handleConnLogClear)
 	return mux
+}
+
+// handleConnLog answers GET /connLog: whether the host's logs hold lines a
+// previous agent wrote per client connection, where, and since when (A-265).
+func (s *Server) handleConnLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET only")
+		return
+	}
+	if s.cfg.ConnLog == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "this agent does not read the host's logs")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.cfg.ConnLog.Trace(r.Context()))
+}
+
+// handleConnLogClear answers POST /connLog/clear: the operator's choice to
+// empty the journal and syslog of those lines. 200 whatever each step did;
+// the answer says it per source.
+func (s *Server) handleConnLogClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	if s.cfg.ConnLog == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "this agent does not read the host's logs")
+		return
+	}
+	res := s.cfg.ConnLog.Clear(r.Context())
+	for _, x := range res.Results {
+		s.logger.Info("connLog: cleared", "source", x.Source, "state", x.State)
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleAssetsList answers GET /assets: the geo files on disk with their
