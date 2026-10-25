@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { slotConflictsOf, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
+import { slotConflictsOf, slotLabel, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
+
+describe('slotLabel: слот словами', () => {
+  const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? ' ' + JSON.stringify(vars) : ''}`;
+  it('AmneziaWG: в engine поколение, говорится «AmneziaWG 3.1» и «AmneziaWG 1.x», не «на 3»', () => {
+    expect(slotLabel('amneziawg', '3', t)).toBe('AmneziaWG 3.1');
+    expect(slotLabel('amneziawg', '1', t)).toBe('AmneziaWG 1.x');
+  });
+  it('прочие: протокол на своём движке', () => {
+    expect(slotLabel('shadowsocks', 'xray', t)).toBe('nodeEdit.slotPair {"protocol":"Shadowsocks","engine":"xray"}');
+    expect(slotLabel('shadowsocks', 'singbox', t)).toBe('nodeEdit.slotPair {"protocol":"Shadowsocks","engine":"sing-box"}');
+  });
+});
 
 describe('slotConflictsOf (A-195): несколько профилей на одном адаптере ноды', () => {
   it('нода обслуживает один, остальные названы', () => {

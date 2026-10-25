@@ -1,4 +1,24 @@
 import type { UserScopeGap } from '@iceslab/shared';
+import { awgLabel } from '@/lib/domain/awg';
+import { protocolLabelCompact } from '@/lib/domain/protocols';
+
+type T = (key: string, vars?: Record<string, unknown>) => string;
+
+/**
+ * The slot named in words. For AmneziaWG the server puts the GENERATION in
+ * `engine` ('1' | '3'), not an engine: «AmneziaWG 3.1», as the other screens
+ * name it (awgLabel), never «amneziawg on 3». Any other slot is the protocol
+ * on its engine.
+ */
+export function slotLabel(protocol: string, engine: string, t: T): string {
+  if (protocol === 'amneziawg') {
+    const generation = engine === '3' ? awgLabel(3) : engine === '1' ? awgLabel(1) : engine;
+    return `${protocolLabelCompact(protocol)} ${generation}`;
+  }
+  // The engine by its own name («xray», «sing-box»): the core words of the
+  // other screens («ядро xray») do not fit after «на».
+  return t('nodeEdit.slotPair', { protocol: protocolLabelCompact(protocol), engine: engine === 'singbox' ? 'sing-box' : engine });
+}
 
 /** Every gap the contract names: a Record over the shared union, so a new
  *  member is a type error here rather than a gap silently skipped. */

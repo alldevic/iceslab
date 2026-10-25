@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Stack, Text } from '@mantine/core';
 import type { NodeSyncStatus } from '@/lib/domain/nodes';
-import { slotConflictsOf, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
+import { slotConflictsOf, slotLabel, userScopeGapsOf } from '@/contours/nodes/lib/nodeAdapterFacts';
 import { AMBER } from '@/contours/nodes/lib/colors';
 
 /**
@@ -23,8 +23,7 @@ export function NodeAdapterLines({ status }: { status: NodeSyncStatus | undefine
       {conflicts.map((c) => (
         <Text key={`slot-${c.protocol}-${c.engine}`} style={line}>
           {t(c.served ? 'nodeEdit.slotConflict' : 'nodeEdit.slotConflictNoServed', {
-            protocol: c.protocol,
-            engine: c.engine,
+            slot: slotLabel(c.protocol, c.engine, t),
             served: c.served ? at(c.served) : '',
             others: c.others.map(at).join(', '),
           })}
