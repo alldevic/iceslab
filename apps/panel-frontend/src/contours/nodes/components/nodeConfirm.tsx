@@ -64,6 +64,28 @@ export function confirmCertRotate(node: Pick<Node, 'name'>, t: TFunction, onConf
 }
 
 /**
+ * The window before the node's connection log is wiped (owner's decision
+ * 26.10). It says what goes: the WHOLE journal of the machine and its
+ * syslog, not only the agent's lines, because the tools cannot pick lines.
+ */
+export function confirmConnLogClear(node: Pick<Node, 'name'>, t: TFunction, onConfirm: () => void): void {
+  modals.openConfirmModal({
+    title: t('nodeConfirm.connLogTitle', { name: node.name }),
+    children: (
+      <Stack gap="xs">
+        <Text size="sm">{t('nodeConfirm.connLogBody')}</Text>
+        <Text size="sm" fw={600}>
+          {t('nodeConfirm.connLogWhole')}
+        </Text>
+      </Stack>
+    ),
+    labels: { confirm: t('nodeConfirm.connLogConfirm'), cancel: t('common.cancel') },
+    confirmProps: { color: 'red' },
+    onConfirm,
+  });
+}
+
+/**
  * The one window before a bootstrap token is re-issued, on the list and on the
  * node page (spec frontend-nodes). The page used to re-issue on one click.
  */

@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
 import type { Node } from '@/lib/domain/nodes';
 import { CertRow } from '@/contours/nodes/components/NodeEdit/CertRow';
+import { ConnLogBlock } from '@/contours/nodes/components/NodeEdit/ConnLogBlock';
 import { confirmCertRotate } from '@/contours/nodes/components/nodeConfirm';
 import { certTerm } from '@/contours/nodes/lib/nodeCert';
 import { useNow } from '@/lib/ui/useNow';
@@ -28,7 +29,7 @@ export function SystemPanel({
   exposureMutation,
   certMutation,
 }: Pick<NodeEditor, 'hostsQuery' | 'dashNode' | 'metrics' | 'exposureMutation' | 'certMutation'> & {
-  node: Pick<Node, 'name' | 'certNotAfter' | 'agentCanRotate'>;
+  node: Pick<Node, 'id' | 'name' | 'certNotAfter' | 'agentCanRotate'>;
 }) {
   const { t } = useTranslation();
   // After a renewal the page shows the end the server just gave, until the
@@ -144,6 +145,9 @@ export function SystemPanel({
                     />
                   </>
                 )}
+                {/* Clients' addresses in the machine's logs, checked on request. */}
+                <Divider />
+                <ConnLogBlock node={node} />
               </Stack>
             </Box>
     </>
