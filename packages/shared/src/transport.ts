@@ -1642,8 +1642,8 @@ export interface UserStats {
    * The protocol of the adapter that reported this entry: the inbound the user
    * came through (25.09), read per entry rather than off the node's label.
    * Online is read from bytes alone (A-121): an mtproto entry carries none per
-   * user, so being listed does not make a user online. Absent on older agents,
-   * in which case the panel falls back to the label.
+   * user, so being listed does not make a user online. Absent on older agents;
+   * the panel reads no node label in its place (3cc05fb0).
    */
   protocol?: string;
   /**

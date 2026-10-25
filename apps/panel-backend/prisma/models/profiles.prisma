@@ -1,7 +1,8 @@
 // ───── Slice 27: Profiles + Node Bindings ─────────────────────────────────
 //
-// New model that replaces the per-node `Inbound` row. Inspired by Remnawave's
-// ConfigProfile + Host split, simplified for our 7-protocol topology:
+// New model that replaces the per-node `Inbound` row. Inspired by the config
+// profile + host split of the panel operators migrate from, simplified for our
+// 7-protocol topology:
 //
 //   Profile               - a logical inbound TEMPLATE with shared config
 //                           (e.g. one VLESS+REALITY profile reused on N nodes)
@@ -113,7 +114,7 @@ model ProfileNodeBinding {
 // the subscription stays back-compat (one binding still emits one URL until
 // the admin actually adds extra hosts).
 //
-// Inspired by Remnawave's hosts table; field set tightened to the overrides
+// Inspired by the hosts table of the panel operators migrate from; field set tightened to the overrides
 // our URI builders / format formatters actually consume.
 model Host {
   // See User.sourceId. Partial unique index lives in the raw migration.

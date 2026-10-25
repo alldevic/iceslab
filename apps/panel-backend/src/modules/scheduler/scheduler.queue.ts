@@ -28,7 +28,7 @@ export const cronTasksQueue = new Queue(QUEUE_NAME, {
   },
 });
 
-// ───── Job names + расписание (зеркалим Remnawave) ─────
+// ───── Job names + schedule (mirrors the panel operators migrate from) ─────
 
 interface CronJobSpec {
   name: string;

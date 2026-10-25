@@ -302,9 +302,10 @@ function buildProxyOutbound(
  *   1. xray-core's hy2 outbound has NO Salamander obfs field. Our RU nodes set
  *      obfsPassword (bare QUIC is DPI-throttled in RU), so on an obfs node this
  *      outbound will NOT connect via xray-core. It only works on non-obfs hy2
- *      nodes. The Remnawave эталон likely routes protocol:"hysteria" through
- *      Happ's NATIVE hy2 core (not xray-core), which does support obfs, so the
- *      real working shape must be confirmed against that эталон + a live hy2
+ *      nodes. The reference panel operators migrate from likely routes
+ *      protocol:"hysteria" through Happ's NATIVE hy2 core (not xray-core), which
+ *      does support obfs, so the real working shape must be confirmed against
+ *      that reference + a live hy2
  *      node before tester sign-off.
  *   2. xray-core has open bugs on the hy2 outbound (XTLS/Xray-core#5619).
  * Isolated here so the exact shape is one edit once the эталон lands.
