@@ -356,7 +356,7 @@ describe('what the node is actually sent', () => {
     const entry = await makeNode();
     const exit = await makeNode();
     const { direction } = await cascadeWithDirection(entry, exit);
-    await openUserOn(entry);
+    const userId = await openUserOn(entry);
     const p = await createPolicy([
       { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
     ]);
@@ -367,6 +367,9 @@ describe('what the node is actually sent', () => {
     expect(wire!.rules[0]!.action).toEqual({
       kind: 'cascade',
       exit: `cascade-link-out-d${direction.tag}-0`,
+      // A-277: the users the direction's door lets through, sent even when
+      // that is everybody on the entry.
+      users: [userId],
     });
     expect(wire!.rules[0]!.match).toEqual({ domain: ['youtube.com'] });
   });

@@ -1256,10 +1256,12 @@ export type NodePolicyAction =
    *
    * `users` (A-277): at an xray entry, the users the door of that direction
    * lets through (the panel's own entry gate), drawn as the rule's `user`.
-   * Absent: everybody, as before (every user of the entry may take it, or the
-   * entry cannot tell its users apart, or the node is no entry). Never sent
-   * empty: an empty `user` in xray matches everyone; a rule nobody may take is
-   * left out by the panel, and the node does not draw an empty one either.
+   * Sent whenever the entry has a gate, even with every user on it: closed by
+   * default like the door, so a user added later by addUser is not let in.
+   * Absent: everybody, as before (the entry cannot tell its users apart, or
+   * the node is no entry). Never sent empty: an empty `user` in xray matches
+   * everyone; a rule nobody may take is left out by the panel, and the node
+   * does not draw an empty one either.
    */
   | { kind: 'cascade'; exit: string; users?: string[] };
 

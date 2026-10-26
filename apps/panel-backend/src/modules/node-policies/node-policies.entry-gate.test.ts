@@ -6,7 +6,8 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
-import { explainPolicyForNode } from './node-policies.service.js';
+import { explainPolicyForNode, usersForDirection } from './node-policies.service.js';
+import { autoRouteTag, routeTag } from '../cascades/cascade.config.js';
 import { applyInboundsRequestForNode } from '../inbounds/inbounds.queue.js';
 
 /**
@@ -104,6 +105,19 @@ async function stand(entryProtocol = 'xray') {
 const cascadeAction = (p: Awaited<ReturnType<typeof explainPolicyForNode>>) =>
   p.policy?.rules.find((r) => r.action.kind === 'cascade')?.action as { kind: 'cascade'; exit: string; users?: string[] } | undefined;
 
+describe('who a rule into direction N lets through', () => {
+  it('whoever may take any tag of N: the plain one or a route policy variant of it, not Auto, not another direction', () => {
+    const gate = new Map<string, Set<number>>([
+      ['plain', new Set([routeTag(0, 1)])],
+      ['variant-only', new Set([routeTag(3, 1)])],
+      ['auto-only', new Set([autoRouteTag(0)])],
+      ['other', new Set([routeTag(0, 0), routeTag(2, 0)])],
+    ]);
+    expect(usersForDirection(gate, 2)).toEqual(['plain', 'variant-only']);
+    expect(usersForDirection(gate, 1)).toEqual(['other']);
+  });
+});
+
 describe('a node policy rule into a cascade direction', () => {
   it('lists the users the door lets through: not the squad it is switched off for, not one narrowed elsewhere', async () => {
     const { ru, cascadeId, nlDir, profileId } = await stand();
@@ -126,14 +140,22 @@ describe('a node policy rule into a cascade direction', () => {
     expect(pushed?.users).not.toContain(nlUser.id);
   });
 
-  it('every user of the entry may take it: no list, as before', async () => {
-    const { ru, profileId } = await stand();
+  it('every user of the entry may take it: the list still goes out, so one added later is not let in', async () => {
+    const { ru, cascadeId, profileId } = await stand();
     const open = await post('/api/squads', { name: 'open', profileIds: [profileId] });
-    await post('/api/users', { username: 'u_a', groupIds: [open.id] });
-    await post('/api/users', { username: 'u_b', groupIds: [open.id] });
-    const action = cascadeAction(await explainPolicyForNode(ru));
-    expect(action).toBeDefined();
-    expect(action!.users).toBeUndefined();
+    const a = await post('/api/users', { username: 'u_a', groupIds: [open.id] });
+    const b = await post('/api/users', { username: 'u_b', groupIds: [open.id] });
+    const drawn = cascadeAction(await explainPolicyForNode(ru));
+    expect(drawn?.users).toEqual([a.id, b.id].sort());
+
+    // A user added afterwards to a squad the cascade is off for reaches the
+    // node by addUser, which does not redraw the rules: the rule the node
+    // holds is the one above, and it does not name them.
+    const off = await post('/api/squads', { name: 'off', profileIds: [profileId], exitAcl: [{ cascadeId, directionIds: [] }] });
+    const late = await post('/api/users', { username: 'u_late', groupIds: [off.id] });
+    expect(drawn!.users).not.toContain(late.id);
+    // And the next push keeps them out too.
+    expect(cascadeAction(await explainPolicyForNode(ru))?.users).toEqual([a.id, b.id].sort());
   });
 
   it('nobody may take it: the rule is left out, never sent with an empty list', async () => {

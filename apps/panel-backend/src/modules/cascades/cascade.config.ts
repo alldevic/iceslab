@@ -2031,6 +2031,13 @@ export function isAutoRouteTag(tag: number): boolean {
   return tag >= autoRouteTag(MAX_DIRECTION_ORDINAL);
 }
 
+/** The direction tag a route tag leads to, whatever policy band it sits in:
+ *  `routeTag(ordinal, N - 1)` -> N. Null for an Auto tag, which names no
+ *  direction. The inverse of routeTag, kept beside it (A-277). */
+export function directionOfRouteTag(tag: number): number | null {
+  return isAutoRouteTag(tag) ? null : tag % 256;
+}
+
 /** Balancer that spans every direction of one entry, as opposed to `bal-d<tag>`
  *  which spans the pool INSIDE one direction. */
 const AUTO_BALANCER_TAG = 'bal-auto';

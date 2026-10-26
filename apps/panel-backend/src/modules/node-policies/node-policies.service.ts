@@ -3,7 +3,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { mapPolicy, type NodePolicyDto } from './node-policies.mapper.js';
-import { policyCascadeOutTag, routeTag, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
+import { directionOfRouteTag, policyCascadeOutTag, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
 import { cascadeEntryGate, type CascadeEntryGate } from '../cascades/cascade.service.js';
 import { splitPolicyEntries } from '../cascades/policy-entries.js';
 import { isPortList, POLICY_PROTOCOLS } from './node-policies.schemas.js';
@@ -358,6 +358,19 @@ export interface PolicyRuleNotDrawn {
 }
 
 /**
+ * A-277: who a rule into direction N lets through at an xray entry: whoever
+ * may take ANY tag of N, the plain one or a route policy's variant of it
+ * (routeTag(ordinal, N - 1)); a user granted only the variant still reaches N
+ * through its door. Auto names no direction and counts for none. Sorted.
+ */
+export function usersForDirection(allowedTagsOf: Map<string, Set<number>>, directionTag: number): string[] {
+  return [...allowedTagsOf]
+    .filter(([, tags]) => [...tags].some((t) => directionOfRouteTag(t) === directionTag))
+    .map(([u]) => u)
+    .sort();
+}
+
+/**
  * The policy as the push sends it, and every rule left out with why. ONE loop:
  * the read that shows the operator which rules do not act here and the push
  * cannot tell two stories. ⚠ By the drawing the panel SENDS (cascadeXrayDrawingOf);
@@ -467,20 +480,19 @@ export async function explainPolicyForNode(
         rules.push({ match, action: { kind: 'cascade', exit } });
         continue;
       }
-      // The door of direction N is the plain profile's tag (getRouteProfilesByEntryNode).
-      const door = routeTag(0, r.direction.tag - 1);
-      const all = [...gate.allowedTagsOf.keys()];
-      const users = all.filter((u) => gate.allowedTagsOf.get(u)!.has(door)).sort();
+      const users = usersForDirection(gate.allowedTagsOf, r.direction.tag);
       // Never an empty list: xray drops an empty condition and the rule would
       // match everyone, the leak this closes.
       if (users.length === 0) {
         notDrawn.push({ ruleId: r.id, reason: 'nobody-may-take' });
         continue;
       }
-      rules.push({
-        match,
-        action: users.length === all.length ? { kind: 'cascade', exit } : { kind: 'cascade', exit, users },
-      });
+      // The list goes out even when every user of the entry is on it: closed
+      // by default, like the door (applyEntryUserGate). A user added later to
+      // a squad the cascade is off for is handed to xray by addUser, which
+      // does not redraw the rules; without a list the rule would take them
+      // into the cascade until the next push.
+      rules.push({ match, action: { kind: 'cascade', exit, users } });
       continue;
     }
     rules.push({
