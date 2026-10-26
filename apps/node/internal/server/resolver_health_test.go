@@ -46,14 +46,22 @@ func TestADeadSystemResolverDegradesANodeWhoseCoresAllRun(t *testing.T) {
 // degraded instead of waiting for it.
 func TestAHangingResolverIsCutAtTheTimeout(t *testing.T) {
 	s := newServerWith(t, &fakeAdapter{name: "xray", engine: "xray"})
+	// What cut the probe, not how long the healthcheck took on this machine:
+	// the probe is handed a deadline no later than resolverProbeTimeout, and it
+	// is that deadline, not anything else, that ends it.
+	var gotDeadline bool
+	var within bool
+	var cutBy error
 	s.cfg.ResolverProbe = func(ctx context.Context) error {
+		dl, ok := ctx.Deadline()
+		gotDeadline, within = ok, ok && time.Until(dl) <= resolverProbeTimeout
 		<-ctx.Done()
-		return ctx.Err()
+		cutBy = ctx.Err()
+		return cutBy
 	}
-	start := time.Now()
 	h := healthOf(t, s)
-	if took := time.Since(start); took > resolverProbeTimeout+time.Second {
-		t.Errorf("the healthcheck took %v", took)
+	if !gotDeadline || !within || !errors.Is(cutBy, context.DeadlineExceeded) {
+		t.Errorf("the probe ran with deadline %v (within the timeout %v) and was ended by %v, want the timeout's deadline", gotDeadline, within, cutBy)
 	}
 	if h.Reason != dto.ResolverDownReason {
 		t.Errorf("reason %q", h.Reason)

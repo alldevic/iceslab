@@ -36,27 +36,23 @@ func TestAStopRightAfterStartIsNotACrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	const rounds = 50
-	var slowest time.Duration
 	for i := 0; i < rounds; i++ {
 		s := New(Config{Name: "race", Binary: bin, Logger: quiet(), MaxRestarts: 5, RestartBackoff: 10 * time.Millisecond})
 		if err := s.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		begin := time.Now()
+		// Whether the process died on SIGTERM is what Stop answers: it
+		// returns an error only when the grace ran out and it had to kill
+		// (subprocess.go Stop). A measured "slowest Stop under 1 s" was
+		// the same question asked of the runner's clock.
 		if err := s.Stop(context.Background()); err != nil {
-			t.Fatalf("round %d: Stop: %v", i, err)
-		}
-		if d := time.Since(begin); d > slowest {
-			slowest = d
+			t.Fatalf("round %d: Stop: %v (the process outlived SIGTERM)", i, err)
 		}
 	}
 	time.Sleep(300 * time.Millisecond) // a respawn would have happened by now
 	body, _ := os.ReadFile(filepath.Join(dir, "starts"))
 	if n := strings.Count(string(body), "start"); n > rounds {
 		t.Fatalf("%d starts for %d Start calls: a Stop was taken for a crash", n, rounds)
-	}
-	if slowest > time.Second {
-		t.Fatalf("the slowest Stop took %v: the process outlived SIGTERM", slowest)
 	}
 	if out, _ := exec.Command("pgrep", "-f", marker).Output(); strings.TrimSpace(string(out)) != "" {
 		t.Fatalf("processes left after Stop: %s", out)

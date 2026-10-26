@@ -12,8 +12,7 @@ import (
 // engine. A config `sing-box check` refuses now leaves the running process,
 // the file on disk and the held inbounds as they were.
 func TestAConfigTheEngineRefusesReplacesNothing(t *testing.T) {
-	a, starts, _ := countingAdapter(t) // already running on 9443
-	time.Sleep(100 * time.Millisecond)
+	a, starts := countingAdapter(t) // already running on 9443, its start seen
 	cfgPath := filepath.Join(filepath.Dir(starts), "config.json")
 	before, _ := os.ReadFile(cfgPath)
 	a.mu.Lock()

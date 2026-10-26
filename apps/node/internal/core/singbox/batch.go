@@ -26,11 +26,27 @@ const (
 	defaultMaxWait     = 10 * time.Second
 )
 
+// batchClock is the time the batch reads: the wall clock in the agent, a
+// clock a test steps by hand, so the quiet window and the cap are tested as
+// rules and not as how fast a loaded runner happens to be.
+type batchClock interface {
+	Now() time.Time
+	AfterFunc(d time.Duration, f func()) stopper
+}
+
+type stopper interface{ Stop() bool }
+
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
+func (wallClock) AfterFunc(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }
+
 // scheduleRestart puts a user change into the pending batch.
 func (a *Adapter) scheduleRestart() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	now := time.Now()
+	now := a.clock.Now()
 	if a.batchTimer == nil {
 		a.batchFirst = now
 	} else {
@@ -43,7 +59,7 @@ func (a *Adapter) scheduleRestart() {
 	if delay < 0 {
 		delay = 0
 	}
-	a.batchTimer = time.AfterFunc(delay, a.flushBatch)
+	a.batchTimer = a.clock.AfterFunc(delay, a.flushBatch)
 }
 
 // flushBatch is the batch's one restart.

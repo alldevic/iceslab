@@ -107,10 +107,12 @@ type Adapter struct {
 	ssmRetryBase time.Duration
 
 	// The pending batch of user changes (batch.go), under mu. onFlush is a
-	// test hook: the moment a batch decides to restart.
-	batchTimer *time.Timer
+	// test hook: the moment a batch decides to restart. clock is the wall
+	// clock unless a test steps its own.
+	batchTimer stopper
 	batchFirst time.Time
 	onFlush    func()
+	clock      batchClock
 }
 
 func New(cfg Config, logger *slog.Logger) *Adapter {
@@ -132,6 +134,7 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		logger:   logger,
 		users:    make(map[string]userEntry),
 		inbounds: make(map[string]InboundConfig),
+		clock:    wallClock{},
 	}
 }
 

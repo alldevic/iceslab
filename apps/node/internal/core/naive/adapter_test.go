@@ -24,6 +24,9 @@ type fakeCLI struct {
 	mu      sync.Mutex
 	calls   []call
 	handler func(name string, args []string) ([]byte, error)
+	// ctxHandler, when set, answers instead of handler and sees the context
+	// the adapter ran the command with.
+	ctxHandler func(ctx context.Context) ([]byte, error)
 }
 
 type call struct {
@@ -31,11 +34,15 @@ type call struct {
 	args []string
 }
 
-func (f *fakeCLI) run(_ context.Context, name string, args ...string) ([]byte, error) {
+func (f *fakeCLI) run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, call{name: name, args: append([]string(nil), args...)})
 	h := f.handler
+	ch := f.ctxHandler
 	f.mu.Unlock()
+	if ch != nil {
+		return ch(ctx)
+	}
 	if h == nil {
 		return nil, nil
 	}
@@ -328,22 +335,36 @@ func TestReload_FailurePropagates(t *testing.T) {
 }
 
 func TestReload_HonoursTimeout(t *testing.T) {
-	// Reload that never returns, adapter should bail out at ReloadTimeout.
+	// A reload that never returns on its own: the adapter runs it under
+	// ReloadTimeout, so the command's context carries that deadline and it is
+	// the deadline that ends it. Asked of the context the command got, not of
+	// how long AddUser took on this machine. The fallback only catches an
+	// adapter that set no deadline at all, which would otherwise hang the test.
+	var deadline time.Duration
+	var cutBy error
 	fake := &fakeCLI{
-		handler: func(name string, args []string) ([]byte, error) {
-			time.Sleep(800 * time.Millisecond)
-			return nil, errors.New("context deadline exceeded")
+		ctxHandler: func(ctx context.Context) ([]byte, error) {
+			dl, ok := ctx.Deadline()
+			if !ok {
+				return nil, errors.New("no deadline on the reload")
+			}
+			deadline = time.Until(dl)
+			select {
+			case <-ctx.Done():
+				cutBy = ctx.Err()
+				return nil, ctx.Err()
+			case <-time.After(time.Minute):
+				return nil, errors.New("the reload's deadline never came")
+			}
 		},
 	}
 	a, _ := newManagedTestAdapter(t, fake) // ReloadTimeout=500ms
-	start := time.Now()
 	err := a.AddUser(core.User{UserID: "u", Username: "a", NaivePassword: "p"})
-	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("expected error when reload exceeds ReloadTimeout")
 	}
-	if elapsed > 1500*time.Millisecond {
-		t.Errorf("reload should have bailed at ~500ms, took %v", elapsed)
+	if !errors.Is(cutBy, context.DeadlineExceeded) || deadline > 500*time.Millisecond {
+		t.Errorf("the reload ran with a deadline %v away and was ended by %v, want ReloadTimeout's (500ms) deadline", deadline, cutBy)
 	}
 }
 
