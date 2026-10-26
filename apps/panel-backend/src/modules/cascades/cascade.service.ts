@@ -3387,6 +3387,33 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
 }
 
 /**
+ * A-277: the gate of this node's xray entry in this cascade, for a rule of
+ * the node's policy that sends traffic into the cascade: it must let through
+ * exactly the users the door of that direction lets through. The same
+ * computation as the doors' (entryGateFor), one answer for both.
+ *   - `none`: the node is not an entry of the cascade; nothing to gate.
+ *   - `ungated`: an entry whose users arrive through the chain (hysteria,
+ *     AmneziaWG, A-116): xray cannot tell them apart, a rule acts on all.
+ *   - `gate`: user id -> the tags they may take.
+ */
+export type CascadeEntryGate =
+  | { kind: 'none' }
+  | { kind: 'ungated' }
+  | { kind: 'gate'; allowedTagsOf: Map<string, Set<number>> };
+
+export async function cascadeEntryGate(nodeId: string, cascadeId: string): Promise<CascadeEntryGate> {
+  const positions = await prisma.cascadePosition.findMany({
+    where: { cascadeId },
+    select: { position: true, entryProtocol: true, nodes: { select: { nodeId: true } } },
+  });
+  const entry = positions.find((p) => p.position === 0);
+  if (!entry || !entry.nodes.some((n) => n.nodeId === nodeId)) return { kind: 'none' };
+  if (entryReachesCascadeOnlyThroughChain(entry.entryProtocol)) return { kind: 'ungated' };
+  const { entryUserGate } = await entryGateFor(nodeId, cascadeId, positions);
+  return entryUserGate ? { kind: 'gate', allowedTagsOf: entryUserGate } : { kind: 'none' };
+}
+
+/**
  * A-134: the tags each user may take at an xray entry: the same answer the
  * subscription gives them (getRouteProfilesByEntryNode), turned around into
  * "user -> allowed tags". Users with the same squads get the same answer, so

@@ -87,6 +87,36 @@ async function attach(nodeId: string, policyId: string | null, expected = 200) {
   return JSON.parse(res.body);
 }
 
+/**
+ * A user who reaches the entry through an open squad. A cascade rule at an
+ * xray entry lets through the users its door does (A-277); an entry nobody
+ * reaches has no one to let through and the rule stays home.
+ */
+async function openUserOn(entryId: string): Promise<string> {
+  seq += 1;
+  const post = async (url: string, payload: unknown) => {
+    const res = await app.inject({ method: 'POST', url, headers: auth(), payload });
+    expect(res.statusCode, res.body).toBe(201);
+    return JSON.parse(res.body) as { id: string };
+  };
+  const profile = await post('/api/profiles', {
+    name: `pol-vless-${seq}`,
+    protocol: 'xray',
+    config: {
+      security: 'reality',
+      realityDest: 'www.microsoft.com:443',
+      realityServerNames: ['www.microsoft.com'],
+      realityPrivateKey: 'k'.repeat(43),
+      realityPublicKey: 'p'.repeat(43),
+      realityShortIds: ['0123abcd'],
+      network: 'raw',
+    },
+  });
+  await post('/api/hosts', { profileId: profile.id, nodeId: entryId, port: 443 });
+  const squad = await post('/api/squads', { name: `pol-open-${seq}`, profileIds: [profile.id] });
+  return (await post('/api/users', { username: `pol_user_${seq}`, groupIds: [squad.id] })).id;
+}
+
 /** A two-node cascade with one way out, which is what a cascade rule needs. */
 async function cascadeWithDirection(entryId: string, exitId: string) {
   seq += 1;
@@ -326,6 +356,7 @@ describe('what the node is actually sent', () => {
     const entry = await makeNode();
     const exit = await makeNode();
     const { direction } = await cascadeWithDirection(entry, exit);
+    await openUserOn(entry);
     const p = await createPolicy([
       { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
     ]);
@@ -347,6 +378,7 @@ describe('what the node is actually sent', () => {
     const entry = await makeNode();
     const exit = await makeNode();
     const { direction } = await cascadeWithDirection(entry, exit);
+    await openUserOn(entry);
     const p = await createPolicy([
       { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
     ]);
@@ -365,6 +397,7 @@ describe('what the node is actually sent', () => {
     const entry = await makeNode();
     const exit = await makeNode();
     const { cascadeId, direction } = await cascadeWithDirection(entry, exit);
+    await openUserOn(entry);
     const p = await createPolicy([
       { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
       { match: { domain: ['ads.example'] }, action: { kind: 'block' } },
@@ -377,7 +410,7 @@ describe('what the node is actually sent', () => {
     };
 
     // An xray entry under a chain: the hand-over, every rule goes out.
-    expect(await read()).toEqual({ policyId: p.id, drawing: 'handover', notDrawn: [], agent: null });
+    expect(await read()).toEqual({ policyId: p.id, drawing: 'handover', notDrawn: [], ungated: [], agent: null });
 
     // The same entry on hysteria: xray draws no way out, the cascade rule stays home.
     await prisma.cascadePosition.updateMany({ where: { cascadeId, position: 0 }, data: { entryProtocol: 'hysteria' } });
@@ -386,6 +419,7 @@ describe('what the node is actually sent', () => {
       policyId: p.id,
       drawing: 'none',
       notDrawn: [{ ruleId: cascadeRule.id, reason: 'no-cascade-drawing' }],
+      ungated: [],
       agent: null,
     });
   });

@@ -376,11 +376,13 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
     const node = await prisma.node.findFirst({ where: { id: params.id, deletedAt: null }, select: { policyId: true } });
     if (!node) return reply.code(404).send({ error: 'NOT_FOUND' });
     const drawing = await cascadeXrayDrawingForNode(params.id);
-    const { notDrawn } = await explainPolicyForNode(params.id, drawing);
+    // A-277: `ungated` = rule ids into a cascade drawn for every user, because
+    // this entry cannot tell its users apart (hysteria, AmneziaWG).
+    const { notDrawn, ungated } = await explainPolicyForNode(params.id, drawing);
     // Beside it, what the node's xray says it did with the last render it
     // accepted; null from an agent that does not report it.
     const agent = await agentPolicyReportForNode(params.id);
-    return reply.send({ policyId: node.policyId, drawing, notDrawn, agent });
+    return reply.send({ policyId: node.policyId, drawing, notDrawn, ungated, agent });
   });
 
   // Did the last save reach this machine? The node card draws "saved, not

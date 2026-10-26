@@ -59,6 +59,13 @@ func buildPolicyRules(rules []dto.NodePolicyRule) ([]any, error) {
 		if r.Match.Network != "" {
 			rule["network"] = r.Match.Network
 		}
+		// A-277: into a cascade, only the users its door lets through (the
+		// panel's entry gate); the rest go on down the list. Above the doors
+		// with no user, the rule took a squad the cascade was switched off
+		// for into it. Empty never reaches here (fitCascadeExits).
+		if r.Action.Kind == dto.PolicyActionCascade && len(r.Action.Users) > 0 {
+			rule["user"] = r.Action.Users
+		}
 		out = append(out, rule)
 	}
 	return out, nil
@@ -580,6 +587,20 @@ func fitCascadeExits(rules []dto.NodePolicyRule, cascade *CascadeFragments) ([]d
 	out := make([]dto.NodePolicyRule, 0, len(rules))
 	var dropped []dto.PolicyNotDrawn
 	for _, r := range rules {
+		// A-277: a list of who may take the way out that came empty would draw
+		// as no `user` condition at all, which xray reads as everyone: the
+		// leak the list exists to close. The panel never sends one; a rule
+		// nobody may take is left out here too.
+		if r.Action.Kind == dto.PolicyActionCascade && r.Action.Users != nil && len(r.Action.Users) == 0 {
+			n := 0
+			if m := legacyExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+				n, _ = strconv.Atoi(m[1])
+			} else if m := handoverExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+				n, _ = strconv.Atoi(m[1])
+			}
+			dropped = append(dropped, dto.PolicyNotDrawn{Exit: r.Action.Exit, Direction: n})
+			continue
+		}
 		if r.Action.Kind != dto.PolicyActionCascade || r.Action.Exit == "" || drawn[r.Action.Exit] {
 			out = append(out, r)
 			continue

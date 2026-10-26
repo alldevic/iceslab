@@ -205,6 +205,11 @@ type NodePolicyAction struct {
 	// fails the core's own validation, which is louder than a rule that never
 	// fires.
 	Exit string `json:"exit,omitempty"`
+	// Cascade only (A-277): at an xray entry, the users the door of that
+	// direction lets through, by the panel's entry gate; drawn as the rule's
+	// `user`. Absent: everybody, as before. Never drawn empty: an empty `user`
+	// in xray matches everyone, so such a rule is left out (NotDrawn).
+	Users []string `json:"users,omitempty"`
 }
 
 // DnsCfg mirrors DnsCfg in shared/transport.ts: who answers the name lookups of

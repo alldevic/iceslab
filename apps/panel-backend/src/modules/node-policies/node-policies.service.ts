@@ -3,7 +3,8 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { mapPolicy, type NodePolicyDto } from './node-policies.mapper.js';
-import { policyCascadeOutTag, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
+import { policyCascadeOutTag, routeTag, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
+import { cascadeEntryGate, type CascadeEntryGate } from '../cascades/cascade.service.js';
 import { splitPolicyEntries } from '../cascades/policy-entries.js';
 import { isPortList, POLICY_PROTOCOLS } from './node-policies.schemas.js';
 import { getLogger } from '../../lib/infra/logger.js';
@@ -345,9 +346,12 @@ export async function agentPolicyReportForNode(nodeId: string): Promise<AgentPol
  *   - `direction-not-dialled`: the node dials the rule's direction by no leg,
  *     or by more than one (a pooled direction, not supported by a rule);
  *   - `no-cascade-drawing`: the push gives xray no way out of the cascade (a
- *     transit or exit under a chain, an entry on hysteria or AmneziaWG).
+ *     transit or exit under a chain, an entry on hysteria or AmneziaWG);
+ *   - `nobody-may-take` (A-277): no user of this entry may take the rule's
+ *     direction (a squad narrowed elsewhere, the cascade switched off for it),
+ *     so the rule would only open the way to the users its door keeps out.
  */
-export type PolicyNotDrawnReason = 'lost-condition' | 'direction-not-dialled' | 'no-cascade-drawing';
+export type PolicyNotDrawnReason = 'lost-condition' | 'direction-not-dialled' | 'no-cascade-drawing' | 'nobody-may-take';
 export interface PolicyRuleNotDrawn {
   ruleId: string;
   reason: PolicyNotDrawnReason;
@@ -359,12 +363,23 @@ export interface PolicyRuleNotDrawn {
  * cannot tell two stories. ⚠ By the drawing the panel SENDS (cascadeXrayDrawingOf);
  * an agent whose chain was refused draws another one and may rename or drop a
  * cascade rule there (fitCascadeExits), which only its journal shows.
+ *
+ * A-277: a rule into a cascade direction lets through the users the door of
+ * that direction lets through (cascadeEntryGate, the doors' own computation),
+ * as `users` on its action. Before, it sat above the doors with no user and
+ * took a squad the cascade was switched off for into it (stand, 26.10).
+ * `ungated` names the rules drawn for everybody because the entry cannot tell
+ * its users apart (hysteria, AmneziaWG: they arrive through the chain).
  */
 export async function explainPolicyForNode(
   nodeId: string,
   drawing: CascadeXrayDrawing = 'legacy',
-): Promise<{ policy: WireNodePolicy | undefined; notDrawn: PolicyRuleNotDrawn[] }> {
+): Promise<{ policy: WireNodePolicy | undefined; notDrawn: PolicyRuleNotDrawn[]; ungated: string[] }> {
   const notDrawn: PolicyRuleNotDrawn[] = [];
+  const ungated: string[] = [];
+  const gates = new Map<string, Promise<CascadeEntryGate>>();
+  const gateOf = (cascadeId: string) =>
+    gates.get(cascadeId) ?? gates.set(cascadeId, cascadeEntryGate(nodeId, cascadeId)).get(cascadeId)!;
   const node = await prisma.node.findFirst({
     where: { id: nodeId, deletedAt: null },
     select: {
@@ -379,7 +394,7 @@ export async function explainPolicyForNode(
       },
     },
   });
-  if (!node?.policy) return { policy: undefined, notDrawn };
+  if (!node?.policy) return { policy: undefined, notDrawn, ungated };
 
   const rules: WireRule[] = [];
   for (const r of node.policy.rules) {
@@ -446,7 +461,26 @@ export async function explainPolicyForNode(
         notDrawn.push({ ruleId: r.id, reason: 'no-cascade-drawing' });
         continue;
       }
-      rules.push({ match, action: { kind: 'cascade', exit } });
+      const gate = await gateOf(r.direction.cascadeId);
+      if (gate.kind === 'ungated') ungated.push(r.id);
+      if (gate.kind !== 'gate') {
+        rules.push({ match, action: { kind: 'cascade', exit } });
+        continue;
+      }
+      // The door of direction N is the plain profile's tag (getRouteProfilesByEntryNode).
+      const door = routeTag(0, r.direction.tag - 1);
+      const all = [...gate.allowedTagsOf.keys()];
+      const users = all.filter((u) => gate.allowedTagsOf.get(u)!.has(door)).sort();
+      // Never an empty list: xray drops an empty condition and the rule would
+      // match everyone, the leak this closes.
+      if (users.length === 0) {
+        notDrawn.push({ ruleId: r.id, reason: 'nobody-may-take' });
+        continue;
+      }
+      rules.push({
+        match,
+        action: users.length === all.length ? { kind: 'cascade', exit } : { kind: 'cascade', exit, users },
+      });
       continue;
     }
     rules.push({
@@ -455,5 +489,5 @@ export async function explainPolicyForNode(
     });
   }
 
-  return { policy: { rules }, notDrawn };
+  return { policy: { rules }, notDrawn, ungated };
 }
