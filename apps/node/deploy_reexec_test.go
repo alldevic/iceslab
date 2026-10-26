@@ -113,22 +113,45 @@ func TestADeployHandsOverAtMostOnce(t *testing.T) {
 	}
 }
 
-// The real deploy.sh does it in that order: the sum before step 1 can touch
-// the files, the sync, then the hand-over, and the second run skips the sync.
-func TestDeployShHandsOverAfterItsSync(t *testing.T) {
-	blob, err := os.ReadFile("../../scripts/ops/deploy.sh")
+// Every deploy script that syncs does it in that order: the sum before step 1
+// can touch the files, the sync, then the hand-over, and the second run skips
+// the sync. A deploy script that syncs and is not on this list fails here too.
+func TestEveryDeployScriptHandsOverAfterItsSync(t *testing.T) {
+	scripts, err := filepath.Glob("../../scripts/ops/*.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(blob)
-	sum := strings.Index(s, `DEPLOY_SELF_SUM="$(deploy_self_sum "$DEPLOY_SELF")"`)
-	sync := strings.Index(s, "\n    git_sync_to_ref\n")
-	hand := strings.Index(s, `reexec_if_updated "$DEPLOY_SELF_SUM" "$DEPLOY_SELF" "$@"`)
-	guard := strings.Index(s, `if [[ "${ICESLAB_DEPLOY_REEXEC:-0}" == 1 ]]; then`)
-	if sum < 0 || sync < 0 || hand < 0 || guard < 0 {
-		t.Fatalf("deploy.sh lacks a part of the hand-over (sum %d, sync %d, hand-over %d, guard %d)", sum, sync, hand, guard)
+	var syncing []string
+	for _, p := range scripts {
+		blob, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(blob)
+		if filepath.Base(p) == "_lib.sh" || !strings.Contains(s, "\n    git_sync_to_ref\n") && !strings.Contains(s, "\ngit_sync_to_ref\n") {
+			continue
+		}
+		syncing = append(syncing, filepath.Base(p))
+		sum := strings.Index(s, `DEPLOY_SELF_SUM="$(deploy_self_sum "$DEPLOY_SELF")"`)
+		sync := strings.Index(s, "\n    git_sync_to_ref\n")
+		hand := strings.Index(s, `reexec_if_updated "$DEPLOY_SELF_SUM" "$DEPLOY_SELF" "$@"`)
+		guard := strings.Index(s, `if [[ "${ICESLAB_DEPLOY_REEXEC:-0}" == 1 ]]; then`)
+		if sum < 0 || sync < 0 || hand < 0 || guard < 0 {
+			t.Errorf("%s lacks a part of the hand-over (sum %d, sync %d, hand-over %d, guard %d)", filepath.Base(p), sum, sync, hand, guard)
+			continue
+		}
+		if !(sum < guard && guard < sync && sync < hand) {
+			t.Errorf("%s: want sum < reexec guard < git_sync_to_ref < reexec_if_updated, got %d %d %d %d", filepath.Base(p), sum, guard, sync, hand)
+		}
 	}
-	if !(sum < guard && guard < sync && sync < hand) {
-		t.Errorf("deploy.sh: want sum < reexec guard < git_sync_to_ref < reexec_if_updated, got %d %d %d %d", sum, guard, sync, hand)
+	// The glob must have found the three that sync, or this passed for nothing.
+	for _, want := range []string{"deploy.sh", "deploy-backend.sh", "deploy-frontend.sh"} {
+		found := false
+		for _, s := range syncing {
+			found = found || s == want
+		}
+		if !found {
+			t.Errorf("%s does not sync, or the test did not find it", want)
+		}
 	}
 }

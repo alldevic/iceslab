@@ -17,6 +17,12 @@ LIB_PREFIX="deploy-be"
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 trap 'on_err $LINENO' ERR
 
+# This script and its library before step 1 can replace them on disk: see
+# reexec_if_updated in _lib.sh (A-272). Absolute, because require_compose_root
+# may cd.
+DEPLOY_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+DEPLOY_SELF_SUM="$(deploy_self_sum "$DEPLOY_SELF")"
+
 # ───── Args ─────
 NO_CACHE=1
 for arg in "$@"; do
@@ -44,14 +50,24 @@ STEP_TOTAL=4
 # ───── Step 1: sync source to ICESLAB_REF ─────
 # Honors ICESLAB_REF (branch or pinned tag), defaults to the current branch.
 # See git_sync_to_ref in _lib.sh; it avoids the bare `git pull` detached-HEAD trap.
-step 1 "sync source (ICESLAB_REF=${ICESLAB_REF:-auto: branch or main})"
-git_sync_to_ref
-if [[ "$SHA_BEFORE" == "$SHA_AFTER" ]]; then
-    log_info "  ${SYNC_TARGET}: no new commits, re-deploying ${SHA_AFTER}"
+if [[ "${ICESLAB_DEPLOY_REEXEC:-0}" == 1 ]]; then
+    # The previous copy of this script synced and handed over to this one.
+    SHA_AFTER=$(git_short_sha)
+    step 1 "sync source (done before the hand-over: ${SHA_BEFORE:-?} -> ${SHA_AFTER})"
+    step_done
 else
-    log_info "  ${SYNC_TARGET}: ${SHA_BEFORE} -> ${SHA_AFTER}"
+    step 1 "sync source (ICESLAB_REF=${ICESLAB_REF:-auto: branch or main})"
+    git_sync_to_ref
+    if [[ "$SHA_BEFORE" == "$SHA_AFTER" ]]; then
+        log_info "  ${SYNC_TARGET}: no new commits, re-deploying ${SHA_AFTER}"
+    else
+        log_info "  ${SYNC_TARGET}: ${SHA_BEFORE} -> ${SHA_AFTER}"
+    fi
+    step_done
+    # The sync may have replaced this script or _lib.sh; bash would go on
+    # with the copy it already read (A-272, see deploy.sh).
+    reexec_if_updated "$DEPLOY_SELF_SUM" "$DEPLOY_SELF" "$@"
 fi
-step_done
 
 # ───── Step 2: rebuild backend (BEFORE migrate) ─────
 # Build first: the migrate one-shot below runs the same iceslab-backend:latest
