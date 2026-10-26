@@ -263,6 +263,61 @@ func TestInstallerRefusesAnUnusableSet(t *testing.T) {
 	}
 }
 
+// A-276: the e-mail is optional, the agent asks for the certificate without
+// one. An address Let's Encrypt refuses (invalidContact) is refused before the
+// bootstrap token is spent, not on the first push in the journal.
+func TestHysteriaFlagsAreCheckedBeforeTheInstall(t *testing.T) {
+	bash := needBash(t)
+	for _, c := range []struct {
+		domain, email string
+		refused       bool
+		says          string
+	}{
+		{"hy.iceslab.dev", "", false, "without an e-mail"},
+		{"hy.iceslab.dev", "ops@iceslab.dev", false, ""},
+		{"", "ops@iceslab.dev", false, "does nothing"},
+		{"", "", false, ""},
+		// What the panel put in before A-276 when ACME_DEFAULT_EMAIL was empty.
+		{"hy.iceslab.dev", "admin@example.com", true, "refuses addresses at example.com"},
+		{"hy.iceslab.dev", "ops@Example.ORG", true, "refuses addresses at example.org"},
+		{"hy.iceslab.dev", "ops@example.net", true, "example.net"},
+		{"hy.iceslab.dev", "root@localhost", true, "localhost"},
+		{"hy.iceslab.dev", "root@box.localhost", true, "box.localhost"},
+		{"hy.iceslab.dev", "ops", true, "not an e-mail address"},
+		{"hy.iceslab.dev", "ops@", true, "not an e-mail address"},
+	} {
+		prog := "set -euo pipefail\nlog() { echo \"log: $*\"; }\nwarn() { echo \"warn: $*\"; }\nfail() { echo \"fail: $*\"; exit 1; }\n" +
+			coresSection(t) + "\n" +
+			"HY_DOMAIN='" + c.domain + "'\nHY_EMAIL='" + c.email + "'\ncheck_hysteria_flags\necho checked\n"
+		out, err := exec.Command(bash, "-c", prog).CombinedOutput()
+		s := string(out)
+		if c.refused != (err != nil) || c.refused == strings.Contains(s, "checked") {
+			t.Errorf("%q/%q: refused=%v want %v:\n%s", c.domain, c.email, err != nil, c.refused, s)
+		}
+		if c.says != "" && !strings.Contains(s, c.says) {
+			t.Errorf("%q/%q: the output lacks %q:\n%s", c.domain, c.email, c.says, s)
+		}
+		if c.says == "" && strings.TrimSpace(s) != "checked" {
+			t.Errorf("%q/%q: want no word, got:\n%s", c.domain, c.email, s)
+		}
+	}
+}
+
+// The check runs before the token is redeemed: a refused e-mail leaves the
+// one-shot token unspent.
+func TestHysteriaFlagsAreCheckedBeforeTheTokenIsRedeemed(t *testing.T) {
+	blob, err := os.ReadFile(installerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(blob)
+	check := strings.Index(s, "\ncheck_hysteria_flags\n")
+	redeem := strings.Index(s, "/api/internal/bootstrap/$BOOTSTRAP_TOKEN")
+	if check == -1 || redeem == -1 || check > redeem {
+		t.Errorf("check_hysteria_flags at %d, the redemption at %d", check, redeem)
+	}
+}
+
 func TestAnOldCheckoutGetsOneCoreAndAWarningThatSaysWhatFixesIt(t *testing.T) {
 	r := runInstall(t, false, "xray", "xray,hysteria,singbox", false)
 	if r.err != nil {

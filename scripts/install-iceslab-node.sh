@@ -64,8 +64,9 @@
 #     --panel-url https://panel.example.com \
 #     --bootstrap bs_xxx \
 #     --engines hysteria \
-#     --hysteria-domain hy2-01.example.com \
-#     --hysteria-email admin@example.com
+#     --hysteria-domain hy2-01.example.com
+#   # Optional: --hysteria-email you@your-domain   (the ACME account's
+#   #             contact; an example.* or localhost address is refused).
 #   # Optional: --hysteria-port-range 20000-50000   (port-hopping;
 #   #             defeats RU TSPU UDP/443 throttle. Pass "" to disable.)
 #   # --hysteria-masquerade-url / --hysteria-obfs-password are still accepted
@@ -727,6 +728,30 @@ resolve_engines() {
 
 has_engine() { [[ " ${ENGINES[*]} " == *" $1 "* ]]; }
 
+# check_hysteria_flags: --hysteria-domain and --hysteria-email before anything
+# is spent (the bootstrap token included). The e-mail is optional: the agent
+# asks for the certificate without one (A-276). One Let's Encrypt refuses is
+# refused here instead, where it still names the flag: an example domain or
+# localhost (invalidContact) failed the first push hours later, in the journal.
+check_hysteria_flags() {
+  if [[ -n "$HY_EMAIL" ]]; then
+    local domain="${HY_EMAIL##*@}"
+    domain="${domain,,}"
+    if [[ "$HY_EMAIL" != *@* || -z "$domain" || -z "${HY_EMAIL%@*}" ]]; then
+      fail "--hysteria-email '$HY_EMAIL' is not an e-mail address. Leave the flag out to get the certificate without one."
+    fi
+    case "$domain" in
+      example.com|example.net|example.org|localhost|*.localhost)
+        fail "--hysteria-email '$HY_EMAIL': Let's Encrypt refuses addresses at $domain. Give a real address or leave the flag out." ;;
+    esac
+    if [[ -z "$HY_DOMAIN" ]]; then
+      warn "--hysteria-email without --hysteria-domain does nothing: a node on an IP gets the panel's self-signed certificate."
+    fi
+  elif [[ -n "$HY_DOMAIN" ]]; then
+    log "Hysteria certificate for $HY_DOMAIN is requested without an e-mail (--hysteria-email adds one)."
+  fi
+}
+
 # core_flags_env: the install flags of each core in the set, into the env. By
 # the core, not by --protocol: --hysteria-domain acts on any node with
 # hysteria, a REALITY key on any node with xray.
@@ -945,6 +970,8 @@ if [[ $UNINSTALL -eq 1 ]]; then
   ok "Uninstall complete. Rerun install-iceslab-node.sh to set up a fresh agent."
   exit 0
 fi
+
+check_hysteria_flags
 
 # If both --panel-url and --bootstrap given, redeem the bootstrap token to
 # fetch the full payload from panel over HTTP. This is the recommended flow:

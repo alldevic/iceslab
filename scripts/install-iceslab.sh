@@ -262,14 +262,15 @@ fi
 # Caught live 2026-05-12: with this empty, the panel's install-node emitter
 # fell back to `--hysteria-email admin@example.com`, which Let's Encrypt
 # rejects as a forbidden test domain. The operator only finds out 15 min later
-# when the fresh Hysteria node crashloops on cert obtain. Ask up front; this
-# also seeds Caddy's contact field for renewal warnings on the panel's cert.
+# when the fresh Hysteria node crashloops on cert obtain. Since A-276 the panel
+# leaves the flag out when this is empty and the agent asks without one, so the
+# address is optional; it is the ACME contact for Caddy and the Hysteria nodes.
 if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
-  printf 'Контактный email для Let'\''s Encrypt (получит уведомления о renewal'\''ах):\n'
-  printf '  Используется и для Caddy панели, и автоматом подставляется в команду\n'
+  printf 'Контактный email для Let'\''s Encrypt (необязательно):\n'
+  printf '  Контакт ACME-аккаунта для Caddy панели, и автоматом подставляется в команду\n'
   printf '  установки Hysteria-нод как --hysteria-email.\n'
   printf '\n'
-  printf 'Оставь пустым: придётся передавать email вручную при создании каждой ноды.\n'
+  printf 'Оставь пустым: сертификаты выпускаются и без него.\n'
   printf '\n'
   printf '\033[1;33mEmail:\033[0m '
   read -r ACME_DEFAULT_EMAIL </dev/tty || ACME_DEFAULT_EMAIL=""
@@ -289,13 +290,13 @@ if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
       printf 'как латинская, но панель такой адрес не примет.\033[0m\n' >&2
       exit 1
     fi
-    if [[ "$ACME_DEFAULT_EMAIL" =~ @(example\.com|example\.net|example\.org)$ ]]; then
+    if [[ "${ACME_DEFAULT_EMAIL,,}" =~ @(example\.com|example\.net|example\.org)$ ]]; then
       printf '\033[1;31m"%s": LE отвергает example.* как forbidden test domain. Введи реальный.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
       exit 1
     fi
     log "Email для ACME: ${ACME_DEFAULT_EMAIL}"
   else
-    log "Email не указан: install-команды для Hysteria/Naive-нод будут с placeholder, заполнишь вручную"
+    log "Email не указан: Hysteria-ноды получат сертификат без контакта (A-276)"
   fi
   printf '\n'
 fi
