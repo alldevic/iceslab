@@ -22,6 +22,7 @@ import { layOutGeo } from '../geo-sets/geo-push.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { acmeHostnameFor } from './acme-hostname.js';
+import { checkRenderDrift, recordPushed } from './render-drift.js';
 import { ensureHysteriaTls } from '../nodes/hysteria-tls.js';
 import { ensureAwg3Geometry } from '../nodes/awg3-geometry.js';
 import { pushedBindingsWhere } from '../nodes/pushed-bindings.js';
@@ -215,7 +216,9 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
         select: { id: true, name: true, protocol: true, engine: true, config: true, awgProtocol: true },
       },
     },
-    orderBy: { port: 'asc' },
+    // The id breaks a tie (443/TCP and 443/UDP): the push's order is part of
+    // its drawing, which render-drift.ts compares (A-278).
+    orderBy: [{ port: 'asc' }, { id: 'asc' }],
   });
   // t07-6: the node's 3.1 geometry, minted on the first push that needs it.
   const awg3Geometry = bindings.some((b) => b.profile.protocol === 'amneziawg' && b.profile.awgProtocol === 3)
@@ -538,6 +541,7 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
    * card the same way.
    */
   let req: ApplyInboundsRequest;
+  let built: ApplyInboundsRequest | null = null;
   let inbounds: InboundDto[] = [];
   // A-275: the agent's ADAPTER_FAILED, held until the roster has gone out.
   let partial: NodeRequestError | null = null;
@@ -550,6 +554,9 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
     // the cascade, here and on the other end (which this queues).
     await giveCascadeLegsReality(node.id);
     req = await buildApplyInboundsRequest(node);
+    // What the drawing check compares with later (render-drift.ts): the
+    // request as built, before the geo block that needs the agent.
+    built = req;
     inbounds = req.inbounds;
     // Phase 9.2: the geo files go out before the push that names them, since
     // the agent refuses a push whose files it does not hold (GEO_MISSING). An
@@ -626,6 +633,9 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
         UPDATE nodes SET applied_revision = GREATEST(applied_revision, ${rev})
         WHERE id = ${nodeId}::uuid`.catch(() => null);
     }
+    // Applied in full: the drawing the node now has, as a sha. A partial push
+    // (A-275) goes to the catch and records nothing, so the check asks again.
+    if (built) await recordPushed(nodeId, built).catch(() => null);
   } catch (err) {
     const detail =
       err instanceof NodeRequestError
@@ -880,6 +890,12 @@ export async function requeueIfMoved(nodeId: string, readRevision: bigint | null
  * whose last attempt died on the network, which is the case this is for.
  */
 const RECONCILE_EVERY_S = 3600;
+
+/** The drawing check (render-drift.ts) with this module's builder and push:
+ *  at backend start and from the hourly cron (node-drawing-check). */
+export function checkNodeDrawings(): Promise<number> {
+  return checkRenderDrift((nodeId) => applyInboundsRequestForNode(nodeId), enqueueNodePush);
+}
 
 export async function reconcileNodeRevisions(): Promise<number> {
   const behind = await prisma.$queryRaw<{ id: string; desired: bigint }[]>`

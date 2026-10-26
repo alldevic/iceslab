@@ -10,7 +10,7 @@ import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
-import { startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
+import { checkNodeDrawings, startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
 import { scheduleBuiltinFetch, startGeoSetsWorker } from './modules/geo-sets/geo-sets.queue.js';
 import {
   startCronTasksWorker,
@@ -73,6 +73,15 @@ async function start() {
 
     await registerCronJobs();
     app.log.info('Cron jobs registered');
+
+    // A nodes' drawing that changed with this panel (a deploy is no event)
+    // goes out now, not with the next unrelated edit (render-drift.ts). In
+    // the background: the workers above take the pushes.
+    // Said every start, 0 included: a second start with the same drawing
+    // queues none, which is how a deploy is checked on the stand (A-278).
+    void checkNodeDrawings()
+      .then((n) => app?.log.info({ queued: n }, `drawing check at start: ${n} node push(es) queued`))
+      .catch((err) => app?.log.error({ err }, 'drawing check failed'));
 
     // A-019: a stored rule the linear engine cannot run is no longer served;
     // say which, once, rather than let it stop matching in silence.

@@ -4,6 +4,7 @@ import { verifyHeartbeatToken } from './heartbeat-token.js';
 import { config } from '../../config.js';
 import { redis } from '../../lib/infra/redis.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
+import { getLogger } from '../../lib/infra/logger.js';
 
 /**
  * Slice 38 follow-up: detect agent restart and re-issue applyInbounds.
@@ -53,8 +54,9 @@ async function trackAgentStart(nodeId: string, startTime: string): Promise<void>
     // the restart bumps the revision, so a push already running for this
     // node is followed by another one instead of absorbing this resync.
     await enqueueNodePush(nodeId);
-    console.log(
-      `[heartbeat] node=${nodeId} agent restart detected (prev=${previous} new=${startTime}), enqueued applyInbounds`,
+    getLogger().info(
+      { node: nodeId, prev: previous, next: startTime },
+      '[heartbeat] agent restart detected, enqueued applyInbounds',
     );
   }
 }
@@ -135,7 +137,7 @@ export async function heartbeatRoutes(app: FastifyInstance): Promise<void> {
     if (incomingStart) {
       trackAgentStart(verified.nodeId, incomingStart).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log(`[heartbeat] node=${verified.nodeId} trackAgentStart failed: ${msg}`);
+        getLogger().warn({ node: verified.nodeId, err: msg }, '[heartbeat] trackAgentStart failed');
       });
     }
 

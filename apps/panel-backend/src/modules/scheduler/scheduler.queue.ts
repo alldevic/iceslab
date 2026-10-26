@@ -13,6 +13,7 @@ import { renewExpiringNodeCerts } from '../nodes/node-cert-rotation.js';
 import { pollNodeStats } from '../stats/stats.cron.js';
 import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS, pruneHistory } from '../maintenance/retention.cron.js';
 import { queueDueUrlFetches } from '../geo-sets/geo-sets.queue.js';
+import { checkNodeDrawings } from '../inbounds/inbounds.queue.js';
 import { getLogger } from '../../lib/infra/logger.js';
 
 // ───── Queue ─────
@@ -50,6 +51,7 @@ const CRON_JOBS: CronJobSpec[] = [
   { name: 'alert-near-expiry',              pattern: '0 9 * * *'  },     // 09:00 каждый день - K3 near-expiry/near-cap дайджест в Telegram
   { name: 'geo-url-refresh',                pattern: '*/10 * * * *' },   // каждые 10 минут - Ф9.4: гео-наборы по URL, у которых вышел refreshHours
   { name: 'node-cert-renew',                pattern: '20 * * * *' },     // каждый час в :20 - A-124: сертификат ноды за 30 дней до конца
+  { name: 'node-drawing-check',             pattern: '40 * * * *' },     // каждый час в :40 - нода, чей рисунок сменился без события (новая панель, правка базы), получает пуш
 ];
 
 // ───── Регистрация (вызывается один раз при бутстрапе) ─────
@@ -149,6 +151,11 @@ export function startCronTasksWorker(): Worker {
           if (renewed + failed > 0) {
             getLogger().info(`[cron] node-cert-renew - ${renewed} renewed, ${failed} failed`);
           }
+          break;
+        }
+        case 'node-drawing-check': {
+          const n = await checkNodeDrawings();
+          if (n > 0) getLogger().info(`[cron] node-drawing-check - queued ${n} node push(es) whose drawing changed`);
           break;
         }
         case 'prune-history': {
