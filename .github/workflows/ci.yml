@@ -733,6 +733,29 @@ jobs:
           head -1 <<<"$ver"
           case "$ver" in *with_v2ray_api*) ;; *) echo "::error::sing-box without with_v2ray_api"; exit 1 ;; esac
 
+      # mita for the mieru adapter's live test (A-275: an inbound with no users
+      # waits, the first user brings mita up). Upstream ships mita only as a
+      # .deb, so the binary is taken out of it with dpkg-deb -x: nothing is
+      # installed and no mita.service starts on the runner. Same release and
+      # sha256 bootstrap-mieru.sh pins (the version manifest), which
+      # core-pins.test.ts holds this line to.
+      - name: Install mita (for the mieru adapter's live test)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/mita.deb \
+              https://github.com/enfein/mieru/releases/download/v3.37.0/mita_3.37.0_amd64.deb
+            then break; fi
+            echo "mita download failed (attempt ${attempt}/3)"
+            [ "$attempt" = 3 ] && exit 1
+            sleep $(( attempt * 5 ))
+          done
+          echo "22248dc1568280a8b1bdaf55051a59b3d64ac1edb4ec4918e3925088f78a35de  /tmp/mita.deb" | sha256sum -c -
+          dpkg-deb -x /tmp/mita.deb /tmp/mita-deb
+          install -D -m 0755 /tmp/mita-deb/usr/bin/mita /tmp/mita-bin/mita
+          echo "MIERU_BIN=/tmp/mita-bin/mita" >> "$GITHUB_ENV"
+          /tmp/mita-bin/mita version
+
       # caddy-naive for the naive adapter's live test (A-118, admin API on a
       # unix socket). The same pinned set bootstrap-naive.sh builds on a node
       # (A-216: xcaddy, Caddy and the klzgrad/forwardproxy commit, never a
