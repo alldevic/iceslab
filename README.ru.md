@@ -93,11 +93,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main
   --panel-url https://panel.example.com \
   --bootstrap bs_xxx \
   --protocol hysteria \
-  --hysteria-domain hy2-01.example.com \
-  --hysteria-email admin@example.com
+  --hysteria-domain hy2-01.example.com
 ```
 
-Скрипт пишет `/etc/hysteria/config.yaml`, кладёт systemd-юнит, и при первом запуске Hysteria получит LE-сертификат через HTTP-01.
+Необязательно: `--hysteria-email you@your-domain`, контакт ACME-аккаунта. Сертификат выпускается и без него; адрес на `example.*` или `localhost` установщик отвергает, как отвергает его Let's Encrypt.
+
+Скрипт ставит Hysteria и её systemd-юнит; агент пишет `/etc/hysteria/config.yaml` и получает LE-сертификат через HTTP-01 при первом пуше панели.
 
 #### AmneziaWG
 
