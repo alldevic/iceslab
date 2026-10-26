@@ -78,8 +78,8 @@ const legacyCaddyfile = `panel.example.com {
 
 type caddyRefresh struct {
 	out, calls, file string
-	backups           []string
-	stamp             string
+	backups          []string
+	stamp            string
 }
 
 // runRefresh: the file in place (empty: none), whether a stamp of it lies
@@ -169,7 +169,8 @@ func TestADeployRewritesTheHostCaddyfileTheInstallerWrote(t *testing.T) {
 
 	// And the deploy after it finds nothing to do: no rewrite, no reload.
 	again := runRefresh(t, r.file, true, "SUBSCRIPTION_PATH_PREFIX=/s3cr3t\n", true)
-	if !strings.Contains(again.out, "already current") || strings.Contains(again.calls, "systemctl") {
+	// prepare_caddy_logs still asks systemctl for Caddy's user; no reload.
+	if !strings.Contains(again.out, "already current") || strings.Contains(again.calls, "systemctl reload") {
 		t.Errorf("a current file was rewritten or reloaded:\n%s\ncalls:\n%s", again.out, again.calls)
 	}
 }
@@ -191,6 +192,83 @@ func TestADeployKeepsTheOldHostCaddyfileWhenTheNewOneDoesNotValidate(t *testing.
 	// validate, so only a reload counts here.
 	if r.file != legacyCaddyfile || len(r.backups) != 0 || strings.Contains(r.calls, "systemctl reload") {
 		t.Errorf("a file that does not validate was put in place:\n%s\ncalls:\n%s", r.file, r.calls)
+	}
+}
+
+// Caddy keeps a file log open across reloads and hands the same writer to the
+// next config (see caddy_restart_if_stale_logs in _lib.sh), so a log removed
+// under it is written into the removed file until a restart. The function
+// restarts exactly then: a named log held as «(deleted)».
+func TestCaddyRestartsOnlyWhenItHoldsARemovedLog(t *testing.T) {
+	bash := needBash(t)
+	run := func(t *testing.T, links map[string]string) (string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		fdDir := filepath.Join(dir, "proc", "4242", "fd")
+		if err := os.MkdirAll(fdDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, target := range links {
+			// A symlink's target can be any text: the kernel's «(deleted)»
+			// suffix included.
+			if err := os.Symlink(target, filepath.Join(fdDir, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		caddyfile := filepath.Join(dir, "Caddyfile")
+		if err := os.WriteFile(caddyfile, []byte(legacyCaddyfile+"x {\n  log y {\n    output file /var/log/caddy/access-masked.log {\n      roll_size 10MiB\n    }\n  }\n}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		calls := filepath.Join(dir, "calls")
+		bin := stubs(t, map[string]string{
+			"systemctl": `echo "systemctl $*" >>'` + calls + `'
+case "$1" in
+  show) echo 4242 ;;
+  is-active) echo active ;;
+esac
+exit 0
+`,
+		})
+		prog := "set -euo pipefail\nLIB_PREFIX=test\nsource '" + opsLib + "'\nCADDY_PROC='" + filepath.Join(dir, "proc") + "' caddy_restart_if_stale_logs '" + caddyfile + "'\necho DONE\n"
+		cmd := exec.Command(bash, "-c", prog)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "DONE") {
+			t.Fatalf("caddy_restart_if_stale_logs: %v\n%s", err, out)
+		}
+		c, _ := os.ReadFile(calls)
+		return string(out), string(c)
+	}
+
+	out, calls := run(t, map[string]string{
+		"7":  "/var/log/caddy/access-masked.log (deleted)",
+		"13": "/var/log/caddy/access.log",
+	})
+	if !strings.Contains(calls, "systemctl restart caddy") || !strings.Contains(out, "access-masked.log into a removed file") {
+		t.Errorf("a removed log held open did not restart Caddy:\n%s\ncalls:\n%s", out, calls)
+	}
+
+	for what, links := range map[string]map[string]string{
+		"logs open, none removed":  {"7": "/var/log/caddy/access-masked.log", "13": "/var/log/caddy/access.log"},
+		"a removed file not a log": {"9": "/tmp/whatever (deleted)"},
+	} {
+		out, calls := run(t, links)
+		if strings.Contains(calls, "restart") {
+			t.Errorf("%s: Caddy restarted for nothing:\n%s\ncalls:\n%s", what, out, calls)
+		}
+	}
+}
+
+// refresh_host_caddyfile asks after both of its outcomes that touch a running
+// Caddy: the re-render and «already current».
+func TestTheRefreshChecksForRemovedLogsOnBothPaths(t *testing.T) {
+	blob, err := os.ReadFile(opsLib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fnBody(t, strings.ReplaceAll(string(blob), "\r\n", "\n"), "refresh_host_caddyfile")
+	if n := strings.Count(body, `caddy_restart_if_stale_logs "$file"`); n != 2 {
+		t.Errorf("refresh_host_caddyfile calls caddy_restart_if_stale_logs %d times, want 2 (after the reload, and when already current)", n)
 	}
 }
 

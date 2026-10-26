@@ -439,7 +439,12 @@ refresh_host_caddyfile() {
     PANEL_DOMAIN="$domain" FRONTEND_PORT="$port" SUB_PREFIX="$prefix" write_caddyfile "$tmp"
     if cmp -s "$tmp" "$file"; then
         rm -f "$tmp"
+        # The file is current, its logs may not be: a deploy before A-273 ran
+        # validate as root and left a log root:root, which Caddy cannot open
+        # on its next start (26.10, the stand). Nothing is reloaded for it.
+        prepare_caddy_logs "$file"
         log_info "host Caddyfile already current"
+        caddy_restart_if_stale_logs "$file"
         return 0
     fi
     # The logs first: validate runs as root and opens every log the new file
@@ -461,9 +466,48 @@ refresh_host_caddyfile() {
     if systemctl reload caddy; then
         sha256sum "$file" | cut -d' ' -f1 > "$stamp"
         log_ok "host Caddyfile re-rendered for ${domain} and Caddy reloaded (previous kept as ${backup})"
+        caddy_restart_if_stale_logs "$file"
     else
         cp -p "$backup" "$file"
         systemctl reload caddy || true
         log_warn "Caddy refused the new file on reload; the previous one is back in place"
+    fi
+}
+
+# caddy_restart_if_stale_logs <Caddyfile>: restart Caddy when it writes a log
+# the Caddyfile names into a file that is no longer on disk.
+#
+# Caddy never closes a file log on reload: the config's cleanup that would
+# (Logging.closeLogs) is registered on a copy of the context and never runs
+# (caddy v2.11.4: logging.go:86-93 openLogs takes the Context by value and
+# calls OnCancel on it; context.go:73-95 the cancel runs the parent's
+# cleanupFuncs). The writer stays in the pool (logging.go:250-252, :806), and
+# every later config that names the same file gets that writer back instead
+# of opening the file. So a log removed under a running Caddy is written into
+# the removed file until Caddy restarts, and a reload does not change that:
+# 26.10 on the stand, access-masked.log removed, two reloads later still
+# «(deleted)» in /proc/<pid>/fd, the masked lines lost. A restart opens every
+# log afresh; it costs a second or two of the panel being unreachable, which
+# is why it happens only when a removed file is actually held.
+#
+#   CADDY_PROC  default /proc (a test points it elsewhere)
+caddy_restart_if_stale_logs() {
+    local proc="${CADDY_PROC:-/proc}" pid fd t named stale=""
+    pid="$(systemctl show -p MainPID --value caddy 2>/dev/null || true)"
+    [[ -n "$pid" && "$pid" != 0 && -d "$proc/$pid/fd" ]] || return 0
+    named="$(sed -nE 's/^[[:space:]]*output file ([^[:space:]{]+).*/\1/p' "$1")"
+    for fd in "$proc/$pid/fd/"*; do
+        t="$(readlink "$fd" 2>/dev/null)" || continue
+        [[ "$t" == *" (deleted)" ]] || continue
+        if grep -qxF "${t% (deleted)}" <<<"$named"; then
+            stale+="${t% (deleted)} "
+        fi
+    done
+    [[ -n "$stale" ]] || return 0
+    log_warn "Caddy writes ${stale% } into a removed file (a reload keeps an open log); restarting Caddy"
+    if systemctl restart caddy && [[ "$(systemctl is-active caddy 2>/dev/null || true)" == active ]]; then
+        log_ok "Caddy restarted, its logs are open afresh"
+    else
+        log_warn "Caddy did not come back after the restart: check 'systemctl status caddy' and 'journalctl -u caddy'"
     fi
 }
