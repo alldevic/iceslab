@@ -31,6 +31,7 @@ export const common = {
     deleted: 'Deleted',
     created: 'Created',
     updated: 'Updated',
+    error: 'Error',
     saveError: 'Failed to save',
     createError: 'Failed to create',
     deleteError: 'Failed to delete',

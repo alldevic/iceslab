@@ -2,19 +2,21 @@ import { useTranslation } from 'react-i18next';
 import { AMBER, DISPLAY, MIST, MOSS } from '@/contours/nodes/lib/colors';
 import { Box, Text } from '@mantine/core';
 import { TickIcon, WarnIcon } from '@/contours/nodes/components/NodeEdit/icons';
-export function ExposureNote({
-  result,
-}: {
-  result: { checked: boolean; unexpectedPorts?: number[]; note?: string };
-}) {
+import { exposureView } from '@/contours/nodes/lib/exposureView';
+
+export function ExposureNote({ result }: { result: unknown }) {
   const { t } = useTranslation();
-  const clean = result.checked && (result.unexpectedPorts ?? []).length === 0;
-  const tone = !result.checked ? MIST : clean ? MOSS : AMBER;
-  const text = !result.checked
-    ? t('nodes.form.exposureSkipped', { note: result.note ?? '-' })
-    : clean
-      ? t('nodes.form.exposureClean')
-      : t('nodes.form.exposureExtra', { ports: (result.unexpectedPorts ?? []).join(', ') });
+  const v = exposureView(result);
+  const clean = v.kind === 'clean';
+  const tone = v.kind === 'skipped' ? MIST : clean ? MOSS : AMBER;
+  const text =
+    v.kind === 'skipped'
+      ? t('nodeEdit.exposureSkipped', { note: v.note ?? '-' })
+      : v.kind === 'clean'
+        ? t('nodeEdit.exposureClean')
+        : v.kind === 'extra'
+          ? t('nodeEdit.exposureExtra', { ports: v.ports.join(', ') })
+          : t('nodeEdit.exposureUnknown');
   return (
     <Box
       style={{
@@ -33,5 +35,3 @@ export function ExposureNote({
     </Box>
   );
 }
-
-/** One way out of the node. The selected row lifts on a faint cyan wash. */

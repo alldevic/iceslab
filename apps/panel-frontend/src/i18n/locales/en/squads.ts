@@ -187,6 +187,7 @@ export const squads = {
     cascadeWorksOnlyWithEntry: 'A cascade works for the squad members only if the squad hands out an entry host.',
     exit: 'exit',
     routePolicies: 'Route policies',
+    routePoliciesEmpty: 'No route policies yet.',
     routePoliciesHint:
       'Grant ad-split policies to this squad. The plain variant is always available, each granted policy adds one more variant per exit.',
     blocksDomains: 'blocks {{count}} domains',

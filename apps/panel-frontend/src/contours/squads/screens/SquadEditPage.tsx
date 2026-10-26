@@ -1443,7 +1443,7 @@ export function SquadEditPage() {
               {isNew && <Chip accent={FAINT}>{t('squadEdit.optional')}</Chip>}
             </Box>
             <Hint>{isAll ? t('squadEdit.routePoliciesAll') : t('squadEdit.routePoliciesHint')}</Hint>
-            <SectionLists lists={[policiesQuery]} count={policies.length} empty={t('routes.empty')} />
+            <SectionLists lists={[policiesQuery]} count={policies.length} empty={t('squadEdit.routePoliciesEmpty')} />
             {isAll && policies.length > 0 && (
               <Box
                 style={{

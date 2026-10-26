@@ -402,6 +402,12 @@ export const nodes = {
     bindings: 'Bindings',
     exposure: 'Probe exposure',
     exposureCheck: 'Check open ports',
+    saved: 'Node saved',
+    warpError: 'Could not switch WARP',
+    exposureSkipped: 'The check is unavailable: {{note}}.',
+    exposureClean: 'No unexpected open ports.',
+    exposureExtra: 'Unexpected open ports: {{ports}}. Close them or make sure they are meant to be open.',
+    exposureUnknown: 'The answer was not read: no port list came back.',
     connLog: {
       label: 'Connection log',
       notChecked: 'not checked',

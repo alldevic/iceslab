@@ -229,7 +229,7 @@ export function useNodeEditForm() {
       // A-232: the drawing lines read the saved policy.
       qc.invalidateQueries({ queryKey: ['policy-drawing', id] });
       form.resetDirty(form.values);
-      notifications.show({ color: 'green', message: t('nodes.notify.updated') });
+      notifications.show({ color: 'green', message: t('nodeEdit.saved') });
     },
     onError: (err) => {
       // A policy this machine cannot carry out comes back naming the node and
@@ -266,7 +266,7 @@ export function useNodeEditForm() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        title: t('nodes.form.warpError'),
+        title: t('nodeEdit.warpError'),
         message: apiErrorMessage(err),
       }),
   });
