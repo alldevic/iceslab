@@ -721,6 +721,32 @@ ${PANEL_DOMAIN} {
 EOF
 }
 
+# prepare_caddy_logs <Caddyfile>: every `output file` the Caddyfile names is
+# there and belongs to the user the caddy service runs as (User= of its unit,
+# caddy by default), before Caddy loads the file. A log Caddy cannot open fails
+# the whole reload. 26.10 on the stand: `caddy validate`, run as root, opened
+# the new access-masked.log and left it root:root 0600, and the reload, running
+# as caddy, got permission denied. The directory is made writable for that user
+# too, because rotation (roll_size) renames files in it. Same text in
+# scripts/ops/_lib.sh; apps/node/caddyfile_test.go holds the two together.
+prepare_caddy_logs() {
+  local u g f d
+  u="$(systemctl show -p User --value caddy 2>/dev/null || true)"
+  u="${u:-caddy}"
+  id -u "$u" >/dev/null 2>&1 || return 0
+  g="$(id -gn "$u")"
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    d="$(dirname "$f")"
+    [[ -d "$d" ]] || install -d -o "$u" -g "$g" -m 0750 "$d"
+    if ! command -v runuser >/dev/null 2>&1 || ! runuser -u "$u" -- test -w "$d" 2>/dev/null; then
+      chown "$u:$g" "$d"
+    fi
+    [[ -e "$f" ]] || install -o "$u" -g "$g" -m 0640 /dev/null "$f"
+    chown "$u:$g" "$f"
+  done < <(sed -nE 's/^[[:space:]]*output file ([^[:space:]{]+).*/\1/p' "$1")
+}
+
 if [[ -n "$PANEL_DOMAIN" ]]; then
   step "Caddy + TLS for ${PANEL_DOMAIN}"
   if ! command -v caddy >/dev/null; then
@@ -737,6 +763,7 @@ if [[ -n "$PANEL_DOMAIN" ]]; then
   # What we wrote, so deploy.sh can tell this file from one the operator has
   # edited since, and rewrite only the former.
   sha256sum /etc/caddy/Caddyfile | cut -d' ' -f1 > /etc/caddy/.iceslab-caddyfile.sha256
+  prepare_caddy_logs /etc/caddy/Caddyfile
   systemctl enable --now caddy >/dev/null 2>&1 || true
   systemctl reload caddy || systemctl restart caddy
   ok "TLS will be issued by Let's Encrypt on first request"

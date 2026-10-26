@@ -48,6 +48,16 @@ func TestTheHostCaddyfileIsWrittenByOneFunction(t *testing.T) {
 	if a, b := caddyfileFunc(t, panelInstaller), caddyfileFunc(t, opsLib); a != b {
 		t.Errorf("write_caddyfile differs between install-iceslab.sh and scripts/ops/_lib.sh:\n--- installer\n%s\n--- _lib.sh\n%s", a, b)
 	}
+	read := func(p string) string {
+		blob, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.ReplaceAll(string(blob), "\r\n", "\n")
+	}
+	if a, b := fnBody(t, read(panelInstaller), "prepare_caddy_logs"), fnBody(t, read(opsLib), "prepare_caddy_logs"); a != b {
+		t.Errorf("prepare_caddy_logs differs between install-iceslab.sh and scripts/ops/_lib.sh:\n--- installer\n%s\n--- _lib.sh\n%s", a, b)
+	}
 }
 
 const legacyCaddyfile = `panel.example.com {
@@ -177,7 +187,9 @@ func TestADeployLeavesAnEditedHostCaddyfileAlone(t *testing.T) {
 
 func TestADeployKeepsTheOldHostCaddyfileWhenTheNewOneDoesNotValidate(t *testing.T) {
 	r := runRefresh(t, legacyCaddyfile, false, "", false)
-	if r.file != legacyCaddyfile || len(r.backups) != 0 || strings.Contains(r.calls, "systemctl") {
+	// prepare_caddy_logs asks systemctl which user Caddy runs as before the
+	// validate, so only a reload counts here.
+	if r.file != legacyCaddyfile || len(r.backups) != 0 || strings.Contains(r.calls, "systemctl reload") {
 		t.Errorf("a file that does not validate was put in place:\n%s\ncalls:\n%s", r.file, r.calls)
 	}
 }

@@ -348,6 +348,32 @@ ${PANEL_DOMAIN} {
 EOF
 }
 
+# prepare_caddy_logs <Caddyfile>: every `output file` the Caddyfile names is
+# there and belongs to the user the caddy service runs as (User= of its unit,
+# caddy by default), before Caddy loads the file. A log Caddy cannot open fails
+# the whole reload. 26.10 on the stand: `caddy validate`, run as root, opened
+# the new access-masked.log and left it root:root 0600, and the reload, running
+# as caddy, got permission denied. The directory is made writable for that user
+# too, because rotation (roll_size) renames files in it. Same text in
+# scripts/install-iceslab.sh; caddyfile_test.go holds the two together.
+prepare_caddy_logs() {
+  local u g f d
+  u="$(systemctl show -p User --value caddy 2>/dev/null || true)"
+  u="${u:-caddy}"
+  id -u "$u" >/dev/null 2>&1 || return 0
+  g="$(id -gn "$u")"
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    d="$(dirname "$f")"
+    [[ -d "$d" ]] || install -d -o "$u" -g "$g" -m 0750 "$d"
+    if ! command -v runuser >/dev/null 2>&1 || ! runuser -u "$u" -- test -w "$d" 2>/dev/null; then
+      chown "$u:$g" "$d"
+    fi
+    [[ -e "$f" ]] || install -o "$u" -g "$g" -m 0640 /dev/null "$f"
+    chown "$u:$g" "$f"
+  done < <(sed -nE 's/^[[:space:]]*output file ([^[:space:]{]+).*/\1/p' "$1")
+}
+
 # The file every installer up to v0.2.1 wrote, for a domain and a port. A
 # panel installed then has no stamp, and a file equal to this is still ours.
 legacy_caddyfile_v1() {
@@ -416,6 +442,10 @@ refresh_host_caddyfile() {
         log_info "host Caddyfile already current"
         return 0
     fi
+    # The logs first: validate runs as root and opens every log the new file
+    # names, and a log it has to create is left root:root 0600, which the
+    # reload, running as caddy, cannot open (A-273, the stand 26.10).
+    prepare_caddy_logs "$tmp"
     if ! caddy validate --config "$tmp" --adapter caddyfile >/dev/null 2>&1; then
         rm -f "$tmp"
         log_warn "the new Caddyfile does not validate; Caddy keeps its old file"
@@ -425,6 +455,9 @@ refresh_host_caddyfile() {
     cp -p "$file" "$backup"
     cat "$tmp" > "$file"
     rm -f "$tmp"
+    # Once more before the reload: whatever validate touched is the caddy
+    # user's again.
+    prepare_caddy_logs "$file"
     if systemctl reload caddy; then
         sha256sum "$file" | cut -d' ' -f1 > "$stamp"
         log_ok "host Caddyfile re-rendered for ${domain} and Caddy reloaded (previous kept as ${backup})"
