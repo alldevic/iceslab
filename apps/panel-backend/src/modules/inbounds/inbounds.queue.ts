@@ -538,7 +538,9 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
    * card the same way.
    */
   let req: ApplyInboundsRequest;
-  let inbounds: InboundDto[];
+  let inbounds: InboundDto[] = [];
+  // A-275: the agent's ADAPTER_FAILED, held until the roster has gone out.
+  let partial: NodeRequestError | null = null;
   // Whether the push being tried carries a chain block (E46, see the catch).
   let sentChain = false;
   const transport = new NodeTransport(node);
@@ -679,12 +681,29 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
         },
       })
       .catch(() => null);
-    throw err;
+    /**
+     * A-275, stand 26.10: ADAPTER_FAILED is the agent's answer AFTER it applied
+     * every core it could (server.go handleApplyInbounds: applyPushOutcome runs
+     * all of them, then 500 names the ones that refused). Rethrowing here kept
+     * the roster from the node, so one refusing core (mieru with no user, a
+     * hysteria with no ACME email) left the users of every other core on the
+     * node without their new users. The roster goes out to what applied; the
+     * job still fails after it, the error stays on the node card, the revision
+     * is not marked applied, and BullMQ's retry pushes again.
+     */
+    if (err instanceof NodeRequestError && err.status === 500 && err.body?.error === 'ADAPTER_FAILED') {
+      partial = err;
+    } else {
+      throw err;
+    }
   }
 
   // Push all active users so protocol servers (xray, hysteria, etc.) have
   // an up-to-date client list. addUser is idempotent on the node side.
-  if (inbounds.length === 0) return;
+  if (inbounds.length === 0) {
+    if (partial) throw partial;
+    return;
+  }
 
   // Find the AmneziaWG profile bound to this node (at most one, single
   // awg-quick interface per host). When present, every active user with
@@ -749,8 +768,10 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   }));
   const failed = await sendRoster(transport, node.name, requests);
   getLogger().info(
-    `[worker:inbound-sync] user sync to ${node.name} done (${users.length - failed}/${users.length} ok)`,
+    `[worker:inbound-sync] user sync to ${node.name} done (${users.length - failed}/${users.length} ok)` +
+      (partial ? ', after a push some cores refused' : ''),
   );
+  if (partial) throw partial;
 }
 
 /**
