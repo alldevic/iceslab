@@ -720,9 +720,11 @@ type CoreStatus struct {
 	// configured, the behaviour that predates it.
 	Provisioned *bool `json:"provisioned,omitempty"`
 	// Reason says why a core is not running when that is by design and not a
-	// fault. Today one value, "no inbounds in the last push": the last push the
-	// agent applied named no inbound for this core, so the agent stopped it and
-	// it does not degrade the node. Empty otherwise.
+	// fault, and it does not degrade the node. Two values: "no inbounds in the
+	// last push" (the last push named no inbound for this core, so the agent
+	// stopped it) and "no users on its inbounds yet" (A-275: configured, but its
+	// binary will not run an inbound nobody is on; the first user starts it).
+	// Empty otherwise.
 	Reason string `json:"reason,omitempty"`
 	// Installed answers a different question from Provisioned: is the core's
 	// BINARY on this machine. Provisioned is about configuration the panel

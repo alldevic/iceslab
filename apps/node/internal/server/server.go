@@ -609,6 +609,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				cs.Running = false
 				cs.Provisioned = &f
 				cs.Reason = core.IdleReason
+			} else if w, ok := adapter.(core.Waiter); ok {
+				// A-275: configured and waiting for its first user, not a fault.
+				if r := w.Waiting(); r != "" {
+					cs.Running = false
+					cs.Reason = r
+				}
 			}
 			// Why it is down when that is a fault (P1: the operator sees the
 			// reason, not only the red). Idle or never configured is down by
@@ -717,6 +723,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	allHealthy := true
 	for _, c := range cores {
 		if c.Provisioned != nil && !*c.Provisioned {
+			continue
+		}
+		// Down by design, in words (idle, waiting for its first user).
+		if c.Reason != "" {
 			continue
 		}
 		if !c.Running {

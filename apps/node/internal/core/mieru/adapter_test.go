@@ -140,6 +140,15 @@ func managedAdapter(t *testing.T, runner *recordingRunner) (*Adapter, string) {
 	}, slog.New(slog.NewTextHandler(io.Discard, nil))), path
 }
 
+// withUser: mita starts a proxy only with a user on it (A-275), so a test of
+// what mita serves has one before its first inbound.
+func withUser(t *testing.T, a *Adapter) {
+	t.Helper()
+	if err := a.AddUser(core.User{UserID: "u-0", Username: "zoe", XrayUUID: "uuid-z"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (r *recordingRunner) joined() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -191,6 +200,7 @@ func TestStartServesNothingUntilAPushNamesAnInbound(t *testing.T) {
 func TestIdleStopsMitaAndTheSamePushBringsItBack(t *testing.T) {
 	runner := &recordingRunner{}
 	a, _ := managedAdapter(t, runner)
+	withUser(t, a)
 	body, _ := json.Marshal(map[string]any{"mtu": 1400})
 	if err := a.ApplyIdentifiedInbound("in-1", 9012, body); err != nil {
 		t.Fatal(err)
@@ -219,6 +229,7 @@ func TestIdleStopsMitaAndTheSamePushBringsItBack(t *testing.T) {
 func TestTwoInboundsAreServedAndARemovedOneGoes(t *testing.T) {
 	runner := &recordingRunner{}
 	a, path := managedAdapter(t, runner)
+	withUser(t, a)
 	body, _ := json.Marshal(map[string]any{"mtu": 1400})
 	if err := a.ApplyIdentifiedInbound("in-1", 9012, body); err != nil {
 		t.Fatal(err)
@@ -293,6 +304,7 @@ func TestTheFirstIdleAfterAnUpdateStopsTheMitaLeftRunning(t *testing.T) {
 func TestABindingRecreatedOnTheSamePortIsNotRefused(t *testing.T) {
 	runner := &recordingRunner{}
 	a, path := managedAdapter(t, runner)
+	withUser(t, a)
 	if err := a.ApplyIdentifiedInbound("old", 9012, []byte(`{"mtu":1400}`)); err != nil {
 		t.Fatal(err)
 	}

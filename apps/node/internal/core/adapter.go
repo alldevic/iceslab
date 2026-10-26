@@ -289,6 +289,18 @@ type Idler interface {
 // name. The node is not degraded by it: nothing is meant to run there.
 const IdleReason = "no inbounds in the last push"
 
+// Waiter is an OPTIONAL interface: the core is configured, holds its inbound,
+// and does not serve yet BY DESIGN, with the reason in words (A-275: mita
+// refuses to start a proxy with no user). /healthz reports it running:false
+// with that reason and the node is not degraded by it. Empty when it serves,
+// or when it is down for any other reason (a fault is FaultReporter's).
+type Waiter interface {
+	Waiting() string
+}
+
+// NoUsersReason: a core whose binary will not run an inbound nobody is on.
+const NoUsersReason = "no users on its inbounds yet"
+
 // GeoReceiver is implemented by a core that reads geo files at start and
 // never again (xray: infra/conf/router.go reads a `.dat` while building the
 // config). A new file under an unchanged config reaches it only through a

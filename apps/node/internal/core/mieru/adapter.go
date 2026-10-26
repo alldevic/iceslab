@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
@@ -61,6 +62,10 @@ type Adapter struct {
 	// serving: the last apply put mita's proxy up (`mita start`), and no Idle
 	// has stopped it since.
 	serving bool
+	// waiting: mita holds this config with no user in it, and its proxy is
+	// down until the first user arrives (`mita start` refuses an empty user
+	// list, see regenerateAndReload). Configured, not serving, not a fault.
+	waiting bool
 	// unknown: this agent has not yet stopped or started mita, so what mita
 	// runs is whatever the previous agent left (A-198).
 	unknown bool
@@ -149,14 +154,15 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	a.unknown = false
 	a.inbounds = make(map[string]InboundConfig)
 	a.serving = false
+	a.waiting = false
 	a.renderedHash = [32]byte{}
 	bin, run := a.cfg.BinaryPath, a.cfg.RunCmd
 	a.mu.Unlock()
 	if !had || bin == "" {
 		return nil
 	}
-	if out, err := run(ctx, bin, "stop"); err != nil {
-		return fmt.Errorf("mieru idle: mita stop: %w (%s)", err, out)
+	if err := stopMita(ctx, run, bin); err != nil {
+		return fmt.Errorf("mieru idle: %w", err)
 	}
 	a.logger.Info("mieru: no inbound in the last push, mita stopped")
 	return nil
@@ -294,7 +300,7 @@ func (a *Adapter) ApplyIdentifiedInbound(id string, port int, rawCfg json.RawMes
 		next.MTU = a.cfg.Inbound.MTU
 	}
 	prev, had := a.inbounds[id]
-	if had && prev == next && a.serving {
+	if had && prev == next && (a.serving || a.waiting) {
 		a.mu.Unlock()
 		a.logger.Info("mieru ApplyInbound: config unchanged, skipping")
 		return nil
@@ -412,7 +418,7 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	// no-op resync, otherwise paid `mita apply` + `mita reload` for nothing.
 	hash := sha256.Sum256(blob)
 	a.mu.Lock()
-	unchanged := a.serving && a.renderedHash == hash
+	unchanged := (a.serving || a.waiting) && a.renderedHash == hash
 	a.mu.Unlock()
 	if unchanged {
 		a.logger.Debug("mieru config unchanged, skipping mita apply/reload", "users", len(users))
@@ -435,17 +441,58 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 		a.logger.Warn("mita reload returned non-zero (often safe after apply)",
 			"err", err, "out", string(out))
 	}
+	// No user yet (a new mieru inbound, a node nobody is on): mita 3.37.0 takes
+	// the config and the reload (SetConfig and ValidateFullServerConfig do not
+	// ask for users), but `mita start` refuses, "no user found" (pkg/protocol
+	// mux.go:360), and a proxy already up keeps RUNNING on its port with an
+	// empty list. Checked live against 3.37.0, 26.10. So the config stays in
+	// mita, the proxy goes down (`mita stop`: IDLE, port closed) and the
+	// adapter waits; the first user's regenerate starts it. Before this the
+	// refused start failed the whole push, and the push failing kept the
+	// roster, and with it the first user, from ever reaching the node.
+	if len(users) == 0 {
+		a.mu.Lock()
+		up := a.serving || a.unknown
+		a.mu.Unlock()
+		if up {
+			if err := stopMita(ctx, run, binPath); err != nil {
+				return fmt.Errorf("no users: %w", err)
+			}
+		}
+		a.mu.Lock()
+		a.serving = false
+		a.waiting = true
+		a.unknown = false
+		a.renderedHash = hash
+		a.mu.Unlock()
+		a.logger.Info("mieru: config applied, no users yet, mita proxy waits for the first one", "inbounds", len(inbounds))
+		return nil
+	}
 	if out, err := run(ctx, binPath, "start"); err != nil {
 		return fmt.Errorf("mita start: %w (%s)", err, string(out))
 	}
 
 	a.mu.Lock()
 	a.serving = true
+	a.waiting = false
 	a.unknown = false
 	a.renderedHash = hash
 	a.mu.Unlock()
 	a.logger.Info("mieru (mita) reloaded", "users", len(users), "inbounds", len(inbounds))
 	return nil
+}
+
+// stopMita takes the proxy down. A proxy already down is what stop wants:
+// mita 3.37.0 refuses the stop of a proxy that is not RUNNING with exit 1,
+// "mita server proxy is not running" (pkg/cli/server.go:514-516), which is the
+// state of every fresh agent's first stop (A-275, live 26.10). A daemon that
+// is not running at all is still an error: nothing then holds the config.
+func stopMita(ctx context.Context, run RunCmdFunc, bin string) error {
+	out, err := run(ctx, bin, "stop")
+	if err == nil || strings.Contains(string(out), "server proxy is not running") {
+		return nil
+	}
+	return fmt.Errorf("mita stop: %w (%s)", err, string(out))
 }
 
 // sortedInbounds is the map in port order, so a render from the same state is
