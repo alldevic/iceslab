@@ -14,12 +14,13 @@ import (
 	"time"
 )
 
-// A-265: the hysteria the agent spawns runs with HYSTERIA_LOG_LEVEL=warn. At
-// its default, info, it writes the client's IP and the user's id on every
-// connect and disconnect, and its config file has no key to stop it. A stand-in
+// A-265: the hysteria the agent spawns runs with HYSTERIA_LOG_LEVEL=error. At
+// info it writes the client's IP and the user's id on every connect and
+// disconnect, at warn on every broken connection, and its config file has no
+// key to stop it (LogLevelEnv). A stand-in
 // binary writes the variable it was started with; the real core is not needed
 // to see what environment the agent hands it.
-func TestTheSpawnedHysteriaLogsAtWarn(t *testing.T) {
+func TestTheSpawnedHysteriaLogsAtError(t *testing.T) {
 	dir := t.TempDir()
 	seen := filepath.Join(dir, "env.txt")
 	bin := filepath.Join(dir, "hysteria")
@@ -48,7 +49,7 @@ func TestTheSpawnedHysteriaLogsAtWarn(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if strings.TrimSpace(string(got)) != "warn" {
-		t.Fatalf("the spawned hysteria got HYSTERIA_LOG_LEVEL=%q, want warn", got)
+	if strings.TrimSpace(string(got)) != "error" {
+		t.Fatalf("the spawned hysteria got HYSTERIA_LOG_LEVEL=%q, want error", got)
 	}
 }

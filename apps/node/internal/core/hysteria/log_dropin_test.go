@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// A-265: the unit systemd runs gets HYSTERIA_LOG_LEVEL=warn from a runtime
+// A-265: the unit systemd runs gets HYSTERIA_LOG_LEVEL=error from a runtime
 // drop-in when its environment lacks it, once; a unit that has it (a new
 // installer's, or the drop-in already in place) is left alone, with no reload
 // and no restart.
@@ -58,7 +58,7 @@ func TestALegacyUnitGetsTheLogLevelOnceAndIsRestartedIfRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("drop-in not written (the unit name needs its .service suffix): %v", err)
 	}
-	if !strings.Contains(string(body), "[Service]\nEnvironment=HYSTERIA_LOG_LEVEL=warn\n") {
+	if !strings.Contains(string(body), "[Service]\nEnvironment=HYSTERIA_LOG_LEVEL=error\n") {
 		t.Fatalf("drop-in body:\n%s", body)
 	}
 	if strings.Join(f.calls, ";") != "systemctl daemon-reload;systemctl try-restart hysteria.service" {
@@ -66,7 +66,7 @@ func TestALegacyUnitGetsTheLogLevelOnceAndIsRestartedIfRunning(t *testing.T) {
 	}
 
 	// systemd now carries it: the next start reads it and does nothing.
-	f.env = "PATH=/usr/bin HYSTERIA_LOG_LEVEL=warn"
+	f.env = "PATH=/usr/bin HYSTERIA_LOG_LEVEL=error"
 	f.calls = nil
 	a.ensureUnitLogLevel(context.Background())
 	if len(f.calls) != 0 {
@@ -75,11 +75,11 @@ func TestALegacyUnitGetsTheLogLevelOnceAndIsRestartedIfRunning(t *testing.T) {
 }
 
 func TestANewInstallersUnitIsLeftAlone(t *testing.T) {
-	f := &unitFake{env: "HYSTERIA_LOG_LEVEL=warn"}
+	f := &unitFake{env: "HYSTERIA_LOG_LEVEL=error"}
 	a, dir := unitAdapter(t, f, "hysteria.service")
 	a.ensureUnitLogLevel(context.Background())
 	if len(f.calls) != 0 {
-		t.Fatalf("calls %v on a unit that already logs at warn", f.calls)
+		t.Fatalf("calls %v on a unit that already logs at error", f.calls)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "hysteria.service.d")); !os.IsNotExist(err) {
 		t.Fatalf("a drop-in was written for a unit that needs none: %v", err)
@@ -87,11 +87,21 @@ func TestANewInstallersUnitIsLeftAlone(t *testing.T) {
 }
 
 func TestAnotherLevelInTheUnitIsOverridden(t *testing.T) {
-	f := &unitFake{env: "HYSTERIA_LOG_LEVEL=info"}
-	a, _ := unitAdapter(t, f, "hysteria.service")
-	a.ensureUnitLogLevel(context.Background())
-	if len(f.calls) != 2 {
-		t.Fatalf("calls %v, want the drop-in applied (it comes after the unit's line, the later wins)", f.calls)
+	// info: a unit someone set by hand. warn: what bootstrap-hysteria.sh wrote
+	// until 26.10, which still names the client on every broken connection.
+	for _, level := range []string{"info", "warn"} {
+		f := &unitFake{env: "HYSTERIA_LOG_LEVEL=" + level}
+		a, _ := unitAdapter(t, f, "hysteria.service")
+		a.ensureUnitLogLevel(context.Background())
+		if len(f.calls) != 2 {
+			t.Fatalf("%s: calls %v, want the drop-in applied (it comes after the unit's line, the later wins)", level, f.calls)
+		}
+		// After the reload systemd answers the later assignment: one restart.
+		f.env, f.calls = "HYSTERIA_LOG_LEVEL=error", nil
+		a.ensureUnitLogLevel(context.Background())
+		if len(f.calls) != 0 {
+			t.Fatalf("%s: restarted again on the next start: %v", level, f.calls)
+		}
 	}
 }
 

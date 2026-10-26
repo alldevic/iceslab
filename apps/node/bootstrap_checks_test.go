@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 )
 
 // Stand nl-01, 25.09 (third pass): two bootstrap checks that answered wrong.
@@ -195,12 +197,14 @@ func TestTheAwgRemoveTakesTheStateWithTheConfigs(t *testing.T) {
 	}
 }
 
-// A-267: the hysteria unit the bootstrap writes runs at warn, so the server
-// does not journal every "client connected" with the client's address and the
-// user's id. Checked on the unit write_unit actually writes, in its [Service]
-// section: a line elsewhere, or only in a comment, would not reach hysteria.
-// Nodes installed before this get the same from the agent at runtime (BACK).
-func TestTheHysteriaUnitRunsAtWarn(t *testing.T) {
+// A-267, A-265: the hysteria unit the bootstrap writes runs at the agent's own
+// level, hysteria.LogLevelEnv (error), so the server journals no client's
+// address and user id. One value: the constant is what this compares to, so
+// the script, the agent's spawn and its runtime drop-in cannot drift apart.
+// Checked on the unit write_unit actually writes, in its [Service] section: a
+// line elsewhere, or only in a comment, would not reach hysteria. Reads a file
+// outside the package: -count=1 locally (go test caches it otherwise).
+func TestTheHysteriaUnitRunsAtTheAgentsLevel(t *testing.T) {
 	dir := t.TempDir()
 	unit := filepath.Join(dir, "hysteria.service")
 	bin := stubs(t, map[string]string{"systemctl": "exit 0\n"})
@@ -223,12 +227,12 @@ func TestTheHysteriaUnitRunsAtWarn(t *testing.T) {
 			section = line
 			continue
 		}
-		if section == "[Service]" && line == "Environment=HYSTERIA_LOG_LEVEL=warn" {
+		if section == "[Service]" && line == "Environment="+hysteria.LogLevelEnv {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("the hysteria unit has no Environment=HYSTERIA_LOG_LEVEL=warn in [Service]:\n%s", blob)
+		t.Errorf("the hysteria unit has no Environment=%s in [Service], the level the agent gives the core:\n%s", hysteria.LogLevelEnv, blob)
 	}
 }
 

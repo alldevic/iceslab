@@ -12,10 +12,12 @@ import (
 )
 
 /*
-A-265: the hysteria systemd runs logs at warn too.
+A-265: the hysteria systemd runs logs at error too (LogLevelEnv says why).
 
 The unit comes from the installer, and on nodes installed before A-265 it has
-no HYSTERIA_LOG_LEVEL, so hysteria logs every client's IP and user id at info.
+no HYSTERIA_LOG_LEVEL, so hysteria logs every client's IP and user id at info;
+the installer of 26.10 wrote warn, which still names the client on every
+connection that ends in an error. Either is overridden here.
 The agent cannot fix the unit file: its own unit runs under ProtectSystem=strict
 and /etc/systemd/system is not among its ReadWritePaths (install-iceslab-node.sh),
 and reinstalling the agent to widen them wipes its mTLS keys. /run is writable,
@@ -23,7 +25,10 @@ and systemd reads drop-ins from /run/systemd/system as well (runtime units).
 
 So on every start of the adapter: if the unit's environment already carries
 the level (a new installer sets it in the unit, or the drop-in is still there),
-nothing is done. Otherwise the runtime drop-in is written, systemd reloaded and
+nothing is done. The drop-in's Environment= comes after the unit's, and for
+the same variable systemd keeps the later assignment (systemd.exec,
+Environment=), which is also what `systemctl show -p Environment` answers
+after the reload: one try-restart, then the check finds the level and stops. Otherwise the runtime drop-in is written, systemd reloaded and
 the unit try-restarted, which restarts it only if it runs: a hysteria the agent
 idled for want of an inbound stays down. /run is empty after a reboot, so a node
 whose unit lacks the line restarts hysteria once after each boot.
@@ -51,12 +56,13 @@ func unitName(u string) string {
 }
 
 func logDropIn() []byte {
-	return []byte("# Written by iceslab-node (A-265): hysteria logs every client's IP and\n" +
-		"# user id at info, its default. Runtime: gone after a reboot, written again.\n" +
+	return []byte("# Written by iceslab-node (A-265): below error hysteria logs the client's IP\n" +
+		"# and user id (info: every connect; warn: every broken connection).\n" +
+		"# Runtime: gone after a reboot, written again.\n" +
 		"[Service]\nEnvironment=" + LogLevelEnv + "\n")
 }
 
-// ensureUnitLogLevel gives the systemd unit HYSTERIA_LOG_LEVEL=warn when its
+// ensureUnitLogLevel gives the systemd unit LogLevelEnv when its
 // environment does not carry it. Best-effort: a node it fails on keeps
 // serving, and says why in the agent's log.
 func (a *Adapter) ensureUnitLogLevel(ctx context.Context) {

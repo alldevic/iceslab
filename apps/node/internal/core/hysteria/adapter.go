@@ -266,14 +266,27 @@ func (a *Adapter) Engine() string { return "hysteria" }
 //	                     in tests + setups that don't want systemd in
 //	                     the lifecycle loop.
 //
-// LogLevelEnv (A-265): hysteria logs "client connected/disconnected" with the
-// client's IP and the user's id at info, its default (hysteria 2.12.3,
-// app/cmd/server.go:1805 and :1809; the default in app/cmd/root.go:120), and
-// its config has no log key: only HYSTERIA_LOG_LEVEL or -l set it. warn keeps
-// those lines out of the journal. The spawned process gets it here; the systemd
-// unit from its installer (bootstrap-hysteria.sh) on new nodes, and from the
-// agent's runtime drop-in where it lacks it (log_dropin.go).
-const LogLevelEnv = "HYSTERIA_LOG_LEVEL=warn"
+// LogLevelEnv (A-265): no line of hysteria's journal may say who connected
+// from where. Read at app/v2.12.3:
+//   - info, its default (app/cmd/root.go:120): "client connected" and "client
+//     disconnected" with the client's address and the user's id
+//     (app/cmd/server.go:1805, :1809);
+//   - warn: "TCP error" and "UDP error" with the client's address, the user's
+//     id and, for TCP, where to (app/cmd/server.go:1820, :1832), one line per
+//     connection that ends badly (stand 26.10, aeza-de-01);
+//   - error: nothing of a client. What the server writes there is its own
+//     trouble (app/cmd/server.go:604 realm, :1529 reverse proxy, :1753
+//     shutdown, :1798 database download), plus the Fatal lines it dies on.
+//     A certificate that fails to come is there too: certmagic v0.25.4 (its
+//     go.mod) logs "could not get certificate from issuer" (config.go:687),
+//     "will retry" (async.go:131) and a failed renewal (maintain.go:73) at
+//     error, and acmez v3.1.6 "challenge failed" (client.go:570).
+//
+// Its config has no log key: only HYSTERIA_LOG_LEVEL (app/cmd/root.go:24) or
+// -l set it. The spawned process gets it here; the systemd unit from its
+// installer (bootstrap-hysteria.sh) on new nodes, and from the agent's runtime
+// drop-in where it carries another level or none (log_dropin.go).
+const LogLevelEnv = "HYSTERIA_LOG_LEVEL=error"
 
 func (a *Adapter) Start(ctx context.Context) error {
 	if err := validateTrafficStatsListen(a.cfg.TrafficStatsListen); err != nil {
