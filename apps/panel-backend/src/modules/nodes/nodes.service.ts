@@ -335,7 +335,9 @@ export function buildInstallCommand(input: InstallCommandInput): string {
     if (input.acmeEmail) {
       flags.push(`--hysteria-email ${input.acmeEmail}`);
     } else {
-      notes.push('# optional: --hysteria-email you@domain, for the certificate expiry notices');
+      // The ACME account's contact, nothing more: Let's Encrypt stopped its
+      // expiry emails on 4 June 2025 (letsencrypt.org/2025/01/22/ending-expiration-emails).
+      notes.push("# optional: --hysteria-email you@domain, the ACME account's contact");
     }
   }
 

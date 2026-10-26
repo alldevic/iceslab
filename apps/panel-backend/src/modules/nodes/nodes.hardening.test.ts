@@ -245,7 +245,7 @@ describe('buildInstallCommand: no # inside the command, whatever the placeholder
     expect(cmd).toContain('--hysteria-domain hy.example.com');
     expect(cmd.split('\n').filter((l) => l.trimStart().startsWith('--hysteria-email'))).toEqual([]);
     expect(cmd).not.toContain('admin@example.com');
-    expect(cmd).toContain('# optional: --hysteria-email you@domain, for the certificate expiry notices');
+    expect(cmd).toContain("# optional: --hysteria-email you@domain, the ACME account's contact");
   });
 });
 

@@ -239,7 +239,8 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		// required"). hysteria 2.12.3 hands the email to certmagic as it is
 		// (app/cmd/server.go:1026-1031), certmagic v0.25.4 registers an account
 		// with no contact (account.go:100-103), and RFC 8555 7.3 makes the
-		// contact optional. The email only buys the CA's expiry notices.
+		// contact optional. The email is only the account's contact: Let's
+		// Encrypt stopped its expiry emails on 4 June 2025.
 	}
 	// Port selection priority (slice 50, 2026-05-20):
 	//   1. inbound.Port: what the panel actually pushed, the source of truth

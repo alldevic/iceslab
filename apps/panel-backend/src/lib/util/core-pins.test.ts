@@ -137,12 +137,12 @@ describe('the payload road names the same variables as the scripts', () => {
 });
 
 describe('CI asks the engine the fleet runs, checked by the same sha256', () => {
-  // The config-validity tests download xray, sing-box and hysteria. A CI on
-  // another release answers for an engine no node runs: green in CI, refused on
-  // the fleet.
+  // The config-validity tests download xray, sing-box and hysteria, and the
+  // mieru adapter's live test mita (A-275). A CI on another release answers for
+  // an engine no node runs: green in CI, refused on the fleet.
   const ci = read('.github/workflows/ci.yml');
 
-  it.each(['xray', 'singbox', 'hysteria'] as const)('%s', (c) => {
+  it.each(['xray', 'singbox', 'hysteria', 'mita'] as const)('%s', (c) => {
     const entry = CORE_VERSIONS[c];
     const release = entry.releases.find((r) => r.version === entry.pinned)!;
     const asset = release.assets!.amd64!;
