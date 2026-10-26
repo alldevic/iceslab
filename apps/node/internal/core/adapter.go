@@ -301,6 +301,14 @@ type Waiter interface {
 // NoUsersReason: a core whose binary will not run an inbound nobody is on.
 const NoUsersReason = "no users on its inbounds yet"
 
+// ACMEUser is an OPTIONAL interface: the config this core runs takes its
+// certificate from a public CA over ACME, whose HTTP-01 challenge comes in on
+// 80/tcp (A-280). The server opens 80/tcp beside the inbound's own port when
+// it says so. Cheap: called after every applied inbound of the core.
+type ACMEUser interface {
+	UsesACME() bool
+}
+
 // GeoReceiver is implemented by a core that reads geo files at start and
 // never again (xray: infra/conf/router.go reads a `.dat` while building the
 // config). A new file under an unchanged config reaches it only through a

@@ -1519,6 +1519,7 @@ func (s *Server) applyPushKept(
 		// And for the cascade inter-hop link port (buried in the xray cascade
 		// fragment, not a top-level inbound, so ensureInboundFirewall misses it).
 		s.ensureCascadeFirewall(ctx, ib)
+		s.ensureACMEFirewall(ctx, matched)
 		applied++
 	}
 
@@ -1655,13 +1656,29 @@ func (s *Server) ensureInboundFirewall(ctx context.Context, ib dto.InboundDto) {
 	}
 }
 
+// ensureACMEFirewall opens 80/tcp for a core whose config takes an ACME
+// certificate (core.ACMEUser). A-280, stand 26.10 on aeza-de-01: hysteria put
+// on a node later by its bootstrap had no 80/tcp (the installer's rule,
+// install-iceslab-node.sh:1418-1422, never ran for it), every HTTP-01
+// challenge timed out, and the unit restarted every 5 s into Let's Encrypt's
+// failed-validation limit while the push read as applied.
+//
+// Never closed by the agent, even with no ACME core left: the installer
+// opens the same rule and the agent cannot tell its own from that one, and a
+// certificate's renewal needs 80 for as long as the core keeps it.
+func (s *Server) ensureACMEFirewall(ctx context.Context, adapter core.CoreAdapter) {
+	if au, ok := adapter.(core.ACMEUser); ok && au.UsesACME() {
+		fwAllow(ctx, s.logger, 80, "tcp")
+	}
+}
+
 // closeDroppedPorts closes the ports the cores served on before a push and do
 // not after it (A-158): a removed host, or one moved to another port, left
 // its rule open. Both sides are what the cores RUN (the stored accepted push
 // before and after), not what the panel sent: a refused inbound keeps its
 // old port, and closing it would cut the users still on it. A (port, proto)
-// another inbound still uses stays open, and the SSH port and the agent's own
-// are never touched.
+// another inbound still uses stays open, and the SSH port, 80 (ACME) and the
+// agent's own are never touched.
 func (s *Server) closeDroppedPorts(ctx context.Context, before, after []dto.InboundDto) {
 	open := func(ibs []dto.InboundDto) map[string]bool {
 		out := map[string]bool{}
@@ -1676,7 +1693,8 @@ func (s *Server) closeDroppedPorts(ctx context.Context, before, after []dto.Inbo
 		return out
 	}
 	still := open(after)
-	keep := map[int]bool{22: true}
+	// 80 with SSH: ACME's port is never closed by the agent (ensureACMEFirewall).
+	keep := map[int]bool{22: true, 80: true}
 	if p, err := strconv.Atoi(s.cfg.Port); err == nil {
 		keep[p] = true
 	}

@@ -717,6 +717,20 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	return a.restartLocked("ApplyInbound")
 }
 
+var _ core.ACMEUser = (*Adapter)(nil)
+
+// UsesACME implements core.ACMEUser (A-280): the config written for the
+// applied inbound takes its certificate over ACME, the `acme:` branch of
+// renderConfig (inbound.go:220, :229-236, :274-283): an inbound with no panel
+// pair. The self-signed pair (E30a) and nothing applied (or idled, which
+// clears the inbound) need no 80/tcp. Nothing is written without ConfigPath,
+// so nothing of ours runs then either.
+func (a *Adapter) UsesACME() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.ConfigPath != "" && a.inbound != (InboundConfig{}) && a.inbound.TLSCertPEM == ""
+}
+
 // ApplyCascade implements core.CascadeReceiver: the node-level hand-off to the
 // chain, phase 6.
 //

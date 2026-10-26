@@ -129,6 +129,15 @@ func (a *Adapter) Provisioned() bool {
 	return a.cfg.Inbound.Hostname != ""
 }
 
+var _ core.ACMEUser = (*Adapter)(nil)
+
+// UsesACME implements core.ACMEUser (A-280): naive has no other certificate.
+// A provisioned site is `:<port>, <hostname>` with `tls <email>`
+// (caddyfile.go:164-165), Caddy's automatic HTTPS from a public CA, whose
+// HTTP-01 challenge needs 80/tcp. Same condition as Provisioned; Idle clears
+// the hostname, so an idle naive needs nothing.
+func (a *Adapter) UsesACME() bool { return a.Provisioned() }
+
 func (a *Adapter) Start(ctx context.Context) error {
 	if !a.Provisioned() {
 		a.logger.Info("naive adapter: hostname not set, waiting for ApplyInbound from panel")
