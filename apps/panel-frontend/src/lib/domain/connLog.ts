@@ -1,47 +1,21 @@
+import type {
+  ConnLogClearResponse,
+  ConnLogClearResult,
+  ConnLogSource,
+  ConnLogSourceCheck,
+  ConnLogTraceResponse,
+} from '@iceslab/shared';
 import { api } from '@/lib/net/client';
 
 /**
  * The node's connection log (owner's decision 26.10): whether the machine's
  * journal or syslog holds lines with clients' addresses, and a wipe of both.
  *
- * Shapes as BACK-2 gave them (packages/shared transport.ts, ConnLog*); kept
- * here until that commit lands, then read from shared. Every answer is
- * checked first: a malformed one is `null`, never «clean».
+ * Shapes are the contract's (packages/shared transport.ts, ConnLog*, BACK-2
+ * e3d7f828). Every answer is still checked first: a malformed one is `null`,
+ * never «clean».
  */
-export type ConnLogSource = 'journal' | 'syslog';
-export type ConnLogCheckState = 'found' | 'clean' | 'absent' | 'failed';
-
-export interface ConnLogSourceCheck {
-  source: ConnLogSource;
-  state: ConnLogCheckState;
-  since: string | null;
-  error?: string;
-}
-
-export interface ConnLogTrace {
-  /** true: found; false: everything clean or absent; null: nothing found but a source failed. */
-  present: boolean | null;
-  since: string | null;
-  sources: ConnLogSource[];
-  checks: ConnLogSourceCheck[];
-}
-
-export interface ConnLogClearStep {
-  command: string;
-  ok: boolean;
-  error?: string;
-}
-
-export interface ConnLogClearResult {
-  source: ConnLogSource;
-  state: 'cleared' | 'absent' | 'failed';
-  steps: ConnLogClearStep[];
-}
-
-export interface ConnLogClear {
-  results: ConnLogClearResult[];
-  after: ConnLogTrace;
-}
+type ConnLogCheckState = ConnLogSourceCheck['state'];
 
 /** GET runs the check on the node: up to 60 s by the contract. */
 export async function getConnLog(nodeId: string): Promise<unknown> {
@@ -62,7 +36,7 @@ const CLEAR_STATES: readonly string[] = ['cleared', 'absent', 'failed'];
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' ? (v as Record<string, unknown>) : null);
 const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 
-export function connLogTraceOf(data: unknown): ConnLogTrace | null {
+export function connLogTraceOf(data: unknown): ConnLogTraceResponse | null {
   const d = obj(data);
   if (!d) return null;
   if (!(d.present === null || typeof d.present === 'boolean') || !strOrNull(d.since)) return null;
@@ -87,7 +61,7 @@ export function connLogTraceOf(data: unknown): ConnLogTrace | null {
   };
 }
 
-export function connLogClearOf(data: unknown): ConnLogClear | null {
+export function connLogClearOf(data: unknown): ConnLogClearResponse | null {
   const d = obj(data);
   if (!d || !Array.isArray(d.results)) return null;
   const after = connLogTraceOf(d.after);

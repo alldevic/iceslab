@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next';
 import { Box, Text } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { clearConnLog, connLogClearOf, connLogRefusal, connLogTraceOf, getConnLog, type ConnLogSource } from '@/lib/domain/connLog';
+import type { ConnLogSource } from '@iceslab/shared';
+import { clearConnLog, connLogClearOf, connLogRefusal, connLogTraceOf, getConnLog } from '@/lib/domain/connLog';
 import { connLogClearFailures, connLogView, type ConnLogLine } from '@/contours/nodes/lib/connLogView';
 import { confirmConnLogClear } from '@/contours/nodes/components/nodeConfirm';
 import { PlainButton } from '@/contours/nodes/components/NodeEdit/PlainButton';

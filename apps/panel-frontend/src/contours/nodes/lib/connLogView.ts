@@ -1,4 +1,4 @@
-import type { ConnLogClear, ConnLogSource, ConnLogTrace } from '@/lib/domain/connLog';
+import type { ConnLogClearResponse as ConnLogClear, ConnLogSource, ConnLogTraceResponse as ConnLogTrace } from '@iceslab/shared';
 
 /**
  * What the node page says about the connection log (owner's decision 26.10).
