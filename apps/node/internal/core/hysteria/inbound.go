@@ -234,9 +234,12 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		if hostname == "" {
 			return nil, fmt.Errorf("hysteria render: Hostname is required")
 		}
-		if adapterCfg.ACMEEmail == "" {
-			return nil, fmt.Errorf("hysteria render: ACMEEmail is required")
-		}
+		// No email is not a refusal (A-276, stand 26.10: a node installed
+		// without --hysteria-email failed every push with "ACMEEmail is
+		// required"). hysteria 2.12.3 hands the email to certmagic as it is
+		// (app/cmd/server.go:1026-1031), certmagic v0.25.4 registers an account
+		// with no contact (account.go:100-103), and RFC 8555 7.3 makes the
+		// contact optional. The email only buys the CA's expiry notices.
 	}
 	// Port selection priority (slice 50, 2026-05-20):
 	//   1. inbound.Port: what the panel actually pushed, the source of truth
@@ -276,7 +279,9 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		b.WriteString("acme:\n")
 		b.WriteString("  domains:\n")
 		fmt.Fprintf(&b, "    - %s\n", hostname)
-		fmt.Fprintf(&b, "  email: %s\n", adapterCfg.ACMEEmail)
+		if adapterCfg.ACMEEmail != "" {
+			fmt.Fprintf(&b, "  email: %s\n", adapterCfg.ACMEEmail)
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString("auth:\n")

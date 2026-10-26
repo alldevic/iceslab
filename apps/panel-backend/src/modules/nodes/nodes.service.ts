@@ -328,11 +328,14 @@ export function buildInstallCommand(input: InstallCommandInput): string {
   const acmeDomain = acmeHostnameFor(input.nodeAddress);
   if (input.engines.includes('hysteria') && acmeDomain) {
     flags.push(`--hysteria-domain ${acmeDomain}`);
+    // A-276: no email is a working install (the agent renders ACME without
+    // one), and a placeholder is not: Let's Encrypt refuses a contact at
+    // example.com/.net/.org (boulder policy/pa.go, forbiddenMailDomains), so
+    // the admin@example.com this used to write never got a certificate.
     if (input.acmeEmail) {
       flags.push(`--hysteria-email ${input.acmeEmail}`);
     } else {
-      flags.push('--hysteria-email admin@example.com');
-      notes.push('# set ACME_DEFAULT_EMAIL on the panel to inject the address automatically; replace admin@example.com below');
+      notes.push('# optional: --hysteria-email you@domain, for the certificate expiry notices');
     }
   }
 

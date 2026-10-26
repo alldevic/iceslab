@@ -175,7 +175,7 @@ describe('buildInstallCommand: no # inside the command, whatever the placeholder
       expect(cmd).toContain('--ssh-allowlist 203.0.113.4');
     }
     if (!c.panelIp) expect(cmd).toMatch(/^# panel IP auto-detect failed/m);
-    if (c.engines.includes('hysteria') && !c.acmeEmail) expect(cmd).toMatch(/^# set ACME_DEFAULT_EMAIL/m);
+    if (c.engines.includes('hysteria') && !c.acmeEmail) expect(cmd).toMatch(/^# optional: --hysteria-email/m);
   });
 
   it('names the cores right after the token, and no --protocol', () => {
@@ -228,6 +228,24 @@ describe('buildInstallCommand: no # inside the command, whatever the placeholder
       '  --hysteria-domain hy.example.com \\',
       '  --hysteria-email ops@example.com',
     ]);
+  });
+
+  // A-276: Let's Encrypt refuses a contact at example.com (boulder
+  // forbiddenMailDomains), so the placeholder never got a certificate. With no
+  // ACME_DEFAULT_EMAIL the flag is left out and the command says it is optional.
+  it('with no ACME email writes no placeholder, only that the email is optional', () => {
+    const cmd = buildInstallCommand({
+      panelUrl: 'https://p',
+      token: 't',
+      nodeAddress: 'hy.example.com:1337',
+      engines: ['hysteria'],
+      panelIp: '198.51.100.7',
+      acmeEmail: '',
+    });
+    expect(cmd).toContain('--hysteria-domain hy.example.com');
+    expect(cmd.split('\n').filter((l) => l.trimStart().startsWith('--hysteria-email'))).toEqual([]);
+    expect(cmd).not.toContain('admin@example.com');
+    expect(cmd).toContain('# optional: --hysteria-email you@domain, for the certificate expiry notices');
   });
 });
 
