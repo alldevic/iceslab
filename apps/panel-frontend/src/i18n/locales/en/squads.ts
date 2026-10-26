@@ -167,6 +167,9 @@ export const squads = {
     cascadeHandedOut: 'HANDED OUT',
     cascadeNotHandedOut: 'NOT HANDED OUT',
     cascadeOff: 'OFF FOR THIS SQUAD',
+    cascadeNodePolicyGated: "Node policy rules leading into this cascade do not apply to this squad's users either.",
+    cascadeNodePolicyGatedExceptChain:
+      "Node policy rules leading into this cascade do not apply to this squad's users either, except on hysteria and AmneziaWG entries: users cannot be told apart there.",
     cascadeSwitch: 'Hand out cascade "{{name}}"',
     cascadeOffMeans:
       'The entry host {{nodes}}, if handed out, stays a plain server: the squad members come out in the entry country, {{countries}}.',

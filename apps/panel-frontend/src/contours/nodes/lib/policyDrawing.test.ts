@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { policyDrawingOf } from '@/lib/domain/nodePolicies';
 import { notDrawnReasonKey, policyDrawingLoad, policyDrawingView } from '@/contours/nodes/lib/policyDrawing';
+import ru from '@/i18n/locales/ru';
+import en from '@/i18n/locales/en';
 
 describe('policyDrawingLoad (хвост A-232): у каждого состояния запроса свои слова', () => {
   const say = (err: unknown) => `сказал: ${(err as { response?: { data?: { message?: string } } }).response?.data?.message}`;
@@ -107,5 +109,15 @@ describe('policyDrawingView (A-232)', () => {
   it('незнакомая причина называется кодом, а не молчит', () => {
     expect(notDrawnReasonKey('lost-condition')).toBe('nodeEdit.policyDrawing.reason.lost-condition');
     expect(notDrawnReasonKey('something-new')).toBeNull();
+    // A-277: the new reason has its words in both locales.
+    const key = notDrawnReasonKey('nobody-may-take')!;
+    const at = (d: unknown) => key.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], d);
+    expect(typeof at(ru)).toBe('string');
+    expect(typeof at(en)).toBe('string');
+  });
+  it('A-277: ungated читается списком строк; поля нет (старый сервер) это null', () => {
+    const base = { policyId: 'p', drawing: 'handover', notDrawn: [], agent: null };
+    expect(policyDrawingOf({ ...base, ungated: ['r1', 7] })?.ungated).toEqual(['r1']);
+    expect(policyDrawingOf(base)?.ungated).toBeNull();
   });
 });

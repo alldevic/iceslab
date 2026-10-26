@@ -187,6 +187,20 @@ describe('три состояния каскада для сквада', () => {
     expect(c.exits.map((e) => e.allowed)).toEqual([false, false]);
   });
 
+  it('A-277: выключен или сужен, правила политики ноды в каскад на сквад не действуют; все выходы: строки нет', () => {
+    expect(row([]).nodePolicyNote).toBeNull();
+    expect(row([{ cascadeId: 'c1', directionIds: ['d2'] }]).nodePolicyNote).toBe('gated');
+    expect(row([{ cascadeId: 'c1', directionIds: [], exitNodeIds: [] }]).nodePolicyNote).toBe('gated');
+  });
+
+  it('A-277: вход hysteria или AmneziaWG: юзера не различить, оговорка «кроме входов»', () => {
+    for (const proto of ['hysteria', 'amneziawg']) {
+      const c = { ...cascade, positions: [{ ...cascade.positions[0]!, entryProtocol: proto }] } as unknown as Cascade;
+      const r = squadCascades('me', state({ exitAcl: [{ cascadeId: 'c1', directionIds: ['d1'] }] }), { ...world, cascades: [c] })[0]!;
+      expect(r.nodePolicyNote).toBe('gated-except-chain');
+    }
+  });
+
   it('страна входа неизвестна хотя бы у одной ноды: страны нет вовсе', () => {
     const w = { ...world, nodes: world.nodes.map((n) => (n.id === 'entry' ? { ...n, countryCode: null } : n)) };
     expect(squadCascades('me', state(), w)[0]!.entryCountries).toBeNull();

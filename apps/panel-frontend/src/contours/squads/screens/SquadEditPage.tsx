@@ -1391,6 +1391,15 @@ export function SquadEditPage() {
                       </UnstyledButton>
                     );
                   })}
+                  {/* A-277: off or narrowed, the node policy's rules into this
+                      cascade do not take the squad's users either. */}
+                  {c.nodePolicyNote && (
+                    <Text style={{ padding: '8px 14px', fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST, borderTop: `1px solid ${HAIRLINE}` }}>
+                      {c.nodePolicyNote === 'gated-except-chain'
+                        ? t('squadEdit.cascadeNodePolicyGatedExceptChain')
+                        : t('squadEdit.cascadeNodePolicyGated')}
+                    </Text>
+                  )}
                   {lastExitRefused === c.id && (
                     <Text style={{ padding: '8px 14px', fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER }}>
                       {t('squadEdit.cascadeLastExit')}

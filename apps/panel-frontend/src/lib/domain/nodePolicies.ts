@@ -93,13 +93,19 @@ export interface NodePolicyInput {
  * that does not report it). Read by `policyDrawingOf`, input checked first.
  */
 export type PolicyDrawingKind = 'legacy' | 'handover' | 'none';
-export type PolicyNotDrawnReason = 'lost-condition' | 'direction-not-dialled' | 'no-cascade-drawing';
+export type PolicyNotDrawnReason = 'lost-condition' | 'direction-not-dialled' | 'no-cascade-drawing' | 'nobody-may-take';
 
 export interface PolicyDrawing {
   policyId: string | null;
   drawing: PolicyDrawingKind;
   /** Rules the push leaves out; a reason this build does not know stays as its code. */
   notDrawn: { ruleId: string; reason: string }[];
+  /**
+   * A-277 (BACK-2 5465a512): cascade rules drawn for every user of the entry,
+   * because the entry (hysteria, AmneziaWG) cannot tell users apart. `null`:
+   * a server older than the field, nothing said.
+   */
+  ungated: string[] | null;
   agent: {
     drawing: PolicyDrawingKind;
     /** `ruleIds` empty: no rule of the current policy names that way out. */
@@ -143,7 +149,8 @@ export function policyDrawingOf(data: unknown): PolicyDrawing | null {
       observedAt: a.observedAt,
     };
   }
-  return { policyId: d.policyId as string | null, drawing: d.drawing as PolicyDrawingKind, notDrawn, agent };
+  const ungated = Array.isArray(d.ungated) ? d.ungated.filter((x): x is string => typeof x === 'string') : null;
+  return { policyId: d.policyId as string | null, drawing: d.drawing as PolicyDrawingKind, notDrawn, ungated, agent };
 }
 
 export async function listNodePolicies(): Promise<{ policies: NodePolicy[] }> {

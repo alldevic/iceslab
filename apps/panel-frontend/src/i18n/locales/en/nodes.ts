@@ -224,6 +224,7 @@ export const nodes = {
         'lost-condition': 'a whole kind of its conditions cannot be read',
         'direction-not-dialled': 'the node dials its direction by no leg, or by more than one',
         'no-cascade-drawing': 'the push gives xray no way out into the cascade (a transit or exit under a chain, an entry on hysteria or AmneziaWG)',
+        'nobody-may-take': 'no user of this entry may take the direction (squads narrowed or the cascade switched off for them)',
       },
       agentSilent: 'The agent does not report what it drew: an older agent, or not asked yet. This is not «everything goes out».',
       mismatch: 'The panel sent {{sent}}, the agent drew {{drawn}}.',
@@ -477,6 +478,10 @@ export const nodes = {
       },
       policyWhy: 'node policy "{{name}}"',
       policyNotDrawn: 'Not drawn: this rule of policy "{{name}}" did not reach the node and will not fire',
+      policyNobodyMayTake:
+        'Not drawn: no user of this entry may take the direction (squads narrowed or the cascade switched off for them), the rule does not act.',
+      policyUngated:
+        'The entry takes users through hysteria or AmneziaWG, where users cannot be told apart: the rule acts on every user of the entry.',
       entryChip: 'Cascade entry',
       chip: {
         none: 'Outside cascades',

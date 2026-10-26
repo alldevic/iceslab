@@ -108,7 +108,7 @@ export function policyDrawingView(
 
 /** The reason's words key, or null for a reason this build does not know (said as its code). */
 export function notDrawnReasonKey(reason: string): string | null {
-  return reason === 'lost-condition' || reason === 'direction-not-dialled' || reason === 'no-cascade-drawing'
+  return reason === 'lost-condition' || reason === 'direction-not-dialled' || reason === 'no-cascade-drawing' || reason === 'nobody-may-take'
     ? `nodeEdit.policyDrawing.reason.${reason}`
     : null;
 }

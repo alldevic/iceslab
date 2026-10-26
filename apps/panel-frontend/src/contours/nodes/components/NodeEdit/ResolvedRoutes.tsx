@@ -134,10 +134,22 @@ export function ResolvedRoutes({
         const match = r.rule.match.length > 0 ? r.rule.match.join(' · ') : t('nodeEdit.routes.policyAny');
         return r.rule.notDrawn ? (
           <RuleRow key={i} accent={AMBER} background={`${AMBER}0D`} icon={<WarnIcon size={14} color={AMBER} />}
-            match={match} action={action} why={t('nodeEdit.routes.policyNotDrawn', { name: policyName })} whyTone={AMBER} struck />
+            match={match} action={action}
+            why={
+              // A-277: nobody of this entry may take the direction.
+              r.rule.notDrawnReason === 'nobody-may-take'
+                ? t('nodeEdit.routes.policyNobodyMayTake')
+                : t('nodeEdit.routes.policyNotDrawn', { name: policyName })
+            }
+            whyTone={AMBER} struck />
         ) : (
           <RuleRow key={i} accent={CYAN} match={match} action={action} actionDot={POLICY_TONE[r.rule.action]}
-            why={t('nodeEdit.routes.policyWhy', { name: policyName })} />
+            why={
+              r.rule.ungated
+                ? `${t('nodeEdit.routes.policyWhy', { name: policyName })}. ${t('nodeEdit.routes.policyUngated')}`
+                : t('nodeEdit.routes.policyWhy', { name: policyName })
+            }
+            whyTone={r.rule.ungated ? AMBER : undefined} />
         );
       }
       case 'fromLink':

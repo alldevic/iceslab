@@ -101,7 +101,21 @@ export interface SquadCascade {
   entryHostToAdd: string | null;
   /** Policies granted on this cascade by other squads and not by this one. */
   policiesToOffer: { id: string; name: string }[];
+  /**
+   * A-277: off or narrowed, the node policy's rules into this cascade do not
+   * take the squad's users either (BACK-2 5465a512): `gated`. An entry on
+   * hysteria or AmneziaWG cannot tell users apart, a rule there acts on all:
+   * `gated-except-chain`. Null when the squad takes every exit.
+   */
+  nodePolicyNote: 'gated' | 'gated-except-chain' | null;
 }
+
+/**
+ * Entry protocols whose users reach the cascade through the chain, where the
+ * entry's xray cannot tell one user from another: the server's list
+ * (cascade.validation.ts:64, ENTRIES_ONLY_THROUGH_CHAIN).
+ */
+const CHAIN_ONLY_ENTRIES: readonly string[] = ['hysteria', 'amneziawg'];
 
 export interface SquadState {
   profileIds: string[];
@@ -149,6 +163,12 @@ export function cascadeShape(c: Pick<Cascade, 'hops' | 'positions' | 'directions
     entryNodeIds: hops[0] ? [hops[0].nodeId] : [],
     directions: hops.slice(1).map((h, i) => ({ key: h.id, tag: i + 1, countryCode: null, nodeIds: [h.nodeId] })),
   };
+}
+
+/** The cascade's entry speaks hysteria or AmneziaWG (v4 positions only; a legacy hop cascade has no entry protocol). */
+function chainOnlyEntry(c: Pick<Cascade, 'positions'>): boolean {
+  const entry = c.positions.find((p) => p.position === 0);
+  return entry?.entryProtocol != null && CHAIN_ONLY_ENTRIES.includes(entry.entryProtocol);
 }
 
 /** Does this squad hand out an enabled host on one of these nodes. */
@@ -261,6 +281,7 @@ export function squadCascades(squadId: string | null, state: SquadState, world: 
           .filter((p) => offered.has(p.id))
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((p) => ({ id: p.id, name: p.name })),
+        nodePolicyNote: acl === undefined ? null : chainOnlyEntry(c) ? 'gated-except-chain' : 'gated',
       };
     });
 }

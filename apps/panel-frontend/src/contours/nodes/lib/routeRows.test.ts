@@ -21,6 +21,7 @@ const drawing = (over: Partial<PolicyDrawing> = {}): PolicyDrawing => ({
   policyId: 'cascade-test',
   drawing: 'handover',
   notDrawn: [],
+  ungated: [],
   agent: null,
   ...over,
 });
@@ -65,6 +66,15 @@ describe('nodePolicyBand (A-263): политика ноды, вход первы
       say,
     );
     expect(agent.rules.find((r) => r.ruleId === 'r1')?.notDrawn).toBe(true);
+  });
+  it('A-277: nobody-may-take несёт свою причину; ungated помечено, но нарисовано', () => {
+    const d = drawing({ notDrawn: [{ ruleId: 'r4', reason: 'nobody-may-take' }], ungated: ['r1'] });
+    const rows = nodePolicyBand('cascade-test', q({ policies: [policy] }), d, say).rules;
+    expect(rows.find((r) => r.ruleId === 'r4')).toMatchObject({ notDrawn: true, notDrawnReason: 'nobody-may-take', ungated: false });
+    expect(rows.find((r) => r.ruleId === 'r1')).toMatchObject({ notDrawn: false, notDrawnReason: null, ungated: true });
+    // A server older than the field: nothing is marked ungated.
+    const old = nodePolicyBand('cascade-test', q({ policies: [policy] }), drawing({ ungated: null }), say).rules;
+    expect(old.every((r) => r.ungated === false)).toBe(true);
   });
   it('рисунок не прочитан или про другую политику: метки нет (null), а не «нарисовано»', () => {
     expect(nodePolicyBand('cascade-test', q({ policies: [policy] }), null, say).rules.every((r) => r.notDrawn === null)).toBe(true);

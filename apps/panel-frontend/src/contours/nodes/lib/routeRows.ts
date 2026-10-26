@@ -27,6 +27,10 @@ export interface PolicyRuleRow {
   direction: string | null;
   /** `null`: whether it reached the node is not known (drawing not read). */
   notDrawn: boolean | null;
+  /** Why the panel left it out, when it did (notDrawn[].reason); null otherwise. */
+  notDrawnReason: string | null;
+  /** A-277: drawn for every user of the entry (hysteria, AmneziaWG cannot tell them apart). */
+  ungated: boolean;
 }
 
 /** The node's policy as a band over its rows: present, absent or not known. */
@@ -76,6 +80,8 @@ export function nodePolicyBand(
   const notDrawn = new Set(
     known ? [...drawing.notDrawn.map((n) => n.ruleId), ...(drawing.agent?.notDrawn ?? []).flatMap((n) => n.ruleIds)] : [],
   );
+  const reasonOf = new Map(known ? drawing.notDrawn.map((n) => [n.ruleId, n.reason] as const) : []);
+  const ungated = new Set(known ? (drawing.ungated ?? []) : []);
   const rules = [...policy.rules]
     // The push carries enabled rules only (node-policies.service, `where: { enabled: true }`).
     .filter((r) => r.enabled)
@@ -92,6 +98,8 @@ export function nodePolicyBand(
       action: r.action.kind,
       direction: r.action.kind === 'cascade' ? (r.action.directionLabel ?? null) : null,
       notDrawn: known ? notDrawn.has(r.id) : null,
+      notDrawnReason: reasonOf.get(r.id) ?? null,
+      ungated: ungated.has(r.id),
     }));
   return { band: { kind: 'ready', name: policy.name, drawingKnown: known }, rules };
 }
