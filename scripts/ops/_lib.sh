@@ -254,6 +254,31 @@ git_sync_to_ref() {
     SHA_AFTER=$(git_short_sha)
 }
 
+# deploy_self_sum <script>: sha256 of a deploy script and of this library
+# together, as they are on disk now.
+deploy_self_sum() {
+    cat "$1" "${BASH_SOURCE[0]}" | sha256sum | cut -d' ' -f1
+}
+
+# reexec_if_updated <sum before> <script> [args...]: after git_sync_to_ref,
+# start the script again when the sync changed it or this library, with the
+# same arguments and environment. bash keeps executing the copy it already
+# read, and this library was sourced before the sync, so without this a step
+# added in the new version (step 5, the host Caddy) is skipped by the very
+# deploy that brings it, and only the next deploy runs it (26.10, the stand,
+# updated from a v0.2.1-era checkout: Caddyfile not re-rendered).
+# ICESLAB_DEPLOY_REEXEC=1 marks the second run: it does not sync again and
+# never hands over a second time, so a script that changes itself on every
+# sync cannot loop. SHA_BEFORE goes along for the step 1 line.
+reexec_if_updated() {
+    local before="$1" script="$2"
+    shift 2
+    [[ "${ICESLAB_DEPLOY_REEXEC:-0}" == 1 ]] && return 0
+    [[ "$(deploy_self_sum "$script")" == "$before" ]] && return 0
+    log_info "the sync changed $(basename "$script") or _lib.sh: handing over to the new one"
+    ICESLAB_DEPLOY_REEXEC=1 SHA_BEFORE="${SHA_BEFORE:-}" exec bash "$script" "$@"
+}
+
 # ───── Host Caddy (A-267) ─────
 # The installer writes /etc/caddy/Caddyfile once, in domain mode. A fix to that
 # file (the masked logs of A-267) would otherwise never reach a panel that is
