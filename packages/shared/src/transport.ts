@@ -2066,6 +2066,19 @@ export interface HealthcheckResponse {
    * xray that has not rendered yet.
    */
   policy?: NodePolicyDrawn;
+  /**
+   * The Hysteria 2 port-hopping range the node's nat table redirects, read on
+   * every healthcheck. `start: 0` = this node redirects none. ⚠ ABSENT is not
+   * "none": the table could not be read, or the agent is older than the field.
+   * Mirrors the Go PortHopDto json tags exactly (wire-sync).
+   */
+  portHopping?: PortHopping;
+}
+
+/** An inclusive UDP port range a node redirects; `{start: 0, end: 0}` = none. */
+export interface PortHopping {
+  start: number;
+  end: number;
 }
 
 /** A-232. Mirrors dto.PolicyDrawn. */
@@ -2140,6 +2153,9 @@ export interface NodeCores {
   /** See HealthcheckResponse.chainEngine (E46). Kept with the inventory:
    *  the cascade save reads it between healthchecks. */
   chainEngine?: EngineName;
+  /** See HealthcheckResponse.portHopping. Inventory: it changes when hysteria's
+   *  bootstrap is rerun with another range. Absent = not reported. */
+  portHopping?: PortHopping;
   cores: NodeCoreInfo[];
 }
 

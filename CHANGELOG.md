@@ -26,6 +26,12 @@ All notable changes to Iceslab are documented here. Format loosely follows
   start with the backend's rule. `PANEL_BACKEND_ADDR` (default
   `backend:3000`) points it at a backend that is not the compose service.
 
+- A node reports the Hysteria 2 port-hopping range its nat table actually
+  redirects, on every healthcheck, and the host and deploy screens warn about
+  a UDP port inside that range instead of inside the installer's default
+  20000-50000. A node that redirects nothing is not warned about; an agent
+  older than this falls back to the default.
+
 ### Fixed
 
 - A user whose term ends while they are `limited` (quota used up) now

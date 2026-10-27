@@ -779,7 +779,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		CertNotAfter:    s.certNotAfter(),
 		AgentVersion:    s.cfg.AgentVersion,
 		Policy:          s.policyDrawn(),
+		PortHopping:     s.portHopping(r.Context()),
 	})
+}
+
+// portHopping is the range the nat table redirects to hysteria, nil when it
+// could not be read. Read each time, like the declared engines: a bootstrap
+// rerun with another range shows on the next healthcheck.
+func (s *Server) portHopping(ctx context.Context) *dto.PortHopDto {
+	if s.cfg.HopGuard == nil {
+		return nil
+	}
+	r, ok := s.cfg.HopGuard.HopRange(ctx)
+	if !ok {
+		return nil
+	}
+	return &dto.PortHopDto{Start: r.Start, End: r.End}
 }
 
 // policyDrawnReporter is the core that renders the node policy into its own

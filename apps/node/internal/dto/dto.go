@@ -846,6 +846,18 @@ type HealthcheckResponse struct {
 	// Mirrors HealthcheckResponse.policy. Absent from an agent older than the
 	// field, or one whose xray has not rendered yet: not "nothing left out".
 	Policy *PolicyDrawn `json:"policy,omitempty"`
+	// PortHopping: the Hysteria 2 port-hopping range this node's nat table
+	// redirects, read on every healthcheck. Start 0 is a node that redirects
+	// none. Absent when the table could not be read, or from an agent older
+	// than the field: not reported, which is not "none". Mirrors
+	// HealthcheckResponse.portHopping.
+	PortHopping *PortHopDto `json:"portHopping,omitempty"`
+}
+
+// PortHopDto is an inclusive UDP port range, {0, 0} for none.
+type PortHopDto struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 // The cascade drawings of a node's xray, as the panel names them.

@@ -16,7 +16,7 @@ import { getLogger } from '../../lib/infra/logger.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { AWG_PROTOCOLS, CORE_ARCHES, ENGINE_NAMES } from '@iceslab/shared';
-import type { CoreArch, CoreStatus, NodeCoreRestarts, NodeCores } from '@iceslab/shared';
+import type { CoreArch, CoreStatus, NodeCoreRestarts, NodeCores, PortHopping } from '@iceslab/shared';
 
 const METRICS_KEY_PREFIX = 'node:metrics:';
 const METRICS_TTL_SECONDS = 60;
@@ -390,6 +390,13 @@ function restartsWorthWriting(
   return Math.abs(nextRss - prevRss) / prevRss > 0.1;
 }
 
+/** A reported port-hopping range the panel can use: none, or a real range. */
+function isPortHopping(r: PortHopping): boolean {
+  const int = (n: unknown) => typeof n === 'number' && Number.isInteger(n);
+  if (!int(r.start) || !int(r.end)) return false;
+  return (r.start === 0 && r.end === 0) || (r.start >= 1 && r.end > r.start && r.end <= 65535);
+}
+
 /**
  * The core inventory as the panel keeps it: what the agent listed, minus the
  * parts that belong to liveness (`running`, `restarts`). See NodeCoreInfo.
@@ -404,6 +411,7 @@ export function observedCores(
   observedAt: string,
   arch?: CoreArch,
   chainEngine?: EngineName,
+  portHopping?: PortHopping,
 ): NodeCores {
   return {
     observedAt,
@@ -413,6 +421,8 @@ export function observedCores(
     // E46: legs on this node ride the chain process alone. A name outside
     // EngineName is not kept: the gate would compare it with nothing.
     ...(chainEngine && (ENGINE_NAMES as readonly string[]).includes(chainEngine) ? { chainEngine } : {}),
+    // Only a range that is one ({0, 0} = none): the host screen warns by it.
+    ...(portHopping && isPortHopping(portHopping) ? { portHopping: { start: portHopping.start, end: portHopping.end } } : {}),
     cores: cores.map((c) => ({
       name: c.name,
       ...(c.engine !== undefined ? { engine: c.engine } : {}),
@@ -468,6 +478,7 @@ export function coresWorthWriting(
   if (JSON.stringify(stored.cores) !== JSON.stringify(fresh.cores)) return true;
   if (stored.arch !== fresh.arch) return true;
   if (stored.chainEngine !== fresh.chainEngine) return true;
+  if (JSON.stringify(stored.portHopping) !== JSON.stringify(fresh.portHopping)) return true;
   const storedAt = Date.parse(stored.observedAt);
   // NaN (missing or garbled stamp from an older build) counts as stale, so the
   // next poll repairs it instead of freezing forever.
@@ -571,7 +582,7 @@ async function checkOne(node: {
       unnamedDetail: verdict.message === UNNAMED_DEGRADED ? res : undefined,
       coreVersion,
       coreRestarts,
-      cores: observedCores(res.cores, new Date().toISOString(), res.arch, res.chainEngine),
+      cores: observedCores(res.cores, new Date().toISOString(), res.arch, res.chainEngine, res.portHopping),
       // `null` and `undefined` are different answers here: null is "the node
       // answered and has no chain", undefined never reaches this line because
       // an unreachable node returns from the catch below.

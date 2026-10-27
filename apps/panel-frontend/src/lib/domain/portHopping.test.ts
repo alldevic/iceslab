@@ -22,6 +22,19 @@ describe('portInHopRange: UDP-порт внутри hopping hysteria ноды', 
     expect(portInHopRange('udp', 30000, {})).toBe(false);
   });
 
+  it('диапазон, который нода сообщила, вместо умолчания', () => {
+    const at = (start: number, end: number) => ({
+      ...hy,
+      cores: { observedAt: '2026-10-27T00:00:00.000Z', cores: [], portHopping: { start, end } },
+    });
+    expect(portInHopRange('udp', 30000, at(40000, 45000))).toBe(false);
+    expect(portInHopRange('udp', 41000, at(40000, 45000))).toBe(true);
+    // Нода сказала «перенаправления нет»: предупреждать не о чем.
+    expect(portInHopRange('udp', 30000, at(0, 0))).toBe(false);
+    // Не сообщала: прежнее умолчание.
+    expect(portInHopRange('udp', 30000, { ...hy, cores: { observedAt: 'x', cores: [] } })).toBe(true);
+  });
+
   it('свой диапазон ноды, когда он есть', () => {
     expect(portInHopRange('udp', 30000, hy, { from: 40000, to: 45000 })).toBe(false);
     expect(portInHopRange('udp', 41000, hy, { from: 40000, to: 45000 })).toBe(true);
