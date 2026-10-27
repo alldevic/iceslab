@@ -6,7 +6,7 @@ The panel builds a Subscription Page v1 document for each subscription
 opinion to hold: the shop validates it all-or-nothing, and a document that
 fails ANY rule is discarded whole, with the buyer silently getting the shop's
 generic guide (or, when the shop's own default file is not on disk, no guide at
-all — seen on this stand, 2026-08-25). Nothing about that failure is visible
+all). Nothing about that failure is visible
 from the panel side. A green panel test suite proves only that we agree with
 ourselves.
 
@@ -19,9 +19,9 @@ would mean nothing more than "the validator ran".
 
 Env:
     PANEL_URL     panel base, default http://127.0.0.1:3000
-    PANEL_TOKEN   icp_ API token, default read from
-                  /var/tmp/iceslab-vmlab/minishop-panel-token
-    MINISHOP_DIR  shop checkout, default /home/stdfo/workspace/minishop-361
+    PANEL_TOKEN       icp_ API token; else read from PANEL_TOKEN_FILE
+    PANEL_TOKEN_FILE  default .runtime/panel-token next to this file
+    MINISHOP_DIR      shop checkout, required
 """
 
 from __future__ import annotations
@@ -33,8 +33,12 @@ import sys
 import urllib.request
 
 PANEL_URL = os.environ.get("PANEL_URL", "http://127.0.0.1:3000").rstrip("/")
-MINISHOP_DIR = os.environ.get("MINISHOP_DIR", "/home/stdfo/workspace/minishop-361")
-TOKEN_FILE = "/var/tmp/iceslab-vmlab/minishop-panel-token"
+MINISHOP_DIR = os.environ.get("MINISHOP_DIR", "")
+TOKEN_FILE = os.environ.get(
+    "PANEL_TOKEN_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".runtime", "panel-token")
+)
+if not MINISHOP_DIR:
+    sys.exit("subpage: MINISHOP_DIR is not set: point it at a remnawave-minishop checkout")
 
 sys.path.insert(0, os.path.join(MINISHOP_DIR, "backend"))
 try:

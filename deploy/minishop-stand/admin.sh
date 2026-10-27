@@ -4,8 +4,8 @@
 #
 # Everything before this walked the subscriber path: buy, activate, hand out a
 # config. The admin pages went untested while they counted as somebody else's
-# front end. They are ours - the decision of 2026-08-24 is that we do not build
-# an admin of our own and use the shop's - so the same differential the purchase
+# front end. They are ours - the panel does not build an admin of its own for
+# shop operators and uses the shop's - so the same differential the purchase
 # gets, they get: one run against our facade, one against a real Remnawave, and
 # a comparison of both what the pages RENDER and what they CALL.
 #

@@ -9,8 +9,11 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHOP="${MINISHOP_DIR:-/home/stdfo/workspace/minishop-361}"
-TOKEN_FILE="${PANEL_TOKEN_FILE:-/var/tmp/iceslab-vmlab/minishop-panel-token}"
+# The shop's checkout. No default: the stand is only meaningful against a known
+# shop version, and guessing a path would run it against whatever is there.
+SHOP="${MINISHOP_DIR:-}"
+# The panel API token the shop uses (an icp_ token). Kept out of the tree.
+TOKEN_FILE="${PANEL_TOKEN_FILE:-$HERE/.runtime/panel-token}"
 PANEL_URL="${PANEL_URL:-http://127.0.0.1:3000}"
 # Where the shop's backend is published on the host. Its container port stays
 # 8080; this only moves the host side when 8080 is taken.
@@ -40,8 +43,16 @@ die() { echo "stand: $*" >&2; exit 1; }
 # "we did not wait long enough" must not read like "the shop did not call it".
 refuse() { echo "stand: $*" >&2; exit 2; }
 
-[[ -d "$SHOP" ]] || die "no minishop checkout at $SHOP (set MINISHOP_DIR)"
-[[ -f "$SHOP/docker-compose-dev.yml" ]] || die "$SHOP is not a minishop checkout"
+# Every command but the offline ones drives the shop.
+case "${1:-}" in
+  selftest|compare|compare-admin|mark|'') ;;
+  *)
+    [[ -n "$SHOP" ]] || die "MINISHOP_DIR is not set: point it at a remnawave-minishop checkout
+(git clone https://gitlab.com/3252a8/remnawave-minishop && git -C remnawave-minishop checkout v3.6.1)"
+    [[ -d "$SHOP" ]] || die "MINISHOP_DIR=$SHOP does not exist"
+    [[ -f "$SHOP/docker-compose-dev.yml" ]] || die "$SHOP is not a minishop checkout (no docker-compose-dev.yml)"
+    ;;
+esac
 
 # The two stands share container names, so they cannot run at the same time.
 # Their shop DATABASES are different volumes (the reference override renames
@@ -75,7 +86,8 @@ compose_ref=(docker compose
 SHOP_SERVICES=(postgres redis migrate backend worker frontend)
 # The panel's own frontend image, brought up alongside the shop so the shop
 # reaches the facade the way a real deploy does — through nginx. See item 6 in
-# stand.override.yml: without it this stand could not have caught §54.2.
+# stand.override.yml: without it the stand cannot see an nginx that serves the
+# facade's prefix from the SPA fallback.
 STAND_SERVICES=(panel-front)
 # Every optional profile, for teardown. Naming them one by one is how a
 # container gets left running: `down` has to cover what any `up` may have
@@ -238,9 +250,9 @@ correct, but the fix belongs here." ;;
 # attachment OUTLIVES the run: our panel is not a stand volume. The differential
 # after a probe then had our half metering premium while the reference - whose
 # panel has no nodes to grant - skipped it, which is a divergence the fixture
-# invented. Third time this session that leftover state on our panel changed the
-# next run; the rule is the same each time, so it is applied the same way: a run
-# establishes the fixture it needs instead of inheriting one.
+# invented. Leftover state on our panel changing the next run is a recurring
+# trap here, and the rule is the same each time: a run establishes the fixture
+# it needs instead of inheriting one.
 #
 # Cheap and unconditional rather than conditional on what is attached: reading
 # first and writing only on a difference would make the common path silent about
@@ -305,7 +317,7 @@ panel_psql() {
   user="$(sed -E 's#^[a-z]+://([^:]+):.*#\1#' <<<"$url")"
   db="$(sed -E 's#.*/([^/?]+)(\?.*)?$#\1#' <<<"$url")"
   [[ -n "$user" && -n "$db" ]] || die "could not read a user and database out of DATABASE_URL"
-  docker exec "${PANEL_DB_CONTAINER:-iceslab-postgres-test}" \
+  docker exec "${PANEL_DB_CONTAINER:-iceslab-postgres}" \
     psql -U "$user" -d "$db" -qtAX "$@"
 }
 
@@ -655,8 +667,8 @@ assert_front_proxies_the_facade() {
   # it report something about the shop that is not true. Two directions, because
   # either check alone passes on an nginx broken the other way: one that
   # forwards nothing satisfies the second, and one whose SPA fallback swallows
-  # the API satisfies the first — which is precisely §54.2, an index.html served
-  # with a 200 on the prefix the shop is documented to use.
+  # the API satisfies the first: an index.html served with a 200 on the prefix
+  # the shop is documented to use.
   local front="http://127.0.0.1:${PANEL_FRONT_PORT:-8087}"
   local code ctype
 
@@ -668,13 +680,13 @@ assert_front_proxies_the_facade() {
   case "$code" in
     401|403) ;;
     *) die "the frontend image answered $code ($ctype) on /$PREFIX/api/users.
-A 200 text/html here is the SPA fallback eating the facade (see §54.2); anything
+A 200 text/html here is the SPA fallback eating the facade; anything
 else means nginx is not reaching the panel on $ICESLAB_BACKEND_ADDR." ;;
   esac
   case "$ctype" in
     *html*) die "the frontend image answered $code but with $ctype on
-/$PREFIX/api/users: that is index.html, i.e. the SPA fallback, which is the
-exact shape §54.2 had." ;;
+/$PREFIX/api/users: that is index.html, i.e. the SPA fallback answering the
+facade's prefix." ;;
   esac
 
   # 2. ...and it is still a single-page app for everything else, or the fixture
@@ -723,9 +735,13 @@ about the fallback."
   echo "stand: panel-shim hides POST .../bandwidth-stats/nodes/usage and forwards the rest"
 }
 
-# Unconditional: `down`, `reset` and `half ref` all reach for compose_ref, and
-# `--env-file` on a file that is not there is a compose error, not a fallback.
-fill_ref_token
+# For every command that drives the shop: `down`, `reset` and `half ref` all
+# reach for compose_ref, and `--env-file` on a file that is not there is a
+# compose error, not a fallback. The offline ones have no shop to read it from.
+case "${1:-}" in
+  selftest|compare|compare-admin|mark|'') ;;
+  *) fill_ref_token ;;
+esac
 
 case "${1:-}" in
   up-iceslab)
@@ -758,10 +774,10 @@ case "${1:-}" in
     if [[ -z "${HIDE_NODES_USAGE:-}" ]]; then
       # The ordinary run reaches the facade through the panel's OWN frontend
       # image, because that is what stands in front of it in a real deploy.
-      # Pointing the shop straight at the backend is what made §54.2 invisible
-      # here: the SPA fallback answered `/rw/api/*` with index.html and a 200,
-      # on the prefix the shop is documented to use, and no request of this
-      # stand's ever went through nginx to see it.
+      # Pointing the shop straight at the backend would hide an nginx whose SPA
+      # fallback answers `/rw/api/*` with index.html and a 200, on the prefix
+      # the shop is documented to use: no request would go through nginx to
+      # see it.
       #
       # Written into the runtime env BEFORE `up`, for the same reason the shim
       # line below is: `env_file` is read when the container is created.
@@ -1219,9 +1235,20 @@ rejected - check the affectedRows key."
 d=json.load(sys.stdin)
 print(d.get("id") or d["users"][0]["id"])')"
 
+    # The nginx the shop reaches the facade through: every page of the walk
+    # passes it, which the worker's own metric lines do not promise.
+    case "$(sed -n 's/^PANEL_API_URL=//p' "$RUNTIME_ENV" | tail -1)" in
+      http://panel-front/*) front=remnawave-minishop-panel-front ;;
+      http://panel-shim:*) front=remnawave-minishop-panel-shim ;;
+      *) refuse "the shop does not reach the facade through panel-front or panel-shim,
+so the walk's pages cannot be counted. Bring the stand up with up-iceslab." ;;
+    esac
+    deleted_at="$(mktemp)"; trap 'rm -f "$jar" "$deleted_at"' RETURN
+
     csrf="$(shop_admin_session "$jar")"
     mark="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     ( sleep "${CHURN_DELETE_AFTER:-4}"
+      date +%s.%N > "$deleted_at"
       curl -sS -o /dev/null -X DELETE -H "authorization: Bearer $tok" "$PANEL_URL/api/users/$victim"
       echo "stand: deleted $victim_name mid-walk" ) &
     curl -sS -b "$jar" -H 'content-type: application/json' -H "X-CSRF-Token: $csrf" \
@@ -1240,11 +1267,11 @@ print(d.get("id") or d["users"][0]["id"])')"
     verdict=0
     echo "stand: panel had $total users; one was deleted after the walk collected it"
     # The verdict is delegated because the FIRST thing it has to decide is
-    # whether this run proved anything at all: a walk that fitted in one page
-    # never followed a cursor, and the earlier version of this probe reported
-    # success in exactly that case.
-    docker logs --since "$mark" remnawave-minishop-worker 2>&1 \
-      | python3 "$HERE/churn_verdict.py" "$total" "$checked" "${CHURN_DELETE_AFTER:-4}" \
+    # whether this run proved anything at all: a walk that fitted in one page,
+    # or that ended before the deletion, never followed a cursor across it, and
+    # an earlier version of this probe reported success in exactly that case.
+    docker logs --timestamps --since "$mark" "$front" 2>&1 \
+      | python3 "$HERE/churn_verdict.py" "$total" "$checked" "$(cat "$deleted_at")" \
       || verdict=$?
     # `|| verdict=$?` and not a bare `verdict=$?`: under `set -e` a failing
     # pipeline ends the script THERE, so the assignment would only ever run when
@@ -1252,8 +1279,7 @@ print(d.get("id") or d["users"][0]["id"])')"
     # only on success is cleanup missing exactly when a run is worth repeating.
     # Its own 40 users, gone. They are not a stand volume - our panel never is -
     # so without this every churn run leaves them behind, the next differential
-    # counts a different fleet, and the panel grows by 39 a run. Fifth thing
-    # this session that outlived the run that made it; the rule has not changed.
+    # counts a different fleet, and the panel grows by 39 a run.
     # After the verdict, so a failed probe can still be looked at. NOT best
     # effort any more: a cleanup that quietly failed is how twelve of forty
     # users stayed on the panel while the probe reported success, and the next
@@ -1349,7 +1375,7 @@ print(d.get("id") or d["users"][0]["id"])')"
     # Needs the shop CHECKOUT (not the stand) and a live panel.
     shift
     [[ $# -ge 1 ]] || die "usage: stand.sh subpage <subscription-token> [<subscription-token> ...]"
-    MINISHOP_DIR="$SHOP" exec python3 "$HERE/subpage_validate.py" "$@"
+    MINISHOP_DIR="$SHOP" PANEL_TOKEN_FILE="$TOKEN_FILE" exec python3 "$HERE/subpage_validate.py" "$@"
     ;;
 
   selftest)
@@ -1358,7 +1384,8 @@ print(d.get("id") or d["users"][0]["id"])')"
     # is a check, and an unchecked check is exactly what this stand keeps
     # finding - it reports something every run and nothing says whether that
     # something is true.
-    exec python3 "$HERE/compare_admin.py" --selftest
+    python3 "$HERE/compare_admin.py" --selftest
+    exec python3 "$HERE/churn_verdict.py" --selftest
     ;;
   status) docker ps --filter name=remnawave --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' ;;
   logs)   shift; "${compose_iceslab[@]}" logs --tail "${1:-80}" backend worker ;;
@@ -1381,10 +1408,8 @@ print(d.get("id") or d["users"][0]["id"])')"
     out="${1:-/dev/stdout}"
     # From this container run only. `docker logs` keeps output across restarts,
     # and a trace that carries a previous run's calls compares two things that
-    # never happened together - it cost me a diff full of 403s from an unseeded
-    # panel before I noticed.
-    # BOTH containers. This read the backend alone until 2026-08-24, and the
-    # shop is two processes: the fleet sync, the premium tariff workers and
+    # never happened together (a diff full of 403s from an unseeded panel).
+    # BOTH containers: the shop is two processes: the fleet sync, the premium tariff workers and
     # every capability-gated bulk call live in the WORKER. A trace that cannot
     # see them reports "the shop never called that" about calls it was not
     # listening for - which is the answer a probe gives when it is looking in

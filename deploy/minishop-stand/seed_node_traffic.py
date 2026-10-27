@@ -27,9 +27,9 @@ import subprocess
 import sys
 
 ICESLAB_DB = (
-    os.environ.get("PANEL_DB_CONTAINER", "iceslab-postgres-test"),
-    "iceslab",
-    os.environ.get("PANEL_DB_NAME", "iceslab_a2dev"),
+    os.environ.get("PANEL_DB_CONTAINER", "iceslab-postgres"),
+    os.environ.get("PANEL_DB_USER", "iceslab"),
+    os.environ.get("PANEL_DB_NAME", "iceslab"),
 )
 REF_DB = ("remnawave-dev-db", "postgres", "postgres")
 

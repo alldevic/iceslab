@@ -1,566 +1,136 @@
-# Mini Shop ↔ iceslab stand
+# Mini Shop stand
 
-Проверка связки: **неизменённая** витрина [remnawave-minishop] управляет этой
-панелью через Remnawave-совместимый фасад (`/rw/api`). Всё здесь — наше;
-чекаут витрины не правится, его compose-файлы подключаются абсолютными путями,
-а оверрайд и env-файлы лежат в этом каталоге.
+An **unmodified** [remnawave-minishop] driving this panel through its
+Remnawave-compatible API (`/<REMNAWAVE_COMPAT_PREFIX>/api`, default `/rw/api`),
+and the same shop driving a real Remnawave 3.2.3 for comparison. Nothing is
+written into the shop's checkout: its compose files are referenced by path, and
+every override and env file lives in this directory.
 
-## Три яруса, от дешёвого к дорогому
+## What it checks
 
-| Ярус | Что | Где | Нужен стенд? |
+| Tier | What | Where | Needs the stand |
 |---|---|---|---|
-| 1 | Контракт: каждая rw3-операция реестра витрины доезжает до роута, а отсутствующий роут отвечает в форме, которую витрина классифицирует | `apps/panel-backend/src/modules/remnawave-compat/remnawave.contract.test.ts` | нет |
-| 1 | Лимит 1200/мин на роутах фасада против глобальных 100/мин | `…/remnawave.ratelimit.test.ts` | нет |
-| 2 | Витрина реально покупает подписку через фасад | этот каталог, `stand.sh up-iceslab` | да |
-| 3 | То же против настоящего Remnawave 3.2.3, сравнение трасс | `stand.sh up-ref` + `compare` | да |
-| 3 | Обход админки: те же страницы против фасада и против эталона, сравнение **отрисованного** и трасс | `admin.sh` + `compare_admin.py` | да |
-| 3 | Подписанный вебхук через настоящий TLS-прокси | `stand.sh webhook-probe` | да |
-| 3 | Страница установки: документ v1, который панель отдаёт витрине, через ЕЁ валидатор | `stand.sh subpage <токен>` | нет; нужен чекаут витрины и живая панель |
+| 1 | Every rw3 operation in the shop's contract registry reaches a route; a missing route answers in the shape the shop classifies as missing | `apps/panel-backend/src/modules/remnawave-compat/remnawave.contract.test.ts` | no |
+| 1 | The facade's own rate limit | `…/remnawave.ratelimit.test.ts` | no |
+| 2 | The shop really sells a subscription through the facade | `stand.sh up-iceslab`, `buy.sh` | yes |
+| 3 | The same against Remnawave 3.2.3, call traces compared | `stand.sh differential` | yes |
+| 3 | The shop's admin pages against both panels: what they render and what they call | `admin.sh`, `compare_admin.py` | yes |
+| 3 | Probes for specific risks: per-node premium accounting and demotion, a user lost while the fleet sync pages, a signed webhook through a TLS proxy | `stand.sh premium-probe`, `churn-probe`, `webhook-probe` | yes |
 
-Ярус 1 гоняется в общем `pnpm test` и не требует ничего. Ярусы 2–3 — здесь.
+Tier 1 runs in the ordinary `pnpm test`. Tier 2 answers "the shop did not
+break"; tier 3 answers "the shop took the same path as against Remnawave". The
+shop logs one line per panel response with an identifier-free operation label
+and the status, so two runs compare without normalising ids or timestamps. A
+call only the reference makes is a call that never reached our facade.
 
-## Зачем ярус 3
+3.2.3 is the Remnawave version the shop's `deploy/dev/remnawave-versions.lock.json`
+pins at v3.6.1, i.e. the one the shop release itself is certified against.
 
-Ярус 2 в одиночку отвечает только на «витрина не упала». Он не видит **тихого
-расхождения**: витрина решила, что наша панель не 3.x, и пошла по legacy-пути;
-или сочла возможность отсутствующей и перестала её звать. Оба случая выглядят
-как успех.
+## Prerequisites
 
-Поэтому эталон. Витрина логирует по одной строке на каждый ответ панели, и в
-строке — **метка операции из её же реестра контрактов** плюс статус. Метка
-намеренно без идентификаторов («Never log the raw URL: path/query values can
-contain Telegram ids, usernames, emails, user ids, or UUIDs»), поэтому трассы
-двух стендов сравниваются без нормализации id и времени. Строка, которая есть
-только у эталона, — это вызов, который до нашего фасада не дошёл.
+- A shop checkout at **v3.6.1** (`MINISHOP_DIR`, required).
+- The panel running with the facade on: `REMNAWAVE_COMPAT_ENABLED=true`,
+  `REMNAWAVE_COMPAT_WEBHOOK_URL=http://127.0.0.1:${SHOP_PORT}/webhook/panel`
+  and `REMNAWAVE_COMPAT_WEBHOOK_SECRET` equal to the shop's `PANEL_WEBHOOK_SECRET`
+  (see `iceslab.env`). `stand.sh` checks the facade answers before it starts
+  anything.
+- A panel API token (`icp_…`, from `POST /api/api-tokens`) in
+  `PANEL_TOKEN_FILE`.
+- The panel's frontend image, which the shop reaches the facade through, as a
+  real deploy does: `docker build -f apps/panel-frontend/Dockerfile -t iceslab-frontend:stand .`
+  from the repo root (`up-iceslab` builds it when missing).
+- Docker. One shop is six containers and about 1.5 GB; the reference adds
+  Remnawave, its database, valkey and the subscription page, about 1 GB more.
 
-Версия эталона — **3.2.3**, не произвольная: именно её закрепляет
-`deploy/dev/remnawave-versions.lock.json` на теге v3.6.1, то есть та, против
-которой сертифицируется сам релиз витрины. Сравнение с версией, которую витрина
-не сертифицирует, сделало бы любое расхождение спорным.
+## Variables
 
-## Предварительные условия
+| Variable | Default | |
+|---|---|---|
+| `MINISHOP_DIR` | none, required | the shop checkout |
+| `PANEL_URL` | `http://127.0.0.1:3000` | the panel's backend |
+| `PANEL_TOKEN_FILE` | `.runtime/panel-token` | the `icp_` token |
+| `PANEL_DATABASE_URL` | `DATABASE_URL` from the repo's `.env` | for fixtures written with psql |
+| `PANEL_DB_CONTAINER` | `iceslab-postgres` | the container psql runs in |
+| `PANEL_DB_NAME` | `iceslab` | the panel's database, for `seed_node_traffic.py` |
+| `SHOP_PORT` | `8080` | host port of the shop's backend (the panel's webhook URL points here) |
+| `ICESLAB_BACKEND_ADDR` | docker bridge gateway `:3000` | where the frontend image proxies the facade to |
+| `REMNAWAVE_COMPAT_PREFIX` | `rw` | the facade's prefix |
+| `CHURN_PAGING`, `CHURN_PAGE_SIZE`, `CHURN_PAGE_DELAY`, `CHURN_DELETE_AFTER` | off, 5, 1.0, 4 | slow paging for `churn-probe` |
+| `HIDE_NODES_USAGE` | off | put `panel-shim` in front of the facade (below) |
 
-- Панель поднята, фасад включён: `REMNAWAVE_COMPAT_ENABLED=true` в `.env`,
-  плюс `REMNAWAVE_COMPAT_WEBHOOK_URL=http://127.0.0.1:8080/webhook/panel` и
-  `REMNAWAVE_COMPAT_WEBHOOK_SECRET`, равный `PANEL_WEBHOOK_SECRET` витрины.
-  `stand.sh` проверяет это до запуска контейнеров: 404 на
-  `/rw/api/system/metadata` значит, что фасад не смонтирован.
-- Токен панели (`icp_…`, из `POST /api/api-tokens`) лежит в
-  `/var/tmp/iceslab-vmlab/minishop-panel-token`. `stand.sh` подставляет его в
-  `iceslab.env`.
-- Чекаут витрины на теге **v3.6.1** — по умолчанию
-  `/home/stdfo/workspace/minishop-361`, иначе `MINISHOP_DIR`.
-- Панель может работать со своим окружением, не с `.env` репозитория: тогда
-  `PANEL_URL`, `PANEL_TOKEN_FILE`, `PANEL_DATABASE_URL` (для фикстур через
-  psql) и `PANEL_DB_NAME` (для `seed_node_traffic.py`). Если порт 8080 на
-  хосте занят, `SHOP_PORT` переносит туда бэкенд витрины (внутри контейнера
-  он остаётся 8080), и `REMNAWAVE_COMPAT_WEBHOOK_URL` панели должен смотреть
-  на этот порт.
+Everything generated (the env copies with the token filled in, certificates,
+the token itself by default) goes to `.runtime/`, which is not tracked.
 
-## Прогон
-
-Одной командой — и это не удобство, а условие: две половины, набранные руками с
-интервалом в час, это два разных эксперимента.
-
-```sh
-./stand.sh differential /var/tmp/iceslab-vmlab/stand-runs
-```
-
-Она делает: `reset` → `up-iceslab` → покупка → обход админки → трассы → `reset` →
-`up-ref` → то же самое → три сравнения (трасса покупки, трасса админки, отрисованное
-админкой). Внутри это `stand.sh half iceslab <dir>` и `stand.sh half ref <dir>`,
-их можно звать и по отдельности.
-
-Против **dev** вместо тега — те же команды с другим чекаутом и другим тегом образов
-(v3.6.1 остаются рядом):
+## Running
 
 ```sh
-MINISHOP_DIR=/home/stdfo/workspace/minishop-dev IMAGE_TAG=dev \
-  MINISHOP_BUILD_TAG=v3.6.1-40-g1c20764a MINISHOP_BUILD_COMMIT=1c20764a \
-  ./stand.sh half iceslab /var/tmp/iceslab-vmlab/dev-run
-python3 compare_admin.py .../stand-runs/iceslab-admin.jsonl .../dev-run/iceslab-admin.jsonl
+export MINISHOP_DIR=~/src/remnawave-minishop   # at v3.6.1
+./stand.sh selftest                  # the comparators against known answers; no docker
+./stand.sh half iceslab /tmp/run     # reset, up, buy, admin walk, traces
+./stand.sh differential /tmp/run     # both halves and the three comparisons
+./stand.sh full /tmp/run             # the differential and every probe, ~1 hour
 ```
 
-Вручную, по шагам, если нужно вмешаться посередине:
+Both halves in one command is a requirement, not a convenience: two halves run
+an hour apart by hand are two different experiments. The two stands share
+container names, so only one is up at a time; `reset` drops the shop's volumes,
+and the next half starts clean.
+
+Probes, against a stand that is up:
 
 ```sh
-./stand.sh up-iceslab            # витрина -> наш фасад (+ демо-seed, + рестарт)
-./buy.sh stand-buyer@example.com
-./stand.sh trace /tmp/iceslab.trace
-./admin.sh /tmp/iceslab-admin.jsonl stand-buyer@example.com
-./stand.sh reset                 # ОБЯЗАТЕЛЬНО с -v: перенос БД витрины между
-                                 # стендами делает сравнение бессмысленным молча
-
-./stand.sh up-ref                # витрина -> настоящий Remnawave 3.2.3
-#   … тот же сценарий …
-./stand.sh compare /tmp/ref.trace /tmp/iceslab.trace
-./stand.sh compare-admin /tmp/ref-admin.jsonl /tmp/iceslab-admin.jsonl
-
-./stand.sh selftest              # сравнивалки против известных ответов; без стенда
-./stand.sh subpage <токен>       # документ установки — через валидатор витрины
+CHURN_PAGING=1 ./stand.sh up-iceslab && ./stand.sh churn-probe
+./stand.sh webhook-probe
+./stand.sh premium-probe
+HIDE_NODES_USAGE=1 ./stand.sh up-iceslab && ./stand.sh premium-probe
+./stand.sh subpage <subscription-token>
 ```
 
-## Зачем `subpage` отдельной проверкой
-
-Витрина сначала спрашивает конфиг страницы установки **для конкретной подписки**,
-и в этот момент панель знает, какие протоколы у покупателя есть. Документ
-принимается **целиком или никак**: нарушено одно правило — витрина отбрасывает
-его молча и рисует свой общий гид. А если её собственного файла-дефолта нет на
-диске, покупатель остаётся вообще без гида: так вышло на этом стенде 2026-08-25
-(`Config file does not exist: /app/data/subpage-config/multiapp.json`).
-
-Со стороны панели принятый и отброшенный документ выглядят одинаково. Поэтому
-проверка импортирует `config.subscription_guides_config` из чекаута витрины и
-гоняет **настоящий** валидатор, а не наше представление о нём. И ломает документ
-семью способами, требуя, чтобы каждая поломка была отвергнута: иначе «валидатор
-принял» значит всего лишь «валидатор запустился».
-
-## Зачем сравнивать отрисованное, а не только трассу
-
-Трасса отвечает «вызов был». Она не отвечает «ответ пришёл в форме, которую страница
-может показать»: пустой список сквадов, нулевая плитка CPU, таблица трафика из
-прочерков — всё это выглядит как работающая страница и в трассе неотличимо от успеха.
-`compare_admin.py` сличает **статус**, **форму** (ключи и вид значений; пустой список
-против непустого — расхождение) и **значения**. Валят прогон только первые два:
-эталон это другая версия панели с другими идентификаторами и своими часами, и диф,
-который ругается каждый прогон, перестают читать.
-
-Так нашлись пустая плитка CPU и таблица трафика по нодам из одних прочерков.
-
-**Списки записей сличаются по идентичности, а не по позиции.** Витрина порядка не
-обещает и одних и тех же строк на двух половинах не держит, поэтому `users[1]` —
-это здесь один подписчик, а там другой: позиционный обход докладывал все поля двух
-несвязанных строк как расхождения и при этом не делал ни одного сравнения, ради
-которого затевался. Ключ выбирается из полей, которые совпадают у половин
-(`email`, `username`, `key`, `name`, `id`, …; панельные `uuid` исключены нарочно —
-это ровно то, о чём половины расходятся), и требуется пересечение хотя бы на
-половину короткого списка. Где такого ключа нет, обход остаётся позиционным и
-**говорит об этом вслух** — иначе список, который никто не сравнивал, читается как
-список, который сошёлся. Строка, которая есть только у одной половины, — это
-другая строка, а не потерянное поле: она попадает в «различия», а не в
-«расхождения».
-
-## Четвёртый capability-роут и `panel-shim`
-
-`POST /bandwidth-stats/nodes/users` витрина зовёт только как **фолбэк** — когда
-`/bandwidth-stats/nodes/usage` недоступен. Против фасада, который отдаёт оба,
-первый отвечает всегда, и настройкой у витрины это не выключить: капабилити она
-выводит из собственного наблюдения и манифеста версии, а не из конфигурации.
-
-Но наблюдение можно предоставить. Витрина считает роут отсутствующим, увидев 404
-без `errorCode` и с «not found» в message
-(`panel_api_responses.py::_is_missing_endpoint_response`). Значит, nginx перед
-панелью, который отвечает так на **один** путь и проксирует остальное, — это, с
-точки зрения витрины, сборка панели без этого роута. Ни витрина, ни панель не
-правятся.
-
-```sh
-HIDE_NODES_USAGE=1 ./stand.sh up-iceslab   # витрина ходит через panel-shim
-./stand.sh premium-probe                   # сама поймёт, что ждать фолбэк
-```
-
-Прогон 2026-08-25 (журнал воркера):
-
-```
-Observed Remnawave capability multi-node-usage=False.
-Remnawave multi-node usage is unavailable or returned an unsupported shape.
-Observed Remnawave capability multi-node-top-users=True.
-metric premium_usage_snapshot source=multi_node_top_users nodes=3 complete=True users=12
-```
-
-Ценность двойная. Четвёртый роут впервые вызван настоящей витриной (**4 из 4**),
-и впервые же проверено свойство, на котором держится вся конструкция: наш 404
-читается витриной как «роута нет», и она чисто уходит на фолбэк — а не считает
-это сбоем и не долбится в отсутствующий роут каждый тик. В трассе это видно
-парой строк под одной меткой, `POST /bandwidth-stats/nodes 404` и следом `200`.
-
-Сам шим — фикстура, а неверная фикстура рассказывает про витрину неправду, поэтому
-`up-iceslab` проверяет его **в обе стороны**: спрятанный роут отвечает так, как
-витрина читает «роута нет» (её же предикатом, `reads_as_missing_route.py`), а
-соседний `nodes/users` по-прежнему доходит до панели. Каждой проверки по
-отдельности мало: шим, отдающий 404 на всё, проходит первую, а шим, не прячущий
-ничего, — вторую.
-
-**Принятые расхождения.** `compare_admin.py` держит именованную таблицу
-`ACCEPTED_DIVERGENCE`: расхождения, которые известны, объяснены и дефектами не
-являются. Она появилась не для тишины, а потому что альтернатива хуже: обход валил
-прогон **на каждом** запуске одними и теми же 23 строками, а гейт, который всегда
-красный, никто не читает — та же болезнь, что этот стенд ловит в собственных
-проверках, этажом выше. Сейчас двадцать четвёртое расхождение видно сразу.
-
-Внутри две группы. Четырнадцать полей страницы статистики, у которых **нет
-потребителя**: тип `PanelStats` во фронте витрины
-(`frontend/src/lib/admin/statsDerivations.ts`) перечисляет всё, что её админка
-читает, и ни одного из них там нет. Отдавать их — выдумывать числа, чтобы замолчал
-отчёт; ровно эту сделку проект уже отклонял для `activeInboundsCount`. И девять
-строк `user-seeded` — фикстура, которую половины не могут разделить: у эталона
-юзер лежит в скваде по его же SQL-сиду, у нас его создаёт синк витрины.
-
-Таблицу стерегут с двух сторон: поле, которого в ней **нет**, по-прежнему
-расхождение (запись не может ничего проглотить случайно), а запись, не совпавшая
-ни с чем, докладывается как **устаревшая** — чтобы не пережила свою причину
-незаметно. То, что мы вообще шлём `onlineAt`, стережётся не здесь, а тестом
-`remnawave.mappers.test.ts`.
-
-**Слепое пятно, которое стоит помнить.** У эталонной панели в окне обхода нет
-трафика нод, поэтому `nodes_bandwidth.topNodes` пуст у ОБЕИХ половин — и если наш
-станет пустым, сравнению это не с чем сопоставить. Проверено мутацией: опустошение
-нашего `topNodes` прогон не валит. Это третий случай той же болезни («сравнение не
-умеет заметить того, чего не сделала ни одна сторона»), и лечится он засевом
-трафика нод в эталон, а не правкой сравнивалки.
-
-**Проверить сами сравнивалки:** `./stand.sh selftest` — гоняет `compare_admin.py`
-против обходов с заранее известным ответом. Ни стенда, ни docker не нужно.
-Сравнивалка — это тоже проверка, а непроверенная проверка здесь находилась уже
-пять раз: она уверенно докладывает что-то каждый прогон, и ничто не говорит,
-правда ли это.
-
-Одновременно стенды не поднимаются: имена контейнеров у витрины прописаны
-жёстко. Тома при этом разные (оверрайд эталона переименовывает их с суффиксом
-`-323`), так что БД витрины у двух стендов не общая — это и делает прогоны
-сравнимыми, а не суммируемыми.
-
-## Сценарий покупки без Telegram и без денег
-
-Витрина возит для этого свой QA-режим, он включён в обоих env-файлах:
-
-- `QA_AUTH_ENABLED=True` — публичный auth-API отдаёт код подтверждения почты,
-  значит вход возможен без Telegram-OAuth. `BOT_TOKEN` в env заведомо
-  фиктивный: бот не опрашивает Telegram, а webapp работает.
-- `QA_PAYMENT_ENABLED=True` — провайдер `qa` с HMAC-подписанным вебхуком на
-  `/webhook/qa-payment`. Оплата = один подписанный POST, реальный шлюз не нужен.
-
-`PANEL_WRITE_MODE=live` в обоих файлах — намеренно против примера витрины,
-который ставит `dry_run`. В `dry_run` записи только валидируются и логируются,
-не отправляясь; это ровно та настройка, при которой вся затея ничего не
-доказывает.
-
-## Каталог тарифов
-
-Без каталога тарифов две админ-операции, которые доходят до панели **через
-тариф**, не доходят никуда: `POST /admin/users/{id}/tariff` отвечает 400
-`tariffs_not_configured`, а `POST /admin/users/{id}/premium-override` — 502, не
-сделав к панели ни одного вызова. Обе половины дифференциала при этом сравнивали
-два отказа, и сравнение было чистым: **сравнение не умеет заметить того, чего не
-сделала ни одна сторона.**
-
-Поэтому `up-iceslab` и `up-ref` теперь засевают каталог сами, до рестарта,
-которым витрина его перечитывает.
-
-**Сквады названы, а не вписаны.** `tariffs.template.json` пишет их как
-`@MiniShop Standard`, а `seed_tariffs.py` резолвит имя в uuid **на той панели,
-куда витрина смотрит сейчас**: uuid'ы выдают панели, они у половин разные, и
-каталог с чужими uuid'ами витрина отвергла бы у себя внутри — до панели он бы не
-доехал. Эталонная половина приезжает с этими сквадами из своего же сида
-(`deploy/dev/seed-remnawave.sql`, «match the public development tariff
-fixture»), на нашей их создаёт `ensure_panel_squads` через нативный
-`POST /api/squads`. Имена берутся из шаблона (`squad_names.py`), а не из второго
-списка: имя, живущее только в одном из двух, — это либо каталог, который не
-сохранить, либо сквад, которым никто не пользуется.
-
-Каталог кладётся **через админ-API самой витрины** (`PUT /api/admin/tariffs`), а
-не файлом в том: витрина его валидирует, сверяет с ним существующие подписки и
-обновляет свои кэши; файл, положенный рядом, пропустил бы все три шага.
-
-**Два тарифа, и порядок в обходе не случаен.** `standard` (его покупает `buy.sh`)
-несёт премиум-сквад, `pro` — нет. `premium-override` идёт первым, пока
-премиум-сквад ещё на юзере; переключение на `pro` его **снимает** — то
-направление, которое add-only или status-gated реализация проходит молча.
-Переключение на тариф, который у юзера уже есть, было бы no-op'ом, неотличимым в
-трассе от работающего переключения.
-
-**Проверка умеет падать** — проверено мутациями:
-
-| мутация | что делает `seed_tariffs.py` |
-|---|---|
-| сквад, которого на панели нет | exit 1, перечисляет доступные |
-| в шаблоне нет тарифа, который называют `buy.sh`/`admin.sh` | exit 1 после чтения обратно |
-| каталог, который отвергнет модель витрины | exit 1 с её же текстом валидации |
-
-И отдельно — в `admin.sh` есть список `MUST_SUCCEED`: панель-трогающие мутации,
-для которых **не-2xx на обеих половинах** это не расхождение, а пустой прогон.
-Обход дописывает JSONL до конца (его ещё можно сравнить руками) и выходит
-ненулём. Проверено мутацией: каталог без `pro` → `tariff-switch -> 400
-invalid_tariff`, `admin.sh` exit 1, и `half` падает следом (`set -o pipefail`
-делает код `admin.sh` кодом всего пайпа с `tee`).
-
-**Следствия для сценария покупки.** Как только каталог есть, `tariff_key`
-перестаёт быть необязательным: `POST /api/payments` и `POST
-/api/subscription/quote` без него отвечают 400 `invalid_plan` «Tariff is not
-selected», а `POST /admin/users/{id}/extend` — 400 `tariff_required`, потому что
-период-тарифов стало больше одного и выбирать не из чего. `buy.sh` шлёт
-`TARIFF_KEY` (по умолчанию `standard`), `admin.sh` — явный ключ в `extend`.
-
-## Результат прогонов (2026-08-24)
-
-Витрина **v3.6.1**, эталон **Remnawave 3.2.3**, покупка одного месяца через
-`buy.sh`. Оба стенда довели активацию до конца; трассы:
-
-```
-GET  /subscription-page-configs 200 ×3
-GET  /system/metadata           200
-GET  /users/stream              200
-GET  /users/by-username         404
-POST /users                     201 (эталон) / 200 (мы)
-GET  /users                     200 ×3
-```
-
-Последовательность **идентична**, единственное расхождение — код на создании
-юзера, и реестр витрины объявляет для `users.create`
-`success_statuses: [200, 201]`, то есть оба приняты. `compare_traces.py` так и
-говорит: «the facade is indistinguishable to the shop».
-
-Что подтвердилось на нашей стороне: витрина определила панель как
-`3.3.2 generation=rw3-numeric-user-id user_identity=numeric_id`, подтвердила
-возможности `user-stream` и `user-stream-filters`, создала юзера
-(`numericId 28`), и `expireAt` в панели совпал с `final_end_date` витрины
-до миллисекунды.
-
-**Две вещи, которые снял именно эталон, а не чтение кода:**
-
-1. Витрина логирует `Panel entitlement response requires persisted verification:
-   … mismatched_fields=panel_user` после создания. Против нашего фасада это
-   выглядит как дефект echo-ответа. Эталон выдаёт **ту же строку**
-   (`panel_uuid=5`) → это поведение витрины против настоящего Remnawave, а не
-   наша проблема. Часами читать её питон было бы бесполезно.
-2. Три `GET /users` после создания — это НЕ откат на legacy-список
-   (`users.list`, rw2-only). У `users.get` и `users.list` в реестре **одна
-   метка** `/users`, а под `POST /users` метку делят целых пять операций.
-   Трасса этого различить не может, и `compare_traces.py` говорит об этом в
-   выводе, вместо того чтобы выглядеть точнее, чем есть.
-
-**Замечание про заявляемую версию.** Фасад объявляет `3.3.2`, а этот релиз
-витрины сертифицирует до `3.2.3` — в логе видно `support=unverified`. Записи
-сегодня идут: `panel_mutation_allowed` блокирует их только для версии из явного
-блок-листа. Но релиз витрины, который внесёт 3.3.2 в блок-лист, молча выключит
-записи, а выглядеть это будет как отказ панели.
-
-### Обход админки (37 страниц)
-
-Статусы совпали на всех 37 шагах. По отрисованному диф нашёл три настоящих дефекта
-у нас — пустая плитка CPU, таблица трафика по нодам из одних прочерков,
-`statusCounts` без трёх статусов — все исправлены; остаток расхождений формы это
-поля, которых витрина не читает (проверено по её коду отрисовки).
-
-Не наши поломки, одинаковые в обеих половинах: `tribute-catalog` 503
-(`tribute_not_configured`), `backups` 500 (`Permission denied: 'data/backups'`
-внутри контейнера витрины).
-
-> **Оговорка, добавленная задним числом (2026-08-24).** Этот прогон, как и все до
-> него, сравнивался с эталоном, у которого **воркер витрины ходил на панель без
-> токена** — см. «Прогон с каталогом тарифов» ниже. Совпадение статусов
-> остаётся верным (все 42 шага совпадают и после починки), но всё, что стоит
-> ниже по течению от флотового синка — счётчики вызовов, плитка `panel_sync`,
-> страница засеянного юзера — тогда сравнивалось с половиной, которая половину
-> работы не делала.
-
-### dev против v3.6.1, оба против нашего фасада
-
-Трасса покупки идентична, трасса админки идентична, расхождений формы ноль. 184
-сообщённых различия — идентификаторы, живые числа и новые поля самой витрины
-(`telegram_notifications.*`, promo/checkout-поля на платежах). За 40 коммитов
-витрина не изменила ничего в том, как разговаривает с панелью.
-
-### Прогон с каталогом тарифов (2026-08-24)
-
-Три дифференциала подряд, потому что первые два нашли не фасад, а стенд.
-
-| | трасса покупки | трасса админки | отрисованное |
-|---|---|---|---|
-| 1. каталог заведён | 13/13, только `POST /users` 201/200 | одна строка (`GET /users`) вместо четырёх | 26 расхождений (было 16) |
-| 2. уборка панели починена | то же | то же | 18 |
-| 3. эталон аутентифицирован | 13/12, `POST /users` 201/200 | три строки | 25, из них 9 — фикстура эталона |
-
-Что каждый прогон предъявил:
-обход не умел заметить шаг, который ничего не сделал; прогон оставлял юзеров на
-нашей панели, и следующий видел другую картину; **воркер витрины на эталонной
-половине ходил на панель без токена во всех прогонах, что здесь делались**.
-
-Оба тарифных пути дошли до панели: `premium-override` 502 → 200,
-`tariff-switch` 400 → 200, в трассе появились `GET /internal-squads`,
-`GET /hosts` и дополнительные `PATCH /users`. Проверено на панели, а не по
-ответу витрины: покупка кладёт юзеру оба сквада, переключение на `pro` поднимает
-лимит трафика с 500 ГиБ до 1000 ГиБ.
-
-Что осталось расходиться и почему, коротко: `/system/metadata` и
-`/internal-squads` за 300-секундным кэшем витрины (тайминг, не поведение, и
-`compare_traces.py` теперь это говорит вслух); `GET /users` — у нас на панели
-больше юзеров; девять расхождений на `user-seeded` — у эталона этот юзер лежит в
-сквадe по его же seed-SQL, а у нас юзера панели для него создаёт синк, и создаёт
-без сквадов на обеих половинах.
-
-## Потеря юзера при churn во время синка
-
-`stand.sh churn-probe [n]` (нужен `CHURN_PAGING=1` на `up-iceslab`) засевает n
-юзеров, запускает флотовый синк витрины, удаляет одного уже собранного обходом и
-сравнивает «Panel records checked» с числом юзеров на панели.
-
-**Сначала она решает, доказал ли прогон хоть что-нибудь**, и это важнее самого
-сравнения: если обход уложился в одну страницу, курсор не использовался вовсе,
-удаление пришло уже после конца — и «ничего не потеряно» будет утверждением ни о
-чём. Первая версия этой пробы именно так и зеленела против панели с дефектом.
-Теперь: одна страница или удаление позже конца обхода → отказ (exit 2), а не
-успех. Проверено мутацией в обе стороны — против keyset exit 0 («8 страниц за
-7.1 с, удаление на 4.0 с — внутри»), против офсетного контроля exit 1 («витрина
-увидела 37 из 38»). Против keyset-курсора
-не теряется никто; против офсетного (контроль — вернуть роут к старой семантике)
-пропадает живой человек, и `Sync errors: 0`.
-
-## Подпись вебхука через настоящий прокси
-
-`stand.sh webhook-probe` поднимает `webhook-tls` (nginx с TLS перед вебхук-эндпоинтом
-витрины, отдельный профиль) и шлёт через него подписанное тело — плюс контроль: тело,
-изменённое на один байт после подписи, обязано получить 401. Без контроля проба
-прошла бы и против прокси, который принимает что угодно.
-
-## Что стенд не проверяет
-
-- **Реальный Telegram и реальный платёжный шлюз.** QA-режим обходит оба.
-- **Расхождение часов** между панелью, витриной и БД: здесь всё на одном хосте,
-  то есть один источник времени. Впрочем, допуск витрины в 5 минут сравнивает
-  хранимые значения, а не показания часов.
-
-## Ресурсы
-
-Одна витрина — 6 контейнеров (postgres, redis, migrate, backend, worker,
-frontend), ~1–1.5 ГБ. Эталонный стенд добавляет панель Remnawave, её postgres,
-valkey и страницу подписки — ещё около 1 ГБ. Образы собираются из исходников,
-приватный реестр не нужен; сборка frontend компилирует nginx с brotli и идёт
-несколько минут.
-
-Сервис `newt` (туннель Pangolin) стенду не нужен, но его compose объявляет
-обязательные переменные — в env-файлах лежат заглушки, чтобы
-`docker compose config` разбирался, а сервисы поднимаются перечислением по
-именам.
-
-## Ловушки, которые уже стоили времени
-
-Кратко:
-
-- `--profile seed` нужен и на спуске, иначе завершившийся seed-контейнер остаётся и
-  следующий прогон падает на удалённой сети;
-- имя compose-проекта пиньнуто (`-p minishop-stand`): иначе смена `MINISHOP_DIR`
-  создаёт второй проект и `reset` разбирает не тот стенд;
-- `docker compose restart` не ждёт приложение, а фронтенд витрины надо перезапускать
-  последним и отдельно — его nginx резолвит upstream один раз;
-- наша панель не входит в тома стенда, поэтому `half iceslab` сам удаляет покупателя,
-  оставшегося от прошлого прогона;
-- демо-seed витрины падает штатно; проверять надо строку админа, а не код возврата;
-- **не правьте исходники панели во время прогона.** `tsx watch` перезапустит её
-  посреди обхода, и половина запросов витрины получит отказ — в дифференциале это
-  выглядит как настоящее расхождение (у меня так «сломался» `/internal-squads`);
-- фикс, применённый к одной половине, — это расхождение, которое следующий прогон
-  предъявит как находку. Поэтому том `/app/data` живёт в отдельном
-  `data-volume.override.yml`, подключённом к обеим половинам, а не в
-  `stand.override.yml`, который только для iceslab-половины.
-- **`churn-probe` тоже убирает за собой.** Она засевает 40 юзеров на панели, а
-  панель томом стенда не является: без уборки каждый прогон оставлял 39, и
-  следующий дифференциал считал другой флот. Уборка идёт ПОСЛЕ вердикта и
-  best-effort, чтобы проблема уборки не превратила находку в ошибку;
-- **наша панель копит то, что оставил прошлый прогон.** Обход заканчивается
-  `POST /admin/sync`, а синк СОЗДАЁТ юзера панели для каждого засеянного юзера
-  витрины, у которого его нет. У эталона они уезжают с томом, у нас остаются, и
-  следующий прогон рисует их страницу иначе. `purge_panel_leftovers` берёт
-  адреса из `deploy/dev/seed-minishop.sql` витрины, а не из списка в скрипте;
-- **эталонный оверрайд витрины настраивает `PANEL_API_KEY` только у `backend`.**
-  `worker` получает окружение одним `env_file`, где ключ пуст, и молча ходит на
-  панель неаутентифицированным — видно это одной плиткой `panel_sync: failed`.
-  `fill_ref_token` достаёт токен из её же compose, `assert_worker_authenticated`
-  проверяет результат на обеих половинах;
-- **`/system/metadata` и `/internal-squads` витрина кэширует на 300 с.** Попадёт
-  вызов в окно трассы или нет, решает разрыв между шагами, а не панель. Три
-  прогона подряд эти строки перетасовывались.
+- **churn-probe** seeds users, starts the shop's fleet sync with small slow
+  pages, deletes a user the walk has already collected and compares the shop's
+  `Panel records checked` with the panel's count. It first decides whether the
+  run proved anything: the walk's pages are counted in the request log of the
+  nginx in front of the facade, and a walk of one page, with no cursor, or that
+  did not span the deletion is a refusal (exit 2), not a pass.
+- **premium-probe** buys, waits for two tariff ticks, and checks the shop built
+  a complete per-node usage snapshot and then demoted the user (bulk squads and
+  connection drop). With `HIDE_NODES_USAGE=1` the shop reaches the panel through
+  `panel-shim`, an nginx that answers `POST …/bandwidth-stats/nodes/usage` the
+  way the shop reads as an absent route, and the probe expects the fallback
+  `POST …/bandwidth-stats/nodes/users` instead.
+- **webhook-probe** sends a signed webhook through a TLS nginx, and a body
+  changed after signing that must get 401.
+- **subpage** runs the install document the panel emits through the shop's own
+  validator, plus seven mutations it must reject.
+
+Purchases use the shop's QA mode (`QA_AUTH_ENABLED`, `QA_PAYMENT_ENABLED`): no
+Telegram, no payment gateway. `PANEL_WRITE_MODE=live` in both env files on
+purpose; the shop's example ships `dry_run`, under which nothing is sent.
+
+## Known differences from the reference
+
+- **Seeded users.** The reference gets the shop's two demo users from the shop's
+  SQL seed; on our half the shop's sync creates them through the API. The
+  purchase trace therefore has two more `POST /users` and their lookups on our
+  side; the purchase itself matches.
+- **Accepted divergences** of the admin walk are listed, with the reason for
+  each, in `ACCEPTED_DIVERGENCE` in `compare_admin.py`.
+- The shop caches `/system/metadata` and `/internal-squads` for 300 s, so
+  whether those calls fall inside a trace window depends on timing, not on the
+  panel.
+
+## Traps
+
+- Our panel is not a stand volume. Whatever a run leaves on it (users from a
+  probe, a profile attached to a squad, users the shop's sync created) changes
+  the next run; each command removes what it created and establishes the
+  fixture it needs instead of inheriting one.
+- Do not edit the panel's sources during a run: `tsx watch` restarts it and half
+  the shop's requests fail, which reads as a real divergence.
+- The compose project name is pinned (`STAND_PROJECT`), so pointing
+  `MINISHOP_DIR` at another checkout does not create a second project that
+  `reset` would miss.
+- The shop's own demo seed exits non-zero at v3.6.1; the stand checks the admin
+  row it needs instead of the exit code.
 
 [remnawave-minishop]: https://gitlab.com/3252a8/remnawave-minishop
-
-## Премиум-учёт по нодам: `stand.sh premium-probe`
-
-`POST /bandwidth-stats/nodes/usage` — один из четырёх capability-роутов,
-поданных в `741d0cd`. До 2026-08-24 **ни один из четырёх не был вызван настоящей
-витриной ни в одном прогоне**: их держали только наши собственные тесты. Проба
-доводит витрину до этого вызова и проверяет, что она построила по ответу полный
-снимок.
-
-Цепочка условий длинная, и **каждое звено обрывается молча**:
-
-1. витрина должна сертифицировать версию, которую мы объявляем. `dev`
-   (`1c20764a`) сертифицирует 3.3.2 — в логе `support=current`, тогда как v3.6.1
-   пишет `support=unverified`. Так что проба идёт против `dev`;
-2. премиум-подписка должна быть **живой**. Обход админки в конце удаляет своего
-   покупателя, поэтому проба, запущенная после `half`, не найдёт кандидатов;
-3. премиум-сквад тарифа должен резолвиться в **ноды**. Пустой сквад (а таким он
-   создаётся) даёт `[]`, витрина пишет `Premium squads for tariff standard have
-   no accessible nodes` и пропускает весь учёт;
-4. воркер держит ответ «сквад → ноды» в 300-секундном кэше, поэтому фикстуру,
-   заведённую только что, он не видит — проба перезапускает воркер;
-5. считает только **полный** тик тарифного воркера, а он раз в пять минут
-   (замерено: 13:53:10, 13:58:10, 14:03:10), не раз в минуту, как `premium_fast`.
-
-Любое из пяти делает роут невызванным, а невызванный роут выглядит ровно как
-роут, с которым всё в порядке.
-
-Проба поэтому **сначала решает, доказала ли что-нибудь**: нет полного тика за
-одиннадцать минут → отказ (exit 2), а не успех. Дальше требует строку вызова в
-трассе и снимок в логе воркера с `source=multi_node_usage` (метка
-`/bandwidth-stats/nodes` в трассе делится четырьмя операциями, двумя из них
-POST, так что одной трассы мало) и с `complete=True` — это витрина
-подтверждает, что мы ответили **за каждую** запрошенную ноду.
-
-Проверено мутацией: снять профиль с премиум-сквада → «the shop never called
-POST /bandwidth-stats/nodes», exit 1. Прогон: `nodes=3 complete=True users=6`.
-
-Ноды сквадам выдаёт сама проба, а **не** `up-*`: дать их можно только нашей
-половине (у эталонной панели нод нет), и в дифференциале это значило бы, что мы
-учитываем премиум, а эталон пропускает — лишняя строка расхождения каждый прогон,
-не говорящая ничего о фасаде.
-
-### Демоушен: ещё два роута
-
-Вторая стадия той же пробы. `POST /users/bulk/update-squads` и
-`POST /connections/drop` ставит в очередь **один и тот же** путь: премиум-подписчик
-уходит за премиум-лимит, теряет премиум-сквад и ему рвут сессии
-(`tariff_worker_premium_batches.py`). Проба пишет юзеру на панель трафик на 20 %
-выше премиум-лимита тарифа — на ноду, которую даёт **премиум**-сквад, иначе это
-не премиум-трафик.
-
-Желаемый набор сквадов обязан остаться **непустым**, иначе стадия ничего не
-доказывает: очистку последнего сквада витрина намеренно ведёт по-юзерными
-PATCH'ами, потому что Remnawave 3.0.0 отвечает A088/500 на bulk-очистку. Поэтому
-тариф теряет только премиум-сквад, а базовый остаётся.
-
-Метка bulk-роута в трассе — `/users`, её делят пять операций, так что трасса
-сказать не может; говорит метрика витрины `panel_squad_bulk … selector=userIds`.
-Последняя проверка — на **панели**, а не по журналу: ровно один из наших сквадов
-остался на юзере. Два значит, что bulk ничего не изменил; ноль — что витрина
-ушла в PATCH и bulk-роут не тронула.
-
-Проверено мутацией: трафик вдвое **ниже** лимита → первая стадия по-прежнему
-зелёная, вторая падает «never demoted».
-
-**Кэши витрины, каждый из которых умеет тихо подменить результат** (все найдены
-прогоном, не чтением):
-
-| что | где | TTL |
-|---|---|---|
-| `squads:nodes` | Redis витрины **и** память процесса | 300 с |
-| снимок премиум-потребления | память процесса, переживает тики | 115 с |
-| детект версии панели | память процесса | 300 с |
-| список сквадов | Redis + память | 300 с |
-
-Первый снимается только обоими действиями сразу и в порядке «сначала ключи
-Redis, потом рестарт» — `drop_shop_squad_cache`.
-
-**Окно наблюдения начинается там, где проверяемое становится возможным, и для
-двух стадий это разные точки.** Первая ждёт повторяющегося вызова, который
-появляется только с покупкой → метка **после** покупки. Вторая ждёт одноразового
-события, которое запускает сам рестарт → метка **до** рестарта, но после записи
-фикстуры трафика, иначе окно поймает демоушен прошлого прогона. Обе неверные
-версии этого «работали»: одна молча пропускала событие, другая засчитывала тик,
-случившийся раньше, чем появилась подписка.
-
-**Чистить нужно обе стороны.** Удалить покупателя с панели мало: флотовый синк
-витрины импортирует незнакомых юзеров панели обратно, и демоутнутый покупатель
-возвращается как её подписка без `tariff_key` — следующая покупка отвечает
-`tariff_switch_required`. `purge_shop_user` снимает её сторону через её же
-админ-API, до и после прогона.
-
