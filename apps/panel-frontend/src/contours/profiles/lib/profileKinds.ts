@@ -11,10 +11,14 @@ import { isPlainSubprotocol, type PlainSubprotocol } from '@/contours/profiles/l
 // Mirrors the backend's ENGINE_OPTIONS; also gates the engine field in buildConfig.
 export const ENGINE_CHOICE_PROTOCOLS = ['xray', 'hysteria', 'shadowsocks'];
 
+/** The engine as the form holds it: the protocol's own core, sing-box, or
+ *  mtprotoproxy (MTProto's second engine, a secret per user). */
+export type FormEngine = 'native' | 'singbox' | 'mtprotoproxy';
+
 export interface ProfileKind {
   key: string;
   protocol: ProtocolName;
-  engine: 'native' | 'singbox';
+  engine: FormEngine;
   label: string;
   /** SOCKS5 and HTTP are xray profiles told apart by their subprotocol, not
    *  by a protocol name of their own. Absent on every other kind. */
@@ -31,6 +35,12 @@ export const PROFILE_KINDS: ProfileKind[] = [
   { key: 'amneziawg', protocol: 'amneziawg', engine: 'native', label: 'AmneziaWG' },
   { key: 'naive', protocol: 'naive', engine: 'native', label: 'NaiveProxy' },
   { key: 'mtproto', protocol: 'mtproto', engine: 'native', label: 'MTProto (Telegram-only, mtg)' },
+  {
+    key: 'mtproto#mtprotoproxy',
+    protocol: 'mtproto',
+    engine: 'mtprotoproxy',
+    label: 'MTProto (Telegram-only, mtprotoproxy)',
+  },
   // xray only: the server refuses them on sing-box, so there is no
   // `#singbox` twin to pick.
   { key: 'socks5', protocol: 'xray', engine: 'native', subprotocol: 'socks', label: 'SOCKS5 (xray)' },
@@ -68,9 +78,10 @@ export const PREVIEW_KINDS: PreviewKind[] = [{ key: 'telegramweb', label: 'WEB' 
 // SOCKS5 and HTTP key by their own kind: they share `xray` with vless.
 export function profileKindKey(
   protocol: string,
-  engine: 'native' | 'singbox',
+  engine: FormEngine,
   subprotocol?: unknown,
 ): string {
+  if (protocol === 'mtproto' && engine === 'mtprotoproxy') return 'mtproto#mtprotoproxy';
   if (protocol === 'xray' && isPlainSubprotocol(subprotocol)) {
     return PROFILE_KINDS.find((k) => k.subprotocol === subprotocol)?.key ?? protocol;
   }
@@ -81,7 +92,7 @@ export function profileKindKey(
 
 // Grouped Select data (create mode): native cores first, then a sing-box group.
 export const PROFILE_PROTOCOL_GROUPED = [
-  ...PROFILE_KINDS.filter((k) => k.engine === 'native').map((k) => ({ value: k.key, label: k.label })),
+  ...PROFILE_KINDS.filter((k) => k.engine !== 'singbox').map((k) => ({ value: k.key, label: k.label })),
   {
     group: 'sing-box',
     items: PROFILE_KINDS.filter((k) => k.engine === 'singbox').map((k) => ({

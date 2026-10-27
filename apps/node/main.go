@@ -18,6 +18,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mieru"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtproto"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtprotoproxy"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/naive"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/shadowsocks"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
@@ -277,6 +278,29 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		logger.Info("mtproto adapter registered")
 	}
 
+	// MTProto via alexbers/mtprotoproxy, a second engine beside mtg: one
+	// secret per user (revocable, counted), and the user set reloaded with
+	// SIGUSR2 instead of a restart. A profile picks it with engine
+	// "mtprotoproxy"; both run side by side on their own ports.
+	if os.Getenv("MTPROTOPROXY_SCRIPT") != "" {
+		mppCfg := mtprotoproxy.Config{
+			PythonPath: getenv("MTPROTOPROXY_PYTHON", "/usr/bin/python3"),
+			ScriptPath: os.Getenv("MTPROTOPROXY_SCRIPT"),
+			ConfigPath: getenv("MTPROTOPROXY_CONFIG", "/etc/mtprotoproxy/config.py"),
+			Inbound: mtprotoproxy.InboundConfig{
+				ListenPort:  getenvInt("MTPROTOPROXY_PORT", 2084),
+				MetricsPort: getenvInt("MTPROTOPROXY_METRICS_PORT", 3130),
+				Domain:      os.Getenv("MTPROTOPROXY_DOMAIN"), // empty → deferred until ApplyInbound
+			},
+			// Migration from an mtg profile: the inbound's mtg secret kept as one
+			// extra user, so links already in Telegram keep working. Off unless
+			// set, and meant to be turned off once the old links are gone.
+			AcceptLegacySecret: os.Getenv("MTPROTOPROXY_ACCEPT_LEGACY") == "true",
+		}
+		adapters = append(adapters, mtprotoproxy.New(mppCfg, logger))
+		logger.Info("mtprotoproxy adapter registered")
+	}
+
 	// Slice 40: Mieru via enfein/mieru's `mita` server.
 	if os.Getenv("MITA_BINARY") != "" {
 		mieruCfg := mieru.Config{
@@ -451,6 +475,7 @@ var knownEngines = []struct{ protocol, engine string }{
 	{"amneziawg", "amneziawg"},
 	{"naive", "naive"},
 	{"mtproto", "mtproto"},
+	{"mtproto", "mtprotoproxy"},
 	{"mieru", "mieru"},
 }
 

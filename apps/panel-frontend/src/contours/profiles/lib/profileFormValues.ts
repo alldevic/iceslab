@@ -1,5 +1,6 @@
 import type { AwgProtocol, LinkCongestion, XraySubprotocol } from '@iceslab/shared';
 import type { ProtocolName } from '@/lib/domain/protocols';
+import type { FormEngine } from '@/contours/profiles/lib/profileKinds';
 
 export type Mode = 'create' | 'edit';
 
@@ -8,8 +9,9 @@ export interface FormValues {
   name: string;
   description: string;
   enabled: boolean;
-  // Engine-choice: 'native' = the protocol's native core, 'singbox' = sing-box.
-  engine: 'native' | 'singbox';
+  // Engine-choice: 'native' = the protocol's native core, 'singbox' = sing-box,
+  // 'mtprotoproxy' = MTProto's second engine.
+  engine: FormEngine;
 
   // Hysteria
   hyObfsPassword: string;

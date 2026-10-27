@@ -32,7 +32,7 @@ import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { entriesSwitchedOff } from '../users/user-reach.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
-import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/auth/credentials.js';
+import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword, deriveMtprotoSecret } from '../../lib/auth/credentials.js';
 import {
   buildAnytlsUri,
   buildHysteriaUri,
@@ -49,6 +49,7 @@ import {
   hostFromAddress,
   isPlainXray,
   mtprotoSecret,
+  mtprotoFakeTlsSecret,
   withUriRemark,
   buildSocksUri,
   buildHttpProxyUri,
@@ -1344,13 +1345,16 @@ export async function generateSubscription(
         uri: '',
       });
     } else if (ib.protocol === 'mtproto') {
-      // Slice 41: Telegram MTProto via 9seconds/mtg. Architectural note:
-      // mtg is intentionally single-secret upstream. So every user
-      // assigned to this inbound's squad receives the SAME secret + URL.
-      // We derive once per inbound from (inboundId, domain). Domain
-      // change rotates the secret. No per-user accounting available.
+      // Slice 41: Telegram MTProto. On mtg (native) one secret for the whole
+      // inbound, derived from (inboundId, domain): every user of it gets the
+      // same link, and a domain change rotates it. On mtprotoproxy the user's
+      // own secret, the one the node was given for them, so a user taken off
+      // the node is refused, and their bytes are counted.
       const cfg = ib.config as unknown as { domain: string };
-      const secret = mtprotoSecret(ib.id, cfg.domain);
+      const secret =
+        ib.engine === 'mtprotoproxy'
+          ? mtprotoFakeTlsSecret(deriveMtprotoSecret(user.xrayUuid), cfg.domain)
+          : mtprotoSecret(ib.id, cfg.domain);
       endpoints.push({
         protocol: 'mtproto',
         nodeName,

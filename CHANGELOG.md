@@ -31,6 +31,15 @@ All notable changes to Iceslab are documented here. Format loosely follows
   a UDP port inside that range instead of inside the installer's default
   20000-50000. A node that redirects nothing is not warned about; an agent
   older than this falls back to the default.
+- **MTProto on mtprotoproxy, beside mtg.** An MTProto profile can now run on
+  alexbers/mtprotoproxy (engine `mtprotoproxy`, the node's
+  `bootstrap-mtprotoproxy.sh` or `--engines mtprotoproxy`) instead of mtg. There
+  every user has their own secret, so a disabled or expired user is refused,
+  the squad screen no longer reports the shared-secret gap (A-204), and traffic
+  is counted per user. Users join and leave the running proxy without a restart.
+  mtg profiles and nodes are unchanged; both engines can run on one node. The
+  pinned source is patched for Telegram's CDN datacenter 203, where upstream
+  dropped media connections without a word.
 - An Ansible role, `deploy/ansible`, that installs nodes from an inventory by
   running the node installer of the ref you name with the cores and flags you
   set, so a node installed by the play is the node the panel's command would

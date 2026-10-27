@@ -12,7 +12,7 @@ export function defaults(profile: Profile | null): FormValues {
     name: profile?.name ?? '',
     description: profile?.description ?? '',
     enabled: profile?.enabled ?? true,
-    engine: profile?.engine === 'singbox' ? 'singbox' : 'native',
+    engine: profile?.engine === 'singbox' || profile?.engine === 'mtprotoproxy' ? profile.engine : 'native',
 
     hyObfsPassword: '',
     hyMasqueradeUrl: '',

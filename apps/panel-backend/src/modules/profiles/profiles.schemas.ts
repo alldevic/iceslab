@@ -47,7 +47,7 @@ export const ProtocolEnum = z.enum([
 ]);
 
 // Engine-choice (EC5): which proxy core serves a profile. null = native.
-export const EngineEnum = z.enum(['xray', 'hysteria', 'singbox']);
+export const EngineEnum = z.enum(['xray', 'hysteria', 'singbox', 'mtprotoproxy']);
 
 // Which engines each protocol may be served by. The shared protocols can run on
 // their native core OR sing-box; everything else has a single native core, so
@@ -64,6 +64,9 @@ const ENGINE_OPTIONS: Record<string, readonly string[]> = {
   tuic: ['singbox'],
   anytls: ['singbox'],
   shadowtls: ['singbox'],
+  // MTProto: native (null) is mtg, one secret for the inbound; mtprotoproxy
+  // gives every user their own secret, revocable and counted.
+  mtproto: ['mtprotoproxy'],
 };
 
 /** A null/undefined engine (native) is always valid; a set engine must be one

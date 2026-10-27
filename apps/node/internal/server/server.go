@@ -970,6 +970,7 @@ func (s *Server) addUser(req dto.AddUserRequest) []string {
 		TuicPassword:        req.Credentials.TuicPassword,
 		AnytlsPassword:      req.Credentials.AnytlsPassword,
 		ShadowtlsPassword:   req.Credentials.ShadowtlsPassword,
+		MtprotoSecret:       req.Credentials.MtprotoSecret,
 	}
 
 	// Best-effort fanout. A failure on a dormant adapter (no ApplyInbound

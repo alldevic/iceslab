@@ -3,7 +3,7 @@ import type { AddUserRequest, RemoveUserRequest } from '@iceslab/shared';
 import { redis } from '../../lib/infra/redis.js';
 import { prisma } from '../../prisma.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
-import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
+import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { reachOfUsers } from './user-reach.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
@@ -137,6 +137,7 @@ export async function syncAddUser(userId: string): Promise<void> {
       tuicPassword: deriveTuicPassword(user.xrayUuid),
       anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
       shadowtlsPassword: deriveShadowtlsPassword(user.xrayUuid),
+      mtprotoSecret: deriveMtprotoSecret(user.xrayUuid),
     },
   };
 

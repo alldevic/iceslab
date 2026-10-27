@@ -562,6 +562,8 @@ export const ENGINE_NAMES = [
   'naive',
   'mieru',
   'mtproto',
+  // alexbers/mtprotoproxy, the second engine of mtproto: a secret per user.
+  'mtprotoproxy',
 ] as const;
 
 export type EngineName = (typeof ENGINE_NAMES)[number];
@@ -593,6 +595,9 @@ export interface ProtocolCredentials {
   /** ShadowTLS v3 (sing-box engine): per-user password for the shadowtls
    *  users[] (the inner shadowsocks key is server-wide, in the inbound config). */
   shadowtlsPassword?: string;
+  /** MTProto on the mtprotoproxy engine: the user's own 32-hex secret. mtg runs
+   *  on one secret per inbound and ignores it. */
+  mtprotoSecret?: string;
 }
 
 // ───── POST /addUser ─────

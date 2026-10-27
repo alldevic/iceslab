@@ -17,7 +17,7 @@ import type { AwgProtocol } from '@/lib/domain/awg';
  * under the same name in a second file is the trap from CLAUDE.local.md, one
  * name and two forms of value, and `effectiveEngine` below is the full one.
  */
-export type PinnableEngine = 'xray' | 'hysteria' | 'singbox';
+export type PinnableEngine = 'xray' | 'hysteria' | 'singbox' | 'mtprotoproxy';
 
 export interface Profile {
   id: string;

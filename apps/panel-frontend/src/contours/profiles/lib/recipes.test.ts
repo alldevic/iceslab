@@ -139,7 +139,10 @@ describe('страж: RECIPE_APPLY_KEYS не несёт ключевого ма�
 describe('recipeTile: плитка выводится из engine, protocol, subprotocol', () => {
   it('на всех 16 плитках: рецепт с полями плитки ложится ровно на неё, как профиль (profileKindKey)', () => {
     const tiles = [
-      ...PROFILE_KINDS.map((k) => ({ key: k.key, r: { protocol: k.protocol, engine: k.engine, subprotocol: k.subprotocol } })),
+      // A recipe says native or sing-box (RECIPE_ENGINES); mtprotoproxy has no recipes.
+      ...PROFILE_KINDS.flatMap((k) =>
+        k.engine === 'mtprotoproxy' ? [] : [{ key: k.key, r: { protocol: k.protocol, engine: k.engine, subprotocol: k.subprotocol } }],
+      ),
       ...PREVIEW_KINDS.map((k) => ({ key: k.key, r: { protocol: k.key, engine: 'native' as const } })),
     ];
     expect(tiles).toHaveLength(16);

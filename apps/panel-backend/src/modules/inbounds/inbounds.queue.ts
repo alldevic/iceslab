@@ -19,7 +19,7 @@ import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } f
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { cascadeXrayDrawingOf, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
 import { layOutGeo } from '../geo-sets/geo-push.js';
-import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
+import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { acmeHostnameFor } from './acme-hostname.js';
 import { checkRenderDrift, recordPushed } from './render-drift.js';
@@ -774,6 +774,7 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
       tuicPassword: deriveTuicPassword(u.xrayUuid),
       anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
       shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
+      mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
     },
   }));
   const failed = await sendRoster(transport, node.name, requests);

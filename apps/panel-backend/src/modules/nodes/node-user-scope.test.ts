@@ -41,6 +41,12 @@ describe('the rule (shared userScopeGap)', () => {
     }
     expect(userScopeGap({ protocol: 'tuic', effectiveEngine: 'singbox' })).toBeNull();
   });
+
+  it('mtproto on mtprotoproxy holds the limit: a secret per user, taken off with them', () => {
+    expect(adapters.mtprotoproxy).toMatch(/MtprotoSecret/);
+    expect(adapters.mtprotoproxy).toMatch(/func \(a \*Adapter\) RemoveUser\(/);
+    expect(userScopeGap({ protocol: 'mtproto', effectiveEngine: 'mtprotoproxy' })).toBeNull();
+  });
 });
 
 describe('nodeUserScopeGaps', () => {

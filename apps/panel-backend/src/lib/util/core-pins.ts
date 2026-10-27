@@ -23,6 +23,7 @@ export const PIN_SITES: { file: string; components: CoreComponent[] }[] = [
     components: ['amneziawg-module', 'amneziawg-tools'],
   },
   { file: 'apps/node/scripts/bootstrap-mtg.sh', components: ['mtg'] },
+  { file: 'apps/node/scripts/bootstrap-mtprotoproxy.sh', components: ['mtprotoproxy'] },
   { file: 'apps/node/scripts/bootstrap-mieru.sh', components: ['mita'] },
 ];
 

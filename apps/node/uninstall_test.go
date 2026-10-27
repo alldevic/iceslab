@@ -81,7 +81,7 @@ func runUninstall(t *testing.T, keepCores bool, present, failCore, legacyCore st
 	}
 	prog := "set -euo pipefail\n" +
 		"log() { echo \"log: $*\"; echo \"log: $*\" >>'" + calls + "'; }\nwarn() { echo \"warn: $*\"; }\nfail() { echo \"fail: $*\"; exit 1; }\n" +
-		"KNOWN_ENGINES=\"xray singbox hysteria amneziawg mtproto mieru naive\"\n" +
+		"KNOWN_ENGINES=\"xray singbox hysteria amneziawg mtproto mtprotoproxy mieru naive\"\n" +
 		"CORE_PROCESSES=\"xray sing-box hysteria mtg caddy-naive mita\"\n" +
 		installerFunc(t, "bootstrap_of") + installerFunc(t, "stop_cores") + installerFunc(t, "remove_cores") +
 		installerFunc(t, "do_uninstall") + installerFunc(t, "uninstall_all") +

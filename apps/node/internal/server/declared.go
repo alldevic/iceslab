@@ -24,7 +24,7 @@ import (
 // envBlockEngines: the block names that are cores. The same names as the
 // engines adapters answer with; contract-mirror.test.ts holds this list, the
 // bootstraps' block names and EngineName in shared to one set.
-var envBlockEngines = []string{"xray", "hysteria", "singbox", "amneziawg", "naive", "mieru", "mtproto"}
+var envBlockEngines = []string{"xray", "hysteria", "singbox", "amneziawg", "naive", "mieru", "mtproto", "mtprotoproxy"}
 
 // legacyBinaryKeys: the same declaration in the spelling from before the
 // blocks (the installer's legacy_primary_env, lines written by hand before
@@ -39,6 +39,8 @@ var legacyBinaryKeys = map[string]string{
 	"CADDY_NAIVE_BIN": "naive",
 	"MITA_BINARY":     "mieru",
 	"MTG_BINARY":      "mtproto",
+	// A node a fork installed before the blocks.
+	"MTPROTOPROXY_SCRIPT": "mtprotoproxy",
 }
 
 const (

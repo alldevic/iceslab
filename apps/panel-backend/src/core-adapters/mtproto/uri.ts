@@ -98,3 +98,12 @@ export function mtprotoSecret(inboundId: string, domain: string): string {
   const domainHex = Buffer.from(domain, 'utf8').toString('hex');
   return `ee${seedHex}${domainHex}`;
 }
+
+/**
+ * The Fake-TLS form of a user's own secret on the mtprotoproxy engine:
+ * `ee` + the 32-hex raw secret (deriveMtprotoSecret) + hex of the masquerade
+ * domain, the shape mtgSecret above has and Telegram reads.
+ */
+export function mtprotoFakeTlsSecret(rawSecret: string, domain: string): string {
+  return `ee${rawSecret}${Buffer.from(domain, 'utf8').toString('hex')}`;
+}

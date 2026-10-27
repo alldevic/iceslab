@@ -11,6 +11,7 @@ import { CoreVersionStrip } from '@/contours/profiles/components/ProfileForm/Cor
 import {
   PREVIEW_KINDS,
   PROFILE_KINDS,
+  type FormEngine,
   type PreviewKindKey,
   type ProfileKind,
 } from '@/contours/profiles/lib/profileKinds';
@@ -52,7 +53,7 @@ export function EnginePicker({
   onPick,
   onPickPreview,
 }: {
-  engine: 'native' | 'singbox';
+  engine: FormEngine;
   protocol: string;
   /** The xray subprotocol: SOCKS5 and HTTP are told from vless by it alone. */
   subprotocol: string;
@@ -84,8 +85,8 @@ export function EnginePicker({
   // and the strip says exactly that instead of disappearing (owner, 24.09).
   const selectedEngine: EngineName | PreviewKindKey = preview
     ? preview
-    : engine === 'singbox'
-      ? 'singbox'
+    : engine === 'singbox' || engine === 'mtprotoproxy'
+      ? engine
       : nativeEngineOfIntent(protocol);
 
   const tiles: TileSpec[] = [

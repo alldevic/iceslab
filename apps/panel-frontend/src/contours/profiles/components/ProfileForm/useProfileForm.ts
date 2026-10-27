@@ -281,12 +281,14 @@ export function useProfileForm({
         break;
     }
 
-    // Engine-choice: only the shared protocols carry a non-native engine;
-    // everything else stays null (native). A 'native' selection -> null.
-    const engine: 'singbox' | null =
+    // Engine-choice: only the shared protocols carry sing-box and only MTProto
+    // carries mtprotoproxy; everything else stays null (native).
+    const engine: 'singbox' | 'mtprotoproxy' | null =
       ENGINE_CHOICE_PROTOCOLS.includes(values.protocol) && values.engine === 'singbox'
         ? 'singbox'
-        : null;
+        : values.protocol === 'mtproto' && values.engine === 'mtprotoproxy'
+          ? 'mtprotoproxy'
+          : null;
 
     // Поколение AWG (227054e): в PUT только при смене, в POST только 3.
     const isAwg = values.protocol === 'amneziawg';

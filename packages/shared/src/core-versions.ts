@@ -43,6 +43,7 @@ export const CORE_COMPONENTS = [
   'amneziawg-module',
   'amneziawg-tools',
   'mtg',
+  'mtprotoproxy',
   'mita',
   'caddy-naive',
 ] as const;
@@ -316,6 +317,30 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
     knownBad: [],
   },
 
+  mtprotoproxy: {
+    reportedBy: { engine: 'mtprotoproxy', field: 'version' },
+    pinned: '1.1.2',
+    releases: [
+      {
+        version: '1.1.2',
+        tag: 'v1.1.2',
+        // Python source, one artefact for every arch. Upstream attaches no
+        // files to its releases, so this is GitHub's generated tag tarball;
+        // if GitHub ever recompresses those, the sum stops matching and the
+        // bootstrap refuses it, loudly. The node reports the version the
+        // bootstrap wrote beside the script (upstream has no version string).
+        assets: {
+          amd64: { file: 'v1.1.2.tar.gz', sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702' },
+          arm64: { file: 'v1.1.2.tar.gz', sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702' },
+          armv7: { file: 'v1.1.2.tar.gz', sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702' },
+        },
+        why: 'The latest release; carries per-user secrets, quotas and the SIGUSR2 reload the adapter relies on.',
+        checkedAt: '2026-09-02',
+      },
+    ],
+    knownBad: [],
+  },
+
   mita: {
     reportedBy: { engine: 'mieru', field: 'version' },
     pinned: '3.37.0',
@@ -368,6 +393,7 @@ export const CORE_ENV_PREFIX: Record<CoreComponent, string> = {
   'amneziawg-module': 'AWG_MODULE',
   'amneziawg-tools': 'AWG_TOOLS',
   mtg: 'MTG',
+  mtprotoproxy: 'MTPROTOPROXY',
   mita: 'MIERU',
   'caddy-naive': 'CADDY_NAIVE',
 };
@@ -557,6 +583,7 @@ export const ENGINE_BOOTSTRAP: Record<EngineName, string> = {
   hysteria: 'bootstrap-hysteria.sh',
   amneziawg: 'bootstrap-amneziawg.sh',
   mtproto: 'bootstrap-mtg.sh',
+  mtprotoproxy: 'bootstrap-mtprotoproxy.sh',
   mieru: 'bootstrap-mieru.sh',
   naive: 'bootstrap-naive.sh',
 };

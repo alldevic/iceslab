@@ -21,6 +21,9 @@ type User struct {
 	TuicPassword        string
 	AnytlsPassword      string
 	ShadowtlsPassword   string
+	// MtprotoSecret: the user's own 32-hex secret, for the mtprotoproxy engine
+	// (mtg runs on one secret per inbound and ignores it).
+	MtprotoSecret string
 }
 
 // UserStats are per-user traffic counters reported by a single core.

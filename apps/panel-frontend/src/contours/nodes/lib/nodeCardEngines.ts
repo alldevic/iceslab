@@ -13,6 +13,7 @@ export const ENGINE_SHORT: Record<EngineName, string> = {
   naive: 'naive',
   mieru: 'mieru',
   mtproto: 'mtg',
+  mtprotoproxy: 'mtpp',
 };
 
 const ENGINE_FULL: Record<EngineName, string> = {
@@ -23,6 +24,7 @@ const ENGINE_FULL: Record<EngineName, string> = {
   naive: 'naive',
   mieru: 'mieru',
   mtproto: 'mtproto',
+  mtprotoproxy: 'mtprotoproxy',
 };
 
 /** Ядра намерения в порядке ENGINE_NAMES, как бы список ни хранился. */

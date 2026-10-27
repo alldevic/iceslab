@@ -44,7 +44,7 @@ func TestAnAgentWithNothingConfiguredReportsSevenEnginesAllAbsent(t *testing.T) 
 		}
 	}
 	sort.Strings(engines)
-	want := "amneziawg hysteria mieru mtproto naive singbox xray"
+	want := "amneziawg hysteria mieru mtproto mtprotoproxy naive singbox xray"
 	if got := strings.Join(engines, " "); got != want {
 		t.Fatalf("engines = %q, want exactly one row per known engine: %q", got, want)
 	}

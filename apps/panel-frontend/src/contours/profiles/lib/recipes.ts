@@ -226,12 +226,15 @@ export function recipeRailEmpty(s: {
   return 'tile';
 }
 
-/** Рецепты одной плитки (ключ PROFILE_KINDS) из ответа реестра. */
+/** Рецепты одной плитки (ключ PROFILE_KINDS) из ответа реестра. У MTProto на
+ *  mtprotoproxy рецепты те же, что у mtg: настройка одна (домен маскировки), а
+ *  рецепт движок не трогает (recipeApplyPlan), и в реестре движка такого нет. */
 export function recipesOnTile<R extends Pick<Recipe, 'protocol' | 'engine' | 'subprotocol'>>(
   recipes: readonly R[],
   kindKey: string,
 ): R[] {
-  return recipes.filter((r) => recipeTile(r) === kindKey);
+  const tile = kindKey === 'mtproto#mtprotoproxy' ? 'mtproto' : kindKey;
+  return recipes.filter((r) => recipeTile(r) === tile);
 }
 
 /**
