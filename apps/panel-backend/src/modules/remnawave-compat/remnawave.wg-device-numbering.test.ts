@@ -2,9 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
-// Skipped: the facade lists and revokes WireGuard tunnels as devices once the
-// panel keeps a WgDevice per tunnel, which it does not yet.
-
 /**
  * The Nth card in the buyer's device list and the Nth download link are the
  * same tunnel.
@@ -103,7 +100,7 @@ async function addressInDownload(token: string, device: number): Promise<string>
   return address!;
 }
 
-describe.skip('the Nth tunnel is the same tunnel on both sides', () => {
+describe('the Nth tunnel is the same tunnel on both sides', () => {
   let userId: string;
   let userRef: string;
   let subToken: string;

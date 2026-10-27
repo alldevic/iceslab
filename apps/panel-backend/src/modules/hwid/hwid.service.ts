@@ -58,10 +58,30 @@ export interface HwidCheckResult {
  * The hwid string is bounded to 255 chars upstream by the route handler;
  * here we trust it. UTF-8 collation is fine for the equality check.
  */
+/** What a client says about itself on /sub; every field optional. */
+export interface HwidDeviceMeta {
+  platform?: string | null;
+  osVersion?: string | null;
+  deviceModel?: string | null;
+  userAgent?: string | null;
+}
+
+/** The fields a fetch has something to say about: one that sent no
+ *  x-device-os does not erase what an earlier one said. */
+function metaData(meta: HwidDeviceMeta | undefined) {
+  const out: Record<string, string> = {};
+  for (const k of ['platform', 'osVersion', 'deviceModel', 'userAgent'] as const) {
+    const v = meta?.[k];
+    if (typeof v === 'string' && v.length > 0) out[k] = v;
+  }
+  return out;
+}
+
 export async function enforceHwid(
   userId: string,
   hwid: string | null,
   limit: number | null,
+  meta?: HwidDeviceMeta,
 ): Promise<HwidCheckResult> {
   if (!hwid) {
     // No header → no enforcement, no row. Return `active=0` for the
@@ -79,7 +99,7 @@ export async function enforceHwid(
   if (existing) {
     await prisma.hwidUserDevice.update({
       where: { id: existing.id },
-      data: { lastSeenAt: new Date() },
+      data: { lastSeenAt: new Date(), ...metaData(meta) },
     });
     // For the unlimited (audit-only) path `active` stays cosmetic (0/unlimited);
     // otherwise report the real device count for the X-Hwid-Active gauge.
@@ -116,7 +136,7 @@ export async function enforceHwid(
       return { result: { status: 'denied' as const, active: current, limit }, created: null };
     }
 
-    const created = await tx.hwidUserDevice.create({ data: { userId, hwid } });
+    const created = await tx.hwidUserDevice.create({ data: { userId, hwid, ...metaData(meta) } });
     return {
       result: {
         status: 'allowed' as const,
@@ -135,6 +155,10 @@ export async function enforceHwid(
       deviceId: outcome.created.id,
       hwid: outcome.created.hwid,
       firstSeenAt: outcome.created.firstSeenAt,
+      platform: outcome.created.platform,
+      osVersion: outcome.created.osVersion,
+      deviceModel: outcome.created.deviceModel,
+      userAgent: outcome.created.userAgent,
     });
   }
   return outcome.result;

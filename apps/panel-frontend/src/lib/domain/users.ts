@@ -301,3 +301,34 @@ export async function listUserDevices(userId: string): Promise<{ devices: HwidDe
 export async function deleteHwidDevice(id: string): Promise<void> {
   await api.delete(`/api/hwid-devices/${id}`);
 }
+
+// ───── WireGuard devices ─────
+
+/**
+ * One of a user's WireGuard keys: each client gets its own, so one revoked is
+ * that client cut off and nobody else. Bytes come as strings (a lifetime
+ * outgrows a safe JSON number). `index` is its number among the live devices,
+ * the one `?device=` takes; null once revoked.
+ */
+export interface WgDevice {
+  id: string;
+  userId: string;
+  index: number | null;
+  label: string | null;
+  publicKey: string;
+  addresses: string[];
+  bytesIn: string;
+  bytesOut: string;
+  lastSeenAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export async function listUserWgDevices(userId: string): Promise<{ devices: WgDevice[] }> {
+  const { data } = await api.get<{ devices: WgDevice[] }>(`/api/users/${userId}/wg-devices`);
+  return data;
+}
+
+export async function revokeWgDevice(id: string): Promise<void> {
+  await api.delete(`/api/wg-devices/${id}`);
+}

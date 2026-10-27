@@ -70,3 +70,15 @@ describe("a user's device limit", () => {
     }
   });
 });
+
+describe('what a client says about itself', () => {
+  it('keeps platform, OS, model and user agent on its device row, and a fetch without them erases nothing', async () => {
+    const { id, token } = await userInSquadLimitedTo(3);
+    const fetchWith = (headers: Record<string, string>) =>
+      app.inject({ method: 'GET', url: `${config.SUBSCRIPTION_PATH_PREFIX}/${token}`, headers: { 'x-hwid': 'phone', ...headers } });
+    await fetchWith({ 'x-device-os': 'iOS', 'x-ver-os': '18.1', 'x-device-model': 'iPhone15,2', 'user-agent': 'Happ/3.9' });
+    await fetchWith({ 'user-agent': 'Happ/3.10' });
+    const row = await prisma.hwidUserDevice.findFirstOrThrow({ where: { userId: id, hwid: 'phone' } });
+    expect(row).toMatchObject({ platform: 'iOS', osVersion: '18.1', deviceModel: 'iPhone15,2', userAgent: 'Happ/3.10' });
+  });
+});

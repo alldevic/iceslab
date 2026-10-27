@@ -9,6 +9,7 @@ import {
   SegmentedControl,
   Select,
   Stack,
+  Switch,
   Text,
   TextInput,
 } from '@mantine/core';
@@ -150,6 +151,17 @@ export function AmneziawgSection({
               {isEdit && showGenerateWarning(impact) && (
                 <GenerateWarning impact={impact} />
               )}
+              {/* A preshared key per device: the peer takes it, the config
+                  carries it. Turning it on in a profile already handed out
+                  breaks every config fetched before, until it is fetched
+                  again, and the hint says so where the switch is. */}
+              <Switch
+                label={t('profiles.form.cfg.awgPresharedKeyLabel')}
+                description={
+                  isEdit ? t('profiles.form.cfg.awgPresharedKeyEditHint') : t('profiles.form.cfg.awgPresharedKeyHint')
+                }
+                {...form.getInputProps('awgPresharedKey', { type: 'checkbox' })}
+              />
               <Group justify="space-between" align="center" wrap="nowrap" gap="md">
                 <Text size="sm" fw={500}>
                   {t('profiles.form.cfg.awgPresetLabel')}

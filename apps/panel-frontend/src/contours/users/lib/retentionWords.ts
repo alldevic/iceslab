@@ -17,3 +17,8 @@ export function deleteRetentionText(t: T): string {
 export function deviceForgetText(t: T): string {
   return t('userDrawer.devicesForget', { count: HWID_DEVICE_RETENTION_DAYS });
 }
+
+/** A-269 for WireGuard devices: one without traffic for N days is revoked. */
+export function wgDeviceForgetText(t: T): string {
+  return t('userDrawer.wgDevicesForget', { count: HWID_DEVICE_RETENTION_DAYS });
+}

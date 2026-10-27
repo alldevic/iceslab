@@ -2,6 +2,7 @@ import { prisma } from '../../prisma.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { creditDeviceTraffic } from '../wg-devices/wg-devices.stats.js';
 import {
   computeNodeStatsWrites,
   computeNodeTotalsFromCores,
@@ -319,6 +320,11 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         // re-derives the delta from the un-advanced baseline).
         if (w.newSnapshot) totalSnapshot.set(node.id, w.newSnapshot);
         if (newAdapterTotals) adapterTotalSnapshot.set(node.id, newAdapterTotals);
+        // The WireGuard devices' share of it, after the user's own: a failure
+        // here costs a device's counter one poll, never the user's bytes.
+        await creditDeviceTraffic(res.users ?? [], now).catch((err) => {
+          getLogger().warn(`[cron] node-stats-poll ${node.id}: device traffic not credited: ${err instanceof Error ? err.message : String(err)}`);
+        });
         ok++;
       } catch (err) {
         failed++;

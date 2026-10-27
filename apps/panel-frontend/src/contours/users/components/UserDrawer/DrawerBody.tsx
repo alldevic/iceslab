@@ -2,6 +2,7 @@ import { AdvancedPanel } from '@/contours/users/components/UserDrawer/AdvancedPa
 import { Box } from '@mantine/core';
 import { DangerZone } from '@/contours/users/components/UserDrawer/DangerZone';
 import { DeviceList } from '@/contours/users/components/UserDrawer/DeviceList';
+import { WgDeviceList } from '@/contours/users/components/UserDrawer/WgDeviceList';
 import { DialCard } from '@/contours/users/components/UserDrawer/DialCard';
 import { SubscriptionCard } from '@/contours/users/components/UserDrawer/SubscriptionCard';
 import { FormColumn } from '@/contours/users/components/UserDrawer/FormColumn';
@@ -105,6 +106,7 @@ export function DrawerBody({
           {ui.isEdit && user && (
             <>
               <DeviceList userId={user.id} cap={ui.deviceCap} />
+              <WgDeviceList userId={user.id} />
               {onRevoke && (
                 <SubscriptionCard user={user} onRevoke={onRevoke} endpoints={ui.endpointsQuery.data?.endpoints} />
               )}

@@ -36,6 +36,12 @@ export interface StatsUserEntry {
    * summed snapshot per (node, user), as before.
    */
   engine?: string;
+  /**
+   * The same counters by peer key (wire field `peers`), from a core whose user
+   * holds a peer per device (AmneziaWG). Credited to the devices apart from
+   * the user's own accounting (wg-devices.stats.ts). Absent elsewhere.
+   */
+  peers?: { publicKey: string; bytesIn: number; bytesOut: number }[];
 }
 
 /** The adapter an entry's snapshot is keyed by: (protocol, engine), or

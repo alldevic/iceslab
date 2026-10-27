@@ -10,6 +10,7 @@ import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { observedCores } from '../nodes/nodes.cron.js';
 import { reachOfUsers } from './user-reach.js';
 import { syncAddUser } from './users.queue.js';
+import { ensureDevices } from '../wg-devices/wg-devices.service.js';
 import { applyInboundsForNode } from '../inbounds/inbounds.queue.js';
 import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
 import { generateSubscription } from '../subscription/subscription.service.js';
@@ -135,7 +136,7 @@ describe('rolling a user out (syncAddUser)', () => {
     void b;
   });
 
-  it('carries the AmneziaWG addresses of both generations without a push (A-164)', async () => {
+  it('carries the AmneziaWG peers of every device, on both generations, without a push (A-164)', async () => {
     const n = await node();
     await prisma.node.update({
       where: { id: n },
@@ -152,11 +153,21 @@ describe('rolling a user out (syncAddUser)', () => {
     await host(three, n, 51830);
     const sq = await post('/api/squads', { name: 'awg', profileIds: [one, three] });
     const u = await user('awg_user', [sq.id]);
+    // Devices are issued with the subscription; two, as a user who fetched it.
+    const devices = await ensureDevices(u, 2);
     const { added } = capture();
     await syncAddUser(u);
     expect(added).toHaveLength(1);
-    expect(added[0]!.req.credentials.amneziawgAllowedIp).toMatch(/^10\.66\.66\./);
-    expect(added[0]!.req.credentials.amneziawgAllowedIp3).toMatch(/^10\.67\.67\./);
+    const creds = added[0]!.req.credentials;
+    expect(creds.amneziawgPeers?.map((p) => p.publicKey)).toEqual(devices.map((d) => d.publicKey));
+    for (const p of creds.amneziawgPeers ?? []) {
+      expect(p.allowedIp).toMatch(/^10\.66\.66\./);
+      expect(p.allowedIp3).toMatch(/^10\.67\.67\./);
+    }
+    // Device 1 in the single fields, for an agent older than devices.
+    expect(creds.amneziawgPublicKey).toBe(devices[0]!.publicKey);
+    expect(creds.amneziawgAllowedIp).toMatch(/^10\.66\.66\./);
+    expect(creds.amneziawgAllowedIp3).toMatch(/^10\.67\.67\./);
   });
 
   it('a returning user (expired -> active by an extension) is rolled out the same way', async () => {

@@ -373,6 +373,9 @@ export const common = {
     fragmentTitle: 'TLS fragment',
     fragmentHint:
       'Dials each server through a fragment outbound that chops the ClientHello into pieces, so SNI-based DPI cannot cleanly match it. Xray JSON format only.',
+    wgUnusedTitle: 'Unused WireGuard devices',
+    wgUnusedHint:
+      "A shop working through the compatibility API lists a user's devices, WireGuard ones among them. A device that has never moved traffic is a free slot rather than a device, and is left out unless this is on.",
   },
   // One label per subscription format name, ONE for the whole panel: the host
   // screen, the "default format" setting and the delivery rule all read it.

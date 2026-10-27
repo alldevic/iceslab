@@ -17,13 +17,29 @@ type User struct {
 	AmneziaWGAllowedIP string
 	// AmneziaWGAllowedIP3: the address on the 3.1 interface (t07-6).
 	AmneziaWGAllowedIP3 string
-	TuicUUID            string
-	TuicPassword        string
-	AnytlsPassword      string
-	ShadowtlsPassword   string
+	// AmneziaWGPeers: one peer per device of the user, each with its own key
+	// and addresses. Non-nil replaces the three single fields above, which an
+	// older panel sends instead; non-nil and empty means no device, no peer.
+	AmneziaWGPeers    []AmneziaWGPeer
+	TuicUUID          string
+	TuicPassword      string
+	AnytlsPassword    string
+	ShadowtlsPassword string
 	// MtprotoSecret: the user's own 32-hex secret, for the mtprotoproxy engine
 	// (mtg runs on one secret per inbound and ignores it).
 	MtprotoSecret string
+}
+
+// AmneziaWGPeer is one device of a user: its key, its address on the 1.x and
+// the 3.1 interface (either may be empty: the profile of that generation does
+// not reach the user), and the preshared key on each when that interface's
+// profile asks for one.
+type AmneziaWGPeer struct {
+	PublicKey     string
+	AllowedIP     string
+	AllowedIP3    string
+	PresharedKey  string
+	PresharedKey3 string
 }
 
 // UserStats are per-user traffic counters reported by a single core.
@@ -31,6 +47,16 @@ type UserStats struct {
 	UserID   string
 	BytesIn  int64
 	BytesOut int64
+	// Peers: the same counters by peer key, for a core whose user holds more
+	// than one (AmneziaWG, a peer per device). Their sum is BytesIn/BytesOut.
+	Peers []PeerStats
+}
+
+// PeerStats are one peer's counters, in the same mode as its user's entry.
+type PeerStats struct {
+	PublicKey string
+	BytesIn   int64
+	BytesOut  int64
 }
 
 // Stats is what an adapter returns from GetStats. The aggregator in

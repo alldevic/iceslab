@@ -26,6 +26,9 @@ export interface SubscriptionSettings {
   /** TLS-fragment - split the ClientHello via a freedom `fragment` outbound in
    *  the Xray JSON format so SNI-DPI cannot match the handshake. Xray JSON only. */
   tlsFragment: boolean;
+  /** List WireGuard devices that never moved traffic among a user's devices on
+   *  the Remnawave-compatible API (wgShowUnusedTunnels). Off by default. */
+  wgShowUnusedTunnels: boolean;
   /** R3-b - raw custom xray routing rules, or null. Applied to xray/xkeen. */
   customRoutingRules: Record<string, unknown>[] | null;
   /** R3 - operator-defined custom domain lists (direct/proxy/block), or null
@@ -135,6 +138,7 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
   // TLS-fragment. Only the literal boolean true turns it on; missing / garbage
   // rows fall back to false, keeping the Xray JSON output byte-identical.
   const tlsFragment = map.get('subscriptionTlsFragment') === true;
+  const wgShowUnusedTunnels = map.get('wgShowUnusedTunnels') === true;
 
   // R3-b - custom xray routing rules. Must be an array of objects, else null
   // so a hand-edited / malformed row can never break /sub.
@@ -230,6 +234,7 @@ export async function getSubscriptionSettings(): Promise<SubscriptionSettings> {
     brandName: asString('brandName'),
     routingPreset: isRoutingPresetId(routingRaw) ? routingRaw : 'proxy-all',
     tlsFragment,
+    wgShowUnusedTunnels,
     customRoutingRules,
     customDomainLists,
     defaultLocale,

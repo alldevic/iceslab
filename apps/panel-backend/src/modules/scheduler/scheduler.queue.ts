@@ -176,10 +176,10 @@ export function startCronTasksWorker(): Worker {
           const r = await pruneHistory();
           const total =
             r.subscriptionRequests + r.nodeUserUsage + r.nodeUsage + r.subscriptionEvents + r.bootstrapTokens +
-            r.deletedUsers + r.hwidDevices;
+            r.deletedUsers + r.hwidDevices + r.wgDevices.forgotten + r.wgDevices.erased;
           if (total > 0) {
             getLogger().info(
-              `[cron] prune-history - deleted ${r.subscriptionRequests} sub-req, ${r.nodeUserUsage} user-usage, ${r.nodeUsage} node-usage, ${r.subscriptionEvents} sub-event, ${r.bootstrapTokens} bootstrap-token rows, ${r.deletedUsers} users deleted over ${DELETED_USER_RETENTION_DAYS} days ago, ${r.hwidDevices} devices unseen for ${HWID_DEVICE_RETENTION_DAYS} days`,
+              `[cron] prune-history - deleted ${r.subscriptionRequests} sub-req, ${r.nodeUserUsage} user-usage, ${r.nodeUsage} node-usage, ${r.subscriptionEvents} sub-event, ${r.bootstrapTokens} bootstrap-token rows, ${r.deletedUsers} users deleted over ${DELETED_USER_RETENTION_DAYS} days ago, ${r.hwidDevices} devices unseen for ${HWID_DEVICE_RETENTION_DAYS} days, ${r.wgDevices.forgotten} WireGuard devices forgotten and ${r.wgDevices.erased} revoked ones erased`,
             );
           }
           break;

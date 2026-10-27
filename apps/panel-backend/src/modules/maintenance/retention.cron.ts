@@ -1,5 +1,6 @@
 import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
+import { revokeDevice } from '../wg-devices/wg-devices.service.js';
 import { purgeExpiredBootstrapTokens } from '../nodes/bootstrap.service.js';
 import { sourceIdSha256 } from '../users/erased-sources.js';
 
@@ -94,6 +95,36 @@ export interface PruneResult {
   bootstrapTokens: number;
   deletedUsers: number;
   hwidDevices: number;
+  /** WireGuard devices forgotten (revoked) and revoked ones erased. */
+  wgDevices: { forgotten: number; erased: number };
+}
+
+/** WireGuard devices forgotten per run, so a backlog is never one long run. */
+const WG_FORGET_BATCH = 500;
+
+/**
+ * A-269 for WireGuard devices: a live device that has moved no traffic for
+ * HWID_DEVICE_RETENTION_DAYS (since it was issued, if it never has) is
+ * revoked, its peer off the nodes, and the next render of the subscription
+ * issues a fresh one; a device revoked that long ago is erased with its
+ * history. The same window as HWID clients, the same number on the screens.
+ */
+async function forgetWgDevices(now: number): Promise<{ forgotten: number; erased: number }> {
+  const before = new Date(now - RETENTION_DAYS.hwidDevices * DAY_MS);
+  const stale = await prisma.wgDevice.findMany({
+    where: {
+      revokedAt: null,
+      OR: [{ lastSeenAt: { lt: before } }, { lastSeenAt: null, createdAt: { lt: before } }],
+    },
+    select: { id: true },
+    take: WG_FORGET_BATCH,
+  });
+  let forgotten = 0;
+  for (const d of stale) {
+    if (await revokeDevice(d.id, 'forgotten')) forgotten++;
+  }
+  const erased = await prisma.wgDevice.deleteMany({ where: { revokedAt: { lt: before } } });
+  return { forgotten, erased: erased.count };
 }
 
 /**
@@ -107,7 +138,7 @@ export interface PruneResult {
  */
 export async function pruneHistory(): Promise<PruneResult> {
   const now = Date.now();
-  const [subscriptionRequests, nodeUserUsage, nodeUsage, subscriptionEvents, bootstrapTokens, deletedUsers, hwidDevices] =
+  const [subscriptionRequests, nodeUserUsage, nodeUsage, subscriptionEvents, bootstrapTokens, deletedUsers, hwidDevices, wgDevices] =
     await Promise.all([
       prisma.subscriptionRequestHistory.deleteMany({
         where: { requestedAt: { lt: new Date(now - RETENTION_DAYS.subscriptionRequests * DAY_MS) } },
@@ -127,6 +158,7 @@ export async function pruneHistory(): Promise<PruneResult> {
       prisma.hwidUserDevice.deleteMany({
         where: { lastSeenAt: { lt: new Date(now - RETENTION_DAYS.hwidDevices * DAY_MS) } },
       }),
+      forgetWgDevices(now),
     ]);
   return {
     subscriptionRequests: subscriptionRequests.count,
@@ -136,5 +168,6 @@ export async function pruneHistory(): Promise<PruneResult> {
     bootstrapTokens,
     deletedUsers,
     hwidDevices: hwidDevices.count,
+    wgDevices,
   };
 }

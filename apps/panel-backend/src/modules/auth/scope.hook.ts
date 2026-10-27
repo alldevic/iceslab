@@ -111,6 +111,7 @@ export const SCOPEABLE_RESOURCES = [
   'inbounds',
   'cascades',
   'hwid-devices',
+  'wg-devices',
   'settings',
   'recipes',
   'dashboard',

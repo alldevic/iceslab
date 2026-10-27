@@ -7,7 +7,7 @@ import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deri
 import { getLogger } from '../../lib/infra/logger.js';
 import { reachOfUsers } from './user-reach.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
-import { allocateAwgAddresses, awgBindingsOfNode } from '../amneziawg/awg-addresses.js';
+import { awgBindingsOfNode, awgCredentialsOf } from '../amneziawg/awg-addresses.js';
 
 // ───── Job data shapes ─────
 
@@ -105,7 +105,6 @@ export async function syncAddUser(userId: string): Promise<void> {
       hysteriaPassword: true,
       naivePassword: true,
       xrayUuid: true,
-      amneziawgPublicKey: true,
     },
   });
   if (!user) {
@@ -132,7 +131,6 @@ export async function syncAddUser(userId: string): Promise<void> {
       hysteriaPassword: user.hysteriaPassword,
       naivePassword: user.naivePassword,
       xrayUuid: user.xrayUuid,
-      amneziawgPublicKey: user.amneziawgPublicKey,
       tuicUuid: user.xrayUuid,
       tuicPassword: deriveTuicPassword(user.xrayUuid),
       anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
@@ -151,9 +149,9 @@ export async function syncAddUser(userId: string): Promise<void> {
    * match yet would take the user off everything there, and its first push
    * hands every user out anyway (the push job, after the agent applied).
    *
-   * A-164: with the AmneziaWG address of each generation the node serves and
-   * the user reaches, allocated by the same rule as the push. Without it the
-   * agent put no 1.x peer and took the user off 3.1.
+   * A-164: with the AmneziaWG peers of the user's devices, an address on each
+   * generation the node serves and the user reaches, by the same rule as the
+   * push. Without them the agent put no 1.x peer and took the user off 3.1.
    */
   const nodes = await fetchActiveNodes();
   const reach = (await reachOfUsers([userId])).get(userId) ?? new Map<string, string[]>();
@@ -168,16 +166,18 @@ export async function syncAddUser(userId: string): Promise<void> {
       }
       if (node.lastInboundSyncAt === null) return;
       const awg = await awgBindingsOfNode(node.id);
-      const one = awg.one && inboundIds.includes(awg.one) ? (await allocateAwgAddresses(awg.one, [user])).get(user.id) : undefined;
-      const three = awg.three && inboundIds.includes(awg.three) ? (await allocateAwgAddresses(awg.three, [user])).get(user.id) : undefined;
+      const awgCreds = await awgCredentialsOf(awg, [
+        {
+          id: user.id,
+          username: user.username,
+          reachesOne: !!awg.one && inboundIds.includes(awg.one),
+          reachesThree: !!awg.three && inboundIds.includes(awg.three),
+        },
+      ]);
       await transport.addUser({
         ...base,
         inboundIds,
-        credentials: {
-          ...base.credentials,
-          ...(one ? { amneziawgAllowedIp: one } : {}),
-          ...(three ? { amneziawgAllowedIp3: three } : {}),
-        },
+        credentials: { ...base.credentials, ...awgCreds.get(user.id) },
       });
     },
     `addUser ${userId}`,

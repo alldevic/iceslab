@@ -384,7 +384,12 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       });
       const subUrl = await subscriptionUrl(user.subscriptionToken);
       return reply.send({
-        endpoints: result.endpoints.map((e) => ({
+        // One AmneziaWG row per tunnel, device 1's: the user's devices have a
+        // list of their own on the card, and a row per key would read as more
+        // servers.
+        endpoints: result.endpoints
+          .filter((e) => e.protocol !== 'amneziawg' || (e.deviceIndex ?? 1) === 1)
+          .map((e) => ({
           protocol: e.protocol,
           /**
            * The core serving it. A protocol name alone does not say what the

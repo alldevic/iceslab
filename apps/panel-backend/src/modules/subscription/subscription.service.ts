@@ -23,6 +23,7 @@ import {
 // output.
 import { subscriptionServerName } from '../../lib/util/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
+import { ensureDevices, wgDeviceCount } from '../wg-devices/wg-devices.service.js';
 import {
   getHiddenCascadeNodeIds,
   getHysteriaEntryLabels,
@@ -65,7 +66,7 @@ import { effectiveEngineOf } from '../nodes/node-engines.js';
 import { hysteriaPinFor } from '../nodes/hysteria-tls-shape.js';
 import { ensureAwg3Geometry, readAwg3Geometry } from '../nodes/awg3-geometry.js';
 import { getLogger } from '../../lib/infra/logger.js';
-import { endpointId } from './endpoint-identity.js';
+import { endpointId, endpointKey } from './endpoint-identity.js';
 import { expandCascadeEntry } from './cascade-entries.js';
 
 // ───── Domain errors ─────
@@ -221,6 +222,8 @@ interface AmneziawgInboundConfig {
   serverPrivateKey: string;
   serverPublicKey: string;
   obfuscation: AmneziawgObfuscation;
+  /** Each device's peer takes its preshared key. */
+  presharedKey?: boolean;
 }
 
 interface NaiveInboundConfig {
@@ -389,7 +392,11 @@ function refineLabels(group: SubscriptionEndpoint[], level: number): void {
  * the function exists at all rather than the caller doing it inline: URIs are
  * built one binding at a time, before there is a list to compare against.
  */
-export function disambiguateEndpointLabels(endpoints: SubscriptionEndpoint[]): void {
+export function disambiguateEndpointLabels(all: SubscriptionEndpoint[]): void {
+  // The devices of one AmneziaWG endpoint are one server, not a collision:
+  // device 1 stands for them all, and the rest take its label at the end.
+  const later = (e: SubscriptionEndpoint) => e.protocol === 'amneziawg' && (e.deviceIndex ?? 1) > 1;
+  const endpoints = all.filter((e) => !later(e));
   const before = new Map<SubscriptionEndpoint, string>();
   const groups = new Map<string, SubscriptionEndpoint[]>();
   for (const e of endpoints) {
@@ -419,6 +426,13 @@ export function disambiguateEndpointLabels(endpoints: SubscriptionEndpoint[]): v
 
   for (const e of endpoints) {
     if (e.nodeName !== before.get(e)) e.uri = withUriRemark(e.uri, e.nodeName);
+  }
+
+  const firstOf = new Map<string, SubscriptionEndpoint>();
+  for (const e of endpoints) if (e.protocol === 'amneziawg') firstOf.set(endpointKey(e), e);
+  for (const e of all) {
+    const first = later(e) ? firstOf.get(endpointKey(e)) : undefined;
+    if (first) e.nodeName = first.nodeName;
   }
 }
 
@@ -644,7 +658,7 @@ export async function generateSubscription(
   // identical squad set, i.e. a redundant round-trip on every /sub poll.
   const memberships = await prisma.groupMember.findMany({
     where: { userId: user.id },
-    select: { groupId: true, group: { select: PRESET_COLUMNS_SELECT } },
+    select: { groupId: true, group: { select: { ...PRESET_COLUMNS_SELECT, hwidDeviceLimit: true } } },
   });
   const groupIds = memberships.map((g) => g.groupId);
 
@@ -934,6 +948,14 @@ export async function generateSubscription(
     entryReach,
     'amneziawg',
   );
+
+  // The user's WireGuard devices, issued up to their count when they hold an
+  // AmneziaWG binding at all: every AmneziaWG endpoint below is one per
+  // device. Issuing here and not on the push means a key exists once someone
+  // could fetch its config; the push carries what is issued.
+  const wgDevices = bindings.some((b) => b.profile.protocol === 'amneziawg')
+    ? await ensureDevices(user.id, wgDeviceCount(user.hwidDeviceLimit, memberships.map((m) => m.group.hwidDeviceLimit)))
+    : [];
 
   const endpoints: SubscriptionEndpoint[] = [];
   for (const b of bindings) {
@@ -1280,7 +1302,7 @@ export async function generateSubscription(
         // otherwise, so the array format emits a single config as before.
         cascadeExits: balancerExits.get(b.node.id),
       });
-    } else if (ib.protocol === 'amneziawg' && user.amneziawgPrivateKey) {
+    } else if (ib.protocol === 'amneziawg' && wgDevices.length > 0) {
       const cfg = ib.config as unknown as Partial<AmneziawgInboundConfig>;
       // Same jsonb lesson as the xray branch above, with a sharper edge: the
       // obfuscation block is eleven numbers, and there is no safe default for
@@ -1312,41 +1334,47 @@ export async function generateSubscription(
         ? (readAwg3Geometry(b.node.awg3Geometry) ?? (await ensureAwg3Geometry(b.node.id)))
         : null;
       if (is3 && !geometry3) continue;
-      // Slice 27: peer is keyed on profileId (one allocation per logical
-      // AmneziaWG profile, shared across all nodes the profile is bound to).
-      const peer = await allocatePeer(ib.profileId, user.id, cfg.subnet);
-      endpoints.push({
-        protocol: 'amneziawg',
-        // A 3.1 endpoint is told apart by name: a node serving both
-        // generations has two AmneziaWG tunnels, and the page and `?node=`
-        // pick a tunnel by this name. It also tells a user which app it needs.
-        nodeName: is3 ? `${nodeName} · 3.1` : nodeName,
-        host,
-        port,
-        ...hostMeta,
-        privateKey: user.amneziawgPrivateKey,
-        allowedIp: `${peer.ip}/32`,
-        serverPublicKey: cfg.serverPublicKey ?? '',
-        jc: obf.jc,
-        jmin: obf.jmin,
-        jmax: obf.jmax,
-        s1: obf.s1,
-        s2: obf.s2,
-        s3: obf.s3,
-        s4: obf.s4,
-        h1: obf.h1,
-        h2: obf.h2,
-        h3: obf.h3,
-        h4: obf.h4,
-        i1: obf.i1 ?? '',
-        i2: obf.i2 ?? '',
-        i3: obf.i3 ?? '',
-        i4: obf.i4 ?? '',
-        i5: obf.i5 ?? '',
-        ...(geometry3 ? { geometry3 } : {}),
-        // No standardised URI format for AmneziaWG; clients fetch ?format=wgconf.
-        uri: '',
-      });
+      // An endpoint per device, each with its own key and its own address on
+      // the profile (one allocation per (profile, device), shared by every
+      // node the profile is bound to).
+      for (const [idx, device] of wgDevices.entries()) {
+        const peer = await allocatePeer(ib.profileId, device, cfg.subnet);
+        endpoints.push({
+          protocol: 'amneziawg',
+          // A 3.1 endpoint is told apart by name: a node serving both
+          // generations has two AmneziaWG tunnels, and the page and `?node=`
+          // pick a tunnel by this name. It also tells a user which app it needs.
+          nodeName: is3 ? `${nodeName} · 3.1` : nodeName,
+          host,
+          port,
+          ...hostMeta,
+          privateKey: device.privateKey,
+          allowedIp: `${peer.ip}/32`,
+          deviceId: device.id,
+          deviceIndex: idx + 1,
+          ...(cfg.presharedKey && device.presharedKey ? { presharedKey: device.presharedKey } : {}),
+          serverPublicKey: cfg.serverPublicKey ?? '',
+          jc: obf.jc,
+          jmin: obf.jmin,
+          jmax: obf.jmax,
+          s1: obf.s1,
+          s2: obf.s2,
+          s3: obf.s3,
+          s4: obf.s4,
+          h1: obf.h1,
+          h2: obf.h2,
+          h3: obf.h3,
+          h4: obf.h4,
+          i1: obf.i1 ?? '',
+          i2: obf.i2 ?? '',
+          i3: obf.i3 ?? '',
+          i4: obf.i4 ?? '',
+          i5: obf.i5 ?? '',
+          ...(geometry3 ? { geometry3 } : {}),
+          // No standardised URI format for AmneziaWG; clients fetch ?format=wgconf.
+          uri: '',
+        });
+      }
     } else if (ib.protocol === 'mtproto') {
       // Slice 41: Telegram MTProto. On mtg (native) one secret for the whole
       // inbound, derived from (inboundId, domain): every user of it gets the

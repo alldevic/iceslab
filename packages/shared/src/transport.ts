@@ -568,6 +568,17 @@ export const ENGINE_NAMES = [
 
 export type EngineName = (typeof ENGINE_NAMES)[number];
 
+/** One device of a user on an AmneziaWG node. An address is absent when no
+ *  profile of that generation on the node reaches the user; a preshared key,
+ *  when that generation's profile does not ask for one. */
+export interface AmneziawgPeerCred {
+  publicKey: string;
+  allowedIp?: string;
+  allowedIp3?: string;
+  presharedKey?: string;
+  presharedKey3?: string;
+}
+
 export interface ProtocolCredentials {
   hysteriaPassword?: string;
   xrayUuid?: string;
@@ -587,6 +598,15 @@ export interface ProtocolCredentials {
    * two addresses. Same public key on both.
    */
   amneziawgAllowedIp3?: string;
+  /**
+   * One peer per device of the user (wg_devices), each with its own key, its
+   * addresses on the 1.x and 3.1 interfaces and the preshared key when the
+   * profile asks for one. An agent that knows the field takes it and ignores
+   * the three single fields above, which the panel fills with the first
+   * device for agents that do not. `[]` is meaningful: the user has no device
+   * left, and their peers come off; an absent field changes nothing.
+   */
+  amneziawgPeers?: AmneziawgPeerCred[];
   /** TUIC v5 (sing-box engine): per-user UUID + password. */
   tuicUuid?: string;
   tuicPassword?: string;
@@ -980,6 +1000,9 @@ export interface AmneziawgInboundCfg {
   /** t07-6: the node's 3.1 geometry, on a 3.1 inbound only. It replaces the
    *  profile's jc..h4 on that interface. */
   geometry3?: AwgGeometry3;
+  /** A preshared key per device. The agent ignores it here: the keys come
+   *  with each user's peers (`amneziawgPeers`). */
+  presharedKey?: boolean;
 }
 
 /**
@@ -1669,6 +1692,19 @@ export interface UserStats {
    * snapshot by (node, user, protocol, engine). Absent on older agents.
    */
   engine?: EngineName;
+  /**
+   * The same counters by peer public key, from a core whose user holds a peer
+   * per device (AmneziaWG); their sum is this entry. The panel credits each to
+   * its device. Absent from other cores and older agents.
+   */
+  peers?: PeerStats[];
+}
+
+/** One peer's counters, in the mode of its user's entry. */
+export interface PeerStats {
+  publicKey: string;
+  bytesIn: number;
+  bytesOut: number;
 }
 
 /**

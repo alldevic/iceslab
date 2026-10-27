@@ -60,6 +60,19 @@ export function pickServer<T extends SubscriptionEndpoint>(eps: readonly T[], no
 }
 
 /**
+ * The endpoints of one WireGuard device (`?device=`), for the single-tunnel
+ * formats: its number among the user's live devices, oldest first, or its id;
+ * absent = device 1. A user holds several devices on every AmneziaWG node, and
+ * a file is one tunnel of one of them. Numbers move when a device is revoked
+ * (the next one moves up); ids do not.
+ */
+export function ofDevice<T extends { deviceIndex?: number; deviceId?: string }>(eps: readonly T[], device?: string): T[] {
+  if (device && !/^\d+$/.test(device)) return eps.filter((e) => e.deviceId === device);
+  const n = device ? Number(device) : 1;
+  return eps.filter((e) => (e.deviceIndex ?? 1) === n);
+}
+
+/**
  * The config-internal tag for an endpoint, in the formats where a tag is NOT
  * shown to anyone: xray-json outbounds and the rules pointing at them.
  *

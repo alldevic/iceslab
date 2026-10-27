@@ -13,7 +13,7 @@ import { prisma } from '../../prisma.js';
 import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
-import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
+import { awgCredentialsOf } from '../amneziawg/awg-addresses.js';
 import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
@@ -124,7 +124,6 @@ interface ActiveUser {
   username: string;
   xrayUuid: string;
   hysteriaPassword: string;
-  amneziawgPublicKey: string;
   naivePassword: string;
 }
 
@@ -158,7 +157,6 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
       username: true,
       xrayUuid: true,
       hysteriaPassword: true,
-      amneziawgPublicKey: true,
       naivePassword: true,
     },
   });
@@ -776,14 +774,16 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   // would run past Postgres's bind-parameter cap on a large roster).
   const reach = await reachOfUsers(null, { nodeId });
   const inboundIdsOf = (userId: string): string[] => reach.get(userId)?.get(nodeId) ?? [];
-  // A-164: an address only for the users who reach that AmneziaWG inbound.
-  const awgIpByUser = await allocateAwgAddresses(
-    awgBinding?.id,
-    users.filter((u) => awgBinding && inboundIdsOf(u.id).includes(awgBinding.id)),
-  );
-  const awg3IpByUser = await allocateAwgAddresses(
-    awg3Binding?.id,
-    users.filter((u) => awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id)),
+  // A-164: AmneziaWG peers only for the users who reach that inbound, one per
+  // device, each with an address on the generations the user reaches.
+  const awgCreds = await awgCredentialsOf(
+    { one: awgBinding?.id, three: awg3Binding?.id },
+    users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      reachesOne: !!awgBinding && inboundIdsOf(u.id).includes(awgBinding.id),
+      reachesThree: !!awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id),
+    })),
   );
 
   const requests: AddUserRequest[] = users.map((u) => ({
@@ -794,9 +794,7 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
     credentials: {
       xrayUuid: u.xrayUuid,
       hysteriaPassword: u.hysteriaPassword,
-      amneziawgPublicKey: u.amneziawgPublicKey,
-      amneziawgAllowedIp: awgIpByUser.get(u.id),
-      amneziawgAllowedIp3: awg3IpByUser.get(u.id),
+      ...awgCreds.get(u.id),
       naivePassword: u.naivePassword,
       tuicUuid: u.xrayUuid,
       tuicPassword: deriveTuicPassword(u.xrayUuid),

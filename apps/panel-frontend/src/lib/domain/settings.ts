@@ -48,6 +48,9 @@ export interface AdminSettings extends PublicSettings {
   /** TLS-fragment - split the ClientHello in the Xray JSON format so SNI-DPI
    *  cannot match the handshake. Xray JSON only. */
   subscriptionTlsFragment?: boolean;
+  /** List WireGuard devices that never moved traffic among a user's devices
+   *  on the compatibility API. Off: such a device is a slot, not a device. */
+  wgShowUnusedTunnels?: boolean;
   /** R3-b - raw custom xray routing rules. */
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   /** R3 - operator-defined custom domain lists (direct/proxy/block). */
@@ -148,6 +151,7 @@ export interface UpdateSettingsInput {
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
   subscriptionTlsFragment?: boolean;
+  wgShowUnusedTunnels?: boolean;
   subscriptionCustomRoutingRules?: Record<string, unknown>[] | null;
   subscriptionCustomDomainLists?: {
     direct?: string[];

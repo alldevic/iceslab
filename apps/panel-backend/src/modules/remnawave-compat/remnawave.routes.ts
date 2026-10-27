@@ -8,8 +8,10 @@ import { CreateUserSchema, UpdateUserSchema } from '../users/users.schemas.js';
 import { mapUserToPublic } from '../users/users.mapper.js';
 import * as squadsService from '../squads/squads.service.js';
 import * as hwidService from '../hwid/hwid.service.js';
+import { findDeviceForUser, listDevicesWithPeers, revokeDevice } from '../wg-devices/wg-devices.service.js';
+import { describeWgTunnel, servedProfileIds, WG_HWID_PREFIX } from '../wg-devices/wg-devices.presentation.js';
 import { getOverview } from '../dashboard/dashboard.service.js';
-import { formatBytes } from '../settings/settings.service.js';
+import { formatBytes, getSubscriptionSettings } from '../settings/settings.service.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
 import { ALL_SQUAD_ID, NO_ACCESS_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureNoAccessSquad } from '../squads/squads.system.js';
@@ -81,18 +83,44 @@ function parseStreamCursor(raw: string | undefined): { numericId: bigint } | nul
 const ONLINE_NOW_WINDOW_MS = 3 * 60 * 1000;
 
 // HWID device row → Remnawave device shape. `createdAt` maps from `firstSeenAt`
-// (there is no native `createdAt` column on hwid_user_devices). The panel does
-// not keep what the client reports about itself (platform, OS, model, UA), so
-// those are null; the shop shows the card without them.
-function mapDevice(d: { id: string; hwid: string; firstSeenAt: Date }) {
+// (there is no native `createdAt` column on hwid_user_devices). Platform, OS,
+// model and user agent are what the client last said about itself on /sub,
+// null where it said nothing.
+function mapDevice(d: {
+  id: string;
+  hwid: string;
+  firstSeenAt: Date;
+  platform?: string | null;
+  osVersion?: string | null;
+  deviceModel?: string | null;
+  userAgent?: string | null;
+}) {
   return {
     id: d.id,
     hwid: d.hwid,
-    platform: null,
-    osVersion: null,
-    deviceModel: null,
-    userAgent: null,
+    platform: d.platform ?? null,
+    osVersion: d.osVersion ?? null,
+    deviceModel: d.deviceModel ?? null,
+    userAgent: d.userAgent ?? null,
     createdAt: d.firstSeenAt.toISOString(),
+  };
+}
+
+// A WireGuard device → the same shape, beside the HWID clients: the shop's
+// device tab is one list, and its "N of M" is that list's length. Named by its
+// address (describeWgTunnel); the line under the name carries its traffic and
+// when it last moved any, and user agent stays empty: the shop draws that row
+// under a "User Agent" label, where traffic figures would be worse than none.
+function mapWgTunnel(
+  d: { id: string; createdAt: Date; bytesIn: bigint; bytesOut: bigint; lastSeenAt: Date | null; peers: { ip: string; profileId: string }[] },
+  served: Set<string>,
+) {
+  const seen = d.lastSeenAt ? ` · ${d.lastSeenAt.toISOString().slice(0, 16).replace('T', ' ')}` : '';
+  return {
+    id: d.id,
+    ...describeWgTunnel(d, served),
+    osVersion: `↑ ${formatBytes(d.bytesOut)} ↓ ${formatBytes(d.bytesIn)}${seen}`,
+    userAgent: null,
   };
 }
 
@@ -1171,10 +1199,21 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // ─────────────── HWID devices ───────────────
 
   // GET /api/hwid/devices/:userUuid — list a user's devices.
+  // The user's WireGuard devices follow the HWID clients, oldest first: a
+  // device limit is one number spent on whatever the buyer connects. A device
+  // that never moved traffic is a slot rather than a device and is listed only
+  // with `wgShowUnusedTunnels`; a revoked one never is.
   app.get('/api/hwid/devices/:ref', opts, async (request, reply) => {
     const { ref } = request.params as { ref: string };
-    const rows = await hwidService.listUserDevices(await resolveUserId(ref));
-    return sendResponse(reply, { devices: rows.map(mapDevice) });
+    const userId = await resolveUserId(ref);
+    const [rows, tunnels, settings, served] = await Promise.all([
+      hwidService.listUserDevices(userId),
+      listDevicesWithPeers(userId),
+      getSubscriptionSettings(),
+      servedProfileIds(userId),
+    ]);
+    const live = tunnels.filter((t) => !t.revokedAt && (t.lastSeenAt || settings.wgShowUnusedTunnels));
+    return sendResponse(reply, { devices: [...rows.map(mapDevice), ...live.map((t) => mapWgTunnel(t, served))] });
   });
 
   // POST /api/hwid/devices/delete {userId, hwid} — the 3.x selector is the
@@ -1194,6 +1233,15 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     const userId = await resolveUserId(
       body.userId !== undefined ? String(body.userId) : body.userUuid,
     );
+    // A WireGuard device is revoked, not deleted: its row keeps its traffic,
+    // and a replacement is issued on the next fetch. The id comes through the
+    // buyer's browser, so ownership is settled BEFORE the revoke: a stranger's
+    // device is {deleted:false} and untouched.
+    if (body.hwid.startsWith(WG_HWID_PREFIX)) {
+      const own = await findDeviceForUser(body.hwid.slice(WG_HWID_PREFIX.length), userId).catch(() => null);
+      if (!own) return sendResponse(reply, { deleted: false });
+      return sendResponse(reply, { deleted: (await revokeDevice(own.id)) !== null });
+    }
     // Single atomic statement instead of find-then-delete-by-id: the read/write
     // gap let two concurrent deletes of the same device both resolve a row, and
     // the loser's delete-by-id then threw P2025 ("record required but not

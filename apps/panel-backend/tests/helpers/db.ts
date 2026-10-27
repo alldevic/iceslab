@@ -51,6 +51,7 @@ export const TABLES = [
   'group_inbounds',
   'groups',
   'hwid_user_devices',
+  'wg_devices',
   'user_traffic',
   'users',
   // A-268 tombstone: no foreign key; a hash left by one test would refuse the

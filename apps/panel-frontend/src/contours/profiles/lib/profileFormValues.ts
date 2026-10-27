@@ -78,6 +78,8 @@ export interface FormValues {
   awgI3: string;
   awgI4: string;
   awgI5: string;
+  /** Каждому устройству свой preshared key в peer (config.presharedKey). */
+  awgPresharedKey: boolean;
 
   // Naive
   naiveHostname: string;

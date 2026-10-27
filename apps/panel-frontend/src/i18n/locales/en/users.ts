@@ -140,6 +140,20 @@ export const users = {
     devicesError: 'the device list',
     deviceReset: 'Device reset',
     deviceResetHint: 'Reset this device and free its slot',
+    wgDevices: 'WireGuard devices',
+    wgDevicesEmpty: 'None yet: each client gets its own key with the first download of the subscription.',
+    wgDevicesError: 'the WireGuard device list',
+    wgDevicesForget_one:
+      'A device that moves no traffic for {{count}} day is revoked by itself; revoking one cuts off that client alone, and its next download is a new key.',
+    wgDevicesForget_other:
+      'A device that moves no traffic for {{count}} days is revoked by itself; revoking one cuts off that client alone, and its next download is a new key.',
+    wgDeviceNever: 'never used',
+    wgDeviceRevoked: 'revoked',
+    wgDeviceRevoke: 'Revoke',
+    wgDeviceRevokeTitle: 'Revoke device #{{n}}?',
+    wgDeviceRevokeBody:
+      "The client holding this key stops connecting. The user's other devices keep working, and the next download of the subscription issues a new key.",
+    wgDeviceRevokedNote: 'Device revoked',
     traffic: 'Traffic',
     trafficUnit: 'GB',
     expires: 'Expires',

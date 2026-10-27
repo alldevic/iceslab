@@ -31,9 +31,13 @@ the update, and that restart still comes up with no peers, as before.
 */
 
 type savedState struct {
-	Inbound   InboundConfig   `json:"inbound"`
-	InboundID string          `json:"inboundId,omitempty"`
-	Peers     map[string]Peer `json:"peers"`
+	Inbound   InboundConfig `json:"inbound"`
+	InboundID string        `json:"inboundId,omitempty"`
+	// PeerSets: every peer of each user, a peer per device. Peers keeps one
+	// per user, the first: what an agent older than devices reads, so a
+	// downgrade comes back with a device per user rather than none.
+	PeerSets map[string][]Peer `json:"peerSets,omitempty"`
+	Peers    map[string]Peer   `json:"peers"`
 }
 
 // statePath sits beside the config, under a name awg-quick does not read
@@ -50,10 +54,14 @@ func (a *Adapter) saveState() {
 	st := savedState{
 		Inbound:   a.cfg.Inbound,
 		InboundID: a.inboundID,
+		PeerSets:  make(map[string][]Peer, len(a.peers)),
 		Peers:     make(map[string]Peer, len(a.peers)),
 	}
-	for id, p := range a.peers {
-		st.Peers[id] = p
+	for id, set := range a.peers {
+		st.PeerSets[id] = append([]Peer(nil), set...)
+		if len(set) > 0 {
+			st.Peers[id] = set[0]
+		}
 	}
 	a.mu.Unlock()
 	body, err := json.MarshalIndent(st, "", "  ")
@@ -94,13 +102,23 @@ func (a *Adapter) loadState() {
 	if inbound.ListenPort == 0 {
 		inbound.ListenPort = a.cfg.Inbound.ListenPort
 	}
-	peers := make(map[string]Peer, len(st.Peers))
-	for id, p := range st.Peers {
-		if err := validatePeer(p); err != nil {
-			a.logger.Warn("amneziawg: saved peer refused", "user", id, "err", err)
-			continue
+	// An agent older than devices saved one peer per user.
+	sets := st.PeerSets
+	if sets == nil {
+		sets = make(map[string][]Peer, len(st.Peers))
+		for id, p := range st.Peers {
+			sets[id] = []Peer{p}
 		}
-		peers[id] = p
+	}
+	peers := make(map[string][]Peer, len(sets))
+	for id, set := range sets {
+		for _, p := range set {
+			if err := validatePeer(p); err != nil {
+				a.logger.Warn("amneziawg: saved peer refused", "user", id, "err", err)
+				continue
+			}
+			peers[id] = append(peers[id], p)
+		}
 	}
 	a.cfg.Inbound = inbound
 	a.inboundID = st.InboundID
@@ -117,6 +135,11 @@ func validatePeer(p Peer) error {
 	}
 	if err := validateAllowedIP(p.AllowedIP); err != nil {
 		return err
+	}
+	if p.PresharedKey != "" {
+		if err := validateWGKey(p.PresharedKey); err != nil {
+			return fmt.Errorf("preshared key: %w", err)
+		}
 	}
 	return nil
 }

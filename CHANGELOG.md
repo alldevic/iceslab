@@ -46,6 +46,29 @@ All notable changes to Iceslab are documented here. Format loosely follows
   have made. The bootstrap token goes in as a 0600 file and is removed even
   when the install fails.
 
+- **A WireGuard key per device.** Every AmneziaWG client of a user held the
+  user's one key, so a second client took the connection over from the first,
+  and cutting one off meant cutting off all of them. A user now holds a key per
+  device, as many as their device limit (3 without one, at most 10), issued
+  with the first download of the subscription, each with its own address.
+  `?device=N` picks one in the `.conf` and `vpn://` links, and the
+  subscription page offers each device its own tunnel. The user card lists the
+  devices with their traffic and last use and revokes one at a time; the next
+  download issues a replacement. Existing users keep their key as device 1.
+  The node agent of this release serves every device; an older one serves
+  device 1 alone.
+- An AmneziaWG profile can give each device's peer a preshared key of its own
+  ("Preshared key per device"). Needs the node agent of this release.
+- A WireGuard device that moves no traffic for 90 days is revoked by itself,
+  as an HWID device unseen that long is forgotten; a revoked one is erased 90
+  days later.
+- What a client says about itself on `/sub` (`x-device-os`, `x-ver-os`,
+  `x-device-model`, User-Agent) is kept on its device row. The
+  Remnawave-compatible API returns it in the device list and in
+  `user_hwid_devices.added`, and lists the user's WireGuard devices after the
+  HWID ones, so a shop's device count covers both; deleting one there revokes
+  it.
+
 ### Fixed
 
 - A user whose term ends while they are `limited` (quota used up) now

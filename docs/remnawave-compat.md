@@ -91,6 +91,14 @@ the token and its scopes.
 - **Dropping connections** takes the user off the chosen nodes and puts them
   back at once; if putting back fails, the panel retries it in the
   background.
+- **Devices** are the clients that sent `x-hwid` and, after them, the user's
+  WireGuard devices (a key per client, issued with the subscription), oldest
+  first, so the shop's "N of M" counts both. A WireGuard device has `hwid`
+  `wg:<id>`, platform `WireGuard/AmneziaWG`, its address as the model and its
+  traffic as the OS line. One that has never moved traffic is a free slot and
+  is listed only with the panel setting "Unused WireGuard devices"; deleting
+  one revokes it (the next download issues a new key), and a device of
+  another user is never revoked.
 
 ## Endpoints
 
@@ -121,12 +129,10 @@ change the signed bytes.
 |---|---|
 | `user.expires_in_72_hours`, `…_48_…`, `…_24_…` | A scan every 10 minutes, once per user, stage and term. Delivered at least once: a failed delivery is retried on the next scan, and a renewal starts the stages again. The 24-hour one is the shop's auto-renew charge. |
 | `user.expired` | When the expiry check moves an active or limited user to expired. |
-| `user_hwid_devices.added` | When a subscription request brings a device the user did not have. |
+| `user_hwid_devices.added` | When a subscription request brings a device the user did not have, with what the client said about itself; and when a WireGuard device moves traffic for the first time. |
 
 ## Not there yet
 
 - The subscription page config answers `{}`, and the shop shows its own
   install page built from the subscription link.
-- Devices carry no platform, OS, model or user agent; those fields are
-  `null`.
 - Remnawave 2.x (UUID users) is not served.

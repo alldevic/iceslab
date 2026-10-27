@@ -1,4 +1,7 @@
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { prisma } from '../../prisma.js';
+import { getLogger } from '../../lib/infra/logger.js';
+import { describeWgTunnel, servedProfileIds } from '../wg-devices/wg-devices.presentation.js';
 import { emitRemnaWebhookForUser, isRemnaWebhookConfigured } from './remnawave.webhook.js';
 
 /**
@@ -33,13 +36,13 @@ export function registerRemnawaveWebhookEmitter(): void {
       payload.userId,
       {},
       {
-        // Remnawave's own key (`data: { user, hwidUserDevice }`). The panel
-        // keeps no client-reported metadata, hence the nulls.
+        // Remnawave's own key (`data: { user, hwidUserDevice }`), with what
+        // the client said about itself on that fetch.
         hwidUserDevice: {
           hwid: payload.hwid,
-          platform: null,
-          osVersion: null,
-          deviceModel: null,
+          platform: payload.platform ?? null,
+          osVersion: payload.osVersion ?? null,
+          deviceModel: payload.deviceModel ?? null,
           // Remnawave's name for our firstSeenAt, and load-bearing: the shop
           // hashes hwid + createdAt into its dedupe fingerprint, so a device
           // removed and reconnected (same hwid, new row) reads as a new event.
@@ -47,5 +50,27 @@ export function registerRemnawaveWebhookEmitter(): void {
         },
       },
     );
+  });
+
+  // A WireGuard device is announced the same way, once, at its first use: an
+  // issued key nobody has imported is a slot, not a device the buyer added.
+  // Named by its address, the name it has in the device list.
+  eventBus.on('wg-devices.first-used', async ({ userId, deviceId }) => {
+    if (!isRemnaWebhookConfigured()) return;
+    try {
+      const [device, served] = await Promise.all([
+        prisma.wgDevice.findUnique({
+          where: { id: deviceId },
+          include: { peers: { select: { ip: true, profileId: true }, orderBy: { ip: 'asc' } } },
+        }),
+        servedProfileIds(userId),
+      ]);
+      if (!device || device.revokedAt) return;
+      emitRemnaWebhookForUser('user_hwid_devices.added', userId, {}, {
+        hwidUserDevice: { ...describeWgTunnel(device, served), osVersion: null },
+      });
+    } catch (err) {
+      getLogger().warn(`[remnawave] first use of WireGuard device ${deviceId} not announced: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 }

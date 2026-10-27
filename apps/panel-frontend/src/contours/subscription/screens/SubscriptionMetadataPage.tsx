@@ -72,6 +72,7 @@ interface Draft {
   announce: string;
   preset: RoutingPresetId;
   tlsFragment: boolean;
+  wgShowUnused: boolean;
 }
 
 export function SubscriptionMetadataPage() {
@@ -106,6 +107,7 @@ export function SubscriptionMetadataPage() {
         subscriptionAnnounceTemplate: draft.announce.trim() || null,
         subscriptionRoutingPreset: draft.preset,
         subscriptionTlsFragment: draft.tlsFragment,
+        wgShowUnusedTunnels: draft.wgShowUnused,
       });
     },
     onSuccess: async () => {
@@ -391,6 +393,24 @@ export function SubscriptionMetadataPage() {
               {t('metadata.fragmentHint')}
             </Text>
           </Stack>
+
+          {/* Unused WireGuard devices in a shop's device list */}
+          <Stack
+            gap={12}
+            style={{ padding: 20, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}
+          >
+            <Box style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+              <CardCaption>{t('metadata.wgUnusedTitle')}</CardCaption>
+              <Box style={{ flex: 1, minWidth: 0 }} />
+              <Switch
+                checked={draft.wgShowUnused}
+                onChange={(e) => patch({ wgShowUnused: e.currentTarget.checked })}
+              />
+            </Box>
+            <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
+              {t('metadata.wgUnusedHint')}
+            </Text>
+          </Stack>
         </Box>
       </Box>
     </Stack>
@@ -407,6 +427,7 @@ function toDraft(s: AdminSettings): Draft {
     announce: s.subscriptionAnnounceTemplate ?? '',
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',
     tlsFragment: s.subscriptionTlsFragment ?? false,
+    wgShowUnused: s.wgShowUnusedTunnels ?? false,
   };
 }
 

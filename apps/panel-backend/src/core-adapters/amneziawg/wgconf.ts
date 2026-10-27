@@ -27,6 +27,9 @@ export interface AmneziawgClientConfigOpts {
   allowedIp: string;
   /** Server's WireGuard public key (base64, 32 bytes). */
   serverPublicKey: string;
+  /** The device's preshared key when the profile asks for one; absent
+   *  renders no line. */
+  presharedKey?: string;
   /** Public host the client connects to (no port). */
   host: string;
   /** Public UDP port the AmneziaWG inbound listens on. */
@@ -166,6 +169,7 @@ function peerBlock(lines: string[], opts: AmneziawgClientConfigOpts, allowed: st
   lines.push('');
   lines.push('[Peer]');
   lines.push(`PublicKey = ${opts.serverPublicKey}`);
+  if (opts.presharedKey) lines.push(`PresharedKey = ${opts.presharedKey}`);
   lines.push(`AllowedIPs = ${allowed}`);
   lines.push(`Endpoint = ${opts.host}:${opts.port}`);
   lines.push(`PersistentKeepalive = ${opts.persistentKeepalive ?? 25}`);

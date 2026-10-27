@@ -102,6 +102,9 @@ export interface SubscriptionPageData {
      *  `node=` (A-107): the label moves when a neighbour profile lands on the
      *  node, the id does not. Absent: the label, as before. */
     id?: string;
+    /** Which of the user's WireGuard devices this tunnel is for, 1 = the
+     *  oldest live one. Links carry `device=` from 2 on. */
+    device?: number;
     /** The wg-quick config this node hands out. */
     conf?: string;
     /** Raw AmneziaVPN vpn:// key. Also what the copy button hands over, since
@@ -525,9 +528,9 @@ function renderSteps(
     const confs = (data.awgNodes ?? [])
       .map(
         (n) =>
-          `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&node=${encodeURIComponent(n.id ?? n.nodeName)}`))}">` +
-          `<span class="conf-row__name">${esc(n.nodeName)}</span>` +
-          `<span class="conf-row__file">awg-${esc(n.nodeName)}.conf</span></a>`,
+          `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&${awgQuery(n)}`))}">` +
+          `<span class="conf-row__name">${esc(awgLabel(n))}</span>` +
+          `<span class="conf-row__file">awg-${esc(awgLabel(n).replace(' #', '-'))}.conf</span></a>`,
       )
       .join('');
     const hasProxy = data.protocols.some((p) => p !== 'amneziawg');
@@ -687,8 +690,8 @@ function renderDownloads(
   const perNode = (fmt: string): Row[] =>
     (data.awgNodes ?? []).map((n) => ({
       fmt,
-      q: `&amp;node=${encodeURIComponent(n.id ?? n.nodeName)}`,
-      label: n.nodeName,
+      q: `&amp;${awgQuery(n).replace('&', '&amp;')}`,
+      label: awgLabel(n),
     }));
   const router: Row[] = [
     ...(carries('xkeen') ? [{ fmt: 'xkeen' }] : []),
@@ -1150,7 +1153,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // reads "AmneziaWG", not "London". Only disambiguate by node when there's more
   // than one AmneziaWG server.
   for (const n of awgNodes)
-    targets.push({ id: `awg:${n.nodeName}`, label: multiAwg ? `AmneziaWG · ${n.nodeName}` : 'AmneziaWG' });
+    targets.push({ id: `awg:${awgLabel(n)}`, label: multiAwg ? `AmneziaWG · ${awgLabel(n)}` : 'AmneziaWG' });
 
   const figures: string[] = [];
   awgNodes.forEach((n, ni) => {
@@ -1162,14 +1165,14 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
       // AmneziaVPN's scanner never took the key (E39, amneziaQrChunkFromKey).
       // What a person copies or reads without JS stays the key.
       figures.push(
-        `<figure class="qrf${vpnOn}" data-target="awg:${esc(n.nodeName)}" data-app="vpn">` +
+        `<figure class="qrf${vpnOn}" data-target="awg:${esc(awgLabel(n))}" data-app="vpn">` +
           qrBox({ text: amneziaQrChunkFromKey(n.vpnKey), fallback: n.vpnKey, note: t.qrNeedsJs, ecc: 'low', esc }) +
           `<figcaption>AmneziaVPN${n.awg3 ? `<br><small>${esc(t.awg3Client)}</small>` : ''}</figcaption>${copyBtn}</figure>`,
       );
     }
     if (n.conf) {
       figures.push(
-        `<figure class="qrf" data-target="awg:${esc(n.nodeName)}" data-app="conf">` +
+        `<figure class="qrf" data-target="awg:${esc(awgLabel(n))}" data-app="conf">` +
           qrBox({ text: n.conf, fallback: n.conf, note: t.qrNeedsJs, esc }) +
           `<figcaption>AmneziaWG</figcaption></figure>`,
       );
@@ -1411,4 +1414,17 @@ ${transferHtml}
   // пустоту: кружок статуса без галки, плитки без значков. Метка разрывает этот
   // порядок, не двигая лист в конец документа, где `use` на первом кадре мигают.
   return doc.replace(SPRITE_SLOT, icons.sprite());
+}
+
+type AwgNode = NonNullable<SubscriptionPageData['awgNodes']>[number];
+
+/** A tunnel's name on the page: the node, and `#N` for device 2 and on. */
+function awgLabel(n: AwgNode): string {
+  return (n.device ?? 1) > 1 ? `${n.nodeName} #${n.device}` : n.nodeName;
+}
+
+/** The query a tunnel's links carry: its node, and its device from 2 on. */
+function awgQuery(n: AwgNode): string {
+  const device = (n.device ?? 1) > 1 ? `&device=${n.device}` : '';
+  return `node=${encodeURIComponent(n.id ?? n.nodeName)}${device}`;
 }

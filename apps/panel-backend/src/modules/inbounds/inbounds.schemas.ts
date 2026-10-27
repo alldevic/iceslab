@@ -302,6 +302,12 @@ export const AmneziawgConfigSchema = z
     /** Public key paired with privateKey, emitted in client config. */
     serverPublicKey: z.string().min(1).max(128),
     obfuscation: ObfuscationSchema,
+    /**
+     * Give every device's peer a preshared key (one per device, issued with
+     * it). Turning it on changes every config of the profile: one downloaded
+     * before has no key and stops connecting until it is fetched again.
+     */
+    presharedKey: z.boolean().optional(),
   })
   // Mirror the constraints the node's config.go validate() enforces at deploy
   // time, so the operator gets a clear form error instead of a confusing

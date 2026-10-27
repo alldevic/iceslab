@@ -37,6 +37,10 @@ type inboundCfgWire struct {
 	// the obfuscation block on that interface. Mirrors AwgGeometry3 in
 	// shared/transport.ts.
 	Geometry3 *geometry3Wire `json:"geometry3,omitempty"`
+	// PresharedKey is the profile's choice of a preshared key per device.
+	// Unused on the agent: the keys themselves come with each user's peers
+	// (AmneziaWGPeers), and a peer without one has none.
+	PresharedKey bool `json:"presharedKey,omitempty"`
 }
 
 // geometry3Wire is AwgGeometry3 as it travels: ranges as the tools' strings.

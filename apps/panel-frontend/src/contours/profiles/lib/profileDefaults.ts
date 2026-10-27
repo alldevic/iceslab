@@ -69,6 +69,7 @@ export function defaults(profile: Profile | null): FormValues {
     awgI3: '',
     awgI4: '',
     awgI5: '',
+    awgPresharedKey: false,
 
     naiveHostname: '',
     naiveTlsEmail: '',
@@ -160,6 +161,7 @@ export function defaults(profile: Profile | null): FormValues {
         awgI3: ((obf.i3 as string) ?? '') as string,
         awgI4: ((obf.i4 as string) ?? '') as string,
         awgI5: ((obf.i5 as string) ?? '') as string,
+        awgPresharedKey: cfg.presharedKey === true,
       };
     }
     case 'naive':

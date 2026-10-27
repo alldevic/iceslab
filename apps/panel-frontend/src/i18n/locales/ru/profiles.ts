@@ -246,6 +246,11 @@ export const profiles = {
         awgSubnetLabel: 'Подсеть (CIDR)',
         awgSubnetHint: 'Не берите 10.0.0.0/24, она сталкивается с сетью некоторых хостеров',
         awgSubnetLockedHint: 'Менять после выдачи ключей нельзя: пиры уже сидят в этой сети',
+        awgPresharedKeyLabel: 'Preshared key на устройство',
+        awgPresharedKeyHint:
+          'Peer каждого устройства получает ещё и свой симметричный ключ, выданный вместе с устройством. Нужен агент узла этого релиза.',
+        awgPresharedKeyEditHint:
+          'Переключение меняет все конфиги профиля: скачанный раньше перестанет подключаться, пока его не скачают заново.',
         awgServerPrivLabel: 'Приватный ключ сервера',
         awgServerPubLabel: 'Публичный ключ сервера',
         awgServerPubPlaceholder: 'появится после генерации',

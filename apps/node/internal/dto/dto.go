@@ -49,6 +49,15 @@ func NativeEngine(p ProtocolName) EngineName {
 	}
 }
 
+// AmneziaWGPeerDto mirrors AmneziawgPeerCred in shared/transport.ts.
+type AmneziaWGPeerDto struct {
+	PublicKey     string `json:"publicKey"`
+	AllowedIP     string `json:"allowedIp,omitempty"`
+	AllowedIP3    string `json:"allowedIp3,omitempty"`
+	PresharedKey  string `json:"presharedKey,omitempty"`
+	PresharedKey3 string `json:"presharedKey3,omitempty"`
+}
+
 type ProtocolCredentials struct {
 	HysteriaPassword   string `json:"hysteriaPassword,omitempty"`
 	XrayUUID           string `json:"xrayUuid,omitempty"`
@@ -63,6 +72,11 @@ type ProtocolCredentials struct {
 	// (t07-6), from the 3.1 profile's own subnet: the two interfaces cannot
 	// share one. Same public key.
 	AmneziaWGAllowedIP3 string `json:"amneziawgAllowedIp3,omitempty"`
+	// AmneziaWGPeers: one peer per device of the user, each with its own key,
+	// its addresses on the 1.x and 3.1 interfaces and an optional preshared
+	// key. When present the agent takes it and ignores the three fields above,
+	// which the panel still fills with the first device for older agents.
+	AmneziaWGPeers []AmneziaWGPeerDto `json:"amneziawgPeers,omitempty"`
 	// TUIC (sing-box engine): per-user UUID + password. Both required for a
 	// TUIC v5 client to authenticate. Only present when the user has access
 	// to a tuic inbound.
@@ -570,6 +584,17 @@ type UserStats struct {
 	// and their own restarts. The panel keys a user's snapshot by (node, user,
 	// protocol, engine). Omitted by older agents.
 	Engine EngineName `json:"engine,omitempty"`
+	// Peers: the same counters by peer public key, from a core whose user
+	// holds a peer per device (AmneziaWG). Their sum is this entry. Omitted by
+	// other cores and by older agents.
+	Peers []PeerStatsDto `json:"peers,omitempty"`
+}
+
+// PeerStatsDto mirrors PeerStats in shared/transport.ts.
+type PeerStatsDto struct {
+	PublicKey string `json:"publicKey"`
+	BytesIn   int64  `json:"bytesIn"`
+	BytesOut  int64  `json:"bytesOut"`
 }
 
 // CoreTrafficTotal (A-152) is one adapter's total for this poll, with its own

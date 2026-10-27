@@ -161,3 +161,24 @@ describe('the device window (A-269)', () => {
     expect(left.map((d) => d.hwid)).toEqual(['recent']);
   });
 });
+
+describe('the WireGuard device window (A-269)', () => {
+  it('revokes a device that moved nothing for 91 days (or never, since issued then), erases one revoked 91 days ago', async () => {
+    const u = await user(null);
+    const dev = (n: string, data: Record<string, unknown>) =>
+      prisma.wgDevice.create({ data: { userId: u, privateKey: `priv-${n}`, publicKey: `pub-${n}`, ...data } });
+    const quiet = await dev('quiet', { lastSeenAt: daysAgo(91) });
+    const neverUsed = await dev('never', { createdAt: daysAgo(91) });
+    const recent = await dev('recent', { lastSeenAt: daysAgo(89) });
+    const fresh = await dev('fresh', {});
+    const longGone = await dev('gone', { revokedAt: daysAgo(91) });
+
+    const r = await pruneHistory();
+    expect(r.wgDevices).toEqual({ forgotten: 2, erased: 1 });
+    const rows = await prisma.wgDevice.findMany({ where: { userId: u }, select: { id: true, revokedAt: true } });
+    const revoked = new Set(rows.filter((d) => d.revokedAt).map((d) => d.id));
+    expect(revoked).toEqual(new Set([quiet.id, neverUsed.id]));
+    expect(rows.map((d) => d.id)).not.toContain(longGone.id);
+    expect(rows.map((d) => d.id)).toEqual(expect.arrayContaining([recent.id, fresh.id]));
+  });
+});

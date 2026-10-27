@@ -2,9 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
-// Skipped: the facade lists and revokes WireGuard tunnels as devices once the
-// panel keeps a WgDevice per tunnel, which it does not yet.
-
 /**
  * wg tunnels among the buyer's devices (2026-09-02).
  *
@@ -135,7 +132,7 @@ const listDevices = (ref: string) =>
 const del = (payload: unknown) =>
   app.inject({ method: 'POST', url: `/${PREFIX}/api/hwid/devices/delete`, headers: bearer(), payload });
 
-describe.skip('wg tunnels are devices too', () => {
+describe('wg tunnels are devices too', () => {
   it('a used tunnel is listed and counted alongside the hwid clients', async () => {
     await setShowUnused(false);
     const u = await mkUser();
@@ -229,7 +226,7 @@ describe.skip('wg tunnels are devices too', () => {
   });
 });
 
-describe.skip('disconnecting a tunnel', () => {
+describe('disconnecting a tunnel', () => {
   it('revokes it rather than deleting it, and takes it out of the list', async () => {
     await setShowUnused(false);
     const u = await mkUser();

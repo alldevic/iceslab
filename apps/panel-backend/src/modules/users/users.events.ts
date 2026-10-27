@@ -60,6 +60,14 @@ export function registerUserEventHandlers(): void {
     }
   });
 
+  // A WireGuard device issued or revoked changes the peers the user's record
+  // carries on every AmneziaWG node: the whole list goes again, so a revoked
+  // device's peer comes off and a new one goes on. addUser skips a user who is
+  // not active.
+  eventBus.on('wg-devices.changed', async ({ userId }) => {
+    await nodeUsersQueue.add('addUser', { userId });
+  });
+
   eventBus.on('user.deleted', async ({ userId }) => {
     console.log(`[event] user.deleted - ${userId}`);
     await nodeUsersQueue.add('removeUser', { userId });

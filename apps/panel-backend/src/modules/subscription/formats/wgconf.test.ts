@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { inflateSync } from 'node:zlib';
 import { buildWgQuickConf } from './wgconf.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
 
@@ -96,5 +97,44 @@ describe('buildWgQuickConf', () => {
 
   it('output is byte-deterministic for the same input', () => {
     expect(buildWgQuickConf([awgEp])).toBe(buildWgQuickConf([awgEp]));
+  });
+});
+
+describe('devices: a user holds several keys on one node', () => {
+  const dev = (n: number, extra: Partial<SubscriptionEndpoint> = {}) =>
+    ({
+      ...awgEp,
+      privateKey: `priv-${n}`,
+      allowedIp: `10.0.0.${n + 1}/32`,
+      deviceId: `id-${n}`,
+      deviceIndex: n,
+      ...extra,
+    }) as SubscriptionEndpoint;
+  const two = [dev(1), dev(2, { presharedKey: 'psk-2' })];
+
+  it('device 1 without ?device=, the asked one with it, by number or id', () => {
+    expect(buildWgQuickConf(two)).toContain('PrivateKey = priv-1');
+    expect(buildWgQuickConf(two, undefined, '2')).toContain('PrivateKey = priv-2');
+    expect(buildWgQuickConf(two, 'eu-1', 'id-2')).toContain('Address = 10.0.0.3/32');
+    expect(buildWgQuickConf(two, undefined, '3')).toBe('');
+  });
+
+  it("carries the device's preshared key in its peer, and nothing when it has none", () => {
+    expect(buildWgQuickConf(two, undefined, '2')).toContain('PublicKey = srvPub64\nPresharedKey = psk-2\nAllowedIPs');
+    expect(buildWgQuickConf(two)).not.toContain('PresharedKey');
+  });
+
+  it('the AmneziaVPN key carries it too, and names device 2 on', async () => {
+    const { buildAwgVpnLink } = await import('./amneziavpn.js');
+    const decode = (link: string) => {
+      const raw = Buffer.from(link.replace(/^vpn:\/\//, ''), 'base64url');
+      // qCompress: 4-byte length, then zlib.
+      return JSON.parse(inflateSync(raw.subarray(4)).toString('utf8'));
+    };
+    const one = JSON.stringify(decode(buildAwgVpnLink(two)));
+    const second = JSON.stringify(decode(buildAwgVpnLink(two, undefined, '2')));
+    expect(one).not.toContain('psk-2');
+    expect(second).toContain('psk-2');
+    expect(second).toContain('#2');
   });
 });

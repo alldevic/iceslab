@@ -238,6 +238,11 @@ export const profiles = {
         awgSubnetLabel: 'Subnet (CIDR)',
         awgSubnetHint: 'Avoid 10.0.0.0/24, it collides with some hosters',
         awgSubnetLockedHint: 'Changing it after keys are handed out strands every peer already on this subnet',
+        awgPresharedKeyLabel: 'Preshared key per device',
+        awgPresharedKeyHint:
+          "Each device's peer also takes a symmetric key of its own, issued with the device. Needs the node agent of this release.",
+        awgPresharedKeyEditHint:
+          'Changing it changes every config of this profile: one downloaded before stops connecting until it is downloaded again.',
         awgServerPrivLabel: 'Server private key',
         awgServerPubLabel: 'Server public key',
         awgServerPubPlaceholder: 'derived after generate',

@@ -16,7 +16,23 @@ export interface DomainEventMap {
   // hwid.device-added → a /sub request brought a device the user had not had,
   // and it was admitted (a new row, not a lastSeenAt touch). Emitted after the
   // insert has committed.
-  'hwid.device-added':    { userId: string; deviceId: string; hwid: string; firstSeenAt: Date };
+  'hwid.device-added':    {
+    userId: string;
+    deviceId: string;
+    hwid: string;
+    firstSeenAt: Date;
+    // What the client said about itself on that fetch, null where nothing.
+    platform?: string | null;
+    osVersion?: string | null;
+    deviceModel?: string | null;
+    userAgent?: string | null;
+  };
+  // A user's WireGuard devices changed (issued, revoked, forgotten): their
+  // peers on the nodes follow (users.events re-adds the user).
+  'wg-devices.changed':   { userId: string; reason: 'issued' | 'revoked' | 'forgotten' };
+  // A WireGuard device moved bytes for the first time: the moment a shop
+  // learns of a new device, as it does of an HWID client on its first fetch.
+  'wg-devices.first-used': { userId: string; deviceId: string };
   // node.created → backfill all active users to this node. Required because
   // an empty new node otherwise stays empty until each existing user is
   // mutated again. Caught live during slice-23 VPS test 2026-05-06.

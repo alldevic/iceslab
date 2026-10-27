@@ -122,6 +122,10 @@ const UpsertInput = z.object({
   // TLS-fragment - split the client's outgoing ClientHello so SNI-based DPI
   // (RU TSPU / RKN) cannot cleanly match the handshake. Xray JSON format only.
   subscriptionTlsFragment: z.boolean().optional(),
+  // List a WireGuard device that has never moved traffic among a user's
+  // devices on the Remnawave-compatible API. Off: such a device is a slot a
+  // shop has no reason to show yet.
+  wgShowUnusedTunnels: z.boolean().optional(),
   // R3-b - raw custom xray routing rules (array of rule objects), or null to
   // clear. Applied to xray/xkeen subscription output ahead of the preset.
   subscriptionCustomRoutingRules: z

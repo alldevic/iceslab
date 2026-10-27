@@ -201,7 +201,7 @@ func TestAUserHasAPeerOnEachInterfaceItReaches(t *testing.T) {
 	if err := a.AddUser(u); err != nil {
 		t.Fatal(err)
 	}
-	if a.peers["u1"].AllowedIP != "10.66.66.2/32" || a.v3.peers["u1"].AllowedIP != "10.67.67.2/32" {
+	if a.peers["u1"][0].AllowedIP != "10.66.66.2/32" || a.v3.peers["u1"][0].AllowedIP != "10.67.67.2/32" {
 		t.Fatalf("peers: 1.x %v, 3.1 %v", a.peers, a.v3.peers)
 	}
 	// No 3.1 address any more (no 3.1 profile reaches the user): gone from awg3.

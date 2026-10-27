@@ -245,6 +245,7 @@ export function useProfileForm({
             i4: (values.awgI4 ?? '').trim(),
             i5: (values.awgI5 ?? '').trim(),
           },
+          ...(values.awgPresharedKey ? { presharedKey: true } : {}),
         };
         break;
       case 'naive':

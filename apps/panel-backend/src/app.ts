@@ -29,6 +29,7 @@ import { namedOutboundsRoutes } from './modules/named-outbounds/named-outbounds.
 import { cascadeRoutes } from './modules/cascades/cascade.routes.js';
 import { routePolicyRoutes } from './modules/route-policies/route-policies.routes.js';
 import { hwidRoutes } from './modules/hwid/hwid.routes.js';
+import { wgDevicesRoutes } from './modules/wg-devices/wg-devices.routes.js';
 import { regionsRoutes } from './modules/regions/regions.routes.js';
 import { testConnectRoutes } from './modules/test-connect/test-connect.routes.js';
 import { apiTokensRoutes } from './modules/api-tokens/api-tokens.routes.js';
@@ -320,6 +321,7 @@ export async function buildApp(opts: { log?: { level: string; stream: { write(li
   await app.register(cascadeRoutes);
   await app.register(routePolicyRoutes);
   await app.register(hwidRoutes);
+  await app.register(wgDevicesRoutes);
   await app.register(regionsRoutes);
   await app.register(testConnectRoutes);
   await app.register(apiTokensRoutes);

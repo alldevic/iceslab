@@ -24,8 +24,8 @@ import { buildLoonConf } from './formats/loon.js';
 import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
 import { linkWithDescription } from './subscription.description.js';
-import { endpointsForFormat, isPlainXray, withoutDescription, type SubscriptionEndpoint } from './subscription.formats.js';
-import { endpointId, pickServer } from './endpoint-identity.js';
+import { endpointsForFormat, isPlainXray, withoutDescription, type AmneziawgSubscriptionEndpoint, type SubscriptionEndpoint } from './subscription.formats.js';
+import { endpointId, ofDevice, pickServer } from './endpoint-identity.js';
 import { matchRuleForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
 import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
@@ -54,6 +54,24 @@ const TokenParamSchema = z.object({
 // was a 400 on saving a host with a format this route serves happily.
 const FormatEnum = z.enum(FORMAT_NAMES);
 type Format = z.infer<typeof FormatEnum>;
+
+/**
+ * What a client says about itself beside `x-hwid` (Happ, Hiddify, v2rayTun
+ * send these): kept on its device row for the device lists. Bounded to the
+ * columns' width; a header that is absent or empty says nothing.
+ */
+function hwidMeta(headers: Record<string, string | string[] | undefined>) {
+  const one = (name: string, max: number): string | null => {
+    const v = headers[name];
+    return typeof v === 'string' && v.length > 0 ? v.slice(0, max) : null;
+  };
+  return {
+    platform: one('x-device-os', 64),
+    osVersion: one('x-ver-os', 64),
+    deviceModel: one('x-device-model', 128),
+    userAgent: one('user-agent', 512),
+  };
+}
 
 const QuerySchema = z.object({
   format: FormatEnum.optional(),
@@ -89,6 +107,10 @@ const QuerySchema = z.object({
   // `?node=<endpoint id>` (endpointId, A-107); the label the links carried
   // before is still taken when no id matches (pickServer). Omitted = the first.
   node: z.string().min(1).max(64).optional(),
+  // WireGuard device for wgconf / amneziavpn: a user holds several on every
+  // AmneziaWG node, each a tunnel of its own (ofDevice). Its number among the
+  // live ones, oldest first, or its id. Omitted = device 1.
+  device: z.string().min(1).max(64).optional(),
   // Human landing-page language override. The page renders an in-page RU/EN
   // selector that links here; it wins over the panel default and the
   // Accept-Language guess. Only meaningful for the HTML page.
@@ -604,7 +626,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           userMin.hwidDeviceLimit,
           userMin.groupMembers.map((m) => m.group.hwidDeviceLimit),
         );
-        const hwidResult = await enforceHwid(userMin.id, hwid, hwidLimit);
+        const hwidResult = await enforceHwid(userMin.id, hwid, hwidLimit, hwidMeta(request.headers));
         // Always emit the gauge header so the client can render "2/3" in
         // its profile detail UI, even on success, even when no limit set.
         // HTTP headers are ISO-8859-1; use ASCII-only "unlimited" instead
@@ -730,23 +752,29 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // person copies, scans or adds is what this page lists.
         const subUrl = withProtocols(await subscriptionUrl(params.token), onlyProtocols ?? []);
         const protocols = [...new Set(result.endpoints.map((e) => e.protocol))];
-        // One QR pair per AmneziaWG node (deduped by node name). wg-quick / vpn://
-        // are single-tunnel-per-key, so a user with several AWG servers gets each
-        // server's own labelled QR (.conf for the AmneziaWG app, vpn:// for the
-        // AmneziaVPN app) instead of only the first node's. ecl 'L' keeps the long
+        // One QR pair per AmneziaWG node and device (deduped by node name and
+        // device). wg-quick / vpn:// are single-tunnel-per-key, so a user with
+        // several AWG servers gets each server's own labelled QR (.conf for the
+        // AmneziaWG app, vpn:// for the AmneziaVPN app) instead of only the first
+        // node's, and each of their devices its own key. ecl 'L' keeps the long
         // payloads scannable.
         const awgSeen = new Set<string>();
         const awgNodes = filtered
-          .filter((e) => e.protocol === 'amneziawg')
-          .filter((e) => !awgSeen.has(e.nodeName) && !!awgSeen.add(e.nodeName))
+          .filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg')
+          .filter((e) => {
+            const k = `${e.nodeName}\u0000${e.deviceIndex ?? 1}`;
+            return !awgSeen.has(k) && !!awgSeen.add(k);
+          })
           .map((e) => {
             // By the endpoint's id, the key the per-node links carry (A-107).
             const id = endpointId(e);
-            const conf = buildWgQuickConf(filtered, id);
-            const vpn = buildAwgVpnLink(filtered, id);
+            const device = e.deviceIndex ?? 1;
+            const conf = buildWgQuickConf(filtered, id, String(device));
+            const vpn = buildAwgVpnLink(filtered, id, String(device));
             return {
               nodeName: e.nodeName,
               id,
+              device,
               // The PAYLOADS, not pictures of them. The codes are drawn in the
               // browser now: three server-rendered SVGs cost about 49 KB gzip
               // on this page, the encoder costs 4.3 KB once, and the code on
@@ -901,7 +929,16 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // and the label it is saved under: an id in a file name reads as noise.
       const singleServerProtocol = SINGLE_SERVER_FORMATS[format];
       const singleServers = singleServerProtocol ? served.filter((e) => e.protocol === singleServerProtocol) : [];
-      const nodeLabel = query.node ? (pickServer(singleServers, query.node)?.nodeName ?? query.node) : undefined;
+      const awgServers = singleServers.filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg');
+      const picked = awgServers.length > 0 ? pickServer(ofDevice(awgServers, query.device), query.node) : undefined;
+      const deviceNo = picked?.deviceIndex ?? 1;
+      // Device 2 and on are told apart in the name; device 1 is the name it
+      // always had.
+      const nodeLabel = query.node
+        ? `${pickServer(singleServers, query.node)?.nodeName ?? query.node}${deviceNo > 1 ? `-${deviceNo}` : ''}`
+        : deviceNo > 1
+          ? String(deviceNo)
+          : undefined;
       if (query.dl === '1' && format !== 'plain') {
         reply.header(
           'Content-Disposition',
@@ -925,9 +962,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             : format === 'raw'
               ? linksFor('raw').every((u) => u.length === 0)
             : format === 'wgconf'
-              ? buildWgQuickConf(served, query.node) === ''
+              ? buildWgQuickConf(served, query.node, query.device) === ''
               : format === 'amneziavpn'
-                ? buildAwgVpnLink(served, query.node) === ''
+                ? buildAwgVpnLink(served, query.node, query.device) === ''
                 : format === 'outline'
                   ? buildOutlineJson(served, query.node) === ''
                   : served.length === 0;
@@ -1028,7 +1065,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           return reply
             .type('text/plain; charset=utf-8')
             .header('Content-Disposition', `attachment; filename="${fname}"`)
-            .send(buildWgQuickConf(served, query.node));
+            .send(buildWgQuickConf(served, query.node, query.device));
         }
         case 'amneziavpn': {
           // AmneziaVPN-app "vpn://" connection key (base64 blob the flagship
@@ -1038,7 +1075,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // for this user (same 204-style contract as wgconf).
           return reply
             .type('text/plain; charset=utf-8')
-            .send(buildAwgVpnLink(served, query.node));
+            .send(buildAwgVpnLink(served, query.node, query.device));
         }
         case 'xrayjson': {
           const xjBundle: 'flat' | 'balancer' | undefined =

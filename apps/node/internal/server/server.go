@@ -953,6 +953,37 @@ func (s *Server) handleAddUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.AddUsersResponse{Results: results})
 }
 
+// amneziawgPeers: the wire's device peers as the adapters take them. nil when
+// the field is absent (an older panel: the single fields stand), and EMPTY,
+// not nil, when the panel sent `[]`: the user has no device left on this
+// node, which takes their peers off.
+func amneziawgPeers(in []dto.AmneziaWGPeerDto) []core.AmneziaWGPeer {
+	if in == nil {
+		return nil
+	}
+	out := make([]core.AmneziaWGPeer, 0, len(in))
+	for _, p := range in {
+		out = append(out, core.AmneziaWGPeer{
+			PublicKey: p.PublicKey, AllowedIP: p.AllowedIP, AllowedIP3: p.AllowedIP3,
+			PresharedKey: p.PresharedKey, PresharedKey3: p.PresharedKey3,
+		})
+	}
+	return out
+}
+
+// peerStats: a user's per-peer counters for the wire; nil (omitted) when the
+// core keeps none.
+func peerStats(in []core.PeerStats) []dto.PeerStatsDto {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]dto.PeerStatsDto, 0, len(in))
+	for _, p := range in {
+		out = append(out, dto.PeerStatsDto{PublicKey: p.PublicKey, BytesIn: p.BytesIn, BytesOut: p.BytesOut})
+	}
+	return out
+}
+
 // addUser puts one user onto the cores, and returns the names of the healthy
 // ones that refused (none: done).
 func (s *Server) addUser(req dto.AddUserRequest) []string {
@@ -966,6 +997,7 @@ func (s *Server) addUser(req dto.AddUserRequest) []string {
 		AmneziaWGPublicKey:  req.Credentials.AmneziaWGPublicKey,
 		AmneziaWGAllowedIP:  req.Credentials.AmneziaWGAllowedIP,
 		AmneziaWGAllowedIP3: req.Credentials.AmneziaWGAllowedIP3,
+		AmneziaWGPeers:      amneziawgPeers(req.Credentials.AmneziaWGPeers),
 		TuicUUID:            req.Credentials.TuicUUID,
 		TuicPassword:        req.Credentials.TuicPassword,
 		AnytlsPassword:      req.Credentials.AnytlsPassword,
@@ -1978,6 +2010,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 					// adapter, whose counters are its own. The sing-box adapter
 					// of the xray family is protocol "xray" too.
 					Engine: dto.EngineName(adapter.Engine()),
+					Peers:  peerStats(u.Peers),
 				})
 			}
 			// The adapter's own total when it keeps one (xray's inbound

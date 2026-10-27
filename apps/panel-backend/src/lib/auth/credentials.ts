@@ -38,6 +38,11 @@ export function generateWireguardKeyPair(): {
   };
 }
 
+/** A WireGuard preshared key: 32 random bytes, standard base64 (`wg genpsk`). */
+export function generatePresharedKey(): string {
+  return randomBytes(32).toString('base64');
+}
+
 /**
  * Curve25519 keypair as **base64url** (`-`/`_`, no padding). Used by Xray
  * REALITY: `xray x25519` produces this form. The Xray config validator

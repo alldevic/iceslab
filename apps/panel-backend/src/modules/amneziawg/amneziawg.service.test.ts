@@ -15,6 +15,7 @@ import {
 
 // Slice 27: peer allocation is keyed on profileId (the logical AmneziaWG
 // inbound), not the per-node Inbound row. Tests now seed Profile rows.
+// Since devices, on (profile, device): createUser hands back the device.
 
 async function createProfile(name = 'awg0'): Promise<string> {
   const profile = await prisma.profile.create({
@@ -27,7 +28,8 @@ async function createProfile(name = 'awg0'): Promise<string> {
   return profile.id;
 }
 
-async function createUser(username: string): Promise<string> {
+/** A user with one WireGuard device: the device is what holds an address. */
+async function createUser(username: string): Promise<{ id: string; userId: string }> {
   const creds = generateUserCredentials();
   const user = await prisma.user.create({
     data: {
@@ -41,7 +43,10 @@ async function createUser(username: string): Promise<string> {
       amneziawgPublicKey: creds.amneziawgPublicKey,
     },
   });
-  return user.id;
+  const device = await prisma.wgDevice.create({
+    data: { userId: user.id, privateKey: creds.amneziawgPrivateKey, publicKey: creds.amneziawgPublicKey },
+  });
+  return { id: device.id, userId: user.id };
 }
 
 beforeEach(async () => {
@@ -66,7 +71,7 @@ describe('allocatePeer', () => {
     expect(b.ip).toBe('10.66.66.3');
   });
 
-  it('is idempotent for the same (profile, user)', async () => {
+  it('is idempotent for the same (profile, device)', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
 
@@ -87,7 +92,7 @@ describe('allocatePeer', () => {
     const peer2 = await allocatePeer(profileId, u2); // .3
     expect(peer2.ip).toBe('10.66.66.3');
 
-    await releasePeer(profileId, u2);
+    await releasePeer(profileId, u2.userId);
     const peer3 = await allocatePeer(profileId, u3);
     expect(peer3.ip).toBe('10.66.66.3');
   });
@@ -129,7 +134,7 @@ describe('getPeer / listPeers / releasePeer', () => {
   it('returns null when no allocation exists', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
-    expect(await getPeer(profileId, u)).toBeNull();
+    expect(await getPeer(profileId, u.id)).toBeNull();
   });
 
   it('lists peers in IP order', async () => {
@@ -149,7 +154,7 @@ describe('getPeer / listPeers / releasePeer', () => {
   it('release is a no-op when nothing is allocated', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
-    await expect(releasePeer(profileId, u)).resolves.toBeUndefined();
+    await expect(releasePeer(profileId, u.userId)).resolves.toBeUndefined();
   });
 });
 
@@ -176,8 +181,8 @@ describe('preallocatePeers (B7 bulk)', () => {
     const existing = await allocatePeer(profileId, u1); // takes .2
 
     const map = await preallocatePeers(profileId, [u1, u2]);
-    expect(map.get(u1)).toBe(existing.ip); // unchanged
-    expect(map.get(u2)).toBe('10.66.66.3'); // next free
+    expect(map.get(u1.id)).toBe(existing.ip); // unchanged
+    expect(map.get(u2.id)).toBe('10.66.66.3'); // next free
   });
 
   it('reuses a gap left by a release', async () => {
@@ -187,10 +192,10 @@ describe('preallocatePeers (B7 bulk)', () => {
     const u3 = await createUser('carol');
     await allocatePeer(profileId, u1); // .2
     await allocatePeer(profileId, u2); // .3
-    await releasePeer(profileId, u1); // frees .2
+    await releasePeer(profileId, u1.userId); // frees .2
 
     const map = await preallocatePeers(profileId, [u3]);
-    expect(map.get(u3)).toBe('10.66.66.2'); // lowest free reused
+    expect(map.get(u3.id)).toBe('10.66.66.2'); // lowest free reused
   });
 
   it('is a no-op second call (idempotent), returning the same IPs', async () => {
@@ -217,5 +222,24 @@ describe('preallocatePeers (B7 bulk)', () => {
     const map = await preallocatePeers(profileId, [u1, u2], '10.99.0.0/30');
     expect(map.size).toBe(1); // only one user could be placed
     expect([...map.values()]).toEqual(['10.99.0.2']);
+  });
+});
+
+describe('per device', () => {
+  it("gives two devices of one user two addresses on one profile, and the bulk path agrees", async () => {
+    const profileId = await createProfile();
+    const phone = await createUser('alice');
+    const laptop = await prisma.wgDevice.create({
+      data: { userId: phone.userId, privateKey: 'k'.repeat(44), publicKey: 'p'.repeat(44) },
+    });
+    const a = await allocatePeer(profileId, phone);
+    const b = await allocatePeer(profileId, { id: laptop.id, userId: phone.userId });
+    expect(a.ip).not.toBe(b.ip);
+    expect([a.deviceId, b.deviceId]).toEqual([phone.id, laptop.id]);
+    expect(a.userId).toBe(b.userId);
+
+    const map = await preallocatePeers(profileId, [phone, { id: laptop.id, userId: phone.userId }]);
+    expect(map.get(phone.id)).toBe(a.ip);
+    expect(map.get(laptop.id)).toBe(b.ip);
   });
 });

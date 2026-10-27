@@ -321,10 +321,17 @@ export function endpointsForFormat(
 
 export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase {
   protocol: 'amneziawg';
-  /** User's WireGuard private key. */
+  /** The device's WireGuard private key (wg_devices): one endpoint per
+   *  device of the user on every AmneziaWG binding. */
   privateKey: string;
-  /** IP allocated to this user inside the inbound's subnet, CIDR /32 form. */
+  /** IP allocated to this device inside the profile's subnet, CIDR /32 form. */
   allowedIp: string;
+  /** Which device: its id, and its number among the user's live devices,
+   *  oldest first (`?device=`). Absent on an endpoint written by hand: 1. */
+  deviceId?: string;
+  deviceIndex?: number;
+  /** The device's preshared key, when the profile asks for one. */
+  presharedKey?: string;
   /** Server's WireGuard public key (the inbound's interface PublicKey). */
   serverPublicKey: string;
   /** Junk/header obfuscation parameters: must match the server inbound. */

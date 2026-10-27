@@ -3,7 +3,7 @@ import type {
   SubscriptionEndpoint,
   AmneziawgSubscriptionEndpoint,
 } from '../subscription.formats.js';
-import { pickServer } from '../endpoint-identity.js';
+import { ofDevice, pickServer } from '../endpoint-identity.js';
 
 /**
  * wg-quick / awg-quick `.conf` subscription formatter (AmneziaWG-only).
@@ -31,19 +31,22 @@ import { pickServer } from '../endpoint-identity.js';
 export function buildWgQuickConf(
   endpoints: SubscriptionEndpoint[],
   node?: string,
+  device?: string,
 ): string {
   const awgEndpoints = endpoints.filter(
     (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
   );
-  // `node` selects which tunnel, by its id or its label; absent = first
-  // (legacy whole-sub link). See pickServer.
-  const awg = pickServer(awgEndpoints, node);
+  // `device` selects whose key (absent = device 1), then `node` which tunnel,
+  // by its id or its label; absent = first (legacy whole-sub link). See
+  // ofDevice and pickServer.
+  const awg = pickServer(ofDevice(awgEndpoints, device), node);
   if (!awg) return '';
 
   return buildAmneziawgClientConfig({
     privateKey: awg.privateKey,
     allowedIp: awg.allowedIp,
     serverPublicKey: awg.serverPublicKey,
+    ...(awg.presharedKey ? { presharedKey: awg.presharedKey } : {}),
     host: awg.host,
     port: awg.port,
     jc: awg.jc,

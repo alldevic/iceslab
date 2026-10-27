@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -69,8 +70,9 @@ type Adapter struct {
 	// restartMu, so the two can't deadlock (AWG#10).
 	restartMu sync.Mutex
 	mu        sync.Mutex
-	peers     map[string]Peer // key: userId
-	started   bool
+	// peers: each user's peers on this interface, one per device, key userId.
+	peers   map[string][]Peer
+	started bool
 	// lastStats holds the previous cumulative kernel counters per peer, keyed
 	// by PublicKey to match `awg show dump`. GetStats diffs against it so the
 	// panel ingests per-poll DELTAS (the same contract the xray adapter meets
@@ -149,7 +151,7 @@ func newOne(cfg Config, logger *slog.Logger) *Adapter {
 	a := &Adapter{
 		cfg:       cfg,
 		logger:    logger,
-		peers:     make(map[string]Peer),
+		peers:     make(map[string][]Peer),
 		lastStats: make(map[string]peerCounters),
 	}
 	// Before Start and before the first push: the interface the kernel kept
@@ -384,8 +386,8 @@ func (a *Adapter) setStarted(v bool) {
 	a.mu.Unlock()
 }
 
-// AddUser registers / updates a peer. No-op for users without amneziawg
-// credentials. Idempotent.
+// AddUser registers / updates a user's peers, one per device. No-op for users
+// without amneziawg credentials. Idempotent.
 func (a *Adapter) AddUser(user core.User) error {
 	if err := a.addPeer(user); err != nil {
 		return err
@@ -393,34 +395,71 @@ func (a *Adapter) AddUser(user core.User) error {
 	if a.v3 == nil {
 		return nil
 	}
-	// t07-6: the same key on the 3.1 interface, at the user's 3.1 address. A
-	// user without one (no 3.1 profile reaches them) leaves that interface.
+	// t07-6: the same keys on the 3.1 interface, at the devices' 3.1
+	// addresses. A user without one (no 3.1 profile reaches them) leaves that
+	// interface.
+	on3 := user
+	if user.AmneziaWGPeers != nil {
+		on3.AmneziaWGPeers = make([]core.AmneziaWGPeer, 0, len(user.AmneziaWGPeers))
+		for _, p := range user.AmneziaWGPeers {
+			if p.AllowedIP3 != "" {
+				p.AllowedIP, p.AllowedIP3 = p.AllowedIP3, ""
+				p.PresharedKey, p.PresharedKey3 = p.PresharedKey3, ""
+				on3.AmneziaWGPeers = append(on3.AmneziaWGPeers, p)
+			}
+		}
+		if len(on3.AmneziaWGPeers) == 0 {
+			return a.v3.RemoveUser(user.UserID)
+		}
+		return a.v3.addPeer(on3)
+	}
 	if user.AmneziaWGPublicKey == "" || user.AmneziaWGAllowedIP3 == "" {
 		return a.v3.RemoveUser(user.UserID)
 	}
-	on3 := user
 	on3.AmneziaWGAllowedIP, on3.AmneziaWGAllowedIP3 = user.AmneziaWGAllowedIP3, ""
 	return a.v3.addPeer(on3)
 }
 
-func (a *Adapter) addPeer(user core.User) error {
+// peersOf: the peers a user asks for on this interface, sorted. explicit: the
+// panel sent a device list (possibly empty, which takes the user off), rather
+// than the single fields of an older panel, whose absence is no change.
+func peersOf(user core.User) (peers []Peer, explicit bool) {
+	if user.AmneziaWGPeers != nil {
+		for _, p := range user.AmneziaWGPeers {
+			if p.PublicKey == "" || p.AllowedIP == "" {
+				continue
+			}
+			peers = append(peers, Peer{PublicKey: p.PublicKey, AllowedIP: ensureCIDR(p.AllowedIP), PresharedKey: p.PresharedKey})
+		}
+		sort.Slice(peers, func(i, j int) bool { return peers[i].AllowedIP < peers[j].AllowedIP })
+		return peers, true
+	}
 	if user.AmneziaWGPublicKey == "" || user.AmneziaWGAllowedIP == "" {
+		return nil, false
+	}
+	return []Peer{{PublicKey: user.AmneziaWGPublicKey, AllowedIP: ensureCIDR(user.AmneziaWGAllowedIP)}}, false
+}
+
+func (a *Adapter) addPeer(user core.User) error {
+	desired, explicit := peersOf(user)
+	if len(desired) == 0 {
+		if explicit {
+			return a.removeOne(user.UserID)
+		}
 		return nil
 	}
-	desired := Peer{
-		PublicKey: user.AmneziaWGPublicKey,
-		AllowedIP: ensureCIDR(user.AmneziaWGAllowedIP),
-	}
-	// Checked before it is kept. П-3, 22.10: a peer the render refuses sat in
-	// the map, and every later render of the interface failed on it: nobody
-	// added, nobody removed, the config frozen until the agent restarted. Now
-	// it is this call that fails, and only it.
-	if err := validatePeer(desired); err != nil {
-		return fmt.Errorf("amneziawg AddUser %s: %w", user.UserID, err)
+	// Checked before they are kept. П-3, 22.10: a peer the render refuses sat
+	// in the map, and every later render of the interface failed on it:
+	// nobody added, nobody removed, the config frozen until the agent
+	// restarted. Now it is this call that fails, and only it.
+	for _, p := range desired {
+		if err := validatePeer(p); err != nil {
+			return fmt.Errorf("amneziawg AddUser %s: %w", user.UserID, err)
+		}
 	}
 
 	a.mu.Lock()
-	if existing, ok := a.peers[user.UserID]; ok && existing == desired {
+	if existing, ok := a.peers[user.UserID]; ok && slices.Equal(existing, desired) {
 		a.mu.Unlock()
 		return nil // no change, no IO
 	}
@@ -461,18 +500,31 @@ func (a *Adapter) AddUserOn(user core.User, inboundIDs []string) error {
 	id1 := a.inboundID
 	a.mu.Unlock()
 	scoped := user
+	if user.AmneziaWGPeers != nil {
+		scoped.AmneziaWGPeers = append([]core.AmneziaWGPeer{}, user.AmneziaWGPeers...)
+	}
 	if !named[id1] {
 		if err := a.removeOne(user.UserID); err != nil {
 			return err
 		}
-		scoped.AmneziaWGAllowedIP = "" // addPeer then leaves this interface alone
+		// addPeer then leaves this interface alone.
+		scoped.AmneziaWGAllowedIP = ""
+		if scoped.AmneziaWGPeers != nil {
+			for i := range scoped.AmneziaWGPeers {
+				scoped.AmneziaWGPeers[i].AllowedIP = ""
+			}
+		}
 	}
 	if a.v3 != nil {
 		a.v3.mu.Lock()
 		id3 := a.v3.inboundID
 		a.v3.mu.Unlock()
 		if !named[id3] {
-			scoped.AmneziaWGAllowedIP3 = "" // AddUser takes it off the 3.1 interface
+			// AddUser takes them off the 3.1 interface.
+			scoped.AmneziaWGAllowedIP3 = ""
+			for i := range scoped.AmneziaWGPeers {
+				scoped.AmneziaWGPeers[i].AllowedIP3 = ""
+			}
 		}
 	}
 	return a.AddUser(scoped)
@@ -547,9 +599,29 @@ func mergeStats(a, b *core.Stats) *core.Stats {
 		if i, ok := at[u.UserID]; ok {
 			out.Users[i].BytesIn += u.BytesIn
 			out.Users[i].BytesOut += u.BytesOut
+			out.Users[i].Peers = mergePeerStats(out.Users[i].Peers, u.Peers)
 			continue
 		}
 		out.Users = append(out.Users, u)
+	}
+	return out
+}
+
+// mergePeerStats: a device on both interfaces is one device, one key.
+func mergePeerStats(a, b []core.PeerStats) []core.PeerStats {
+	out := append([]core.PeerStats(nil), a...)
+	at := make(map[string]int, len(out))
+	for i, p := range out {
+		at[p.PublicKey] = i
+	}
+	for _, p := range b {
+		if i, ok := at[p.PublicKey]; ok {
+			out[i].BytesIn += p.BytesIn
+			out[i].BytesOut += p.BytesOut
+			continue
+		}
+		at[p.PublicKey] = len(out)
+		out = append(out, p)
 	}
 	return out
 }
@@ -603,33 +675,37 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 	// Rebuild the snapshot from scratch each poll so removed peers drop out and
 	// a re-added peer (its kernel counter reset to 0) is treated as first-sight.
 	next := make(map[string]peerCounters, len(a.peers))
-	for id, peer := range a.peers {
-		curRx := rxByPub[peer.PublicKey]
-		curTx := txByPub[peer.PublicKey]
-		next[peer.PublicKey] = peerCounters{rx: curRx, tx: curTx}
+	for id, set := range a.peers {
+		entry := core.UserStats{UserID: id}
+		for _, peer := range set {
+			curRx := rxByPub[peer.PublicKey]
+			curTx := txByPub[peer.PublicKey]
+			next[peer.PublicKey] = peerCounters{rx: curRx, tx: curTx}
 
-		var dRx, dTx int64
-		if last, seen := a.lastStats[peer.PublicKey]; seen {
-			if curRx >= last.rx {
-				dRx = curRx - last.rx
-			} else {
-				dRx = curRx // interface bounced, counter reset
+			var dRx, dTx int64
+			if last, seen := a.lastStats[peer.PublicKey]; seen {
+				if curRx >= last.rx {
+					dRx = curRx - last.rx
+				} else {
+					dRx = curRx // interface bounced, counter reset
+				}
+				if curTx >= last.tx {
+					dTx = curTx - last.tx
+				} else {
+					dTx = curTx
+				}
 			}
-			if curTx >= last.tx {
-				dTx = curTx - last.tx
-			} else {
-				dTx = curTx
-			}
+			// else: first sight, baseline recorded above, count nothing this tick.
+
+			// The user is billed the sum; the device's own share rides along
+			// so the panel can tell which of the user's devices moved it.
+			entry.BytesIn += dRx
+			entry.BytesOut += dTx
+			entry.Peers = append(entry.Peers, core.PeerStats{PublicKey: peer.PublicKey, BytesIn: dRx, BytesOut: dTx})
 		}
-		// else: first sight, baseline recorded above, count nothing this tick.
-
-		users = append(users, core.UserStats{
-			UserID:   id,
-			BytesIn:  dRx,
-			BytesOut: dTx,
-		})
-		totalIn += dRx
-		totalOut += dTx
+		users = append(users, entry)
+		totalIn += entry.BytesIn
+		totalOut += entry.BytesOut
 	}
 	a.lastStats = next
 
@@ -1366,10 +1442,10 @@ func (a *Adapter) writeConfigSnapshot(inbound InboundConfig, peers []Peer) error
 
 // sortedPeers returns peers in deterministic AllowedIP order so successive
 // renders produce byte-identical configs.
-func sortedPeers(in map[string]Peer) []Peer {
+func sortedPeers(in map[string][]Peer) []Peer {
 	out := make([]Peer, 0, len(in))
-	for _, p := range in {
-		out = append(out, p)
+	for _, set := range in {
+		out = append(out, set...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AllowedIP < out[j].AllowedIP })
 	return out

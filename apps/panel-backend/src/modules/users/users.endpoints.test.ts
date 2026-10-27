@@ -93,7 +93,9 @@ describe('the endpoints a user card copies', () => {
     const inFormat = (JSON.parse(sub.body).endpoints as { protocol: string; uri: string }[]).filter(
       (e) => e.protocol === 'amneziawg',
     );
-    expect(inFormat.map((e) => e.uri)).toEqual(['', '']);
+    // Every device of the user on both nodes (three by default), each without a link.
+    expect(inFormat).toHaveLength(6);
+    expect(new Set(inFormat.map((e) => e.uri))).toEqual(new Set(['']));
   });
 
   it('tells two xray doors of one node apart by subprotocol', async () => {

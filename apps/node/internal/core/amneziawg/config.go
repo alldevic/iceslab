@@ -121,11 +121,15 @@ type InboundConfig struct {
 	Geometry *Geometry3
 }
 
-// Peer is a single [Peer] block. Generated from a panel `amneziawg_peers` row.
+// Peer is a single [Peer] block: one device of a user, generated from a panel
+// `amneziawg_peers` row.
 type Peer struct {
 	PublicKey string
 	// AllowedIP is the peer's IP in CIDR /32 form, e.g. "10.0.0.2/32".
 	AllowedIP string
+	// PresharedKey is mixed into this peer's handshake when the profile asks
+	// for one; empty renders no line, as before.
+	PresharedKey string `json:",omitempty"`
 }
 
 func (c *InboundConfig) withDefaults() InboundConfig {
@@ -414,9 +418,17 @@ func renderHooksAndPeers(b *strings.Builder, cfg InboundConfig, peers []Peer) (s
 		if err := validateAllowedIP(p.AllowedIP); err != nil {
 			return "", fmt.Errorf("peer AllowedIP: %w", err)
 		}
+		if p.PresharedKey != "" {
+			if err := validateWGKey(p.PresharedKey); err != nil {
+				return "", fmt.Errorf("peer PresharedKey: %w", err)
+			}
+		}
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "[Peer]")
 		fmt.Fprintf(b, "PublicKey = %s\n", p.PublicKey)
+		if p.PresharedKey != "" {
+			fmt.Fprintf(b, "PresharedKey = %s\n", p.PresharedKey)
+		}
 		fmt.Fprintf(b, "AllowedIPs = %s\n", p.AllowedIP)
 	}
 
