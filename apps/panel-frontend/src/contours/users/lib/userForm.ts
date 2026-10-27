@@ -1,6 +1,7 @@
 import type { TrafficLimitStrategy, UpdateUserInput, User } from '@/lib/domain/users';
 import { MIST, MONO } from '@/contours/users/lib/colors';
 import { presetChoiceOf, presetChoicePatch } from '@/lib/domain/routingPresets';
+import { NO_ACCESS_SQUAD_ID } from '@/lib/domain/squads';
 export const LABEL = {
   fontFamily: MONO,
   fontSize: 10,
@@ -112,4 +113,15 @@ export function userUpdatePatch(seed: FormValues, values: FormValues, chosenExpi
   const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
   if (!sameSet(values.groupIds, seed.groupIds)) out.groupIds = [...values.groupIds];
   return { ...out, ...presetChoicePatch(seed.routingPreset, values.routingPreset) };
+}
+
+/**
+ * The squads offered to pick for a user. The compatibility API's "No access" is
+ * not one to put a user in by hand; it is offered only to a user the facade
+ * parked there, so the operator sees why they have nothing and can take them
+ * out, and a save does not drop it unseen.
+ */
+export function squadChoicesFor<S extends { id: string }>(squads: S[], userGroupIds: readonly string[] | undefined): S[] {
+  if (userGroupIds?.includes(NO_ACCESS_SQUAD_ID)) return squads;
+  return squads.filter((s) => s.id !== NO_ACCESS_SQUAD_ID);
 }

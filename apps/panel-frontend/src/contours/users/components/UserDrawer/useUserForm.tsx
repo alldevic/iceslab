@@ -6,7 +6,13 @@ import type { ExpirySpan } from '@/contours/users/lib/userExpiry';
 import { ALL_SQUAD_ID, listRoutingPresets } from '@/lib/domain/routePolicies';
 import { isRoutingPresetId, presetChoiceName, presetChoiceOf, presetChoicePatch, presetKey } from '@/lib/domain/routingPresets';
 import { routingRow, type DeliveryView } from '@/contours/users/lib/routingRow';
-import { defaultValues, trafficLimitInput, trafficLimitProblem, userUpdatePatch } from '@/contours/users/lib/userForm';
+import {
+  defaultValues,
+  squadChoicesFor,
+  trafficLimitInput,
+  trafficLimitProblem,
+  userUpdatePatch,
+} from '@/contours/users/lib/userForm';
 import { expiryDays } from '@/contours/users/lib/userExpiry';
 import { endpointsWhy } from '@/contours/users/lib/endpointsWhy';
 import { effectiveDeviceCap } from '@/contours/users/lib/deviceLimit';
@@ -140,6 +146,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
   // Memoised because two derived blocks below key off it: a fresh [] per render
   // would recompute the estimate and the routing check on every keystroke.
   const squads = useMemo(() => squadsQuery.data?.squads ?? [], [squadsQuery.data]);
+  const squadChoices = useMemo(() => squadChoicesFor(squads, user?.groupIds), [squads, user?.groupIds]);
 
   // Username availability. There is no dedicated endpoint, so this reuses the
   // list search and compares exactly: a substring hit on another user must not
@@ -483,6 +490,7 @@ export function useUserForm({ opened, user, onSubmit, onClose }: Props) {
     bindingsQuery,
     nodesQuery,
     squads,
+    squadChoices,
     nameProbe,
     nameQuery,
     nameTaken,

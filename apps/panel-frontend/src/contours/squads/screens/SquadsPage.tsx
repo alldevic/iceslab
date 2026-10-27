@@ -20,7 +20,15 @@ import {
   IconUsers,
 } from '@tabler/icons-react';
 import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
-import { deleteSquad, listSquads, type Squad } from '@/lib/domain/squads';
+import {
+  deleteSquad,
+  isSystemSquad,
+  listSquads,
+  NO_ACCESS_SQUAD_ID,
+  systemSquadDescription,
+  systemSquadName,
+  type Squad,
+} from '@/lib/domain/squads';
 import { listBindings } from '@/lib/domain/profiles';
 import { listCascades } from '@/lib/domain/cascades';
 import { listAllNodes } from '@/lib/domain/nodes';
@@ -132,20 +140,23 @@ export function SquadsPage() {
     );
   }, [squads, search]);
 
-  // Pin "All" first, then alphabetical.
+  // Pin "All" first, then the facade's "No access", then alphabetical.
   const sortedSquads = useMemo(() => {
     const all: Squad[] = [];
+    const noAccess: Squad[] = [];
     const others: Squad[] = [];
     for (const s of filteredSquads) {
       if (s.id === ALL_SQUAD_ID) all.push(s);
+      else if (s.id === NO_ACCESS_SQUAD_ID) noAccess.push(s);
       else others.push(s);
     }
     others.sort((a, b) => a.name.localeCompare(b.name));
-    return [...all, ...others];
+    return [...all, ...noAccess, ...others];
   }, [filteredSquads]);
 
   const totalMembers = squads.reduce((sum, s) => sum + s.memberCount, 0);
-  const withoutHosts = squads.filter((s) => s.profileIds.length === 0).length;
+  // "No access" grants nothing by design; it is not a squad left without hosts.
+  const withoutHosts = squads.filter((s) => s.profileIds.length === 0 && s.id !== NO_ACCESS_SQUAD_ID).length;
 
   usePageMeta([
     t('pageMeta.squads', { count: squads.length }),
@@ -351,16 +362,17 @@ function SquadCard({
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
-  const isAll = squad.id === ALL_SQUAD_ID;
-  const empty = squad.profileIds.length === 0;
+  // All, or the compatibility API's "No access": read-only, never deleted.
+  const system = isSystemSquad(squad);
+  // "No access" grants nothing on purpose, which is not a squad to warn about.
+  const noAccess = squad.id === NO_ACCESS_SQUAD_ID;
+  const empty = squad.profileIds.length === 0 && !noAccess;
   // Accent carries the state: system green, amber when nothing is granted,
   // violet for an ordinary squad.
-  const accent = isAll ? MOSS : empty ? AMBER : VIOLET;
+  const accent = system ? MOSS : empty ? AMBER : VIOLET;
 
-  // The "All" squad is seeded in English by a migration, so its name and
-  // description come from i18n instead of the row.
-  const displayName = isAll ? t('squads.allDefaultName') : squad.name;
-  const displayDescription = isAll ? t('squads.allDefaultDescription') : squad.description;
+  const displayName = systemSquadName(squad, t);
+  const displayDescription = systemSquadDescription(squad, t);
 
   const exits = squadExitsSummary(squad.exitAcl, cascadeIds);
   const exitsLabel =
@@ -420,9 +432,9 @@ function SquadCard({
             >
               {displayName}
             </Text>
-            {/* The system squad is the one card an operator must not treat like
-                the others, so it says so on the card, not in a tooltip. */}
-            {isAll && (
+            {/* A system squad is a card an operator must not treat like the
+                others, so it says so on the card, not in a tooltip. */}
+            {system && (
               <>
                 <IconShield size={13} stroke={1.8} color={MOSS} />
                 <Box
@@ -470,12 +482,12 @@ function SquadCard({
           </Menu.Target>
           <Menu.Dropdown style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
             <Menu.Item leftSection={<IconEdit size={14} />} onClick={onEdit}>
-              {isAll ? t('squads.open') : t('common.edit')}
+              {system ? t('squads.open') : t('common.edit')}
             </Menu.Item>
             <Menu.Item
               color="red"
               leftSection={<IconTrash size={14} />}
-              disabled={isAll}
+              disabled={system}
               onClick={onDelete}
             >
               {t('common.delete')}
@@ -501,6 +513,8 @@ function SquadCard({
           </Text>
           {countries === null ? (
             <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>-</Text>
+          ) : countries.length === 0 && noAccess ? (
+            <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>{t('squads.card.noneGranted')}</Text>
           ) : countries.length === 0 ? (
             <Box style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <IconAlertTriangle size={12} stroke={2} color={AMBER} />
@@ -568,7 +582,7 @@ function SquadCard({
           <IconPencil size={14} stroke={1.8} />
         </Box>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, fontWeight: 500, color: accent }}>
-          {isAll ? t('squads.open') : empty ? t('squads.card.grantHosts') : t('common.edit')}
+          {system ? t('squads.open') : empty ? t('squads.card.grantHosts') : t('common.edit')}
         </Text>
       </UnstyledButton>
     </Box>

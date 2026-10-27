@@ -28,6 +28,8 @@ import {
   updateSquad,
   type SquadExitAclEntry,
   type UpdateSquadInput,
+  NO_ACCESS_SQUAD_ID,
+  systemSquadName,
 } from '@/lib/domain/squads';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { nodesByProfile } from '@/lib/domain/profileNodes';
@@ -124,6 +126,11 @@ export function SquadEditPage() {
   const isNew = id === 'new';
   const squad = isNew ? null : (squadsQuery.data?.squads.find((s) => s.id === id) ?? null);
   const isAll = squad?.id === ALL_SQUAD_ID;
+  // The compatibility API's squad: as read-only as All, but it grants nothing.
+  // `isAll` is kept where it means "every profile", `locked` where it means
+  // "not editable".
+  const isNoAccess = squad?.id === NO_ACCESS_SQUAD_ID;
+  const locked = isAll || isNoAccess;
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -404,7 +411,7 @@ export function SquadEditPage() {
    * list would mean the first click silently cuts the squad down to one host.
    */
   function beginRestriction() {
-    if (isAll) return;
+    if (locked) return;
     setDirty(true);
     setRestricted(true);
     setHostIds(reachableIds);
@@ -413,7 +420,7 @@ export function SquadEditPage() {
   /** Back to every host. `[]` is the value that says that, so it is what gets
    *  sent, and the operator has no other way to undo a restriction. */
   function clearRestriction() {
-    if (isAll) return;
+    if (locked) return;
     setDirty(true);
     setRestricted(false);
     setHostIds([]);
@@ -425,7 +432,7 @@ export function SquadEditPage() {
    * heaviest control on the screen and it lives above the tree, not inside it.
    */
   function toggleProfile(profileId: string) {
-    if (isAll) return;
+    if (locked) return;
     setDirty(true);
     const granting = !profileIds.includes(profileId);
     setProfileIds((prev) =>
@@ -456,7 +463,7 @@ export function SquadEditPage() {
   }
 
   function toggleHost(hostId: string) {
-    if (isAll || !restricted) return;
+    if (locked || !restricted) return;
     setDirty(true);
     setHostIds((prev) =>
       prev.includes(hostId) ? prev.filter((x) => x !== hostId) : [...prev, hostId],
@@ -466,7 +473,7 @@ export function SquadEditPage() {
   /** Group checkbox: all-or-nothing for the hosts inside that country. Disabled
    *  rows sit this out, the same way they sit out the counts. */
   function toggleCountryHosts(rows: { id: string; granted: boolean; enabled: boolean }[]) {
-    if (isAll || !restricted) return;
+    if (locked || !restricted) return;
     const live = rows.filter((r) => r.enabled);
     if (live.length === 0) return;
     setDirty(true);
@@ -537,7 +544,7 @@ export function SquadEditPage() {
     isNew
       ? [t('squadEdit.newCrumb')]
       : [
-          squad ? (isAll ? t('squads.allDefaultName') : squad.name) : null,
+          squad ? systemSquadName(squad, t) : null,
           t('pageMeta.squadMembers', { count: squad?.memberCount ?? 0 }),
         ],
   );
@@ -577,7 +584,7 @@ export function SquadEditPage() {
    * the screen says so instead.
    */
   function toggleExit(c: SquadCascade, exit: SquadCascadeExit) {
-    if (c.off) return;
+    if (locked || c.off) return;
     const next = toggleCascadeExit(exitAcl, c.id, c.aclField, c.exits, exit);
     if (next === null) {
       setLastExitRefused(c.id);
@@ -594,6 +601,7 @@ export function SquadEditPage() {
    * either way.
    */
   function switchCascade(c: SquadCascade, on: boolean) {
+    if (locked) return;
     const next = setCascadeOn(exitAcl, c.id, on, c.aclField, c.exits.flatMap((e) => e.aclIds), parkedExits[c.id]);
     setParkedExits((prev) => {
       const rest = { ...prev };
@@ -608,12 +616,13 @@ export function SquadEditPage() {
   /** «Выдать вход»: the entry host joins the restriction. Without a restriction
    *  it already goes out, and the link is not offered. */
   function giveEntry(hostId: string) {
-    if (isAll || !restricted) return;
+    if (locked || !restricted) return;
     setDirty(true);
     setHostIds((prev) => (prev.includes(hostId) ? prev : [...prev, hostId]));
   }
 
   function togglePolicy(policyId: string) {
+    if (locked) return;
     setDirty(true);
     setPolicyIds((prev) =>
       prev.includes(policyId) ? prev.filter((x) => x !== policyId) : [...prev, policyId],
@@ -660,7 +669,7 @@ export function SquadEditPage() {
             {isNew ? <IconPlus size={18} stroke={2} /> : <IconLink size={18} stroke={1.8} />}
           </Box>
           <Text style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 600, color: SNOW }}>
-            {isNew ? t('squadEdit.newTitle') : isAll ? t('squads.allDefaultName') : squad!.name}
+            {isNew ? t('squadEdit.newTitle') : systemSquadName(squad!, t)}
           </Text>
         </Box>
 
@@ -695,7 +704,7 @@ export function SquadEditPage() {
               </Box>
             </>
           )}
-          {isAll && (
+          {locked && (
             <Box
               style={{
                 display: 'flex',
@@ -717,7 +726,7 @@ export function SquadEditPage() {
         </Box>
 
         <Box style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 8, flexShrink: 0 }}>
-          {isAll ? (
+          {locked ? (
             // Nothing here can be changed, so the only action is leaving.
             <PageButton onClick={() => navigate('/squads')}>{t('squadEdit.close')}</PageButton>
           ) : (
@@ -755,7 +764,7 @@ export function SquadEditPage() {
         </Box>
       </Box>
 
-      {isAll && (
+      {locked && (
         <Box
           style={{
             display: 'flex',
@@ -771,10 +780,10 @@ export function SquadEditPage() {
           </Box>
           <Box style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <Text style={{ fontFamily: DISPLAY, fontSize: 13, fontWeight: 500, color: SNOW }}>
-              {t('squadEdit.allTitle')}
+              {isAll ? t('squadEdit.allTitle') : t('squadEdit.noAccessTitle')}
             </Text>
             <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST }}>
-              {t('squadEdit.allBody')}
+              {isAll ? t('squadEdit.allBody') : t('squadEdit.noAccessBody')}
             </Text>
           </Box>
         </Box>
@@ -790,7 +799,7 @@ export function SquadEditPage() {
                 <IconShield size={15} stroke={1.8} />
               </Box>
               <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('squadEdit.basics')}</Text>
-              {isAll && <Chip accent={FAINT}>{t('squadEdit.locked')}</Chip>}
+              {locked && <Chip accent={FAINT}>{t('squadEdit.locked')}</Chip>}
             </Box>
             <Box style={{ display: 'flex', gap: 16 }}>
               <Box style={{ flex: 1 }}>
@@ -810,7 +819,7 @@ export function SquadEditPage() {
                     </Text>
                   }
                   rightSectionWidth={48}
-                  disabled={isAll}
+                  disabled={locked}
                 />
                 <Hint>{t('squadEdit.nameHint')}</Hint>
               </Box>
@@ -819,7 +828,7 @@ export function SquadEditPage() {
                   label={t('squadEdit.description')}
                   placeholder={t('squadEdit.descriptionPlaceholder')}
                   value={description}
-                  disabled={isAll}
+                  disabled={locked}
                   onChange={(e) => {
                     setDescription(e.currentTarget.value);
                     setDirty(true);
@@ -833,7 +842,7 @@ export function SquadEditPage() {
               <Box style={{ flex: 1 }}>
                 <Select
                   label={t('squadEdit.routingOverride')}
-                  disabled={isAll}
+                  disabled={locked}
                   value={routingPreset}
                   onChange={(v) => {
                     setRoutingPreset(v ?? '');
@@ -861,7 +870,7 @@ export function SquadEditPage() {
                   label={t('squadEdit.hwidLimit')}
                   placeholder={t('squadEdit.hwidPlaceholder')}
                   value={hwidLimit}
-                  disabled={isAll}
+                  disabled={locked}
                   // A-148: a squad's limit is 1 or more (the server refuses 0);
                   // the explicit no-limit, 0, is the user's own value only.
                   min={1}
@@ -891,7 +900,7 @@ export function SquadEditPage() {
                 <IconBox size={15} stroke={1.8} />
               </Box>
               <Text style={{ ...LABEL, letterSpacing: '0.16em' }}>{t('squadEdit.profiles')}</Text>
-              <Chip accent={isAll ? MOSS : profileIds.length > 0 ? CYAN : AMBER}>
+              <Chip accent={isAll ? MOSS : isNoAccess ? FAINT : profileIds.length > 0 ? CYAN : AMBER}>
                 {isAll
                   ? t('squadEdit.allProfiles')
                   : t('squadEdit.grantedOf', {
@@ -902,7 +911,7 @@ export function SquadEditPage() {
             </Box>
             <Hint>{isAll ? t('squadEdit.profilesAll') : t('squadEdit.profilesHint')}</Hint>
             <SectionLists lists={[profilesQuery]} count={allProfiles.length} empty={t('squadEdit.noProfiles')} />
-            {!isAll && profileIds.length === 0 && allProfiles.length > 0 && (
+            {!locked && profileIds.length === 0 && allProfiles.length > 0 && (
               // A squad with no profiles hands out an empty subscription. That is
               // a valid state to pass through while editing and a bad one to
               // leave, so it says so rather than looking like a fresh start.
@@ -943,7 +952,7 @@ export function SquadEditPage() {
                       backgroundColor: WELL,
                       border: `1px solid ${HAIRLINE}`,
                       borderLeft: `3px solid ${checked ? CYAN : '#2C3A4E'}`,
-                      cursor: isAll ? 'default' : 'pointer',
+                      cursor: locked ? 'default' : 'pointer',
                     }}
                   >
                     <CheckBox checked={checked} />
@@ -993,7 +1002,7 @@ export function SquadEditPage() {
                   : t('squadEdit.selectedOf', { count: selectedHosts, total: reachableIds.length })}
               </Chip>
               <Box style={{ flex: 1 }} />
-              {!isAll &&
+              {!locked &&
                 (restricted ? (
                   <SmallButton onClick={clearRestriction}>
                     <IconCheck size={12} stroke={2.2} color={MIST} />
@@ -1059,7 +1068,7 @@ export function SquadEditPage() {
             {/* No restriction is a state, not an empty selection, and it needs
                 saying out loud: a wall of ticked boxes with no explanation
                 would read as "somebody picked all of these". */}
-            {!isAll && !restricted && groups.length > 0 && (
+            {!locked && !restricted && groups.length > 0 && (
               <Box
                 style={{
                   display: 'flex',
@@ -1168,7 +1177,7 @@ export function SquadEditPage() {
                           // Without a restriction the ticks state a fact rather
                           // than offering a choice, so the row does not pretend
                           // to be clickable.
-                          cursor: isAll || !restricted || !r.enabled ? 'default' : 'pointer',
+                          cursor: locked || !restricted || !r.enabled ? 'default' : 'pointer',
                         }}
                       >
                         <Box style={{ width: 14, flexShrink: 0 }} />
@@ -1271,7 +1280,7 @@ export function SquadEditPage() {
                   }}
                 >
                   <Box style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' }}>
-                    {!isAll && (
+                    {!locked && (
                       <Switch
                         size="xs"
                         checked={!c.off}
@@ -1341,7 +1350,7 @@ export function SquadEditPage() {
                             ? t('squadEdit.cascadeWhyNoEntry')
                             : t('squadEdit.cascadeWhyNoHost')}
                       </Text>
-                      {c.entryHostToAdd && !isAll && (
+                      {c.entryHostToAdd && !locked && (
                         <SmallButton onClick={() => giveEntry(c.entryHostToAdd!)}>
                           <IconPlus size={12} stroke={2.2} color={MIST} />
                           {t('squadEdit.cascadeGiveEntry')}
@@ -1362,7 +1371,7 @@ export function SquadEditPage() {
                     return (
                       <UnstyledButton
                         key={exit.key}
-                        onClick={() => !isAll && toggleExit(c, exit)}
+                        onClick={() => !locked && toggleExit(c, exit)}
                         disabled={c.off}
                         style={{
                           width: '100%',
@@ -1373,7 +1382,7 @@ export function SquadEditPage() {
                           backgroundColor: ROW,
                           borderTop: `1px solid ${HAIRLINE}`,
                           opacity: live ? 1 : 0.45,
-                          cursor: isAll || c.off ? 'default' : 'pointer',
+                          cursor: locked || c.off ? 'default' : 'pointer',
                         }}
                       >
                         <CheckBox checked={isAll || exit.allowed} accent={VIOLET} />
@@ -1408,7 +1417,7 @@ export function SquadEditPage() {
 
                   {/* Политики, которые на этом каскаде выдают другие сквады:
                       одним кликом в выдачу этого. */}
-                  {!isAll && !c.off && c.policiesToOffer.length > 0 && (
+                  {!locked && !c.off && c.policiesToOffer.length > 0 && (
                     <Box
                       style={{
                         display: 'flex',
@@ -1434,7 +1443,7 @@ export function SquadEditPage() {
                 <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST }}>
                   {t('squadEdit.cascadeWorksOnlyWithEntry')}
                 </Text>
-                {!isAll && (
+                {!locked && (
                   <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>
                     {t('squadEdit.cascadeOffOtherSquads')}
                   </Text>
@@ -1453,7 +1462,7 @@ export function SquadEditPage() {
             </Box>
             <Hint>{isAll ? t('squadEdit.routePoliciesAll') : t('squadEdit.routePoliciesHint')}</Hint>
             <SectionLists lists={[policiesQuery]} count={policies.length} empty={t('squadEdit.routePoliciesEmpty')} />
-            {isAll && policies.length > 0 && (
+            {locked && policies.length > 0 && (
               <Box
                 style={{
                   display: 'flex',
@@ -1471,7 +1480,7 @@ export function SquadEditPage() {
                 </Text>
               </Box>
             )}
-            {!isAll &&
+            {!locked &&
               policies.map((p) => {
               const checked = policyIds.includes(p.id);
               return (

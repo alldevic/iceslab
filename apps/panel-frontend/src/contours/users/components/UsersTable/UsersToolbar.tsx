@@ -7,6 +7,7 @@ import { MONO_LABEL } from '@/contours/users/lib/textStyles';
 import { Toolbar, ToolbarButton, ToolbarIconButton, ToolbarSearch } from '@/ui/Toolbar';
 import { presetKey } from '@/lib/domain/routingPresets';
 import { useTranslation } from 'react-i18next';
+import { systemSquadName } from '@/lib/domain/squads';
 import type { UsersPageState } from '@/contours/users/screens/useUsersPage';
 
 /**
@@ -59,7 +60,7 @@ export function UsersToolbar({
                 value={squadFilter}
                 onChange={setSquadFilter}
                 clearable
-                data={(squadsQuery.data?.squads ?? []).map((s) => ({ value: s.id, label: s.name }))}
+                data={(squadsQuery.data?.squads ?? []).map((s) => ({ value: s.id, label: systemSquadName(s, t) }))}
               />
               <Select
                 label={t('users.filters.tag')}

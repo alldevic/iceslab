@@ -28,6 +28,8 @@ export const squads = {
     empty: 'No squads.',
     allDefaultName: 'All',
     allDefaultDescription: 'Default group; new users join automatically.',
+    noAccessName: 'No access',
+    noAccessDescription: 'Compatibility API: users a shop left with no squads. Grants nothing.',
     deleteTitle: 'Delete squad "{{name}}"?',
     deleteBody: 'Users stay, but lose access to profiles bound to this squad. Users with no other squad get re-added to All.',
     deleteAllProtected: 'Squad "All" is system-protected and cannot be deleted.',
@@ -98,6 +100,9 @@ export const squads = {
     allTitle: 'All is the system squad, it cannot be renamed, edited or deleted.',
     allBody:
       'Every new host is attached to it and every new user joins it, so this page is the read-only baseline of the whole panel.',
+    noAccessTitle: 'No access is the system squad of the compatibility API, it cannot be renamed, edited or deleted.',
+    noAccessBody:
+      'A shop working through the compatibility API takes a user with no squads as having no access, where the panel would put them in All. Such users land here instead: it grants no profiles. To give one access, add them to another squad.',
     basics: 'Basics',
     name: 'Name',
     nameHint: 'Shown to operators only, never to members.',

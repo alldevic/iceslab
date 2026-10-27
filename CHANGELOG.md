@@ -55,6 +55,11 @@ All notable changes to Iceslab are documented here. Format loosely follows
   `active` a user the expiry check moved meanwhile.
 - Two edits setting the same squads on one user at the same moment no longer
   answer 500 to one of them.
+- The squad the Remnawave-compatible API parks users without squads in ("No
+  access") shows as a system squad: read-only, with its purpose said on the
+  card and in the editor, instead of an ordinary squad whose edit and delete
+  failed without a reason. It is not offered when picking a user's squads,
+  except for a user already in it.
 - A NaiveProxy binding on a port other than 443 no longer has Caddy listen on
   443 as well: the named site address carries the bound port.
 - The node and panel installers, the sing-box bootstrap and the backup create

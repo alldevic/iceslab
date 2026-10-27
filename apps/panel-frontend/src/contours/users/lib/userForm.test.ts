@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { defaultValues, trafficLimitInput, trafficLimitProblem, userUpdatePatch } from '@/contours/users/lib/userForm';
+import {
+  defaultValues,
+  squadChoicesFor,
+  trafficLimitInput,
+  trafficLimitProblem,
+  userUpdatePatch,
+} from '@/contours/users/lib/userForm';
+import { NO_ACCESS_SQUAD_ID } from '@/lib/domain/squads';
 import type { User } from '@/lib/domain/users';
 
 describe('A-142: лимит 0 не становится безлимитом', () => {
@@ -61,5 +68,20 @@ describe('userUpdatePatch: PUT дровера несёт только измен
     expect(userUpdatePatch(seed, { ...seed, description: 'x' }, null)).toEqual({ description: 'x' });
     expect(userUpdatePatch(seed, { ...seed, routingPreset: 'ru-split' }, null)).toEqual({ routingPreset: 'ru-split' });
     expect(userUpdatePatch(seed, { ...seed, routingPreset: '' }, null)).toEqual({ customRoutingPresetId: null });
+  });
+});
+
+describe('squadChoicesFor: сквад «Без доступа» фасада не предлагается', () => {
+  const all = { id: '00000000-0000-0000-0000-000000000001' };
+  const noAccess = { id: NO_ACCESS_SQUAD_ID };
+  const vip = { id: 'vip' };
+
+  it('новому и обычному пользователю его нет в выборе', () => {
+    expect(squadChoicesFor([all, noAccess, vip], undefined)).toEqual([all, vip]);
+    expect(squadChoicesFor([all, noAccess, vip], [all.id, vip.id])).toEqual([all, vip]);
+  });
+
+  it('пользователю, которого туда положил фасад, он показан: видно, почему доступа нет, и сохранение его не теряет', () => {
+    expect(squadChoicesFor([all, noAccess, vip], [NO_ACCESS_SQUAD_ID])).toEqual([all, noAccess, vip]);
   });
 });

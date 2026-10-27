@@ -1,5 +1,16 @@
+import type { TFunction } from 'i18next';
 import type { RoutingPresetId } from '@iceslab/shared';
 import { api } from '@/lib/net/client';
+import { ALL_SQUAD_ID } from '@/lib/domain/routePolicies';
+
+/**
+ * The compatibility API's "no access" squad: a group with no profiles, where
+ * that API parks a user a shop left with no squads (the shop's API reads that
+ * as no access, the panel would put them in All). System-owned like All: the
+ * server refuses to edit or delete it, and it is not a squad to pick for a
+ * user by hand. Same id as the backend's squads.constants.ts.
+ */
+export const NO_ACCESS_SQUAD_ID = '00000000-0000-0000-0000-000000000002';
 
 /**
  * Per-cascade exit allow-list entry, keyed by DIRECTION since 39c266a (A-149):
@@ -94,4 +105,24 @@ export async function updateSquad(id: string, input: UpdateSquadInput): Promise<
 
 export async function deleteSquad(id: string): Promise<void> {
   await api.delete(`/api/squads/${id}`);
+}
+
+/** Whether a squad is the panel's own (All, or the compatibility API's no access):
+ *  shown read-only, never deleted. */
+export function isSystemSquad(squad: Pick<Squad, 'id'>): boolean {
+  return squad.id === ALL_SQUAD_ID || squad.id === NO_ACCESS_SQUAD_ID;
+}
+
+/** The system squads are seeded in English, so their names and descriptions
+ *  come from i18n instead of the row. */
+export function systemSquadName(squad: Pick<Squad, 'id' | 'name'>, t: TFunction): string {
+  if (squad.id === ALL_SQUAD_ID) return t('squads.allDefaultName');
+  if (squad.id === NO_ACCESS_SQUAD_ID) return t('squads.noAccessName');
+  return squad.name;
+}
+
+export function systemSquadDescription(squad: Pick<Squad, 'id' | 'description'>, t: TFunction): string | null {
+  if (squad.id === ALL_SQUAD_ID) return t('squads.allDefaultDescription');
+  if (squad.id === NO_ACCESS_SQUAD_ID) return t('squads.noAccessDescription');
+  return squad.description;
 }

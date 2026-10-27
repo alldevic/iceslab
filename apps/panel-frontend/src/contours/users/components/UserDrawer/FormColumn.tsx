@@ -5,6 +5,7 @@ import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { PlanRow } from '@/contours/users/components/UserDrawer/PlanRow';
 import { Section } from '@/contours/users/components/UserDrawer/Section';
 import { useTranslation } from 'react-i18next';
+import { systemSquadName } from '@/lib/domain/squads';
 import type { RefObject } from 'react';
 import type { UserForm } from '@/contours/users/components/UserDrawer/useUserForm';
 
@@ -17,7 +18,7 @@ export function FormColumn({
   isEdit,
   presets,
   form,
-  squads,
+  squadChoices,
   nameTaken,
   nameFree,
   nameUnchecked,
@@ -34,7 +35,7 @@ export function FormColumn({
   | 'isEdit'
   | 'presets'
   | 'form'
-  | 'squads'
+  | 'squadChoices'
   | 'nameTaken'
   | 'nameFree'
   | 'nameUnchecked'
@@ -182,7 +183,7 @@ export function FormColumn({
       <Section label={t('userDrawer.squads')}>
         {squadsFailure && <LoadFailedLine message={squadsFailure.message} onRetry={squadsFailure.onRetry} />}
         <Box style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {squads.map((s) => {
+          {squadChoices.map((s) => {
             const active = form.values.groupIds.includes(s.id);
             return (
               <UnstyledButton
@@ -222,7 +223,7 @@ export function FormColumn({
                     color: active ? SNOW : MIST,
                   }}
                 >
-                  {s.name}
+                  {systemSquadName(s, t)}
                 </Text>
               </UnstyledButton>
             );

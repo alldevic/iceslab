@@ -10,7 +10,7 @@ import type { RowDensity } from '@/contours/users/lib/usersTable';
 import { DENSITY_ORDER, DENSITY_STORAGE_KEY, USER_COLUMN_BY_ID, loadColumnView, loadDensity, saveColumnView } from '@/contours/users/lib/usersTable';
 import { createUser, deleteUser, listUserTags, listUsers, resetUserTraffic, revokeUserSubscription, rotateUserSubscription, updateUser } from '@/lib/domain/users';
 import { fetchAuthStatus } from '@/lib/auth/api';
-import { listSquads } from '@/lib/domain/squads';
+import { listSquads, systemSquadName } from '@/lib/domain/squads';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useDisclosure } from '@mantine/hooks';
@@ -232,9 +232,9 @@ export function useUsersPage() {
   const dashQuery = useOverview();
   const squadNameById = useMemo(() => {
     const m = new Map<string, string>();
-    for (const s of squadsQuery.data?.squads ?? []) m.set(s.id, s.name);
+    for (const s of squadsQuery.data?.squads ?? []) m.set(s.id, systemSquadName(s, t));
     return m;
-  }, [squadsQuery.data]);
+  }, [squadsQuery.data, t]);
 
   // The page did not arrive (spec frontend-users): said with a retry, not as
   // «nobody yet» or «nothing matched». A failure under a placeholder counts
