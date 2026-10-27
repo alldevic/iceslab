@@ -40,6 +40,10 @@ export const CreateUserSchema = z.object({
     .regex(/^[A-Za-z0-9_-]+$/, 'Subscription token must be URL-safe (A-Z a-z 0-9 _ -)')
     .optional(),
   trafficLimitGb: z.number().int().positive().nullish(),         // null/undefined = unlimited
+  // Remnawave-compat: the limit in bytes, exactly as the shop sent it; wins
+  // over trafficLimitGb. The shop compares the echo and rolls a payment back
+  // on a mismatch, so rounding to GiB is not an option.
+  trafficLimitBytes: z.number().int().positive().nullish(),
   trafficLimitStrategy: TrafficLimitStrategy.default('no_reset'),
   expireDays: z.number().int().positive().nullish(),             // null/undefined = no expiry
   // ───── Import fields ─────
@@ -79,6 +83,8 @@ export const CreateUserSchema = z.object({
     z.string().regex(/^\d+$/),
   ]).nullish(),
   email: z.email().max(255).nullish(),
+  // Remnawave-compat: the shop's external squad id, stored and echoed as is.
+  externalSquadUuid: z.string().max(64).nullish(),
   groupIds: z.array(PermissiveUuid).default([]),
   // R3 - optional per-user routing-preset override. Null = inherit (squad ->
   // global -> default). Wins over squad/global, loses only to ?routing= query.
@@ -136,6 +142,8 @@ export type BulkUsersInput = z.infer<typeof BulkUsersSchema>;
 export const UpdateUserSchema = z.object({
   status: z.enum(['active', 'disabled']).optional(),             // expired/limited только cron'ом
   trafficLimitGb: z.number().int().positive().nullish(),
+  // Remnawave-compat: byte-exact, wins over trafficLimitGb (see CreateUserSchema).
+  trafficLimitBytes: z.number().int().positive().nullish(),
   trafficLimitStrategy: TrafficLimitStrategy.optional(),
   expireAt: z.iso.datetime().nullish(),                          // ISO 8601 string OR null
   // A-148: null = as the squads say, 0 = explicit no-limit, N >= 1 = the limit
@@ -148,6 +156,8 @@ export const UpdateUserSchema = z.object({
     z.string().regex(/^\d+$/),
   ]).nullish(),
   email: z.email().max(255).nullish(),
+  // Remnawave-compat: the shop's external squad id, stored and echoed as is.
+  externalSquadUuid: z.string().max(64).nullish(),
   groupIds: z.array(PermissiveUuid).optional(),
   // R3 - per-user routing-preset override. Null clears it (back to inherit).
   routingPreset: z.enum(ROUTING_PRESET_IDS).nullable().optional(),

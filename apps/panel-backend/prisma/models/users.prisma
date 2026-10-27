@@ -7,6 +7,11 @@ model User {
   // to enforce it here.
   sourceId String? @map("source_id") @db.VarChar(128)
   id       String  @id @default(uuid()) @db.Uuid
+  // Remnawave-compat: the user's number in the Remnawave 3.x API, where an
+  // integer id is the only user reference. Issued by a sequence, never reused,
+  // never reissued: a shop stores it as the subscriber's key. Read only by the
+  // facade (docs/remnawave-compat.md).
+  numericId BigInt @unique @default(autoincrement()) @map("numeric_id")
   shortId  String  @unique @map("short_id") @db.VarChar(16)
   username String  @db.VarChar(64)
   status   String  @default("active") @db.VarChar(16)
@@ -58,6 +63,10 @@ model User {
   tag         String? @db.VarChar(64)
   telegramId  BigInt? @map("telegram_id")
   email       String? @db.VarChar(255)
+
+  // Remnawave-compat: the shop's external squad id, stored and echoed back as
+  // given. Not a foreign key, not validated, not queried.
+  externalSquadUuid String? @map("external_squad_uuid") @db.VarChar(64)
 
   // Lifecycle
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)

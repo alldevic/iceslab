@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "The tariff catalogue the stand configures on BOTH halves of the",
+    "differential, before the purchase. Squads are named, not pinned: a",
+    "@-prefixed string is resolved by seed_tariffs.py against the squads the",
+    "shop can actually see on whichever panel it is pointed at, because the two",
+    "panels issue their own uuids and a catalogue with the other half's uuids",
+    "would fail inside the shop and never reach the panel at all.",
+    "",
+    "Two tariffs, arranged so the admin walkthrough moves squads in both",
+    "directions: `standard` (bought) carries the premium squad, `pro` does not,",
+    "so switching standard->pro is a squad REMOVAL - the direction where a",
+    "status-gated or add-only implementation quietly does nothing."
+  ],
+  "default_tariff": "standard",
+  "default_currency": "rub",
+  "tariffs": [
+    {
+      "key": "standard",
+      "names": { "ru": "Стандарт", "en": "Standard" },
+      "descriptions": { "ru": "Базовый набор серверов", "en": "Base server pool" },
+      "premium_names": { "ru": "Premium-серверы", "en": "Premium servers" },
+      "squad_uuids": ["@MiniShop Standard"],
+      "premium_squad_uuids": ["@MiniShop Premium"],
+      "premium_monthly_gb": 50,
+      "premium_traffic_limit_strategy": "MONTH",
+      "billing_model": "period",
+      "monthly_gb": 500,
+      "hwid_device_limit": 5,
+      "prices_rub": { "1": 200, "3": 600 },
+      "prices_stars": { "1": 0, "3": 0 },
+      "enabled_periods": [1, 3],
+      "enabled": true
+    },
+    {
+      "key": "pro",
+      "names": { "ru": "Про", "en": "Pro" },
+      "descriptions": { "ru": "Больше трафика, без премиум-сегмента", "en": "More traffic, no premium segment" },
+      "squad_uuids": ["@MiniShop Standard"],
+      "billing_model": "period",
+      "monthly_gb": 1000,
+      "hwid_device_limit": 8,
+      "prices_rub": { "1": 400, "3": 1000 },
+      "prices_stars": { "1": 0, "3": 0 },
+      "enabled_periods": [1, 3],
+      "enabled": true
+    }
+  ]
+}

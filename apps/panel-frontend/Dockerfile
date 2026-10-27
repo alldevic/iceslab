@@ -57,12 +57,18 @@ COPY --from=builder /repo/apps/panel-frontend/dist /usr/share/nginx/html
 # /etc/nginx/conf.d/), so the subscription prefix is the one the operator set
 # for the backend, not one baked into the image. The filter keeps envsubst
 # off every other `$`: the rest of the file is nginx variables. The default
-# is the backend's default, so an unset variable behaves as before.
+# is the backend's default, so an unset variable behaves as before. The same
+# for the Remnawave-compat facade's prefix, and for the backend's address
+# (the compose service; a single-host setup or the minishop stand points it
+# elsewhere).
 ENV SUBSCRIPTION_PATH_PREFIX=/sub \
-    NGINX_ENVSUBST_FILTER=^SUBSCRIPTION_PATH_PREFIX$
+    REMNAWAVE_COMPAT_PREFIX=rw \
+    PANEL_BACKEND_ADDR=backend:3000 \
+    NGINX_ENVSUBST_FILTER=^(SUBSCRIPTION_PATH_PREFIX|REMNAWAVE_COMPAT_PREFIX|PANEL_BACKEND_ADDR)$
 COPY apps/panel-frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
-# Checks the prefix with the backend's rule before it reaches a location line.
+# Check the prefixes with the backend's rules before they reach a location line.
 COPY --chmod=0755 apps/panel-frontend/docker-entrypoint.d/15-subscription-prefix.sh /docker-entrypoint.d/
+COPY --chmod=0755 apps/panel-frontend/docker-entrypoint.d/16-compat-prefix.sh /docker-entrypoint.d/
 EXPOSE 80
 
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 \

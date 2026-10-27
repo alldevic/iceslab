@@ -29,7 +29,8 @@ beforeAll(async () => {
   });
   expect(res.statusCode, res.body).toBe(201);
   const first = await prisma.user.findUniqueOrThrow({ where: { id: JSON.parse(res.body).id as string } });
-  const { id: _id, updatedAt: _u, ...row } = first;
+  // numericId is a sequence: each copy draws its own.
+  const { id: _id, updatedAt: _u, numericId: _n, ...row } = first;
   for (let i = 1; i < N; i++) {
     const n = String(i).padStart(3, '0');
     await prisma.user.create({

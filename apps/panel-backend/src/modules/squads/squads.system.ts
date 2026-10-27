@@ -1,5 +1,5 @@
 import type { Prisma } from '../../generated/prisma/client.js';
-import { ALL_SQUAD_ID, ALL_SQUAD_NAME } from './squads.constants.js';
+import { ALL_SQUAD_ID, ALL_SQUAD_NAME, NO_ACCESS_SQUAD_ID, NO_ACCESS_SQUAD_NAME } from './squads.constants.js';
 
 /** The seed migration's wording, so a repaired row reads like a seeded one. */
 const ALL_SQUAD_DESCRIPTION = 'Default group containing every inbound. Auto-membership for new users.';
@@ -29,5 +29,26 @@ export async function ensureAllSquad(tx: Prisma.TransactionClient): Promise<void
       name: nameTaken ? `${ALL_SQUAD_NAME} (system)` : ALL_SQUAD_NAME,
       description: ALL_SQUAD_DESCRIPTION,
     },
+  });
+}
+
+/**
+ * Remnawave-compat: make sure the "no access" squad exists, inside the
+ * caller's transaction. ON CONFLICT DO NOTHING, so two first-time callers at
+ * once do not fail each other; the name falls back as for "All".
+ */
+export async function ensureNoAccessSquad(tx: Prisma.TransactionClient): Promise<void> {
+  const description =
+    'Remnawave-compat: users whose squad set is empty. System-managed, has no profiles; do not edit or assign by hand.';
+  await tx.group.createMany({
+    data: [{ id: NO_ACCESS_SQUAD_ID, name: NO_ACCESS_SQUAD_NAME, description }],
+    skipDuplicates: true,
+  });
+  const present = await tx.group.findUnique({ where: { id: NO_ACCESS_SQUAD_ID }, select: { id: true } });
+  if (present) return;
+  // Skipped on the name: a squad of the operator's own already holds it.
+  await tx.group.createMany({
+    data: [{ id: NO_ACCESS_SQUAD_ID, name: `${NO_ACCESS_SQUAD_NAME} (system)`, description }],
+    skipDuplicates: true,
   });
 }

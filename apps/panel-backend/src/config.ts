@@ -146,6 +146,39 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => (v === '' ? undefined : v)),
 
+  // Remnawave-compat facade (docs/remnawave-compat.md): a Remnawave 3.x-shaped
+  // API at /<prefix>/api/* for shops and bots written against Remnawave. Off by
+  // default; off, none of its routes are registered.
+  REMNAWAVE_COMPAT_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // One URL segment, never 'api' (the native API lives there).
+  REMNAWAVE_COMPAT_PREFIX: z
+    .string()
+    .default('rw')
+    .refine((s) => /^[a-zA-Z0-9_-]+$/.test(s) && s !== 'api', {
+      message: 'REMNAWAVE_COMPAT_PREFIX must be a single URL segment and not "api"',
+    }),
+  // The shop's webhook endpoint and the secret it checks X-Remnawave-Signature
+  // with. Either empty = no Remnawave-format webhooks (the K2 bus above is
+  // separate and unaffected).
+  REMNAWAVE_COMPAT_WEBHOOK_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
+  REMNAWAVE_COMPAT_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
+  // Deliveries in flight at once. A single expiry tick can flip thousands of
+  // users; the bound protects the shop and this process's sockets (the row is
+  // read before the POST, so the database pool is never held for a delivery).
+  // 32: the shop handles 50 webhooks at once, sending more only queues there,
+  // and far fewer makes the drain long when the shop is down (5000 users at the
+  // 5 s timeout: 52 min at 8, under 7 at 32).
+  REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(32),
+
   // Slice S7: public IP of the panel, baked into the node-install
   // command as `--panel-ip`. Causes the agent's UFW to allow :1337/tcp
   // ONLY from this IP. CRITICAL: must be the panel's *origin* IP, not

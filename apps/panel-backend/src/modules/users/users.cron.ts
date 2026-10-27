@@ -68,8 +68,14 @@ export async function resetTrafficRolling(): Promise<number> {
 }
 
 /**
- * Find active users whose expire_at has passed and flip them to 'expired'.
- * Emits user.status-changed → handler chain enqueues removeUser job.
+ * Find active or limited users whose expire_at has passed and flip them to
+ * 'expired'. Emits user.status-changed → handler chain enqueues removeUser job.
+ *
+ * 'limited' counts as due: a period subscriber who used up the quota before the
+ * term ended stayed 'limited' forever once the date passed, read as a live
+ * subscriber who is merely over quota, and `user.expired` (K2, the
+ * Remnawave-compat webhook) never went out for them. 'disabled' stays out: an
+ * operator's decision, not a lapse.
  */
 export async function findExpiredUsers(): Promise<number> {
   // A-132: the condition and the write are ONE statement, and the ids that go
@@ -79,12 +85,22 @@ export async function findExpiredUsers(): Promise<number> {
   // stayed cut off (the cron no longer picks a non-active row), a disabled one
   // became expired and lost why it was off. `updated_at` by hand: a raw write
   // gets no @updatedAt, and the orphan reconcile below windows by it.
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
-    UPDATE users SET status = 'expired', updated_at = now()
-    WHERE status = 'active'
-      AND deleted_at IS NULL
-      AND expire_at < now()
-    RETURNING id::text AS id
+  // Still one statement: the CTE locks the due rows (re-checking the condition
+  // after any wait, as the UPDATE alone did) and keeps the status each one had,
+  // which the event below reports as `from`. A traffic reset lifting limited →
+  // active cannot land between the read and the write.
+  const rows = await prisma.$queryRaw<{ id: string; from: string }[]>`
+    WITH due AS (
+      SELECT id, status FROM users
+      WHERE status IN ('active', 'limited')
+        AND deleted_at IS NULL
+        AND expire_at < now()
+      FOR UPDATE
+    )
+    UPDATE users u SET status = 'expired', updated_at = now()
+    FROM due
+    WHERE u.id = due.id
+    RETURNING u.id::text AS id, due.status AS "from"
   `;
 
   if (rows.length === 0) return 0;
@@ -112,8 +128,8 @@ export async function findExpiredUsers(): Promise<number> {
   // Event handlers still fire (Telegram alerts, audit log) but they no
   // longer carry the sync invariant, that's covered by the direct
   // enqueue above.
-  for (const id of ids) {
-    eventBus.emit('user.status-changed', { userId: id, from: 'active', to: 'expired' });
+  for (const row of rows) {
+    eventBus.emit('user.status-changed', { userId: row.id, from: row.from, to: 'expired' });
   }
   return ids.length;
 }
@@ -252,7 +268,9 @@ export async function alertNearLimits(): Promise<number> {
   const soon = new Date(now.getTime() + NEAR_EXPIRY_DAYS * 86_400_000);
 
   const expiring = await prisma.user.findMany({
-    where: { status: 'active', deletedAt: null, expireAt: { gte: now, lte: soon } },
+    // 'limited' too: still a subscriber whose term is about to end, and the
+    // expiry cron now expires them.
+    where: { status: { in: ['active', 'limited'] }, deletedAt: null, expireAt: { gte: now, lte: soon } },
     select: { username: true, expireAt: true },
     orderBy: { expireAt: 'asc' },
     take: 50,

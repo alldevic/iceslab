@@ -12,3 +12,13 @@ export const ALL_SQUAD_ID = '00000000-0000-0000-0000-000000000001';
 
 /** Display name shown in panel UI; matches the seeded row's `name` column. */
 export const ALL_SQUAD_NAME = 'All';
+
+/**
+ * Remnawave-compat: the "no access" squad, a group with no profiles. Remnawave
+ * reads an empty squad set as no access, where native would put the user in
+ * "All" (full access), so the facade parks such users here. Created on demand
+ * (ensureNoAccessSquad) and, like "All", refused to edit or delete.
+ */
+export const NO_ACCESS_SQUAD_ID = '00000000-0000-0000-0000-000000000002';
+
+export const NO_ACCESS_SQUAD_NAME = 'No access (remnawave-compat)';

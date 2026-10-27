@@ -111,7 +111,9 @@ server {
     # The variable in proxy_pass is what activates the runtime resolver
     # path. With a static upstream{} block (the previous setup), nginx
     # short-circuits the resolver entirely, leading to the stale-IP bug.
-    set $backend "backend:3000";
+    # An address docker's embedded DNS answers (a compose service) or an
+    # IP:port; a variable proxy_pass never reads /etc/hosts.
+    set $backend "${PANEL_BACKEND_ADDR}";
 
     # ───── API proxy ─────
     location /api/ {
@@ -201,6 +203,21 @@ server {
 
     location = /health {
         proxy_pass http://$backend;
+    }
+
+    # The Remnawave-compat facade (backend REMNAWAVE_COMPAT_PREFIX, default
+    # rw), checked by docker-entrypoint.d/16-compat-prefix.sh. Without this the
+    # SPA fallback below answered /rw/api/* with index.html and a 200, which a
+    # shop reads as a broken panel. Forwarded when the facade is off too: the
+    # backend's 404 is the honest answer there.
+    location /${REMNAWAVE_COMPAT_PREFIX}/api/ {
+        proxy_pass http://$backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
     }
 
     # Bull-board UI mounted by panel-backend at /admin/queues. Without

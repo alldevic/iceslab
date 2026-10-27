@@ -43,7 +43,8 @@ async function realViolation(field: UserUniqueField): Promise<unknown> {
   const first = await create({ username: 'first', sourceId: 'src-1' });
   expect(first.statusCode, first.body).toBe(201);
   const a = await prisma.user.findUniqueOrThrow({ where: { id: JSON.parse(first.body).id as string } });
-  const { id: _id, createdAt: _c, updatedAt: _u, ...row } = a;
+  // numericId is unique too, and a copied one would collide on its own.
+  const { id: _id, createdAt: _c, updatedAt: _u, numericId: _n, ...row } = a;
   const fresh = { username: 'second', shortId: 'second01', subscriptionToken: 'second-token-0000000000000000', sourceId: 'src-2' };
   const repeat = { username: a.username, shortId: a.shortId, subscriptionToken: a.subscriptionToken, sourceId: a.sourceId };
   try {

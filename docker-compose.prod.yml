@@ -156,6 +156,12 @@ services:
       # even logged, because to the backend the bus was simply disabled.
       WEBHOOK_URLS: ${WEBHOOK_URLS:-}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      # Remnawave-compat facade, off unless enabled (docs/remnawave-compat.md).
+      REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
+      REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
+      REMNAWAVE_COMPAT_WEBHOOK_URL: ${REMNAWAVE_COMPAT_WEBHOOK_URL:-}
+      REMNAWAVE_COMPAT_WEBHOOK_SECRET: ${REMNAWAVE_COMPAT_WEBHOOK_SECRET:-}
+      REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY: ${REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY:-32}
       # Subscription addressing. Without these an operator cannot move /sub onto
       # its own domain, nor change the path prefix away from the recognisable
       # `/sub` - both are documented knobs that silently did nothing in
@@ -207,6 +213,8 @@ services:
       # The same value the backend gets: nginx proxies subscriptions at this
       # prefix and serves the SPA everywhere else (A-137).
       SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
+      # And the Remnawave-compat facade's, forwarded at /<prefix>/api/.
+      REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
     depends_on:
       backend:
         condition: service_healthy

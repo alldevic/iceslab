@@ -5,6 +5,7 @@ import { uniqueViolationOf, type UniqueViolation } from '../../lib/util/unique-v
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import * as repo from './users.repository.js';
+import type { UserSort } from './users.repository.js';
 import { isSourceIdErased } from './erased-sources.js';
 import type {
   CreateUserInput,
@@ -184,7 +185,12 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       amneziawgPrivateKey: creds.amneziawgPrivateKey,
       amneziawgPublicKey:  creds.amneziawgPublicKey,
 
-      trafficLimitBytes:    gbToBytes(input.trafficLimitGb),
+      // Remnawave-compat: a byte limit wins over whole GiB, so the shop's exact
+      // value round-trips (it compares the echo and rolls a payment back on a
+      // mismatch).
+      trafficLimitBytes:    input.trafficLimitBytes !== undefined
+        ? toBigIntOrNull(input.trafficLimitBytes)
+        : gbToBytes(input.trafficLimitGb),
       trafficLimitStrategy: input.trafficLimitStrategy,
       // An absolute instant wins over a relative span: expireAt is a fact being
       // transferred from another panel, expireDays is a convenience for humans
@@ -209,6 +215,7 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       tag:             input.tag ?? null,
       telegramId:      toBigIntOrNull(input.telegramId),
       email:           input.email ?? null,
+      externalSquadUuid: input.externalSquadUuid ?? null,
 
       enabledProtocols: input.enabledProtocols,
 
@@ -257,7 +264,20 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
   return mapUserToPublic(user, user.traffic);
 }
 
-export async function listUsers(query: ListUsersQuery): Promise<{
+/** Remnawave-compat: list filters the native query has no field for, set by
+ *  the facade only. The admin API has `search` for the human case. */
+export interface InternalUserFilters {
+  telegramIdEquals?: bigint;
+  emailEquals?: string;
+  /** Keyset cursor; see `ListParams.after`. */
+  after?: { numericId: bigint };
+}
+
+/** `sort` is wider than the public enum: the facade's stream pages by
+ *  numericId, which the native list does not offer. */
+export async function listUsers(
+  query: Omit<ListUsersQuery, 'sort'> & { sort?: UserSort } & InternalUserFilters,
+): Promise<{
   users: PublicUserDto[];
   total: number;
   page: number;
@@ -270,6 +290,12 @@ export async function listUsers(query: ListUsersQuery): Promise<{
     page: query.page,
     limit: query.limit,
   };
+}
+
+/** Remnawave-compat: the user behind a numeric reference, or null. */
+export async function findUserByNumericId(numericId: bigint): Promise<PublicUserDto | null> {
+  const user = await repo.findActiveByNumericId(numericId);
+  return user ? mapUserToPublic(user, user.traffic) : null;
 }
 
 export async function getUserById(id: string): Promise<PublicUserDto> {
@@ -303,7 +329,11 @@ export async function updateUser(
     data.status = nextStatus;
     changedFields.push('status');
   }
-  if (input.trafficLimitGb !== undefined) {
+  if (input.trafficLimitBytes !== undefined) {
+    // Remnawave-compat: byte-exact, wins over whole GiB (see createUser).
+    data.trafficLimitBytes = toBigIntOrNull(input.trafficLimitBytes);
+    changedFields.push('trafficLimitBytes');
+  } else if (input.trafficLimitGb !== undefined) {
     data.trafficLimitBytes = gbToBytes(input.trafficLimitGb);
     changedFields.push('trafficLimitBytes');
   }
@@ -350,6 +380,10 @@ export async function updateUser(
     data.email = input.email;
     changedFields.push('email');
   }
+  if (input.externalSquadUuid !== undefined) {
+    data.externalSquadUuid = input.externalSquadUuid ?? null;
+    changedFields.push('externalSquadUuid');
+  }
   if (input.groupIds !== undefined) {
     // Mirror createUser's fallback: an empty groupIds means "no squads picked",
     // but deleteMany + create:[] would leave the user in zero groups and their
@@ -370,8 +404,16 @@ export async function updateUser(
   // The same repair as on create: falling back to "All" on a database that
   // lost the row would fail on the foreign key.
   const intoAll = input.groupIds !== undefined && input.groupIds.length === 0;
-  const updated = await repo
-    .updateById(id, data, intoAll ? ensureAllSquad : undefined)
+  const write = () => repo.updateById(id, data, intoAll ? ensureAllSquad : undefined);
+  const updated = await write()
+    .catch((err: unknown) => {
+      // A squad rewrite is deleteMany + create. Two concurrent rewrites of one
+      // user interleave as delete, delete, create, create, and the second
+      // create meets the group_members key: a 500 for a write whose end state
+      // is the one already there. Setting the set is idempotent, so once more.
+      if (data.groupMembers !== undefined && isUniqueViolation(err)) return write();
+      throw err;
+    })
     .catch((err: unknown) => rethrowPresetGone(err, preset.customRoutingPresetId));
 
   if (changedFields.length > 0) {
@@ -419,12 +461,17 @@ export function statusAfterEdit(
     trafficLimitBytes: bigint | null;
     traffic?: { usedTrafficBytes: bigint } | null;
   },
-  input: Pick<UpdateUserInput, 'status' | 'expireAt' | 'trafficLimitGb'>,
+  input: Pick<UpdateUserInput, 'status' | 'expireAt' | 'trafficLimitGb' | 'trafficLimitBytes'>,
   now: Date = new Date(),
 ): UserStatus | undefined {
   const expireAt =
     input.expireAt !== undefined ? (input.expireAt ? new Date(input.expireAt) : null) : existing.expireAt;
-  const limit = input.trafficLimitGb !== undefined ? gbToBytes(input.trafficLimitGb) : existing.trafficLimitBytes;
+  const limit =
+    input.trafficLimitBytes !== undefined
+      ? toBigIntOrNull(input.trafficLimitBytes)
+      : input.trafficLimitGb !== undefined
+        ? gbToBytes(input.trafficLimitGb)
+        : existing.trafficLimitBytes;
   const used = existing.traffic?.usedTrafficBytes ?? 0n;
   const byFacts = (): UserStatus =>
     expireAt && expireAt < now ? 'expired' : limit !== null && used >= limit ? 'limited' : 'active';
@@ -436,7 +483,7 @@ export function statusAfterEdit(
   // only when this edit touched what holds them.
   const touched =
     (existing.status === 'expired' && input.expireAt !== undefined) ||
-    (existing.status === 'limited' && input.trafficLimitGb !== undefined);
+    (existing.status === 'limited' && (input.trafficLimitGb !== undefined || input.trafficLimitBytes !== undefined));
   if (!touched) return undefined;
   const next = byFacts();
   return next === existing.status ? undefined : next;

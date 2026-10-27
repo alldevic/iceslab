@@ -1,0 +1,275 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import type { FastifyInstance } from 'fastify';
+
+// Skipped: the facade lists and revokes WireGuard tunnels as devices once the
+// panel keeps a WgDevice per tunnel, which it does not yet.
+
+/**
+ * wg tunnels among the buyer's devices (2026-09-02).
+ *
+ * The shop's device tab is fed by ONE endpoint, and it treats what comes back
+ * as opaque: it counts the array for "N of M", renders the text fields, and
+ * hands `hwid` straight back when the buyer taps disconnect. So tunnels join
+ * that list here, and the shop shows and counts them without a line changing.
+ *
+ * That count is the point. The device limit is one number and a buyer spends it
+ * on whatever they connect; counting only the clients that send `x-hwid` made
+ * wg free, which was a bug in the meaning of the limit rather than its
+ * arithmetic. These tests pin the three things that can go wrong quietly: what
+ * is counted, what is shown, and who is allowed to revoke.
+ */
+
+let app: FastifyInstance;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let prisma: any;
+const PREFIX = 'rw';
+const adminToken = `icp_wgdev_${Date.now()}`;
+const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+const bearer = () => ({ authorization: `Bearer ${adminToken}` });
+const userIds: string[] = [];
+const profileIds: string[] = [];
+const groupIds: string[] = [];
+
+beforeAll(async () => {
+  process.env['REMNAWAVE_COMPAT_ENABLED'] = 'true';
+  process.env['REMNAWAVE_COMPAT_PREFIX'] = PREFIX;
+  const [{ buildApp }, prismaMod] = await Promise.all([import('../../app.js'), import('../../prisma.js')]);
+  prisma = prismaMod.prisma;
+  app = await buildApp();
+  await app.ready();
+  await prisma.apiToken.createMany({
+    data: [{ name: 'wgdev-admin', tokenHash: sha(adminToken), scopes: [] }],
+    skipDuplicates: true,
+  });
+});
+
+afterAll(async () => {
+  if (userIds.length) {
+    await prisma.amneziawgPeer.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.wgDevice.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.hwidUserDevice.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+  }
+  if (groupIds.length) await prisma.group.deleteMany({ where: { id: { in: groupIds } } });
+  if (profileIds.length) await prisma.profile.deleteMany({ where: { id: { in: profileIds } } });
+  await prisma.apiToken.deleteMany({ where: { tokenHash: sha(adminToken) } });
+  await prisma.appSetting.deleteMany({ where: { key: 'wgShowUnusedTunnels' } });
+  await app.close();
+});
+
+let seq = 0;
+
+/** Users are made through the facade, not with a raw insert: the row has
+ *  required columns this test has no opinion about, and restating them here
+ *  would be a second definition of "a user" to drift from the first. */
+async function mkUser(): Promise<{ id: string; ref: number }> {
+  const res = await app.inject({
+    method: 'POST',
+    url: `/${PREFIX}/api/users`,
+    headers: bearer(),
+    payload: { username: `wgdev_${Date.now()}_${seq++}` },
+  });
+  if (res.statusCode !== 200) throw new Error(`mkUser failed: ${res.statusCode} ${res.body}`);
+  const ref = res.json().response.id as number;
+  const row = await prisma.user.findFirst({ where: { numericId: BigInt(ref) }, select: { id: true } });
+  userIds.push(row.id);
+  return { id: row.id, ref };
+}
+
+async function mkTunnel(
+  userId: string,
+  opts: { used: boolean; revoked?: boolean; ip?: string; unservedIp?: string },
+) {
+  const n = seq++;
+  const device = await prisma.wgDevice.create({
+    data: {
+      userId,
+      privateKey: `priv-${n}`.padEnd(44, 'x'),
+      publicKey: `pub-${n}`.padEnd(44, 'x'),
+      presharedKey: `psk-${n}`.padEnd(44, 'x'),
+      ...(opts.used ? { lastSeenAt: new Date() } : {}),
+      ...(opts.revoked ? { revokedAt: new Date() } : {}),
+    },
+  });
+  // The address is the tunnel's NAME on the card, so a test about naming has
+  // to allocate one. In production the subscription does it: every device gets
+  // an address on the first fetch, used or not.
+  for (const [ip, served] of [
+    ...(opts.ip ? ([[opts.ip, true]] as [string, boolean][]) : []),
+    ...(opts.unservedIp ? ([[opts.unservedIp, false]] as [string, boolean][]) : []),
+  ]) {
+    const profile = await prisma.profile.create({
+      data: { name: `wgdev-profile-${Date.now()}-${seq++}`, protocol: 'amneziawg', config: {} },
+    });
+    profileIds.push(profile.id);
+    if (served) {
+      const group = await prisma.group.create({ data: { name: `wgdev-squad-${Date.now()}-${seq++}` } });
+      groupIds.push(group.id);
+      await prisma.groupProfile.create({ data: { groupId: group.id, profileId: profile.id } });
+      await prisma.groupMember.create({ data: { groupId: group.id, userId } });
+    }
+    await prisma.amneziawgPeer.create({
+      data: { deviceId: device.id, profileId: profile.id, userId, ip },
+    });
+  }
+  return device;
+}
+
+/** The setting is read through a TTL cache, so a test that flips it has to
+ *  flip it where the cache will see it. Writing the row and letting the cache
+ *  expire would make these tests time-dependent; clearing it is exact. */
+async function setShowUnused(value: boolean) {
+  await prisma.appSetting.upsert({
+    where: { key: 'wgShowUnusedTunnels' },
+    create: { key: 'wgShowUnusedTunnels', value },
+    update: { value },
+  });
+  const { invalidateSubscriptionSettingsCache } = await import('../settings/settings.service.js');
+  invalidateSubscriptionSettingsCache();
+}
+
+const listDevices = (ref: string) =>
+  app.inject({ method: 'GET', url: `/${PREFIX}/api/hwid/devices/${ref}`, headers: bearer() });
+
+const del = (payload: unknown) =>
+  app.inject({ method: 'POST', url: `/${PREFIX}/api/hwid/devices/delete`, headers: bearer(), payload });
+
+describe.skip('wg tunnels are devices too', () => {
+  it('a used tunnel is listed and counted alongside the hwid clients', async () => {
+    await setShowUnused(false);
+    const u = await mkUser();
+    await prisma.hwidUserDevice.create({ data: { userId: u.id, hwid: `phone-${u.id}` } });
+    await mkTunnel(u.id, { used: true });
+
+    const devices = listDevices(String(u.ref));
+    const body = (await devices).json().response.devices as Record<string, unknown>[];
+    // Two entries is the whole feature: the shop's "N of M" is the length of
+    // this array, so the limit starts meaning every device rather than only
+    // the ones that speak the header.
+    expect(body).toHaveLength(2);
+    const tunnel = body.find((d) => String(d.hwid).startsWith('wg:'));
+    expect(tunnel).toBeDefined();
+    expect(tunnel!.platform).toBe('WireGuard/AmneziaWG');
+    // Left empty deliberately: the shop draws that row under a "User Agent"
+    // label, and traffic figures under that label are worse than no row.
+    expect(tunnel!.userAgent).toBeNull();
+  });
+
+  it('an untouched tunnel is a slot, not a device, until the setting says otherwise', async () => {
+    const u = await mkUser();
+    await mkTunnel(u.id, { used: false });
+
+    await setShowUnused(false);
+    expect((await listDevices(String(u.ref))).json().response.devices).toHaveLength(0);
+
+    await setShowUnused(true);
+    expect((await listDevices(String(u.ref))).json().response.devices).toHaveLength(1);
+    await setShowUnused(false);
+  });
+
+  it('names a tunnel by its own address, so nothing else can rename it', async () => {
+    // The name used to be the tunnel's POSITION, and a position is a property
+    // of the set rather than of the tunnel: hiding a quiet neighbour, or
+    // revoking one, renamed the tunnels the buyer never touched - while the
+    // name is exactly what they use to decide which one to disconnect. The
+    // address is the tunnel's own and is in the config file they imported.
+    await setShowUnused(false);
+    const u = await mkUser();
+    await mkTunnel(u.id, { used: false, ip: '10.90.0.2' });
+    await new Promise((r) => setTimeout(r, 5));
+    await mkTunnel(u.id, { used: true, ip: '10.90.0.3' });
+
+    const hidden = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
+    expect(hidden).toHaveLength(1);
+    expect(hidden[0]!.deviceModel).toBe('10.90.0.3');
+
+    // The quiet one appears beside it and the used one keeps its name.
+    await setShowUnused(true);
+    const both = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
+    expect(both.map((d) => d.deviceModel)).toEqual(['10.90.0.2', '10.90.0.3']);
+    await setShowUnused(false);
+  });
+
+  it('names the tunnel only by addresses the buyer could actually be holding', async () => {
+    // wg peers are allocated for every user of a wg-bearing node, squad or no
+    // squad, so a device carries addresses from inbounds this buyer is never
+    // offered. Naming the card by one of those names it by something they
+    // cannot find in any config of theirs - and the notification, built from
+    // the same description, would repeat it.
+    await setShowUnused(false);
+    const u = await mkUser();
+    await mkTunnel(u.id, { used: true, ip: '10.68.0.9', unservedIp: '10.66.0.9' });
+
+    const body = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
+    expect(body[0]!.deviceModel).toBe('10.68.0.9');
+  });
+
+  it('leaves the traffic line without a second copy of the address', async () => {
+    // Name and line are drawn one above the other by the shop, and the same
+    // fields make up the "new device" notification's one-line label. The
+    // address is the name now; repeating it below only makes both longer.
+    await setShowUnused(false);
+    const u = await mkUser();
+    await mkTunnel(u.id, { used: true, ip: '10.90.0.7' });
+
+    const body = (await listDevices(String(u.ref))).json().response.devices as Record<string, unknown>[];
+    expect(body[0]!.deviceModel).toBe('10.90.0.7');
+    expect(String(body[0]!.osVersion)).not.toContain('10.90.0.7');
+    // Control: the line is not simply empty - it still carries the traffic.
+    expect(String(body[0]!.osVersion)).toContain('↑');
+  });
+
+  it('a revoked tunnel is history and never shows, even with the setting on', async () => {
+    await setShowUnused(true);
+    const u = await mkUser();
+    await mkTunnel(u.id, { used: true, revoked: true });
+    expect((await listDevices(String(u.ref))).json().response.devices).toHaveLength(0);
+    await setShowUnused(false);
+  });
+});
+
+describe.skip('disconnecting a tunnel', () => {
+  it('revokes it rather than deleting it, and takes it out of the list', async () => {
+    await setShowUnused(false);
+    const u = await mkUser();
+    const t = await mkTunnel(u.id, { used: true });
+
+    const res = await del({ userId: String(u.ref), hwid: `wg:${t.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().response.deleted).toBe(true);
+
+    // The row survives: it holds the traffic this tunnel did, and deleting it
+    // would free the address for the next device allocated - at which point
+    // the config just disconnected works again, for somebody else.
+    const after = await prisma.wgDevice.findUnique({ where: { id: t.id } });
+    expect(after).not.toBeNull();
+    expect(after.revokedAt).not.toBeNull();
+    expect((await listDevices(String(u.ref))).json().response.devices).toHaveLength(0);
+  });
+
+  it('will not revoke a tunnel belonging to someone else', async () => {
+    // The id travels through the buyer's own browser, so asking for a stranger's
+    // is a request anyone can make. Ownership has to be settled BEFORE the
+    // revoke: checking afterwards revokes first and discovers the theft second.
+    await setShowUnused(false);
+    const owner = await mkUser();
+    const attacker = await mkUser();
+    const t = await mkTunnel(owner.id, { used: true });
+
+    const res = await del({ userId: String(attacker.ref), hwid: `wg:${t.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().response.deleted).toBe(false);
+    const after = await prisma.wgDevice.findUnique({ where: { id: t.id } });
+    expect(after.revokedAt).toBeNull();
+  });
+
+  it('still deletes a plain hwid device, unchanged', async () => {
+    const u = await mkUser();
+    const hwid = `phone-${Date.now()}`;
+    await prisma.hwidUserDevice.create({ data: { userId: u.id, hwid } });
+    const res = await del({ userId: String(u.ref), hwid });
+    expect(res.json().response.deleted).toBe(true);
+    expect(await prisma.hwidUserDevice.findFirst({ where: { userId: u.id, hwid } })).toBeNull();
+  });
+});

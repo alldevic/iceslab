@@ -72,16 +72,15 @@ export function registerUserEventHandlers(): void {
   // status-changed cascade do the addUser fan-out, emitting the event
   // already triggers nodeUsersQueue.add('addUser') in the handler above.
   // (Earlier version did both, producing double-enqueue on every reset.)
+  // Conditional in one statement: the expiry cron also moves 'limited' users
+  // (to 'expired'), and a read here followed by a write would bring one it had
+  // just expired back to active.
   eventBus.on('user.traffic-reset', async ({ userId }) => {
-    const user = await prisma.user.findFirst({
-      where: { id: userId, deletedAt: null },
-      select: { status: true },
-    });
-    if (!user || user.status !== 'limited') return;
-    await prisma.user.update({
-      where: { id: userId },
+    const { count } = await prisma.user.updateMany({
+      where: { id: userId, deletedAt: null, status: 'limited' },
       data: { status: 'active' },
     });
+    if (count === 0) return;
     eventBus.emit('user.status-changed', {
       userId,
       from: 'limited',

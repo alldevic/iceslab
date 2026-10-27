@@ -54,6 +54,8 @@ function makeFakeUser(overrides: Partial<repo.UserWithTraffic> = {}): repo.UserW
     tag: null,
     telegramId: null,
     email: null,
+    numericId: 1n,
+    externalSquadUuid: null,
     createdAt: new Date('2026-05-04T00:00:00Z'),
     updatedAt: new Date('2026-05-04T00:00:00Z'),
     deletedAt: null,

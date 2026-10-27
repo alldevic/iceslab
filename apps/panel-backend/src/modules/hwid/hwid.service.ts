@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
 import { config } from '../../config.js';
 
 /**
@@ -101,7 +102,7 @@ export async function enforceHwid(
   // the disk fills. Above the cap we skip the insert (audit-only for unlimited
   // users -> `allowed`; a real per-user limit -> `denied` so the client sees 403).
   const ceiling = effectiveDeviceCeiling(limit, config.HWID_MAX_DEVICES_PER_USER);
-  return prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
     const current = await tx.hwidUserDevice.count({ where: { userId } });
 
@@ -110,18 +111,33 @@ export async function enforceHwid(
       // count and denies (403 upstream); the unlimited audit path just stops
       // growing the table and still lets the client through.
       if (limit === null) {
-        return { status: 'allowed' as const, active: 0, limit: null };
+        return { result: { status: 'allowed' as const, active: 0, limit: null }, created: null };
       }
-      return { status: 'denied' as const, active: current, limit };
+      return { result: { status: 'denied' as const, active: current, limit }, created: null };
     }
 
-    await tx.hwidUserDevice.create({ data: { userId, hwid } });
+    const created = await tx.hwidUserDevice.create({ data: { userId, hwid } });
     return {
-      status: 'allowed' as const,
-      active: limit === null ? 0 : current + 1,
-      limit,
+      result: {
+        status: 'allowed' as const,
+        active: limit === null ? 0 : current + 1,
+        limit,
+      },
+      created,
     };
   });
+
+  // After the transaction: its advisory lock holds every other device check of
+  // this user until it ends, and a listener may make an HTTP call.
+  if (outcome.created) {
+    eventBus.emit('hwid.device-added', {
+      userId,
+      deviceId: outcome.created.id,
+      hwid: outcome.created.hwid,
+      firstSeenAt: outcome.created.firstSeenAt,
+    });
+  }
+  return outcome.result;
 }
 
 /**

@@ -13,6 +13,7 @@ import { authRoutes } from './modules/auth/auth.routes.js';
 import { usersRoutes } from './modules/users/users.routes.js';
 import { nodesRoutes } from './modules/nodes/nodes.routes.js';
 import { subscriptionRoutes } from './modules/subscription/subscription.routes.js';
+import { remnawaveCompatRoutes } from './modules/remnawave-compat/remnawave.routes.js';
 import { srrRoutes } from './modules/srr/srr.routes.js';
 // Slice 27: `inboundsRoutes` retired. The new /api/profiles + /api/bindings
 // pair from `profilesRoutes` replaces it. The inbounds module file is kept
@@ -329,6 +330,16 @@ export async function buildApp(opts: { log?: { level: string; stream: { write(li
   await app.register(geoSetsRoutes);
   await app.register(routingPresetsRoutes);
   await app.register(subscriptionTemplatesRoutes);
+
+  // Remnawave-compat facade (docs/remnawave-compat.md): Remnawave-shaped
+  // routes declared as /api/* inside the plugin, mounted under /<prefix> so
+  // they never meet the native API. Off: nothing is mounted. After the global
+  // rate limit and the security gate, like every route; the scope hook maps
+  // its resources (requiredCompatScope). Outside the geo-block, which gates
+  // /api/* only: the shop calls server to server from wherever it is hosted.
+  if (config.REMNAWAVE_COMPAT_ENABLED) {
+    await app.register(remnawaveCompatRoutes, { prefix: `/${config.REMNAWAVE_COMPAT_PREFIX}` });
+  }
 
   return app;
 }

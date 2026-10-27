@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isKnownScope, SCOPEABLE_RESOURCES, UNSCOPED_RESOURCES } from './scope.hook.js';
+import { COMPAT_SCOPE_RESOURCE, isKnownScope, SCOPEABLE_RESOURCES, UNSCOPED_RESOURCES } from './scope.hook.js';
 
 /**
  * A-040: the scopeable resources are a list kept by hand, and it drifted from
@@ -14,13 +14,16 @@ import { isKnownScope, SCOPEABLE_RESOURCES, UNSCOPED_RESOURCES } from './scope.h
  */
 
 const src = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+// The Remnawave-compat facade declares `/api/...` too, but mounts it under
+// `/<prefix>`: its segments are Remnawave's, scoped by COMPAT_SCOPE_RESOURCE.
+const FACADE = join(src, 'modules/remnawave-compat');
 
-function sources(dir: string): string[] {
+function sources(dir: string, skip: string | null = FACADE): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     if (statSync(p).isDirectory()) {
-      if (name !== 'generated') out.push(...sources(p));
+      if (name !== 'generated' && p !== skip) out.push(...sources(p, skip));
     } else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) {
       out.push(p);
     }
@@ -28,11 +31,11 @@ function sources(dir: string): string[] {
   return out;
 }
 
-function routeSegments(): Set<string> {
+function routeSegments(root = src, skip: string | null = FACADE): Set<string> {
   const seen = new Set<string>();
   // A route registration: the method call, then the path, possibly on the next line.
   const re = /\.(?:get|post|put|patch|delete|head)\(\s*['`]\/api\/([a-z0-9-]+)/g;
-  for (const file of sources(src)) {
+  for (const file of sources(root, skip)) {
     for (const m of readFileSync(file, 'utf8').matchAll(re)) seen.add(m[1]!);
   }
   return seen;
@@ -51,6 +54,16 @@ describe('scopes against routes', () => {
     const segments = routeSegments();
     const dead = SCOPEABLE_RESOURCES.filter((r) => !segments.has(r));
     expect(dead).toEqual([]);
+  });
+
+  it('every facade segment maps to a native scope a token can be given', () => {
+    const segments = routeSegments(FACADE, null);
+    expect(segments.size).toBeGreaterThan(5);
+    const unmapped = [...segments].filter((s) => !(s in COMPAT_SCOPE_RESOURCE)).sort();
+    expect(unmapped, 'facade routes with no scope: add them to COMPAT_SCOPE_RESOURCE').toEqual([]);
+    for (const native of Object.values(COMPAT_SCOPE_RESOURCE)) {
+      expect(isKnownScope(`${native}:read`), native).toBe(true);
+    }
   });
 
   it('the four that were missing can be minted now', () => {

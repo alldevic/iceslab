@@ -1,0 +1,31 @@
+# A writable /app/data, for BOTH halves of the differential.
+#
+# The shop's compose bind-mounts its checkout's ./data over /app/data. On the
+# host that directory belongs to uid 1000; inside, the app runs as uid 10001 -
+# so the mount SHADOWS a directory the image ships writable with one the app
+# cannot write. The symptoms are an admin Backups page answering 500
+# ("Permission denied: 'data/backups'"), a themes warning on every request, and
+# a tariff catalogue that cannot be written at all - which in turn makes the two
+# admin actions that would reach the panel through a tariff (switch, premium
+# override) fail before they get there.
+#
+# A named volume is seeded from the image's own /app/data on first use, so the
+# shipped example files are still there and the directory belongs to the app.
+#
+# Its OWN file, and not part of stand.override.yml, because that one is the
+# iceslab half's only: a fix applied to one half of a differential is a
+# divergence the next run reports as a finding. This is included by both.
+services:
+  backend:
+    volumes:
+      - remnawave-minishop-data:/app/data:rw
+  worker:
+    volumes:
+      - remnawave-minishop-data:/app/data:rw
+  migrate:
+    volumes:
+      - remnawave-minishop-data:/app/data:rw
+
+volumes:
+  remnawave-minishop-data:
+    name: ${STAND_DATA_VOLUME:-remnawave-minishop-stand-data}

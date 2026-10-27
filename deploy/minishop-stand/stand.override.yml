@@ -1,0 +1,157 @@
+# Two things the stand needs that the shop's own compose cannot know about, kept
+# here rather than as edits to its files: the minishop stays unmodified by
+# design.
+#
+# 1. A name for the HOST. The shop's dev compose expects the panel to be a
+#    service on its own network (`http://remnawave:3000/api`); ours runs on the
+#    host. `host-gateway` is docker's own alias for it. Only the three services
+#    that talk to the panel get it - the frontend never does, and a container
+#    with a route it does not need is a route to debug later.
+#
+# 2. The version stamp as build args instead of a git call. The Dockerfile
+#    derives the image version by running `git describe` inside the build
+#    context, and the context here is a git WORKTREE: its `.git` is a file
+#    pointing outside the context, so git exits 128 and the build fails. The
+#    Dockerfile already skips git entirely when the commit is supplied, so
+#    supply it. Provenance is `custom` because we built it - the source is the
+#    unmodified v3.6.1 tag, but the image is not an official one.
+x-panel-build: &panel-build
+  context: .
+  dockerfile: deploy/docker/Dockerfile
+  args:
+    REMNAWAVE_MINISHOP_BUILD_TAG: ${MINISHOP_BUILD_TAG:-v3.6.1}
+    REMNAWAVE_MINISHOP_BUILD_COMMIT: ${MINISHOP_BUILD_COMMIT:-unknown}
+    REMNAWAVE_MINISHOP_BUILD_PROVENANCE: custom
+    REMNAWAVE_MINISHOP_BRANCH: ''
+
+services:
+  backend:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    build:
+      <<: *panel-build
+      target: backend
+  worker:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    build:
+      <<: *panel-build
+      target: worker
+  migrate:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    build:
+      <<: *panel-build
+      target: backend
+  frontend:
+    build:
+      <<: *panel-build
+      target: frontend
+
+  # 3. The shop's own demo fixtures, for the iceslab half of the differential.
+  #    They live in the shop's REFERENCE compose (docker-compose.remnawave-dev.yml),
+  #    which this half does not include - so without a copy here, only the
+  #    reference stand gets an admin user and the two halves are not comparable.
+  #    Same image, same command, same file: a different seeding mechanism would
+  #    itself be a difference between the halves.
+  #
+  #    It exits non-zero at v3.6.1: the payments INSERT omits `funding_source`,
+  #    which the shop's own migration made NOT NULL. That is the last of the
+  #    file's three statements, and psql here runs without --single-transaction,
+  #    so users and subscriptions are already committed. `stand.sh seed` checks
+  #    that the admin row landed rather than trusting the exit code either way.
+  dev-seed:
+    image: postgres:17.6
+    container_name: remnawave-minishop-dev-seed
+    profiles:
+      - seed
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ./deploy/dev/seed-minishop.sql:/seed/seed-minishop.sql:ro
+    networks:
+      - remnawave-minishop
+    command: ['sh', '-ec', 'psql -v ON_ERROR_STOP=1 -f /seed/seed-minishop.sql']
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # 4. A TLS reverse proxy in front of the shop's webhook endpoint, for the one
+  #    live risk the rest of the stand structurally cannot reach: the panel signs
+  #    an HMAC over the raw body, and in production there is a proxy between the
+  #    two. Its own profile - the ordinary run does not need it.
+  webhook-tls:
+    image: nginx:1.27-alpine
+    container_name: remnawave-minishop-webhook-tls
+    profiles:
+      - tls
+    volumes:
+      - ${STAND_DIR:?stand.sh exports this}/webhook-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STAND_DIR:?stand.sh exports this}/.runtime/certs:/certs:ro
+    networks:
+      - remnawave-minishop
+    ports:
+      - '127.0.0.1:${WEBHOOK_TLS_PORT:-8444}:8443'
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # 5. A panel with exactly one route missing, for the one capability route the
+  #    shop reaches only as a fallback. See panel-shim.conf for why this is a
+  #    proxy and not a setting: the shop decides a route is absent by OBSERVING
+  #    a 404, and nothing in its configuration can tell it to stop preferring
+  #    `/bandwidth-stats/nodes/usage`. Its own profile - the ordinary run must
+  #    keep talking to the panel directly, or every other probe would be
+  #    measuring nginx too.
+  panel-shim:
+    image: nginx:1.27-alpine
+    container_name: remnawave-minishop-panel-shim
+    profiles:
+      - shim
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ${STAND_DIR:?stand.sh exports this}/panel-shim.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - remnawave-minishop
+    # Published so the stand can check from the host what the shop will get
+    # from inside the network - same server block either way. A shim asserted
+    # only through the shop's behaviour would be diagnosed through the shop's
+    # behaviour too, which is a long way round for "is nginx forwarding".
+    ports:
+      - '127.0.0.1:${PANEL_SHIM_PORT:-8086}:8080'
+
+  # 6. THE PANEL'S OWN FRONTEND IMAGE, in front of the facade.
+  #
+  # The shop used to be pointed straight at the backend dev process on the host
+  # (`http://host.docker.internal:3000/rw/api`). That skips the one thing a real
+  # deploy puts in the path: this nginx. §54.2 is what the skip costs — the SPA
+  # fallback answered `/rw/api/*` with index.html and a 200, on the very prefix
+  # the shop is documented to use, and this stand could not have noticed because
+  # no request of its ever went through nginx.
+  #
+  # `ICESLAB_BACKEND_ADDR` is an ADDRESS, not a name: a variable `proxy_pass`
+  # resolves through docker's embedded DNS and never reads /etc/hosts, so the
+  # `host.docker.internal` alias would not resolve. stand.sh puts the gateway's
+  # IP here.
+  panel-front:
+    image: iceslab-frontend:stand
+    container_name: remnawave-minishop-panel-front
+    build:
+      context: ${ICESLAB_REPO:?stand.sh exports this}
+      dockerfile: apps/panel-frontend/Dockerfile
+    environment:
+      PANEL_BACKEND_ADDR: ${ICESLAB_BACKEND_ADDR:?stand.sh exports this}
+      REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
+    networks:
+      - remnawave-minishop
+    # Published for the same reason panel-shim is: "did nginx forward it" is a
+    # question to ask nginx, not to infer from the shop's behaviour.
+    ports:
+      - '127.0.0.1:${PANEL_FRONT_PORT:-8087}:80'

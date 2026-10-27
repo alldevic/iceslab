@@ -82,6 +82,24 @@ describe('the deleted user window (A-268)', () => {
     expect((await pruneHistory()).deletedUsers).toBe(1);
     expect((await pruneHistory()).deletedUsers).toBe(0);
   });
+
+  // Remnawave-compat: a shop keeps numeric_id as the subscriber's key, so an
+  // erased user's number is never handed to anyone else, even when it was the
+  // highest one issued.
+  it("an erased user's numeric id is never issued again", async () => {
+    const kept = await user(null);
+    const gone = await user(daysAgo(DELETED_USER_RETENTION_DAYS + 1));
+    const numberOf = async (id: string) =>
+      (await prisma.user.findUniqueOrThrow({ where: { id }, select: { numericId: true } })).numericId;
+    const keptNumber = await numberOf(kept);
+    const goneNumber = await numberOf(gone);
+    expect(goneNumber).toBeGreaterThan(keptNumber);
+
+    expect((await pruneHistory()).deletedUsers).toBe(1);
+    const next = await numberOf(await user(null));
+    expect(next).toBeGreaterThan(goneNumber);
+    expect(await numberOf(kept)).toBe(keptNumber);
+  });
 });
 
 /**

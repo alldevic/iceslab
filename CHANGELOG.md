@@ -3,6 +3,39 @@
 All notable changes to Iceslab are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags.
 
+## Unreleased
+
+### Added
+
+- **A Remnawave-compatible API.** With `REMNAWAVE_COMPAT_ENABLED=true` the
+  panel answers the Remnawave 3.x API at `/<REMNAWAVE_COMPAT_PREFIX>/api/*`
+  (default `rw`), so a shop or bot written against Remnawave, such as
+  remnawave-minishop, sells and manages subscriptions here without a change
+  to its code: users by a numeric id that is never reused, squads,
+  devices, nodes, hosts and statistics, behind an ordinary API token whose
+  scopes hold on the facade as on `/api/*`. Off by default; off, none of its
+  routes exist. See `docs/remnawave-compat.md`.
+- **Remnawave-format webhooks to the shop.** With
+  `REMNAWAVE_COMPAT_WEBHOOK_URL` and `_SECRET` set, the panel sends
+  `user.expires_in_{72,48,24}_hours` (a scan every 10 minutes, retried until
+  delivered), `user.expired` and `user_hwid_devices.added`, signed with
+  `X-Remnawave-Signature`, at most `REMNAWAVE_COMPAT_WEBHOOK_CONCURRENCY` (32)
+  at a time. The panel's own webhooks (`WEBHOOK_URLS`) are unchanged.
+- The frontend container forwards `/<REMNAWAVE_COMPAT_PREFIX>/api/` to the
+  backend, so the facade is reachable through it; the prefix is checked at
+  start with the backend's rule. `PANEL_BACKEND_ADDR` (default
+  `backend:3000`) points it at a backend that is not the compose service.
+
+### Fixed
+
+- A user whose term ends while they are `limited` (quota used up) now
+  becomes `expired`. They stayed `limited` for good, read as a subscriber who
+  is only over quota, and no `user.expired` went out for them. The near-expiry
+  digest counts them too, and a traffic reset no longer brings back to
+  `active` a user the expiry check moved meanwhile.
+- Two edits setting the same squads on one user at the same moment no longer
+  answer 500 to one of them.
+
 ## v0.2.1 (2026-09-26)
 
 The routing release. Everything that leaves a node now goes through one policy

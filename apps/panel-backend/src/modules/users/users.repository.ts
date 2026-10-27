@@ -29,7 +29,8 @@ export type UserSort =
   | 'traffic'
   | 'lastOnline'
   | 'firstConnected'
-  | 'lifetimeTraffic';
+  | 'lifetimeTraffic'
+  | 'numericId';
 
 export interface ListParams {
   page: number;
@@ -64,8 +65,23 @@ export interface ListParams {
   createdAfter?: Date;
   firstConnectedBefore?: Date;
   firstConnectedAfter?: Date;
+  /** Remnawave-compat: exact matches, unlike `search`'s fuzzy OR. Remnawave
+   *  3.x looks a user up by streaming the list with one of these pinned, and an
+   *  approximate answer there hands the shop the wrong account. */
+  telegramIdEquals?: bigint;
+  emailEquals?: string;
   sort?: UserSort;
   order?: 'asc' | 'desc';
+  /**
+   * Remnawave-compat keyset cursor: only rows strictly after this numericId.
+   * Honoured with `sort: 'numericId'` only. A shop walks every page to decide
+   * who still exists; with OFFSET, a row deleted ahead of the cursor shifts the
+   * tail by one, one user is never returned, and the shop reads that as
+   * deleted and deactivates a paid subscription. numericId rather than
+   * createdAt: unique, monotonic and exact in JS (a timestamptz(6) cursor loses
+   * its microseconds through a Date).
+   */
+  after?: { numericId: bigint };
 }
 
 /** Sentinels accepted by `routingPreset` alongside a concrete preset id. */
@@ -98,6 +114,8 @@ function orderClause(
       return { expireAt: { sort: order, nulls: 'last' } };
     case 'createdAt':
       return { createdAt: order };
+    case 'numericId':
+      return { numericId: order };
     case 'username':
     default:
       return { username: order };
@@ -124,6 +142,14 @@ export async function findBySubscriptionToken(
 export async function findActiveById(id: string): Promise<UserWithTraffic | null> {
   return prisma.user.findFirst({
     where: { id, deletedAt: null },
+    include: USER_INCLUDE,
+  });
+}
+
+/** Remnawave-compat: the user behind the facade's numeric reference. */
+export async function findActiveByNumericId(numericId: bigint): Promise<UserWithTraffic | null> {
+  return prisma.user.findFirst({
+    where: { numericId, deletedAt: null },
     include: USER_INCLUDE,
   });
 }
@@ -294,15 +320,25 @@ export async function list(params: ListParams): Promise<{
   }
   if (params.createdAfter) and.push({ createdAt: { gte: params.createdAfter } });
   if (params.createdBefore) and.push({ createdAt: { lte: params.createdBefore } });
+  if (params.telegramIdEquals !== undefined) and.push({ telegramId: params.telegramIdEquals });
+  if (params.emailEquals !== undefined) {
+    and.push({ email: { equals: params.emailEquals, mode: 'insensitive' } });
+  }
 
   const where: Prisma.UserWhereInput = {
     deletedAt: null,
     ...(and.length ? { AND: and } : {}),
   };
+  // The keyset predicate mirrors the numericId ORDER BY. `total` below stays
+  // the count of the whole filtered set: the shop shows it as the user count.
+  const keyset =
+    params.after && params.sort === 'numericId'
+      ? { numericId: params.order === 'desc' ? { lt: params.after.numericId } : { gt: params.after.numericId } }
+      : null;
 
   const [users, total] = await Promise.all([
     prisma.user.findMany({
-      where,
+      where: keyset ? { AND: [where, keyset] } : where,
       include: USER_INCLUDE,
       // A-166: `id` as the second key. Every sort but the name leaves ties
       // (30 000 imported users, half on 0 traffic and no expiry), Postgres
@@ -310,7 +346,9 @@ export async function list(params: ListParams): Promise<{
       // skip/take repeated one user on two pages and showed another on none,
       // and "select the page and extend" acted on that.
       orderBy: [orderClause(params.sort ?? 'username', params.order ?? 'asc'), { id: 'asc' }],
-      skip: (params.page - 1) * params.limit,
+      // With a keyset cursor the window is the predicate; skipping on top of it
+      // would drop a page of rows on every page but the first.
+      ...(keyset ? {} : { skip: (params.page - 1) * params.limit }),
       take: params.limit,
     }),
     prisma.user.count({ where }),
