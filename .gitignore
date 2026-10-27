@@ -364,3 +364,6 @@ tmp/
 .continue/
 .windsurf/
 CLAUDE.local.md
+
+# Ansible inventory with real hosts (deploy/ansible/inventory.example.ini is the template)
+deploy/ansible/inventory.ini

@@ -31,6 +31,11 @@ All notable changes to Iceslab are documented here. Format loosely follows
   a UDP port inside that range instead of inside the installer's default
   20000-50000. A node that redirects nothing is not warned about; an agent
   older than this falls back to the default.
+- An Ansible role, `deploy/ansible`, that installs nodes from an inventory by
+  running the node installer of the ref you name with the cores and flags you
+  set, so a node installed by the play is the node the panel's command would
+  have made. The bootstrap token goes in as a 0600 file and is removed even
+  when the install fails.
 
 ### Fixed
 

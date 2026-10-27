@@ -1,0 +1,84 @@
+---
+- name: Refuse to install from an unnamed source
+  ansible.builtin.assert:
+    that:
+      - iceslab_panel_url | length > 0
+      - iceslab_bootstrap_token | length > 0
+      - iceslab_node_repo | length > 0
+      - iceslab_node_ref | length > 0
+    fail_msg: >-
+      iceslab_panel_url, iceslab_bootstrap_token, iceslab_node_repo and
+      iceslab_node_ref are all required. Left unset, the installer builds its
+      own default release, and a node built from another source than the panel
+      answers 404 to whatever the two do not share.
+    quiet: true
+
+# Installed once: the env file is the installer's last word. Cores change
+# afterwards from the node page, which runs the same bootstraps.
+- name: Is the node installed
+  ansible.builtin.stat:
+    path: /etc/iceslab-node/env
+  register: iceslab_env
+
+- name: Install the node
+  when: not iceslab_env.stat.exists
+  block:
+    - name: Ship the node installer
+      ansible.builtin.copy:
+        src: "{{ iceslab_installer_src }}"
+        dest: /usr/local/sbin/install-iceslab-node.sh
+        mode: "0755"
+
+    # A file, not argv: --bootstrap would sit in /proc/<pid>/cmdline for the
+    # whole install, readable by any local process.
+    - name: Hand over the bootstrap token
+      ansible.builtin.copy:
+        content: "{{ iceslab_bootstrap_token }}"
+        dest: /root/.iceslab-bootstrap-token
+        mode: "0600"
+      no_log: true
+
+    - name: Run the node installer
+      ansible.builtin.command:
+        argv: "{{ iceslab_installer_argv }}"
+      vars:
+        iceslab_installer_argv: >-
+          {{
+            ['/usr/local/sbin/install-iceslab-node.sh',
+             '--panel-url', iceslab_panel_url,
+             '--bootstrap-file', '/root/.iceslab-bootstrap-token']
+            + (['--engines', iceslab_engines | join(',')] if iceslab_engines | length > 0 else [])
+            + (['--hysteria-domain', iceslab_hysteria_domain] if iceslab_hysteria_domain | length > 0 else [])
+            + (['--hysteria-email', iceslab_hysteria_email] if iceslab_hysteria_email | length > 0 else [])
+            + (['--hysteria-port-range', iceslab_hysteria_port_range] if iceslab_hysteria_port_range is not none else [])
+            + (['--panel-ip', iceslab_panel_ip] if iceslab_panel_ip | length > 0 else [])
+            + (['--harden-ufw'] if iceslab_harden_ufw | bool else [])
+            + (['--fail2ban'] if iceslab_fail2ban | bool else [])
+            + (['--ssh-allowlist', iceslab_ssh_allowlist | join(',')] if iceslab_ssh_allowlist | length > 0 else [])
+            + iceslab_installer_extra_args
+          }}
+      # The installer takes its source from the environment only.
+      environment: >-
+        {{ {'ICESLAB_NODE_REPO': iceslab_node_repo, 'ICESLAB_NODE_REF': iceslab_node_ref}
+           | combine({'ICESLAB_NODE_REF_SHA': iceslab_node_ref_sha} if iceslab_node_ref_sha | length > 0 else {}) }}
+  # Gone whether the install worked or not.
+  always:
+    - name: Forget the bootstrap token
+      ansible.builtin.file:
+        path: /root/.iceslab-bootstrap-token
+        state: absent
+
+# The agent wants a client certificate, so an HTTP probe dies in the TLS
+# handshake. What proves it locally: the socket is open and systemd says the
+# unit runs.
+- name: Wait for the node-agent to listen
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ iceslab_node_agent_port }}"
+    timeout: 60
+
+- name: Confirm the node-agent unit is running
+  ansible.builtin.command: systemctl is-active iceslab-node
+  register: iceslab_agent_active
+  changed_when: false
+  failed_when: iceslab_agent_active.stdout | trim != 'active'

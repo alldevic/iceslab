@@ -1,0 +1,50 @@
+---
+# What the play hands to scripts/install-iceslab-node.sh. The role runs that
+# script and nothing else: packages, sysctl/BBR, the cores and their pinned
+# versions are the installer's and the bootstraps' (packages/shared
+# core-versions.ts), so a node installed by hand and one installed by this role
+# are the same node.
+
+# The panel and the node's single-use bootstrap token (15 min). Usually per
+# host: the panel's "Create node" mints one per node.
+iceslab_panel_url: ""
+iceslab_bootstrap_token: ""
+
+# WHICH agent the installer builds. Required, no default: the installer's own
+# default is the last release, and a node quietly built from another source
+# answers 404 to whatever the panel has and that release has not. The copy of
+# the installer shipped below hands over to the installer of this ref before
+# it touches anything, so the steps that run are the ref's own.
+iceslab_node_repo: ""
+iceslab_node_ref: ""
+# Optional: the commit the ref must resolve to (ICESLAB_NODE_REF_SHA), for a
+# tag that must not have moved.
+iceslab_node_ref_sha: ""
+
+# The node's cores (--engines). Empty: only the agent goes on, cores are added
+# later from the node page.
+iceslab_engines: []
+# Hysteria (--hysteria-*), used when hysteria is among the engines.
+iceslab_hysteria_domain: ""
+iceslab_hysteria_email: ""
+# null: the installer's own default (20000-50000, or what the node had);
+# "" turns port hopping off.
+iceslab_hysteria_port_range: null
+# The panel's origin IP (--panel-ip): the agent's ufw lets its port in from
+# this address only.
+iceslab_panel_ip: ""
+# --harden-ufw and --ssh-allowlist. EMPTY ALLOWLIST MEANS NO RESTRICTION; one
+# that does not include where you connect from locks you out.
+iceslab_harden_ufw: false
+iceslab_ssh_allowlist: []
+# --fail2ban: an SSH jail on the node.
+iceslab_fail2ban: false
+# Anything else the installer takes, as it takes it, e.g.
+# ["--xray-reality-dest", "www.example.com:443"].
+iceslab_installer_extra_args: []
+
+# The agent's mTLS port (the installer's default).
+iceslab_node_agent_port: 1337
+
+# The installer copy shipped to the node: the one in this repository.
+iceslab_installer_src: "{{ role_path }}/../../../../scripts/install-iceslab-node.sh"

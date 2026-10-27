@@ -1,0 +1,9 @@
+---
+# Provision iceslab nodes: run the node installer of the ref you name, with
+# the cores you name. See README.md.
+- name: Provision iceslab nodes
+  hosts: iceslab_nodes
+  become: true
+  gather_facts: false
+  roles:
+    - iceslab_node
