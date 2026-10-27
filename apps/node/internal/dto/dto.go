@@ -756,21 +756,27 @@ type CoreStatus struct {
 	// so a node running mieru or naive could never reach full certainty.
 	ReservedPorts *[]ReservedPortDto `json:"reservedPorts,omitempty"`
 	// TLS is the certificate this core serves, as the adapter read it from what
-	// it was given (E30a). Today only native hysteria. Absent = unknown.
+	// it was given (E30a): native hysteria, and sing-box's TLS protocols.
+	// Absent = unknown.
 	TLS *CoreTLSDto `json:"tls,omitempty"`
 }
 
 // CoreTLSDto mirrors CoreTls in shared/transport.ts.
 //
 //	Source      "acme" (a public CA by name) or "self-signed" (the panel's
-//	            certificate for a node addressed by IP, pinned by clients)
+//	            certificate for a node addressed by IP, or the one sing-box's
+//	            bootstrap generated; pinned by clients)
 //	CertSha256  sha256 of the certificate's DER, lowercase hex, no colons;
 //	            empty for acme, whose store the agent does not read
 //	NotAfter    RFC 3339, when known
+//	ServerName  the name in its SAN, for a certificate the panel did not mint
+//	CertPem     the certificate itself, same condition
 type CoreTLSDto struct {
 	Source     string `json:"source"`
 	CertSha256 string `json:"certSha256,omitempty"`
 	NotAfter   string `json:"notAfter,omitempty"`
+	ServerName string `json:"serverName,omitempty"`
+	CertPem    string `json:"certPem,omitempty"`
 }
 
 // ChainStatusDto mirrors ChainStatus in shared/transport.ts: the chain process

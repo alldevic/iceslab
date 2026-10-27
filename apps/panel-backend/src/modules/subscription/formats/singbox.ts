@@ -140,10 +140,11 @@ export function buildSingboxJson(
           : {}),
         tls: {
           enabled: true,
-          // E30a: the panel's self-signed certificate on a node addressed by
-          // IP, given as the trust anchor itself with `insecure` off, the form
-          // the cascade legs use (cascades/link-tls.ts). sing-box then checks
-          // the name against it, so the name is the one in its SAN.
+          // E30a: a self-signed certificate (the panel's on a node addressed by
+          // IP, or sing-box's own), given as the trust anchor itself with
+          // `insecure` off, the form the cascade legs use (cascades/link-tls.ts).
+          // sing-box then checks the name against it, so the name is the one in
+          // its SAN.
           server_name: e.tlsPin ? e.tlsPin.serverName : e.host,
           // As lines, like the legs' PEM: one string with newlines is taken too.
           ...(e.tlsPin ? { certificate: e.tlsPin.certPem.trim().split(/\r?\n/) } : {}),

@@ -51,7 +51,7 @@ export function selfSignedHostFor(address: string | null | undefined): string | 
   return bare || null;
 }
 
-/** What a subscription pins for one native hysteria endpoint. */
+/** What a subscription pins for one hysteria endpoint. */
 export interface HysteriaTlsPin {
   /** sha256 of the DER, lowercase hex, no colons. */
   certSha256: string;
@@ -61,16 +61,51 @@ export interface HysteriaTlsPin {
   serverName: string;
 }
 
+/** What the pin of a node is read from: its address, the pair the panel
+ *  minted, and the core inventory the agent reported. */
+export interface HysteriaPinSource {
+  address: string;
+  hysteriaTls: unknown;
+  cores: unknown;
+}
+
 /**
- * The pin of a hysteria endpoint, or null when it has none: another core than
- * native hysteria (sing-box brings its own certificate), a node with an FQDN
- * (ACME), no pair minted yet, or a pair minted for an address the node no
+ * The pin of a hysteria endpoint by the core that serves it, or null when it
+ * has none.
+ *
+ * Native hysteria serves the panel's pair: null on a node with an FQDN (ACME),
+ * with no pair minted yet, or with a pair minted for an address the node no
  * longer has (the next push re-mints it; a pin for the old one would not match).
+ *
+ * sing-box serves the certificate its bootstrap generated, for a name of its
+ * own and not for the node's address, so the address plays no part: the pin is
+ * what the agent reported on the hysteria[singbox] row. null when it reported
+ * nothing (an agent older than the report, or a node not polled yet) or a
+ * certificate a CA issued.
  */
-export function hysteriaPinFor(engine: string | undefined, address: string, raw: unknown): HysteriaTlsPin | null {
+export function hysteriaPinFor(engine: string | undefined, node: HysteriaPinSource): HysteriaTlsPin | null {
+  if (engine === 'singbox') return singboxPinFor(node.cores);
   if (engine !== 'hysteria') return null;
-  const host = selfSignedHostFor(address);
-  const t = readHysteriaTls(raw);
+  const host = selfSignedHostFor(node.address);
+  const t = readHysteriaTls(node.hysteriaTls);
   if (!host || !t || t.host !== host) return null;
   return { certSha256: t.certSha256, certPem: t.certPem, serverName: t.host };
+}
+
+/** The pin from the tls fact of the hysteria[singbox] row of the inventory
+ *  (`nodes.cores`), or null when it has no complete self-signed one. */
+export function singboxPinFor(raw: unknown): HysteriaTlsPin | null {
+  const cores = (raw as { cores?: unknown } | null)?.cores;
+  if (!Array.isArray(cores)) return null;
+  const row = cores.find(
+    (c): c is { tls?: unknown } =>
+      !!c && typeof c === 'object' && (c as { name?: unknown }).name === 'hysteria' && (c as { engine?: unknown }).engine === 'singbox',
+  );
+  const tls = row?.tls as Record<string, unknown> | undefined;
+  if (!tls || tls.source !== 'self-signed') return null;
+  const { certSha256, certPem, serverName } = tls;
+  if (typeof certSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(certSha256)) return null;
+  if (typeof certPem !== 'string' || !certPem.includes('-----BEGIN CERTIFICATE-----')) return null;
+  if (typeof serverName !== 'string' || !serverName) return null;
+  return { certSha256, certPem, serverName };
 }

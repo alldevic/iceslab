@@ -701,6 +701,9 @@ export async function generateSubscription(
                   // E30a: the self-signed pair native hysteria serves on a node
                   // addressed by IP; its certificate is what clients pin.
                   hysteriaTls: true,
+                  // The inventory: the certificate sing-box serves, as the
+                  // agent reported it, pinned for its hysteria2.
+                  cores: true,
                   // t07-6c: the node's 3.1 geometry, which a 3.1 key carries.
                   awg3Geometry: true,
                   createdAt: true,
@@ -1056,9 +1059,9 @@ export async function generateSubscription(
         : undefined;
       // E30a: native hysteria on a node addressed by IP serves the panel's
       // self-signed certificate, and every client pins it. Only while the node
-      // has no FQDN (then ACME, no pin) and only on the native core (sing-box
-      // brings its own certificate).
-      const tlsPin = hysteriaPinFor(ib.engine, b.node.address, b.node.hysteriaTls);
+      // has no FQDN (then ACME, no pin). sing-box serves the certificate its
+      // bootstrap generated, pinned from what the agent reports of it.
+      const tlsPin = hysteriaPinFor(ib.engine, b.node);
       // A-154: the client's claim is the profile's bandwidth turned over, or none.
       const claim = clientBandwidthClaim(hyCfg);
       endpoints.push({

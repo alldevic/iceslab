@@ -656,7 +656,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			// beside the certificate it minted. Absent = unknown.
 			if tr, ok := adapter.(core.TLSReporter); ok {
 				if f := tr.TLSFact(); f != nil {
-					t := dto.CoreTLSDto{Source: f.Source, CertSha256: f.CertSha256}
+					t := dto.CoreTLSDto{Source: f.Source, CertSha256: f.CertSha256, ServerName: f.ServerName, CertPem: f.CertPem}
 					if !f.NotAfter.IsZero() {
 						t.NotAfter = f.NotAfter.UTC().Format(time.RFC3339)
 					}

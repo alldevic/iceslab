@@ -354,10 +354,16 @@ type Installable interface {
 // it was given (E30a). Source is "acme" or "self-signed"; CertSha256 is the
 // sha256 of the certificate's DER in lowercase hex, empty for acme; NotAfter is
 // zero when unknown.
+//
+// ServerName and CertPem are for a certificate the panel did not mint and so
+// cannot pin from its own copy (sing-box's, from its bootstrap): the name in
+// its SAN and the certificate itself. Empty for the panel's own and for acme.
 type TLSFact struct {
 	Source     string
 	CertSha256 string
 	NotAfter   time.Time
+	ServerName string
+	CertPem    string
 }
 
 // TLSReporter is an OPTIONAL interface: a core that serves a TLS certificate of

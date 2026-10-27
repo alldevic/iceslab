@@ -263,8 +263,8 @@ export function buildClashYaml(
       ) {
         lines.push(`    ports: ${e.portHoppingStart}-${e.portHoppingEnd}`);
       }
-      // E30a: the panel's self-signed certificate on a node addressed by IP.
-      // mihomo's `fingerprint` is the sha256 of the certificate DER (colons
+      // E30a: a self-signed certificate (the panel's on a node addressed by IP,
+      // or sing-box's own). mihomo's `fingerprint` is the sha256 of the certificate DER (colons
       // optional); a leaf that matches is accepted with no other check, so no
       // skip-cert-verify (component/ca/fingerprint.go, read 2026-09-25).
       // Stash spells it `server-cert-fingerprint`, a common TLS parameter:

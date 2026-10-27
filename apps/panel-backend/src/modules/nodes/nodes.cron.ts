@@ -10,6 +10,7 @@ import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/infra/redis.js';
 import { NodeTransport, NodeRequestError } from './nodes.transport.js';
 import { intendedFromReport } from './node-intended-engines.js';
+import { singboxPinFor } from './hysteria-tls-shape.js';
 import { inboundSyncQueue, reconcileNodeRevisions } from '../inbounds/inbounds.queue.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
 import { getLogger } from '../../lib/infra/logger.js';
@@ -123,6 +124,17 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       const storedCores = (node.cores as NodeCores | null) ?? null;
       const coresChanged =
         result.cores !== undefined && coresWorthWriting(storedCores, result.cores, Date.now());
+      // The certificate sing-box serves is pinned in every subscription from
+      // this inventory, so a new one (or the first report of it) changes the
+      // link its hysteria2 subscribers hold, as rotating native hysteria's pair
+      // does (A-122). Only on a node that serves hysteria2 on sing-box: on any
+      // other the link did not change, and the stamp says so for every host.
+      const singboxPinMoved =
+        coresChanged &&
+        singboxPinFor(storedCores)?.certSha256 !== singboxPinFor(result.cores)?.certSha256 &&
+        (await prisma.profileNodeBinding.count({
+          where: { nodeId: node.id, profile: { protocol: 'hysteria', engine: 'singbox' } },
+        })) > 0;
       // The chain process, same rule again: undefined = the node was
       // unreachable, keep what is stored. `null` is different and does get
       // written: it means the node answered and has no chain, which is what
@@ -192,6 +204,7 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
               ? { coreRestarts: result.coreRestarts as unknown as Prisma.InputJsonValue }
               : {}),
             ...(coresChanged ? { cores: result.cores as unknown as Prisma.InputJsonValue } : {}),
+            ...(singboxPinMoved ? { linkChangedAt: new Date() } : {}),
             ...(chainChanged
               ? {
                   chainStatus:

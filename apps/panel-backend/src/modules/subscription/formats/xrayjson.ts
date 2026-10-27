@@ -331,8 +331,9 @@ function buildHysteriaOutbound(e: SubscriptionEndpoint, tag: string): Record<str
       ...(typeof e.downMbps === 'number' ? { brutalDown: `${e.downMbps}mbps` } : {}),
     };
   }
-  // E30a: the panel's self-signed certificate on a node addressed by IP,
-  // pinned by xray's `pinnedPeerCertSha256` (sha256 of the DER, hex). xray
+  // E30a: a self-signed certificate (the panel's on a node addressed by IP, or
+  // sing-box's own), pinned by xray's `pinnedPeerCertSha256` (sha256 of the
+  // DER, hex). xray
   // treats the pinned certificate as the anchor AND checks serverName against
   // it ("against pinned CA and serverName", XTLS/Xray-core#5655), so the name
   // is the one in its SAN. Verified live against xray 26.3.27 in
@@ -356,10 +357,10 @@ function buildHysteriaOutbound(e: SubscriptionEndpoint, tag: string): Record<str
 
 /**
  * Whether xray-core can connect to this hysteria endpoint at all. A sing-box
- * hysteria2 inbound serves the node's self-signed certificate, and with no pin
- * for it (tlsPin is the native daemon's) xray cannot trust it: `allowInsecure`
- * no longer exists in this core. Such an endpoint is left out of the format,
- * not handed out as a server that never connects.
+ * hysteria2 inbound serves the node's self-signed certificate, pinned from what
+ * the agent reports of it; with no report (an older agent) xray cannot trust
+ * it, `allowInsecure` no longer exists in this core. Such an endpoint is left
+ * out of the format, not handed out as a server that never connects.
  */
 export function hysteriaUsableInXray(e: SubscriptionEndpoint): boolean {
   if (e.protocol !== 'hysteria') return false;

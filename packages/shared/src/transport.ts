@@ -1942,24 +1942,32 @@ export interface CoreStatus {
    * a port it names and may never promise one it does not.
    */
   reservedPorts?: ReservedPort[];
-  /** The certificate this core serves, see CoreTls. Today only native hysteria. */
+  /** The certificate this core serves, see CoreTls. Native hysteria and sing-box's TLS protocols. */
   tls?: CoreTls;
 }
 
 /**
  * The TLS certificate a core serves, as the agent READ it from what the core
  * was given (E30a, 25.09). A FACT for the node's "Cores", beside the panel's
- * intent (`hysteriaTls` on the node DTO); the pin in a subscription comes from
- * the panel's own copy, never from this.
+ * intent (`hysteriaTls` on the node DTO). For native hysteria the pin in a
+ * subscription comes from the panel's own copy, never from this. sing-box's
+ * certificate is the one its bootstrap generated, the panel has no copy of it,
+ * and its hysteria2 endpoints are pinned from this fact.
  *
  *   source      'acme': the core gets its certificate from a public CA by
  *               name (the node has an FQDN); 'self-signed': the panel's
- *               certificate for a node addressed by IP, pinned by clients.
+ *               certificate for a node addressed by IP, or sing-box's own;
+ *               pinned by clients.
  *   certSha256  sha256 of the certificate's DER, lowercase hex, 64 characters,
  *               no colons. The same value `openssl x509 -fingerprint -sha256`
  *               prints, and the one pinned. Absent for 'acme': the agent does
  *               not read hysteria's ACME store.
  *   notAfter    ISO time the certificate expires, when known.
+ *   serverName  the name in its SAN, the one a client checks against the
+ *               pinned certificate. Only for a certificate the panel did not
+ *               mint (sing-box's).
+ *   certPem     the certificate itself, for the clients that take it as their
+ *               trust anchor. Same condition.
  *
  * Absent on the core = an agent older than the field, or a core that serves no
  * TLS of its own: unknown, never "no certificate".
@@ -1968,6 +1976,8 @@ export interface CoreTls {
   source: 'acme' | 'self-signed';
   certSha256?: string;
   notAfter?: string;
+  serverName?: string;
+  certPem?: string;
 }
 
 /**

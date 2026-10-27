@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { X509Certificate, createPrivateKey } from 'node:crypto';
 import type { HysteriaInboundCfg } from '@iceslab/shared';
@@ -10,13 +10,16 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { fetchEnabledInbounds } from '../inbounds/inbounds.queue.js';
 import { certSha256, mintHysteriaTls } from './hysteria-tls.js';
 import { hysteriaPinFor, readHysteriaTls } from './hysteria-tls-shape.js';
+import { NodeTransport } from './nodes.transport.js';
+import { pollNodeStatuses } from './nodes.cron.js';
 
 /**
  * E30a, 25.09: native hysteria on a node addressed by IP, where no public CA
  * issues. The panel mints a self-signed pair per node, pushes it to the agent
  * in the hysteria inbound, shows its fingerprint on the node, and every
  * subscription format pins it. A node with an FQDN keeps ACME and no pin;
- * hysteria on sing-box brings its own certificate. E30b's gate is gone.
+ * hysteria on sing-box brings its own certificate, which the node reports and
+ * the formats pin the same way. E30b's gate is gone.
  */
 let app: FastifyInstance;
 let token: string;
@@ -30,6 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await app.close();
 });
 
@@ -204,15 +208,143 @@ describe('every subscription format pins it, in its own field', () => {
   });
 });
 
+/** The inventory of a node whose sing-box reported its certificate. */
+const singboxCores = (tls: Record<string, unknown> | undefined) => ({
+  observedAt: new Date().toISOString(),
+  cores: [
+    { name: 'hysteria', engine: 'hysteria', running: false },
+    { name: 'hysteria', engine: 'singbox', running: true, ...(tls ? { tls } : {}) },
+  ],
+});
+
+describe('hysteria on sing-box: pinned from the certificate the node reports', () => {
+  // A real certificate, under the name sing-box's bootstrap writes in its SAN.
+  async function reported() {
+    const t = await mintHysteriaTls('203.0.113.9');
+    return { source: 'self-signed', certSha256: t.certSha256, serverName: 'www.bing.com', certPem: t.certPem };
+  }
+  async function subscribe(address: string, tls: Record<string, unknown> | undefined): Promise<string> {
+    const n = await node(address);
+    await hysteriaOn(n.id, 'singbox');
+    await prisma.node.update({ where: { id: n.id }, data: { cores: singboxCores(tls) } });
+    const res = await post('/api/users', { username: `u-${seq}` });
+    expect(res.statusCode, res.body).toBe(201);
+    return JSON.parse(res.body).subscriptionToken as string;
+  }
+  const sub = async (token: string, format?: string) =>
+    (await get(`/sub/${token}${format ? `?format=${format}` : ''}`)).text;
+
+  // The certificate is not for the node's address: a node with an FQDN is pinned too.
+  it.each(['46.149.66.235:1337', 'hy.example.com:1337'])('reported, node %s: every format pins it, under its name', async (address) => {
+    const tls = await reported();
+    const token = await subscribe(address, tls);
+
+    const plain = Buffer.from(await sub(token), 'base64').toString('utf8');
+    const uri = new URL(plain.split('\n').find((l) => l.startsWith('hysteria2://'))!);
+    expect(uri.searchParams.get('pinSHA256')).toBe(tls.certSha256);
+    expect(uri.searchParams.get('insecure')).toBe('1');
+
+    const xj = await sub(token, 'xrayjson-array');
+    expect(xj).toMatch(new RegExp(`"pinnedPeerCertSha256":\\s*"${tls.certSha256}"`));
+    expect(xj).toMatch(/"serverName":\s*"www\.bing\.com"/);
+
+    const sb = JSON.parse(await sub(token, 'singbox')) as { outbounds: { type: string; tls?: Record<string, unknown> }[] };
+    const hy = sb.outbounds.find((o) => o.type === 'hysteria2')!;
+    expect(hy.tls).toMatchObject({ enabled: true, server_name: 'www.bing.com' });
+    expect(certSha256((hy.tls!.certificate as string[]).join('\n'))).toBe(tls.certSha256);
+
+    expect(await sub(token, 'clash')).toContain(`    fingerprint: ${tls.certSha256}`);
+  });
+
+  it('not reported (an older agent): left out of xray-json, unpinned elsewhere as before', async () => {
+    const token = await subscribe('46.149.66.235:1337', undefined);
+    expect(await sub(token, 'xrayjson-array')).not.toContain('"hysteria"');
+    const plain = Buffer.from(await sub(token), 'base64').toString('utf8');
+    expect(plain).toContain('hysteria2://');
+    expect(plain).not.toContain('pinSHA256');
+  });
+});
+
+describe('the status poll: a new sing-box certificate is a new link (A-122)', () => {
+  // A local address that refuses at once: the poll also reads the agent's own
+  // certificate by handshake, and an unroutable one waits out its timeout.
+  const stamp = async (id: string) =>
+    (await prisma.node.findUniqueOrThrow({ where: { id }, select: { linkChangedAt: true } })).linkChangedAt.getTime();
+  const reports = (tls: Record<string, unknown> | undefined) =>
+    vi
+      .spyOn(NodeTransport.prototype, 'healthcheck')
+      .mockResolvedValue({ status: 'ok', cores: singboxCores(tls).cores } as never);
+
+  it('moves on the first report and on a new certificate, not on the same one again', async () => {
+    const n = await node('127.0.0.1:1');
+    await hysteriaOn(n.id, 'singbox');
+    const before = await stamp(n.id);
+    const t1 = await mintHysteriaTls('203.0.113.9');
+    const fact = (t: typeof t1) => ({ source: 'self-signed', certSha256: t.certSha256, serverName: 'www.bing.com', certPem: t.certPem });
+
+    const spy = reports(fact(t1));
+    await pollNodeStatuses();
+    const first = await stamp(n.id);
+    expect(first).toBeGreaterThan(before);
+
+    await pollNodeStatuses();
+    expect(await stamp(n.id)).toBe(first);
+
+    const t2 = await mintHysteriaTls('203.0.113.9');
+    spy.mockResolvedValue({ status: 'ok', cores: singboxCores(fact(t2)).cores } as never);
+    await pollNodeStatuses();
+    expect(await stamp(n.id)).toBeGreaterThan(first);
+  });
+
+  it('stays on a node that serves no hysteria2 on sing-box', async () => {
+    const n = await node('127.0.0.1:1');
+    await hysteriaOn(n.id);
+    const before = await stamp(n.id);
+    const t = await mintHysteriaTls('203.0.113.9');
+    reports({ source: 'self-signed', certSha256: t.certSha256, serverName: 'www.bing.com', certPem: t.certPem });
+    await pollNodeStatuses();
+    expect(await stamp(n.id)).toBe(before);
+  });
+});
+
 describe('hysteriaPinFor', () => {
-  it('pins only native hysteria, on the address the pair was minted for', async () => {
+  it('pins native hysteria on the address the pair was minted for', async () => {
     const t = await mintHysteriaTls('46.149.66.235');
     const pin = { certSha256: t.certSha256, certPem: t.certPem, serverName: '46.149.66.235' };
-    expect(hysteriaPinFor('hysteria', '46.149.66.235:1337', t)).toEqual(pin);
-    expect(hysteriaPinFor('singbox', '46.149.66.235:1337', t)).toBeNull();
-    expect(hysteriaPinFor('hysteria', 'hy.example.com:1337', t)).toBeNull();
+    const at = (address: string, hysteriaTls: unknown = t) => ({ address, hysteriaTls, cores: null });
+    expect(hysteriaPinFor('hysteria', at('46.149.66.235:1337'))).toEqual(pin);
+    expect(hysteriaPinFor('hysteria', at('hy.example.com:1337'))).toBeNull();
     // Moved and not pushed yet: a pin for the old certificate would not match.
-    expect(hysteriaPinFor('hysteria', '46.149.66.236:1337', t)).toBeNull();
-    expect(hysteriaPinFor('hysteria', '46.149.66.235:1337', null)).toBeNull();
+    expect(hysteriaPinFor('hysteria', at('46.149.66.236:1337'))).toBeNull();
+    expect(hysteriaPinFor('hysteria', at('46.149.66.235:1337', null))).toBeNull();
+    // The panel's pair is native hysteria's; sing-box does not serve it.
+    expect(hysteriaPinFor('singbox', at('46.149.66.235:1337'))).toBeNull();
+    expect(hysteriaPinFor('xray', at('46.149.66.235:1337'))).toBeNull();
+  });
+
+  it('pins sing-box from the tls fact of its hysteria row, and only a complete self-signed one', async () => {
+    const t = await mintHysteriaTls('203.0.113.9');
+    const fact = { source: 'self-signed', certSha256: t.certSha256, serverName: 'www.bing.com', certPem: t.certPem };
+    const on = (cores: unknown) => ({ address: '46.149.66.235:1337', hysteriaTls: null, cores });
+    expect(hysteriaPinFor('singbox', on(singboxCores(fact)))).toEqual({
+      certSha256: t.certSha256,
+      certPem: t.certPem,
+      serverName: 'www.bing.com',
+    });
+    // The native row's fact is not sing-box's, and sing-box's is not native's.
+    const swapped = { cores: [{ name: 'hysteria', engine: 'hysteria', running: true, tls: fact }] };
+    expect(hysteriaPinFor('singbox', on(swapped))).toBeNull();
+    expect(hysteriaPinFor('hysteria', on(singboxCores(fact)))).toBeNull();
+    for (const broken of [
+      undefined,
+      { source: 'acme' },
+      { ...fact, certSha256: 'AB' },
+      { ...fact, certPem: undefined },
+      { ...fact, serverName: '' },
+    ]) {
+      expect(hysteriaPinFor('singbox', on(singboxCores(broken)))).toBeNull();
+    }
+    expect(hysteriaPinFor('singbox', on(null))).toBeNull();
+    expect(hysteriaPinFor('singbox', on({ cores: 'nope' }))).toBeNull();
   });
 });

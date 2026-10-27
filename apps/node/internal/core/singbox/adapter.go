@@ -93,6 +93,8 @@ type Adapter struct {
 	proc         *subprocess.Subprocess
 	// restarts: the core's restart tally (RestartReporter).
 	restarts *core.RestartTally
+	// cert: the certificate file as TLSFact last read it (tls.go), under mu.
+	cert *certCache
 
 	// restartMu serializes regenerateAndRestart so concurrent user/inbound
 	// changes can't race the subprocess swap. Never held together with mu

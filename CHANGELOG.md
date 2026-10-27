@@ -77,7 +77,13 @@ All notable changes to Iceslab are documented here. Format loosely follows
 - The xray-json (array) document for Hysteria 2 carries Salamander obfuscation
   and the Brutal bandwidth where xray-core reads them (`finalmask`), so clients
   on that format connect to obfuscated nodes; a sing-box Hysteria 2 endpoint
-  xray cannot trust (self-signed, no pin) is left out of it.
+  whose certificate the node has not reported (an older agent) is left out of
+  it, as xray cannot trust it.
+- Hysteria 2 on the sing-box engine connects. sing-box serves the self-signed
+  certificate its bootstrap generated, which clients checked against a public
+  CA and refused, in every format. The node now reports that certificate, and
+  every subscription format pins it under the name it was issued for, as for
+  native Hysteria 2 on a node addressed by IP.
 
 ## v0.2.1 (2026-09-26)
 
