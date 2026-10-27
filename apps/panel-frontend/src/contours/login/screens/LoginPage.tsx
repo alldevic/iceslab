@@ -11,12 +11,16 @@ import {
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { fetchAuthStatus, login, register, type LoginResponse } from '@/lib/auth/api';
-import { api } from '@/lib/net/client';
+import { api, apiErrorMessage } from '@/lib/net/client';
+import { useNow } from '@/lib/ui/useNow';
+import { createSignIn, lockoutSeconds } from '@/contours/login/lib/signIn';
+import { backendStatusOf, entryMode } from '@/contours/login/lib/loginView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { useAuth } from '@/lib/auth/session';
 import { useBrandName } from '@/lib/ui/useBrandName';
 import { LanguageSwitcher } from '@/ui/LanguageSwitcher';
@@ -61,6 +65,7 @@ export function LoginPage() {
   const setSession = useAuth((s) => s.setSession);
   const brandName = useBrandName();
   const { t } = useTranslation();
+  const qc = useQueryClient();
 
   const statusQuery = useQuery({
     queryKey: ['auth', 'status'],
@@ -80,16 +85,17 @@ export function LoginPage() {
     refetchInterval: 10_000,
     retry: false,
   });
-  const backendStatus: 'normal' | 'degraded' | 'down' =
-    healthQuery.isError ? 'down' :
-    healthQuery.data?.status === 'ok' ? 'normal' : 'degraded';
+  // «Checking» until /health first answers (A-240, backendStatusOf).
+  const backendStatus = backendStatusOf(healthQuery);
   const statusColor =
     backendStatus === 'normal' ? MOSS :
-    backendStatus === 'degraded' ? LAMP_AMBER : RUST;
+    backendStatus === 'degraded' ? LAMP_AMBER :
+    backendStatus === 'down' ? RUST : MIST;
   const statusLabel = t(
     backendStatus === 'normal' ? 'loginPage.topbarStatusNormal' :
     backendStatus === 'degraded' ? 'loginPage.topbarStatusDegraded' :
-    'loginPage.topbarStatusDown'
+    backendStatus === 'down' ? 'loginPage.topbarStatusDown' :
+    'loginPage.topbarStatusChecking'
   );
 
   // K8 - when the admin has 2FA on, the first login attempt returns
@@ -104,23 +110,30 @@ export function LoginPage() {
     },
   });
 
-  const isBootstrap = statusQuery.data?.registration.enabled ?? false;
+  // Which form, by the server's answer only (A-238, entryMode): a failed
+  // status is not «registration closed».
+  const entry = entryMode(statusQuery);
+  const isBootstrap = entry === 'register';
+
+  // Registers at most once in this page's life, then only logs in (A-156):
+  // a failed login after a created admin no longer loops on 403
+  // REGISTRATION_DISABLED. The status is re-read once the admin exists.
+  const [signIn] = useState(() =>
+    createSignIn({
+      register,
+      login,
+      onRegistered: () => void qc.invalidateQueries({ queryKey: ['auth', 'status'] }),
+    }),
+  );
+
+  // A lockout (429) counts down on the button instead of a toast that says
+  // nothing about when to try again.
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const now = useNow(1000);
+  const lockedFor = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
 
   const submitMutation = useMutation({
-    mutationFn: async ({
-      username,
-      password,
-      totpCode,
-    }: {
-      username: string;
-      password: string;
-      totpCode: string;
-    }) => {
-      if (isBootstrap) {
-        await register(username, password);
-      }
-      return login(username, password, totpCode || undefined);
-    },
+    mutationFn: (creds: { username: string; password: string; totpCode: string }) => signIn(creds, isBootstrap),
     onSuccess: (data: LoginResponse) => {
       setRequires2fa(false);
       setSession(data.token, data.admin);
@@ -143,18 +156,31 @@ export function LoginPage() {
         }
         return;
       }
+      const wait = lockoutSeconds(err);
+      if (wait !== null) setLockedUntil(Date.now() + wait * 1000);
+      // The server's words, not axios's «Request failed with status code 401».
       notifications.show({
         color: 'red',
         title: t('loginPage.signInFailed'),
-        message: err instanceof Error ? err.message : t('loginPage.unknownError'),
+        message: apiErrorMessage(err),
       });
     },
   });
 
-  if (statusQuery.isLoading) {
+  if (entry === 'loading') {
     return (
       <Center h="100%" style={{ backgroundColor: GROUND }}>
         <Loader color={CYAN} />
+      </Center>
+    );
+  }
+  // Neither form until the status arrives: the server's words and a retry.
+  if (entry === 'failed') {
+    return (
+      <Center style={{ minHeight: '100vh', backgroundColor: GROUND, padding: 40 }}>
+        <Box style={{ width: 'min(560px, 100%)' }}>
+          <LoadFailed message={apiErrorMessage(statusQuery.error)} onRetry={() => void statusQuery.refetch()} />
+        </Box>
       </Center>
     );
   }
@@ -173,7 +199,9 @@ export function LoginPage() {
     },
   };
 
-  const submitLabel = isBootstrap
+  const submitLabel = lockedFor > 0
+    ? t('loginPage.lockedFor', { seconds: lockedFor })
+    : isBootstrap
     ? t('loginPage.createAdminAction')
     : requires2fa
       ? t('loginPage.twofaVerify')
@@ -359,7 +387,7 @@ export function LoginPage() {
                     stack stays the brightest thing on screen. */}
                 <UnstyledButton
                   type="submit"
-                  disabled={submitMutation.isPending}
+                  disabled={submitMutation.isPending || lockedFor > 0}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -371,7 +399,7 @@ export function LoginPage() {
                     borderRadius: 10,
                     backgroundColor: WELL,
                     border: `1px solid ${EDGE}`,
-                    opacity: submitMutation.isPending ? 0.6 : 1,
+                    opacity: submitMutation.isPending || lockedFor > 0 ? 0.6 : 1,
                   }}
                 >
                   <Text

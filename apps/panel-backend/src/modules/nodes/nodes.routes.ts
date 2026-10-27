@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { TRANSPORTS, type EngineName } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
@@ -11,14 +11,22 @@ import {
   type HardeningInput,
 } from './nodes.schemas.js';
 import * as nodesService from './nodes.service.js';
-import { buildInstallCommand } from './nodes.service.js';
+import { panelInstallCommand } from './nodes.service.js';
 import { checkNodePortExposure } from './nodes.exposure.js';
 import { getNodeSyncStatus } from './nodes.sync-status.js';
 import { portClaimsOnNode } from './node-ports.js';
 import { readChainSecret } from './chain-secret.js';
-import { PolicyDoesNotFitNodeError } from '../node-policies/node-policies.service.js';
+import {
+  PolicyDoesNotFitNodeError,
+  agentPolicyReportForNode,
+  explainPolicyForNode,
+} from '../node-policies/node-policies.service.js';
+import { cascadeXrayDrawingForNode } from '../inbounds/inbounds.queue.js';
+import { prisma } from '../../prisma.js';
 import * as bootstrap from './bootstrap.service.js';
 import { getPanelPublicIp } from './panel-ip.js';
+import { NodeCertRotationError, rotateNodeCert } from './node-cert-rotation.js';
+import { NodeConnLogError, clearNodeConnLog, readNodeConnLog } from './node-conn-log.js';
 
 /**
  * Derive the panel URL the admin is currently using to talk to the API.
@@ -49,7 +57,8 @@ async function renderRefreshBootstrapCommand(
   hardening: HardeningInput | null | undefined,
   engines: readonly EngineName[],
 ): Promise<string> {
-  return buildInstallCommand({
+  // A-270: the agent of this panel's release, as on node create.
+  return panelInstallCommand({
     panelUrl,
     token,
     nodeAddress,
@@ -139,6 +148,52 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName });
       }
       throw err;
+    }
+  });
+
+  // A-124: renew the node's mTLS server certificate now, the cron's work done
+  // on request. 200 { fingerprint, notAfter }. 404 unknown node; 409
+  // UPDATE_AGENT (the agent has no rotation), PENDING (an earlier one waits
+  // for its confirm); 502 for a node that refused the pair, did not confirm,
+  // or did not answer: the node keeps or goes back to its old pair.
+  app.post('/api/nodes/:id/cert/rotate', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    try {
+      return reply.send(await rotateNodeCert(params.id));
+    } catch (err) {
+      if (err instanceof NodeCertRotationError) {
+        const status = err.code === 'NODE_NOT_FOUND' ? 404 : err.code === 'UPDATE_AGENT' || err.code === 'PENDING' ? 409 : 502;
+        return reply.code(status).send({ error: `CERT_${err.code}`, message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // A-265: the connection lines an older agent left in the node's journal and
+  // syslog. GET 200 ConnLogTraceResponse, POST .../clear 200
+  // ConnLogClearResponse (a step that failed is in its results, not a code).
+  // 404 unknown node; 409 UPDATE_AGENT, the agent has no /connLog; 502
+  // CONN_LOG_NODE_FAILED when the node did not answer or refused.
+  const connLogRefusal = (err: unknown, reply: FastifyReply) => {
+    if (!(err instanceof NodeConnLogError)) throw err;
+    if (err.code === 'NODE_NOT_FOUND') return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+    if (err.code === 'UPDATE_AGENT') return reply.code(409).send({ error: 'UPDATE_AGENT', message: err.message });
+    return reply.code(502).send({ error: 'CONN_LOG_NODE_FAILED', message: err.message });
+  };
+  app.get('/api/nodes/:id/conn-log', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    try {
+      return reply.send(await readNodeConnLog(params.id));
+    } catch (err) {
+      return connLogRefusal(err, reply);
+    }
+  });
+  app.post('/api/nodes/:id/conn-log/clear', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    try {
+      return reply.send(await clearNodeConnLog(params.id, request.admin?.id ?? null));
+    } catch (err) {
+      return connLogRefusal(err, reply);
     }
   });
 
@@ -307,6 +362,27 @@ export async function nodesRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+  });
+
+  // A-232: which rules of the node's policy the push leaves out here, and why.
+  // 200 { policyId, drawing, notDrawn: [{ ruleId, reason }], agent: { drawing,
+  // notDrawn: [{ exit, direction, ruleIds }], renderedAt, observedAt } | null };
+  // notDrawn empty
+  // when every rule goes out, policyId null when the node has none. By the
+  // drawing the panel SENDS; an agent whose chain was refused may draw another
+  // and rename or drop a cascade rule there (its journal says so).
+  app.get('/api/nodes/:id/policy-drawing', auth, async (request, reply) => {
+    const params = NodeIdParamSchema.parse(request.params);
+    const node = await prisma.node.findFirst({ where: { id: params.id, deletedAt: null }, select: { policyId: true } });
+    if (!node) return reply.code(404).send({ error: 'NOT_FOUND' });
+    const drawing = await cascadeXrayDrawingForNode(params.id);
+    // A-277: `ungated` = rule ids into a cascade drawn for every user, because
+    // this entry cannot tell its users apart (hysteria, AmneziaWG).
+    const { notDrawn, ungated } = await explainPolicyForNode(params.id, drawing);
+    // Beside it, what the node's xray says it did with the last render it
+    // accepted; null from an agent that does not report it.
+    const agent = await agentPolicyReportForNode(params.id);
+    return reply.send({ policyId: node.policyId, drawing, notDrawn, ungated, agent });
   });
 
   // Did the last save reach this machine? The node card draws "saved, not

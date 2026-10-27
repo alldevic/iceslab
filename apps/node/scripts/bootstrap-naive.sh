@@ -77,7 +77,18 @@ verify_caddy() {
     fail "forward_proxy module not present in the built Caddy; the build was misconfigured"
   fi
 }
-GO_VERSION=${GO_VERSION:-1.23.4}
+# The same Go the node installer puts on, pinned with go.dev's sha256 (see
+# install-iceslab-node.sh, step 3; bootstrap_checks_test.go holds both to
+# apps/node/go.mod). Another version comes only with its sum.
+GO_PINNED_VERSION=1.27.3
+declare -A GO_PINNED_SHA256=(
+  [amd64]=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+  [arm64]=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+)
+if [[ -n "${GO_VERSION:-}" && -z "${GO_SHA256:-}" ]] || [[ -z "${GO_VERSION:-}" && -n "${GO_SHA256:-}" ]]; then
+  fail "GO_VERSION and GO_SHA256 go together: a Go without its checksum is not installed"
+fi
+GO_VERSION=${GO_VERSION:-$GO_PINNED_VERSION}
 
 # ───── 1. Distro check ─────
 if [[ ! -r /etc/os-release ]]; then
@@ -102,8 +113,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 NEED_GO=true
 if command -v go >/dev/null; then
   CUR=$(go version | awk '{print $3}' | sed 's/^go//')
-  if [[ "$(printf '%s\n' "1.22" "$CUR" | sort -V | head -1)" == "1.22" ]]; then
-    log "Go $CUR already meets >= 1.22"
+  if [[ "$(printf '%s\n' "$GO_VERSION" "$CUR" | sort -V | head -1)" == "$GO_VERSION" ]]; then
+    log "Go $CUR already meets >= $GO_VERSION"
     NEED_GO=false
   fi
 fi
@@ -115,20 +126,39 @@ if $NEED_GO; then
     arm64) GO_ARCH=arm64 ;;
     *) fail "Unsupported arch: $ARCH" ;;
   esac
+  GO_WANT_SHA=${GO_SHA256:-${GO_PINNED_SHA256[$GO_ARCH]}}
   TARBALL="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
   TMPDL=$(mktemp -d)
   curl -fsSL "https://go.dev/dl/${TARBALL}" -o "${TMPDL}/${TARBALL}"
+  GO_GOT_SHA=$(sha256sum "${TMPDL}/${TARBALL}" | awk '{print $1}')
+  if [[ "$GO_GOT_SHA" != "$GO_WANT_SHA" ]]; then
+    rm -rf "$TMPDL"
+    fail "Go ${GO_VERSION} archive checksum mismatch: got ${GO_GOT_SHA}, expected ${GO_WANT_SHA}"
+  fi
   rm -rf /usr/local/go
   tar -C /usr/local -xzf "${TMPDL}/${TARBALL}"
   rm -rf "$TMPDL"
 fi
 export PATH=/usr/local/go/bin:$PATH
 
-# ───── 4. xcaddy ─────
-if ! command -v xcaddy >/dev/null; then
-  log "Installing xcaddy"
-  GOBIN=/usr/local/bin go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-fi
+# ───── 4. xcaddy, Caddy and the naive fork, pinned as a set ─────
+#
+# A-216, 22.10: the fork's naive branch moved (e747854e7874, "Do not break
+# authenticated stream after read_body_idle") onto a Caddy API that no Caddy
+# release has yet (caddyhttp.IdleTimeoutsFromContext), and every fresh naive
+# node failed to build against the latest Caddy that xcaddy took. Nothing here
+# floats any more: the three below build together, checked on 22.10 (Go
+# 1.27.3: forward_proxy linked, the agent's admin-socket live test passes on
+# the result). CI builds the same set for that test (ci.yml, node-agent job);
+# bootstrap_checks_test.go holds the two to each other and to exact versions.
+# Moving one means moving the set, with a build behind it.
+XCADDY_VERSION=v0.4.7
+CADDY_VERSION=v2.11.7
+FORWARDPROXY_VERSION=v0.0.0-20261006113151-c096d6a00cb2
+
+# Always the pinned xcaddy, whatever an earlier run left on PATH.
+log "Installing xcaddy ${XCADDY_VERSION}"
+GOBIN=/usr/local/bin go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
 log "xcaddy: $(xcaddy version 2>&1 | head -1 || echo present)"
 
 # ───── 5. Build caddy + forwardproxy@naive ─────
@@ -142,12 +172,12 @@ log "xcaddy: $(xcaddy version 2>&1 | head -1 || echo present)"
 # on a second xcaddy build, when the module cache resolved a different
 # inner version than the first attempt and exposed the missing suffix.
 #
-# We reference the `@naive` BRANCH (not a v2.x tag) because klzgrad's repo
-# doesn't follow the Go-modules /v2 path convention: Go semver rejects
-# tags >= v2.0 unless the module path ends in /v2. A branch reference
-# resolves to a pseudo-version that bypasses semver strict mode, which is
-# what the NaiveProxy ArchWiki and klzgrad/forwardproxy README document.
-log "Building Caddy + klzgrad/forwardproxy@naive plugin -> $CADDY_NAIVE_BIN"
+# The fork is named by a commit pseudo-version (FORWARDPROXY_VERSION), not a
+# v2.x tag: klzgrad's repo doesn't follow the Go-modules /v2 path convention,
+# and Go semver rejects tags >= v2.0 unless the module path ends in /v2. The
+# README's `@naive` branch resolves to the same kind of pseudo-version, but to
+# whatever the branch holds that day, which is how A-216 broke the build.
+log "Building Caddy ${CADDY_VERSION} + klzgrad/forwardproxy ${FORWARDPROXY_VERSION} -> $CADDY_NAIVE_BIN"
 
 # Clear stale module cache from prior failed builds; otherwise `go build`
 # can keep resolving to a half-baked older entry.
@@ -159,8 +189,10 @@ trap 'rm -rf "$WORKDIR"' EXIT
 # a build that fails the check never replaces a caddy-naive that works.
 BUILT="$WORKDIR/caddy-naive"
 pushd "$WORKDIR" > /dev/null
-xcaddy build \
-  --with 'github.com/caddyserver/forwardproxy@caddy2=github.com/klzgrad/forwardproxy@naive' \
+# xcaddy splits these shell-style, so the quotes keep -s -w one -ldflags.
+XCADDY_GO_BUILD_FLAGS="-trimpath -ldflags='-s -w'" \
+  xcaddy build "$CADDY_VERSION" \
+  --with "github.com/caddyserver/forwardproxy@caddy2=github.com/klzgrad/forwardproxy@${FORWARDPROXY_VERSION}" \
   --output "$BUILT"
 popd > /dev/null
 

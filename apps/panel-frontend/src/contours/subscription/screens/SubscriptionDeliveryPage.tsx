@@ -5,8 +5,12 @@ import { Box, Stack, Text, Textarea, TextInput, UnstyledButton } from '@mantine/
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SettingsTabs } from '@/contours/subscription/components/SettingsTabs';
+import { probeVerdict } from '@/contours/subscription/lib/probeVerdict';
+import { activeCountOf, previewView } from '@/contours/subscription/lib/deliveryView';
 import { formatLabel } from '@/lib/domain/formats';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import {
   getSettings,
   getSubscriptionPreviewUrl,
@@ -142,6 +146,10 @@ export function SubscriptionDeliveryPage() {
   });
 
   if (!draft) {
+    // Settings did not arrive: the error and a retry, not «loading» forever (A-141).
+    if (loadView(settingsQuery) === 'failed') {
+      return <LoadFailed message={apiErrorMessage(settingsQuery.error)} onRetry={() => void settingsQuery.refetch()} />;
+    }
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>
@@ -153,7 +161,9 @@ export function SubscriptionDeliveryPage() {
 
   const patch = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
   const s = settingsQuery.data;
-  const activeCount = s?.subscriptionActiveCount ?? 0;
+  // A-233: null is «the server did not say», not «nobody».
+  const activeCount = activeCountOf(s);
+  const preview = previewView(previewQuery);
 
   return (
     <Stack gap={20}>
@@ -363,7 +373,12 @@ export function SubscriptionDeliveryPage() {
             {/* Число выдано ДО сохранения, а не после: каждый из этих людей
                 держит ссылку на старом хосте, и никакой редирект их не спасёт,
                 потому что старое имя может вообще перестать резолвиться в нас. */}
-            {hostChanged && activeCount > 0 && (
+            {hostChanged && activeCount === null && (
+              <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '17px', color: AMBER }}>
+                {t('deliverySetup.activeCountUnknown')}
+              </Text>
+            )}
+            {hostChanged && activeCount !== null && activeCount > 0 && (
               <Box
                 style={{
                   display: 'flex',
@@ -437,12 +452,18 @@ export function SubscriptionDeliveryPage() {
                 border: `1px solid ${HAIRLINE}`,
               }}
             >
-              {previewQuery.data?.url ? (
+              {preview === 'ready' && previewQuery.data ? (
                 <iframe
                   key={previewQuery.data.url}
                   src={previewQuery.data.url}
                   title={t('deliverySetup.previewTitle')}
                   style={{ width: '100%', height: '100%', border: 0 }}
+                />
+              ) : preview === 'failed' ? (
+                // A-233: the link did not come, said with a retry.
+                <LoadFailed
+                  message={previewQuery.isError ? apiErrorMessage(previewQuery.error) : t('deliverySetup.previewNoUrl')}
+                  onRetry={() => void previewQuery.refetch()}
                 />
               ) : (
                 <Box style={{ padding: 20 }}>
@@ -658,15 +679,14 @@ function ShapeChoice({
 }
 
 /**
- * Что ответил адрес.
- *
- * `ok` это «панель достучалась», а не «всё хорошо»: 404 по токену, которого ни
- * у кого нет, это ожидаемый ответ и он зелёный. Красное тут только тогда, когда
- * до адреса не дошли вовсе.
+ * Что ответил адрес (A-137, probeVerdict): зелёное только когда ответил сам
+ * маршрут подписки; ответ не того (HTML панели, страница прокси) красный со
+ * словами сервера, так же как адрес, до которого не дошли.
  */
 function ProbeResult({ r }: { r: import('@/lib/domain/settings').SubscriptionProbe }) {
   const { t } = useTranslation();
-  const tone = r.ok ? MOSS : RED;
+  const verdict = probeVerdict(r);
+  const tone = verdict === 'ok' ? MOSS : RED;
 
   return (
     <Stack
@@ -681,7 +701,13 @@ function ProbeResult({ r }: { r: import('@/lib/domain/settings').SubscriptionPro
       <Box style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <Box style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: tone, flexShrink: 0 }} />
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, fontWeight: 600, color: tone }}>
-          {r.ok ? t('deliverySetup.probeOk') : t('deliverySetup.probeBad')}
+          {t(
+            verdict === 'ok'
+              ? 'deliverySetup.probeOk'
+              : verdict === 'notRoute'
+                ? 'deliverySetup.probeNotRoute'
+                : 'deliverySetup.probeBad',
+          )}
         </Text>
         <Box style={{ flex: 1 }} />
         <Text style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>

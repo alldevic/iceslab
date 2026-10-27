@@ -9,14 +9,17 @@ import { apiErrorMessage } from '@/lib/net/client';
 import {
   DEFAULT_LINK_UNDERLAY,
   deleteCascade,
+  cascadeDeleteRefusal,
   cascadeShapeError,
   getCascadeStatus,
   listCascades,
+  nodeInOtherCascadeRefusal,
+  nodeInOtherCascadeWords,
   updateCascadeV4,
   type Cascade,
   type CascadeProtocol,
 } from '@/lib/domain/cascades';
-import { listNodes, type Node } from '@/lib/domain/nodes';
+import { listAllNodes, type Node } from '@/lib/domain/nodes';
 import {
   directionOutbounds,
   listNamedOutbounds,
@@ -32,8 +35,13 @@ import { isRealisedLinkCell } from '@/lib/domain/engines';
 import { SyncRefusalStrip } from '@/ui/SyncRefusalStrip';
 import { ChainStatusLine } from '@/ui/ChainStatusLine';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
-import { cascadeStatusView, hopBroken } from '@/contours/cascades/lib/cascadeStatus';
+import { cascadeStatusView, hopBroken } from '@/lib/domain/cascadeStatus';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
+import { cascadeClaims } from '@/lib/domain/cascadeMembership';
+import { editGate, loadFailure, loadView } from '@/lib/ui/loadView';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
+import { confirmCascadeDelete } from '@/ui/confirmCascadeDelete';
+import { useEntryAwg31 } from '@/contours/cascades/lib/useEntryAwg31';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
@@ -115,6 +123,10 @@ import {
   statusTone,
   toDirectionInputs,
   toPositionInputs,
+  movePosition,
+  removePosition,
+  appendPosition,
+  refusedPositionMoved,
   withEntryConfirm,
   withUnderlay,
   isOneLegCascade,
@@ -159,7 +171,7 @@ export function CascadeEditPage() {
   // There is no single-cascade endpoint; the list is short and already cached
   // by the page the operator came from.
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const overviewQuery = useOverview();
   const cascade = cascadesQuery.data?.cascades.find((c) => c.id === id) ?? null;
   // Какие поля сервер рендерит, говорит `fields` конверта; по стоящим каскадам
@@ -182,14 +194,8 @@ export function CascadeEditPage() {
 
   // Every other cascade that already claims a node. This one is excluded: its
   // own nodes are not a clash.
-  const claimedBy = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of cascadesQuery.data?.cascades ?? []) {
-      if (c.id === id) continue;
-      for (const h of c.hops) m.set(h.nodeId, c.name);
-    }
-    return m;
-  }, [cascadesQuery.data, id]);
+  // v4 positions and directions included (cascadeClaims, A-139).
+  const claimedBy = useMemo(() => cascadeClaims(cascadesQuery.data?.cascades ?? [], id), [cascadesQuery.data, id]);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
@@ -234,6 +240,8 @@ export function CascadeEditPage() {
     draft?.pools[0]?.nodeIds ?? [],
     nodeById,
   );
+  // E58: AWG 3.1 на нодах входа, для строки подписки. Тоже до раннего выхода.
+  const entryAwg31 = useEntryAwg31(draft?.pools[0]?.entryProtocol, draft?.pools[0]?.nodeIds ?? []);
 
   // Seed once per cascade, and only once the node list is in: a direction is
   // named after a country, which is a fact about the node under it. Re-seeding
@@ -432,10 +440,23 @@ export function CascadeEditPage() {
         qc.invalidateQueries({ queryKey: ['route-policies'] });
         return;
       }
+      // Позиция переехала без настроек ноги (8072de8): словами, на экране.
+      const moved = refusedPositionMoved(err);
+      if (moved) {
+        setSaveRefusal(t('cascadeEdit.positionMoved', moved));
+        return;
+      }
       // The form blocks both unstorable shapes, so a 400 means the API saw
       // something this page did not. Its sentence is the useful one, and it
       // stays ON SCREEN rather than in a toast: the server names the place
       // («direction "DE"»), and it is read next to the rows it is about.
+      // A-101: a member change put a node of this enabled cascade into another
+      // enabled one. On screen, beside the rows, in the panel's words.
+      const taken = nodeInOtherCascadeRefusal(err);
+      if (taken) {
+        setSaveRefusal(nodeInOtherCascadeWords(taken, t));
+        return;
+      }
       const shape = cascadeShapeError(err);
       if (shape) {
         setSaveRefusal(shape);
@@ -457,15 +478,38 @@ export function CascadeEditPage() {
       notifications.show({ color: 'green', message: t('cascades.deleted') });
       navigate('/nodes');
     },
-    onError: (err) =>
-      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) }),
+    // Same reading as the list (cascadeDeleteRefusal): already gone is what the
+    // operator asked for, so the page leaves; another refusal the server
+    // explained stays on screen in its words, beside the form.
+    onError: (err) => {
+      const refusal = cascadeDeleteRefusal(err);
+      if (refusal?.kind === 'gone') {
+        qc.invalidateQueries({ queryKey: ['cascades'] });
+        qc.invalidateQueries({ queryKey: ['nodes'] });
+        notifications.show({ message: t('cascades.alreadyDeleted') });
+        navigate('/nodes');
+        return;
+      }
+      if (refusal) {
+        setSaveRefusal(`${t('cascades.deleteRefused')} ${refusal.message}`);
+        return;
+      }
+      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
+    },
   });
 
+  // «No such cascade» only when the list arrived without it (A-141): a failed
+  // node list used to read as the cascade being gone.
+  const gate = editGate(cascadesQuery, cascade !== null, [nodesQuery]);
+  if (gate.kind === 'failed') {
+    const q = gate.index === 0 ? cascadesQuery : nodesQuery;
+    return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
   if (!cascade || !draft) {
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>
-          {cascadesQuery.isLoading ? t('common.loading') : t('cascadeEdit.gone')}
+          {gate.kind === 'gone' ? t('cascadeEdit.gone') : t('common.loading')}
         </Text>
       </Box>
     );
@@ -530,12 +574,9 @@ export function CascadeEditPage() {
     );
   }
 
+  // A-140: позиция, сменившая номер, шлёт свою ногу явно (movePosition).
   function movePool(idx: number, dir: -1 | 1) {
-    const j = idx + dir;
-    if (j < 0 || j >= pools.length) return;
-    const next = [...pools];
-    [next[idx], next[j]] = [next[j]!, next[idx]!];
-    patch({ pools: next });
+    patch({ pools: movePosition(pools, idx, dir) });
   }
 
   function moveDirection(idx: number, dir: -1 | 1) {
@@ -629,13 +670,7 @@ export function CascadeEditPage() {
                 : null;
 
   function confirmDelete() {
-    modals.openConfirmModal({
-      title: t('cascadeEdit.deleteTitle', { name: cascade!.name }),
-      children: <Text size="sm">{t('cascadeEdit.deleteBody', { count: cascade!.hops.length })}</Text>,
-      labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
-      confirmProps: { color: 'red' },
-      onConfirm: () => deleteMutation.mutate(),
-    });
+    confirmCascadeDelete(cascade!, t, () => deleteMutation.mutate());
   }
 
   const directionNames = directions
@@ -823,6 +858,7 @@ export function CascadeEditPage() {
                 role={poolRoleAt(i)}
                 poolLabel={i === 0 ? t('cascadeCreate.poolEntry') : t('cascadeCreate.poolTransit')}
                 nodeIds={pool.nodeIds}
+                linkCell={pool.linkProtocol}
                 nodes={nodes}
                 claimedBy={claimedBy}
                 usedElsewhere={othersThan(pool.nodeIds)}
@@ -836,7 +872,7 @@ export function CascadeEditPage() {
                 canDelete={i > 0}
                 onUp={() => movePool(i, -1)}
                 onDown={() => movePool(i, 1)}
-                onDelete={() => patch({ pools: pools.filter((_, j) => j !== i) })}
+                onDelete={() => patch({ pools: removePosition(pools, i) })}
               >
                 {/* Отказ сервера по входным нодам: sing-box на них нет. Факт
                     сервера по отчёту ноды, поэтому показывается только после
@@ -848,6 +884,7 @@ export function CascadeEditPage() {
                     place={entryPolicyPlace(pool.entryProtocol, draft.entryPolicyId !== undefined)}
                     value={draft.entryPolicyId ?? null}
                     policies={policiesQuery.data?.policies ?? []}
+                    loadFailed={loadFailure(policiesQuery, apiErrorMessage)}
                     gone={entryPolicyGone}
                     onChange={(v) => {
                       setEntryPolicyGone(false);
@@ -855,7 +892,7 @@ export function CascadeEditPage() {
                     }}
                   />
                 )}
-                {i === 0 && <EntryBystandersNote items={bystanders} />}
+                {i === 0 && <EntryBystandersNote items={bystanders.items} failure={bystanders.failure} />}
                 {i === 0 &&
                   entryChainNotes(
                     entryChainGaps(entryIds.map((id) => nodeById.get(id))),
@@ -890,7 +927,8 @@ export function CascadeEditPage() {
                   const tone = f.state === 'down' ? RED : MIST;
                   return (
                     <Note key={`chain-${n.id}`} tone={tone} icon={<WarnIcon size={13} color={tone} />}>
-                      {f.state === 'unknown'
+                      {/* Нода недоступна (E57): старый отчёт не факт, серым как «нет данных». */}
+                      {f.state === 'unknown' || f.state === 'stale'
                         ? t('chain.noteNoData', { name: n.name })
                         : f.error
                           ? t('chain.noteDown', { name: n.name, reason: f.error })
@@ -1023,6 +1061,7 @@ export function CascadeEditPage() {
                             }),
                           outboundId: dir.outboundId ?? null,
                           options: outboundOptions,
+                          loadFailed: loadFailure(outboundsQuery, apiErrorMessage),
                           onOutbound: (o) =>
                             setDirection(i, {
                               outboundId: o?.id ?? null,
@@ -1116,14 +1155,7 @@ export function CascadeEditPage() {
               label={t('cascadeCreate.addPosition')}
               note={t('cascadeCreate.positionsLeft', { n: MAX_POSITIONS - positionCount })}
               disabled={positionCount >= MAX_POSITIONS}
-              onClick={() =>
-                patch({
-                  pools: [
-                    ...pools,
-                    { key: nextFreeKey(pools), nodeIds: [''], entryProtocol: 'xray', linkProtocol: 'xray' },
-                  ],
-                })
-              }
+              onClick={() => patch({ pools: appendPosition(pools, nextFreeKey(pools)) })}
             />
           </Stack>
         </Box>
@@ -1240,7 +1272,7 @@ export function CascadeEditPage() {
                   width: '100%',
                 }}
               >
-                {subscriptionRows(draft, nodeById, t).map((row, i) => (
+                {subscriptionRows(draft, nodeById, t, entryAwg31.awg31, entryAwg31.failure !== null).map((row, i) => (
                   <Box
                     key={row.label + i}
                     style={{
@@ -1271,7 +1303,9 @@ export function CascadeEditPage() {
                         minWidth: 0,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                        // Строка без пометки справа (вход AWG) переносится
+                        // целиком, а не режется многоточием.
+                        whiteSpace: row.note ? 'nowrap' : 'normal',
                       }}
                     >
                       {row.label}
@@ -1285,7 +1319,13 @@ export function CascadeEditPage() {
             )}
 
             <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>
-              {directions.length > 1 ? t('cascadeEdit.subHintMany') : t('cascadeEdit.subHintOne')}
+              {/* E58: у входа AmneziaWG записей по направлениям нет, и подпись
+                  про них ввела бы в заблуждение. */}
+              {pools[0]?.entryProtocol === 'amneziawg'
+                ? t('cascadeEdit.subHintAwg')
+                : directions.length > 1
+                  ? t('cascadeEdit.subHintMany')
+                  : t('cascadeEdit.subHintOne')}
             </Text>
           </Stack>
 
@@ -1347,6 +1387,15 @@ export function CascadeEditPage() {
               </Text>
             )}
 
+            {/* The status did not arrive: said as that, not «loading» forever
+                (cascadeStatusView reads no data as loading, which is only true
+                while the request is out). */}
+            {loadView(statusQuery) === 'failed' ? (
+              <LoadFailedLine
+                message={apiErrorMessage(statusQuery.error)}
+                onRetry={() => void statusQuery.refetch()}
+              />
+            ) : (
             <Text
               style={{
                 fontFamily: DISPLAY,
@@ -1363,6 +1412,7 @@ export function CascadeEditPage() {
                     ? t('cascadeEdit.brokenShort')
                     : t('cascadeEdit.pushPending', { names: pushView.waiting.join(', ') })}
             </Text>
+            )}
 
             {(statusQuery.data?.hops ?? []).map((hop) => {
               // Три разные вещи про один хоп, и ни одна не выводится из
@@ -1650,8 +1700,25 @@ function subscriptionRows(
   d: Draft,
   byId: Map<string, Node>,
   t: (k: string, o?: Record<string, unknown>) => string,
+  entryAwg31: boolean | undefined,
+  awg31Unknown: boolean,
 ): { label: string; note: string; tone: string }[] {
   const rows: { label: string; note: string; tone: string }[] = [];
+  // E58: вход AmneziaWG направлений в подписку не отдаёт: клиент ходит одним
+  // туннелем через Авто и политику входа. Направления перечисляются только у
+  // входа xray и hysteria.
+  if (d.pools[0]?.entryProtocol === 'amneziawg') {
+    // Без правой пометки: в узкой колонке она съедала бы саму строку. Кроме
+    // случая, когда поколение не прочитано (A-172 п.4): тогда строка говорит
+    // это, а не притворяется «не 3.1».
+    rows.push({
+      label: `${t('cascadeEdit.subAwg')}${entryAwg31 ? ' · 3.1' : ''}`,
+      note: awg31Unknown ? t('common.loadFailed') : '',
+      tone: awg31Unknown ? AMBER : MOSS,
+    });
+    if (!d.hideHops) pushDirect(d, byId, t, rows);
+    return rows;
+  }
   // Same two conditions the panel enforces when it builds the subscription: the
   // switch is on, and there are at least two directions to choose between.
   // Направление на выходе (фаза 10) обслуживается так же, как с пулом.
@@ -1674,13 +1741,20 @@ function subscriptionRows(
     });
   });
   // Off means the direction nodes keep their own direct entries alongside.
-  if (!d.hideHops) {
-    for (const nid of d.directions.flatMap((x) => (directionVia(x) === 'pool' ? x.nodeIds.filter(Boolean) : []))) {
-      const name = byId.get(nid)?.name;
-      if (name) rows.push({ label: name, note: t('cascadeEdit.subDirect'), tone: DIM });
-    }
-  }
+  if (!d.hideHops) pushDirect(d, byId, t, rows);
   return rows;
+}
+
+function pushDirect(
+  d: Draft,
+  byId: Map<string, Node>,
+  t: (k: string, o?: Record<string, unknown>) => string,
+  rows: { label: string; note: string; tone: string }[],
+): void {
+  for (const nid of d.directions.flatMap((x) => (directionVia(x) === 'pool' ? x.nodeIds.filter(Boolean) : []))) {
+    const name = byId.get(nid)?.name;
+    if (name) rows.push({ label: name, note: t('cascadeEdit.subDirect'), tone: DIM });
+  }
 }
 
 /* ───── Formatting ──────────────────────────────────────────────────────── */

@@ -55,7 +55,7 @@ export interface ListParams {
   trafficLimit?: 'limited' | 'unlimited';
   usedOver?: number;
   usedUnder?: number;
-  deviceLimit?: 'set' | 'unset';
+  deviceLimit?: 'set' | 'unlimited' | 'unset';
   telegram?: 'linked' | 'none';
   email?: 'set' | 'none';
   revoked?: 'yes' | 'no';
@@ -156,7 +156,7 @@ export async function create(
 /** `before` as in `create`: run first, in the same transaction. */
 export async function updateById(
   id: string,
-  data: Prisma.UserUpdateInput,
+  data: Prisma.UserUncheckedUpdateInput,
   before?: (tx: Prisma.TransactionClient) => Promise<void>,
 ): Promise<UserWithTraffic> {
   if (!before) {
@@ -273,10 +273,14 @@ export async function list(params: ListParams): Promise<{
     );
   }
   if (params.deviceLimit) {
+    // A-148: 0 is an explicit no-limit, not "a limit is set"; it was, and an
+    // operator looking for who is capped got the uncapped ones too.
     and.push(
       params.deviceLimit === 'set'
-        ? { hwidDeviceLimit: { not: null } }
-        : { hwidDeviceLimit: null },
+        ? { hwidDeviceLimit: { gte: 1 } }
+        : params.deviceLimit === 'unlimited'
+          ? { hwidDeviceLimit: 0 }
+          : { hwidDeviceLimit: null },
     );
   }
   if (params.telegram) {
@@ -300,7 +304,12 @@ export async function list(params: ListParams): Promise<{
     prisma.user.findMany({
       where,
       include: USER_INCLUDE,
-      orderBy: orderClause(params.sort ?? 'username', params.order ?? 'asc'),
+      // A-166: `id` as the second key. Every sort but the name leaves ties
+      // (30 000 imported users, half on 0 traffic and no expiry), Postgres
+      // orders equal keys as it likes and may do it differently per query, so
+      // skip/take repeated one user on two pages and showed another on none,
+      // and "select the page and extend" acted on that.
+      orderBy: [orderClause(params.sort ?? 'username', params.order ?? 'asc'), { id: 'asc' }],
       skip: (params.page - 1) * params.limit,
       take: params.limit,
     }),

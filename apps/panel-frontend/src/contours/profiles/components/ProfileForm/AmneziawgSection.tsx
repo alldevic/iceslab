@@ -16,7 +16,7 @@ import { IconKey } from '@tabler/icons-react';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
 import { randomAwgHeaders } from '@/contours/profiles/lib/awgPresets';
-import { useGenerateImpact } from '@/contours/profiles/lib/generateImpact';
+import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
 import type { UseFormReturnType } from '@mantine/form';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 import { AWG_PROTOCOLS, awgLabel, type AwgProtocol } from '@/lib/domain/awg';
@@ -44,7 +44,8 @@ export function AmneziawgSection({
   awgRefusal: CoreGateRefusal | null;
 }) {
   const { t } = useTranslation();
-  const impact = useGenerateImpact(profileId);
+  // The warning reads the cached count; the press asks the server again (A-225).
+  const { impact, checking, press } = useGenerateGate(profileId);
   return (
             <Stack>
               {/* Поколение, которое профиль раздаёт: выбор профиля, а не ноды
@@ -128,7 +129,9 @@ export function AmneziawgSection({
                     leftSection={<IconKey size={14} />}
                     variant="light"
                     loading={keypairPending}
-                    onClick={() => confirmGenerate(impact, t, () => void generateAwgKeys())}
+                    // The cost has to be known (or known to be unknown) first: A-225.
+                    disabled={impact.kind === 'loading' || checking}
+                    onClick={() => press((fresh) => confirmGenerate(fresh, t, () => void generateAwgKeys()))}
                     type="button"
                   >
                     {t('profiles.form.cfg.generate')}
@@ -144,7 +147,7 @@ export function AmneziawgSection({
               </Group>
               {/* A profile nobody has deployed yet cannot break anything, so
                   the warning appears only once there is a fleet behind it. */}
-              {isEdit && (impact.hosts > 0 || impact.nodes > 0) && (
+              {isEdit && showGenerateWarning(impact) && (
                 <GenerateWarning impact={impact} />
               )}
               <Group justify="space-between" align="center" wrap="nowrap" gap="md">

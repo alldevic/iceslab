@@ -11,6 +11,9 @@ import { GEO_BUILTIN } from '@iceslab/shared';
 import { ingestGeoFile } from './geo-sets.store.js';
 import { geoSetsQueue } from './geo-sets.queue.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
+import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
+import { chainRuleSetFileName } from './geo-refs.js';
 
 /**
  * Phase 9.1v: /api/geo-sets as geo-contract.md section 5 draws it. The push
@@ -36,6 +39,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await geoSetsQueue.close();
+  await inboundSyncQueue.close();
   await prisma.$disconnect();
   await closeRedis();
 });
@@ -359,4 +363,57 @@ describe('rollout: the plan, then the pins', () => {
     const plan = (await call('GET', `/api/geo-sets/${id}/rollout-plan`)).body;
     expect(plan.nodes.map((n: { name: string }) => n.name)).toEqual(['ru-01']);
   });
+
+  it('a cascade exit is to hold the rule-set its chain reads from its node policy: the plan sends it, the rollout pushes it, the list counts it behind', async () => {
+    registerInboundEventHandlersOnce();
+    // The push's own queue is not reached: the revision moves before it.
+    vi.spyOn(inboundSyncQueue, 'add').mockResolvedValue({} as never);
+    const id = await verifiedSet();
+    const p = await policy('no-ads', ['ext:mylist:ads']);
+    const exit = await node('se-01', { policyId: p });
+    const entry = await node('ru-01');
+    const c = await prisma.cascade.create({ data: { name: 'on', enabled: true, mode: 'chain' }, select: { id: true } });
+    await prisma.cascadePosition.create({ data: { cascadeId: c.id, position: 0, entryProtocol: 'xray', nodes: { create: [{ nodeId: entry }] } } });
+    await prisma.cascadeDirection.create({ data: { cascadeId: c.id, tag: 1, nodes: { create: [{ nodeId: exit }] } } });
+
+    // Pinned at current and holding the .dat, but not the chain's rule-set.
+    const { current } = (await call('GET', `/api/geo-sets/${id}`)).body;
+    await prisma.nodeGeoPin.create({ data: { nodeId: exit, geoSetId: id, versionId: (await prisma.geoSet.findUniqueOrThrow({ where: { id } })).currentVersionId! } });
+    await prisma.node.update({
+      where: { id: exit },
+      data: {
+        geo: {
+          version: 'x',
+          files: [{ name: 'iceslab-mylist.dat', sha256: current.sha256, size: current.sizeBytes }],
+          observedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const plan = (await call('GET', `/api/geo-sets/${id}/rollout-plan`)).body;
+    expect(plan.nodes).toEqual([
+      expect.objectContaining({ name: 'se-01', from: current.version, filesToSend: [chainRuleSetFileName('mylist', 'ads')], restartsXray: false }),
+    ]);
+    expect((await call('GET', `/api/geo-sets/${id}`)).body.nodes).toEqual({ total: 1, behind: 1 });
+
+    const before = (await prisma.node.findUniqueOrThrow({ where: { id: exit } })).desiredRevision;
+    expect((await call('POST', `/api/geo-sets/${id}/rollout`, { version: plan.version })).body).toEqual({ nodes: 1 });
+    await vi.waitFor(async () =>
+      expect((await prisma.node.findUniqueOrThrow({ where: { id: exit } })).desiredRevision).toBe(before + 1n),
+    );
+
+    // The same node out of the cascade reads no chain: the .dat is all it holds.
+    await prisma.cascade.update({ where: { id: c.id }, data: { enabled: false } });
+    expect((await call('GET', `/api/geo-sets/${id}/rollout-plan`)).body.nodes).toEqual([
+      expect.objectContaining({ name: 'se-01', filesToSend: [] }),
+    ]);
+    expect((await call('GET', `/api/geo-sets/${id}`)).body.nodes).toEqual({ total: 1, behind: 0 });
+  });
 });
+
+let handlersOn = false;
+function registerInboundEventHandlersOnce(): void {
+  if (handlersOn) return;
+  handlersOn = true;
+  registerInboundEventHandlers();
+}

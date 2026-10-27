@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { PermissiveUuid } from '../../lib/util/uuid-schema.js';
+import { BOTH_PRESETS_MESSAGE, bothPresetsGiven } from '../routing-presets/routing-presets.assign.js';
 
 const NameSchema = z
   .string()
@@ -10,6 +11,10 @@ const NameSchema = z
 
 // R3-a - optional per-squad routing-preset override (null = inherit panel default).
 const RoutingPresetField = z.enum(ROUTING_PRESET_IDS).nullish();
+// A-229 - or the operator's own preset, by id. Never together with the
+// built-in key: both values in one request are refused, a value on one side
+// clears the other on write.
+const CustomRoutingPresetField = z.uuid().nullish();
 
 // A4 increment 2 - per-cascade exit allow-list. Each entry names a cascade and
 // the exit nodes this squad grants for it. Three states per cascade:
@@ -18,10 +23,21 @@ const RoutingPresetField = z.enum(ROUTING_PRESET_IDS).nullish();
 //   - exitNodeIds: []   -> the cascade is OFF for this squad, no line of it is
 //                          built. Stored (GroupCascadeOff); until 2026-09-24 an
 //                          empty list was dropped and read as "absent".
-const ExitAclEntry = z.object({
-  cascadeId: z.uuid(),
-  exitNodeIds: z.array(z.uuid()),
-});
+//
+// A-149: keyed by DIRECTION. `directionIds` is the list; `exitNodeIds` is
+// still accepted for the screen that has not moved yet and is mapped on the
+// server to the directions whose pool holds those nodes (a legacy hop cascade,
+// which has no directions, keeps node rows). When both come, directionIds
+// wins. Off is the given list empty.
+const ExitAclEntry = z
+  .object({
+    cascadeId: z.uuid(),
+    directionIds: z.array(z.uuid()).optional(),
+    exitNodeIds: z.array(z.uuid()).optional(),
+  })
+  .refine((e) => e.directionIds !== undefined || e.exitNodeIds !== undefined, {
+    message: 'exitAcl entry needs directionIds (or exitNodeIds)',
+  });
 
 // One entry per cascade. Two entries for one cascade would have to be merged by
 // a rule nobody asked for ([] and [x]: off or restricted?), so they are refused.
@@ -34,6 +50,7 @@ export const CreateSquadSchema = z.object({
   name: NameSchema,
   description: z.string().max(1000).nullish(),
   routingPreset: RoutingPresetField,
+  customRoutingPresetId: CustomRoutingPresetField,
   // K7 - per-squad HWID device-limit default (null = none).
   hwidDeviceLimit: z.number().int().positive().nullish(),
   /** Slice 27: squad ACL is now profile-level. Initial profile assignment;
@@ -47,13 +64,14 @@ export const CreateSquadSchema = z.object({
   /** A4 ad-split: extra route-policies this squad grants its members. Empty =
    *  only the plain profile. */
   policyIds: z.array(z.uuid()).default([]),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type CreateSquadInput = z.infer<typeof CreateSquadSchema>;
 
 export const UpdateSquadSchema = z.object({
   name: NameSchema.optional(),
   description: z.string().max(1000).nullish(),
   routingPreset: RoutingPresetField,
+  customRoutingPresetId: CustomRoutingPresetField,
   hwidDeviceLimit: z.number().int().positive().nullish(),
   /** When provided, replaces the full profile set (set semantics). */
   profileIds: z.array(z.uuid()).optional(),
@@ -65,7 +83,7 @@ export const UpdateSquadSchema = z.object({
   exitAcl: ExitAcl.optional(),
   /** When provided, replaces the full route-policy grant set (set semantics). */
   policyIds: z.array(z.uuid()).optional(),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type UpdateSquadInput = z.infer<typeof UpdateSquadSchema>;
 
 // PermissiveUuid: SquadIdParamSchema accepts the seeded "All" squad

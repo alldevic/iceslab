@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { apiErrorMessage } from '@/lib/net/client';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { useMutation } from '@tanstack/react-query';
@@ -23,6 +24,7 @@ import { ENGINE_CHOICE_PROTOCOLS } from '@/contours/profiles/lib/profileKinds';
 import { isPlainSubprotocol, plainXrayConfig } from '@/contours/profiles/lib/plainSubprotocol';
 import { saveThen } from '@/contours/profiles/lib/saveThen';
 import { profileAwgCreate, profileAwgPatch } from '@/lib/domain/awg';
+import { ssConfigPatch } from '@/contours/profiles/lib/ssServerKey';
 
 /**
  * Everything the profile form owns that is not markup: the Mantine form, the
@@ -82,8 +84,9 @@ export function useProfileForm({
     onError: (err) =>
       notifications.show({
         color: 'red',
-        title: 'Generate failed',
-        message: err instanceof Error ? err.message : String(err),
+        title: t('common.error'),
+        // The server's words, not axios's (A-227).
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -252,6 +255,7 @@ export function useProfileForm({
         };
         break;
       case 'shadowsocks':
+        // The real payload is ssConfigPatch below; this is only the create shape.
         config = { method: values.ssMethod };
         break;
       case 'mtproto':
@@ -286,13 +290,19 @@ export function useProfileForm({
 
     // Поколение AWG (227054e): в PUT только при смене, в POST только 3.
     const isAwg = values.protocol === 'amneziawg';
+    // Shadowsocks: an edit that keeps the cipher sends no config, so the
+    // server key it cannot show is not erased (A-028).
+    const configPart =
+      values.protocol === 'shadowsocks'
+        ? ssConfigPatch(profile?.config, isEdit, values.ssMethod)
+        : { config };
     const input: CreateProfileInput | UpdateProfileInput = isEdit
       ? {
           name: values.name,
           description: values.description.trim() || null,
           enabled: values.enabled,
           engine,
-          config: config as never,
+          ...(configPart as { config?: never }),
           ...(isAwg ? profileAwgPatch(profile.awgProtocol, values.awgGeneration) : {}),
         }
       : {

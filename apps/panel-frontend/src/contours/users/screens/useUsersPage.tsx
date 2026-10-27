@@ -1,6 +1,9 @@
-﻿import { useDebouncedValue } from '@mantine/hooks';
+import { apiErrorMessage } from '@/lib/net/client';
+import { deleteRetentionText } from '@/contours/users/lib/retentionWords';
+import { useDebouncedValue } from '@mantine/hooks';
 import { Text } from '@mantine/core';
 import type { StatusFilter } from '@/contours/users/lib/userStatus';
+import { saveToastNeeded } from '@/contours/users/lib/userSaveRefusal';
 import type { UpdateUserInput, User, UserFilters, UserSort } from '@/lib/domain/users';
 import type { ColumnPin, ColumnView, UserColumnId } from '@/contours/users/lib/usersTable';
 import type { RowDensity } from '@/contours/users/lib/usersTable';
@@ -14,6 +17,7 @@ import { useDisclosure } from '@mantine/hooks';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOverview } from '@/lib/domain/dashboard';
+import { loadFailure } from '@/lib/ui/loadView';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { useTranslation } from 'react-i18next';
 
@@ -214,11 +218,9 @@ export function useUsersPage() {
     staleTime: 5 * 60 * 1000,
   });
   const knownTags = tagsQuery.data?.tags ?? [];
-  // Wave-14 #16: subscriptionUrl(token) without a second arg falls back to
-  // API_BASE_URL, which defaults to http://localhost:3000, so a prod SPA
-  // built without VITE_API_BASE_URL silently copies a localhost link to the
-  // operator's clipboard. Hence the panel host from /auth/status, which is
-  // where the row's copy-link action and the drawer both read it from.
+  // The subscription address comes from /auth/status only (A-207): a link
+  // built on the API base copied a localhost host on a prod build (Wave-14
+  // #16). The row's copy-link action and the drawer both read it from here.
   const authStatusQuery = useQuery({
     queryKey: ['auth', 'status'],
     queryFn: fetchAuthStatus,
@@ -234,27 +236,41 @@ export function useUsersPage() {
     return m;
   }, [squadsQuery.data]);
 
-  const pagedUsers = usersQuery.data?.users ?? [];
+  // The page did not arrive (spec frontend-users): said with a retry, not as
+  // «nobody yet» or «nothing matched». A failure under a placeholder counts
+  // too: the rows on screen would be the previous filter's.
+  const usersFailure =
+    usersQuery.isError && (usersQuery.data === undefined || usersQuery.isPlaceholderData)
+      ? { message: apiErrorMessage(usersQuery.error), onRetry: () => void usersQuery.refetch() }
+      : null;
+  const pagedUsers = usersFailure ? [] : (usersQuery.data?.users ?? []);
   const totalUsers = usersQuery.data?.total ?? 0;
+  // Side lists the toolbar and the rows read; a failed one is said once.
+  const sideFailure =
+    [squadsQuery, tagsQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null;
 
+  // Counts come from the dashboard; without it they are unknown, not zero
+  // (spec frontend-users). `total` falls back to the list's own total.
   const stats = useMemo(() => {
-    const byStatus = dashQuery.data?.users.byStatus ?? {};
+    const users = dashQuery.data?.users;
+    const byStatus = users?.byStatus;
     return {
-      total: dashQuery.data?.users.total ?? totalUsers,
-      active: byStatus.active ?? 0,
-      expired: byStatus.expired ?? 0,
-      limited: byStatus.limited ?? 0,
-      disabled: byStatus.disabled ?? 0,
+      total: users?.total ?? (usersQuery.data ? totalUsers : null),
+      active: byStatus ? (byStatus.active ?? 0) : null,
+      expired: byStatus ? (byStatus.expired ?? 0) : null,
+      limited: byStatus ? (byStatus.limited ?? 0) : null,
+      disabled: byStatus ? (byStatus.disabled ?? 0) : null,
     };
-  }, [dashQuery.data, totalUsers]);
+  }, [dashQuery.data, usersQuery.data, totalUsers]);
 
   // Topbar line: "/ USERS · 36 ACCOUNTS · 21 ACTIVE". `count` drives i18next
   // pluralization (one/few/many/other for RU), otherwise a single user reads
   // as "1 аккаунтов".
-  usePageMeta([
-    t('pageMeta.users', { count: stats.total }),
-    t('pageMeta.usersActive', { count: stats.active }),
-  ]);
+  usePageMeta(
+    stats.total === null || stats.active === null
+      ? [t('pageMeta.noData')]
+      : [t('pageMeta.users', { count: stats.total }), t('pageMeta.usersActive', { count: stats.active })],
+  );
 
   /**
    * Сменился любой серверный фильтр: возвращаемся на первую страницу, иначе
@@ -297,12 +313,11 @@ export function useUsersPage() {
       qc.invalidateQueries({ queryKey: ['users'] });
       notifications.show({ color: 'green', message: t('users.notify.created') });
     },
-    onError: (err) =>
-      notifications.show({
-        color: 'red',
-        title: t('common.createError'),
-        message: err instanceof Error ? err.message : String(err),
-      }),
+    // A refusal the drawer puts at a field is said there only (saveToastNeeded).
+    onError: (err) => {
+      if (!saveToastNeeded(err)) return;
+      notifications.show({ color: 'red', title: t('common.createError'), message: apiErrorMessage(err) });
+    },
   });
 
   const updateMutation = useMutation({
@@ -311,12 +326,10 @@ export function useUsersPage() {
       qc.invalidateQueries({ queryKey: ['users'] });
       notifications.show({ color: 'green', message: t('users.notify.updated') });
     },
-    onError: (err) =>
-      notifications.show({
-        color: 'red',
-        title: t('common.saveError'),
-        message: err instanceof Error ? err.message : String(err),
-      }),
+    onError: (err) => {
+      if (!saveToastNeeded(err)) return;
+      notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -329,7 +342,7 @@ export function useUsersPage() {
       notifications.show({
         color: 'red',
         title: t('common.deleteError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -342,7 +355,7 @@ export function useUsersPage() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -355,7 +368,7 @@ export function useUsersPage() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -368,7 +381,7 @@ export function useUsersPage() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -405,7 +418,7 @@ export function useUsersPage() {
       title: t('users.deleteTitle', { name: user.username }),
       children: (
         <Text size="sm">
-          {t('users.deleteBody')}
+          {t('users.deleteBody')} {deleteRetentionText(t)}
         </Text>
       ),
       labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
@@ -439,6 +452,8 @@ export function useUsersPage() {
     serverStatus,
     serverSearch,
     usersQuery,
+    usersFailure,
+    sideFailure,
     squadsQuery,
     tagsQuery,
     knownTags,

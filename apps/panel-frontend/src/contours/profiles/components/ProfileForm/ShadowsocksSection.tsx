@@ -2,13 +2,19 @@ import { useTranslation } from 'react-i18next';
 import { Alert, Select, Stack, Text } from '@mantine/core';
 import type { UseFormReturnType } from '@mantine/form';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
+import { ssKeyState } from '@/contours/profiles/lib/ssServerKey';
 
 export function ShadowsocksSection({
   form,
+  isEdit,
+  storedConfig,
 }: {
   form: UseFormReturnType<FormValues>;
+  isEdit: boolean;
+  storedConfig: unknown;
 }) {
   const { t } = useTranslation();
+  const keyState = ssKeyState(storedConfig, isEdit, form.values.ssMethod);
   return (
             <Stack>
               <Select
@@ -24,6 +30,11 @@ export function ShadowsocksSection({
                 allowDeselect={false}
                 {...form.getInputProps('ssMethod')}
               />
+              {/* The key itself is never shown: it is the server's secret, and
+                  the form only has to say whether the save keeps it. */}
+              <Text size="sm" c={keyState === 'set' || keyState === 'server' ? 'dimmed' : 'yellow'}>
+                {t(`profiles.form.cfg.ssKey.${keyState}`)}
+              </Text>
               <Alert color="blue" variant="light">
                 <Text size="sm">
                   {t('profiles.form.cfg.ssNote')}

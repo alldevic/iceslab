@@ -7,12 +7,14 @@ import { DEFAULT_FORMAT_NAMES, ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
 import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/infra/redis.js';
+import { headerSafeUrl } from '../../lib/util/header-url.js';
 import { config, subscriptionOrigin } from '../../config.js';
 import { buildSubscriptionPage } from '../subscription/subscription.page.js';
 import {
   getSubscriptionSettings,
   invalidateSubscriptionSettingsCache,
 } from './settings.service.js';
+import { readCapped, subscriptionProbeAnswered } from './settings.probe.js';
 
 /**
  * When the certificate on that address runs out, or null when there is none
@@ -94,7 +96,23 @@ const UpsertInput = z.object({
   brandName: z.string().min(1).max(64).optional(),
   subscriptionProfileTitle: z.string().min(1).max(128).nullable().optional(),
   subscriptionUpdateIntervalHours: z.number().int().min(1).max(168).optional(),
-  subscriptionSupportUrl: z.string().url().max(255).nullable().optional(),
+  // A-168: stored in the form a header carries (punycode host, percent-
+  // encoded path and query), so the value the operator sees back is the one
+  // clients get. The 255 cap is checked on that form.
+  subscriptionSupportUrl: z
+    .string()
+    .url()
+    .transform((v, ctx) => {
+      const safe = headerSafeUrl(v);
+      if (!safe) {
+        ctx.addIssue({ code: 'custom', message: 'not a URL an HTTP header can carry' });
+        return z.NEVER;
+      }
+      return safe;
+    })
+    .pipe(z.string().max(255))
+    .nullable()
+    .optional(),
   subscriptionAnnounceTemplate: z.string().max(512).nullable().optional(),
   subscriptionRoutingPreset: z.enum(ROUTING_PRESET_IDS).optional(),
   // Entry pool cap. 0 = hand out every node the subscriber is entitled to,
@@ -283,12 +301,22 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
           headersTimeout: 5000,
           bodyTimeout: 5000,
         });
-        // Drain, or undici keeps the socket and the next probe queues behind it.
-        await res.body.dump();
+        const body = await readCapped(res.body, 4096);
+        const contentType = String(res.headers['content-type'] ?? '');
+        // Only the subscription route's own answer for a token nobody owns
+        // (A-137, 22.10). It was anything under 500, and with a prefix the
+        // frontend's nginx did not route, the SPA's index.html came back with
+        // 200 and the probe was green while every subscriber got HTML.
+        const ok = subscriptionProbeAnswered(res.statusCode, contentType, body);
         return reply.send({
-          // Anything the app answers means the address is ours and reachable.
-          // 404 is the expected one for a token nobody owns.
-          ok: res.statusCode < 500,
+          ok,
+          ...(ok
+            ? {}
+            : {
+                error:
+                  `the address answered ${res.statusCode} (${contentType || 'no content type'}), ` +
+                  'not the subscription route: the request did not reach the panel backend at this prefix',
+              }),
           status: res.statusCode,
           ms: Date.now() - started,
           tlsExpiresAt: await peerCertificateExpiry(url),

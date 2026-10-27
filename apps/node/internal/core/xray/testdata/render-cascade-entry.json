@@ -2,7 +2,8 @@
   "api": {
     "services": [
       "StatsService",
-      "HandlerService"
+      "HandlerService",
+      "RoutingService"
     ],
     "tag": "api"
   },
@@ -53,7 +54,7 @@
         },
         "security": "reality"
       },
-      "tag": "vless-in-cascade-"
+      "tag": "vless-in-cascade-entry"
     },
     {
       "listen": "127.0.0.1",
@@ -66,6 +67,8 @@
     }
   ],
   "log": {
+    "access": "none",
+    "dnsLog": false,
     "loglevel": "warning"
   },
   "observatory": {

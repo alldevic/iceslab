@@ -87,6 +87,37 @@ model Node {
   // Written in the failure branch, cleared in the success branch beside the
   // stamp above, so the pair reads as one state and never as two half-truths.
   lastInboundSyncError  Json?     @map("last_inbound_sync_error")
+  // A-162 (principle P1): the node's config as a REVISION, not as a time.
+  //
+  // desiredRevision grows by one on every event that asks for a push, in the
+  // same place the push is queued (enqueueNodePush). The push job reads it
+  // at the START of building the request and, once the agent answered ok,
+  // writes it to appliedRevision. Applied is appliedRevision >= desiredRevision.
+  //
+  // This replaced a Redis "dirty" flag and a millisecond comparison of
+  // lastInboundSyncAt with four updatedAt maxima. The flag lost an edit made
+  // during a push of the same node (the re-queue ran inside the job, BullMQ
+  // dropped it as a duplicate jobId, and the flag was already eaten), and the
+  // comparison then called the lost edit applied. A revision read at the start
+  // cannot be claimed by an answer to an older request.
+  desiredRevision       BigInt    @default(0) @map("desired_revision")
+  appliedRevision       BigInt    @default(0) @map("applied_revision")
+  // When desiredRevision last grew: what the node card shows as "changed at".
+  configChangedAt       DateTime? @map("config_changed_at") @db.Timestamptz(6)
+  // A-124: notAfter of the node's mTLS server certificate, as its /healthz
+  // reports it (null: an agent older than the field, or never polled). The
+  // renewal cron reads it to hand the node a new pair ahead of expiry.
+  certNotAfter          DateTime? @map("cert_not_after") @db.Timestamptz(6)
+  // A-221: certNotAfter was read off the leaf the node presented on a
+  // handshake, because its agent does not report it: an agent older than
+  // rotation, which cannot be renewed in place and has to be updated first.
+  certFromHandshake     Boolean   @default(false) @map("cert_from_handshake")
+  // A-232: what the node's xray did with the node policy in the last render it
+  // accepted, as /healthz reports it: { drawing, notDrawn: [{ exit, direction }],
+  // renderedAt (the node's clock), observedAt (the panel's, at the poll) }.
+  // Null until an agent that reports it is polled; a poll without the field
+  // keeps what is stored (chainStatus's rule).
+  policyDrawn           Json?     @map("policy_drawn")
   // What the agent reported about this node's CHAIN process (phase 4).
   //
   // Shape (ChainStatus in packages/shared): { running, version?, error? }.
@@ -112,7 +143,9 @@ model Node {
   // NodeGeoFact in shared. NULL = the node has not said (an agent older than
   // geo, or not polled yet).
   geo                   Json?
-  consumptionMultiplier BigInt    @default(1) @map("consumption_multiplier")
+  // A-143: whole tenths, 10 = 1.0, 0 = a free node, up to 1000 = 100.0
+  // (CHECK in the migration). The API speaks the multiplier itself.
+  consumptionMultiplierTenths Int @default(10) @map("consumption_multiplier_tenths")
 
   // Slice 27.5: region grouping + capacity hint. Both NULL by default
   // so existing nodes need no backfill; UI shows them under "Без региона"
@@ -200,6 +233,8 @@ model Node {
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // A-122: when what goes into a client's link last changed (not any write to the row, as updatedAt is); the host card's "who holds the old link" reads it.
+  linkChangedAt DateTime @default(now()) @map("link_changed_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   inbounds          Inbound[]
@@ -315,13 +350,19 @@ model NodeUsageHistory {
 /// bytes (the snapshot is advanced in the same transaction as the increments).
 /// No FK relations on purpose: rows for removed nodes/users are harmless and
 /// pruned separately, and it keeps the hot stats-poll write off relation joins.
+///
+/// A-163: one row per ADAPTER of the user on the node, (protocol, engine) as
+/// the agent dispatches. '' / '' is the summed snapshot of an agent that does
+/// not name its engine. See the migration 20261022171022 for the transition.
 model NodeUserTrafficSnapshot {
   nodeId    String   @map("node_id") @db.Uuid
   userId    String   @map("user_id") @db.Uuid
+  protocol  String   @default("") @db.VarChar(32)
+  engine    String   @default("") @db.VarChar(32)
   cumIn     BigInt   @default(0) @map("cum_in")
   cumOut    BigInt   @default(0) @map("cum_out")
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  @@id([nodeId, userId])
+  @@id([nodeId, userId, protocol, engine])
   @@map("node_user_traffic_snapshot")
 }

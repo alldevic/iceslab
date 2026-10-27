@@ -1,9 +1,11 @@
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import { withQuery } from '../subscription.protocols.js';
+import { pickServer } from '../endpoint-identity.js';
 
 /**
  * Outline dynamic access key (`?format=outline`): ONE Shadowsocks server.
  *
- * The page hands it out as `ssconf://<host>/sub/<token>?format=outline&node=<name>#<label>`.
+ * The page hands it out as `ssconf://<host>/sub/<token>?format=outline&node=<id>#<label>`.
  * The Outline app turns `ssconf://` into `https://`, keeps the query, takes the
  * fragment as the server's name (outline-apps
  * client/web/app/outline_server_repository/config.ts:117-127), fetches the
@@ -28,21 +30,26 @@ import type { SubscriptionEndpoint } from '../subscription.formats.js';
  */
 /**
  * The access key the page hands to Outline for one node:
- * `ssconf://<host>/sub/<token>?format=outline&node=<name>#<name>`.
+ * `ssconf://<host>/sub/<token>?format=outline&node=<id>#<label>`.
+ *
+ * `node` is the endpoint's id (endpointId), which no rename and no neighbour
+ * moves: Outline saves the key and fetches it on every connect, so a label in
+ * it broke the key the day a second profile went on the node (A-107). The
+ * label stays in the fragment, the name the app shows.
  *
  * Only from an https subscription address: the app fetches every ssconf:// key
  * over https (config.ts:124-126) and refuses an http:// one outright
  * (config.ts:133), so a panel served over plain http has no key to give.
  */
-export function outlineAccessKey(subUrl: string, nodeName: string): string | undefined {
+export function outlineAccessKey(subUrl: string, id: string, label: string): string | undefined {
   if (!subUrl.startsWith('https://')) return undefined;
-  const node = encodeURIComponent(nodeName);
-  return `ssconf://${subUrl.slice('https://'.length)}?format=outline&node=${node}#${node}`;
+  const node = encodeURIComponent(id);
+  return `ssconf://${withQuery(subUrl.slice('https://'.length), `format=outline&node=${node}`)}#${encodeURIComponent(label)}`;
 }
 
-export function buildOutlineJson(endpoints: SubscriptionEndpoint[], nodeName?: string): string {
+export function buildOutlineJson(endpoints: SubscriptionEndpoint[], node?: string): string {
   const ss = endpoints.filter((e) => e.protocol === 'shadowsocks');
-  const e = nodeName ? ss.find((x) => x.nodeName === nodeName) : ss[0];
+  const e = pickServer(ss, node);
   if (!e || e.protocol !== 'shadowsocks') return '';
   return (
     JSON.stringify({ server: e.host, server_port: e.port, method: e.method, password: e.password }, null, 2) + '\n'

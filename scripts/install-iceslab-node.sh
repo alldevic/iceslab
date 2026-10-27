@@ -64,8 +64,9 @@
 #     --panel-url https://panel.example.com \
 #     --bootstrap bs_xxx \
 #     --engines hysteria \
-#     --hysteria-domain hy2-01.example.com \
-#     --hysteria-email admin@example.com
+#     --hysteria-domain hy2-01.example.com
+#   # Optional: --hysteria-email you@your-domain   (the ACME account's
+#   #             contact; an example.* or localhost address is refused).
 #   # Optional: --hysteria-port-range 20000-50000   (port-hopping;
 #   #             defeats RU TSPU UDP/443 throttle. Pass "" to disable.)
 #   # --hysteria-masquerade-url / --hysteria-obfs-password are still accepted
@@ -496,9 +497,14 @@ do_uninstall() {
   log "Removing source checkout ($ICESLAB_NODE_DIR)"
   rm -rf "$ICESLAB_NODE_DIR"
 
-  if command -v ufw >/dev/null && ufw status | grep -q "${NODE_PORT}/tcp"; then
-    log "Removing UFW allow rule for ${NODE_PORT}/tcp"
-    ufw --force delete allow "${NODE_PORT}/tcp" >/dev/null || true
+  # The rules into a variable first, never `| grep -q` (E33): under pipefail
+  # grep leaving early can kill ufw with SIGPIPE and the rule is left behind.
+  if command -v ufw >/dev/null; then
+    ufw_rules=$(ufw status 2>/dev/null || true)
+    if grep -q "${NODE_PORT}/tcp" <<<"$ufw_rules"; then
+      log "Removing UFW allow rule for ${NODE_PORT}/tcp"
+      ufw --force delete allow "${NODE_PORT}/tcp" >/dev/null || true
+    fi
   fi
 }
 
@@ -722,6 +728,30 @@ resolve_engines() {
 
 has_engine() { [[ " ${ENGINES[*]} " == *" $1 "* ]]; }
 
+# check_hysteria_flags: --hysteria-domain and --hysteria-email before anything
+# is spent (the bootstrap token included). The e-mail is optional: the agent
+# asks for the certificate without one (A-276). One Let's Encrypt refuses is
+# refused here instead, where it still names the flag: an example domain or
+# localhost (invalidContact) failed the first push hours later, in the journal.
+check_hysteria_flags() {
+  if [[ -n "$HY_EMAIL" ]]; then
+    local domain="${HY_EMAIL##*@}"
+    domain="${domain,,}"
+    if [[ "$HY_EMAIL" != *@* || -z "$domain" || -z "${HY_EMAIL%@*}" ]]; then
+      fail "--hysteria-email '$HY_EMAIL' is not an e-mail address. Leave the flag out to get the certificate without one."
+    fi
+    case "$domain" in
+      example.com|example.net|example.org|localhost|*.localhost)
+        fail "--hysteria-email '$HY_EMAIL': Let's Encrypt refuses addresses at $domain. Give a real address or leave the flag out." ;;
+    esac
+    if [[ -z "$HY_DOMAIN" ]]; then
+      warn "--hysteria-email without --hysteria-domain does nothing: a node on an IP gets the panel's self-signed certificate."
+    fi
+  elif [[ -n "$HY_DOMAIN" ]]; then
+    log "Hysteria certificate for $HY_DOMAIN is requested without an e-mail (--hysteria-email adds one)."
+  fi
+}
+
 # core_flags_env: the install flags of each core in the set, into the env. By
 # the core, not by --protocol: --hysteria-domain acts on any node with
 # hysteria, a REALITY key on any node with xray.
@@ -814,7 +844,7 @@ install_engines() {
     warn "  and then for each missing core: sudo bash $dir/bootstrap-<core>.sh --restart-agent"
     warn "  (rebuilding the agent from that checkout by hand needs Go: this installer put it in /usr/local/go;"
     warn "  a node where 'go' is missing gets it back by rerunning this installer,"
-    warn "  or by unpacking go${GO_VERSION:-1.23.4} there and linking /usr/local/go/bin/go into /usr/local/bin)"
+    warn "  or by unpacking go${GO_VERSION:-${GO_PINNED_VERSION:-1.27.3}} there and linking /usr/local/go/bin/go into /usr/local/bin)"
     LEGACY_CHECKOUT=1
     if run_bootstrap "${ENGINES[0]}" "$dir"; then
       legacy_primary_env
@@ -940,6 +970,8 @@ if [[ $UNINSTALL -eq 1 ]]; then
   ok "Uninstall complete. Rerun install-iceslab-node.sh to set up a fresh agent."
   exit 0
 fi
+
+check_hysteria_flags
 
 # If both --panel-url and --bootstrap given, redeem the bootstrap token to
 # fetch the full payload from panel over HTTP. This is the recommended flow:
@@ -1156,24 +1188,47 @@ log "Installing apt prereqs"
 "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y git curl ca-certificates ufw unzip
 
 # ───── 3. Go ─────
+# The agent's toolchain, the same as `toolchain` in apps/node/go.mod and as
+# CI, release.yml and the agent's Dockerfile; bootstrap_checks_test.go holds
+# all of them to go.mod. A Go older than this would only download it again on
+# the first `go build` (GOTOOLCHAIN=auto), from proxy.golang.org, which a node
+# behind a filtered network may not reach; so the installer puts this one on.
+#
+# The archive is checked against the sha256 go.dev publishes for it (the
+# "sha256" of https://go.dev/dl/?mode=json&include=all). Another version
+# comes only with its sum: GO_VERSION and GO_SHA256 together, or neither.
+GO_PINNED_VERSION=1.27.3
+declare -A GO_PINNED_SHA256=(
+  [amd64]=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+  [arm64]=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+)
+if [[ -n "${GO_VERSION:-}" && -z "${GO_SHA256:-}" ]] || [[ -z "${GO_VERSION:-}" && -n "${GO_SHA256:-}" ]]; then
+  fail "GO_VERSION and GO_SHA256 go together: a Go without its checksum is not installed"
+fi
+GO_VERSION=${GO_VERSION:-$GO_PINNED_VERSION}
 NEED_GO=true
 if command -v go >/dev/null; then
   CUR=$(go version | awk '{print $3}' | sed 's/^go//')
-  if [[ "$(printf '%s\n' "1.22" "$CUR" | sort -V | head -1)" == "1.22" ]]; then
+  if [[ "$(printf '%s\n' "$GO_VERSION" "$CUR" | sort -V | head -1)" == "$GO_VERSION" ]]; then
     NEED_GO=false
   fi
 fi
 if $NEED_GO; then
-  GO_VERSION=${GO_VERSION:-1.23.4}
   ARCH=$(dpkg --print-architecture)
   case "$ARCH" in
     amd64) GO_ARCH=amd64 ;;
     arm64) GO_ARCH=arm64 ;;
     *) fail "Unsupported arch: $ARCH" ;;
   esac
+  GO_WANT_SHA=${GO_SHA256:-${GO_PINNED_SHA256[$GO_ARCH]}}
   log "Installing Go $GO_VERSION"
   TMPDL=$(mktemp -d)
   curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o "${TMPDL}/go.tar.gz"
+  GO_GOT_SHA=$(sha256sum "${TMPDL}/go.tar.gz" | awk '{print $1}')
+  if [[ "$GO_GOT_SHA" != "$GO_WANT_SHA" ]]; then
+    rm -rf "$TMPDL"
+    fail "Go ${GO_VERSION} archive checksum mismatch: got ${GO_GOT_SHA}, expected ${GO_WANT_SHA}"
+  fi
   rm -rf /usr/local/go
   tar -C /usr/local -xzf "${TMPDL}/go.tar.gz"
   rm -rf "$TMPDL"
@@ -1216,9 +1271,21 @@ fi
 
 step "Build node-agent (Go, static)"
 cd "$ICESLAB_NODE_DIR/apps/node"
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/iceslab-node .
+# The version the agent reports (A-202): the release tag when the checkout is
+# one, else the short commit. Without -X it said "dev" on every node, and an
+# SSH update is this same rebuild. A shallow fetch of a tag by name leaves no
+# local tag for `git describe`, so a ref that is a release tag counts as well;
+# the shape check keeps anything else out of -ldflags.
+AGENT_VERSION=$(git -C "$ICESLAB_NODE_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)
+if [[ -z "$AGENT_VERSION" && "$ICESLAB_NODE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+  AGENT_VERSION=$ICESLAB_NODE_REF
+fi
+if [[ ! "$AGENT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+  AGENT_VERSION=$(git -C "$ICESLAB_NODE_DIR" rev-parse --short=7 HEAD 2>/dev/null || echo dev)
+fi
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${AGENT_VERSION}" -o /usr/local/bin/iceslab-node .
 chmod +x /usr/local/bin/iceslab-node
-ok "built /usr/local/bin/iceslab-node ($(stat -c %s /usr/local/bin/iceslab-node) bytes)"
+ok "built /usr/local/bin/iceslab-node ${AGENT_VERSION} ($(stat -c %s /usr/local/bin/iceslab-node) bytes)"
 
 # The core versions the panel chose for this node, as defaults for the
 # bootstrap scripts below; an explicit env pair still wins.
@@ -1249,6 +1316,14 @@ if [[ -n "$PAYLOAD" || ! -f "$ENV_FILE" ]]; then
       fail "First-time install needs --payload <base64-blob> from panel (no /dev/tty for interactive prompt)"
     fi
   fi
+  # A new payload is a new identity. The agent keeps its mTLS pair on disk
+  # (tls/: node.crt, node.key, their .prev, pending.json) and prefers it to
+  # NODE_PAYLOAD at start whenever it chains to the node's CA, so a pair left
+  # from an earlier install against the same panel would override the payload
+  # written here (A-124). --reset, the wipe prompt and --uninstall already
+  # remove all of /etc/iceslab-node; this covers the install that finds no env
+  # file and no binary but an old tls/ beside them.
+  rm -rf "$ENV_DIR/tls"
   log "Writing $ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 NODE_PAYLOAD=${PAYLOAD}

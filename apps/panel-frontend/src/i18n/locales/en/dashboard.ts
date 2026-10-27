@@ -1,6 +1,8 @@
 export const dashboard = {
   dashboard: {
     title: 'Home',
+    // A-242: the poll failed, the last answer is on screen.
+    staleSince: 'Not updated: last answer {{when}}.',
     subtitle: 'Panel summary - refreshed every 10 seconds',
     hero: {
       onlineNow: 'Online now',

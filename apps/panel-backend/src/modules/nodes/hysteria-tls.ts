@@ -6,6 +6,7 @@ import { X509Certificate, webcrypto } from 'node:crypto';
 import { isIP } from 'node:net';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { bustBindingsCache } from '../subscription/subscription.bindings-cache.js';
 import { readHysteriaTls, selfSignedHostFor, type StoredHysteriaTls } from './hysteria-tls-shape.js';
 
 export {
@@ -101,7 +102,15 @@ export async function ensureHysteriaTls(nodeId: string): Promise<StoredHysteriaT
   const stored = readHysteriaTls(node.hysteriaTls);
   if (stored && stored.host === host) return stored;
   const fresh = await mintHysteriaTls(host);
-  await prisma.node.update({ where: { id: nodeId }, data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue } });
+  // A-122: a new pin is in every hysteria link of the node. Minted only when
+  // none matched, so this write is always a real change.
+  await prisma.node.update({
+    where: { id: nodeId },
+    data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
+  });
+  // A-165: the subscription caches the node row; the next one must carry the
+  // new pin, not the old one for a minute.
+  bustBindingsCache();
   return fresh;
 }
 
@@ -115,7 +124,11 @@ export async function rotateHysteriaTls(nodeId: string): Promise<StoredHysteriaT
   const host = selfSignedHostFor(node?.address);
   if (!node || !host) return null;
   const fresh = await mintHysteriaTls(host);
-  await prisma.node.update({ where: { id: nodeId }, data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue } });
+  await prisma.node.update({
+    where: { id: nodeId },
+    data: { hysteriaTls: fresh as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
+  });
+  bustBindingsCache();
   return fresh;
 }
 

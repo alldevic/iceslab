@@ -37,6 +37,8 @@ import type { SyncRefusal } from '@/lib/domain/syncRefusal';
 import type { ChainFacts } from '@/lib/domain/chainStatus';
 import type { NodeGeoFacts } from '@/lib/domain/geoSets';
 import { ChainStatusLine } from '@/ui/ChainStatusLine';
+import type { CertAlarm } from '@/contours/nodes/lib/nodeCert';
+import { multiplierBadge } from '@/contours/nodes/lib/nodeLimits';
 import type { PolicyReachFacts } from '@/contours/nodes/lib/policyReach';
 import { nodeStatusText, statusRepeatsRefusal } from '@/lib/domain/nodeStatusText';
 import { AMBER, CARD, CYAN, DIM, FAINT, GROUND, HAIRLINE, MIST, MOSS, RED, SNOW, VIOLET } from '@/contours/nodes/lib/colors';
@@ -98,6 +100,11 @@ interface CardNode {
   /** Гео на этой машине против намерения. `null` = сервер поля не отдаёт,
    *  карточка молчит. См. `nodeGeoFacts`. */
   geo?: NodeGeoFacts;
+  /** Сертификат mTLS горит (certAlarm): только значок, без даты; дата и
+   *  кнопка на странице ноды. null = гореть нечему или сказать нечего. */
+  certAlarm?: CertAlarm | null;
+  /** Множитель потребления (A-143): значок, только когда он не 1. */
+  multiplier?: number | string;
 }
 
 interface Props {
@@ -240,6 +247,8 @@ export function NodeCard({
             </Stack>
           </Group>
           <Group gap={4} wrap="nowrap">
+            <MultiplierBadge stored={node.multiplier} />
+            {node.certAlarm && <CertAlarmBadge alarm={node.certAlarm} />}
             <Badge
               variant="light"
               size="sm"
@@ -353,7 +362,7 @@ export function NodeCard({
             />
             <MetricBar
               icon={<IconDeviceFloppy size={12} />}
-              label="Disk"
+              label={t('nodeCard.disk')}
               value={m.disk.usedPercent}
               tooltip={`${formatBytes(m.disk.usedBytes)} / ${formatBytes(m.disk.totalBytes)}`}
             />
@@ -413,7 +422,7 @@ export function NodeCard({
         )}
 
         <Group gap="sm" wrap="nowrap" pt={2} style={{ borderTop: `1px solid ${HAIRLINE}` }}>
-          <Tooltip label="Traffic today">
+          <Tooltip label={t('nodeCard.todayTip')}>
             <Group gap={4} wrap="nowrap">
               <IconDownload size={12} style={{ color: CYAN }} />
               <Text
@@ -424,14 +433,14 @@ export function NodeCard({
               </Text>
             </Group>
           </Tooltip>
-          <Tooltip label="Inbound bindings on this node">
+          <Tooltip label={t('nodeCard.bindingsTip')}>
             <Group gap={4} wrap="nowrap">
               <IconUpload size={12} style={{ color: VIOLET }} />
               <Text
                 size="xs"
                 style={{ color: SNOW, fontFamily: "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace" }}
               >
-                {node.inboundCount} bindings
+                {t('nodeCard.bindings', { count: node.inboundCount })}
               </Text>
             </Group>
           </Tooltip>
@@ -813,6 +822,66 @@ function PolicyBadge({ facts }: { facts: PolicyReachFacts }) {
           {t(`nodeCard.policyBadge.${facts.state}`)}
         </Text>
       </Box>
+    </Tooltip>
+  );
+}
+
+/** The mTLS certificate burns on this node (ARCH 23.10, A-221): red when it
+ *  ended, amber when it ends within 30 days or the agent cannot renew it. The
+ *  words are in the tooltip; the date and the button live on the node page. */
+function CertAlarmBadge({ alarm }: { alarm: CertAlarm }) {
+  const { t } = useTranslation();
+  const tone = alarm === 'expired' ? RED : AMBER;
+  return (
+    <Tooltip label={t(`nodeCard.cert.${alarm}Tip`)} withArrow multiline w={260}>
+      <Badge
+        variant="light"
+        size="sm"
+        leftSection={<IconKey size={10} />}
+        style={{
+          backgroundColor: `${tone}1A`,
+          color: tone,
+          border: `1px solid ${tone}33`,
+          textTransform: 'uppercase',
+          fontFamily: "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace",
+          letterSpacing: '0.08em',
+        }}
+      >
+        {t(`nodeCard.cert.${alarm}`)}
+      </Badge>
+    </Tooltip>
+  );
+}
+
+/** The consumption multiplier when it is not 1 (A-143): «free» at 0, «×0,5»
+ *  otherwise, with the language's decimal mark. Nothing at 1 or unknown. */
+function MultiplierBadge({ stored }: { stored: number | string | undefined }) {
+  const { t, i18n } = useTranslation();
+  const badge = multiplierBadge(stored);
+  if (!badge) return null;
+  const value = badge.kind === 'times' ? String(badge.value).replace('.', i18n.language.startsWith('ru') ? ',' : '.') : '';
+  const tone = badge.kind === 'free' ? MOSS : CYAN;
+  return (
+    <Tooltip
+      label={badge.kind === 'free' ? t('nodeCard.multiplierFreeTip') : t('nodeCard.multiplierTimesTip', { value })}
+      withArrow
+      multiline
+      w={260}
+    >
+      <Badge
+        variant="light"
+        size="sm"
+        style={{
+          backgroundColor: `${tone}1A`,
+          color: tone,
+          border: `1px solid ${tone}33`,
+          textTransform: badge.kind === 'free' ? 'uppercase' : 'none',
+          fontFamily: "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace",
+          letterSpacing: '0.08em',
+        }}
+      >
+        {badge.kind === 'free' ? t('nodeCard.multiplierFree') : t('nodeCard.multiplierTimes', { value })}
+      </Badge>
     </Tooltip>
   );
 }

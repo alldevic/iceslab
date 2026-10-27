@@ -3,13 +3,12 @@ import { Action } from '@/contours/traffic/components/RoutePolicy/Action';
 import { Chip } from '@/contours/traffic/components/RoutePolicy/Chip';
 import { IconAction } from '@/contours/traffic/components/RoutePolicy/IconAction';
 import { InfoIcon } from '@/contours/traffic/components/DevicePreset/icons';
-import { NEW_PRESET_ID } from '@/contours/traffic/lib/devicePresets';
 import { NoEntryIcon, TrashIcon } from '@/contours/traffic/components/RoutePolicy/icons';
 import { RulesList } from '@/contours/traffic/components/DevicePreset/RulesList';
 import { useDevicePresetForm } from '@/contours/traffic/components/DevicePreset/useDevicePresetForm';
 import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text, TextInput } from '@mantine/core';
-import { ROUTING_PRESET_WRITES_LIVE, type RoutingPreset } from '@/lib/domain/routePolicies';
+import type { RoutingPreset } from '@/lib/domain/routePolicies';
 
 /**
  * The "on the device" editor: the rules written into the client's own config.
@@ -19,8 +18,8 @@ import { ROUTING_PRESET_WRITES_LIVE, type RoutingPreset } from '@/lib/domain/rou
  * that is a node egress.
  *
  * Built-in presets are read-only because they are compiled into the
- * subscription builder rather than stored; an operator's own preset is a normal
- * editable row once the API can hold one. See `RoutingPreset` in lib/api.
+ * subscription builder rather than stored; an operator's own preset is a
+ * stored row, saved and deleted here (A-229).
  */
 
 export function DevicePresetEditor({
@@ -33,7 +32,7 @@ export function DevicePresetEditor({
   isDefault: boolean;
   /** Clean resolver the built-in split presets point local domains at. */
   dns?: string;
-  onSaved?: () => void;
+  onSaved?: (id?: string) => void;
 }) {
   const { t } = useTranslation();
   const {
@@ -48,9 +47,12 @@ export function DevicePresetEditor({
     confirmDelete,
     name,
     setName,
+    nameError,
+    unknownEntries,
     rules,
     dragging,
     setDragging,
+    isNew,
   } = useDevicePresetForm(preset, onSaved);
 
   return (
@@ -75,6 +77,7 @@ export function DevicePresetEditor({
             value={name}
             onChange={(e) => setName(e.currentTarget.value)}
             placeholder={t('routes.presetNamePlaceholder')}
+            error={nameError}
             style={{ width: 260, flexShrink: 0 }}
             styles={{
               input: {
@@ -112,25 +115,20 @@ export function DevicePresetEditor({
             {t('routes.presetNoDelete')}
           </Text>
         ) : (
-          preset.id !== NEW_PRESET_ID &&
-          ROUTING_PRESET_WRITES_LIVE && (
+          !isNew && (
             <IconAction title={t('common.delete')} onClick={confirmDelete}>
               <TrashIcon size={15} color={RED} />
             </IconAction>
           )
         )}
         {!locked && (
-          <Action
-            disabled={!ROUTING_PRESET_WRITES_LIVE || !dirty || saveMutation.isPending}
-            title={ROUTING_PRESET_WRITES_LIVE ? undefined : t('routes.writesDisabledPresets')}
-            onClick={() => saveMutation.mutate()}
-          >
+          <Action disabled={!dirty || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
             {t('common.save')}
           </Action>
         )}
       </Box>
 
-      <RulesList locked={locked} shadows={shadows} setRule={setRule} addRule={addRule} removeRule={removeRule} move={move} rules={rules} dragging={dragging} setDragging={setDragging} />
+      <RulesList locked={locked} shadows={shadows} setRule={setRule} addRule={addRule} removeRule={removeRule} move={move} rules={rules} dragging={dragging} setDragging={setDragging} unknownEntries={unknownEntries} />
 
       {/* The fallback. Always there, always the tunnel. */}
       <Box
@@ -222,7 +220,7 @@ export function DevicePresetEditor({
         <Text
           style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: locked ? FAINT : AMBER, flex: 1 }}
         >
-          {locked ? t('routes.presetReadOnly') : t('routes.presetWritesNotLive')}
+          {locked ? t('routes.presetReadOnly') : t('routes.presetOwnNote')}
         </Text>
       </Box>
     </Stack>

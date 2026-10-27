@@ -10,10 +10,12 @@
 //     server with the supplied password; we look it up in the map.
 //
 // Adding/removing users does NOT restart Hysteria, the state map is updated
-// live and the next auth callback uses the new state.
+// live and the next auth callback uses the new state; a removed user's open
+// sessions are kicked over the traffic stats API.
 package hysteria
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -84,6 +86,14 @@ type Config struct {
 	// Tests inject a fake to assert which commands fire without spawning anything.
 	RunCmd RunCmdFunc
 
+	// CmdOutput runs a command for its output (`systemctl show`, A-265).
+	// Defaults to os/exec; tests inject a fake.
+	CmdOutput CmdOutputFunc
+
+	// RuntimeUnitDir is where the log level drop-in of ServiceUnit goes
+	// (A-265). Default: RuntimeUnitDir, /run/systemd/system.
+	RuntimeUnitDir string
+
 	// TrafficStatsListen is the `host:port` where hysteria-server's traffic
 	// API listens (e.g. "127.0.0.1:9999"). When set, renderConfig emits a
 	// `trafficStats:` block in /etc/hysteria/config.yaml and GetStats polls
@@ -122,6 +132,9 @@ type Adapter struct {
 	mu      sync.RWMutex
 	users   map[string]userEntry // key: HysteriaPassword
 	inbound InboundConfig        // last applied panel config; zero value = none
+
+	// kickPending: removed users whose kick failed (RemoveUser), by user id.
+	kickPending map[string]bool
 
 	// The node-level hand-off to the chain, phase 6. nil = this node is not a
 	// hysteria entry of a cascade, and the config carries no outbounds at all,
@@ -166,6 +179,12 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 	}
 	if cfg.RunCmd == nil {
 		cfg.RunCmd = defaultRunCmd
+	}
+	if cfg.CmdOutput == nil {
+		cfg.CmdOutput = defaultCmdOutput
+	}
+	if cfg.RuntimeUnitDir == "" {
+		cfg.RuntimeUnitDir = RuntimeUnitDir
 	}
 	return &Adapter{
 		cfg:    cfg,
@@ -246,6 +265,29 @@ func (a *Adapter) Engine() string { return "hysteria" }
 //	ServiceUnit empty  → "spawn mode", agent owns the subprocess. Used
 //	                     in tests + setups that don't want systemd in
 //	                     the lifecycle loop.
+//
+// LogLevelEnv (A-265): no line of hysteria's journal may say who connected
+// from where. Read at app/v2.12.3:
+//   - info, its default (app/cmd/root.go:120): "client connected" and "client
+//     disconnected" with the client's address and the user's id
+//     (app/cmd/server.go:1805, :1809);
+//   - warn: "TCP error" and "UDP error" with the client's address, the user's
+//     id and, for TCP, where to (app/cmd/server.go:1820, :1832), one line per
+//     connection that ends badly (stand 26.10, aeza-de-01);
+//   - error: nothing of a client. What the server writes there is its own
+//     trouble (app/cmd/server.go:604 realm, :1529 reverse proxy, :1753
+//     shutdown, :1798 database download), plus the Fatal lines it dies on.
+//     A certificate that fails to come is there too: certmagic v0.25.4 (its
+//     go.mod) logs "could not get certificate from issuer" (config.go:687),
+//     "will retry" (async.go:131) and a failed renewal (maintain.go:73) at
+//     error, and acmez v3.1.6 "challenge failed" (client.go:570).
+//
+// Its config has no log key: only HYSTERIA_LOG_LEVEL (app/cmd/root.go:24) or
+// -l set it. The spawned process gets it here; the systemd unit from its
+// installer (bootstrap-hysteria.sh) on new nodes, and from the agent's runtime
+// drop-in where it carries another level or none (log_dropin.go).
+const LogLevelEnv = "HYSTERIA_LOG_LEVEL=error"
+
 func (a *Adapter) Start(ctx context.Context) error {
 	if err := validateTrafficStatsListen(a.cfg.TrafficStatsListen); err != nil {
 		return fmt.Errorf("invalid TrafficStatsListen: %w", err)
@@ -263,6 +305,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		a.logger.Info("hysteria managed by systemd, skipping in-process spawn",
 			"unit", a.cfg.ServiceUnit,
 		)
+		a.ensureUnitLogLevel(ctx)
 		return nil
 	}
 
@@ -270,6 +313,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		Name:           Name,
 		Binary:         a.cfg.BinaryPath,
 		Args:           []string{"server", "-c", a.cfg.ConfigPath},
+		Env:            []string{LogLevelEnv},
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
@@ -338,22 +382,106 @@ func (a *Adapter) AddUser(user core.User) error {
 		// User has no Hysteria credentials, nothing to do for this protocol.
 		return nil
 	}
+	// The map is keyed by password, so a reissued password was added beside
+	// the old one and the old one kept authenticating (22.10). The user's other
+	// passwords go, and the sessions opened with them are kicked, as on a
+	// removal; a kick still owed from a failed removal or rotation goes too.
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	held := a.kickPending[user.UserID]
+	for password, entry := range a.users {
+		if entry.UserID == user.UserID && password != user.HysteriaPassword {
+			delete(a.users, password)
+			held = true
+		}
+	}
 	a.users[user.HysteriaPassword] = userEntry{
 		UserID:   user.UserID,
 		Username: user.Username,
 	}
+	a.mu.Unlock()
+	if !held {
+		return nil
+	}
+	if err := a.kick(user.UserID); err != nil {
+		return fmt.Errorf("hysteria: kick the sessions of the user's old password: %w", err)
+	}
 	return nil
 }
 
+// RemoveUser forgets the user's password, so the auth callback refuses the
+// next connection, and kicks the sessions already open (A-120, 22.10).
+// hysteria asks the callback only when a client connects, and a QUIC session
+// of a router that never reconnects lived on for hours: a disabled, expired or
+// over-limit user kept going and kept counting. The kick goes through the
+// traffic stats API (POST /kick), after the password is gone, so the client's
+// reconnect is refused. A kick that fails fails the call and is remembered,
+// so the panel's retry kicks again although the password is already gone.
 func (a *Adapter) RemoveUser(userID string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	held := a.kickPending[userID]
 	for password, entry := range a.users {
 		if entry.UserID == userID {
 			delete(a.users, password)
+			held = true
 		}
+	}
+	a.mu.Unlock()
+	if !held {
+		return nil
+	}
+	if err := a.kick(userID); err != nil {
+		return fmt.Errorf("hysteria: kick the removed user's open sessions: %w", err)
+	}
+	return nil
+}
+
+// kick closes the user's open sessions when the traffic stats API is there
+// and hysteria serves; a failure is remembered in kickPending for the next
+// AddUser/RemoveUser of the user, a success clears it. Called without mu.
+func (a *Adapter) kick(userID string) error {
+	a.mu.RLock()
+	listen, secret, client := a.cfg.TrafficStatsListen, a.cfg.TrafficStatsSecret, a.cfg.HTTPClient
+	a.mu.RUnlock()
+	if listen == "" || secret == "" || !a.serving() {
+		return nil
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
+	err := kickUsers(client, listen, secret, []string{userID})
+	a.mu.Lock()
+	if err != nil {
+		if a.kickPending == nil {
+			a.kickPending = make(map[string]bool)
+		}
+		a.kickPending[userID] = true
+	} else {
+		delete(a.kickPending, userID)
+	}
+	a.mu.Unlock()
+	return err
+}
+
+// kickUsers closes the open sessions of these users (hysteria's traffic stats
+// API, POST /kick with a JSON list of the ids the auth callback returned).
+func kickUsers(client HTTPClient, listen, secret string, ids []string) error {
+	body, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/kick", listen), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", secret)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("traffic API /kick HTTP %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -409,11 +537,9 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 
 	counters, err := fetchTrafficStats(httpClient, statsListen, statsSecret)
 	if err != nil {
+		// NoData, not zeros (A-163): absent, the panel moves nothing.
 		a.logger.Warn("hysteria GetStats: traffic API fetch failed", "err", err)
-		for _, e := range users {
-			out = append(out, core.UserStats{UserID: e.UserID})
-		}
-		return &core.Stats{Users: out}, nil
+		return &core.Stats{NoData: true}, nil
 	}
 
 	for _, e := range users {
@@ -602,6 +728,20 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 		"bandwidth", newInbound.BrutalUpMbps > 0 || newInbound.BrutalDownMbps > 0,
 		"chain", a.chain != nil)
 	return a.restartLocked("ApplyInbound")
+}
+
+var _ core.ACMEUser = (*Adapter)(nil)
+
+// UsesACME implements core.ACMEUser (A-280): the config written for the
+// applied inbound takes its certificate over ACME, the `acme:` branch of
+// renderConfig (inbound.go:220, :229-236, :274-283): an inbound with no panel
+// pair. The self-signed pair (E30a) and nothing applied (or idled, which
+// clears the inbound) need no 80/tcp. Nothing is written without ConfigPath,
+// so nothing of ours runs then either.
+func (a *Adapter) UsesACME() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.ConfigPath != "" && a.inbound != (InboundConfig{}) && a.inbound.TLSCertPEM == ""
 }
 
 // ApplyCascade implements core.CascadeReceiver: the node-level hand-off to the

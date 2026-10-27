@@ -55,6 +55,8 @@
     }
   ],
   "log": {
+    "access": "none",
+    "dnsLog": false,
     "loglevel": "warning"
   },
   "outbounds": [

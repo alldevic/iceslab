@@ -39,6 +39,7 @@ describe('profileFormats', () => {
       format: 'surge',
       carried: false,
       why: 'client-lacks-protocol',
+      reason: 'door',
     });
     expect(byFormat(profileFormats('xray', cfg, 'tls')).surge!.carried).toBe(true);
   });
@@ -65,6 +66,36 @@ describe('profileFormats', () => {
     const f = byFormat(profileFormats('amneziawg', {}));
     expect(f.plain!.why).toBe('no-uri-standard');
     expect(f.wgconf!.carried).toBe(true);
+  });
+
+  it('A-231: one reason per format, the door first, then the transport', () => {
+    // trojan + REALITY + raw: Surge lacks the door's layer (no REALITY) and
+    // would carry raw; it says door, once.
+    const trojan = profileFormats('xray', { security: 'reality', subprotocol: 'trojan', network: 'raw' });
+    const surge = trojan.formats.filter((f) => f.format === 'surge');
+    expect(surge).toEqual([{ format: 'surge', carried: false, why: 'client-lacks-protocol', reason: 'door' }]);
+
+    // vless + REALITY + xhttp: sing-box carries vless and has no XHTTP.
+    const vless = byFormat(profileFormats('xray', { security: 'reality', subprotocol: 'vless', network: 'xhttp' }));
+    expect(vless.singbox).toEqual({ format: 'singbox', carried: false, why: 'client-lacks-transport', reason: 'transport' });
+    expect(vless.clash).toMatchObject({ carried: true, reason: null });
+    expect(vless.xrayjson).toMatchObject({ carried: true, reason: null });
+    expect(vless.plain).toMatchObject({ carried: true, reason: null });
+    // The panel's own dump carries everything.
+    expect(vless.json).toMatchObject({ carried: true, reason: null });
+
+    // vmess + kcp: the vmess link carries it, Clash does not.
+    const vmessKcp = byFormat(profileFormats('xray', { security: 'none', subprotocol: 'vmess', network: 'kcp' }));
+    expect(vmessKcp.plain).toMatchObject({ carried: true, reason: null });
+    expect(vmessKcp.clash).toMatchObject({ carried: false, reason: 'transport' });
+    // A door the table does not cover has no transport question.
+    expect(byFormat(profileFormats('hysteria', {})).clash).toMatchObject({ carried: true, reason: null });
+  });
+
+  it('A-230: a stored vmess + REALITY profile reads as none, so Quantumult X takes its WebSocket', () => {
+    const f = byFormat(profileFormats('xray', { security: 'reality', subprotocol: 'vmess', network: 'ws' }));
+    expect(f.quantumultx).toMatchObject({ carried: true, reason: null });
+    expect(f.surge).toMatchObject({ carried: true, reason: null });
   });
 
   it('works out the client security layer the way the subscription does', () => {

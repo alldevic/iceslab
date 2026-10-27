@@ -1,5 +1,5 @@
+import { DRY_RUN_WARNING_CODES, type DryRunWarningCode } from '@iceslab/shared';
 import {
-  FOREIGN_TEMPLATE_KEY,
   TEMPLATE_TYPES,
   type SubscriptionTemplate,
   type TemplateDryRun,
@@ -15,7 +15,7 @@ import {
  * «сервер ещё не умеет» выглядит как потерянные данные; ошибка вместо обоих
  * зовёт чинить исправное.
  */
-export type TemplatesScreenState = 'unavailable' | 'empty' | 'list';
+export type TemplatesScreenState = 'unavailable' | 'loading' | 'failed' | 'empty' | 'list';
 
 export interface TemplatesScreenFacts {
   state: TemplatesScreenState;
@@ -30,12 +30,14 @@ export function templatesScreenFacts(input: {
   templates?: SubscriptionTemplate[];
   /** Сервер ответил «такого маршрута нет», то есть фаза 11 не доехала. */
   notImplemented?: boolean;
+  /** Запрос упал не 404 (сеть, 5xx): сбой, а не «ещё не выпущено» (A-233 п.d). */
+  failed?: boolean;
 }): TemplatesScreenFacts {
   if (input.notImplemented) return { state: 'unavailable', groups: [], total: 0 };
   const list = input.templates;
-  // Ответа ещё нет: это не «пусто». Экран в этот момент показывает загрузку, и
-  // сказать «шаблонов нет» значило бы соврать на полсекунды каждому открытию.
-  if (!list) return { state: 'unavailable', groups: [], total: 0 };
+  // Ответа нет: это не «пусто» и не «сервер не умеет». Пока идёт, загрузка;
+  // упал не 404, сбой с повтором (A-236, из A-233 п.d).
+  if (!list) return { state: input.failed ? 'failed' : 'loading', groups: [], total: 0 };
   if (list.length === 0) return { state: 'empty', groups: [], total: 0 };
 
   const groups = TEMPLATE_TYPES.map((type) => ({
@@ -91,12 +93,20 @@ export function templateActions(template: Pick<SubscriptionTemplate, 'isDefault'
  */
 export interface DryRunFacts {
   rendered: string;
-  check: { ok: boolean; message: string | null };
-  warnings: string[];
-  /** Сохранение разрешено: ядро не возражает. */
+  /** `ok: null`: ядро не запускалось. */
+  check: { ok: boolean | null; message: string | null };
+  /** `code: null`: сервер старше кодов (строка) или код, которого нет в контракте. */
+  warnings: DryRunWarning[];
+  /**
+   * Итог прогона (A-236 шаг 3, решение ARCH и AUDT 24.10):
+   *   checked    ядро приняло, жалоб нет: «проверено ядром»;
+   *   unchecked  ничего не отказано, но ядро не запускалось: сохранять можно,
+   *              а сказать «ок» нельзя;
+   *   refused    ядро отказало или панель жалуется: сохранение закрыто, причина
+   *              словами (слова ядра и жалобы).
+   */
+  verdict: 'checked' | 'unchecked' | 'refused';
   canSave: boolean;
-  /** Сохранение разрешено, но спросив: есть жалобы панели. */
-  needsConfirm: boolean;
 }
 
 /**
@@ -134,47 +144,97 @@ export function templateEditorFacts(input: {
 }
 
 /**
- * Что панель получила из импортированного файла.
- *
- * Сервер переписывает чужой служебный ключ (`FOREIGN_TEMPLATE_KEY`) в наш (`iceslab:`) и
- * говорит, сколько раз это понадобилось. Число показывается не ради статистики:
- * оно объясняет, почему тело на экране отличается от файла, который человек
- * только что выбрал.
- *
- * ⚠ `foreignKeysLeft` это проверка ЗА сервером. После импорта чужого ключа в
- * теле остаться не должно; если он остался, шаблон молча уедет в подписку с
- * ключом, которого наш сборщик не понимает, и вместо этого экран скажет прямо.
+ * Ворота редактора шаблона (A-236, из A-233 п.d). Новый шаблон открывается
+ * сразу. Существующий ждёт список: при сбое не открывается пустым, а говорит
+ * сбой с повтором; «удалён» только когда список пришёл без него; 404 списка
+ * это «ещё не выпущено», как на экране списка.
+ */
+export type TemplateEditGate = 'ready' | 'loading' | 'failed' | 'gone' | 'unavailable';
+
+export function templateEditGate(
+  isNew: boolean,
+  q: { data: unknown; isError: boolean },
+  notImplemented: boolean,
+  found: boolean,
+): TemplateEditGate {
+  if (isNew) return 'ready';
+  if (notImplemented) return 'unavailable';
+  if (q.data === undefined || q.data === null) return q.isError ? 'failed' : 'loading';
+  return found ? 'ready' : 'gone';
+}
+
+/**
+ * Что уходит при сохранении (A-236). Новый шаблон целиком; существующий
+ * только изменённое, отсутствие ключа на сервере это отсутствие правки. Имя
+ * Default не уходит вовсе: оно не меняется. Нечего слать: null.
+ */
+export function templateSavePatch(
+  template: Pick<SubscriptionTemplate, 'name' | 'body' | 'isDefault'> | null,
+  name: string,
+  body: string,
+): { name?: string; body?: string } | null {
+  const typed = name.trim();
+  if (!template) return { name: typed, body };
+  const out: { name?: string; body?: string } = {};
+  if (!template.isDefault && typed !== template.name) out.name = typed;
+  if (body !== template.body) out.body = body;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * Что панель получила из импортированного файла. Чужих служебных ключей
+ * панель не узнаёт (решение владельца 25.10): файл из другой панели сначала
+ * идёт через `iceslab-migrate templates`, об этом подсказка на экране.
  */
 export interface ImportFacts {
   body: string;
   /** Тип, который определил сервер. `null` = не смог, спрашиваем оператора. */
   type: TemplateType | null;
   name: string;
-  rewrittenKeys: number;
   /** Тип придётся выбрать руками. */
   needsType: boolean;
-  /** Чужие ключи, которые сервер не переписал. Пусто это норма. */
-  foreignKeysLeft: string[];
 }
-
-const FOREIGN_KEYS = [FOREIGN_TEMPLATE_KEY];
 
 export function importFacts(result: {
   template?: Partial<SubscriptionTemplate> | null;
-  rewrittenKeys?: number;
 } | null | undefined): ImportFacts | null {
   if (!result?.template) return null;
   const tpl = result.template;
   const type = tpl.type && TEMPLATE_TYPES.includes(tpl.type) ? tpl.type : null;
-  const body = tpl.body ?? '';
   return {
-    body,
+    body: tpl.body ?? '',
     type,
     name: tpl.name ?? '',
-    rewrittenKeys: Number.isFinite(result.rewrittenKeys) ? Number(result.rewrittenKeys) : 0,
     needsType: type === null,
-    foreignKeysLeft: FOREIGN_KEYS.filter((k) => body.includes(k)),
   };
+}
+
+export type DryRunWarning = { code: DryRunWarningCode | null; message: string };
+
+/**
+ * Одна жалоба прогона, вход первым (BACK-2 20f07677): объект `{ code, message }`
+ * или строка старого сервера (фраза без кода). Код вне контракта читается как
+ * `null`, а не выбрасывает жалобу; без фразы жалоба пропускается.
+ */
+export function dryRunWarningOf(w: unknown): DryRunWarning | null {
+  if (typeof w === 'string') return { code: null, message: w };
+  if (!w || typeof w !== 'object') return null;
+  const { code, message } = w as { code?: unknown; message?: unknown };
+  if (typeof message !== 'string') return null;
+  const known = typeof code === 'string' && (DRY_RUN_WARNING_CODES as readonly string[]).includes(code);
+  return { code: known ? (code as DryRunWarningCode) : null, message };
+}
+
+/**
+ * Сухой прогон сказал, что узлы не попали ни в одну группу: так выглядит файл
+ * из другой панели, чьи служебные ключи Iceslab не узнаёт. Рядом с жалобой
+ * подсказка про `iceslab-migrate templates`. По коду из контракта, не по
+ * фразе; у строки старого сервера кода нет, и подсказки там нет.
+ */
+const NO_GROUP_CODES: readonly DryRunWarningCode[] = ['NO_GROUP_HOLDS_NODE', 'NO_SELECTOR_HOLDS_NODE'];
+
+export function nodesInNoGroup(warnings: readonly DryRunWarning[]): boolean {
+  return warnings.some((w) => w.code !== null && NO_GROUP_CODES.includes(w.code));
 }
 
 /**
@@ -195,15 +255,81 @@ export function dryRunForBody(
   return ranForBody === body ? run : null;
 }
 
+/**
+ * Save with the run first (A-236 tail, AUDT on f604fb58). Without a verdict
+ * for this very body the save asks the dry run itself:
+ *   refused       nothing is sent, the reason stays at the button;
+ *   checked or unchecked   the save goes;
+ *   the run did not answer (network, 5xx) or the server has none (404): the
+ *                 save goes, said «not checked». An incomplete fact refuses
+ *                 nothing.
+ * The calls come in, so a test drives it without a network.
+ */
+/**
+ * One save at a time (AUDT on f604fb58): a second press while the run or the
+ * save is still going is dropped, not queued, so a double click sends one run
+ * and one save. The button is closed too; this holds even between two clicks
+ * in one frame, before the closed button is drawn.
+ */
+export function singleFlight() {
+  let busy = false;
+  return async function <T>(fn: () => Promise<T>): Promise<T | undefined> {
+    if (busy) return undefined;
+    busy = true;
+    try {
+      return await fn();
+    } finally {
+      busy = false;
+    }
+  };
+}
+
+export type SaveAfterRun<T> =
+  | { kind: 'saved'; result: T; note: null | 'no-answer' | 'not-here' }
+  | { kind: 'refused'; run: TemplateDryRun };
+
+export async function saveAfterRun<T>(calls: {
+  /** The run already shown for this body (dryRunForBody), or null. */
+  shown: TemplateDryRun | null;
+  runDry: () => Promise<TemplateDryRun>;
+  save: () => Promise<T>;
+  notImplemented: (err: unknown) => boolean;
+  /** The fresh run, so the screen shows what the save was decided on. */
+  onRun?: (run: TemplateDryRun) => void;
+}): Promise<SaveAfterRun<T>> {
+  let run = calls.shown;
+  let note: null | 'no-answer' | 'not-here' = null;
+  if (!run) {
+    try {
+      run = await calls.runDry();
+      calls.onRun?.(run);
+    } catch (err) {
+      note = calls.notImplemented(err) ? 'not-here' : 'no-answer';
+    }
+  }
+  if (run && dryRunFacts(run)?.verdict === 'refused') return { kind: 'refused', run };
+  return { kind: 'saved', result: await calls.save(), note };
+}
+
 export function dryRunFacts(run: TemplateDryRun | null | undefined): DryRunFacts | null {
   if (!run) return null;
-  const warnings = run.warnings ?? [];
-  const checkOk = run.check?.ok === true;
+  const warnings = Array.isArray(run.warnings)
+    ? run.warnings.map(dryRunWarningOf).filter((w): w is DryRunWarning => w !== null)
+    : [];
+  // Только true и false это ответ ядра; null, отсутствие и мусор: не запускалось.
+  const checkOk = run.check?.ok === true ? true : run.check?.ok === false ? false : null;
+  // Общий итог сервера, если он булев или null; ответ без него (старый сервер)
+  // складывается тем же правилом, что у сервера: отказ или жалоба ложны.
+  const derived = checkOk === false || warnings.length > 0 ? false : checkOk;
+  const overall = run.ok === true || run.ok === false || run.ok === null ? run.ok : derived;
+  // Отказ ядра или жалоба главнее «ок» общего итога: на экране не может быть
+  // зелёного над словами отказа.
+  const verdict = overall === false || derived === false ? 'refused' : overall === true && checkOk === true ? 'checked' : 'unchecked';
   return {
-    rendered: run.rendered ?? '',
-    check: { ok: checkOk, message: run.check?.message ?? null },
+    rendered: typeof run.rendered === 'string' ? run.rendered : '',
+    check: { ok: checkOk, message: typeof run.check?.message === 'string' ? run.check.message : null },
     warnings,
-    canSave: checkOk,
-    needsConfirm: checkOk && warnings.length > 0,
+    verdict,
+    canSave: verdict !== 'refused',
   };
 }

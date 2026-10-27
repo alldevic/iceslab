@@ -10,21 +10,27 @@ import { createBinding, listProfiles, type Profile } from '@/lib/domain/profiles
 import {
   createNode,
   findNode,
-  listNodes,
+  listAllNodes,
   type NodeWithPayload,
 } from '@/lib/domain/nodes';
 import {
   createCoreVersions,
   enginesPayload,
+  freshNodeReason,
   legacyEngines,
   nodeEnginesRefusal,
   pickFreePort,
+  selectedThatCan,
   type FormValues,
   type NodeEnginesRefusal,
   type Registered,
 } from '@/contours/nodes/lib/nodeCreateForm';
 import { coreVersionRefusal } from '@/lib/domain/coreVersions';
+import { awgGateText, coreGateRefusal } from '@/lib/domain/nodeCoreFit';
+import { multiplierPatch, parseMultiplier } from '@/contours/nodes/lib/nodeLimits';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
+import { adapterRefusal, adapterRefusalWords, addOnePerSlot, slotHeldBy } from '@/lib/domain/adapterSlot';
 import { buildHardening } from '@/contours/nodes/lib/nodeInstall';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import { installIntentLabel, nodeIntentWords } from '@/lib/domain/engines';
@@ -54,7 +60,7 @@ export function useNodeCreateForm() {
       port: DEFAULT_NODE_PORT,
       protocol: 'xray',
       countryCode: '',
-      consumptionMultiplier: 1,
+      consumptionMultiplier: '1',
       domain: '',
       singboxEngine: false,
       engines: ['xray'],
@@ -66,6 +72,7 @@ export function useNodeCreateForm() {
     },
     validateInputOnBlur: true,
     validate: {
+      consumptionMultiplier: (v) => (parseMultiplier(v).ok ? null : t('nodeEdit.multiplierBad')),
       name: (v) => {
         const trimmed = v.trim();
         if (trimmed.length === 0) return t('validation.nameRequired');
@@ -109,6 +116,12 @@ export function useNodeCreateForm() {
     refetchInterval: 5000,
   });
   if (!isOnline && nodeWatch.data?.status === 'online') setIsOnline(true);
+  // The poll that did not answer is said beside «waiting for the agent»: the
+  // panel cannot tell waiting from not knowing (spec frontend-nodes). Read on
+  // the current poll, not on stale data: an old «offline» is not an answer.
+  const watchFailure = nodeWatch.isError
+    ? { message: apiErrorMessage(nodeWatch.error), onRetry: () => void nodeWatch.refetch() }
+    : null;
 
   // Seconds since the node was registered, for the "waiting" clock.
   const [waited, setWaited] = useState(0);
@@ -136,7 +149,7 @@ export function useNodeCreateForm() {
    * (nodeFieldKnown). Не знаем: прежняя форма, а не выбор, который сервер
    * может отвергнуть.
    */
-  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const coreVersionsKnown = nodeFieldKnown(fleetQuery.data, 'coreVersions');
   /** Строки отказа 400 CORE_VERSION_NOT_LISTED после «Зарегистрировать». */
   const [coreRefusal, setCoreRefusal] = useState<string[] | null>(null);
@@ -146,6 +159,11 @@ export function useNodeCreateForm() {
    * не слал ключ, который сервер отвергнет.
    */
   const enginesKnown = nodeFieldKnown(fleetQuery.data, 'intendedEngines');
+  // A fleet list that did not arrive is not «the server is older than these
+  // fields»: the page waits for it or says it failed instead of drawing the
+  // old form (spec frontend-nodes).
+  const fleetView = loadView(fleetQuery);
+  const fleetFailure = loadFailure(fleetQuery, apiErrorMessage);
   /** Отказ 400 INVALID_ENGINES или LAST_CORE: под чипами. */
   const [enginesRefusal, setEnginesRefusal] = useState<NodeEnginesRefusal | null>(null);
   // Какие ядра встанут на ноду: чипы, или то же из старой формы.
@@ -164,6 +182,8 @@ export function useNodeCreateForm() {
   // the profile: its effective engine, resolved by the server, among them.
   // Everything else is listed with the reason it cannot, rather than hidden,
   // so the operator sees the whole inventory and why it is short.
+  // A profile list that did not arrive is not «no profile fits».
+  const profilesFailure = loadFailure(profilesQuery, apiErrorMessage);
   const enginesKey = engines.join(',');
   const groups = useMemo(() => {
     const all = profilesQuery.data?.profiles ?? [];
@@ -171,20 +191,29 @@ export function useNodeCreateForm() {
     const can: Profile[] = [];
     const cannot: { profile: Profile; reason: string }[] = [];
     for (const p of all) {
-      if (carried.has(p.effectiveEngine)) {
+      const why = freshNodeReason(p, carried);
+      if (why === null) {
         can.push(p);
       } else {
         cannot.push({
           profile: p,
           reason:
-            p.effectiveEngine === 'singbox'
+            why === 'noSingbox'
               ? t('nodeCreate.reasonNoSingbox')
-              : t('nodeCreate.reasonNoCore', { protocol: p.protocol }),
+              : why === 'awg31NotReported'
+                ? t('nodeCreate.reasonAwg31NotReported')
+                : t('nodeCreate.reasonNoCore', { protocol: p.protocol }),
         });
       }
     }
     return { can, cannot };
   }, [profilesQuery.data, enginesKey, t]);
+
+  // A profile whose core was taken off on step 1 leaves the selection, so the
+  // counter, the summary, the ports and the button count only what can stand
+  // (A-146). Done in render, not in an effect: the next frame already agrees.
+  const live = selectedThatCan(selected, profilesQuery.data ? groups.can.map((p) => p.id) : null);
+  if (live.length !== selected.length) setSelected(live);
 
   // Ports are assigned in selection order, so the chip on a row is the port
   // that row will actually listen on once the node registers.
@@ -199,18 +228,26 @@ export function useNodeCreateForm() {
     return map;
   }, [selected]);
 
+  // A-055: a node holds one inbound per adapter (protocol and engine, AWG by
+  // generation; native xray takes many). A profile whose adapter a picked one
+  // already holds is not offered: the server would refuse the second binding.
+  const slotHeld = useMemo(() => slotHeldBy(groups.can, selected), [groups.can, selected]);
+
   function toggle(id: string) {
+    if (!selected.includes(id) && slotHeld.has(id)) return;
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   function toggleAllCan() {
     const ids = groups.can.map((p) => p.id);
-    const allOn = ids.length > 0 && ids.every((id) => selected.includes(id));
-    setSelected((prev) => (allOn ? prev.filter((x) => !ids.includes(x)) : [...new Set([...prev, ...ids])]));
+    // «All» is all that can stand together: one per adapter.
+    const allOn = ids.length > 0 && ids.every((id) => selected.includes(id) || slotHeld.has(id));
+    setSelected((prev) => (allOn ? prev.filter((x) => !ids.includes(x)) : addOnePerSlot(prev, groups.can)));
   }
 
   function goNext() {
     if (step === 0) {
+      if (fleetView !== 'ready') return;
       const result = form.validate();
       if (result.hasErrors) return;
       setStep(1);
@@ -232,8 +269,8 @@ export function useNodeCreateForm() {
         name: form.values.name.trim(),
         address: `${form.values.host.trim()}:${port}`,
         countryCode: form.values.countryCode || null,
-        consumptionMultiplier:
-          form.values.consumptionMultiplier === '' ? 1 : Number(form.values.consumptionMultiplier),
+        // Step 1 refuses a value that does not parse (A-143); none is guessed here.
+        ...multiplierPatch(form.values.consumptionMultiplier),
         domain: form.values.domain.trim() || null,
         hardening: buildHardening(form.values),
         // Ядра: intendedEngines с меткой в паре, или прежние поля у сервера
@@ -255,25 +292,42 @@ export function useNodeCreateForm() {
       for (const id of selected) {
         const profile = groups.can.find((p) => p.id === id);
         const hostPort = portByProfile.get(id) ?? DEFAULT_NODE_PORT;
-        if (!profile) continue;
+        // Not a silent skip (A-146): a picked profile that cannot stand on
+        // this node is named in the toast with the rest that did not bind.
+        if (!profile) {
+          const gone = profilesQuery.data?.profiles.find((p) => p.id === id);
+          failed.push(`${gone?.name ?? id.slice(0, 8)}: ${t('nodeCreate.reasonCannotStand')}`);
+          continue;
+        }
         try {
           await createBinding({
             profileId: id,
             nodeId: node.id,
             port: hostPort,
             publicHost: form.values.host.trim(),
-            publicPort: hostPort,
+            // No publicPort (A-150): the wizard has no external-port field, and
+            // a copy of the listen port stored as one shadowed every later move
+            // of that port in the subscription.
           });
           hosts.push({ name: profile.name, port: hostPort });
-        } catch {
-          failed.push(profile.name);
+        } catch (err) {
+          // The server's reason beside the name: «port taken» and «core
+          // refused» are different fixes.
+          // A-160: a 3.1 refusal on a node that has not reported says to wait
+          // for the first poll, not to rebuild the agent.
+          const slot = adapterRefusal(err);
+          const gate = coreGateRefusal(err);
+          const awg = gate ? awgGateText(gate, t) : null;
+          failed.push(
+            `${profile.name}: ${slot ? adapterRefusalWords({ ...slot, nodeName: null }, t) : (awg ?? apiErrorMessage(err))}`,
+          );
         }
       }
       if (failed.length > 0) {
         notifications.show({
           color: 'yellow',
           title: t('nodeCreate.hostsPartialTitle'),
-          message: t('nodeCreate.hostsPartial', { names: failed.join(', ') }),
+          message: t('nodeCreate.hostsPartial', { names: failed.join('; ') }),
         });
       }
 
@@ -363,11 +417,16 @@ export function useNodeCreateForm() {
     setEnginesRefusal,
     groups,
     portByProfile,
+    slotHeld,
     toggle,
     toggleAllCan,
     goNext,
     register,
     copy,
     downloadPayload,
+    fleetView,
+    fleetFailure,
+    profilesFailure,
+    watchFailure,
   };
 }

@@ -67,6 +67,13 @@ wire_env() {
 # The unit the agent restarts. Rewritten only when it differs, so a rerun does
 # not reload systemd for nothing. Enabled, not started: without a config it has
 # nothing to run, and the agent's first push starts it.
+#
+# A-267, A-265: HYSTERIA_LOG_LEVEL=error. At its default (info) hysteria logs
+# every "client connected" / "client disconnected" with the client's address
+# and the user's id (app/cmd/server.go:1805-1809 at app/v2.12.3), and at warn
+# every "TCP error" / "UDP error" with the same and where to (:1820, :1832): a
+# journal of who connected from where. error keeps the server's own trouble
+# only. The variable is upstream's own (app/cmd/root.go:24, appLogLevelEnv).
 write_unit() {
   local want
   want="$(cat <<EOF
@@ -78,6 +85,7 @@ ConditionPathExists=${HYSTERIA_CONFIG_PATH}
 
 [Service]
 Type=simple
+Environment=HYSTERIA_LOG_LEVEL=error
 ExecStart=${INSTALL_PATH} server -c ${HYSTERIA_CONFIG_PATH}
 Restart=always
 RestartSec=5

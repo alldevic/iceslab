@@ -17,7 +17,16 @@ field findings from a clean-machine stand run are fixed. 516 commits since
 v0.2.0.
 
 Upgrading nodes: the agent has no self-update yet. After deploying the panel,
-rebuild the agent on every node (`git fetch`, `go build`, restart), then rerun
+rebuild the agent on every node, as root:
+
+```
+cd /opt/iceslab-node && git fetch --depth 1 origin tag v0.2.1 && git checkout -q v0.2.1
+cd apps/node && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always)" -o /usr/local/bin/iceslab-node .
+systemctl restart iceslab-node
+```
+
+The `-X main.version` part is what makes the node report its version to the
+panel; a build without it reports `dev`. Then rerun
 `bootstrap-amneziawg.sh --restart-agent` on AmneziaWG nodes with the interface
 down to move them to the 3.1 module; existing 1.x clients keep working on it.
 

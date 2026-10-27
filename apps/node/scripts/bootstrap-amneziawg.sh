@@ -61,7 +61,10 @@ unwire_env() {
 # --remove: the tools (awg, awg-quick, their unit template, man pages and
 # completions), the kernel module from DKMS with its sources, the build trees,
 # and the interface configs the agent rendered (the panel pushes them again,
-# keys included, onto a node that gets AWG back). Kept: IP forwarding
+# keys included, onto a node that gets AWG back), together with the state the
+# agent keeps beside each one (awg0.state.json, awg3.state.json: the server
+# key and the peers). A state file left behind would bring the old key and
+# peers back up on the next install instead of what the panel sends. Kept: IP forwarding
 # (99-awg.conf) and ufw's FORWARD policy, which other traffic on the node may
 # rely on.
 #
@@ -88,7 +91,7 @@ remove_core() {
   fi
   rm -rf /usr/src/amneziawg-src /usr/src/amneziawg-tools-build
   rm -f "$MARKER"
-  rm -f /etc/amnezia/amneziawg/*.conf
+  rm -f /etc/amnezia/amneziawg/*.conf /etc/amnezia/amneziawg/*.state.json
   systemctl daemon-reload >/dev/null 2>&1 || true
   unwire_env
   if amneziawg_loaded; then

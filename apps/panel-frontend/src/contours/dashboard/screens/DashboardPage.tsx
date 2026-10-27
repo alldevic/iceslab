@@ -14,8 +14,12 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
+  UnstyledButton,
 } from '@mantine/core';
 import { useOverview } from '@/lib/domain/dashboard';
+import { overviewView, usageFill } from '@/contours/dashboard/lib/overviewView';
+import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 // Shared with the user list, which is where the wording and the flooring were
 // settled. This page used to carry its own copy, in English, past i18n.
@@ -266,13 +270,14 @@ function Sparkline({ data, height = 110 }: { data: { hour: string; bytes: number
 
 export function DashboardPage() {
   const { t } = useTranslation();
-  const { data, isLoading, isError } = useOverview();
+  const overviewQuery = useOverview();
+  const view = overviewView(overviewQuery);
 
   // The crumb says the page is live and how often it refreshes. The number
   // tracks useOverview's refetchInterval; keep the two in step.
   usePageMeta([t('pageMeta.overviewLive'), t('pageMeta.overviewRefresh', { n: 30 })]);
 
-  if (isLoading) {
+  if (view.kind === 'loading') {
     return (
       <Stack>
         <Title order={2}>{t('dashboard.title')}</Title>
@@ -280,16 +285,31 @@ export function DashboardPage() {
       </Stack>
     );
   }
-  if (isError || !data) {
+  // Before the first answer only: the server's words and a retry (A-242, j).
+  if (view.kind === 'failed' || !overviewQuery.data) {
     return (
-      <Stack>
-        <Title order={2}>{t('dashboard.title')}</Title>
-        <Text style={{ color: RED }}>{t('dashboard.health.noData')}</Text>
-      </Stack>
+      <LoadFailed message={apiErrorMessage(overviewQuery.error)} onRetry={() => void overviewQuery.refetch()} />
     );
   }
 
-  return <DashboardContent data={data} />;
+  return (
+    <Stack gap="sm">
+      {/* A failed poll keeps the last answer on screen and says so (A-242, i). */}
+      {view.stale && (
+        <Text style={{ fontSize: 12, color: AMBER }}>
+          {t('dashboard.staleSince', { when: relativeTime(view.updatedAt, t).text })}{' '}
+          <UnstyledButton
+            type="button"
+            onClick={() => void overviewQuery.refetch()}
+            style={{ display: 'inline', fontSize: 12, color: CYAN }}
+          >
+            {t('common.loadRetry')}
+          </UnstyledButton>
+        </Text>
+      )}
+      <DashboardContent data={overviewQuery.data} />
+    </Stack>
+  );
 }
 
 function DashboardContent({ data }: { data: DashboardOverview }) {
@@ -781,7 +801,7 @@ function SystemHealth({ host }: { host: DashboardOverview['host'] }) {
           icon={<IconServer2 size={16} />}
           color={diskColor}
           label={t('dashboard.health.disk')}
-          percent={host.disk?.usedPercent ?? 0}
+          percent={host.disk?.usedPercent ?? null}
           primary={
             host.disk
               ? `${formatBytes(host.disk.usedBytes)} / ${formatBytes(host.disk.totalBytes)}`
@@ -819,12 +839,13 @@ function UsageBar({
 }: {
   icon: ReactNode;
   label: string;
-  percent: number;
+  /** Null: unknown. The rail stays empty and the figure reads «-» (A-242, k). */
+  percent: number | null;
   primary: string;
   secondary: string;
   color: string;
 }) {
-  const clamped = Math.min(100, Math.max(0, percent));
+  const fill = usageFill(percent);
   return (
     <Card withBorder p={16} radius={TILE_RADIUS} style={tileStyle}>
       <Group justify="space-between" align="center" mb={10}>
@@ -843,7 +864,7 @@ function UsageBar({
             fontWeight: 500,
           }}
         >
-          {percent.toFixed(0)}%
+          {fill === null ? '-' : `${percent!.toFixed(0)}%`}
         </Text>
       </Group>
       {/* 4px rail: a readout, not a control. Anything thicker starts competing
@@ -858,7 +879,7 @@ function UsageBar({
           marginBottom: 10,
         }}
       >
-        <Box style={{ height: 4, borderRadius: 2, backgroundColor: color, width: `${clamped}%` }} />
+        {fill !== null && <Box style={{ height: 4, borderRadius: 2, backgroundColor: color, width: `${fill}%` }} />}
       </Box>
       <Text
         style={{

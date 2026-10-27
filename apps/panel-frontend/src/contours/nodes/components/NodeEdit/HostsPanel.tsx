@@ -1,4 +1,5 @@
 import { modals } from '@mantine/modals';
+import { notifications } from '@mantine/notifications';
 import { countryFlag } from '@/lib/domain/countries';
 import { deleteHost } from '@/lib/domain/hosts';
 import { GlobeIcon, LinkIcon, TrashIcon } from '@/contours/nodes/components/NodeEdit/icons';
@@ -10,6 +11,9 @@ import { Box, Text, UnstyledButton } from '@mantine/core';
 import { CARD, CYAN_HI, DIM, DISPLAY, EDGE, FAINT, HAIRLINE, MIST, MONO, MOSS, RED, SNOW, WELL } from '@/contours/nodes/lib/colors';
 import { refusalOf } from '@/lib/domain/syncRefusal';
 import { useTranslation } from 'react-i18next';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
 
 /**
@@ -68,7 +72,16 @@ export function HostsPanel({
               </PlainButton>
             </Box>
 
-            {(hostsQuery.data?.hosts ?? []).length === 0 ? (
+            {/* A list that did not arrive is not «no hosts» (A-141). */}
+            {loadView(hostsQuery) === 'failed' ? (
+              <Box style={{ padding: '0 20px 20px' }}>
+                <LoadFailed message={apiErrorMessage(hostsQuery.error)} onRetry={() => void hostsQuery.refetch()} />
+              </Box>
+            ) : loadView(hostsQuery) === 'loading' ? (
+              <Box style={{ padding: '18px 20px', borderTop: `1px solid ${HAIRLINE}` }}>
+                <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: FAINT }}>{t('common.loading')}</Text>
+              </Box>
+            ) : (hostsQuery.data?.hosts ?? []).length === 0 ? (
               <Box style={{ padding: '18px 20px', borderTop: `1px solid ${HAIRLINE}` }}>
                 <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: FAINT }}>
                   {t('nodeEdit.hostsEmpty')}
@@ -250,9 +263,21 @@ export function HostsPanel({
                           children: <Text size="sm">{t('nodeEdit.detachBody')}</Text>,
                           labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
                           confirmProps: { color: 'red' },
+                          // A refusal said in the server's words, and the list
+                          // read again either way (A-147): it used to vanish
+                          // into an unhandled promise with the modal closed.
                           onConfirm: async () => {
-                            await deleteHost(h.id);
-                            qc.invalidateQueries({ queryKey: ['hosts', id] });
+                            try {
+                              await deleteHost(h.id);
+                            } catch (err) {
+                              notifications.show({
+                                color: 'red',
+                                title: t('common.deleteError'),
+                                message: apiErrorMessage(err),
+                              });
+                            } finally {
+                              qc.invalidateQueries({ queryKey: ['hosts', id] });
+                            }
                           },
                         })
                       }

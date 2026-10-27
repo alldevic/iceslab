@@ -136,6 +136,48 @@ type InboundReconciler interface {
 	RetainInbounds(keep []string) error
 }
 
+// UserCounter is an OPTIONAL interface: whether this core counts traffic per
+// user, or only reports who is on it (CoreStatus.countsUsers). Not
+// implemented = unknown.
+type UserCounter interface {
+	CountsUsers() bool
+}
+
+// FaultReporter is an OPTIONAL interface: why the core is not working when
+// that is a fault, in the core's or the agent's words (CoreStatus.error);
+// empty when it works or when it is down by design (idle, never configured).
+type FaultReporter interface {
+	Fault() string
+}
+
+// IdentifiedApplier is an OPTIONAL interface for an adapter that holds several
+// inbounds whose wire config carries no id of its own (mieru's is the MTU
+// alone). The server calls it instead of ApplyInbound, with the id it already
+// has from the push, so the adapter keys its inbounds by the same id
+// RetainInbounds later hands it. Agent-internal: the wire is unchanged.
+type IdentifiedApplier interface {
+	ApplyIdentifiedInbound(id string, port int, cfg json.RawMessage) error
+}
+
+// ScopedUserAdder is an OPTIONAL interface for an adapter that can put a user
+// on some of its inbounds and not the others (A-022): xray renders clients per
+// inbound, AmneziaWG has one interface per generation. inboundIDs are this
+// adapter's own, never empty (a user named on none of them is removed with
+// RemoveUser). An adapter without it serves its users on all its inbounds,
+// so the server only adds or removes the user there as a whole.
+type ScopedUserAdder interface {
+	AddUserOn(user User, inboundIDs []string) error
+}
+
+// PushScoped is an OPTIONAL interface: the server tells the adapter, BEFORE it
+// applies the push's inbounds, which of its inbound ids the push carries, so
+// one deleted by this push does not stand in the way of one it creates (the
+// same port re-bound under a new id). RetainInbounds still runs after the
+// inbounds, as for every reconciler.
+type PushScoped interface {
+	ScopePush(keep []string)
+}
+
 // PolicyReceiver is an OPTIONAL interface for adapters that can render the
 // node-level routing policy (see dto.NodePolicy).
 //
@@ -246,6 +288,26 @@ type Idler interface {
 // IdleReason is what /healthz says about a core the last applied push did not
 // name. The node is not degraded by it: nothing is meant to run there.
 const IdleReason = "no inbounds in the last push"
+
+// Waiter is an OPTIONAL interface: the core is configured, holds its inbound,
+// and does not serve yet BY DESIGN, with the reason in words (A-275: mita
+// refuses to start a proxy with no user). /healthz reports it running:false
+// with that reason and the node is not degraded by it. Empty when it serves,
+// or when it is down for any other reason (a fault is FaultReporter's).
+type Waiter interface {
+	Waiting() string
+}
+
+// NoUsersReason: a core whose binary will not run an inbound nobody is on.
+const NoUsersReason = "no users on its inbounds yet"
+
+// ACMEUser is an OPTIONAL interface: the config this core runs takes its
+// certificate from a public CA over ACME, whose HTTP-01 challenge comes in on
+// 80/tcp (A-280). The server opens 80/tcp beside the inbound's own port when
+// it says so. Cheap: called after every applied inbound of the core.
+type ACMEUser interface {
+	UsesACME() bool
+}
 
 // GeoReceiver is implemented by a core that reads geo files at start and
 // never again (xray: infra/conf/router.go reads a `.dat` while building the

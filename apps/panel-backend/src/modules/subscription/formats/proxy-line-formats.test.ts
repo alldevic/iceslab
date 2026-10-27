@@ -112,3 +112,60 @@ describe('buildLoonConf (the grammar of the Loon docs)', () => {
     }
   });
 });
+
+// A-133: the transport of an xray endpoint, in each client's grammar or not at all.
+describe('xray transports in Quantumult X, Loon and Surge', () => {
+  const vlessWsTls: SubscriptionEndpoint = {
+    ...vlessReality,
+    nodeName: 'ws-1',
+    securityLayer: 'tls',
+    network: 'ws',
+    path: '/x',
+    hostHeader: 'cdn.example.com',
+    flow: undefined,
+  };
+  const vmessWsTls: SubscriptionEndpoint = { ...vlessWsTls, nodeName: 'ws-2', subprotocol: 'vmess' };
+  const trojanWsTls: SubscriptionEndpoint = { ...vlessWsTls, nodeName: 'ws-3', subprotocol: 'trojan' };
+  const others = (['xhttp', 'grpc', 'httpupgrade', 'kcp'] as const).flatMap((network) =>
+    (['vless', 'vmess', 'trojan'] as const).map(
+      (subprotocol): SubscriptionEndpoint => ({ ...vlessWsTls, nodeName: `${network}-${subprotocol}`, network, subprotocol }),
+    ),
+  );
+  const realityXhttp: SubscriptionEndpoint = { ...vlessReality, nodeName: 'rx', network: 'xhttp' };
+
+  it('leaves out every network a client does not speak, REALITY over XHTTP included', () => {
+    for (const build of [buildQuantumultXConf, buildLoonConf, buildSurgeConf]) {
+      expect(build([...others, realityXhttp]), build.name).toBe('');
+    }
+  });
+
+  it('Quantumult X: WebSocket over TLS as obfs=wss with the path', () => {
+    const out = buildQuantumultXConf([vlessWsTls, vmessWsTls, trojanWsTls]);
+    for (const tag of ['ws-1', 'ws-2', 'ws-3']) {
+      const line = out.split('\n').find((l) => l.endsWith(`tag=${tag}`))!;
+      expect(line, tag).toContain('obfs=wss');
+      expect(line, tag).toContain('obfs-uri=/x');
+      expect(line, tag).not.toContain('obfs=over-tls');
+    }
+  });
+
+  it('Loon: transport=ws with the path and the host', () => {
+    const out = buildLoonConf([vlessWsTls, vmessWsTls, trojanWsTls]);
+    for (const name of ['ws-1', 'ws-2', 'ws-3']) {
+      const line = out.split('\n').find((l) => l.startsWith(`${name} =`))!;
+      expect(line, name).toContain('transport=ws');
+      expect(line, name).toContain('path=/x');
+      expect(line, name).toContain('host=cdn.example.com');
+    }
+  });
+
+  it('Surge: ws=true with the path and the Host header', () => {
+    const out = buildSurgeConf([vmessWsTls, trojanWsTls]);
+    for (const name of ['ws-2', 'ws-3']) {
+      const line = out.split('\n').find((l) => l.startsWith(`${name} =`))!;
+      expect(line, name).toContain('ws=true');
+      expect(line, name).toContain('ws-path=/x');
+      expect(line, name).toContain('ws-headers=Host:cdn.example.com');
+    }
+  });
+});

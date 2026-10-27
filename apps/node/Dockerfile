@@ -9,11 +9,13 @@
 # Runtime is `distroless/static:nonroot`, no shell, no package manager,
 # minimal attack surface. The Go binary is fully static (CGO_ENABLED=0).
 
-# golang is minor-pinned (1.22.x). distroless `nonroot` is a floating tag with
+# golang is pinned to the patch: the `toolchain` of go.mod, as in CI, the
+# release build and the node installer (bootstrap_checks_test.go holds them
+# together). distroless `nonroot` is a floating tag with
 # no version aliases - it should be digest-pinned (@sha256) as the I4b
 # follow-up once Renovate is wired; distroless rarely ships behaviour-breaking
 # changes, so the floating tag is acceptable in the interim.
-ARG GO_VERSION=1.22-alpine
+ARG GO_VERSION=1.27.3-alpine
 ARG DISTROLESS_VERSION=nonroot
 
 # ───── Build stage ─────
@@ -28,12 +30,16 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 COPY . .
 
+# The version the agent reports (A-202): CI passes the release tag or the short
+# commit; a plain `docker build` off a checkout says "dev", as before.
+ARG AGENT_VERSION=dev
+
 # Static binary, stripped, no symbols/DWARF.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
-        -ldflags="-s -w" \
+        -ldflags="-s -w -X main.version=${AGENT_VERSION}" \
         -o /out/iceslab-node \
         .
 

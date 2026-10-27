@@ -1,0 +1,23 @@
+-- A-236 step 6: a host's line under the server name and a host kept out of
+-- every public output.
+--
+-- server_description: what the client apps that show one put under the server
+-- name. NULL = none. One line and at most 200 code points, checked by the API
+-- (serverDescriptionProblem in @iceslab/shared), not here: the rule counts
+-- code points and names Unicode line separators, which a CHECK would restate
+-- in a second language.
+-- is_hidden: the host is in no subscription format, on no subscription page
+-- and in no format list, unless a template asks for hidden hosts. Every
+-- existing host stays visible (DEFAULT false).
+--
+-- WRITTEN BY HAND. `migrate status` clean before (88 migrations) and after.
+-- Test: src/modules/hosts/hosts.description-hidden-migration.test.ts
+-- (forward, back, forward).
+--
+-- Rollback:
+--   ALTER TABLE "hosts" DROP COLUMN "is_hidden", DROP COLUMN "server_description";
+--   DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261024204203_host_description_hidden';
+-- The rollback drops what operators wrote in the two columns since; a hidden
+-- host comes back into every subscription.
+
+ALTER TABLE "hosts" ADD COLUMN "server_description" TEXT, ADD COLUMN "is_hidden" BOOLEAN NOT NULL DEFAULT false;

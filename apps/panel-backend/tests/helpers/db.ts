@@ -1,4 +1,6 @@
 import { prisma } from '../../src/prisma.js';
+import { redis } from '../../src/lib/infra/redis.js';
+import { invalidateDeadCascadeCache } from '../../src/modules/cascades/cascade-exclusive.js';
 import { _resetBindingsCacheForTest } from '../../src/modules/subscription/subscription.bindings-cache.js';
 import { invalidateSubscriptionSettingsCache } from '../../src/modules/settings/settings.service.js';
 
@@ -38,6 +40,9 @@ export const TABLES = [
   'subscription_events',
   'subscription_request_history',
   'subscription_response_rules',
+  // A-236. Unique on (type, name): a template left behind would refuse the
+  // next test's create of the same name.
+  'subscription_templates',
   'node_user_usage_history',
   'node_usage_history',
   'group_members',
@@ -48,6 +53,12 @@ export const TABLES = [
   'hwid_user_devices',
   'user_traffic',
   'users',
+  // A-268 tombstone: no foreign key; a hash left by one test would refuse the
+  // same source id in the next.
+  'erased_user_sources',
+  // A-229. After users and groups, which point at it with RESTRICT; the name is
+  // unique, so a row left behind would refuse the next test's create.
+  'routing_presets',
   'hosts',
   'profile_node_bindings',
   'profiles',
@@ -103,6 +114,13 @@ export async function cleanDatabase(): Promise<void> {
   // minute, so truncating app_settings above would otherwise leave the previous
   // file's values being served from memory for the rest of the run.
   invalidateSubscriptionSettingsCache();
+  // The dead-cascade set (A-223) is cached in-process the same way.
+  invalidateDeadCascadeCache();
+  // The security gate counts per IP in Redis (`sec:sub-ip:*`, `sec:blacklist:*`),
+  // and every test asks from 127.0.0.1: one file's subscription fetches used up
+  // the next file's minute and it got 429. The limit stays real, tests stay apart.
+  const sec = await redis.keys('sec:*');
+  if (sec.length) await redis.del(...sec);
   // Re-seed the "All" squad, slice 26 wired user-create to default to it,
   // so an empty groups table makes every user-create fail with FK violation.
   // The seed migration installs this row in production; tests truncate it

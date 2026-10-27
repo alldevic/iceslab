@@ -380,6 +380,14 @@ describe('buildSubscriptionPage', () => {
     );
   });
 
+  it('a link out of the page hands the next site neither the page nor its URL (AUDT, A-267)', () => {
+    const html = buildSubscriptionPage(base({ supportUrl: 'https://t.me/support' }));
+    expect(html).toMatch(/<a class="support" [^>]*rel="noopener noreferrer"/);
+    const outward = [...html.matchAll(/<a [^>]*(?:target="_blank"|data-app-get)[^>]*>/g)].map((m) => m[0]);
+    expect(outward.length).toBeGreaterThan(0);
+    for (const a of outward) expect(a, a).toContain('rel="noopener noreferrer"');
+  });
+
   it('puts the subscription QR in the transfer window, and only there', () => {
     // It used to sit in the scan card as well. The same code twice is the most
     // expensive decoration available on a page opened over a link that may

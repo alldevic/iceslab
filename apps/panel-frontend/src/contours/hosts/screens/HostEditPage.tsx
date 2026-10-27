@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   Box,
   NumberInput,
+  Radio,
   Select,
   Stack,
   Switch,
@@ -26,7 +27,10 @@ import {
   IconServer2,
   IconShield,
   IconStack2,
+  IconX,
 } from '@tabler/icons-react';
+import { HOST_SERVER_DESCRIPTION_MAX } from '@iceslab/shared';
+import { descriptionProblem, visibilityKnown, visibilityPatch } from '@/contours/hosts/lib/hostVisibility';
 import {
   createHost,
   getHostFreshness,
@@ -34,8 +38,17 @@ import {
   hostHiddenFacts,
   listHosts,
   portConflict,
+  profileNotOnNode,
   updateHost,
+  hostPortPayload,
+  serverDescriptionRefusal,
+  type HostPortMove,
 } from '@/lib/domain/hosts';
+import { hostPortPlan } from '@/contours/hosts/lib/hostPortPlan';
+import { profileNotOnNodeWords } from '@/lib/domain/profileNotOnNodeWords';
+import { apiErrorMessage } from '@/lib/net/client';
+import { hostEditGate } from '@/contours/hosts/lib/hostsView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
 import { HostFreshnessCard } from '@/contours/hosts/components/HostFreshnessCard';
 import { nodePortClaims } from '@/contours/hosts/lib/portClaims';
@@ -50,6 +63,7 @@ import { profileTransport } from '@/lib/domain/profileTransport';
 import { singboxXrayMessage, singboxXrayRefusal } from '@/lib/domain/singboxXray';
 import {
   coreGateRefusal,
+  coreGateText,
   awgGateText,
   awgProfilePrediction,
   nodeCoreBlocks,
@@ -59,6 +73,7 @@ import {
 } from '@/lib/domain/nodeCoreFit';
 import { NodeCoreLine } from '@/ui/NodeCoreLine';
 import { CoreGateRefusalLine } from '@/ui/CoreGateRefusalLine';
+import { adapterRefusal, adapterRefusalWords, type AdapterRefusal } from '@/lib/domain/adapterSlot';
 import {
   checkNodePort,
   portRefusalOf,
@@ -71,10 +86,13 @@ import {
   formatGapGroups,
   formatGapKey,
   formatLabel,
+  formatReasonKey,
   getProfileFormats,
   hostFormatFacts,
+  toggleHostFormat,
+  type FormatReason,
 } from '@/lib/domain/formats';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
 import { portInHopRange } from '@/lib/domain/portHopping';
 import { type Fingerprint } from '@/lib/domain/protocols';
@@ -118,7 +136,7 @@ export function HostEditPage() {
 
   const hostsQuery = useQuery({ queryKey: ['hosts'], queryFn: () => listHosts() });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   // Four aggregates over the request history, so it is asked once per host and
   // never for a host that does not exist yet.
   const freshnessQuery = useQuery({
@@ -140,7 +158,12 @@ export function HostEditPage() {
 
   const [name, setName] = useState('');
   const [country, setCountry] = useState<string | null>(null);
+  /** The port the node listens on: the binding's (A-150). */
   const [port, setPort] = useState<number | ''>('');
+  /** The port clients dial when it differs (NAT, CDN): the host's override. */
+  const [clientPort, setClientPort] = useState<number | ''>('');
+  /** A-259: a new listen port takes this host only (default) or the whole inbound. */
+  const [portMove, setPortMove] = useState<HostPortMove>('host');
   const [enabled, setEnabled] = useState(true);
   /**
    * Arriving from a profile: /hosts/new?profileId=... starts with it chosen.
@@ -176,12 +199,18 @@ export function HostEditPage() {
   const [alpn, setAlpn] = useState<string[]>([]);
   const [securityLayer, setSecurityLayer] = useState<'default' | 'tls' | 'none'>('default');
   const [disabledFormats, setDisabledFormats] = useState<string[]>([]);
+  // A-236 step 6: the host's own line for clients that show it, and «hidden».
+  const [description, setDescription] = useState('');
+  const [hidden, setHidden] = useState(false);
+  const [descriptionRefusal, setDescriptionRefusal] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [nodeSearch, setNodeSearch] = useState('');
   const [onlyAttachable, setOnlyAttachable] = useState(false);
   const [dirty, setDirty] = useState(false);
   /** Отказ гейта ядра после «Сохранить» (409 CORE_NOT_ON_NODE / CORE_VERSION_REFUSED). */
   const [coreRefusal, setCoreRefusal] = useState<CoreGateRefusal | null>(null);
+  /** A-055: 409 ADAPTER_SLOT_TAKEN or MIERU_MTU_MISMATCH, said under the picked node. */
+  const [slotRefusal, setSlotRefusal] = useState<AdapterRefusal | null>(null);
 
   const currentBinding = bindings.find((b) => b.id === (bindingId ?? host?.bindingId));
   // On create there is no binding yet, so the chosen node is the only source.
@@ -224,6 +253,11 @@ export function HostEditPage() {
   const whyLabel = (why: string) => {
     const key = formatGapKey(why);
     return key ? t(key) : t('hostEdit.formatWhyUnknown', { code: why });
+  };
+  /** «Дверь: …» or «Транспорт: …» (A-231); a server older than the reason says the why alone. */
+  const reasonLabel = (reason: FormatReason | null, why: string) => {
+    const key = formatReasonKey(reason);
+    return key ? `${t(key)}: ${why}` : why;
   };
   /** No answer yet, or none coming: every control stays visible. */
   const can = (f: string) => (fields ? fields[f]?.supported === true : true);
@@ -333,7 +367,12 @@ export function HostEditPage() {
     const node = binding ? nodes.find((n) => n.id === binding.nodeId) : undefined;
     setName(host.remark);
     setCountry(node?.countryCode ? node.countryCode.toUpperCase() : null);
-    setPort(host.portOverride ?? binding?.publicPort ?? binding?.port ?? '');
+    // A-150: «Port» is where the node listens, not what the subscription hands
+    // out. It used to be seeded from portOverride and saved into it, so the
+    // node kept the old port while clients were sent the new one.
+    setPort(binding?.port ?? '');
+    setClientPort(host.portOverride ?? '');
+    setPortMove('host');
     setEnabled(host.enabled);
     setProfileId(binding?.profileId ?? null);
     setBindingId(host.bindingId);
@@ -346,6 +385,9 @@ export function HostEditPage() {
     setAlpn(host.alpn);
     setSecurityLayer(host.securityLayer);
     setDisabledFormats(host.disableForFormats);
+    setDescription(host.serverDescription ?? '');
+    setHidden(host.isHidden ?? false);
+    setDescriptionRefusal(null);
     setDirty(false);
   }
 
@@ -359,7 +401,16 @@ export function HostEditPage() {
     // Порт занят парой (порт, транспорт), как у сервера (E40): hy2 на 443/udp
     // не закрыт vless на 443/tcp. Привязка без транспорта (сервер старше)
     // закрывает по номеру, как раньше.
-    const takenPort = nodePortClaims(bindings, hostsQuery.data?.hosts ?? [], port, portCheckTransport, host?.id);
+    // A-259: the profile's own inbound on this port is not «taken», the host
+    // joins it; unless the whole inbound moves, which a sibling would block.
+    const takenPort = nodePortClaims(
+      bindings,
+      hostsQuery.data?.hosts ?? [],
+      port,
+      portCheckTransport,
+      host?.id,
+      isNew || portMove === 'host' ? profileId : null,
+    );
     const q = nodeSearch.trim().toLowerCase();
 
     return nodes
@@ -437,8 +488,27 @@ export function HostEditPage() {
     hostsQuery.data,
     portCheckTransport,
     genKnown,
+    isNew,
+    portMove,
     t,
   ]);
+
+  // Drawn and sent only when the server carries the keys (visibilityKnown).
+  const visibilityOn = visibilityKnown(isNew, host ? { isHidden: host.isHidden } : null, hostsQuery.data?.hosts);
+  const descriptionIssue = visibilityOn ? descriptionProblem(description) : null;
+
+  // A-259: what the port means on the node, said before the save. The host is
+  // placed by its binding id, never by the profile and node pair.
+  const portPlan = hostPortPlan({
+    bindings,
+    hosts: hostsQuery.data?.hosts ?? [],
+    profileId,
+    nodeId,
+    port,
+    self: isNew || !host ? null : { hostId: host.id, bindingId: host.bindingId },
+    move: portMove,
+  });
+  const names = (list: string[]) => list.map((n) => `«${n}»`).join(', ');
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -449,7 +519,6 @@ export function HostEditPage() {
         remark: name.trim(),
         enabled,
         addressOverride: address.trim() || null,
-        portOverride: port === '' ? null : Number(port),
         sniOverride: can('sniOverride') ? sni.trim() || null : null,
         hostHeaderOverride: can('hostHeaderOverride') ? hostHeader.trim() || null : null,
         pathOverride: can('pathOverride') ? path.trim() || null : null,
@@ -459,6 +528,14 @@ export function HostEditPage() {
         alpn: can('alpn') ? alpn : [],
         securityLayer: can('securityLayer') ? securityLayer : ('default' as const),
         disableForFormats: disabledFormats,
+        // Only what was set or changed; clearing is null (visibilityPatch).
+        ...(visibilityOn
+          ? visibilityPatch(
+              isNew ? null : { serverDescription: host?.serverDescription, isHidden: host?.isHidden },
+              description,
+              hidden,
+            )
+          : {}),
       };
       if (isNew) {
         // Say what the operator means: serve this profile from this node on this
@@ -468,15 +545,26 @@ export function HostEditPage() {
         if (!profileId || !profiles.some((p) => p.id === profileId) || !nodeId || port === '') {
           throw new Error(t('hostEdit.pickNodeFirst'));
         }
-        return createHost({ profileId, nodeId, port: Number(port), ...payload });
+        return createHost({ profileId, nodeId, ...payload, ...hostPortPayload(null, { port, clientPort }) });
       }
-      return updateHost(host!.id, payload);
+      // Ports only when changed (hostPortPayload): restating the listen port
+      // would read as a move, and an override equal to it is no override. A
+      // moved port says what moves (A-259).
+      const stored = currentBinding ? { listenPort: currentBinding.port, clientPort: host!.portOverride } : null;
+      return updateHost(host!.id, {
+        ...payload,
+        ...(stored ? hostPortPayload(stored, { port, clientPort }, portMove) : {}),
+      });
     },
     onSuccess: (saved) => {
       qc.invalidateQueries({ queryKey: ['hosts'] });
+      // A-259: a port move may put the host on another binding, or a new one.
+      qc.invalidateQueries({ queryKey: ['bindings'] });
       setDirty(false);
       setSniExpected(null);
       setCoreRefusal(null);
+      setSlotRefusal(null);
+      setDescriptionRefusal(null);
       notifications.show({
         color: 'green',
         message: isNew ? t('hostEdit.created') : t('hostEdit.saved'),
@@ -484,6 +572,12 @@ export function HostEditPage() {
       if (isNew && saved) navigate(`/hosts/${saved.id}`, { replace: true });
     },
     onError: (err) => {
+      // A-236 step 6: the server's sentence about the description, at its field.
+      const described = serverDescriptionRefusal(err);
+      if (described) {
+        setDescriptionRefusal(described);
+        return;
+      }
       // The API refuses an SNI the node would not serve, and says which names it
       // does. Naming them on the field beats a red toast the operator has to
       // translate into an action.
@@ -520,6 +614,26 @@ export function HostEditPage() {
         setCoreRefusal(core);
         return;
       }
+      // A node this list does not show: the same words in a toast (A-235),
+      // it used to fall through to the port field as «port taken».
+      if (core) {
+        qc.invalidateQueries({ queryKey: ['nodes'] });
+        notifications.show({ color: 'red', title: t('common.saveError'), message: coreGateText(core, t) });
+        return;
+      }
+      // The adapter already serves another host on this node (A-055).
+      const slot = adapterRefusal(err);
+      if (slot) {
+        setSlotRefusal(slot);
+        return;
+      }
+      // The node runs no core for this profile (A-235): its own words, with
+      // the needed and the reported engines, not «port taken».
+      const notOnNode = profileNotOnNode(err);
+      if (notOnNode) {
+        notifications.show({ color: 'red', title: t('common.saveError'), message: profileNotOnNodeWords(notOnNode, t) });
+        return;
+      }
       const conflict = portConflict(err);
       if (conflict !== null) {
         setPortConflictMsg(conflict || t('hostEdit.portConflictFallback'));
@@ -545,21 +659,33 @@ export function HostEditPage() {
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       });
     },
   });
 
   usePageMeta(isNew ? [t('hostEdit.newCrumb')] : [host?.remark ?? '']);
 
-  if (!host && !isNew) {
+  // A-141: «host not found» only when the list arrived without it. The binding
+  // list is part of the gate too: without it the port field seeds empty and a
+  // typed port would not leave on save (hostPortPayload needs the stored one).
+  // A-234: the node and profile lists are the form's too. Without them a new
+  // host offered an empty profile choice and said «pick a node first», and an
+  // existing one drew «nothing found» under its nodes.
+  const gateQueries = { hosts: hostsQuery, bindings: bindingsQuery, nodes: nodesQuery, profiles: profilesQuery };
+  const { view: gate, failed } = hostEditGate(isNew, gateQueries, host !== null);
+  if (failed) {
+    const q = gateQueries[failed];
+    return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
+  if (!isNew && gate.kind !== 'ready') {
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Stack align="center" gap={14}>
           <Text style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 500, color: SNOW }}>
-            {hostsQuery.isLoading ? t('common.loading') : t('hostEdit.notFound')}
+            {gate.kind === 'gone' ? t('hostEdit.notFound') : t('common.loading')}
           </Text>
-          {!hostsQuery.isLoading && (
+          {gate.kind === 'gone' && (
             <PageButton onClick={() => navigate('/hosts')}>{t('hostEdit.backToList')}</PageButton>
           )}
         </Stack>
@@ -577,9 +703,14 @@ export function HostEditPage() {
         ? t('hostEdit.needPort')
         : isNew && !nodeId
           ? t('hostEdit.needNode')
-          : null;
+          : descriptionIssue
+            ? t('hostEdit.needDescription')
+            : null;
 
   const selectedProfile = profiles.find((p) => p.id === profileId);
+  // A-231: the format chips are the one answer to «who will not get this
+  // host» (the server's /formats, door or transport); the line that said it a
+  // second time from the client side is gone.
   // Only fields this profile can actually serve are counted. A leftover SNI on
   // a Hysteria host is not an override, it is a value nobody reads, and saving
   // clears it anyway.
@@ -675,7 +806,7 @@ export function HostEditPage() {
       {/* Хост есть, а подписка его не отдаёт: нода в каскаде не вход. Над
           формой, потому что правка полей ниже этого не изменит: решается это
           на странице каскада, куда и ведёт ссылка. */}
-      {!isNew && <HostHiddenLine facts={hostHiddenFacts(host, currentNode?.name ?? '?', currentNode)} />}
+      {!isNew && <HostHiddenLine facts={hostHiddenFacts(host, currentNode?.name ?? null, currentNode)} />}
 
       {/* Who is still holding the previous link. Above the form, because the
           fields below are what will make that number grow. */}
@@ -732,6 +863,7 @@ export function HostEditPage() {
                     // про прошлое число.
                     setPortCheck(null);
                     setPortRefusal(null);
+                    setSlotRefusal(null);
                     setDirty(true);
                   }}
                   onBlur={() => void runPortCheck()}
@@ -753,12 +885,85 @@ export function HostEditPage() {
                 {portRefusal && (
                   <PortRefusalLine code={portRefusal.code} conflicts={portRefusal.conflicts} />
                 )}
-                <PortCheckHint
-                  result={portCheck}
-                  checking={portChecking}
-                  port={port === '' ? 0 : port}
-                  transport={portCheckTransport}
+                {/* The server's check counts the profile's own inbound on this
+                    port as a holder; the plan says the host joins it (A-259). */}
+                {portPlan?.kind !== 'join' && (
+                  <PortCheckHint
+                    result={portCheck}
+                    checking={portChecking}
+                    port={port === '' ? 0 : port}
+                    transport={portCheckTransport}
+                  />
+                )}
+                {portPlan?.kind === 'join' && (
+                  <Hint>
+                    {portPlan.hosts.length > 0
+                      ? t('hostEdit.portJoin', { port: portPlan.port, names: names(portPlan.hosts) })
+                      : t('hostEdit.portJoinAlone', { port: portPlan.port })}
+                  </Hint>
+                )}
+                {portPlan?.kind === 'newInbound' && (
+                  <Hint>{t('hostEdit.portNewInbound', { port: portPlan.port, ports: portPlan.ports.join(', ') })}</Hint>
+                )}
+                {/* A-259: other hosts ride this inbound. By default only this
+                    one leaves for its own port; the whole inbound is the other
+                    choice. */}
+                {(portPlan?.kind === 'split' || portPlan?.kind === 'moveAll') && (
+                  <Radio.Group
+                    value={portMove}
+                    onChange={(v) => {
+                      setPortMove(v === 'binding' ? 'binding' : 'host');
+                      setPortRefusal(null);
+                      setSlotRefusal(null);
+                      setDirty(true);
+                    }}
+                    style={{ marginTop: 8 }}
+                  >
+                    <Stack gap={6}>
+                      <Radio
+                        value="host"
+                        label={t('hostEdit.portMoveHost')}
+                        description={t('hostEdit.portMoveHostWhy', {
+                          port: portPlan.port,
+                          from: portPlan.from,
+                          names: names(portPlan.others),
+                        })}
+                      />
+                      <Radio
+                        value="binding"
+                        label={t('hostEdit.portMoveBinding')}
+                        description={t('hostEdit.portMoveBindingWhy', {
+                          port: portPlan.port,
+                          from: portPlan.from,
+                          names: names(portPlan.others),
+                        })}
+                      />
+                    </Stack>
+                  </Radio.Group>
+                )}
+                {/* On an edit the node list is far below: the adapter's refusal
+                    of the new port stands at the port (A-259). */}
+                {!isNew && slotRefusal && (
+                  <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED, marginTop: 6 }}>
+                    {adapterRefusalWords({ ...slotRefusal, nodeName: null }, t, selectedProfile?.name)}
+                  </Text>
+                )}
+              </Box>
+              {/* A-150: the port clients dial when it is not the one the node
+                  listens on. Empty means they dial the listen port. */}
+              <Box style={{ flex: 1 }}>
+                <NumberInput
+                  label={t('hostEdit.clientPort')}
+                  placeholder={port === '' ? '' : String(currentBinding?.publicPort ?? port)}
+                  value={clientPort}
+                  min={1}
+                  max={65535}
+                  onChange={(v) => {
+                    setClientPort(typeof v === 'number' ? v : '');
+                    setDirty(true);
+                  }}
                 />
+                <Hint>{t('hostEdit.clientPortHint')}</Hint>
               </Box>
               <Box style={{ flex: 1 }}>
                 <Text style={{ ...LABEL, marginBottom: 8 }}>{t('hostEdit.state')}</Text>
@@ -773,6 +978,69 @@ export function HostEditPage() {
                 <Hint>{t('hostEdit.stateHint')}</Hint>
               </Box>
             </Box>
+
+            {/* A-236 step 6: drawn only when the server carries the keys; an
+                older server has said nothing about either. */}
+            {visibilityOn && (
+              <Box style={{ display: 'flex', gap: 16 }}>
+                <Box style={{ flex: 2 }}>
+                  <TextInput
+                    label={t('hostEdit.description')}
+                    placeholder={t('hostEdit.descriptionPlaceholder')}
+                    value={description}
+                    error={descriptionIssue || descriptionRefusal ? true : undefined}
+                    onChange={(e) => {
+                      setDescription(e.currentTarget.value);
+                      setDescriptionRefusal(null);
+                      setDirty(true);
+                    }}
+                    rightSection={
+                      description !== '' ? (
+                        <UnstyledButton
+                          type="button"
+                          aria-label={t('hostEdit.descriptionClear')}
+                          onClick={() => {
+                            setDescription('');
+                            setDescriptionRefusal(null);
+                            setDirty(true);
+                          }}
+                        >
+                          <IconX size={14} stroke={1.8} color={MIST} />
+                        </UnstyledButton>
+                      ) : undefined
+                    }
+                  />
+                  {descriptionRefusal ? (
+                    <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED }}>
+                      {descriptionRefusal}
+                    </Text>
+                  ) : descriptionIssue ? (
+                    <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: RED }}>
+                      {t(`hostEdit.descriptionProblem.${descriptionIssue}`, { max: HOST_SERVER_DESCRIPTION_MAX })}
+                    </Text>
+                  ) : (
+                    <Hint>
+                      {t('hostEdit.descriptionHint', {
+                        used: [...description].length,
+                        max: HOST_SERVER_DESCRIPTION_MAX,
+                      })}
+                    </Hint>
+                  )}
+                </Box>
+                <Box style={{ flex: 1 }}>
+                  <Text style={{ ...LABEL, marginBottom: 8 }}>{t('hostEdit.hiddenLabel')}</Text>
+                  <Switch
+                    checked={hidden}
+                    onChange={(e) => {
+                      setHidden(e.currentTarget.checked);
+                      setDirty(true);
+                    }}
+                    label={hidden ? t('hostEdit.hiddenOn') : t('hostEdit.hiddenOff')}
+                  />
+                  <Hint>{t('hostEdit.hiddenHint')}</Hint>
+                </Box>
+              </Box>
+            )}
 
             {/* The address is one line for however many nodes stand behind the
                 host, so it belongs here rather than under Advanced: with one
@@ -1103,12 +1371,11 @@ export function HostEditPage() {
                         key={f}
                         active={on}
                         disabled={cannot}
-                        title={row.state === 'cannot' ? whyLabel(row.why) : undefined}
+                        title={row.state === 'cannot' ? reasonLabel(row.reason, whyLabel(row.why)) : undefined}
                         onClick={() => {
                           if (cannot) return;
-                          setDisabledFormats((prev) =>
-                            prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f],
-                          );
+                          // Clash and Mihomo go off and on together (A-249).
+                          setDisabledFormats((prev) => toggleHostFormat(prev, f));
                           setDirty(true);
                         }}
                       >
@@ -1121,12 +1388,12 @@ export function HostEditPage() {
                 {/* Почему серые серые: по причине строка, в ней форматы.
                     Причины из ответа, а не из списка здесь: незнакомая этой
                     сборке тоже получает строку, с кодом. */}
-                {formatGapGroups(formatFacts.rows).map(({ why, formats }) => (
+                {formatGapGroups(formatFacts.rows).map(({ why, reason, formats }) => (
                   <Text
-                    key={why}
+                    key={`${reason ?? ''}:${why}`}
                     style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT, marginTop: 6 }}
                   >
-                    {whyLabel(why)}: {formats.map((f) => formatLabel(f, t)).join(', ')}
+                    {reasonLabel(reason, whyLabel(why))}: {formats.map((f) => formatLabel(f, t)).join(', ')}
                   </Text>
                 ))}
               </Stack>
@@ -1237,6 +1504,7 @@ export function HostEditPage() {
                         setDirty(true);
                         // Отказ был про прежний выбор ноды.
                         setCoreRefusal(null);
+                        setSlotRefusal(null);
                       }}
                       style={{
                         width: '100%',
@@ -1309,6 +1577,13 @@ export function HostEditPage() {
                       <Text style={{ fontSize: 11, lineHeight: '15px', color: RED }}>{r.awgWhy}</Text>
                     </Box>
                   )}
+                  {isNew && r.selected && slotRefusal && (
+                    <Box style={{ padding: '0 14px 12px 46px' }}>
+                      <Text style={{ fontSize: 11, lineHeight: '15px', color: RED }}>
+                        {adapterRefusalWords({ ...slotRefusal, nodeName: null }, t, selectedProfile?.name)}
+                      </Text>
+                    </Box>
+                  )}
                   {coreRefusal?.nodeName === r.node.name && (
                     <Box style={{ padding: '0 14px 12px 46px' }}>
                       <CoreGateRefusalLine refusal={coreRefusal} nodeId={r.node.id} arch={r.node.cores?.arch} />
@@ -1342,8 +1617,12 @@ export function HostEditPage() {
               <Text style={{ flex: 1, fontFamily: DISPLAY, fontSize: 15, fontWeight: 500, color: SNOW }}>
                 {name.trim() || t('hostEdit.unnamed')}
               </Text>
+              {/* The port a client dials: its own override, else the inbound's
+                  public port, else where the node listens (A-150). */}
               {port !== '' && (
-                <Text style={{ fontFamily: MONO, fontSize: 12, color: CYAN_HI }}>{port}</Text>
+                <Text style={{ fontFamily: MONO, fontSize: 12, color: CYAN_HI }}>
+                  {clientPort !== '' ? clientPort : (currentBinding?.publicPort ?? port)}
+                </Text>
               )}
             </Box>
             <Hint>{isNew ? t('hostEdit.previewHintNew') : t('hostEdit.previewHint')}</Hint>

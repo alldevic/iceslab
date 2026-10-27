@@ -46,7 +46,9 @@ export interface DomainEventMap {
   // deleted or reordered. Affects subscription OUTPUT only, never the config
   // pushed to a node, so read-cache invalidation is the whole job. No payload:
   // a reorder moves many rows at once and naming one of them would mislead.
-  'host.changed':         Record<string, never>;
+  // nodeId: the node whose inbound reach the change moved (A-215), absent for a
+  // change that moves none (a reorder).
+  'host.changed':         { nodeId?: string };
   // policy.changed → a node-level routing policy (Э3 layer B) was edited,
   // deleted, or attached to / detached from a node. Unlike host.changed this
   // DOES re-push: the policy is rendered into the node's config, so a rule the

@@ -41,14 +41,36 @@ import {
   directionEmpty,
   directionLines,
   directionOfRefusal,
+  entryHasAwg31,
   entryChainGaps,
   entryChainNotes,
   outboundChainGaps,
   outboundTakenBy,
   refusedDirection,
+  movePosition,
+  removePosition,
+  appendPosition,
+  refusedPositionMoved,
   type DirectionDraft,
+  type PositionDraft,
 } from '@/contours/cascades/lib/cascadeForm';
 import { directionOutbounds, type NamedOutbound } from '@/lib/domain/namedOutbounds';
+
+describe('entryHasAwg31: AWG 3.1 на нодах входа (E58)', () => {
+  const profiles = [
+    { id: 'p1', protocol: 'amneziawg', awgProtocol: 3 },
+    { id: 'p2', protocol: 'amneziawg', awgProtocol: null },
+    { id: 'p3', protocol: 'xray', awgProtocol: 3 },
+  ];
+  it('привязка профиля amneziawg 3: да; только 1.x или чужой протокол: нет', () => {
+    expect(entryHasAwg31([{ profileId: 'p2' }, { profileId: 'p1' }], profiles)).toBe(true);
+    expect(entryHasAwg31([{ profileId: 'p2' }, { profileId: 'p3' }], profiles)).toBe(false);
+  });
+  it('ответы не пришли: undefined', () => {
+    expect(entryHasAwg31(undefined, profiles)).toBeUndefined();
+    expect(entryHasAwg31([], undefined)).toBeUndefined();
+  });
+});
 
 describe('направление на именованном выходе (фаза 10, d28cc14)', () => {
   const dir = (over: Partial<DirectionDraft>): DirectionDraft => ({
@@ -1006,6 +1028,32 @@ describe('entryBystanders', () => {
   it('6. профиль, которого нет в списке, чужим не называется', () => {
     expect(entryBystanders('xray', nodes, [bind('p-gone', 'n1')], profiles)).toEqual([]);
   });
+
+  it('7. A-264: xray trojan и vmess на входе xray мимо vlessRoute названы, vless нет, без известного subprotocol не назван', () => {
+    const xray = [
+      { id: 'x-vless', protocol: 'xray', config: { subprotocol: 'vless' } },
+      { id: 'x-trojan', protocol: 'xray', config: { subprotocol: 'trojan' } },
+      { id: 'x-vmess', protocol: 'xray', config: { subprotocol: 'vmess' } },
+      { id: 'x-unknown', protocol: 'xray', config: {} },
+      { id: 'x-noconfig', protocol: 'xray' },
+    ];
+    const all = xray.map((p) => bind(p.id, 'n1'));
+    expect(entryBystanders('xray', nodes, all, xray)).toEqual([
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['trojan', 'vmess'] },
+    ]);
+    expect(entryBystanders('xray', nodes, [bind('x-vless', 'n1'), bind('x-unknown', 'n1')], xray)).toEqual([]);
+  });
+
+  it('8. хвост A-264: xray socks и http (вход по логину, без UUID) тоже названы, vless нет', () => {
+    const xray = [
+      { id: 'x-vless', protocol: 'xray', config: { subprotocol: 'vless' } },
+      { id: 'x-socks', protocol: 'xray', config: { subprotocol: 'socks' } },
+      { id: 'x-http', protocol: 'xray', config: { subprotocol: 'http' } },
+    ];
+    expect(entryBystanders('xray', nodes, xray.map((p) => bind(p.id, 'n1')), xray)).toEqual([
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['http', 'socks'] },
+    ]);
+  });
 });
 
 describe('entryNoteKind', () => {
@@ -1195,5 +1243,54 @@ describe('entryProtocolDefault: вход по ядрам ноды, а не по 
   it('сервер старше intendedEngines: прежнее правило по метке, иначе сказать нечего', () => {
     expect(entryProtocolDefault({ protocol: 'hysteria' })).toEqual({ kind: 'protocol', protocol: 'hysteria' });
     expect(entryProtocolDefault({ protocol: 'tuic' })).toEqual({ kind: 'unknown' });
+  });
+});
+
+describe('A-140: позиция, сменившая номер, шлёт свою ногу', () => {
+  const entry: PositionDraft = { key: 0, nodeIds: ['e'], entryProtocol: 'xray', linkProtocol: 'xray', linkParams: null };
+  const a: PositionDraft = { key: 1, nodeIds: ['a'], entryProtocol: 'xray', linkProtocol: 'xray', linkParams: { underlay: 'awg' } };
+  const b: PositionDraft = { key: 2, nodeIds: ['b'], entryProtocol: 'xray', linkProtocol: 'tuic', linkParams: { congestion: 'bbr' } };
+
+  it('два транзита местами: у обоих в пейлоаде linkParams нового места', () => {
+    const out = toPositionInputs(movePosition([entry, a, b], 1, 1));
+    expect(out[1]).toMatchObject({ nodeIds: ['b'], position: 1, linkProtocol: 'tuic', linkParams: { congestion: 'bbr' } });
+    expect(out[2]).toMatchObject({ nodeIds: ['a'], position: 2, linkProtocol: 'xray', linkParams: { underlay: 'awg' } });
+    expect('linkParams' in out[0]!).toBe(false);
+  });
+
+  it('удаление средней: сдвинутые шлют своё, оставшиеся на месте нет', () => {
+    const out = toPositionInputs(removePosition([entry, a, b], 1));
+    expect(out).toHaveLength(2);
+    expect('linkParams' in out[0]!).toBe(false);
+    expect(out[1]).toMatchObject({ nodeIds: ['b'], position: 1, linkParams: { congestion: 'bbr' } });
+  });
+
+  it('поле, которое сервер не отдал, не помечается: null стёр бы хранимое', () => {
+    const blind = { ...b, linkParams: undefined };
+    const out = toPositionInputs(movePosition([entry, a, blind], 2, -1));
+    expect('linkParams' in out[1]!).toBe(false);
+    expect(out[2]).toMatchObject({ linkParams: { underlay: 'awg' } });
+  });
+
+  it('удалить позицию с подложкой и добавить новую: у новой в пейлоаде linkParams: null', () => {
+    const out = toPositionInputs(appendPosition(removePosition([entry, a, b], 2), 9));
+    expect(out[2]).toMatchObject({ nodeIds: [], position: 2, linkProtocol: 'xray', linkParams: null });
+    expect('linkParams' in out[2]!).toBe(true);
+  });
+
+  it('отказ POSITION_MOVED_WITHOUT_LINK_PARAMS: номера с единицы, вход проверяется первым', () => {
+    const r = (status: number, data: unknown) => ({ response: { status, data } });
+    expect(
+      refusedPositionMoved(r(400, { error: 'POSITION_MOVED_WITHOUT_LINK_PARAMS', message: 'm', position: 2, storedPosition: 1 })),
+    ).toEqual({ position: 3, stored: 2 });
+    for (const e of [null, 'x', new Error('Network Error'), { response: null }]) expect(refusedPositionMoved(e)).toBeNull();
+    expect(refusedPositionMoved(r(400, { error: 'POSITION_MOVED_WITHOUT_LINK_PARAMS', position: '2', storedPosition: 1 }))).toBeNull();
+    expect(refusedPositionMoved(r(400, { error: 'INVALID', position: 2, storedPosition: 1 }))).toBeNull();
+    expect(refusedPositionMoved(r(409, { error: 'POSITION_MOVED_WITHOUT_LINK_PARAMS', position: 2, storedPosition: 1 }))).toBeNull();
+  });
+
+  it('за край не двигает', () => {
+    const pools = [entry, a];
+    expect(movePosition(pools, 1, 1)).toBe(pools);
   });
 });

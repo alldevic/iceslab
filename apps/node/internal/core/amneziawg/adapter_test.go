@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -232,7 +233,9 @@ func TestAdapter_GetStats_ParsesDumpAndReportsDeltas(t *testing.T) {
 	}
 }
 
-func TestAdapter_GetStats_AwgFailureReturnsZeros(t *testing.T) {
+// A configured interface whose dump failed is NoData, not zeros (A-163): the
+// poll does not fail, and the panel leaves the users' snapshots alone.
+func TestAdapter_GetStats_AwgFailureIsNoData(t *testing.T) {
 	dir := t.TempDir()
 	a := New(Config{
 		Inbound:     validInbound(),
@@ -254,8 +257,8 @@ func TestAdapter_GetStats_AwgFailureReturnsZeros(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStats should fall back, not error: %v", err)
 	}
-	if len(stats.Users) != 1 || stats.Users[0].BytesIn != 0 {
-		t.Errorf("expected zero-counter fallback, got %+v", stats.Users)
+	if !stats.NoData || len(stats.Users) != 0 {
+		t.Errorf("expected NoData with no users, got %+v", stats)
 	}
 }
 
@@ -386,6 +389,8 @@ func TestAdapter_ConcurrentReloadsNoRaceNoDeadlock(t *testing.T) {
 
 	const workers = 8
 	const iters = 25
+	// Every finished step, for the watchdog below.
+	var steps atomic.Int64
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
@@ -398,6 +403,7 @@ func TestAdapter_ConcurrentReloadsNoRaceNoDeadlock(t *testing.T) {
 				_, _ = a.GetStats()
 				_ = a.Healthy()
 				_ = a.RemoveUser(uid)
+				steps.Add(1)
 			}
 		}(w)
 	}
@@ -409,14 +415,32 @@ func TestAdapter_ConcurrentReloadsNoRaceNoDeadlock(t *testing.T) {
 		for i := 0; i < iters*workers; i++ {
 			_, _ = a.GetStats()
 			_ = a.Healthy()
+			steps.Add(1)
 		}
 	}()
 
+	// A deadlock is no progress, not a slow run. The watchdog used to be 20 s
+	// for the whole test, and 400 config writes, each fsynced (atomicfile),
+	// passed it alone and missed it under a parallel `go test ./...` on a
+	// loaded machine (BACK-2, AUDT 26.10). It now fails only when no step at
+	// all finishes for stallLimit; a test that keeps moving, however slowly,
+	// runs to the end, and go test's own -timeout still bounds the whole.
+	const stallLimit = 30 * time.Second
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(20 * time.Second):
-		t.Fatal("concurrent reloads deadlocked (20s watchdog)")
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	last, lastMoved := steps.Load(), time.Now()
+	for {
+		select {
+		case <-done:
+			return
+		case <-tick.C:
+			if n := steps.Load(); n != last {
+				last, lastMoved = n, time.Now()
+			} else if time.Since(lastMoved) > stallLimit {
+				t.Fatalf("concurrent reloads deadlocked: no step finished for %s (%d done)", stallLimit, n)
+			}
+		}
 	}
 }

@@ -78,6 +78,10 @@ func TestRenderConfig_WithBrutalBandwidth(t *testing.T) {
 	if !strings.Contains(got, "bandwidth:\n  up: 100 mbps\n  down: 200 mbps\n") {
 		t.Errorf("missing bandwidth section, got:\n%s", got)
 	}
+	// A-154: beside a bandwidth the flag turned Brutal off on both sides.
+	if strings.Contains(got, "ignoreClientBandwidth") {
+		t.Errorf("ignoreClientBandwidth beside a bandwidth, Brutal would be off:\n%s", got)
+	}
 }
 
 func TestRenderConfig_RequiresHostname(t *testing.T) {
@@ -87,10 +91,23 @@ func TestRenderConfig_RequiresHostname(t *testing.T) {
 	}
 }
 
-func TestRenderConfig_RequiresACMEEmail(t *testing.T) {
-	_, err := renderConfig(Config{Hostname: "h"}, InboundConfig{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "ACMEEmail is required") {
-		t.Fatalf("expected ACMEEmail-required error, got %v", err)
+// A-276: a node with a domain and no ACME email renders, with an acme block
+// that carries no email line (hysteria 2.12.3 and certmagic take none).
+func TestRenderConfig_ACMEWithoutEmail(t *testing.T) {
+	out, err := renderConfig(Config{Hostname: "hy2.example.net"}, InboundConfig{}, nil)
+	if err != nil {
+		t.Fatalf("a node with no ACME email refused the render: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "acme:\n  domains:\n    - hy2.example.net\n") {
+		t.Fatalf("no acme block for the domain:\n%s", s)
+	}
+	if strings.Contains(s, "email") {
+		t.Fatalf("an email line with no email:\n%s", s)
+	}
+	with, err := renderConfig(Config{Hostname: "hy2.example.net", ACMEEmail: "ops@iceslab.test"}, InboundConfig{}, nil)
+	if err != nil || !strings.Contains(string(with), "  email: ops@iceslab.test\n") {
+		t.Fatalf("the email given is not rendered: %v\n%s", err, with)
 	}
 }
 

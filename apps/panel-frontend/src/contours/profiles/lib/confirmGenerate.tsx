@@ -1,21 +1,21 @@
 import { Stack, Text } from '@mantine/core';
 import { modals } from '@mantine/modals';
-import type { GenerateImpact } from '@/contours/profiles/lib/generateImpact';
+import { generateStep, type GenerateImpact } from '@/contours/profiles/lib/generateImpact';
 import type { TFn } from '@/lib/ui/relativeTime';
 
 /**
- * Ask before replacing a key pair, with the same numbers the warning above the
- * button already showed.
+ * Ask before replacing a key pair, with the server's numbers (A-225).
  *
  * Deliberately not a plain "are you sure": the cost of this one is measured in
- * hosts and nodes, so the dialog repeats the measurement rather than asking
- * the operator to remember it from the row they just read.
- *
- * A profile that has never been deployed cannot break anything, so it is
- * generated straight away.
+ * hosts, nodes and client configs, so the dialog repeats the measurement. When
+ * the count did not arrive the dialog still opens and says the cost is not
+ * known: a failed count used to read as zero and skip the question. While the
+ * count is on its way nothing happens (the button also waits for it).
  */
 export function confirmGenerate(impact: GenerateImpact, t: TFn, run: () => void): void {
-  if (impact.hosts === 0 && impact.nodes === 0) {
+  const step = generateStep(impact);
+  if (step === 'wait') return;
+  if (step === 'run') {
     run();
     return;
   }
@@ -25,7 +25,9 @@ export function confirmGenerate(impact: GenerateImpact, t: TFn, run: () => void)
     children: (
       <Stack gap={8}>
         <Text size="sm">
-          {t('profiles.generate.confirmBody', { hosts: impact.hosts, nodes: impact.nodes })}
+          {impact.kind === 'ready'
+            ? t('profiles.generate.confirmBody', { hosts: impact.hosts, nodes: impact.nodes, configs: impact.configs })
+            : t('profiles.generate.confirmUnknown')}
         </Text>
         <Text size="sm" c="dimmed">
           {t('profiles.generate.body')}

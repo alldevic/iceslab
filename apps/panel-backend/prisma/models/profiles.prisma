@@ -1,7 +1,8 @@
 // ───── Slice 27: Profiles + Node Bindings ─────────────────────────────────
 //
-// New model that replaces the per-node `Inbound` row. Inspired by Remnawave's
-// ConfigProfile + Host split, simplified for our 7-protocol topology:
+// New model that replaces the per-node `Inbound` row. Inspired by the config
+// profile + host split of the panel operators migrate from, simplified for our
+// 7-protocol topology:
 //
 //   Profile               - a logical inbound TEMPLATE with shared config
 //                           (e.g. one VLESS+REALITY profile reused on N nodes)
@@ -40,6 +41,8 @@ model Profile {
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // A-122: when what goes into a client's link last changed (not any write to the row, as updatedAt is); the host card's "who holds the old link" reads it.
+  linkChangedAt DateTime @default(now()) @map("link_changed_at") @db.Timestamptz(6)
 
   bindings       ProfileNodeBinding[]
   groupProfiles  GroupProfile[]
@@ -77,6 +80,8 @@ model ProfileNodeBinding {
   enabled    Boolean  @default(true)
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // A-122: when what goes into a client's link last changed (not any write to the row, as updatedAt is); the host card's "who holds the old link" reads it.
+  linkChangedAt DateTime @default(now()) @map("link_changed_at") @db.Timestamptz(6)
 
   profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
   node    Node    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
@@ -88,7 +93,9 @@ model ProfileNodeBinding {
   // used to be [nodeId, port] and refused it, which is not caution, it is a
   // refusal of a standard configuration.
   @@unique([nodeId, port, transport])
-  @@unique([profileId, nodeId])
+  // No [profileId, nodeId] since 25.10: one profile may sit on a node on
+  // several ports, each binding its own inbound (a single-inbound adapter
+  // still takes one, assertAdapterSlotFree).
   @@index([profileId])
   @@index([nodeId])
   @@map("profile_node_bindings")
@@ -109,7 +116,7 @@ model ProfileNodeBinding {
 // the subscription stays back-compat (one binding still emits one URL until
 // the admin actually adds extra hosts).
 //
-// Inspired by Remnawave's hosts table; field set tightened to the overrides
+// Inspired by the hosts table of the panel operators migrate from; field set tightened to the overrides
 // our URI builders / format formatters actually consume.
 model Host {
   // See User.sourceId. Partial unique index lives in the raw migration.
@@ -154,8 +161,19 @@ model Host {
   // canonical lowercase format name array: ["plain","clash","singbox","xrayjson","wgconf"].
   disableForFormats String[] @default([]) @map("disable_for_formats")
 
+  // A-236 step 6. A line the client apps that show one put under the server
+  // name (DESCRIPTION_CLIENTS in @iceslab/shared); one line, at most 200 code
+  // points, checked by serverDescriptionProblem. NULL = none.
+  serverDescription String? @map("server_description")
+  // A host in no public output (every subscription format, the page, the
+  // format list) unless a template asks for hidden hosts
+  // (iceslab.includeHiddenHosts), and then only in its own format.
+  isHidden          Boolean @default(false) @map("is_hidden")
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // A-122: when what goes into a client's link last changed (not any write to the row, as updatedAt is); the host card's "who holds the old link" reads it.
+  linkChangedAt DateTime @default(now()) @map("link_changed_at") @db.Timestamptz(6)
 
   binding    ProfileNodeBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
   // Squads that narrow their handout to this specific host. See GroupHost.

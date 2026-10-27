@@ -45,23 +45,60 @@ interface LatestCache {
 let latestCache: LatestCache | null = null;
 let inflight: Promise<LatestCache> | null = null;
 
-/** Strip a leading v, drop any pre-release/build suffix, split to numbers. */
-function parseSemver(v: string): number[] {
-  const core = v.replace(/^v/i, '').split(/[-+]/)[0];
-  return core.split('.').map((n) => Number.parseInt(n, 10) || 0);
+/**
+ * A panel version as semver 2.0 reads it: a leading v stripped, the build
+ * metadata (+...) dropped, which takes no part in precedence, and the
+ * pre-release (-rc.1) kept as its dot-separated identifiers.
+ *
+ * Not compareCoreVersions (shared core-versions.ts): that one refuses to order
+ * suffixes on purpose, because the cores' upstreams give them opposite
+ * meanings. The panel's own tags are semver, and a suffix there is a
+ * pre-release.
+ */
+function parseSemver(v: string): { core: number[]; pre: string[] } {
+  const noBuild = v.trim().replace(/^v/i, '').split('+')[0]!;
+  const dash = noBuild.indexOf('-');
+  const coreText = dash === -1 ? noBuild : noBuild.slice(0, dash);
+  const preText = dash === -1 ? '' : noBuild.slice(dash + 1);
+  return {
+    core: coreText.split('.').map((n) => Number.parseInt(n, 10) || 0),
+    pre: preText === '' ? [] : preText.split('.'),
+  };
 }
 
-/** True when `latest` is strictly newer than `current` (numeric major.minor.patch). */
+/** semver 2.0 §11.4: numeric identifiers numerically and below alphanumeric
+ *  ones, those in ASCII order, and a shorter set first when all before agree. */
+function comparePre(a: string[], b: string[]): number {
+  // No pre-release outranks any: 0.3.0 is newer than 0.3.0-rc.1 (§11.3).
+  if (a.length === 0 || b.length === 0) return b.length - a.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    const xn = /^\d+$/.test(x);
+    const yn = /^\d+$/.test(y);
+    if (xn && yn) return Number(x) - Number(y);
+    if (xn !== yn) return xn ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** True when `latest` is strictly newer than `current` by semver 2.0
+ *  precedence: a final is newer than its own pre-releases (a panel on
+ *  0.3.0-rc.1 is told about 0.3.0), rc.2 newer than rc.1. */
 export function isNewer(latest: string, current: string): boolean {
   const a = parseSemver(latest);
   const b = parseSemver(current);
-  const len = Math.max(a.length, b.length);
+  const len = Math.max(a.core.length, b.core.length);
   for (let i = 0; i < len; i++) {
-    const x = a[i] ?? 0;
-    const y = b[i] ?? 0;
+    const x = a.core[i] ?? 0;
+    const y = b.core[i] ?? 0;
     if (x !== y) return x > y;
   }
-  return false;
+  return comparePre(a.pre, b.pre) > 0;
 }
 
 function githubHeaders(): Record<string, string> {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FORMAT_NAMES } from '@iceslab/shared';
+import { FORMAT_NAMES, SERVER_DESCRIPTION_WORDS, serverDescriptionProblem } from '@iceslab/shared';
 
 // Format names accepted in `disableForFormats[]`.
 //
@@ -12,6 +12,12 @@ import { FORMAT_NAMES } from '@iceslab/shared';
 const FormatEnum = z.enum(FORMAT_NAMES);
 
 const SecurityLayerEnum = z.enum(['default', 'tls', 'none']);
+
+/** A-236 step 6: the shared rule, its words as the refusal. Null clears. */
+const ServerDescription = z.string().superRefine((s, ctx) => {
+  const problem = serverDescriptionProblem(s);
+  if (problem) ctx.addIssue({ code: 'custom', message: SERVER_DESCRIPTION_WORDS[problem] });
+});
 
 export const HostIdParamSchema = z.object({ id: z.uuid() });
 
@@ -64,6 +70,8 @@ export const CreateHostSchema = z
     allowInsecure: z.boolean().default(false),
     securityLayer: SecurityLayerEnum.default('default'),
     disableForFormats: z.array(FormatEnum).default([]),
+    serverDescription: ServerDescription.nullable().optional(),
+    isHidden: z.boolean().default(false),
   })
   .superRefine((val, ctx) => {
     if (val.bindingId) return;
@@ -87,7 +95,25 @@ export const UpdateHostSchema = z
     remark: z.string().min(1).max(64).optional(),
     priority: z.number().int().min(0).max(1000).optional(),
     enabled: z.boolean().optional(),
+    /**
+     * A-150: the port the NODE listens on, i.e. the binding's port. Changing it
+     * moves the inbound (same port checks as creating one, then a push). Before
+     * this the screen's "port" wrote portOverride, so the node kept listening
+     * on the old port while the subscription handed out the new one.
+     */
+    port: z.number().int().min(1).max(65535).optional(),
+    /**
+     * A-259: what a new `port` moves. `host` (the default): this host alone,
+     * onto the profile's binding of that port on the node, a new one when there
+     * is none; a host alone on its binding moves the binding itself. `binding`:
+     * the whole binding, every host on it with it.
+     */
+    portMove: z.enum(['host', 'binding']).optional(),
+    /** A-150, kept for the screens that send it: `true` is portMove 'binding'. */
+    confirmSharedPort: z.boolean().optional(),
     addressOverride: z.string().min(1).max(253).nullable().optional(),
+    /** The port CLIENTS dial when it differs from the one the node listens on
+     *  (NAT, CDN). Only this writes portOverride; null clears it. */
     portOverride: z.number().int().min(1).max(65535).nullable().optional(),
     sniOverride: z.string().min(1).max(253).nullable().optional(),
     hostHeaderOverride: z.string().min(1).max(253).nullable().optional(),
@@ -100,6 +126,9 @@ export const UpdateHostSchema = z
     allowInsecure: z.boolean().optional(),
     securityLayer: SecurityLayerEnum.optional(),
     disableForFormats: z.array(FormatEnum).optional(),
+    // Absent is no edit; null clears (A-236 step 6).
+    serverDescription: ServerDescription.nullable().optional(),
+    isHidden: z.boolean().optional(),
   });
 
 export const ReorderHostsSchema = z.object({

@@ -77,6 +77,8 @@ func TestHealthyConfigOnly(t *testing.T) {
 
 func TestGetStatsViaFakeRunCmd(t *testing.T) {
 	a := New(Config{
+		// A binary that carries v2ray_api: without it there are no counters.
+		BinaryPath:   taggedBinary(t, "with_quic,with_v2ray_api"),
 		StatsListen:  "127.0.0.1:8082",
 		XrayStatsBin: "/usr/local/bin/xray",
 		RunCmd: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
@@ -179,8 +181,8 @@ func TestApplyInboundConfigOnly(t *testing.T) {
 	if err := a.ApplyInbound(8443, json.RawMessage(`{"serverName":"x.example","congestionControl":"bbr"}`)); err != nil {
 		t.Fatalf("ApplyInbound: %v", err)
 	}
-	if a.inbound.ListenPort != 8443 || a.inbound.ServerName != "x.example" {
-		t.Errorf("inbound not stored: %+v", a.inbound)
+	if a.inbounds[""].ListenPort != 8443 || a.inbounds[""].ServerName != "x.example" {
+		t.Errorf("inbound not stored: %+v", a.inbounds[""])
 	}
 	// Unchanged re-apply is a no-op.
 	if err := a.ApplyInbound(8443, json.RawMessage(`{"serverName":"x.example","congestionControl":"bbr"}`)); err != nil {
@@ -200,8 +202,8 @@ func TestXrayFamilyAdapter(t *testing.T) {
 	if err := a.ApplyInbound(443, json.RawMessage(cfg)); err != nil {
 		t.Fatalf("ApplyInbound: %v", err)
 	}
-	if a.inbound.Subprotocol != "vless" || a.inbound.RealityServerName != "www.cloudflare.com" {
-		t.Errorf("inbound not stored: %+v", a.inbound)
+	if a.inbounds[""].Subprotocol != "vless" || a.inbounds[""].RealityServerName != "www.cloudflare.com" {
+		t.Errorf("inbound not stored: %+v", a.inbounds[""])
 	}
 	// AddUser keyed on the xray uuid.
 	if err := a.AddUser(core.User{UserID: "u1", XrayUUID: "uuid-1"}); err != nil {
@@ -251,8 +253,8 @@ func TestHysteria2Adapter(t *testing.T) {
 	if err := a.ApplyInbound(443, json.RawMessage(`{"obfsPassword":"o","brutalUpMbps":50}`)); err != nil {
 		t.Fatalf("ApplyInbound: %v", err)
 	}
-	if a.inbound.ObfsPassword != "o" || a.inbound.BrutalUpMbps != 50 {
-		t.Errorf("inbound not stored: %+v", a.inbound)
+	if a.inbounds[""].ObfsPassword != "o" || a.inbounds[""].BrutalUpMbps != 50 {
+		t.Errorf("inbound not stored: %+v", a.inbounds[""])
 	}
 	if err := a.AddUser(core.User{UserID: "u1", HysteriaPassword: "hp1"}); err != nil {
 		t.Fatalf("AddUser: %v", err)
@@ -280,8 +282,8 @@ func TestShadowsocksAdapter(t *testing.T) {
 	if err := a.ApplyInbound(8388, json.RawMessage(`{"method":"2022-blake3-aes-256-gcm","serverPsk":"SPSK"}`)); err != nil {
 		t.Fatalf("ApplyInbound: %v", err)
 	}
-	if a.inbound.Method != "2022-blake3-aes-256-gcm" || a.inbound.ServerPSK != "SPSK" {
-		t.Errorf("inbound not stored: %+v", a.inbound)
+	if a.inbounds[""].Method != "2022-blake3-aes-256-gcm" || a.inbounds[""].ServerPSK != "SPSK" {
+		t.Errorf("inbound not stored: %+v", a.inbounds[""])
 	}
 	// method/serverPsk are required.
 	if err := a.ApplyInbound(8388, json.RawMessage(`{"method":"2022-blake3-aes-256-gcm"}`)); err == nil {
@@ -321,8 +323,8 @@ func TestShadowtlsAdapter(t *testing.T) {
 	if err := a.ApplyInbound(443, json.RawMessage(cfg)); err != nil {
 		t.Fatalf("ApplyInbound: %v", err)
 	}
-	if a.inbound.ShadowtlsHandshake != "www.microsoft.com:443" || a.inbound.ServerPSK != "INNER-KEY" {
-		t.Errorf("inbound not stored: %+v", a.inbound)
+	if a.inbounds[""].ShadowtlsHandshake != "www.microsoft.com:443" || a.inbounds[""].ServerPSK != "INNER-KEY" {
+		t.Errorf("inbound not stored: %+v", a.inbounds[""])
 	}
 	if err := a.AddUser(core.User{UserID: "u1", ShadowtlsPassword: "stpw1"}); err != nil {
 		t.Fatalf("AddUser: %v", err)

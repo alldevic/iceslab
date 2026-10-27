@@ -16,6 +16,8 @@ export const login = {
     topbarStatusNormal: 'Backend reachable',
     topbarStatusDegraded: 'Backend degraded',
     topbarStatusDown: 'Backend unreachable',
+    // A-240: before /health first answers.
+    topbarStatusChecking: 'Checking backend',
     signInBadge: 'Sign in',
     heroLine1: 'Operator',
     heroLine2: 'console.',
@@ -31,6 +33,7 @@ export const login = {
     // No arrow glyph in the copy: the button draws its own.
     continueAction: 'Continue',
     createAdminAction: 'Create admin',
+    lockedFor: 'Locked, {{seconds}} s left',
     bootstrapHint: 'First admin has full panel access. Choose a strong password, bootstrap runs once.',
     signInFailed: 'Sign-in failed',
     unknownError: 'Unknown error',

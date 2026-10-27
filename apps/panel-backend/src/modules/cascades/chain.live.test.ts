@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer as createTcpServer, connect, type AddressInfo, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
+import { lookup } from 'node:dns/promises';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +12,13 @@ import { LINK_CELLS, type LinkCell } from '@iceslab/shared';
 import { renderChainConfig, type ChainRenderInput } from './chain.config.js';
 import { chainPoliciesOf } from './chain-policy.js';
 import { CHAIN_SOCKS_USER } from './chain.ports.js';
-import { generateTopologyLinks, newLinkCred, topologyLinkKey, type LinkCred } from './cascade.config.js';
+import {
+  buildCascadeConfigs,
+  generateTopologyLinks,
+  newLinkCred,
+  topologyLinkKey,
+  type LinkCred,
+} from './cascade.config.js';
 
 /**
  * Every leg cell, carrying a real request between two real sing-box processes.
@@ -39,7 +46,22 @@ const SINGBOX_BIN =
   ['/usr/local/bin/sing-box', '/usr/bin/sing-box'].find((p) => existsSync(p)) ??
   '';
 
+const XRAY_BIN = process.env.XRAY_BIN ?? ['/usr/local/bin/xray'].find((p) => existsSync(p)) ?? '';
+
 const children: ChildProcess[] = [];
+
+/** Like run, for xray (the legacy drawing of a leg). */
+function runXray(name: string, config: unknown): { log: () => string } {
+  const dir = mkdtempSync(join(tmpdir(), `iceslab-live-${name}-`));
+  const file = join(dir, 'config.json');
+  writeFileSync(file, JSON.stringify(config, null, 2));
+  const child = spawn(XRAY_BIN, ['run', '-c', file], { stdio: ['ignore', 'pipe', 'pipe'] });
+  children.push(child);
+  let out = '';
+  child.stdout!.on('data', (d: Buffer) => (out += d.toString()));
+  child.stderr!.on('data', (d: Buffer) => (out += d.toString()));
+  return { log: () => `--- ${name}\n${out.split('\n').slice(-15).join('\n')}` };
+}
 afterAll(() => {
   for (const c of children) c.kill('SIGKILL');
 });
@@ -318,6 +340,210 @@ describe('a leg carries a request between two engines', () => {
       }
     },
     40000,
+  );
+
+  /**
+   * A-102, for real: a shadowsocks leg into a transit with two ways out. The
+   * leg carries one secret for both directions, so the transit cannot tell
+   * them apart; route's default would send both out through the first. The
+   * fallback for a shape stored before the save refused it drops both instead.
+   * Without it, both requests below arrive.
+   */
+  it.skipIf(!SINGBOX_BIN)(
+    'a transit that cannot tell two directions apart drops both instead of sending them out of the first',
+    async () => {
+      const password = randomBytes(12).toString('hex');
+      const legIn = await newLinkCred('shadowsocks', await freePort());
+      const outA = await newLinkCred('shadowsocks', await freePort());
+      const outB = await newLinkCred('shadowsocks', await freePort());
+      const entry = renderChainConfig({
+        role: 'entry',
+        socksPassword: password,
+        directionTags: [1, 2],
+        out: [
+          { tag: 1, host: '127.0.0.1', cred: legIn },
+          { tag: 2, host: '127.0.0.1', cred: legIn },
+        ],
+      }) as { inbounds: { type: string; tag: string; listen_port: number }[] };
+      const socksPorts: number[] = [];
+      for (const i of entry.inbounds) {
+        if (i.type !== 'socks') continue;
+        i.listen_port = await freePort();
+        socksPorts.push(i.listen_port);
+      }
+      const transit = renderChainConfig({
+        role: 'transit',
+        socksPassword: password,
+        in: { cred: legIn, clients: [{ tag: 1 }, { tag: 2 }] },
+        out: [
+          { tag: 1, host: '127.0.0.1', cred: outA },
+          { tag: 2, host: '127.0.0.1', cred: outB },
+        ],
+      });
+      const exitOf = (cred: LinkCred) =>
+        renderChainConfig({ role: 'exit', socksPassword: password, in: { cred, clients: [{ tag: 1 }] } });
+      // Exit B lets nothing out: a request that arrives went out through A.
+      const exitB = exitOf(outB) as { route: { rules: Record<string, unknown>[] } };
+      exitB.route.rules.unshift({ network: ['tcp', 'udp'], action: 'reject', method: 'drop' });
+      expect(socksPorts).toHaveLength(2);
+
+      /** One run of the four engines; the bodies each direction's socks got. */
+      const once = async (name: string, transitConfig: unknown, wait: (port: number) => Promise<string>) => {
+        const runs = [
+          run(`${name}-exit-a`, exitOf(outA)),
+          run(`${name}-exit-b`, exitB),
+          run(`${name}-transit`, transitConfig),
+          run(`${name}-entry`, entry),
+        ];
+        try {
+          const bodies: string[] = [];
+          for (const port of socksPorts) bodies.push(await wait(port));
+          return { bodies, logs: () => runs.map((r) => r.log()).join('\n') };
+        } finally {
+          await stopAll();
+        }
+      };
+      const arrives = (port: number) =>
+        eventually(async () => {
+          const body = await getThroughSocks(port, password, httpPort);
+          if (!body.includes(nonce)) throw new Error('reply without the nonce');
+          return body;
+        }, 15000);
+
+      // The control first, with the closing rule cut out of the transit: the
+      // defect itself. Both directions arrive, and since exit B lets nothing
+      // out, both went through A. This also proves the four engines, the ports
+      // and the legs are up, so the real run below fails for the rule alone.
+      const blind = structuredClone(transit) as { route: { rules: Record<string, unknown>[] } };
+      blind.route.rules = blind.route.rules.filter((r) => !(r.action === 'reject' && 'network' in r));
+      expect(blind.route.rules.length).toBe((transit as typeof blind).route.rules.length - 1);
+      const control = await once('a102-control', blind, arrives);
+      for (const body of control.bodies) expect(body, control.logs()).toContain(nonce);
+
+      // With the rule: neither direction gets through.
+      // The same engines came up in the control within seconds; give them that.
+      let settled = false;
+      const real = await once('a102', transit, async (port) => {
+        if (!settled) {
+          await new Promise((r) => setTimeout(r, 4000));
+          settled = true;
+        }
+        return getThroughSocks(port, password, httpPort).catch(() => '');
+      });
+      for (const body of real.bodies) expect(body, real.logs()).not.toContain(nonce);
+    },
+    60000,
+  );
+
+  /**
+   * A-111, the dial family, for real. The entry is addressed by an IPv4 literal
+   * in the panel, the next hop by a name with both an A and an AAAA record
+   * (`localhost`: 127.0.0.1 and ::1), and the exit listens on 127.0.0.1 only,
+   * as a next hop's ufw lets in only the IPv4 source. Pinned to IPv4 the leg
+   * arrives; the control pinned to IPv6 does not, which proves the pin is what
+   * the engine dials by and not a lucky resolver order.
+   */
+  /**
+   * The name has to carry BOTH families, or the positive half proves only that
+   * IPv4 arrives anyway. Fails rather than skips: a machine without ::1 for
+   * localhost cannot run this test, and saying so is the answer.
+   */
+  const assertDualStackLocalhost = async () => {
+    const families = new Set((await lookup('localhost', { all: true })).map((a) => a.family));
+    expect([...families].sort(), 'localhost must resolve to both 127.0.0.1 and ::1 for this test').toEqual([4, 6]);
+  };
+
+  const pinnedPair = async (selfHost: string) => {
+    const socksPort = await freePort();
+    const password = randomBytes(12).toString('hex');
+    const cred = await newLinkCred('shadowsocks', await freePort());
+    const pair = renderPair(cred, socksPort, password);
+    const entry = renderChainConfig({
+      ...pair.entryInput,
+      selfHost,
+      out: [{ tag: 1, host: 'localhost', cred }],
+    }) as { inbounds: { type: string; listen_port: number }[] };
+    for (const i of entry.inbounds) if (i.type === 'socks') i.listen_port = socksPort;
+    const exit = pair.exit as { inbounds: { listen?: string }[] };
+    for (const i of exit.inbounds) i.listen = '127.0.0.1';
+    return { entry, exit, socksPort, password, cred };
+  };
+
+  it.skipIf(!SINGBOX_BIN)(
+    'a sing-box leg from an IPv4 literal to a dual-stack name dials IPv4, and an IPv6 pin does not arrive',
+    async () => {
+      await assertDualStackLocalhost();
+      const v4 = await pinnedPair('127.0.0.1');
+      expect(JSON.stringify(v4.entry)).toContain('ipv4_only');
+      expect(await through('pin-v4', v4.entry, v4.exit, v4.socksPort, v4.password)).toContain(nonce);
+      const v6 = await pinnedPair('::1');
+      expect(JSON.stringify(v6.entry)).toContain('ipv6_only');
+      await expect(through('pin-v6', v6.entry, v6.exit, v6.socksPort, v6.password, 4000)).rejects.toThrow();
+    },
+    40000,
+  );
+
+  it.skipIf(!SINGBOX_BIN || !XRAY_BIN)(
+    'a legacy xray shadowsocks leg from an IPv4 literal to a dual-stack name dials IPv4, and an IPv6 pin does not arrive',
+    async () => {
+      await assertDualStackLocalhost();
+      const legacyEntry = (selfHost: string, cred: LinkCred, socksPort: number, password: string) => {
+        const [entry, exitHop] = buildCascadeConfigs(
+          [
+            { nodeId: 'e', position: 0, nodeHost: selfHost },
+            { nodeId: 'x', position: 1, nodeHost: 'localhost' },
+          ] as never,
+          [cred],
+        );
+        const linkOut = entry!.outbounds.find((o) => (o as { protocol?: string }).protocol === 'shadowsocks')!;
+        // The legacy exit too: the xray link-out carries mux, which only an xray
+        // link-in takes. On 127.0.0.1 only, as the next hop's ufw lets in.
+        const exit = {
+          log: { loglevel: 'warning' },
+          inbounds: exitHop!.inbounds.map((i) => ({ ...i, listen: '127.0.0.1' })),
+          outbounds: exitHop!.outbounds,
+        };
+        return {
+          exit,
+          log: { loglevel: 'warning' },
+          inbounds: [
+            {
+              listen: '127.0.0.1',
+              port: socksPort,
+              protocol: 'socks',
+              settings: { auth: 'password', accounts: [{ user: CHAIN_SOCKS_USER, pass: password }] },
+            },
+          ],
+          // The link-out first: xray sends what no rule names to the first outbound.
+          outbounds: [linkOut],
+        };
+      };
+      for (const [selfHost, arrives] of [
+        ['127.0.0.1', true],
+        ['::1', false],
+      ] as const) {
+        const p = await pinnedPair(selfHost);
+        const entry = legacyEntry(selfHost, p.cred, p.socksPort, p.password);
+        expect(JSON.stringify(entry)).toContain(arrives ? 'ForceIPv4' : 'ForceIPv6');
+        const { exit, ...entryConfig } = entry;
+        const exitRun = runXray(`xray-pin-${arrives ? 'v4' : 'v6'}-exit`, exit);
+        const entryRun = runXray(`xray-pin-${arrives ? 'v4' : 'v6'}-entry`, entryConfig);
+        try {
+          const got = eventually(async () => {
+            const body = await getThroughSocks(p.socksPort, p.password, httpPort);
+            if (!body.includes(nonce)) throw new Error('reply without the nonce');
+            return body;
+          }, arrives ? 15000 : 4000);
+          if (arrives) expect(await got).toContain(nonce);
+          else await expect(got).rejects.toThrow();
+        } catch (err) {
+          throw new Error(`${(err as Error).message}\n${exitRun.log()}\n${entryRun.log()}`);
+        } finally {
+          await stopAll();
+        }
+      }
+    },
+    60000,
   );
 
   afterAll(() => http?.close());

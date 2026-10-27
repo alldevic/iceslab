@@ -1,6 +1,6 @@
 import { Box, Text } from '@mantine/core';
 import { FooterButton } from '@/contours/users/components/UserDrawer/FooterButton';
-import { HAIRLINE, MIST, MONO, WELL } from '@/contours/users/lib/colors';
+import { HAIRLINE, MIST, MONO, RED, WELL } from '@/contours/users/lib/colors';
 import { useTranslation } from 'react-i18next';
 import type { Props } from '@/contours/users/components/UserDrawer';
 import type { UserForm } from '@/contours/users/components/UserDrawer/useUserForm';
@@ -13,7 +13,8 @@ export function DrawerFooter({
   onClose,
   loading,
   setCreateNext,
-}: Pick<UserForm, 'isEdit' | 'setCreateNext'> & {
+  saveRefusal,
+}: Pick<UserForm, 'isEdit' | 'setCreateNext' | 'saveRefusal'> & {
   onClose: Props['onClose'];
   loading: Props['loading'];
 }) {
@@ -33,9 +34,17 @@ export function DrawerFooter({
             flexShrink: 0,
           }}
         >
-          <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MIST }}>
-            ⏎ {isEdit ? t('userDrawer.saveShort') : t('userDrawer.createShort')}
-          </Text>
+          {/* A refused save in the server's words, where the eye is when the
+              button did not close the form (userSaveRefusal). */}
+          {saveRefusal ? (
+            <Text style={{ fontSize: 12, lineHeight: '16px', color: RED, flex: 1, minWidth: 0, paddingRight: 12, overflowWrap: 'anywhere' }}>
+              {saveRefusal}
+            </Text>
+          ) : (
+            <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MIST }}>
+              ⏎ {isEdit ? t('userDrawer.saveShort') : t('userDrawer.createShort')}
+            </Text>
+          )}
           <Box style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Making accounts is done in runs, so the second button saves this
                 one and leaves the form open on a blank draft. An edit is a

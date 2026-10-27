@@ -1,11 +1,15 @@
 import { IconExternalLink, IconLink, IconRefresh } from '@tabler/icons-react';
-import { Box, Text, UnstyledButton } from '@mantine/core';
+import { Box, Select, Text, UnstyledButton } from '@mantine/core';
+import { useState } from 'react';
+import { userProtocols, withProtocols } from '@/contours/users/lib/subscriptionProtocols';
 import { CARD, CYAN, FAINT, DISPLAY, FIELD_EDGE, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contours/users/lib/colors';
 import { LABEL } from '@/contours/users/lib/userForm';
 import { CopyButton } from '@/ui/CopyButton';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import { fetchAuthStatus } from '@/lib/auth/api';
-import { subscriptionUrl } from '@/lib/domain/users';
+import { subscriptionLink } from '@/contours/users/lib/subscriptionLink';
+import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
@@ -22,9 +26,12 @@ import type { User } from '@/lib/domain/users';
 export function SubscriptionCard({
   user,
   onRevoke,
+  endpoints,
 }: {
   user: User;
   onRevoke: (user: User) => void;
+  /** Эндпоинты пользователя: из них список протоколов для ссылки на один. */
+  endpoints?: readonly { protocol: string }[];
 }) {
   const { t } = useTranslation();
   // Same key the roster uses, so this reads the cache rather than asking again
@@ -34,7 +41,15 @@ export function SubscriptionCard({
     queryFn: fetchAuthStatus,
     staleTime: 5 * 60 * 1000,
   });
-  const url = subscriptionUrl(user.subscriptionToken, status.data?.panel);
+  // Вся подписка или один протокол (BACK 55dacc5): боту оператора нужна
+  // ссылка на протокол. Один за раз, без мультивыбора.
+  const protocols = userProtocols(endpoints);
+  const [picked, setPicked] = useState<string | null>(null);
+  const only = picked && protocols.includes(picked as never) ? picked : null;
+  // No link while the panel's address is unknown (subscriptionLink): a
+  // fallback host in the copy button is the wrong link for the client.
+  const link = subscriptionLink(user.subscriptionToken, status, apiErrorMessage);
+  const url = link.kind === 'ready' ? withProtocols(link.url, only ? [only] : []) : null;
 
   return (
     <Box
@@ -57,6 +72,31 @@ export function SubscriptionCard({
         </Text>
       </Box>
 
+      {protocols.length > 0 && (
+        <Select
+          size="xs"
+          aria-label={t('userDrawer.subScope')}
+          data={[
+            { value: '', label: t('userDrawer.subAll') },
+            ...protocols.map((p) => ({ value: p, label: p })),
+          ]}
+          value={only ?? ''}
+          allowDeselect={false}
+          onChange={(v) => setPicked(v || null)}
+          style={{ maxWidth: 240 }}
+        />
+      )}
+
+      {link.kind === 'failed' && (
+        <LoadFailedLine message={`${t('users.linkUnavailable')}: ${link.message}`} onRetry={link.onRetry} />
+      )}
+      {link.kind === 'absent' && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>{t('users.linkNoAddress')}</Text>
+      )}
+      {link.kind === 'loading' && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>{t('common.loading')}</Text>
+      )}
+      {url !== null && (
       <Box
         style={{
           display: 'flex',
@@ -89,15 +129,23 @@ export function SubscriptionCard({
         <CopyButton text={url} label={t('userDrawer.copy')} variant="solid" />
 
       </Box>
+      )}
+      {only && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: CYAN }}>
+          {t('userDrawer.subOnly', { protocol: only })}
+        </Text>
+      )}
 
       <Box style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Action
-          href={url}
-          icon={<IconExternalLink size={12} stroke={1.7} color={MIST} />}
-          label={t('userDrawer.openAsClient')}
-          color="#8A9BB2"
-          edge={HAIRLINE}
-        />
+        {url !== null && (
+          <Action
+            href={url}
+            icon={<IconExternalLink size={12} stroke={1.7} color={MIST} />}
+            label={t('userDrawer.openAsClient')}
+            color="#8A9BB2"
+            edge={HAIRLINE}
+          />
+        )}
         <Action
           onClick={() => onRevoke(user)}
           icon={<IconRefresh size={12} stroke={1.7} color={RED} />}

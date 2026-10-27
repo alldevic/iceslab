@@ -2,6 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import type { AwgGeometry3 } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { bustBindingsCache } from '../subscription/subscription.bindings-cache.js';
 
 /**
  * A node's AmneziaWG 3.1 geometry (t07-6): minted here ONCE per node and
@@ -219,10 +220,14 @@ export async function ensureAwg3Geometry(nodeId: string): Promise<AwgGeometry3 |
   // Written only where none is stored, then read back: two pushes minting at
   // once must end on ONE geometry, or the node runs one and a key carries the
   // other.
-  await prisma.node.updateMany({
+  // A-122: the geometry is in every 3.1 key of the node; the guarded write
+  // lands only where none was stored, so it is always a real change.
+  const wrote = await prisma.node.updateMany({
     where: { id: nodeId, awg3Geometry: { equals: Prisma.DbNull } },
-    data: { awg3Geometry: mintAwg3Geometry() as unknown as Prisma.InputJsonValue },
+    data: { awg3Geometry: mintAwg3Geometry() as unknown as Prisma.InputJsonValue, linkChangedAt: new Date() },
   });
+  // A-165: a cached node row without the geometry is stale now.
+  if (wrote.count > 0) bustBindingsCache();
   const after = await prisma.node.findUnique({ where: { id: nodeId }, select: { awg3Geometry: true } });
   return readAwg3Geometry(after?.awg3Geometry);
 }

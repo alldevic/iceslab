@@ -24,10 +24,9 @@ export { TEMPLATE_TYPES };
  * ⚠ Таблица приехала в `@iceslab/shared` 2026-09-22, временный мост снят:
  * теперь обычный именованный импорт, и расхождение ловит сборка.
  *
- * Локальная копия говорила `stash: 'stash'`, и контракт с ней разошёлся:
- * диалектов без `xhttp` и без `vless` у `/sub` пока нет, поэтому `stash` и
- * `clash` обрамляют тот же формат `clash`, что и `mihomo`. Ровно то, ради чего
- * копию и убирали.
+ * С шага 4 A-236 (BACK-2 51e2d152) клеш-семейство по ядру: `mihomo`
+ * обрамляет `mihomo`, `stash` свой `stash`, тип `clash` старое ядро
+ * `clash-legacy`. Адрес `clash` остался псевдонимом mihomo.
  */
 export function templateFormat(type: TemplateType): string {
   return TEMPLATE_FORMATS[type];
@@ -51,32 +50,33 @@ export interface SubscriptionTemplate {
   updatedAt: string;
 }
 
-/** Ответ сухого прогона: что вышло, что сказало ядро и на что жалуется панель. */
+/**
+ * Ответ сухого прогона (A-236 шаг 3, BACK-2 09326d9a): что вышло, что сказало
+ * ядро и на что жалуется панель. `null` у `check.ok` и у общего `ok` значит
+ * «ядро не запускалось» (на панели нет бинаря, у Clash ядра нет вовсе): это
+ * не «да». Общий `ok` ложен при отказе ядра или любой жалобе панели.
+ */
 export interface TemplateDryRun {
-  ok: boolean;
+  ok: boolean | null;
   /** Вывод на синтетических трёх узлах. */
   rendered: string;
   /** Ответ ядра: `sing-box check` или `xray -test`. */
-  check: { ok: boolean; message?: string };
-  /** «Слот пуст», «группа без узлов» и подобное. Не отказ, но повод спросить. */
-  warnings: string[];
+  check: { ok: boolean | null; message?: string };
+  /**
+   * «Слот пуст», «группа без узлов» и подобное. Не отказ, но повод спросить.
+   * С BACK-2 20f07677 объект с кодом из `DRY_RUN_WARNING_CODES` (shared) и
+   * фразой; сервер старше отвечает строкой. Разбор `dryRunFacts` принимает оба.
+   */
+  warnings: ({ code: string; message: string } | string)[];
 }
 
 /**
- * Ключ чужого формата импорта, переписывается сервером в наш `iceslab:`.
- *
- * Это идентификатор формата на проводе, а не упоминание: распознать чужой
- * служебный ключ в импортированном шаблоне, не назвав его, нельзя. Правило «не
- * называть чужие панели» про прозу, шапки, коммиты и тексты экрана; исключение
- * то же, что у репо iceslab-migrate (решение ARCH 23.09). Поэтому литерал
- * живёт ровно здесь, а все места, которым он нужен, читают эту константу.
+ * Ответ импорта. Чужие служебные ключи панель не узнаёт и не переписывает
+ * (решение владельца 25.10: имени чужой панели в коде нет даже литералом):
+ * файл из другой панели сначала идёт через `iceslab-migrate templates`.
  */
-export const FOREIGN_TEMPLATE_KEY = 'remnawave:';
-
 export interface TemplateImportResult {
   template: SubscriptionTemplate;
-  /** Сколько чужих ключей (`FOREIGN_TEMPLATE_KEY`) переписано в наши `iceslab:`. */
-  rewrittenKeys: number;
 }
 
 export async function listTemplates(): Promise<{ templates: SubscriptionTemplate[] }> {
@@ -135,23 +135,41 @@ export async function importTemplate(input: {
  * оператор ищет ошибку глазами по всему конфигу.
  */
 export interface TemplateRefusal {
-  code: 'TEMPLATE_INVALID' | 'TEMPLATE_NAME_TAKEN' | 'TEMPLATE_DEFAULT_PROTECTED';
+  code: 'TEMPLATE_INVALID' | 'TEMPLATE_NAME_TAKEN' | 'TEMPLATE_DEFAULT_PROTECTED' | 'TEMPLATE_NOT_DEFAULT';
   message?: string;
+  /** TEMPLATE_INVALID: строка и столбец, когда сервер их знает (A-236, 29d1f62c). */
   line?: number;
+  column?: number;
 }
+
+/** Код и статус, с которым сервер его отдаёт (templates.routes.ts). */
+const TEMPLATE_REFUSAL_STATUS: Record<TemplateRefusal['code'], number> = {
+  TEMPLATE_INVALID: 400,
+  TEMPLATE_NAME_TAKEN: 409,
+  TEMPLATE_DEFAULT_PROTECTED: 409,
+  TEMPLATE_NOT_DEFAULT: 409,
+};
 
 export function templateRefusal(err: unknown): TemplateRefusal | null {
   // ⚠ `err` бывает `null`: у react-query это обычное значение «ошибки нет», и
   // читать у него поле значит уронить весь экран на первом же рендере.
   if (!err || typeof err !== 'object') return null;
-  const res = (err as {
-    response?: { status?: number; data?: { error?: string; message?: string; line?: number } };
-  }).response;
-  const code = res?.data?.error;
-  if (code !== 'TEMPLATE_INVALID' && code !== 'TEMPLATE_NAME_TAKEN' && code !== 'TEMPLATE_DEFAULT_PROTECTED') {
-    return null;
-  }
-  return { code, message: res?.data?.message, line: res?.data?.line };
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  const code = d.error;
+  if (typeof code !== 'string' || !Object.hasOwn(TEMPLATE_REFUSAL_STATUS, code)) return null;
+  const c = code as TemplateRefusal['code'];
+  if (TEMPLATE_REFUSAL_STATUS[c] !== status) return null;
+  const pos = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : undefined);
+  return {
+    code: c,
+    message: typeof d.message === 'string' ? d.message : undefined,
+    line: pos(d.line),
+    column: pos(d.column),
+  };
 }
 
 /**

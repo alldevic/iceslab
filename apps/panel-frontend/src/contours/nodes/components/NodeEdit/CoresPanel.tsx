@@ -25,6 +25,7 @@ import {
 import { HysteriaTlsLine } from '@/contours/nodes/components/NodeEdit/HysteriaTlsLine';
 import { agentAwgFact, nodeAwgFact, type AgentAwgFact, type NodeAwgFact } from '@/lib/domain/awg';
 import { coreVersionOf } from '@/lib/domain/coreVersion';
+import { coreFault, coreUncounted } from '@/lib/domain/coreReport';
 import {
   componentsOfCore,
   coreNeed,
@@ -433,6 +434,21 @@ function CoreRow({
           </RowButton>
         )}
       </Box>
+
+      {/* Поломка ядра словами агента (error, 49699f88): отдельно от reason,
+          который говорит «не работает по замыслу». */}
+      {coreFault(core) && (
+        <Text style={{ fontSize: 12, lineHeight: '17px', color: RED, marginTop: 6, paddingLeft: 18, overflowWrap: 'anywhere' }}>
+          {t('nodeEdit.coreFault', { error: coreFault(core) })}
+        </Text>
+      )}
+      {/* Ядро не считает трафик по юзеру (countsUsers: false): лимиты на нём
+          не действуют. Отсутствие поля это агент старше, молчание. */}
+      {coreUncounted(core) && (
+        <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER, marginTop: 6, paddingLeft: 18 }}>
+          {t('nodeEdit.coreUncounted')}
+        </Text>
+      )}
 
       {/* Сертификат нативной hysteria (E30a): какой отдаёт нода и тот ли, что
           выпустила панель. Сказать нечего: строки нет. */}

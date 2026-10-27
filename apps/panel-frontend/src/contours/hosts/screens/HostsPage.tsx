@@ -35,8 +35,13 @@ import { HostHiddenLine } from '@/ui/HostHiddenLine';
 import { AwgGenerationBadge } from '@/ui/AwgGenerationBadge';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { profilePairLabel, type EngineName } from '@/lib/domain/engines';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
+import { hostsBarCounts, listsArrived } from '@/contours/hosts/lib/hostsView';
+import { hiddenByOperator } from '@/contours/hosts/lib/hostVisibility';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
 import { COUNTRIES } from '@/lib/domain/countries';
 import { AMBER, CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, SNOW, VIOLET, WELL } from '@/contours/hosts/lib/colors';
 
@@ -62,8 +67,13 @@ export function HostsPage() {
 
   const hostsQuery = useQuery({ queryKey: ['hosts'], queryFn: () => listHosts() });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
+
+  // Once for the cards and the bar (A-247): «no node» and «unbound» only with
+  // both of their lists in hand (A-234).
+  const nodesKnown = listsArrived(bindingsQuery, nodesQuery);
+  const profileKnown = listsArrived(bindingsQuery, profilesQuery);
 
   const rows = useMemo(() => {
     const bindingById = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b]));
@@ -87,7 +97,7 @@ export function HostsPage() {
           nodeName: node?.name ?? null,
           // Нода в каскаде не вход: подписка этот хост не выдаёт. Факт сервера,
           // здесь только имя ноды к нему.
-          hidden: hostHiddenFacts(h, node?.name ?? '?', node),
+          hidden: hostHiddenFacts(h, node?.name ?? null, node),
           port: h.portOverride ?? binding?.publicPort ?? binding?.port ?? null,
           address: h.addressOverride ?? binding?.publicHost ?? null,
           countryCode: node?.countryCode ? node.countryCode.toUpperCase() : null,
@@ -95,8 +105,14 @@ export function HostsPage() {
           // each squad's member count, which counted one person in two squads
           // twice, and cannot be fixed here: the squad list carries totals, not
           // user ids, so there is nothing to deduplicate against.
-          squadCount: h.reach?.squads ?? 0,
-          userCount: h.reach?.users ?? 0,
+          // A-234: no reach in the answer is «unknown», not «nobody».
+          squadCount: h.reach?.squads ?? null,
+          userCount: h.reach?.users ?? null,
+          // Which node carries the host is known only with both lists in
+          // hand; without them «no node» would be a claim (A-234).
+          nodesKnown,
+          // The same for the profile: «unbound» only with both lists in hand.
+          profileKnown,
         };
       })
       .filter((r) => {
@@ -113,6 +129,8 @@ export function HostsPage() {
     bindingsQuery.data,
     nodesQuery.data,
     profilesQuery.data,
+    nodesKnown,
+    profileKnown,
     search,
     country,
   ]);
@@ -133,9 +151,13 @@ export function HostsPage() {
       children: (
         <Stack gap={8}>
           <Text size="sm">{t('hostsPage.deleteBody')}</Text>
-          {row.lastOfBinding && row.nodeName && (
+          {/* The last host of its binding restarts the core whether or not the
+              node list arrived: without the name it is said without it (A-234). */}
+          {row.lastOfBinding && (
             <Text size="sm" style={{ color: AMBER }}>
-              {t('hostsPage.deleteLast', { node: row.nodeName })}
+              {row.nodeName
+                ? t('hostsPage.deleteLast', { node: row.nodeName })
+                : t('hostsPage.deleteLastUnknownNode')}
             </Text>
           )}
         </Stack>
@@ -148,10 +170,11 @@ export function HostsPage() {
           qc.invalidateQueries({ queryKey: ['hosts'] });
           notifications.show({ color: 'green', message: t('hostsPage.deleted') });
         } catch (err) {
+          // A-235: the server's sentence, not axios's «status code 404».
           notifications.show({
             color: 'red',
-            title: t('common.saveError'),
-            message: err instanceof Error ? err.message : String(err),
+            title: t('common.deleteError'),
+            message: apiErrorMessage(err),
           });
         }
       },
@@ -161,11 +184,14 @@ export function HostsPage() {
   const total = hostsQuery.data?.hosts.length ?? 0;
   // The bar counts the same three states the cards show, so a degraded host is
   // not filed under LIVE where it would go unnoticed.
-  const isDegraded = (r: Row) =>
-    r.host.enabled && r.nodes.length > 0 && r.nodes.some((n) => n.status !== 'online');
-  const live = rows.filter((r) => r.host.enabled && r.nodes.length > 0 && !isDegraded(r)).length;
-  const degraded = rows.filter(isDegraded).length;
-  const orphaned = rows.filter((r) => r.nodes.length === 0).length;
+  // A-234: «no node» and «live» only when the node lists arrived (hostsBarCounts).
+  const { live, degraded, orphaned } = hostsBarCounts(rows, nodesKnown);
+  // The lists that did not arrive, said above the cards with a retry; the
+  // profile list too, the cards say «profile unknown» without it (A-247).
+  const listFailure =
+    loadFailure(bindingsQuery, apiErrorMessage) ??
+    loadFailure(nodesQuery, apiErrorMessage) ??
+    loadFailure(profilesQuery, apiErrorMessage);
   const countries = [...new Set(rows.map((r) => r.countryCode).filter(Boolean))] as string[];
 
   usePageMeta([
@@ -270,7 +296,10 @@ export function HostsPage() {
           />
           <BarButton
             title={t('common.refresh')}
-            onClick={() => qc.invalidateQueries({ queryKey: ['hosts'] })}
+            // Every list the cards read, not the hosts alone (A-247).
+            onClick={() => {
+              for (const key of ['hosts', 'bindings', 'nodes', 'profiles']) void qc.invalidateQueries({ queryKey: [key] });
+            }}
           >
             <IconRefresh size={16} stroke={1.8} color={MIST} />
           </BarButton>
@@ -280,7 +309,14 @@ export function HostsPage() {
         </Box>
       </Box>
 
-      {rows.length === 0 ? (
+      {listFailure && rows.length > 0 && (
+        <LoadFailedLine message={listFailure.message} onRetry={listFailure.onRetry} />
+      )}
+
+      {/* A list that did not arrive is not an empty one (A-141). */}
+      {rows.length === 0 && loadView(hostsQuery) === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(hostsQuery.error)} onRetry={() => void hostsQuery.refetch()} />
+      ) : rows.length === 0 ? (
         <Box
           style={{
             padding: 40,
@@ -294,7 +330,11 @@ export function HostsPage() {
               <IconWorldOff size={24} />
             </ThemeIcon>
             <Text c="dimmed" size="sm">
-              {total === 0 ? t('hostsPage.empty') : t('common.nothingFound')}
+              {loadView(hostsQuery) === 'loading'
+                ? t('common.loading')
+                : total === 0
+                  ? t('hostsPage.empty')
+                  : t('common.nothingFound')}
             </Text>
           </Stack>
         </Box>
@@ -315,7 +355,7 @@ export function HostsPage() {
 }
 
 type Row = {
-  host: { id: string; remark: string; enabled: boolean; priority: number };
+  host: { id: string; remark: string; enabled: boolean; priority: number; isHidden?: boolean };
   // `effectiveEngine` rides along: a profile row names the pair, and the engine
   // half is not derivable here on purpose.
   profile?: { name: string; protocol: string; effectiveEngine: EngineName };
@@ -326,8 +366,13 @@ type Row = {
   port: number | null;
   address: string | null;
   countryCode: string | null;
-  squadCount: number;
-  userCount: number;
+  /** Null: the server sent no reach (unknown, not «nobody»). */
+  squadCount: number | null;
+  userCount: number | null;
+  /** Whether the binding and node lists arrived, so «no node» is a fact. */
+  nodesKnown: boolean;
+  /** Whether the binding and profile lists arrived, so «unbound» is a fact. */
+  profileKnown: boolean;
 };
 
 function HostCard({
@@ -340,14 +385,16 @@ function HostCard({
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
-  const orphaned = row.nodes.length === 0;
+  // A-234: without the node lists the node is unknown, not missing.
+  const unknown = !row.nodesKnown;
+  const orphaned = !unknown && row.nodes.length === 0;
   // A host with nodes is not automatically serving: the state used to read
   // "a node exists" and never looked at whether the node answers. Between LIVE
   // and NO NODES there is a third state, still handing out URLs but through a
   // node that is not online, and it is the one worth catching early.
   const down = row.nodes.filter((n) => n.status !== 'online');
   const degraded = row.host.enabled && !orphaned && down.length > 0;
-  const live = row.host.enabled && !orphaned && !degraded;
+  const live = row.host.enabled && !unknown && !orphaned && !degraded;
   const accent = orphaned ? AMBER : degraded ? AMBER : row.host.enabled ? VIOLET : DIM;
 
   return (
@@ -384,6 +431,25 @@ function HostCard({
         {row.port !== null && (
           <Text style={{ fontFamily: MONO, fontSize: 14, fontWeight: 500, color: CYAN_HI }}>
             {row.port}
+          </Text>
+        )}
+        {/* A-236 step 6: the operator hid it; apart from the cascade's line below. */}
+        {hiddenByOperator(row.host) && (
+          <Text
+            title={t('hostEdit.hiddenHint')}
+            style={{
+              fontFamily: MONO,
+              fontSize: 10,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              color: AMBER,
+              padding: '2px 7px',
+              borderRadius: 5,
+              border: `1px solid ${AMBER}55`,
+              flexShrink: 0,
+            }}
+          >
+            {t('hostEdit.hiddenOn')}
           </Text>
         )}
         {row.address && (
@@ -459,13 +525,15 @@ function HostCard({
           </Box>
         ) : (
           <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
-            {t('hostsPage.unbound')}
+            {row.profileKnown ? t('hostsPage.unbound') : t('hostsPage.card.profileUnknown')}
           </Text>
         )}
       </FieldRow>
 
       <FieldRow label={t('hostsPage.card.nodes')}>
-        {orphaned ? (
+        {unknown ? (
+          <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>{t('hostsPage.card.nodesUnknown')}</Text>
+        ) : orphaned ? (
           <Box
             style={{
               display: 'inline-flex',
@@ -524,13 +592,13 @@ function HostCard({
         <Box style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <IconUser size={13} stroke={1.8} color={FAINT} />
           <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
-            {t('hostsPage.card.squads', { count: row.squadCount })}
+            {row.squadCount === null ? t('hostsPage.card.reachUnknown') : t('hostsPage.card.squads', { count: row.squadCount })}
           </Text>
         </Box>
         <Box style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <IconList size={13} stroke={1.8} color={FAINT} />
           <Text style={{ fontFamily: MONO, fontSize: 11, color: MIST }}>
-            {t('hostsPage.card.reach', { count: row.userCount })}
+            {row.userCount === null ? t('hostsPage.card.reachUnknown') : t('hostsPage.card.reach', { count: row.userCount })}
           </Text>
         </Box>
         <Box style={{ flex: 1 }} />
@@ -554,7 +622,9 @@ function HostCard({
             // Which node is down, since the card lists several by name.
             title={degraded ? down.map((n) => n.name).join(', ') : undefined}
           >
-            {live
+            {unknown
+              ? '-'
+              : live
               ? t('hostsPage.card.live')
               : orphaned
                 ? t('hostsPage.card.noNodes')
@@ -590,7 +660,7 @@ function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Fact({ value, label, accent }: { value: number; label: string; accent?: string }) {
+function Fact({ value, label, accent }: { value: number | string; label: string; accent?: string }) {
   return (
     <>
       <Text style={{ fontFamily: MONO, fontSize: 13, fontWeight: 500, color: accent ?? SNOW }}>

@@ -148,5 +148,25 @@ export async function requireAuth(
   request.admin = { id: admin.id, role: admin.role };
 }
 
+/**
+ * After requireAuth on routes that change how the admin LOGS IN (2FA): an
+ * API token is refused, whatever its scopes.
+ *
+ * requireAuth sets request.admin from a token's issuing admin, and a full
+ * token passes every scope check, so without this a full token could call
+ * setup, compute the code from the secret it got back and enable 2FA: the
+ * next password login answers TOTP_REQUIRED and the owner, who has no code,
+ * is locked out of a panel the token still runs. The same reason the token
+ * routes refuse tokens (api-tokens.routes.ts).
+ */
+export async function requireSession(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (request.apiToken) {
+    return reply.code(403).send({
+      error: 'FORBIDDEN',
+      message: 'API tokens cannot manage 2FA, log in as admin',
+    });
+  }
+}
+
 // Re-export for tests / future call-sites.
 export { API_TOKEN_PREFIX };

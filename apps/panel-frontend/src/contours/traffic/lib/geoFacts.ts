@@ -21,7 +21,7 @@ export function usesWords(uses: GeoUse[], t: (k: string, o?: Record<string, unkn
  * Что показать на экране гео-наборов (Ф9.5, geo-contract §5, §7). Разметка
  * отсюда только красит.
  */
-export type GeoScreenState = 'unavailable' | 'empty' | 'list';
+export type GeoScreenState = 'unavailable' | 'loading' | 'failed' | 'empty' | 'list';
 
 export interface GeoScreenFacts {
   state: GeoScreenState;
@@ -31,12 +31,13 @@ export interface GeoScreenFacts {
   anyChecking: boolean;
 }
 
-export function geoScreenFacts(input: { sets?: GeoSet[]; notImplemented?: boolean }): GeoScreenFacts {
+export function geoScreenFacts(input: { sets?: GeoSet[]; notImplemented?: boolean; failed?: boolean }): GeoScreenFacts {
   const none = { sets: [], total: 0, anyChecking: false };
   if (input.notImplemented) return { state: 'unavailable', ...none };
   const list = input.sets;
-  // Ответа ещё нет: это не «пусто».
-  if (!list) return { state: 'unavailable', ...none };
+  // Ответа ещё нет: это не «пусто». И не «скоро»: «скоро» значит, что сервер
+  // ручки не знает (501), а упавший запрос это ошибка с повтором (A-141).
+  if (!list) return { state: input.failed ? 'failed' : 'loading', ...none };
   if (list.length === 0) return { state: 'empty', ...none };
   // Битые, потом в проверке, потом проверенные: экран открывают, когда что-то
   // не так. Встроенные среди своих по имени.
@@ -108,10 +109,13 @@ export function geoSetActions(set: Pick<GeoSet, 'source' | 'status' | 'current' 
  */
 export function geoAttention(
   sets: Pick<GeoSet, 'name' | 'status'>[],
-  nodesBehind: number,
-): { broken: string[]; nodesBehind: number } | null {
+  nodesBehind: number | 'loading' | 'failed',
+): { broken: string[]; nodesBehind: number; nodesFailed: boolean } | null {
   const broken = sets.filter((s) => s.status === 'broken').map((s) => s.name);
-  return broken.length === 0 && nodesBehind === 0 ? null : { broken, nodesBehind };
+  // A-252: a node list that did not arrive is said, not counted as «none behind».
+  const nodesFailed = nodesBehind === 'failed';
+  const behind = typeof nodesBehind === 'number' ? nodesBehind : 0;
+  return broken.length === 0 && behind === 0 && !nodesFailed ? null : { broken, nodesBehind: behind, nodesFailed };
 }
 
 /**

@@ -1,9 +1,16 @@
-import type { ChainStatus, EngineName, GeoStatus, HostMetricsResponse, NodeGeoFact } from '@iceslab/shared';
+import type {
+  ChainStatus,
+  EngineName,
+  GeoStatus,
+  HostMetricsResponse,
+  NodeGeoFact,
+  NodePolicyDrawn,
+} from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { redis } from '../../lib/infra/redis.js';
 import { NodeTransport, NodeRequestError } from './nodes.transport.js';
 import { intendedFromReport } from './node-intended-engines.js';
-import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
+import { inboundSyncQueue, reconcileNodeRevisions } from '../inbounds/inbounds.queue.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
@@ -63,6 +70,9 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       intendedEngines: true,
       protocol: true,
       singboxEngine: true,
+      certNotAfter: true,
+      certFromHandshake: true,
+      policyDrawn: true,
     },
   });
 
@@ -132,7 +142,21 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // (E42). null = nothing to write: an older agent, an unreadable env, or
       // the same set as stored.
       const intended = intendedFromReport(node, result.declaredEngines);
+      // A-124: the certificate's end, same rule: undefined keeps what is
+      // stored (unreachable, or an agent older than the field).
+      const certChanged =
+        result.certNotAfter !== undefined &&
+        (result.certNotAfter.getTime() !== node.certNotAfter?.getTime() ||
+          result.certFromHandshake !== node.certFromHandshake);
+      // A-232: what xray did with the node policy. undefined keeps the stored
+      // fact (unreachable, or an agent that does not report it); a report is
+      // written when it changed, and on the heartbeat so observedAt stays true.
+      const storedPolicy = (node.policyDrawn as NodePolicyDrawnFact | null) ?? null;
+      const policyChanged =
+        result.policyDrawn !== undefined && policyDrawnWorthWriting(storedPolicy, result.policyDrawn, Date.now());
       if (
+        policyChanged ||
+        certChanged ||
         statusChanged ||
         messageChanged ||
         versionChanged ||
@@ -146,6 +170,17 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
           where: { id: node.id },
           data: {
             ...(intended ?? {}),
+            ...(certChanged
+              ? { certNotAfter: result.certNotAfter, certFromHandshake: result.certFromHandshake === true }
+              : {}),
+            ...(policyChanged
+              ? {
+                  policyDrawn: {
+                    ...result.policyDrawn!,
+                    observedAt: new Date().toISOString(),
+                  } satisfies NodePolicyDrawnFact as unknown as Prisma.InputJsonValue,
+                }
+              : {}),
             status: result.status,
             lastStatusChange: statusChanged ? new Date() : undefined,
             lastStatusMessage: result.message,
@@ -241,6 +276,14 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
     }),
   );
 
+  // A-162, P1: a node that is online and behind its desired revision (its
+  // last push failed and nobody has edited since) is pushed again, without
+  // waiting for an event. After the statuses above are written, so a node
+  // that just came back counts as online.
+  await reconcileNodeRevisions().catch((err) =>
+    getLogger().warn({ err }, '[cron] revision reconciliation failed'),
+  );
+
   return { ok, down };
 }
 
@@ -253,8 +296,14 @@ interface PollResult {
   geo?: GeoStatus | null;
   /** E42: the cores the node's env declares. undefined keeps the stored intent. */
   declaredEngines?: EngineName[];
+  /** A-124: notAfter of the node's mTLS certificate; undefined keeps the stored one. */
+  certNotAfter?: Date;
+  /** A-221: certNotAfter came off the handshake, the agent does not report it. */
+  certFromHandshake?: boolean;
+  /** A-232: the policy report of /healthz; undefined keeps the stored one. */
+  policyDrawn?: NodePolicyDrawn;
   /**
-   * `online`     - the agent answers and every configured core is serving.
+   * `online`   - the agent answers and every configured core is serving.
    * `degraded`   - the agent answers, a configured core is not running. Still
    *                served in subscriptions: its other endpoints work, and the
    *                liveness filter is keyed on `unreachable`, not on this.
@@ -381,6 +430,10 @@ export function observedCores(
       ...(c.installed !== undefined ? { installed: c.installed } : {}),
       ...(c.rendersPolicy !== undefined ? { rendersPolicy: c.rendersPolicy } : {}),
       ...(c.rendersDns !== undefined ? { rendersDns: c.rendersDns } : {}),
+      // Whether the core counts bytes per user; absent stays absent (unknown).
+      ...(c.countsUsers !== undefined ? { countsUsers: c.countsUsers } : {}),
+      // The fault as the agent words it, for the node screen.
+      ...(c.error ? { error: c.error } : {}),
       // Kept, unlike `running`, because it is inventory: the ports a core holds
       // change when the node is reconfigured, and the port check has to answer
       // between two healthchecks rather than by calling the node.
@@ -469,6 +522,8 @@ async function checkOne(node: {
   /** Whether the panel has ever sent this node a chain block. See
    *  statusFromHealth: it decides whether a missing chain is a fault. */
   chainSentAt?: Date | null;
+  certNotAfter?: Date | null;
+  certFromHandshake?: boolean;
 }): Promise<PollResult> {
   try {
     const transport = new NodeTransport(node);
@@ -523,6 +578,8 @@ async function checkOne(node: {
       chain: res.chain ?? null,
       geo: res.geo ?? null,
       declaredEngines: res.declaredEngines,
+      ...(await certEndOf(transport, node, res.certNotAfter)),
+      ...(res.policy ? { policyDrawn: res.policy } : {}),
     };
   } catch (err) {
     if (err instanceof NodeRequestError) {
@@ -533,6 +590,65 @@ async function checkOne(node: {
       message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
     };
   }
+}
+
+/** A-232: the policy report as the panel keeps it: the agent's, plus when the
+ *  panel last saw it (its own clock, beside the node's renderedAt). */
+export type NodePolicyDrawnFact = NodePolicyDrawn & { observedAt: string };
+
+/** Changed in content, or older than the heartbeat (observedAt must mean
+ *  "seen recently"), the same rule as the core inventory. */
+export function policyDrawnWorthWriting(stored: NodePolicyDrawnFact | null, fresh: NodePolicyDrawn, nowMs: number): boolean {
+  if (!stored) return true;
+  const { observedAt, ...was } = stored;
+  if (JSON.stringify(was) !== JSON.stringify(fresh)) return true;
+  const at = Date.parse(observedAt);
+  return !Number.isFinite(at) || nowMs - at >= RESTARTS_HEARTBEAT_MS;
+}
+
+/** How often the end of an old agent's certificate is read off a handshake. */
+const HANDSHAKE_CERT_REREAD_MS = 6 * 60 * 60 * 1000;
+const handshakeCertReadAt = new Map<string, number>();
+
+/** Test hook: forget when each node's certificate was last read off a handshake. */
+export function _resetHandshakeCertReadsForTest(): void {
+  handshakeCertReadAt.clear();
+}
+
+/**
+ * The certificate's end for this poll (A-124, A-221). The agent's own field
+ * when it sends one. Without it (an agent older than rotation) the end is read
+ * off the leaf the node presents on a handshake of its own, marked as such:
+ * that node cannot be renewed in place, but its operator can be told by when
+ * to update the agent. The extra handshake is made when nothing is stored, and
+ * then every six hours: the leaf of an old agent only changes by a reinstall.
+ * A failed read keeps what is stored.
+ */
+async function certEndOf(
+  transport: NodeTransport,
+  node: { id: string; certNotAfter?: Date | null; certFromHandshake?: boolean },
+  reported: string | undefined,
+): Promise<{ certNotAfter?: Date; certFromHandshake?: boolean }> {
+  const fromAgent = parseCertNotAfter(reported);
+  if (fromAgent) return { certNotAfter: fromAgent, certFromHandshake: false };
+  const last = handshakeCertReadAt.get(node.id);
+  const stale = !node.certNotAfter || !node.certFromHandshake || last === undefined || Date.now() - last >= HANDSHAKE_CERT_REREAD_MS;
+  if (!stale) return {};
+  try {
+    const presented = await transport.presentedCert();
+    handshakeCertReadAt.set(node.id, Date.now());
+    if (!Number.isFinite(presented.notAfter.getTime())) return {};
+    return { certNotAfter: presented.notAfter, certFromHandshake: true };
+  } catch {
+    return {};
+  }
+}
+
+/** The agent's RFC3339 certNotAfter, or undefined for absent or unreadable. */
+export function parseCertNotAfter(raw: string | undefined): Date | undefined {
+  if (!raw) return undefined;
+  const at = new Date(raw);
+  return Number.isFinite(at.getTime()) ? at : undefined;
 }
 
 /**

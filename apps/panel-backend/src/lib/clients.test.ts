@@ -7,6 +7,7 @@ import {
   type ClientId,
 } from '@iceslab/shared';
 import { compileRule } from '../modules/srr/srr.service.js';
+import { testLinearRule } from '../modules/srr/linear-regex.js';
 import { APPS } from '../modules/subscription/subscription.page-apps.js';
 
 /**
@@ -20,7 +21,7 @@ import { APPS } from '../modules/subscription/subscription.page-apps.js';
  */
 
 const ordered = [...CLIENT_RULES].sort((a, b) => a.priority - b.priority);
-const firstMatch = (ua: string) => ordered.find((r) => compileRule(r.pattern).test(ua));
+const firstMatch = (ua: string) => ordered.find((r) => testLinearRule(compileRule(r.pattern), ua));
 const entries = Object.entries(CLIENTS) as [ClientId, ClientDef][];
 
 describe('every User-Agent sample lands on its client format', () => {
@@ -60,9 +61,11 @@ describe('the catalog keeps its own rules', () => {
   it('carries the fixes the recon asked for', () => {
     const rule = (name: string) => CLIENT_RULES.find((r) => r.name === name);
     expect(rule('Clash')?.pattern).toBe('(?i)clash|mihomo');
-    expect(rule('Stash')).toMatchObject({ pattern: '(?i)stash', format: 'clash' });
+    // By core since A-236 step 4: Stash its own dialect, the rest mihomo.
+    expect(rule('Stash')).toMatchObject({ pattern: '(?i)stash', format: 'stash' });
     expect(rule('Loon')?.pattern).toBe('(?i)loon|decar');
-    expect(rule('NekoBox/NekoRay')?.format).toBe('clash');
+    expect(rule('NekoBox/NekoRay')?.format).toBe('mihomo');
+    expect(rule('Clash')?.format).toBe('mihomo');
   });
 });
 

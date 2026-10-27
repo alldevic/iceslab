@@ -6,19 +6,25 @@ import { checkSniConsistency } from '../profiles/host-fields.js';
 // Reused rather than redefined so the operator gets the same wording whichever
 // route created the binding.
 import {
+  assertBindingFitsNode,
   assertPortFreeOfOthers,
-  assertSingboxServesBinding,
   NodeNotFoundError,
+  ProfileDoesNotRunOnNodeError,
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,
   PortHeldByCoreServiceError,
   PortInUseError,
   ProfileNotFoundError,
+  updateBinding,
 } from '../profiles/profiles.service.js';
 import { mapHost, type HostReach, type PublicHostDto } from './hosts.mapper.js';
-import { hostConfigChangedAt } from './hosts.freshness.js';
+import { HOST_LINK_FIELDS, hostConfigChangedAt } from './hosts.freshness.js';
+import { anyChanged } from '../../lib/util/same-value.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
+import type { Transport } from '@iceslab/shared';
 import { getHiddenCascadeNodes, type HidingCascade } from '../cascades/cascade.service.js';
-import { assertAwgSubnetFree, assertCoreOnNode } from '../nodes/node-core-gate.js';
+import { assertCoreOnNode } from '../nodes/node-core-gate.js';
+import { AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
 import type {
   CreateHostInput,
   ListHostsQuery,
@@ -35,6 +41,16 @@ export class HostNotFoundError extends Error {
   }
 }
 
+/**
+ * A-215: the node a host's binding sits on. A host decides who reaches the
+ * inbound (a squad narrowed to hosts reaches a binding through them), so a
+ * host created, toggled or removed moves the node's user reach; host.changed
+ * carries the node and the push hands its users out again.
+ */
+async function nodeOfBinding(bindingId: string): Promise<string | undefined> {
+  return (await prisma.profileNodeBinding.findUnique({ where: { id: bindingId }, select: { nodeId: true } }))?.nodeId;
+}
+
 export class BindingNotFoundError extends Error {
   constructor(public id: string) {
     super(`Binding ${id} not found`);
@@ -45,7 +61,10 @@ export class BindingNotFoundError extends Error {
 // Re-exported so the routes layer can catch them without importing the profiles
 // module, which it otherwise has no business knowing about.
 export {
+  AdapterSlotTakenError,
+  MieruMtuMismatchError,
   NodeNotFoundError,
+  ProfileDoesNotRunOnNodeError,
   ProfileEngineNotForTransportError,
   PortHeldByCascadeError,
   PortHeldByCoreServiceError,
@@ -87,23 +106,26 @@ async function assertSniMatchesProfile(opts: {
   if (!opts.sniOverride) return;
   const binding = await prisma.profileNodeBinding.findUnique({
     where: { id: opts.bindingId },
-    select: { profile: { select: { protocol: true, config: true } } },
+    select: { profile: { select: { protocol: true, config: true, engine: true } } },
   });
   if (!binding) return; // caller already raises BindingNotFoundError
 
   await assertSniMatchesProfileConfig({
     protocol: binding.profile.protocol,
     config: binding.profile.config,
+    engine: binding.profile.engine,
     sniOverride: opts.sniOverride,
     securityLayer: opts.securityLayer,
   });
 }
 
 /** Same check against a profile already in hand, so create can run it before
- *  opening a transaction rather than after writing the binding. */
+ *  opening a transaction rather than after writing the binding. The engine
+ *  decides which names serve (A-159: one, the first, on sing-box). */
 async function assertSniMatchesProfileConfig(opts: {
   protocol: string;
   config: unknown;
+  engine: string | null | undefined;
   sniOverride: string | null | undefined;
   securityLayer: string | null | undefined;
 }): Promise<void> {
@@ -121,6 +143,26 @@ async function hidingCascadeOfBinding(bindingId: string): Promise<HidingCascade 
   return (await getHiddenCascadeNodes()).get(b.nodeId) ?? null;
 }
 
+/** A-122: the four rows a host's link is made of, by their link stamps. */
+const LINK_STAMPS = {
+  nodeId: true,
+  linkChangedAt: true,
+  profile: { select: { linkChangedAt: true } },
+  node: { select: { linkChangedAt: true } },
+} as const;
+
+function linkStampsOf(h: {
+  linkChangedAt: Date;
+  binding: { linkChangedAt: Date; profile: { linkChangedAt: Date }; node: { linkChangedAt: Date } };
+}) {
+  return {
+    host: h.linkChangedAt,
+    binding: h.binding.linkChangedAt,
+    profile: h.binding.profile.linkChangedAt,
+    node: h.binding.node.linkChangedAt,
+  };
+}
+
 export async function listHosts(q: ListHostsQuery): Promise<PublicHostDto[]> {
   const where: Prisma.HostWhereInput = {};
   if (q.bindingId) where.bindingId = q.bindingId;
@@ -136,9 +178,7 @@ export async function listHosts(q: ListHostsQuery): Promise<PublicHostDto[]> {
     where,
     // The two rows under the host are part of its config: an operator who moved
     // the port edited the BINDING, and every client's link changed with it.
-    include: {
-      binding: { select: { updatedAt: true, nodeId: true, profile: { select: { updatedAt: true } } } },
-    },
+    include: { binding: { select: LINK_STAMPS } },
     orderBy: [{ bindingId: 'asc' }, { priority: 'asc' }, { createdAt: 'asc' }],
   });
   const [reach, hidden] = await Promise.all([reachByHost(rows.map((r) => r.id)), getHiddenCascadeNodes()]);
@@ -146,11 +186,7 @@ export async function listHosts(q: ListHostsQuery): Promise<PublicHostDto[]> {
     mapHost(
       r,
       reach.get(r.id) ?? { squads: 0, users: 0 },
-      hostConfigChangedAt({
-        host: r.updatedAt,
-        binding: r.binding.updatedAt,
-        profile: r.binding.profile.updatedAt,
-      }).toISOString(),
+      hostConfigChangedAt(linkStampsOf(r)).toISOString(),
       hidden.get(r.binding.nodeId) ?? null,
     ),
   );
@@ -198,19 +234,13 @@ async function reachByHost(hostIds: string[]): Promise<Map<string, HostReach>> {
 export async function getHostById(id: string): Promise<PublicHostDto> {
   const h = await prisma.host.findUnique({
     where: { id },
-    include: {
-      binding: { select: { updatedAt: true, nodeId: true, profile: { select: { updatedAt: true } } } },
-    },
+    include: { binding: { select: LINK_STAMPS } },
   });
   if (!h) throw new HostNotFoundError(id);
   return mapHost(
     h,
     undefined,
-    hostConfigChangedAt({
-      host: h.updatedAt,
-      binding: h.binding.updatedAt,
-      profile: h.binding.profile.updatedAt,
-    }).toISOString(),
+    hostConfigChangedAt(linkStampsOf(h)).toISOString(),
     (await getHiddenCascadeNodes()).get(h.binding.nodeId) ?? null,
   );
 }
@@ -220,27 +250,35 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
   // the two writes then happen together. Creating the binding first and letting
   // the host fail afterwards would leave an orphan the operator cannot see or
   // remove: the new UI has no screen for bindings at all.
+  // A new binding under the host passes the bindings route's gate there
+  // (assertBindingFitsNode), sing-box's fields included.
   const plan = await planHostCreate(input);
-  // Creating the binding here is the fourth way onto a node, and a profile
-  // saved before the sing-box rule existed (xray family on sing-box with TLS or
-  // xhttp) would otherwise reach the node through it unrefused.
-  if (!plan.bindingId) {
-    assertSingboxServesBinding({ ...plan.profile, engine: plan.profile.engine ?? null }, undefined);
-  }
 
   await assertSniMatchesProfileConfig({
     protocol: plan.profile.protocol,
     config: plan.profile.config,
+    engine: plan.profile.engine,
     sniOverride: input.sniOverride,
     securityLayer: input.securityLayer,
   });
 
+  // A-150: an override equal to what clients get anyway (the binding's public
+  // port, else its listen port) is not stored. The create screen sent the
+  // binding's own port as one, and that copy then shadowed every later move
+  // of the listen port in the subscription.
+  const existingBinding = plan.bindingId
+    ? await prisma.profileNodeBinding.findUnique({
+        where: { id: plan.bindingId },
+        select: { port: true, publicPort: true },
+      })
+    : null;
+  const listenPort = existingBinding ? (existingBinding.publicPort ?? existingBinding.port) : plan.port;
   const hostData = {
     remark: input.remark,
     priority: input.priority,
     enabled: input.enabled,
     addressOverride: input.addressOverride ?? null,
-    portOverride: input.portOverride ?? null,
+    portOverride: input.portOverride != null && input.portOverride !== listenPort ? input.portOverride : null,
     sniOverride: input.sniOverride ?? null,
     hostHeaderOverride: input.hostHeaderOverride ?? null,
     pathOverride: input.pathOverride ?? null,
@@ -249,6 +287,8 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
     allowInsecure: input.allowInsecure,
     securityLayer: input.securityLayer,
     disableForFormats: input.disableForFormats,
+    serverDescription: input.serverDescription ?? null,
+    isHidden: input.isHidden,
   };
 
   const { created, newBinding } = await prisma.$transaction(async (tx) => {
@@ -284,7 +324,7 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
   }
   // A host IS an endpoint in the subscription, so every mutation here changes
   // what users are handed.
-  eventBus.emit('host.changed', {});
+  eventBus.emit('host.changed', { nodeId: await nodeOfBinding(created.bindingId) });
   return mapHost(created, undefined, undefined, await hidingCascadeOfBinding(created.bindingId));
 }
 
@@ -293,11 +333,12 @@ export async function createHost(input: CreateHostInput): Promise<PublicHostDto>
  * satisfiable, without writing anything.
  *
  * Returns either an existing `bindingId` (given directly, or found for the
- * profile/node pair) or the pieces needed to create one. An existing binding
- * for the pair is REUSED rather than rejected: a second host on the same node
- * is an ordinary thing to want (a CDN-fronted variant next to the direct one),
- * and erroring there would push the operator back into the dead end this whole
- * change exists to remove.
+ * profile, node and port) or the pieces needed to create one. An existing
+ * binding on that port is REUSED rather than rejected: a second host on the
+ * same node and port is an ordinary thing to want (a CDN-fronted variant next
+ * to the direct one), and erroring there would push the operator back into the
+ * dead end this whole change exists to remove. Another port is another binding
+ * of the same pair (A-259).
  */
 async function planHostCreate(input: CreateHostInput): Promise<{
   bindingId: string | null;
@@ -308,7 +349,7 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   if (input.bindingId) {
     const binding = await prisma.profileNodeBinding.findUnique({
       where: { id: input.bindingId },
-      select: { id: true, profile: { select: { id: true, protocol: true, config: true } } },
+      select: { id: true, profile: { select: { id: true, protocol: true, config: true, engine: true } } },
     });
     if (!binding) throw new BindingNotFoundError(input.bindingId);
     return { bindingId: binding.id, profile: binding.profile };
@@ -318,20 +359,19 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   const nodeId = input.nodeId!;
   const port = input.port!;
 
-  const profile = await prisma.profile.findUnique({
-    where: { id: profileId },
-    select: { id: true, protocol: true, config: true, engine: true, awgProtocol: true },
-  });
+  const profile = await prisma.profile.findUnique({ where: { id: profileId } });
   if (!profile) throw new ProfileNotFoundError(profileId);
 
-  const node = await prisma.node.findFirst({
-    where: { id: nodeId, deletedAt: null },
-    select: { id: true, name: true, cores: true, coreVersions: true },
-  });
+  const node = await prisma.node.findFirst({ where: { id: nodeId, deletedAt: null } });
   if (!node) throw new NodeNotFoundError(nodeId);
 
-  const existing = await prisma.profileNodeBinding.findUnique({
-    where: { profileId_nodeId: { profileId, nodeId } },
+  // A-259: a profile may sit on one node on several ports, one binding each.
+  // The host goes onto the binding of THIS port when there is one; a port the
+  // pair does not have yet is a new binding (the checks below). Before, the
+  // pair's one binding was reused whatever port was asked, and a host asked for
+  // on 8443 landed silently on 443.
+  const existing = await prisma.profileNodeBinding.findFirst({
+    where: { profileId, nodeId, port },
     select: { id: true },
   });
   // A second host on a binding that already exists is still a host put on this
@@ -356,9 +396,12 @@ async function planHostCreate(input: CreateHostInput): Promise<{
   // creates the binding under it, so this route reaches the same socket the
   // bindings route does and has to ask the same question.
   await assertPortFreeOfOthers(nodeId, port, transport, node.name);
-  // After the ports, before anything is written (docs/plan/core-lifecycle.md 6).
-  assertCoreOnNode(node, profile);
-  await assertAwgSubnetFree(node, profile);
+  // After the ports, before anything is written (docs/plan/core-lifecycle.md 6):
+  // the bindings route's gate, whole (A-161). It had the core and the subnet
+  // and not the engine list, so a sing-box profile went onto a node that had
+  // reported its engines without sing-box. sing-box's own fields are part of
+  // it too, which used to be asked separately in createHost.
+  await assertBindingFitsNode(node, profile);
 
   return { bindingId: null, profile, nodeId, port };
 }
@@ -381,12 +424,59 @@ export async function updateHost(
       input.securityLayer !== undefined ? input.securityLayer : existing.securityLayer,
   });
 
+  /**
+   * A-150: the port on this screen is the port the node LISTENS on, and it
+   * belongs to the binding. Before that the field wrote portOverride, the node
+   * kept the old port, and every client was handed a port nothing listened on.
+   *
+   * A-259: what moves is said by `portMove` (confirmSharedPort true reads as
+   * 'binding'):
+   *   - 'binding': the binding, every host on it with it (updateBinding: the
+   *     port checks of a binding, then the push);
+   *   - 'host', the default: this host alone. Onto the profile's binding of
+   *     the new port on this node when there is one; a host alone on its
+   *     binding with no such binding moves the binding itself; otherwise a new
+   *     binding of the profile on that port (the checks of a new binding; its
+   *     public host and overrides copied, no public port), and the host goes
+   *     onto it. A binding left without a host is removed, as a host's delete
+   *     removes it. The host's move is one transaction.
+   * HOST_PORT_SHARED is not answered any more: a host moves alone unless asked.
+   */
+  const binding = await prisma.profileNodeBinding.findUniqueOrThrow({
+    where: { id: existing.bindingId },
+    select: { port: true, publicPort: true, hosts: { select: { id: true } } },
+  });
+  const moving = input.port !== undefined && input.port !== binding.port;
+  const mode = input.portMove ?? (input.confirmSharedPort === true ? 'binding' : 'host');
+  let hostMove: HostMovePlan | null = null;
+  if (moving && mode === 'host') {
+    hostMove = await planHostMove(existing.bindingId, input.port!, binding.hosts.length === 1);
+  }
+  if (moving && !hostMove) await updateBinding(existing.bindingId, { port: input.port! });
+  // What clients get without an override: the binding's public port, else the
+  // port the node listens on (subscription.service.ts, basePort). A public port
+  // equal to the old listen port was a copy, and updateBinding dropped it with
+  // the move (A-150 tail). A host moved to another binding takes that one's.
+  const publicPort = hostMove
+    ? hostMove.publicPort
+    : moving && binding.publicPort === binding.port
+      ? null
+      : binding.publicPort;
+  const listenPort = publicPort ?? (moving ? input.port! : binding.port);
+
   const data: Prisma.HostUpdateInput = {};
   if (input.remark !== undefined) data.remark = input.remark;
   if (input.priority !== undefined) data.priority = input.priority;
   if (input.enabled !== undefined) data.enabled = input.enabled;
   if (input.addressOverride !== undefined) data.addressOverride = input.addressOverride;
-  if (input.portOverride !== undefined) data.portOverride = input.portOverride;
+  // An override equal to the listen port is no override: stored as null, so a
+  // later move of the listen port is not shadowed by a stale copy of the old
+  // one (the trace the create screen used to leave, A-150).
+  if (input.portOverride !== undefined) {
+    data.portOverride = input.portOverride === listenPort ? null : input.portOverride;
+  } else if (moving && existing.portOverride === listenPort) {
+    data.portOverride = null;
+  }
   if (input.sniOverride !== undefined) data.sniOverride = input.sniOverride;
   if (input.hostHeaderOverride !== undefined) {
     data.hostHeaderOverride = input.hostHeaderOverride;
@@ -401,10 +491,125 @@ export async function updateHost(
   if (input.disableForFormats !== undefined) {
     data.disableForFormats = input.disableForFormats;
   }
+  if (input.serverDescription !== undefined) data.serverDescription = input.serverDescription;
+  if (input.isHidden !== undefined) data.isHidden = input.isHidden;
+  // A-122: the stamp moves when a value that reaches the client really
+  // changed, every host field but priority (HOST_LINK_FIELDS).
+  if (anyChanged(existing, data as Partial<typeof existing>, HOST_LINK_FIELDS)) data.linkChangedAt = new Date();
+  // A host on another binding is on another port: its link changed (A-122).
+  if (hostMove) data.linkChangedAt = new Date();
 
-  const updated = await prisma.host.update({ where: { id }, data });
-  eventBus.emit('host.changed', {});
+  if (!hostMove) {
+    const updated = await prisma.host.update({ where: { id }, data });
+    eventBus.emit('host.changed', { nodeId: await nodeOfBinding(updated.bindingId) });
+    return mapHost(updated, undefined, undefined, await hidingCascadeOfBinding(updated.bindingId));
+  }
+
+  const plan = hostMove;
+  const { updated, createdBinding, removedBinding } = await prisma
+    .$transaction(async (tx) => {
+      let targetId = plan.targetBindingId;
+      let createdBinding: { id: string; profileId: string; nodeId: string } | null = null;
+      if (!targetId) {
+        createdBinding = await tx.profileNodeBinding.create({ data: plan.newBinding!, select: { id: true, profileId: true, nodeId: true } });
+        targetId = createdBinding.id;
+      }
+      const updated = await tx.host.update({ where: { id }, data: { ...data, binding: { connect: { id: targetId } } } });
+      const left = await tx.host.count({ where: { bindingId: existing.bindingId } });
+      let removedBinding: { id: string; profileId: string; nodeId: string } | null = null;
+      if (left === 0) {
+        removedBinding = await tx.profileNodeBinding.delete({
+          where: { id: existing.bindingId },
+          select: { id: true, profileId: true, nodeId: true },
+        });
+      }
+      return { updated, createdBinding, removedBinding };
+    })
+    .catch((err: unknown) => {
+      // The port checked free above and taken before the insert: the same
+      // answer the check gives (A-257).
+      if (isUniqueViolationOn(err, 'profile_node_bindings_node_id_port_transport_key', ['node_id', 'port', 'transport'])) {
+        throw new PortInUseError(plan.port, plan.nodeName, plan.profileName, plan.transport);
+      }
+      throw err;
+    });
+
+  // The host first, then the bindings: binding.* re-push the node, by then
+  // the subscription caches (dropped by host.changed, A-165) know the move.
+  eventBus.emit('host.changed', { nodeId: plan.nodeId });
+  if (createdBinding) eventBus.emit('binding.created', { bindingId: createdBinding.id, profileId: createdBinding.profileId, nodeId: createdBinding.nodeId });
+  if (removedBinding) eventBus.emit('binding.deleted', { bindingId: removedBinding.id, profileId: removedBinding.profileId, nodeId: removedBinding.nodeId });
   return mapHost(updated, undefined, undefined, await hidingCascadeOfBinding(updated.bindingId));
+}
+
+/** A-259: where a host moved alone to another port goes, checked, unwritten. */
+interface HostMovePlan {
+  port: number;
+  nodeId: string;
+  nodeName: string;
+  profileName: string;
+  transport: Transport;
+  /** The profile's binding of that port on the node, when there is one. */
+  targetBindingId: string | null;
+  /** Otherwise the binding to create. */
+  newBinding: Prisma.ProfileNodeBindingUncheckedCreateInput | null;
+  /** What the host's clients dial without an override, on the target. */
+  publicPort: number | null;
+}
+
+/**
+ * Where a host moved alone to `port` goes (portMove 'host'), or null when it
+ * is the binding that moves: a host alone on its binding with no binding of
+ * the profile on that port moves its binding, nothing to split.
+ */
+async function planHostMove(bindingId: string, port: number, alone: boolean): Promise<HostMovePlan | null> {
+  const from = await prisma.profileNodeBinding.findUniqueOrThrow({
+    where: { id: bindingId },
+    select: {
+      profileId: true,
+      nodeId: true,
+      publicHost: true,
+      overrides: true,
+      enabled: true,
+      profile: { select: { id: true, name: true, protocol: true, engine: true, config: true, awgProtocol: true } },
+      node: true,
+    },
+  });
+  const target = await prisma.profileNodeBinding.findFirst({
+    where: { profileId: from.profileId, nodeId: from.nodeId, port },
+    select: { id: true, port: true, publicPort: true },
+  });
+  const transport = transportForBinding(from.profile, from.overrides);
+  const base = { port, nodeId: from.nodeId, nodeName: from.node.name, profileName: from.profile.name, transport };
+  if (target) {
+    return { ...base, targetBindingId: target.id, newBinding: null, publicPort: target.publicPort };
+  }
+  if (alone) return null;
+
+  // A new binding of the profile on this node: the checks every new binding
+  // goes through (planHostCreate, createBinding).
+  const clash = await prisma.profileNodeBinding.findUnique({
+    where: { nodeId_port_transport: { nodeId: from.nodeId, port, transport } },
+    select: { profile: { select: { name: true } } },
+  });
+  if (clash) throw new PortInUseError(port, from.node.name, clash.profile.name, transport);
+  await assertPortFreeOfOthers(from.nodeId, port, transport, from.node.name);
+  await assertBindingFitsNode(from.node, from.profile, from.overrides);
+  return {
+    ...base,
+    targetBindingId: null,
+    newBinding: {
+      profileId: from.profileId,
+      nodeId: from.nodeId,
+      port,
+      transport,
+      enabled: from.enabled,
+      publicHost: from.publicHost,
+      publicPort: null,
+      overrides: from.overrides === null ? Prisma.JsonNull : (from.overrides as Prisma.InputJsonValue),
+    },
+    publicPort: null,
+  };
 }
 
 /**
@@ -428,6 +633,8 @@ export async function updateHost(
 export async function deleteHost(id: string): Promise<void> {
   const existing = await prisma.host.findUnique({ where: { id } });
   if (!existing) throw new HostNotFoundError(id);
+  // Read before the delete: the binding may go with its last host.
+  const nodeId = await nodeOfBinding(existing.bindingId);
 
   const orphanedBinding = await prisma.$transaction(async (tx) => {
     await tx.host.delete({ where: { id } });
@@ -444,7 +651,7 @@ export async function deleteHost(id: string): Promise<void> {
     return binding;
   });
 
-  eventBus.emit('host.changed', {});
+  eventBus.emit('host.changed', { nodeId });
   // Ordered after host.changed on purpose: this one re-pushes the node's
   // inbound set, so it should run once the subscription caches already know
   // the host is gone.

@@ -28,6 +28,16 @@ const EXEMPT = new Set<string>([
   // Prisma's own migration ledger. Truncating it would make every later run
   // believe the schema was never migrated.
   '_prisma_migrations',
+  // A-150's rollback record: the port overrides the data migration cleared.
+  // No code writes it and no test reads it; dropped by that migration's
+  // rollback. Kept until v0.3.0 and a stable week on the stand, then dropped
+  // by a migration of its own (queued). The note lives here and not in the
+  // migration header: an applied migration edited afterwards fails Prisma's
+  // checksum on every database that already ran it.
+  'host_port_override_a150_backup',
+  // The same for the public ports its tail cleared (20261022081837), same
+  // lifetime.
+  'binding_public_port_a150_backup',
 ]);
 
 describe('the test-database truncate list', () => {

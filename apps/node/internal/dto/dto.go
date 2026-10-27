@@ -82,10 +82,39 @@ type AddUserRequest struct {
 	ShortID     string              `json:"shortId"`
 	Username    string              `json:"username"`
 	Credentials ProtocolCredentials `json:"credentials"`
+	// InboundIDs (A-022): the inbounds of THIS node (InboundDto.ID, the panel's
+	// binding id) the user is served on. SET semantics: exactly these, and the
+	// user is taken off every other inbound of the node; an empty list equals
+	// removeUser here. nil (absent) = every inbound, the behaviour before the
+	// field and what an older panel sends. A pointer, since a plain slice
+	// cannot tell absent from empty.
+	InboundIDs *[]string `json:"inboundIds,omitempty"`
 }
 
 type AddUserResponse struct {
 	OK bool `json:"ok"`
+}
+
+// ───── POST /addUsers ─────
+//
+// A-112: the roster after a push, many users per request instead of one
+// /addUser each. Every entry goes through exactly what /addUser does, in
+// order, and one entry's failure does not stop the rest.
+
+type AddUsersRequest struct {
+	Users []AddUserRequest `json:"users"`
+}
+
+type AddUsersResponse struct {
+	// Results: one per request entry, in its order.
+	Results []AddUsersResult `json:"results"`
+}
+
+type AddUsersResult struct {
+	UserID string `json:"userId"`
+	OK     bool   `json:"ok"`
+	// Error: the cores that refused, the message /addUser's 500 carries.
+	Error string `json:"error,omitempty"`
 }
 
 // ───── POST /applyInbounds ─────
@@ -176,6 +205,11 @@ type NodePolicyAction struct {
 	// fails the core's own validation, which is louder than a rule that never
 	// fires.
 	Exit string `json:"exit,omitempty"`
+	// Cascade only (A-277): at an xray entry, the users the door of that
+	// direction lets through, by the panel's entry gate; drawn as the rule's
+	// `user`. Absent: everybody, as before. Never drawn empty: an empty `user`
+	// in xray matches everyone, so such a rule is left out (NotDrawn).
+	Users []string `json:"users,omitempty"`
 }
 
 // DnsCfg mirrors DnsCfg in shared/transport.ts: who answers the name lookups of
@@ -328,6 +362,20 @@ type NodeChain struct {
 	// ends of each leg. Mirrors NodeChain.tunnels. Shipped in the contract ahead
 	// of the agent's half (Ф8.2); until then no panel sends it.
 	Tunnels []ChainTunnel `json:"tunnels,omitempty"`
+	// LinkIngress (A-111) is every port the chain receives legs on over the
+	// internet, with the previous hops that dial it. Mirrors
+	// NodeChain.linkIngress: the agent opens these in the firewall on every
+	// push and at start from the stored push.
+	LinkIngress []ChainLinkIngress `json:"linkIngress,omitempty"`
+}
+
+// ChainLinkIngress mirrors ChainLinkIngress in shared/transport.ts.
+type ChainLinkIngress struct {
+	Port int `json:"port"`
+	// Transports is tcp, udp, or both.
+	Transports []string `json:"transports"`
+	// AllowFrom is the previous hops' addresses; never empty from the panel.
+	AllowFrom []string `json:"allowFrom"`
 }
 
 // ChainTunnelIfacePrefix starts the name of every leg tunnel: awg-l<index>.
@@ -506,12 +554,35 @@ type UserStats struct {
 	// ignore this field and fall back to the response-level flag.
 	Cumulative bool `json:"cumulative,omitempty"`
 	// Protocol is the Name() of the adapter that reported this entry, i.e. the
-	// protocol of the inbound the user came through (25.09). The panel reads
-	// presence-only accounting (mtproto: the user being listed is the online
-	// signal, there are no bytes) off it per entry, where it used to read the
-	// node's label, which on a node with xray beside mtproto said "xray" and
-	// left every mtproto user offline. Omitted by older agents.
+	// protocol of the inbound the user came through (25.09), read per entry
+	// rather than off the node's label. The panel reads online from bytes alone
+	// (A-121): an mtproto entry carries none per user, so being listed is not
+	// being online, and an mtg that serves no inbound lists nobody. Omitted by
+	// older agents.
 	Protocol string `json:"protocol,omitempty"`
+	// Engine (A-163) is the engine of the adapter that counted this entry. With
+	// Protocol it names the ADAPTER, the pair adapterFor dispatches on: the
+	// sing-box adapter serving the xray family reports Protocol "xray", and six
+	// sing-box adapters are six processes with their own cumulative counters
+	// and their own restarts. The panel keys a user's snapshot by (node, user,
+	// protocol, engine). Omitted by older agents.
+	Engine EngineName `json:"engine,omitempty"`
+}
+
+// CoreTrafficTotal (A-152) is one adapter's total for this poll, with its own
+// counter semantics. The adapter is the (Protocol, Engine) pair, as in
+// UserStats.
+type CoreTrafficTotal struct {
+	Protocol   ProtocolName `json:"protocol"`
+	Engine     EngineName   `json:"engine"`
+	BytesIn    int64        `json:"bytesIn"`
+	BytesOut   int64        `json:"bytesOut"`
+	Cumulative bool         `json:"cumulative"`
+	// NoData: this adapter did not answer its stats query this poll. Its
+	// numbers are absent, NOT zero, and its users are absent from Users; the
+	// panel leaves this adapter's snapshots where they are. Sending zeros as a
+	// fact is what turned a missed poll into a burst on the next one (A-163).
+	NoData bool `json:"noData,omitempty"`
 }
 
 type GetStatsResponse struct {
@@ -523,6 +594,9 @@ type GetStatsResponse struct {
 	// the panel must compute deltas against its stored snapshot. Absent/false
 	// keeps the legacy "already-deltas" interpretation for older agents. #5.
 	Cumulative bool `json:"cumulative,omitempty"`
+	// Cores (A-152): the total per adapter. Absent from an older agent, which
+	// leaves the panel on TotalBytesIn/Out with Cumulative.
+	Cores []CoreTrafficTotal `json:"cores,omitempty"`
 }
 
 // ───── GET /healthz ─────
@@ -585,6 +659,15 @@ type CoreStatus struct {
 	// same question: tuic and vless can both be sing-box on one node. Empty
 	// from an agent older than the field.
 	Engine string `json:"engine,omitempty"`
+	// CountsUsers: whether this core counts traffic per user. false = it
+	// reports presence without bytes per user (sing-box built without
+	// with_v2ray_api, naive); true = it counts; nil = unknown (an agent older
+	// than the field). A pointer so absence is a state of its own.
+	CountsUsers *bool `json:"countsUsers,omitempty"`
+	// Error: why the core is not working now when it is a fault (the process
+	// exited, "ssm-api sync pending: ..."). Not Reason, which is "does not
+	// run by design". nil when it works and from an older agent.
+	Error *string `json:"error,omitempty"`
 	// RendersPolicy / RendersDns: whether THIS core carries out the node-level
 	// policy and the node-level resolver. Both are optional adapter interfaces
 	// (core.PolicyReceiver, core.DnsReceiver) and today exactly one core
@@ -637,9 +720,11 @@ type CoreStatus struct {
 	// configured, the behaviour that predates it.
 	Provisioned *bool `json:"provisioned,omitempty"`
 	// Reason says why a core is not running when that is by design and not a
-	// fault. Today one value, "no inbounds in the last push": the last push the
-	// agent applied named no inbound for this core, so the agent stopped it and
-	// it does not degrade the node. Empty otherwise.
+	// fault, and it does not degrade the node. Two values: "no inbounds in the
+	// last push" (the last push named no inbound for this core, so the agent
+	// stopped it) and "no users on its inbounds yet" (A-275: configured, but its
+	// binary will not run an inbound nobody is on; the first user starts it).
+	// Empty otherwise.
 	Reason string `json:"reason,omitempty"`
 	// Installed answers a different question from Provisioned: is the core's
 	// BINARY on this machine. Provisioned is about configuration the panel
@@ -749,6 +834,76 @@ type HealthcheckResponse struct {
 	// node without this engine carries no leg at all. Absent from an agent older
 	// than the chain, which may still end vless and shadowsocks legs in xray.
 	ChainEngine EngineName `json:"chainEngine,omitempty"`
+	// CertNotAfter (A-124): notAfter of this node's mTLS server certificate,
+	// RFC3339. The panel renews it ahead of time over rotateCert. Absent from
+	// an agent older than the field.
+	CertNotAfter string `json:"certNotAfter,omitempty"`
+	// AgentVersion: main.version, set with -X at release, "dev" for a local
+	// build. Absent from an agent older than the field.
+	AgentVersion string `json:"agentVersion,omitempty"`
+	// Policy (A-232): what the last config xray ACCEPTED did with the node
+	// policy: the cascade drawing it took and the cascade rules it left out.
+	// Mirrors HealthcheckResponse.policy. Absent from an agent older than the
+	// field, or one whose xray has not rendered yet: not "nothing left out".
+	Policy *PolicyDrawn `json:"policy,omitempty"`
+}
+
+// The cascade drawings of a node's xray, as the panel names them.
+const (
+	PolicyDrawingLegacy   = "legacy"
+	PolicyDrawingHandover = "handover"
+	PolicyDrawingNone     = "none"
+)
+
+// PolicyDrawn mirrors NodePolicyDrawn in shared/transport.ts.
+type PolicyDrawn struct {
+	Drawing  string           `json:"drawing"`
+	NotDrawn []PolicyNotDrawn `json:"notDrawn"`
+	// RenderedAt, RFC3339: when xray accepted the render this report is about,
+	// by the node's clock. The panel stamps its own observedAt beside it.
+	RenderedAt string `json:"renderedAt"`
+}
+
+// PolicyNotDrawn is a cascade rule the render left out: the way out the panel
+// named, and its direction's tag.
+type PolicyNotDrawn struct {
+	Exit      string `json:"exit"`
+	Direction int    `json:"direction"`
+}
+
+// ───── POST /rotateCert, POST /rotateCert/confirm (A-124) ─────
+//
+// The panel hands the agent a new server certificate over the live mTLS
+// channel, ahead of the old one's expiry. The agent checks it (the key matches
+// the certificate, it chains to its own CA, it is in date, its SAN fits),
+// writes it beside the old pair, serves it to new handshakes and waits for the
+// panel to confirm from a NEW connection that it sees the new fingerprint. No
+// confirm by ConfirmBy: the agent goes back to the old pair by itself.
+//
+// Errors: 400 CERT_INVALID (any of the checks above), 409
+// CERT_ROTATION_PENDING (an earlier rotation still waits for its confirm). An
+// agent older than this answers 404, which the panel reads as "update the
+// agent". The panel neither logs nor keeps KeyPEM after the call.
+
+type RotateCertRequest struct {
+	CertPEM string `json:"certPem"`
+	KeyPEM  string `json:"keyPem"`
+}
+
+type RotateCertResponse struct {
+	OK bool `json:"ok"`
+	// Fingerprint is the sha256 hex of the new leaf's DER.
+	Fingerprint string `json:"fingerprint"`
+	// ConfirmBy is RFC3339: no confirm by then and the agent rolls back.
+	ConfirmBy string `json:"confirmBy"`
+}
+
+type ConfirmCertRequest struct {
+	Fingerprint string `json:"fingerprint"`
+}
+
+type ConfirmCertResponse struct {
+	OK bool `json:"ok"`
 }
 
 // ResolverDownReason: the host's own resolver did not answer the agent's probe
@@ -807,6 +962,53 @@ type UfwPortsResponse struct {
 	// the exposure check rather than treating it as an error.
 	Managed bool         `json:"managed"`
 	Ports   []UfwPortDto `json:"ports"`
+}
+
+// ───── Connection log trace (GET /connLog, POST /connLog/clear) ─────
+//
+// A-265, mirror of packages/shared/src/transport.ts: where lines a previous
+// agent left behind (one per client connection, with its address) lie, and
+// since when; never the lines themselves.
+
+type ConnLogSource string
+
+const (
+	ConnLogJournal ConnLogSource = "journal"
+	ConnLogSyslog  ConnLogSource = "syslog"
+)
+
+type ConnLogSourceCheck struct {
+	Source ConnLogSource `json:"source"`
+	// found | clean | absent | failed
+	State string  `json:"state"`
+	Since *string `json:"since"`
+	Error string  `json:"error,omitempty"`
+}
+
+type ConnLogTraceResponse struct {
+	// Nil: none found, but a source could not be read.
+	Present *bool                `json:"present"`
+	Since   *string              `json:"since"`
+	Sources []ConnLogSource      `json:"sources"`
+	Checks  []ConnLogSourceCheck `json:"checks"`
+}
+
+type ConnLogClearStep struct {
+	Command string `json:"command"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+}
+
+type ConnLogClearResult struct {
+	Source ConnLogSource `json:"source"`
+	// cleared | absent | failed
+	State string             `json:"state"`
+	Steps []ConnLogClearStep `json:"steps"`
+}
+
+type ConnLogClearResponse struct {
+	Results []ConnLogClearResult `json:"results"`
+	After   ConnLogTraceResponse `json:"after"`
 }
 
 // ───── Common error shape ─────

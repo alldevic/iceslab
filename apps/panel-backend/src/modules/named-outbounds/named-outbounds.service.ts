@@ -1,6 +1,7 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { mapNamedOutbound, type NamedOutboundUse, type PublicNamedOutbound } from './named-outbounds.mapper.js';
 import {
   CONFIG_SCHEMAS,
@@ -86,16 +87,29 @@ async function assertNameFree(name: string, exceptId?: string): Promise<void> {
 
 export async function createNamedOutbound(input: CreateNamedOutboundInput): Promise<PublicNamedOutbound> {
   await assertNameFree(input.name);
-  const row = await prisma.namedOutbound.create({
-    data: {
-      name: input.name,
-      type: input.type,
-      countryCode: input.countryCode ?? null,
-      config: input.config as Prisma.InputJsonValue,
-    },
-    include: withUse,
-  });
+  const row = await prisma.namedOutbound
+    .create({
+      data: {
+        name: input.name,
+        type: input.type,
+        countryCode: input.countryCode ?? null,
+        config: input.config as Prisma.InputJsonValue,
+      },
+      include: withUse,
+    })
+    .catch((err: unknown) => {
+      throw nameClashOf(err, input.name) ?? err;
+    });
   return mapNamedOutbound(row);
+}
+
+/**
+ * A-257: two saves of one name at once both pass assertNameFree, and the
+ * second met the index as a 500. The same refusal as the check, read from the
+ * index the error names.
+ */
+function nameClashOf(err: unknown, name: string): NamedOutboundNameTakenError | null {
+  return isUniqueViolationOn(err, 'named_outbounds_name_key', ['name']) ? new NamedOutboundNameTakenError(name) : null;
 }
 
 export async function updateNamedOutbound(id: string, input: UpdateNamedOutboundInput): Promise<PublicNamedOutbound> {
@@ -124,7 +138,9 @@ export async function updateNamedOutbound(id: string, input: UpdateNamedOutbound
     data.config = parsed.data as Prisma.InputJsonValue;
   }
 
-  const row = await prisma.namedOutbound.update({ where: { id }, data, include: withUse });
+  const row = await prisma.namedOutbound.update({ where: { id }, data, include: withUse }).catch((err: unknown) => {
+    throw nameClashOf(err, input.name ?? existing.name) ?? err;
+  });
   // The chains that draw it redraw: the nodes of the cascades it stands in are
   // re-pushed, the way any cascade edit re-pushes them.
   const cascadeIds = [...new Set(row.directions.map((d) => d.cascade.id))];

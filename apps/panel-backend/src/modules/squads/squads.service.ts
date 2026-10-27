@@ -1,8 +1,14 @@
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { ALL_SQUAD_ID } from './squads.constants.js';
 import type { CreateSquadInput, UpdateSquadInput } from './squads.schemas.js';
 import { mapSquadToPublic, type PublicSquadDto } from './squads.mapper.js';
+import {
+  assertCustomPresetExists,
+  presetUpdateData,
+  rethrowPresetGone,
+} from '../routing-presets/routing-presets.assign.js';
 
 // ───── Domain errors ─────
 
@@ -35,7 +41,16 @@ export class SquadProtectedError extends Error {
 const includeRelations = {
   groupProfiles: { select: { profileId: true } },
   groupHosts: { select: { hostId: true } },
-  cascadeExits: { select: { cascadeId: true, exitNodeId: true } },
+  cascadeExits: {
+    select: {
+      cascadeId: true,
+      directionId: true,
+      exitNodeId: true,
+      // For the exitNodeIds the old screen still reads: a direction row
+      // answers with its CURRENT pool.
+      direction: { select: { nodes: { select: { nodeId: true } } } },
+    },
+  },
   cascadesOff: { select: { cascadeId: true } },
   routePolicies: { select: { policyId: true } },
   _count: {
@@ -45,23 +60,97 @@ const includeRelations = {
   },
 } as const;
 
-// A4 increment 2: flatten the grouped exit ACL into join rows. An entry with no
-// exits is not "no rows" any more: it is the cascade switched OFF, stored in its
-// own table (offRows), because an allow row cannot exist without an exit.
-function exitAclRows(
-  groupId: string,
-  exitAcl: { cascadeId: string; exitNodeIds: string[] }[],
-): { groupId: string; cascadeId: string; exitNodeId: string }[] {
-  return exitAcl.flatMap((e) =>
-    e.exitNodeIds.map((exitNodeId) => ({ groupId, cascadeId: e.cascadeId, exitNodeId })),
-  );
+/** A-149: an exitAcl entry that names something the cascade does not have. */
+export class SquadExitAclError extends Error {
+  readonly code = 'EXIT_ACL_INVALID';
+  constructor(message: string) {
+    super(message);
+    this.name = 'SquadExitAclError';
+  }
 }
 
-function offRows(
-  groupId: string,
-  exitAcl: { cascadeId: string; exitNodeIds: string[] }[],
-): { groupId: string; cascadeId: string }[] {
-  return exitAcl.filter((e) => e.exitNodeIds.length === 0).map((e) => ({ groupId, cascadeId: e.cascadeId }));
+type ExitAclInput = { cascadeId: string; directionIds?: string[]; exitNodeIds?: string[] }[];
+type ExitRow = { groupId: string; cascadeId: string; directionId: string | null; exitNodeId: string | null };
+
+const givenList = (e: ExitAclInput[number]): string[] => e.directionIds ?? e.exitNodeIds ?? [];
+
+/**
+ * The allow rows an exitAcl stands for, keyed by DIRECTION (A-149).
+ *
+ * `directionIds` are checked to belong to the cascade. `exitNodeIds` (the
+ * screen that has not moved yet) become every direction whose pool holds one
+ * of them, which is exactly what that screen meant: it ticked the nodes it
+ * showed under a direction. A node under no direction is refused rather than
+ * dropped: dropping it could leave the entry with no rows, and no rows reads
+ * as "every exit". A cascade with no directions (the legacy hop shape) has
+ * nothing to key by and keeps node rows.
+ *
+ * An entry whose list is empty is the cascade switched OFF, stored in its own
+ * table (offRows).
+ */
+async function exitAclRows(groupId: string, exitAcl: ExitAclInput): Promise<ExitRow[]> {
+  const live = exitAcl.filter((e) => givenList(e).length > 0);
+  if (live.length === 0) return [];
+  /**
+   * A-134: narrowing the ways out of a cascade entered through hysteria or
+   * AmneziaWG is refused. Such an entry hands every user to the chain as one
+   * socks user (hysteria) or by its interface (AWG), the chain picks the way
+   * out, and nothing on the node can tell one squad's users from another's:
+   * the narrowing would be words on the squad screen and nothing on the node.
+   * Switching such a cascade off for a squad (an empty list) stays allowed.
+   */
+  const throughChain = await prisma.cascadePosition.findMany({
+    where: {
+      position: 0,
+      cascadeId: { in: live.map((e) => e.cascadeId) },
+      entryProtocol: { in: ['hysteria', 'amneziawg'] },
+    },
+    select: { entryProtocol: true, cascade: { select: { name: true } } },
+  });
+  if (throughChain.length > 0) {
+    const c = throughChain[0]!;
+    throw new SquadExitAclError(
+      `cascade "${c.cascade.name}" is entered through ${c.entryProtocol}, which hands every user to the chain ` +
+        `without telling them apart, so its ways out cannot be narrowed for a squad. Switch the cascade on or off ` +
+        `for the squad instead.`,
+    );
+  }
+  const directions = await prisma.cascadeDirection.findMany({
+    where: { cascadeId: { in: live.map((e) => e.cascadeId) } },
+    select: { id: true, cascadeId: true, nodes: { select: { nodeId: true } } },
+  });
+  const rows: ExitRow[] = [];
+  for (const e of live) {
+    const own = directions.filter((d) => d.cascadeId === e.cascadeId);
+    if (e.directionIds !== undefined) {
+      for (const id of new Set(e.directionIds)) {
+        if (!own.some((d) => d.id === id)) {
+          throw new SquadExitAclError(`direction ${id} is not a direction of cascade ${e.cascadeId}`);
+        }
+        rows.push({ groupId, cascadeId: e.cascadeId, directionId: id, exitNodeId: null });
+      }
+      continue;
+    }
+    const nodeIds = [...new Set(e.exitNodeIds ?? [])];
+    if (own.length === 0) {
+      for (const n of nodeIds) rows.push({ groupId, cascadeId: e.cascadeId, directionId: null, exitNodeId: n });
+      continue;
+    }
+    const picked = new Set<string>();
+    for (const n of nodeIds) {
+      const under = own.filter((d) => d.nodes.some((x) => x.nodeId === n));
+      if (under.length === 0) {
+        throw new SquadExitAclError(`node ${n} is in no direction of cascade ${e.cascadeId}`);
+      }
+      for (const d of under) picked.add(d.id);
+    }
+    for (const id of picked) rows.push({ groupId, cascadeId: e.cascadeId, directionId: id, exitNodeId: null });
+  }
+  return rows;
+}
+
+function offRows(groupId: string, exitAcl: ExitAclInput): { groupId: string; cascadeId: string }[] {
+  return exitAcl.filter((e) => givenList(e).length === 0).map((e) => ({ groupId, cascadeId: e.cascadeId }));
 }
 
 export async function listSquads(): Promise<PublicSquadDto[]> {
@@ -84,12 +173,19 @@ export async function getSquadById(id: string): Promise<PublicSquadDto> {
 export async function createSquad(input: CreateSquadInput): Promise<PublicSquadDto> {
   const existing = await prisma.group.findUnique({ where: { name: input.name } });
   if (existing) throw new SquadAlreadyExistsError(input.name);
+  // Resolved before the write: a refusal must not leave half a squad.
+  const exitRows = await exitAclRows('', input.exitAcl);
+  await assertCustomPresetExists(input.customRoutingPresetId);
 
   const row = await prisma.group.create({
     data: {
       name: input.name,
       description: input.description ?? null,
       routingPreset: input.routingPreset ?? null,
+      // A-229 - or an own preset (the schema refused both at once).
+      ...(input.customRoutingPresetId
+        ? { customRoutingPreset: { connect: { id: input.customRoutingPresetId } } }
+        : {}),
       hwidDeviceLimit: input.hwidDeviceLimit ?? null,
       groupProfiles: {
         create: input.profileIds.map((profileId) => ({ profileId })),
@@ -100,23 +196,24 @@ export async function createSquad(input: CreateSquadInput): Promise<PublicSquadD
         create: input.hostIds.map((hostId) => ({ hostId })),
       },
       cascadeExits: {
-        create: input.exitAcl.flatMap((e) =>
-          e.exitNodeIds.map((exitNodeId) => ({
-            cascade: { connect: { id: e.cascadeId } },
-            node: { connect: { id: exitNodeId } },
-          })),
-        ),
+        create: exitRows.map((r) => ({
+          cascade: { connect: { id: r.cascadeId } },
+          ...(r.directionId ? { direction: { connect: { id: r.directionId } } } : {}),
+          ...(r.exitNodeId ? { node: { connect: { id: r.exitNodeId } } } : {}),
+        })),
       },
       cascadesOff: {
-        create: input.exitAcl
-          .filter((e) => e.exitNodeIds.length === 0)
-          .map((e) => ({ cascade: { connect: { id: e.cascadeId } } })),
+        create: offRows('', input.exitAcl).map((o) => ({ cascade: { connect: { id: o.cascadeId } } })),
       },
       routePolicies: {
         create: input.policyIds.map((policyId) => ({ policy: { connect: { id: policyId } } })),
       },
     },
     include: includeRelations,
+  }).catch((err: unknown) => {
+    // The check above is read-then-insert: a create racing it loses here.
+    if (isUniqueViolationOn(err, 'groups_name_key', ['name'])) throw new SquadAlreadyExistsError(input.name);
+    return rethrowPresetGone(err, input.customRoutingPresetId);
   });
   eventBus.emit('squad.changed', { squadId: row.id });
   return mapSquadToPublic(row);
@@ -140,6 +237,10 @@ export async function updateSquad(
     const dupe = await prisma.group.findUnique({ where: { name: input.name } });
     if (dupe) throw new SquadAlreadyExistsError(input.name);
   }
+
+  const exitRows = input.exitAcl !== undefined ? await exitAclRows(id, input.exitAcl) : [];
+  const presetFields = presetUpdateData(input);
+  await assertCustomPresetExists(presetFields.customRoutingPresetId);
 
   // Profile set replacement, done via tx so concurrent updates can't leave
   // half-applied state. Wipe the join rows, write the new ones.
@@ -169,9 +270,8 @@ export async function updateSquad(
     if (input.exitAcl !== undefined) {
       await tx.groupCascadeExit.deleteMany({ where: { groupId: id } });
       await tx.groupCascadeOff.deleteMany({ where: { groupId: id } });
-      const rows = exitAclRows(id, input.exitAcl);
-      if (rows.length > 0) {
-        await tx.groupCascadeExit.createMany({ data: rows });
+      if (exitRows.length > 0) {
+        await tx.groupCascadeExit.createMany({ data: exitRows });
       }
       const off = offRows(id, input.exitAcl);
       if (off.length > 0) {
@@ -192,11 +292,19 @@ export async function updateSquad(
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.description !== undefined ? { description: input.description } : {}),
-        ...(input.routingPreset !== undefined ? { routingPreset: input.routingPreset } : {}),
+        // R3-a + A-229: one preset, a built-in key or an own one; a value on
+        // one side clears the other (presetUpdateData).
+        ...presetFields,
         ...(input.hwidDeviceLimit !== undefined ? { hwidDeviceLimit: input.hwidDeviceLimit } : {}),
       },
       include: includeRelations,
     });
+  }).catch((err: unknown) => {
+    // A rename racing the check above (A-257).
+    if (input.name !== undefined && isUniqueViolationOn(err, 'groups_name_key', ['name'])) {
+      throw new SquadAlreadyExistsError(input.name);
+    }
+    return rethrowPresetGone(err, presetFields.customRoutingPresetId);
   });
 
   // A squad edit changes what its members are handed, and the binding cache is

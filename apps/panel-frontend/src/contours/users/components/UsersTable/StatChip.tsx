@@ -5,7 +5,8 @@ import { MONO_LABEL } from '@/contours/users/lib/textStyles';
 export interface StatChipProps {
   icon: React.ReactNode;
   label: string;
-  value: number;
+  /** null: the count did not arrive; a dash, not a zero. */
+  value: number | null;
   accent: string;
   active?: boolean;
   onClick?: () => void;
@@ -44,7 +45,7 @@ export function StatChip({ icon, label, value, accent, active, onClick }: StatCh
         <Stack gap={2}>
           <Text style={MONO_LABEL}>{label}</Text>
           <Text style={{ ...DISPLAY, fontSize: 28, fontWeight: 500, lineHeight: 1, color: SNOW }}>
-            {value}
+            {value ?? '-'}
           </Text>
         </Stack>
         <Box style={{ color: accent, display: 'flex', flexShrink: 0 }}>{icon}</Box>

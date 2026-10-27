@@ -2,7 +2,8 @@
   "api": {
     "services": [
       "StatsService",
-      "HandlerService"
+      "HandlerService",
+      "RoutingService"
     ],
     "tag": "api"
   },
@@ -136,6 +137,8 @@
     }
   ],
   "log": {
+    "access": "none",
+    "dnsLog": false,
     "loglevel": "warning"
   },
   "outbounds": [

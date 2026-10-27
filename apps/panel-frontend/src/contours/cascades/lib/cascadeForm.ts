@@ -1,11 +1,11 @@
-import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS } from '@iceslab/shared';
-import type { CascadeDirectionInput, CascadeMode, CascadeProtocol } from '@/lib/domain/cascades';
+import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS, type XraySubprotocol } from '@iceslab/shared';
+import type { CascadeDirectionInput, CascadeProtocol } from '@/lib/domain/cascades';
 import { linkCellPair, nativeEngineOfIntent, type EnginePair, type EngineName } from '@/lib/domain/engines';
 import { DEFAULT_LINK_CONGESTION, DEFAULT_LINK_UNDERLAY, LINK_CONGESTIONS } from '@/lib/domain/cascades';
 import type { LinkCell, LinkCongestion, LinkParams, LinkUnderlay } from '@/lib/domain/cascades';
 import type { Node } from '@/lib/domain/nodes';
 import { nodeCoreFit } from '@/lib/domain/nodeCoreFit';
-import { AMBER, CYAN, DIM, MIST, MOSS, RED, VIOLET } from '@/contours/cascades/lib/colors';
+import { AMBER, CYAN, DIM, MIST, MOSS, RED } from '@/contours/cascades/lib/colors';
 
 /**
  * The shape of a cascade draft and the small functions that read it.
@@ -16,11 +16,9 @@ import { AMBER, CYAN, DIM, MIST, MOSS, RED, VIOLET } from '@/contours/cascades/l
  * module.
  */
 
-// Mirrors the backend cap (cascade.schemas MAX_CASCADE_HOPS); keep the two in
-// sync. Each hop adds latency and one more inter-hop link port to open.
-export const MAX_HOPS = 5;
-
-export const MAX_POSITIONS = MAX_HOPS;
+// The server's cap, read from the contract (A-175): each step adds latency and
+// one more inter-hop link port to open.
+export const MAX_POSITIONS = MAX_CASCADE_HOPS;
 
 /** Entries multiplied by directions, each pair being one link with its own
  *  credentials. Mirrors the backend ceiling. */
@@ -208,7 +206,28 @@ export function entryNoteKind(facts: EntryChainFacts | null): EntryNoteKind | nu
  * Сравнение идёт по ПРОТОКОЛУ профиля, тем же правилом, что у сервера: при
  * смене входа он снимал с каскада профиль `hy2` именно как hysteria-профиль.
  * Выключенная привязка в счёт не идёт: пользователей через неё нет.
+ *
+ * A-264: протокол xray на входе xray ещё не значит «в каскаде». Вход
+ * раскладывает юзеров по выходам только через vlessRoute (UUID vless), и
+ * профиль xray с subprotocol trojan или vmess мимо него выходит из страны
+ * входа. Такой профиль назван своим subprotocol. Subprotocol берётся из
+ * конфига профиля в списке; профиль без известного subprotocol не назван:
+ * неполный факт фактом не считается.
  */
+/**
+ * Подпротоколы xray, которые вход каскада не раскладывает (A-264): у них нет
+ * UUID vless, по которому vlessRoute выбирает выход. socks и http входят по
+ * логину и тоже идут мимо.
+ */
+const OFF_ROUTE_SUBPROTOCOLS: readonly XraySubprotocol[] = ['trojan', 'vmess', 'socks', 'http'];
+
+/** Подпротокол xray мимо vlessRoute, по конфигу профиля; иначе null (vless или не известно). */
+function xrayOffRouteSubprotocol(profile: { protocol: string; config?: unknown }): XraySubprotocol | null {
+  if (profile.protocol !== 'xray' || !profile.config || typeof profile.config !== 'object') return null;
+  const sub = (profile.config as { subprotocol?: unknown }).subprotocol;
+  return OFF_ROUTE_SUBPROTOCOLS.find((s) => s === sub) ?? null;
+}
+
 export interface EntryBystander {
   nodeId: string;
   nodeName: string;
@@ -220,19 +239,25 @@ export function entryBystanders(
   entryProtocol: string | null | undefined,
   entryNodes: { id: string; name: string; countryCode: string | null }[],
   bindings: { profileId: string; nodeId: string; enabled: boolean }[] | undefined,
-  profiles: { id: string; protocol: string }[] | undefined,
+  profiles: { id: string; protocol: string; config?: unknown }[] | undefined,
 ): EntryBystander[] | undefined {
   if (!entryProtocol || !bindings || !profiles) return undefined;
-  const protocolOf = new Map(profiles.map((p) => [p.id, p.protocol]));
+  const byId = new Map(profiles.map((p) => [p.id, p]));
   const out: EntryBystander[] = [];
   for (const node of entryNodes) {
     const foreign = new Set<string>();
     for (const b of bindings) {
       if (b.nodeId !== node.id || !b.enabled) continue;
-      const proto = protocolOf.get(b.profileId);
+      const profile = byId.get(b.profileId);
       // Профиль, которого нет в списке, ничего не говорит о протоколе: его не
       // считаем, чтобы не назвать чужим то, чего мы просто не видим.
-      if (proto && proto !== entryProtocol) foreign.add(proto);
+      if (!profile) continue;
+      if (profile.protocol !== entryProtocol) {
+        foreign.add(profile.protocol);
+        continue;
+      }
+      const sub = xrayOffRouteSubprotocol(profile);
+      if (sub) foreign.add(sub);
     }
     if (foreign.size > 0) {
       out.push({ nodeId: node.id, nodeName: node.name, countryCode: node.countryCode, protocols: [...foreign].sort() });
@@ -248,46 +273,6 @@ export const ROLE_TONE: Record<HopRole, string> = {
   transit: MIST,
   exit: MOSS,
 };
-
-/** A chain is one fixed path, a balancer is a choice, and the panel colours
- *  them apart wherever a mode is named. */
-export const MODE_TONE: Record<CascadeMode, string> = {
-  chain: CYAN,
-  balancer: VIOLET,
-};
-
-/** One hop of the draft, before it becomes a CascadeHopInput. */
-export interface HopDraft {
-  /** Stable across reorder and delete, so React keeps the right field focused. */
-  key: number;
-  nodeId: string;
-  entryProtocol: CascadeProtocol;
-  linkProtocol: CascadeProtocol;
-}
-
-/** entry, then in a chain the last hop is the exit; in a balancer everything
- *  past the entry is a parallel exit. */
-export function roleAt(index: number, count: number, mode: CascadeMode): HopRole {
-  if (index === 0) return 'entry';
-  return mode === 'balancer' || index === count - 1 ? 'exit' : 'transit';
-}
-
-/** chain: every hop but the last forwards to the next. balancer: only the entry
- *  carries a link, and it is the one protocol every exit link uses. */
-export function carriesLinkAt(index: number, count: number, mode: CascadeMode): boolean {
-  return mode === 'balancer' ? index === 0 : index < count - 1;
-}
-
-/** The hops as the API wants them: entryProtocol only on the entry, and a link
- *  protocol only where the role actually carries one. */
-export function toHopInputs(hops: HopDraft[], mode: CascadeMode) {
-  return hops.map((h, i) => ({
-    nodeId: h.nodeId,
-    position: i,
-    ...(i === 0 ? { entryProtocol: h.entryProtocol } : {}),
-    ...(carriesLinkAt(i, hops.length, mode) ? { linkProtocol: h.linkProtocol } : {}),
-  }));
-}
 
 /** The cascade list's status palette, so a node keeps its colour between the
  *  picker here and the card it appears on afterwards. */
@@ -405,6 +390,64 @@ export function outboundTakenBy(
  *  directions block, so it is never a pool. */
 export function poolRoleAt(index: number): HopRole {
   return index === 0 ? 'entry' : 'transit';
+}
+
+/**
+ * 400 POSITION_MOVED_WITHOUT_LINK_PARAMS (8072de8): позиция пришла на другом
+ * номере, чем хранится, без `linkParams`, и сервер не стал подставлять их по
+ * номеру. После `reorderedPositions` экран его получать не должен; если всё же
+ * пришёл, номера для слов. Вход проверяется первым; номера с сервера с нуля,
+ * на экран с единицы (вход первый).
+ */
+export function refusedPositionMoved(err: unknown): { position: number; stored: number } | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 400 || !data || typeof data !== 'object') return null;
+  const d = data as { error?: unknown; position?: unknown; storedPosition?: unknown };
+  if (d.error !== 'POSITION_MOVED_WITHOUT_LINK_PARAMS') return null;
+  if (!Number.isInteger(d.position) || !Number.isInteger(d.storedPosition)) return null;
+  return { position: (d.position as number) + 1, stored: (d.storedPosition as number) + 1 };
+}
+
+/**
+ * Позиции после перестановки или удаления (A-140).
+ *
+ * Сервер подставляет неприсланный `linkParams` из хранимой позиции С ТЕМ ЖЕ
+ * НОМЕРОМ (`positionsForSave`, cascade.service.ts:1637-1653): ключа у
+ * позиции нет, номер и есть ключ. Поэтому позиция, сменившая номер, шлёт свои
+ * настройки ноги явно, иначе подложка AWG и congestion остаются на старом
+ * номере и уезжают к соседней ноге. Позиция, у которой сервер поля не отдал
+ * (`undefined`), не помечается: прислать за неё нечего, а `null` стёр бы
+ * хранимое.
+ */
+export function reorderedPositions(before: PositionDraft[], after: PositionDraft[]): PositionDraft[] {
+  return after.map((p, i) =>
+    before[i]?.key !== p.key && p.linkParams !== undefined && !p.linkTouched ? { ...p, linkTouched: true } : p,
+  );
+}
+
+export function movePosition(pools: PositionDraft[], idx: number, dir: -1 | 1): PositionDraft[] {
+  const j = idx + dir;
+  if (j < 0 || j >= pools.length) return pools;
+  const next = [...pools];
+  [next[idx], next[j]] = [next[j]!, next[idx]!];
+  return reorderedPositions(pools, next);
+}
+
+/**
+ * A new transit at the end. It carries `linkParams: null` and counts as
+ * touched, so the save says "nothing" for it out loud: left absent, the server
+ * fills it from the stored position with the same number, and after "delete
+ * B, add C" that is B's AWG underlay handed to C.
+ */
+export function appendPosition(pools: PositionDraft[], key: number): PositionDraft[] {
+  return [...pools, { key, nodeIds: [''], entryProtocol: 'xray', linkProtocol: 'xray', linkParams: null, linkTouched: true }];
+}
+
+export function removePosition(pools: PositionDraft[], idx: number): PositionDraft[] {
+  return reorderedPositions(pools, pools.filter((_, j) => j !== idx));
 }
 
 /**
@@ -577,6 +620,20 @@ export function outboundChainGaps(
   lastPosition: Parameters<typeof entryChainGaps>[0],
 ): EntryChainConflict[] {
   return directions.some((d) => directionVia(d) === 'outbound') ? entryChainGaps(lastPosition) : [];
+}
+
+/**
+ * E58: есть ли на нодах входа инбаунд AmneziaWG 3.1, то есть привязка профиля
+ * amneziawg с `awgProtocol: 3`. `undefined`: ответы ещё не пришли, и тогда
+ * «· 3.1» не пишется (незнание не факт).
+ */
+export function entryHasAwg31(
+  bindings: readonly { profileId: string }[] | undefined,
+  profiles: readonly { id: string; protocol: string; awgProtocol?: number | null }[] | undefined,
+): boolean | undefined {
+  if (!bindings || !profiles) return undefined;
+  const awg31 = new Set(profiles.filter((p) => p.protocol === 'amneziawg' && p.awgProtocol === 3).map((p) => p.id));
+  return bindings.some((b) => awg31.has(b.profileId));
 }
 
 /**

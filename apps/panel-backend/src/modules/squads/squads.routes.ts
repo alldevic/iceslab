@@ -6,6 +6,7 @@ import {
   SquadIdParamSchema,
 } from './squads.schemas.js';
 import * as squadsService from './squads.service.js';
+import { RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
 
 export async function squadsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/squads', { onRequest: [requireAuth] }, async (_req, reply) => {
@@ -33,6 +34,12 @@ export async function squadsRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof squadsService.SquadAlreadyExistsError) {
         return reply.code(409).send({ error: 'NAME_TAKEN', message: err.message });
       }
+      if (err instanceof squadsService.SquadExitAclError) {
+        return reply.code(400).send({ error: err.code, message: err.message });
+      }
+      if (err instanceof RoutingPresetNotFoundError) {
+        return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
+      }
       throw err;
     }
   });
@@ -49,8 +56,14 @@ export async function squadsRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof squadsService.SquadAlreadyExistsError) {
         return reply.code(409).send({ error: 'NAME_TAKEN', message: err.message });
       }
+      if (err instanceof squadsService.SquadExitAclError) {
+        return reply.code(400).send({ error: err.code, message: err.message });
+      }
       if (err instanceof squadsService.SquadProtectedError) {
         return reply.code(403).send({ error: 'PROTECTED', message: err.message });
+      }
+      if (err instanceof RoutingPresetNotFoundError) {
+        return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
       throw err;
     }

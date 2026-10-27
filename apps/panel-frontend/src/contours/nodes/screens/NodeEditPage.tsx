@@ -11,6 +11,7 @@ import { ResolvedRoutes } from '@/contours/nodes/components/NodeEdit/ResolvedRou
 import { Sep } from '@/contours/nodes/components/NodeEdit/Separators';
 import { SyncRefusalStrip } from '@/ui/SyncRefusalStrip';
 import { SyncStatusStrip } from '@/contours/nodes/components/NodeEdit/SyncStatusStrip';
+import { NodeAdapterLines } from '@/contours/nodes/components/NodeEdit/NodeAdapterLines';
 import { SystemPanel } from '@/contours/nodes/components/NodeEdit/SystemPanel';
 import { TabButton } from '@/contours/nodes/components/NodeEdit/TabButton';
 import { useNodeEditForm } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
@@ -23,14 +24,17 @@ import { ServerIcon } from '@/contours/nodes/components/NodeCreate/icons';
 import { useEffect } from 'react';
 import { nodeIntentWords } from '@/lib/domain/engines';
 import { useTranslation } from 'react-i18next';
-import { modals } from '@mantine/modals';
+import { notifications } from '@mantine/notifications';
 import {
   deleteNode,
 } from '@/lib/domain/nodes';
-import { NodeDeleteCascades } from '@/contours/nodes/components/NodeDelete';
+import { confirmBootstrapReissue, confirmNodeDelete } from '@/contours/nodes/components/nodeConfirm';
 import { showNodeDeleteFailed } from '@/contours/nodes/components/nodeDeleteToast';
-import { nodeDeleteFacts } from '@/contours/nodes/lib/nodeDelete';
 import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
+import { NodePayloadModal } from '@/contours/nodes/components/NodePayloadModal';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 
 /**
  * A registered node, as a page with tabs. Parameters is what the panel stores
@@ -41,6 +45,8 @@ import { awgGenerationsKnown } from '@/lib/domain/nodeFields';
 export function NodeEditPage() {
   const { t } = useTranslation();
   const {
+    issuedBootstrap,
+    setIssuedBootstrap,
     tab,
     setTab,
     id,
@@ -61,6 +67,7 @@ export function NodeEditPage() {
     saveMutation,
     warpMutation,
     exposureMutation,
+    certMutation,
     bootstrapMutation,
     statusTone,
     egress,
@@ -71,6 +78,11 @@ export function NodeEditPage() {
     enginesKnown,
     enginesRefusal,
     fleetQuery,
+    cascadeFailure,
+    syncFailure,
+    regionsFailure,
+    nodePoliciesFailure,
+    reachFailure,
   } = useNodeEditForm();
 
   // `#cores`: the deploy window and the host form link here for a core the
@@ -88,6 +100,10 @@ export function NodeEditPage() {
 
   // The id in the URL may match nothing: show the fallback rather than an
   // editor bound to a node that is not there.
+  // A failed list is not «no such node» (A-141).
+  if (!node && loadView(nodesQuery) === 'failed') {
+    return <LoadFailed message={apiErrorMessage(nodesQuery.error)} onRetry={() => void nodesQuery.refetch()} />;
+  }
   if (!node) {
     return <NodeNotFound isLoading={nodesQuery.isLoading} onBack={() => navigate('/nodes')} />;
   }
@@ -99,6 +115,17 @@ export function NodeEditPage() {
 
   return (
     <Stack gap={20}>
+      {/* The re-issued token's install command, shown rather than only copied
+          (A-147): on plain http there is no clipboard API to copy it with. */}
+      {issuedBootstrap && (
+        <NodePayloadModal
+          opened
+          onClose={() => setIssuedBootstrap(null)}
+          nodeName={node.name}
+          payload=""
+          bootstrap={issuedBootstrap}
+        />
+      )}
       {/* Page bar */}
       <Box
         style={{
@@ -194,44 +221,27 @@ export function NodeEditPage() {
           )}
         </Box>
         <Box style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 10, flexShrink: 0 }}>
-          <PlainButton icon="key" strong onClick={() => bootstrapMutation.mutate()}>
+          <PlainButton icon="key" strong onClick={() => confirmBootstrapReissue(node, t, () => bootstrapMutation.mutate())}>
             {t('nodeEdit.reissue')}
           </PlainButton>
           <UnstyledButton
             type="button"
-            onClick={() => {
-              // Включённый каскад держит ноду: кнопка недоступна до щелчка, а
-              // отказ, если всё же пришёл, говорит словами (E28). Раньше отказ
-              // здесь терялся вовсе: onConfirm ждал удаления без catch.
-              const cascades = nodeDeleteFacts(node);
-              const blocked = (cascades?.blocked.length ?? 0) > 0;
-              modals.openConfirmModal({
-                title: t('nodes.deleteTitle', { name: node.name }),
-                children: (
-                  <Stack gap="sm">
-                    <NodeDeleteCascades facts={cascades} />
-                    <Text size="sm">{t('nodes.deleteBody')}</Text>
-                  </Stack>
-                ),
-                labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
-                confirmProps: {
-                  color: 'red',
-                  disabled: blocked,
-                  title: blocked ? t('nodeConfirm.deleteBlockedHint') : undefined,
-                },
-                onConfirm: async () => {
-                  try {
-                    await deleteNode(node.id);
-                  } catch (err) {
-                    showNodeDeleteFailed(err, t);
-                    return;
-                  }
-                  qc.invalidateQueries({ queryKey: ['nodes'] });
-                  qc.invalidateQueries({ queryKey: ['node', id] });
-                  navigate('/nodes');
-                },
-              });
-            }}
+            onClick={() =>
+              // One window with the list (spec frontend-nodes): any cascade, on or
+              // off, locks the button (1bf18ca), a refusal is said in words (E28).
+              confirmNodeDelete(node, t, async () => {
+                try {
+                  await deleteNode(node.id);
+                } catch (err) {
+                  showNodeDeleteFailed(err, t);
+                  return;
+                }
+                qc.invalidateQueries({ queryKey: ['nodes'] });
+                qc.invalidateQueries({ queryKey: ['node', id] });
+                notifications.show({ color: 'green', message: t('nodeConfirm.deleted') });
+                navigate('/nodes');
+              })
+            }
             style={{
               width: 38,
               height: 38,
@@ -283,7 +293,8 @@ export function NodeEditPage() {
           Отказ вытесняет «ещё не применено», а не встаёт рядом с ним: это одно
           и то же событие, только с причиной, и две полосы подряд про один пуш
           читаются как две разные беды. */}
-      {refusal ? <SyncRefusalStrip refusal={refusal} /> : <SyncStatusStrip status={syncQuery.data} />}
+      {refusal ? <SyncRefusalStrip refusal={refusal} /> : <SyncStatusStrip status={syncQuery.data} failure={syncFailure} />}
+      <NodeAdapterLines status={syncQuery.data} />
 
       {/* Рядом с отказом ядра, но отдельной сущностью: конфиг и процесс цепи
           ломаются независимо, и объединять их значит прятать одно за другим. */}
@@ -302,9 +313,11 @@ export function NodeEditPage() {
                 policyRefusal={policyRefusal}
                 enginesKnown={enginesKnown}
                 enginesRefusal={enginesRefusal}
+                regionsFailure={regionsFailure}
+                nodePoliciesFailure={nodePoliciesFailure}
               />
 
-              <EgressCard navigate={navigate} cascade={cascade} warpMutation={warpMutation} egress={egress} />
+              <EgressCard navigate={navigate} cascade={cascade} warpMutation={warpMutation} egress={egress} cascadeFailure={cascadeFailure} />
 
               {/* Состав ядер приходит от самой ноды, поэтому секция стоит
                   рядом с параметрами, а не в системной панели справа: это
@@ -322,7 +335,14 @@ export function NodeEditPage() {
               </Box>
             </Box>
 
-            <SystemPanel hostsQuery={hostsQuery} dashNode={dashNode} metrics={metrics} exposureMutation={exposureMutation} />
+            <SystemPanel
+              node={node}
+              hostsQuery={hostsQuery}
+              dashNode={dashNode}
+              metrics={metrics}
+              exposureMutation={exposureMutation}
+              certMutation={certMutation}
+            />
           </Box>
 
           <HostsPanel navigate={navigate} qc={qc} node={node} hostsQuery={hostsQuery} profileById={profileById} bindingById={bindingById} id={id} />
@@ -336,6 +356,10 @@ export function NodeEditPage() {
           isBalancerEntry={isBalancerEntry}
           policies={reachablePolicies}
           egressLabel={egress === 'warp' ? t('nodeEdit.egressWarp') : t('nodeEdit.egressDirect')}
+          nodePoliciesQuery={nodePoliciesQuery}
+          cascadeUnknown={egress === 'unknown'}
+          cascadeFailure={cascadeFailure}
+          policiesFailure={reachFailure}
         />
       )}
     </Stack>

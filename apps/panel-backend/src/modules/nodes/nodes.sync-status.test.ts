@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
 
 /**
  * "Saved, but not applied yet" for a node.
@@ -22,6 +23,11 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 let app: FastifyInstance;
 let token: string;
 let seq = 0;
+
+// A-162: what marks a node pending is the push being ASKED for, which the
+// event handlers do (index.ts registers them; buildApp does not). Subscribed
+// once: the bus has no unsubscribe.
+beforeAll(() => registerInboundEventHandlers());
 
 beforeEach(async () => {
   app = await buildApp();
@@ -88,9 +94,33 @@ async function bind(profileId: string, nodeId: string, port: number): Promise<st
   return JSON.parse(res.body).id as string;
 }
 
-/** The agent acknowledging a push, which is the only thing that stamps this. */
-async function acknowledge(nodeId: string, when = new Date()): Promise<void> {
-  await prisma.node.update({ where: { id: nodeId }, data: { lastInboundSyncAt: when } });
+/** The node's revision once the event handlers of the last request have run:
+ *  they bump it asynchronously, after the response. */
+async function settledRevision(nodeId: string): Promise<bigint> {
+  // Unchanged across three looks 100 ms apart: under a full run a handler can
+  // land well after a single short pause.
+  let last = -1n;
+  let still = 0;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 100));
+    const now = (await prisma.node.findUniqueOrThrow({ where: { id: nodeId } })).desiredRevision;
+    still = now === last ? still + 1 : 0;
+    if (still >= 2) return now;
+    last = now;
+  }
+}
+
+/**
+ * The agent acknowledging a push, which is the only thing that stamps this:
+ * as the worker does it (A-162), the revision the push was built for and the
+ * time it was built.
+ */
+async function acknowledge(nodeId: string, when?: Date): Promise<void> {
+  const rev = await settledRevision(nodeId);
+  await prisma.node.update({
+    where: { id: nodeId },
+    data: { lastInboundSyncAt: when ?? new Date(), appliedRevision: rev },
+  });
 }
 
 async function syncStatus(nodeId: string) {
@@ -139,7 +169,7 @@ describe('node sync status', () => {
     });
     expect(res.statusCode, res.body).toBe(200);
 
-    expect((await syncStatus(nodeId)).applied).toBe(false);
+    await expect.poll(async () => (await syncStatus(nodeId)).applied, { timeout: 10_000 }).toBe(false);
   });
 
   it('goes back to pending when the PROFILE changes, though no node row was touched', async () => {
@@ -160,8 +190,8 @@ describe('node sync status', () => {
     });
     expect(res.statusCode, res.body).toBe(200);
 
+    await expect.poll(async () => (await syncStatus(nodeId)).applied, { timeout: 10_000 }).toBe(false);
     const after = await syncStatus(nodeId);
-    expect(after.applied).toBe(false);
     expect(new Date(after.configChangedAt) > new Date(after.lastInboundSyncAt!)).toBe(true);
   });
 
@@ -196,6 +226,57 @@ describe('node sync status', () => {
     await acknowledge(nodeId, when);
     const res = await app.inject({ method: 'GET', url: `/api/nodes/${nodeId}`, headers: auth() });
     expect(JSON.parse(res.body).lastInboundSyncAt).toBe(when.toISOString());
+  });
+
+  /**
+   * A-195: two bindings that stood on one single-inbound adapter before A-055
+   * refused the second. The node serves one, the last by port; the status says
+   * so instead of nothing. Written past the API, which refuses them now.
+   */
+  it('names the bindings that share a single-inbound adapter, and the one the node serves', async () => {
+    const nodeId = await makeNode();
+    const ss = async (name: string) =>
+      (await prisma.profile.create({
+        data: { name, protocol: 'shadowsocks', config: { method: '2022-blake3-aes-128-gcm' } },
+        select: { id: true },
+      })).id;
+    const low = await prisma.profileNodeBinding.create({ data: { nodeId, profileId: await ss('ss-a'), port: 8388, transport: 'tcp' } });
+    const high = await prisma.profileNodeBinding.create({ data: { nodeId, profileId: await ss('ss-b'), port: 8389, transport: 'tcp' } });
+    // xray takes many: two of them are no conflict.
+    await bind(await makeProfile(), nodeId, 443);
+    await bind(await makeProfile(), nodeId, 8443);
+
+    const s = (await syncStatus(nodeId)) as unknown as {
+      slotConflicts: { protocol: string; engine: string; bindings: { bindingId: string; port: number }[]; servedBindingId: string }[];
+    };
+    expect(s.slotConflicts).toHaveLength(1);
+    expect(s.slotConflicts[0]).toMatchObject({ protocol: 'shadowsocks', servedBindingId: high.id });
+    expect(s.slotConflicts[0]!.bindings.map((b) => b.bindingId)).toEqual([low.id, high.id]);
+
+    // A disabled binding takes no slot on the node.
+    await prisma.profileNodeBinding.update({ where: { id: low.id }, data: { enabled: false } });
+    expect(((await syncStatus(nodeId)) as unknown as { slotConflicts: unknown[] }).slotConflicts).toEqual([]);
+  });
+
+  it('A-204: names where a squad\'s limit on a user does not hold, and not for a disabled profile', async () => {
+    const nodeId = await makeNode();
+    const raw = async (name: string, protocol: string, port: number) => {
+      const p = await prisma.profile.create({ data: { name, protocol, config: {} }, select: { id: true } });
+      return prisma.profileNodeBinding.create({ data: { nodeId, profileId: p.id, port, transport: 'tcp' } });
+    };
+    const m1 = await raw('mi-a', 'mieru', 2001);
+    const m2 = await raw('mi-b', 'mieru', 2002);
+    const mt = await raw('mt-a', 'mtproto', 4443);
+    type Gaps = { userScopeGaps: { bindingId: string; gap: string; profileName: string }[] };
+    const gaps = ((await syncStatus(nodeId)) as unknown as Gaps).userScopeGaps;
+    expect(gaps.map((g) => [g.bindingId, g.gap]).sort()).toEqual(
+      [[m1.id, 'shared-users'], [m2.id, 'shared-users'], [mt.id, 'shared-secret']].sort(),
+    );
+
+    // A disabled profile is not pushed: its mtproto names no secret, and the
+    // mieru left alone has nothing to cross into.
+    await prisma.profile.updateMany({ where: { id: { in: [m2.profileId, mt.profileId] } }, data: { enabled: false } });
+    expect(((await syncStatus(nodeId)) as unknown as Gaps).userScopeGaps).toEqual([]);
   });
 
   it('404s for a node that does not exist', async () => {

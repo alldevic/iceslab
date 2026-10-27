@@ -24,6 +24,10 @@ export const traffic = {
     nodeOnNodes_one: 'on {{count}} node',
     nodeOnNodes_other: 'on {{count}} nodes',
     nodeOnNoNodes: 'on no nodes',
+    // A-251: the server sent no node count.
+    nodeOnUnknown: 'on an unknown number of nodes',
+    nodeDeleteBodyUnknown:
+      'The server did not say how many nodes carry it: if any do, their configs are rewritten without these rules.',
     nodeCountHint:
       'This is one policy, not copies. Saving changes it at once on every node carrying it.',
     nodeColIf: 'If this',
@@ -118,8 +122,20 @@ export const traffic = {
     addRule: 'Add rule',
     dragHint: 'Drag to reorder',
     matchPlaceholder: 'geosite:google  geoip:private',
+    entryGrammar:
+      'An entry is a name (geosite:, ext:, domain:, full:, keyword:, regexp:, a hostname) or an address (geoip:, ext-ip:, IPv4/IPv6, CIDR).',
+    entryUnknown: 'Neither a name nor an address: {{entries}}. Such entries are marked in the rules.',
+    entryUnknownRow: 'Neither a name nor an address: {{entries}}.',
     notePlaceholder: 'why this rule exists',
     shadowedBy: 'never fires: {{match}} is claimed by a rule above, which takes this traffic first',
+    shadowedByBlock: 'never fires: {{match}} is blocked too, and on the node block always comes before direct',
+    shadowedTwice: 'repeat: {{match}} is already in another row with the same action',
+    blockAboveDirect: 'Block always comes before direct, row order does not matter',
+    colShadow: 'Overlap',
+    warpProxyElsewhere: 'WARP and proxy by domain are set in the exit node policy.',
+    openNodePolicies: 'Open «Node rules»',
+    importDroppedActions_one: '{{count}} WARP or proxy rule was left out of the file: the exit node policy sets those.',
+    importDroppedActions_other: '{{count}} WARP or proxy rules were left out of the file: the exit node policy sets those.',
     hygieneMatch: 'DNS · bittorrent · port 25 · QUIC',
     hygieneAction: 'our way',
     hygieneNote: 'The panel puts this first, always. It cannot be moved.',
@@ -137,19 +153,30 @@ export const traffic = {
       proxy: 'Into the tunnel',
     },
     extra: 'Extra',
-    writesDisabledPresets: 'Available once presets are data: the write endpoints do not exist yet.',
     presetNamePlaceholder: 'Preset name',
     presetSaved: 'Preset saved',
     presetDeleted: 'Preset deleted',
     presetDeleteTitle: 'Delete preset "{{name}}"?',
-    presetDeleteBody: 'Squads on it fall back to the default preset the next time a config is issued.',
+    presetDeleteBody: 'Only a preset nobody holds is deleted. One in use is refused, and the server names who holds it.',
+    presetEntryUnknown: 'A device rule cannot carry these: {{entries}}. The rows are marked.',
+    presetGeoTagUnknown: 'The panel geo set has no such tags: {{entries}}. The rows are marked.',
+    presetEntryRow: 'Refused by the server: {{entries}}.',
+    presetBuiltInRefused: 'A built-in preset is not changed or deleted.',
+    presetGone: 'This preset is gone: the list was read again.',
+    presetNameTaken: 'A preset with this name already exists.',
+    presetInUse: 'The preset is assigned to {{holders}}. Take it off there, then delete.',
+    presetHeldUsers_one: '{{count}} user ({{names}})',
+    presetHeldUsers_other: '{{count}} users ({{names}})',
+    presetHeldSquads_one: '{{count}} squad ({{names}})',
+    presetHeldSquads_other: '{{count}} squads ({{names}})',
+    presetHeldMore: '{{names}} and {{count}} more',
     // Stands where the delete button stands on the two neighbouring tabs. An
     // empty corner reads as a button somebody forgot, so the absence is said.
     presetNoDelete: 'built in, cannot be deleted',
     presetBuiltInWhy:
       'The three ready-made presets are compiled into the subscription builder rather than stored as data, so there is nothing to delete. Your own layer of rules is edited below.',
-    presetWritesNotLive:
-      'Saving needs the preset endpoints, which the API does not ship yet: today these are three rule sets compiled into the builder rather than data. Everything else on this screen is live, and Save will start working the moment they land.',
+    presetOwnNote:
+      'Your own preset: its rules go into the client config of whoever holds it (a user or a squad, set on their card). Like the built-ins, it reaches the full formats only.',
     actionDirect: 'Straight out',
     actionBlock: 'Dropped',
     actionDrop: 'Blocked',
@@ -173,7 +200,7 @@ export const traffic = {
     nodeReadOnly:
       'Read-only for now. The API ships route policies as a list, with no create or edit, so the panel shows what exists rather than pretending to write it.',
     presetReadOnly:
-      'Read-only: the three presets are compiled into the subscription builder, not stored as data. What you can change is your own layer below, which runs ahead of them.',
+      'Read-only: the three built-in presets are compiled into the subscription builder. Your own preset is made with "New preset"; your own layer below runs ahead of any preset.',
     ownTitle: 'Your own rules',
     ownHint: 'Applied before the preset, so these win over it.',
     unsaved: 'unsaved',
@@ -285,6 +312,8 @@ export const traffic = {
       used_other: 'Cannot delete: the set is in {{count}} rules, detach it there first',
     },
     attention: {
+      // A-252: without the node list we cannot tell whether geo lags on any node.
+      nodesFailed: 'the node list that shows where geo is behind',
       broken_one: 'Broken set: {{names}}.',
       broken_other: 'Broken sets: {{names}}.',
       behind_one: 'Geo is behind the intent on {{count}} node: roll the set out or look at the node card.',

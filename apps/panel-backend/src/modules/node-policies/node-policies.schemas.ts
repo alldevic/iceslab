@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { classifyPolicyEntry } from '../cascades/policy-entries.js';
 
 /**
  * Э3 layer B: what a NODE does with traffic.
@@ -18,6 +19,26 @@ const NameSchema = z
 /** Engine-neutral matcher entries: "geosite:category-ru", "geoip:ru",
  *  "domain:example.com", plain hostnames, CIDRs. The node translates. */
 const MatchEntry = z.string().min(1).max(253);
+
+/** The sniffed protocols xray's routing and sing-box's both take by name. */
+export const POLICY_PROTOCOLS = ['http', 'tls', 'quic', 'bittorrent'] as const;
+
+/**
+ * xray's port string ("443", "1000-2000", "80,443"), strictly: digits, one
+ * plain hyphen per range, low <= high, 1..65535. A range pasted with an en dash
+ * is refused here instead of vanishing in translation.
+ */
+export function isPortList(s: string): boolean {
+  const parts = s.split(',').map((p) => p.trim());
+  if (parts.length === 0 || parts.some((p) => p === '')) return false;
+  return parts.every((p) => {
+    const m = /^(\d{1,5})(?:-(\d{1,5}))?$/.exec(p);
+    if (!m) return false;
+    const lo = Number(m[1]);
+    const hi = m[2] === undefined ? lo : Number(m[2]);
+    return lo >= 1 && hi <= 65535 && lo <= hi;
+  });
+}
 
 export const PolicyActionKind = z.enum(['direct', 'block', 'warp', 'cascade']);
 export type PolicyActionKindValue = z.infer<typeof PolicyActionKind>;
@@ -44,6 +65,51 @@ export const PolicyRuleSchema = z
     }),
   })
   .superRefine((val, ctx) => {
+    // A-103: every matcher is checked here, the way a route policy's entries
+    // are (classifyPolicyEntry, E55). An entry no engine reads used to pass,
+    // and two engines then disagreed: xray refused the whole config, and the
+    // chain dropped the entry and, with nothing left, turned the rule into a
+    // rule on EVERYTHING (block every connection, or send all of it to WARP).
+    val.match.domain.forEach((e, i) => {
+      if (classifyPolicyEntry(e) !== 'domain') {
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            classifyPolicyEntry(e) === 'ip'
+              ? `"${e}" is an address, it goes in the address list, not the domains`
+              : `"${e}" is not a domain matcher (geosite:, ext:, domain:, full:, keyword:, regexp:, or a hostname)`,
+          path: ['match', 'domain', i],
+        });
+      }
+    });
+    val.match.ip.forEach((e, i) => {
+      if (classifyPolicyEntry(e) !== 'ip') {
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            classifyPolicyEntry(e) === 'domain'
+              ? `"${e}" is a domain, it goes in the domain list, not the addresses`
+              : `"${e}" is not an address matcher (geoip:, ext-ip:, an IP address or a CIDR)`,
+          path: ['match', 'ip', i],
+        });
+      }
+    });
+    if (val.match.port && !isPortList(val.match.port)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `"${val.match.port}" is not a port list: ports 1-65535 and ranges like 1000-2000, comma-separated`,
+        path: ['match', 'port'],
+      });
+    }
+    val.match.protocol.forEach((p, i) => {
+      if (!(POLICY_PROTOCOLS as readonly string[]).includes(p)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `"${p}" is not a protocol both engines match (${POLICY_PROTOCOLS.join(', ')})`,
+          path: ['match', 'protocol', i],
+        });
+      }
+    });
     // A cascade rule with no direction has nowhere to send traffic, and a
     // direction on any other kind is a leftover from switching the action in
     // the form. Both are accepted silently by a plain shape check and then mean

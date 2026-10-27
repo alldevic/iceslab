@@ -134,7 +134,8 @@ export const USER_COLUMNS: UserColumn[] = [
     id: 'deviceLimit',
     label: 'deviceLimit',
     width: 130,
-    filter: { kind: 'choice', param: 'deviceLimit', values: ['set', 'unset'] },
+    // A-148: 0 is its own value, the explicit no-limit; `unset` is «as the squad».
+    filter: { kind: 'choice', param: 'deviceLimit', values: ['set', 'unlimited', 'unset'] },
   },
   {
     id: 'firstConnected',
@@ -239,7 +240,14 @@ export function saveColumnView(view: ColumnView): void {
 }
 
 /** The selection gutter and the trailing actions cell, neither of them data. */
-export const SELECT_COL = 44;
+/**
+ * Row selection is hidden until bulk actions arrive (spec frontend-users,
+ * ARCH 22.10: after rc). A tick column whose only effect was a counter read
+ * as a promise of an action the screen does not have. The server takes bulk
+ * already (POST /api/users/bulk); turning this on is the first step of that work.
+ */
+export const ROW_SELECTION = false;
+export const SELECT_COL = ROW_SELECTION ? 44 : 0;
 export const ACTIONS_COL = 44;
 
 /**

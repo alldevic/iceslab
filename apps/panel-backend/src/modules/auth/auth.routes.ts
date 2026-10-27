@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { requireAuth } from './auth.hook.js';
+import { requireAuth, requireSession } from './auth.hook.js';
 import { findAdminById } from '../admin/admin.service.js';
 import { LoginSchema, RegisterSchema, TotpCodeSchema } from './auth.schemas.js';
 import * as authService from './auth.service.js';
@@ -8,7 +8,8 @@ import * as adminService from '../admin/admin.service.js';
 import { mapAdminToPublic } from '../admin/admin.mapper.js';
 import { notifyTelegramAsync, escapeMarkdown, redactIp, redactUsername } from '../../lib/notify/telegram-notify.js';
 import { loginAttempts } from '../../lib/infra/metrics.js';
-import { config, subscriptionOrigin } from '../../config.js';
+import { config } from '../../config.js';
+import { subscriptionLinkOrigin } from '../subscription/subscription.link.js';
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/auth/status - public discovery: tells the frontend which auth
@@ -29,8 +30,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       panel: {
         // Origin the SPA prepends to a token for the copy-paste link. Client
         // facing, so it follows a subscription-domain split rather than the
-        // panel's own address.
-        publicUrl: subscriptionOrigin(),
+        // panel's own address, and the host the operator set in the panel
+        // first (A-171, 22.10): it was the environment's alone, and the link
+        // copied from the users list kept the old domain after the move.
+        publicUrl: await subscriptionLinkOrigin(),
         // Subscription path prefix. Default `/sub`, admin can override
         // via SUBSCRIPTION_PATH_PREFIX env to mask the Iceslab
         // signature (e.g. `/v` or `/get`). Always starts with `/`.
@@ -184,10 +187,27 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   // ───── K8: 2FA (TOTP) management, all protected ─────
 
+  // A-123: a session only, never an API token (requireSession says why).
+  const sessionAuth = { onRequest: [requireAuth, requireSession] };
+
   // Map twofa service errors to HTTP. Shared by enable/disable/setup.
+  //
+  // A wrong code here is 400, not 401 (A-169, 22.10): the admin is signed in
+  // and only mistyped a digit, and the panel reads any 401 as an expired
+  // session, so a typo while enabling 2FA signed them out and lost the setup.
+  // The login route keeps 401 for its wrong code: there is no session yet.
   function twofaError(reply: FastifyReply, err: unknown): FastifyReply | null {
     if (err instanceof twofa.TotpBadCodeError) {
-      return reply.code(401).send({ error: 'INVALID_TOTP', message: err.message });
+      return reply.code(400).send({ error: 'INVALID_TOTP', message: err.message });
+    }
+    // Too many wrong codes (A-123): the login's lockout answer, word for word.
+    if (err instanceof authService.AccountLockedError) {
+      reply.header('Retry-After', err.retryAfterSeconds.toString());
+      return reply.code(429).send({
+        error: 'ACCOUNT_LOCKED',
+        message: err.message,
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
     }
     if (err instanceof twofa.TotpAlreadyEnabledError) {
       return reply.code(409).send({ error: 'CONFLICT', message: err.message });
@@ -200,7 +220,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.get(
     '/api/auth/2fa/status',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => reply.send(await twofa.getTotpStatus(request.admin!.id)),
   );
 
@@ -208,7 +228,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   // until /enable confirms a code.
   app.post(
     '/api/auth/2fa/setup',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => {
       try {
         return reply.send(await twofa.setupTotp(request.admin!.id));
@@ -220,7 +240,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     '/api/auth/2fa/enable',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => {
       const { code } = TotpCodeSchema.parse(request.body);
       try {
@@ -234,7 +254,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     '/api/auth/2fa/disable',
-    { onRequest: [requireAuth] },
+    sessionAuth,
     async (request, reply) => {
       const { code } = TotpCodeSchema.parse(request.body);
       try {

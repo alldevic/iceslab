@@ -192,29 +192,6 @@ export interface CascadeTunnel {
   publicLinkPortOpen: boolean;
 }
 
-export interface CascadeHopInput {
-  nodeId: string;
-  position: number;
-  entryProtocol?: CascadeProtocol;
-  linkProtocol?: CascadeProtocol;
-}
-
-export interface CreateCascadeInput {
-  name: string;
-  enabled?: boolean;
-  mode?: CascadeMode;
-  hideHopsFromSub?: boolean;
-  hops: CascadeHopInput[];
-}
-
-export interface UpdateCascadeInput {
-  name?: string;
-  enabled?: boolean;
-  mode?: CascadeMode;
-  hideHopsFromSub?: boolean;
-  hops?: CascadeHopInput[];
-}
-
 /* ───── Cascades, v4 shape ──────────────────────────────────────────────────
  * The panel describes a cascade as positions and directions rather than hops:
  * a position is a POOL of nodes that all do the same job, and a direction is a
@@ -312,11 +289,97 @@ export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input> & {
   confirmEntryChange?: true;
 };
 
-/** The API's own sentence when it refuses a shape it cannot store. */
+/** The API's own sentence when it refuses a shape it cannot store. Input
+ *  checked first: whatever onError hands over, null included, is not trusted. */
 export function cascadeShapeError(err: unknown): string | null {
-  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
-  if (res?.status !== 400) return null;
-  return res.data?.message ?? null;
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 400 || !data || typeof data !== 'object') return null;
+  const { message } = data as { message?: unknown };
+  return typeof message === 'string' && message !== '' ? message : null;
+}
+
+/**
+ * The server's refusal to switch a cascade on, in its own words (A-126).
+ *
+ * Since 1bf18ca switching a cascade on runs the topology gates on the stored
+ * cascade, so `{ enabled: true }` alone can be refused: 400 INVALID for a
+ * node that is gone, or any of the gate codes (CELL_NOT_CARRIED and the rest)
+ * with a message that names the node. The card keeps the cascade drawn as off
+ * (it never flips before the server answers) and puts these words under it.
+ *
+ * Input checked first. Null means "not a refusal the server explained": a
+ * network failure or a 5xx stays a toast.
+ */
+export function cascadeToggleRefusal(err: unknown): { code: string; message: string } | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (typeof status !== 'number' || status < 400 || status >= 500 || !data || typeof data !== 'object') return null;
+  const { error, message } = data as { error?: unknown; message?: unknown };
+  if (typeof message !== 'string' || message === '') return null;
+  return { code: typeof error === 'string' ? error : '', message };
+}
+
+/**
+ * Why a delete did not happen (spec frontend-cascades). The server refuses one
+ * way today, 404 NOT_FOUND: someone else deleted the cascade first, so what the
+ * operator wanted is already true and is said as such, not as a failure. Any
+ * other 4xx with a sentence is said in the server's words. Null: nothing the
+ * server explained (network, 5xx), which stays a toast.
+ */
+export type CascadeDeleteRefusal = { kind: 'gone' } | { kind: 'refused'; code: string; message: string };
+
+export function cascadeDeleteRefusal(err: unknown): CascadeDeleteRefusal | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (typeof status !== 'number' || status < 400 || status >= 500) return null;
+  const { error, message } = (data && typeof data === 'object' ? data : {}) as { error?: unknown; message?: unknown };
+  if (status === 404 && error === 'NOT_FOUND') return { kind: 'gone' };
+  if (typeof message !== 'string' || message === '') return null;
+  return { kind: 'refused', code: typeof error === 'string' ? error : '', message };
+}
+
+/**
+ * A-101 (BACK 7c5e3ed7): a node carries one ENABLED cascade. The server
+ * refuses 409 NODE_IN_OTHER_CASCADE { nodeName, cascadeId, cascadeName } when
+ * a save would put a node of an enabled cascade into a second enabled one:
+ * on create of an enabled cascade, on an edit that changes its members
+ * (hops, positions, directions), and on switching one on. A rename alone
+ * passes. Input checked first; without the node or the other cascade named
+ * the refusal is not read here (the server's sentence still says it).
+ */
+export interface NodeInOtherCascade {
+  nodeName: string;
+  cascadeId: string | null;
+  cascadeName: string;
+}
+
+export function nodeInOtherCascadeRefusal(err: unknown): NodeInOtherCascade | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 409 || !data || typeof data !== 'object') return null;
+  const d = data as { error?: unknown; nodeName?: unknown; cascadeId?: unknown; cascadeName?: unknown };
+  if (d.error !== 'NODE_IN_OTHER_CASCADE') return null;
+  if (typeof d.nodeName !== 'string' || d.nodeName === '') return null;
+  if (typeof d.cascadeName !== 'string' || d.cascadeName === '') return null;
+  return {
+    nodeName: d.nodeName,
+    cascadeId: typeof d.cascadeId === 'string' && d.cascadeId !== '' ? d.cascadeId : null,
+    cascadeName: d.cascadeName,
+  };
+}
+
+/** The refusal in the panel's words, one sentence for create, edit and the toggle. */
+export function nodeInOtherCascadeWords(r: NodeInOtherCascade, t: (key: string, opts?: Record<string, string>) => string): string {
+  return t('cascades.nodeInOtherCascade', { node: r.nodeName, cascade: r.cascadeName });
 }
 
 export async function createCascadeV4(input: CreateCascadeV4Input): Promise<Cascade> {
@@ -339,13 +402,13 @@ export async function listCascades(): Promise<{ cascades: Cascade[]; fields?: st
   return data;
 }
 
-export async function createCascade(input: CreateCascadeInput): Promise<Cascade> {
-  const { data } = await api.post<Cascade>('/api/cascades', input);
-  return data;
-}
-
-export async function updateCascade(id: string, input: UpdateCascadeInput): Promise<Cascade> {
-  const { data } = await api.put<Cascade>(`/api/cascades/${id}`, input);
+/**
+ * The switch on the cascade list: one key, nothing else. A narrow call with an
+ * honest body rather than the whole update input, so the list cannot send what
+ * it does not edit.
+ */
+export async function setCascadeEnabled(id: string, enabled: boolean): Promise<Cascade> {
+  const { data } = await api.put<Cascade>(`/api/cascades/${id}`, { enabled });
   return data;
 }
 

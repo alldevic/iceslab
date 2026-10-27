@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { NodeTransport } from '../nodes/nodes.transport.js';
+import { pollNodeStatuses } from '../nodes/nodes.cron.js';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -6,6 +8,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { resolvePolicyForNode } from './node-policies.service.js';
+import { applyInboundsRequestForNode } from '../inbounds/inbounds.queue.js';
 import { markShadowed, type PolicyRuleDto } from './node-policies.mapper.js';
 
 /**
@@ -82,6 +85,36 @@ async function attach(nodeId: string, policyId: string | null, expected = 200) {
   });
   expect(res.statusCode, res.body).toBe(expected);
   return JSON.parse(res.body);
+}
+
+/**
+ * A user who reaches the entry through an open squad. A cascade rule at an
+ * xray entry lets through the users its door does (A-277); an entry nobody
+ * reaches has no one to let through and the rule stays home.
+ */
+async function openUserOn(entryId: string): Promise<string> {
+  seq += 1;
+  const post = async (url: string, payload: unknown) => {
+    const res = await app.inject({ method: 'POST', url, headers: auth(), payload });
+    expect(res.statusCode, res.body).toBe(201);
+    return JSON.parse(res.body) as { id: string };
+  };
+  const profile = await post('/api/profiles', {
+    name: `pol-vless-${seq}`,
+    protocol: 'xray',
+    config: {
+      security: 'reality',
+      realityDest: 'www.microsoft.com:443',
+      realityServerNames: ['www.microsoft.com'],
+      realityPrivateKey: 'k'.repeat(43),
+      realityPublicKey: 'p'.repeat(43),
+      realityShortIds: ['0123abcd'],
+      network: 'raw',
+    },
+  });
+  await post('/api/hosts', { profileId: profile.id, nodeId: entryId, port: 443 });
+  const squad = await post('/api/squads', { name: `pol-open-${seq}`, profileIds: [profile.id] });
+  return (await post('/api/users', { username: `pol_user_${seq}`, groupIds: [squad.id] })).id;
 }
 
 /** A two-node cascade with one way out, which is what a cascade rule needs. */
@@ -165,6 +198,47 @@ describe('storing a policy', () => {
   });
 });
 
+/**
+ * A-155: deleting a whole cascade drops every direction of it, and a rule that
+ * routes through one is RESTRICT. Left to the key, that was a 500 about a
+ * foreign key; the edit that removes one direction already named the policy.
+ */
+describe('deleting a cascade a policy routes through', () => {
+  it('is refused naming the policy, and the cascade stays', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { cascadeId, direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([{ action: { kind: 'cascade', directionId: direction.id } }]);
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/cascades/${cascadeId}`, headers: auth() });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'DIRECTION_IN_USE_BY_POLICY', policies: [p.name] });
+    expect(await prisma.cascade.count({ where: { id: cascadeId } })).toBe(1);
+
+    // Without the rule the delete goes through.
+    await app.inject({ method: 'PUT', url: `/api/node-policies/${p.id}`, headers: auth(), payload: { rules: [] } });
+    const ok = await app.inject({ method: 'DELETE', url: `/api/cascades/${cascadeId}`, headers: auth() });
+    expect(ok.statusCode, ok.body).toBe(204);
+  });
+
+  it('a foreign key refusing a write no route checked first is a 409, not a 500', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    await createPolicy([{ action: { kind: 'cascade', directionId: direction.id } }]);
+    // A route that writes without asking: the case the general handler is for.
+    const bare = await buildApp();
+    bare.delete('/__test/direction/:id', async (req) => {
+      await prisma.cascadeDirection.delete({ where: { id: (req.params as { id: string }).id } });
+      return { ok: true };
+    });
+    const res = await bare.inject({ method: 'DELETE', url: `/__test/direction/${direction.id}` });
+    await bare.close();
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body).error).toBe('REFERENCED');
+  });
+});
+
 describe('a policy has to fit the node it is attached to', () => {
   it('refuses a WARP rule on a node without WARP, at the save', async () => {
     // The core would refuse it too, minutes later, in a worker log attached to
@@ -212,6 +286,64 @@ describe('a policy has to fit the node it is attached to', () => {
   });
 });
 
+describe('matchers no engine reads are refused at the save (A-103)', () => {
+  it('refuses an en-dash range, a port with a transport, a protocol name as a port, an address among domains, a domain among addresses, an unknown protocol', async () => {
+    for (const match of [
+      { port: '1000–2000' },
+      { port: '443/tcp' },
+      { port: 'http' },
+      { port: '0' },
+      { domain: ['geoip:ru'] },
+      { domain: ['10.0.0.0/8'] },
+      { ip: ['example.com'] },
+      { ip: ['cidr:10.0.0.0/8'] },
+      { protocol: ['ssh'] },
+    ]) {
+      const res = await createPolicy([{ match, action: { kind: 'block' } }], 400);
+      expect(JSON.stringify(res), JSON.stringify(match)).toMatch(/not a|goes in the/);
+    }
+  });
+
+  it('takes what both engines read', async () => {
+    await createPolicy([
+      { match: { port: '80,443,1000-2000' }, action: { kind: 'block' } },
+      { match: { domain: ['geosite:category-ads-all', 'domain:example.com', 'example.org'] }, action: { kind: 'block' } },
+      { match: { ip: ['geoip:ru', '10.0.0.0/8', '2001:db8::1'] }, action: { kind: 'direct' } },
+      { match: { protocol: ['bittorrent'] }, action: { kind: 'block' } },
+    ]);
+  });
+
+  it('a stored rule whose every matcher is unreadable is not sent, and does not become a rule on everything', async () => {
+    const nodeId = await makeNode();
+    const p = await createPolicy([
+      { match: { port: '443' }, action: { kind: 'block' } },
+      { match: { domain: ['ads.example'] }, action: { kind: 'block' } },
+    ]);
+    await attach(nodeId, p.id);
+    // As a row from before the check holds it.
+    const [first] = await prisma.nodePolicyRule.findMany({ where: { policyId: p.id }, orderBy: { position: 'asc' } });
+    await prisma.nodePolicyRule.update({ where: { id: first!.id }, data: { matchPort: '1000–2000' } });
+    const wire = await resolvePolicyForNode(nodeId);
+    expect(wire?.rules).toEqual([{ match: { domain: ['ads.example'] }, action: { kind: 'block' } }]);
+  });
+
+  it('a stored rule that lost a whole kind of condition is not sent; one that lost part of a kind goes out narrower', async () => {
+    const nodeId = await makeNode();
+    const p = await createPolicy([
+      { match: { domain: ['a.example'], port: '443' }, action: { kind: 'block' } },
+      { match: { domain: ['b.example'], port: '443' }, action: { kind: 'block' } },
+    ]);
+    await attach(nodeId, p.id);
+    const [first, second] = await prisma.nodePolicyRule.findMany({ where: { policyId: p.id }, orderBy: { position: 'asc' } });
+    // "block, domain: [geoip:xx], port: 443": the domains gone, would block all of 443.
+    await prisma.nodePolicyRule.update({ where: { id: first!.id }, data: { matchDomain: ['geoip:xx'] } });
+    // Two domains, one unreadable: narrower, still sent.
+    await prisma.nodePolicyRule.update({ where: { id: second!.id }, data: { matchDomain: ['geoip:xx', 'b.example'] } });
+    const wire = await resolvePolicyForNode(nodeId);
+    expect(wire?.rules).toEqual([{ match: { domain: ['b.example'], port: '443' }, action: { kind: 'block' } }]);
+  });
+});
+
 describe('what the node is actually sent', () => {
   it('sends nothing at all for a node with no policy', async () => {
     // undefined, not an empty policy: the node renders byte-identically to
@@ -224,6 +356,7 @@ describe('what the node is actually sent', () => {
     const entry = await makeNode();
     const exit = await makeNode();
     const { direction } = await cascadeWithDirection(entry, exit);
+    const userId = await openUserOn(entry);
     const p = await createPolicy([
       { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
     ]);
@@ -234,8 +367,190 @@ describe('what the node is actually sent', () => {
     expect(wire!.rules[0]!.action).toEqual({
       kind: 'cascade',
       exit: `cascade-link-out-d${direction.tag}-0`,
+      // A-277: the users the direction's door lets through, sent even when
+      // that is everybody on the entry.
+      users: [userId],
     });
     expect(wire!.rules[0]!.match).toEqual({ domain: ['youtube.com'] });
+  });
+
+  it('names an outbound the push actually draws, on an entry under a chain and on a transit (A-108)', async () => {
+    // The rule used to mirror the legacy drawing alone (cascade-link-out-d<t>-0),
+    // which an entry under a chain does not get: its xray hands over to the
+    // chain through cascade-link-out-chain-d<t>.
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    await openUserOn(entry);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+    ]);
+    await attach(entry, p.id);
+
+    const req = await applyInboundsRequestForNode(entry);
+    const exitTag = (req?.policy?.rules[0]?.action as { exit?: string } | undefined)?.exit;
+    expect(exitTag).toBe(`cascade-link-out-chain-d${direction.tag}`);
+    const handover = req?.chain?.userCore;
+    expect(handover?.engine).toBe('xray');
+    const outbounds = (handover as { fragments: { outbounds: { tag?: string }[] } }).fragments.outbounds;
+    expect(outbounds.map((o) => o.tag)).toContain(exitTag);
+  });
+
+  it('says which rules the push leaves out on a node, and why (A-232)', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { cascadeId, direction } = await cascadeWithDirection(entry, exit);
+    await openUserOn(entry);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+      { match: { domain: ['ads.example'] }, action: { kind: 'block' } },
+    ]);
+    await attach(entry, p.id);
+    const read = async () => {
+      const res = await app.inject({ method: 'GET', url: `/api/nodes/${entry}/policy-drawing`, headers: auth() });
+      expect(res.statusCode, res.body).toBe(200);
+      return JSON.parse(res.body) as { policyId: string; drawing: string; notDrawn: { ruleId: string; reason: string }[] };
+    };
+
+    // An xray entry under a chain: the hand-over, every rule goes out.
+    expect(await read()).toEqual({ policyId: p.id, drawing: 'handover', notDrawn: [], ungated: [], agent: null });
+
+    // The same entry on hysteria: xray draws no way out, the cascade rule stays home.
+    await prisma.cascadePosition.updateMany({ where: { cascadeId, position: 0 }, data: { entryProtocol: 'hysteria' } });
+    const cascadeRule = p.rules.find((r: PolicyRuleDto) => r.action.kind === 'cascade');
+    expect(await read()).toEqual({
+      policyId: p.id,
+      drawing: 'none',
+      notDrawn: [{ ruleId: cascadeRule.id, reason: 'no-cascade-drawing' }],
+      ungated: [],
+      agent: null,
+    });
+  });
+
+  it('a node in a cascade with no chain and no xray inbound reads "none", as the push sends nothing to it', async () => {
+    // A hop-only cascade: no chain block, the legacy fragments only. The push
+    // puts them on the node's xray inbound and has none to put them on.
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/cascades',
+      headers: auth(),
+      payload: {
+        name: 'hops-only',
+        enabled: true,
+        hops: [
+          { nodeId: entry, position: 0, entryProtocol: 'xray', linkProtocol: 'vless' },
+          { nodeId: exit, position: 1 },
+        ],
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const read = async () =>
+      (JSON.parse((await app.inject({ method: 'GET', url: `/api/nodes/${entry}/policy-drawing`, headers: auth() })).body) as {
+        drawing: string;
+      }).drawing;
+
+    const req = await applyInboundsRequestForNode(entry);
+    expect(req?.chain).toBeUndefined();
+    expect(req?.cascade).toBeUndefined();
+    expect(await read()).toBe('none');
+
+    // With an enabled xray inbound the push carries the fragments, and the read agrees.
+    const profile = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      headers: auth(),
+      payload: {
+        name: 'hops-vless',
+        protocol: 'xray',
+        config: {
+          security: 'reality',
+          realityDest: 'www.microsoft.com:443',
+          realityServerNames: ['www.microsoft.com'],
+          realityPrivateKey: 'k'.repeat(43),
+          realityPublicKey: 'p'.repeat(43),
+          realityShortIds: ['0123abcd'],
+          network: 'raw',
+        },
+      },
+    });
+    expect(profile.statusCode, profile.body).toBe(201);
+    const bind = await app.inject({
+      method: 'POST',
+      url: '/api/bindings',
+      headers: auth(),
+      payload: { profileId: JSON.parse(profile.body).id, nodeId: entry, port: 443 },
+    });
+    expect(bind.statusCode, bind.body).toBe(201);
+    expect((await applyInboundsRequestForNode(entry))?.cascade).toBeDefined();
+    expect(await read()).toBe('legacy');
+  });
+
+  it("shows the node's own report beside the drawing sent: the poll keeps it, maps its exits to rules, and an old agent is null", async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+    ]);
+    await attach(entry, p.id);
+    await prisma.node.updateMany({ data: { status: 'online' } });
+    const read = async () =>
+      JSON.parse((await app.inject({ method: 'GET', url: `/api/nodes/${entry}/policy-drawing`, headers: auth() })).body) as {
+        drawing: string;
+        agent: null | { drawing: string; notDrawn: { exit: string; direction: number; ruleIds: string[] }[]; renderedAt: string; observedAt: string };
+      };
+
+    // An agent that does not report: null, not "nothing left out".
+    // The certificate end of an agent without the field is read off a
+    // handshake (A-221); these nodes have no address to shake hands with.
+    vi.spyOn(NodeTransport.prototype, 'presentedCert').mockRejectedValue(new Error('no node here'));
+    const health = vi.spyOn(NodeTransport.prototype, 'healthcheck');
+    health.mockResolvedValue({ status: 'ok', cores: [] } as never);
+    await pollNodeStatuses();
+    expect((await read()).agent).toBeNull();
+
+    // The chain refused on the node: it drew the legacy legs and left the rule out.
+    const exitTag = `cascade-link-out-chain-d${direction.tag}`;
+    health.mockResolvedValue({
+      status: 'ok',
+      cores: [],
+      policy: { drawing: 'legacy', notDrawn: [{ exit: exitTag, direction: direction.tag }, { exit: 'cascade-link-out-chain-d99', direction: 99 }], renderedAt: '2026-10-24T10:00:00Z' },
+    } as never);
+    await pollNodeStatuses();
+    const got = await read();
+    expect(got.drawing).toBe('handover');
+    const rule = p.rules[0] as PolicyRuleDto;
+    expect(got.agent).toMatchObject({
+      drawing: 'legacy',
+      renderedAt: '2026-10-24T10:00:00Z',
+      notDrawn: [
+        { exit: exitTag, direction: direction.tag, ruleIds: [rule.id] },
+        // A way out no rule of the current policy names: kept, not lost.
+        { exit: 'cascade-link-out-chain-d99', direction: 99, ruleIds: [] },
+      ],
+    });
+    expect(Number.isFinite(Date.parse(got.agent!.observedAt))).toBe(true);
+
+    // A poll without the field keeps the fact.
+    health.mockResolvedValue({ status: 'ok', cores: [] } as never);
+    await pollNodeStatuses();
+    expect((await read()).agent?.drawing).toBe('legacy');
+    vi.restoreAllMocks();
+  });
+
+  it('drops a cascade rule where the push draws no way out in xray', async () => {
+    const entry = await makeNode();
+    const exit = await makeNode();
+    const { direction } = await cascadeWithDirection(entry, exit);
+    const p = await createPolicy([
+      { match: { domain: ['youtube.com'] }, action: { kind: 'cascade', directionId: direction.id } },
+      { match: { domain: ['ads.example'] }, action: { kind: 'block' } },
+    ]);
+    await attach(entry, p.id);
+    const wire = await resolvePolicyForNode(entry, 'none');
+    expect(wire?.rules.map((r) => r.action.kind)).toEqual(['block']);
   });
 
   it('leaves a disabled rule out of the push', async () => {

@@ -41,6 +41,10 @@ model User {
   // global -> default). Highest precedence: wins over squad and global, loses
   // only to the per-request ?routing= query.
   routingPreset String? @map("routing_preset") @db.VarChar(32)
+  // A-229 - or the operator's own preset instead. Never both (CHECK
+  // users_one_routing_preset); RESTRICT keeps a preset in use from deletion.
+  customRoutingPresetId String?        @map("custom_routing_preset_id") @db.Uuid
+  customRoutingPreset   RoutingPreset? @relation(fields: [customRoutingPresetId], references: [id], onDelete: Restrict)
 
   // Slice 27.5: sticky-affinity hint for subscription generator.
   // NULL = no preference (current behaviour). When set, the generator
@@ -75,7 +79,19 @@ model User {
   @@index([deletedAt])
   @@index([telegramId])
   @@index([email])
+  @@index([customRoutingPresetId])
   @@map("users")
+}
+
+/// A-268 tombstone (ARCH 26.10): the source id of an imported user erased for
+/// good, as sha256 hex and nothing else, so a later import run of the same
+/// source does not bring the erased user back with their old link. Kept
+/// forever; no source id itself and nothing about the person.
+model ErasedUserSource {
+  sourceIdSha256 String   @id @map("source_id_sha256") @db.Char(64)
+  erasedAt       DateTime @default(now()) @map("erased_at") @db.Timestamptz(6)
+
+  @@map("erased_user_sources")
 }
 
 model UserTraffic {

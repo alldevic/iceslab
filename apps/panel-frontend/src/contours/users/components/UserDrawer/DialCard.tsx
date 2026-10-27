@@ -5,6 +5,7 @@ import { LABEL } from '@/contours/users/lib/userForm';
 import { dialCopy } from '@/contours/users/lib/dialCopy';
 import { CopyButton } from '@/ui/CopyButton';
 import { dialTabOf, dialTabs } from '@/contours/users/lib/dialTabs';
+import { endpointsWhy } from '@/contours/users/lib/endpointsWhy';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { UserForm } from '@/contours/users/components/UserDrawer/useUserForm';
@@ -38,15 +39,17 @@ export function DialCard({ query }: { query: EndpointsQuery }) {
    * block". A 403 is its own answer: the subscription endpoint refuses an
    * account that has expired, run out or had its link revoked.
    */
-  const empty = query.isLoading
-    ? t('common.loading')
-    : isForbidden(query.error)
-      ? t('userDrawer.dialRefused')
-      : query.isError
-        ? t('userDrawer.dialError')
-        : endpoints.length === 0
-          ? t('userDrawer.dialEmpty')
-          : null;
+  const why = endpointsWhy(query);
+  const empty =
+    why === 'loading'
+      ? t('common.loading')
+      : why === 'refused'
+        ? t('userDrawer.dialRefused')
+        : why === 'failed'
+          ? t('userDrawer.dialError')
+          : why === 'empty'
+            ? t('userDrawer.dialEmpty')
+            : null;
 
   return (
     <Box
@@ -64,9 +67,12 @@ export function DialCard({ query }: { query: EndpointsQuery }) {
         <IconList size={13} stroke={1.7} color={CYAN} />
         <Text style={{ ...LABEL, letterSpacing: '0.14em' }}>{t('userDrawer.dialTitle')}</Text>
         <Box style={{ flex: 1 }} />
-        <Text style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: FAINT }}>
-          {endpoints.length} {t('userDrawer.configs', { count: endpoints.length })}
-        </Text>
+        {/* No list, no count (A-141). */}
+        {why !== 'failed' && why !== 'loading' && (
+          <Text style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: FAINT }}>
+            {endpoints.length} {t('userDrawer.configs', { count: endpoints.length })}
+          </Text>
+        )}
       </Box>
 
       {empty && (
@@ -159,14 +165,5 @@ export function DialCard({ query }: { query: EndpointsQuery }) {
         </Text>
       )}
     </Box>
-  );
-}
-
-/** The subscription endpoint answers 403 for an account it will not serve. */
-function isForbidden(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { response?: { status?: number } }).response?.status === 403
   );
 }

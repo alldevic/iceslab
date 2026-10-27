@@ -251,19 +251,20 @@ describe('the gate on deploying a profile', () => {
     expect(body.message).toContain('no core at all');
   });
 
-  it('says "not yet" rather than "no" when the core was only just switched on', async () => {
-    // The narrow edge: sing-box is enabled on a node that has already reported,
-    // and between that click and the next poll the report still says what it
-    // said before. The pair is legitimate and the refusal is only early.
-    // Falling back to intent to avoid refusing is what was measured as wrong,
-    // so the difference lives in the message.
+  it('says the agent declares the core and reports none, and what to do, rather than a bare "no"', async () => {
+    // Since E42 the declaration comes from the agent's env (the bootstrap
+    // writes it), not from an edit here: right after the bootstrap the next
+    // poll shows the core, past that the bootstrap failed or the binary went.
+    // The sentence used to promise the poll alone would fix it (A-161).
     const node = await makeNode({ protocol: 'xray', singboxEngine: true });
     await reportCores(node.id, [{ name: 'xray', engine: 'xray' }]);
     const tuic = await makeProfile('tuic', {});
 
     const body = await bind(tuic.id, node.id, 443, 409);
-    expect(body.message).toContain('has not reported it yet');
-    expect(body.message).toContain('wait for the next status poll');
+    expect(body.canWait).toBe(true);
+    expect(body.message).toContain('declares singbox but reports no such core');
+    expect(body.message).toContain('run the singbox bootstrap on the node again');
+    expect(body.message).not.toContain('wait for the next status poll and try again');
   });
 
   it('does not say "not yet" when the node is not set up for that core at all', async () => {
@@ -274,7 +275,7 @@ describe('the gate on deploying a profile', () => {
     const tuic = await makeProfile('tuic', {});
 
     const body = await bind(tuic.id, node.id, 443, 409);
-    expect(body.message).not.toContain('wait for the next status poll');
+    expect(body.message).not.toContain('next status poll');
   });
 
   it('refuses an engine switch that would strand the profile on its nodes', async () => {

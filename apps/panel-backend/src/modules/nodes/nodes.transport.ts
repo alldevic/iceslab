@@ -1,6 +1,12 @@
 import { fetch, Agent } from 'undici';
+import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import type {
+  ConfirmCertResponse,
+  RotateCertRequest,
+  RotateCertResponse,
   AddUserRequest,
+  AddUsersRequest,
+  AddUsersResponse,
   RemoveUserRequest,
   GetStatsResponse,
   HealthcheckResponse,
@@ -11,10 +17,13 @@ import type {
   UfwPortsResponse,
   GeoAssetsResponse,
   GeoFileDto,
+  ConnLogTraceResponse,
+  ConnLogClearResponse,
 } from '@iceslab/shared';
 import { bootstrapCa, getPanelClientCert } from '../keygen/keygen.service.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const ADD_USERS_TIMEOUT_MS = 60_000;
 
 // Shared HTTPS agent for ALL panel→node calls. undici reuses TCP+TLS
 // connections within an Agent's pool, so /healthz and /metrics polls hit
@@ -33,6 +42,31 @@ export interface MtlsOverride {
   /** Panel-client leaf cert (clientAuth-only, signed by CA). */
   panelClientCertPem: string;
   panelClientKeyPem: string;
+}
+
+/** The mTLS material every connection to a node presents and trusts. */
+async function mtlsMaterial(override?: MtlsOverride): Promise<{ ca: string; cert: string; key: string }> {
+  if (override) {
+    return { ca: override.caCertPem, cert: override.panelClientCertPem, key: override.panelClientKeyPem };
+  }
+  const ca = await bootstrapCa();
+  const panelClient = await getPanelClientCert();
+  return { ca: ca.certPem, cert: panelClient.certPem, key: panelClient.privateKeyPem };
+}
+
+/** What a node presented on one handshake. */
+export interface PresentedCert {
+  /** sha256 hex of the leaf's DER, lowercase, no colons. */
+  fingerprint: string;
+  /** As Node gives it, e.g. "DNS:a.example, IP Address:1.2.3.4"; "" without SANs. */
+  subjectAltName: string;
+  /** The leaf's notAfter (A-221: the end of a node whose agent does not report it). */
+  notAfter: Date;
+}
+
+/** Node's colon-separated uppercase sha256 as the agent and keygen write it. */
+function plainFingerprint(colons: string): string {
+  return colons.replace(/:/g, '').toLowerCase();
 }
 
 async function getSharedAgent(override?: MtlsOverride): Promise<Agent> {
@@ -191,10 +225,103 @@ export class NodeTransport {
     }
   }
 
+  /**
+   * One request on a connection of its own, opened for it and closed after:
+   * no pooled socket, no keep-alive. Returns what the node presented on THAT
+   * handshake. With `expectFingerprint` the handshake itself is refused when
+   * the node presents another leaf, so the request is never sent (A-124: the
+   * confirm of a rotation has to come from a connection that saw the new pair,
+   * and only then).
+   */
+  private async onFreshConnection<TRes>(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+    expectFingerprint?: string,
+  ): Promise<{ res: TRes; presented: PresentedCert }> {
+    let presented: PresentedCert | null = null;
+    const agent = new Agent({
+      connect: {
+        ...(await mtlsMaterial(this.mtlsOverride)),
+        rejectUnauthorized: true,
+        checkServerIdentity: (host: string, cert: PeerCertificate) => {
+          const err = checkServerIdentity(host, cert);
+          if (err) return err;
+          presented = {
+            fingerprint: plainFingerprint(cert.fingerprint256),
+            subjectAltName: cert.subjectaltname ?? '',
+            notAfter: new Date(cert.valid_to),
+          };
+          if (expectFingerprint && presented.fingerprint !== expectFingerprint) {
+            return new Error(
+              `node ${this.node.address} presented ${presented.fingerprint}, not the rotated ${expectFingerprint}`,
+            );
+          }
+          return undefined;
+        },
+      },
+      connections: 1,
+      pipelining: 0,
+    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+    try {
+      const res = await fetch(this.buildUrl(path), {
+        method,
+        headers: { connection: 'close', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        dispatcher: agent,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => null)) as NodeErrorResponse | null;
+        throw new NodeRequestError(
+          `Node ${this.node.address} returned ${res.status}: ${errBody?.message ?? res.statusText}`,
+          res.status,
+          errBody,
+        );
+      }
+      const parsed = (await res.json()) as TRes;
+      if (!presented) throw new Error(`node ${this.node.address}: no certificate seen on the handshake`);
+      return { res: parsed, presented };
+    } finally {
+      clearTimeout(timer);
+      await agent.close();
+    }
+  }
+
   // ───── API methods ─────
+
+  /** A-124: the leaf the node serves to a new handshake right now. */
+  async presentedCert(): Promise<PresentedCert> {
+    return (await this.onFreshConnection<HealthcheckResponse>('GET', '/healthz')).presented;
+  }
+
+  /**
+   * A-124: hand the node a new server pair. ⚠ `keyPem` is the node's private
+   * key: not logged, not kept, and not put into an error message.
+   */
+  async rotateCert(req: RotateCertRequest): Promise<RotateCertResponse> {
+    return this.request<RotateCertResponse>('POST', '/rotateCert', req);
+  }
+
+  /** A-124: confirm a rotation, from a new connection that saw `fingerprint`. */
+  async confirmCertOnFreshConnection(fingerprint: string): Promise<void> {
+    await this.onFreshConnection<ConfirmCertResponse>('POST', '/rotateCert/confirm', { fingerprint }, fingerprint);
+  }
 
   async addUser(req: AddUserRequest): Promise<void> {
     await this.request<void>('POST', '/addUser', req);
+  }
+
+  /**
+   * A-112: many users in one request. An agent older than the route answers
+   * 404 (NodeRequestError), which the caller takes as "send them one by one".
+   * A longer timeout than one user: a user the cores do not hold yet costs a
+   * live add or a restart on the node, and a batch is many of those.
+   */
+  async addUsers(req: AddUsersRequest): Promise<AddUsersResponse> {
+    return this.request<AddUsersResponse>('POST', '/addUsers', req, { timeoutMs: ADD_USERS_TIMEOUT_MS });
   }
 
   async removeUser(req: RemoveUserRequest): Promise<void> {
@@ -235,11 +362,27 @@ export class NodeTransport {
    */
   async applyInbounds(req: ApplyInboundsRequest): Promise<ApplyInboundsResponse> {
     return this.request<ApplyInboundsResponse>('POST', '/applyInbounds', req, {
-      // Re-generating an Xray config + restart can take ~3-5 s; AmneziaWG
-      // syncconf is faster but Caddy reload occasionally hits the LE rate
-      // limiter. 30 s gives slack without making admin clicks feel hung.
-      timeoutMs: 30_000,
+      // 120 s, not 30 (ARCH 26.10). The agent carries a push through on its
+      // own once begun (server.go handleApplyInbounds: WithoutCancel, its own
+      // pushTimeout of 5 min, one push at a time under pushMu), so a long wait
+      // here holds no core. A short one only made a heavy push (a cascade
+      // entry: xray -test, the chain, AWG tunnels, sing-box check, caddy
+      // reload, ufw per port) read as a failure, and the retries restarted the
+      // cores again. The agent logs "applyInbounds done in N ms" per push.
+      timeoutMs: 120_000,
     });
+  }
+
+  /** A-265: whether the host's logs hold a previous agent's connection lines.
+   *  The agent reads the journal through, hence the long timeout. 404 from
+   *  an agent older than the route. */
+  async getConnLog(): Promise<ConnLogTraceResponse> {
+    return this.request<ConnLogTraceResponse>('GET', '/connLog', undefined, { timeoutMs: 60_000 });
+  }
+
+  /** A-265: clear the journal and syslog of them, the operator's choice. */
+  async clearConnLog(): Promise<ConnLogClearResponse> {
+    return this.request<ConnLogClearResponse>('POST', '/connLog/clear', {}, { timeoutMs: 120_000 });
   }
 
   /** Phase 9: the geo files the agent holds. 404 from an agent older than

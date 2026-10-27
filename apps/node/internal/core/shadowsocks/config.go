@@ -177,12 +177,13 @@ func renderConfig(inbound InboundConfig, users []ssClient) ([]byte, error) {
 			"servers":       servers,
 			"queryStrategy": strategy,
 		},
-		// `warning`, for the same reason the vless side of this binary logs at
-		// warning: at info xray writes a line per CONNECTION, journald mirrors
-		// it into syslog, and the journald limits in our installer do not cap
-		// syslog. This is a second xray process on the same box, so it was
-		// filling the same disk from the other end.
-		"log":   map[string]any{"loglevel": "warning"},
+		// The same as the vless side of this binary (xray/config.go): the error
+		// log at `warning`, and the ACCESS log, which `loglevel` does not touch
+		// and which goes to stdout (journald) unless set, at `none`: a line per
+		// connection with the client's IP, the destination and the user. This
+		// is a second xray process on the same box, so it was filling the same
+		// journal from the other end.
+		"log":   map[string]any{"loglevel": "warning", "access": "none", "dnsLog": false},
 		"stats": map[string]any{},
 		"api": map[string]any{
 			"tag":      "api",

@@ -3,6 +3,11 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { mapPolicy, type NodePolicyDto } from './node-policies.mapper.js';
+import { directionOfRouteTag, policyCascadeOutTag, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
+import { cascadeEntryGate, type CascadeEntryGate } from '../cascades/cascade.service.js';
+import { splitPolicyEntries } from '../cascades/policy-entries.js';
+import { isPortList, POLICY_PROTOCOLS } from './node-policies.schemas.js';
+import { getLogger } from '../../lib/infra/logger.js';
 import type {
   CreateNodePolicyInput,
   PolicyRuleInput,
@@ -251,13 +256,6 @@ export async function assertPolicyFitsNode(policyId: string, nodeId: string): Pr
   }
 }
 
-/** Per-direction outbound tag, mirroring cascade.config's dirOutTag. Kept in one
- *  place: the panel prints both the fragments and this rule in the same push, so
- *  they cannot disagree, but two copies of the format string could. */
-export function directionOutboundTag(directionTag: number, idx: number): string {
-  return `cascade-link-out-d${directionTag}-${idx}`;
-}
-
 /**
  * The policy this node should be running, in wire shape.
  *
@@ -265,10 +263,136 @@ export function directionOutboundTag(directionTag: number, idx: number): string 
  * cascade fragments those outbounds come from. That is the whole reason the id
  * is what gets stored: the name is only true relative to one rendering.
  *
+ * A-108: and relative to WHICH rendering. `drawing` is the one this push gives
+ * the node's xray (policyCascadeOutTag); the name came from the legacy one
+ * alone, and every entry under a chain got a rule to an outbound its config did
+ * not have. A drawing with no way out of the cascade drops the rule, as a
+ * direction the node does not dial does: naming an outbound that is not in the
+ * config would make the core reject the whole push. Default `legacy`: a caller
+ * that renders no xray cascade (the exit's chain) skips these rules anyway.
+ *
  * Returns undefined when the node has no policy, which is the normal state and
  * renders on the node exactly as before the field existed.
  */
-export async function resolvePolicyForNode(nodeId: string): Promise<WireNodePolicy | undefined> {
+export async function resolvePolicyForNode(
+  nodeId: string,
+  drawing: CascadeXrayDrawing = 'legacy',
+): Promise<WireNodePolicy | undefined> {
+  return (await explainPolicyForNode(nodeId, drawing)).policy;
+}
+
+/** A-232: the node's own report about the policy, as /policy-drawing shows it. */
+export interface AgentPolicyReport {
+  drawing: 'legacy' | 'handover' | 'none';
+  /** Each rule the node's xray left out, with the policy rules it stands for;
+   *  `ruleIds` empty when no rule of the current policy names that way out
+   *  (the policy changed since): the exit is kept, not lost. */
+  notDrawn: { exit: string; direction: number; ruleIds: string[] }[];
+  /** When xray accepted the render, by the node's clock. */
+  renderedAt: string;
+  /** When the panel last saw the report, by its own clock. */
+  observedAt: string;
+}
+
+/**
+ * The agent's report stored by the poll (nodes.policy_drawn), its exits put
+ * back on the rules of the node's policy by the names the panel prints
+ * (policyCascadeOutTag, either drawing). null for a node whose agent has not
+ * reported: an older agent, never "nothing left out".
+ */
+export async function agentPolicyReportForNode(nodeId: string): Promise<AgentPolicyReport | null> {
+  const node = await prisma.node.findFirst({
+    where: { id: nodeId, deletedAt: null },
+    select: {
+      policyDrawn: true,
+      policy: {
+        select: {
+          rules: {
+            where: { actionKind: 'cascade' },
+            select: { id: true, direction: { select: { tag: true } } },
+          },
+        },
+      },
+    },
+  });
+  const stored = node?.policyDrawn as
+    | { drawing: AgentPolicyReport['drawing']; notDrawn: { exit: string; direction: number }[]; renderedAt: string; observedAt: string }
+    | null
+    | undefined;
+  if (!stored) return null;
+  const rules = node?.policy?.rules ?? [];
+  return {
+    drawing: stored.drawing,
+    notDrawn: (stored.notDrawn ?? []).map((d) => ({
+      exit: d.exit,
+      direction: d.direction,
+      ruleIds: rules
+        .filter(
+          (r) =>
+            r.direction &&
+            (policyCascadeOutTag(r.direction.tag, 'legacy') === d.exit ||
+              policyCascadeOutTag(r.direction.tag, 'handover') === d.exit),
+        )
+        .map((r) => r.id),
+    })),
+    renderedAt: stored.renderedAt,
+    observedAt: stored.observedAt,
+  };
+}
+
+/**
+ * Why a rule of the node's policy does not reach the node (A-232):
+ *   - `lost-condition`: a whole kind of its matchers is unreadable (A-103);
+ *   - `direction-not-dialled`: the node dials the rule's direction by no leg,
+ *     or by more than one (a pooled direction, not supported by a rule);
+ *   - `no-cascade-drawing`: the push gives xray no way out of the cascade (a
+ *     transit or exit under a chain, an entry on hysteria or AmneziaWG);
+ *   - `nobody-may-take` (A-277): no user of this entry may take the rule's
+ *     direction (a squad narrowed elsewhere, the cascade switched off for it),
+ *     so the rule would only open the way to the users its door keeps out.
+ */
+export type PolicyNotDrawnReason = 'lost-condition' | 'direction-not-dialled' | 'no-cascade-drawing' | 'nobody-may-take';
+export interface PolicyRuleNotDrawn {
+  ruleId: string;
+  reason: PolicyNotDrawnReason;
+}
+
+/**
+ * A-277: who a rule into direction N lets through at an xray entry: whoever
+ * may take ANY tag of N, the plain one or a route policy's variant of it
+ * (routeTag(ordinal, N - 1)); a user granted only the variant still reaches N
+ * through its door. Auto names no direction and counts for none. Sorted.
+ */
+export function usersForDirection(allowedTagsOf: Map<string, Set<number>>, directionTag: number): string[] {
+  return [...allowedTagsOf]
+    .filter(([, tags]) => [...tags].some((t) => directionOfRouteTag(t) === directionTag))
+    .map(([u]) => u)
+    .sort();
+}
+
+/**
+ * The policy as the push sends it, and every rule left out with why. ONE loop:
+ * the read that shows the operator which rules do not act here and the push
+ * cannot tell two stories. ⚠ By the drawing the panel SENDS (cascadeXrayDrawingOf);
+ * an agent whose chain was refused draws another one and may rename or drop a
+ * cascade rule there (fitCascadeExits), which only its journal shows.
+ *
+ * A-277: a rule into a cascade direction lets through the users the door of
+ * that direction lets through (cascadeEntryGate, the doors' own computation),
+ * as `users` on its action. Before, it sat above the doors with no user and
+ * took a squad the cascade was switched off for into it (stand, 26.10).
+ * `ungated` names the rules drawn for everybody because the entry cannot tell
+ * its users apart (hysteria, AmneziaWG: they arrive through the chain).
+ */
+export async function explainPolicyForNode(
+  nodeId: string,
+  drawing: CascadeXrayDrawing = 'legacy',
+): Promise<{ policy: WireNodePolicy | undefined; notDrawn: PolicyRuleNotDrawn[]; ungated: string[] }> {
+  const notDrawn: PolicyRuleNotDrawn[] = [];
+  const ungated: string[] = [];
+  const gates = new Map<string, Promise<CascadeEntryGate>>();
+  const gateOf = (cascadeId: string) =>
+    gates.get(cascadeId) ?? gates.set(cascadeId, cascadeEntryGate(nodeId, cascadeId)).get(cascadeId)!;
   const node = await prisma.node.findFirst({
     where: { id: nodeId, deletedAt: null },
     select: {
@@ -283,19 +407,52 @@ export async function resolvePolicyForNode(nodeId: string): Promise<WireNodePoli
       },
     },
   });
-  if (!node?.policy) return undefined;
+  if (!node?.policy) return { policy: undefined, notDrawn, ungated };
 
   const rules: WireRule[] = [];
   for (const r of node.policy.rules) {
+    // A-103: only what an engine reads goes out, each entry in its own list. A
+    // row saved before the save checked its matchers can hold a `geoip:` among
+    // the domains or a port with an en dash; xray refused the whole config on
+    // it, the chain dropped it. A rule whose every condition is unreadable is
+    // left out entirely: dropping its conditions would make it a rule on all
+    // traffic, the opposite of what the operator wrote.
+    const domain = splitPolicyEntries(r.matchDomain).domain;
+    const ip = splitPolicyEntries(r.matchIp).ip;
+    const port = r.matchPort && isPortList(r.matchPort) ? r.matchPort : undefined;
+    const protocol = r.matchProtocol.filter((p) => (POLICY_PROTOCOLS as readonly string[]).includes(p));
+    // The kinds of condition AND together (domains AND addresses AND port AND
+    // protocol), in xray's rule and in the chain's. So losing a WHOLE kind
+    // widens the rule as much as losing all of them: "block, domain:
+    // [geoip:xx], port: 443" would go out as "block all of 443". A rule that
+    // lost any kind it was written with is left out; losing some entries
+    // inside one kind (they OR) only narrows it, and that stays.
+    const lost = [
+      r.matchDomain.length > 0 && domain.length === 0 ? 'domain' : null,
+      r.matchIp.length > 0 && ip.length === 0 ? 'ip' : null,
+      r.matchPort && !port ? 'port' : null,
+      r.matchProtocol.length > 0 && protocol.length === 0 ? 'protocol' : null,
+    ].filter((k): k is string => k !== null);
+    if (lost.length > 0) {
+      getLogger().warn(
+        { nodeId, ruleId: r.id, lost },
+        '[node-policy] a rule that lost a whole kind of condition is left out, not widened to more traffic',
+      );
+      notDrawn.push({ ruleId: r.id, reason: 'lost-condition' });
+      continue;
+    }
     const match: WireRule['match'] = {};
-    if (r.matchDomain.length) match.domain = r.matchDomain;
-    if (r.matchIp.length) match.ip = r.matchIp;
-    if (r.matchPort) match.port = r.matchPort;
-    if (r.matchProtocol.length) match.protocol = r.matchProtocol;
+    if (domain.length) match.domain = domain;
+    if (ip.length) match.ip = ip;
+    if (port) match.port = port;
+    if (protocol.length) match.protocol = protocol;
     if (r.matchNetwork) match.network = r.matchNetwork as WireRule['match']['network'];
 
     if (r.actionKind === 'cascade') {
-      if (!r.direction) continue;
+      if (!r.direction) {
+        notDrawn.push({ ruleId: r.id, reason: 'direction-not-dialled' });
+        continue;
+      }
       const legs = await prisma.cascadeLink.findMany({
         where: {
           cascadeId: r.direction.cascadeId,
@@ -308,8 +465,34 @@ export async function resolvePolicyForNode(nodeId: string): Promise<WireNodePoli
       // Saving already refuses this, so reaching it means the topology changed
       // underneath; naming an outbound that is not in the config would make the
       // core reject the WHOLE push and take the node's other inbounds with it.
-      if (legs.length !== 1) continue;
-      rules.push({ match, action: { kind: 'cascade', exit: directionOutboundTag(r.direction.tag, 0) } });
+      if (legs.length !== 1) {
+        notDrawn.push({ ruleId: r.id, reason: 'direction-not-dialled' });
+        continue;
+      }
+      const exit = policyCascadeOutTag(r.direction.tag, drawing);
+      if (!exit) {
+        notDrawn.push({ ruleId: r.id, reason: 'no-cascade-drawing' });
+        continue;
+      }
+      const gate = await gateOf(r.direction.cascadeId);
+      if (gate.kind === 'ungated') ungated.push(r.id);
+      if (gate.kind !== 'gate') {
+        rules.push({ match, action: { kind: 'cascade', exit } });
+        continue;
+      }
+      const users = usersForDirection(gate.allowedTagsOf, r.direction.tag);
+      // Never an empty list: xray drops an empty condition and the rule would
+      // match everyone, the leak this closes.
+      if (users.length === 0) {
+        notDrawn.push({ ruleId: r.id, reason: 'nobody-may-take' });
+        continue;
+      }
+      // The list goes out even when every user of the entry is on it: closed
+      // by default, like the door (applyEntryUserGate). A user added later to
+      // a squad the cascade is off for is handed to xray by addUser, which
+      // does not redraw the rules; without a list the rule would take them
+      // into the cascade until the next push.
+      rules.push({ match, action: { kind: 'cascade', exit, users } });
       continue;
     }
     rules.push({
@@ -318,5 +501,5 @@ export async function resolvePolicyForNode(nodeId: string): Promise<WireNodePoli
     });
   }
 
-  return { rules };
+  return { policy: { rules }, notDrawn, ungated };
 }

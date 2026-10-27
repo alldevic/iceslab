@@ -1,10 +1,17 @@
 import type { RoutingPresetId } from '@iceslab/shared';
 import { api } from '@/lib/net/client';
 
-/** A4 increment 2, per-cascade exit allow-list entry. */
+/**
+ * Per-cascade exit allow-list entry, keyed by DIRECTION since 39c266a (A-149):
+ * a node replaced or added under a direction changes nobody's access. The
+ * server answers both lists, `exitNodeIds` only for showing pools; the screen
+ * sends `directionIds`, and `exitNodeIds` only for a legacy hop cascade, which
+ * has no directions to name. An empty list is the cascade switched off.
+ */
 export interface SquadExitAclEntry {
   cascadeId: string;
-  exitNodeIds: string[];
+  directionIds?: string[];
+  exitNodeIds?: string[];
 }
 
 export interface Squad {
@@ -26,6 +33,8 @@ export interface Squad {
   hostIds: string[];
   /** R3-a, per-squad routing-preset override; null = inherit panel default. */
   routingPreset: RoutingPresetId | null;
+  /** A-229, the operator's own preset instead of a built-in one, never both. Absent: a server older than own presets. */
+  customRoutingPresetId?: string | null;
   /** K7, per-squad HWID device-limit default; null = none. */
   hwidDeviceLimit: number | null;
   memberCount: number;
@@ -37,6 +46,8 @@ export interface CreateSquadInput {
   name: string;
   description?: string | null;
   routingPreset?: RoutingPresetId | null;
+  /** A-229, an own preset by id; the server takes one of the two, never both. */
+  customRoutingPresetId?: string | null;
   hwidDeviceLimit?: number | null;
   profileIds?: string[];
   exitAcl?: SquadExitAclEntry[];
@@ -48,6 +59,8 @@ export interface UpdateSquadInput {
   name?: string;
   description?: string | null;
   routingPreset?: RoutingPresetId | null;
+  /** A-229, an own preset by id: a value clears the built-in on the server, null clears only this side. */
+  customRoutingPresetId?: string | null;
   hwidDeviceLimit?: number | null;
   /** Replaces the full profile set when provided. */
   profileIds?: string[];

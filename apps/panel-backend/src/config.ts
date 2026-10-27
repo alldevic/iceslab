@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+/** The panel's own routes on the frontend's nginx; see SUBSCRIPTION_PATH_PREFIX. */
+export const RESERVED_PATH_PREFIXES: readonly string[] = ['/api', '/admin', '/health', '/assets'];
+
 // Exported for the guard test that feeds it a compose-shaped environment: every
 // optional setting must survive being handed an EMPTY STRING, because that is
 // what `${VAR:-}` in docker-compose delivers when the operator left it blank.
@@ -68,9 +71,18 @@ export const ConfigSchema = z.object({
   // and `/api/auth/status` surfaces it to the SPA so admin sees the
   // correct full URL when copy-pasting a user's subscription link.
   // Always starts with `/`, no trailing slash.
+  //
+  // ⚠ One rule in two places (A-137, 22.10): the pattern and the reserved list
+  // are the same as apps/panel-frontend/docker-entrypoint.d/15-subscription-
+  // prefix.sh, which puts the prefix into an nginx `location`, and they change
+  // as a pair. /api, /admin, /health and /assets are the panel's own routes on
+  // that server: a subscription mounted there takes them away or fails nginx.
   SUBSCRIPTION_PATH_PREFIX: z
     .string()
     .regex(/^\/[a-zA-Z0-9_-]+$/, 'Must start with / and use only [a-zA-Z0-9_-]')
+    .refine((v) => !RESERVED_PATH_PREFIXES.includes(v), {
+      message: `Taken by the panel itself: ${RESERVED_PATH_PREFIXES.join(', ')}`,
+    })
     .default('/sub'),
 
   // Number of trusted reverse-proxy hops in front of the backend. Zero

@@ -41,8 +41,10 @@ func TestAnIdleMtprotoIsNotScraped(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err := a.GetStats()
-	if err != nil || stats.TotalBytesIn != 0 || stats.TotalBytesOut != 0 || len(stats.Users) != 1 {
-		t.Fatalf("idle: %v %+v, want zeros for the one user", err, stats)
+	// A-121: and no users either. The roster is cached for the next inbound,
+	// but nobody is on an inbound that is not served, and the report says so.
+	if err != nil || stats.TotalBytesIn != 0 || stats.TotalBytesOut != 0 || len(stats.Users) != 0 {
+		t.Fatalf("idle: %v %+v, want zeros and no users", err, stats)
 	}
 	if hits.Load() != 1 {
 		t.Errorf("the idle mtg was scraped: %d hits", hits.Load())
@@ -58,7 +60,11 @@ func TestAnIdleMtprotoIsNotScraped(t *testing.T) {
 		MetricsURL: srv.URL,
 	}, logger)
 	_ = spawn.AddUser(core.User{UserID: "bob"})
-	if _, err := spawn.GetStats(); err != nil || hits.Load() != 1 {
+	got, err := spawn.GetStats()
+	if err != nil || hits.Load() != 1 {
 		t.Errorf("an mtg that is not running was scraped: %v, %d hits", err, hits.Load())
+	}
+	if len(got.Users) != 0 {
+		t.Errorf("an mtg that is not running reported users: %+v", got.Users)
 	}
 }

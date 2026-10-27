@@ -11,6 +11,55 @@ import * as svc from './hosts.service.js';
 import { getHostFreshness } from './hosts.freshness.js';
 import { coreGateReply } from '../nodes/node-core-gate.js';
 
+/**
+ * The refusals of a new binding (or of a binding's move), in the bindings
+ * route's bodies word for word, for create and for a port move (A-259): the
+ * screen draws them with the words it already has whichever way it came.
+ */
+function newBindingRefusal(err: unknown): { status: number; body: Record<string, unknown> } | null {
+  // The same three codes and the same union as the bindings route and the port check.
+  if (
+    err instanceof svc.PortInUseError ||
+    err instanceof svc.PortHeldByCascadeError ||
+    err instanceof svc.PortHeldByCoreServiceError
+  ) {
+    return { status: 409, body: { error: err.code, message: err.message, conflicts: err.conflicts } };
+  }
+  // A-055: the adapter holds one inbound and serves another host already.
+  if (err instanceof svc.MieruMtuMismatchError) {
+    return { status: 409, body: { error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy } };
+  }
+  if (err instanceof svc.AdapterSlotTakenError) {
+    return {
+      status: 409,
+      body: { error: err.code, message: err.message, nodeName: err.nodeName, protocol: err.protocol, engine: err.engine, heldBy: err.heldBy },
+    };
+  }
+  // The node's core for this profile is not installed, or runs a version this
+  // panel refuses.
+  const core = coreGateReply(err);
+  if (core) return { status: core.status, body: core.body as Record<string, unknown> };
+  // The node reported its engines and the profile's is not among them (A-161).
+  if (err instanceof svc.ProfileDoesNotRunOnNodeError) {
+    return {
+      status: 409,
+      body: {
+        error: 'PROFILE_DOES_NOT_RUN_ON_NODE',
+        message: err.message,
+        nodeName: err.nodeName,
+        neededEngine: err.neededEngine,
+        reportedEngines: err.reportedEngines,
+        canWait: err.canWait,
+      },
+    };
+  }
+  // An xray-family profile on sing-box with a field sing-box cannot serve.
+  if (err instanceof svc.ProfileEngineNotForTransportError) {
+    return { status: 400, body: { error: err.code, message: err.message, path: err.path } };
+  }
+  return null;
+}
+
 export async function hostsRoutes(app: FastifyInstance): Promise<void> {
   // Wave-14 #15: per-route auth (see users.routes.ts header comment).
   const auth = { onRequest: [requireAuth] };
@@ -56,29 +105,10 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
       ) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
       }
-      // Creating a host can now create the binding under it, so the port clash
-      // that used to belong to the bindings route surfaces here too.
-      if (
-        err instanceof svc.PortInUseError ||
-        err instanceof svc.PortHeldByCascadeError ||
-        err instanceof svc.PortHeldByCoreServiceError
-      ) {
-        // The same three codes and the same union as the bindings route and the
-        // port check: whichever screen the operator got here from, it draws the
-        // answer with the words it already has.
-        return reply
-          .code(409)
-          .send({ error: err.code, message: err.message, conflicts: err.conflicts });
-      }
-      // The node's core for this profile is not installed, or runs a version
-      // this panel refuses. Same body as the bindings route.
-      const core = coreGateReply(err);
-      if (core) return reply.code(core.status).send(core.body);
-      // The new binding would put an xray-family profile on sing-box with a
-      // field sing-box cannot serve: the bindings route's answer, word for word.
-      if (err instanceof svc.ProfileEngineNotForTransportError) {
-        return reply.code(400).send({ error: err.code, message: err.message, path: err.path });
-      }
+      // Creating a host can create the binding under it, so the refusals that
+      // belong to the bindings route surface here too.
+      const refused = newBindingRefusal(err);
+      if (refused) return reply.code(refused.status).send(refused.body);
       // The form shows this next to the SNI field, so it carries the served
       // names rather than only prose.
       if (err instanceof svc.SniMismatchError) {
@@ -108,6 +138,10 @@ export async function hostsRoutes(app: FastifyInstance): Promise<void> {
           expected: err.expected,
         });
       }
+      // A port move: the checks of the binding it moves or of the new binding a
+      // host moved alone lands on (A-259), the same bodies as create.
+      const refused = newBindingRefusal(err);
+      if (refused) return reply.code(refused.status).send(refused.body);
       throw err;
     }
   });

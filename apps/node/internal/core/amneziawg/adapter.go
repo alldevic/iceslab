@@ -146,12 +146,16 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 }
 
 func newOne(cfg Config, logger *slog.Logger) *Adapter {
-	return &Adapter{
+	a := &Adapter{
 		cfg:       cfg,
 		logger:    logger,
 		peers:     make(map[string]Peer),
 		lastStats: make(map[string]peerCounters),
 	}
+	// Before Start and before the first push: the interface the kernel kept
+	// up is matched by what the previous agent applied to it (A-114).
+	a.loadState()
+	return a
 }
 
 // both is this adapter and its 3.1 one, when there is one.
@@ -317,6 +321,9 @@ func (a *Adapter) idleOne(ctx context.Context) error {
 	managed := a.cfg.AwgQuickBin != ""
 	iface := a.cfg.Inbound.Interface
 	a.mu.Unlock()
+	// Saved without the key, so a restart does not bring back up an interface
+	// the last push took down.
+	a.saveState()
 	a.logger.Info("amneziawg: no inbound in the last push, interface down", "interface", iface)
 	if !managed {
 		return nil
@@ -404,6 +411,13 @@ func (a *Adapter) addPeer(user core.User) error {
 		PublicKey: user.AmneziaWGPublicKey,
 		AllowedIP: ensureCIDR(user.AmneziaWGAllowedIP),
 	}
+	// Checked before it is kept. П-3, 22.10: a peer the render refuses sat in
+	// the map, and every later render of the interface failed on it: nobody
+	// added, nobody removed, the config frozen until the agent restarted. Now
+	// it is this call that fails, and only it.
+	if err := validatePeer(desired); err != nil {
+		return fmt.Errorf("amneziawg AddUser %s: %w", user.UserID, err)
+	}
 
 	a.mu.Lock()
 	if existing, ok := a.peers[user.UserID]; ok && existing == desired {
@@ -432,6 +446,40 @@ func (a *Adapter) RemoveUser(userID string) error {
 			return err
 		}
 	}
+	return a.removeOne(userID)
+}
+
+// AddUserOn implements core.ScopedUserAdder (A-022): the user's peer goes on
+// the interfaces whose inbound the panel names, and off the other. One
+// interface per generation, so a 1.x and a 3.1 inbound are scoped apart.
+func (a *Adapter) AddUserOn(user core.User, inboundIDs []string) error {
+	named := make(map[string]bool, len(inboundIDs))
+	for _, id := range inboundIDs {
+		named[id] = true
+	}
+	a.mu.Lock()
+	id1 := a.inboundID
+	a.mu.Unlock()
+	scoped := user
+	if !named[id1] {
+		if err := a.removeOne(user.UserID); err != nil {
+			return err
+		}
+		scoped.AmneziaWGAllowedIP = "" // addPeer then leaves this interface alone
+	}
+	if a.v3 != nil {
+		a.v3.mu.Lock()
+		id3 := a.v3.inboundID
+		a.v3.mu.Unlock()
+		if !named[id3] {
+			scoped.AmneziaWGAllowedIP3 = "" // AddUser takes it off the 3.1 interface
+		}
+	}
+	return a.AddUser(scoped)
+}
+
+// removeOne drops the peer from this interface alone.
+func (a *Adapter) removeOne(userID string) error {
 	a.mu.Lock()
 	if _, ok := a.peers[userID]; !ok {
 		a.mu.Unlock()
@@ -483,9 +531,12 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 }
 
 func mergeStats(a, b *core.Stats) *core.Stats {
+	// One interface silent: the other's deltas stand, and the silent one's
+	// are kept by its own snapshot for its next answer. Both silent: no data.
 	out := &core.Stats{
 		TotalBytesIn:  a.TotalBytesIn + b.TotalBytesIn,
 		TotalBytesOut: a.TotalBytesOut + b.TotalBytesOut,
+		NoData:        a.NoData && b.NoData,
 	}
 	at := make(map[string]int, len(a.Users))
 	for _, u := range a.Users {
@@ -518,6 +569,7 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 		a.mu.Unlock()
 		return &core.Stats{Users: users}, nil
 	}
+	configured := a.cfg.Inbound.PrivateKey != ""
 	a.mu.Unlock()
 
 	if iface == "" {
@@ -533,8 +585,12 @@ func (a *Adapter) statsOne() (*core.Stats, error) {
 
 	users := make([]core.UserStats, 0, len(a.peers))
 	if err != nil {
-		// Interface may be down or never started, fall back to zero counters
-		// rather than failing the whole stats poll.
+		// An interface nothing configured has nothing to count: zero counters.
+		// One that is configured and did not answer is NoData (A-163), so the
+		// panel does not take its silence for a poll with no traffic.
+		if configured {
+			return &core.Stats{NoData: true}, nil
+		}
 		for id := range a.peers {
 			users = append(users, core.UserStats{UserID: id})
 		}
@@ -833,6 +889,7 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 		if err := writeConfig(a.cfg.ConfigPath, blob); err != nil {
 			return err
 		}
+		a.saveState()
 		a.logger.Info("amneziawg restart skipped (config-only mode)")
 		a.setStarted(true)
 		return nil
@@ -848,6 +905,7 @@ func (a *Adapter) restartInterfaceFrom(parent context.Context, inbound InboundCo
 	if err := writeConfig(a.cfg.ConfigPath, blob); err != nil {
 		return err
 	}
+	a.saveState()
 	for _, t := range []*ChainTProxy{also, inbound.Chain} {
 		if err := a.sweepChain(ctx, inbound.Interface, t); err != nil {
 			return err
@@ -1042,6 +1100,7 @@ func (a *Adapter) applyCascadeOne(next *ChainTProxy) error {
 		if err := writeConfig(a.cfg.ConfigPath, mustRender(inbound, peers)); err != nil {
 			return err
 		}
+		a.saveState()
 		a.logger.Info("amneziawg ApplyCascade: hand-off to the chain changed in place, no bounce",
 			"interface", inbound.Interface, "chain", next != nil)
 		a.logChain(ctx, inbound.Interface, next)
@@ -1298,7 +1357,11 @@ func (a *Adapter) writeConfigSnapshot(inbound InboundConfig, peers []Peer) error
 	if err != nil {
 		return fmt.Errorf("render amneziawg config: %w", err)
 	}
-	return writeConfig(a.cfg.ConfigPath, blob)
+	if err := writeConfig(a.cfg.ConfigPath, blob); err != nil {
+		return err
+	}
+	a.saveState()
+	return nil
 }
 
 // sortedPeers returns peers in deterministic AllowedIP order so successive

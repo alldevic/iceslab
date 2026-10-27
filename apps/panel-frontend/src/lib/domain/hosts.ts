@@ -49,8 +49,41 @@ export interface Host {
    * нет по контракту.
    */
   hiddenByCascade?: { cascadeId: string; cascadeName: string } | null;
+  /**
+   * A-236 step 6. The line a client app that understands it shows under the
+   * server name (one line, up to HOST_SERVER_DESCRIPTION_MAX code points);
+   * `null` = none. No key: a server older than step 6, which has not said.
+   */
+  serverDescription?: string | null;
+  /**
+   * The operator hid the host: no subscription hands it out, except a
+   * template with includeHiddenHosts. Not `hiddenByCascade`, which is the
+   * cascade's doing. No key: a server older than step 6, never read as «no».
+   */
+  isHidden?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * 400 VALIDATION_ERROR at `serverDescription` (A-236 step 6): the server's
+ * sentence from `issues[].message`, said at the field. The input is checked
+ * first; any other refusal is not this one.
+ */
+export function serverDescriptionRefusal(err: unknown): string | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 400 || !data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.error !== 'VALIDATION_ERROR' || !Array.isArray(d.issues)) return null;
+  for (const i of d.issues) {
+    if (!i || typeof i !== 'object') continue;
+    const { path, message } = i as { path?: unknown; message?: unknown };
+    if (Array.isArray(path) && path[0] === 'serverDescription' && typeof message === 'string') return message;
+  }
+  return null;
 }
 
 /**
@@ -66,16 +99,31 @@ export interface Host {
  * о скрытии как раз дешевле всего.
  */
 export interface HostHiddenFacts {
-  nodeName: string;
+  /** Null: the node list did not arrive. The fact is the host's and stands;
+   *  only the name is unknown, and it is said so, never as «?» (A-234). */
+  nodeName: string | null;
   cascadeId: string;
   cascadeName: string;
 }
 
 type HiddenBy = { cascadeId: string; cascadeName: string };
 
+/** Whether any host of a profile sets its own security; `null` hosts (the
+ *  list did not arrive) is «cannot tell», which keeps the caveat on. Moved
+ *  here from formatReach.ts when the profile line went to /formats. */
+export function hostsMaySecureOtherwise(hosts: readonly { securityLayer?: string | null }[] | null): boolean {
+  if (hosts === null) return true;
+  return hosts.some((h) => h.securityLayer === 'tls' || h.securityLayer === 'none');
+}
+
+/** The opening of the hidden line: the node by name, or said unknown. */
+export function hiddenLineStart(facts: Pick<HostHiddenFacts, 'nodeName'>, t: (key: string, vars?: Record<string, unknown>) => string): string {
+  return facts.nodeName === null ? t('hostHidden.beforeUnknown') : t('hostHidden.before', { node: facts.nodeName });
+}
+
 export function hostHiddenFacts(
   host: { hiddenByCascade?: HiddenBy | null } | null | undefined,
-  nodeName: string,
+  nodeName: string | null,
   node?: { hiddenByCascade?: HiddenBy | null } | null,
 ): HostHiddenFacts | null {
   const h =
@@ -113,20 +161,106 @@ export interface CreateHostInput {
   allowInsecure?: boolean;
   securityLayer?: 'default' | 'tls' | 'none';
   disableForFormats?: string[];
+  /** A-236 step 6: sent only when set or changed (visibilityPatch); null clears. */
+  serverDescription?: string | null;
+  isHidden?: boolean;
 }
 
-// The binding is immutable: moving a host to another node is a delete plus a
-// create, not an edit.
-export type UpdateHostInput = Partial<
-  Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId' | 'port'>
->;
+/**
+ * A-259: what a new listen port moves. 'host' (the server's default) takes
+ * this host to the inbound on that port, a new one when the profile does not
+ * listen there yet; 'binding' moves the whole inbound with all its hosts.
+ */
+export type HostPortMove = 'host' | 'binding';
+
+// The node is not edited here: moving a host to another node is a delete plus
+// a create. Its listen port is (A-150, A-259): `port` with `portMove`, and the
+// answer may carry another `bindingId`; `portOverride` is only what clients dial.
+export type UpdateHostInput = Partial<Omit<CreateHostInput, 'bindingId' | 'profileId' | 'nodeId'>> & {
+  /** Sent with `port` only. */
+  portMove?: HostPortMove;
+};
+
+/**
+ * The port fields of a host save (A-150). The «Port» field is the port the
+ * node listens on (the binding's), «Client port» is the override clients dial
+ * behind NAT or a CDN, empty when they dial the listen port.
+ *
+ * An edit sends each only when it changed: an absent key is no edit, and
+ * restating the listen port would be read as a move. A create sends the listen
+ * port always and the client port only when one was typed.
+ *
+ * A-259: an edit that moves the listen port says what moves (`portMove`),
+ * and only then; a create sends none, the port itself picks the binding.
+ */
+export function hostPortPayload(
+  stored: { listenPort: number; clientPort: number | null } | null,
+  form: { port: number | ''; clientPort: number | '' },
+  move?: HostPortMove,
+): { port?: number; portOverride?: number | null; portMove?: HostPortMove } {
+  const client = form.clientPort === '' ? null : form.clientPort;
+  if (stored === null) {
+    return {
+      ...(form.port !== '' ? { port: form.port } : {}),
+      ...(client !== null ? { portOverride: client } : {}),
+    };
+  }
+  const moved = form.port !== '' && form.port !== stored.listenPort;
+  return {
+    ...(moved ? { port: form.port as number } : {}),
+    ...(moved && move ? { portMove: move } : {}),
+    ...(client !== stored.clientPort ? { portOverride: client } : {}),
+  };
+}
+
+/**
+ * 409 PROFILE_DOES_NOT_RUN_ON_NODE (A-161, A-235): the node reported its cores
+ * and the profile's engine is not among them. Read before `portConflict`,
+ * which takes any 409 for a port clash. The input is checked first; an
+ * engine list with anything but strings, or a missing needed engine, is not
+ * this refusal. `reportedEngines: []` means «reported, runs nothing».
+ */
+export interface ProfileNotOnNode {
+  nodeName: string;
+  neededEngine: string;
+  reportedEngines: string[];
+  canWait: boolean;
+}
+
+export function profileNotOnNode(err: unknown): ProfileNotOnNode | null {
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: unknown }).response;
+  if (!res || typeof res !== 'object') return null;
+  const { status, data } = res as { status?: unknown; data?: unknown };
+  if (status !== 409 || !data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.error !== 'PROFILE_DOES_NOT_RUN_ON_NODE') return null;
+  if (typeof d.nodeName !== 'string' || typeof d.neededEngine !== 'string') return null;
+  if (!Array.isArray(d.reportedEngines) || !d.reportedEngines.every((e) => typeof e === 'string')) return null;
+  return {
+    nodeName: d.nodeName,
+    neededEngine: d.neededEngine,
+    reportedEngines: d.reportedEngines as string[],
+    canWait: d.canWait === true,
+  };
+}
+
+/**
+ * The codes of a port clash: the three the save refuses with today (read
+ * first by `portRefusalOf`, with their conflicts) and PORT_IN_USE of a server
+ * older than the split. Only these are a port (A-235): any other 409 used to
+ * land in the port field as «port taken».
+ */
+const PORT_CODES = new Set(['PORT_IN_USE', 'PORT_TAKEN_PROFILE', 'PORT_TAKEN_CASCADE', 'PORT_TAKEN_CORE_SERVICE']);
 
 /** The port is taken on that node. The message names the profile holding it, so
- *  it is worth showing verbatim rather than replacing with "port busy". */
+ *  it is worth showing verbatim rather than replacing with "port busy". Null
+ *  for anything that is not a port clash. */
 export function portConflict(err: unknown): string | null {
-  const res = (err as { response?: { status?: number; data?: { message?: string } } }).response;
-  if (res?.status !== 409) return null;
-  return res.data?.message ?? '';
+  if (!err || typeof err !== 'object') return null;
+  const res = (err as { response?: { status?: unknown; data?: { error?: unknown; message?: unknown } } }).response;
+  if (res?.status !== 409 || typeof res.data?.error !== 'string' || !PORT_CODES.has(res.data.error)) return null;
+  return typeof res.data.message === 'string' ? res.data.message : '';
 }
 
 /** The profile or the node disappeared while the form was open. */

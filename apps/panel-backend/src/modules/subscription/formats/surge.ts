@@ -1,3 +1,4 @@
+import { transportServed } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
@@ -36,20 +37,25 @@ export function buildSurgeConf(endpoints: SubscriptionEndpoint[]): string {
       // socks/http (the Telegram doors) are carried by plain, clash, sing-box and
       // xray-json only, by decision of 23.09; this format leaves them out.
       const sec = e.securityLayer ?? 'default';
-      // Surge cannot do REALITY; only emit xray endpoints over real TLS.
-      if (sec === 'default') continue;
+      // What Surge carries is the shared table's to say (A-224): no VLESS, no
+      // REALITY, and WebSocket the one transport (`ws=true`, `ws-path=`,
+      // `ws-headers=Host:<name>`, manual.nssurge.com policies/vmess|trojan).
+      if (!transportServed('surge', e)) continue;
       const tls = sec === 'tls';
       const ws = e.network === 'ws';
+      const wsParts = ws
+        ? ['ws=true', `ws-path=${e.path ?? '/'}`, ...(e.hostHeader ? [`ws-headers=Host:${e.hostHeader}`] : [])]
+        : [];
       if (e.subprotocol === 'trojan') {
         const p = [`${name} = trojan, ${e.host}, ${e.port}, password=${e.uuid}`];
         if (tls) p.push(`sni=${e.sni}`);
-        if (ws) p.push('ws=true', `ws-path=${e.path ?? '/'}`);
+        p.push(...wsParts);
         if (e.allowInsecure) p.push('skip-cert-verify=true');
         lines.push(p.join(', '));
       } else if (e.subprotocol === 'vmess') {
         const p = [`${name} = vmess, ${e.host}, ${e.port}, username=${e.uuid}`, 'vmess-aead=true'];
         if (tls) p.push('tls=true', `sni=${e.sni}`);
-        if (ws) p.push('ws=true', `ws-path=${e.path ?? '/'}`);
+        p.push(...wsParts);
         if (e.allowInsecure) p.push('skip-cert-verify=true');
         lines.push(p.join(', '));
       }

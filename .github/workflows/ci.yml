@@ -15,6 +15,12 @@ on:
     # which waits for this workflow to pass ON THE TAG, would have waited
     # forever.
     tags: ['v*']
+  # By hand, from the Actions tab or `gh workflow run ci.yml --ref develop`.
+  # A merge made with GITHUB_TOKEN (the dependabot auto-merge) starts no
+  # workflow, so without this the merged tree had no push run and develop had
+  # no image until the next human push. A manual run tests everything, like a
+  # tag, and on main or develop it publishes, like a push.
+  workflow_dispatch:
 
 # Cancel in-flight runs when a new commit lands on the same ref. Saves
 # minutes on rapid push-fix-push cycles and removes confusing red marks
@@ -41,19 +47,19 @@ jobs:
     name: changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # A release tag runs everything. What a release ships is the whole tree, not
-    # the diff of its last commit, and a tag push has no `before` to compare
-    # with in the first place.
+    # A release tag and a manual run test everything. What a release ships is
+    # the whole tree, not the diff of its last commit; and neither a tag push
+    # nor a manual run has a `before` to compare with in the first place.
     outputs:
-      backend: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.backend }}
-      frontend: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.frontend }}
-      node: ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.node }}
+      backend: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.backend }}
+      frontend: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.frontend }}
+      node: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.node }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
-        if: "!startsWith(github.ref, 'refs/tags/')"
+        if: "!startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'"
         with:
           # The lockfile, the workspace file and THIS FILE are in every list: an
           # install affects all three apps whichever one the commit was about,
@@ -88,9 +94,9 @@ jobs:
             echo ""
             echo "| area | runs |"
             echo "| --- | --- |"
-            echo "| backend | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.backend }} |"
-            echo "| frontend | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.frontend }} |"
-            echo "| node-agent | ${{ startsWith(github.ref, 'refs/tags/') || steps.filter.outputs.node }} |"
+            echo "| backend | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.backend }} |"
+            echo "| frontend | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.frontend }} |"
+            echo "| node-agent | ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') || steps.filter.outputs.node }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
@@ -105,13 +111,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.33.2
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # ⚠ From .nvmrc, never a literal. The workflow and the backend image
           # drifted apart once (22.x against 22.22) and the image crash-looped on
@@ -140,12 +146,30 @@ jobs:
         run: pnpm audit --prod --audit-level high
         continue-on-error: false
 
+  # ⚠ FOUR PARTS, each with its own Postgres and Redis. The suite runs its
+  # files strictly one after another (`fileParallelism: false` in
+  # vitest.config.ts: every file calls cleanDatabase() on the one test
+  # database), so one job spent ~530 s on tests on one core while three sat
+  # idle. Split by `vitest --shard`, the same 202 files take ~140 s a part
+  # (simulated on the per-file times of run 39718422205; N=6 gained nothing,
+  # one part collects the heaviest files). A database shared between parts
+  # is exactly the collision the serial run exists to avoid, so each part
+  # gets its own service containers, which a matrix gives for free.
+  #
+  # `backend-files` below adds the parts up: a file that no part ran would
+  # otherwise be a green tick over a test that never happened.
   backend:
-    name: backend (panel)
+    name: backend (panel, ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.backend == 'true'
+    strategy:
+      # One red part must not cancel the others: the point of the run page is
+      # to show every failing file at once.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     # Real Postgres + Redis. The backend's vitest suite mostly mocks Prisma
     # but `subscription.routes.test.ts` and a handful of others import the
@@ -184,13 +208,13 @@ jobs:
       NODE_ENV: test
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.33.2
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # ⚠ From .nvmrc, never a literal. The workflow and the backend image
           # drifted apart once (22.x against 22.22) and the image crash-looped on
@@ -235,10 +259,13 @@ jobs:
           # The manifest's sha256 (packages/shared/src/core-versions.ts);
           # core-pins.test.ts holds this line and the URL to it.
           echo "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae  /tmp/xray.zip" | sha256sum -c -
-          unzip -o /tmp/xray.zip xray -d /tmp/xray-bin
+          # The two .dat files from the same archive: xray looks for them next
+          # to its binary, and a rule naming geosite:/geoip: cannot be judged
+          # without them (the own-preset xray -test skips itself then).
+          unzip -o /tmp/xray.zip xray geosite.dat geoip.dat -d /tmp/xray-bin
           chmod +x /tmp/xray-bin/xray
           echo "XRAY_BIN=/tmp/xray-bin/xray" >> "$GITHUB_ENV"
-          /tmp/xray-bin/xray version | head -1
+          /tmp/xray-bin/xray version | sed -n 1p
 
       # A sing-box binary, for the same reason and with the same shape as xray
       # above: phase 4 moves the chain into a sing-box process whose config the
@@ -256,18 +283,22 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/sing-box.tar.gz \
-              https://github.com/SagerNet/sing-box/releases/download/v1.13.14/sing-box-1.13.14-linux-amd64.tar.gz
+              https://github.com/icecompany-tech/iceslab/releases/download/core-singbox-v1.13.14/sing-box-1.13.14-iceslab-linux-amd64.tar.gz
             then break; fi
             echo "sing-box download failed (attempt ${attempt}/3)"
             [ "$attempt" = 3 ] && exit 1
             sleep $(( attempt * 5 ))
           done
-          echo "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697  /tmp/sing-box.tar.gz" | sha256sum -c -
+          echo "8c982dfa05d5d2bf508a3e282fa3cceb22b0d6e7993b845f4e82df32660ae19e  /tmp/sing-box.tar.gz" | sha256sum -c -
           tar -xzf /tmp/sing-box.tar.gz -C /tmp
           mkdir -p /tmp/sing-box-bin
-          install -m 0755 /tmp/sing-box-1.13.14-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
+          install -m 0755 /tmp/sing-box-1.13.14-iceslab-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
           echo "SINGBOX_BIN=/tmp/sing-box-bin/sing-box" >> "$GITHUB_ENV"
-          /tmp/sing-box-bin/sing-box version | head -1
+          # Our build (cores.yml): the official tags plus with_v2ray_api. A
+          # binary without it would let a config with v2ray_api pass nowhere.
+          ver=$(/tmp/sing-box-bin/sing-box version)
+          head -1 <<<"$ver"
+          case "$ver" in *with_v2ray_api*) ;; *) echo "::error::sing-box without with_v2ray_api"; exit 1 ;; esac
 
       # E30a: hysteria-pin.live.test.ts runs native hysteria on the pair the
       # PANEL mints and dials it with hysteria's own client, sing-box and xray,
@@ -331,7 +362,7 @@ jobs:
 
       # By tag: a run downloads only when upstream publishes a newer pair.
       - name: Cache the geo release pair
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/geo
           key: geo-pair-${{ steps.geo.outputs.tag }}
@@ -365,39 +396,131 @@ jobs:
           echo "GEO_DLC_DAT=/tmp/geo/dlc.dat" >> "$GITHUB_ENV"
           echo "SING_GEOSITE_DB=/tmp/geo/geosite.db" >> "$GITHUB_ENV"
 
+      # Once, in the first part: the types are the same in all four.
       - name: Typecheck backend
+        if: matrix.shard == 1
         working-directory: apps/panel-backend
         run: pnpm exec tsc --noEmit
 
       # `github-actions` puts a failing assertion on the diff as an annotation,
       # so a red suite is readable without opening the log; `json` is what the
-      # summary below counts. The default reporter stays, because the log is
-      # still where a human looks when the annotation is not enough.
-      - name: Test backend
+      # summary below counts and what `backend-files` adds up. The default
+      # reporter stays, because the log is still where a human looks when the
+      # annotation is not enough.
+      - name: Test backend (part ${{ matrix.shard }} of 4)
         working-directory: apps/panel-backend
         run: >-
-          pnpm exec vitest run --passWithNoTests
+          pnpm exec vitest run --passWithNoTests --shard=${{ matrix.shard }}/4
           --reporter=default --reporter=github-actions
-          --reporter=json --outputFile=/tmp/backend-vitest.json
+          --reporter=json --outputFile=/tmp/backend-vitest-${{ matrix.shard }}.json
+
+      # The report even from a red part: a part that failed still ran its files,
+      # and the count is about which files ran, not whether they passed.
+      - name: Keep the report for the file count
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-vitest-${{ matrix.shard }}
+          path: /tmp/backend-vitest-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "### backend (panel)"
+            echo "### backend (panel), part ${{ matrix.shard }} of 4"
             echo ""
-            if [ -f /tmp/backend-vitest.json ]; then
+            report=/tmp/backend-vitest-${{ matrix.shard }}.json
+            if [ -f "$report" ]; then
               jq -r '"- tests: \(.numPassedTests) passed, \(.numPendingTests) skipped, " +
-                     "\(.numFailedTests) failed, over \(.numTotalTestSuites) files"' \
-                /tmp/backend-vitest.json
-              jq -r '"- suite ran in \(((.testResults | map(.endTime - .startTime) | add) / 1000 | floor))s"' \
-                /tmp/backend-vitest.json
+                     "\(.numFailedTests) failed, over \(.testResults | length) files"' "$report"
+              jq -r '"- this part ran in \(((.testResults | map(.endTime - .startTime) | add // 0) / 1000 | floor))s"' "$report"
             else
-              echo "- tests: no report, so the suite did not get as far as running"
+              echo "- tests: no report, so the part did not get as far as running"
             fi
-            echo "- config validity asked of the pinned engines: xray v26.3.27, sing-box v1.13.14"
+            echo "- config validity asked of the pinned engines: xray v26.3.27, sing-box v1.13.14 (our build with v2ray_api, core-singbox-v1.13.14)"
             echo "- geo rule-sets compared on the release pair ${{ steps.geo.outputs.tag || '-' }} (dlc.dat and sing-geosite of one tag)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # The four backend parts, added up. Each part is green about ITS files, and
+  # nothing in a part knows whether another part ran at all: a shard that
+  # came out empty, or a file that fell between two, would leave four green
+  # ticks over tests nobody ran. So the files every part reports are counted
+  # against the test files in the tree, and a difference fails this job. The
+  # tree is counted with the include globs of vitest.config.ts.
+  # ───────────────────────────────────────────────────────────────────────
+  backend-files:
+    name: backend (all parts, file count)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, backend]
+    if: "!cancelled() && needs.changes.outputs.backend == 'true'"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: backend-vitest-*
+          path: /tmp/reports
+          merge-multiple: true
+
+      - name: Every test file ran in exactly one part
+        run: |
+          set -euo pipefail
+          cd apps/panel-backend
+          # vitest.config.ts: include ['src/**/*.test.ts', 'tests/**/*.test.ts'].
+          tree=$( { find src tests -name '*.test.ts' -type f 2>/dev/null || true; } | sed 's#^#/#' | sort)
+          expected=$(printf '%s\n' "$tree" | grep -c . || true)
+          ran=$(jq -r '.testResults[].name' /tmp/reports/backend-vitest-*.json 2>/dev/null \
+            | sed 's#^.*/apps/panel-backend##' | sort)
+          got=$(printf '%s\n' "$ran" | grep -c . || true)
+          dup=$(printf '%s\n' "$ran" | uniq -d)
+          missing=$(comm -23 <(printf '%s\n' "$tree") <(printf '%s\n' "$ran" | sort -u))
+          parts=$(ls /tmp/reports/backend-vitest-*.json 2>/dev/null | wc -l)
+          {
+            echo "### backend (all parts)"
+            echo ""
+            echo "- reports from parts: ${parts} of 4"
+            echo "- test files in the tree: ${expected}, run across the parts: ${got}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          verdict=0
+          if [ "$parts" != 4 ]; then
+            echo "::error::only ${parts} of 4 backend parts left a report"
+            verdict=1
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::test files no part ran: $(echo $missing)"
+            verdict=1
+          fi
+          if [ -n "$dup" ]; then
+            echo "::error::test files run by more than one part: $(echo $dup)"
+            verdict=1
+          fi
+          if [ "$got" != "$expected" ]; then
+            echo "::error::${got} files ran, the tree has ${expected}"
+            verdict=1
+          fi
+
+          # A-191, the backend side. Its engine tests skip with
+          # it.skipIf(!XRAY_BIN) and print no reason, so the guard is a list:
+          # a skipped test that is not on it fails the job. CI installs every
+          # engine and sets GEO_COMPARE_TAG, so the only skip expected here is
+          # the placeholder geo-dat.test.ts prints when that tag is SET. A new
+          # skip that is meant goes on this list in the commit that adds it.
+          allowed='oracle tag not set'
+          skipped=$(jq -r '.testResults[].assertionResults[]
+                           | select(.status == "skipped" or .status == "pending")
+                           | .fullName' /tmp/reports/backend-vitest-*.json | sort -u)
+          unexpected=$(printf '%s\n' "$skipped" | grep -v -e '^$' -e "$allowed" || true)
+          echo "- skipped tests: $(printf '%s\n' "$skipped" | grep -c . || true), outside the allowed list: $(printf '%s\n' "$unexpected" | grep -c . || true)" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$unexpected" ]; then
+            echo "::error::tests skipped in CI that are not on the allowed list (an engine binary missing?):"
+            printf '%s\n' "$unexpected"
+            verdict=1
+          fi
+          exit "$verdict"
 
   # No Postgres, no Redis, no Prisma: the SPA never touches them. Its own job
   # so a backend test failure and a frontend type error stop sharing one red
@@ -410,13 +533,13 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.frontend == 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.33.2
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # ⚠ From .nvmrc, never a literal. The workflow and the backend image
           # drifted apart once (22.x against 22.22) and the image crash-looped on
@@ -512,16 +635,19 @@ jobs:
   node-agent:
     name: node-agent (Go)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10: a cold caddy-naive build takes minutes (cached after).
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.node == 'true'
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.22'
+          # The `toolchain` of apps/node/go.mod, exactly; one Go everywhere the
+          # agent is built (bootstrap_checks_test.go holds them together).
+          go-version: '1.27.3'
           # No go.sum yet (zero external deps), let setup-go skip cache wiring.
           cache: false
 
@@ -560,9 +686,153 @@ jobs:
           echo "HYSTERIA_BIN=/tmp/hysteria" >> "$GITHUB_ENV"
           /tmp/hysteria version | grep '^Version:'
 
+      # ⚠ xray and sing-box here too, not only in the backend job. Until
+      # 2026-10-22 this job installed hysteria alone, so every agent test that
+      # asks xray or sing-box (the live REALITY client of A-129, `xray -test`,
+      # `sing-box check`, the direct-resolver live tests) skipped itself on
+      # XRAY_BIN / SINGBOX_BIN unset, and a green node-agent said nothing about
+      # them. Same releases and sha256 as the backend job's steps, which
+      # core-pins.test.ts holds to the version manifest; retried on the
+      # download only, as there.
+      - name: Install xray (for the agent's engine tests)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/xray.zip \
+              https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+            then break; fi
+            echo "xray download failed (attempt ${attempt}/3)"
+            [ "$attempt" = 3 ] && exit 1
+            sleep $(( attempt * 5 ))
+          done
+          echo "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae  /tmp/xray.zip" | sha256sum -c -
+          unzip -o /tmp/xray.zip xray -d /tmp/xray-bin
+          chmod +x /tmp/xray-bin/xray
+          echo "XRAY_BIN=/tmp/xray-bin/xray" >> "$GITHUB_ENV"
+          /tmp/xray-bin/xray version | sed -n 1p
+
+      - name: Install sing-box (for the agent's engine tests)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/sing-box.tar.gz \
+              https://github.com/icecompany-tech/iceslab/releases/download/core-singbox-v1.13.14/sing-box-1.13.14-iceslab-linux-amd64.tar.gz
+            then break; fi
+            echo "sing-box download failed (attempt ${attempt}/3)"
+            [ "$attempt" = 3 ] && exit 1
+            sleep $(( attempt * 5 ))
+          done
+          echo "8c982dfa05d5d2bf508a3e282fa3cceb22b0d6e7993b845f4e82df32660ae19e  /tmp/sing-box.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          mkdir -p /tmp/sing-box-bin
+          install -m 0755 /tmp/sing-box-1.13.14-iceslab-linux-amd64/sing-box /tmp/sing-box-bin/sing-box
+          echo "SINGBOX_BIN=/tmp/sing-box-bin/sing-box" >> "$GITHUB_ENV"
+          # Our build (cores.yml): the official tags plus with_v2ray_api. A
+          # binary without it would let a config with v2ray_api pass nowhere.
+          ver=$(/tmp/sing-box-bin/sing-box version)
+          head -1 <<<"$ver"
+          case "$ver" in *with_v2ray_api*) ;; *) echo "::error::sing-box without with_v2ray_api"; exit 1 ;; esac
+
+      # mita for the mieru adapter's live test (A-275: an inbound with no users
+      # waits, the first user brings mita up). Upstream ships mita only as a
+      # .deb, so the binary is taken out of it with dpkg-deb -x: nothing is
+      # installed and no mita.service starts on the runner. Same release and
+      # sha256 bootstrap-mieru.sh pins (the version manifest), which
+      # core-pins.test.ts holds this line to.
+      - name: Install mita (for the mieru adapter's live test)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 2 --retry-delay 3 -o /tmp/mita.deb \
+              https://github.com/enfein/mieru/releases/download/v3.37.0/mita_3.37.0_amd64.deb
+            then break; fi
+            echo "mita download failed (attempt ${attempt}/3)"
+            [ "$attempt" = 3 ] && exit 1
+            sleep $(( attempt * 5 ))
+          done
+          echo "22248dc1568280a8b1bdaf55051a59b3d64ac1edb4ec4918e3925088f78a35de  /tmp/mita.deb" | sha256sum -c -
+          dpkg-deb -x /tmp/mita.deb /tmp/mita-deb
+          install -D -m 0755 /tmp/mita-deb/usr/bin/mita /tmp/mita-bin/mita
+          echo "MIERU_BIN=/tmp/mita-bin/mita" >> "$GITHUB_ENV"
+          /tmp/mita-bin/mita version
+
+      # caddy-naive for the naive adapter's live test (A-118, admin API on a
+      # unix socket). The same pinned set bootstrap-naive.sh builds on a node
+      # (A-216: xcaddy, Caddy and the klzgrad/forwardproxy commit, never a
+      # branch or latest); bootstrap_checks_test.go holds the two to each
+      # other. A build takes minutes, so it is cached under the set and the Go
+      # that built it, and checked for forward_proxy either way.
+      - name: Cache caddy-naive (pinned set)
+        id: caddy-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/caddy-naive-bin
+          key: caddy-naive-xcaddy-v0.4.7-caddy-v2.11.7-forwardproxy-v0.0.0-20261006113151-c096d6a00cb2-go1.27.3
+
+      - name: Build caddy-naive (for the naive adapter's live test)
+        env:
+          XCADDY_VERSION: v0.4.7
+          CADDY_VERSION: v2.11.7
+          FORWARDPROXY_VERSION: v0.0.0-20261006113151-c096d6a00cb2
+          CACHE_HIT: ${{ steps.caddy-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          bin=/tmp/caddy-naive-bin/caddy-naive
+          if [ "$CACHE_HIT" != true ] || [ ! -x "$bin" ]; then
+            GOBIN=/tmp/xcaddy-bin go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+            mkdir -p /tmp/caddy-naive-bin
+            ( cd "$(mktemp -d)" &&
+              XCADDY_GO_BUILD_FLAGS="-trimpath -ldflags='-s -w'" \
+              /tmp/xcaddy-bin/xcaddy build "$CADDY_VERSION" \
+                --with "github.com/caddyserver/forwardproxy@caddy2=github.com/klzgrad/forwardproxy@${FORWARDPROXY_VERSION}" \
+                --output "$bin" )
+          fi
+          "$bin" version
+          mods=$("$bin" list-modules 2>&1)
+          grep -Eq '^[[:space:]]*http\.handlers\.forward_proxy[[:space:]]*$' <<<"$mods" ||
+            { echo "::error::caddy-naive has no forward_proxy module"; exit 1; }
+          echo "CADDY_NAIVE_BIN=$bin" >> "$GITHUB_ENV"
+
+      # -json, so the summary can say which tests SKIPPED and why: `ok` on a
+      # package says nothing about a test inside it that skipped itself. The
+      # log still shows a readable line per package and every failure in full.
       - name: Test
         working-directory: apps/node
-        run: go test ./... | tee /tmp/go-test.txt
+        run: |
+          set -o pipefail
+          status=0
+          go test -json ./... > /tmp/go-test.json || status=$?
+          jq -r 'select(.Action == "output" and .Test == null) | .Output' /tmp/go-test.json | grep -E '^(ok|FAIL|---|\?)' || true
+          if [ "$status" != 0 ]; then
+            echo "== failing tests, full output:"
+            jq -r 'select(.Action == "fail" and .Test != null) | "\(.Package) \(.Test)"' /tmp/go-test.json | sort -u |
+              while read -r pkg test; do
+                jq -r --arg p "$pkg" --arg t "$test" \
+                  'select(.Package == $p and .Test == $t and .Action == "output") | .Output' /tmp/go-test.json
+              done
+          fi
+          exit "$status"
+
+      # A-191. An engine test skips itself when its binary is missing, which is
+      # right on a laptop and wrong here: in CI it turns a removed install step
+      # into green. The agent's tests say so in one shape,
+      # t.Skip("XRAY_BIN not set...") / t.Skip("HYSTERIA_BIN not set"), so any
+      # skip line of that shape fails the job, whatever the tests themselves
+      # concluded.
+      - name: No engine test skipped for want of its binary
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          [ -f /tmp/go-test.json ] || { echo "no test report, nothing to check"; exit 0; }
+          missing=$(jq -r 'select(.Test != null and .Action == "output" and (.Output | test("[A-Z]+_BIN not set")))
+                           | "\(.Package | sub(".*/apps/node/"; "")) \(.Test): \(.Output | sub("^\\s+"; "") | rtrimstr("\n"))"' \
+                      /tmp/go-test.json)
+          if [ -n "$missing" ]; then
+            echo "::error::engine tests skipped because a binary was not set; CI installs every engine, so this is a missing step, not a pass"
+            printf '%s\n' "$missing"
+            exit 1
+          fi
+          echo "no engine test skipped for want of its binary"
 
       - name: Summary
         if: always()
@@ -570,14 +840,26 @@ jobs:
           {
             echo "### node-agent (Go)"
             echo ""
-            if [ -f /tmp/go-test.txt ]; then
-              echo "- packages ok: $(grep -c '^ok' /tmp/go-test.txt || true)"
-              echo "- packages failed: $(grep -c '^FAIL' /tmp/go-test.txt || true)"
-              echo "- packages with no test files: $(grep -c 'no test files' /tmp/go-test.txt || true)"
+            if [ -f /tmp/go-test.json ]; then
+              count() { jq -r --arg a "$1" 'select(.Action == $a and .Test != null) | .Test' /tmp/go-test.json | wc -l; }
+              echo "- tests: $(count pass) passed, $(count skip) skipped, $(count fail) failed"
+              echo ""
+              echo "<details><summary>skipped, with the reason each gave</summary>"
+              echo ""
+              # The reason is the last line the test printed before its skip,
+              # not counting go test's own === RUN / --- SKIP lines.
+              jq -r 'select(.Test != null and (.Action == "output" or .Action == "skip"))
+                     | [.Action, .Package, .Test, (.Output // "")] | @tsv' /tmp/go-test.json |
+                awk -F'\t' '$1 == "output" && $4 !~ /^ *(=== |--- )/ { last[$2" "$3] = $4 }
+                            $1 == "skip" { r = last[$2" "$3]; gsub(/^ +| +$|\\n/, "", r);
+                                           sub(/.*github.com\/icecompany-tech\/iceslab\/apps\/node\//, "", $2);
+                                           print "- `" $2 "` " $3 ": " r }'
+              echo ""
+              echo "</details>"
             else
               echo "- the suite produced no output, so it did not get as far as running"
             fi
-            echo "- config validity asked of the pinned engine: hysteria v2.12.3"
+            echo "- engines asked: hysteria v2.12.3, xray v26.3.27, sing-box v1.13.14 (our build with v2ray_api), caddy-naive (caddy v2.11.7 + forwardproxy c096d6a00cb2)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Slice 36 follow-up: build + publish container images to GHCR on every
@@ -601,7 +883,7 @@ jobs:
     # server pulled it. A pipeline that ships past its own alarm is not a
     # pipeline. go-lint is in the list for the same reason while it is still
     # report-only: the day it starts failing is the day it must stop a publish.
-    needs: [changes, audit, backend, frontend, node-agent, secrets-scan, go-lint]
+    needs: [changes, audit, backend, backend-files, frontend, node-agent, secrets-scan, go-lint]
     # Runs on a pull request too, but only BUILDS there (see `push:` below).
     # A Dockerfile break used to surface after merge, when the job first ran on
     # develop - which is also the branch the operator's test server pulls from,
@@ -626,7 +908,10 @@ jobs:
        (github.event_name == 'push' &&
         (github.ref == 'refs/heads/main' ||
          github.ref == 'refs/heads/develop' ||
-         startsWith(github.ref, 'refs/tags/v'))))
+         startsWith(github.ref, 'refs/tags/v'))) ||
+       (github.event_name == 'workflow_dispatch' &&
+        (github.ref == 'refs/heads/main' ||
+         github.ref == 'refs/heads/develop')))
     permissions:
       contents: read
       packages: write
@@ -650,9 +935,9 @@ jobs:
             dockerfile: apps/node/Dockerfile
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # The runtime the images are built on comes from the same file the
       # workflow's own Node comes from. The Dockerfiles keep a default so a
@@ -661,12 +946,27 @@ jobs:
         id: node
         run: echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
 
+      # The version the node agent reports (A-202), the same rule as the
+      # installer: the release tag on a tag, else the short commit. Only the
+      # agent's Dockerfile reads it; the other two ignore the build arg.
+      - name: Agent version
+        id: agent
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" == tag && "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "version=$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       # Only needed to publish. Skipped on a pull request, where the job builds
       # and throws the image away - a fork PR has no write token anyway, so
       # attempting the login there would fail the job for no reason.
       - name: Log in to GHCR
-        if: github.event_name == 'push'
-        uses: docker/login-action@v4
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -681,7 +981,7 @@ jobs:
       # candidate must not move it for whoever does.
       - name: Metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }}
           tags: |
@@ -691,18 +991,19 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build + push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.dockerfile }}
           # Build everywhere, publish only from the branches that something
           # actually pulls. On a pull request the image is built and discarded:
           # the point there is to prove the Dockerfile still works.
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             NODE_VERSION=${{ steps.node.outputs.version }}-alpine
+            AGENT_VERSION=${{ steps.agent.outputs.version }}
           # Cache via GHA cache (free, ephemeral), speeds up incremental
           # builds dramatically without needing a paid registry tier.
           cache-from: type=gha,scope=${{ matrix.image.name }}
@@ -714,7 +1015,7 @@ jobs:
           {
             echo "### docker: ${{ matrix.image.name }}"
             echo ""
-            if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
               echo "published:"
             else
               echo "built and discarded (pull request), tags it would have carried:"
@@ -746,7 +1047,7 @@ jobs:
       # For the SARIF upload below.
       security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: a secret committed and "removed" a few commits later
           # is still there, and scanning only the tip would call that clean.
@@ -759,9 +1060,20 @@ jobs:
       #
       # --redact so a finding does not print the secret into a public build log,
       # which would leak it a second time to a wider audience.
+      #
+      # ⚠ Pinned by version AND digest. This image is handed the whole history
+      # of a public repository, so `:latest` was the one place where whatever
+      # the registry served that day ran over everything we ever committed.
+      # Dependabot does not update a `docker run` line, so a bump is by hand:
+      # take the newest release from github.com/gitleaks/gitleaks/releases,
+      # read its index digest with
+      #   docker buildx imagetools inspect zricethezav/gitleaks:vX.Y.Z
+      # (the "Digest:" line, the index, not one platform's manifest), put both
+      # here, and check this job still reports the same findings as before.
       - name: gitleaks
         run: |
-          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+          docker run --rm -v "$PWD:/repo" \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source=/repo --config=/repo/.gitleaks.toml \
             --redact --verbose --no-banner \
             --report-format sarif --report-path /repo/gitleaks.sarif
@@ -772,7 +1084,7 @@ jobs:
       # the report stays redacted: this repository is public.
       - name: Upload findings
         if: always() && hashFiles('gitleaks.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -805,14 +1117,21 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.node == 'true'
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.24'
+          go-version: '1.27.3'
           cache-dependency-path: apps/node/go.sum
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          # The linter itself, pinned: `latest` changed the rule set under a
+          # commit that changed nothing. Dependabot moves the action above, not
+          # this. A bump is by hand: the newest release from
+          # github.com/golangci/golangci-lint/releases, then compare the issue
+          # count in this job's log ("N issues:") with the run before it; the
+          # action logs the version it installed ("Installing golangci-lint
+          # binary vX.Y.Z").
+          version: v2.15.0
           working-directory: apps/node
           # Report-only for now: turning a fresh linter loose on existing code
           # usually produces a wall of findings, and a red pipeline nobody can
@@ -839,7 +1158,7 @@ jobs:
   # resolve inside the container while every test and build was green.
   # ───────────────────────────────────────────────────────────────────────
   #
-  # ⚠ On a push this pulls the PUBLISHED image by its sha tag instead of
+  # ⚠ On a push (or a manual run) this pulls the PUBLISHED image by its sha tag instead of
   # building its own. Building a second time proved the Dockerfile works, which
   # is not the question: the question is whether the artifact the test server
   # will pull boots, and a local rebuild can differ from the published one for
@@ -873,14 +1192,14 @@ jobs:
           --health-timeout 5s --health-retries 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
-        if: github.event_name != 'push'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: github.event_name == 'pull_request'
 
       - name: Log in to GHCR
-        if: github.event_name == 'push'
-        uses: docker/login-action@v4
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -889,7 +1208,7 @@ jobs:
       # The published artifact, by the same sha tag the docker job wrote.
       - name: Pull the published image
         id: image
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           ref="ghcr.io/${{ github.repository_owner }}/iceslab-backend:sha-$(echo "${{ github.sha }}" | cut -c1-7)"
@@ -901,8 +1220,8 @@ jobs:
       # and be explicit that this proves the Dockerfile, not a deployable
       # artifact.
       - name: Build backend image (pull request only)
-        if: github.event_name != 'push'
-        uses: docker/build-push-action@v7
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: apps/panel-backend/Dockerfile
@@ -954,12 +1273,166 @@ jobs:
           {
             echo "### smoke (image boots)"
             echo ""
-            if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
               echo "- ran the PUBLISHED image: \`${{ steps.image.outputs.ref }}\`"
             else
               echo "- pull request: nothing is published, so the image was built here"
             fi
             echo "- migrations applied from inside the image, then \`/health\` answered after ${{ steps.health.outputs.seconds || '-' }}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Does the FRONTEND image send subscriptions to the backend at the prefix
+  # the operator set?
+  #
+  # A-137, 2026-10-22: the backend read SUBSCRIPTION_PATH_PREFIX, the
+  # frontend's nginx proxied a hard-coded /sub/, and with any other prefix
+  # every subscription came back as the SPA's index.html with a 200. Nothing
+  # failed, the clients just got HTML. The image now renders its config from
+  # the variable at start; this job runs it the way an operator would and
+  # asks a stand-in backend what reached it.
+  #
+  # Same rule as smoke: the published image on a push, a local build on a
+  # pull request.
+  # ───────────────────────────────────────────────────────────────────────
+  frontend-proxy:
+    name: smoke (frontend proxies the subscription prefix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [docker]
+    if: "!cancelled() && needs.docker.result == 'success'"
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: github.event_name == 'pull_request'
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the published image
+        id: image
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/${{ github.repository_owner }}/iceslab-frontend:sha-$(echo "${{ github.sha }}" | cut -c1-7)"
+          docker pull "$ref"
+          docker tag "$ref" iceslab-frontend:proxy
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend image (pull request only)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/panel-frontend/Dockerfile
+          push: false
+          load: true
+          tags: iceslab-frontend:proxy
+          cache-from: type=gha,scope=iceslab-frontend
+
+      # The stand-in answers every request with the path it received, so the
+      # check reads where a request went, not just that something answered.
+      - name: Stand-in backend
+        run: |
+          set -euo pipefail
+          docker network create proxy-net
+          docker run -d --name backend --network proxy-net --network-alias backend \
+            node:22-alpine node -e \
+            "require('http').createServer((q,s)=>s.end('BACKEND '+q.url)).listen(3000)"
+
+      - name: Subscription prefix /s2, and the default
+        run: |
+          set -euo pipefail
+          start() {
+            local name="$1" port="$2"; shift 2
+            docker run -d --name "$name" --network proxy-net -p "127.0.0.1:${port}:80" "$@" iceslab-frontend:proxy
+            for i in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:${port}/" >/dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            docker logs "$name"
+            echo "::error::$name did not answer on :$port"
+            exit 1
+          }
+          # `[[ == ]]` on a variable, not `| grep -q` (E33).
+          expect_backend() {
+            local body
+            body=$(curl -fsS "$1")
+            if [[ "$body" != "BACKEND $2" ]]; then
+              echo "::error::$1 should reach the backend as $2, got: ${body:0:120}"
+              exit 1
+            fi
+            echo "ok: $1 -> backend $2"
+          }
+          expect_spa() {
+            local body
+            body=$(curl -fsS "$1")
+            if [[ "$body" == BACKEND* || "$body" != *'<div id="root">'* ]]; then
+              echo "::error::$1 should be the SPA, got: ${body:0:120}"
+              exit 1
+            fi
+            echo "ok: $1 -> SPA index.html"
+          }
+
+          start fe-s2 8081 -e SUBSCRIPTION_PATH_PREFIX=/s2
+          expect_backend http://127.0.0.1:8081/s2/tok-123 /s2/tok-123
+          expect_spa http://127.0.0.1:8081/sub/tok-123
+          expect_backend http://127.0.0.1:8081/api/auth/status /api/auth/status
+
+          # No variable: the image's default, as before the change.
+          start fe-default 8082
+          expect_backend http://127.0.0.1:8082/sub/tok-123 /sub/tok-123
+          expect_spa http://127.0.0.1:8082/s2/tok-123
+
+      # A value the backend would refuse stops the container with a reason,
+      # instead of reaching a location line.
+      - name: A prefix the backend would refuse is refused here too
+        run: |
+          set -euo pipefail
+          for bad in '/s2;x' 'sub' '/api'; do
+            if docker run --rm --network proxy-net -e "SUBSCRIPTION_PATH_PREFIX=$bad" \
+                 iceslab-frontend:proxy nginx -t >/tmp/bad.log 2>&1; then
+              cat /tmp/bad.log
+              echo "::error::SUBSCRIPTION_PATH_PREFIX=$bad was accepted"
+              exit 1
+            fi
+            out=$(cat /tmp/bad.log)
+            if [[ "$out" != *"iceslab-frontend: SUBSCRIPTION_PATH_PREFIX=\"$bad\""* ]]; then
+              echo "$out"
+              echo "::error::$bad was refused, but not by the prefix check"
+              exit 1
+            fi
+            echo "ok: $bad refused"
+          done
+
+      - name: Container logs on failure
+        if: failure()
+        run: |
+          for c in fe-s2 fe-default backend; do echo "== $c"; docker logs "$c" 2>&1 | tail -40 || true; done
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### smoke (frontend proxies the subscription prefix)"
+            echo ""
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
+              echo "- ran the PUBLISHED image: \`${{ steps.image.outputs.ref }}\`"
+            else
+              echo "- pull request: nothing is published, so the image was built here"
+            fi
+            echo "- SUBSCRIPTION_PATH_PREFIX=/s2: /s2/<token> reaches the backend, /sub/<token> is the SPA"
+            echo "- unset: /sub/<token> reaches the backend, as before"
+            echo "- /s2;x, sub and /api: the container refuses to start"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────
@@ -984,7 +1457,7 @@ jobs:
     timeout-minutes: 5
     if: always()
     needs:
-      [changes, audit, secrets-scan, backend, frontend, node-agent, go-lint, docker, smoke]
+      [changes, audit, secrets-scan, backend, backend-files, frontend, node-agent, go-lint, docker, smoke, frontend-proxy]
     steps:
       - name: Every check accounted for
         env:
@@ -1021,7 +1494,10 @@ jobs:
           # Filtered by area. A skip is legitimate exactly when the filter said
           # the area was untouched, which is why the outputs are read here
           # instead of assumed.
+          # A matrix job reports one result for all its parts: failure if any
+          # part failed. backend-files is what says no file fell between them.
           check backend "$([ "$RUNS_BACKEND" = "true" ] && echo no || echo yes)"
+          check backend-files "$([ "$RUNS_BACKEND" = "true" ] && echo no || echo yes)"
           check frontend "$([ "$RUNS_FRONTEND" = "true" ] && echo no || echo yes)"
           check node-agent "$([ "$RUNS_NODE" = "true" ] && echo no || echo yes)"
           check go-lint "$([ "$RUNS_NODE" = "true" ] && echo no || echo yes)"
@@ -1034,12 +1510,17 @@ jobs:
             case "$REF" in
               refs/heads/main|refs/heads/develop|refs/tags/v*) docker_may_skip=no ;;
             esac
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            case "$REF" in
+              refs/heads/main|refs/heads/develop) docker_may_skip=no ;;
+            esac
           elif [ "$EVENT" = "pull_request" ] && [ "$SAME_REPO" = "true" ]; then
             docker_may_skip=no
           fi
           check docker "$docker_may_skip"
           # Smoke follows docker: no image, nothing to boot.
           check smoke "$docker_may_skip"
+          check frontend-proxy "$docker_may_skip"
 
           {
             echo "### gate"

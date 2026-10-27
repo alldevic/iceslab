@@ -1,13 +1,14 @@
 import { Stack, Text } from '@mantine/core';
 import { listCascades } from '@/lib/domain/cascades';
 import type { DraftRule } from '@/contours/traffic/lib/routeRules';
-import { NEW_POLICY_ID, findShadows, strip, toRules } from '@/contours/traffic/lib/routeRules';
+import { NEW_POLICY_ID, findShadows, policyDirty, strip, toRules } from '@/contours/traffic/lib/routeRules';
 import { apiErrorMessage } from '@/lib/net/client';
 import {
   createRoutePolicy,
   deleteRoutePolicy,
   policyConflict,
   policyEntryOf,
+  policyEntryUnknown,
   routePolicyInUse,
   toPolicyInput,
   updateRoutePolicy,
@@ -19,6 +20,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { RoutePolicy } from '@/lib/domain/routePolicies';
 import type { Squad } from '@/lib/domain/squads';
+import { conflictField } from '@/lib/domain/conflictField';
+
+const ROUTE_POLICY_FIELDS = ['name', 'ordinal'] as const;
 
 /**
  * The draft a policy is edited as: its name, its rules in order, what is dirty,
@@ -38,22 +42,26 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
   const [name, setName] = useState(policy.name);
   const [rules, setRules] = useState<DraftRule[]>(initial);
   const [loadedFor, setLoadedFor] = useState(policy.id);
-  const [dragging, setDragging] = useState<number | null>(null);
+  /** Записи из отказа ROUTE_POLICY_ENTRY_UNKNOWN: подсветка до правки строки. */
+  const [unknownEntries, setUnknownEntries] = useState<string[]>([]);
+  /** A-257 tail: 409 CONFLICT `field: 'name'`, the server's words at the name. */
+  const [nameTaken, setNameTaken] = useState<string | null>(null);
 
   // Re-seed when the operator picks a different policy in the list.
   if (loadedFor !== policy.id) {
     setLoadedFor(policy.id);
     setName(policy.name);
     setRules(toRules(policy));
-    setDragging(null);
+    setUnknownEntries([]);
+    setNameTaken(null);
   }
 
   // A policy that has never been saved is dirty by definition, even straight
-  // out of an imported file where nothing has been typed yet.
-  const dirty =
-    policy.id === NEW_POLICY_ID ||
-    name !== policy.name ||
-    JSON.stringify(strip(rules)) !== JSON.stringify(strip(initial));
+  // out of an imported file where nothing has been typed yet. Otherwise the
+  // draft is compared as the server stores it, two sets (policyDirty, A-151):
+  // compared row by row, a save that the server re-orders read «unsaved»
+  // forever.
+  const dirty = policyDirty(policy, name, rules);
   const shadows = useMemo(() => findShadows(rules), [rules]);
   const granted = squads.filter((s) => s.policyIds.includes(policy.id));
 
@@ -71,6 +79,25 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
       onCreated?.();
     },
     onError: (err) => {
+      // Записи, которые ни имя, ни адрес (265e93e): подсвечиваются в своих
+      // строках, в тосте одна фраза со списком.
+      const unknown = policyEntryUnknown(err);
+      if (unknown) {
+        setUnknownEntries(unknown);
+        notifications.show({
+          color: 'red',
+          title: t('common.saveError'),
+          message: t('routes.entryUnknown', { entries: unknown.join(', ') }),
+        });
+        return;
+      }
+      // A taken name stands at the name (A-257 tail). The band has no field
+      // here (the API assigns it), so its clash stays a toast in the API's words.
+      const taken = conflictField(err, ROUTE_POLICY_FIELDS);
+      if (taken?.field === 'name') {
+        setNameTaken(taken.message || apiErrorMessage(err));
+        return;
+      }
       // A name or band collision, or a policy with no domains at all: the API
       // says which, and the fix differs, so its sentence is the useful one.
       const named = policyConflict(err);
@@ -110,6 +137,9 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
   const entryOf = policyEntryOf(policy.id, cascadesQuery.data?.cascades, cascadesQuery.data?.fields);
 
   function setRule(i: number, patch: Partial<DraftRule>) {
+    // Правка строки: подсветка отказа про неё становится неверной, сервер
+    // скажет заново на следующем сохранении.
+    if (patch.match) setUnknownEntries([]);
     setRules((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
   function addRule() {
@@ -120,16 +150,6 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
   }
   function removeRule(i: number) {
     setRules((prev) => prev.filter((_, j) => j !== i));
-  }
-  /** Move `from` to `to`, the way a drop reads: the row lands where it hovers. */
-  function move(from: number, to: number) {
-    if (from === to) return;
-    setRules((prev) => {
-      const next = [...prev];
-      const [row] = next.splice(from, 1);
-      next.splice(to, 0, row!);
-      return next;
-    });
   }
 
   function confirmDelete() {
@@ -168,16 +188,18 @@ export function useRoutePolicyForm(policy: RoutePolicy, squads: Squad[], onCreat
     setRule,
     addRule,
     removeRule,
-    move,
     confirmDelete,
     name,
-    setName,
+    setName: (v: string) => {
+      setName(v);
+      setNameTaken(null);
+    },
+    nameTaken,
     rules,
     setRules,
     loadedFor,
     setLoadedFor,
-    dragging,
-    setDragging,
+    unknownEntries,
   };
 }
 

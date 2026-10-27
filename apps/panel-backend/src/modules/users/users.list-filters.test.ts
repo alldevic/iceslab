@@ -227,6 +227,15 @@ describe('filters the roster headers turn on', () => {
     expect(await listed('hasTag=no')).toEqual(['bare']);
   });
 
+  it('tells a device limit, the explicit no-limit and none of their own apart (A-148)', async () => {
+    await makeUser({ username: 'capped', hwidDeviceLimit: 3 });
+    await makeUser({ username: 'free', hwidDeviceLimit: 0 });
+    await makeUser({ username: 'inherits' });
+    expect(await listed('deviceLimit=set')).toEqual(['capped']);
+    expect(await listed('deviceLimit=unlimited')).toEqual(['free']);
+    expect(await listed('deviceLimit=unset')).toEqual(['inherits']);
+  });
+
   it('combines two filters on the same relation instead of letting one win', async () => {
     // nodeId and online both narrow `traffic`. Assembled as one object literal
     // the second key overwrites the first, and the operator gets a list that

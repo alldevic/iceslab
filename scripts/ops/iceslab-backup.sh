@@ -75,11 +75,19 @@ source <(grep -E '^(POSTGRES_USER|POSTGRES_DB)=' "$ENV_FILE")
 
 # Both containers must be up. pg_dump against a stopped DB is the usual
 # failure when this runs from cron the night after a deploy that stalled.
-if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+#
+# The list into a variable first, never `| grep -q` (E33): under pipefail grep
+# leaving at the first match can kill `docker ps` with SIGPIPE, and a running
+# container then reads as stopped.
+if ! running="$(docker ps --format '{{.Names}}')"; then
+    log_err "docker ps failed, cannot tell which containers are running"
+    exit 1
+fi
+if ! grep -q "^${POSTGRES_CONTAINER}$" <<<"$running"; then
     log_err "container ${POSTGRES_CONTAINER} is not running"
     exit 1
 fi
-if ! docker ps --format '{{.Names}}' | grep -q "^${REDIS_CONTAINER}$"; then
+if ! grep -q "^${REDIS_CONTAINER}$" <<<"$running"; then
     log_err "container ${REDIS_CONTAINER} is not running"
     exit 1
 fi

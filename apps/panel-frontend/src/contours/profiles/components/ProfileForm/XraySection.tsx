@@ -23,10 +23,15 @@ import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 import { XrayAdvanced } from '@/contours/profiles/components/ProfileForm/XrayAdvanced';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
-import { useGenerateImpact } from '@/contours/profiles/lib/generateImpact';
+import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
 import { isPlainSubprotocol } from '@/contours/profiles/lib/plainSubprotocol';
 import { PlainXraySection } from '@/contours/profiles/components/ProfileForm/PlainXraySection';
-import { RED } from '@/contours/profiles/lib/colors';
+import { AMBER, RED } from '@/contours/profiles/lib/colors';
+import { MIST } from '@/lib/ui/tokens';
+import { hostsMaySecureOtherwise, listHosts } from '@/lib/domain/hosts';
+import { formatGapKey, formatLabel, formatReasonKey, getProfileFormats } from '@/lib/domain/formats';
+import { profileFormatsLine } from '@/contours/profiles/lib/profileFormatsLine';
+import { useQuery } from '@tanstack/react-query';
 
 export function XraySection({
   generateXrayKeys,
@@ -44,11 +49,37 @@ export function XraySection({
   profileId: string | null;
 }) {
   const { t } = useTranslation();
-  const impact = useGenerateImpact(profileId);
+  // The warning reads the cached count; the press asks the server again (A-225).
+  const { impact, checking, press } = useGenerateGate(profileId);
   // На sing-box xray-семейство это только REALITY steal-others по raw: всё
   // прочее агент отказывает, поэтому здесь оно недоступно с причиной.
   const onSingbox = form.values.engine === 'singbox';
   const singboxWhy = t('profiles.form.cfg.singboxXrayOnly');
+  // Who will not get the saved profile: the server's /formats at the profile's
+  // own security, the answer the host chips read (no copy of the table here).
+  const formatsQuery = useQuery({
+    queryKey: ['profile-formats', profileId, 'default'],
+    queryFn: () => getProfileFormats(profileId!, 'default'),
+    enabled: profileId !== null,
+    retry: false,
+  });
+  const line = profileFormatsLine(profileId, formatsQuery);
+  const whyWords = (why: string) => {
+    const key = formatGapKey(why);
+    return key ? t(key) : t('hostEdit.formatWhyUnknown', { code: why });
+  };
+  // Said by the profile's own security; a host may override it (tls/none), and
+  // then its own line on the host page is the one that holds (A-224, AUDT).
+  const hostsQuery = useQuery({
+    queryKey: ['hosts', { profileId }],
+    queryFn: () => listHosts({ profileId: profileId! }),
+    enabled: profileId !== null,
+    staleTime: 30_000,
+  });
+  // A list on its way is «cannot tell» as much as a failed one (A-248): the
+  // caveat stays until the hosts are known, it does not appear late.
+  const hostsMayDiffer =
+    profileId !== null && hostsMaySecureOtherwise(hostsQuery.data ? hostsQuery.data.hosts : null);
   // SOCKS5 / HTTP have no subprotocol pill, transport, security or REALITY to
   // offer: the server takes them plain only.
   if (isPlainSubprotocol(form.values.xraySubprotocol)) {
@@ -128,6 +159,34 @@ export function XraySection({
 
               {/* Почему половина пилюль серая: одна строка под рядом, а не
                   только в подсказке при наведении. */}
+              {/* A-224: which subscription clients will not get this profile,
+                  by the shared table the format builders use. */}
+              {line.kind === 'gaps' ? (
+                <Stack gap={2}>
+                  <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+                    {t('profiles.form.cfg.clientsLeftOut')}
+                    {hostsMayDiffer && ` ${t('profiles.form.cfg.clientsHostCaveat')}`}
+                  </Text>
+                  {line.groups.map((g) => {
+                    const side = formatReasonKey(g.reason);
+                    return (
+                      <Text key={`${g.reason ?? ''}:${g.why}`} style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+                        {side ? `${t(side)}: ` : ''}
+                        {whyWords(g.why)}: {g.formats.map((f) => formatLabel(f, t)).join(', ')}
+                      </Text>
+                    );
+                  })}
+                </Stack>
+              ) : line.kind !== 'none' ? (
+                <Text style={{ fontSize: 12, lineHeight: '17px', color: MIST }}>
+                  {t('profiles.form.cfg.clientsLeftOut')}{' '}
+                  {line.kind === 'loading'
+                    ? t('common.loading')
+                    : line.kind === 'unknown'
+                      ? t('profiles.form.cfg.clientsUnknown')
+                      : '-'}
+                </Text>
+              ) : null}
               {onSingbox && (
                 <Text style={{ fontSize: 12, lineHeight: '17px', color: '#7A8BA3' }}>{singboxWhy}</Text>
               )}
@@ -214,8 +273,9 @@ export function XraySection({
                       />
                       <UnstyledButton
                         type="button"
-                        onClick={() => confirmGenerate(impact, t, () => void generateXrayKeys())}
-                        disabled={keypairPending}
+                        onClick={() => press((fresh) => confirmGenerate(fresh, t, () => void generateXrayKeys()))}
+                        // The cost has to be known (or known to be unknown) first: A-225.
+                        disabled={keypairPending || impact.kind === 'loading' || checking}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -247,7 +307,7 @@ export function XraySection({
               )}
               {/* A profile nobody has deployed yet cannot break anything, so
                   the warning appears only once there is a fleet behind it. */}
-              {form.values.xraySecurity === 'reality' && (impact.hosts > 0 || impact.nodes > 0) && (
+              {form.values.xraySecurity === 'reality' && showGenerateWarning(impact) && (
                 <GenerateWarning impact={impact} />
               )}
               {form.values.xraySecurity === 'tls' && (

@@ -150,10 +150,6 @@ describe('profile key impact', () => {
   });
 
   it('counts every node the profile is deployed to', async () => {
-    // Worth pinning: a profile can reach one node only ONCE
-    // (@@unique([profileId, nodeId])), so "several bindings of one profile on
-    // one node, on different ports" cannot happen, whatever the confirm dialog
-    // guards against. Bindings and nodes therefore move together here.
     const profileId = await makeProfile();
     const a = await makeNode();
     const b = await makeNode();
@@ -166,17 +162,17 @@ describe('profile key impact', () => {
     expect(i.hosts).toBe(2);
   });
 
-  it('refuses to double-bind one profile to one node, which is why nodes cannot be overcounted', async () => {
+  it('counts a node once when the profile sits on it on two ports (A-259)', async () => {
+    // Since A-259 a profile may sit on one node on several ports, a binding
+    // each. Bindings count each port; nodes count the machine once.
     const profileId = await makeProfile();
     const nodeId = await makeNode();
     await bind(profileId, nodeId, 443);
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/bindings',
-      headers: auth(),
-      payload: { profileId, nodeId, port: 8443 },
-    });
-    expect(res.statusCode).toBe(409);
+    await bind(profileId, nodeId, 8443);
+
+    const i = await impact(profileId);
+    expect(i.bindings).toBe(2);
+    expect(i.nodes).toBe(1);
   });
 
   it('multiplies hosts by the subscribers who can reach them', async () => {

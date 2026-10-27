@@ -2,6 +2,10 @@ import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text } from '@mantine/core';
 import type { NodeSyncStatus } from '@/lib/domain/nodes';
 import { AMBER, MIST, SNOW } from '@/contours/nodes/lib/colors';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import type { LoadFailure } from '@/lib/ui/loadView';
+import { useNow } from '@/lib/ui/useNow';
+import { SYNC_CONFIRM_MINUTES, syncPoll } from '@/contours/nodes/lib/syncPoll';
 
 const MONO = "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace";
 
@@ -18,13 +22,37 @@ const MONO = "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace";
  * not a status board, and a green "all good" strip on every healthy node is
  * noise that pushes the real thing off the screen.
  */
-export function SyncStatusStrip({ status }: { status: NodeSyncStatus | undefined }) {
+export function SyncStatusStrip({
+  status,
+  failure = null,
+}: {
+  status: NodeSyncStatus | undefined;
+  /** The poll did not answer. Drawn, because nothing drawn here reads as
+   *  «applied», the one thing the panel does not know (P1, P5). */
+  failure?: LoadFailure | null;
+}) {
   const { t } = useTranslation();
+  // Polling stops after the confirm window (syncPoll); the strip says so
+  // instead of waiting in silence.
+  const now = useNow(15_000);
+  if (failure && !status) {
+    return (
+      <Stack
+        gap={8}
+        style={{ width: '100%', padding: '16px 18px', borderRadius: 10, backgroundColor: `${AMBER}0F`, border: `1px solid ${AMBER}33` }}
+      >
+        <Text style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.14em', color: AMBER }}>{t('nodeEdit.syncUnknownTag')}</Text>
+        <Text style={{ fontSize: 13, lineHeight: '19px', color: SNOW }}>{t('nodeEdit.syncUnknownBody')}</Text>
+        <LoadFailedLine message={failure.message} onRetry={failure.onRetry} />
+      </Stack>
+    );
+  }
   if (!status || status.applied) return null;
 
   const waiting = !status.online;
   const tone = waiting ? MIST : AMBER;
   const never = status.lastInboundSyncAt === null;
+  const { timedOut } = syncPoll(status, now);
 
   return (
     <Box
@@ -59,6 +87,11 @@ export function SyncStatusStrip({ status }: { status: NodeSyncStatus | undefined
             ? t('nodeEdit.syncNever')
             : t('nodeEdit.syncLastApplied', { at: when(status.lastInboundSyncAt!) })}
         </Text>
+        {timedOut && (
+          <Text style={{ fontSize: 12, lineHeight: '17px', color: AMBER }}>
+            {t('nodeEdit.syncTimedOut', { minutes: SYNC_CONFIRM_MINUTES })}
+          </Text>
+        )}
       </Stack>
     </Box>
   );

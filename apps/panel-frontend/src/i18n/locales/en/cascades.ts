@@ -24,7 +24,7 @@ export const cascades = {
     mode: 'Mode',
     modeChain: 'Chain (sequential)',
     modeChainHint: 'Entry, then transits in order, then one exit. Every hop forwards to the next.',
-    modeBalancer: 'Balancer (auto exit)',
+    modeBalancer: 'Balancer (several exits)',
     modeBalancerHint: 'One entry, several parallel exits. The client picks an exit by picking a server.',
     hideHops: 'Hide exit nodes from subscription',
     hideHopsHint:
@@ -178,6 +178,7 @@ export const cascades = {
   // holding its config, and a delete.
   cascadeEdit: {
     gone: 'This cascade no longer exists.',
+    positionMoved: 'Position {{position}} moved from place {{stored}} without its leg settings, and the server would not guess them by number. Save again.',
     // The node was deleted after the cascade had been saved. An empty picker
     // in its place read as "the operator did not choose one", which is a lie
     // about the cause.
@@ -230,6 +231,9 @@ export const cascades = {
     subAuto: '⚡ {{name}} → Auto',
     subTag: 'tag {{tag}} · plain',
     subDirect: 'also a direct pick',
+    subAwg: 'AWG tunnel: Auto and the entry policy',
+    subHintAwg:
+      'An AmneziaWG entry gives the client one tunnel: Auto and the entry policy pick the way out, the subscription has no per-direction entries.',
     subHintMany:
       'One entry per direction, and a squad can narrow the list to the directions it grants. A direction with no live node under it never reaches a subscription. Every entry of a pool offers the same set, so those lines carry their transport to stay distinct.',
     subHintOne:

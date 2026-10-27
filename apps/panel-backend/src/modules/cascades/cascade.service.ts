@@ -1,6 +1,8 @@
 import {
   LINK_CELL_ENGINES,
-  LINK_CELL_TRANSPORT,
+  LINK_CELL_TRANSPORTS,
+  TRANSPORTS,
+  type ChainLinkIngress,
   type ChainStatus,
   type ChainTunnel,
   type ChainUserCore,
@@ -14,9 +16,20 @@ import { cascadeAutoProfileLabel, cascadeProfileLabel } from '../../lib/util/cou
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { xrayGeoEntry } from '../geo-sets/geo-refs.js';
-import { chainPoliciesOf } from './chain-policy.js';
+import { chainNodePolicyOf, chainPoliciesOf } from './chain-policy.js';
+import {
+  assertNodesInNoOtherCascade,
+  CASCADE_OWNERSHIP_ORDER,
+  deadCascadeIds,
+  deadCascadeIdsNow,
+  invalidateDeadCascadeCache,
+  nodesOfCascades,
+} from './cascade-exclusive.js';
+import { hostFromAddress } from '../subscription/subscription.formats.js';
+import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import {
   assertDirectionShapes,
   CascadeValidationError,
@@ -34,6 +47,7 @@ import {
   generateLinkCreds,
   LINK_PORT_BASE,
   generateTopologyLinks,
+  giveRealityToPlainVless,
   normalizeLinkProtocol,
   parseLinkCred,
   routeTag,
@@ -61,6 +75,7 @@ import {
   type ChainForeignOut,
   type ChainRenderInput,
   type ChainRole,
+  type ChainWarp,
 } from './chain.config.js';
 import { CHAIN_TPROXY_PORT, chainSocksPort, chainSocksUser, chainTProxyMark } from './chain.ports.js';
 import { chainSecretFor } from '../nodes/chain-secret.js';
@@ -73,6 +88,7 @@ import {
   type ResolvedDirection,
 } from './direction-merge.js';
 import { isConfigApplied } from '../nodes/nodes.sync-status.js';
+import { bindingsReachedBySquads } from '../users/user-reach.js';
 import {
   freeTunnelIndexes,
   legUnderlay,
@@ -135,6 +151,23 @@ async function assertEntryPolicyExists(policyId: string | null | undefined): Pro
   const found = await prisma.routePolicy.findUnique({ where: { id: policyId }, select: { id: true } });
   if (!found) throw new CascadeEntryPolicyNotFoundError(policyId);
 }
+/** A-140: a position's pool moved to another number without its linkParams. */
+export class CascadePositionMovedError extends Error {
+  readonly code = 'POSITION_MOVED_WITHOUT_LINK_PARAMS';
+  constructor(
+    public position: number,
+    public storedPosition: number,
+  ) {
+    super(
+      `position ${position} holds the nodes stored at position ${storedPosition}, and came without ` +
+        `linkParams. The leg settings are kept by number, so this save would hand that leg the ` +
+        `settings of position ${position} (an AWG underlay or a congestion controller moving to ` +
+        `another leg). Send linkParams for every position that moved.`,
+    );
+    this.name = 'CascadePositionMovedError';
+  }
+}
+
 export class CascadeNodeMissingError extends Error {
   constructor(
     public nodeId: string,
@@ -197,22 +230,19 @@ function receivingLinkPorts(
   hops: { nodeId: string }[],
   creds: LinkCred[],
 ): { nodeId: string; port: number; transport: Transport }[] {
-  return hops
-    .slice(1)
-    .map((h, i) =>
-      creds[i]
-        ? {
-            nodeId: h.nodeId,
-            port: creds[i]!.port,
-            // From the cred's own cell. The legacy storage only ever holds
-            // vless and SS2022, so this is tcp today and reads it rather than
-            // saying it: the day a QUIC cell folds into hops, a constant here
-            // would be a silent lie about which socket is taken.
-            transport: LINK_CELL_TRANSPORT[creds[i]!.protocol],
-          }
-        : null,
-    )
-    .filter((x): x is { nodeId: string; port: number; transport: Transport } => x !== null);
+  return hops.slice(1).flatMap((h, i) =>
+    creds[i]
+      ? // From the cred's own cell. The legacy storage only ever holds vless
+        // and SS2022, and reads the table rather than saying it: SS2022 holds
+        // udp beside tcp (A-117), and the day a QUIC cell folds into hops, a
+        // constant here would be a silent lie about which socket is taken.
+        LINK_CELL_TRANSPORTS[creds[i]!.protocol].map((transport) => ({
+          nodeId: h.nodeId,
+          port: creds[i]!.port,
+          transport,
+        }))
+      : [],
+  );
 }
 
 /**
@@ -742,6 +772,17 @@ async function assertBalancerEntrySupportsVlessRoute(entryNodeId: string): Promi
   }
 }
 
+/** The same gate for every node of an entry pool: a client may land on any of
+ *  them, so one old xray in the pool is the silent failure for its share of
+ *  users (A-145). */
+async function assertEntryPoolSupportsVlessRoute(nodeIds: string[]): Promise<void> {
+  for (const id of new Set(nodeIds)) await assertBalancerEntrySupportsVlessRoute(id);
+}
+
+function entryPoolOf(positions: { position: number; nodeIds: string[] }[] | undefined): string[] {
+  return positions?.find((p) => p.position === 0)?.nodeIds ?? [];
+}
+
 const hopInclude = {
   hops: {
     orderBy: { position: 'asc' as const },
@@ -847,6 +888,8 @@ const HIDDEN_NODES_TTL_MS = 60_000;
 
 export function invalidateHiddenCascadeNodeCache(): void {
   hiddenNodesCache = null;
+  // The dead set moves with the same changes (A-223), and the hidden set reads it.
+  invalidateDeadCascadeCache();
 }
 
 export async function getHiddenCascadeNodeIds(): Promise<Set<string>> {
@@ -876,20 +919,23 @@ async function readHiddenCascadeNodes(): Promise<{ ids: Set<string>; byNode: Map
   // direct subscription picks (they still work standalone; the cascade just
   // additionally offers them behind its "Auto" entry).
   const cascade = { select: { id: true, name: true } } as const;
+  // A-223: a dead cascade is treated as switched off, and a switched-off one
+  // hides nothing.
+  const dead = [...(await deadCascadeIds())];
   const [hops, positions, directionNodes] = await Promise.all([
     prisma.cascadeHop.findMany({
-      where: { cascade: { enabled: true, hideHopsFromSub: true } },
+      where: { cascade: { enabled: true, hideHopsFromSub: true, id: { notIn: dead } } },
       select: { nodeId: true, position: true, cascade },
     }),
     // v4: the same rule, read from the topology tables. Without this a v4-only
     // cascade would leak its transits and exits into subscriptions as direct
     // endpoints, which is exactly the bypass this function exists to stop.
     prisma.cascadePosition.findMany({
-      where: { cascade: { enabled: true, hideHopsFromSub: true } },
+      where: { cascade: { enabled: true, hideHopsFromSub: true, id: { notIn: dead } } },
       select: { position: true, nodes: { select: { nodeId: true } }, cascade },
     }),
     prisma.cascadeDirectionNode.findMany({
-      where: { direction: { cascade: { enabled: true, hideHopsFromSub: true } } },
+      where: { direction: { cascade: { enabled: true, hideHopsFromSub: true, id: { notIn: dead } } } },
       select: { nodeId: true, direction: { select: { cascade } } },
     }),
   ]);
@@ -956,7 +1002,11 @@ export interface CascadeRouteProfile {
  * a password, there is no route tag). So the host is not a direct server any
  * more, it IS the cascade, and it is named like one: the exit's flag and
  * country when there is one direction, the Auto line when there are several.
- * A squad that switched the cascade off keeps the host under its own name.
+ * A squad that switched the cascade off does not get the host at all (A-116,
+ * entriesSwitchedOff): the node puts every user of the inbound into the chain,
+ * so a host under its own name would promise a direct server the node is not.
+ * The off check below therefore no longer meets a host the subscription keeps;
+ * it stays as the same rule seen from the label's side.
  *
  * `protocol` since t07-wire: an AmneziaWG entry's awg host is the cascade in
  * the same way, its users are keys and pick no way out either.
@@ -972,6 +1022,8 @@ export async function getHysteriaEntryLabels(
   const cascades = await prisma.cascade.findMany({
     where: {
       enabled: true,
+      // A-223: a dead cascade does not chain its entry; its host is a plain one.
+      id: { notIn: [...(await deadCascadeIds())] },
       positions: {
         some: { position: 0, entryProtocol: protocol, nodes: { some: { nodeId: { in: nodeIds } } } },
       },
@@ -1058,6 +1110,9 @@ export async function getRouteProfilesByEntryNode(
   const cascades = await prisma.cascade.findMany({
     where: {
       enabled: true,
+      // A-223: a dead cascade runs on none of its nodes; its lines would lead
+      // a client to a way out the entry does not draw.
+      id: { notIn: [...(await deadCascadeIds())] },
       OR: [
         { hops: { some: { nodeId: { in: nodeIds }, position: 0 } } },
         { positions: { some: { position: 0, nodes: { some: { nodeId: { in: nodeIds } } } } } },
@@ -1088,12 +1143,14 @@ export async function getRouteProfilesByEntryNode(
   });
   if (cascades.length === 0) return out;
 
-  // A4 increment 2: per-squad exit allow-list. Union the user's allow rows per
-  // cascade. OPT-IN restriction: a cascade absent from this map is unrestricted
-  // (no rows => all exits); present => keep only the allowed exit nodes.
-  const allowByCascade = new Map<string, Set<string>>();
-  // Per-SQUAD views of the same two facts, so a policy can be attributed to the
-  // squad that granted it (see policiesForDirection).
+  // A4 increment 2: per-squad exit allow-list, per cascade. OPT-IN restriction:
+  // a squad with no rows for a cascade is unrestricted there (all exits); with
+  // rows, only those. What a user gets at one entry is decided by exitAllowAt
+  // (A-128): only the squads that hand that entry out speak, and they grant.
+  //
+  // A-149: the set holds DIRECTION ids for a cascade with directions and exit
+  // NODE ids for the legacy hop shape (aclKey). A row with neither key still
+  // puts the squad in the map: restricted to nothing, never to everything.
   const allowByGroupCascade = new Map<string, Set<string>>(); // `${groupId}|${cascadeId}`
   const policiesByGroup = new Map<string, { ordinal: number; name: string }[]>();
   // cascadeId -> squads that switched it OFF (an exitAcl entry with no exits).
@@ -1102,7 +1159,7 @@ export async function getRouteProfilesByEntryNode(
     const [allExitRows, grants, offRows] = await Promise.all([
       prisma.groupCascadeExit.findMany({
         where: { groupId: { in: groupIds }, cascadeId: { in: cascades.map((c) => c.id) } },
-        select: { groupId: true, cascadeId: true, exitNodeId: true },
+        select: { groupId: true, cascadeId: true, directionId: true, exitNodeId: true },
       }),
       prisma.groupRoutePolicy.findMany({
         where: { groupId: { in: groupIds } },
@@ -1124,7 +1181,8 @@ export async function getRouteProfilesByEntryNode(
     for (const r of exitRows) {
       const k = `${r.groupId}|${r.cascadeId}`;
       const s = allowByGroupCascade.get(k) ?? new Set<string>();
-      s.add(r.exitNodeId);
+      const key = aclKey(r);
+      if (key) s.add(key);
       allowByGroupCascade.set(k, s);
     }
     for (const g of grants) {
@@ -1132,15 +1190,16 @@ export async function getRouteProfilesByEntryNode(
       if (!list.some((p) => p.ordinal === g.policy.ordinal)) list.push(g.policy);
       policiesByGroup.set(g.groupId, list);
     }
-    for (const r of exitRows) {
-      let set = allowByCascade.get(r.cascadeId);
-      if (!set) {
-        set = new Set();
-        allowByCascade.set(r.cascadeId, set);
-      }
-      set.add(r.exitNodeId);
-    }
   }
+  /** groupId -> that squad's allow-set for this cascade, squads with rows only. */
+  const allowByGroupOf = (cascadeId: string): Map<string, Set<string>> => {
+    const m = new Map<string, Set<string>>();
+    for (const groupId of groupIds) {
+      const allows = allowByGroupCascade.get(`${groupId}|${cascadeId}`);
+      if (allows) m.set(groupId, allows);
+    }
+    return m;
+  };
 
   for (const c of cascades) {
     // v4 path: profiles come from DIRECTIONS, and the tag is the direction's
@@ -1173,7 +1232,6 @@ export async function getRouteProfilesByEntryNode(
       // (getHysteriaEntryLabels).
       // An amneziawg entry the same, t07-wire: its awg host stands for it.
       if (entryReachesCascadeOnlyThroughChain(entryPos?.entryProtocol)) continue;
-      const allowed = allowByCascade.get(c.id);
       /**
        * Policies that apply to THIS direction: only the ones granted by squads
        * that also let the user reach it.
@@ -1189,25 +1247,22 @@ export async function getRouteProfilesByEntryNode(
        * existing opt-in convention), so its policies apply to all of that
        * cascade's directions.
        */
-      const exitAllowByGroup = new Map<string, Set<string>>();
-      for (const groupId of groupIds) {
-        const allows = allowByGroupCascade.get(`${groupId}|${c.id}`);
-        if (allows) exitAllowByGroup.set(groupId, allows);
-      }
-      // Per entry, because the granted policies depend on which squads hand out
-      // THAT entry: two entries of one pool can legitimately differ.
+      const exitAllowByGroup = allowByGroupOf(c.id);
+      // Per entry, because the granted policies and exits depend on which
+      // squads hand out THAT entry: two entries of one pool can differ.
       const offGroups = offByCascade.get(c.id);
       for (const entryNodeId of entryNodeIds) {
         // Switched off by every squad that hands this entry out: no line of the
         // cascade here, and the entry stays whatever else it is to the user.
         if (cascadeIsOffAt({ groupIds, entryNodeId, entryReach, offGroups })) continue;
-        const policiesForDirection = (directionNodeIds: string[]): RoutePolicyRef[] =>
+        const allowed = exitAllowAt({ groupIds, entryNodeId, entryReach, offGroups, allowByGroup: exitAllowByGroup });
+        const policiesForDirection = (directionIds: string[]): RoutePolicyRef[] =>
           policiesForEntry({
             groupIds,
             entryNodeId,
             policiesByGroup,
             entryReach,
-            directionNodeIds,
+            directionIds,
             exitAllowByGroup,
             offGroups,
           });
@@ -1235,7 +1290,7 @@ export async function getRouteProfilesByEntryNode(
           // Policy variants of Auto are gated by the direction they can reach,
           // so a policy granted only for one direction does not become an Auto
           // row that can egress through another.
-          for (const p of policiesForDirection(usable.flatMap((d) => d.nodes.map((n) => n.node.id)))) {
+          for (const p of policiesForDirection(usable.map((d) => d.id))) {
             profiles.push({
               label: `${autoLabel} · ${p.name}`,
               tag: autoRouteTag(p.ordinal),
@@ -1247,18 +1302,14 @@ export async function getRouteProfilesByEntryNode(
           // A direction with neither a node nor an outbound serves nobody;
           // offering it would hand out a config that cannot connect.
           if (!directionServes(d)) continue;
-          // Squad ACL is keyed on exit NODES, so a direction survives if any of
-          // its pool is allowed.
-          //
-          // ⚠ Phase 10: a direction on a named outbound has no node for an
-          // allow-list to name, so a squad that restricts this cascade's exits
-          // does not get it. Restriction is the smaller access, and granting a
-          // way out the list cannot express would walk past it, as Auto would.
-          // Opening it to such squads needs the ACL keyed by direction.
-          if (allowed && !d.nodes.some((n) => allowed.has(n.node.id))) continue;
+          // Squad ACL is keyed on the DIRECTION (A-149): replacing or adding a
+          // node under it changes neither who may use it nor anything else.
+          // A direction on a named outbound is named the same way, so a
+          // restricted squad can be given it now.
+          if (allowed && !allowed.has(d.id)) continue;
           const label = directionProfileLabel(c.name, d);
           profiles.push({ label, tag: routeTag(0, d.tag - 1), cascadeId: c.id });
-          for (const p of policiesForDirection(d.nodes.map((n) => n.node.id))) {
+          for (const p of policiesForDirection([d.id])) {
             profiles.push({
               label: `${label} · ${p.name}`,
               tag: routeTag(p.ordinal, d.tag - 1),
@@ -1305,7 +1356,14 @@ export async function getRouteProfilesByEntryNode(
       index: i,
       nodeId: h.node.id,
     }));
-    const exits = applyExitAcl(fullExits, allowByCascade.get(c.id));
+    const allowed = exitAllowAt({
+      groupIds,
+      entryNodeId: entry.nodeId,
+      entryReach,
+      offGroups,
+      allowByGroup: allowByGroupOf(c.id),
+    });
+    const exits = applyExitAcl(fullExits, allowed);
     if (exits.length === 0) continue;
     // Cartesian: each exit x (plain + granted policies). Plain first per exit so
     // the client list reads CH, CH-no-ads, TR, TR-no-ads.
@@ -1315,7 +1373,7 @@ export async function getRouteProfilesByEntryNode(
     // does not recognise already means "let the balancer choose". Same two gates
     // as the v4 path: the operator asked for it, and the user is unrestricted,
     // since Auto can reach any exit.
-    if (c.autoProfile && isBalancer && !allowByCascade.get(c.id) && fullExits.length > 1) {
+    if (c.autoProfile && isBalancer && !allowed && fullExits.length > 1) {
       const autoLabel = cascadeAutoProfileLabel(c.name);
       profiles.push({ label: autoLabel, tag: autoRouteTag(0), cascadeId: c.id });
       for (const p of grantedPolicies) {
@@ -1372,23 +1430,24 @@ export function policiesForEntry(args: {
   entryNodeId: string;
   policiesByGroup: Map<string, RoutePolicyRef[]>;
   entryReach?: Map<string, Set<string>>;
-  /** Exit nodes of the direction being offered. Omit to skip the exit gate. */
-  directionNodeIds?: string[];
-  /** groupId -> allowed exit nodes for THIS cascade. */
+  /** The direction(s) being offered (A-149: ids, not exit nodes). Omit to
+   *  skip the exit gate. */
+  directionIds?: string[];
+  /** groupId -> allowed directions for THIS cascade. */
   exitAllowByGroup?: Map<string, Set<string>>;
   /** Squads that switched THIS cascade off: they grant nothing on it. */
   offGroups?: Set<string>;
 }): RoutePolicyRef[] {
-  const { groupIds, entryNodeId, policiesByGroup, entryReach, directionNodeIds } = args;
+  const { groupIds, entryNodeId, policiesByGroup, entryReach, directionIds } = args;
   const reach = entryReach?.get(entryNodeId);
   const seen = new Set<number>();
   const out: RoutePolicyRef[] = [];
   for (const groupId of groupIds) {
     if (entryReach && !reach?.has(groupId)) continue;
     if (args.offGroups?.has(groupId)) continue;
-    if (directionNodeIds) {
+    if (directionIds) {
       const allows = args.exitAllowByGroup?.get(groupId);
-      if (allows && !directionNodeIds.some((id) => allows.has(id))) continue;
+      if (allows && !directionIds.some((id) => allows.has(id))) continue;
     }
     for (const p of policiesByGroup.get(groupId) ?? []) {
       if (seen.has(p.ordinal)) continue;
@@ -1425,6 +1484,51 @@ export function cascadeIsOffAt(args: {
   return speaking.length > 0 && speaking.every((g) => offGroups.has(g));
 }
 
+/**
+ * The exits a user may take at one entry of a cascade (A-128): undefined is
+ * every exit, a set is those only.
+ *
+ * Only the squads that SPEAK at the entry count, the gate the policies and the
+ * off switch already use, and a squad that switched the cascade off speaks no
+ * exits. Among the speaking ones squads grant, they do not take away from each
+ * other: one without rows for the cascade is every exit, else the union of
+ * their rows. It used to be the union of the rows of EVERY squad of the user,
+ * so joining a squad limited to NL took Sweden and Auto from a user whose other
+ * squad granted every exit, and a squad that did not even hand this entry out
+ * narrowed it.
+ *
+ * No squad speaking says nothing, and nothing is restricted, as with the off
+ * switch. Pure and exported to be tested without a database.
+ */
+export function exitAllowAt(args: {
+  groupIds: string[];
+  entryNodeId: string;
+  entryReach?: Map<string, Set<string>>;
+  offGroups?: Set<string>;
+  /** groupId -> that squad's allow-set for THIS cascade; absent = no rows. */
+  allowByGroup: Map<string, Set<string>>;
+}): Set<string> | undefined {
+  const { groupIds, entryNodeId, entryReach, offGroups, allowByGroup } = args;
+  const reach = entryReach?.get(entryNodeId);
+  const speaking = groupIds.filter((g) => (!entryReach || reach?.has(g)) && !offGroups?.has(g));
+  if (speaking.length === 0) return undefined;
+  const out = new Set<string>();
+  for (const g of speaking) {
+    const allows = allowByGroup.get(g);
+    if (!allows) return undefined;
+    for (const k of allows) out.add(k);
+  }
+  return out;
+}
+
+/** A-149: what an allow row names. A direction for a cascade with directions,
+ *  the exit node for the legacy hop shape; null for a row that restricts to
+ *  nothing (its direction was deleted, or its node had left before the
+ *  migration). */
+function aclKey(r: { directionId: string | null; exitNodeId: string | null }): string | null {
+  return r.directionId ?? r.exitNodeId;
+}
+
 /** A4 increment 2: apply a squad exit allow-set to a cascade's full exit list.
  *  `allowed` undefined => opt-in default, keep ALL exits. A present set (union of
  *  the user's squads' grants) => keep only those exit nodes. The `index` (link-out
@@ -1442,7 +1546,9 @@ export function applyExitAcl(
 export async function listCascades(): Promise<CascadeDto[]> {
   const rows = await prisma.cascade.findMany({
     include: hopInclude,
-    orderBy: { createdAt: 'desc' },
+    // A-101: the ownership order (oldest first), so the screen that takes the
+    // first cascade a node is in names the one the node actually runs.
+    orderBy: CASCADE_OWNERSHIP_ORDER,
   });
   return rows.map(mapCascade);
 }
@@ -1493,37 +1599,55 @@ export interface CascadeStatusDto {
  * honest answer: the push is queued and the cron re-pushes when it returns.
  */
 export async function getCascadeStatus(id: string): Promise<CascadeStatusDto> {
+  const nodeSelect = {
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      lastInboundSyncAt: true,
+      lastInboundSyncError: true,
+      chainStatus: true,
+    },
+  } as const;
   const c = await prisma.cascade.findUnique({
     where: { id },
     include: {
-      hops: {
-        orderBy: { position: 'asc' },
-        include: {
-          node: {
-            select: {
-              id: true,
-              name: true,
-              status: true,
-              lastInboundSyncAt: true,
-              lastInboundSyncError: true,
-              chainStatus: true,
-            },
-          },
-        },
-      },
+      hops: { orderBy: { position: 'asc' }, include: { node: nodeSelect } },
+      positions: { orderBy: { position: 'asc' }, include: { nodes: { include: { node: nodeSelect } } } },
+      directions: { orderBy: { tag: 'asc' }, include: { nodes: { include: { node: nodeSelect } } } },
     },
   });
   if (!c) throw new CascadeNotFoundError(id);
 
+  /**
+   * The nodes the save pushed to, from the storage that describes the cascade.
+   *
+   * E52, stand 26.09: read from the legacy hop rows alone, and a v4-only shape
+   * has none. A cascade with a direction on a named outbound never folds into
+   * hops (a hop IS a node), so a live cascade whose two directions both gave
+   * their own IP answered `done: false, hops: []` forever. The v4 topology
+   * first, in path order (positions, then the nodes behind the directions); a
+   * direction on an outbound has no node here and waits on none. The hop rows
+   * only for a cascade written before the topology tables.
+   */
+  const v4Nodes = [
+    ...c.positions.flatMap((p) => p.nodes.map((n) => n.node)),
+    ...c.directions.flatMap((d) => d.nodes.map((n) => n.node)),
+  ];
+  const members =
+    c.positions.length > 0
+      ? v4Nodes.filter((n, i) => v4Nodes.findIndex((m) => m.id === n.id) === i)
+      : c.hops.map((h) => h.node);
+
   const savedAt = c.updatedAt;
-  const hops = c.hops.map((h) => ({
-    nodeId: h.node.id,
-    name: h.node.name,
+  const hops = members.map((node) => ({
+    nodeId: node.id,
+    name: node.name,
     // Same predicate the node card uses, from one place: two readings of
     // "applied" that could disagree is exactly the confusion this answers.
-    applied: isConfigApplied(h.node.lastInboundSyncAt, savedAt),
-    online: h.node.status === 'online',
-    broken: hopBrokenReason(h.node, savedAt),
+    applied: isConfigApplied(node.lastInboundSyncAt, savedAt),
+    online: node.status === 'online',
+    broken: hopBrokenReason(node, savedAt),
   }));
   const firstBroken = hops.find((h) => h.broken !== null);
   return {
@@ -1622,14 +1746,61 @@ async function positionsForSave(
   if (!cascadeId) return incoming;
   const stored = await prisma.cascadePosition.findMany({
     where: { cascadeId },
-    select: { position: true, linkParams: true },
+    select: { position: true, linkParams: true, nodes: { select: { nodeId: true } } },
   });
   const byIndex = new Map(stored.map((p) => [p.position, p]));
+  /**
+   * A-140. The knob is filled in BY NUMBER, so a position that moved without
+   * its knob would take the knob of whatever stood at its new number: swap two
+   * transits and the leg hidden in AWG goes out direct, the direct one into the
+   * tunnel, with nothing said. Refused instead: a pool that sat at another
+   * number has to bring its linkParams. A stable position id is the real fix,
+   * planned after Э4.
+   */
+  const poolKey = (ids: string[]) => [...ids].sort().join(',');
+  const storedAt = new Map(stored.map((p) => [poolKey(p.nodes.map((n) => n.nodeId)), p.position]));
+  for (const p of incoming) {
+    if ('linkParams' in p) continue;
+    const was = storedAt.get(poolKey(p.nodeIds));
+    if (was !== undefined && was !== p.position) throw new CascadePositionMovedError(p.position, was);
+  }
   return incoming.map((p) =>
     'linkParams' in p
       ? p
       : { ...p, linkParams: storedLinkParams(byIndex.get(p.position)?.linkParams) },
   );
+}
+
+/**
+ * The stored v4 topology in the shape a save sends, for the gates of a save
+ * that switches the cascade on without sending one (A-126). Null for a
+ * cascade with no v4 rows: the legacy hops are checked from the hop rows.
+ *
+ * A direction goes as its id alone: resolveDirections fills everything absent
+ * from the stored row, so the gates see exactly what is stored. A position
+ * carries its pool and cells, which positionsForSave does not fill in.
+ */
+async function storedTopologyForGates(
+  cascadeId: string,
+): Promise<{ positions: CascadePositionInput[]; directions: CascadeDirectionInput[] } | null> {
+  const [positions, directions] = await Promise.all([
+    prisma.cascadePosition.findMany({
+      where: { cascadeId },
+      orderBy: { position: 'asc' },
+      select: { position: true, entryProtocol: true, linkProtocol: true, nodes: { select: { nodeId: true } } },
+    }),
+    prisma.cascadeDirection.findMany({ where: { cascadeId }, select: { id: true } }),
+  ]);
+  if (positions.length === 0 && directions.length === 0) return null;
+  return {
+    positions: positions.map((p) => ({
+      position: p.position,
+      nodeIds: p.nodes.map((n) => n.nodeId),
+      ...(p.entryProtocol ? { entryProtocol: p.entryProtocol as CascadePositionInput['entryProtocol'] } : {}),
+      ...(p.linkProtocol ? { linkProtocol: p.linkProtocol as CascadePositionInput['linkProtocol'] } : {}),
+    })),
+    directions: directions.map((d) => ({ id: d.id })),
+  };
 }
 
 /**
@@ -1881,6 +2052,8 @@ async function writeTopologyV4(
  * allocation, and the port check against profiles is asked here too: a
  * refusal throws and the transaction takes the whole save back.
  */
+const TUNNEL_INDEX_LOCK = 'cascade-tunnel-index';
+
 async function writeTunnels(
   tx: Prisma.TransactionClient,
   cascadeId: string,
@@ -1906,6 +2079,11 @@ async function writeTunnels(
   const missing = wanted.filter((p) => !have.has(key(p.fromNodeId, p.toNodeId)));
   if (missing.length === 0) return;
 
+  // A-127: the index is unique panel-wide and chosen by reading what is
+  // taken; under read committed two saves would read the same free one and
+  // the second fail on the key. One at a time from here to the commit: the
+  // read after the lock sees what the save before it wrote.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${TUNNEL_INDEX_LOCK}))`;
   const used = new Set((await tx.cascadeTunnel.findMany({ select: { index: true } })).map((t) => t.index));
   const indexes = freeTunnelIndexes(used, missing.length);
   const created = missing.map((p, i) => ({
@@ -2017,9 +2195,8 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // T7: an enabled balancer entry serves vlessRoute-tagged exit configs; gate
   // it on the entry's xray version. Disabled cascades don't expand in subs.
   // A v4-only shape gates on its entry position instead.
-  const entryNodeId = hops[0]?.nodeId ?? positions?.find((p) => p.position === 0)?.nodeIds[0];
-  if (input.enabled && entryNodeId && (isBalancer || !folded)) {
-    await assertBalancerEntrySupportsVlessRoute(entryNodeId);
+  if (input.enabled && (isBalancer || !folded)) {
+    await assertEntryPoolSupportsVlessRoute(hops.length > 0 ? [hops[0]!.nodeId] : entryPoolOf(positions));
   }
   // Pre-generate inter-hop link creds.
   //   chain:    one cred per link, stored on each non-exit (originating) hop.
@@ -2045,6 +2222,9 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
   // process, so its nodes must be able to run one.
   await assertEntryCanChain(positions);
   await assertEntryPolicyExists(input.entryPolicyId);
+  // A-101: one enabled cascade per node. A switched-off one is not drawn and
+  // takes no node.
+  if (input.enabled) await assertNodesInNoOtherCascade(null, allNodeIds);
   // v4 topology, validated separately from the fold: the fold answers "can the
   // old storage hold this", these rules answer "is this a sane cascade at all".
   const topology =
@@ -2094,11 +2274,15 @@ export async function createCascade(input: CreateCascadeInput): Promise<CascadeD
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new CascadeNameTakenError(input.name);
-    }
+    // A-127: "name taken" only for the name. Any other unique key on the way
+    // (a tunnel index, a link) is not something the operator can rename away.
+    if (isCascadeNameClash(err)) throw new CascadeNameTakenError(input.name);
     throw err;
   }
+}
+
+function isCascadeNameClash(err: unknown): boolean {
+  return isUniqueViolationOn(err, 'cascades_name_key', ['name']);
 }
 
 /**
@@ -2178,6 +2362,25 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   // would judge a leg this save is not going to build. See direction-merge.ts.
   const directions = await directionsForSave(id, input.directions);
   const positions = await positionsForSave(id, input.positions);
+  /**
+   * What the topology gates below are asked about. The payload's topology when
+   * it carries one; the STORED one when this save switches the cascade on and
+   * carries none.
+   *
+   * A-126. The toggle on the node screen sends `{ enabled: true }` alone, so
+   * `positions` and `directions` above are undefined and every gate had
+   * nothing to check. A switched-off cascade could hold a node deleted since
+   * (deleting was allowed under a disabled cascade), the toggle switched it on,
+   * and the renderer then refused every push to its entries: the 2026-09-22
+   * incident through a door the guard on deletion did not cover.
+   *
+   * Gates only. What is written stays what the payload said, so a toggle
+   * still rewrites no hop, leg or credential.
+   */
+  const switchingOn = input.enabled === true && !existing.enabled;
+  const stored = switchingOn && !positions && !directions ? await storedTopologyForGates(id) : null;
+  const gateDirections = directions ?? (stored ? await directionsForSave(id, stored.directions) : undefined);
+  const gatePositions = positions ?? (stored ? await positionsForSave(id, stored.positions) : undefined);
 
   // Same fold as create. A v4 payload also decides the mode, since the shape
   // now says it: one direction is a chain, several are a balancer.
@@ -2200,17 +2403,26 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
    *
    * Both shapes are asked about, because both can be sent.
    */
-  await assertNodesExistNamed(nodeRefsOfTopology(positions, directions));
+  await assertNodesExistNamed(nodeRefsOfTopology(gatePositions, gateDirections));
   if (hops) await assertNodesExist(hops.map((h) => h.nodeId));
-  await assertDirectionOutbounds(positions, directions);
+  await assertDirectionOutbounds(gatePositions, gateDirections);
   // T7: gate an effectively-enabled balancer on the entry node's xray version
   // (covers both enabling an existing cascade and swapping in a new entry hop).
+  //
+  // A-145: the entry is read the way create reads it, from the positions
+  // (sent, or stored when the toggle switches the cascade on), and every node
+  // of the entry pool is asked. The stored hops this used to read are empty
+  // for a shape that does not fold, so a v4 cascade was never gated here.
   const willBeEnabled = input.enabled ?? existing.enabled;
-  if (isBalancer && willBeEnabled) {
-    const entryNodeId = hops
-      ? hops[0]!.nodeId
-      : existing.hops.find((h) => h.position === 0)?.nodeId;
-    if (entryNodeId) await assertBalancerEntrySupportsVlessRoute(entryNodeId);
+  const gateFolded = gatePositions && gateDirections ? tryFoldPositions(gatePositions, gateDirections) : null;
+  const v4Only = gatePositions !== undefined && !gateFolded;
+  if (willBeEnabled && (isBalancer || v4Only)) {
+    const entryPool = hops
+      ? [hops[0]!.nodeId]
+      : gatePositions
+        ? entryPoolOf(gatePositions)
+        : existing.hops.filter((h) => h.position === 0).map((h) => h.nodeId);
+    await assertEntryPoolSupportsVlessRoute(entryPool);
   }
   const creds = hops
     ? await generateLinkCreds(
@@ -2231,16 +2443,31 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
   // a QUIC cell for a direction that has been served over vless since C3 is one
   // dropdown, and the node it lands on may be an xray-only machine nobody has
   // touched since.
-  await assertNodesCarryCells(positions, directions);
+  await assertNodesCarryCells(gatePositions, gateDirections);
   // Phase 8: a leg riding AWG needs AmneziaWG on both of its ends.
-  await assertUnderlayOnNodes(positions, directions);
+  await assertUnderlayOnNodes(gatePositions, gateDirections);
   // Phase 6, in this order. First whether the entry CAN chain, because that is
   // a refusal no confirmation lifts; asking the operator to confirm a switch
   // that is then refused anyway would be a question with no useful answer.
-  await assertEntryCanChain(positions);
+  await assertEntryCanChain(gatePositions);
   await assertEntryChangeConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryNodesDropConfirmed(id, positions, input.confirmEntryChange === true);
   await assertEntryPolicyExists(input.entryPolicyId);
+  // A-101: one enabled cascade per node, asked when this save changes the
+  // members or switches the cascade on. A rename of a cascade stored before
+  // the rule is not refused for a pair it did not make.
+  if (willBeEnabled && (switchingOn || hops || positions || directions)) {
+    const target = [
+      ...new Set([
+        ...(hops ?? []).map((h) => h.nodeId),
+        ...(gatePositions ?? []).flatMap((p) => p.nodeIds),
+        ...(gateDirections ?? []).flatMap((d) => d.nodeIds),
+      ]),
+    ];
+    await assertNodesInNoOtherCascade(id, target.length > 0 ? target : oldNodeIds);
+  }
+  // A-223: read before the write, compared after it (nodesOfDeadMoved).
+  const deadBefore = await deadCascadeIdsNow();
 
   try {
     const c = await prisma.$transaction(async (tx) => {
@@ -2303,13 +2530,13 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
       ...(positions ?? []).flatMap((p) => p.nodeIds),
       ...(directions ?? []).flatMap((d) => d.nodeIds),
     ];
-    emitCascadeChanged(id, [...new Set([...oldNodeIds, ...newNodeIds])], 'update');
+    // A-223: and the nodes of every cascade this save revived or killed.
+    const moved = await nodesOfDeadMoved(deadBefore);
+    emitCascadeChanged(id, [...new Set([...oldNodeIds, ...newNodeIds, ...moved])], 'update');
     invalidateHiddenCascadeNodeCache();
     return mapCascade(c);
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new CascadeNameTakenError(input.name ?? '');
-    }
+    if (isCascadeNameClash(err)) throw new CascadeNameTakenError(input.name ?? '');
     throw err;
   }
 }
@@ -2429,8 +2656,9 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
   if (!role) return null;
 
   const secret = await chainSecretFor(nodeId);
-  const input = chainInputFor(nodeId, topology, role, secret);
-  if (!input) return null;
+  const base = chainInputFor(nodeId, topology, role, secret);
+  if (!base) return null;
+  const input = role === 'exit' ? { ...base, ...(await exitPolicyFor(nodeId)) } : base;
   // t07-wire: an AmneziaWG entry's hand-off is minted from its interface's
   // listen port, so it is read here, where the database is.
   // t07-6b: one per interface, the 1.x one and the 3.1 one.
@@ -2454,6 +2682,7 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
         : { iface: tunnelIface(x.index), conf: renderTunnelConf(x, 'to'), listenPort: x.port },
     );
 
+  const linkIngress = chainLinkIngressOf(nodeId, topology);
   return {
     engine: 'singbox',
     config: config as Record<string, unknown>,
@@ -2461,6 +2690,94 @@ export async function getChainForNode(nodeId: string): Promise<NodeChain | null>
     socksPassword: secret,
     ...userCoreFor(nodeId, topology, role, secret, awgPorts),
     ...(tunnels.length > 0 ? { tunnels } : {}),
+    ...(linkIngress.length > 0 ? { linkIngress } : {}),
+  };
+}
+
+/**
+ * The host other hops dial a node by, and the source its firewall rules name:
+ * the address without the agent's port, bare. `address.split(':')[0]` cut an
+ * IPv6 address at its first colon (`2001:db8::1` became `2001`), so a leg
+ * dialled nowhere and the ufw rule named a source that is no address at all.
+ * Brackets go too: sing-box takes `server` and ufw takes `from` unbracketed.
+ */
+export function linkHostOf(address: string): string {
+  return hostFromAddress(address).replace(/^\[(.*)\]$/, '$1');
+}
+
+/**
+ * A-111: the ports this node's chain receives legs on over the internet, each
+ * with the hops that dial it, for the agent's firewall. One entry per port:
+ * the legs of one receiving step share one listener. A leg inside an AWG
+ * tunnel is left out, it arrives on the tunnel's interface. Each cell gets
+ * the sockets its listener takes (LINK_CELL_TRANSPORTS): shadowsocks both.
+ * A leg whose peer has no address is not here, and chainInputFor renders no
+ * chain for it either.
+ */
+export function chainLinkIngressOf(nodeId: string, t: TopologyInput): ChainLinkIngress[] {
+  const byPort = new Map<number, { transports: Set<Transport>; allowFrom: Set<string> }>();
+  for (const l of t.links) {
+    if (l.toNodeId !== nodeId || l.underlay === 'awg') continue;
+    const from = t.hosts.get(l.fromNodeId);
+    if (!from) continue;
+    const e = byPort.get(l.cred.port) ?? { transports: new Set<Transport>(), allowFrom: new Set<string>() };
+    for (const x of LINK_CELL_TRANSPORTS[l.cred.protocol]) e.transports.add(x);
+    e.allowFrom.add(from);
+    byPort.set(l.cred.port, e);
+  }
+  return [...byPort.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([port, e]) => ({
+      port,
+      transports: TRANSPORTS.filter((x) => e.transports.has(x)),
+      allowFrom: [...e.allowFrom].sort(),
+    }));
+}
+
+/**
+ * E53: the node policy of an exit, for its chain.
+ *
+ * Read from the same resolver that feeds the node's xray (resolvePolicyForNode),
+ * so the two drawings of one policy on one node are one list. A rule into WARP
+ * on a node with no usable account is refused out loud: the save already
+ * refuses WARP on a node with it switched off (POLICY_DOES_NOT_FIT_NODE), and
+ * an account the node holds but that lacks its key would otherwise put a rule
+ * to a tag nothing defines, which the engine refuses for the whole chain.
+ */
+async function exitPolicyFor(
+  nodeId: string,
+): Promise<Pick<ChainRenderInput, 'exitPolicy' | 'ruleSets'>> {
+  const policy = await resolvePolicyForNode(nodeId);
+  if (!policy || policy.rules.length === 0) return {};
+  const { rules, ruleSets, usesWarp } = chainNodePolicyOf(policy.rules);
+  if (rules.length === 0) return {};
+  let warp: ChainWarp | undefined;
+  if (usesWarp) {
+    const node = await prisma.node.findUnique({ where: { id: nodeId }, select: { warpEnabled: true, warpAccount: true } });
+    const acct = (node?.warpEnabled ? node.warpAccount : null) as {
+      secretKey?: string;
+      address?: string[];
+      publicKey?: string;
+      endpoint?: string;
+      reserved?: number[];
+    } | null;
+    if (!acct?.secretKey || !acct.address?.length) {
+      throw new CascadeTopologyBrokenError(
+        nodeId,
+        'the node policy routes into WARP and this exit has no usable WARP account (enable WARP on the node)',
+      );
+    }
+    warp = {
+      privateKey: acct.secretKey,
+      address: acct.address,
+      ...(acct.publicKey ? { publicKey: acct.publicKey } : {}),
+      ...(acct.endpoint ? { endpoint: acct.endpoint } : {}),
+      ...(acct.reserved ? { reserved: acct.reserved } : {}),
+    };
+  }
+  return {
+    exitPolicy: { rules, ...(warp ? { warp } : {}) },
+    ...(ruleSets.length > 0 ? { ruleSets: ruleSets.map((r) => ({ tag: r.tag, path: r.path })) } : {}),
   };
 }
 
@@ -2642,6 +2959,8 @@ function chainInputFor(
     : undefined;
 
   const foreign = foreignOf(nodeId, t);
+  // This node's address as the next hops' firewalls name it (A-111).
+  const selfHost = t.hosts.get(nodeId);
   if (role === 'entry') {
     // The tags the user core may ask for, Auto first when the cascade offers
     // it. Auto has no leg of its own: the chain renders it as a group over the
@@ -2678,6 +2997,7 @@ function chainInputFor(
     return {
       role,
       socksPassword,
+      ...(selfHost ? { selfHost } : {}),
       directionTags,
       out,
       ...(foreign.length > 0 ? { foreign } : {}),
@@ -2690,7 +3010,14 @@ function chainInputFor(
   if (!inLeg) return null;
   return role === 'exit'
     ? { role, socksPassword, in: inLeg }
-    : { role, socksPassword, in: inLeg, out, ...(foreign.length > 0 ? { foreign } : {}) };
+    : {
+        role,
+        socksPassword,
+        ...(selfHost ? { selfHost } : {}),
+        in: inLeg,
+        out,
+        ...(foreign.length > 0 ? { foreign } : {}),
+      };
 }
 
 /**
@@ -2798,9 +3125,11 @@ async function buildCascadeFragmentsForNode(
     if (mine) return toWireFragments(mine);
   }
 
-  // A node belongs to at most one cascade in the v1 model; first enabled match.
+  // A node belongs to at most one enabled cascade (A-101: the save refuses a
+  // second); for a pair stored before the rule, the oldest holds it.
   const member = await prisma.cascadeHop.findFirst({
-    where: { nodeId, cascade: { enabled: true } },
+    where: { nodeId, cascade: { enabled: true, id: { notIn: [...(await deadCascadeIds())] } } },
+    orderBy: [{ cascade: { createdAt: 'asc' } }, { cascadeId: 'asc' }],
     select: { cascadeId: true },
   });
   if (!member) return null;
@@ -2827,7 +3156,7 @@ async function buildCascadeFragmentsForNode(
     position: h.position,
     // Public host the previous hop dials. node.address is host[:agentPort];
     // the link binds its own port (cred.port), so strip any agent port.
-    nodeHost: h.node.address.split(':')[0]!,
+    nodeHost: linkHostOf(h.node.address),
   }));
 
   // A4 ad-split: emit EVERY defined policy's rules on the entry (policies are
@@ -2902,24 +3231,29 @@ async function buildCascadeFragmentsForNode(
  * consistent and wrong together, which is the hardest kind of wrong to see.
  */
 async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null> {
-  const link =
-    (await prisma.cascadeLink.findFirst({
-      where: {
-        cascade: { enabled: true },
-        OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }],
-      },
-      select: { cascadeId: true },
-    })) ??
-    // Phase 10: an entry whose only ways out are named outbounds has no link
-    // at all, and is in the cascade all the same. Found by its position, in
-    // a cascade that has an outbound direction to draw.
-    (await prisma.cascadePosition.findFirst({
-      where: {
-        nodes: { some: { nodeId } },
-        cascade: { enabled: true, directions: { some: { outboundId: { not: null } } } },
-      },
-      select: { cascadeId: true },
-    }));
+  // The enabled cascade whose legs touch this node or, phase 10, whose position
+  // holds it with a named outbound to dial (an entry with only such ways out
+  // has no link and is in the cascade all the same). A-101: one query, in the
+  // ownership order, so a node stored in two enabled cascades always gets the
+  // oldest, here and in every other read of a node's cascade.
+  const owner = await prisma.cascade.findFirst({
+    where: {
+      enabled: true,
+      // A-223: a dead cascade is drawn nowhere, its own nodes included: its
+      // chain would lead into a node that takes only the owner's legs.
+      id: { notIn: [...(await deadCascadeIds())] },
+      OR: [
+        { links: { some: { OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }] } } },
+        {
+          positions: { some: { nodes: { some: { nodeId } } } },
+          directions: { some: { outboundId: { not: null } } },
+        },
+      ],
+    },
+    orderBy: CASCADE_OWNERSHIP_ORDER,
+    select: { id: true },
+  });
+  const link = owner ? { cascadeId: owner.id } : null;
   if (!link) return null;
 
   const [cascadeRow, positions, directions, links, policyRows, tunnelRows] = await Promise.all([
@@ -3000,7 +3334,7 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
     where: { id: { in: [...nodeIds] }, deletedAt: null },
     select: { id: true, address: true },
   });
-  const hosts = new Map(nodeRows.map((n) => [n.id, n.address.split(':')[0]!]));
+  const hosts = new Map(nodeRows.map((n) => [n.id, linkHostOf(n.address)]));
 
   const rows: TopologyLinkRow[] = [];
   for (const l of links) {
@@ -3044,7 +3378,84 @@ async function readTopologyForNode(nodeId: string): Promise<TopologyInput | null
     ...(cascadeRow?.entryPolicy ? { entryPolicyOrdinal: cascadeRow.entryPolicy.ordinal } : {}),
     entryProtocol: positions.find((p) => p.position === 0)?.entryProtocol ?? undefined,
     tunnels,
+    // A-134: who may take which tag at THIS entry, by the subscription's own
+    // rule. Only for an entry the users dial with xray: a hysteria or AWG entry
+    // hands its users over without a tag (and refuses narrowed squads, see
+    // assertNarrowingFitsEntries).
+    ...(await entryGateFor(nodeId, link.cascadeId, positions)),
   };
+}
+
+/**
+ * A-277: the gate of this node's xray entry in this cascade, for a rule of
+ * the node's policy that sends traffic into the cascade: it must let through
+ * exactly the users the door of that direction lets through. The same
+ * computation as the doors' (entryGateFor), one answer for both.
+ *   - `none`: the node is not an entry of the cascade; nothing to gate.
+ *   - `ungated`: an entry whose users arrive through the chain (hysteria,
+ *     AmneziaWG, A-116): xray cannot tell them apart, a rule acts on all.
+ *   - `gate`: user id -> the tags they may take.
+ */
+export type CascadeEntryGate =
+  | { kind: 'none' }
+  | { kind: 'ungated' }
+  | { kind: 'gate'; allowedTagsOf: Map<string, Set<number>> };
+
+export async function cascadeEntryGate(nodeId: string, cascadeId: string): Promise<CascadeEntryGate> {
+  const positions = await prisma.cascadePosition.findMany({
+    where: { cascadeId },
+    select: { position: true, entryProtocol: true, nodes: { select: { nodeId: true } } },
+  });
+  const entry = positions.find((p) => p.position === 0);
+  if (!entry || !entry.nodes.some((n) => n.nodeId === nodeId)) return { kind: 'none' };
+  if (entryReachesCascadeOnlyThroughChain(entry.entryProtocol)) return { kind: 'ungated' };
+  const { entryUserGate } = await entryGateFor(nodeId, cascadeId, positions);
+  return entryUserGate ? { kind: 'gate', allowedTagsOf: entryUserGate } : { kind: 'none' };
+}
+
+/**
+ * A-134: the tags each user may take at an xray entry: the same answer the
+ * subscription gives them (getRouteProfilesByEntryNode), turned around into
+ * "user -> allowed tags". Users with the same squads get the same answer, so
+ * it is asked once per squad set, not once per user.
+ *
+ * The users are those who reach the entry at all (user-reach, the A-022
+ * rule); the renderer gates every tag that is not allowed to all of them.
+ */
+async function entryGateFor(
+  nodeId: string,
+  cascadeId: string,
+  positions: { position: number; entryProtocol: string | null; nodes: { nodeId: string }[] }[],
+): Promise<{ entryUserGate?: Map<string, Set<number>> }> {
+  const entry = positions.find((p) => p.position === 0);
+  if (!entry || !entry.nodes.some((n) => n.nodeId === nodeId)) return {};
+  if (entryReachesCascadeOnlyThroughChain(entry.entryProtocol)) return {};
+
+  const memberships = await prisma.groupMember.findMany({
+    where: { user: { deletedAt: null, status: 'active' } },
+    select: { userId: true, groupId: true },
+  });
+  const groupsOf = new Map<string, string[]>();
+  for (const m of memberships) (groupsOf.get(m.userId) ?? groupsOf.set(m.userId, []).get(m.userId)!).push(m.groupId);
+  const reachedBy = await bindingsReachedBySquads([...new Set(memberships.map((m) => m.groupId))], { nodeId });
+  const reaches = (g: string) => (reachedBy.get(g)?.length ?? 0) > 0;
+
+  const bySet = new Map<string, string[]>();
+  for (const [userId, groups] of groupsOf) {
+    if (!groups.some(reaches)) continue;
+    const key = [...groups].sort().join(',');
+    (bySet.get(key) ?? bySet.set(key, []).get(key)!).push(userId);
+  }
+
+  const gate = new Map<string, Set<number>>();
+  for (const [key, users] of bySet) {
+    const groups = key.split(',');
+    const reach = new Map([[nodeId, new Set(groups.filter(reaches))]]);
+    const profiles = (await getRouteProfilesByEntryNode([nodeId], groups, reach)).get(nodeId) ?? [];
+    const tags = new Set(profiles.filter((p) => p.cascadeId === cascadeId).map((p) => p.tag));
+    for (const u of users) gate.set(u, tags);
+  }
+  return { entryUserGate: gate };
 }
 
 /**
@@ -3114,6 +3525,98 @@ export async function rotateCascadeTunnels(
   return getCascade(id);
 }
 
+/**
+ * A-157: a vless leg stored without REALITY gets it on the next push of any
+ * node of its cascade, without an operator.
+ *
+ * Such legs date from before phase 5b, when the block was minted and not
+ * stored; only a save of the topology wrote it after, so a cascade nobody
+ * saved since ran open VLESS between its nodes (the leg's UUID and the users'
+ * destinations in clear) under a green card.
+ *
+ * Written to the storage that draws it: `cascade_links` when the cascade has
+ * the v4 rows, else the legacy `cascade_hops` creds (on a chain the cred of
+ * hop i is received by hop i+1, on a balancer by the exit hop that holds it).
+ * Under a per-cascade advisory lock and re-read inside it, so two pushes at
+ * once cannot mint two pairs for one listener. Both ends must change together:
+ * the other nodes of the cascade are pushed, this one is being pushed now.
+ */
+export async function giveCascadeLegsReality(nodeId: string): Promise<void> {
+  const cascades = await prisma.cascade.findMany({
+    where: {
+      enabled: true,
+      OR: [{ links: { some: { OR: [{ fromNodeId: nodeId }, { toNodeId: nodeId }] } } }, { hops: { some: { nodeId } } }],
+    },
+    select: { id: true, name: true },
+  });
+  for (const c of cascades) {
+    const healed = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cascade-leg-reality:${c.id}`}))`;
+      const links = await tx.cascadeLink.findMany({
+        where: { cascadeId: c.id },
+        select: { id: true, toNodeId: true, config: true },
+      });
+      if (links.length > 0) {
+        const legs = links.flatMap((l) => {
+          const cred = parseLinkCred(l.config);
+          return cred ? [{ id: l.id, to: l.toNodeId, cred }] : [];
+        });
+        const next = giveRealityToPlainVless(legs);
+        if (!next) return 0;
+        let n = 0;
+        for (let i = 0; i < legs.length; i++) {
+          if (next[i] === legs[i]!.cred) continue;
+          await tx.cascadeLink.update({
+            where: { id: legs[i]!.id },
+            data: { config: serializeLinkCred(next[i]!) as unknown as Prisma.InputJsonValue },
+          });
+          n++;
+        }
+        return n;
+      }
+      const cascade = await tx.cascade.findUniqueOrThrow({
+        where: { id: c.id },
+        select: { mode: true, hops: { orderBy: { position: 'asc' }, select: { id: true, nodeId: true, linkConfig: true } } },
+      });
+      const hops = cascade.hops;
+      const legs = hops.flatMap((h, i) => {
+        const cred = parseLinkCred(h.linkConfig);
+        if (!cred) return [];
+        const to = cascade.mode === 'balancer' ? (i > 0 ? h.nodeId : null) : hops[i + 1]?.nodeId;
+        return to ? [{ id: h.id, to, cred }] : [];
+      });
+      const next = giveRealityToPlainVless(legs);
+      if (!next) return 0;
+      let n = 0;
+      for (let i = 0; i < legs.length; i++) {
+        if (next[i] === legs[i]!.cred) continue;
+        await tx.cascadeHop.update({
+          where: { id: legs[i]!.id },
+          data: { linkConfig: serializeLinkCred(next[i]!) as unknown as Prisma.InputJsonValue },
+        });
+        n++;
+      }
+      return n;
+    });
+    if (healed === 0) continue;
+    getLogger().info(
+      { cascadeId: c.id },
+      `[cascade] "${c.name}": ${healed} vless leg(s) stored without REALITY have been given it; ` +
+        `the legs reconnect once, as both ends are pushed`,
+    );
+    const members = await prisma.cascade.findUnique({
+      where: { id: c.id },
+      select: {
+        hops: { select: { nodeId: true } },
+        positions: { select: { nodes: { select: { nodeId: true } } } },
+        directions: { select: { nodes: { select: { nodeId: true } } } },
+      },
+    });
+    const others = (members ? cascadeMemberNodeIds(members) : []).filter((id) => id !== nodeId);
+    if (others.length > 0) emitCascadeChanged(c.id, others, 'leg-reality');
+  }
+}
+
 export async function deleteCascade(id: string): Promise<void> {
   // Grab the member nodes before deleting so we can re-push them afterwards to
   // strip the cascade fragments from their live xray config. Both shapes: a
@@ -3127,6 +3630,18 @@ export async function deleteCascade(id: string): Promise<void> {
       directions: { select: { nodes: { select: { nodeId: true } } } },
     },
   });
+  // A-155: the same question writeTopologyV4 asks before it drops a direction.
+  // Deleting the cascade drops all of them, and a node-policy rule routing
+  // through one is RESTRICT: left to the key, that was a 500 about a foreign
+  // key, with nothing naming the policy that holds the cascade.
+  const blocking = await prisma.nodePolicyRule.findMany({
+    where: { direction: { cascadeId: id } },
+    select: { policy: { select: { name: true } } },
+  });
+  if (blocking.length > 0) {
+    throw new DirectionInUseByPolicyError([...new Set(blocking.map((r) => r.policy.name))].sort());
+  }
+  const deadBefore = await deadCascadeIdsNow();
   try {
     await prisma.cascade.delete({ where: { id } });
   } catch (err) {
@@ -3136,6 +3651,21 @@ export async function deleteCascade(id: string): Promise<void> {
     throw err;
   }
   const members = existing ? cascadeMemberNodeIds(existing) : [];
-  emitCascadeChanged(id, members, 'delete');
+  // A-223: deleting the owner revives the cascade it held dead.
+  const moved = await nodesOfDeadMoved(deadBefore);
+  emitCascadeChanged(id, [...new Set([...members, ...moved])], 'delete');
   invalidateHiddenCascadeNodeCache();
+}
+
+/**
+ * A-223: the nodes of the cascades whose "dead" changed across one save, the
+ * symmetric difference of deadCascadeIds before and after it. A cascade can
+ * come back to life, or die, without anyone saving it: the owner of its shared
+ * node is switched off, deleted, or loses that node. Its own nodes have to be
+ * pushed then, or they wait without a chain until the revision reconcile.
+ */
+async function nodesOfDeadMoved(before: Set<string>): Promise<string[]> {
+  const after = await deadCascadeIdsNow();
+  const moved = [...before].filter((x) => !after.has(x)).concat([...after].filter((x) => !before.has(x)));
+  return nodesOfCascades(moved);
 }

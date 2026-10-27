@@ -1,0 +1,23 @@
+-- One profile on one node on several ports (owner's decision 25.10): a node
+-- may hold several bindings of one profile, each its own inbound on its own
+-- port, with its own hosts. The socket stays unique by
+-- profile_node_bindings_node_id_port_transport_key; this drops only the pair.
+--
+-- No data is touched: until now a second binding of a pair could not exist.
+--
+-- WRITTEN BY HAND: `migrate dev --create-only` exits on "Drift detected"
+-- before drafting. `migrate status` clean before and after.
+--
+-- ⚠ The rollback works ONLY until the first second port is saved: with two
+-- bindings of one pair on a node the constraint cannot be created again, and
+-- the way back is then deleting the extra bindings first.
+--
+-- Rollback:
+--   ALTER TABLE "profile_node_bindings"
+--     ADD CONSTRAINT "profile_node_bindings_profile_id_node_id_key" UNIQUE ("profile_id", "node_id");
+--   DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261025164819_binding_many_ports';
+--
+-- The test that holds this file: src/modules/profiles/profiles.many-ports-migration.test.ts
+-- (forward, back, forward).
+
+ALTER TABLE "profile_node_bindings" DROP CONSTRAINT "profile_node_bindings_profile_id_node_id_key";

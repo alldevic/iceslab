@@ -1,4 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { syncPoll } from '@/contours/nodes/lib/syncPoll';
+import { apiErrorMessage } from '@/lib/net/client';
+import { onBootstrapIssued, type BootstrapInfo } from '@/contours/nodes/lib/bootstrapIssued';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useForm } from '@mantine/form';
@@ -9,15 +12,19 @@ import {
   findNode,
   getNodeExposure,
   getNodeSyncStatus,
-  listNodes,
+  listAllNodes,
   listRegions,
   refreshNodeBootstrap,
   registerNodeWarp,
+  rotateNodeCert,
   updateNode,
 } from '@/lib/domain/nodes';
+import { certRotateRefusal } from '@/contours/nodes/lib/nodeCert';
+import { maxUsersPatch, multiplierFieldError, multiplierPatch, parseMaxUsers } from '@/contours/nodes/lib/nodeLimits';
 import type { Node } from '@/lib/domain/nodes';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
 import { listCascades, type Cascade } from '@/lib/domain/cascades';
+import { cascadeExitWords, cascadeMemberships, type CascadeRole } from '@/lib/domain/cascadeMembership';
 import { listHosts } from '@/lib/domain/hosts';
 import { listRoutePolicies, type RoutePolicy } from '@/lib/domain/routePolicies';
 // Aliased: the state below holds the refusal and wants the plain name. An
@@ -27,13 +34,16 @@ import { listNodePolicies, policyFitRefusal as readPolicyRefusal } from '@/lib/d
 import { listSquads } from '@/lib/domain/squads';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { defaults, nodeEnginesPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { defaults, egressOf, nodeEnginesPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nodeEnginesRefusal, type NodeEnginesRefusal } from '@/contours/nodes/lib/nodeCreateForm';
 import { AMBER, DIM, MOSS } from '@/contours/nodes/lib/colors';
 import { DEFAULT_NODE_PORT } from '@/contours/nodes/lib/nodeProtocols';
 import { coreVersionRefusal, coreVersionsPatch } from '@/lib/domain/coreVersions';
 export function useNodeEditForm() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // The multiplier is shown with the language's decimal mark (A-143).
+  const comma = i18n.language.startsWith('ru');
 
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -51,7 +61,7 @@ export function useNodeEditForm() {
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
   // The fleet, for naming a cascade's directions after the country of the node
   // under each one. Shares the cache key every other page already uses.
-  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const fleetQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const bindingsQuery = useQuery({
     queryKey: ['bindings', id],
     queryFn: () => listBindings({ nodeId: id }),
@@ -74,15 +84,30 @@ export function useNodeEditForm() {
     enabled: !!id,
     // A push is asynchronous and lands seconds later; without this the card
     // says "not applied yet" until the operator reloads the page themselves.
-    refetchInterval: 15_000,
+    // How often, and when to stop, is syncPoll's: 5 s while a push is pending,
+    // none after it times out.
+    refetchInterval: (q) => syncPoll(q.state.data, Date.now()).intervalMs,
   });
+  // The drawing the agent reports is read once; when the config lands, it is
+  // read again, or the policy lines keep the answer from before the save.
+  const applied = syncQuery.data?.applied;
+  useEffect(() => {
+    if (applied) void qc.invalidateQueries({ queryKey: ['policy-drawing', id] });
+  }, [applied, qc, id]);
   const [policyRefusal, setPolicyRefusal] = useState<string | null>(null);
   const overviewQuery = useOverview();
 
   const form = useForm<FormValues>({
-    initialValues: defaults(node),
+    initialValues: defaults(node, comma),
     validateInputOnBlur: true,
     validate: {
+      // A-143: refused at the field, never rounded.
+      // Empty on an edit is refused, not 1: it would make a free node paid.
+      consumptionMultiplier: (v) => {
+        const e = multiplierFieldError(v, true);
+        return e === 'required' ? t('nodeEdit.multiplierRequired') : e === 'bad' ? t('nodeEdit.multiplierBad') : null;
+      },
+      maxUsers: (v) => (parseMaxUsers(v).ok ? null : t('nodeEdit.maxUsersDesc')),
       name: (v) => {
         const trimmed = v.trim();
         if (trimmed.length === 0) return t('validation.nameRequired');
@@ -107,8 +132,8 @@ export function useNodeEditForm() {
   // Seed the form once the node lands, without clobbering edits in flight.
   const [seeded, setSeeded] = useState(false);
   if (node && !seeded) {
-    form.setValues(defaults(node));
-    form.resetDirty(defaults(node));
+    form.setValues(defaults(node, comma));
+    form.resetDirty(defaults(node, comma));
     setSeeded(true);
   }
 
@@ -180,9 +205,9 @@ export function useNodeEditForm() {
         address: `${form.values.host.trim()}:${port}`,
         countryCode: form.values.countryCode || null,
         regionId: form.values.regionId || null,
-        consumptionMultiplier:
-          form.values.consumptionMultiplier === '' ? 1 : Number(form.values.consumptionMultiplier),
-        maxUsers: form.values.maxUsers === '' ? null : Number(form.values.maxUsers),
+        // Validated before the save is offered; a value that does not parse here is not sent.
+        ...multiplierPatch(form.values.consumptionMultiplier, true),
+        ...maxUsersPatch(form.values.maxUsers),
         policyId: form.values.policyId || null,
         // Поколения AWG нет: это факт модуля, не выбор (227054e).
         // Версии ядер: только изменённые компоненты, и только если сервер поле
@@ -201,8 +226,10 @@ export function useNodeEditForm() {
       qc.invalidateQueries({ queryKey: ['node', id] });
       qc.invalidateQueries({ queryKey: ['node-policies'] });
       qc.invalidateQueries({ queryKey: ['node-sync', id] });
+      // A-232: the drawing lines read the saved policy.
+      qc.invalidateQueries({ queryKey: ['policy-drawing', id] });
       form.resetDirty(form.values);
-      notifications.show({ color: 'green', message: t('nodes.notify.updated') });
+      notifications.show({ color: 'green', message: t('nodeEdit.saved') });
     },
     onError: (err) => {
       // A policy this machine cannot carry out comes back naming the node and
@@ -228,7 +255,7 @@ export function useNodeEditForm() {
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       });
     },
   });
@@ -239,8 +266,8 @@ export function useNodeEditForm() {
     onError: (err) =>
       notifications.show({
         color: 'red',
-        title: t('nodes.form.warpError'),
-        message: err instanceof Error ? err.message : String(err),
+        title: t('nodeEdit.warpError'),
+        message: apiErrorMessage(err),
       }),
   });
 
@@ -248,29 +275,53 @@ export function useNodeEditForm() {
     mutationFn: () => getNodeExposure(id!),
   });
 
+  // A-124: a refusal the server names is said under the certificate row
+  // (certRotateRefusal); anything else is a toast in the server's words.
+  const certMutation = useMutation({
+    mutationFn: () => rotateNodeCert(id!),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['node', id] });
+      void qc.invalidateQueries({ queryKey: ['nodes'] });
+    },
+    onError: (err) => {
+      if (certRotateRefusal(err)) return;
+      notifications.show({ color: 'red', title: t('common.error'), message: apiErrorMessage(err) });
+    },
+  });
+
+  /** The command of a re-issued token, shown until the operator closes it (A-147). */
+  const [issuedBootstrap, setIssuedBootstrap] = useState<BootstrapInfo | null>(null);
   const bootstrapMutation = useMutation({
     mutationFn: () => refreshNodeBootstrap(id!),
-    onSuccess: (info) => {
-      void navigator.clipboard.writeText(info.command).catch(() => undefined);
-      notifications.show({
-        color: 'green',
-        title: t('nodeEdit.bootstrapIssued'),
-        message: t('nodeEdit.bootstrapCopied'),
-      });
-    },
+    onSuccess: (info) =>
+      onBootstrapIssued(info, setIssuedBootstrap, (n) => notifications.show({ color: 'green', ...n }), t),
     onError: (err) =>
       notifications.show({
         color: 'red',
         title: t('common.error'),
-        message: err instanceof Error ? err.message : String(err),
+        message: apiErrorMessage(err),
       }),
   });
 
   const statusTone = node?.status === 'online' ? MOSS : node?.status === 'offline' ? DIM : AMBER;
   const warpOn = node?.warpEnabled ?? false;
-  const egress: 'direct' | 'warp' | 'cascade' = cascade ? 'cascade' : warpOn ? 'warp' : 'direct';
+  // Whether the node is in a cascade is known only from the cascade list; a
+  // missing list is said, not read as «straight out» (spec frontend-nodes).
+  const cascadeFailure = loadFailure(cascadesQuery, apiErrorMessage);
+  const egress = egressOf(cascade !== null, loadView(cascadesQuery) === 'ready', warpOn);
+  // Lists a side of the page reads; each failure is said where the list feeds.
+  const syncFailure = loadFailure(syncQuery, apiErrorMessage);
+  const regionsFailure = loadFailure(regionsQuery, apiErrorMessage);
+  const nodePoliciesFailure = loadFailure(nodePoliciesQuery, apiErrorMessage);
+  // The reachable policies come from three lists; any one missing makes the
+  // empty answer a guess.
+  const reachFailure = isBalancerEntry
+    ? ([bindingsQuery, squadsQuery, policiesQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null)
+    : null;
 
   return {
+    issuedBootstrap,
+    setIssuedBootstrap,
     tab,
     setTab,
     id,
@@ -305,10 +356,16 @@ export function useNodeEditForm() {
     setEnginesRefusal,
     warpMutation,
     exposureMutation,
+    certMutation,
     bootstrapMutation,
     statusTone,
     warpOn,
     egress,
+    cascadeFailure,
+    syncFailure,
+    regionsFailure,
+    nodePoliciesFailure,
+    reachFailure,
   };
 }
 
@@ -318,27 +375,20 @@ export type NodeEditor = ReturnType<typeof useNodeEditForm>;
 /**
  * Каскад, в котором стоит эта нода, с её ролью и списком направлений.
  *
- * `null`, когда нода не в каскаде. Нода стоит максимум в одном, поэтому первый
- * найденный и есть ответ.
+ * `null`, когда нода не в каскаде. Членство по позициям и направлениям v4,
+ * хопы только у старых каскадов (cascadeMemberships, A-144): по одним хопам
+ * нода v4-каскада выходила одиночной, и экран писал «напрямую».
  */
 function cascadeOfNode(
   cascades: Cascade[],
   fleet: Node[],
   id: string,
-): { cascade: Cascade; role: 'entry' | 'exit' | 'transit'; directions: string[] } | null {
-  for (const c of cascades) {
-    const idx = c.hops.findIndex((h) => h.nodeId === id);
-    if (idx === -1) continue;
-    const role = idx === 0 ? 'entry' : idx === c.hops.length - 1 ? 'exit' : 'transit';
-    // What this node feeds is a set of DIRECTIONS, named by the country a
-    // client picks, not the next machine in a list. The node under a direction
-    // can be swapped without any of this changing.
-    const exits = c.mode === 'balancer' ? c.hops.slice(1) : c.hops.slice(-1);
-    const directions = exits
-      .map((h) => fleet.find((n) => n.id === h.nodeId)?.countryCode)
-      .filter((code): code is string => Boolean(code))
-      .map((code) => code.toUpperCase());
-    return { cascade: c, role, directions: role === 'exit' ? [] : directions };
-  }
-  return null;
+): { cascade: Cascade; role: CascadeRole; directions: string[] } | null {
+  const m = cascadeMemberships(cascades).get(id);
+  if (!m) return null;
+  // What this node feeds is a set of DIRECTIONS, named by the country a
+  // client picks, not the next machine in a list. The node under a direction
+  // can be swapped without any of this changing.
+  const directions = cascadeExitWords(m.cascade, (nodeId) => fleet.find((n) => n.id === nodeId)?.countryCode);
+  return { cascade: m.cascade, role: m.role, directions: m.role === 'exit' ? [] : directions };
 }

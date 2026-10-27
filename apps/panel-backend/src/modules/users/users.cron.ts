@@ -72,14 +72,24 @@ export async function resetTrafficRolling(): Promise<number> {
  * Emits user.status-changed → handler chain enqueues removeUser job.
  */
 export async function findExpiredUsers(): Promise<number> {
-  const users = await prisma.user.findMany({
-    where: { expireAt: { lt: new Date() }, status: 'active', deletedAt: null },
-    select: { id: true },
-  });
+  // A-132: the condition and the write are ONE statement, and the ids that go
+  // to the queue and the events are the rows it changed. As a select then an
+  // update by id list, an operator extending or disabling a user between the
+  // two had the write land anyway: an extended user went out as expired and
+  // stayed cut off (the cron no longer picks a non-active row), a disabled one
+  // became expired and lost why it was off. `updated_at` by hand: a raw write
+  // gets no @updatedAt, and the orphan reconcile below windows by it.
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    UPDATE users SET status = 'expired', updated_at = now()
+    WHERE status = 'active'
+      AND deleted_at IS NULL
+      AND expire_at < now()
+    RETURNING id::text AS id
+  `;
 
-  if (users.length === 0) return 0;
+  if (rows.length === 0) return 0;
 
-  const ids = users.map((u) => u.id);
+  const ids = rows.map((u) => u.id);
 
   // #4 - flip the DB status BEFORE enqueuing. syncRemoveUser now status-gates
   // (it skips removal for a still-active row), so a removeUser job that runs
@@ -93,11 +103,8 @@ export async function findExpiredUsers(): Promise<number> {
   // is no repeated-enqueue load to dedup. removeUser is idempotent node-side,
   // so an occasional duplicate (reconcile also enqueues) is harmless.
   // B11: one addBulk instead of N awaited add()s, a 1000-user expiry batch
-  // was 1000 sequential Redis round-trips; addBulk pipelines them.
-  await prisma.user.updateMany({
-    where: { id: { in: ids } },
-    data: { status: 'expired' },
-  });
+  // was 1000 sequential Redis round-trips; addBulk pipelines them. The flip is
+  // the UPDATE above.
   await nodeUsersQueue.addBulk(
     ids.map((id) => ({ name: 'removeUser', data: { userId: id } })),
   );
@@ -116,14 +123,17 @@ export async function findExpiredUsers(): Promise<number> {
  * Cross-column comparison → raw SQL.
  */
 export async function findExceededTrafficUsers(): Promise<number> {
+  // A-132: one statement, as findExpiredUsers: a quota raised or a user
+  // disabled between a select and an update by id list was overwritten.
   const rows = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT u.id::text AS id
-    FROM users u
-    JOIN user_traffic ut ON u.id = ut.user_id
-    WHERE u.status = 'active'
+    UPDATE users u SET status = 'limited', updated_at = now()
+    FROM user_traffic ut
+    WHERE ut.user_id = u.id
+      AND u.status = 'active'
       AND u.deleted_at IS NULL
       AND u.traffic_limit_bytes IS NOT NULL
       AND ut.used_traffic_bytes >= u.traffic_limit_bytes
+    RETURNING u.id::text AS id
   `;
 
   if (rows.length === 0) return 0;
@@ -132,12 +142,9 @@ export async function findExceededTrafficUsers(): Promise<number> {
 
   // #4 - flip THEN enqueue (see findExpiredUsers): syncRemoveUser status-gates,
   // so the row must be 'limited' before the removeUser job runs or it would
-  // skip a still-active user. reconcile is the crash backstop. No dedup jobId
-  // (one-time transition); removeUser is idempotent node-side. B11: addBulk.
-  await prisma.user.updateMany({
-    where: { id: { in: ids } },
-    data: { status: 'limited' },
-  });
+  // skip a still-active user. The flip is the UPDATE above; reconcile is the
+  // crash backstop. No dedup jobId (one-time transition); removeUser is
+  // idempotent node-side. B11: addBulk.
   await nodeUsersQueue.addBulk(
     ids.map((id) => ({ name: 'removeUser', data: { userId: id } })),
   );

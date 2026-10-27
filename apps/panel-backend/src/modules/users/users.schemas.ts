@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ROUTING_PRESET_IDS } from '@iceslab/shared';
 import { PermissiveUuid } from '../../lib/util/uuid-schema.js';
+import { BOTH_PRESETS_MESSAGE, bothPresetsGiven } from '../routing-presets/routing-presets.assign.js';
 
 // ───── Reusable atoms ─────
 
@@ -63,9 +64,14 @@ export const CreateUserSchema = z.object({
   // in every other number on the page.
   createdAt: z.iso.datetime().optional(),
   // Provenance, see the sourceId column. Set by the importer, never by a human;
-  // it is what makes a second run a delta instead of a duplicate.
+  // it is what makes a second run a delta instead of a duplicate. It is the
+  // source's RANDOM id (a UUID): never a username, email, telegram id or phone,
+  // since an erased user leaves the sha256 of this value behind (A-268
+  // tombstone), and such values are guessed back from it by trying them.
   sourceId: z.string().max(128).optional(),
-  hwidDeviceLimit: z.number().int().positive().nullish(),
+  // A-148: null = as the squads say, 0 = explicit no-limit, N >= 1 = the limit
+  // (effectiveHwidLimit in hwid.service.ts).
+  hwidDeviceLimit: z.number().int().nonnegative().nullish(),
   description: z.string().max(1000).nullish(),
   tag: z.string().max(64).nullish(),
   telegramId: z.union([
@@ -77,6 +83,9 @@ export const CreateUserSchema = z.object({
   // R3 - optional per-user routing-preset override. Null = inherit (squad ->
   // global -> default). Wins over squad/global, loses only to ?routing= query.
   routingPreset: z.enum(ROUTING_PRESET_IDS).nullable().optional(),
+  // A-229 - or the operator's own preset, by id. Never together with
+  // routingPreset (refused below; the database CHECK says the same).
+  customRoutingPresetId: z.uuid().nullable().optional(),
   // Slice 27 follow-up: enabledProtocols accepted for back-compat with API
   // clients but no longer affects subscription output. Squad ACL alone
   // determines visibility. Empty/missing → defaults to all 7 (was previously
@@ -84,7 +93,7 @@ export const CreateUserSchema = z.object({
   enabledProtocols: z
     .array(ProtocolName)
     .default(['hysteria', 'xray', 'amneziawg', 'naive', 'shadowsocks', 'mtproto', 'mieru']),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 
 // ───── POST /api/users/bulk ─────
@@ -129,7 +138,9 @@ export const UpdateUserSchema = z.object({
   trafficLimitGb: z.number().int().positive().nullish(),
   trafficLimitStrategy: TrafficLimitStrategy.optional(),
   expireAt: z.iso.datetime().nullish(),                          // ISO 8601 string OR null
-  hwidDeviceLimit: z.number().int().positive().nullish(),
+  // A-148: null = as the squads say, 0 = explicit no-limit, N >= 1 = the limit
+  // (effectiveHwidLimit in hwid.service.ts).
+  hwidDeviceLimit: z.number().int().nonnegative().nullish(),
   description: z.string().max(1000).nullish(),
   tag: z.string().max(64).nullish(),
   telegramId: z.union([
@@ -140,9 +151,12 @@ export const UpdateUserSchema = z.object({
   groupIds: z.array(PermissiveUuid).optional(),
   // R3 - per-user routing-preset override. Null clears it (back to inherit).
   routingPreset: z.enum(ROUTING_PRESET_IDS).nullable().optional(),
+  // A-229 - the operator's own preset instead. A value on one side clears the
+  // other (presetUpdateData); both values in one request are refused.
+  customRoutingPresetId: z.uuid().nullable().optional(),
   // Slice 27 follow-up: kept for back-compat, ignored by subscription.
   enabledProtocols: z.array(ProtocolName).optional(),
-});
+}).refine((v) => !bothPresetsGiven(v), { message: BOTH_PRESETS_MESSAGE, path: ['customRoutingPresetId'] });
 export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;
 
 // ───── GET /api/users (query params) ─────
@@ -204,8 +218,10 @@ export const ListUsersQuerySchema = z.object({
    *  who is visible. */
   usedOver: z.coerce.number().int().nonnegative().optional(),
   usedUnder: z.coerce.number().int().nonnegative().optional(),
-  /** Per-user device cap, set or inherited. */
-  deviceLimit: z.enum(['set', 'unset']).optional(),
+  /** The user's own device limit (A-148): `set` a limit of one or more,
+   *  `unlimited` the explicit no-limit (0), `unset` none of their own, so as
+   *  the squads say (null). */
+  deviceLimit: z.enum(['set', 'unlimited', 'unset']).optional(),
   /** Telegram account linked to the user. */
   telegram: z.enum(['linked', 'none']).optional(),
   /** Email filled in. */

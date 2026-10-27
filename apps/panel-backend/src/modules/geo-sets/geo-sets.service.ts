@@ -10,10 +10,12 @@ import {
   type NodeGeoFact,
 } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { assertPublicHttpUrl } from '../../lib/util/guarded-fetch.js';
 import { reportedEngines } from '../nodes/node-engines.js';
 import { collectGeoUses, usesOf, type GeoUseSite } from './geo-refs.js';
-import { chainTagsFor, filesOfSet } from './geo-push.js';
+import { chainTagsFor, filesOfSet, isCascadeExit } from './geo-push.js';
 import { enqueueBuiltinFetch, enqueueUrlFetch } from './geo-sets.queue.js';
 import { builtinNeedsFetch, ensureBuiltinSets, ingestGeoFile } from './geo-sets.store.js';
 
@@ -157,9 +159,10 @@ async function nodesOf(s: SetRow, sites: GeoUseSite[]) {
 
 /** The files of this set a node is to hold at version `v`: the `.dat`, and
  *  the chain's rule-sets when the node is a cascade entry whose route
- *  policies name tags of the set. */
-function wantedOn(s: SetRow, v: { version: string; sha256: string; sizeBytes: number }, nodeId: string, sites: GeoUseSite[]) {
-  return filesOfSet(s, v, chainTagsFor(nodeId, sites).get(s.name) ?? []);
+ *  policies name tags of the set, or an exit whose node policy does. The
+ *  same reading as nodeGeoFor, which is what the push lays out. */
+async function wantedOn(s: SetRow, v: { version: string; sha256: string; sizeBytes: number }, nodeId: string, sites: GeoUseSite[]) {
+  return filesOfSet(s, v, chainTagsFor(nodeId, sites, await isCascadeExit(nodeId)).get(s.name) ?? []);
 }
 
 /** The names of `wanted` the node's own report does not show with that sha;
@@ -238,6 +241,18 @@ export async function listTags(
   return { version: s.current.version, total: all.length, tags: all.slice(0, limit) };
 }
 
+/**
+ * The tag names of a set's verified version, by the set's name, or null while
+ * it has none (never fetched, or broken). A-229 checks a device preset's
+ * `geosite:`/`geoip:` against them; null is an unknown list, and an unknown
+ * list does not refuse.
+ */
+export async function setTagNames(name: string): Promise<Set<string> | null> {
+  const s = await prisma.geoSet.findUnique({ where: { name }, select: SET_SELECT });
+  if (!s?.current) return null;
+  return new Set(tagsOf(s).map((t) => t.name.toLowerCase()));
+}
+
 // ---------------------------------------------------------------- writing
 
 function checkName(name: string): void {
@@ -249,15 +264,13 @@ function checkName(name: string): void {
   }
 }
 
+/** http(s) to a public host (A-115: no loopback, private or metadata
+ *  address; the same check runs again on every fetch and redirect). */
 function checkUrl(url: string): void {
-  let u: URL;
   try {
-    u = new URL(url);
-  } catch {
-    throw new GeoSetInvalidError('url', `"${url}" is not a URL`);
-  }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') {
-    throw new GeoSetInvalidError('url', `only http and https are fetched, not ${u.protocol}`);
+    assertPublicHttpUrl(url);
+  } catch (err) {
+    throw new GeoSetInvalidError('url', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -272,6 +285,15 @@ function checkSha(sha256Source: 'sidecar' | 'manual', sha256: string | undefined
 async function nameFree(name: string, exceptId?: string): Promise<void> {
   const other = await prisma.geoSet.findUnique({ where: { name }, select: { id: true } });
   if (other && other.id !== exceptId) throw new GeoSetNameTakenError(name);
+}
+
+/** nameFree reads, then the write inserts: a write racing it loses on the
+ *  index, and that is the same refusal, not a 500 (A-257). */
+function nameTakenOnWrite(name: string) {
+  return (err: unknown): never => {
+    if (isUniqueViolationOn(err, 'geo_sets_name_key', ['name'])) throw new GeoSetNameTakenError(name);
+    throw err;
+  };
 }
 
 export interface CreateUrlSetInput {
@@ -299,7 +321,7 @@ export async function createUrlSet(input: CreateUrlSetInput): Promise<GeoSetDto>
       status: 'checking',
     },
     select: { id: true },
-  });
+  }).catch(nameTakenOnWrite(input.name));
   await enqueueUrlFetch(row.id);
   return getGeoSet(row.id);
 }
@@ -335,7 +357,7 @@ export async function createUploadSet(input: UploadInput & { name: string; kind:
   const row = await prisma.geoSet.create({
     data: { name: input.name, kind: input.kind, sourceType: 'upload', filename: input.filename.slice(0, 255) },
     select: { id: true },
-  });
+  }).catch(nameTakenOnWrite(input.name));
   await ingestGeoFile(row.id, { bytes: input.bytes, expectedSha256: expected });
   return getGeoSet(row.id);
 }
@@ -402,7 +424,7 @@ export async function patchSet(id: string, input: PatchSetInput): Promise<GeoSet
     data.sha256Manual = checkSha(source, input.sha256);
   }
   if (input.refreshHours !== undefined) data.refreshHours = input.refreshHours;
-  await prisma.geoSet.update({ where: { id }, data });
+  await prisma.geoSet.update({ where: { id }, data }).catch(nameTakenOnWrite(data.name ?? s.name));
   if (data.url !== undefined || data.sha256Source !== undefined) {
     await prisma.geoSet.update({ where: { id }, data: { status: 'checking' } });
     await enqueueUrlFetch(id);
@@ -475,7 +497,7 @@ export async function rolloutPlan(id: string): Promise<GeoRolloutPlan> {
     const row = byId.get(n.id);
     if (!row) continue;
     // What the node must hold of this set at current: the `.dat`, and at a
-    // cascade entry the chain's rule-sets (phase 9.3).
+    // cascade entry or exit the chain's rule-sets (phase 9.3, E53).
     const filesToSend = missingOnDisk(await wantedOn(s, current, n.id, sites), n.fact);
     const engines = reportedEngines(row);
     planNodes.push({

@@ -6,6 +6,8 @@ import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import {
@@ -21,7 +23,7 @@ import {
   type GeoSet,
   type GeoSetKind,
 } from '@/lib/domain/geoSets';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import {
   geoAttention,
@@ -77,14 +79,20 @@ export function GeoSetsPage() {
   const facts = geoScreenFacts({
     sets: setsQuery.data?.geoSets,
     notImplemented: isNotImplemented(setsQuery.error),
+    failed: setsQuery.isError,
   });
 
   // Что требует внимания: битые наборы и ноды, у которых гео отстаёт. Ноды
   // считаются по факту карточек (nodeGeoFacts), тем же ключом кэша, что у
   // списка нод. Отдельного ящика внимания в панели пока нет.
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const geoKnown = nodeFieldKnown(nodesQuery.data, 'geo');
-  const nodesBehind = (nodesQuery.data?.nodes ?? []).filter((n) => nodeGeoFacts(n, geoKnown)?.state === 'behind').length;
+  const nodesView = loadView(nodesQuery);
+  const nodesBehind =
+    nodesView === 'ready'
+      ? (nodesQuery.data?.nodes ?? []).filter((n) => nodeGeoFacts(n, geoKnown)?.state === 'behind').length
+      : nodesView;
+  const nodesFailure = loadFailure(nodesQuery, apiErrorMessage);
   const attention = facts.state === 'list' ? geoAttention(facts.sets, nodesBehind) : null;
 
   const [adding, setAdding] = useState<'url' | 'upload' | null>(null);
@@ -184,14 +192,19 @@ export function GeoSetsPage() {
               {t('geoSets.attention.behind', { count: attention.nodesBehind })}
             </Text>
           )}
+          {attention.nodesFailed && nodesFailure && (
+            <LoadFailedLine
+              message={`${t('geoSets.attention.nodesFailed')}: ${nodesFailure.message}`}
+              onRetry={nodesFailure.onRetry}
+            />
+          )}
         </Box>
       )}
 
-      {facts.state === 'unavailable' && (
-        <Placeholder
-          title={setsQuery.isLoading ? t('common.loading') : t('geoSets.soonTitle')}
-          body={setsQuery.isLoading ? '' : t('geoSets.soonBody')}
-        />
+      {facts.state === 'unavailable' && <Placeholder title={t('geoSets.soonTitle')} body={t('geoSets.soonBody')} />}
+      {facts.state === 'loading' && <Placeholder title={t('common.loading')} body="" />}
+      {facts.state === 'failed' && (
+        <LoadFailed message={apiErrorMessage(setsQuery.error)} onRetry={() => void setsQuery.refetch()} />
       )}
       {facts.state === 'empty' && <Placeholder title={t('geoSets.emptyTitle')} body={t('geoSets.emptyBody')} />}
 

@@ -3,6 +3,7 @@ import { LINK_PORT_BASE, type LinkCred } from './cascade.config.js';
 import { CHAIN_TPROXY_PORT, chainSocksPort, chainSocksUser } from './chain.ports.js';
 import { chainMatchIsEmpty, type ChainPolicy } from './chain-policy.js';
 import { LINK_TLS_SERVER_NAME, pemLines, type LinkTls } from './link-tls.js';
+import { dialFamilyOf, LEG_DNS_TAG, singboxDialFields } from './dial-family.js';
 
 /**
  * The chain as its own process: one sing-box config per node, rendered here.
@@ -128,6 +129,63 @@ export interface ChainRenderInput {
    * which draws no rules. Every such connection goes to the Auto line.
    */
   tproxy?: { ordinal: number };
+  /**
+   * E53: the node policy of an EXIT, as route rules (chainNodePolicyOf), and
+   * the WARP egress its rules route into. The rule-sets they name travel in
+   * `ruleSets`. Exit only: that is where the cascade's traffic leaves.
+   */
+  exitPolicy?: { rules: Json[]; warp?: ChainWarp };
+  /**
+   * This node's own address in the panel, which the next hops' firewalls name
+   * as the source of its legs (linkIngress.allowFrom). A leg to a hostname is
+   * dialled over that address's family (dial-family.ts). Absent: no pin.
+   */
+  selfHost?: string;
+}
+
+/** The exit's Cloudflare WARP egress, from the node's registered account. */
+export interface ChainWarp {
+  privateKey: string;
+  address: string[];
+  /** Cloudflare's well-known values when the account does not say. */
+  publicKey?: string;
+  endpoint?: string;
+  reserved?: number[];
+  mtu?: number;
+}
+
+/** The same defaults the agent's xray renders WARP with (xray/config.go). */
+const WARP_DEFAULT_PUBLIC_KEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=';
+const WARP_DEFAULT_ENDPOINT = '162.159.192.1:2408';
+const WARP_DEFAULT_MTU = 1280;
+
+/**
+ * WARP as a sing-box 1.13 wireguard ENDPOINT: the wireguard outbound is gone
+ * from that version, an endpoint takes its place and is routed to by tag like
+ * an outbound. `system: false`, so no interface appears on the node.
+ */
+function warpEndpoint(w: ChainWarp): Json {
+  const ep = w.endpoint || WARP_DEFAULT_ENDPOINT;
+  const at = ep.lastIndexOf(':');
+  const host = at > 0 ? ep.slice(0, at).replace(/^\[|\]$/g, '') : ep;
+  const port = at > 0 ? Number.parseInt(ep.slice(at + 1), 10) || 2408 : 2408;
+  return {
+    type: 'wireguard',
+    tag: 'warp',
+    system: false,
+    mtu: w.mtu || WARP_DEFAULT_MTU,
+    address: w.address.map((a) => (a.includes('/') ? a : a.includes(':') ? `${a}/128` : `${a}/32`)),
+    private_key: w.privateKey,
+    peers: [
+      {
+        address: host,
+        port,
+        public_key: w.publicKey || WARP_DEFAULT_PUBLIC_KEY,
+        allowed_ips: ['0.0.0.0/0', '::/0'],
+        ...(w.reserved && w.reserved.length === 3 ? { reserved: w.reserved } : {}),
+      },
+    ],
+  };
 }
 
 type Json = Record<string, unknown>;
@@ -409,7 +467,10 @@ function linkInbound(leg: ChainLegIn): Json {
 
 /** SS2022 carries one key per listener, so a shadowsocks leg cannot tell
  *  directions apart by credential. It is the cell the operator chose, and the
- *  routing falls back to the default way out for it. */
+ *  routing falls back to the default way out for it.
+ *
+ *  No `network`: tcp and udp both, so UDP through the cascade rides the leg.
+ *  The port check holds both sockets for it (LINK_CELL_TRANSPORTS, A-117). */
 function ssInbound(cred: Extract<LinkCred, { protocol: 'shadowsocks' }>): Json {
   return {
     type: 'shadowsocks',
@@ -513,10 +574,19 @@ function splitDest(dest: string, serverName: string): [string, number] {
  * else it says. They are on every role, not only the exit, because a transit
  * that forwards them has already carried them across a border.
  */
-function protectionRules(): Json[] {
+function protectionRules(hijackOnlyOn?: string[]): Json[] {
   return [
     { action: 'sniff' },
-    { protocol: 'dns', action: 'hijack-dns' },
+    // E56, stand 26.09: an AmneziaWG client's DNS (10.66.66.3 -> 1.1.1.1:53)
+    // arrived by TPROXY, was hijacked here and answered by the ENTRY's system
+    // resolver, the hoster's RU one, while the traffic left in NL: every CDN
+    // answer was a Russian edge. On an entry that takes TPROXY the hijack is
+    // kept to the socks listeners (an xray or hysteria user's lookups have
+    // always been answered here), and the tunnel's DNS goes on like any UDP,
+    // by the entry policy and Auto, to be answered where it leaves.
+    hijackOnlyOn
+      ? { protocol: 'dns', inbound: hijackOnlyOn, action: 'hijack-dns' }
+      : { protocol: 'dns', action: 'hijack-dns' },
     // `drop` rather than the default refusal: a refused connection tells the
     // other end something is filtering, a dropped one looks like the internet.
     { port: [25], action: 'reject', method: 'drop' },
@@ -547,9 +617,16 @@ function policyRules(policies: ChainPolicy[], tproxy?: { ordinal: number }): Jso
       if (!chainMatchIsEmpty(p.block)) {
         rules.push({ ...gate, ...p.block, action: 'reject', method: 'drop' });
       }
+      // E55: by ADDRESS, after the policy's names had their turn. sing-box
+      // matches an IP only on an IP, so a request that came in by name is
+      // resolved first, for this policy's holders only (the gate), the way
+      // xray's IPIfNonMatch resolves a name no domain rule took.
+      if (p.blockIp || p.directIp) rules.push({ ...gate, action: 'resolve' });
+      if (p.blockIp) rules.push({ ...gate, ...p.blockIp, action: 'reject', method: 'drop' });
       if (!chainMatchIsEmpty(p.direct)) {
         rules.push({ ...gate, ...p.direct, action: 'route', outbound: 'direct' });
       }
+      if (p.directIp) rules.push({ ...gate, ...p.directIp, action: 'route', outbound: 'direct' });
     }
   }
   return rules;
@@ -568,7 +645,14 @@ export function renderChainConfig(input: ChainRenderInput): Json {
   const isEntry = input.role === 'entry';
   const policies = isEntry ? (input.policies ?? []) : [];
   const tproxy = isEntry ? input.tproxy : undefined;
-  const rules: Json[] = [...protectionRules(), ...policyRules(policies, tproxy)];
+  const rules: Json[] = [
+    ...protectionRules(tproxy ? (input.directionTags ?? []).map(socksTag) : undefined),
+    ...policyRules(policies, tproxy),
+  ];
+  // E53: the exit's node policy, after the protections (an operator's rule
+  // must not reopen port 25 here either) and before the default way out.
+  const exitPolicy = input.role === 'exit' ? input.exitPolicy : undefined;
+  if (exitPolicy) rules.push(...exitPolicy.rules);
 
   if (isEntry) {
     // One user per profile the entry can hand over: the plain one and each
@@ -629,9 +713,16 @@ export function renderChainConfig(input: ChainRenderInput): Json {
   }
   /** One leg out, one branch per CELL. Same switch as the inbound side, for the
    *  same reason: a new cell must not fall through into vless. */
+  let legDns = false;
   const renderLeg = (tag: string, leg: ChainLegOut): Json => {
     const rendered = renderLegCell(tag, leg);
-    return leg.via ? { ...rendered, bind_interface: leg.via } : rendered;
+    if (leg.via) return { ...rendered, bind_interface: leg.via };
+    // A-111: over the internet, dialled over the family the next hop's rule
+    // names. Inside a tunnel the leg dials an inner literal, nothing to pin.
+    const family = dialFamilyOf(input.selfHost, leg.host);
+    if (!family) return rendered;
+    legDns = true;
+    return { ...rendered, ...singboxDialFields(family) };
   };
   const renderLegCell = (tag: string, leg: ChainLegOut): Json => {
     switch (cellOf(leg.cred)) {
@@ -714,6 +805,17 @@ export function renderChainConfig(input: ChainRenderInput): Json {
     if (tproxy && outbounds.some((o) => o.tag === outTag(AUTO_TAG))) {
       rules.push({ inbound: [TPROXY_IN_TAG], action: 'route', outbound: outTag(AUTO_TAG) });
     }
+  } else if (
+    input.role === 'transit' &&
+    input.in &&
+    input.in.cred.protocol !== 'vless' &&
+    new Set([...(input.out ?? []).map((l) => l.tag), ...(input.foreign ?? []).map((f) => f.tag)]).size > 1
+  ) {
+    // A-102: a leg that carries no credential per direction, into a transit
+    // with several ways out. The save refuses this shape now; one stored
+    // before fails CLOSED here: route's default is the first outbound, which
+    // is somebody else's country.
+    rules.push({ network: ['tcp', 'udp'], action: 'reject', method: 'drop' });
   } else if (input.role === 'transit' && input.in?.cred.protocol === 'vless') {
     // A transit sees links, not users: which credential the traffic arrived on
     // is the only thing that says which way out it was headed for.
@@ -739,13 +841,22 @@ export function renderChainConfig(input: ChainRenderInput): Json {
   // Only on an entry that has policies to read them. sing-box opens every
   // declared rule-set at start and refuses the config for a file it cannot
   // open, so a declaration nothing reads would be a way to fail for nothing.
-  const ruleSets = isEntry && policies.length > 0 ? (input.ruleSets ?? []) : [];
+  const ruleSets =
+    (isEntry && policies.length > 0) || (exitPolicy && exitPolicy.rules.length > 0) ? (input.ruleSets ?? []) : [];
   return {
     log: { level: 'warn' },
+    // The resolver a pinned leg names (dial-family.ts): the system's, as an
+    // unpinned leg uses, with only the family narrowed.
+    ...(legDns ? { dns: { servers: [{ type: 'local', tag: LEG_DNS_TAG }] } } : {}),
     inbounds,
     outbounds,
+    ...(exitPolicy?.warp ? { endpoints: [warpEndpoint(exitPolicy.warp)] } : {}),
     route: {
       rules,
+      // Named, not left to the engine, once the exit has a policy: with an
+      // endpoint beside the outbounds, "the first outbound" is one reading
+      // away from being WARP for everything the policy does not name.
+      ...(exitPolicy ? { final: 'direct' } : {}),
       ...(ruleSets.length > 0
         ? { rule_set: ruleSets.map((r) => ({ type: 'local', tag: r.tag, format: 'source', path: r.path })) }
         : {}),

@@ -90,11 +90,13 @@ func (a *Adapter) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, ok := a.LookupByPassword(req.Auth)
 	if !ok {
+		// The address stays on a refusal: fail2ban bans the guessing by this line (install-iceslab-node.sh:1497-1501), and a refused caller is no subscriber.
 		a.logger.Info("hysteria auth rejected", "addr", req.Addr)
 		writeAuthJSON(w, AuthResponse{OK: false})
 		return
 	}
-	a.logger.Info("hysteria auth accepted", "addr", req.Addr, "userId", userID)
+	// Nothing is written for an accepted one (A-265: no connection log on a
+	// node). Not Debug either: the agent's level is one env away from Info.
 	writeAuthJSON(w, AuthResponse{OK: true, ID: userID})
 }
 

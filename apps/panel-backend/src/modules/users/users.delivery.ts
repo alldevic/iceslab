@@ -1,4 +1,10 @@
-import { isRoutingPresetId, type RoutingPresetId } from '@iceslab/shared';
+import type { RoutingPresetId } from '@iceslab/shared';
+import {
+  PRESET_COLUMNS_SELECT,
+  presetOf,
+  resolveSquadPreset,
+  type ResolvedPreset,
+} from '../routing-presets/routing-presets.resolve.js';
 import { prisma } from '../../prisma.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
 import { matchRuleForUserAgent } from '../srr/srr.service.js';
@@ -15,6 +21,18 @@ import { matchRuleForUserAgent } from '../srr/srr.service.js';
  */
 
 export type RoutingSource = 'user' | 'squad' | 'global';
+
+/** A preset as the card names it: a built-in by its key, an own one by id and
+ *  name. */
+export interface PresetRef {
+  builtIn: boolean;
+  id: string;
+  name: string;
+}
+
+function refOf(p: ResolvedPreset): PresetRef {
+  return p.kind === 'builtin' ? { builtIn: true, id: p.id, name: p.id } : { builtIn: false, id: p.id, name: p.name };
+}
 
 export interface UserDeliveryDto {
   routing: {
@@ -37,6 +55,15 @@ export interface UserDeliveryDto {
     squadConflict: boolean;
     /** The panel-wide default, the floor everything falls through to. */
     global: RoutingPresetId;
+    /**
+     * A-229: the same tiers with the operator's own presets in them. The four
+     * fields above speak only in built-in keys and stay for the screens that
+     * read them; where an own preset decides, `effective` there is the
+     * built-in it falls back on and these say what is really served.
+     */
+    effectivePreset: PresetRef;
+    userPreset: PresetRef | null;
+    squadPreset: PresetRef | null;
   };
   format: {
     /** The format the last real request was answered in, or the panel's
@@ -67,8 +94,8 @@ export async function getUserDelivery(userId: string): Promise<UserDeliveryDto |
   const user = await prisma.user.findFirst({
     where: { id: userId, deletedAt: null },
     select: {
-      routingPreset: true,
-      groupMembers: { select: { group: { select: { routingPreset: true } } } },
+      ...PRESET_COLUMNS_SELECT,
+      groupMembers: { select: { group: { select: PRESET_COLUMNS_SELECT } } },
     },
   });
   if (!user) return null;
@@ -84,18 +111,17 @@ export async function getUserDelivery(userId: string): Promise<UserDeliveryDto |
     }),
   ]);
 
-  const distinctSquad = [
-    ...new Set(
-      user.groupMembers
-        .map((m) => m.group.routingPreset)
-        .filter((p): p is RoutingPresetId => p !== null && isRoutingPresetId(p)),
-    ),
-  ];
-  const squad = distinctSquad.length === 1 ? distinctSquad[0]! : null;
-  const own = isRoutingPresetId(user.routingPreset) ? user.routingPreset : null;
-
-  const effective = own ?? squad ?? settings.routingPreset;
-  const source: RoutingSource = own ? 'user' : squad ? 'squad' : 'global';
+  // The same resolution the subscription makes (routing-presets.resolve.ts),
+  // so the card cannot say one thing while the client is handed another.
+  const { preset: squadPreset, conflict } = resolveSquadPreset(user.groupMembers.map((m) => m.group));
+  const userPreset = presetOf(user);
+  const effectivePreset: ResolvedPreset = userPreset ?? squadPreset ?? { kind: 'builtin', id: settings.routingPreset };
+  const source: RoutingSource = userPreset ? 'user' : squadPreset ? 'squad' : 'global';
+  const builtinKey = (p: ResolvedPreset | null): RoutingPresetId | null => (p?.kind === 'builtin' ? p.id : null);
+  const own = builtinKey(userPreset);
+  const squad = builtinKey(squadPreset);
+  // An own preset is its rules over proxy-all (the format builders' base).
+  const effective: RoutingPresetId = effectivePreset.kind === 'builtin' ? effectivePreset.id : 'proxy-all';
 
   const rule = await matchRuleForUserAgent(lastRequest?.userAgent);
 
@@ -105,8 +131,11 @@ export async function getUserDelivery(userId: string): Promise<UserDeliveryDto |
       source,
       user: own,
       squad,
-      squadConflict: distinctSquad.length > 1,
+      squadConflict: conflict,
       global: settings.routingPreset,
+      effectivePreset: refOf(effectivePreset),
+      userPreset: userPreset ? refOf(userPreset) : null,
+      squadPreset: squadPreset ? refOf(squadPreset) : null,
     },
     format: {
       effective: rule?.format ?? FALLBACK_FORMAT,

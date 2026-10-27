@@ -27,9 +27,15 @@ import {
   dryRunFacts,
   dryRunForBody,
   templateActions,
+  templateEditGate,
   templateEditorFacts,
+  templateSavePatch,
+  saveAfterRun,
+  singleFlight,
+  nodesInNoGroup,
   type ImportFacts,
 } from '@/contours/subscription/lib/templateFacts';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { CodeArea } from '@/contours/subscription/components/CodeArea';
 import { AMBER, CARD, CYAN, DIM, FAINT, HAIRLINE, MIST, MOSS, RED, SNOW } from '@/contours/subscription/lib/colors';
 
@@ -77,6 +83,8 @@ export function TemplateEditPage() {
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   /** Строка, на которую указал сервер в TEMPLATE_INVALID. */
   const [errorLine, setErrorLine] = useState<number | null>(null);
+  /** Столбец там же (A-236, 29d1f62c), когда сервер его знает. */
+  const [errorColumn, setErrorColumn] = useState<number | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [nameTaken, setNameTaken] = useState(false);
 
@@ -108,6 +116,7 @@ export function TemplateEditPage() {
   /** Тело, по которому сделан показанный прогон. `null` = прогона не было. */
   const [ranForBody, setRanForBody] = useState<string | null>(null);
   const [run, setRun] = useState<TemplateDryRun | null>(null);
+  const [once] = useState(() => singleFlight());
   const dry = dryRunFacts(dryRunForBody(run, ranForBody, body));
 
   const dryRun = useMutation({
@@ -127,17 +136,43 @@ export function TemplateEditPage() {
   });
 
   const save = useMutation({
-    mutationFn: () =>
-      isNew
-        ? createTemplate({ type, name: name.trim(), body })
-        : updateTemplate(id, { name: name.trim(), body }),
-    onSuccess: (saved) => {
+    // The run first, unless this body already has a verdict on screen
+    // (saveAfterRun): a body without a slot no longer saves silently.
+    mutationFn: async () => {
+      const bodyNow = body;
+      return saveAfterRun({
+        shown: dryRunForBody(run, ranForBody, bodyNow),
+        runDry: () => dryRunTemplate({ type, body: bodyNow }),
+        onRun: (fresh) => {
+          setRun(fresh);
+          setRanForBody(bodyNow);
+        },
+        notImplemented: isNotImplemented,
+        save: () => {
+          // Only what changed; the name of a Default never goes (templateSavePatch).
+          const patch = templateSavePatch(isNew ? null : template, name, bodyNow);
+          if (!patch) throw new Error('nothing changed');
+          return isNew
+            ? createTemplate({ type, name: patch.name ?? name.trim(), body: patch.body ?? bodyNow })
+            : updateTemplate(id, patch);
+        },
+      });
+    },
+    onSuccess: (outcome) => {
+      // Refused by the run: nothing went, the verdict and its reason are on screen.
+      if (outcome.kind === 'refused') return;
       qc.invalidateQueries({ queryKey: ['subscription-templates'] });
-      notifications.show({ color: 'green', message: t('common.saved') });
-      navigate(`/subscription/templates/${saved.id}`);
+      notifications.show({
+        color: outcome.note ? 'yellow' : 'green',
+        message: outcome.note
+          ? t(outcome.note === 'not-here' ? 'templates.savedNoRunHere' : 'templates.savedRunNoAnswer')
+          : t('common.saved'),
+      });
+      navigate(`/subscription/templates/${outcome.result.id}`);
     },
     onError: (err) => {
       setErrorLine(null);
+      setErrorColumn(null);
       setNameTaken(false);
       setRefusal(null);
       const r = templateRefusal(err);
@@ -145,11 +180,16 @@ export function TemplateEditPage() {
       // рядом с телом, занятое имя рядом с именем. Тост унёс бы и то и другое.
       if (r?.code === 'TEMPLATE_INVALID') {
         setErrorLine(r.line ?? null);
+        setErrorColumn(r.column ?? null);
         setRefusal(r.message ?? t('templates.invalidNoMessage'));
         return;
       }
       if (r?.code === 'TEMPLATE_NAME_TAKEN') {
         setNameTaken(true);
+        return;
+      }
+      if (r?.code === 'TEMPLATE_DEFAULT_PROTECTED') {
+        notifications.show({ color: 'red', title: t('common.saveError'), message: t('templates.defaultKeepsName') });
         return;
       }
       notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
@@ -168,14 +208,17 @@ export function TemplateEditPage() {
       setRun(null);
       setRanForBody(null);
       setErrorLine(null);
+      setErrorColumn(null);
       setRefusal(null);
       notifications.show({ color: 'green', message: t('templates.restored') });
     },
     onError: (err) =>
       notifications.show({
-        color: isNotImplemented(err) ? 'yellow' : 'red',
+        color: 'red',
         title: t('templates.restoreFailed'),
-        message: isNotImplemented(err) ? t('templates.dryRunUnavailable') : apiErrorMessage(err),
+        // Only a Default has a built-in body to go back to (409 TEMPLATE_NOT_DEFAULT).
+        message:
+          templateRefusal(err)?.code === 'TEMPLATE_NOT_DEFAULT' ? t('templates.notDefault') : apiErrorMessage(err),
       }),
   });
 
@@ -227,39 +270,30 @@ export function TemplateEditPage() {
   }
 
   /**
-   * Сохранение с оглядкой на прогон.
-   *
-   * Отказ ядра сохранять не даёт вовсе (кнопка выключена). Жалобы панели
-   * сохранять не запрещают, но спрашивают: шаблон без слота это пустая
-   * подписка у всех, кто попал на это правило, и узнать об этом от клиентов
-   * дороже, чем ответить на один вопрос.
+   * Сохранение с оглядкой на прогон (план 4.6). Отказ ядра или жалоба панели
+   * (шаблон без слота это пустая подписка у всех на этом правиле) закрывают
+   * кнопку, причина стоит у неё словами. «Ядро не проверило» не закрывает.
    */
   function attemptSave() {
-    if (dry?.needsConfirm) {
-      modals.openConfirmModal({
-        title: t('templates.confirmTitle'),
-        children: (
-          <Stack gap={6}>
-            {dry.warnings.map((w) => (
-              <Text key={w} style={{ fontFamily: DISPLAY, fontSize: 13, color: SNOW }}>
-                {w}
-              </Text>
-            ))}
-            <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>
-              {t('templates.confirmBody')}
-            </Text>
-          </Stack>
-        ),
-        labels: { confirm: t('common.save'), cancel: t('common.cancel') },
-        onConfirm: () => save.mutate(),
-      });
-      return;
-    }
-    save.mutate();
+    if (dry && !dry.canSave) return;
+    // One run and one save per press, a double click included (singleFlight).
+    void once(() => save.mutateAsync().catch(() => undefined));
   }
+  const verdictTone = dry?.verdict === 'checked' ? MOSS : dry?.verdict === 'unchecked' ? MIST : RED;
 
-  if (!isNew && query.isSuccess && !template) {
-    return <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST }}>{t('templates.gone')}</Text>;
+  // A-236 (from A-233 d): an existing template waits for the list. A failed
+  // list is said with a retry instead of opening an empty editor whose save
+  // would write empty fields over the template.
+  const gate = templateEditGate(isNew, query, isNotImplemented(query.error), template !== null);
+  if (gate === 'failed') {
+    return <LoadFailed message={apiErrorMessage(query.error)} onRetry={() => void query.refetch()} />;
+  }
+  if (gate !== 'ready') {
+    return (
+      <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST }}>
+        {gate === 'gone' ? t('templates.gone') : gate === 'unavailable' ? t('templates.soonTitle') : t('common.loading')}
+      </Text>
+    );
   }
 
   return (
@@ -283,11 +317,14 @@ export function TemplateEditPage() {
           {templateBodyLanguage(type).toUpperCase()}
         </Text>
         <Box style={{ flex: 1 }} />
-        {facts.blocker && (
+        {facts.blocker ? (
           <Text style={{ fontFamily: DISPLAY, fontSize: 11, color: FAINT }}>
             {t(`templates.blocker.${facts.blocker}`)}
           </Text>
-        )}
+        ) : dry?.verdict === 'refused' ? (
+          // Why Save is closed, at the button (plan 4.6): the run refused it.
+          <Text style={{ fontFamily: DISPLAY, fontSize: 11, color: RED }}>{t('templates.blocker.dryRunRefused')}</Text>
+        ) : null}
         {/* Действия над готовым шаблоном. У Default кнопки удаления НЕТ, а не
             выключенная: выключенная кнопка обещает, что когда-нибудь можно.
             Вместо неё стоит строка с причиной. */}
@@ -313,6 +350,7 @@ export function TemplateEditPage() {
           disabled={
             !facts.canSave ||
             save.isPending ||
+            dryRun.isPending ||
             dry?.canSave === false ||
             // Импортированный черновик сохраняется только после прогона: файл
             // писали не здесь и не мы, и «загрузится ли это вообще» пока не
@@ -337,8 +375,8 @@ export function TemplateEditPage() {
             border: `1px solid ${CYAN}33`,
           }}
         >
-          <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: CYAN }}>
-            {t('templates.importedKeys', { n: imported.rewrittenKeys })}
+          <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: CYAN }}>
+            {t('templates.migrateHint')}
           </Text>
           <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
             {dry === null ? t('templates.importNeedsDryRun') : t('templates.importReady')}
@@ -346,14 +384,6 @@ export function TemplateEditPage() {
           {imported.needsType && (
             <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: AMBER }}>
               {t('templates.importNeedsType')}
-            </Text>
-          )}
-          {/* Проверка ЗА сервером: после импорта чужого ключа остаться не
-              должно. Если остался, шаблон уедет в подписку с ключом, которого
-              наш сборщик не понимает, и молчать об этом нельзя. */}
-          {imported.foreignKeysLeft.length > 0 && (
-            <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: RED }}>
-              {t('templates.importForeignLeft', { keys: imported.foreignKeysLeft.join(', ') })}
             </Text>
           )}
         </Stack>
@@ -420,7 +450,11 @@ export function TemplateEditPage() {
             }}
           >
             <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: RED }}>
-              {errorLine ? t('templates.invalidAtLine', { line: errorLine }) : t('templates.invalid')}
+              {errorLine && errorColumn
+                ? t('templates.invalidAtLineColumn', { line: errorLine, column: errorColumn })
+                : errorLine
+                  ? t('templates.invalidAtLine', { line: errorLine })
+                  : t('templates.invalid')}
             </Text>
             <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '16px', color: SNOW, flex: 1 }}>
               {refusal}
@@ -444,8 +478,8 @@ export function TemplateEditPage() {
               gap: 10,
               padding: '10px 14px',
               borderRadius: 10,
-              backgroundColor: dry.check.ok ? `${MOSS}0F` : `${RED}0F`,
-              border: `1px solid ${dry.check.ok ? MOSS : RED}33`,
+              backgroundColor: `${verdictTone}0F`,
+              border: `1px solid ${verdictTone}33`,
             }}
           >
             <Box
@@ -453,7 +487,7 @@ export function TemplateEditPage() {
                 width: 6,
                 height: 6,
                 borderRadius: 999,
-                backgroundColor: dry.check.ok ? MOSS : RED,
+                backgroundColor: verdictTone,
                 flexShrink: 0,
               }}
             />
@@ -463,10 +497,15 @@ export function TemplateEditPage() {
                 fontSize: 11,
                 letterSpacing: '0.1em',
                 textTransform: 'uppercase',
-                color: dry.check.ok ? MOSS : RED,
+                color: verdictTone,
               }}
             >
-              {dry.check.ok ? t('templates.checkOk') : t('templates.checkFailed')}
+              {/* «Не проверило» нейтральным, не зелёным: ядро не запускалось. */}
+              {dry.verdict === 'checked'
+                ? t('templates.checkOk')
+                : dry.verdict === 'unchecked'
+                  ? t('templates.checkSkipped')
+                  : t('templates.checkFailed')}
             </Text>
             {/* Слова ядра, не наши: они и есть то, ради чего прогон делается. */}
             {dry.check.message && (
@@ -497,14 +536,20 @@ export function TemplateEditPage() {
               >
                 {t('templates.warnings')}
               </Text>
-              {dry.warnings.map((w) => (
-                <Text key={w} style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '17px', color: SNOW }}>
-                  {w}
+              {dry.warnings.map((w, i) => (
+                <Text key={`${i}-${w.message}`} style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '17px', color: SNOW }}>
+                  {w.message}
                 </Text>
               ))}
               <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: MIST }}>
-                {t('templates.warningsNote')}
+                {t('templates.warningsBlock')}
               </Text>
+              {/* Nodes in no group is how a file from another panel looks. */}
+              {nodesInNoGroup(dry.warnings) && (
+                <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '16px', color: CYAN }}>
+                  {t('templates.migrateHint')}
+                </Text>
+              )}
             </Stack>
           )}
 

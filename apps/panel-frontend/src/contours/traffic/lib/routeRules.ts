@@ -1,4 +1,4 @@
-import type { RoutePolicy, RouteRule } from '@/lib/domain/routePolicies';
+import type { RouteAction, RoutePolicy, RouteRule } from '@/lib/domain/routePolicies';
 
 /**
  * Правило в черновике экрана.
@@ -20,9 +20,17 @@ export function blankPolicy(): RoutePolicy {
 /* ───── Model ───────────────────────────────────────────────────────────── */
 
 /**
- * The policy as an ordered rule list. When the API ships `rules` that is what
- * we use; until then the two flat arrays are unrolled into one rule per domain,
- * block first, which is the order the config generator emits them in.
+ * What a route policy (entry) can do with a domain: exactly what the server
+ * stores, two lists (A-151, decisions.md 2026-10-22). WARP and proxy by domain
+ * live in the exit node's policy; an editor that offered them here saved
+ * "successfully" and the rule was gone.
+ */
+export const POLICY_ACTIONS: RouteAction[] = ['block', 'direct'];
+
+/**
+ * The policy as rows, one per domain, block first: the two lists the server
+ * stores, and nothing else. `rules`, if a server ever sends it, is not read:
+ * the screen shows what is stored.
  *
  * Ключи строк ДЕТЕРМИНИРОВАНЫ: позиция плюс префикс источника. Раньше их давал
  * счётчик в `useRef`, который приходилось читать и увеличивать прямо в рендере,
@@ -30,7 +38,6 @@ export function blankPolicy(): RoutePolicy {
  * которые оператор добавляет руками (`new-`), и пересечься они не могут.
  */
 export function toRules(policy: RoutePolicy): DraftRule[] {
-  if (policy.rules) return policy.rules.map((r, i) => ({ ...r, id: r.id || `seed-${i}` }));
   return [
     ...policy.blockDomains.map((d, i) => ({
       id: `seed-b${i}`,
@@ -49,7 +56,45 @@ export function toRules(policy: RoutePolicy): DraftRule[] {
 
 /** The payload shape, without the client-side keys. */
 export function strip(rules: DraftRule[]) {
-  return rules.map((r) => ({ match: r.match, action: r.action, note: r.note }));
+  return rules.map((r) => ({ match: r.match, action: r.action }));
+}
+
+/**
+ * The draft as the server will store it: two sets of domains. Row order,
+ * which row a domain sits in and repeats do not survive a save, so they do
+ * not make the draft "unsaved" either.
+ */
+export function policySets(rules: Pick<DraftRule, 'match' | 'action'>[]): { block: string[]; direct: string[] } {
+  const pick = (action: RouteAction) =>
+    [...new Set(rules.filter((r) => r.action === action).flatMap((r) => r.match.filter(Boolean)))].sort();
+  return { block: pick('block'), direct: pick('direct') };
+}
+
+/**
+ * An imported rule list folded into the two lists the server keeps. Rules
+ * with any other action (WARP, proxy) are counted, not kept: they belong to
+ * the exit node's policy.
+ */
+export function importedPolicy(rules: Pick<DraftRule, 'match' | 'action'>[]): {
+  lists: { blockDomains: string[]; directDomains: string[] };
+  dropped: number;
+} {
+  const sets = policySets(rules);
+  return {
+    lists: { blockDomains: sets.block, directDomains: sets.direct },
+    dropped: rules.filter((r) => !POLICY_ACTIONS.includes(r.action)).length,
+  };
+}
+
+/** Whether the draft differs from the stored policy, compared as the server stores it. */
+export function policyDirty(policy: RoutePolicy, name: string, rules: Pick<DraftRule, 'match' | 'action'>[]): boolean {
+  if (policy.id === NEW_POLICY_ID || name !== policy.name) return true;
+  const draft = policySets(rules);
+  const stored = {
+    block: [...new Set(policy.blockDomains)].sort(),
+    direct: [...new Set(policy.directDomains)].sort(),
+  };
+  return JSON.stringify(draft) !== JSON.stringify(stored);
 }
 
 /** Matchers are entered as one line, separated by spaces or middots. */
@@ -61,25 +106,33 @@ export function splitMatch(value: string): string[] {
 }
 
 /**
- * Which rules can never fire, and because of what.
+ * Which rows can never fire, and because of what: counted the way the node
+ * renders the policy (A-151), block always above direct whatever the row
+ * order (`cascade.config.ts:1475, 1480`). A domain in both lists is blocked,
+ * so the DIRECT row is the dead one; a domain repeated within one list is
+ * dead in the later row.
  *
- * Only exact matcher collisions are reported: an earlier rule claiming the same
- * token always wins, which is provable from the strings alone. Real subsumption
- * (geosite:google swallowing geosite:youtube) needs the geosite database, which
- * the panel does not have, so those go unflagged rather than guessed at.
+ * Only exact matcher collisions are reported, which is provable from the
+ * strings alone. Real subsumption (geosite:google swallowing geosite:youtube)
+ * needs the geosite database, which the panel does not have, so those go
+ * unflagged rather than guessed at.
  */
-export function findShadows(rules: DraftRule[]): Map<string, string> {
-  const out = new Map<string, string>();
-  const seen = new Map<string, string>();
-  for (const rule of rules) {
-    if (rule.match.length === 0) continue;
-    const hit = rule.match.find((m) => seen.has(m));
-    if (hit !== undefined) {
-      out.set(rule.id, hit);
-      continue;
+export function findShadows(rules: DraftRule[]): Map<string, { match: string; by: RouteAction }> {
+  const out = new Map<string, { match: string; by: RouteAction }>();
+  const seen = new Map<string, RouteAction>();
+  const pass = (action: RouteAction) => {
+    for (const rule of rules) {
+      if (rule.action !== action || rule.match.length === 0) continue;
+      const hit = rule.match.find((m) => seen.has(m));
+      if (hit !== undefined) {
+        out.set(rule.id, { match: hit, by: seen.get(hit)! });
+        continue;
+      }
+      for (const m of rule.match) seen.set(m, action);
     }
-    for (const m of rule.match) seen.set(m, rule.id);
-  }
+  };
+  pass('block');
+  pass('direct');
   return out;
 }
 

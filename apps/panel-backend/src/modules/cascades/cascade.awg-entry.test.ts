@@ -62,7 +62,7 @@ async function makeNode(name: string): Promise<string> {
   return JSON.parse(res.body).id as string;
 }
 
-async function bindAwg(nodeId: string, port: number, generation: 1 | 3 = 1) {
+async function bindAwg(nodeId: string, port: number, generation: 1 | 3 = 1, legacyRow = false) {
   seq += 1;
   const p = await app.inject({
     method: 'POST',
@@ -81,6 +81,14 @@ async function bindAwg(nodeId: string, port: number, generation: 1 | 3 = 1) {
     },
   });
   expect(p.statusCode, p.body).toBe(201);
+  if (legacyRow) {
+    // A second binding of one generation, as a panel from before A-055 could
+    // store it; the API refuses it now (ADAPTER_SLOT_TAKEN).
+    await prisma.profileNodeBinding.create({
+      data: { profileId: JSON.parse(p.body).id, nodeId, port, transport: 'udp', enabled: true },
+    });
+    return;
+  }
   const b = await app.inject({
     method: 'POST',
     url: '/api/bindings',
@@ -149,7 +157,7 @@ describe('the chain block of an amneziawg entry', () => {
     // interface the adapter carries.
     const entry = await makeNode('ru-entry');
     await bindAwg(entry, 443);
-    await bindAwg(entry, 51820);
+    await bindAwg(entry, 51820, 1, true);
     await makeCascade(entry, await makeNode('nl-exit'));
     const chain = await getChainForNode(entry);
     expect(chain?.userCore).toMatchObject({ tproxy: { mark: chainTProxyMark(51820) } });

@@ -50,6 +50,10 @@ model Group {
   // inherit the panel-wide default. A user's effective preset is the single
   // distinct non-null override across their squads (see subscription.service).
   routingPreset   String?  @map("routing_preset") @db.VarChar(32)
+  // A-229 - or the operator's own preset instead. Never both (CHECK
+  // groups_one_routing_preset); RESTRICT keeps a preset in use from deletion.
+  customRoutingPresetId String? @map("custom_routing_preset_id") @db.Uuid
+  customRoutingPreset   RoutingPreset? @relation(fields: [customRoutingPresetId], references: [id], onDelete: Restrict)
   // K7 - optional per-squad HWID device-limit default. Used only when the user
   // has no explicit hwidDeviceLimit; the effective default is the MAX across
   // the user's squads (most-permissive cohort wins). Null = no squad default.
@@ -70,6 +74,7 @@ model Group {
   // A4 ad-split: per-squad grant of extra route-policies. See GroupRoutePolicy.
   routePolicies GroupRoutePolicy[]
 
+  @@index([customRoutingPresetId])
   @@map("groups")
 }
 
@@ -106,18 +111,31 @@ model GroupMember {
 // exits across their groups. Keyed on (cascade, exit_node) not the hop id: hops are
 // recreated on every cascade edit, node ids are stable. A stale row for a node no
 // longer in the cascade is harmless (filtered out at build time).
+//
+// A-149 (2026-10-22): keyed by DIRECTION. A row names the direction the squad
+// may use; `exitNodeId` is kept only for the legacy hop shape (a cascade with
+// no directions) and for rows the migration could not map. Any row of a
+// (squad, cascade) means "restricted", so a row with neither key restricts to
+// nothing rather than to everything. See the migration header.
 model GroupCascadeExit {
-  groupId    String @map("group_id") @db.Uuid
-  cascadeId  String @map("cascade_id") @db.Uuid
-  exitNodeId String @map("exit_node_id") @db.Uuid
+  id          String  @id @default(uuid()) @db.Uuid
+  groupId     String  @map("group_id") @db.Uuid
+  cascadeId   String  @map("cascade_id") @db.Uuid
+  directionId String? @map("direction_id") @db.Uuid
+  exitNodeId  String? @map("exit_node_id") @db.Uuid
 
-  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  cascade Cascade @relation(fields: [cascadeId], references: [id], onDelete: Cascade)
-  node    Node    @relation(fields: [exitNodeId], references: [id], onDelete: Cascade)
+  group     Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  cascade   Cascade           @relation(fields: [cascadeId], references: [id], onDelete: Cascade)
+  // SetNull: a deleted direction must not turn "restricted to it" into
+  // "unrestricted".
+  direction CascadeDirection? @relation(fields: [directionId], references: [id], onDelete: SetNull)
+  node      Node?             @relation(fields: [exitNodeId], references: [id], onDelete: Cascade)
 
-  @@id([groupId, cascadeId, exitNodeId])
+  @@unique([groupId, directionId])
+  @@unique([groupId, cascadeId, exitNodeId])
   @@index([cascadeId])
   @@index([exitNodeId])
+  @@index([directionId])
   @@map("group_cascade_exits")
 }
 

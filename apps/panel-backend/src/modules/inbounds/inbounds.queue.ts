@@ -1,5 +1,6 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import type {
+  AddUserRequest,
   ApplyInboundsRequest,
   DnsCfg,
   InboundDto,
@@ -12,15 +13,19 @@ import { prisma } from '../../prisma.js';
 import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
-import { allocatePeer, preallocatePeers } from '../amneziawg/amneziawg.service.js';
-import { getCascadeFragmentsForNode, getChainForNode } from '../cascades/cascade.service.js';
+import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
+import { reachOfUsers } from '../users/user-reach.js';
+import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
+import { cascadeXrayDrawingOf, type CascadeXrayDrawing } from '../cascades/cascade.config.js';
 import { layOutGeo } from '../geo-sets/geo-push.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { acmeHostnameFor } from './acme-hostname.js';
+import { checkRenderDrift, recordPushed } from './render-drift.js';
 import { ensureHysteriaTls } from '../nodes/hysteria-tls.js';
 import { ensureAwg3Geometry } from '../nodes/awg3-geometry.js';
+import { pushedBindingsWhere } from '../nodes/pushed-bindings.js';
 
 // Moved to its own module (E30) so the install command reads the address the
 // same way; re-exported for the callers that import it from here.
@@ -38,23 +43,37 @@ export interface ApplyNodeInboundsJobData {
 const QUEUE_NAME = 'inbound-sync';
 
 /**
- * Redis key for the "dirty" flag used by the dirty-flag coalescing pattern.
+ * A-162: every push is asked for HERE, and asking bumps the node's revision.
  *
- * Race the flag fixes: BullMQ's per-jobId dedupe rejects new enqueues for
- * jobs that are currently `active` (mid-push), so an admin edit landing
- * during the 5-30 s mTLS push window was silently dropped, the running
- * worker never saw the change, and no new push got scheduled. Next push
- * had to wait for an unrelated event.
+ * BullMQ drops an add whose jobId is still active, so an edit landing during
+ * the 5-30 s of a push of the same node used to vanish. A Redis "dirty" flag
+ * was meant to catch that, and did not: the re-queue ran inside the job,
+ * where the jobId was still active, so it was dropped too, after the flag had
+ * been eaten; a node with no hosts returned before the check; a last failed
+ * attempt never got there. And the status then compared the acknowledgement
+ * time with updatedAt maxima, so the lost edit read as applied.
  *
- * Sequence with the flag:
- *   enqueue → SET dirty
- *   worker start → DEL dirty (consume current intent)
- *   worker do-work (any concurrent enqueue re-SETs the flag here)
- *   worker end → GET dirty; if set, re-enqueue (new job, succeeds since
- *               the active one just completed)
+ * Now the intent lives in the database as nodes.desired_revision. The job
+ * reads it at the start of building the request and acknowledges exactly
+ * that revision (applied_revision). When the job ends, completed or out of
+ * attempts, and the revision moved meanwhile, it is queued again from the
+ * worker's event, where the old job no longer holds the jobId.
  */
-export function inboundDirtyKey(nodeId: string): string {
-  return `inbound-sync:dirty:${nodeId}`;
+export async function enqueueNodePush(nodeId: string): Promise<void> {
+  // The panel's clock, not the database's now(): lastInboundSyncAt beside it
+  // is stamped by the panel too, and the node card puts the two side by side.
+  // A Postgres in a VM can run seconds off the host (seen locally 22.10, a
+  // test reading "changed after it was applied").
+  await prisma.$executeRaw`
+    UPDATE nodes SET desired_revision = desired_revision + 1, config_changed_at = ${new Date()}
+    WHERE id = ${nodeId}::uuid`;
+  await inboundSyncQueue.add('applyNodeInbounds', { nodeId }, { jobId: `apply-${nodeId}` });
+}
+
+/** The revision a push about to be built stands for. Null: no such node. */
+export async function readDesiredRevision(nodeId: string): Promise<bigint | null> {
+  const row = await prisma.node.findUnique({ where: { id: nodeId }, select: { desiredRevision: true } });
+  return row?.desiredRevision ?? null;
 }
 
 export const inboundSyncQueue = new Queue<ApplyNodeInboundsJobData>(QUEUE_NAME, {
@@ -146,55 +165,42 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
 }
 
 /**
- * Each AWG user's address in the subnet of the profile behind `binding`, or an
- * empty map when there is no such binding.
- *
- * Wave-14 #13: allocated serially (allocatePeer is racy under concurrency, IP
- * slots aren't unique-indexed) before the addUser fan-out, and B7: one bulk
- * allocation for the whole set, stragglers (race loss / contention) falling
- * back to the per-user allocator.
+ * The legacy cascade fragments as a push carries them (A-232): the node's
+ * fragments, and only when it has an enabled xray inbound to carry them, which
+ * is where the push puts them. A node in a cascade without one gets none, and
+ * its xray draws no way out. ONE function for the push and for the read of the
+ * drawing (cascadeXrayDrawingForNode), so the read cannot say "drawn" about a
+ * node the push sends nothing to. `inbounds`: the push's own list; without it
+ * the enabled bindings are asked, by the same filter fetchEnabledInbounds uses.
  */
-async function allocateAwgAddresses(
-  binding: InboundDto | undefined,
-  users: { id: string; username: string; amneziawgPublicKey: string | null }[],
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  if (!binding) return out;
-  const row = await prisma.profileNodeBinding.findUnique({
-    where: { id: binding.id },
-    select: { profileId: true, profile: { select: { config: true } } },
-  });
-  if (!row) return out;
-  const profileId = row.profileId;
-  const subnet = ((row.profile.config ?? {}) as { subnet?: string }).subnet ?? '10.66.66.0/24';
-  const awgUsers = users.filter((u) => u.amneziawgPublicKey);
-  const bulk = await preallocatePeers(
-    profileId,
-    awgUsers.map((u) => u.id),
-    subnet,
-  ).catch((err) => {
-    const detail = err instanceof Error ? err.message : String(err);
+export async function legacyCascadeAsPushed(
+  nodeId: string,
+  inbounds?: { protocol: string }[],
+): Promise<XrayCascadeFragments | null> {
+  const fragments = await getCascadeFragmentsForNode(nodeId);
+  if (!fragments) return null;
+  const hasXray = inbounds
+    ? inbounds.some((i) => i.protocol === 'xray')
+    : (await prisma.profileNodeBinding.count({
+        where: { AND: [pushedBindingsWhere(nodeId), { profile: { protocol: 'xray' } }] },
+      })) > 0;
+  if (!hasXray) {
     getLogger().info(
-      `[worker:inbound-sync] bulk preallocatePeers on profile ${profileId} FAILED, per-user fallback: ${detail}`,
+      `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound; cascade not applied`,
     );
-    return new Map<string, string>();
-  });
-  for (const u of awgUsers) {
-    let ip = bulk.get(u.id);
-    if (!ip) {
-      try {
-        ip = (await allocatePeer(profileId, u.id, subnet)).ip;
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        getLogger().info(`[worker:inbound-sync] allocatePeer ${u.username} on profile ${profileId} FAILED: ${detail}`);
-        // Fall through, addUser will silently skip the AWG portion on the
-        // node side, other protocols still work for this user.
-        continue;
-      }
-    }
-    out.set(u.id, ip);
+    return null;
   }
-  return out;
+  return fragments;
+}
+
+/**
+ * A-232: the drawing a push gives this node's xray, read without pushing: the
+ * push's inputs (its chain block and, without one, legacyCascadeAsPushed)
+ * through the same cascadeXrayDrawingOf.
+ */
+export async function cascadeXrayDrawingForNode(nodeId: string): Promise<CascadeXrayDrawing> {
+  const chain = await getChainForNode(nodeId);
+  return cascadeXrayDrawingOf(chain, chain ? null : await legacyCascadeAsPushed(nodeId));
 }
 
 export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]> {
@@ -203,17 +209,16 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // table read while keeping the wire format identical (the node-agent
   // doesn't know about profile/binding split, it just gets a flat list).
   const bindings = await prisma.profileNodeBinding.findMany({
-    where: {
-      nodeId,
-      enabled: true,
-      profile: { enabled: true },
-    },
+    // The one filter of what a push sends, shared with the reports (A-204).
+    where: pushedBindingsWhere(nodeId),
     include: {
       profile: {
         select: { id: true, name: true, protocol: true, engine: true, config: true, awgProtocol: true },
       },
     },
-    orderBy: { port: 'asc' },
+    // The id breaks a tie (443/TCP and 443/UDP): the push's order is part of
+    // its drawing, which render-drift.ts compares (A-278).
+    orderBy: [{ port: 'asc' }, { id: 'asc' }],
   });
   // t07-6: the node's 3.1 geometry, minted on the first push that needs it.
   const awg3Geometry = bindings.some((b) => b.profile.protocol === 'amneziawg' && b.profile.awgProtocol === 3)
@@ -368,21 +373,15 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // xray inbound. The node-agent merges them into the xray config and forwards
   // entry->exit. Non-cascade nodes: getCascadeFragmentsForNode returns null and
   // this is a no-op, so the wire stays byte-identical to before.
-  const cascade = await getCascadeFragmentsForNode(nodeId);
+  const cascade = await legacyCascadeAsPushed(nodeId, inbounds);
   if (cascade) {
     // A node runs a single xray config.json, so the first xray inbound is the
     // one (and only one) that carries the cascade.
-    const xrayInbound = inbounds.find((i) => i.protocol === 'xray');
-    if (xrayInbound) {
-      xrayInbound.config = {
-        ...(xrayInbound.config as Record<string, unknown>),
-        cascade,
-      } as InboundDto['config'];
-    } else {
-      getLogger().info(
-        `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound; cascade not applied`,
-      );
-    }
+    const xrayInbound = inbounds.find((i) => i.protocol === 'xray')!;
+    xrayInbound.config = {
+      ...(xrayInbound.config as Record<string, unknown>),
+      cascade,
+    } as InboundDto['config'];
   }
 
   // WARP egress (feat/warp-native) - if this node has WARP enabled, attach the
@@ -445,7 +444,6 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
  */
 async function buildApplyInboundsRequest(node: NodeRow): Promise<ApplyInboundsRequest> {
   const inbounds = await fetchEnabledInbounds(node.id);
-  const policy = await resolvePolicyForNode(node.id);
   const dns = (node.dns as DnsCfg | null) ?? undefined;
   // Э3 шаг 1: the cascade is a node-level block now, next to the policy and the
   // resolver. Read back off the xray inbound rather than fetched a second time,
@@ -483,6 +481,10 @@ async function buildApplyInboundsRequest(node: NodeRow): Promise<ApplyInboundsRe
   // the agent stops holding a chain and hands its core the legacy fragments
   // again. Nobody logs in to the box.
   const chain = await getChainForNode(node.id);
+  // A-108: the node policy names the cascade's outbounds of the drawing THIS
+  // push gives the node's xray. Under a chain an xray entry hands over (socks
+  // outbounds), and a node whose users are not on xray draws no way out at all.
+  const policy = await resolvePolicyForNode(node.id, cascadeXrayDrawingOf(chain, fragments));
   return {
     inbounds,
     ...(policy ? { policy } : {}),
@@ -510,11 +512,12 @@ export async function applyInboundsRequestForNode(
  * Slice 24: replaces the manual `/etc/iceslab-node/env` editing dance
  * caught during the 2026-05-06 VPS test.
  */
-export async function applyInboundsForNode(nodeId: string): Promise<void> {
-  // Consume the dirty-flag at the start. Any enqueue that comes in WHILE
-  // we're working will re-SET this key; we check it again at the end and
-  // re-enqueue if it's set. See inboundDirtyKey() for the full rationale.
-  await redis.del(inboundDirtyKey(nodeId)).catch(() => null);
+export async function applyInboundsForNode(nodeId: string, revision?: bigint | null): Promise<void> {
+  // A-162: the revision and the time this push stands for are taken BEFORE
+  // anything is read for the request, so an edit that lands while it is being
+  // built or delivered is newer than what it acknowledges.
+  const rev = revision !== undefined ? revision : await readDesiredRevision(nodeId);
+  const builtAt = new Date();
 
   const node = await fetchNode(nodeId);
   if (!node) {
@@ -538,13 +541,22 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
    * card the same way.
    */
   let req: ApplyInboundsRequest;
-  let inbounds: InboundDto[];
+  let built: ApplyInboundsRequest | null = null;
+  let inbounds: InboundDto[] = [];
+  // A-275: the agent's ADAPTER_FAILED, held until the roster has gone out.
+  let partial: NodeRequestError | null = null;
   // Whether the push being tried carries a chain block (E46, see the catch).
   let sentChain = false;
   const transport = new NodeTransport(node);
 
   try {
+    // A-157: a vless leg stored without REALITY gets it before anything reads
+    // the cascade, here and on the other end (which this queues).
+    await giveCascadeLegsReality(node.id);
     req = await buildApplyInboundsRequest(node);
+    // What the drawing check compares with later (render-drift.ts): the
+    // request as built, before the geo block that needs the agent.
+    built = req;
     inbounds = req.inbounds;
     // Phase 9.2: the geo files go out before the push that names them, since
     // the agent refuses a push whose files it does not hold (GEO_MISSING). An
@@ -594,7 +606,9 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         // both current and broken, and an operator has no way to tell which
         // half is the old one.
         data: {
-          lastInboundSyncAt: new Date(),
+          // A-162: when the request was BUILT, not when the agent answered:
+          // an edit saved during the push is then later than this stamp.
+          lastInboundSyncAt: builtAt,
           lastInboundSyncError: Prisma.DbNull,
           /**
            * Whether this node was sent a chain block, recorded by the side
@@ -611,6 +625,17 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         },
       })
       .catch(() => null);
+    // A-162: the revision read before building, never a later one: an edit
+    // that landed meanwhile stays above it and is pushed again. GREATEST so a
+    // slow answer to an older request cannot lower what a newer one set.
+    if (rev !== null) {
+      await prisma.$executeRaw`
+        UPDATE nodes SET applied_revision = GREATEST(applied_revision, ${rev})
+        WHERE id = ${nodeId}::uuid`.catch(() => null);
+    }
+    // Applied in full: the drawing the node now has, as a sha. A partial push
+    // (A-275) goes to the catch and records nothing, so the check asks again.
+    if (built) await recordPushed(nodeId, built).catch(() => null);
   } catch (err) {
     const detail =
       err instanceof NodeRequestError
@@ -666,12 +691,29 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
         },
       })
       .catch(() => null);
-    throw err;
+    /**
+     * A-275, stand 26.10: ADAPTER_FAILED is the agent's answer AFTER it applied
+     * every core it could (server.go handleApplyInbounds: applyPushOutcome runs
+     * all of them, then 500 names the ones that refused). Rethrowing here kept
+     * the roster from the node, so one refusing core (mieru with no user, a
+     * hysteria with no ACME email) left the users of every other core on the
+     * node without their new users. The roster goes out to what applied; the
+     * job still fails after it, the error stays on the node card, the revision
+     * is not marked applied, and BullMQ's retry pushes again.
+     */
+    if (err instanceof NodeRequestError && err.status === 500 && err.body?.error === 'ADAPTER_FAILED') {
+      partial = err;
+    } else {
+      throw err;
+    }
   }
 
   // Push all active users so protocol servers (xray, hysteria, etc.) have
   // an up-to-date client list. addUser is idempotent on the node side.
-  if (inbounds.length === 0) return;
+  if (inbounds.length === 0) {
+    if (partial) throw partial;
+    return;
+  }
 
   // Find the AmneziaWG profile bound to this node (at most one, single
   // awg-quick interface per host). When present, every active user with
@@ -697,76 +739,193 @@ export async function applyInboundsForNode(nodeId: string): Promise<void> {
   getLogger().info(
     `[worker:inbound-sync] pushing ${users.length} user(s) to ${node.name}`,
   );
-  const awgIpByUser = await allocateAwgAddresses(awgBinding, users);
-  const awg3IpByUser = await allocateAwgAddresses(awg3Binding, users);
+  // A-022: each user on exactly the inbounds of this node their squads reach
+  // (the subscription's own rule, user-reach.ts). A user who reaches none of
+  // them gets an empty list, which takes them off the node: a squad that lost
+  // this node's profile must not leave its members on it. An agent older than
+  // the field ignores the list and serves everyone on every inbound, as before.
+  // Every active user, as a filter (users holds the same set; a list of ids
+  // would run past Postgres's bind-parameter cap on a large roster).
+  const reach = await reachOfUsers(null, { nodeId });
+  const inboundIdsOf = (userId: string): string[] => reach.get(userId)?.get(nodeId) ?? [];
+  // A-164: an address only for the users who reach that AmneziaWG inbound.
+  const awgIpByUser = await allocateAwgAddresses(
+    awgBinding?.id,
+    users.filter((u) => awgBinding && inboundIdsOf(u.id).includes(awgBinding.id)),
+  );
+  const awg3IpByUser = await allocateAwgAddresses(
+    awg3Binding?.id,
+    users.filter((u) => awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id)),
+  );
 
-  // Chunked parallel fanout. 25 is a balance between throughput and not
-  // hammering the node-agent's HTTP server (default Node http.Agent
-  // maxSockets = Infinity but the node-agent runs single-process Go,
-  // 25 concurrent in-flight is comfortably below typical default ulimits).
-  const ADD_USER_CHUNK = 25;
-  let chunkFailed = 0;
-  for (let i = 0; i < users.length; i += ADD_USER_CHUNK) {
-    const chunk = users.slice(i, i + ADD_USER_CHUNK);
-    const results = await Promise.allSettled(
-      chunk.map((u) =>
-        transport.addUser({
-          userId: u.id,
-          shortId: u.shortId,
-          username: u.username,
-          credentials: {
-            xrayUuid: u.xrayUuid,
-            hysteriaPassword: u.hysteriaPassword,
-            amneziawgPublicKey: u.amneziawgPublicKey,
-            amneziawgAllowedIp: awgIpByUser.get(u.id),
-            amneziawgAllowedIp3: awg3IpByUser.get(u.id),
-            naivePassword: u.naivePassword,
-            tuicUuid: u.xrayUuid,
-            tuicPassword: deriveTuicPassword(u.xrayUuid),
-            anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
-            shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
-          },
-        }),
-      ),
-    );
+  const requests: AddUserRequest[] = users.map((u) => ({
+    userId: u.id,
+    shortId: u.shortId,
+    username: u.username,
+    inboundIds: inboundIdsOf(u.id),
+    credentials: {
+      xrayUuid: u.xrayUuid,
+      hysteriaPassword: u.hysteriaPassword,
+      amneziawgPublicKey: u.amneziawgPublicKey,
+      amneziawgAllowedIp: awgIpByUser.get(u.id),
+      amneziawgAllowedIp3: awg3IpByUser.get(u.id),
+      naivePassword: u.naivePassword,
+      tuicUuid: u.xrayUuid,
+      tuicPassword: deriveTuicPassword(u.xrayUuid),
+      anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
+      shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
+    },
+  }));
+  const failed = await sendRoster(transport, node.name, requests);
+  getLogger().info(
+    `[worker:inbound-sync] user sync to ${node.name} done (${users.length - failed}/${users.length} ok)` +
+      (partial ? ', after a push some cores refused' : ''),
+  );
+  if (partial) throw partial;
+}
+
+/**
+ * A-112: users per /addUsers request. Sized against the agent's 1 MiB body
+ * cap (maxRequestBodyBytes in server.go) with room to spare; the guard test
+ * builds a batch of this size from the longest values each field takes.
+ */
+export const ADD_USERS_BATCH = 250;
+
+/** The old fanout, for an agent without /addUsers: 25 /addUser at a time. */
+const ADD_USER_CHUNK = 25;
+
+/**
+ * The roster to one node, ADD_USERS_BATCH users per request: thirty thousand
+ * users were thirty thousand requests on every push (A-112). An agent older
+ * than /addUsers answers 404, and the rest goes one by one as before. Answers
+ * how many users did not land; a failed request counts all of its users and
+ * the rest still goes, as a failed /addUser did before.
+ */
+export async function sendRoster(
+  transport: Pick<NodeTransport, 'addUser' | 'addUsers'>,
+  nodeName: string,
+  requests: AddUserRequest[],
+): Promise<number> {
+  let failed = 0;
+  let i = 0;
+  for (; i < requests.length; i += ADD_USERS_BATCH) {
+    const batch = requests.slice(i, i + ADD_USERS_BATCH);
+    try {
+      const res = await transport.addUsers({ users: batch });
+      for (const r of res.results) {
+        if (r.ok) continue;
+        failed++;
+        getLogger().info(`[worker:inbound-sync] addUser ${r.userId} to ${nodeName} FAILED: ${r.error ?? 'refused'}`);
+      }
+      // An entry the agent did not answer for did not land either.
+      failed += Math.max(0, batch.length - res.results.length);
+    } catch (err) {
+      if (err instanceof NodeRequestError && err.status === 404) break;
+      failed += batch.length;
+      const detail = err instanceof Error ? err.message : String(err);
+      getLogger().info(`[worker:inbound-sync] addUsers (${batch.length}) to ${nodeName} FAILED: ${detail}`);
+    }
+  }
+  if (i >= requests.length) return failed;
+
+  getLogger().info(`[worker:inbound-sync] ${nodeName} has no /addUsers (older agent), sending users one by one`);
+  for (; i < requests.length; i += ADD_USER_CHUNK) {
+    const chunk = requests.slice(i, i + ADD_USER_CHUNK);
+    const results = await Promise.allSettled(chunk.map((r) => transport.addUser(r)));
     for (let j = 0; j < results.length; j++) {
       const r = results[j]!;
       if (r.status === 'rejected') {
-        chunkFailed++;
+        failed++;
         const detail = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        getLogger().info(
-          `[worker:inbound-sync] addUser ${chunk[j]!.username} to ${node.name} FAILED: ${detail}`,
-        );
+        getLogger().info(`[worker:inbound-sync] addUser ${chunk[j]!.username} to ${nodeName} FAILED: ${detail}`);
       }
     }
   }
-  getLogger().info(
-    `[worker:inbound-sync] user sync to ${node.name} done (${users.length - chunkFailed}/${users.length} ok)`,
-  );
+  return failed;
+}
 
-  // End-of-job dirty check: if an admin edit landed during the push window,
-  // the event handler re-SET the flag we cleared above. Re-enqueue so the
-  // intermediate edit doesn't get silently lost behind BullMQ's per-jobId
-  // active-job dedupe.
-  const stillDirty = await redis.getdel(inboundDirtyKey(nodeId)).catch(() => null);
-  if (stillDirty) {
-    void inboundSyncQueue.add(
-      'applyNodeInbounds',
-      { nodeId },
-      { jobId: `apply-${nodeId}` },
-    );
+/**
+ * A-162: after a job, completed or out of attempts, push again when the
+ * node's revision moved past the one the job read. Called from the worker's
+ * events, where the finished job no longer holds the jobId (removeOnComplete
+ * and removeOnFail), so this add is not dropped as a duplicate.
+ *
+ * "Moved past what was read", not "above what is applied": a node that is
+ * down would otherwise be queued again and again after every last attempt.
+ * Such a node is brought back by the poll cron instead (reconcileNodeRevisions).
+ */
+export async function requeueIfMoved(nodeId: string, readRevision: bigint | null | undefined): Promise<boolean> {
+  if (readRevision === null || readRevision === undefined) return false;
+  const now = await readDesiredRevision(nodeId);
+  if (now === null || now <= readRevision) return false;
+  // ⚠ The worker emits completed/failed while the finished job still holds
+  // its jobId (measured on BullMQ here: getState() said "active" inside the
+  // handler), so an add right away is folded into the job that is ending and
+  // lost, the very bug this replaces. Wait until the old job is gone, two
+  // seconds at most, then add.
+  const jobId = `apply-${nodeId}`;
+  for (let i = 0; i < 100; i++) {
+    const old = await inboundSyncQueue.getJob(jobId);
+    if (!old || (await old.getState()) !== 'active') break;
+    await new Promise((r) => setTimeout(r, 20));
   }
+  await inboundSyncQueue.add('applyNodeInbounds', { nodeId }, { jobId });
+  return true;
+}
+
+/**
+ * A-162, principle P1: a node converges by itself. Online or degraded, and
+ * its applied revision behind the desired one (the last attempt failed and
+ * nothing has been edited since): queue its push. Degraded counts, by the
+ * same rule as the re-push on coming back (nodes.cron.ts): a node whose core
+ * will not start is the one that needs the config, and a degraded node with
+ * a failed push and no status change would otherwise never converge. Run
+ * from the status poll; one query on a small table, and the jobId folds a
+ * push already queued.
+ *
+ * ⚠ At most once an hour per (node, revision). A config the agent REFUSES
+ * stays behind too, and that refusal restarts the node's cores on every try:
+ * retried on each poll tick it would bounce a live node every half minute
+ * over an error only an edit can fix. Once an hour still converges a node
+ * whose last attempt died on the network, which is the case this is for.
+ */
+const RECONCILE_EVERY_S = 3600;
+
+/** The drawing check (render-drift.ts) with this module's builder and push:
+ *  at backend start and from the hourly cron (node-drawing-check). */
+export function checkNodeDrawings(): Promise<number> {
+  return checkRenderDrift((nodeId) => applyInboundsRequestForNode(nodeId), enqueueNodePush);
+}
+
+export async function reconcileNodeRevisions(): Promise<number> {
+  const behind = await prisma.$queryRaw<{ id: string; desired: bigint }[]>`
+    SELECT id::text AS id, desired_revision AS desired FROM nodes
+    WHERE deleted_at IS NULL AND status IN ('online', 'degraded') AND applied_revision < desired_revision`;
+  let queued = 0;
+  for (const n of behind) {
+    const first = await redis.set(`inbound-sync:reconciled:${n.id}:${n.desired}`, '1', 'EX', RECONCILE_EVERY_S, 'NX');
+    if (first !== 'OK') continue;
+    await inboundSyncQueue.add('applyNodeInbounds', { nodeId: n.id }, { jobId: `apply-${n.id}` });
+    queued++;
+  }
+  return queued;
 }
 
 // ───── Worker ─────
 
 export function startInboundSyncWorker(): Worker<ApplyNodeInboundsJobData> {
+  // A-162: the revision each running job read, for its completed/failed
+  // event. Kept in this process: the events of a job fire in the worker that
+  // ran it.
+  const readByJob = new Map<string, bigint | null>();
   const worker = new Worker<ApplyNodeInboundsJobData>(
     QUEUE_NAME,
     async (job: Job<ApplyNodeInboundsJobData>) => {
       switch (job.name) {
         case 'applyNodeInbounds': {
-          await applyInboundsForNode(job.data.nodeId);
+          const rev = await readDesiredRevision(job.data.nodeId);
+          readByJob.set(job.id ?? '', rev);
+          await applyInboundsForNode(job.data.nodeId, rev);
           break;
         }
         default:
@@ -802,6 +961,18 @@ export function startInboundSyncWorker(): Worker<ApplyNodeInboundsJobData> {
         `(attempt ${job?.attemptsMade ?? '?'} of ${job?.opts?.attempts ?? '?'}) ` +
         `node=${job?.data?.nodeId ?? 'unknown'}: ${err?.message ?? String(err)}`,
     );
+    // Only the LAST attempt ends the job: an earlier one retries and reads
+    // the revision again at its start.
+    if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+      const rev = readByJob.get(job.id ?? '');
+      readByJob.delete(job.id ?? '');
+      void requeueIfMoved(job.data.nodeId, rev).catch(() => null);
+    }
+  });
+  worker.on('completed', (job) => {
+    const rev = readByJob.get(job.id ?? '');
+    readByJob.delete(job.id ?? '');
+    void requeueIfMoved(job.data.nodeId, rev).catch(() => null);
   });
 
   return worker;

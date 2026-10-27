@@ -190,6 +190,8 @@ model CascadeDirection {
   // is RESTRICT on their side, so a direction cannot be deleted while a policy
   // still points at it.
   policyRules NodePolicyRule[]
+  // A-149: squads whose exit allow-list names this direction.
+  groupExits GroupCascadeExit[]
 
   @@unique([cascadeId, tag])
   @@index([outboundId])

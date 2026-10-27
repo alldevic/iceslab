@@ -151,9 +151,20 @@ type Adapter struct {
 	geo        string
 	geoRunning string
 
+	// policyDrawn (A-232): the policy report of the last render in force.
+	policyDrawn *dto.PolicyDrawn
+
 	// restartMu serializes regenerateAndRestart so concurrent config changes
 	// can't race the subprocess swap. Never held together with mu across IO.
 	restartMu sync.Mutex
+}
+
+// PolicyDrawn implements core.PolicyDrawnReporter (A-232): what the last render
+// in force did with the node policy; nil until one is.
+func (a *Adapter) PolicyDrawn() *dto.PolicyDrawn {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.policyDrawn
 }
 
 // ApplyPolicy implements core.PolicyReceiver: store the node-level policy and
@@ -187,12 +198,22 @@ func (a *Adapter) ApplyPolicy(raw json.RawMessage) error {
 		a.mu.Unlock()
 		return nil
 	}
+	prev := a.policy
 	a.policy = parsed.Rules
 	count := len(parsed.Rules)
 	a.mu.Unlock()
 
 	a.logger.Info("xray ApplyPolicy: policy changed, regenerating", "rules", count)
-	return a.regenerateAndRestart(context.Background())
+	err := a.regenerateAndRestart(context.Background())
+	if isRefused(err) {
+		// Same rule as ApplyInbound (A-130): what the core refused is not kept.
+		a.mu.Lock()
+		if policyEqual(a.policy, parsed.Rules) {
+			a.policy = prev
+		}
+		a.mu.Unlock()
+	}
+	return err
 }
 
 // ApplyDns implements core.DnsReceiver: store the node's resolver and re-render
@@ -232,11 +253,21 @@ func (a *Adapter) ApplyDns(raw json.RawMessage) error {
 		a.mu.Unlock()
 		return nil
 	}
+	prev := a.dns
 	a.dns = parsed
 	a.mu.Unlock()
 
 	a.logger.Info("xray ApplyDns: resolver changed, regenerating", "named", parsed != nil)
-	return a.regenerateAndRestart(context.Background())
+	err := a.regenerateAndRestart(context.Background())
+	if isRefused(err) {
+		// Same rule as ApplyInbound (A-130): what the core refused is not kept.
+		a.mu.Lock()
+		if a.dns == parsed {
+			a.dns = prev
+		}
+		a.mu.Unlock()
+	}
+	return err
 }
 
 // ApplyCascade implements core.CascadeReceiver: take this node's hop in a
@@ -274,20 +305,37 @@ func (a *Adapter) ApplyCascade(fragments json.RawMessage) error {
 			a.mu.Unlock()
 			return nil
 		}
+		prev := a.cascade
 		a.cascade = nil
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyCascade: the chain process holds the cascade, dropping the legs from xray")
-		return a.regenerateAndRestart(context.Background())
+		return a.revertRefusedCascade(a.regenerateAndRestart(context.Background()), nil, prev)
 	}
 	if parsed == nil || cascadeEqual(a.cascade, parsed) {
 		a.mu.Unlock()
 		return nil
 	}
+	prev := a.cascade
 	a.cascade = parsed
 	a.mu.Unlock()
 
 	a.logger.Info("xray ApplyCascade: cascade changed, regenerating")
-	return a.regenerateAndRestart(context.Background())
+	return a.revertRefusedCascade(a.regenerateAndRestart(context.Background()), parsed, prev)
+}
+
+// revertRefusedCascade: same rule as ApplyInbound (A-130), what the core
+// refused is not kept. `stored` is what the call put in a.cascade; a newer
+// value there is not ours to undo.
+func (a *Adapter) revertRefusedCascade(err error, stored, prev *CascadeFragments) error {
+	if !isRefused(err) {
+		return err
+	}
+	a.mu.Lock()
+	if a.cascade == stored {
+		a.cascade = prev
+	}
+	a.mu.Unlock()
+	return err
 }
 
 // SetChainHolds implements core.ChainAware; the server calls it before
@@ -389,15 +437,18 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 //
 // Derived from the id rather than random for that same reason, and prefixed
 // with the base tag so a human reading the config still sees what it is.
+//
+// The WHOLE id (A-131, 22.10): the first 8 characters were taken, and two
+// bindings whose ids share them (1 in about 4 billion per pair with random
+// uuids, every pair of fixtures like ...0001 and ...0002 that differ at the
+// end) got one tag, and xray refused the node's whole config. The tags of a
+// running core change once with this, which costs nothing extra: the agent's
+// update restarts xray, and its counters start over then anyway.
 func inboundTagFor(inboundID, baseTag string) string {
-	short := inboundID
-	if len(short) > 8 {
-		short = short[:8]
-	}
 	if baseTag == "" {
 		baseTag = "vless-in"
 	}
-	return baseTag + "-" + short
+	return baseTag + "-" + inboundID
 }
 
 // recordRestart accumulates what the supervisor did. Called from the
@@ -536,6 +587,26 @@ func (a *Adapter) Stop(ctx context.Context) error {
 //
 // Idempotent: re-adding the same user with the same UUID is a no-op.
 func (a *Adapter) AddUser(user core.User) error {
+	return a.addUser(user, "")
+}
+
+// AddUserOn implements core.ScopedUserAdder (A-022): the user goes onto these
+// inbounds of the node only, and off the others. The panel's squad decides
+// which; before this every user was on every inbound of every node, so a
+// squad limited what the subscription showed, not what a client could use.
+func (a *Adapter) AddUserOn(user core.User, inboundIDs []string) error {
+	ids := append([]string(nil), inboundIDs...)
+	sort.Strings(ids)
+	scope := strings.Join(ids, ",")
+	if scope == "" {
+		// Named on none of this core's inbounds: the server says so with
+		// RemoveUser, and an empty scope here would read as "every inbound".
+		return a.RemoveUser(user.UserID)
+	}
+	return a.addUser(user, scope)
+}
+
+func (a *Adapter) addUser(user core.User, scope string) error {
 	if user.XrayUUID == "" {
 		// User has no Xray credentials, nothing to do.
 		return nil
@@ -550,9 +621,10 @@ func (a *Adapter) AddUser(user core.User) error {
 	// serves, and Vision is only legal on raw. The inbound owns it now, see
 	// buildUserInboundSettings.
 	desired := xrayClient{
-		ID:    user.XrayUUID,
-		Email: user.UserID,
-		Login: user.Username,
+		ID:       user.XrayUUID,
+		Email:    user.UserID,
+		Login:    user.Username,
+		Inbounds: scope,
 	}
 	if exists && existing == desired {
 		a.mu.Unlock()
@@ -566,13 +638,13 @@ func (a *Adapter) AddUser(user core.User) error {
 	if dormant {
 		return nil
 	}
-	change := userChange{op: liveAdd, target: desired}
+	change := userChange{next: &desired}
 	if exists {
-		// A rename changes only the socks/http login. The user is already on
-		// every vless/trojan/vmess inbound with the same id, and re-adding them
-		// there would fail as a duplicate and fall back to a restart.
-		change.managedUnchanged = existing.ID == desired.ID && existing.Email == desired.Email
-		change.prevLogin = existing.Login
+		// A rename changes only the socks/http login: the user stays on the
+		// vless/trojan/vmess inbounds they are on with the same id, and
+		// re-adding them there would fail as a duplicate and fall back to a
+		// restart. liveUpdateUser works that out from the pair.
+		change.prev = &existing
 	}
 	if a.liveUpdateUser(context.Background(), change) {
 		return nil
@@ -620,7 +692,7 @@ func (a *Adapter) RemoveUser(userID string) error {
 	if dormant {
 		return nil
 	}
-	if a.liveUpdateUser(context.Background(), userChange{op: liveRemove, target: removed}) {
+	if a.liveUpdateUser(context.Background(), userChange{prev: &removed}) {
 		return nil
 	}
 	return a.regenerateAndRestart(context.Background())
@@ -633,35 +705,42 @@ const (
 	liveRemove
 )
 
-// userChange is one AddUser/RemoveUser as the live path needs to see it.
+// userChange is one AddUser/RemoveUser as the live path needs to see it: the
+// user as the running core carries them (prev, nil when new) and as they are
+// to be (next, nil when removed). Membership per inbound, identity and the
+// socks/http login all follow from the two.
 type userChange struct {
-	op     liveOp
-	target xrayClient
-	// managedUnchanged: the user's id and email are what the vless/trojan/vmess
-	// inbounds already carry, so only the socks/http accounts move (a rename).
-	managedUnchanged bool
-	// prevLogin: the login this user had before an add that replaced them.
-	prevLogin string
+	prev, next *xrayClient
 }
 
-// accountsBeforeChange: how many socks/http accounts the running core carried
-// BEFORE this change, from the count after it. It decides whether each plain
-// inbound exists in the running core right now (an inbound with no accounts is
-// not rendered, see renderMultiConfig), so whether it has to be removed before
-// it is added back.
-func accountsBeforeChange(after int, c userChange) int {
-	has := func(login string) int {
-		if login != "" {
-			return 1
+// clientsBefore is the user list as the running core carries it, from the
+// list after the change: next taken out, prev put back.
+func clientsBefore(after []xrayClient, prev, next *xrayClient) []xrayClient {
+	out := make([]xrayClient, 0, len(after)+1)
+	for _, c := range after {
+		if next != nil && c.Email == next.Email {
+			continue
 		}
-		return 0
+		out = append(out, c)
 	}
-	switch c.op {
-	case liveAdd:
-		return after - has(c.target.Login) + has(c.prevLogin)
-	default:
-		return after + has(c.target.Login)
+	if prev != nil {
+		out = append(out, *prev)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Email < out[j].Email })
+	return out
+}
+
+// sameAccounts: two socks/http account lists that render the same.
+func sameAccounts(a, b []xrayClient) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Login != b[i].Login || a[i].ID != b[i].ID {
+			return false
+		}
+	}
+	return true
 }
 
 // buildAduInbound renders the JSON that `xray api adu` consumes. It MUST be a
@@ -743,7 +822,6 @@ func buildAduInboundEntry(inbound InboundConfig, target xrayClient) map[string]a
 // false tells the caller to fall back to a full restart. restartMu-guarded so
 // it can't race a regenerateAndRestart; a.mu only for the fast snapshot.
 func (a *Adapter) liveUpdateUser(ctx context.Context, change userChange) bool {
-	op, target := change.op, change.target
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
 
@@ -770,19 +848,14 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, change userChange) bool {
 		return false
 	}
 
-	// Keep the on-disk config current so a later restart has the same user set
-	// (and the same cascade fragments). Rendered from the full inbound set, the
-	// same way regenerateAndRestart does it: rendering the single install-time
-	// inbound here would overwrite a multi-inbound config on disk with one that
-	// serves a fraction of it.
+	// The on-disk config follows the change so a later restart has the same user
+	// set (and the same cascade fragments). Rendered from the full inbound set,
+	// the same way regenerateAndRestart does it: rendering the single
+	// install-time inbound here would overwrite a multi-inbound config on disk
+	// with one that serves a fraction of it. Written at the end, see there.
 	blob, err := renderMultiConfig(inbounds, clients, cascade, inbounds[0].withDefaults().ApiPort, policy, dns)
 	if err != nil {
 		return false
-	}
-	if cfgPath != "" {
-		if err := writeConfig(cfgPath, blob); err != nil {
-			return false
-		}
 	}
 
 	// The api port is install-time identity and identical across inbounds; the
@@ -798,15 +871,50 @@ func (a *Adapter) liveUpdateUser(ctx context.Context, change userChange) bool {
 	// adu to cover them would come back short of "Added N" and send every user
 	// change on the node into a restart, dropping every vless session on it.
 	managed, plain := splitInbounds(inbounds)
-	if len(managed) > 0 && !change.managedUnchanged {
-		if !a.liveManaged(cctx, run, binPath, server, op, managed, target) {
+	prev, next := change.prev, change.next
+	// Per inbound, since a user may be on some of them only (A-022): off the
+	// ones they leave, onto the ones they join. A changed id on an inbound they
+	// stay on is the same pair, rmu of the old then adu of the new: adu alone
+	// answers "already exists" for the email and falls into a restart.
+	same := prev != nil && next != nil && prev.ID == next.ID && prev.Email == next.Email
+	var leave, join []InboundConfig
+	for _, in := range managed {
+		was := prev != nil && prev.servesOn(in)
+		is := next != nil && next.servesOn(in)
+		if was && (!is || !same) {
+			leave = append(leave, in)
+		}
+		if is && (!was || !same) {
+			join = append(join, in)
+		}
+	}
+	if len(leave) > 0 && !a.liveManaged(cctx, run, binPath, server, liveRemove, leave, *prev) {
+		return false
+	}
+	if len(join) > 0 && !a.liveManaged(cctx, run, binPath, server, liveAdd, join, *next) {
+		return false
+	}
+	// socks/http, each replaced whole only when its own accounts changed.
+	before := clientsBefore(clients, prev, next)
+	for _, in := range plain {
+		was := plainAccounts(usersFor(in, before))
+		is := plainAccounts(usersFor(in, clients))
+		if sameAccounts(was, is) {
+			continue
+		}
+		if !a.refreshPlainInbounds(cctx, run, binPath, server, []InboundConfig{in}, usersFor(in, clients), len(was) > 0, len(is) > 0) {
 			return false
 		}
 	}
-	if len(plain) > 0 {
-		after := len(plainAccounts(clients))
-		before := accountsBeforeChange(after, change)
-		if !a.refreshPlainInbounds(cctx, run, binPath, server, plain, clients, before > 0, after > 0) {
+	// Only now, with the running core holding exactly this state. This blob is
+	// never put through `xray -test`, and written ahead of the live call it went
+	// to disk even when the call then failed: the next supervisor restart (a
+	// crash, the memory watchdog) loaded it, and a config the core refuses took
+	// the node dark (A-130, 22.10). Written after, it is what the core already
+	// runs. A failed write falls back to the restart, which validates and writes.
+	if cfgPath != "" {
+		if err := writeConfig(cfgPath, blob); err != nil {
+			a.logger.Warn("xray: user changed live, config write failed; falling back to restart", "err", err)
 			return false
 		}
 	}
@@ -1083,25 +1191,26 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	if len(users) > 0 {
 		counters, err := queryUserStats(ctx, run, binary, apiPort)
 		if err != nil {
-			// Soft-fail: emit NO per-user rows this poll, not zero-counter rows.
-			// Zero-counter rows would read as a cumulative drop to 0 and re-baseline
-			// the panel's per-user snapshots, spiking each user's quota on recovery.
-			// The node total below still reports via the inbound query.
-			a.logger.Warn("xray GetStats: user statsquery failed, skipping per-user this poll", "err", err)
-		} else {
-			for _, u := range users {
-				c := counters[u.UserID]
-				// The same person through a socks/http door: a second counter
-				// under their login, added to the first.
-				if login, ok := loginOf[u.UserID]; ok {
-					viaLogin := counters[login]
-					c.UplinkBytes += viaLogin.UplinkBytes
-					c.DownlinkBytes += viaLogin.DownlinkBytes
-				}
-				out = append(out, core.UserStats{UserID: u.UserID, BytesIn: c.UplinkBytes, BytesOut: c.DownlinkBytes})
-				userIn += c.UplinkBytes
-				userOut += c.DownlinkBytes
+			// No per-user rows this poll, not zero-counter rows: those would
+			// read as a cumulative drop to 0 and re-baseline the panel's
+			// per-user snapshots, spiking each user's quota on recovery. And
+			// said as NoData (A-163), so the panel leaves this core's snapshots
+			// alone instead of reading the missing rows as nothing.
+			a.logger.Warn("xray GetStats: user statsquery failed, no data this poll", "err", err)
+			return &core.Stats{NoData: true, Cumulative: true}, nil
+		}
+		for _, u := range users {
+			c := counters[u.UserID]
+			// The same person through a socks/http door: a second counter
+			// under their login, added to the first.
+			if login, ok := loginOf[u.UserID]; ok {
+				viaLogin := counters[login]
+				c.UplinkBytes += viaLogin.UplinkBytes
+				c.DownlinkBytes += viaLogin.DownlinkBytes
 			}
+			out = append(out, core.UserStats{UserID: u.UserID, BytesIn: c.UplinkBytes, BytesOut: c.DownlinkBytes})
+			userIn += c.UplinkBytes
+			userOut += c.DownlinkBytes
 		}
 	}
 
@@ -1283,6 +1392,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	key := wire.InboundID
 	if key != "" {
 		newInbound.Tag = inboundTagFor(key, newInbound.Tag)
+		newInbound.ID = key
 	}
 
 	a.mu.Lock()
@@ -1296,10 +1406,25 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// push look like a change and restart the core for nothing.
 	fromNode := a.cascadeFromNode
 	unchanged := fromNode || cascadeEqual(a.cascade, wire.Cascade)
+	prev, had := a.inbounds[key]
+	prevLegacy, prevCascade := a.cfg.Inbound, a.cascade
+	// Two self-steal inbounds naming one host with different pages behind it
+	// cannot share the fallback (A-129): refused before it is stored.
+	if newInbound.RealityMode == selfStealModeValue && key != "" {
+		others := make([]InboundConfig, 0, len(a.inbounds)+1)
+		for id, in := range a.inbounds {
+			if id != key {
+				others = append(others, in)
+			}
+		}
+		if err := selfStealConflict(append(others, newInbound)); err != nil {
+			a.mu.Unlock()
+			return fmt.Errorf("xray ApplyInbound: %w", err)
+		}
+	}
 	if key == "" {
 		unchanged = unchanged && inboundEqual(a.cfg.Inbound, newInbound)
 	} else {
-		prev, had := a.inbounds[key]
 		unchanged = unchanged && had && inboundEqual(prev, newInbound)
 	}
 	if unchanged {
@@ -1327,7 +1452,30 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	// Use background context for the restart, the request that triggered
 	// this call may have a short deadline and we want xray to keep coming
 	// back up even if the caller times out.
-	return a.regenerateAndRestart(context.Background())
+	err := a.regenerateAndRestart(context.Background())
+	if !isRefused(err) {
+		return err
+	}
+	// The core never saw it, so memory goes back to what the core runs. Only
+	// what this call put there: a newer push for the same inbound is not ours
+	// to undo.
+	a.mu.Lock()
+	if key == "" {
+		if inboundEqual(a.cfg.Inbound, newInbound) {
+			a.cfg.Inbound = prevLegacy
+		}
+	} else if cur, ok := a.inbounds[key]; ok && inboundEqual(cur, newInbound) {
+		if had {
+			a.inbounds[key] = prev
+		} else {
+			delete(a.inbounds, key)
+		}
+	}
+	if !fromNode && a.cascade == wire.Cascade {
+		a.cascade = prevCascade
+	}
+	a.mu.Unlock()
+	return err
 }
 
 func inboundEqual(a, b InboundConfig) bool {
@@ -1438,14 +1586,46 @@ func rawSliceEqual(a, b []json.RawMessage) bool {
 	return true
 }
 
+// refusedError is a regenerateAndRestart that stopped before touching anything:
+// the render or `xray -test` said no, so the disk and the running process still
+// hold the last config the core accepted. The caller that stored the change
+// takes it back on this error and only on this one; a failure after the write
+// (a process that would not start) leaves the new config on disk, and memory
+// has to keep matching it.
+//
+// A-130, 22.10: the inbound -test refused stayed in the map, and every later
+// adu/rmu named its tag, which the running core does not have.
+type refusedError struct{ err error }
+
+func (e *refusedError) Error() string { return e.err.Error() }
+func (e *refusedError) Unwrap() error { return e.err }
+
+func isRefused(err error) bool {
+	var r *refusedError
+	return errors.As(err, &r)
+}
+
 // regenerateAndRestart renders the current users-map to ConfigPath and
 // (re)starts the xray subprocess. Bug #1: it must NOT be called with a.mu
 // held. restartMu serializes restarts; a.mu is taken only for the fast
 // snapshot of state and the final proc swap, so Healthy()/GetStats never
 // block behind the multi-second Stop/Start.
-func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
+func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
+
+	// A-232: the policy report of THIS render, kept only once the render is in
+	// force (accepted by xray and applied); a refused one leaves the last.
+	var report *dto.PolicyDrawn
+	defer func() {
+		if retErr != nil || report == nil {
+			return
+		}
+		report.RenderedAt = time.Now().UTC().Format(time.RFC3339)
+		a.mu.Lock()
+		a.policyDrawn = report
+		a.mu.Unlock()
+	}()
 
 	// Snapshot the inputs under a.mu (fast), then do all IO with a.mu free.
 	a.mu.Lock()
@@ -1486,9 +1666,10 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	if len(pushed) == 0 && inbound.RealityPrivateKey != "" {
 		pushed = []InboundConfig{inbound}
 	}
-	blob, err := renderMultiConfig(pushed, clients, cascade, inbound.withDefaults().ApiPort, policy, dns)
+	blob, err := renderMultiConfigInto(pushed, clients, cascade, inbound.withDefaults().ApiPort, policy, dns, &report)
 	if err != nil {
-		return fmt.Errorf("render xray config: %w", err)
+		report = nil
+		return &refusedError{fmt.Errorf("render xray config: %w", err)}
 	}
 
 	// Ask the core before replacing anything. A config it rejects is refused
@@ -1499,7 +1680,15 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 	if err := validateConfig(ctx, run, binPath, blob); err != nil {
 		a.logger.Error("xray refused the new config, keeping the running one",
 			"err", err, "inbounds", len(pushed), "users", len(clients))
-		return fmt.Errorf("validate xray config: %w", err)
+		return &refusedError{fmt.Errorf("validate xray config: %w", err)}
+	}
+
+	// Only the routing changed (a policy rule, a cascade's entry rules): handed
+	// to the running core, no restart, open connections keep going (A-134).
+	if live, err := a.applyRoutingLive(ctx, blob, inbound.withDefaults().ApiPort, geo); err != nil {
+		return err
+	} else if live {
+		return nil
 	}
 
 	if cfgPath != "" {
@@ -1543,10 +1732,11 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		return nil
 	}
 
-	// K9-B: bring the self-steal local TLS fallback in line with the inbound's
+	// K9-B: bring the self-steal local TLS fallback in line with the inbounds'
 	// REALITY mode BEFORE the xray swap, so REALITY's loopback dest
-	// (127.0.0.1:8443) is already answering when xray comes back up.
-	a.reconcileSelfSteal(ctx, inbound)
+	// (127.0.0.1:8443) is already answering when xray comes back up. From the
+	// set just rendered, not the install-time inbound (A-129).
+	a.reconcileSelfSteal(ctx, pushed)
 
 	// Stop the existing subprocess (keep the field pointing at it so Healthy
 	// reflects "down" during the swap; xray binds a fixed port so old must
@@ -1591,36 +1781,27 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 // matches the inbound's REALITY mode. Called from regenerateAndRestart under
 // restartMu (so it can't race itself); a.mu only guards the field read/write,
 // never held across the slow start/Shutdown.
-func (a *Adapter) reconcileSelfSteal(ctx context.Context, inbound InboundConfig) {
-	want := inbound.RealityMode == selfStealModeValue
-	domain := ""
-	if want && len(inbound.RealityServerNames) > 0 {
-		domain = inbound.RealityServerNames[0]
-	}
-	// No domain -> no cert subject -> can't run the fallback; treat as "off".
-	if domain == "" {
-		want = false
-	}
-	// G1 realistic-fallback target (only meaningful when self-steal is on).
-	upstream := ""
-	if want {
-		upstream = inbound.RealityFallbackUpstream
-	}
+func (a *Adapter) reconcileSelfSteal(ctx context.Context, inbounds []InboundConfig) {
+	// Every inbound the core is about to serve, not one: each self-steal
+	// inbound renders dest = selfStealAddr and needs its site there (A-129).
+	sites := selfStealSites(inbounds)
+	want := len(sites) > 0
+	key := selfStealKey(sites)
 
 	a.mu.Lock()
 	cur := a.selfSteal
 	a.mu.Unlock()
 
-	// Already in the desired state: off-and-nil, or on with the same domain AND
-	// upstream (a changed upstream restarts the fallback with the new target).
+	// Already in the desired state: off-and-nil, or on with the same sites (a
+	// changed name or upstream restarts the fallback with the new set).
 	if !want && cur == nil {
 		return
 	}
-	if want && cur != nil && cur.domain == domain && cur.upstream == upstream {
+	if want && cur != nil && cur.key == key {
 		return
 	}
 
-	// Stop the existing server (mode turned off, or the domain changed).
+	// Stop the existing server (mode turned off, or the sites changed).
 	if cur != nil {
 		if err := cur.stop(ctx); err != nil {
 			a.logger.Warn("xray self-steal stop failed", "err", err)
@@ -1633,12 +1814,12 @@ func (a *Adapter) reconcileSelfSteal(ctx context.Context, inbound InboundConfig)
 		return
 	}
 
-	srv, err := startSelfSteal(selfStealAddr, domain, upstream, a.logger)
+	srv, err := startSelfSteal(selfStealAddr, sites, a.logger)
 	if err != nil {
 		// Non-fatal: xray still starts, but REALITY's dest (127.0.0.1:8443)
 		// won't answer until the next reconcile. Surface loudly.
 		a.logger.Error("xray self-steal start failed; REALITY dest will not answer",
-			"domain", domain, "err", err)
+			"sites", key, "err", err)
 		return
 	}
 	a.mu.Lock()

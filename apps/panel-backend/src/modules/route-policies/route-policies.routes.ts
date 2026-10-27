@@ -3,8 +3,10 @@ import { z } from 'zod';
 import { requireAuth } from '../auth/auth.hook.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { MAX_DIRECTION_ORDINAL } from '../cascades/cascade.config.js';
+import { classifyPolicyEntry } from '../cascades/policy-entries.js';
 
 // A4 ad-split: a named route-policy (extra, ordinal >= 1) the operator can grant
 // to squads. The plain profile (ordinal 0) is implicit and never a row here.
@@ -21,10 +23,37 @@ export interface PublicRoutePolicyDto {
   blockDomains: string[];
 }
 
-/** A geosite/domain matcher as xray accepts it: `geosite:category-ads-all`,
- *  `domain:example.com`, `regexp:.*\.ru$`, or a bare hostname. Kept permissive
- *  on purpose, xray owns the grammar; we only bound the size. */
+/** A matcher: a name (`geosite:category-ads-all`, `domain:example.com`,
+ *  `regexp:.*\.ru$`, a bare hostname) or, since E55, an address (`geoip:ru`,
+ *  `ext-ip:<set>:<tag>`, a CIDR). The size is bounded here; what the entry IS
+ *  is checked below (classifyPolicyEntry), so the chain and xray are never
+ *  handed a string neither side can read. */
 const DomainRule = z.string().min(1).max(253);
+
+/**
+ * E55: entries neither side of a rule understands, refused by name.
+ *
+ * The lists were "kept permissive" on the grounds that xray owns the grammar.
+ * It does, and nothing asked it: an entry it could not read went into `domain`
+ * as a substring, the chain dropped what it did not know, and the operator saw
+ * the rule saved. One sentence at the save beats a rule that silently is not.
+ */
+function unknownEntries(...lists: (string[] | undefined)[]): string[] {
+  return [...new Set(lists.flatMap((l) => l ?? []).filter((e) => classifyPolicyEntry(e) === null))];
+}
+
+function refuseUnknown(entries: string[]) {
+  return {
+    error: 'ROUTE_POLICY_ENTRY_UNKNOWN',
+    message:
+      `not a name or an address a rule can match: ${entries.map((e) => JSON.stringify(e)).join(', ')}. ` +
+      // Placeholders in capitals, not in angle brackets: a screen that renders
+      // the message as markup ate `<set>` and `<tag>` and showed "ext::".
+      `Names: geosite:TAG, ext:SET:TAG, domain:NAME, full:NAME, keyword:WORD, regexp:PATTERN, a hostname. ` +
+      `Addresses: geoip:TAG, ext-ip:SET:TAG, an IP or a CIDR.`,
+    entries,
+  };
+}
 
 const PolicyBody = {
   name: z.string().min(1).max(64),
@@ -104,12 +133,44 @@ export class PolicySpaceExhaustedError extends Error {
  *  here has to reach the nodes. Without this a saved policy sits in the
  *  database and nothing on the fleet knows about it. */
 async function repushCascadeEntries(): Promise<void> {
-  const entries = await prisma.cascadeHop.findMany({
-    where: { position: 0, cascade: { enabled: true } },
-    select: { nodeId: true },
-  });
-  if (entries.length === 0) return;
-  eventBus.emit('cascade.changed', { nodeIds: [...new Set(entries.map((e) => e.nodeId))] });
+  // Both storages. The hop rows alone miss every cascade with no legacy shape
+  // (a pooled entry, a direction on a named outbound): their entries kept the
+  // policy they had until something else pushed them.
+  const [hops, positions] = await Promise.all([
+    prisma.cascadeHop.findMany({
+      where: { position: 0, cascade: { enabled: true } },
+      select: { nodeId: true },
+    }),
+    prisma.cascadePositionNode.findMany({
+      where: { position: { position: 0, cascade: { enabled: true } } },
+      select: { nodeId: true },
+    }),
+  ]);
+  const nodeIds = [...new Set([...hops, ...positions].map((e) => e.nodeId))];
+  if (nodeIds.length === 0) return;
+  eventBus.emit('cascade.changed', { nodeIds });
+}
+
+/**
+ * Which of the two unique fields a save collided on (A-257), read from the
+ * index the error names (meta.target is empty through the pg adapter). The
+ * fixes differ, rename or pick another band. Any other P2002 goes up as is.
+ */
+function policyClash(
+  err: unknown,
+  input: { name?: string; ordinal?: number | null },
+): { error: 'CONFLICT'; field: 'name' | 'ordinal'; message: string } | null {
+  if (isUniqueViolationOn(err, 'route_policies_name_key', ['name'])) {
+    return { error: 'CONFLICT', field: 'name', message: `a policy named "${input.name ?? ''}" already exists` };
+  }
+  if (isUniqueViolationOn(err, 'route_policies_ordinal_key', ['ordinal'])) {
+    return {
+      error: 'CONFLICT',
+      field: 'ordinal',
+      message: `policy band ${input.ordinal ?? ''} was taken while saving, pick another or try again`,
+    };
+  }
+  return null;
 }
 
 export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
@@ -120,6 +181,8 @@ export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/route-policies', auth, async (req, reply) => {
     const input = CreatePolicySchema.parse(req.body);
+    const bad = unknownEntries(input.directDomains, input.blockDomains);
+    if (bad.length > 0) return reply.code(400).send(refuseUnknown(bad));
     // Both `name` and `ordinal` are unique, and an operator needs to know WHICH
     // one collided: the fixes are different (rename vs pick another band).
     // Checked up front rather than by reading a P2002, whose `meta.target`
@@ -155,11 +218,8 @@ export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({ error: 'CONFLICT', message: err.message });
       }
       // Still possible under a race between the check above and this insert.
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        return reply
-          .code(409)
-          .send({ error: 'CONFLICT', message: 'name or band was taken while saving, try again' });
-      }
+      const taken = policyClash(err, input);
+      if (taken) return reply.code(409).send(taken);
       throw err;
     }
   });
@@ -167,6 +227,8 @@ export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
   app.put('/api/route-policies/:id', auth, async (req, reply) => {
     const { id } = IdParam.parse(req.params);
     const input = UpdatePolicySchema.parse(req.body);
+    const bad = unknownEntries(input.directDomains, input.blockDomains);
+    if (bad.length > 0) return reply.code(400).send(refuseUnknown(bad));
     try {
       const updated = await prisma.routePolicy.update({ where: { id }, data: input });
       await repushCascadeEntries();
@@ -176,12 +238,9 @@ export async function routePolicyRoutes(app: FastifyInstance): Promise<void> {
         if (err.code === 'P2025') {
           return reply.code(404).send({ error: 'NOT_FOUND', message: `policy ${id} not found` });
         }
-        if (err.code === 'P2002') {
-          return reply
-            .code(409)
-            .send({ error: 'CONFLICT', message: `a policy named "${input.name}" already exists` });
-        }
       }
+      const taken = policyClash(err, input);
+      if (taken) return reply.code(409).send(taken);
       throw err;
     }
   });

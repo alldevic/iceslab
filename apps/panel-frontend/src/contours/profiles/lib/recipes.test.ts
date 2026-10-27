@@ -16,6 +16,10 @@ import {
   hiddenAfter,
   importSaved,
   isCuratedRecipe,
+  recipeApplyPlan,
+  RECIPE_APPLY_KEYS,
+  RECIPE_SECRET_FIELDS,
+  type Recipe,
   recipeNotFound,
   registryRecipePath,
   registrySkips,
@@ -53,6 +57,82 @@ describe('рецепты снимка у каждой плитки', () => {
     expect(onTile('hysteria').every((r) => r.engine === 'native')).toBe(true);
     expect(onTile('hysteria#singbox').every((r) => r.engine === 'singbox')).toBe(true);
     expect(onTile('socks5').map((r) => r.id)).toEqual(['telegram-socks5']);
+  });
+});
+
+describe('recipeApplyPlan: рецепт пишет в форму только разрешённые поля', () => {
+  const base = { ...defaults(null), protocol: 'shadowsocks' };
+
+  const r = (apply: Record<string, string | number | boolean>, randomize?: Recipe['randomize']) => ({ apply, randomize });
+
+  it('поле протокола из RECIPE_APPLY_KEYS пишется', () => {
+    expect(recipeApplyPlan('shadowsocks', r({ ssMethod: '2022-blake3-aes-256-gcm' }), base)).toEqual({
+      apply: { ssMethod: '2022-blake3-aes-256-gcm' },
+      skipped: [],
+    });
+  });
+
+  it('поле формы вне списка не пишется и называется: ключ сервера, порт, общие поля', () => {
+    const plan = recipeApplyPlan(
+      'shadowsocks',
+      r({ ssMethod: '2022-blake3-aes-128-gcm', serverPsk: 'AAAA', name: 'x', enabled: false }),
+      base,
+    );
+    expect(plan.apply).toEqual({ ssMethod: '2022-blake3-aes-128-gcm' });
+    expect(plan.skipped).toEqual(['serverPsk', 'name', 'enabled']);
+  });
+
+  it('поле чужого протокола не пишется, даже если оно есть в плоской форме', () => {
+    const plan = recipeApplyPlan('shadowsocks', r({ xrayDest: 'evil.example:443' }), base);
+    expect(plan.apply).toEqual({});
+    expect(plan.skipped).toEqual(['xrayDest']);
+  });
+
+  it('у протокола без рецептов в снимке не пишется ничего', () => {
+    expect(recipeApplyPlan('nope', r({ ssMethod: 'x' }), base).skipped).toEqual(['ssMethod']);
+  });
+
+  it('ключевой материал: из apply только пустым, выдуманный на клике проходит', () => {
+    const hy = { ...defaults(null), protocol: 'hysteria' };
+    expect(recipeApplyPlan('hysteria', r({ hyObfsPassword: 'everyone-knows' }), hy).skipped).toEqual(['hyObfsPassword']);
+    expect(recipeApplyPlan('hysteria', r({ hyObfsPassword: '' }), hy).apply).toEqual({ hyObfsPassword: '' });
+    const drawn = recipeApplyPlan('hysteria', r({}, [{ field: 'hyObfsPassword', kind: 'password16' }]), hy);
+    expect(drawn.skipped).toEqual([]);
+    expect(String(drawn.apply.hyObfsPassword)).toHaveLength(16);
+  });
+
+  it('каждый рецепт снимка ложится на свою плитку целиком, без пропусков', () => {
+    for (const kind of PROFILE_KINDS) {
+      for (const recipe of onTile(kind.key)) {
+        const form = { ...defaults(null), protocol: kind.protocol };
+        expect(recipeApplyPlan(kind.protocol, recipe, form).skipped, recipe.id).toEqual([]);
+      }
+    }
+  });
+});
+
+describe('страж: RECIPE_APPLY_KEYS не несёт ключевого материала', () => {
+  const secretInList = Object.entries(RECIPE_APPLY_KEYS).flatMap(([proto, keys]) =>
+    keys.filter((k) => RECIPE_SECRET_FIELDS.has(k)).map((k) => ({ proto, k })),
+  );
+
+  it('каждое поле формы с секретом профиля стоит в RECIPE_SECRET_FIELDS', () => {
+    // Новое поле ключа на форме обязано попасть в список, иначе страж его не видит.
+    const looksSecret = Object.keys(defaults(null)).filter((k) => /priv|pub|short|cert|tlskey|password|psk|secret/i.test(k));
+    expect(looksSecret.filter((k) => !RECIPE_SECRET_FIELDS.has(k))).toEqual([]);
+  });
+
+  it('поле с секретом попадает в список только так, что ни один рецепт снимка не несёт его значением', () => {
+    for (const { proto, k } of secretInList) {
+      for (const recipe of SNAPSHOT_RECIPES.filter((x) => x.protocol === proto)) {
+        const literal = recipe.apply[k];
+        expect(literal === undefined || literal === '', `${recipe.id}: ${k}`).toBe(true);
+      }
+    }
+  });
+
+  it('сегодня в списке из секретов только пароль обфускации hysteria (пустой или выдуманный на клике)', () => {
+    expect(secretInList).toEqual([{ proto: 'hysteria', k: 'hyObfsPassword' }]);
   });
 });
 

@@ -5,6 +5,7 @@ export const settings = {
     factTokens: 'API tokens',
     factTwofaOn: '2FA on',
     factTwofaOff: '2FA off',
+    factTwofaUnknown: '2FA: unknown',
     factRegions: 'regions',
     factSources: 'recipe sources',
     language: {
@@ -21,6 +22,7 @@ export const settings = {
       disable: 'Disable 2FA',
       confirm: 'Confirm',
       codeLabel: '6-digit code',
+      codeWrong: 'The code did not match. Enter the current code from the authenticator; if that fails, check the clock on the device',
       secretLabel: 'Secret',
       uriLabel: 'otpauth URI',
       scanHint: 'Add this secret to your authenticator app (scan the otpauth URI, or enter the secret manually), then enter the current code to confirm.',
@@ -89,6 +91,9 @@ export const settings = {
       brandName: 'Brand name',
       brandNameDesc:
         'Shown as the login page title, and as the subscription name when Profile title is left empty.',
+      // A-237: an empty name is refused, not replaced with «Iceslab».
+      brandNameEmpty: 'The name cannot be empty.',
+      brandNameEmptyHint: 'Empty: the panel is called Iceslab.',
     },
   },
 
@@ -111,6 +116,8 @@ export const settings = {
     deleteTitle: 'Delete region "{{name}}"?',
     deleteWithNodes: '{{count}} nodes will remain but lose their region link (field cleared).',
     deleteSafe: 'No node attached - safe to delete.',
+    // A-256: the server sent no node count, that is not «0».
+    deleteUnknownNodes: 'The server did not say how many nodes are attached: those that are stay, but lose their region (field cleared).',
     notify: {
       created: 'Region created',
       updated: 'Region updated',

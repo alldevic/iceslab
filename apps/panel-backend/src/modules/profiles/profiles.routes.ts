@@ -19,7 +19,10 @@ import { resolveHostFields } from './host-fields.js';
 import { profileFormats } from './profile-formats.js';
 import { getProfileKeyImpact } from './profiles.key-impact.js';
 import { coreGateReply } from '../nodes/node-core-gate.js';
+import { AdapterSlotTakenError, MieruMtuMismatchError } from '../nodes/node-adapter-slot.js';
 import * as svc from './profiles.service.js';
+import { prisma } from '../../prisma.js';
+import { withStoredSecrets } from '../auth/token-secrets.js';
 
 const KeypairQuery = z.object({
   protocol: z.enum(['xray', 'amneziawg']).default('amneziawg'),
@@ -104,7 +107,7 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Which subscription formats carry this profile, and why not where they do
-  // not: { door, formats: [{ format, carried, why }] }, one entry per
+  // not: { door, formats: [{ format, carried, why, reason }] }, one entry per
   // FORMAT_NAMES. `?securityLayer=` is the host screen's own override (tls /
   // none), because a REALITY profile fronted by a TLS host reaches formats the
   // bare profile does not; 'default' or absent means the profile's own.
@@ -124,7 +127,8 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
 
   app.put('/api/profiles/:id', auth, async (req, reply) => {
     const { id } = ProfileIdParamSchema.parse(req.params);
-    const input = UpdateProfileSchema.parse(req.body);
+    const input = UpdateProfileSchema.parse(await withStoredSecrets(req, 'config', async () =>
+      (await prisma.profile.findUnique({ where: { id }, select: { config: true } }))?.config));
     try {
       return reply.send(await svc.updateProfile(id, input));
     } catch (err) {
@@ -139,6 +143,21 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       }
       if (err instanceof svc.ProfileAwgProtocolNotAwgError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: err.path });
+      }
+      // A-055 on an edit: the adapter the profile moves onto is taken on one of
+      // its nodes. The same body as a binding gets.
+      if (err instanceof MieruMtuMismatchError) {
+        return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });
+      }
+      if (err instanceof AdapterSlotTakenError) {
+        return reply.code(409).send({
+          error: err.code,
+          message: err.message,
+          nodeName: err.nodeName,
+            protocol: err.protocol,
+          engine: err.engine,
+          heldBy: err.heldBy,
+        });
       }
       // Moving the profile to 3.1 while a node it is on runs a 1.x module:
       // AWG_PROTOCOL_MISMATCH, the answer a binding gets.
@@ -218,8 +237,19 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
           .code(409)
           .send({ error: err.code, message: err.message, conflicts: err.conflicts });
       }
-      if (err instanceof svc.NodeAlreadyBoundError) {
-        return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+      // A-055: the same body as the host route.
+      if (err instanceof MieruMtuMismatchError) {
+        return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });
+      }
+      if (err instanceof AdapterSlotTakenError) {
+        return reply.code(409).send({
+          error: err.code,
+          message: err.message,
+          nodeName: err.nodeName,
+          protocol: err.protocol,
+          engine: err.engine,
+          heldBy: err.heldBy,
+        });
       }
       // The node's core for this profile is not installed, runs a version this
       // panel refuses, or its AmneziaWG module cannot speak the profile's
@@ -279,7 +309,8 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
 
   app.put('/api/bindings/:id', auth, async (req, reply) => {
     const { id } = BindingIdParamSchema.parse(req.params);
-    const input = UpdateBindingSchema.parse(req.body);
+    const input = UpdateBindingSchema.parse(await withStoredSecrets(req, 'overrides', async () =>
+      (await prisma.profileNodeBinding.findUnique({ where: { id }, select: { overrides: true } }))?.overrides));
     try {
       return reply.send(await svc.updateBinding(id, input));
     } catch (err) {
@@ -297,6 +328,10 @@ export async function profilesRoutes(app: FastifyInstance): Promise<void> {
       }
       if (err instanceof svc.ProfileEngineNotForTransportError) {
         return reply.code(400).send({ error: err.code, message: err.message, path: err.path });
+      }
+      // A-199: an MTU in the overrides that the node's mieru does not run.
+      if (err instanceof MieruMtuMismatchError) {
+        return reply.code(409).send({ error: err.code, message: err.message, nodeName: err.nodeName, mtu: err.mtu, wanted: err.wanted, heldBy: err.heldBy });
       }
       throw err;
     }

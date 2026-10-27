@@ -1,3 +1,4 @@
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { StatsRow } from '@/contours/users/components/UsersTable/StatsRow';
 import { UsersTable } from '@/contours/users/components/UsersTable/UsersTable';
 import { UsersToolbar } from '@/contours/users/components/UsersTable/UsersToolbar';
@@ -72,10 +73,12 @@ export function UsersPage() {
     colParams,
     setFilterParam,
     clearFilterParams,
+    usersFailure,
+    sideFailure,
   } = useUsersPage();
 
   const table = (
-    <UsersTable toggleSort={toggleSort} authStatusQuery={authStatusQuery} squadNameById={squadNameById} pagedUsers={pagedUsers} totalUsers={totalUsers} stats={stats} totalPages={totalPages} safePage={safePage} rangeStart={rangeStart} rangeEnd={rangeEnd} handleRevoke={handleRevoke} handleRotate={handleRotate} handleResetTraffic={handleResetTraffic} handleDelete={handleDelete} setEditing={setEditing} setPage={setPage} rowsPerPage={rowsPerPage} setRowsPerPage={setRowsPerPage} sort={sort} order={order} statusFilter={statusFilter} setStatusFilter={setStatusFilter} colFilters={colFilters} setColFilter={setColFilter} selected={selected} setSelected={setSelected} toggleSelected={toggleSelected} activeFilters={activeFilters} columnView={columnView} setColumnView={setColumnView} visibleColumns={visibleColumns} toggleColumn={toggleColumn} pinColumn={pinColumn} moveColumn={moveColumn} density={density} cycleDensity={cycleDensity} fullscreen={fullscreen} setFullscreen={setFullscreen} openCreate={openCreate} colParams={colParams} setFilterParam={setFilterParam} clearFilterParams={clearFilterParams} />
+    <UsersTable toggleSort={toggleSort} authStatusQuery={authStatusQuery} squadNameById={squadNameById} pagedUsers={pagedUsers} totalUsers={totalUsers} stats={stats} usersFailure={usersFailure} totalPages={totalPages} safePage={safePage} rangeStart={rangeStart} rangeEnd={rangeEnd} handleRevoke={handleRevoke} handleRotate={handleRotate} handleResetTraffic={handleResetTraffic} handleDelete={handleDelete} setEditing={setEditing} setPage={setPage} rowsPerPage={rowsPerPage} setRowsPerPage={setRowsPerPage} sort={sort} order={order} statusFilter={statusFilter} setStatusFilter={setStatusFilter} colFilters={colFilters} setColFilter={setColFilter} selected={selected} setSelected={setSelected} toggleSelected={toggleSelected} activeFilters={activeFilters} columnView={columnView} setColumnView={setColumnView} visibleColumns={visibleColumns} toggleColumn={toggleColumn} pinColumn={pinColumn} moveColumn={moveColumn} density={density} cycleDensity={cycleDensity} fullscreen={fullscreen} setFullscreen={setFullscreen} openCreate={openCreate} colParams={colParams} setFilterParam={setFilterParam} clearFilterParams={clearFilterParams} />
   );
 
   // Full screen is the same table with the room the rest of the page was
@@ -103,6 +106,10 @@ export function UsersPage() {
       <StatsRow stats={stats} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />
 
       <UsersToolbar qc={qc} activeFilters={activeFilters} usersQuery={usersQuery} squadsQuery={squadsQuery} knownTags={knownTags} search={search} setSearch={setSearch} squadFilter={squadFilter} setSquadFilter={setSquadFilter} tagFilter={tagFilter} setTagFilter={setTagFilter} routingFilter={routingFilter} setRoutingFilter={setRoutingFilter} openCreate={openCreate} />
+
+      {/* Squads or tags did not arrive: the filters and the squad names in the
+          rows run short, and this line says why. */}
+      {sideFailure && <LoadFailedLine message={sideFailure.message} onRetry={sideFailure.onRetry} />}
 
       {table}
 

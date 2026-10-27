@@ -1,8 +1,11 @@
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadFailure } from '@/lib/ui/loadView';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { useTranslation } from 'react-i18next';
 import { Box, Menu, Stack, Text, UnstyledButton } from '@mantine/core';
 import { IconFilter, IconFilterFilled, IconX } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import type { UserFilters } from '@/lib/domain/users';
 import { filterKeys, type ColumnFilter as Descriptor } from '@/contours/users/lib/usersTable';
 import { AMBER, CYAN, HAIRLINE, MIST, SNOW, WELL } from '@/contours/users/lib/colors';
@@ -217,11 +220,14 @@ function NodeFilter({
 }) {
   const { t } = useTranslation();
   // The fleet is small and every other screen already holds this cache.
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   const nodes = nodesQuery.data?.nodes ?? [];
+  // The fleet did not arrive: the node choice is short, and says why.
+  const nodesFailure = loadFailure(nodesQuery, apiErrorMessage);
 
   return (
     <Stack gap={10}>
+      {nodesFailure && <LoadFailedLine message={nodesFailure.message} onRetry={nodesFailure.onRetry} />}
       <Field label={t('usersTable.filterNode')}>
         <Select
           value={(params.nodeId as string | undefined) ?? ''}

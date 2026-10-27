@@ -93,17 +93,22 @@ describe('getHiddenCascadeNodeIds (cascade subscription exposure)', () => {
     expect((await getHiddenCascadeNodeIds()).size).toBe(0);
   });
 
-  it('keeps a node exposed when it is an entry somewhere, even if a non-entry elsewhere', async () => {
+  it('a cascade dead on a shared node hides nothing, as a switched-off one (A-223)', async () => {
+    // b in two enabled cascades: a pair the save refuses since A-101, stored
+    // here past the gate. cas1 is older and holds b, so cas2 is dead as a
+    // whole: drawn on none of its nodes, it hides none of them either. Before
+    // A-223, b counted as cas2's entry and stayed exposed while cas2 ran
+    // nowhere; now b is cas1's exit, and c no cascade's hop.
     const a = await node('a');
     const b = await node('b');
     const c = await node('c');
     await cascade('cas1', true, [a, b]); // a entry, b exit
-    await cascade('cas2', true, [b, c]); // b entry, c exit
+    await cascade('cas2', true, [b, c]); // dead: b is held by cas1
 
     const hidden = await getHiddenCascadeNodeIds();
     expect(hidden.has(a)).toBe(false); // entry of cas1
-    expect(hidden.has(b)).toBe(false); // exit of cas1 BUT entry of cas2 -> exposed
-    expect(hidden.has(c)).toBe(true); // exit of cas2
+    expect(hidden.has(b)).toBe(true); // exit of cas1, and cas2 does not run
+    expect(hidden.has(c)).toBe(false); // cas2 hides nothing
     expect(hidden.size).toBe(1);
   });
 });

@@ -23,6 +23,8 @@ export interface VmessUriOpts {
   path?: string;
   hostHeader?: string;
   serviceName?: string;
+  /** XHTTP mode, written into `type` on xhttp (v2rayN's reading). */
+  xhttpMode?: string;
   sni?: string;
   fingerprint?: string;
   alpn?: string[];
@@ -60,6 +62,11 @@ export function buildVmessUri(opts: VmessUriOpts): string {
     if (opts.path) obj.path = opts.path;
     if (opts.hostHeader) obj.host = opts.hostHeader;
   }
+  // On xhttp, `type` is the XHTTP mode, not a header type (A-133): v2rayN
+  // reads it as `XhttpMode = vmessQRCode.type` and writes it back from there
+  // (ServiceLib/Handler/Fmt/VmessFmt.cs, ResolveVmess and ToUri, read 22.10).
+  // 'none' went out here, a mode that does not exist.
+  if (network === 'xhttp') obj.type = opts.xhttpMode ?? 'auto';
   // gRPC serviceName lives in `path` in the v2rayN vmess format.
   if (network === 'grpc' && opts.serviceName) {
     obj.path = opts.serviceName;

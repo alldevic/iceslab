@@ -9,6 +9,7 @@ export const users = {
       'Every subscriber lives here. Create the first one and its subscription link is minted on save.',
     emptyImport: 'OR IMPORT AN EXISTING PANEL · ICESLAB-MIGRATE',
     routingOverrideHint: 'This user overrides the routing preset their squad would give them.',
+    routingOwn: 'own preset',
     filters: {
       button: 'Filters',
       squad: 'Squad',
@@ -59,13 +60,17 @@ export const users = {
       disabled: 'Off',
     },
     deleteTitle: 'Delete user "{{name}}"?',
-    deleteBody: 'Irreversible. The subscription becomes invalid; credentials are revoked on every node.',
+    deleteBody: 'The subscription becomes invalid; credentials are revoked on every node.',
+    deleteRetention_one: 'The user leaves the panel at once and is erased for good after {{count}} day, with traffic history, devices and keys.',
+    deleteRetention_other: 'The user leaves the panel at once and is erased for good after {{count}} days, with traffic history, devices and keys.',
     revokeTitle: 'Revoke subscription for "{{name}}"?',
     revokeBody: 'The current subscription link stops working (403). Rotate to hand out a fresh link.',
     rotateTitle: 'Rotate subscription for "{{name}}"?',
     rotateBody: 'A new link is issued; the old link stops working immediately. Any revoke is cleared.',
     resetTrafficTitle: 'Reset traffic for "{{name}}"?',
     resetTrafficBody: 'Used traffic is zeroed and a traffic limit (if any) is lifted - the account goes back to valid.',
+    linkUnavailable: 'Link unavailable',
+    linkNoAddress: 'Link unavailable: the server did not name the subscription address',
     notify: {
       created: 'User created',
       updated: 'User updated',
@@ -93,6 +98,8 @@ export const users = {
   },
 
   userDrawer: {
+    usernameTaken: 'This name is taken by another user',
+    tokenTaken: 'This subscription token belongs to another user',
     newTitle: 'New user',
     newSubtitle: 'Subscription token + creds will mint on save',
     editSubtitle: 'Changes apply on save, the subscription URL stays the same',
@@ -102,6 +109,7 @@ export const users = {
     usernamePlaceholder: 'kate_m',
     nameFree: 'FREE',
     nameTaken: 'TAKEN',
+    nameUnchecked: 'NOT CHECKED',
     generateName: 'Generate a name',
     squads: 'Squads',
     previewTitle: 'What the client gets',
@@ -120,11 +128,16 @@ export const users = {
       'An estimate from the deployed profiles. The exact list appears once saved: it is built by the same pipeline that serves the subscription.',
     devices: 'Devices',
     devicesCounter: '{{used}} of {{limit}} slots used',
-    devicesCounterNoLimit: 'registered: {{used}}',
+    devicesCounterNoLimit: 'registered: {{used}}, no squad sets a limit',
+    devicesCounterSquad: '{{used}} of {{limit}} slots used (squad limit)',
+    devicesCounterUnlimited: 'registered: {{used}}, explicitly unlimited',
+    devicesCounterUnknown: 'registered: {{used}}, squad limit unknown',
     devicesEmpty:
       'No devices, which is normal: a row appears the first time a client sends its identifier.',
+    devicesForget_one: 'A device not seen for {{count}} day is forgotten and frees its slot.',
+    devicesForget_other: 'A device not seen for {{count}} days is forgotten and frees its slot.',
     devicesFull: 'Every slot is taken. A new device cannot connect until one of these is reset.',
-    devicesError: 'Could not load the device list.',
+    devicesError: 'the device list',
     deviceReset: 'Device reset',
     deviceResetHint: 'Reset this device and free its slot',
     traffic: 'Traffic',
@@ -147,6 +160,14 @@ export const users = {
     formatFromRules: 'set by the delivery rules',
     routing: 'Routing',
     routingFromSquad: 'from squad {{squad}}',
+    routingFromSquads: 'from squads',
+    routingFromPanel: 'panel default',
+    routingOwn: 'set on the user',
+    routingFailed: 'could not load',
+    routingUnknown: 'unknown',
+    routingOwnUnnamed: 'own preset (name did not load)',
+    routingPresetsFailed: 'Own presets did not load: {{message}}. The built-ins are available.',
+    routingPresetGone: 'This preset is gone: pick another one.',
     // How the preview says a reset period, where the sentence is "50 GiB,
     // resets monthly" rather than a setting called "Every month".
     resets: {
@@ -179,7 +200,7 @@ export const users = {
     hwidLimit: 'HWID limit',
     tag: 'Tag',
     hwidHint:
-      'Empty means no limit. Enforced only for clients sending the x-hwid header (Hiddify, Streisand, Happ).',
+      'Device limit. Empty: as the squad; 0: no limit. Enforced only for clients sending the x-hwid header (Hiddify, Streisand, Happ).',
     note: 'Note',
     notePlaceholder: 'Internal note, never shown to the client',
     routingOverride: 'Routing override',
@@ -204,6 +225,9 @@ export const users = {
     copyLinkHint: "Copy the link to this node's config",
     copyNoLink: 'AmneziaWG has no link line; the config is fetched as a file on the subscription page',
     openAsClient: 'Open as client',
+    subScope: 'What the link hands out',
+    subAll: 'the whole subscription',
+    subOnly: 'The link hands out {{protocol}} only.',
     revoke: 'Revoke',
     revokeHint:
       'Revoking answers 403 on the current link. The client stops updating until the new link reaches them.',
@@ -225,7 +249,7 @@ export const users = {
       'The current link starts answering 403. Configs already imported keep working until the client refreshes.',
     deleteTitle: 'Delete user',
     deleteBody:
-      'Irreversible. Credentials are pulled from every node, the link dies, devices and traffic history go with it.',
+      'Credentials are pulled from every node, the link dies.',
     tierQuery: 'link query',
     tierQueryHint: '?routing= in the subscription URL wins over everything, including this field',
     tierUser: 'this user',
@@ -244,8 +268,6 @@ export const users = {
     directLinksEmpty:
       "No active endpoints. Bind user to a squad with inbounds and deploy a profile to a node.",
     copyUri: 'Copy URI',
-    copyWgconfHint:
-      'Copy wgconf URL (opens in AmneziaVPN: + → "Configuration file" → paste URL)',
     copyToClipboard: 'Copy',
     copiedShort: 'Copied',
     tooltipUsers: 'Users',
@@ -269,6 +291,7 @@ export const users = {
   },
 
   usersTable: {
+    deviceLimitSquad: 'as squad',
     paused: '- paused',
     pausedHintQuota: 'quota hit',
     pausedHintExpired: 'expired',
@@ -312,7 +335,7 @@ export const users = {
     // `unset` in one and `none` in the other. Taken from the server verbatim.
     filterValue: {
       trafficLimit: { limited: 'Limited', unlimited: 'Unlimited' },
-      deviceLimit: { set: 'Limit set', unset: 'No limit' },
+      deviceLimit: { set: 'Limit set', unlimited: 'Explicitly unlimited', unset: 'As the squad' },
       telegram: { linked: 'Linked', none: 'Not linked' },
       email: { set: 'Filled in', none: 'Empty' },
       revoked: { yes: 'Revoked', no: 'Live' },

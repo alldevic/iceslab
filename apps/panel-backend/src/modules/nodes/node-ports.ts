@@ -1,4 +1,4 @@
-import { LINK_CELL_TRANSPORT, type ChainStatus, type LinkCell, type NodeCores, type Transport } from '@iceslab/shared';
+import { LINK_CELL_TRANSPORTS, type ChainStatus, type LinkCell, type NodeCores, type Transport } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { LINK_PORT_BASE } from '../cascades/cascade.config.js';
 
@@ -144,11 +144,9 @@ export async function portClaimsOnNode(
   // as though it were the only one.
   const seen = new Set<string>();
   for (const l of [
-    ...links.map((l) => ({
-      port: l.port,
-      name: l.cascade.name,
-      transport: legTransport(l.config),
-    })),
+    ...links.flatMap((l) =>
+      legTransports(l.config).map((transport) => ({ port: l.port, name: l.cascade.name, transport })),
+    ),
     // Always UDP: AmneziaWG is.
     ...tunnels.map((t) => ({ port: t.port, name: t.cascade.name, transport: 'udp' as Transport })),
     ...legacy,
@@ -217,12 +215,12 @@ function certaintyOf(inventory: NodeCores | null): PortCertainty {
  * operator one port and being wrong towards "free" costs them a listener that
  * silently fails to bind on the node. A cred with no readable cell is a row
  * from before the cells existed, and every one of those was vless or SS2022,
- * both TCP.
+ * both TCP (and SS2022 UDP as well, A-117: its listener takes both).
  */
-function legTransport(config: unknown): Transport {
+function legTransports(config: unknown): readonly Transport[] {
   const cell = (config as { protocol?: unknown } | null)?.protocol;
-  if (typeof cell !== 'string') return 'tcp';
-  return LINK_CELL_TRANSPORT[cell as LinkCell] ?? 'tcp';
+  if (typeof cell !== 'string') return ['tcp'];
+  return LINK_CELL_TRANSPORTS[cell as LinkCell] ?? ['tcp'];
 }
 
 /**
@@ -270,7 +268,7 @@ async function legacyHopLinkPorts(
       const cred = c.hops[i]!.linkConfig as { port?: unknown } | null;
       const port = cred && typeof cred.port === 'number' ? cred.port : null;
       if (port !== null && ports.includes(port)) {
-        out.push({ port, name: c.name, transport: legTransport(cred) });
+        for (const transport of legTransports(cred)) out.push({ port, name: c.name, transport });
       }
     }
     // The balancer case: the cred sits on the exit that listens on it, so the
@@ -281,7 +279,7 @@ async function legacyHopLinkPorts(
       const cred = hop.linkConfig as { port?: unknown } | null;
       const port = cred && typeof cred.port === 'number' ? cred.port : null;
       if (port !== null && ports.includes(port)) {
-        out.push({ port, name: c.name, transport: legTransport(cred) });
+        for (const transport of legTransports(cred)) out.push({ port, name: c.name, transport });
       }
     }
   }

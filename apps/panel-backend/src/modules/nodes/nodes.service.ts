@@ -3,6 +3,8 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { issueNodeCert, encodeNodePayload } from '../keygen/keygen.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
+import { anyChanged } from '../../lib/util/same-value.js';
+import { NODE_LINK_FIELDS } from '../hosts/hosts.freshness.js';
 import * as repo from './nodes.repository.js';
 import { getPanelPublicIp } from './panel-ip.js';
 import { issueBootstrapToken } from './bootstrap.service.js';
@@ -34,6 +36,8 @@ import { publicHysteriaTls, rotateHysteriaTls, type PublicHysteriaTls } from './
 import { collectGeoUses } from '../geo-sets/geo-refs.js';
 import { nodeGeoFor, publicIntended } from '../geo-sets/geo-push.js';
 import { intendedEngines } from './node-engines.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
+import { readCurrentVersion } from '../system/system.service.js';
 export { CoreVersionIntentError } from './node-core-versions.js';
 export { NodeEnginesError } from './node-intended-engines.js';
 
@@ -74,12 +78,14 @@ export class NodeInUseByCascadeError extends Error {
     public cascades: string[],
   ) {
     super(
-      `Node "${nodeName}" is part of the enabled cascade${cascades.length > 1 ? 's' : ''} ` +
+      `Node "${nodeName}" is part of the cascade${cascades.length > 1 ? 's' : ''} ` +
         `${cascades.map((c) => `"${c}"`).join(', ')}. Deleting it would leave ${
           cascades.length > 1 ? 'those chains' : 'that chain'
         } pointing at a node that is gone, and the panel would stop pushing config to ` +
-        `every node in ${cascades.length > 1 ? 'them' : 'it'}. Take the cascade down, or move ` +
-        `the way out to another node, and then delete this one.`,
+        `every node in ${cascades.length > 1 ? 'them' : 'it'}, now or the day ${
+          cascades.length > 1 ? 'they are' : 'it is'
+        } switched on. Move this node out of the cascade, or delete the cascade, and then ` +
+        `delete this one.`,
     );
     this.name = 'NodeInUseByCascadeError';
   }
@@ -92,6 +98,27 @@ const IPV4_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 function buildSans(address: string): { type: 'dns' | 'ip'; value: string }[] {
   const host = address.split(':')[0]!;
   return [{ type: IPV4_RE.test(host) ? 'ip' : 'dns', value: host }];
+}
+
+/**
+ * A write that passed the app-level checks and met a unique index: two saves
+ * at once. The indexes are partial (`WHERE deleted_at IS NULL`, 20260506), so
+ * a soft-deleted node holds neither its name nor its address.
+ *
+ * ⚠ Read from what the error NAMES (A-127, A-257). meta.target is absent
+ * through the pg adapter, and reading it made every clash "name", an address
+ * clash included. `nodes_source_id_key` is not here on purpose: no panel path
+ * writes `source_id` (the import tool does), so a clash on it, like any other
+ * index, is not worded as a name and goes up as it is.
+ */
+function nodeClashOf(err: unknown, input: { name?: string; address?: string }): NodeAlreadyExistsError | null {
+  if (isUniqueViolationOn(err, 'nodes_address_active_key', ['address'])) {
+    return new NodeAlreadyExistsError('address', input.address ?? '');
+  }
+  if (isUniqueViolationOn(err, 'nodes_name_active_key', ['name'])) {
+    return new NodeAlreadyExistsError('name', input.name ?? '');
+  }
+  return null;
 }
 
 // ───── Service methods ─────
@@ -126,7 +153,7 @@ export async function createNode(
       protocol: engines.protocol,
       intendedEngines: engines.intendedEngines,
       countryCode: input.countryCode ?? null,
-      consumptionMultiplier: BigInt(input.consumptionMultiplier),
+      consumptionMultiplierTenths: Math.round(input.consumptionMultiplier * 10),
       regionId: input.regionId ?? null,
       maxUsers: input.maxUsers ?? null,
       domain: input.domain ?? null,
@@ -147,21 +174,7 @@ export async function createNode(
       heartbeatSecret: randomBytes(32),
     });
   } catch (err) {
-    // Catch DB-level UNIQUE violation. Soft-deleted rows still hold the
-    // unique value at the DB level, the app-level checks above only see
-    // active rows, so a soft-deleted node with the same name/address
-    // surfaces here as P2002. Slice 24 will replace these with partial
-    // unique indexes (`WHERE deleted_at IS NULL`); until then we map the
-    // raw error to a friendly 409.
-    if (isUniqueViolation(err)) {
-      const target = ((err as { meta?: { target?: string[] | string } }).meta?.target ?? '') as
-        | string
-        | string[];
-      const flat = Array.isArray(target) ? target.join(',') : target;
-      const field: 'name' | 'address' = flat.includes('address') ? 'address' : 'name';
-      throw new NodeAlreadyExistsError(field, field === 'address' ? input.address : input.name);
-    }
-    throw err;
+    throw nodeClashOf(err, input) ?? err;
   }
 
   const cert = await issueNodeCert({
@@ -252,6 +265,28 @@ export interface InstallCommandInput {
   panelIp: string | null;
   /** ACME_DEFAULT_EMAIL, trimmed; empty when unset. */
   acmeEmail: string;
+  /** The panel's own version (readCurrentVersion). A release version pins
+   *  the installer and the agent it installs to that tag (A-270). */
+  panelVersion?: string;
+}
+
+/**
+ * The git tag a panel version installs its nodes from (A-270), or null.
+ *
+ * A node created on a panel gets the agent of that panel's release: the
+ * installer from the tag v<version> and ICESLAB_NODE_REF=v<version>, which the
+ * installer clones (install-iceslab-node.sh: ICESLAB_NODE_REF, its own default
+ * pinned to an older release). Before, the command took the installer from
+ * main with no ref, and a node made on a 0.3.0-rc.1 panel came up on v0.2.1.
+ *
+ * Only a release version names a tag: major.minor.patch with an optional
+ * pre-release ("0.3.0", "0.3.0-rc.1"). Anything else (unknown, a dev build,
+ * empty, build metadata "+...") has no tag to point at and keeps the old
+ * command: the installer from main, its own default ref.
+ */
+export function installRefOf(panelVersion: string | undefined): string | null {
+  const v = (panelVersion ?? '').trim().replace(/^v/i, '');
+  return /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(v) ? `v${v}` : null;
 }
 
 /**
@@ -293,21 +328,37 @@ export function buildInstallCommand(input: InstallCommandInput): string {
   const acmeDomain = acmeHostnameFor(input.nodeAddress);
   if (input.engines.includes('hysteria') && acmeDomain) {
     flags.push(`--hysteria-domain ${acmeDomain}`);
+    // A-276: no email is a working install (the agent renders ACME without
+    // one), and a placeholder is not: Let's Encrypt refuses a contact at
+    // example.com/.net/.org (boulder policy/pa.go, forbiddenMailDomains), so
+    // the admin@example.com this used to write never got a certificate.
     if (input.acmeEmail) {
       flags.push(`--hysteria-email ${input.acmeEmail}`);
     } else {
-      flags.push('--hysteria-email admin@example.com');
-      notes.push('# set ACME_DEFAULT_EMAIL on the panel to inject the address automatically; replace admin@example.com below');
+      // The ACME account's contact, nothing more: Let's Encrypt stopped its
+      // expiry emails on 4 June 2025 (letsencrypt.org/2025/01/22/ending-expiration-emails).
+      notes.push("# optional: --hysteria-email you@domain, the ACME account's contact");
     }
   }
 
   flags.push(...hardeningFlags(input.hardening));
 
+  const ref = installRefOf(input.panelVersion);
+  const installer = `https://raw.githubusercontent.com/icecompany-tech/iceslab/${ref ?? 'main'}/scripts/install-iceslab-node.sh`;
   return [
     ...notes,
-    'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\',
+    `${ref ? `ICESLAB_NODE_REF=${ref} ` : ''}bash <(curl -fsSL ${installer}) \\`,
     ...flags.map((f, i) => `  ${f}${i < flags.length - 1 ? ' \\' : ''}`),
   ].join('\n');
+}
+
+/**
+ * The command a panel shows, its own version read where the update check
+ * reads it (readCurrentVersion): one place, for node create and for a
+ * refreshed bootstrap alike (A-270).
+ */
+export function panelInstallCommand(input: Omit<InstallCommandInput, 'panelVersion'>): string {
+  return buildInstallCommand({ ...input, panelVersion: readCurrentVersion() });
 }
 
 async function renderBootstrapCommand(
@@ -317,7 +368,7 @@ async function renderBootstrapCommand(
   hardening: HardeningInput | null | undefined,
   engines: readonly EngineName[],
 ): Promise<string> {
-  return buildInstallCommand({
+  return panelInstallCommand({
     panelUrl,
     token,
     nodeAddress,
@@ -327,15 +378,6 @@ async function renderBootstrapCommand(
     acmeEmail: (process.env.ACME_DEFAULT_EMAIL ?? '').trim(),
   });
 }
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code?: string }).code === 'P2002'
-  );
-}
-
 export async function listNodes(query: ListNodesQuery): Promise<{
   nodes: PublicNodeDto[];
   total: number;
@@ -464,7 +506,8 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   // (intendedFromReport). `protocol` in a body is no edit either (25.09).
   if (input.countryCode !== undefined) data.countryCode = input.countryCode;
   if (input.consumptionMultiplier !== undefined) {
-    data.consumptionMultiplier = BigInt(input.consumptionMultiplier);
+    // A-143: the schema let only steps of 0.1 through; stored in tenths.
+    data.consumptionMultiplierTenths = Math.round(input.consumptionMultiplier * 10);
   }
   if (input.regionId !== undefined) data.regionId = input.regionId;
   if (input.maxUsers !== undefined) data.maxUsers = input.maxUsers;
@@ -525,7 +568,16 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   const policyChanged =
     input.policyId !== undefined && input.policyId !== existing.policyId;
 
-  const updated = await repo.updateById(id, data);
+  // A-122: the address and the self-steal SNI are in every link of this node;
+  // name and country only in its label (NODE_LINK_FIELDS).
+  if (anyChanged(existing, data as Partial<typeof existing>, NODE_LINK_FIELDS)) data.linkChangedAt = new Date();
+
+  let updated;
+  try {
+    updated = await repo.updateById(id, data);
+  } catch (err) {
+    throw nodeClashOf(err, input) ?? err;
+  }
 
   if (domainChanged || addressChanged || dnsChanged) {
     eventBus.emit('node.updated', { nodeId: id, nodeName: updated.name });
@@ -566,14 +618,19 @@ export async function deleteNode(id: string): Promise<void> {
    * all, so the two RU entries stopped receiving config, and nobody found out
    * until their cores were restarted a day later and came up empty.
    *
-   * Refused rather than cascaded-deleted, and only for ENABLED cascades: taking
-   * somebody's live chain down as a side effect of retiring one VPS is a bigger
-   * decision than the click that triggered it. A disabled cascade is not
-   * serving anyone, so the old behaviour stands there.
+   * Refused rather than cascaded-deleted: taking somebody's chain down as a
+   * side effect of retiring one VPS is a bigger decision than the click that
+   * triggered it.
+   *
+   * ⚠ For a SWITCHED-OFF cascade too (A-126, rest of A-023). It used to be
+   * allowed there, as "serving nobody", but the delete below drops only
+   * cascades the node is a legacy hop of, so a v4 cascade kept its positions
+   * and directions pointing at the deleted row, and switching it back on
+   * repeated 2026-09-22 a step later. A disabled cascade is still a plan that
+   * one toggle puts live.
    */
   const live = await prisma.cascade.findMany({
     where: {
-      enabled: true,
       OR: [
         { hops: { some: { nodeId: id } } },
         { positions: { some: { nodes: { some: { nodeId: id } } } } },
@@ -586,46 +643,23 @@ export async function deleteNode(id: string): Promise<void> {
     throw new NodeInUseByCascadeError(node.name, live.map((c) => c.name));
   }
 
-  // A cascade is a chain: drop one hop and it can't route. So deleting a node
-  // that's a hop deletes the whole cascade(s) it belongs to. We collect the
-  // OTHER members first to re-push them afterwards (they go back to plain
-  // nodes). Without this the hops dangle, pointing at a soft-deleted node that
-  // the cascade view renders as UNKNOWN forever.
-  const affectedCascades = await prisma.cascade.findMany({
-    where: { hops: { some: { nodeId: id } } },
-    select: { id: true, name: true, hops: { select: { nodeId: true } } },
-  });
-  const cascadeIds = affectedCascades.map((c) => c.id);
-  const survivorNodeIds = [
-    ...new Set(affectedCascades.flatMap((c) => c.hops.map((h) => h.nodeId))),
-  ].filter((nid) => nid !== id);
-
-  // One transaction: drop the cascades (their hops go via FK onDelete: Cascade),
-  // hard-delete this node's profile bindings (leaving them made a re-install
-  // look double-bound), and soft-delete the node row (kept for audit history).
+  // The guard above refuses every cascade the node is in, legacy hops
+  // included, so there is no cascade left to drop with it: the old delete of
+  // the hop's whole cascade and the re-push of its survivors never runs now.
+  //
+  // One transaction: hard-delete this node's profile bindings (leaving them
+  // made a re-install look double-bound), and soft-delete the node row (kept
+  // for audit history).
   await prisma.$transaction([
-    ...(cascadeIds.length > 0
-      ? [prisma.cascade.deleteMany({ where: { id: { in: cascadeIds } } })]
-      : []),
     prisma.profileNodeBinding.deleteMany({ where: { nodeId: id } }),
     prisma.node.update({ where: { id }, data: { deletedAt: new Date() } }),
   ]);
 
-  // Stop serving this node's endpoints now. cascade.changed below fires only
-  // when the node happened to be a hop, so an ordinary delete needs its own
-  // signal or the subscription keeps advertising a node that is gone.
+  // Stop serving this node's endpoints now, or the subscription keeps
+  // advertising a node that is gone.
   eventBus.emit('node.deleted', { nodeId: id });
-
-  // Re-render the surviving cascade members as plain nodes (drop link fragments).
-  if (survivorNodeIds.length > 0) {
-    eventBus.emit('cascade.changed', { nodeIds: survivorNodeIds });
-  }
 
   notifyTelegramAsync(
     `🗑 *Node deleted*\nname: \`${escapeMarkdown(node.name)}\`\naddress: \`${escapeMarkdown(node.address)}\``,
   );
-  if (affectedCascades.length > 0) {
-    const names = affectedCascades.map((c) => `\`${escapeMarkdown(c.name)}\``).join(', ');
-    notifyTelegramAsync(`🔗 *Cascade removed* (member node deleted): ${names}`);
-  }
 }

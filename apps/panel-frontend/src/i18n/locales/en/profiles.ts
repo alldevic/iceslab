@@ -55,10 +55,11 @@ export const profiles = {
       nodes_one: 'node rebuilds',
       nodes_other: 'nodes rebuild',
       configs: 'configs go stale',
-      configsPending: 'The panel cannot count these yet: it would have to run the subscription pipeline for every member of every squad that reaches this profile.',
       body: 'The key belongs to the profile, so every node of every host on it serves the same one. Replacing it takes effect everywhere at once and the old key is gone.',
       confirmTitle: 'Replace the key pair?',
-      confirmBody: 'This profile is served by {{hosts}} hosts on {{nodes}} nodes. All of them get the new key and every config already handed out stops working.',
+      confirmBody: 'This profile is served by {{hosts}} hosts on {{nodes}} nodes. All of them get the new key, and {{configs}} configs already handed out stop working.',
+      // A-225: the server's count did not arrive.
+      confirmUnknown: 'The cost could not be found out. The key changes on every node of the profile, and clients holding the current key are cut off.',
       confirmAction: 'Replace',
     },    bar: {
       profiles: 'PROFILES',
@@ -82,6 +83,7 @@ export const profiles = {
       pin: 'pin',
       noPin: 'no pin',
       noPinWhy: 'No pin: {{reason}}',
+      uncounted: 'No traffic accounting, user limits on this engine are not counted:',
       component: {
         xray: 'xray',
         singbox: 'sing-box',
@@ -137,6 +139,8 @@ export const profiles = {
       descriptionPlaceholder: 'What this template is for',
       submitCreate: 'Create profile',
       submitEdit: 'Save',
+      recipeSkippedTitle: 'Recipe applied in part',
+      recipeSkipped: 'A recipe may not set these fields, the form left them alone: {{keys}}',
       plain: {
         onXray: 'on the xray core: the same process as the node\'s other xray profiles, no new binary',
         fixed: 'No TLS, REALITY or transport: Telegram clients talk to such a proxy directly over TCP, there is nothing to pick here.',
@@ -172,7 +176,11 @@ export const profiles = {
         realityModeDesc: 'How REALITY borrows a TLS identity',
         realityModeStealOthers: 'steal-from-others (external decoy)',
         realityModeSelfSteal: 'self-steal (local fallback, RU-2026)',
-        singboxXrayOnly: 'On sing-box only REALITY (steal-others) over raw; TLS, self-steal and other transports are on the xray core.',
+        singboxXrayOnly: 'On sing-box only REALITY (steal-others) over raw with one server name; TLS, self-steal, several names and other transports are on the xray core.',
+        // Who the saved profile will not reach: the server's /formats answer.
+        clientsLeftOut: 'Will not get it (the saved profile, by its security):',
+        clientsUnknown: 'unknown: the server answer did not arrive.',
+        clientsHostCaveat: 'A host with its own security may differ.',
         realityModeSelfStealHint:
           'Self-steal: the node runs a local TLS fallback and REALITY dest points at it. Set the domain below to one that resolves to THIS node IP, so SNI and IP match (survives RU whitelist-shutdown). dest is ignored.',
         realityFallbackUpstreamLabel: 'Realistic fallback (G1, optional)',
@@ -244,6 +252,12 @@ export const profiles = {
         naiveTlsEmailLabel: 'TLS contact email',
         naiveMasqueradeLabel: 'Masquerade root',
         ssCipherLabel: 'Cipher method',
+        ssKey: {
+          set: 'The server key is set. Saving leaves it alone.',
+          change: 'The method changed: the server keeps the key if it fits the new method, or issues a new one, and then clients get new links.',
+          new: 'There is no server key: saving issues one, and clients get new links.',
+          server: 'The panel issues the server key on create.',
+        },
         ssNote:
           "Per-user password = the user's xrayUuid. Enable the shadowsocks protocol on the user.",
         mtprotoDomain: 'Masquerade domain',
@@ -254,7 +268,10 @@ export const profiles = {
     },
     deploy: {
       title: 'Deploy "{{name}}" to nodes',
-      hint: 'Tick the nodes you want this profile on. Unticking deletes existing bindings (cascade - users lose URLs for that node). Port for new bindings: {{port}}.',
+      hint: 'Tick the nodes you want this profile on. Unticking takes every inbound of the profile off the node, on all its ports (users lose URLs for that node). Port for new bindings: {{port}}. A second port on the same node is set from a host.',
+      boundPorts: 'Listens on ports: {{ports}}',
+      removesPorts_one: 'Takes off the inbound on port {{ports}}',
+      removesPorts_other: 'Takes off {{count}} inbounds, ports {{ports}}',
       port: 'Port for new bindings',
       portAutoHint: 'Auto-picked free port on the selected node. Override if needed.',
       portPlainHint: '{{port}}: the port clients expect. It is checked, not picked: the line under each ticked node says whether it is free there.',
@@ -269,12 +286,13 @@ export const profiles = {
     newCrumb: 'NEW',
     engineRefused: 'The server refused: this protocol does not run on the chosen engine. SOCKS5 and HTTP are served by the xray core only.',
     // The BACK gate (0c7dcc7): an xray-family profile on sing-box, wrong field.
-    singboxXrayRefused: 'On sing-box only REALITY (steal-others) over raw: field "{{field}}".',
-    singboxXrayRefusedBinding: 'On sing-box only REALITY (steal-others) over raw: field "{{field}}" in the binding overrides.',
+    singboxXrayRefused: 'On sing-box only REALITY (steal-others) over raw with one server name: field "{{field}}".',
+    singboxXrayRefusedBinding: 'On sing-box only REALITY (steal-others) over raw with one server name: field "{{field}}" in the binding overrides.',
     singboxXrayField: {
       network: 'transport',
       security: 'security',
       realityMode: 'REALITY mode',
+      realityServerNames: 'REALITY server names',
     },
     newSubtitle: 'PICK A PROTOCOL AND DEFINE THE TEMPLATE',
     editSubtitle: 'CHANGES REDEPLOY TO EVERY NODE RUNNING THIS PROFILE',

@@ -21,7 +21,7 @@ import {
   IconSearch,
   IconShield,
 } from '@tabler/icons-react';
-import { ALL_SQUAD_ID, listRoutePolicies } from '@/lib/domain/routePolicies';
+import { ALL_SQUAD_ID, listRoutePolicies, listRoutingPresets } from '@/lib/domain/routePolicies';
 import {
   createSquad,
   listSquads,
@@ -30,14 +30,24 @@ import {
   type UpdateSquadInput,
 } from '@/lib/domain/squads';
 import { listBindings, listProfiles } from '@/lib/domain/profiles';
+import { nodesByProfile } from '@/lib/domain/profileNodes';
 import { profilePairLabel } from '@/lib/domain/engines';
+// A-204: the rule is the contract's (BACK-2 7ec8c912), the one the server uses.
+import { userScopeGap } from '@iceslab/shared';
 import { listCascades } from '@/lib/domain/cascades';
 import { listHosts } from '@/lib/domain/hosts';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { COUNTRIES, countryName } from '@/lib/domain/countries';
-import { ROUTING_PRESET_IDS, presetKey } from '@/lib/domain/routingPresets';
+import { assignedPresetGone, presetChoiceOf, presetChoicePatch, presetChoiceRows, presetKey } from '@/lib/domain/routingPresets';
+import { apiErrorMessage } from '@/lib/net/client';
+import { editGate, loadView } from '@/lib/ui/loadView';
+import { LoadFailed, LoadFailedLine } from '@/ui/LoadFailed';
+import { sectionState } from '@/contours/squads/lib/squadView';
 import {
+  aclIdsOf,
+  canonicalAcl,
+  exitAclInvalid,
   isDuplicateExitAcl,
   setCascadeOn,
   squadCascades,
@@ -84,11 +94,12 @@ function sameSet(a: string[], b: string[]): boolean {
   return a.every((x) => seen.has(x));
 }
 
+/** Compared as the server stores it: the ids an entry allows (aclIdsOf), whichever list carries them. */
 function sameExitAcl(a: SquadExitAclEntry[], b: SquadExitAclEntry[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((entry) => {
     const other = b.find((e) => e.cascadeId === entry.cascadeId);
-    return other ? sameSet(entry.exitNodeIds, other.exitNodeIds) : false;
+    return other ? sameSet(aclIdsOf(entry), aclIdsOf(other)) : false;
   });
 }
 
@@ -101,10 +112,12 @@ export function SquadEditPage() {
   const squadsQuery = useQuery({ queryKey: ['squads'], queryFn: listSquads });
   const hostsQuery = useQuery({ queryKey: ['hosts'], queryFn: () => listHosts() });
   const bindingsQuery = useQuery({ queryKey: ['bindings'], queryFn: () => listBindings() });
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
   const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: () => listProfiles() });
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
   const policiesQuery = useQuery({ queryKey: ['route-policies'], queryFn: listRoutePolicies });
+  // The operator's own presets for the routing picker (A-229).
+  const presetsQuery = useQuery({ queryKey: ['routing-presets'], queryFn: listRoutingPresets });
 
   // "/squads/new" is the same page in draft state: same layout, same controls,
   // nothing persisted until Create.
@@ -170,6 +183,13 @@ export function SquadEditPage() {
       .map((h) => h.id);
   }, [hostsQuery.data, bindingsQuery.data, profileIds]);
 
+  // A-259: «N nodes» under a profile counts nodes, not bindings (a profile
+  // stands on a node once per port). Without the list the server's
+  // bindingCount stands in, which may say more, never fewer.
+  const nodeCounts = useMemo(() => nodesByProfile(bindingsQuery.data?.bindings ?? []), [bindingsQuery.data]);
+  const nodesOf = (p: { id: string; bindingCount: number }) =>
+    bindingsQuery.data ? (nodeCounts.get(p.id) ?? 0) : p.bindingCount;
+
   // What leaves for the members, which is what the header states. Counted off
   // `reachableIds` so neither the search box nor a dead id in the list can
   // change it.
@@ -211,11 +231,13 @@ export function SquadEditPage() {
     setSeededFor(seedKey);
     setName(squad.name);
     setDescription(squad.description ?? '');
-    setRoutingPreset(squad.routingPreset ?? '');
+    setRoutingPreset(presetChoiceOf(squad));
     setHwidLimit(squad.hwidDeviceLimit ?? '');
     // Every list defaults to empty rather than trusting the response to carry
     // it: a missing field must not become `undefined` in a comparison below.
-    setExitAcl(squad.exitAcl ?? []);
+    // One list per entry (canonicalAcl): the server answers exitNodeIds beside
+    // directionIds for showing pools, and that list must not go back (A-149).
+    setExitAcl(canonicalAcl(squad.exitAcl ?? []));
     setPolicyIds(squad.policyIds ?? []);
     setProfileIds(squad.profileIds ?? []);
     setHostIds(squad.hostIds ?? []);
@@ -234,7 +256,9 @@ export function SquadEditPage() {
       const base = {
         name: name.trim(),
         description: description.trim() || null,
-        routingPreset: routingPreset ? (routingPreset as never) : null,
+        // One preset, a built-in or an own one, sent only when it moved: the
+        // server clears the other side itself (A-229).
+        ...presetChoicePatch(isNew ? '' : presetChoiceOf(squad), routingPreset),
         hwidDeviceLimit: hwidLimit === '' ? null : Number(hwidLimit),
       };
       // The one state the screen refuses to send. `[]` on the wire lifts the
@@ -284,11 +308,27 @@ export function SquadEditPage() {
       // One entry per cascade is what setCascadeOn writes, so this 400 means
       // the form and the server disagree: read the squad again and say so.
       const duplicate = isDuplicateExitAcl(err);
-      if (duplicate) qc.invalidateQueries({ queryKey: ['squads'] });
+      // A direction gone while the form was open: the server names it, and
+      // the cascades are read again (A-149).
+      const invalid = exitAclInvalid(err);
+      if (duplicate || invalid !== null) {
+        qc.invalidateQueries({ queryKey: ['squads'] });
+        qc.invalidateQueries({ queryKey: ['cascades'] });
+      }
+      // The own preset picked here was deleted meanwhile: the list is read
+      // again and the picker says it (A-229).
+      const presetGone = assignedPresetGone(err);
+      if (presetGone) qc.invalidateQueries({ queryKey: ['routing-presets'] });
       notifications.show({
         color: 'red',
         title: t('common.saveError'),
-        message: duplicate ? t('squadEdit.exitAclDuplicate') : err instanceof Error ? err.message : String(err),
+        // The server's words otherwise: a refusal to narrow (an entry on
+        // hysteria or AWG, A-134) says itself.
+        message: duplicate
+          ? t('squadEdit.exitAclDuplicate')
+          : presetGone
+            ? t('squadEdit.routingPresetGone')
+            : invalid || apiErrorMessage(err),
       });
     },
   });
@@ -502,6 +542,11 @@ export function SquadEditPage() {
         ],
   );
 
+  // «Not found» only when the list arrived without it (A-141).
+  const gate = isNew ? null : editGate(squadsQuery, squad !== null);
+  if (gate?.kind === 'failed') {
+    return <LoadFailed message={apiErrorMessage(squadsQuery.error)} onRetry={() => void squadsQuery.refetch()} />;
+  }
   if (!squad && !isNew) {
     // A stale bookmark or a deleted squad lands here. Say so and offer the way
     // back, instead of leaving a two-word sentence alone on an empty page.
@@ -516,9 +561,9 @@ export function SquadEditPage() {
       >
         <Stack align="center" gap={14}>
           <Text style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 500, color: SNOW }}>
-            {squadsQuery.isLoading ? t('common.loading') : t('squadEdit.notFound')}
+            {gate?.kind === 'gone' ? t('squadEdit.notFound') : t('common.loading')}
           </Text>
-          {!squadsQuery.isLoading && (
+          {gate?.kind === 'gone' && (
             <PageButton onClick={() => navigate('/squads')}>{t('squadEdit.backToList')}</PageButton>
           )}
         </Stack>
@@ -533,7 +578,7 @@ export function SquadEditPage() {
    */
   function toggleExit(c: SquadCascade, exit: SquadCascadeExit) {
     if (c.off) return;
-    const next = toggleCascadeExit(exitAcl, c.id, c.exits, exit);
+    const next = toggleCascadeExit(exitAcl, c.id, c.aclField, c.exits, exit);
     if (next === null) {
       setLastExitRefused(c.id);
       return;
@@ -544,12 +589,12 @@ export function SquadEditPage() {
   }
 
   /**
-   * «Выдавать каскад»: off is `exitNodeIds: []`, on drops the entry or puts
-   * back the narrowing the switch parked (setCascadeOn). One entry per cascade
+   * «Выдавать каскад»: off is an empty list, on drops the entry or puts back
+   * the narrowing the switch parked (setCascadeOn). One entry per cascade
    * either way.
    */
   function switchCascade(c: SquadCascade, on: boolean) {
-    const next = setCascadeOn(exitAcl, c.id, on, c.exits.flatMap((e) => e.nodeIds), parkedExits[c.id]);
+    const next = setCascadeOn(exitAcl, c.id, on, c.aclField, c.exits.flatMap((e) => e.aclIds), parkedExits[c.id]);
     setParkedExits((prev) => {
       const rest = { ...prev };
       delete rest[c.id];
@@ -795,16 +840,20 @@ export function SquadEditPage() {
                     setDirty(true);
                   }}
                   allowDeselect={false}
-                  // Built from the shared list the backend validates against,
-                  // so a fourth preset cannot appear here and be rejected there.
-                  data={[
-                    { value: '', label: t('squadEdit.routingInherit') },
-                    ...ROUTING_PRESET_IDS.map((id) => ({
-                      value: id,
-                      label: t(`metadata.preset${presetKey(id)}`),
-                    })),
-                  ]}
+                  // The built-ins from the shared list the backend validates
+                  // against, then the operator's own presets (A-229).
+                  data={presetChoiceRows(routingPreset, presetsQuery.data?.presets, {
+                    inherit: t('squadEdit.routingInherit'),
+                    unnamed: t('squadEdit.routingOwnUnnamed'),
+                    builtInName: (id) => t(`metadata.preset${presetKey(id)}`),
+                  })}
                 />
+                {/* Own presets that did not arrive are not «none» (A-141). */}
+                {loadView(presetsQuery) === 'failed' && (
+                  <Text style={{ fontSize: 12, color: AMBER, marginTop: 4 }}>
+                    {t('squadEdit.routingPresetsFailed', { message: apiErrorMessage(presetsQuery.error) })}
+                  </Text>
+                )}
                 <Hint>{t('squadEdit.routingHint')}</Hint>
               </Box>
               <Box style={{ flex: 1 }}>
@@ -813,7 +862,10 @@ export function SquadEditPage() {
                   placeholder={t('squadEdit.hwidPlaceholder')}
                   value={hwidLimit}
                   disabled={isAll}
-                  min={0}
+                  // A-148: a squad's limit is 1 or more (the server refuses 0);
+                  // the explicit no-limit, 0, is the user's own value only.
+                  min={1}
+                  clampBehavior="strict"
                   onChange={(v) => {
                     setHwidLimit(typeof v === 'number' ? v : '');
                     setDirty(true);
@@ -849,9 +901,7 @@ export function SquadEditPage() {
               </Chip>
             </Box>
             <Hint>{isAll ? t('squadEdit.profilesAll') : t('squadEdit.profilesHint')}</Hint>
-            {allProfiles.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noProfiles')}</Text>
-            )}
+            <SectionLists lists={[profilesQuery]} count={allProfiles.length} empty={t('squadEdit.noProfiles')} />
             {!isAll && profileIds.length === 0 && allProfiles.length > 0 && (
               // A squad with no profiles hands out an empty subscription. That is
               // a valid state to pass through while editing and a bad one to
@@ -911,9 +961,16 @@ export function SquadEditPage() {
                       <Text style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>
                         {profilePairLabel(p, t)}
                       </Text>
+                      {/* A-204: where the core does not hold the squad's limit
+                          on a user, said at the profile that hands it out. */}
+                      {checked && userScopeGap(p) && (
+                        <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER, marginTop: 4 }}>
+                          {t(`squadEdit.scopeGap.${userScopeGap(p)}`)}
+                        </Text>
+                      )}
                     </Box>
-                    <Chip accent={p.bindingCount > 0 ? FAINT : AMBER}>
-                      {t('squadEdit.profileNodes', { count: p.bindingCount })}
+                    <Chip accent={nodesOf(p) > 0 ? FAINT : AMBER}>
+                      {t('squadEdit.profileNodes', { count: nodesOf(p) })}
                     </Chip>
                   </UnstyledButton>
                 );
@@ -993,9 +1050,11 @@ export function SquadEditPage() {
               </Box>
             </Box>
 
-            {groups.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noHosts')}</Text>
-            )}
+            <SectionLists
+              lists={[hostsQuery, bindingsQuery, nodesQuery, profilesQuery]}
+              count={groups.length}
+              empty={t('squadEdit.noHosts')}
+            />
 
             {/* No restriction is a state, not an empty selection, and it needs
                 saying out loud: a wall of ticked boxes with no explanation
@@ -1186,9 +1245,11 @@ export function SquadEditPage() {
               {isNew && <Chip accent={FAINT}>{t('squadEdit.optional')}</Chip>}
             </Box>
             <Hint>{isAll ? t('squadEdit.cascadeDirectionsAll') : t('squadEdit.cascadeDirectionsHint')}</Hint>
-            {cascadeRows.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('squadEdit.noDirections')}</Text>
-            )}
+            <SectionLists
+              lists={[cascadesQuery, hostsQuery, bindingsQuery, nodesQuery]}
+              count={cascadeRows.length}
+              empty={t('squadEdit.noDirections')}
+            />
             {cascadeRows.map((c) => {
               // The grants stay exactly as they are when the entry is not
               // handed out; only the showing goes quiet. Put the entry host
@@ -1330,6 +1391,15 @@ export function SquadEditPage() {
                       </UnstyledButton>
                     );
                   })}
+                  {/* A-277: off or narrowed, the node policy's rules into this
+                      cascade do not take the squad's users either. */}
+                  {c.nodePolicyNote && (
+                    <Text style={{ padding: '8px 14px', fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: MIST, borderTop: `1px solid ${HAIRLINE}` }}>
+                      {c.nodePolicyNote === 'gated-except-chain'
+                        ? t('squadEdit.cascadeNodePolicyGatedExceptChain')
+                        : t('squadEdit.cascadeNodePolicyGated')}
+                    </Text>
+                  )}
                   {lastExitRefused === c.id && (
                     <Text style={{ padding: '8px 14px', fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: AMBER }}>
                       {t('squadEdit.cascadeLastExit')}
@@ -1382,9 +1452,7 @@ export function SquadEditPage() {
               {isNew && <Chip accent={FAINT}>{t('squadEdit.optional')}</Chip>}
             </Box>
             <Hint>{isAll ? t('squadEdit.routePoliciesAll') : t('squadEdit.routePoliciesHint')}</Hint>
-            {policies.length === 0 && (
-              <Text style={{ fontSize: 12, color: MIST }}>{t('routes.empty')}</Text>
-            )}
+            <SectionLists lists={[policiesQuery]} count={policies.length} empty={t('squadEdit.routePoliciesEmpty')} />
             {isAll && policies.length > 0 && (
               <Box
                 style={{
@@ -1537,6 +1605,30 @@ export function SquadEditPage() {
 }
 
 // ───── Pieces ─────
+
+/**
+ * What a section says when it has nothing to draw (A-239): a list it is drawn
+ * from failed (the server's words and a retry), is on its way, or arrived and
+ * the section is empty. Nothing when the section has rows.
+ */
+function SectionLists({
+  lists,
+  count,
+  empty,
+}: {
+  lists: { data: unknown; isError: boolean; error: unknown; refetch: () => unknown }[];
+  count: number;
+  empty: string;
+}) {
+  const { t } = useTranslation();
+  const state = sectionState(lists, count);
+  if (state.kind === 'failed') {
+    const q = lists[state.index]!;
+    return <LoadFailedLine message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
+  if (state.kind === 'list') return null;
+  return <Text style={{ fontSize: 12, color: MIST }}>{state.kind === 'loading' ? t('common.loading') : empty}</Text>;
+}
 
 function Card({ children }: { children: ReactNode }) {
   return (

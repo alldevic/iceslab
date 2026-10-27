@@ -3,7 +3,7 @@ import { Box, Button, Group, Modal, Stack, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import {
   geoSetRefusal,
   getGeoRolloutPlan,
@@ -11,6 +11,7 @@ import {
   type GeoSet,
 } from '@/lib/domain/geoSets';
 import { geoRolloutFacts, usesWords } from '@/contours/traffic/lib/geoFacts';
+import { rolloutSilent } from '@/contours/traffic/lib/geoRolloutSilent';
 import { AMBER, DIM, DISPLAY, FAINT, HAIRLINE, MIST, MONO, RED, SNOW, WELL } from '@/contours/traffic/lib/colors';
 
 /**
@@ -31,8 +32,9 @@ export function GeoRolloutModal({ set, onClose }: { set: GeoSet | null; onClose:
     enabled: set !== null,
   });
   // Ноды без отчёта о ядрах: рестарт xray у них «возможно», а не факт.
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }), enabled: set !== null });
-  const silent = new Set((nodesQuery.data?.nodes ?? []).filter((n) => !n.cores).map((n) => n.id));
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes(), enabled: set !== null });
+  // A-253: without the node list every restart is «maybe» (rolloutSilent).
+  const silent = rolloutSilent((planQuery.data?.nodes ?? []).map((n) => n.id), nodesQuery.data?.nodes);
   const facts = planQuery.data ? geoRolloutFacts(planQuery.data, silent) : null;
 
   const rollout = useMutation({

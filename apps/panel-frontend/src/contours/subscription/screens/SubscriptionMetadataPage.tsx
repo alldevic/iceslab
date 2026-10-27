@@ -18,6 +18,8 @@ import type { RoutingPresetId } from '@iceslab/shared';
 import { SettingsTabs } from '@/contours/subscription/components/SettingsTabs';
 import { ROUTING_PRESET_IDS, presetKey } from '@/lib/domain/routingPresets';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { getSettings, updateSettings, type AdminSettings } from '@/lib/domain/settings';
 import { CARD, CYAN, CYAN_HI, DIM, EDGE, FAINT, GROUND, HAIRLINE, MIST, MOSS, SNOW, WELL } from '@/contours/subscription/lib/colors';
 
@@ -118,6 +120,10 @@ export function SubscriptionMetadataPage() {
   });
 
   if (!draft) {
+    // Settings did not arrive: the error and a retry, not «loading» forever (A-141).
+    if (loadView(settingsQuery) === 'failed') {
+      return <LoadFailed message={apiErrorMessage(settingsQuery.error)} onRetry={() => void settingsQuery.refetch()} />;
+    }
     return (
       <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>

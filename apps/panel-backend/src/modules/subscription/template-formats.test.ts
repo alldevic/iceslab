@@ -23,17 +23,13 @@ describe('the template formats', () => {
     }
   });
 
-  it('lets several types frame one format, and says which', () => {
-    // ⚠ Not an accident and not a placeholder to be "cleaned up": the plan
-    // names a new YAML dialect for `stash` and a legacy one for `clash`, and
-    // neither is a `?format=` yet. Both are YAML the clash builder already
-    // produces, so both frame `clash` until those dialects ship. The day they
-    // do, this expectation is what has to be edited, which is the point of
-    // writing it down as one.
-    expect(TEMPLATE_FORMATS.mihomo).toBe('clash');
-    expect(TEMPLATE_FORMATS.stash).toBe('clash');
-    expect(TEMPLATE_FORMATS.clash).toBe('clash');
-    // The three that map one to one today.
+  it('gives every type its own format since the dialects shipped (A-236 step 4)', () => {
+    // The Clash family by core; `clash` the format is the alias of mihomo and
+    // is framed by mihomo templates (templateTypeForFormat), not a type's own.
+    expect(TEMPLATE_FORMATS.mihomo).toBe('mihomo');
+    expect(TEMPLATE_FORMATS.stash).toBe('stash');
+    expect(TEMPLATE_FORMATS.clash).toBe('clash-legacy');
+    expect(new Set(Object.values(TEMPLATE_FORMATS)).size).toBe(Object.keys(TEMPLATE_FORMATS).length);
     expect(TEMPLATE_FORMATS.singbox).toBe('singbox');
     expect(TEMPLATE_FORMATS['xray-json']).toBe('xrayjson');
     expect(TEMPLATE_FORMATS['xray-json-array']).toBe('xrayjson-array');

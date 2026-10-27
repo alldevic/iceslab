@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import { trustProxyHops } from './lib/util/ip.js';
 import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyCors from '@fastify/cors';
@@ -35,10 +36,13 @@ import { bullBoardRoutes } from './modules/admin/bull-board.routes.js';
 import { systemRoutes } from './modules/system/system.routes.js';
 import { recipesRoutes } from './modules/recipes/recipes.routes.js';
 import { geoSetsRoutes } from './modules/geo-sets/geo-sets.routes.js';
+import { routingPresetsRoutes } from './modules/routing-presets/routing-presets.routes.js';
+import { subscriptionTemplatesRoutes } from './modules/subscription-templates/templates.routes.js';
 import { registerSecurityGate } from './lib/auth/security-gate.js';
 import { registry as metricsRegistry, httpRequestDuration, routeLabel } from './lib/infra/metrics.js';
 import { requireAuth } from './modules/auth/auth.hook.js';
 import { enforceScopes } from './modules/auth/scope.hook.js';
+import { RedactingLogController, redactUrl, serializeReq, watchSecretRoutes } from './lib/infra/log-redact.js';
 
 /**
  * Build the Fastify instance with all plugins and routes registered.
@@ -49,16 +53,27 @@ import { enforceScopes } from './modules/auth/scope.hook.js';
  * Tests use this directly with `app.inject(...)` for end-to-end HTTP coverage
  * without binding a port.
  */
-export async function buildApp(): Promise<FastifyInstance> {
+export async function buildApp(opts: { log?: { level: string; stream: { write(line: string): void } } } = {}): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: { level: config.LOG_LEVEL },
+    // A-267: no token of a URL and no subscriber's full address in the
+    // request log (log-redact.ts). `opts.log` is for the test that reads it.
+    logger: {
+      level: opts.log?.level ?? config.LOG_LEVEL,
+      serializers: { req: serializeReq },
+      ...(opts.log ? { stream: opts.log.stream } : {}),
+    },
+    logController: new RedactingLogController(),
     // X-Forwarded-For trust hops, gated by env. Zero (default) ignores
     // the header entirely so dev / single-host runs aren't spoofable.
     // Production behind Caddy + Cloudflare uses TRUST_PROXY_HOPS=2.
     // Bumping this above the real hop count is a security bug, any
     // client can then forge X-Forwarded-For and dodge per-IP rate limits.
-    trustProxy: config.TRUST_PROXY_HOPS,
+    // As a function since Fastify 5.12.2 turned a NUMBER into "trust
+    // nobody": see trustProxyHops.
+    trustProxy: trustProxyHops(config.TRUST_PROXY_HOPS),
   });
+  // Before any route: a route is read for its secret segment as it is added.
+  watchSecretRoutes(app);
 
   /**
    * An empty body with `Content-Type: application/json` means "no fields", not
@@ -99,7 +114,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       // but with full issue array (path + message + code per offending
       // field) instead of just `statusCode: 400`.
       request.log.warn(
-        { url: request.url, issues: error.issues },
+        { url: redactUrl(request.url), issues: error.issues },
         'Zod validation failed',
       );
       return reply.code(400).send({
@@ -125,9 +140,26 @@ export async function buildApp(): Promise<FastifyInstance> {
     const errWithCode = error as { statusCode?: number; message?: string };
     const statusCode = errWithCode.statusCode;
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
+      // The wait in the body too, the way ACCOUNT_LOCKED carries it (A-168
+      // tail, 22.10): the plugin puts it only in the Retry-After header, and
+      // a screen reading the body had nothing to count down from.
+      const retryAfter = statusCode === 429 ? Number(reply.getHeader('retry-after')) : NaN;
       return reply.code(statusCode).send({
         error: statusCode === 429 ? 'RATE_LIMITED' : 'REQUEST_REJECTED',
         message: errWithCode.message ?? 'Request rejected',
+        ...(Number.isFinite(retryAfter) && retryAfter >= 0 ? { retryAfterSeconds: Math.ceil(retryAfter) } : {}),
+      });
+    }
+
+    // A-155: a foreign key that refused the write (RESTRICT). Nothing is broken:
+    // the row is still in use, and the route that should have asked first did
+    // not. 409, not 500, so the next such case is a refusal the screen can show
+    // rather than "Internal error"; logged, since that route wants its own check.
+    if ((error as { code?: unknown }).code === 'P2003') {
+      request.log.warn({ err: error, url: redactUrl(request.url) }, 'Foreign key refused the write, no route check before it');
+      return reply.code(409).send({
+        error: 'REFERENCED',
+        message: 'This record is still used by another one, remove that use first',
       });
     }
 
@@ -295,6 +327,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(systemRoutes);
   await app.register(recipesRoutes);
   await app.register(geoSetsRoutes);
+  await app.register(routingPresetsRoutes);
+  await app.register(subscriptionTemplatesRoutes);
 
   return app;
 }

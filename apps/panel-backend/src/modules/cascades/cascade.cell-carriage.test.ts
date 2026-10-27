@@ -248,12 +248,14 @@ describe('the cell-carriage gate on save', () => {
   it('lets the same pair through over vless and shadowsocks', async () => {
     // The transitional fleet, and the reason the gate cannot simply demand a
     // chain: these two legs land inside the node's own xray and have since C3.
+    // Two entries: a node carries one enabled cascade (A-101).
     const entry = await makeNode('ru-entry', [{ name: 'xray', engine: 'xray' }]);
+    const entry2 = await makeNode('ru-entry-2', [{ name: 'xray', engine: 'xray' }]);
     const nl = await makeNode('nl-exit', [{ name: 'xray', engine: 'xray' }]);
     const se = await makeNode('se-exit', [{ name: 'xray', engine: 'xray' }]);
 
     await expect(create(entry, nl, 'vless')).resolves.toBeTruthy();
-    await expect(create(entry, se, 'shadowsocks')).resolves.toBeTruthy();
+    await expect(create(entry2, se, 'shadowsocks')).resolves.toBeTruthy();
   });
 
   it('lets a QUIC cell through onto a node that runs the chain', async () => {

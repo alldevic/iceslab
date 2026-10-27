@@ -93,11 +93,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main
   --panel-url https://panel.example.com \
   --bootstrap bs_xxx \
   --protocol hysteria \
-  --hysteria-domain hy2-01.example.com \
-  --hysteria-email admin@example.com
+  --hysteria-domain hy2-01.example.com
 ```
 
-Скрипт пишет `/etc/hysteria/config.yaml`, кладёт systemd-юнит, и при первом запуске Hysteria получит LE-сертификат через HTTP-01.
+Необязательно: `--hysteria-email you@your-domain`, контакт ACME-аккаунта. Сертификат выпускается и без него; адрес на `example.*` или `localhost` установщик отвергает, как отвергает его Let's Encrypt.
+
+Скрипт ставит Hysteria и её systemd-юнит; агент пишет `/etc/hysteria/config.yaml` и получает LE-сертификат через HTTP-01 при первом пуше панели.
 
 #### AmneziaWG
 
@@ -261,6 +262,15 @@ pnpm --filter @iceslab/panel-frontend exec tsc --noEmit
 - **Контрибуция**: см. [CONTRIBUTING.md](./CONTRIBUTING.md). PR принимаются под AGPL-3.0 inbound = outbound, коммиты squash'ятся при merge.
 - **Безопасность**: уязвимости на `security@icecompany.tech`. Детали и таймлайн раскрытия в [SECURITY.md](./SECURITY.md).
 - **Торговая марка**: имя "Iceslab" ограничено к использованию, политика в [TRADEMARK.md](./TRADEMARK.md). AGPL-права на код не затрагивает, форкай свободно, просто переименуй если шипишь публично.
+
+## Поддержать проект
+
+Iceslab делает один человек, и он остаётся под AGPL. Если панель экономит вам
+время, донат идёт на тестовые ноды:
+
+- **USDT (TRC-20):** `TM432rBBe3Eo5REkWn81ajJ9JLjGuuTjEJ`
+
+Проверьте сеть перед отправкой: только TRC-20, в других сетях средства пропадут.
 
 ## Лицензия
 

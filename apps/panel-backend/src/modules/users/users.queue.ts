@@ -5,6 +5,9 @@ import { prisma } from '../../prisma.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { reachOfUsers } from './user-reach.js';
+import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
+import { allocateAwgAddresses, awgBindingsOfNode } from '../amneziawg/awg-addresses.js';
 
 // ───── Job data shapes ─────
 
@@ -44,10 +47,10 @@ interface NodeRow {
   address: string;
 }
 
-async function fetchActiveNodes(): Promise<NodeRow[]> {
+async function fetchActiveNodes(): Promise<(NodeRow & { lastInboundSyncAt: Date | null })[]> {
   return prisma.node.findMany({
     where: { deletedAt: null, status: { not: 'disabled' } },
-    select: { id: true, name: true, address: true },
+    select: { id: true, name: true, address: true, lastInboundSyncAt: true },
   });
 }
 
@@ -58,9 +61,9 @@ async function fetchActiveNodes(): Promise<NodeRow[]> {
  * `addUser`/`removeUser` MUST be idempotent on the node side (re-adding an
  * existing user is a no-op).
  */
-async function fanOut<T>(
-  nodes: NodeRow[],
-  call: (node: NodeRow) => Promise<T>,
+async function fanOut<T, N extends NodeRow>(
+  nodes: N[],
+  call: (node: N) => Promise<T>,
   label: string,
 ): Promise<void> {
   if (nodes.length === 0) {
@@ -91,7 +94,7 @@ async function fanOut<T>(
   }
 }
 
-async function syncAddUser(userId: string): Promise<void> {
+export async function syncAddUser(userId: string): Promise<void> {
   const user = await prisma.user.findFirst({
     where: { id: userId, deletedAt: null },
     select: {
@@ -121,7 +124,7 @@ async function syncAddUser(userId: string): Promise<void> {
     return;
   }
 
-  const req: AddUserRequest = {
+  const base: AddUserRequest = {
     userId: user.id,
     shortId: user.shortId,
     username: user.username,
@@ -137,12 +140,64 @@ async function syncAddUser(userId: string): Promise<void> {
     },
   };
 
+  /**
+   * A-022: per node, and only where the user's squads reach. A node they
+   * reach gets the user on exactly those inbounds (inboundIds); every other
+   * node takes the user off. Before, one request went to the whole fleet and
+   * put the user on every inbound of every node, whatever their squads.
+   *
+   * ⚠ A node that has never taken a push is skipped: an inbound list it cannot
+   * match yet would take the user off everything there, and its first push
+   * hands every user out anyway (the push job, after the agent applied).
+   *
+   * A-164: with the AmneziaWG address of each generation the node serves and
+   * the user reaches, allocated by the same rule as the push. Without it the
+   * agent put no 1.x peer and took the user off 3.1.
+   */
   const nodes = await fetchActiveNodes();
+  const reach = (await reachOfUsers([userId])).get(userId) ?? new Map<string, string[]>();
   await fanOut(
     nodes,
-    (node) => new NodeTransport(node).addUser(req),
+    async (node) => {
+      const transport = new NodeTransport(node);
+      const inboundIds = reach.get(node.id);
+      if (!inboundIds) {
+        await transport.removeUser({ userId });
+        return;
+      }
+      if (node.lastInboundSyncAt === null) return;
+      const awg = await awgBindingsOfNode(node.id);
+      const one = awg.one && inboundIds.includes(awg.one) ? (await allocateAwgAddresses(awg.one, [user])).get(user.id) : undefined;
+      const three = awg.three && inboundIds.includes(awg.three) ? (await allocateAwgAddresses(awg.three, [user])).get(user.id) : undefined;
+      await transport.addUser({
+        ...base,
+        inboundIds,
+        credentials: {
+          ...base.credentials,
+          ...(one ? { amneziawgAllowedIp: one } : {}),
+          ...(three ? { amneziawgAllowedIp3: three } : {}),
+        },
+      });
+    },
     `addUser ${userId}`,
   );
+
+  /**
+   * A-134: the cascade entries this user reaches draw who may take which tag,
+   * and a user they have not seen yet falls into the trap there (closed by
+   * default). So each such entry is pushed again, and the push carries the
+   * user's tags. The jobId folds a wave of these into one push per entry.
+   */
+  const entries = await prisma.cascadePosition.findMany({
+    where: {
+      position: 0,
+      cascade: { enabled: true },
+      nodes: { some: { nodeId: { in: [...reach.keys()] } } },
+    },
+    select: { nodes: { select: { nodeId: true } } },
+  });
+  const toPush = new Set(entries.flatMap((e) => e.nodes.map((n) => n.nodeId)).filter((id) => reach.has(id)));
+  for (const nodeId of toPush) await enqueueNodePush(nodeId);
 }
 
 async function syncRemoveUser(userId: string): Promise<void> {
@@ -171,119 +226,18 @@ async function syncRemoveUser(userId: string): Promise<void> {
 }
 
 /**
- * Push every active user to a single freshly-registered node. Run on
- * `node.created` so an empty new node doesn't stay empty until each user
- * is mutated again. AddUser is idempotent on the node side, so this is
- * also safe to re-run (e.g. from a future "Sync users" admin button).
+ * A freshly registered node gets its users from its first inbound push
+ * (node.created queues it): the push job hands each user out on exactly the
+ * inbounds their squads reach, after the agent has applied them (A-022).
+ *
+ * This used to send every active user here with no inbound list. Kept as a
+ * job name so jobs already queued drain quietly; it no longer sends anything,
+ * since an inbound list sent before the first push would take the user off
+ * everything on a node that knows no inbound yet.
  */
 async function syncBackfillNode(nodeId: string): Promise<void> {
-  const node = await prisma.node.findFirst({
-    where: { id: nodeId, deletedAt: null, status: { not: 'disabled' } },
-    select: { id: true, name: true, address: true },
-  });
-  if (!node) {
-    getLogger().info(`[worker:node-users] backfillNode ${nodeId} - node not active, skipping`);
-    return;
-  }
-
-  interface BackfillUserRow {
-    id: string;
-    shortId: string;
-    username: string;
-    hysteriaPassword: string;
-    naivePassword: string;
-    xrayUuid: string;
-    amneziawgPublicKey: string;
-  }
-
-  // B14 - stream active users in id-ordered cursor pages instead of loading the
-  // whole active set into memory, and fan out addUser in bounded chunks rather
-  // than one unbounded Promise.allSettled (a 1000-user backfill previously fired
-  // 1000 simultaneous mTLS calls at the single-process Go agent). PAGE bounds
-  // memory; CHUNK bounds in-flight requests (mirrors inbounds.queue's value).
-  const BACKFILL_PAGE = 500;
-  const ADD_USER_CHUNK = 25;
-  const transport = new NodeTransport(node);
-
-  const failures: { username: string; reason: unknown }[] = [];
-  let total = 0;
-  let cursor: string | undefined;
-
-  for (;;) {
-    const page: BackfillUserRow[] = await prisma.user.findMany({
-      where: { deletedAt: null, status: 'active' },
-      select: {
-        id: true,
-        shortId: true,
-        username: true,
-        hysteriaPassword: true,
-        naivePassword: true,
-        xrayUuid: true,
-        amneziawgPublicKey: true,
-      },
-      orderBy: { id: 'asc' },
-      take: BACKFILL_PAGE,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    });
-    if (page.length === 0) break;
-    cursor = page[page.length - 1]!.id;
-    total += page.length;
-
-    for (let i = 0; i < page.length; i += ADD_USER_CHUNK) {
-      const chunk = page.slice(i, i + ADD_USER_CHUNK);
-      const results = await Promise.allSettled(
-        chunk.map((u) => {
-          const req: AddUserRequest = {
-            userId: u.id,
-            shortId: u.shortId,
-            username: u.username,
-            credentials: {
-              hysteriaPassword: u.hysteriaPassword,
-              naivePassword: u.naivePassword,
-              xrayUuid: u.xrayUuid,
-              amneziawgPublicKey: u.amneziawgPublicKey,
-              tuicUuid: u.xrayUuid,
-              tuicPassword: deriveTuicPassword(u.xrayUuid),
-              anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
-              shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
-            },
-          };
-          return transport.addUser(req);
-        }),
-      );
-      for (let j = 0; j < results.length; j++) {
-        const r = results[j]!;
-        if (r.status === 'rejected') {
-          const reason = r.reason;
-          const detail =
-            reason instanceof NodeRequestError
-              ? `${reason.status} ${reason.message}`
-              : String(reason);
-          getLogger().info(
-            `[worker:node-users] backfillNode ${node.name} → ${chunk[j]!.username} FAILED: ${detail}`,
-          );
-          failures.push({ username: chunk[j]!.username, reason });
-        }
-      }
-    }
-
-    if (page.length < BACKFILL_PAGE) break;
-  }
-
-  if (total === 0) {
-    getLogger().info(`[worker:node-users] backfillNode ${node.name} - no active users, skipping`);
-    return;
-  }
-
-  if (failures.length > 0) {
-    throw new AggregateError(
-      failures.map((f) => f.reason),
-      `${failures.length}/${total} users failed to backfill onto ${node.name}`,
-    );
-  }
-  getLogger().info(`[worker:node-users] backfillNode ${node.name} - ${total} user(s) ok`);
+  getLogger().info(`[worker:node-users] backfillNode ${nodeId} - users come with the node's first push, nothing to do`);
 }
-
 // ───── Worker ─────
 
 export function startNodeUsersWorker(): Worker<NodeUserJobData> {

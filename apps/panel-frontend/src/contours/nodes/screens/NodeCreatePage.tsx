@@ -7,6 +7,7 @@ import { StepHosts } from '@/contours/nodes/components/NodeCreate/StepHosts';
 import { StepInstall } from '@/contours/nodes/components/NodeCreate/StepInstall';
 import { StepParams } from '@/contours/nodes/components/NodeCreate/StepParams';
 import { useNodeCreateForm } from '@/contours/nodes/components/NodeCreate/useNodeCreateForm';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -58,6 +59,11 @@ export function NodeCreatePage() {
     register,
     copy,
     downloadPayload,
+    fleetView,
+    fleetFailure,
+    profilesFailure,
+    watchFailure,
+    slotHeld,
   } = useNodeCreateForm();
 
   return (
@@ -314,7 +320,15 @@ export function NodeCreatePage() {
         })}
       </Box>
 
-      {step === 0 && (
+      {/* What the server knows (ядра, версии) is read off the fleet list; until
+          it is in, the form is not drawn in a shape the server may refuse. */}
+      {step === 0 && fleetFailure && <LoadFailed message={fleetFailure.message} onRetry={fleetFailure.onRetry} />}
+      {step === 0 && fleetView === 'loading' && (
+        <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
+          <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>{t('common.loading')}</Text>
+        </Box>
+      )}
+      {step === 0 && fleetView === 'ready' && (
         <StepParams
           form={form}
           coreVersionsKnown={coreVersionsKnown}
@@ -326,9 +340,9 @@ export function NodeCreatePage() {
         />
       )}
 
-      {step === 1 && <StepHosts form={form} installWords={installWords} selected={selected} groupOpen={groupOpen} setGroupOpen={setGroupOpen} profilesQuery={profilesQuery} groups={groups} portByProfile={portByProfile} toggle={toggle} toggleAllCan={toggleAllCan} />}
+      {step === 1 && <StepHosts form={form} installWords={installWords} selected={selected} groupOpen={groupOpen} setGroupOpen={setGroupOpen} profilesQuery={profilesQuery} profilesFailure={profilesFailure} groups={groups} slotHeld={slotHeld} portByProfile={portByProfile} toggle={toggle} toggleAllCan={toggleAllCan} />}
 
-      {step === 2 && registered && <StepInstall registered={registered} showPayload={showPayload} setShowPayload={setShowPayload} copied={copied} isOnline={isOnline} waited={waited} copy={copy} downloadPayload={downloadPayload} />}
+      {step === 2 && registered && <StepInstall registered={registered} showPayload={showPayload} setShowPayload={setShowPayload} copied={copied} isOnline={isOnline} waited={waited} copy={copy} downloadPayload={downloadPayload} watchFailure={watchFailure} />}
 
       <Box style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
         <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', lineHeight: '12px', color: FAINT }}>

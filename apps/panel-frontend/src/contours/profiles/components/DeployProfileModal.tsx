@@ -26,11 +26,15 @@ import {
   listBindings,
   type Profile,
 } from '@/lib/domain/profiles';
-import { deployDiff } from '@/contours/profiles/lib/deployDiff';
+import { deployDiff, portsByNode } from '@/contours/profiles/lib/deployDiff';
+import { deployFailed, deployOutcome, DeployIncomplete } from '@/contours/profiles/lib/deployResult';
+import { adapterRefusalWords, type AdapterRefusal } from '@/lib/domain/adapterSlot';
 import { plainDefaultPort } from '@/contours/profiles/lib/plainSubprotocol';
-import { hostHiddenFacts, listHosts, type Host } from '@/lib/domain/hosts';
+import { hostHiddenFacts, listHosts, type Host, type ProfileNotOnNode } from '@/lib/domain/hosts';
 import { HostHiddenLine } from '@/ui/HostHiddenLine';
-import { listNodes, type Node as PanelNode } from '@/lib/domain/nodes';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import { loadFailure } from '@/lib/ui/loadView';
+import { listAllNodes, type Node as PanelNode } from '@/lib/domain/nodes';
 import { nodeStatusText } from '@/lib/domain/nodeStatusText';
 import {
   engineCoreWord,
@@ -54,6 +58,7 @@ import {
   awgGateText,
   awgProfilePrediction,
   coreGateRefusal,
+  coreGateText,
   nodeCoreBlocks,
   nodeCoreFit,
   nodeCoreFitText,
@@ -61,6 +66,7 @@ import {
 } from '@/lib/domain/nodeCoreFit';
 import { NodeCoreLine } from '@/ui/NodeCoreLine';
 import { CoreGateRefusalLine } from '@/ui/CoreGateRefusalLine';
+import { profileNotOnNodeWords } from '@/lib/domain/profileNotOnNodeWords';
 
 interface Props {
   profile: Profile | null;
@@ -78,7 +84,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
     // but a different queryFn shape. Namespacing avoids the two clobbering each
     // other's cache.
     queryKey: ['nodes', 'deploy-picker'],
-    queryFn: () => listNodes({ limit: 100 }),
+    queryFn: () => listAllNodes(),
     enabled: opened,
   });
 
@@ -96,15 +102,20 @@ export function DeployProfileModal({ profile, onClose }: Props) {
     queryFn: () => listHosts({ profileId: profile!.id }),
     enabled: opened && profile !== null,
   });
-  const hostOfNode = useMemo(() => {
+  // A-259: a node holds the profile once per port, so it is a LIST of hosts,
+  // each found by its binding id. The cascade fact is the node's, the same on
+  // all of them; the first host that carries the key speaks.
+  const hostsOfNode = useMemo(() => {
     const nodeOfBinding = new Map((bindingsQuery.data?.bindings ?? []).map((b) => [b.id, b.nodeId] as const));
-    const m = new Map<string, Pick<Host, 'hiddenByCascade'>>();
+    const m = new Map<string, Pick<Host, 'hiddenByCascade'>[]>();
     for (const h of hostsQuery.data?.hosts ?? []) {
       const nodeId = nodeOfBinding.get(h.bindingId);
-      if (nodeId) m.set(nodeId, h);
+      if (nodeId) m.set(nodeId, [...(m.get(nodeId) ?? []), h]);
     }
     return m;
   }, [bindingsQuery.data, hostsQuery.data]);
+  /** The ports the profile listens on, per node: the tick takes all of them. */
+  const boundPorts = useMemo(() => portsByNode(bindingsQuery.data?.bindings ?? []), [bindingsQuery.data]);
 
   const initialSelected = useMemo(() => {
     const set = new Set<string>();
@@ -244,11 +255,17 @@ export function DeployProfileModal({ profile, onClose }: Props) {
 
   /** Отказ гейта ядра (409 CORE_NOT_ON_NODE / CORE_VERSION_REFUSED) по имени ноды. */
   const [coreRefusal, setCoreRefusal] = useState<CoreGateRefusal | null>(null);
+  /** A-055: ADAPTER_SLOT_TAKEN / MIERU_MTU_MISMATCH by the node the binding was sent for. */
+  const [adapterRefusals, setAdapterRefusals] = useState<Map<string, AdapterRefusal>>(new Map());
+  /** A-246: PROFILE_DOES_NOT_RUN_ON_NODE by the node the binding was sent for, in the host page's words. */
+  const [notOnNode, setNotOnNode] = useState<Map<string, ProfileNotOnNode>>(new Map());
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!profile) return;
       setCoreRefusal(null);
+      setAdapterRefusals(new Map());
+      setNotOnNode(new Map());
       // Поштучно: POST на новую галку, DELETE на снятую. Снимается только то,
       // что оператор снял сам (`deployDiff`).
       const { create: toCreate, remove: toDelete } = deployDiff(
@@ -257,22 +274,21 @@ export function DeployProfileModal({ profile, onClose }: Props) {
         bindingsQuery.data?.bindings ?? [],
       );
 
-      await Promise.all([
-        ...toCreate.map((nodeId) =>
-          createBinding({
-            profileId: profile.id,
-            nodeId,
-            port,
-          }),
-        ),
-        ...toDelete.map((id) => deleteBinding(id)),
+      // Settled one by one: a node whose adapter refuses (A-055) is named under
+      // its own row, and the bindings that went through stand (deployOutcome).
+      const [creates, deletes] = await Promise.all([
+        Promise.allSettled(toCreate.map((nodeId) => createBinding({ profileId: profile.id, nodeId, port }))),
+        Promise.allSettled(toDelete.map((id) => deleteBinding(id))),
       ]);
-
-      return { created: toCreate.length, deleted: toDelete.length };
+      const outcome = deployOutcome(toCreate, creates, deletes);
+      if (deployFailed(outcome)) throw new DeployIncomplete(outcome);
+      return { created: outcome.created, deleted: outcome.deleted };
     },
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['bindings'] });
       qc.invalidateQueries({ queryKey: ['profiles'] });
+      // The key-impact warning on the same page counts what now stands (A-225).
+      qc.invalidateQueries({ queryKey: ['profile-key-impact'] });
       const c = result?.created ?? 0;
       const d = result?.deleted ?? 0;
       if (c === 0 && d === 0) {
@@ -285,7 +301,20 @@ export function DeployProfileModal({ profile, onClose }: Props) {
       }
       onClose();
     },
-    onError: (err) => {
+    onError: (failure) => {
+      // Part of the deploy may have gone through: the lists are read again, and
+      // each adapter refusal stands under its node. Anything else is read below.
+      let err: unknown = failure;
+      if (failure instanceof DeployIncomplete) {
+        qc.invalidateQueries({ queryKey: ['bindings'] });
+        qc.invalidateQueries({ queryKey: ['profiles'] });
+        // The key-impact warning on the same page counts what now stands (A-225).
+        qc.invalidateQueries({ queryKey: ['profile-key-impact'] });
+        setAdapterRefusals(failure.outcome.refused);
+        setNotOnNode(failure.outcome.notOnNode);
+        if (failure.outcome.other === null) return;
+        err = failure.outcome.other;
+      }
       /**
        * Порт занят на одной из выбранных нод.
        *
@@ -307,6 +336,12 @@ export function DeployProfileModal({ profile, onClose }: Props) {
         setCoreRefusal(core);
         return;
       }
+      // A node not in this window: the toast says it in the same words as the
+      // host page (coreGateText), not the server's sentence (A-246).
+      if (core) {
+        notifications.show({ color: 'red', title: t('common.saveError'), message: coreGateText(core, t) });
+        return;
+      }
       // A profile saved on sing-box before the form locked its tile: the node
       // would not render it, and the binding is refused naming the field.
       const sb = singboxXrayRefusal(err);
@@ -321,6 +356,8 @@ export function DeployProfileModal({ profile, onClose }: Props) {
   function toggle(nodeId: string) {
     // Отказ был про прежний набор нод.
     setCoreRefusal(null);
+    setAdapterRefusals(new Map());
+    setNotOnNode(new Map());
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(nodeId)) next.delete(nodeId);
@@ -341,6 +378,10 @@ export function DeployProfileModal({ profile, onClose }: Props) {
   }, [selected, seeded]);
 
   const loading = nodesQuery.isLoading || bindingsQuery.isLoading;
+  // A-226: a node or binding list that did not arrive is said, not drawn as
+  // «no nodes»; without the bindings the diff would re-create what stands,
+  // so the save waits for both.
+  const listFailure = [nodesQuery, bindingsQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null;
 
   return (
     <Modal
@@ -406,7 +447,9 @@ export function DeployProfileModal({ profile, onClose }: Props) {
           </Stack>
         ))}
 
-        {loading ? (
+        {listFailure ? (
+          <LoadFailedLine message={listFailure.message} onRetry={listFailure.onRetry} />
+        ) : loading ? (
           <Group justify="center" py="xl">
             <Loader size="sm" />
           </Group>
@@ -454,14 +497,43 @@ export function DeployProfileModal({ profile, onClose }: Props) {
                       {t('nodeCore.portInHopRange')}
                     </Text>
                   )}
+                  {adapterRefusals.has(node.id) && (
+                    <Text size="xs" c="red" style={{ lineHeight: '15px' }}>
+                      {adapterRefusalWords({ ...adapterRefusals.get(node.id)!, nodeName: null }, t)}
+                    </Text>
+                  )}
+                  {notOnNode.has(node.id) && (
+                    <Text size="xs" c="red" style={{ lineHeight: '15px' }}>
+                      {profileNotOnNodeWords(notOnNode.get(node.id)!, t)}
+                    </Text>
+                  )}
                   {coreRefusal?.nodeName === node.name && (
                     <CoreGateRefusalLine refusal={coreRefusal} nodeId={node.id} arch={node.cores?.arch} />
+                  )}
+                  {/* A-259: what taking the tick off takes with it, and the
+                      ports when the profile stands here more than once. */}
+                  {boundPorts.has(node.id) && !checked && seeded.has(node.id) && (
+                    <Text size="xs" c="yellow" style={{ lineHeight: '15px' }}>
+                      {t('profiles.deploy.removesPorts', {
+                        count: boundPorts.get(node.id)!.length,
+                        ports: boundPorts.get(node.id)!.join(', '),
+                      })}
+                    </Text>
+                  )}
+                  {checked && (boundPorts.get(node.id)?.length ?? 0) > 1 && (
+                    <Text size="xs" c="dimmed" style={{ lineHeight: '15px' }}>
+                      {t('profiles.deploy.boundPorts', { ports: boundPorts.get(node.id)!.join(', ') })}
+                    </Text>
                   )}
                   {/* Нода в каскаде не вход: хост профиля на ней подписка не
                       отдаст. Под именем ноды, и у ноды без хоста тоже: до
                       развёртывания это дешевле всего узнать. */}
                   <HostHiddenLine
-                    facts={hostHiddenFacts(hostOfNode.get(node.id), node.name, node)}
+                    facts={hostHiddenFacts(
+                      (hostsOfNode.get(node.id) ?? []).find((h) => h.hiddenByCascade !== undefined),
+                      node.name,
+                      node,
+                    )}
                     compact
                   />
                 </Stack>
@@ -477,7 +549,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
           <Button
             onClick={() => saveMutation.mutate()}
             loading={saveMutation.isPending}
-            disabled={!dirty || loading}
+            disabled={!dirty || loading || listFailure !== null}
             leftSection={<IconRocket size={14} />}
           >
             {t('common.save')}

@@ -1,16 +1,27 @@
 import type { Prisma } from '../../generated/prisma/client.js';
 import { generateUserCredentials, generateSubscriptionToken } from '../../lib/auth/credentials.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
+import { uniqueViolationOf, type UniqueViolation } from '../../lib/util/unique-violation.js';
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import * as repo from './users.repository.js';
+import { isSourceIdErased } from './erased-sources.js';
 import type {
   CreateUserInput,
   UpdateUserInput,
   ListUsersQuery,
   BulkUsersInput,
+  UserStatus as UserStatusSchema,
 } from './users.schemas.js';
+import type { z } from 'zod';
+
+type UserStatus = z.infer<typeof UserStatusSchema>;
 import { mapUserToPublic, type PublicUserDto } from './users.mapper.js';
+import {
+  assertCustomPresetExists,
+  presetUpdateData,
+  rethrowPresetGone,
+} from '../routing-presets/routing-presets.assign.js';
 
 // ───── Domain errors ─────
 
@@ -32,6 +43,47 @@ export class SubscriptionTokenTakenError extends Error {
   constructor(public token: string) {
     super('Subscription token already in use');
     this.name = 'SubscriptionTokenTakenError';
+  }
+}
+
+/** A user imported twice: the source panel's id is already here (A-257). The
+ *  importer reads this to tell a re-run from a new user. */
+export class SourceIdTakenError extends Error {
+  constructor(public sourceId: string) {
+    super(`a user imported from source id ${JSON.stringify(sourceId)} already exists`);
+    this.name = 'SourceIdTakenError';
+  }
+}
+
+/** A-268 tombstone: the user this source id stood for was deleted and, after
+ *  the retention window, erased for good. An import run of the same source
+ *  does not bring them back. */
+export class SourceIdErasedError extends Error {
+  constructor(public sourceId: string) {
+    super(
+      `the user imported from source id ${JSON.stringify(sourceId)} was deleted and erased; ` +
+        `an import does not bring them back`,
+    );
+    this.name = 'SourceIdErasedError';
+  }
+}
+
+/** The short id the panel generated met another user's (A-257). Ours, not the
+ *  caller's: the same request again draws a new one. */
+export class ShortIdTakenError extends Error {
+  constructor() {
+    super('the generated short id is already in use; send the request again');
+    this.name = 'ShortIdTakenError';
+  }
+}
+
+/** A unique constraint this code does not know (A-257): said as such, not as
+ *  a taken name. */
+export class UserUniqueConflictError extends Error {
+  constructor(public violation: UniqueViolation | null) {
+    const what = violation?.index ?? (violation?.fields.length ? violation.fields.join(', ') : 'unnamed');
+    super(`the user collides with another on a unique constraint (${what})`);
+    this.name = 'UserUniqueConflictError';
   }
 }
 
@@ -60,6 +112,30 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
+/**
+ * Which of the user's four unique constraints a P2002 hit, or null for one
+ * this code does not know (A-257). Read with uniqueViolationOf: through the pg
+ * driver adapter the error names the INDEX and carries no `meta.target`, so
+ * the old reading of `target` found nothing and every lost race read as a
+ * taken name.
+ */
+export type UserUniqueField = 'username' | 'subscriptionToken' | 'shortId' | 'sourceId';
+
+const USER_UNIQUE: { field: UserUniqueField; index: string; columns: string[] }[] = [
+  { field: 'username', index: 'users_username_active_key', columns: ['username'] },
+  { field: 'subscriptionToken', index: 'users_subscription_token_key', columns: ['subscription_token', 'subscriptionToken'] },
+  { field: 'shortId', index: 'users_short_id_key', columns: ['short_id', 'shortId'] },
+  { field: 'sourceId', index: 'users_source_id_key', columns: ['source_id', 'sourceId'] },
+];
+
+export function userUniqueField(err: unknown): UserUniqueField | null {
+  const v = uniqueViolationOf(err);
+  if (!v) return null;
+  if (v.index !== null) return USER_UNIQUE.find((u) => u.index === v.index)?.field ?? null;
+  if (v.fields.length !== 1) return null;
+  return USER_UNIQUE.find((u) => u.columns.includes(v.fields[0]!))?.field ?? null;
+}
+
 // ───── Service methods ─────
 
 export async function createUser(input: CreateUserInput): Promise<PublicUserDto> {
@@ -77,6 +153,14 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       throw new SubscriptionTokenTakenError(input.subscriptionToken);
     }
   }
+
+  // A-268 tombstone: a source id whose user was erased stays refused, or a
+  // later import run would recreate them with their old subscription link.
+  if (input.sourceId && (await isSourceIdErased(input.sourceId))) {
+    throw new SourceIdErasedError(input.sourceId);
+  }
+
+  await assertCustomPresetExists(input.customRoutingPresetId);
 
   const creds = generateUserCredentials();
 
@@ -117,6 +201,10 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       hwidDeviceLimit: input.hwidDeviceLimit ?? null,
       // R3 - per-user routing override; null = inherit (squad -> global -> default).
       routingPreset:   input.routingPreset ?? null,
+      // A-229 - or an own preset (the schema refused both at once).
+      ...(input.customRoutingPresetId
+        ? { customRoutingPreset: { connect: { id: input.customRoutingPresetId } } }
+        : {}),
       description:     input.description ?? null,
       tag:             input.tag ?? null,
       telegramId:      toBigIntOrNull(input.telegramId),
@@ -142,10 +230,23 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
     // so two concurrent creates can both pass it and race on the INSERT; the
     // loser surfaces here as P2002 instead of a raw 500. Mirrors
     // nodes.service.ts createNode.
+    // The race can be lost on any of the four (A-210, A-257): say which, and
+    // name none for a constraint this code does not know.
     if (isUniqueViolation(err)) {
-      throw new UserAlreadyExistsError(input.username);
+      switch (userUniqueField(err)) {
+        case 'username':
+          throw new UserAlreadyExistsError(input.username);
+        case 'subscriptionToken':
+          throw new SubscriptionTokenTakenError(input.subscriptionToken ?? '');
+        case 'shortId':
+          throw new ShortIdTakenError();
+        case 'sourceId':
+          throw new SourceIdTakenError(input.sourceId ?? '');
+        default:
+          throw new UserUniqueConflictError(uniqueViolationOf(err));
+      }
     }
-    throw err;
+    rethrowPresetGone(err, input.customRoutingPresetId);
   }
 
   eventBus.emit('user.created', {
@@ -179,6 +280,9 @@ export async function getUserById(id: string): Promise<PublicUserDto> {
   return mapUserToPublic(user, user.traffic);
 }
 
+// No unique column is written here (UpdateUserSchema takes none of username,
+// subscriptionToken, shortId, sourceId), so no P2002 to read; a rename or a
+// token edit added later gets userUniqueField on its write, with a test (A-257).
 export async function updateUser(
   id: string,
   input: UpdateUserInput,
@@ -188,11 +292,15 @@ export async function updateUser(
     throw new UserNotFoundError(id);
   }
 
-  const data: Prisma.UserUpdateInput = {};
+  // Unchecked: the preset pair is written as two scalar columns in ONE UPDATE.
+  // A relation `disconnect` runs as its own statement after the scalars, and
+  // in between the row would hold both, which the CHECK refuses.
+  const data: Prisma.UserUncheckedUpdateInput = {};
   const changedFields: string[] = [];
 
-  if (input.status !== undefined) {
-    data.status = input.status;
+  const nextStatus = statusAfterEdit(existing, input);
+  if (nextStatus !== undefined) {
+    data.status = nextStatus;
     changedFields.push('status');
   }
   if (input.trafficLimitGb !== undefined) {
@@ -211,10 +319,20 @@ export async function updateUser(
     data.hwidDeviceLimit = input.hwidDeviceLimit;
     changedFields.push('hwidDeviceLimit');
   }
-  if (input.routingPreset !== undefined) {
-    // R3 - null clears the override (back to inherit squad -> global -> default).
-    data.routingPreset = input.routingPreset;
-    changedFields.push('routingPreset');
+  // R3 + A-229: the preset choice, a built-in key or an own preset, never both.
+  // A value written to one side clears the other; null clears only its own
+  // side (back to inherit squad -> global -> default); an absent key is no edit.
+  const preset = presetUpdateData(input);
+  if (preset.customRoutingPresetId) await assertCustomPresetExists(preset.customRoutingPresetId);
+  if (preset.routingPreset !== undefined) {
+    data.routingPreset = preset.routingPreset;
+    if (input.routingPreset !== undefined || existing.routingPreset !== null) changedFields.push('routingPreset');
+  }
+  if (preset.customRoutingPresetId !== undefined) {
+    data.customRoutingPresetId = preset.customRoutingPresetId;
+    if (input.customRoutingPresetId !== undefined || existing.customRoutingPresetId !== null) {
+      changedFields.push('customRoutingPresetId');
+    }
   }
   if (input.description !== undefined) {
     data.description = input.description;
@@ -252,7 +370,9 @@ export async function updateUser(
   // The same repair as on create: falling back to "All" on a database that
   // lost the row would fail on the foreign key.
   const intoAll = input.groupIds !== undefined && input.groupIds.length === 0;
-  const updated = await repo.updateById(id, data, intoAll ? ensureAllSquad : undefined);
+  const updated = await repo
+    .updateById(id, data, intoAll ? ensureAllSquad : undefined)
+    .catch((err: unknown) => rethrowPresetGone(err, preset.customRoutingPresetId));
 
   if (changedFields.length > 0) {
     eventBus.emit('user.updated', {
@@ -262,15 +382,64 @@ export async function updateUser(
   }
 
   // Status transition is a separate, more specific event
-  if (input.status && input.status !== existing.status) {
+  if (nextStatus && nextStatus !== existing.status) {
     eventBus.emit('user.status-changed', {
       userId: id,
       from: existing.status,
-      to: input.status,
+      to: nextStatus,
     });
   }
 
   return mapUserToPublic(updated, updated.traffic);
+}
+
+/**
+ * The status an edit leaves the user in, or undefined for no change.
+ *
+ * A-048. The status changed only when the input named one, so an extension
+ * (form, bulk extend, API) moved the date into the future and left the user
+ * `expired`: the subscription kept refusing and the crons never bring anyone
+ * back, they only pick active users. The same for a quota raised above what
+ * a `limited` user has used. Now an edit that clears the reason brings the
+ * user back by itself, the date or the quota alone is enough.
+ *
+ * And the other half (A-060, server side). `active` asked for a user whose
+ * date has still passed, or whose quota is still spent, is not active: the
+ * crons would flip it back within a minute, after the user had been rolled
+ * out to every node and taken off again. The screen sends `active` with any
+ * edit of an expired user, so that loop ran on a description change. Such a
+ * request lands on the status the facts give.
+ *
+ * `disabled` is the operator's word and is taken as said, both ways in.
+ */
+export function statusAfterEdit(
+  existing: {
+    status: string;
+    expireAt: Date | null;
+    trafficLimitBytes: bigint | null;
+    traffic?: { usedTrafficBytes: bigint } | null;
+  },
+  input: Pick<UpdateUserInput, 'status' | 'expireAt' | 'trafficLimitGb'>,
+  now: Date = new Date(),
+): UserStatus | undefined {
+  const expireAt =
+    input.expireAt !== undefined ? (input.expireAt ? new Date(input.expireAt) : null) : existing.expireAt;
+  const limit = input.trafficLimitGb !== undefined ? gbToBytes(input.trafficLimitGb) : existing.trafficLimitBytes;
+  const used = existing.traffic?.usedTrafficBytes ?? 0n;
+  const byFacts = (): UserStatus =>
+    expireAt && expireAt < now ? 'expired' : limit !== null && used >= limit ? 'limited' : 'active';
+
+  if (input.status === 'disabled') return 'disabled';
+  if (input.status === 'active') return byFacts();
+  if (input.status !== undefined) return input.status;
+  // Nothing asked: only a user held back by the date or the quota moves, and
+  // only when this edit touched what holds them.
+  const touched =
+    (existing.status === 'expired' && input.expireAt !== undefined) ||
+    (existing.status === 'limited' && input.trafficLimitGb !== undefined);
+  if (!touched) return undefined;
+  const next = byFacts();
+  return next === existing.status ? undefined : next;
 }
 
 export interface BulkResult {

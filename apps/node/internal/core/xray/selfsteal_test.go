@@ -30,7 +30,7 @@ func TestSelfSteal_ServesTLS13WithDomainCert(t *testing.T) {
 	}
 	defer func() { selfStealListen = orig }()
 
-	srv, err := startSelfSteal(selfStealAddr, "node.example.com", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := startSelfSteal(selfStealAddr, []selfStealSite{{names: []string{"node.example.com"}}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("startSelfSteal: %v", err)
 	}
@@ -122,13 +122,14 @@ func TestSelfSteal_ReverseProxiesToUpstream(t *testing.T) {
 	}
 	defer func() { selfStealListen = orig }()
 
-	srv, err := startSelfSteal(selfStealAddr, "node.example.com", upstream.URL, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	sites := []selfStealSite{{names: []string{"node.example.com"}, upstream: upstream.URL}}
+	srv, err := startSelfSteal(selfStealAddr, sites, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("startSelfSteal: %v", err)
 	}
 	defer func() { _ = srv.stop(context.Background()) }()
-	if srv.upstream != upstream.URL {
-		t.Errorf("server upstream = %q, want %q", srv.upstream, upstream.URL)
+	if srv.key != selfStealKey(sites) {
+		t.Errorf("server key = %q, want %q", srv.key, selfStealKey(sites))
 	}
 
 	client := &http.Client{

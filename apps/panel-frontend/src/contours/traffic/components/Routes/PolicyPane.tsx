@@ -4,9 +4,13 @@ import { Box, Stack } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { listCascades } from '@/lib/domain/cascades';
 import { listNodePolicies, type NodePolicy } from '@/lib/domain/nodePolicies';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadFailure } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { ListEmpty, ListHead, ListRow } from '@/contours/traffic/components/Routes/RuleList';
 import { NodePolicyEditor } from '@/contours/traffic/components/NodePolicy/NodePolicyEditor';
 import type { DirectionOption } from '@/contours/traffic/components/NodePolicy/RuleRow';
+import { nodeCountOf, nodeCountWords } from '@/contours/traffic/lib/nodePolicyCount';
 
 /**
  * Layer B: the policies a node runs, and the one being edited.
@@ -50,6 +54,11 @@ export function PolicyPane({
 
   const policy = draft ?? policies.find((p) => p.id === selected) ?? policies[0] ?? null;
 
+  // A-228: the policy list or the cascades (the ways out a rule names) that did
+  // not arrive are said with a retry, not drawn as «no policies» or no ways out.
+  const failure = [policiesQuery, cascadesQuery].map((q) => loadFailure(q, apiErrorMessage)).find((f) => f !== null) ?? null;
+  if (failure) return <LoadFailed message={failure.message} onRetry={failure.onRetry} />;
+
   return (
     <Box className="routes-panes">
       <Stack gap={0} className="routes-list">
@@ -71,9 +80,8 @@ export function PolicyPane({
             title={p.name}
             sub={[
               t('routes.ruleCount', { count: p.rules.length }),
-              p.nodeCount
-                ? t('routes.nodeOnNodes', { count: p.nodeCount })
-                : t('routes.nodeOnNoNodes'),
+              // A count the server did not send is unknown, not «on no nodes» (A-251).
+              nodeCountWords(nodeCountOf(p), t).chip,
             ].join(' · ')}
             onClick={() => {
               onDraftDone();

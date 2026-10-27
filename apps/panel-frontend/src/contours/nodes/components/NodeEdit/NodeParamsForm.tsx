@@ -4,6 +4,7 @@ import { CARD, CYAN, HAIRLINE } from '@/contours/nodes/lib/colors';
 import { COUNTRY_OPTIONS } from '@/lib/domain/countries';
 import { FIELD } from '@/contours/nodes/lib/fieldStyles';
 import { PolicyReach } from '@/contours/nodes/components/NodeEdit/PolicyReach';
+import { PolicyDrawingLines } from '@/contours/nodes/components/NodeEdit/PolicyDrawingLines';
 import { PROTOCOL_OPTIONS } from '@/contours/nodes/lib/nodeProtocols';
 import { ServerIcon } from '@/contours/nodes/components/NodeEdit/icons';
 import { useTranslation } from 'react-i18next';
@@ -11,6 +12,7 @@ import { policyReachFacts, type PolicyReachFacts } from '@/contours/nodes/lib/po
 import { FAINT, MIST, MONO, MOSS } from '@/contours/nodes/lib/colors';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
 import { EngineChips } from '@/contours/nodes/components/EngineChips';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 
 /**
  * Name, address, region and protocol of the node, plus the save bar.
@@ -23,6 +25,8 @@ export function NodeParamsForm({
   policyRefusal,
   enginesKnown,
   enginesRefusal,
+  regionsFailure,
+  nodePoliciesFailure,
 }: Pick<
   NodeEditor,
   | 'regionsQuery'
@@ -33,6 +37,8 @@ export function NodeParamsForm({
   | 'policyRefusal'
   | 'enginesKnown'
   | 'enginesRefusal'
+  | 'regionsFailure'
+  | 'nodePoliciesFailure'
 >) {
   const { t } = useTranslation();
   const reach = policyReachFacts(node?.cores?.cores);
@@ -128,17 +134,15 @@ export function NodeParamsForm({
                     clearable
                     {...form.getInputProps('regionId')}
                   />
-                  <NumberInput
+                  {/* Text, not a number field (A-143): a comma and a dot are both taken,
+                      and 1,25 is refused at the field instead of rounded. */}
+                  <TextInput
                     {...FIELD}
                     style={{ flex: 1, minWidth: 0 }}
                     label={t('nodeEdit.multiplier')}
                     description={t('nodeEdit.multiplierDesc')}
-                    min={0.1}
-                    max={10}
-                    step={0.1}
-                    decimalScale={1}
-                    fixedDecimalScale
-                    allowNegative={false}
+                    inputMode="decimal"
+                    placeholder="1"
                     {...form.getInputProps('consumptionMultiplier')}
                   />
                   <NumberInput
@@ -146,12 +150,14 @@ export function NodeParamsForm({
                     style={{ flex: 1, minWidth: 0 }}
                     label={t('nodeEdit.maxUsers')}
                     description={t('nodeEdit.maxUsersDesc')}
-                    min={0}
+                    min={1}
                     allowDecimal={false}
                     allowNegative={false}
                     {...form.getInputProps('maxUsers')}
                   />
                 </Box>
+                {/* The region list did not arrive: said, not an empty picker. */}
+                {regionsFailure && <LoadFailedLine message={regionsFailure.message} onRetry={regionsFailure.onRetry} />}
 
                 {/* Э3 layer B. One policy can sit on many nodes, so the picker
                     names the policy and how many machines already carry it,
@@ -186,6 +192,9 @@ export function NodeParamsForm({
                     onChange={(v) => form.setFieldValue('policyId', v ?? '')}
                   />
                 </Box>
+                {nodePoliciesFailure && (
+                  <LoadFailedLine message={nodePoliciesFailure.message} onRetry={nodePoliciesFailure.onRetry} />
+                )}
                 {/* Подробности охвата только когда политика ВООБЩЕ применяется.
                     В двух других состояниях строка выше уже всё сказала, и
                     PolicyReach повторил бы её своими словами: «не применима»
@@ -200,6 +209,14 @@ export function NodeParamsForm({
                   <PolicyReach
                     cores={node?.cores?.cores}
                     hasPolicy={Boolean(form.values.policyId)}
+                  />
+                )}
+                {/* A-232: which rules of the SAVED policy reach the node, and
+                    what the agent says it drew. */}
+                {node?.policyId && (
+                  <PolicyDrawingLines
+                    nodeId={node.id}
+                    policy={nodePoliciesQuery.data?.policies.find((p) => p.id === node.policyId)}
                   />
                 )}
                 {/* Пояснение у ВСЕХ трёх состояний, и это не многословие: в

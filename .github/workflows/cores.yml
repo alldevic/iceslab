@@ -124,7 +124,7 @@ jobs:
           [ "$head" = "$COMMIT" ] || { echo "::error::checked out $head, want $COMMIT"; exit 1; }
           refs=$(git ls-remote https://github.com/SagerNet/sing-box.git "refs/tags/v$VERSION" "refs/tags/v$VERSION^{}")
           tagged=$(awk '/\^\{\}$/ {print $1}' <<<"$refs")
-          [ -n "$tagged" ] || tagged=$(awk '{print $1}' <<<"$refs" | head -1)
+          [ -n "$tagged" ] || tagged=$(awk 'NR == 1 {print $1}' <<<"$refs")
           if [ "$tagged" != "$COMMIT" ]; then
             echo "::error::upstream v$VERSION now names ${tagged:-nothing}, the table says $COMMIT"
             exit 1
@@ -189,7 +189,7 @@ jobs:
             off_bin=$(find "$RUNNER_TEMP/official" -type f -name sing-box)
             echo "== official"; go version -m "$off_bin"; stat -c '%s bytes' "$off_bin"
             echo "== built here"; go version -m "$RUNNER_TEMP/parity/sing-box"; stat -c '%s bytes' "$RUNNER_TEMP/parity/sing-box"
-            echo "== first differing bytes"; cmp -l "$off_bin" "$RUNNER_TEMP/parity/sing-box" | head -20 || true
+            echo "== first differing bytes"; cmp -l "$off_bin" "$RUNNER_TEMP/parity/sing-box" | sed -n 1,20p || true
             echo "== differing byte count: $(cmp -l "$off_bin" "$RUNNER_TEMP/parity/sing-box" | wc -l || true)"
             exit 1
           fi

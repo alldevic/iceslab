@@ -65,6 +65,29 @@ describe('POST /api/route-policies', () => {
     expect(JSON.parse(third.body).ordinal).toBe(1);
   });
 
+  it('takes addresses beside names, and refuses an entry that is neither, by name (E55)', async () => {
+    const ok = await create({ name: 'RU direct', directDomains: ['geoip:ru', 'domain:gosuslugi.ru', '10.0.0.0/8'] });
+    expect(ok.statusCode, ok.body).toBe(201);
+
+    const bad = await create({ name: 'Typo', directDomains: ['geoip:', 'domain:ya.ru', 'http://x.ru'] });
+    expect(bad.statusCode).toBe(400);
+    expect(JSON.parse(bad.body)).toMatchObject({ error: 'ROUTE_POLICY_ENTRY_UNKNOWN', entries: ['geoip:', 'http://x.ru'] });
+    // No angle brackets in the sentence: a screen rendering it as markup ate
+    // them and showed "ext::" (stand, 26.09).
+    expect(JSON.parse(bad.body).message).not.toMatch(/[<>]/);
+    expect(JSON.parse(bad.body).message).toContain('ext:SET:TAG');
+
+    const id = JSON.parse(ok.body).id as string;
+    const put = await app.inject({
+      method: 'PUT',
+      url: `/api/route-policies/${id}`,
+      headers: auth(),
+      payload: { blockDomains: ['regexp:('] },
+    });
+    expect(put.statusCode).toBe(400);
+    expect(JSON.parse(put.body).entries).toEqual(['regexp:(']);
+  });
+
   it('refuses a policy that would do nothing', async () => {
     const res = await create({ name: 'Empty' });
     expect(res.statusCode).toBe(400);

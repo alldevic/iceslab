@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
-import { invalidateSrrCache, matchFormatForUserAgent } from './srr.service.js';
+import { checkStoredRules, invalidateSrrCache, matchFormatForUserAgent } from './srr.service.js';
 
 interface RuleSeed {
   name: string;
@@ -89,6 +89,15 @@ describe('matchFormatForUserAgent', () => {
     expect(await matchFormatForUserAgent(padded)).toBeNull();
     // But TARGET within the first 256 chars is matched.
     expect(await matchFormatForUserAgent('TARGET')).toBe('clash');
+  });
+
+  it('a stored rule the linear engine cannot run is named at start and not served (A-019)', async () => {
+    await seed([
+      { name: 'ahead', uaPattern: '(?=Hiddify)Hid', format: 'clash', priority: 10 },
+      { name: 'ok', uaPattern: 'Hiddify', format: 'singbox', priority: 20 },
+    ]);
+    expect((await checkStoredRules()).map((r) => r.name)).toEqual(['ahead']);
+    expect(await matchFormatForUserAgent('Hiddify/2.0')).toBe('singbox');
   });
 
   it('supports case-insensitive patterns via inline (?i)', async () => {

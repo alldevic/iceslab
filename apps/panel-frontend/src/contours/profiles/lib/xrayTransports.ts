@@ -50,10 +50,14 @@ export function singboxXrayPatch(values: {
 
 /** The form field behind each name the server refuses on, so the refusal
  *  lands as an error on the control the operator has to change. */
-export const SINGBOX_XRAY_FORM_FIELD: Record<SingboxXrayField, 'xrayNetwork' | 'xraySecurity' | 'xrayRealityMode'> = {
+export const SINGBOX_XRAY_FORM_FIELD: Record<
+  SingboxXrayField,
+  'xrayNetwork' | 'xraySecurity' | 'xrayRealityMode' | 'xrayServerNames'
+> = {
   network: 'xrayNetwork',
   security: 'xraySecurity',
   realityMode: 'xrayRealityMode',
+  realityServerNames: 'xrayServerNames',
 };
 
 // Vision flow is only valid on raw/xhttp; other transports reject it.

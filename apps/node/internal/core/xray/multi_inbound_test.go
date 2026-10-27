@@ -132,16 +132,53 @@ func TestInboundTagIsStableAcrossPushes(t *testing.T) {
 	}
 }
 
+// A-131: two ids that share their first 8 characters are two inbounds, with
+// two tags, and the core takes both. A short tag gave them one, and xray
+// refused the whole config.
+func TestIdsThatShareAPrefixGetTwoTags(t *testing.T) {
+	idA := "00000000-0000-4000-8000-000000000001"
+	idB := "00000000-0000-4000-8000-000000000002"
+	if inboundTagFor(idA, "vless-in") == inboundTagFor(idB, "vless-in") {
+		t.Fatalf("ids %s and %s share a tag", idA, idB)
+	}
+	a := multiAdapter(t)
+	if err := a.ApplyInbound(443, inboundWire(t, idA, 443)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ApplyInbound(8443, inboundWire(t, idB, 8443)); err != nil {
+		t.Fatalf("the second inbound was refused: %v", err)
+	}
+	tags := map[string]bool{}
+	for _, in := range renderedInbounds(t, a) {
+		if tag, _ := in["tag"].(string); tag != "api-in" {
+			tags[tag] = true
+		}
+	}
+	if !tags["vless-in-"+idA] || !tags["vless-in-"+idB] {
+		t.Fatalf("rendered tags %v, want both full ids", tags)
+	}
+}
+
 // Two inbounds on one port is a configuration error worth naming: xray would
 // otherwise reject the whole file with a parser message that points nowhere.
+// The clashing inbound is refused on its own push and not kept (A-130), so the
+// one already serving stays renderable.
 func TestPortClashIsRefusedByName(t *testing.T) {
 	a := multiAdapter(t)
 	_ = a.ApplyInbound(443, inboundWire(t, "aaaaaaaa-1111-4000-8000-000000000001", 443))
-	_ = a.ApplyInbound(443, inboundWire(t, "bbbbbbbb-2222-4000-8000-000000000002", 443))
-
-	_, err := renderMultiConfig(currentInbounds(a), nil, nil, 8080, nil, nil)
+	err := a.ApplyInbound(443, inboundWire(t, "bbbbbbbb-2222-4000-8000-000000000002", 443))
 	if err == nil {
 		t.Fatal("expected a port clash to be refused")
+	}
+
+	if _, err := renderMultiConfig(currentInbounds(a), nil, nil, 8080, nil, nil); err != nil {
+		t.Fatalf("the refused inbound stayed held and breaks the render: %v", err)
+	}
+	a.mu.Lock()
+	held := len(a.inbounds)
+	a.mu.Unlock()
+	if held != 1 {
+		t.Fatalf("adapter holds %d inbounds after a refused one, want 1", held)
 	}
 }
 

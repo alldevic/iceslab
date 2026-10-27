@@ -281,8 +281,12 @@ describe('the AmneziaWG generation gate (t07-1)', () => {
     // AWG_SUBNET_OVERLAP).
     const three = await makeProfile('amneziawg', { ...AWG, subnet: '10.67.67.0/24' }, { awgProtocol: 3 });
     expect((await bind(legacy, nodeId, 51820)).statusCode).toBe(201);
-    expect((await bind(one, nodeId, 51821)).statusCode).toBe(201);
     expect((await bind(three, nodeId, 51822)).statusCode).toBe(201);
+    // An explicit 1.x is the same generation as the legacy one: the gate here
+    // lets it through, and the adapter slot (A-055) refuses the second 1.x.
+    const another = await makeNode();
+    await report(another, [awgRow(3)], 'amd64');
+    expect((await bind(one, another, 51821)).statusCode).toBe(201);
   });
 
   it('lets through a node whose module does not say, when its agent carries 3.1', async () => {
@@ -302,10 +306,18 @@ describe('the AmneziaWG generation gate (t07-1)', () => {
     const onlyOne = await makeNode();
     await report(onlyOne, [awgRow(3, '3.1.20260906', [1])], 'amd64');
     const never = await makeNode();
-    for (const res of [await bind(three, old, 51820), await bind(three, onlyOne, 51820), await host(three, never, 51820)]) {
+    for (const res of [await bind(three, old, 51820), await bind(three, onlyOne, 51820)]) {
       expect(res.statusCode, res.body).toBe(409);
-      expect(JSON.parse(res.body)).toMatchObject({ error: 'AWG_AGENT_TOO_OLD' });
+      expect(JSON.parse(res.body)).toMatchObject({ error: 'AWG_AGENT_TOO_OLD', neverReported: false });
+      expect(JSON.parse(res.body).message).toContain('Rebuild the agent');
     }
+    // A-160: a node that has not reported at all is not an old agent: the same
+    // refusal, saying to wait for the first poll, with the flag for the wizard.
+    const first = await host(three, never, 51820);
+    expect(first.statusCode, first.body).toBe(409);
+    expect(JSON.parse(first.body)).toMatchObject({ error: 'AWG_AGENT_TOO_OLD', neverReported: true });
+    expect(JSON.parse(first.body).message).toContain('has not reported yet');
+    expect(JSON.parse(first.body).message).not.toContain('Rebuild');
     // A 1.x profile asks nothing of the agent.
     const one = await makeProfile('amneziawg', { ...AWG, subnet: '10.68.68.0/24' });
     expect((await bind(one, old, 51821)).statusCode).toBe(201);
@@ -328,8 +340,12 @@ describe('the AmneziaWG generation gate (t07-1)', () => {
     expect(onto.statusCode, onto.body).toBe(409);
     expect(JSON.parse(onto.body)).toMatchObject({ error: 'AWG_SUBNET_OVERLAP', otherSubnet: '10.66.66.0/24' });
     expect((await put({ config: { ...AWG, subnet: '10.69.69.0/24' } })).statusCode).toBe(200);
-    // Back to 1.x on its own subnet: the same generation as the other, not asked.
-    expect((await put({ awgProtocol: null })).statusCode).toBe(200);
+    // Back to 1.x on its own subnet: the subnet gate does not ask (same
+    // generation as the other), and the adapter slot refuses it, since the
+    // node's 1.x interface already serves the other profile (A-055 on edit).
+    const back = await put({ awgProtocol: null });
+    expect(back.statusCode, back.body).toBe(409);
+    expect(JSON.parse(back.body).error).toBe('ADAPTER_SLOT_TAKEN');
   });
 
   it('refuses moving a deployed profile to 3.1 while one of its nodes runs 1.x, and back is free', async () => {

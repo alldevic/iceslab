@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { singboxXrayMessage, singboxXrayRefusal } from '@/lib/domain/singboxXray';
+import { SINGBOX_XRAY_FIELDS, singboxXrayMessage, singboxXrayRefusal } from '@/lib/domain/singboxXray';
 
-// The server's own sentence (profiles.schemas.ts SINGBOX_XRAY_FAMILY_MESSAGE).
-const MSG =
-  'sing-box serves the xray family only as REALITY over raw; use the xray engine for TLS, none, self-steal and other transports';
+// The server's sentence is not read (A-159 changed it and nothing here may
+// notice): the refusal is its code and path. Any text stands in for it.
+const MSG = 'any sentence the server says';
 const CODE = 'SINGBOX_XRAY_FAMILY';
 const res = (data: unknown, status = 400) => ({ response: { status, data } });
 const createIssue = (field: string, params: unknown = { code: CODE }) =>
   res({ error: 'VALIDATION_ERROR', message: 'Invalid input', issues: [{ code: 'custom', message: MSG, path: ['config', field], params }] });
 
 describe('singboxXrayRefusal', () => {
-  it('создание: каждое из трёх полей, issue с params.code', () => {
-    for (const field of ['security', 'realityMode', 'network']) {
+  it('создание: каждое поле, issue с params.code', () => {
+    for (const field of SINGBOX_XRAY_FIELDS) {
       expect(singboxXrayRefusal(createIssue(field))).toEqual({ where: 'config', field });
     }
   });
@@ -20,6 +20,16 @@ describe('singboxXrayRefusal', () => {
     expect(singboxXrayRefusal(res({ error: CODE, message: MSG, path: ['config', 'network'] }))).toEqual({
       where: 'config',
       field: 'network',
+    });
+  });
+
+  it('A-159: больше одного имени REALITY на sing-box, отказ у поля имён в каждой форме ответа', () => {
+    const want = { where: 'config', field: 'realityServerNames' };
+    expect(singboxXrayRefusal(createIssue('realityServerNames'))).toEqual(want);
+    expect(singboxXrayRefusal(res({ error: CODE, path: ['config', 'realityServerNames'] }))).toEqual(want);
+    expect(singboxXrayRefusal(res({ error: CODE, path: ['overrides', 'realityServerNames'] }))).toEqual({
+      ...want,
+      where: 'overrides',
     });
   });
 

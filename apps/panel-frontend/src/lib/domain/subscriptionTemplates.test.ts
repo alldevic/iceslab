@@ -37,17 +37,28 @@ describe('разбор ошибок шаблонов', () => {
     ).toEqual({ code: 'TEMPLATE_INVALID', message: 'bad yaml', line: 12 });
   });
 
+  it('3а. A-236: TEMPLATE_INVALID несёт и столбец; позиция не числом пропускается', () => {
+    expect(
+      templateRefusal({
+        response: { status: 400, data: { error: 'TEMPLATE_INVALID', message: 'bad', line: 3, column: 7 } },
+      }),
+    ).toEqual({ code: 'TEMPLATE_INVALID', message: 'bad', line: 3, column: 7 });
+    expect(
+      templateRefusal({ response: { status: 400, data: { error: 'TEMPLATE_INVALID', line: '3', column: 0 } } }),
+    ).toEqual({ code: 'TEMPLATE_INVALID', message: undefined, line: undefined, column: undefined });
+  });
+
   it('4. чужой код не выдаётся за свой', () => {
     expect(templateRefusal({ response: { status: 409, data: { error: 'PORT_TAKEN_PROFILE' } } })).toBeNull();
   });
 
-  it('5. Default защищён и имя занято это ОТДЕЛЬНЫЕ коды', () => {
-    expect(templateRefusal({ response: { data: { error: 'TEMPLATE_DEFAULT_PROTECTED' } } })?.code).toBe(
-      'TEMPLATE_DEFAULT_PROTECTED',
-    );
-    expect(templateRefusal({ response: { data: { error: 'TEMPLATE_NAME_TAKEN' } } })?.code).toBe(
-      'TEMPLATE_NAME_TAKEN',
-    );
+  it('5. Default защищён, имя занято и «не Default» это ОТДЕЛЬНЫЕ коды, каждый со своим статусом', () => {
+    const res = (status: number, error: string) => ({ response: { status, data: { error } } });
+    expect(templateRefusal(res(409, 'TEMPLATE_DEFAULT_PROTECTED'))?.code).toBe('TEMPLATE_DEFAULT_PROTECTED');
+    expect(templateRefusal(res(409, 'TEMPLATE_NAME_TAKEN'))?.code).toBe('TEMPLATE_NAME_TAKEN');
+    expect(templateRefusal(res(409, 'TEMPLATE_NOT_DEFAULT'))?.code).toBe('TEMPLATE_NOT_DEFAULT');
+    expect(templateRefusal(res(400, 'TEMPLATE_NAME_TAKEN'))).toBeNull();
+    expect(templateRefusal(res(409, 'toString'))).toBeNull();
   });
 });
 
@@ -67,13 +78,12 @@ describe('тип шаблона', () => {
     );
   });
 
-  it('3. stash и clash обрамляют тот же формат clash, что и mihomo', () => {
-    // Локальная копия говорила stash -> 'stash', и контракт с ней разошёлся:
-    // диалектов без xhttp и без vless у /sub пока нет. Копия снята, значение
-    // теперь одно, и вот оно.
-    expect(templateFormat('mihomo')).toBe('clash');
-    expect(templateFormat('stash')).toBe('clash');
-    expect(templateFormat('clash')).toBe('clash');
+  it('3. A-236 шаг 4: каждый тип клеш-семейства обрамляет свой ответ, по ядру', () => {
+    // До шага 4 все три обрамляли `clash`. Теперь у Stash и старого Clash свои
+    // форматы, а `clash` остался адресом mihomo для уже выданных ссылок.
+    expect(templateFormat('mihomo')).toBe('mihomo');
+    expect(templateFormat('stash')).toBe('stash');
+    expect(templateFormat('clash')).toBe('clash-legacy');
     expect(templateFormat('singbox')).toBe('singbox');
     expect(templateFormat('xray-json-array')).toBe('xrayjson-array');
     expect(templateFormat('xray-json')).toBe('xrayjson');

@@ -3,7 +3,8 @@ import { prisma } from '../../prisma.js';
 import { verifyHeartbeatToken } from './heartbeat-token.js';
 import { config } from '../../config.js';
 import { redis } from '../../lib/infra/redis.js';
-import { inboundSyncQueue, inboundDirtyKey } from '../inbounds/inbounds.queue.js';
+import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
+import { getLogger } from '../../lib/infra/logger.js';
 
 /**
  * Slice 38 follow-up: detect agent restart and re-issue applyInbounds.
@@ -49,17 +50,13 @@ async function trackAgentStart(nodeId: string, startTime: string): Promise<void>
     // serializes pushes per node (the worker runs concurrency>1 and relies on
     // "one jobId = one node at a time"). A divergent jobId let a restart-resync
     // race a concurrent binding edit into two simultaneous protocol restarts on
-    // one host. Set the dirty flag BEFORE enqueuing (same pattern as
-    // inbounds.events.ts) so if a push is already active for this node, the
-    // worker re-enqueues at end instead of silently dropping this resync.
-    await redis.set(inboundDirtyKey(nodeId), '1').catch(() => null);
-    await inboundSyncQueue.add(
-      'applyNodeInbounds',
-      { nodeId },
-      { jobId: `apply-${nodeId}` },
-    );
-    console.log(
-      `[heartbeat] node=${nodeId} agent restart detected (prev=${previous} new=${startTime}), enqueued applyInbounds`,
+    // one host. Through enqueueNodePush like every other producer (A-162):
+    // the restart bumps the revision, so a push already running for this
+    // node is followed by another one instead of absorbing this resync.
+    await enqueueNodePush(nodeId);
+    getLogger().info(
+      { node: nodeId, prev: previous, next: startTime },
+      '[heartbeat] agent restart detected, enqueued applyInbounds',
     );
   }
 }
@@ -140,7 +137,7 @@ export async function heartbeatRoutes(app: FastifyInstance): Promise<void> {
     if (incomingStart) {
       trackAgentStart(verified.nodeId, incomingStart).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log(`[heartbeat] node=${verified.nodeId} trackAgentStart failed: ${msg}`);
+        getLogger().warn({ node: verified.nodeId, err: msg }, '[heartbeat] trackAgentStart failed');
       });
     }
 

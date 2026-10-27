@@ -11,6 +11,11 @@ import type { Transport } from '@iceslab/shared';
  * Привязка без `transport` (сервер старше поля) закрывает по номеру, как
  * раньше: неполный факт не повод открыть порт, который может быть занят.
  * Свой же хост (правка) порт не занимает.
+ *
+ * Привязка ТОГО ЖЕ профиля на этом порту порт тоже не занимает (A-259): хост
+ * встаёт на этот инбаунд к его хостам (hostPortPlan 'join'), сервер так и
+ * делает. `ownProfileId` null, когда двигается весь инбаунд: туда соседний
+ * инбаунд пары не пустит.
  */
 export interface PortClaim {
   /** Имя хоста, который держит порт. */
@@ -20,16 +25,18 @@ export interface PortClaim {
 }
 
 export function nodePortClaims(
-  bindings: readonly { id: string; nodeId: string; port: number; transport?: Transport }[],
+  bindings: readonly { id: string; nodeId: string; profileId?: string; port: number; transport?: Transport }[],
   hosts: readonly { id: string; bindingId: string; remark: string }[],
   port: number | '',
   transport: Transport,
   selfHostId: string | undefined,
+  ownProfileId: string | null = null,
 ): Map<string, PortClaim> {
   const out = new Map<string, PortClaim>();
   if (port === '') return out;
   for (const b of bindings) {
     if (b.port !== Number(port)) continue;
+    if (ownProfileId !== null && b.profileId === ownProfileId) continue;
     if (b.transport !== undefined && b.transport !== transport) continue;
     const claimant = hosts.find((h) => h.bindingId === b.id);
     if (!claimant || claimant.id === selfHostId) continue;

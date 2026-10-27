@@ -97,9 +97,9 @@ export function engineServesSubprotocol(
 export const SINGBOX_XRAY_FAMILY_CODE = 'SINGBOX_XRAY_FAMILY';
 
 export const SINGBOX_XRAY_FAMILY_MESSAGE =
-  'sing-box serves the xray family only as REALITY over raw; use the xray engine for TLS, none, self-steal and other transports';
+  'sing-box serves the xray family only as REALITY over raw with one server name; use the xray engine for TLS, none, self-steal, several server names and other transports';
 
-export type SingboxXrayField = 'security' | 'realityMode' | 'network';
+export type SingboxXrayField = 'security' | 'realityMode' | 'network' | 'realityServerNames';
 
 /**
  * The field that keeps an xray-family profile (vless, vmess, trojan) off the
@@ -115,6 +115,12 @@ export type SingboxXrayField = 'security' | 'realityMode' | 'network';
  * Read on the config as it will be stored or pushed, the schema defaults
  * filled in (reality, steal-others, raw). An absent or empty value passes, as
  * on the agent. socks and http answer engineServesSubprotocol, not this.
+ *
+ * And one REALITY server name (A-159, 22.10): sing-box takes exactly one
+ * (1.13.14 common/tls/reality_server.go, ServerNames is a one-key map of
+ * options.ServerName), and the agent renders the first of the list. A host
+ * with the second name as its SNI passed the panel, went out in the
+ * subscription, and every handshake on it was refused by the node.
  */
 export function singboxRefusesXrayField(
   protocol: string,
@@ -127,12 +133,14 @@ export function singboxRefusesXrayField(
     security?: unknown;
     realityMode?: unknown;
     network?: unknown;
+    realityServerNames?: unknown;
   };
   if ((XRAY_PLAIN_SUBPROTOCOLS as readonly unknown[]).includes(c.subprotocol)) return null;
   const set = (v: unknown) => v !== undefined && v !== null && v !== '';
   if (set(c.security) && c.security !== 'reality') return 'security';
   if (c.realityMode === 'self-steal') return 'realityMode';
   if (set(c.network) && c.network !== 'raw') return 'network';
+  if (Array.isArray(c.realityServerNames) && c.realityServerNames.length > 1) return 'realityServerNames';
   return null;
 }
 
@@ -170,9 +178,43 @@ const ProfileBaseFields = z.object({
   awgProtocol: AwgProtocolSchema.nullish(),
 });
 
+/**
+ * A-230: vmess has no REALITY. The xray config schema defaults `security` to
+ * reality for every subprotocol, which is right for vless and trojan and made
+ * a vmess profile saved without the field a REALITY one no client can dial.
+ * So a vmess config that names no security is none (the default, not a
+ * refusal), and one that names reality is refused in words. Both on create
+ * (CreateProfileSchema) and on a config edit (profiles.service), and a recipe
+ * goes the same way: it fills the form, the form posts here.
+ * Not in XrayConfigSchema (inbounds.schemas.ts): binding overrides read that
+ * schema through .partial(), which a preprocess there would break.
+ */
+export const VMESS_REALITY_MESSAGE =
+  'vmess has no REALITY: choose security tls or none (a vmess profile that names no security is none)';
+
+export function withXraySecurityDefault(config: unknown): unknown {
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return config;
+  const c = config as Record<string, unknown>;
+  return c.subprotocol === 'vmess' && c.security === undefined ? { ...c, security: 'none' } : config;
+}
+
+export function vmessOnReality(config: unknown): boolean {
+  const c = (config ?? {}) as { subprotocol?: unknown; security?: unknown };
+  return c.subprotocol === 'vmess' && c.security === 'reality';
+}
+
+function xrayDefaultsFirst(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return v;
+  const o = v as { protocol?: unknown; config?: unknown };
+  return o.protocol === 'xray' ? { ...o, config: withXraySecurityDefault(o.config) } : v;
+}
+
 export const CreateProfileSchema = z
-  .intersection(ProfileBaseFields, ProfileConfigByProtocol)
+  .preprocess(xrayDefaultsFirst, z.intersection(ProfileBaseFields, ProfileConfigByProtocol))
   .superRefine((val, ctx) => {
+    if (val.protocol === 'xray' && vmessOnReality(val.config)) {
+      ctx.addIssue({ code: 'custom', message: VMESS_REALITY_MESSAGE, path: ['config', 'security'] });
+    }
     if (!engineValidForProtocol(val.protocol, val.engine ?? null)) {
       ctx.addIssue({
         code: 'custom',

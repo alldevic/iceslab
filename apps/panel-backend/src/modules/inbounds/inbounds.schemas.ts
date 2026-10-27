@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { XRAY_PLAIN_SUBPROTOCOLS, XRAY_SUBPROTOCOLS } from '@iceslab/shared';
+import { XRAY_PLAIN_SUBPROTOCOLS, XRAY_SUBPROTOCOLS, type AmneziawgInboundCfg } from '@iceslab/shared';
 
 const NameSchema = z
   .string()
@@ -56,6 +56,9 @@ export const XrayConfigSchema = z.object({
    * inbound with missing keys). Kept as a plain ZodObject (no .refine) so it
    * participates in the InboundConfigByProtocol discriminated union.
    */
+  // vmess has no REALITY: its default (none) and the refusal of an explicit
+  // reality live in CreateProfileSchema and updateProfile (A-230), not here,
+  // because binding overrides read this schema through .partial().
   security: z.enum(['reality', 'none', 'tls']).default('reality'),
   /** TLS (security='tls'): SNI the node serves + operator-supplied PEM cert
    *  chain and private key (embedded inline in the xray config; no ACME). The
@@ -337,6 +340,19 @@ export const AmneziawgConfigSchema = z
       });
     }
   });
+
+/** The keys the push adds to a stored AmneziaWG config (inbounds.queue.ts). */
+export const AWG_PUSH_INJECTED_KEYS = ['listenPort', 'inboundId', 'awgProtocol', 'geometry3'] as const;
+
+// A-105: the wire type is the stored config plus what the push injects. A
+// field renamed, added or dropped on either side fails `typecheck` here; a
+// test file would not, since tsc skips them.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const awgWireIsStored: Same<
+  Omit<AmneziawgInboundCfg, (typeof AWG_PUSH_INJECTED_KEYS)[number]>,
+  z.output<typeof AmneziawgConfigSchema>
+> = true;
+void awgWireIsStored;
 
 export const NaiveConfigSchema = z.object({
   hostname: z

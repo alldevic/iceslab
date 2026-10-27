@@ -46,6 +46,20 @@ export function endpointId(e: SubscriptionEndpoint): string {
 }
 
 /**
+ * The one server a single-server file is for (`?node=`, A-107): wgconf,
+ * amneziavpn, outline. Picked by `endpointId` first, which no rename and no
+ * neighbour moves, and only then by the label, the value links carried before
+ * and a client may still hold. The label alone was the key until 25.10, and
+ * it moves: a second profile on the same node renames both points ("nl-01"
+ * becomes "nl-01 · Shadowsocks"), and an Outline key saved with the old label
+ * answered 404. Without `node`, the first, as these formats always did.
+ */
+export function pickServer<T extends SubscriptionEndpoint>(eps: readonly T[], node?: string): T | undefined {
+  if (!node) return eps[0];
+  return eps.find((e) => endpointId(e) === node) ?? eps.find((e) => e.nodeName === node);
+}
+
+/**
  * The config-internal tag for an endpoint, in the formats where a tag is NOT
  * shown to anyone: xray-json outbounds and the rules pointing at them.
  *

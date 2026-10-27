@@ -1,4 +1,15 @@
-import { isRoutingPresetId, type RoutingPresetId } from '@iceslab/shared';
+import {
+  XRAY_TRANSPORT_SUBPROTOCOLS,
+  clientSecurityLayer,
+  transportServed,
+  type RoutingPresetId,
+} from '@iceslab/shared';
+import {
+  PRESET_COLUMNS_SELECT,
+  presetOf,
+  resolveSquadPreset,
+  type ResolvedPreset,
+} from '../routing-presets/routing-presets.resolve.js';
 import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
@@ -18,6 +29,7 @@ import {
   getRouteProfilesByEntryNode,
 } from '../cascades/cascade.service.js';
 import { getSubscriptionSettings } from '../settings/settings.service.js';
+import { entriesSwitchedOff } from '../users/user-reach.js';
 import { getCachedBindings, bindingsCacheKey } from './subscription.bindings-cache.js';
 import { buildNaiveUri } from '../../core-adapters/naive/index.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveSsPassword } from '../../lib/auth/credentials.js';
@@ -47,13 +59,13 @@ import {
   type SubscriptionEndpoint,
   type SubscriptionJsonResponse,
 } from './subscription.formats.js';
-import { engineSpeaksHysteriaObfs } from '../../core-adapters/hysteria/index.js';
+import { clientBandwidthClaim, engineSpeaksHysteriaObfs } from '../../core-adapters/hysteria/index.js';
 import { effectiveEngineOf } from '../nodes/node-engines.js';
 import { hysteriaPinFor } from '../nodes/hysteria-tls-shape.js';
 import { ensureAwg3Geometry, readAwg3Geometry } from '../nodes/awg3-geometry.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { endpointId } from './endpoint-identity.js';
-import { withVlessRouteTag } from './formats/xrayjson.js';
+import { expandCascadeEntry } from './cascade-entries.js';
 
 // ───── Domain errors ─────
 
@@ -126,34 +138,42 @@ export interface RequestContext {
    *  is treated as "country unknown" and the ranker falls back to
    *  utilization-only ordering. */
   cfCountry?: string;
+  /**
+   * A-167: write this request into subscription_request_history. Only a
+   * client's `/sub/<token>` fetch is one: the operator opening a user in the
+   * panel (`/api/users/:id/endpoints`) and a person opening the subscription
+   * page in a browser receive no config. Written as fetches, they made the
+   * host card count a user as holding the new link and gave the delivery card
+   * an empty User-Agent. Off unless asked.
+   */
+  recordFetch?: boolean;
 }
 
 export interface SubscriptionResult {
   endpoints: SubscriptionEndpoint[];
   textPlain: string;
   json: SubscriptionJsonResponse;
-  // R3-a - effective routing override from the user's squads, or null to
-  // inherit the panel-wide default. The single distinct non-null preset across
-  // the user's squads; null when no squad overrides OR they conflict.
-  squadRoutingPreset: RoutingPresetId | null;
-  // R3 - the user's explicit per-user routing override, or null to inherit
+  // R3-a + A-229 - effective routing override from the user's squads, a
+  // built-in key or an own preset, or null to inherit the panel-wide default.
+  // The single distinct preset across the user's squads; null when no squad
+  // overrides OR they conflict (resolveSquadPreset).
+  squadPreset: ResolvedPreset | null;
+  // R3 + A-229 - the user's explicit per-user override, or null to inherit
   // (squad -> global -> default). Highest precedence below the ?routing= query.
-  userRoutingPreset: RoutingPresetId | null;
+  userPreset: ResolvedPreset | null;
 }
 
 /**
- * R3-a - reduce a user's per-squad routing overrides to one effective preset.
- * Rule: the single distinct VALID preset across their squads wins; zero
- * overrides, or a conflict (>1 distinct), returns null = inherit the panel-wide
- * default. Invalid/garbage values are ignored. Pure (no DB) for testing.
+ * R3-a - reduce a user's per-squad built-in overrides to one effective preset.
+ * The rule itself is resolveSquadPreset's (one distinct wins, zero or a
+ * conflict is null, garbage ignored); this is its built-in-only face, kept for
+ * the callers and tests that speak in keys.
  */
 export function resolveSquadRouting(
   overrides: (string | null)[],
 ): RoutingPresetId | null {
-  const distinct = [
-    ...new Set(overrides.filter((p): p is RoutingPresetId => p !== null && isRoutingPresetId(p))),
-  ];
-  return distinct.length === 1 ? distinct[0]! : null;
+  const { preset } = resolveSquadPreset(overrides.map((routingPreset) => ({ routingPreset, customRoutingPreset: null })));
+  return preset?.kind === 'builtin' ? preset.id : null;
 }
 
 // ───── Per-protocol config shapes (mirror inbounds.schemas.ts) ─────
@@ -272,8 +292,9 @@ export function collapseToOneLinePerNode(
  * This used to say the JSON array cannot be pinged in Happ, so URIs were the
  * only format that showed latency. Not true, checked in the field 2026-08-16.
  *
- * vmess is skipped (its UUID lives inside a base64 blob, not the userinfo, so a
- * plain string swap can't reach it) and returned as its single original URI.
+ * VLESS only since 26.10 (expandCascadeEntry): vlessRoute is a VLESS field,
+ * and a trojan password or a vmess UUID with two bytes changed was a credential
+ * the entry refused, so those entries go out as their one original URI.
  * Every non-entry endpoint returns its one original URI unchanged.
  */
 /**
@@ -561,26 +582,9 @@ export function disambiguateCascadeLabels(endpoints: SubscriptionEndpoint[]): vo
 }
 
 export function expandEndpointUris(e: SubscriptionEndpoint): string[] {
-  if (
-    e.protocol !== 'xray' ||
-    // A socks/http login carries no UUID to put a route into.
-    isPlainXray(e) ||
-    !e.cascadeExits ||
-    e.cascadeExits.length === 0 ||
-    e.subprotocol === 'vmess'
-  ) {
-    return e.uri ? [e.uri] : [];
-  }
-  // vless:// and trojan:// both put the UUID in the userinfo, so replacing the
-  // first occurrence of it retargets the link. Strip the original #remark first.
-  const hashIdx = e.uri.indexOf('#');
-  const base = hashIdx === -1 ? e.uri : e.uri.slice(0, hashIdx);
-  return e.cascadeExits.map((profile) => {
-    const tagged = base.replace(e.uuid, withVlessRouteTag(e.uuid, profile.tag));
-    // The label is already unique across this subscription (see
-    // disambiguateCascadeLabels); nothing to append here.
-    return `${tagged}#${encodeURIComponent(profile.label)}`;
-  });
+  // The routes arrive expanded (generateSubscription, A-262); through the same
+  // rule for a caller that hands in an entry as it was, a no-op otherwise.
+  return expandCascadeEntry(e).flatMap((x) => (x.uri ? [x.uri] : []));
 }
 
 /**
@@ -604,7 +608,7 @@ export async function generateSubscription(
 ): Promise<SubscriptionResult> {
   const user = await prisma.user.findFirst({
     where: { subscriptionToken: token, deletedAt: null },
-    include: { traffic: true },
+    include: { traffic: true, customRoutingPreset: PRESET_COLUMNS_SELECT.customRoutingPreset },
   });
   if (!user) throw new SubscriptionNotFoundError();
 
@@ -639,7 +643,7 @@ export async function generateSubscription(
   // identical squad set, i.e. a redundant round-trip on every /sub poll.
   const memberships = await prisma.groupMember.findMany({
     where: { userId: user.id },
-    select: { groupId: true, group: { select: { routingPreset: true } } },
+    select: { groupId: true, group: { select: PRESET_COLUMNS_SELECT } },
   });
   const groupIds = memberships.map((g) => g.groupId);
 
@@ -756,6 +760,31 @@ export async function generateSubscription(
         );
       }
     }
+  }
+  // A-116: a squad that switched off a cascade entered through hysteria or
+  // AmneziaWG does not reach that entry's inbound (entriesSwitchedOff): the node
+  // cannot leave the squad out of the chain, so the host is not handed out. A
+  // binding there stays when another squad of the user grants it, reaches one
+  // of its hosts and did not switch the cascade off; user-reach.ts follows the
+  // same rule, so the node and the subscription agree.
+  const switchedOff = await entriesSwitchedOff(groupIds);
+  if (switchedOff.size > 0) {
+    const grants = await prisma.groupProfile.findMany({
+      where: { groupId: { in: groupIds } },
+      select: { groupId: true, profileId: true },
+    });
+    const kept = bindings.filter((b) => {
+      const key = `${b.node.id}|${b.profile.protocol}`;
+      if (![...switchedOff.values()].some((keys) => keys.has(key))) return true;
+      return groupIds.some(
+        (g) =>
+          !switchedOff.get(g)?.has(key) &&
+          grants.some((r) => r.groupId === g && r.profileId === b.profile.id) &&
+          (!narrowedSquads.has(g) || b.hosts.some((h) => h.groupHosts.some((gh) => gh.groupId === g))),
+      );
+    });
+    bindings.length = 0;
+    bindings.push(...kept);
   }
   // Sort by node createdAt then port so the order across formats stays stable.
   bindings.sort((a, b) => {
@@ -996,6 +1025,10 @@ export async function generateSubscription(
       allowInsecure: hostOverrides?.allowInsecure ?? false,
       securityLayer,
       disableForFormats: hostOverrides?.disableForFormats ?? [],
+      // A-236 step 6. Spread only when set, so an endpoint of a host without
+      // them is the object it always was (the golden files compare it).
+      ...(hostOverrides?.serverDescription ? { serverDescription: hostOverrides.serverDescription } : {}),
+      ...(hostOverrides?.isHidden ? { hidden: true } : {}),
       // Carried on every endpoint, not just the ones that read it today: the
       // question "which core serves this" is asked by the link builder, by the
       // admin endpoints view and, before long, by anything drawing a pair.
@@ -1025,6 +1058,8 @@ export async function generateSubscription(
       // has no FQDN (then ACME, no pin) and only on the native core (sing-box
       // brings its own certificate).
       const tlsPin = hysteriaPinFor(ib.engine, b.node.address, b.node.hysteriaTls);
+      // A-154: the client's claim is the profile's bandwidth turned over, or none.
+      const claim = clientBandwidthClaim(hyCfg);
       endpoints.push({
         protocol: 'hysteria',
         nodeName,
@@ -1033,8 +1068,7 @@ export async function generateSubscription(
         ...hostMeta,
         password: user.hysteriaPassword,
         obfsPassword,
-        upMbps: hyCfg?.brutalUpMbps,
-        downMbps: hyCfg?.brutalDownMbps,
+        ...claim,
         portHoppingStart: hyCfg?.portHoppingStart,
         portHoppingEnd: hyCfg?.portHoppingEnd,
         ...(tlsPin ? { tlsPin } : {}),
@@ -1044,8 +1078,7 @@ export async function generateSubscription(
           port,
           name: nodeName,
           obfsPassword,
-          upMbps: hyCfg?.brutalUpMbps,
-          downMbps: hyCfg?.brutalDownMbps,
+          ...claim,
           portHoppingStart: hyCfg?.portHoppingStart,
           portHoppingEnd: hyCfg?.portHoppingEnd,
           pinSha256: tlsPin?.certSha256,
@@ -1092,6 +1125,7 @@ export async function generateSubscription(
         subprotocol?: 'vless' | 'trojan' | 'vmess';
         security?: 'reality' | 'none' | 'tls';
         tlsServerName?: string;
+        xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
       };
       // Slice 30: per-host overrides on the most-used REALITY knobs. Each
       // null falls through to the profile-level config, so back-compat with
@@ -1116,6 +1150,17 @@ export async function generateSubscription(
       const realityPublicKey = cfg.realityPublicKey ?? '';
       const network = cfg.network ?? 'raw';
       const subprotocol = cfg.subprotocol ?? 'vless';
+      // The cast above trusts the jsonb; a stored subprotocol the panel does
+      // not speak (an old or hand-written row) is skipped here, like the
+      // broken configs below, instead of riding into every builder.
+      if (!(XRAY_TRANSPORT_SUBPROTOCOLS as readonly string[]).includes(subprotocol)) {
+        warnBrokenProfileOnce(
+          ib.profileId,
+          `[subscription] profile ${ib.profileId} (xray) has subprotocol ` +
+            `"${String(subprotocol)}", which no format carries; skipping this endpoint.`,
+        );
+        continue;
+      }
       const fingerprint =
         hostOverrides?.fingerprintOverride ?? cfg.fingerprint;
       const xrayPath = hostOverrides?.pathOverride ?? cfg.path;
@@ -1128,19 +1173,11 @@ export async function generateSubscription(
       // falls through (URI builder skips the param), so back-compat is exact.
       const hostAlpn = hostMeta.alpn;
       const hostAllowInsecure = hostMeta.allowInsecure;
-      // Base security comes from the profile: 'none' (a CDN-fronted / plain
-      // inbound, rendered as security:"none" on the node) maps to a 'none'
-      // client-URI layer; otherwise reality. A per-host override (tls/none)
-      // still wins over the profile base.
-      const profileSecurity = cfg.security ?? 'reality';
-      const effectiveSecurityLayer: 'default' | 'tls' | 'none' =
-        hostMeta.securityLayer === 'tls' || hostMeta.securityLayer === 'none'
-          ? hostMeta.securityLayer
-          : profileSecurity === 'none'
-            ? 'none'
-            : profileSecurity === 'tls'
-              ? 'tls'
-              : 'default';
+      // The layer a client sees: the shared rule (A-230), the same one the
+      // profile's /formats answer and the panel's screens read. A host
+      // override of tls/none wins, else the profile's own, and vmess has no
+      // REALITY.
+      const effectiveSecurityLayer = clientSecurityLayer(cfg, hostMeta.securityLayer);
       let uri: string;
       if (subprotocol === 'trojan') {
         uri = buildTrojanRealityUri({
@@ -1155,6 +1192,7 @@ export async function generateSubscription(
           path: xrayPath,
           hostHeader: xrayHostHeader,
           serviceName: cfg.serviceName,
+          xhttpMode: cfg.xhttpMode,
           name: nodeName,
           alpn: hostAlpn,
           allowInsecure: hostAllowInsecure,
@@ -1172,6 +1210,7 @@ export async function generateSubscription(
           path: xrayPath,
           hostHeader: xrayHostHeader,
           serviceName: cfg.serviceName,
+          xhttpMode: cfg.xhttpMode,
           sni,
           fingerprint,
           alpn: hostAlpn,
@@ -1191,11 +1230,25 @@ export async function generateSubscription(
           path: xrayPath,
           hostHeader: xrayHostHeader,
           serviceName: cfg.serviceName,
+          xhttpMode: cfg.xhttpMode,
           name: nodeName,
           alpn: hostAlpn,
           allowInsecure: hostAllowInsecure,
           securityLayer: effectiveSecurityLayer,
         });
+      }
+      // The share link too is the shared table's to give or not (A-224); no
+      // link is no line in the plain formats, the JSON formats still carry it.
+      const linkFormat = `${subprotocol}-link` as const;
+      if (
+        !transportServed(linkFormat, {
+          subprotocol,
+          network,
+          xhttpMode: cfg.xhttpMode,
+          securityLayer: effectiveSecurityLayer,
+        })
+      ) {
+        uri = '';
       }
       endpoints.push({
         protocol: 'xray',
@@ -1214,6 +1267,9 @@ export async function generateSubscription(
         path: xrayPath,
         hostHeader: xrayHostHeader,
         serviceName: cfg.serviceName,
+        // The XHTTP mode the node waits for (A-133): a client that goes its
+        // own default against a non-auto server does not connect.
+        ...(network === 'xhttp' && cfg.xhttpMode ? { xhttpMode: cfg.xhttpMode } : {}),
         subprotocol,
         uri,
         // A4: set only when this node is a balancer-cascade entry. Undefined
@@ -1464,16 +1520,18 @@ export async function generateSubscription(
     } // host-row loop
   }
 
-  try {
-    await prisma.subscriptionRequestHistory.create({
-      data: {
-        userId: user.id,
-        requestIp: ctx.ip ?? null,
-        userAgent: ctx.userAgent ?? null,
-      },
-    });
-  } catch {
-    // Audit failure must not block the subscription response.
+  if (ctx.recordFetch) {
+    try {
+      await prisma.subscriptionRequestHistory.create({
+        data: {
+          userId: user.id,
+          requestIp: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+        },
+      });
+    } catch {
+      // Audit failure must not block the subscription response.
+    }
   }
 
   // Two ways in that read the same are two rows a subscriber cannot choose
@@ -1496,19 +1554,27 @@ export async function generateSubscription(
   // distinguishable from each other, and from any non-cascade endpoint.
   disambiguateCascadeLabels(endpoints);
 
+  // A-262: the routes of a balancer-cascade entry, one endpoint each, HERE and
+  // nowhere else: every format below (links, Clash, sing-box, the xray-json
+  // array, Loon, Quantumult X, Surge, json) is handed the expanded list, so a
+  // format cannot forget it. Until 26.10 only the links and the array expanded,
+  // Clash and sing-box drew the entry with its bare UUID, and a client there
+  // left from the entry itself. After the deal and the labels above, so what is
+  // expanded is the list already narrowed (A-128, A-134). VLESS only, see
+  // expandCascadeEntry.
+  endpoints.splice(0, endpoints.length, ...endpoints.flatMap(expandCascadeEntry));
+
   // R3-a - resolve the per-squad routing override across the user's squads,
   // reusing the memberships already loaded above (no extra query).
-  const squadRoutingPreset = resolveSquadRouting(
-    memberships.map((m) => m.group.routingPreset),
-  );
+  const { preset: squadPreset } = resolveSquadPreset(memberships.map((m) => m.group));
 
   return {
     endpoints,
     textPlain: encodePlainList(endpoints.flatMap((e) => expandEndpointUris(e))),
     json: buildSubscriptionJson(user, endpoints),
-    squadRoutingPreset,
-    // R3 - per-user override (scalar already loaded on `user`). Garbage / unset
-    // values fall through to null so the route's chain drops to the next tier.
-    userRoutingPreset: isRoutingPresetId(user.routingPreset) ? user.routingPreset : null,
+    squadPreset,
+    // R3 - per-user override (loaded with the user). Garbage / unset values
+    // fall through to null so the route's chain drops to the next tier.
+    userPreset: presetOf(user),
   };
 }

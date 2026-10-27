@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/icecompany-tech/iceslab/apps/node/internal/certstore"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/chain"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/connlog"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/amneziawg"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
@@ -45,6 +47,11 @@ const (
 	// xrayMemoryCeiling for why it is a percentage and why it is this high.
 	defaultXrayMemLimitPercent = 80
 )
+
+// version is the agent's release, set at build time with
+// -ldflags "-X main.version=<tag>" (release.yml does), and reported on
+// /healthz. A local build says "dev".
+var version = "dev"
 
 func main() {
 	// `iceslab-node core-env`: the installer's question, answered before the
@@ -118,6 +125,21 @@ func main() {
 		},
 	})
 
+	// The mTLS server pair: the renewed one on disk wins over the payload's
+	// bootstrap pair (A-124).
+	certs, err := certstore.Open(certstore.Config{
+		Dir:            getenv("NODE_TLS_DIR", certstore.DefaultDir),
+		CACertPEM:      pld.CACertPem,
+		PayloadCertPEM: pld.NodeCertPem,
+		PayloadKeyPEM:  pld.NodeKeyPem,
+		Logger:         logger,
+	})
+	if err != nil {
+		logger.Error("load node certificate", "err", err)
+		stopAdapters(adapters, logger)
+		os.Exit(1)
+	}
+
 	srv, err := server.New(server.Config{
 		Host:              getenv("NODE_HOST", defaultHost),
 		Port:              getenv("NODE_PORT", defaultPort),
@@ -130,6 +152,12 @@ func main() {
 		ResolverProbe:     server.SystemResolverProbe,
 		EnvFile:           getenv("ICESLAB_NODE_ENV", "/etc/iceslab-node/env"),
 		HopGuard:          hopguard.New(logger),
+		Certs:             certs,
+		AgentVersion:      version,
+		ConnLog: connlog.New(connlog.Config{
+			Units: connlog.Units(os.Getenv("HYSTERIA_SERVICE_UNIT")),
+			Tags:  []string{"iceslab-node", "hysteria"},
+		}),
 	})
 	if err != nil {
 		logger.Error("build server", "err", err)
@@ -387,10 +415,13 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		// xrayUuid (matches the xray SS adapter + the subscription URI). Distinct
 		// config + stats port; no cert needed.
 		adapters = append(adapters, singbox.New(singbox.Config{
-			Protocol:     "shadowsocks",
-			BinaryPath:   singboxBin,
-			ConfigPath:   getenv("SINGBOX_SS_CONFIG", "/etc/sing-box/ss.json"),
-			StatsListen:  getenv("SINGBOX_SS_API_LISTEN", "127.0.0.1:8086"),
+			Protocol:    "shadowsocks",
+			BinaryPath:  singboxBin,
+			ConfigPath:  getenv("SINGBOX_SS_CONFIG", "/etc/sing-box/ss.json"),
+			StatsListen: getenv("SINGBOX_SS_API_LISTEN", "127.0.0.1:8086"),
+			// Users handed over the ssm-api instead of a restart, and counted
+			// there with any build of sing-box (A-119).
+			SSMListen:    getenv("SINGBOX_SS_SSM_LISTEN", "127.0.0.1:8088"),
 			XrayStatsBin: singboxStatsBin,
 		}, logger))
 		logger.Info("singbox (shadowsocks) adapter registered")

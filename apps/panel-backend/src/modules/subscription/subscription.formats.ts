@@ -188,6 +188,14 @@ interface SubscriptionEndpointBase {
    *  handler filters by this before invoking the format-specific formatter,
    *  so each formatter can stay format-agnostic. */
   disableForFormats?: string[];
+  /** A-236 step 6: the host's line under the server name. Carried for every
+   *  client; the route hands it on (`describe`) only to the apps that show
+   *  one, and the builders write it only then. */
+  serverDescription?: string;
+  /** A-236 step 6: the operator kept this host out of every public output.
+   *  The route drops it before any builder, unless the template asks for
+   *  hidden hosts in its own format. */
+  hidden?: boolean;
 
   // ───── A4: route-profiles (exit x policy selection) ─────────────────
   /** When this endpoint's node is the ENTRY of an enabled balancer cascade, the
@@ -201,6 +209,9 @@ interface SubscriptionEndpointBase {
    *  single plain config (the pre-A4 behaviour, non-balancer-entry endpoints).
    *  Only the xrayjson-array + plain formats consume this. */
   cascadeExits?: { label: string; tag: number; cascadeId?: string }[];
+  /** Set on one route of a cascade entry (expandCascadeEntry): the line's
+   *  name exactly, where formats would otherwise build one from the node's. */
+  routeLabel?: string;
 }
 
 export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {
@@ -209,9 +220,9 @@ export interface HysteriaSubscriptionEndpoint extends SubscriptionEndpointBase {
   /** Salamander obfuscation password: present only when the inbound has
    *  `obfsPassword` set. Critical on RU/IR/CN ISPs that DPI-throttle bare QUIC. */
   obfsPassword?: string;
-  /** Brutal CC bandwidth declaration in Mbps. Forwarded into URI / singbox
-   *  / clash output so the client negotiates a non-zero send window. See
-   *  HysteriaUriOpts.upMbps for the gory detail. */
+  /** The client's bandwidth claim in Mbps, from the CLIENT's side (up is what
+   *  it sends): the profile's Brutal pair turned over, or absent when the
+   *  profile has none. See clientBandwidthClaim. */
   upMbps?: number;
   downMbps?: number;
   /** Port-hopping range (slice 31.5). When set, URI emits `mport=`, sing-box
@@ -241,6 +252,9 @@ export interface XraySubscriptionEndpoint extends SubscriptionEndpointBase {
   path?: string;
   hostHeader?: string;
   serviceName?: string;
+  /** The profile's XHTTP mode, only on an xhttp endpoint (A-133). Absent =
+   *  the profile says nothing, which the node renders as auto. */
+  xhttpMode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
   /** Slice 24c part 3: controls URI scheme (`vless://` vs `trojan://`)
    *  and downstream singbox/clash outbound type. */
   subprotocol?: 'vless' | 'trojan' | 'vmess';
@@ -436,6 +450,14 @@ export interface SubscriptionJsonResponse {
  * Includes user-state metadata so clients can show quota/expiry without a
  * second request.
  */
+/** The endpoint without its host's description, for a client that shows none
+ *  (A-236 step 6). The same object when there is nothing to take off. */
+export function withoutDescription(e: SubscriptionEndpoint): SubscriptionEndpoint {
+  if (e.serverDescription === undefined) return e;
+  const { serverDescription: _drop, ...rest } = e;
+  return rest as SubscriptionEndpoint;
+}
+
 export function buildSubscriptionJson(
   user: User & { traffic: UserTraffic | null },
   endpoints: SubscriptionEndpoint[],

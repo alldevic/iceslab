@@ -60,7 +60,8 @@ export function NodePayloadModal({ opened, onClose, nodeName, payload, bootstrap
 
   async function handleCopy(key: 'cmd' | 'payload', value: string) {
     try {
-      await copyToClipboard(value);
+      // «Copied» only when it was (A-147): the fallback path can fail too.
+      if (!(await copyToClipboard(value))) return;
       setCopiedKey(key);
       window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1500);
     } catch (err) {

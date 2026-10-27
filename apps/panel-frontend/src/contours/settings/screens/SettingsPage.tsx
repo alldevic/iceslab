@@ -21,6 +21,10 @@ import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { copyToClipboard } from '@/lib/ui/clipboard';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
+import { brandNameFieldError, brandNameSave, listState, regionNodeWords } from '@/contours/settings/lib/settingsView';
+import { conflictField } from '@/lib/domain/conflictField';
 import {
   createApiToken,
   deleteApiToken,
@@ -37,6 +41,7 @@ import {
   type Region,
 } from '@/lib/domain/nodes';
 import { disable2fa, enable2fa, get2faStatus, setup2fa, type TotpSetup } from '@/lib/auth/api';
+import { isTotpRefusal } from '@/contours/settings/lib/totpRefusal';
 import {
   getRecipeSources,
   addRecipeSource,
@@ -66,6 +71,8 @@ export function SettingsPage() {
   const sourcesQuery = useQuery({ queryKey: ['recipe-sources'], queryFn: getRecipeSources });
 
   const twofaOn = twofaQuery.data?.enabled ?? false;
+  // «2FA off» without the status is a claim about the account (A-141).
+  const twofaKnown = twofaQuery.data !== undefined;
 
   return (
     <Stack gap={20}>
@@ -95,13 +102,13 @@ export function SettingsPage() {
         <Box style={{ width: 1, height: 26, backgroundColor: HAIRLINE, flexShrink: 0 }} />
 
         <Box className="page-bar-facts">
-          <Fact value={tokensQuery.data?.tokens.length ?? 0} label={t('settings.factTokens')} />
+          <Fact value={tokensQuery.data ? tokensQuery.data.tokens.length : '-'} label={t('settings.factTokens')} />
           <Dot />
           {/* The one fact worth a colour: an admin panel on the open internet
               without a second factor is the thing to notice here. */}
           <Box style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <Box
-              style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: twofaOn ? MOSS : AMBER }}
+              style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: !twofaKnown ? DIM : twofaOn ? MOSS : AMBER }}
             />
             <Text
               style={{
@@ -110,21 +117,21 @@ export function SettingsPage() {
                 letterSpacing: '0.12em',
                 lineHeight: '12px',
                 textTransform: 'uppercase',
-                color: twofaOn ? MOSS : AMBER,
+                color: !twofaKnown ? MIST : twofaOn ? MOSS : AMBER,
               }}
             >
-              {twofaOn ? t('settings.factTwofaOn') : t('settings.factTwofaOff')}
+              {!twofaKnown ? t('settings.factTwofaUnknown') : twofaOn ? t('settings.factTwofaOn') : t('settings.factTwofaOff')}
             </Text>
           </Box>
           <Dot soft="mid" />
           <Fact
-            value={regionsQuery.data?.regions.length ?? 0}
+            value={regionsQuery.data ? regionsQuery.data.regions.length : '-'}
             label={t('settings.factRegions')}
             soft="mid"
           />
           <Dot soft />
           <Fact
-            value={sourcesQuery.data?.sources.length ?? 0}
+            value={sourcesQuery.data ? sourcesQuery.data.sources.length : '-'}
             label={t('settings.factSources')}
             soft="soft"
           />
@@ -160,8 +167,20 @@ function CustomizationCard() {
   if (brandName === null && settingsQuery.data) setBrandName(settingsQuery.data.brandName ?? '');
   const value = brandName ?? '';
 
+  // Only with the server's answer in hand, and never an empty name (A-237,
+  // brandNameSave): an unseeded or emptied field used to save as «Iceslab»
+  // over the operator's own name.
+  const save = brandNameSave(settingsQuery.data, brandName);
+  const write = save && 'write' in save ? save.write : null;
+  // The refusal shows only after an edit: a panel without its own name seeds
+  // the field empty, and the words used to greet the operator before typing.
+  const [touched, setTouched] = useState(false);
+  const fieldError = brandNameFieldError(save, touched);
   const saveMutation = useMutation({
-    mutationFn: () => updateSettings({ brandName: value.trim() || 'Iceslab' }),
+    mutationFn: () => {
+      if (!write) throw new Error('nothing to save');
+      return updateSettings(write);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
       notifications.show({ color: 'green', message: t('settingsNotify.savedOk') });
@@ -196,21 +215,27 @@ function CustomizationCard() {
     >
       <Stack gap={6}>
         <FieldLabel>{t('settings.customization.brandName')}</FieldLabel>
-        <Box style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
-          <TextInput
-            style={{ flex: 1, minWidth: 0 }}
-            placeholder="Iceslab"
-            value={value}
-            onChange={(e) => setBrandName(e.currentTarget.value)}
-          />
-          <Action
-            icon="tick"
-            disabled={settingsQuery.isLoading || saveMutation.isPending}
-            onClick={() => saveMutation.mutate()}
-          >
-            {t('common.save')}
-          </Action>
-        </Box>
+        {loadView(settingsQuery) === 'failed' ? (
+          <LoadFailed message={apiErrorMessage(settingsQuery.error)} onRetry={() => void settingsQuery.refetch()} />
+        ) : (
+          <Box style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+            <TextInput
+              style={{ flex: 1, minWidth: 0 }}
+              placeholder={save ? 'Iceslab' : t('common.loading')}
+              value={value}
+              disabled={!save}
+              description={t('settings.customization.brandNameEmptyHint')}
+              error={fieldError ? t('settings.customization.brandNameEmpty') : undefined}
+              onChange={(e) => {
+                setTouched(true);
+                setBrandName(e.currentTarget.value);
+              }}
+            />
+            <Action icon="tick" disabled={!write || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+              {t('common.save')}
+            </Action>
+          </Box>
+        )}
         <Hint>{t('settings.customization.brandNameDesc')}</Hint>
       </Stack>
 
@@ -340,10 +365,13 @@ function ApiTokensCard() {
           <ColHead width={56}>{t('common.actions')}</ColHead>
         </Box>
 
-        {tokens.length === 0 ? (
+        {/* A list that did not arrive is not «no tokens» (A-141). */}
+        {tokens.length === 0 && loadView(tokensQuery) === 'failed' ? (
+          <LoadFailed message={apiErrorMessage(tokensQuery.error)} onRetry={() => void tokensQuery.refetch()} />
+        ) : tokens.length === 0 ? (
           <Box style={{ padding: '20px 14px', borderTop: `1px solid ${HAIRLINE}` }}>
             <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST, textAlign: 'center' }}>
-              {tokensQuery.isLoading ? t('common.loading') : t('settings.tokens.empty')}
+              {loadView(tokensQuery) === 'loading' ? t('common.loading') : t('settings.tokens.empty')}
             </Text>
           </Box>
         ) : (
@@ -566,9 +594,17 @@ function RegionsCard() {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [editing, setEditing] = useState<Region | null>(null);
+  // A-257 tail: a taken name or code stands at its field (create and edit apart).
+  const [createTaken, setCreateTaken] = useState<RegionTaken | null>(null);
+  const [editTaken, setEditTaken] = useState<RegionTaken | null>(null);
 
   const fail = (title: string) => (err: unknown) =>
     notifications.show({ color: 'red', title, message: apiErrorMessage(err) });
+  const failAt = (title: string, set: (r: RegionTaken | null) => void) => (err: unknown) => {
+    const taken = conflictField(err, REGION_FIELDS);
+    set(taken);
+    if (!taken) fail(title)(err);
+  };
 
   const createMutation = useMutation({
     mutationFn: createRegion,
@@ -576,9 +612,10 @@ function RegionsCard() {
       qc.invalidateQueries({ queryKey: ['regions'] });
       setName('');
       setCode('');
+      setCreateTaken(null);
       notifications.show({ color: 'green', message: t('regions.notify.created') });
     },
-    onError: fail(t('common.createError')),
+    onError: failAt(t('common.createError'), setCreateTaken),
   });
 
   const updateMutation = useMutation({
@@ -587,9 +624,10 @@ function RegionsCard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['regions'] });
       setEditing(null);
+      setEditTaken(null);
       notifications.show({ color: 'green', message: t('regions.notify.updated') });
     },
-    onError: fail(t('common.saveError')),
+    onError: failAt(t('common.saveError'), setEditTaken),
   });
 
   const deleteMutation = useMutation({
@@ -607,9 +645,7 @@ function RegionsCard() {
       title: t('regions.deleteTitle', { name: r.name }),
       children: (
         <Text size="sm">
-          {r.nodeCount && r.nodeCount > 0
-            ? t('regions.deleteWithNodes', { count: r.nodeCount })
-            : t('regions.deleteSafe')}
+          {regionNodeWords(r, t).deleteBody}
         </Text>
       ),
       labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
@@ -619,6 +655,7 @@ function RegionsCard() {
   }
 
   const regions = regionsQuery.data?.regions ?? [];
+  const regionsState = listState(regionsQuery, regions.length);
 
   return (
     <SectionCard
@@ -627,7 +664,12 @@ function RegionsCard() {
       title={t('regions.title')}
       hint={t('regions.description')}
     >
-      {regions.length === 0 ? (
+      {/* A list that did not arrive is not «no regions» (g). */}
+      {regionsState === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(regionsQuery.error)} onRetry={() => void regionsQuery.refetch()} />
+      ) : regionsState === 'loading' ? (
+        <Hint>{t('common.loading')}</Hint>
+      ) : regionsState === 'empty' ? (
         <Hint>{t('regions.empty')}</Hint>
       ) : (
         <Box className="settings-regions">
@@ -637,7 +679,12 @@ function RegionsCard() {
                 key={r.id}
                 region={r}
                 loading={updateMutation.isPending}
-                onCancel={() => setEditing(null)}
+                taken={editTaken}
+                onEdit={() => setEditTaken(null)}
+                onCancel={() => {
+                  setEditing(null);
+                  setEditTaken(null);
+                }}
                 onSave={(input) => updateMutation.mutate({ id: r.id, input })}
               />
             ) : (
@@ -697,7 +744,7 @@ function RegionsCard() {
                 <Text
                   style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: FAINT, flexShrink: 0 }}
                 >
-                  {t('regions.nodesCount', { count: r.nodeCount ?? 0 })}
+                  {regionNodeWords(r, t).cell}
                 </Text>
                 <UnstyledButton
                   type="button"
@@ -727,7 +774,11 @@ function RegionsCard() {
           <TextInput
             placeholder={t('regions.namePlaceholder')}
             value={name}
-            onChange={(e) => setName(e.currentTarget.value)}
+            error={createTaken?.field === 'name' ? createTaken.message || true : undefined}
+            onChange={(e) => {
+              setName(e.currentTarget.value);
+              setCreateTaken(null);
+            }}
           />
         </Stack>
         <Stack gap={6} style={{ width: 150, flexShrink: 0 }}>
@@ -736,7 +787,11 @@ function RegionsCard() {
             placeholder={t('regions.codePlaceholder')}
             value={code}
             maxLength={16}
-            onChange={(e) => setCode(e.currentTarget.value.toUpperCase())}
+            error={createTaken?.field === 'code' ? createTaken.message || true : undefined}
+            onChange={(e) => {
+              setCode(e.currentTarget.value.toUpperCase());
+              setCreateTaken(null);
+            }}
             styles={{ input: { fontFamily: MONO } }}
           />
         </Stack>
@@ -752,14 +807,22 @@ function RegionsCard() {
   );
 }
 
+type RegionTaken = { field: 'name' | 'code'; message: string };
+const REGION_FIELDS = ['name', 'code'] as const;
+
 function RegionEditRow({
   region,
   loading,
+  taken,
+  onEdit,
   onSave,
   onCancel,
 }: {
   region: Region;
   loading: boolean;
+  /** A-257 tail: the field the server says is taken, with its words. */
+  taken: RegionTaken | null;
+  onEdit: () => void;
   onSave: (input: { name: string; code: string }) => void;
   onCancel: () => void;
 }) {
@@ -770,7 +833,7 @@ function RegionEditRow({
     <Box
       style={{
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 8,
         padding: '8px 10px',
         borderRadius: 10,
@@ -783,13 +846,21 @@ function RegionEditRow({
         style={{ width: 88, flexShrink: 0 }}
         value={code}
         maxLength={16}
-        onChange={(e) => setCode(e.currentTarget.value.toUpperCase())}
+        error={taken?.field === 'code' ? taken.message || true : undefined}
+        onChange={(e) => {
+          setCode(e.currentTarget.value.toUpperCase());
+          onEdit();
+        }}
         styles={{ input: { fontFamily: MONO, height: 30, minHeight: 30 } }}
       />
       <TextInput
         style={{ flex: 1, minWidth: 0 }}
         value={name}
-        onChange={(e) => setName(e.currentTarget.value)}
+        error={taken?.field === 'name' ? taken.message || true : undefined}
+        onChange={(e) => {
+          setName(e.currentTarget.value);
+          onEdit();
+        }}
         styles={{ input: { height: 30, minHeight: 30 } }}
       />
       <UnstyledButton
@@ -817,15 +888,24 @@ function TwoFactorCard() {
 
   const [setupData, setSetupData] = useState<TotpSetup | null>(null);
   const [code, setCode] = useState('');
+  // A wrong code is said at the field it came from (A-169); editing the code
+  // takes the words away, the next try earns them again.
+  const [codeWrong, setCodeWrong] = useState(false);
+  const editCode = (value: string) => {
+    setCode(value.replace(/\D/g, ''));
+    setCodeWrong(false);
+  };
 
   const fail = (err: unknown) =>
     notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
+  const failCode = (err: unknown) => (isTotpRefusal(err) ? setCodeWrong(true) : fail(err));
 
   const setupMutation = useMutation({
     mutationFn: setup2fa,
     onSuccess: (d) => {
       setSetupData(d);
       setCode('');
+      setCodeWrong(false);
     },
     onError: fail,
   });
@@ -834,22 +914,45 @@ function TwoFactorCard() {
     onSuccess: () => {
       setSetupData(null);
       setCode('');
+      setCodeWrong(false);
       qc.invalidateQueries({ queryKey: ['2fa-status'] });
       notifications.show({ color: 'green', message: t('settings.twofa.enabledNotice') });
     },
-    onError: fail,
+    onError: failCode,
   });
   const disableMutation = useMutation({
     mutationFn: () => disable2fa(code),
     onSuccess: () => {
       setCode('');
+      setCodeWrong(false);
       qc.invalidateQueries({ queryKey: ['2fa-status'] });
       notifications.show({ color: 'green', message: t('settings.twofa.disabledNotice') });
     },
-    onError: fail,
+    onError: failCode,
   });
+  const codeError = codeWrong ? t('settings.twofa.codeWrong') : undefined;
 
   const codeValid = /^\d{6}$/.test(code);
+
+  // Without the status the card cannot say «off» and offer to switch on: that
+  // is a claim about the account (A-141). The error and a retry instead.
+  const statusView = loadView(statusQuery);
+  if (statusView !== 'ready') {
+    return (
+      <SectionCard
+        tone={DIM}
+        icon={<ShieldIcon size={16} color={DIM} />}
+        title={t('settings.twofa.title')}
+        hint={t('settings.twofa.subtitle')}
+      >
+        {statusView === 'failed' ? (
+          <LoadFailed message={apiErrorMessage(statusQuery.error)} onRetry={() => void statusQuery.refetch()} />
+        ) : (
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>{t('common.loading')}</Text>
+        )}
+      </SectionCard>
+    );
+  }
 
   return (
     <SectionCard
@@ -896,14 +999,15 @@ function TwoFactorCard() {
       {enabled ? (
         <Stack gap={6}>
           <FieldLabel>{t('settings.twofa.codeLabel')}</FieldLabel>
-          <Box style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+          <Box style={{ display: 'flex', alignItems: 'flex-start', gap: 12, width: '100%' }}>
             <TextInput
               style={{ flex: 1, minWidth: 0 }}
               placeholder="000000"
               inputMode="numeric"
               maxLength={6}
               value={code}
-              onChange={(e) => setCode(e.currentTarget.value.replace(/\D/g, ''))}
+              error={codeError}
+              onChange={(e) => editCode(e.currentTarget.value)}
               styles={{ input: { fontFamily: MONO, letterSpacing: '0.3em' } }}
             />
             <Action
@@ -927,7 +1031,8 @@ function TwoFactorCard() {
               inputMode="numeric"
               maxLength={6}
               value={code}
-              onChange={(e) => setCode(e.currentTarget.value.replace(/\D/g, ''))}
+              error={codeError}
+              onChange={(e) => editCode(e.currentTarget.value)}
               styles={{ input: { fontFamily: MONO, letterSpacing: '0.3em' } }}
             />
           </Stack>
@@ -1048,6 +1153,7 @@ function RecipeSourcesCard() {
   }
 
   const sources = sourcesQuery.data?.sources ?? [];
+  const sourcesState = listState(sourcesQuery, sources.length);
 
   return (
     <SectionCard
@@ -1056,7 +1162,12 @@ function RecipeSourcesCard() {
       title={t('settings.recipeSources.title')}
       hint={t('settings.recipeSources.description')}
     >
-      {sources.length === 0 ? (
+      {/* A list that did not arrive is not «no sources» (h). */}
+      {sourcesState === 'failed' ? (
+        <LoadFailed message={apiErrorMessage(sourcesQuery.error)} onRetry={() => void sourcesQuery.refetch()} />
+      ) : sourcesState === 'loading' ? (
+        <Hint>{t('common.loading')}</Hint>
+      ) : sourcesState === 'empty' ? (
         <Hint>{t('settings.recipeSources.empty')}</Hint>
       ) : (
         <Stack gap={8}>
@@ -1334,7 +1445,8 @@ function Fact({
   accent,
   soft,
 }: {
-  value: number;
+  /** «-» when the list did not arrive: «0» over a failed request is a claim (A-141). */
+  value: number | string;
   label: string;
   accent?: string;
   soft?: 'soft' | 'mid';

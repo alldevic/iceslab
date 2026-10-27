@@ -139,6 +139,13 @@ describe('NodeTransport (mTLS)', () => {
     ).resolves.toBeUndefined();
   });
 
+  // A-112: an agent older than /addUsers answers 404, and that status is what
+  // the roster sender reads as "send them one by one".
+  it('addUsers to an agent without the route rejects with the 404', async () => {
+    const transport = new NodeTransport({ address: handle.address }, handle.mtls);
+    await expect(transport.addUsers({ users: [] })).rejects.toMatchObject({ name: 'NodeRequestError', status: 404 });
+  });
+
   it('removeUser resolves on 200', async () => {
     const transport = new NodeTransport({ address: handle.address }, handle.mtls);
     await expect(

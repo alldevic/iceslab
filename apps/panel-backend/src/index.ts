@@ -10,7 +10,7 @@ import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
-import { startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
+import { checkNodeDrawings, startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
 import { scheduleBuiltinFetch, startGeoSetsWorker } from './modules/geo-sets/geo-sets.queue.js';
 import {
   startCronTasksWorker,
@@ -20,6 +20,9 @@ import { buildApp } from './app.js';
 import { setBaseLogger } from './lib/infra/logger.js';
 import { startMetricsRefreshLoop } from './lib/infra/metrics-refresh.js';
 import { startTelegramBot } from './lib/notify/telegram-bot.js';
+import { assertLinearRegexEngine } from './modules/srr/linear-regex.js';
+import { checkStoredRules } from './modules/srr/srr.service.js';
+import { reportStoredCascadeProblems } from './modules/cascades/cascade-exclusive.js';
 
 let app: FastifyInstance | null = null;
 let nodeUsersWorker: Worker | null = null;
@@ -31,6 +34,10 @@ let stopTelegramBot: (() => void) | null = null;
 
 async function start() {
   try {
+    // A-019: the User-Agent rules on the public /sub run on V8's linear
+    // engine; without it one rule could hold the event loop, so no start.
+    assertLinearRegexEngine();
+
     const dbOk = await pingDatabase();
     if (!dbOk) {
       console.error('Cannot connect to database at startup');
@@ -66,6 +73,22 @@ async function start() {
 
     await registerCronJobs();
     app.log.info('Cron jobs registered');
+
+    // A nodes' drawing that changed with this panel (a deploy is no event)
+    // goes out now, not with the next unrelated edit (render-drift.ts). In
+    // the background: the workers above take the pushes.
+    // Said every start, 0 included: a second start with the same drawing
+    // queues none, which is how a deploy is checked on the stand (A-278).
+    void checkNodeDrawings()
+      .then((n) => app?.log.info({ queued: n }, `drawing check at start: ${n} node push(es) queued`))
+      .catch((err) => app?.log.error({ err }, 'drawing check failed'));
+
+    // A-019: a stored rule the linear engine cannot run is no longer served;
+    // say which, once, rather than let it stop matching in silence.
+    await checkStoredRules().catch((err) => app?.log.error({ err }, 'srr: stored rule check failed'));
+    // A-101/A-223: nodes stored in two enabled cascades; A-102: transits that
+    // cannot tell their directions apart. Named; nothing switched off.
+    await reportStoredCascadeProblems().catch((err) => app?.log.error({ err }, 'cascades: conflict check failed'));
 
     // Phase 9: the built-in geo sets fetch their pinned release in the
     // background. A failure is the set's `broken`, never the panel's start.

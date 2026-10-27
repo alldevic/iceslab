@@ -1,6 +1,9 @@
-import type { RoutingPresetId } from '@iceslab/shared';
+import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
+import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
+import { singboxDeviceRoute } from '../subscription.device-rules.js';
+import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
 
 /**
  * Sing-box JSON subscription formatter (sing-box 1.10+).
@@ -42,6 +45,10 @@ export interface SingboxBuildOpts {
   urltestIntervalSec?: number;
   urltestProbeUrl?: string;
   routingPreset?: RoutingPresetId;
+  /** A-229: an own preset's rules, in place of the built-in preset's. */
+  ownPresetRules?: readonly DeviceRouteRule[];
+  /** A-236: the operator template to fill; absent = the Default in the code. */
+  frame?: Frame;
 }
 
 /**
@@ -70,80 +77,10 @@ export interface SingboxBuildOpts {
  * split by destination; resolution stays with the client app's own DNS
  * config (clash/xrayjson formats do carry split DNS, see R2 in ROADMAP).
  */
-const RU_SPLIT_RULE_SETS: ReadonlyArray<Record<string, unknown>> = [
-  {
-    type: 'remote',
-    tag: 'geosite-category-ads-all',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geosite-category-ru',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geosite-category-gov-ru',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-gov-ru.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geoip-ru',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs',
-  },
-];
-
-const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { rule_set: ['geosite-category-ads-all'], action: 'reject' },
-  { ip_is_private: true, action: 'route', outbound: 'direct' },
-  {
-    rule_set: ['geosite-category-ru', 'geosite-category-gov-ru', 'geoip-ru'],
-    action: 'route',
-    outbound: 'direct',
-  },
-];
-
-/**
- * H2 - the China mirror of the RU rule-sets. `geosite-cn.srs` (SagerNet/
- * sing-geosite) is the single comprehensive mainland category, so one geosite
- * set, not two; `geoip-cn.srs` from SagerNet/sing-geoip. Same `.srs` URL
- * pattern as RU. As with ru-split, split DNS is deliberately omitted (the
- * sing-box DNS server format churned across 1.12/1.14).
- */
-const CN_SPLIT_RULE_SETS: ReadonlyArray<Record<string, unknown>> = [
-  {
-    type: 'remote',
-    tag: 'geosite-category-ads-all',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geosite-cn',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs',
-  },
-  {
-    type: 'remote',
-    tag: 'geoip-cn',
-    format: 'binary',
-    url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs',
-  },
-];
-
-const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { rule_set: ['geosite-category-ads-all'], action: 'reject' },
-  { ip_is_private: true, action: 'route', outbound: 'direct' },
-  {
-    rule_set: ['geosite-cn', 'geoip-cn'],
-    action: 'route',
-    outbound: 'direct',
-  },
-];
+// The route rules and rule-sets of a preset are rendered from its
+// DeviceRouteRule list (subscription.device-rules.ts, A-229): the built-ins' and an own
+// preset's alike, geo names as the SagerNet `.srs` rule-sets the built-ins
+// have always used. The RU/CN arrays that lived here rendered the same.
 
 export function buildSingboxJson(
   endpoints: SubscriptionEndpoint[],
@@ -151,22 +88,9 @@ export function buildSingboxJson(
 ): string {
   const outbounds: Record<string, unknown>[] = [];
   const proxyTags: string[] = [];
-  // Routing preset (R1b + H2). Each split preset selects its own route rules +
-  // remote rule-sets; proxy-all leaves them null so the output stays
-  // byte-identical to pre-R1 builds.
-  const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules =
-    preset === 'ru-split'
-      ? RU_SPLIT_RULES
-      : preset === 'cn-split'
-        ? CN_SPLIT_RULES
-        : null;
-  const splitRuleSets =
-    preset === 'ru-split'
-      ? RU_SPLIT_RULE_SETS
-      : preset === 'cn-split'
-        ? CN_SPLIT_RULE_SETS
-        : null;
+  // Routing preset (R1b + H2 + A-229); proxy-all has no rules, so the output
+  // stays byte-identical to pre-R1 builds.
+  const deviceRules = opts.ownPresetRules ?? BUILTIN_PRESET_RULES[opts.routingPreset ?? 'proxy-all'];
 
   // A sing-box tag is what the selector shows and what a client remembers as
   // "the proxy I picked", so it cannot become an opaque id the way an xray
@@ -176,7 +100,9 @@ export function buildSingboxJson(
   // endpoints that never passed through the service.
   const tagOf = makeTagger();
   for (const e of endpoints) {
-    const tag = tagOf(e, `${e.nodeName}-${e.protocol}`);
+    // A route of a cascade entry (A-262, expanded before any format) is named
+    // by its label, as in the links.
+    const tag = tagOf(e, e.routeLabel ?? `${e.nodeName}-${e.protocol}`);
     if (e.protocol === 'hysteria') {
       proxyTags.push(tag);
       // sing-box requires `tls.enabled: true` for hysteria2 outbounds,
@@ -201,14 +127,14 @@ export function buildSingboxJson(
         server_port: e.port,
         ...(portHopRange ? { server_ports: portHopRange } : {}),
         password: e.password,
-        // Brutal CC bandwidth declaration. Without these the client
-        // negotiates a 0-byte send window, handshake succeeds but every
-        // proxied request times out at tx=0. The server can override via
-        // `ignoreClientBandwidth: true` (recommended default in our
-        // adapter), but supplying real values here keeps Brutal CC active
-        // when the server does honour client bandwidth.
-        up_mbps: e.upMbps ?? 50,
-        down_mbps: e.downMbps ?? 100,
+        // The client's bandwidth claim (clientBandwidthClaim, A-154): the
+        // profile's pair turned over when the profile has one, and nothing
+        // when it has none. The node runs `ignore_client_bandwidth` (BBR)
+        // only for a profile without a bandwidth, and there a claim plays no
+        // part; with one it runs Brutal, and each direction takes the lower
+        // of the two claims, so a fixed claim here would cap the profile.
+        ...(e.upMbps ? { up_mbps: e.upMbps } : {}),
+        ...(e.downMbps ? { down_mbps: e.downMbps } : {}),
         ...(e.obfsPassword
           ? { obfs: { type: 'salamander', password: e.obfsPassword } }
           : {}),
@@ -252,6 +178,14 @@ export function buildSingboxJson(
             },
       );
     } else if (e.protocol === 'xray') {
+      // sing-box's V2Ray transports are http, ws, quic, grpc and httpupgrade
+      // (sing-box.sagernet.org/configuration/shared/v2ray-transport, read
+      // 22.10: "No mKCP transport", no XHTTP). xhttp and kcp went out with no
+      // transport block, that is bare TCP: a line that looked fine and never
+      // connected, the REALITY-over-XHTTP default among them (A-133). Left
+      // out, as the proxy-line formats leave out what their client lacks.
+      // The shared table decides (A-224).
+      if (!transportServed('singbox', e)) continue;
       proxyTags.push(tag);
       const sub = e.subprotocol ?? 'vless';
       // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none'
@@ -412,63 +346,87 @@ export function buildSingboxJson(
     }
   }
 
-  // Slice 29: `url-test` group (auto-failover by latency). Default still
-  // emits the legacy `selector` so manual-pick UIs (Hiddify "Connect to:")
-  // keep working; admins flip to url-test via `?bundle=url-test`.
-  const bundle = opts.bundle ?? 'selector';
-  let primaryTag = 'direct';
-  if (proxyTags.length > 0) {
-    if (bundle === 'url-test') {
-      outbounds.push({
-        type: 'urltest',
-        tag: 'Auto-URLTest',
-        outbounds: proxyTags,
-        url: opts.urltestProbeUrl ?? 'https://www.gstatic.com/generate_204',
-        interval: `${opts.urltestIntervalSec ?? 300}s`,
-        tolerance: 50,
-      });
-      primaryTag = 'Auto-URLTest';
-    } else {
-      outbounds.push({
-        type: 'selector',
-        tag: 'Auto',
-        outbounds: [...proxyTags, 'direct'],
-        default: proxyTags[0],
-      });
-      primaryTag = 'Auto';
-    }
-  }
-  outbounds.push({ type: 'direct', tag: 'direct' });
+  // A-236 step 3: the nodes go into the frame, the operator's template or the
+  // Default (templates.defaults.ts, the shape this builder always wrote: a
+  // single tun inbound, a selector, direct, route.final; no `dns`, no
+  // `experimental`, no mixed/socks/http inbound, which would open a localhost
+  // proxy port). Slice 29's `?bundle=url-test` swaps the Default's selector
+  // for a url-test group; a template of the operator's has its own groups and
+  // the bundle does not touch them.
+  const frame =
+    opts.frame ?? (opts.bundle === 'url-test' ? urltestDefault(opts) : defaultFrame('singbox'));
+  return fillSingboxFrame(frame, outbounds, proxyTags, deviceRules) + '\n';
+}
 
-  // R3 - operator custom domain lists are intentionally NOT emitted for
-  // sing-box: there is no portable inline-domain route-rule vehicle post-1.12
-  // (same rationale as the skipped sing-box DNS split in R2 and the skipped
-  // R3-b custom rules). xray/xkeen + clash carry the lists instead.
-  const config = {
-    log: { level: 'info', timestamp: true },
-    // A single minimal tun inbound. Happ and the sing-box CLI reject a config
-    // with no `inbounds` as invalid and fall back to the routing-less plain
-    // format; Hiddify/NekoBox inject their own OS-managed tun and override this,
-    // so they are unaffected. Deliberately NO mixed/socks/http inbound: that
-    // would open a listening localhost proxy port (a leak surface). tun only.
-    inbounds: [
-      {
-        type: 'tun',
-        tag: 'tun-in',
-        address: ['172.18.0.1/30', 'fdfe:dcba:9876::1/126'],
-        auto_route: true,
-        strict_route: false,
-        stack: 'mixed',
-      },
-    ],
-    outbounds,
-    route: {
-      ...(splitRules
-        ? { rules: splitRules, rule_set: splitRuleSets }
-        : {}),
-      final: primaryTag,
-      auto_detect_interface: true,
-    },
-  };
-  return JSON.stringify(config, null, 2) + '\n';
+const GROUP_TYPES = new Set(['selector', 'urltest']);
+
+/** The Default with Slice 29's url-test group in place of the selector. */
+function urltestDefault(opts: SingboxBuildOpts): Frame {
+  const f = structuredClone(defaultFrame('singbox'));
+  f.outbounds = asArray(f.outbounds).map((o) =>
+    asObject(o).type === 'selector'
+      ? {
+          type: 'urltest',
+          tag: 'Auto-URLTest',
+          outbounds: [],
+          url: opts.urltestProbeUrl ?? 'https://www.gstatic.com/generate_204',
+          interval: `${opts.urltestIntervalSec ?? 300}s`,
+          tolerance: 50,
+        }
+      : o,
+  );
+  f.route = { ...asObject(f.route), final: 'Auto-URLTest' };
+  return f;
+}
+
+/**
+ * The nodes into a sing-box frame:
+ *   - their outbounds go first in `outbounds`;
+ *   - every `selector` and `urltest` group gets the node tags in front of its
+ *     own members, and a selector with no `default` gets the first node;
+ *   - with no node at all, the groups that would hold them go, and every
+ *     reference to one (route.final, a rule's outbound) becomes `direct`;
+ *   - `iceslab.routing: preset` puts the preset's rules and rule-sets ahead of
+ *     the frame's own; a `proxy` rule goes where route.final goes.
+ * JSON.stringify with two spaces, as this builder always wrote.
+ */
+function fillSingboxFrame(
+  frame: Frame,
+  proxyOutbounds: Record<string, unknown>[],
+  proxyTags: string[],
+  deviceRules: readonly DeviceRouteRule[],
+): string {
+  const { cfg, routing } = openFrame(frame);
+  const own = asArray(cfg.outbounds).map(asObject);
+  const gone = new Set<string>();
+  const groups = own.flatMap((o) => {
+    if (!GROUP_TYPES.has(String(o.type))) return [o];
+    if (proxyTags.length === 0) {
+      gone.add(String(o.tag));
+      return [];
+    }
+    o.outbounds = [...proxyTags, ...asArray(o.outbounds)];
+    if (o.type === 'selector' && o.default === undefined) o.default = proxyTags[0];
+    return [o];
+  });
+  cfg.outbounds = [...proxyOutbounds, ...groups];
+
+  const route = asObject(cfg.route);
+  if (typeof route.final === 'string' && gone.has(route.final)) route.final = 'direct';
+  const ownRules = asArray(route.rules).map((r) => {
+    const rule = asObject(r);
+    return typeof rule.outbound === 'string' && gone.has(rule.outbound) ? { ...rule, outbound: 'direct' } : rule;
+  });
+  const target = proxyTags.length > 0 && typeof route.final === 'string' ? route.final : null;
+  const preset = routing ? singboxDeviceRoute(deviceRules, target) : { rules: [], ruleSets: [] };
+  const rules = [...preset.rules, ...ownRules];
+  const ruleSets = [...preset.ruleSets, ...asArray(route.rule_set)];
+  const rest = Object.fromEntries(Object.entries(route).filter(([k]) => k !== 'rules' && k !== 'rule_set'));
+  if (cfg.route !== undefined || rules.length > 0) {
+    cfg.route = {
+      ...(rules.length > 0 ? { rules, ...(ruleSets.length > 0 ? { rule_set: ruleSets } : {}) } : {}),
+      ...rest,
+    };
+  }
+  return JSON.stringify(cfg, null, 2);
 }

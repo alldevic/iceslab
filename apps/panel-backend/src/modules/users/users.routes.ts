@@ -19,6 +19,8 @@ import {
   SubscriptionNotFoundError,
 } from '../subscription/subscription.service.js';
 import { awgConfUrl, subscriptionUrl } from '../subscription/subscription.link.js';
+import { endpointId } from '../subscription/endpoint-identity.js';
+import { RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
 
 // B12-tail - response schema for the paginated users list (Users page keeps it
 // warm via placeholderData). Compiles a fast-json-stringify serializer over the
@@ -83,11 +85,34 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       const user = await usersService.createUser(input);
       return reply.code(201).send(user);
     } catch (err) {
+      // Two refusals, two codes (A-210, 22.10): both were CONFLICT, and the
+      // screen could tell the taken name from the taken token only by
+      // parsing the English sentence. The field travels too.
       if (err instanceof usersService.UserAlreadyExistsError) {
-        return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+        return reply.code(409).send({ error: 'USERNAME_TAKEN', message: err.message, field: 'username' });
       }
       if (err instanceof usersService.SubscriptionTokenTakenError) {
-        return reply.code(409).send({ error: 'CONFLICT', message: err.message });
+        return reply
+          .code(409)
+          .send({ error: 'SUBSCRIPTION_TOKEN_TAKEN', message: err.message, field: 'subscriptionToken' });
+      }
+      // A-257: the other two constraints, and one this code does not know,
+      // each by its own name.
+      if (err instanceof usersService.SourceIdTakenError) {
+        return reply.code(409).send({ error: 'SOURCE_ID_TAKEN', message: err.message, field: 'sourceId' });
+      }
+      // A-268 tombstone: the source's user was erased; an import skips it.
+      if (err instanceof usersService.SourceIdErasedError) {
+        return reply.code(409).send({ error: 'SOURCE_ID_ERASED', message: err.message, field: 'sourceId' });
+      }
+      if (err instanceof usersService.ShortIdTakenError) {
+        return reply.code(409).send({ error: 'SHORT_ID_TAKEN', message: err.message });
+      }
+      if (err instanceof usersService.UserUniqueConflictError) {
+        return reply.code(409).send({ error: 'UNIQUE_CONFLICT', message: err.message });
+      }
+      if (err instanceof RoutingPresetNotFoundError) {
+        return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
       throw err;
     }
@@ -390,7 +415,8 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
           // and only here, it gets the link to that node's .conf: the file an
           // operator actually hands over. The formats keep "" on purpose, a
           // subscriber's client has no use for a link to itself.
-          uri: e.protocol === 'amneziawg' ? awgConfUrl(subUrl, e.nodeName) : e.uri,
+          // By the endpoint's id, which a neighbour profile does not move (A-107).
+          uri: e.protocol === 'amneziawg' ? awgConfUrl(subUrl, endpointId(e)) : e.uri,
         })),
       });
     } catch (err) {
@@ -416,6 +442,9 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       if (err instanceof usersService.UserNotFoundError) {
         return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
+      }
+      if (err instanceof RoutingPresetNotFoundError) {
+        return reply.code(400).send({ error: err.code, message: err.message, field: 'customRoutingPresetId' });
       }
       throw err;
     }

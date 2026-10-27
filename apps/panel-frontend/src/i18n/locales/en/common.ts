@@ -11,6 +11,8 @@ export const common = {
     back: 'Back',
     next: 'Next',
     loading: 'Loading…',
+    loadFailed: 'Could not load',
+    loadRetry: 'Retry',
     yes: 'Yes',
     no: 'No',
     online: 'online',
@@ -29,6 +31,7 @@ export const common = {
     deleted: 'Deleted',
     created: 'Created',
     updated: 'Updated',
+    error: 'Error',
     saveError: 'Failed to save',
     createError: 'Failed to create',
     deleteError: 'Failed to delete',
@@ -49,6 +52,7 @@ export const common = {
     portRequired: 'Port is required',
     portRange: 'Port must be 1–65535',
     emailInvalid: 'Invalid email',
+    trafficWholeGb: 'The limit starts at 1 GB. For no limit, leave the field empty',
     required: 'Required',
     xray: {
       networkInvalid:
@@ -124,6 +128,8 @@ export const common = {
     updateLink: 'How to update',
     blockedShort: 'a host will not land here',
     gateMissing: 'The server refused: {{node}} has no {{core}} core. Install it on the machine over ssh:',
+    // A toast, where no command line follows: the way to it instead (A-235).
+    gateMissingToast: 'The server refused: {{node}} has no {{core}} core. The install line is on the node page, under Cores.',
     gateRefused: 'The server refused: {{core}} {{version}} on {{node}} is refused by the panel.',
     gateAwg: 'Node {{node}} runs the {{nodeGen}} module, the profile needs {{profileGen}}.',
     gateAwgHow: 'The 3.1 module comes with a rerun of the AmneziaWG bootstrap on the node; it carries 1.x profiles too.',
@@ -131,6 +137,7 @@ export const common = {
       'The port is inside this node\'s hysteria port hopping range; hopping is turned off for this port, and hysteria clients will not connect on it.',
     gateAwgAgent:
       'The agent on node {{node}} is older than the AmneziaWG 3.1 interface: rebuild the agent on the node, then bind the 3.1 profile.',
+    gateAwgNotReported: 'Node {{node}} has not reported yet: an AmneziaWG 3.1 profile binds after the first poll.',
     gateAwgSubnet:
       'On node {{node}} subnet {{subnet}} overlaps {{otherSubnet}} of profile {{other}}: 1.x and 3.1 profiles on one node need different subnets.',
     gateAfterInstall: 'The panel runs nothing on the machine. Once installed, the node reports the core by itself and the save goes through.',
@@ -285,6 +292,9 @@ export const common = {
     disabled: 'Disabled',
     off: 'off',
     enable: 'Enable',
+    enabling: 'Enabling…',
+    enableRefused: 'The server did not switch the cascade on, it stays off:',
+    deleteRefused: 'The server did not delete the cascade:',
     oneWayHint: 'One way out, so every client walks the same path',
     fanHint: 'One entry, {{n}} directions. The client picks one by picking a server',
     offHint: 'Nothing is pushed while it is off. Nodes keep serving their own hosts.',
@@ -297,6 +307,9 @@ export const common = {
     // A legitimate v4 state: the tag is issued, no node stands behind it yet,
     // and the direction is not handed to clients.
     directionNoNode: 'no node yet',
+    directionViaOutbound: 'outbound',
+    directionOutboundGone: 'outbound not found',
+    directionOutboundUnknown: 'outbound: list did not load',
     directionDown: 'out',
     outShort: 'out',
     reaches: 'Reaches',
@@ -311,13 +324,16 @@ export const common = {
       pending: 'not applied yet: {{names}}',
     },
     deleted: 'Cascade deleted',
+    alreadyDeleted: 'The cascade is already gone: it was deleted earlier.',
+    nodeInOtherCascade:
+      'Node {{node}} is already in the enabled cascade «{{cascade}}». A node carries one enabled cascade: take it out of that one or switch that one off, then try again.',
     saved: 'Cascade saved',
     provisioning: 'Applying the config on the nodes...',
     provisioned: 'Every node applied the new config.',
     provisionWaiting: 'Still no answer from: {{nodes}}',
     provisionBroken: 'Cascade is broken: {{broken}}',
     provisionUnknown: 'Saved, but the panel could not read the provisioning status.',
-    modeBalancer: 'Balancer (auto exit)',
+    modeBalancer: 'Balancer (several exits)',
   },
   // The subscription-metadata page: everything /sub/:token says about itself.
   metadata: {
@@ -367,8 +383,15 @@ export const common = {
   // called, but what it gives the client.
   formatName: {
     plain: 'Links (plain)',
+    // A-236 step 1 (fe676097): the same links without base64.
+    raw: 'Links without base64 (raw)',
     json: 'JSON',
-    clash: 'Clash / Mihomo',
+    // A-236 step 4 (51e2d152): the Clash family by core; `clash` stays the
+    // mihomo address for links already handed out.
+    clash: 'Clash (same as Mihomo)',
+    mihomo: 'Mihomo',
+    stash: 'Stash',
+    'clash-legacy': 'Clash (legacy core)',
     singbox: 'sing-box',
     wgconf: 'WireGuard .conf',
     amneziavpn: 'AmneziaVPN',
@@ -390,6 +413,10 @@ export const common = {
     noData: 'Chain sent, the node has not reported on it yet',
     up: 'Chain running',
     upVersion: 'Chain running · {{version}}',
+    staleUp: 'By the last report the chain was running',
+    staleUpVersion: 'By the last report the chain was running · {{version}}',
+    staleDown: 'By the last report the chain was not running',
+    staleSince: '(contact with the node lost {{when}})',
     // The position row names the node: it holds several, and without the name
     // the line does not say which one.
     noteDown: '{{name}}: the chain process is not running. {{reason}}',

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LINK_CELL_TRANSPORT } from '@iceslab/shared';
+import { LINK_CELL_TRANSPORTS } from '@iceslab/shared';
 import { renderChainConfig, type ChainRenderInput } from './chain.config.js';
 import { LINK_PORT_BASE, type LinkCred } from './cascade.config.js';
 import type { LinkTls } from './link-tls.js';
@@ -156,7 +156,7 @@ describe('a chain of four hops and three cells', () => {
       [HY2_LEG, TUIC_LEG, SS_LEG].map((cred) => ({
         cell: cred.protocol,
         port: cred.port,
-        transport: LINK_CELL_TRANSPORT[cred.protocol],
+        transports: LINK_CELL_TRANSPORTS[cred.protocol],
       })),
     );
   });

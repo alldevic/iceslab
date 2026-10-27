@@ -409,6 +409,54 @@ export const RECIPE_APPLY_KEYS: Record<string, string[]> = (() => {
   return out;
 })();
 
+/**
+ * Key material: form fields (and the config names the form never shows) that
+ * hold a profile's own secret. A recipe is shared text, so a value it carries
+ * is everyone's value: such a field may come from a recipe only drawn fresh on
+ * the click (`randomize`) or cleared (''). RECIPE_APPLY_KEYS is derived from
+ * the public registry's snapshot, and without this list one recipe with a
+ * literal key would widen it in silence; recipes.test.ts guards both.
+ */
+export const RECIPE_SECRET_FIELDS = new Set([
+  'xrayPrivateKey',
+  'xrayPublicKey',
+  'xrayShortIds',
+  'xrayTlsCert',
+  'xrayTlsKey',
+  'awgServerPriv',
+  'awgServerPub',
+  'hyObfsPassword',
+  'serverPsk',
+  'ssPassword',
+]);
+
+/**
+ * What a recipe may write into the form, by allowlist: only the keys
+ * RECIPE_APPLY_KEYS knows for the form's protocol. It used to be a denylist
+ * (any form field except the five common ones), and a recipe from someone
+ * else's registry could set whatever the flat form carries: the server key,
+ * the port, the listen address. Key material passes only drawn per click or
+ * cleared (RECIPE_SECRET_FIELDS). A key that does not pass is not written and
+ * is named in `skipped`, so the screen can say what it left out instead of
+ * dropping it in silence.
+ */
+export function recipeApplyPlan(
+  protocol: string,
+  recipe: Pick<Recipe, 'apply' | 'randomize'>,
+  current: object,
+): { apply: Record<string, string | number | boolean>; skipped: string[] } {
+  const allowed = new Set(RECIPE_APPLY_KEYS[protocol] ?? []);
+  const drawn = new Set((recipe.randomize ?? []).map((r) => r.field));
+  const apply: Record<string, string | number | boolean> = {};
+  const skipped: string[] = [];
+  for (const [k, v] of Object.entries(resolveRecipeApply(recipe))) {
+    const secretOk = !RECIPE_SECRET_FIELDS.has(k) || drawn.has(k) || v === '';
+    if (allowed.has(k) && k in current && !RECIPE_COMMON_FIELDS.has(k) && secretOk) apply[k] = v;
+    else skipped.push(k);
+  }
+  return { apply, skipped };
+}
+
 export interface RecipeExportMeta {
   id: string;
   name: string;

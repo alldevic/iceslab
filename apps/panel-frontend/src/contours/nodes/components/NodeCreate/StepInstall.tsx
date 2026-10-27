@@ -1,3 +1,4 @@
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { AMBER, CARD, CYAN, DISPLAY, FAINT, GROUND, HAIRLINE, MIST, MONO, MOSS, SNOW, WELL } from '@/contours/nodes/lib/colors';
 import { Box, Collapse, Stack, Text } from '@mantine/core';
 import { CardCaption } from '@/contours/nodes/components/NodeCreate/CardCaption';
@@ -24,7 +25,11 @@ export function StepInstall({
   waited,
   copy,
   downloadPayload,
-}: Pick<Wizard, 'registered' | 'showPayload' | 'setShowPayload' | 'copied' | 'isOnline' | 'waited' | 'copy' | 'downloadPayload'>) {
+  watchFailure,
+}: Pick<
+  Wizard,
+  'registered' | 'showPayload' | 'setShowPayload' | 'copied' | 'isOnline' | 'waited' | 'copy' | 'downloadPayload' | 'watchFailure'
+>) {
   const { t } = useTranslation();
 
   // The page only mounts this step once the node is registered; the guard is
@@ -250,7 +255,7 @@ export function StepInstall({
                   title={t('nodeCreate.tl4', { count: registered.hosts.length })}
                   hint={
                     registered.hosts.length > 0
-                      ? registered.hosts.map((h) => `${h.name} on ${h.port}`).join(', ')
+                      ? registered.hosts.map((h) => t('nodeCreate.tl4Host', { name: h.name, port: h.port })).join(', ')
                       : t('nodeCreate.tl4None')
                   }
                 />
@@ -261,6 +266,10 @@ export function StepInstall({
                   <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: MIST, flex: 1 }}>
                     {isOnline ? t('nodeCreate.heartbeatGot') : t('nodeCreate.heartbeatWait')}
                   </Text>
+                  {/* The poll failed: waiting and not knowing are said apart. */}
+                  {!isOnline && watchFailure && (
+                    <LoadFailedLine message={watchFailure.message} onRetry={watchFailure.onRetry} />
+                  )}
                   <Box
                     style={{
                       display: 'flex',

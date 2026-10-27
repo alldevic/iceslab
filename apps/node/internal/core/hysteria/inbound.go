@@ -234,9 +234,13 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		if hostname == "" {
 			return nil, fmt.Errorf("hysteria render: Hostname is required")
 		}
-		if adapterCfg.ACMEEmail == "" {
-			return nil, fmt.Errorf("hysteria render: ACMEEmail is required")
-		}
+		// No email is not a refusal (A-276, stand 26.10: a node installed
+		// without --hysteria-email failed every push with "ACMEEmail is
+		// required"). hysteria 2.12.3 hands the email to certmagic as it is
+		// (app/cmd/server.go:1026-1031), certmagic v0.25.4 registers an account
+		// with no contact (account.go:100-103), and RFC 8555 7.3 makes the
+		// contact optional. The email is only the account's contact: Let's
+		// Encrypt stopped its expiry emails on 4 June 2025.
 	}
 	// Port selection priority (slice 50, 2026-05-20):
 	//   1. inbound.Port: what the panel actually pushed, the source of truth
@@ -276,7 +280,9 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		b.WriteString("acme:\n")
 		b.WriteString("  domains:\n")
 		fmt.Fprintf(&b, "    - %s\n", hostname)
-		fmt.Fprintf(&b, "  email: %s\n", adapterCfg.ACMEEmail)
+		if adapterCfg.ACMEEmail != "" {
+			fmt.Fprintf(&b, "  email: %s\n", adapterCfg.ACMEEmail)
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString("auth:\n")
@@ -318,18 +324,23 @@ func renderConfig(adapterCfg Config, inbound InboundConfig, handoff *ChainHandof
 		}
 	}
 
-	// Cycle #5 ground truth: Hysteria 2 + Brutal CC requires the client to
-	// declare its own bandwidth at session start. Hiddify iOS / NekoBox /
-	// Streisand frequently negotiate `up=0` and the tunnel handshake then
-	// completes successfully but every proxied request times out at tx=0.
-	// Setting `ignoreClientBandwidth: true` forces BBR (CUBIC-class
-	// congestion control) and removes the client-bandwidth dependency
-	// entirely, at the cost of not using Brutal's aggressive scheduling.
-	// For real-world residential broadband this is invisible; for clients
-	// that DO declare valid bandwidth values via our subscription URI
-	// (`upmbps=`/`downmbps=`) Brutal still kicks in. Net: defaults that
-	// "just work" without sacrificing power-user tunability.
-	b.WriteString("\nignoreClientBandwidth: true\n")
+	// Brutal or BBR, one rule on both engines (A-154, 22.10; the sing-box
+	// render follows it). A profile with a bandwidth gets Brutal, capped by
+	// it: the server takes the client's declared rates, bounded by the
+	// profile's. A profile without one gets `ignoreClientBandwidth: true`,
+	// BBR on both sides, for clients that declare nothing usable (cycle #5:
+	// some negotiate up=0 and then time out every request).
+	//
+	// It was written always, and with it hysteria drops Brutal on both sides
+	// whatever the bandwidth says: the profile's Brutal fields did nothing,
+	// while the comment here promised Brutal for clients that declare their
+	// rates. Measured 22.10 on 2.12.3, a client declaring 30/40 Mbps: with
+	// the bandwidth and the flag both ends logged tx 0 (BBR); with the
+	// bandwidth alone the client logged tx 3750000 and the server 5000000
+	// (Brutal at the client's rates).
+	if inbound.BrutalUpMbps == 0 && inbound.BrutalDownMbps == 0 {
+		b.WriteString("\nignoreClientBandwidth: true\n")
+	}
 
 	// Cycle #6 reality-check 2026-05-12: Hysteria 2's per-user uplink/downlink
 	// counters are exposed via a separate HTTP API (`trafficStats:` block).

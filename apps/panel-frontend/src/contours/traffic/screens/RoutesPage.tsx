@@ -1,11 +1,11 @@
-import { CYAN, DISPLAY, FAINT, HAIRLINE, MIST, SNOW, WELL } from '@/contours/traffic/lib/colors';
+import { CYAN, DISPLAY, HAIRLINE, MIST, SNOW, WELL } from '@/contours/traffic/lib/colors';
 import { DevicePane } from '@/contours/traffic/components/Routes/DevicePane';
 import { PolicyPane } from '@/contours/traffic/components/Routes/PolicyPane';
 import { blankNodePolicy, listNodePolicies, type NodePolicy } from '@/lib/domain/nodePolicies';
 import { ExportIcon, ImportIcon, PhoneIcon, PlusIcon, ServerIcon } from '@/contours/traffic/components/Routes/icons';
 import { FileLink } from '@/contours/traffic/components/Routes/FileLink';
 import { NodePane } from '@/contours/traffic/components/Routes/NodePane';
-import { PRESET_RULES, noteKeyFor } from '@/contours/traffic/lib/devicePresets';
+import { noteKeyFor } from '@/contours/traffic/lib/devicePresets';
 import { PaneTab } from '@/contours/traffic/components/Routes/PaneTab';
 import { exportJson, parseImport, policyRules } from '@/contours/traffic/lib/routeExchange';
 import { useMemo, useState } from 'react';
@@ -13,12 +13,16 @@ import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useQuery } from '@tanstack/react-query';
-import { ROUTING_PRESET_IDS, isRoutingPresetId, presetKey } from '@/lib/domain/routingPresets';
-import { ROUTING_PRESET_WRITES_LIVE, listRoutePolicies, listRoutingPresets, type RoutePolicy, type RoutingPreset } from '@/lib/domain/routePolicies';
+import { isRoutingPresetId, presetKey } from '@/lib/domain/routingPresets';
+import { listRoutePolicies, listRoutingPresets, type RoutePolicy, type RoutingPreset } from '@/lib/domain/routePolicies';
 import { getSettings } from '@/lib/domain/settings';
 import { listSquads } from '@/lib/domain/squads';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { blankPolicy } from '@/contours/traffic/lib/routeRules';
+import { loadView } from '@/lib/ui/loadView';
+import { defaultPresetOf, presetsFromList, routesPaneFailure } from '@/contours/traffic/lib/routesView';
+import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailed } from '@/ui/LoadFailed';
+import { blankPolicy, importedPolicy } from '@/contours/traffic/lib/routeRules';
 import { blankPreset } from '@/contours/traffic/lib/devicePresets';
 
 /**
@@ -44,12 +48,12 @@ import { blankPreset } from '@/contours/traffic/lib/devicePresets';
  * node pane is what opens, not by accident of order, and every tab carries a
  * line about WHEN it is the one you want, above the line about whom it reaches.
  *
- * Only two of the three write for real. Both policy kinds are stored data with
- * a full CRUD behind them, and saving the squad-granted kind re-pushes every
- * cascade entry, so the change reaches the fleet. Presets are still three fixed
- * ids compiled into the subscription builders: their pane reads real data and
- * reports what saving hits, until GET /api/routing-presets exists. The
- * operator's own lists and raw rules are stored as data and editable below.
+ * All three write for real. Both policy kinds are stored data with a full CRUD
+ * behind them, and saving the squad-granted kind re-pushes every cascade
+ * entry, so the change reaches the fleet. Presets come from
+ * /api/routing-presets (A-229): the three built-ins read-only, the operator's
+ * own ones stored and assigned to a user or a squad. The operator's own lists
+ * and raw rules are stored as data and editable below.
  */
 type Pane = 'policy' | 'node' | 'device';
 
@@ -60,8 +64,8 @@ export function RoutesPage() {
   const [pane, setPane] = useState<Pane>('policy');
   const [policyDraft, setPolicyDraft] = useState<NodePolicy | null>(null);
   // A draft is a policy or preset that exists only here: written by New, or
-  // read out of an imported file. Neither can be saved until the API grows the
-  // write endpoints, so the pane shows it as an unsaved row and says so.
+  // read out of an imported file. The pane shows it as an unsaved row until
+  // its Save creates it.
   const [nodeDraft, setNodeDraft] = useState<RoutePolicy | null>(null);
   const [deviceDraft, setDeviceDraft] = useState<RoutingPreset | null>(null);
   // Every draft carries the same id, so the editor cannot tell one from the
@@ -72,59 +76,68 @@ export function RoutesPage() {
   const policiesQuery = useQuery({ queryKey: ['route-policies'], queryFn: listRoutePolicies });
   const squadsQuery = useQuery({ queryKey: ['squads'], queryFn: listSquads });
   const settingsQuery = useQuery({ queryKey: ['settings', 'all'], queryFn: getSettings });
-  // Asked once, never retried: while the endpoint is missing this is a single
-  // 404 and the mirror below answers instead. When it lands, it wins silently.
-  const presetsQuery = useQuery({
-    queryKey: ['routing-presets'],
-    queryFn: listRoutingPresets,
-    retry: false,
-    staleTime: 5 * 60_000,
-  });
+  // Every preset, the built-ins too: the panel keeps no copy of their rules.
+  const presetsQuery = useQuery({ queryKey: ['routing-presets'], queryFn: listRoutingPresets });
 
   const policies = policiesQuery.data?.policies ?? [];
   const squads = squadsQuery.data?.squads ?? [];
-  const defaultPreset = settingsQuery.data?.subscriptionRoutingPreset ?? 'proxy-all';
+  // The panel default is proxy-all only when the settings ANSWERED without one;
+  // settings that did not arrive are not «proxy-all» (A-228).
+  const defaultPreset = defaultPresetOf(settingsQuery.data);
 
-  // The presets as the subscription builder emits them. They live here rather
-  // than in the pane so Export can reach them.
-  const presets: RoutingPreset[] = useMemo(() => {
-    const source: RoutingPreset[] =
-      presetsQuery.data?.presets ??
-      ROUTING_PRESET_IDS.map((id) => ({
-        id,
-        name: '',
-        builtIn: true,
-        rules: PRESET_RULES[id].map((r, i) => ({ id: `${id}-${i}`, match: r.match, action: r.action, note: '' })),
-      }));
-    return source.map((p) => ({
-      ...p,
-      // The three built-ins are panel copy, not operator data: their name and
-      // their notes stay translated here whatever the API calls them.
-      name: isRoutingPresetId(p.id) ? t(`metadata.preset${presetKey(p.id)}`) : p.name,
-      rules: p.rules.map((r) => {
-        const key = noteKeyFor(r.match);
-        return key === undefined ? r : { ...r, note: t(key) };
-      }),
-    }));
-  }, [presetsQuery.data, t]);
+  // The presets as the server lists them (presetsFromList). They live here
+  // rather than in the pane so Export can reach them. Empty until the list
+  // arrives; a failed list is said in place of the pane (routesPaneFailure).
+  const presets: RoutingPreset[] = useMemo(
+    () =>
+      (presetsFromList(presetsQuery.data) ?? []).map((p) =>
+        // The three built-ins are panel copy, not operator data: their name and
+        // their notes stay translated here whatever the API calls them. An own
+        // preset keeps the operator's name and notes as written.
+        p.builtIn && isRoutingPresetId(p.id)
+          ? {
+              ...p,
+              name: t(`metadata.preset${presetKey(p.id)}`),
+              rules: p.rules.map((r) => {
+                const key = noteKeyFor(r.match);
+                return key === undefined ? r : { ...r, note: t(key) };
+              }),
+            }
+          : p,
+      ),
+    [presetsQuery.data, t],
+  );
 
   const nodePolicies = nodePoliciesQuery.data?.policies ?? [];
 
   // The preset clients are actually handed today. It stands on the tab in place
   // of a count, and it is a real answer to «which one is on» without a click.
+  // Neither list here yet: a dash, not «no preset chosen».
   const activePresetName =
-    presets.find((p) => p.id === defaultPreset)?.name ?? t('routes.presetUnknown');
+    defaultPreset === null || presets.length === 0
+      ? '-'
+      : presets.find((p) => p.id === defaultPreset)?.name || t('routes.presetUnknown');
 
-  usePageMeta([
-    t('routes.factNodePolicies', { count: nodePolicies.length }),
-    t('routes.factPolicies', { count: policies.length }),
-    t('routes.factPresets', { count: presets.length }),
-  ]);
+  usePageMeta(
+    loadView(nodePoliciesQuery) !== 'ready' || loadView(policiesQuery) !== 'ready'
+      ? [t('pageMeta.noData')]
+      : [
+          t('routes.factNodePolicies', { count: nodePolicies.length }),
+          t('routes.factPolicies', { count: policies.length }),
+          t('routes.factPresets', { count: presets.length }),
+        ],
+  );
+
+  // A list the open pane is drawn from that did not arrive: said with a retry
+  // in place of the pane, never as «no policies» (A-228).
+  const paneFailure = routesPaneFailure(
+    pane,
+    { routePolicies: policiesQuery, squads: squadsQuery, settings: settingsQuery, presets: presetsQuery },
+    apiErrorMessage,
+  );
 
   const onPolicy = pane === 'policy';
   const onNode = pane === 'node';
-  // Both policy kinds are writable; only presets have nothing behind them.
-  const canCreate = onPolicy || onNode || ROUTING_PRESET_WRITES_LIVE;
 
   function stage(
     nodePolicy: NodePolicy | null,
@@ -165,7 +178,14 @@ export function RoutesPage() {
     }
     const first = parsed[0]!;
     if (onNode) {
-      stage(null, { ...blankPolicy(), name: first.name, rules: first.rules }, null);
+      // The route policy is two lists on the server (A-151): the file folds
+      // into them, and a WARP or proxy rule is left out and said so, since
+      // the editor would not show it and the save would not keep it.
+      const folded = importedPolicy(first.rules);
+      stage(null, { ...blankPolicy(), name: first.name, ...folded.lists }, null);
+      if (folded.dropped > 0) {
+        notifications.show({ color: 'yellow', message: t('routes.importDroppedActions', { count: folded.dropped }) });
+      }
     } else {
       stage(null, null, { ...blankPreset(), name: first.name, rules: first.rules });
     }
@@ -195,21 +215,21 @@ export function RoutesPage() {
           }}
         >
           {/* The figure beside a tab says how many of these the operator made.
-              On the device tab that question has no answer: the presets are
-              three fixed ones nobody creates, so it names the one in force
-              instead, which is what the number was standing in for. */}
+              On the device tab it names the panel default in force instead:
+              that is the question an operator opens the tab with, and own
+              presets are assigned per user or squad, not counted. */}
           <PaneTab
             active={onPolicy}
             icon={<ServerIcon size={13} color={onPolicy ? CYAN : MIST} />}
             label={t('routes.panePolicy')}
-            badge={String(nodePolicies.length)}
+            badge={loadView(nodePoliciesQuery) === 'ready' ? String(nodePolicies.length) : '-'}
             onClick={() => setPane('policy')}
           />
           <PaneTab
             active={onNode}
             icon={<ServerIcon size={13} color={onNode ? CYAN : MIST} />}
             label={t('routes.paneNode')}
-            badge={String(policies.length)}
+            badge={loadView(policiesQuery) === 'ready' ? String(policies.length) : '-'}
             onClick={() => setPane('node')}
           />
           <PaneTab
@@ -250,14 +270,8 @@ export function RoutesPage() {
             </Text>
           </UnstyledButton>
           )}
-          {/* Creating is the one thing this button does, and there is nothing
-              to create into yet, so it stays visible but off with a reason. */}
           <UnstyledButton
             type="button"
-            disabled={!canCreate}
-            // Only the preset pane can be uncreatable now, so there is one
-            // reason to give and no branch to pick it.
-            title={canCreate ? undefined : t('routes.writesDisabledPresets')}
             onClick={() =>
               onPolicy
                 ? stage(blankNodePolicy(), null, null)
@@ -273,20 +287,18 @@ export function RoutesPage() {
               height: 38,
               paddingInline: 16,
               borderRadius: 8,
-              backgroundColor: canCreate ? `${CYAN}1F` : WELL,
-              border: `1px solid ${canCreate ? CYAN : HAIRLINE}`,
-              opacity: canCreate ? 1 : 0.5,
-              cursor: canCreate ? 'pointer' : 'not-allowed',
+              backgroundColor: `${CYAN}1F`,
+              border: `1px solid ${CYAN}`,
             }}
           >
-            <PlusIcon size={13} color={canCreate ? CYAN : FAINT} />
+            <PlusIcon size={13} color={CYAN} />
             <Text
               style={{
                 fontFamily: DISPLAY,
                 fontSize: 13,
                 fontWeight: 500,
                 lineHeight: '16px',
-                color: canCreate ? SNOW : MIST,
+                color: SNOW,
               }}
             >
               {onPolicy || onNode ? t('routes.newPolicy') : t('routes.newPreset')}
@@ -335,7 +347,9 @@ export function RoutesPage() {
         </Text>
       </Stack>
 
-      {onPolicy ? (
+      {paneFailure ? (
+        <LoadFailed message={paneFailure.message} onRetry={paneFailure.onRetry} />
+      ) : onPolicy ? (
         <PolicyPane
           draft={policyDraft}
           draftKey={draftSeq}
@@ -349,7 +363,10 @@ export function RoutesPage() {
           draft={nodeDraft}
           draftKey={draftSeq}
           onDraftDone={() => setNodeDraft(null)}
+          onOpenNodePolicies={() => setPane('policy')}
         />
+      ) : defaultPreset === null || presets.length === 0 ? (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>{t('common.loading')}</Text>
       ) : (
         <DevicePane
           presets={presets}

@@ -10,16 +10,21 @@ import {
   cascadeShapeError,
   createCascadeV4,
   listCascades,
+  nodeInOtherCascadeRefusal,
+  nodeInOtherCascadeWords,
   type CascadeProtocol,
 } from '@/lib/domain/cascades';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { listFieldKnown } from '@/lib/domain/nodeFields';
 import { listRoutePolicies } from '@/lib/domain/routePolicies';
 import { linkCellEngines, nodeCarriesCell } from '@/lib/domain/linkCells';
 import { watchCascadeProvisioning } from '@/contours/cascades/lib/cascadeProvision';
 import { useEntryBystanders } from '@/contours/cascades/lib/useEntryBystanders';
+import { cascadeClaims } from '@/lib/domain/cascadeMembership';
 import { MIN_CASCADE_CORE, isOlderThan } from '@/lib/domain/protocols';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { editGate, loadFailure } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import {
   BarButton,
   CardCaption,
@@ -157,7 +162,7 @@ export function CascadeCreatePage() {
 
   usePageMeta([t('cascadeCreate.crumbSection'), t('cascadeCreate.crumbNew')]);
 
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
   // Политика входа (Ф9.3). Знает ли сервер поле, говорит `fields` конверта
   // каскадов (и на пустом списке); по стоящим каскадам только у сервера старше.
@@ -183,16 +188,9 @@ export function CascadeCreatePage() {
   // протокола: они в каскад не войдут, и сказать это надо при выборе входа.
   const bystanders = useEntryBystanders(pools[0]?.entryProtocol, pools[0]?.nodeIds ?? [], nodeById);
 
-  // Which cascade already claims a node. The config generator picks the first
-  // enabled cascade a node belongs to, so a second one would be written and then
-  // silently ignored: worth saying out loud at pick time.
-  const claimedBy = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of cascadesQuery.data?.cascades ?? []) {
-      for (const h of c.hops) m.set(h.nodeId, c.name);
-    }
-    return m;
-  }, [cascadesQuery.data]);
+  // Which cascade already claims a node, v4 positions and directions included
+  // (cascadeClaims, A-139).
+  const claimedBy = useMemo(() => cascadeClaims(cascadesQuery.data?.cascades ?? []), [cascadesQuery.data]);
 
   const positionCount = pools.length + 1;
 
@@ -385,13 +383,31 @@ export function CascadeCreatePage() {
       // The form blocks both unstorable shapes, so a 400 here means the API saw
       // something this page did not. Its sentence is the useful one, not ours.
       const shape = cascadeShapeError(err);
+      // A-101: a picked node already carries another enabled cascade.
+      const taken = nodeInOtherCascadeRefusal(err);
       notifications.show({
         color: 'red',
         title: t('common.createError'),
-        message: shape ?? apiErrorMessage(err),
+        message: taken ? nodeInOtherCascadeWords(taken, t) : (shape ?? apiErrorMessage(err)),
       });
     },
   });
+
+  // The node list is the pickers and the cascade list is which nodes are taken:
+  // a failed one is said as that, not as an empty fleet or as «nothing is
+  // taken» (spec frontend-cascades, the A-141 gate the edit page has).
+  const gate = editGate(nodesQuery, true, [cascadesQuery]);
+  if (gate.kind === 'failed') {
+    const q = gate.index === 0 ? nodesQuery : cascadesQuery;
+    return <LoadFailed message={apiErrorMessage(q.error)} onRetry={() => void q.refetch()} />;
+  }
+  if (gate.kind !== 'ready') {
+    return (
+      <Box style={{ padding: 40, borderRadius: 10, backgroundColor: CARD, border: `1px solid ${HAIRLINE}` }}>
+        <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>{t('common.loading')}</Text>
+      </Box>
+    );
+  }
 
   // What still stands between this draft and a cascade. One sentence, the first
   // thing missing, so the note reads as an instruction rather than a report.
@@ -568,6 +584,7 @@ export function CascadeCreatePage() {
                 role={poolRoleAt(i)}
                 poolLabel={i === 0 ? t('cascadeCreate.poolEntry') : t('cascadeCreate.poolTransit')}
                 nodeIds={pool.nodeIds}
+                linkCell={pool.linkProtocol}
                 nodes={nodes}
                 claimedBy={claimedBy}
                 usedElsewhere={othersThan(pool.nodeIds)}
@@ -588,6 +605,7 @@ export function CascadeCreatePage() {
                     place={entryPolicyPlace(pool.entryProtocol, entryPolicyKnown)}
                     value={entryPolicyId}
                     policies={policiesQuery.data?.policies ?? []}
+                    loadFailed={loadFailure(policiesQuery, apiErrorMessage)}
                     gone={entryPolicyGone}
                     onChange={(v) => {
                       setEntryPolicyGone(false);
@@ -595,7 +613,7 @@ export function CascadeCreatePage() {
                     }}
                   />
                 )}
-                {i === 0 && <EntryBystandersNote items={bystanders} />}
+                {i === 0 && <EntryBystandersNote items={bystanders.items} failure={bystanders.failure} />}
                 {i === 0 &&
                   entryChainNotes(
                     entryChainGaps(entryIds.map((id) => nodeById.get(id))),
@@ -733,6 +751,7 @@ export function CascadeCreatePage() {
                             }),
                           outboundId: dir.outboundId ?? null,
                           options: outboundOptions,
+                          loadFailed: loadFailure(outboundsQuery, apiErrorMessage),
                           onOutbound: (o) =>
                             setDirection(i, {
                               outboundId: o?.id ?? null,

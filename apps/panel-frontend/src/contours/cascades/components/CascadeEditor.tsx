@@ -49,14 +49,16 @@ import { outboundAddress, type NamedOutbound } from '@/lib/domain/namedOutbounds
 import type { LinkCell, LinkCongestion, LinkParams, LinkUnderlay } from '@/lib/domain/cascades';
 import { cascadeNodeChips, type CascadeLegs } from '@/lib/domain/cascadeChips';
 import { CoreChips } from '@/ui/CoreChips';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import type { LoadFailure } from '@/lib/ui/loadView';
 import {
   engineListWords,
   isRealisedLinkCell,
   linkCellOptions,
-  nodeCarriesCascadeLink,
   legCellName,
   pairCaveats,
 } from '@/lib/domain/engines';
+import { nodeCarriesCell } from '@/lib/domain/linkCells';
 
 /**
  * The pieces both cascade pages are built from. Creating and editing a cascade
@@ -361,7 +363,12 @@ export function NodeSelect({
                 </Text>
               )),
             )}
-            {node && needsLink && nodeCarriesCascadeLink(node) === false && (
+            {/* As the server decides it (A-170): the cell of THIS leg on this
+                node, through the chain engine when the agent has one
+                (nodeCarriesCell, E46). «Is xray there» said no to a sing-box
+                transit the server takes, and yes to an xray-only node it refuses.
+                An unset cell is the default vless leg. */}
+            {node && needsLink && nodeCarriesCell(node, legs?.outLeg ?? 'vless') === false && (
               <Text
                 title={t('engine.legWhy')}
                 style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: AMBER, flexShrink: 0 }}
@@ -489,7 +496,10 @@ export function PositionRow({
   onDown,
   onDelete,
   children,
+  linkCell,
 }: {
+  /** The cell of the leg this position dials: what its pool has to carry (A-170). */
+  linkCell?: string | null;
   role: HopRole;
   poolLabel: string;
   nodeIds: string[];
@@ -537,9 +547,9 @@ export function PositionRow({
           claimedBy={claimedBy}
           usedElsewhere={usedElsewhere}
           meta={role === 'entry' ? 'core' : 'status'}
-          // The leg's cell is picked under the pool, not here: only the
-          // entry protocol is known to this row, the leg is left unsaid.
-          legs={{ entryProtocol }}
+          // The leg's cell is picked under the pool; the page hands it in so
+          // the pickers judge the cell this pool has to carry (A-170).
+          legs={{ entryProtocol, ...(linkCell !== undefined ? { outLeg: linkCell } : {}) }}
           // Every position links onward, to the next position or to the
           // directions, so every machine in a pool has to be able to build one.
           needsLink
@@ -1002,6 +1012,8 @@ export function DirectionRow({
     /** Только vless и socks (directionOutbounds). */
     options: NamedOutbound[];
     onOutbound: (o: NamedOutbound | null) => void;
+    /** The outbound list did not arrive: said instead of «there are none». */
+    loadFailed?: LoadFailure | null;
   };
 }) {
   const { t } = useTranslation();
@@ -1043,7 +1055,9 @@ export function DirectionRow({
                 onChange={(id) => outbound.onOutbound(outbound.options.find((o) => o.id === id) ?? null)}
               />
               {picked && <OutboundCard outbound={picked} />}
-              {outbound.options.length === 0 && (
+              {outbound.loadFailed ? (
+                <LoadFailedLine message={outbound.loadFailed.message} onRetry={outbound.loadFailed.onRetry} />
+              ) : outbound.options.length === 0 && (
                 <Text style={{ fontFamily: DISPLAY, fontSize: 11, lineHeight: '15px', color: FAINT }}>
                   {t('cascadeCreate.outboundNoneHint')}{' '}
                   <Link to="/traffic/named-outbounds" style={{ color: CYAN }}>
@@ -2084,6 +2098,7 @@ export function EntryPolicyRow({
   policies,
   gone,
   onChange,
+  loadFailed = null,
 }: {
   place: EntryPolicyPlace;
   value: string | null;
@@ -2091,6 +2106,8 @@ export function EntryPolicyRow({
   /** 400 ENTRY_POLICY_NOT_FOUND после сохранения: выбранную удалили. */
   gone: boolean;
   onChange: (id: string | null) => void;
+  /** Список политик не пришёл: сказать это, а не показывать один «нет». */
+  loadFailed?: LoadFailure | null;
 }) {
   const { t } = useTranslation();
   if (place === 'hidden') return null;
@@ -2121,6 +2138,7 @@ export function EntryPolicyRow({
           {t('cascadeCreate.entryPolicyHint')}
         </Text>
       </Box>
+      {loadFailed && <LoadFailedLine message={loadFailed.message} onRetry={loadFailed.onRetry} />}
       {gone && (
         <Note tone={RED} icon={<WarnIcon size={13} color={RED} />}>
           {t('cascadeCreate.entryPolicyGone')}
@@ -2172,8 +2190,16 @@ export function EntryChainNote({
  * Профили входных нод, которые в каскад не входят. Спокойная строка: это
  * свойство модели «один вход на каскад», а не ошибка оператора.
  */
-export function EntryBystandersNote({ items }: { items: EntryBystander[] | undefined }) {
+export function EntryBystandersNote({
+  items,
+  failure = null,
+}: {
+  items: EntryBystander[] | undefined;
+  /** Привязки или профили входа не пришли: сказать это, а не промолчать (A-172 п.4). */
+  failure?: LoadFailure | null;
+}) {
   const { t } = useTranslation();
+  if (failure) return <LoadFailedLine message={failure.message} onRetry={failure.onRetry} />;
   if (!items || items.length === 0) return null;
   return (
     <>

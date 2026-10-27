@@ -113,9 +113,12 @@ func (u *User) validate() error {
 // Users are emitted in deterministic Username-sorted order so successive
 // renders produce byte-identical files (helps `caddy reload` skip no-op
 // reloads and makes diffs in `git status`-style audits stable).
-func renderCaddyfile(inbound InboundConfig, users []User) (string, error) {
+func renderCaddyfile(inbound InboundConfig, users []User, adminSocket string) (string, error) {
 	if err := inbound.validate(); err != nil {
 		return "", err
+	}
+	if !filepath.IsAbs(adminSocket) || strings.ContainsAny(adminSocket, " {}\n\r\t") {
+		return "", fmt.Errorf("admin socket %q is not an absolute Caddyfile-safe path", adminSocket)
 	}
 	for i := range users {
 		if err := users[i].validate(); err != nil {
@@ -134,8 +137,29 @@ func renderCaddyfile(inbound InboundConfig, users []User) (string, error) {
 	// HOME set, and only /etc/caddy in ReadWritePaths, so the fallback
 	// hits "mkdir caddy: read-only file system" and ACME never persists
 	// a cert. Caught live cycle #8 2026-05-13.
+	//
+	// The admin API goes on a unix socket (A-118, 22.10). Left to its default
+	// it listened on localhost:2019 without a password: any process on the
+	// node could read every user's basic_auth from GET /config/ or load an
+	// open forward_proxy. caddy creates the socket 0200 for its own user (the
+	// agent's, root), in a directory the adapter keeps 0700; `caddy reload`
+	// reaches it by --address. Checked live 22.10 on caddy-naive v2.11.8-pre:
+	// nothing on TCP 2019, reload through the socket swaps the users.
 	fmt.Fprintln(&b, "{")
+	fmt.Fprintf(&b, "\tadmin unix/%s\n", adminSocket)
 	fmt.Fprintln(&b, "\tstorage file_system /etc/caddy")
+	// A-265: no handler errors in the journal. forward_proxy answers a failed
+	// dial as an error, and Caddy writes errors of 500 and up to the logger
+	// http.log.error at ERROR with the request: the client's remote_ip and the
+	// destination host (caddyhttp/app.go:211 names it, server.go logs it at
+	// ERROR for errStatus >= 500, below that at DEBUG; read on v2.10.2). The
+	// default logger keeps everything else (start, ACME, reloads) at INFO; it
+	// only leaves that one name out ("exclude" in the global log option,
+	// https://caddyserver.com/docs/caddyfile/options#log). No `log` in the site
+	// block either, so Caddy writes no access log.
+	fmt.Fprintln(&b, "\tlog default {")
+	fmt.Fprintln(&b, "\t\texclude http.log.error")
+	fmt.Fprintln(&b, "\t}")
 	fmt.Fprintln(&b, "}")
 	fmt.Fprintf(&b, ":%d, %s {\n", cfg.ListenPort, cfg.Hostname)
 	fmt.Fprintf(&b, "\ttls %s\n", cfg.TLSEmail)

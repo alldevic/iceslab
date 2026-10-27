@@ -18,7 +18,17 @@ type sbConfig struct {
 	Log          sbLog           `json:"log"`
 	Inbounds     []sbInbound     `json:"inbounds"`
 	Outbounds    []sbOutbound    `json:"outbounds"`
+	Services     []sbService     `json:"services,omitempty"`
 	Experimental *sbExperimental `json:"experimental,omitempty"`
+}
+
+// sbService is the ssm-api service (sing-box 1.12+): a REST API on loopback
+// that manages the users of a managed shadowsocks inbound at runtime.
+type sbService struct {
+	Type       string            `json:"type"`
+	Listen     string            `json:"listen"`
+	ListenPort int               `json:"listen_port"`
+	Servers    map[string]string `json:"servers"`
 }
 
 type sbLog struct {
@@ -40,6 +50,9 @@ type sbInbound struct {
 	// shadowsocks-only: cipher + server-level iPSK (omitted for others).
 	Method   string `json:"method,omitempty"`
 	Password string `json:"password,omitempty"`
+	// Managed: the inbound's users come from the ssm-api service, not from
+	// this file. shadowsocks only.
+	Managed bool `json:"managed,omitempty"`
 
 	// hysteria2-only knobs (omitted for every other protocol).
 	UpMbps                int     `json:"up_mbps,omitempty"`
@@ -159,6 +172,22 @@ type userEntry struct {
 	UUID     string
 	Password string
 	Username string
+	// Inbounds: the inbound ids this user is on, sorted and comma-joined so
+	// the struct stays comparable; empty is every inbound (A-022).
+	Inbounds string
+}
+
+// servesOn: the user belongs on the inbound with this id.
+func (u userEntry) servesOn(id string) bool {
+	if u.Inbounds == "" {
+		return true
+	}
+	for _, s := range strings.Split(u.Inbounds, ",") {
+		if s == id {
+			return true
+		}
+	}
+	return false
 }
 
 // renderConfig builds the full sing-box config JSON for a single TUIC inbound.
@@ -391,8 +420,15 @@ func splitHostPort(hostPort string, defPort int) (string, int) {
 // the self-signed cert/key from bootstrap-singbox.sh (like tuic/anytls), so the
 // client connects with cert verification off. Per-user auth is the inline
 // users[] password (= the user's HysteriaPassword), unlike the xray-hysteria
-// path which authenticates via an HTTP callback. ignore_client_bandwidth mirrors
-// that path's "just works even when a client negotiates up=0" default.
+// path which authenticates via an HTTP callback.
+//
+// Brutal or BBR by the native path's rule (A-154, 22.10): a profile with a
+// bandwidth gets up_mbps/down_mbps and Brutal, one without gets
+// ignore_client_bandwidth and BBR. Both were written together, which sing-box
+// documents as a conflict and which forced Brutal on the client, the opposite
+// of what the same profile did on native hysteria (Brutal off on both sides).
+// Measured 22.10 on 1.13.14 with a hysteria client declaring 30/40 Mbps: up/down
+// alone, client tx 3750000 (Brutal); the flag alone, client tx 0 (BBR).
 func renderHysteria2Config(certPath, keyPath, statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
 	ids := sortedIDs(users)
 	sbUsers := make([]sbUser, 0, len(ids))
@@ -406,7 +442,7 @@ func renderHysteria2Config(certPath, keyPath, statsListen string, inbound Inboun
 		Listen:                "0.0.0.0",
 		ListenPort:            inbound.ListenPort,
 		Users:                 sbUsers,
-		IgnoreClientBandwidth: true,
+		IgnoreClientBandwidth: inbound.BrutalUpMbps == 0 && inbound.BrutalDownMbps == 0,
 		TLS: &sbTLS{
 			Enabled:         true,
 			ServerName:      inbound.ServerName,
@@ -510,7 +546,13 @@ func renderShadowtlsConfig(statsListen string, inbound InboundConfig, users map[
 // own AEAD encryption. Multi-user: a server-level iPSK (password) plus per-user
 // uPSKs (users[].password), each derived from the user's xray UUID via
 // core.DeriveSsPassword so the key matches the panel URI and the xray SS adapter.
-func renderShadowsocksConfig(statsListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
+//
+// With ssmListen set the inbound is managed: its users are not in the file but
+// handed to the running process over the ssm-api service (A-119, 22.10), which
+// also counts their bytes, so no v2ray_api is drawn then. Verified live on the
+// pinned 1.13.14: a user added over POST /server/v1/users connects, another
+// user's open stream survives it, and GET /server/v1/stats counts by username.
+func renderShadowsocksConfig(statsListen, ssmListen string, inbound InboundConfig, users map[string]userEntry) ([]byte, error) {
 	ids := sortedIDs(users)
 	sbUsers := make([]sbUser, 0, len(ids))
 	for _, id := range ids {
@@ -520,19 +562,34 @@ func renderShadowsocksConfig(statsListen string, inbound InboundConfig, users ma
 		})
 	}
 
+	in := sbInbound{
+		Type:       "shadowsocks",
+		Tag:        "ss-in",
+		Listen:     "0.0.0.0",
+		ListenPort: inbound.ListenPort,
+		Method:     inbound.Method,
+		Password:   inbound.ServerPSK,
+		Users:      sbUsers,
+	}
 	cfg := sbConfig{
-		Log: sbLog{Level: "warn", Timestamp: true},
-		Inbounds: []sbInbound{{
-			Type:       "shadowsocks",
-			Tag:        "ss-in",
-			Listen:     "0.0.0.0",
-			ListenPort: inbound.ListenPort,
-			Method:     inbound.Method,
-			Password:   inbound.ServerPSK,
-			Users:      sbUsers,
-		}},
+		Log:       sbLog{Level: "warn", Timestamp: true},
 		Outbounds: []sbOutbound{{Type: "direct", Tag: "direct"}},
 	}
+	if ssmListen != "" {
+		host, port, err := net.SplitHostPort(ssmListen)
+		if err != nil {
+			return nil, fmt.Errorf("ssm-api listen %q: %w", ssmListen, err)
+		}
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			return nil, fmt.Errorf("ssm-api listen %q: %w", ssmListen, err)
+		}
+		in.Managed = true
+		in.Users = []sbUser{}
+		cfg.Services = []sbService{{Type: "ssm-api", Listen: host, ListenPort: p, Servers: map[string]string{"/": "ss-in"}}}
+		statsListen = ""
+	}
+	cfg.Inbounds = []sbInbound{in}
 
 	if statsListen != "" {
 		cfg.Experimental = &sbExperimental{

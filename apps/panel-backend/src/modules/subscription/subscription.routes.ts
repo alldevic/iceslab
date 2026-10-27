@@ -1,6 +1,16 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, RouteShorthandOptions } from 'fastify';
 import { z } from 'zod';
-import { FORMAT_NAMES, ROUTING_PRESET_IDS, type RoutingPresetId } from '@iceslab/shared';
+import {
+  FORMAT_NAMES,
+  PROTOCOL_NAMES,
+  ROUTING_PRESET_IDS,
+  formatDisabledForHost,
+  isHappUserAgent,
+  showsServerDescription,
+  type ProtocolName,
+  type RoutingPresetId,
+} from '@iceslab/shared';
+import { parseProtocolsParam, protocolsOf, withProtocols } from './subscription.protocols.js';
 import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
@@ -13,20 +23,27 @@ import { buildQuantumultXConf } from './formats/quantumultx.js';
 import { buildLoonConf } from './formats/loon.js';
 import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
-import { endpointsForFormat, isPlainXray } from './subscription.formats.js';
-import { matchFormatForUserAgent } from '../srr/srr.service.js';
+import { linkWithDescription } from './subscription.description.js';
+import { endpointsForFormat, isPlainXray, withoutDescription, type SubscriptionEndpoint } from './subscription.formats.js';
+import { endpointId, pickServer } from './endpoint-identity.js';
+import { matchRuleForUserAgent } from '../srr/srr.service.js';
+import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
+import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
+import { frameIncludesHidden, type Frame } from './subscription.frames.js';
+import type { DeviceRouteRule } from '../routing-presets/routing-presets.builtins.js';
 import {
   formatBytes,
   getSubscriptionSettings,
   renderAnnounce,
 } from '../settings/settings.service.js';
-import { enforceHwid, resolveSquadHwidLimit } from '../hwid/hwid.service.js';
+import { effectiveHwidLimit, enforceHwid } from '../hwid/hwid.service.js';
 import { prisma } from '../../prisma.js';
 import { config } from '../../config.js';
 import { subscriptionRequests } from '../../lib/infra/metrics.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
 import { redis } from '../../lib/infra/redis.js';
 import { isPublicRoutableIp } from '../../lib/util/ip.js';
+import { headerSafeUrl } from '../../lib/util/header-url.js';
 
 const TokenParamSchema = z.object({
   token: z.string().min(8).max(128),
@@ -58,6 +75,9 @@ const QuerySchema = z.object({
   // on one client before flipping it for everyone (same idea as `bundle`).
   // Only meaningful for full-config formats (clash/singbox/xrayjson).
   routing: z.enum(ROUTING_PRESET_IDS).optional(),
+  // A-236: the operator template the file is framed by, by name (same idea as
+  // `?routing=`). Default when absent.
+  template: z.string().trim().min(1).max(64).optional(),
   // TLS-fragment - per-request override of the panel-wide
   // `subscriptionTlsFragment` setting (same idea as `?routing=`). `1` forces
   // it on, `0` forces it off. Only meaningful for the xrayjson format - the
@@ -66,8 +86,8 @@ const QuerySchema = z.object({
   // Node selector for single-node formats (wgconf, amneziavpn, outline).
   // wg-quick holds one tunnel per file and an Outline key one server, so a user
   // with several such nodes gets one link per node, each pinned with
-  // `?node=<node name>`. Matched against the endpoint's nodeName (unique among
-  // active nodes). Omitted = the first one.
+  // `?node=<endpoint id>` (endpointId, A-107); the label the links carried
+  // before is still taken when no id matches (pickServer). Omitted = the first.
   node: z.string().min(1).max(64).optional(),
   // Human landing-page language override. The page renders an in-page RU/EN
   // selector that links here; it wins over the panel default and the
@@ -80,7 +100,69 @@ const QuerySchema = z.object({
   // contract nobody asked us to change. The download buttons on the human page
   // pass `&dl=1`; every existing address stays byte for byte what it was.
   dl: z.enum(['0', '1']).optional(),
+  // Only these protocols (subscription.protocols.ts), comma-separated. Read
+  // and checked by parseProtocolsParam before this schema runs, so an unknown
+  // name is answered by name; here it only has to be a string.
+  protocols: z.string().max(256).optional(),
 });
+
+/**
+ * Formats a comment can stand in, as the first line of an otherwise empty
+ * file. Everything else answers a narrowing that left nothing with a 404 in
+ * words: JSON has no comments, and a base64 list or a key with a stray line in
+ * it is a broken subscription rather than an empty one.
+ */
+const COMMENTED_FORMATS: ReadonlySet<Format> = new Set<Format>([
+  'clash',
+  'mihomo',
+  'stash',
+  'clash-legacy',
+  'wgconf',
+  'surge',
+  'quantumultx',
+  'loon',
+]);
+
+/** Formats that carry ONE server, picked by `?node=`, and the protocol it is. */
+const SINGLE_SERVER_FORMATS: Partial<Record<Format, string>> = {
+  wgconf: 'amneziawg',
+  amneziavpn: 'amneziawg',
+  outline: 'shadowsocks',
+};
+
+/**
+ * Why a narrowed subscription gave this format nothing, in the terms the
+ * person can act on. Two different answers, and mixing them read as a
+ * contradiction on the stand (26.09): "no hosts of amneziawg ... it has
+ * hysteria, xray, amneziawg".
+ *   - a protocol the person does not have: "no hosts of", and what they have;
+ *   - a protocol they have and this format cannot carry (AmneziaWG in the
+ *     base64 list, MTProto in any config): the format is the reason, and the
+ *     page is where it lives.
+ */
+export function emptyNarrowingWords(
+  format: string,
+  asked: readonly string[],
+  available: readonly string[],
+): string {
+  const missing = asked.filter((p) => !available.includes(p));
+  const notCarried = asked.filter((p) => available.includes(p));
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    parts.push(
+      `this subscription has no hosts of ${missing.join(', ')}` +
+        (available.length > 0 ? ` (it has ${available.join(', ')})` : ''),
+    );
+  }
+  if (notCarried.length > 0) {
+    const what = notCarried.every((p) => p === 'amneziawg') ? 'key' : 'link';
+    parts.push(
+      `the ${format} format does not carry ${notCarried.join(', ')}; ` +
+        `${notCarried.length === 1 ? 'its' : 'their'} ${what} is on the subscription page`,
+    );
+  }
+  return parts.join('; ');
+}
 
 const FORMAT_VALUES: ReadonlySet<Format> = new Set(FormatEnum.options);
 
@@ -128,7 +210,13 @@ async function applySubscriptionHeaders(
   const title = settings.profileTitle ?? settings.brandName;
   if (title) reply.header('Profile-Title', `base64:${Buffer.from(title, 'utf8').toString('base64')}`);
   reply.header('Profile-Update-Interval', String(settings.updateIntervalHours));
-  if (settings.supportUrl) reply.header('Support-URL', settings.supportUrl);
+  // A-168: normalised on the way out too, for a value stored before the
+  // schema did it. A raw non-ASCII URL here threw ERR_INVALID_CHAR and took
+  // /sub down for every user; one that cannot be made safe is left out.
+  // The other operator-set headers are base64 (Profile-Title, Announce) or a
+  // number (Profile-Update-Interval).
+  const supportUrl = headerSafeUrl(settings.supportUrl);
+  if (supportUrl) reply.header('Support-URL', supportUrl);
 
   // Subscription-Userinfo. `upload+download === used`. We don't track
   // upload separately yet (per-user xray stats sum both directions),
@@ -180,19 +268,23 @@ async function applySubscriptionHeaders(
   }
 }
 
+/**
+ * The format, and the template the SRR rule that chose it names (A-236 step
+ * 4; null when no rule chose, or the rule names none).
+ */
 async function resolveFormat(
   query: z.infer<typeof QuerySchema>,
   acceptHeader: string,
   userAgent: string | null,
-): Promise<Format> {
-  if (query.format) return query.format;
-  const matched = await matchFormatForUserAgent(userAgent);
-  if (matched && isFormat(matched)) return matched;
-  if (acceptHeader.toLowerCase().includes('application/json')) return 'json';
+): Promise<{ format: Format; ruleTemplate: string | null }> {
+  if (query.format) return { format: query.format, ruleTemplate: null };
+  const matched = await matchRuleForUserAgent(userAgent);
+  if (matched && isFormat(matched.format)) return { format: matched.format, ruleTemplate: matched.templateName };
+  if (acceptHeader.toLowerCase().includes('application/json')) return { format: 'json', ruleTemplate: null };
   // Last resort, and since 2026-09-21 the operator's choice rather than ours.
   // plain stays the default of that setting: it is the one form every
   // client can read, so an operator who has not decided keeps what worked.
-  return (await getSubscriptionSettings()).defaultFormat;
+  return { format: (await getSubscriptionSettings()).defaultFormat, ruleTemplate: null };
 }
 
 // Wave-14 #6: a browser navigating to /sub/<token> should see a human page,
@@ -341,7 +433,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
   // Path prefix is admin-configurable via SUBSCRIPTION_PATH_PREFIX env
   // (default `/sub`). Lets operators mask Iceslab signature on the
   // wire, e.g. `/v` so user links look like https://panel/v/<token>.
-  app.get(`${config.SUBSCRIPTION_PATH_PREFIX}/:token`, {
+  const subOptions: RouteShorthandOptions = {
     onRequest: [ipRateLimitHook],
     config: {
       rateLimit: {
@@ -349,14 +441,69 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         timeWindow: '1 minute',
         // Per-token bucket so one client polling on the same token doesn't
         // share rate-budget with unrelated subscriptions on shared CGNAT.
-        keyGenerator: (req) => {
+        // The client segment does not split it: one token, one bucket.
+        keyGenerator: (req: FastifyRequest) => {
           const t = (req.params as { token?: string })?.token ?? 'unknown';
           return `${req.ip}:${t}`;
         },
       },
     },
-  }, async (request, reply) => {
+  };
+  const serve = async (request: FastifyRequest, reply: FastifyReply) => {
     const params = TokenParamSchema.parse(request.params);
+    const userAgent = typeof request.headers['user-agent'] === 'string'
+      ? request.headers['user-agent']
+      : null;
+    const client = (request.params as { client?: string }).client;
+
+    // Tier-1 honey-user tripwire. If the requested token is on the admin's
+    // canary list, the token by definition was leaked from where it was
+    // planted (pastebin, screenshot, dropped USB, …). Alert immediately,
+    // blacklist the source IP (same Redis key as the path-honeypot), and
+    // return a plausible-empty 200, making the attacker believe their
+    // exfiltrated token is "just empty subscription" instead of "this is
+    // a panel that knows it was leaked."
+    // First, before the client segment, the format and the protocols are
+    // read: ANY use of a canary trips it, a typo in the rest included (A-243,
+    // step 5 follow-up). So the alert names what was asked, not the format
+    // resolved.
+    if (config.HONEY_USER_TOKENS.includes(params.token)) {
+      const ip = request.ip;
+      const ttl = config.HONEYPOT_BLACKLIST_TTL_SEC;
+      const askedFormat = (request.query as { format?: unknown } | undefined)?.format;
+      // Cut to 64: the string is the requester's, of any length (AUDT, A-255).
+      const asked = (client !== undefined ? `/${client}` : typeof askedFormat === 'string' ? askedFormat : 'auto').slice(0, 64);
+      // Only blacklist real public IPs. If TRUST_PROXY_HOPS is misconfigured
+      // an attacker can spoof X-Forwarded-For with a private/loopback IP and
+      // get arbitrary legit users DoS'd via this honeypot. Skip the blacklist
+      // for any IP we can identify as non-routable; still alert + return empty.
+      if (isPublicRoutableIp(ip)) {
+        await redis.set(`sec:blacklist:${ip}`, '1', 'EX', ttl, 'NX').catch(() => null);
+      }
+      notifyTelegramAsync(
+        `🪤 *Honey-user token used*\nip: \`${escapeMarkdown(ip)}\`\nua: \`${escapeMarkdown(userAgent ?? '?')}\`\nformat: \`${escapeMarkdown(asked)}\`\ntoken: \`${escapeMarkdown(params.token.slice(0, 6))}...\``,
+      );
+      // Plausible empty subscription. Mirror the same content-type the
+      // legit path would use for `?format=plain`.
+      reply.type('text/plain; charset=utf-8');
+      return reply.send('');
+    }
+
+    // A-236 step 5: /sub/<token>/<client>. The segment IS an explicit
+    // format, the same as `?format=` and winning over the User-Agent rules,
+    // for the clients that cannot set a User-Agent and for a QR made for one
+    // client. A slug nobody knows is answered by name. The path segment wins
+    // over ?format= when both are given.
+    if (client !== undefined) {
+      const slugFormat = CLIENT_SLUGS[client];
+      if (!slugFormat) {
+        return reply.code(404).send({
+          error: 'UNKNOWN_CLIENT',
+          message: `unknown client ${JSON.stringify(client)} in the path. This build answers: ${Object.keys(CLIENT_SLUGS).join(', ')}`,
+        });
+      }
+      (request.query as Record<string, unknown>).format = slugFormat;
+    }
     // A format nobody serves is answered by NAME. `QuerySchema.parse` throws a
     // Zod error that the handler turns into a bare 400, so a client asking for
     // a format this build does not have got "Bad Request" and no way to tell a
@@ -372,42 +519,26 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           `${FORMAT_NAMES.join(', ')}`,
       });
     }
+    // Same for a protocol: by name, with the list it is not in.
+    const protocolFilter = parseProtocolsParam((raw as { protocols?: unknown }).protocols);
+    if (protocolFilter.kind === 'unknown') {
+      return reply.code(400).send({
+        error: 'SUBSCRIPTION_PROTOCOL_UNKNOWN',
+        message:
+          `unknown protocol ${JSON.stringify(protocolFilter.protocol)} in ?protocols=. ` +
+          `The panel's protocols are: ${PROTOCOL_NAMES.join(', ')}`,
+        protocol: protocolFilter.protocol,
+        known: [...PROTOCOL_NAMES],
+      });
+    }
+    const onlyProtocols = protocolFilter.kind === 'some' ? protocolFilter.protocols : null;
     const query = QuerySchema.parse(request.query);
-    const userAgent = typeof request.headers['user-agent'] === 'string'
-      ? request.headers['user-agent']
-      : null;
-    const format = await resolveFormat(
+    const { format, ruleTemplate } = await resolveFormat(
       query,
       (request.headers.accept ?? '').toString(),
       userAgent,
     );
     subscriptionRequests.inc({ format });
-
-    // Tier-1 honey-user tripwire. If the requested token is on the admin's
-    // canary list, the token by definition was leaked from where it was
-    // planted (pastebin, screenshot, dropped USB, …). Alert immediately,
-    // blacklist the source IP (same Redis key as the path-honeypot), and
-    // return a plausible-empty 200, making the attacker believe their
-    // exfiltrated token is "just empty subscription" instead of "this is
-    // a panel that knows it was leaked."
-    if (config.HONEY_USER_TOKENS.includes(params.token)) {
-      const ip = request.ip;
-      const ttl = config.HONEYPOT_BLACKLIST_TTL_SEC;
-      // Only blacklist real public IPs. If TRUST_PROXY_HOPS is misconfigured
-      // an attacker can spoof X-Forwarded-For with a private/loopback IP and
-      // get arbitrary legit users DoS'd via this honeypot. Skip the blacklist
-      // for any IP we can identify as non-routable; still alert + return empty.
-      if (isPublicRoutableIp(ip)) {
-        await redis.set(`sec:blacklist:${ip}`, '1', 'EX', ttl, 'NX').catch(() => null);
-      }
-      notifyTelegramAsync(
-        `🪤 *Honey-user token used*\nip: \`${escapeMarkdown(ip)}\`\nua: \`${escapeMarkdown(userAgent ?? '?')}\`\nformat: \`${format}\`\ntoken: \`${escapeMarkdown(params.token.slice(0, 6))}...\``,
-      );
-      // Plausible empty subscription. Mirror the same content-type the
-      // legit path would use for `?format=plain`.
-      reply.type('text/plain; charset=utf-8');
-      return reply.send('');
-    }
 
     try {
       // Slice S2: HWID enforcement runs BEFORE generateSubscription so
@@ -428,13 +559,52 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           groupMembers: { select: { group: { select: { hwidDeviceLimit: true } } } },
         },
       });
+
+      // A-236: `?template=<name>` picks the operator template the file is
+      // framed by; a format no template frames, or a name the type does not
+      // have, is a refusal in words, not a silent Default. Asked only here
+      // (A-243): after the honey-token trap above, so a leaked canary with a
+      // made-up template still trips it, and only for a token that exists, so
+      // the operator's template names cannot be probed with any string in
+      // place of a token (an unknown token answers 404 the same with or
+      // without a template, below). Before the HWID check, so a refused
+      // request does not register a device.
+      // The frame itself (step 3): the named template, or the type's Default
+      // (absent while it is the code's, so the builders' own Default and its
+      // bundles stand).
+      let frame: Frame | undefined;
+      const templateType = templateTypeForFormat(format);
+      if (userMin && query.template !== undefined && !templateType) {
+        return reply.code(400).send({
+          error: 'TEMPLATE_NOT_FOR_FORMAT',
+          message: `the ${format} format takes no template; templates frame mihomo, clash, stash, clash-legacy, singbox, xrayjson and xrayjson-array`,
+        });
+      }
+      if (userMin && templateType) {
+        // Step 4: an explicit ?template= first, then the template the SRR
+        // rule that chose the format names. A rule's template that was deleted
+        // since falls back to the Default instead of failing every client the
+        // rule serves; only an explicit name is refused.
+        const named = query.template ?? ruleTemplate ?? 'Default';
+        let picked = await frameFor(templateType, named);
+        if (!picked.found && query.template === undefined) picked = await frameFor(templateType, 'Default');
+        if (!picked.found) {
+          return reply.code(404).send({
+            error: 'TEMPLATE_NOT_FOUND',
+            message: `no ${templateType} template named ${JSON.stringify(query.template)}`,
+          });
+        }
+        frame = picked.frame;
+      }
+
       if (userMin) {
-        // K7 - explicit per-user limit wins; otherwise fall back to the
-        // most-permissive squad default.
-        const effectiveHwidLimit =
-          userMin.hwidDeviceLimit ??
-          resolveSquadHwidLimit(userMin.groupMembers.map((m) => m.group.hwidDeviceLimit));
-        const hwidResult = await enforceHwid(userMin.id, hwid, effectiveHwidLimit);
+        // K7 - explicit per-user limit wins, 0 there is an explicit no-limit
+        // (A-148); otherwise the most-permissive squad default.
+        const hwidLimit = effectiveHwidLimit(
+          userMin.hwidDeviceLimit,
+          userMin.groupMembers.map((m) => m.group.hwidDeviceLimit),
+        );
+        const hwidResult = await enforceHwid(userMin.id, hwid, hwidLimit);
         // Always emit the gauge header so the client can render "2/3" in
         // its profile detail UI, even on success, even when no limit set.
         // HTTP headers are ISO-8859-1; use ASCII-only "unlimited" instead
@@ -469,19 +639,46 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       const cfCountryRaw = (request.headers['cf-ipcountry'] ??
         request.headers['x-country-code']) as string | string[] | undefined;
       const cfCountry = Array.isArray(cfCountryRaw) ? cfCountryRaw[0] : cfCountryRaw;
-      const result = await service.generateSubscription(params.token, {
+      const generated = await service.generateSubscription(params.token, {
         ip: request.ip,
         userAgent,
         topN: query.topN,
         cfCountry,
+        // A-167: a client's fetch is history; the page in a browser is not,
+        // nothing there carries a config to a client.
+        recordFetch: !wantsHtmlPage(query, (request.headers.accept ?? '').toString()),
       });
+      // ?protocols=: narrowed HERE, once, on what the subscription hands out,
+      // before any format or the page sees it. After the generation and not
+      // inside it, so what is cached per squad set (bindings-cache) stays the
+      // whole subscription and one person's narrowed link cannot become
+      // another's answer. A cascade line goes with its endpoint, whose
+      // protocol is the cascade entry's.
+      // A-236 step 6. A host's description goes only to the apps that show one
+      // (DESCRIPTION_CLIENTS); for every other client it is taken off here, so
+      // no builder and no `json` answer carries it. A hidden host is in no
+      // public output below, the page and its format list included, unless
+      // the template asks for hidden hosts, and then only in this format's
+      // file (`framed`).
+      const describe = showsServerDescription(userAgent);
+      const happ = isHappUserAgent(userAgent);
+      const every = describe ? generated.endpoints : generated.endpoints.map(withoutDescription);
+      const visible = every.filter((e) => !e.hidden);
+      const narrow = (eps: SubscriptionEndpoint[]) =>
+        onlyProtocols ? eps.filter((e) => onlyProtocols.includes(e.protocol as ProtocolName)) : eps;
+      const availableProtocols = protocolsOf(visible);
+      const result = { ...generated, endpoints: narrow(visible) };
+      const framed = frame && frameIncludesHidden(frame) ? narrow(every) : result.endpoints;
 
       // Slice 30: host-level format gating. Each endpoint carries an
       // optional `disableForFormats[]` from its originating host row; we
       // filter before invoking the format-specific formatter so each
       // formatter can stay agnostic of host presence.
-      const filtered = result.endpoints.filter(
-        (e) => !(e.disableForFormats ?? []).includes(format),
+      // A-249: clash and mihomo are one format under two names here
+      // (formatDisabledForHost), so a host switched off for Clash before the
+      // family was split by core stays off for its mihomo clients.
+      const filtered = framed.filter(
+        (e) => !formatDisabledForHost(e.disableForFormats, format),
       );
       // What THIS format carries, by FORMAT_DOORS: every builder below is
       // handed this list and no other, so the table the screens read and the
@@ -495,15 +692,25 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         lineShape === 'per-node'
           ? service.collapseToOneLinePerNode(result.endpoints)
           : result.endpoints;
-      const filteredPlain = endpointsForFormat(
-        'plain',
-        plainSource.filter((e) => !(e.disableForFormats ?? []).includes('plain')),
-      )
-        // A4: a balancer-cascade entry expands into one re-tagged URI per exit;
-        // other endpoints pass through. (This note used to claim the JSON array
-        // is not pingable in Happ. It is - checked in the field 2026-08-16 - and
-        // the claim had been steering design decisions.)
-        .flatMap((e) => service.expandEndpointUris(e));
+      // The share links of a links format: `plain` (base64) and `raw` (the
+      // same lines unwrapped, A-236), each gated and switched off per host by
+      // its own name.
+      const linksFor = (fmt: 'plain' | 'raw') =>
+        endpointsForFormat(
+          fmt,
+          plainSource.filter((e) => !formatDisabledForHost(e.disableForFormats, fmt)),
+        )
+          // A4: a balancer-cascade entry expands into one re-tagged URI per exit;
+          // other endpoints pass through. (This note used to claim the JSON array
+          // is not pingable in Happ. It is - checked in the field 2026-08-16 - and
+          // the claim had been steering design decisions.)
+          .flatMap((e) => {
+            const uris = service.expandEndpointUris(e);
+            // A-236 step 6: Happ reads the description in the link itself.
+            const d = happ ? e.serverDescription : undefined;
+            return d ? uris.map((u) => (u ? linkWithDescription(u, d) : u)) : uris;
+          });
+      const filteredPlain = linksFor('plain');
 
       // Slice S1: emit subscription-metadata HTTP headers every client
       // app reads to set its profile name, refresh interval, quota gauge,
@@ -515,8 +722,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // of the base64 `plain` dump. Uses the same generated data; emits no
       // config, just links + copy + per-format download buttons.
       if (wantsHtmlPage(query, (request.headers.accept ?? '').toString())) {
+        // The page is public whatever template the format has: no hidden host
+        // on it, even when a frame above asked for them (A-236 step 6).
+        const filtered = result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, format));
         const settings = await getSubscriptionSettings();
-        const subUrl = await subscriptionUrl(params.token);
+        // The narrowing travels in every link the page prints, so what a
+        // person copies, scans or adds is what this page lists.
+        const subUrl = withProtocols(await subscriptionUrl(params.token), onlyProtocols ?? []);
         const protocols = [...new Set(result.endpoints.map((e) => e.protocol))];
         // One QR pair per AmneziaWG node (deduped by node name). wg-quick / vpn://
         // are single-tunnel-per-key, so a user with several AWG servers gets each
@@ -528,10 +740,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           .filter((e) => e.protocol === 'amneziawg')
           .filter((e) => !awgSeen.has(e.nodeName) && !!awgSeen.add(e.nodeName))
           .map((e) => {
-            const conf = buildWgQuickConf(filtered, e.nodeName);
-            const vpn = buildAwgVpnLink(filtered, e.nodeName);
+            // By the endpoint's id, the key the per-node links carry (A-107).
+            const id = endpointId(e);
+            const conf = buildWgQuickConf(filtered, id);
+            const vpn = buildAwgVpnLink(filtered, id);
             return {
               nodeName: e.nodeName,
+              id,
               // The PAYLOADS, not pictures of them. The codes are drawn in the
               // browser now: three server-rendered SVGs cost about 49 KB gzip
               // on this page, the encoder costs 4.3 KB once, and the code on
@@ -586,14 +801,17 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         const ssSeen = new Set<string>();
         const outlineNodes = endpointsForFormat(
           'outline',
-          result.endpoints.filter((e) => !(e.disableForFormats ?? []).includes('outline')),
+          result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, 'outline')),
         )
           .filter((e) => !ssSeen.has(e.nodeName) && !!ssSeen.add(e.nodeName))
           .flatMap((e) => {
-            const key = outlineAccessKey(subUrl, e.nodeName);
+            const key = outlineAccessKey(subUrl, endpointId(e), e.nodeName);
             return key ? [{ nodeName: e.nodeName, key }] : [];
           });
-        return reply.type('text/html; charset=utf-8').send(
+        // The page's URL is the subscription: a link out of it must not carry
+        // it in Referer, on an install with no frontend nginx setting the
+        // header either (A-267, AUDT).
+        return reply.type('text/html; charset=utf-8').header('referrer-policy', 'no-referrer').send(
           buildSubscriptionPage({
             brandTitle: settings.profileTitle ?? settings.brandName ?? 'Iceslab',
             // Language priority: in-page ?lang selector (per visitor) > panel
@@ -607,6 +825,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             supportUrl: settings.supportUrl,
             user: result.json.user,
             protocols,
+            protocolSwitch: { available: availableProtocols, selected: onlyProtocols ?? [] },
             // A download row is offered exactly when its file would carry
             // something: the same gate and the same host switches the file
             // itself goes through.
@@ -614,7 +833,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               (f) =>
                 endpointsForFormat(
                   f,
-                  result.endpoints.filter((e) => !(e.disableForFormats ?? []).includes(f)),
+                  result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, f)),
                 ).length > 0,
             ),
             awgNodes,
@@ -631,7 +850,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // per-user override, then their per-squad override, then the panel-wide
       // setting. plain/json/wgconf carry no routing section, so we skip the
       // read there.
+      // A-229: the resolved preset, a built-in key or an own preset's rules.
+      // A built-in goes to the builders as its key; an own preset as its
+      // rules (`ownPresetRules`), over the proxy-all base for everything the
+      // key decides besides the rules (DNS).
+      let preset: ResolvedPreset = { kind: 'builtin', id: 'proxy-all' };
       let routingPreset: RoutingPresetId = 'proxy-all';
+      let ownPresetRules: DeviceRouteRule[] | undefined;
       let customRoutingRules: Record<string, unknown>[] | undefined;
       // R3 - operator-defined custom domain lists (direct/proxy/block), emitted
       // into xray + clash routing rules. Undefined = none = byte-identical.
@@ -642,17 +867,22 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       let tlsFragment = false;
       if (
         format === 'clash' ||
+        format === 'mihomo' ||
+        format === 'stash' ||
+        format === 'clash-legacy' ||
         format === 'singbox' ||
         format === 'xrayjson' ||
         format === 'xrayjson-array' ||
         format === 'xkeen'
       ) {
         const settings = await getSubscriptionSettings();
-        routingPreset =
-          query.routing ??
-          result.userRoutingPreset ??
-          result.squadRoutingPreset ??
-          settings.routingPreset;
+        preset =
+          (query.routing ? { kind: 'builtin', id: query.routing } : null) ??
+          result.userPreset ??
+          result.squadPreset ??
+          { kind: 'builtin', id: settings.routingPreset };
+        routingPreset = preset.kind === 'builtin' ? preset.id : 'proxy-all';
+        ownPresetRules = preset.kind === 'custom' ? preset.rules : undefined;
         // R3-b custom rules apply only to xray-routing formats (xray/xkeen).
         customRoutingRules = settings.customRoutingRules ?? undefined;
         // R3 custom domain lists apply to xray/xkeen + clash.
@@ -667,11 +897,86 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // link, and it must keep behaving exactly as it always has. `wgconf` and
       // `xkeen` set their own, better, filename further down and win by
       // writing the header after this.
+      // The one server a single-server file is for, by id or label (A-107),
+      // and the label it is saved under: an id in a file name reads as noise.
+      const singleServerProtocol = SINGLE_SERVER_FORMATS[format];
+      const singleServers = singleServerProtocol ? served.filter((e) => e.protocol === singleServerProtocol) : [];
+      const nodeLabel = query.node ? (pickServer(singleServers, query.node)?.nodeName ?? query.node) : undefined;
       if (query.dl === '1' && format !== 'plain') {
         reply.header(
           'Content-Disposition',
-          `attachment; filename="${downloadFilename(format, result.json.user.username, query.node)}"`,
+          `attachment; filename="${downloadFilename(format, result.json.user.username, nodeLabel)}"`,
         );
+      }
+
+      /**
+       * A narrowing that leaves this format nothing, said in words.
+       *
+       * Only under ?protocols=: without it every format keeps the contract it
+       * has (an empty wgconf body, an empty base64 list), because clients
+       * polling those addresses read them that way today. With it, the person
+       * asked for something specific, and an empty 200 would read as "the
+       * panel is broken" rather than "you have none of those".
+       */
+      if (onlyProtocols) {
+        const carriesNothing =
+          format === 'plain'
+            ? filteredPlain.every((u) => u.length === 0)
+            : format === 'raw'
+              ? linksFor('raw').every((u) => u.length === 0)
+            : format === 'wgconf'
+              ? buildWgQuickConf(served, query.node) === ''
+              : format === 'amneziavpn'
+                ? buildAwgVpnLink(served, query.node) === ''
+                : format === 'outline'
+                  ? buildOutlineJson(served, query.node) === ''
+                  : served.length === 0;
+        if (carriesNothing) {
+          // Not a file to save: the sentence is the answer.
+          reply.removeHeader('Content-Disposition');
+          const words = emptyNarrowingWords(format, onlyProtocols, availableProtocols);
+          if (COMMENTED_FORMATS.has(format)) {
+            return reply.type('text/plain; charset=utf-8').send(`# ${words}\n`);
+          }
+          return reply.code(404).send({
+            error: 'SUBSCRIPTION_PROTOCOL_EMPTY',
+            message: words,
+            protocols: onlyProtocols,
+            available: availableProtocols,
+          });
+        }
+      }
+
+      /**
+       * E54, stand 26.09: a single-server file asked for a server by a name
+       * this subscription does not have answered 200 with an empty body, the
+       * same as "no such protocol at all", so a mistyped `node=` read as an
+       * empty subscription. The name is the server's LABEL as the subscription
+       * prints it, flag included ("🇷🇺 awg-ru-01"), which is easy to get
+       * wrong by hand; the answer names the ones there are.
+       *
+       * Only with `node=`: without it these formats keep their contract (the
+       * first server, or an empty body when there is none).
+       * A-107: `node=` is the endpoint's id in the links the panel hands out;
+       * a label is still taken, and the refusal names the labels.
+       */
+      if (query.node && singleServerProtocol) {
+        const names = [...new Set(singleServers.map((e) => e.nodeName))];
+        if (!pickServer(singleServers, query.node)) {
+          reply.removeHeader('Content-Disposition');
+          // The server may exist and be one this format cannot read (an
+          // SS2022 cipher for Outline): that is a different sentence.
+          const exists = !!pickServer(filtered.filter((e) => e.protocol === singleServerProtocol), query.node);
+          const has = names.length > 0 ? `it has: ${names.map((n) => JSON.stringify(n)).join(', ')}` : 'it has none';
+          return reply.code(404).send({
+            error: 'SUBSCRIPTION_NODE_UNKNOWN',
+            message: exists
+              ? `the ${format} format cannot carry the server ${JSON.stringify(query.node)}; for this format ${has}`
+              : `this subscription has no ${singleServerProtocol} server named ${JSON.stringify(query.node)}; for the ${format} format ${has}`,
+            node: query.node,
+            nodes: names,
+          });
+        }
       }
 
       switch (format) {
@@ -679,10 +984,24 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           return reply
             .type('application/json')
             .send({ ...result.json, endpoints: served });
+        // A-236 step 4: three Clash-family answers by core. `clash` is the
+        // alias of mihomo for good (the address is in clients' configs), byte
+        // for byte what it always answered.
         case 'clash':
+        case 'mihomo':
+        case 'stash':
+        case 'clash-legacy':
           return reply
             .type('text/yaml; charset=utf-8')
-            .send(buildClashYaml(served, { routingPreset, customDomainLists }));
+            .send(
+              buildClashYaml(served, {
+                routingPreset,
+                ownPresetRules,
+                customDomainLists,
+                frame,
+                dialect: format === 'clash' ? 'mihomo' : format,
+              }),
+            );
         case 'singbox': {
           // TLS-fragment is intentionally NOT emitted for sing-box: the
           // upstream field is unstable across 1.12/1.14 (same rationale as the
@@ -696,7 +1015,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset }));
+            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame }));
         }
         case 'wgconf': {
           // Filename = `<username>-<node>.conf` so a user with several AWG
@@ -704,7 +1023,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // saves test.conf, test(1).conf, ...). The .conf suffix matters: the
           // AmneziaWG / wg-quick / Hiddify file-pickers filter by *.conf, so an
           // extensionless name fails the picker on Windows / macOS.
-          const nodePart = query.node ? `-${sanitizeFilename(query.node)}` : '';
+          const nodePart = nodeLabel ? `-${sanitizeFilename(nodeLabel)}` : '';
           const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}.conf`;
           return reply
             .type('text/plain; charset=utf-8')
@@ -728,7 +1047,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per
@@ -737,7 +1056,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // `bundle` (no balancer: the client picks a server, not an outbound).
           return reply
             .type('application/json')
-            .send(buildXrayJsonArray(served, { routingPreset, customRules: customRoutingRules, customDomainLists, tlsFragment }));
+            .send(buildXrayJsonArray(served, { routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame }));
         }
         case 'xkeen': {
           // XKeen (xray-core on Keenetic routers): outbounds + routing +
@@ -754,7 +1073,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               'Content-Disposition',
               `attachment; filename="${sanitizeFilename(result.json.user.username)}-xkeen.json"`,
             )
-            .send(buildXrayJson(served, { bundle: xkBundle, routingPreset, forRouter: true, customRules: customRoutingRules, customDomainLists }));
+            .send(buildXrayJson(served, { bundle: xkBundle, routingPreset, ownPresetRules, forRouter: true, customRules: customRoutingRules, customDomainLists }));
         }
         case 'outline':
           // Outline dynamic key: one Shadowsocks server, `?node=` picks which,
@@ -773,6 +1092,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // Loon proxy lines (best-effort; verify import in-app). ss/vmess/vless/
           // trojan/hy2 incl REALITY.
           return reply.type('text/plain; charset=utf-8').send(buildLoonConf(served));
+        case 'raw':
+          // A-236: the plain list without the base64, one link per line, for
+          // clients and scripts that take links as text.
+          return reply
+            .type('text/plain; charset=utf-8')
+            .send(linksFor('raw').filter((u) => u.length > 0).join('\n'));
         case 'plain':
         default:
           return reply
@@ -795,7 +1120,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // any difference.
         if (wantsHtmlPage(query, (request.headers.accept ?? '').toString())) {
           const page = await refusalPage(params.token, err.reason, query, request);
-          if (page) return reply.code(403).type('text/html; charset=utf-8').send(page);
+          if (page) return reply.code(403).type('text/html; charset=utf-8').header('referrer-policy', 'no-referrer').send(page);
         }
         return reply.code(403).send({
           error: 'FORBIDDEN',
@@ -805,5 +1130,24 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
-  });
+  };
+
+  app.get(`${config.SUBSCRIPTION_PATH_PREFIX}/:token`, subOptions, serve);
+  app.get(`${config.SUBSCRIPTION_PATH_PREFIX}/:token/:client`, subOptions, serve);
 }
+
+/**
+ * The client segment of /sub/<token>/<client> (A-236 step 5,
+ * docs/plan/subscription-templates.md 4.4) and the format it is. `base64` is
+ * the plain list (the `plain` format), named as clients know it; `raw` the
+ * same unwrapped; the rest are the format names.
+ */
+export const CLIENT_SLUGS: Record<string, Format> = {
+  mihomo: 'mihomo',
+  stash: 'stash',
+  clash: 'clash',
+  singbox: 'singbox',
+  json: 'json',
+  base64: 'plain',
+  raw: 'raw',
+};

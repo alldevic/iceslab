@@ -15,6 +15,8 @@ export const login = {
     topbarStatusNormal: 'Backend доступен',
     topbarStatusDegraded: 'Backend деградирует',
     topbarStatusDown: 'Backend недоступен',
+    // A-240: до первого ответа /health.
+    topbarStatusChecking: 'Проверяю backend',
     signInBadge: 'Вход',
     heroLine1: 'Консоль',
     heroLine2: 'оператора.',
@@ -30,6 +32,7 @@ export const login = {
     // Стрелку рисует сама кнопка, в тексте её быть не должно.
     continueAction: 'Продолжить',
     createAdminAction: 'Создать админа',
+    lockedFor: 'Вход закрыт, ещё {{seconds}} с',
     bootstrapHint: 'У первого админа полный доступ к панели. Выбери надёжный пароль, bootstrap запускается один раз.',
     signInFailed: 'Не удалось войти',
     unknownError: 'Неизвестная ошибка',

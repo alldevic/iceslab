@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   LINK_CELLS,
   LINK_CELL_ENGINES,
-  LINK_CELL_TRANSPORT,
+  LINK_CELL_TRANSPORTS,
   LINK_CONGESTIONS,
   DEFAULT_LINK_CONGESTION,
   PROTOCOL_NAMES,
@@ -33,7 +33,7 @@ describe('the link cells', () => {
     // the engines table would refuse it as unknown while the transport table
     // said it was TCP, or the other way round.
     expect(Object.keys(LINK_CELL_ENGINES).sort()).toEqual([...LINK_CELLS].sort());
-    expect(Object.keys(LINK_CELL_TRANSPORT).sort()).toEqual([...LINK_CELLS].sort());
+    expect(Object.keys(LINK_CELL_TRANSPORTS).sort()).toEqual([...LINK_CELLS].sort());
   });
 
   it('names engines that exist and transports that exist', () => {
@@ -42,7 +42,8 @@ describe('the link cells', () => {
       for (const engine of LINK_CELL_ENGINES[cell]) {
         expect(ENGINE_NAMES as readonly string[], `${cell} names a non-engine`).toContain(engine);
       }
-      expect(TRANSPORTS as readonly string[]).toContain(LINK_CELL_TRANSPORT[cell]);
+      expect(LINK_CELL_TRANSPORTS[cell].length, `${cell} holds no socket`).toBeGreaterThan(0);
+      for (const t of LINK_CELL_TRANSPORTS[cell]) expect(TRANSPORTS as readonly string[]).toContain(t);
     }
   });
 
@@ -209,9 +210,10 @@ describe('the link cells', () => {
     // Not a restatement of the table: it is what the port check will compare
     // against a binding, and getting it backwards means a leg and a user
     // inbound share a port number and one of them fails to bind on the node.
-    expect(LINK_CELL_TRANSPORT.hy2).toBe('udp');
-    expect(LINK_CELL_TRANSPORT.tuic).toBe('udp');
-    expect(LINK_CELL_TRANSPORT.vless).toBe('tcp');
-    expect(LINK_CELL_TRANSPORT.shadowsocks).toBe('tcp');
+    expect(LINK_CELL_TRANSPORTS.hy2).toEqual(['udp']);
+    expect(LINK_CELL_TRANSPORTS.tuic).toEqual(['udp']);
+    expect(LINK_CELL_TRANSPORTS.vless).toEqual(['tcp']);
+    // A-117: the SS2022 listener has no `network`, sing-box takes both.
+    expect(LINK_CELL_TRANSPORTS.shadowsocks).toEqual(['tcp', 'udp']);
   });
 });

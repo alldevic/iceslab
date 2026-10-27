@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EngineName } from '@iceslab/shared';
-import { appendHardeningFlags, buildInstallCommand, enginesFlag } from './nodes.service.js';
+import { appendHardeningFlags, buildInstallCommand, enginesFlag, installRefOf, panelInstallCommand } from './nodes.service.js';
+import { readCurrentVersion } from '../system/system.service.js';
 import { HardeningSchema } from './nodes.schemas.js';
 
 // The render functions build the install command as an array of lines and join
@@ -174,7 +175,7 @@ describe('buildInstallCommand: no # inside the command, whatever the placeholder
       expect(cmd).toContain('--ssh-allowlist 203.0.113.4');
     }
     if (!c.panelIp) expect(cmd).toMatch(/^# panel IP auto-detect failed/m);
-    if (c.engines.includes('hysteria') && !c.acmeEmail) expect(cmd).toMatch(/^# set ACME_DEFAULT_EMAIL/m);
+    if (c.engines.includes('hysteria') && !c.acmeEmail) expect(cmd).toMatch(/^# optional: --hysteria-email/m);
   });
 
   it('names the cores right after the token, and no --protocol', () => {
@@ -228,7 +229,65 @@ describe('buildInstallCommand: no # inside the command, whatever the placeholder
       '  --hysteria-email ops@example.com',
     ]);
   });
+
+  // A-276: Let's Encrypt refuses a contact at example.com (boulder
+  // forbiddenMailDomains), so the placeholder never got a certificate. With no
+  // ACME_DEFAULT_EMAIL the flag is left out and the command says it is optional.
+  it('with no ACME email writes no placeholder, only that the email is optional', () => {
+    const cmd = buildInstallCommand({
+      panelUrl: 'https://p',
+      token: 't',
+      nodeAddress: 'hy.example.com:1337',
+      engines: ['hysteria'],
+      panelIp: '198.51.100.7',
+      acmeEmail: '',
+    });
+    expect(cmd).toContain('--hysteria-domain hy.example.com');
+    expect(cmd.split('\n').filter((l) => l.trimStart().startsWith('--hysteria-email'))).toEqual([]);
+    expect(cmd).not.toContain('admin@example.com');
+    expect(cmd).toContain("# optional: --hysteria-email you@domain, the ACME account's contact");
+  });
 });
+
+/**
+ * A-270: a node created on a panel gets the agent of that panel's release. The
+ * command takes the installer from the tag v<version> and passes
+ * ICESLAB_NODE_REF=v<version>, which the installer clones. A version that names
+ * no tag keeps the old command.
+ */
+describe('buildInstallCommand: the release a node is installed from', () => {
+  const first = (panelVersion?: string) =>
+    buildInstallCommand({ panelUrl: 'https://p', token: 't', engines: [], panelIp: '198.51.100.7', acmeEmail: '', panelVersion })
+      .split('\n')[0];
+
+  it('a candidate and a final pin the installer and the agent to their own tag', () => {
+    expect(first('0.3.0-rc.1')).toBe(
+      'ICESLAB_NODE_REF=v0.3.0-rc.1 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0-rc.1/scripts/install-iceslab-node.sh) \\',
+    );
+    expect(first('0.3.0')).toBe(
+      'ICESLAB_NODE_REF=v0.3.0 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0/scripts/install-iceslab-node.sh) \\',
+    );
+    expect(first('v0.3.0')).toContain('ICESLAB_NODE_REF=v0.3.0 ');
+  });
+
+  it('a version that names no tag keeps main and no ref', () => {
+    const main = 'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\';
+    // 0.3.0-rc.1+dev: develop after the tag (RELEASING 4b) builds from main.
+    for (const v of [undefined, '', 'unknown', 'dev', '0.3.0+build.7', '0.3.0-rc.1+dev', '0.3', 'main']) {
+      expect(first(v), String(v)).toBe(main);
+    }
+  });
+
+  // Whatever the panel's version is today, release or not: the command the
+  // panel shows is built from readCurrentVersion, the update check's reader.
+  it('the panel builds its command from the version the update check reads', () => {
+    const input = { panelUrl: 'https://p', token: 't', engines: [] as EngineName[], panelIp: '198.51.100.7', acmeEmail: '' };
+    expect(panelInstallCommand(input)).toBe(buildInstallCommand({ ...input, panelVersion: readCurrentVersion() }));
+    const ref = installRefOf(readCurrentVersion());
+    expect(panelInstallCommand(input).split('\n')[0]!.startsWith(ref ? `ICESLAB_NODE_REF=${ref} ` : 'bash <(')).toBe(true);
+  });
+});
+
 describe('HardeningSchema (validation contract)', () => {
   it('accepts a valid blob', () => {
     const parsed = HardeningSchema.parse({

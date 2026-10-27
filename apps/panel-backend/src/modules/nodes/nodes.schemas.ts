@@ -139,6 +139,18 @@ const IntendedEnginesSchema = z
   .max(ENGINE_NAMES.length)
   .refine((a) => new Set(a).size === a.length, 'an engine is listed twice');
 
+/**
+ * A-143 (decisions.md 2026-10-22): how much of a user's traffic on this node
+ * counts against their quota, 0 to 100 in steps of 0.1; 0 is a free node. A
+ * value off the step is refused (1.25 is a 400, not a rounding), the node
+ * stores whole tenths (consumptionMultiplierTenths).
+ */
+export const ConsumptionMultiplierSchema = z
+  .number()
+  .min(0)
+  .max(100)
+  .refine((v) => Math.abs(v * 10 - Math.round(v * 10)) < 1e-9, 'the multiplier goes in steps of 0.1');
+
 export const CreateNodeSchema = z.object({
   name: NameSchema,
   address: AddressSchema,
@@ -147,7 +159,7 @@ export const CreateNodeSchema = z.object({
   protocol: ProtocolSchema.optional(),
   intendedEngines: IntendedEnginesSchema.optional(),
   countryCode: CountryCodeSchema.nullish(),
-  consumptionMultiplier: z.number().int().positive().default(1),
+  consumptionMultiplier: ConsumptionMultiplierSchema.default(1),
   // Slice 27.5
   regionId: z.uuid().nullable().optional(),
   maxUsers: z.number().int().positive().max(100000).nullable().optional(),
@@ -180,7 +192,7 @@ export const UpdateNodeSchema = z.object({
   // No `awgProtocol` either (t07-1): the node's AmneziaWG generation is its
   // module's, reported by the agent; a screen that sends one is stripped too.
   countryCode: CountryCodeSchema.nullish(),
-  consumptionMultiplier: z.number().int().positive().optional(),
+  consumptionMultiplier: ConsumptionMultiplierSchema.optional(),
   regionId: z.uuid().nullable().optional(),
   maxUsers: z.number().int().positive().max(100000).nullable().optional(),
   domain: DomainSchema,

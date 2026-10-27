@@ -5,23 +5,38 @@ import { ExposureNote } from '@/contours/nodes/components/NodeEdit/ExposureNote'
 import { FactRow } from '@/contours/nodes/components/NodeEdit/FactRow';
 import { Meter } from '@/contours/nodes/components/NodeEdit/Meter';
 import { PlainButton } from '@/contours/nodes/components/NodeEdit/PlainButton';
-import { formatBytes, uptime } from '@/contours/nodes/lib/nodeFormat';
+import { bytesOrDash, countOrDash, formatBytes, uptime } from '@/contours/nodes/lib/nodeFormat';
 import { Box, Stack, Text } from '@mantine/core';
 import { CARD, CYAN, DISPLAY, HAIRLINE, MIST, MONO, MOSS, WELL } from '@/contours/nodes/lib/colors';
 import { useTranslation } from 'react-i18next';
 import type { NodeEditor } from '@/contours/nodes/components/NodeEdit/useNodeEditForm';
+import type { Node } from '@/lib/domain/nodes';
+import { CertRow } from '@/contours/nodes/components/NodeEdit/CertRow';
+import { ConnLogBlock } from '@/contours/nodes/components/NodeEdit/ConnLogBlock';
+import { confirmCertRotate } from '@/contours/nodes/components/nodeConfirm';
+import { certTerm } from '@/contours/nodes/lib/nodeCert';
+import { useNow } from '@/lib/ui/useNow';
 
 /**
  * What the box reports about itself: uptime, load, disk, core versions.
  * Read-only.
  */
 export function SystemPanel({
+  node,
   hostsQuery,
   dashNode,
   metrics,
   exposureMutation,
-}: Pick<NodeEditor, 'hostsQuery' | 'dashNode' | 'metrics' | 'exposureMutation'>) {
+  certMutation,
+}: Pick<NodeEditor, 'hostsQuery' | 'dashNode' | 'metrics' | 'exposureMutation' | 'certMutation'> & {
+  node: Pick<Node, 'id' | 'name' | 'certNotAfter' | 'agentCanRotate'>;
+}) {
   const { t } = useTranslation();
+  // After a renewal the page shows the end the server just gave, until the
+  // node query brings the same back.
+  const now = useNow(60_000);
+  const certNotAfter = certMutation.data?.notAfter ?? node.certNotAfter;
+  const cert = certTerm(certNotAfter, now);
 
   return (
     <>
@@ -91,12 +106,14 @@ export function SystemPanel({
                 </Stack>
 
                 <Divider />
-                <FactRow label={t('nodeEdit.today')} value={formatBytes(dashNode?.todayBytes ?? 0)} />
-                <FactRow label={t('nodeEdit.hosts')} value={String(hostsQuery.data?.hosts.length ?? 0)} />
-                <FactRow
-                  label={t('nodeEdit.userReach')}
-                  value={dashNode ? `~${dashNode.inboundCount}` : '-'}
-                />
+                {/* No overview: «-», not «0 B» (bytesOrDash). */}
+                <FactRow label={t('nodeEdit.today')} value={bytesOrDash(dashNode?.todayBytes)} />
+                {/* «-» without the list: «0 hosts» over a failed request is a claim (A-141). */}
+                <FactRow label={t('nodeEdit.hosts')} value={hostsQuery.data ? String(hostsQuery.data.hosts.length) : '-'} />
+                {/* A-261: the overview's inboundCount is the node's bindings
+                    (dashboard.service `_count.profileBindings`), said as such; it
+                    was labelled «user reach», which the answer does not carry. */}
+                <FactRow label={t('nodeEdit.bindings')} value={countOrDash(dashNode?.inboundCount)} />
                 <Divider />
 
                 <Box style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
@@ -114,6 +131,23 @@ export function SystemPanel({
                   </PlainButton>
                 </Box>
                 {exposureMutation.data && <ExposureNote result={exposureMutation.data} />}
+                {cert && (
+                  <>
+                    <Divider />
+                    <CertRow
+                      term={cert}
+                      // A renewal that went through proves the agent can.
+                      agentCanRotate={certMutation.data ? true : node.agentCanRotate}
+                      onRotate={() => confirmCertRotate(node, t, () => certMutation.mutate())}
+                      rotating={certMutation.isPending}
+                      rotated={certMutation.data?.notAfter ?? null}
+                      error={certMutation.error}
+                    />
+                  </>
+                )}
+                {/* Clients' addresses in the machine's logs, checked on request. */}
+                <Divider />
+                <ConnLogBlock node={node} />
               </Stack>
             </Box>
     </>

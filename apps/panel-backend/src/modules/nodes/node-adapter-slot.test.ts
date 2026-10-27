@@ -1,0 +1,263 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { buildApp } from '../../app.js';
+import { prisma } from '../../prisma.js';
+import { closeRedis } from '../../lib/infra/redis.js';
+import { cleanDatabase } from '../../../tests/helpers/db.js';
+import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { observedCores } from './nodes.cron.js';
+
+/**
+ * A-055: a node does not get a second inbound on an adapter that holds one.
+ * The agent would silently replace the first with it, and the operator would
+ * see two hosts while the node serves one. Asked on both ways a binding is
+ * born: the bindings route and creating a host.
+ */
+let app: FastifyInstance;
+let token: string;
+let seq = 0;
+
+beforeEach(async () => {
+  app = await buildApp();
+  await cleanDatabase();
+  token = await registerAndLogin(app);
+  seq = 0;
+});
+
+afterEach(async () => {
+  await app.close();
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+  await closeRedis();
+});
+
+const auth = () => ({ authorization: `Bearer ${token}` });
+
+const SS = { method: '2022-blake3-aes-256-gcm' };
+
+const VLESS = {
+  security: 'reality',
+  realityDest: 'www.microsoft.com:443',
+  realityServerNames: ['www.microsoft.com'],
+  realityPrivateKey: 'k'.repeat(43),
+  realityPublicKey: 'p'.repeat(43),
+  realityShortIds: ['0123abcd'],
+  network: 'raw',
+};
+
+async function post(url: string, payload: unknown) {
+  const res = await app.inject({ method: 'POST', url, headers: auth(), payload });
+  return { status: res.statusCode, body: JSON.parse(res.body) };
+}
+
+async function node(): Promise<string> {
+  seq += 1;
+  const r = await post('/api/nodes', { name: `slot-${seq}`, address: `slot-${seq}.test`, protocol: 'xray' });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  return r.body.id as string;
+}
+
+async function profile(protocol: string, config: unknown, extra: Record<string, unknown> = {}): Promise<string> {
+  seq += 1;
+  const r = await post('/api/profiles', { name: `slot-p-${seq}`, protocol, config, ...extra });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  return r.body.id as string;
+}
+
+const awg = (subnet: string) => ({
+  serverPrivateKey: 'a'.repeat(44),
+  serverPublicKey: 'b'.repeat(44),
+  subnet,
+  obfuscation: {},
+});
+
+/**
+ * A-259: one profile may sit on a node on several ports, a binding each. The
+ * slot is then counted by BINDING: the profile's own first binding holds the
+ * one slot of a single-inbound adapter like anyone else's would.
+ */
+describe('one profile on several ports of a node', () => {
+  it('a second native shadowsocks of the same profile is refused', async () => {
+    const n = await node();
+    const p = await profile('shadowsocks', SS);
+    expect((await post('/api/bindings', { profileId: p, nodeId: n, port: 8388 })).status).toBe(201);
+    const second = await post('/api/bindings', { profileId: p, nodeId: n, port: 8389 });
+    expect(second.status).toBe(409);
+    expect(second.body).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'shadowsocks' });
+  });
+
+  it('a second AmneziaWG 1.x of the same profile is refused (one subnet, one address per user)', async () => {
+    const n = await node();
+    const p = await profile('amneziawg', awg('10.66.66.0/24'));
+    expect((await post('/api/bindings', { profileId: p, nodeId: n, port: 51820 })).status).toBe(201);
+    const second = await post('/api/bindings', { profileId: p, nodeId: n, port: 51821 });
+    expect(second.status).toBe(409);
+    expect(second.body).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'amneziawg', engine: 'AmneziaWG 1.x' });
+  });
+
+  it('a second xray of the same profile on another port is its own binding', async () => {
+    const n = await node();
+    const p = await profile('xray', VLESS);
+    const a = await post('/api/bindings', { profileId: p, nodeId: n, port: 443 });
+    const b = await post('/api/bindings', { profileId: p, nodeId: n, port: 2048 });
+    expect(a.status).toBe(201);
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
+    expect(b.body.id).not.toBe(a.body.id);
+    expect(await prisma.profileNodeBinding.count({ where: { profileId: p, nodeId: n } })).toBe(2);
+    // The socket is still one per node: the same port again is refused.
+    expect((await post('/api/bindings', { profileId: p, nodeId: n, port: 443 })).status).toBe(409);
+  });
+
+  it('an engine switch that puts two bindings of one profile in one single slot is refused (A-194)', async () => {
+    const n = await node();
+    const p = await profile('shadowsocks', SS, { engine: 'singbox' });
+    expect((await post('/api/bindings', { profileId: p, nodeId: n, port: 8388 })).status).toBe(201);
+    expect((await post('/api/bindings', { profileId: p, nodeId: n, port: 8389 })).status).toBe(201);
+    const res = await app.inject({ method: 'PUT', url: `/api/profiles/${p}`, headers: auth(), payload: { engine: null } });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body).error).toBe('ADAPTER_SLOT_TAKEN');
+  });
+
+  it('hysteria on sing-box on two ports cannot go native, and stays on sing-box', async () => {
+    const n = await node();
+    const p = await profile('hysteria', {}, { engine: 'singbox' });
+    const a = await post('/api/bindings', { profileId: p, nodeId: n, port: 8443 });
+    const b = await post('/api/bindings', { profileId: p, nodeId: n, port: 9443 });
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
+    const res = await app.inject({ method: 'PUT', url: `/api/profiles/${p}`, headers: auth(), payload: { engine: null } });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'hysteria' });
+    expect((await prisma.profile.findUniqueOrThrow({ where: { id: p } })).engine).toBe('singbox');
+  });
+});
+
+describe('one inbound per adapter where the agent holds one', () => {
+  it('a second native shadowsocks is refused, by host route and bindings route alike', async () => {
+    const n = await node();
+    const a = await profile('shadowsocks', SS);
+    const b = await profile('shadowsocks', SS);
+    const c = await profile('shadowsocks', SS);
+    expect((await post('/api/hosts', { profileId: a, nodeId: n, port: 443, remark: 'First' })).status).toBe(201);
+
+    const viaHost = await post('/api/hosts', { profileId: b, nodeId: n, port: 8443, remark: 'Second' });
+    expect(viaHost.status).toBe(409);
+    expect(viaHost.body).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'shadowsocks', engine: 'xray', heldBy: 'First' });
+
+    const viaBinding = await post('/api/bindings', { profileId: c, nodeId: n, port: 9443 });
+    expect(viaBinding.status).toBe(409);
+    expect(viaBinding.body.error).toBe('ADAPTER_SLOT_TAKEN');
+    // One body on every route, so the screen parses it once.
+    const nodeName = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).name;
+    expect(viaHost.body.nodeName).toBe(nodeName);
+    expect(viaBinding.body.nodeName).toBe(nodeName);
+  });
+
+  it('vless on sing-box takes several too since the agent serves them (22.10)', async () => {
+    const n = await node();
+    const a = await profile('xray', VLESS, { engine: 'singbox' });
+    const b = await profile('xray', VLESS, { engine: 'singbox' });
+    expect((await post('/api/hosts', { profileId: a, nodeId: n, port: 443 })).status).toBe(201);
+    expect((await post('/api/hosts', { profileId: b, nodeId: n, port: 8443 })).status).toBe(201);
+  });
+
+  it('vless on native xray takes as many as the operator wants', async () => {
+    const n = await node();
+    const a = await profile('xray', VLESS);
+    const b = await profile('xray', VLESS);
+    expect((await post('/api/hosts', { profileId: a, nodeId: n, port: 443 })).status).toBe(201);
+    expect((await post('/api/hosts', { profileId: b, nodeId: n, port: 8443 })).status).toBe(201);
+  });
+
+  it('AmneziaWG 1.x and 3.1 sit side by side; a second 1.x is refused', async () => {
+    const n = await node();
+    await prisma.node.update({
+      where: { id: n },
+      data: {
+        cores: observedCores(
+          [{ name: 'amneziawg', engine: 'amneziawg', running: true, installed: true, awgProtocol: 3, awgGenerations: [1, 3] }],
+          new Date().toISOString(),
+        ) as unknown as object,
+      },
+    });
+    const one = await profile('amneziawg', awg('10.66.66.0/24'));
+    const three = await profile('amneziawg', awg('10.67.67.0/24'), { awgProtocol: 3 });
+    const another = await profile('amneziawg', awg('10.68.68.0/24'));
+    expect((await post('/api/bindings', { profileId: one, nodeId: n, port: 51820 })).status).toBe(201);
+    const r3 = await post('/api/bindings', { profileId: three, nodeId: n, port: 51830 });
+    expect(r3.status, JSON.stringify(r3.body)).toBe(201);
+    const r1 = await post('/api/bindings', { profileId: another, nodeId: n, port: 51840 });
+    expect(r1.status).toBe(409);
+    expect(r1.body).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', protocol: 'amneziawg', engine: 'AmneziaWG 1.x' });
+  });
+
+  it('a bound profile moved onto a taken adapter (engine switch) is refused, naming the node', async () => {
+    const n = await node();
+    // shadowsocks: native holds one, sing-box several. Moving the sing-box one
+    // onto the native core where that one is taken is the refusal.
+    const native = await profile('shadowsocks', SS);
+    const onSb = await profile('shadowsocks', SS, { engine: 'singbox' });
+    expect((await post('/api/hosts', { profileId: native, nodeId: n, port: 443, remark: 'SB' })).status).toBe(201);
+    expect((await post('/api/hosts', { profileId: onSb, nodeId: n, port: 8443, remark: 'XR' })).status).toBe(201);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${onSb}`,
+      headers: auth(),
+      payload: { engine: null },
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    const nodeName = (await prisma.node.findUniqueOrThrow({ where: { id: n } })).name;
+    expect(JSON.parse(res.body)).toMatchObject({ error: 'ADAPTER_SLOT_TAKEN', nodeName, heldBy: 'SB' });
+    expect((await prisma.profile.findUniqueOrThrow({ where: { id: onSb } })).engine).toBe('singbox');
+  });
+
+  it('mieru takes several inbounds (agent f8bac16), all on one MTU', async () => {
+    const n = await node();
+    const a = await profile('mieru', { mtu: 1400 });
+    const b = await profile('mieru', {});
+    const c = await profile('mieru', { mtu: 1280 });
+    expect((await post('/api/bindings', { profileId: a, nodeId: n, port: 2012 })).status).toBe(201);
+    // No MTU given is the default, 1400: the same.
+    expect((await post('/api/hosts', { profileId: b, nodeId: n, port: 2013 })).status).toBe(201);
+    const other = await post('/api/bindings', { profileId: c, nodeId: n, port: 2014 });
+    expect(other.status).toBe(409);
+    expect(other.body).toMatchObject({ error: 'MIERU_MTU_MISMATCH', mtu: 1400, wanted: 1280 });
+  });
+
+  it('an MTU edit of a bound mieru profile beside another is refused too', async () => {
+    const n = await node();
+    const a = await profile('mieru', { mtu: 1400 });
+    const b = await profile('mieru', { mtu: 1400 });
+    expect((await post('/api/bindings', { profileId: a, nodeId: n, port: 2012 })).status).toBe(201);
+    expect((await post('/api/bindings', { profileId: b, nodeId: n, port: 2013 })).status).toBe(201);
+    const res = await app.inject({ method: 'PUT', url: `/api/profiles/${b}`, headers: auth(), payload: { config: { mtu: 1280 } } });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body).error).toBe('MIERU_MTU_MISMATCH');
+  });
+
+  it('an MTU set through a binding override beside another mieru is refused (A-199)', async () => {
+    const n = await node();
+    const a = await profile('mieru', { mtu: 1400 });
+    const b = await profile('mieru', { mtu: 1400 });
+    expect((await post('/api/bindings', { profileId: a, nodeId: n, port: 2012 })).status).toBe(201);
+    const second = await post('/api/bindings', { profileId: b, nodeId: n, port: 2013 });
+    expect(second.status).toBe(201);
+    const put = (overrides: unknown) =>
+      app.inject({ method: 'PUT', url: `/api/bindings/${second.body.id}`, headers: auth(), payload: { overrides } });
+    const refused = await put({ mtu: 1280 });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: 'MIERU_MTU_MISMATCH', mtu: 1400, wanted: 1280 });
+    expect((await put({ mtu: 1400 })).statusCode).toBe(200);
+  });
+
+  it('a second hysteria on its native core is refused', async () => {
+    const n = await node();
+    const a = await profile('hysteria', {});
+    const b = await profile('hysteria', {});
+    expect((await post('/api/bindings', { profileId: a, nodeId: n, port: 443 })).status).toBe(201);
+    expect((await post('/api/bindings', { profileId: b, nodeId: n, port: 8443 })).body.error).toBe('ADAPTER_SLOT_TAKEN');
+  });
+});

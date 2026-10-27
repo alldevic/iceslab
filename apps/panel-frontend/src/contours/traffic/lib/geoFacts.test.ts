@@ -41,7 +41,9 @@ function set(p: Partial<GeoSet> = {}): GeoSet {
 describe('geoScreenFacts', () => {
   it('404 или ответа нет: заглушка, а не «пусто»', () => {
     expect(geoScreenFacts({ notImplemented: true }).state).toBe('unavailable');
-    expect(geoScreenFacts({}).state).toBe('unavailable');
+    expect(geoScreenFacts({}).state).toBe('loading');
+    // A-141: упавший запрос это ошибка, а не «скоро».
+    expect(geoScreenFacts({ failed: true }).state).toBe('failed');
     expect(geoScreenFacts({ sets: [] }).state).toBe('empty');
   });
 
@@ -110,8 +112,14 @@ describe('geoAttention: строка над списком', () => {
     expect(geoAttention([set({ name: 'a', status: 'broken' }), set({ name: 'b' })], 2)).toEqual({
       broken: ['a'],
       nodesBehind: 2,
+      nodesFailed: false,
     });
     expect(geoAttention([set()], 0)).toBeNull();
+  });
+
+  it('A-252: список нод не пришёл, это сказано, а не «никто не отстаёт»; в пути тишина', () => {
+    expect(geoAttention([set()], 'failed')).toEqual({ broken: [], nodesBehind: 0, nodesFailed: true });
+    expect(geoAttention([set()], 'loading')).toBeNull();
   });
 });
 

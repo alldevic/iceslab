@@ -6,6 +6,7 @@ import type { SubscriptionEndpoint } from '../subscription.formats.js';
 // as a literal is what these assertions used to do, and it is exactly how a tag
 // silently became a display string.
 import { endpointTag } from '../endpoint-identity.js';
+import { expandCascadeEntry } from '../cascade-entries.js';
 
 const xrayEp: SubscriptionEndpoint = {
   protocol: 'xray',
@@ -649,15 +650,18 @@ describe('buildXrayJsonArray A4 profile expansion', () => {
       { label: 'nl-exit', tag: 2 },
     ],
   };
+  // A-262: the routes are expanded once before any format (generateSubscription);
+  // handed in as there, through the one rule.
+  const expandedArray = (eps: SubscriptionEndpoint[]) => buildXrayJsonArray(eps.flatMap(expandCascadeEntry));
 
   it('expands one entry endpoint into one config per profile, labelled by profile', () => {
-    const arr = parseArray(buildXrayJsonArray([entryEp]));
+    const arr = parseArray(expandedArray([entryEp]));
     expect(arr).toHaveLength(2);
     expect(arr.map((c) => c.remarks)).toEqual(['de-exit', 'nl-exit']);
   });
 
   it('encodes the profile tag into UUID bytes 7-8 so the node vlessRoute rule pins it', () => {
-    const arr = parseArray(buildXrayJsonArray([entryEp]));
+    const arr = parseArray(expandedArray([entryEp]));
     const uuidOf = (c) =>
       c.outbounds.find((o) => o.protocol === 'vless').settings.vnext[0].users[0].id;
     expect(uuidOf(arr[0])).toBe('11111111-2222-0001-4444-555555555555');
@@ -667,7 +671,7 @@ describe('buildXrayJsonArray A4 profile expansion', () => {
   it('ad-split profile: a policy-band tag (257) encodes as bytes 0101', () => {
     // routeTag(1, 0) = 1*256 + 0 + 1 = 257 = 0x0101. The "CH В· Р‘РµР· СЂРµРєР»Р°РјС‹" profile.
     const arr = parse(
-      buildXrayJsonArray([{ ...entryEp, cascadeExits: [{ label: 'de-exit В· Р‘РµР· СЂРµРєР»Р°РјС‹', tag: 257 }] }]),
+      expandedArray([{ ...entryEp, cascadeExits: [{ label: 'de-exit В· Р‘РµР· СЂРµРєР»Р°РјС‹', tag: 257 }] }]),
     );
     expect(arr).toHaveLength(1);
     expect(arr[0].remarks).toBe('de-exit В· Р‘РµР· СЂРµРєР»Р°РјС‹');
@@ -676,7 +680,7 @@ describe('buildXrayJsonArray A4 profile expansion', () => {
   });
 
   it('all profile configs still dial the same entry host', () => {
-    const arr = parseArray(buildXrayJsonArray([entryEp]));
+    const arr = parseArray(expandedArray([entryEp]));
     const hostOf = (c) =>
       c.outbounds.find((o) => o.protocol === 'vless').settings.vnext[0].address;
     expect(hostOf(arr[0])).toBe('n1.example.com');
@@ -691,13 +695,13 @@ describe('buildXrayJsonArray A4 profile expansion', () => {
     // still decorated them would double the suffix.
     for (const hostRemark of ['Default', 'test 2']) {
       expect(
-        parseArray(buildXrayJsonArray([{ ...entryEp, hostRemark }])).map((c) => c.remarks),
+        parseArray(expandedArray([{ ...entryEp, hostRemark }])).map((c) => c.remarks),
       ).toEqual(['de-exit', 'nl-exit']);
     }
   });
 
   it('an xray endpoint with no profiles stays a single unmodified config', () => {
-    const arr = parseArray(buildXrayJsonArray([xrayEp]));
+    const arr = parseArray(expandedArray([xrayEp]));
     expect(arr).toHaveLength(1);
     expect(arr[0].remarks).toBe('eu-1');
     const uuid = arr[0].outbounds.find((o) => o.protocol === 'vless').settings.vnext[0]
@@ -706,7 +710,7 @@ describe('buildXrayJsonArray A4 profile expansion', () => {
   });
 
   it('an empty exit list falls back to a single config', () => {
-    const arr = parseArray(buildXrayJsonArray([{ ...xrayEp, cascadeExits: [] }]));
+    const arr = parseArray(expandedArray([{ ...xrayEp, cascadeExits: [] }]));
     expect(arr).toHaveLength(1);
     expect(arr[0].remarks).toBe('eu-1');
   });

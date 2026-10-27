@@ -56,12 +56,16 @@ export const subscription = {
     pathPrefix: 'Path prefix · read only',
     pathPrefixWhy:
       'Set in the environment: the route is registered with this prefix at boot, and the panel cannot change it.',
+    activeCountUnknown:
+      'The server did not say how many live subscriptions point at this address. Every link on the old host will lose its connection.',
+    previewNoUrl: 'The server gave no preview link.',
     activeCountWarn:
       'subscriptions in force were issued on this address. Changing the domain does not rewrite their links: they keep going to the old host for as long as it points at the panel.',
 
     probe: 'Check',
     probing: 'Checking',
-    probeOk: 'The address answers the panel',
+    probeOk: 'The subscription route answers at this address',
+    probeNotRoute: 'The address answers, but not the subscription route: clients will not get configs',
     probeBad: 'The address could not be reached',
     probeFailed: 'The check did not run',
     probeCode: 'Code',
@@ -121,7 +125,10 @@ export const subscription = {
       plain: 'base64 URI list, works everywhere, no routing',
       xrayjson: 'single Xray config with routing and fragment',
       singbox: 'sing-box config for Hiddify and friends',
-      clash: 'Clash YAML with proxy groups and rules',
+      clash: 'the Mihomo address for links already handed out, the same answer byte for byte',
+      mihomo: 'Clash YAML for the mihomo core',
+      stash: 'Clash YAML for Stash, with its own spellings',
+      'clash-legacy': 'Clash YAML for the legacy Clash core: ss, vmess, trojan, socks, http only',
       xkeen: 'router flavour of the Xray config',
       wgconf: 'wg-quick file, AmneziaWG hosts only',
       outline: 'Outline / SIP008, Shadowsocks only',
@@ -144,6 +151,13 @@ export const subscription = {
     fieldPattern: 'User-Agent regex',
     fieldPatternHint: '(?i) at the front means case-insensitive. Tested against the whole header.',
     patternInvalid: 'This is not a regex the panel can compile, so it would be refused on save.',
+    // A-236 step 4: the template the rule's clients are framed by.
+    fieldTemplate: 'Template',
+    fieldTemplateHint: 'The clients of this rule get their config in this template. Default: the type\'s built-in template.',
+    templateDefault: 'Default (built-in)',
+    templateNoneForFormat: 'The {{format}} format takes no template: clients get it as it is.',
+    templateNotForFormat: 'Not saved: the {{format}} format takes no template, and the rule names «{{name}}». Pick Default or a format with templates.',
+    templateNotFound: 'Not saved: this format has no template «{{name}}». Pick another one or Default.',
     fieldEnabled: 'Enabled',
     fieldEnabledHint: 'A disabled rule is skipped entirely and blocks nothing below it.',
     whatTitle: 'What it serves',
@@ -196,11 +210,13 @@ export const subscription = {
     importing: 'Parsing...',
     importFailed: 'The import did not happen',
     importUnavailable: 'Import arrives with phase 11, together with the template store.',
-    importedKeys: 'Foreign keys rewritten: {{n}}',
+    // Owner's decision 25.10: no other panel is named, not even in the hint.
+    migrateHint: 'Run a file from another panel through iceslab-migrate templates first: it renames the service key for Iceslab.',
+    importNoTemplate: 'The server did not return a template: the import answer has none.',
     importNeedsDryRun: 'A dry run is required before saving: the file was not written here, and nobody has asked yet what comes out of it.',
     importReady: 'The dry run is done, it can be saved.',
     importNeedsType: 'The server could not tell the type, pick it yourself.',
-    importForeignLeft: 'Foreign keys are still in the body: {{keys}}. Our builder does not understand them.',    // Default: never deleted or renamed, but it can be restored.
+    // Default: never deleted or renamed, but it can be restored.
     restoreAction: 'Restore Default',
     restoring: 'Restoring...',
     restored: 'Default restored',
@@ -209,6 +225,9 @@ export const subscription = {
     restoreBody:
       'The body is replaced with the built-in one. Your edits to it are gone, and there is nowhere to get them back from: the panel keeps no copy.',
     defaultProtected: 'Default cannot be deleted: everyone without a template of their own runs on it.',
+    // A-236: 409 TEMPLATE_DEFAULT_PROTECTED on a rename and TEMPLATE_NOT_DEFAULT on a restore.
+    defaultKeepsName: 'Default is not renamed: subscriptions find it by this name.',
+    notDefault: 'Only a Default can be restored: an own template has no built-in body.',
     deleteTitle: 'Delete {{name}}?',
     deleteBody:
       'Delivery rules that named this template start serving the Default of their type. The template itself cannot be brought back.',
@@ -218,27 +237,32 @@ export const subscription = {
     dryRun: 'Dry run',
     dryRunning: 'Building...',
     dryRunFailed: 'The dry run did not happen',
-    dryRunUnavailable: 'The dry run arrives with phase 11, together with the template store.',
-    checkOk: 'the core accepted the config',
-    checkFailed: 'the core refused the config',
+    dryRunUnavailable: 'This server has no dry run yet.',
+    // A-236 tail: saving runs the dry run itself; without an answer it saves, marked.
+    savedRunNoAnswer: 'Saved. Not checked: the dry run did not answer.',
+    savedNoRunHere: 'Saved. Not checked: this server has no dry run yet.',
+    // A-236 step 3: the three outcomes of a run.
+    checkOk: 'checked by the core',
+    checkSkipped: 'the core on the panel did not check it',
+    checkFailed: 'will not save: the run refused it',
     warnings: 'The panel noticed',
-    warningsNote:
-      'This is not a refusal from the core: such a config loads. But if a slot stayed empty, everyone caught by this rule gets an empty subscription.',
+    warningsBlock:
+      'Such a template is not saved: with an empty slot, or nodes that never reached a group, everyone caught by this rule gets an empty subscription.',
     rendered: 'What the client gets',
     renderedHint: 'Built over three synthetic nodes. Your servers take their place.',
-    confirmTitle: 'Save with these notes?',
-    confirmBody: 'The core accepts the config. The notes above stay, and they are visible only here.',
     invalid: 'The server refused the template:',
     invalidAtLine: 'Line {{line}}:',
+    invalidAtLineColumn: 'Line {{line}}, column {{column}}:',
     invalidNoMessage: 'no explanation given',
     // The first thing missing, not a list of complaints.
     blocker: {
       name: 'name it',
       body: 'the body is empty',
       clean: 'nothing changed',
+      dryRunRefused: 'the run refused it: the reason is below',
     },
     emptyTitle: 'No templates yet',
     emptyBody:
-      'Without a template the subscription serves the default config. Create one to decide everything else for the client: groups, rules, profile name. A template from elsewhere can be imported as a file, and its keys are rewritten to ours.',
+      'Without a template the subscription serves the default config. Create one to decide everything else for the client: groups, rules, profile name. A ready template can be imported as a file; run a file from another panel through iceslab-migrate templates first.',
   },
 } as const;

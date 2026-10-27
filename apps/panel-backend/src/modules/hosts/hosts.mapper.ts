@@ -36,13 +36,19 @@ export interface PublicHostDto {
   allowInsecure: boolean;
   securityLayer: string;
   disableForFormats: string[];
+  /** A-236 step 6: the line under the server name in the apps that show one;
+   *  null = none. */
+  serverDescription: string | null;
+  /** A-236 step 6: kept out of every public output by the operator. Not the
+   *  same fact as hiddenByCascade, which the cascade decides. */
+  isHidden: boolean;
   createdAt: string;
   updatedAt: string;
   /** Only the list endpoint computes this; absent elsewhere. See HostReach. */
   reach?: HostReach;
   /**
-   * When the config behind this host last changed: the newest of the host, its
-   * binding and its profile.
+   * When the link behind this host last changed: the newest `linkChangedAt` of
+   * the host, its binding, its profile and its node (A-122, hostConfigChangedAt).
    *
    * Not `updatedAt`. Moving the port is an edit to the BINDING and it rewrites
    * the link every subscriber holds, while the host row sits untouched, so the
@@ -89,6 +95,8 @@ export function mapHost(
     allowInsecure: h.allowInsecure,
     securityLayer: h.securityLayer,
     disableForFormats: h.disableForFormats,
+    serverDescription: h.serverDescription,
+    isHidden: h.isHidden,
     createdAt: h.createdAt.toISOString(),
     updatedAt: h.updatedAt.toISOString(),
   };

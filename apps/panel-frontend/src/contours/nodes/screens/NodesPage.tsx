@@ -3,9 +3,6 @@ import {
   ActionIcon,
   Badge,
   Box,
-  Button,
-  Code,
-  CopyButton,
   Group,
   Menu,
   SimpleGrid,
@@ -15,7 +12,6 @@ import {
   Tooltip,
   UnstyledButton,
 } from '@mantine/core';
-import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -38,9 +34,11 @@ import { chainFacts } from '@/lib/domain/chainStatus';
 import { nodeGeoFacts } from '@/lib/domain/geoSets';
 import { nodeFieldKnown } from '@/lib/domain/nodeFields';
 import { policyBadgeFacts } from '@/contours/nodes/lib/policyReach';
+import { certAlarm } from '@/contours/nodes/lib/nodeCert';
+import { useNow } from '@/lib/ui/useNow';
 import {
   deleteNode,
-  listNodes,
+  listAllNodes,
   listRegions,
   refreshNodeBootstrap,
   type Node,
@@ -49,9 +47,12 @@ import { listCascades } from '@/lib/domain/cascades';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { NodePayloadModal } from '@/contours/nodes/components/NodePayloadModal';
-import { NodeDeleteCascades } from '@/contours/nodes/components/NodeDelete';
+import { confirmBootstrapReissue, confirmNodeDelete } from '@/contours/nodes/components/nodeConfirm';
+import { onBootstrapIssued } from '@/contours/nodes/lib/bootstrapIssued';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { showNodeDeleteFailed } from '@/contours/nodes/components/nodeDeleteToast';
-import { nodeDeleteFacts } from '@/contours/nodes/lib/nodeDelete';
+import { cascadeEntryNodeIds, cascadeMemberships } from '@/lib/domain/cascadeMembership';
 import { cardEngineSet } from '@/contours/nodes/lib/nodeCardEngines';
 import { NodeCard } from '@/contours/nodes/components/NodeCard';
 import { CascadesPanel } from '@/contours/nodes/components/CascadesPanel';
@@ -410,6 +411,8 @@ type MembershipFilter = 'all' | 'standalone' | 'cascade';
 
 export function NodesPage() {
   const { t } = useTranslation();
+  // The clock the certificate badges are read against (certAlarm).
+  const now = useNow(60_000);
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [payload, setPayload] = useState<{
@@ -456,12 +459,10 @@ export function NodesPage() {
 
   const nodesQuery = useQuery({
     queryKey: ['nodes', regionFilter],
-    queryFn: () =>
-      listNodes({
-        page: 1,
-        limit: 100,
-        regionId: regionFilter === 'all' ? undefined : regionFilter,
-      }),
+    // The whole fleet, not page 1: with no filter this key is ['nodes', 'all'],
+    // the very key the pickers fill with listAllNodes (A-138), and one key
+    // must hold one shape.
+    queryFn: () => listAllNodes({ regionId: regionFilter === 'all' ? undefined : regionFilter }),
     // Core version and the restart tally ride on this response, not on the
     // overview blob, and until 2026-08-04 nothing refetched it: a core could
     // bounce with the page open and the card would keep the numbers it was
@@ -489,34 +490,25 @@ export function NodesPage() {
   // держащая его в зависимостях, пересобиралась бы всегда.
   const allCascades = useMemo(() => cascadesQuery.data?.cascades ?? [], [cascadesQuery.data]);
 
-  // nodeId -> the cascade it belongs to + its role (entry/transit/exit). A node
-  // can be in at most one cascade (v1 model).
+  // nodeId -> the cascade it belongs to + its role (entry/transit/exit), v4
+  // positions and directions first (cascadeMemberships, A-144).
   const nodeCascadeMap = useMemo(() => {
     const m = new Map<string, { name: string; role: string }>();
-    for (const c of cascadesQuery.data?.cascades ?? []) {
-      const last = c.hops.length - 1;
-      c.hops.forEach((h, i) => {
-        const role =
-          i === 0
-            ? t('cascades.entry')
-            : i === last
-              ? t('cascades.exit')
-              : t('cascades.transit');
-        m.set(h.nodeId, { name: c.name, role });
-      });
+    for (const [id, { cascade, role }] of cascadeMemberships(allCascades)) {
+      m.set(id, { name: cascade.name, role: t(`cascades.${role}`) });
     }
     return m;
-  }, [cascadesQuery.data, t]);
+  }, [allCascades, t]);
 
-  // What the cascades carried today: the entry node's traffic, because that is
+  // What the cascades carried today: the entry pool's traffic, because that is
   // where a client's bytes enter and everything downstream is the same bytes
   // counted again.
   const cascadeToday = useMemo(() => {
     const byId = new Map((overviewQuery.data?.nodes ?? []).map((n) => [n.id, n.todayBytes] as const));
-    return allCascades.reduce((sum, c) => {
-      const first = [...c.hops].sort((a, b) => a.position - b.position)[0];
-      return sum + (first ? byId.get(first.nodeId) ?? 0 : 0);
-    }, 0);
+    return allCascades.reduce(
+      (sum, c) => sum + cascadeEntryNodeIds(c).reduce((s, id) => s + (byId.get(id) ?? 0), 0),
+      0,
+    );
   }, [allCascades, overviewQuery.data]);
 
   // Merge raw nodes (canonical source for actions / address) with dashboard
@@ -592,7 +584,7 @@ export function NodesPage() {
     mutationFn: deleteNode,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['nodes'] });
-      notifications.show({ color: 'green', message: 'Node deleted' });
+      notifications.show({ color: 'green', message: t('nodeConfirm.deleted') });
     },
     // Тело отказа, а не строка axios: 409 NODE_IN_USE_BY_CASCADE называет
     // каскад и что сделать (E28, стенд 24.09 показал «status code 409»).
@@ -601,77 +593,36 @@ export function NodesPage() {
 
   // Re-issue a bootstrap token for an existing node - used when the original
   // expired / was lost, or when admin changed `node.address` and needs a new
-  // cert with the matching SAN. Reuses the same NodePayloadModal as the create
-  // flow, but `payload` stays empty (panel never re-emits the cert payload -
-  // only the install command + token).
+  // cert with the matching SAN. `payload` stays empty: the panel never
+  // re-emits the cert payload, only the install command and token. The same
+  // window and the same toast as the node
+  // page (nodeConfirm, onBootstrapIssued); the modal shows the install command.
   const refreshBootstrapMutation = useMutation({
     mutationFn: (node: Node) =>
       refreshNodeBootstrap(node.id).then((info) => ({ node, info })),
-    onSuccess: ({ node, info }) => {
-      notifications.show({ color: 'green', message: 'New bootstrap token issued' });
-      setPayload({
-        name: node.name,
-        payload: '',
-        bootstrap: info,
-      });
-    },
+    onSuccess: ({ node, info }) =>
+      onBootstrapIssued(
+        info,
+        (bootstrap) => setPayload({ name: node.name, payload: '', bootstrap }),
+        (n) => notifications.show({ color: 'green', ...n }),
+        t,
+      ),
     onError: (err) =>
       notifications.show({
         color: 'red',
-        title: 'Refresh bootstrap failed',
-        message: err instanceof Error ? err.message : String(err),
+        title: t('nodeConfirm.reBootstrapFailed'),
+        message: apiErrorMessage(err),
       }),
   });
 
   function handleRefreshBootstrap(node: Node) {
-    modals.openConfirmModal({
-      title: t('nodeConfirm.reBootstrapTitle', { name: node.name }),
-      children: (
-        <Text size="sm">{t('nodeConfirm.reBootstrapBody')}</Text>
-      ),
-      labels: { confirm: t('nodeConfirm.reBootstrapConfirm'), cancel: t('common.cancel') },
-      confirmProps: { color: 'blue' },
-      onConfirm: () => refreshBootstrapMutation.mutate(node),
-    });
+    confirmBootstrapReissue(node, t, () => refreshBootstrapMutation.mutate(node));
   }
 
   function handleDelete(node: Node) {
-    // Cleanup command shown post-delete so admins remember to wipe the
-    // VPS - otherwise the orphaned agent keeps occupying the mTLS port
-    // and an old server cert + CA pair sits around as future drift bait.
-    const uninstallCmd =
-      'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) --uninstall';
-    // Включённый каскад держит ноду: сервер откажет, и кнопка говорит это
-    // заранее. Нет поля у ноды: окно как раньше (nodeDeleteFacts).
-    const cascades = nodeDeleteFacts(node);
-    const blocked = (cascades?.blocked.length ?? 0) > 0;
-    modals.openConfirmModal({
-      title: t('nodeConfirm.deleteTitle', { name: node.name }),
-      children: (
-        <Stack gap="sm">
-          <NodeDeleteCascades facts={cascades} />
-          <Text size="sm">{t('nodeConfirm.deleteBody')}</Text>
-          <Text size="sm" fw={600}>
-            {t('nodeConfirm.deleteCleanupHint')}
-          </Text>
-          <Group gap="xs" align="flex-start" wrap="nowrap">
-            <Code block style={{ flex: 1, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-              {uninstallCmd}
-            </Code>
-            <CopyButton value={uninstallCmd}>
-              {({ copied, copy }) => (
-                <Button size="xs" variant="light" color={copied ? 'teal' : 'blue'} onClick={copy}>
-                  {copied ? t('common.copied') : t('common.copy')}
-                </Button>
-              )}
-            </CopyButton>
-          </Group>
-        </Stack>
-      ),
-      labels: { confirm: t('common.delete'), cancel: t('common.cancel') },
-      confirmProps: { color: 'red', disabled: blocked, title: blocked ? t('nodeConfirm.deleteBlockedHint') : undefined },
-      onConfirm: () => deleteMutation.mutate(node.id),
-    });
+    // One window with the node page (nodeConfirm): any cascade, on or off,
+    // holds the node (1bf18ca) and locks the button; the cleanup command is in it.
+    confirmNodeDelete(node, t, () => deleteMutation.mutate(node.id));
   }
 
   return (
@@ -935,6 +886,15 @@ export function NodesPage() {
 
       {view === 'nodes' && (
         <>
+      {/* Cascade membership and regions come from their own lists. A failed one
+          is said here: without it the cascade badges and the region filter
+          simply vanish, which reads as «no node is in a cascade». */}
+      {loadView(cascadesQuery) === 'failed' && (
+        <LoadFailedLine message={apiErrorMessage(cascadesQuery.error)} onRetry={() => void cascadesQuery.refetch()} />
+      )}
+      {loadView(regionsQuery) === 'failed' && (
+        <LoadFailedLine message={apiErrorMessage(regionsQuery.error)} onRetry={() => void regionsQuery.refetch()} />
+      )}
 
       {visibleNodes.length === 0 ? (
         /* Four different nothings, told apart before anything is offered. The
@@ -1023,6 +983,9 @@ export function NodesPage() {
                   // функция: «политики нет» и «политика не работает» слишком
                   // легко спутать, чтобы разбирать их в разметке.
                   policyReach: policyBadgeFacts(n),
+                  // Сертификат mTLS: значок только там, где горит (A-221).
+                  certAlarm: certAlarm(n, now),
+                  multiplier: n.consumptionMultiplier,
                   // Причина статуса словами сервера, с /api/nodes.
                   statusMessage: n.lastStatusMessage,
                   protocol: n.protocol,

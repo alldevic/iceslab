@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalAcl,
   cascadeShape,
+  exitAclInvalid,
   isDuplicateExitAcl,
   setCascadeOn,
   squadCascades,
@@ -73,16 +75,35 @@ describe('squadCascades: каскад как одно целое, статус �
     expect(c).toMatchObject({ handedOut: false, notHandedOut: 'no-granted-host', entryHostToAdd: null });
   });
 
-  it('суженные выходы по exitAcl, политика соседнего сквада предлагается', () => {
-    const [c] = squadCascades('me', state({ exitAcl: [{ cascadeId: 'c1', exitNodeIds: ['nl'] }] }), world);
+  it('суженные выходы по exitAcl (по направлению), политика соседнего сквада предлагается', () => {
+    const [c] = squadCascades('me', state({ exitAcl: [{ cascadeId: 'c1', directionIds: ['d2'] }] }), world);
     expect(c!.exitsNarrowed).toBe(true);
+    expect(c!.aclField).toBe('directionIds');
     expect(c!.exits.map((e) => e.allowed)).toEqual([false, true]);
     expect(c!.policiesToOffer).toEqual([{ id: 'noads', name: 'Без рекламы' }]);
     // Уже выданная скваду политика не предлагается.
     expect(squadCascades('me', state({ policyIds: ['noads'] }), world)[0]!.policiesToOffer).toEqual([]);
   });
 
-  it('старый каскад без positions: вход и выходы по hops', () => {
+  it('ответ сервера несёт оба списка: читается directionIds, exitNodeIds только для показа', () => {
+    const acl = [{ cascadeId: 'c1', directionIds: ['d2'], exitNodeIds: ['de'] }];
+    expect(squadCascades('me', state({ exitAcl: acl }), world)[0]!.exits.map((e) => e.allowed)).toEqual([false, true]);
+  });
+
+  it('направление на именованном выходе без нод выдаётся по id, как любое другое (A-149)', () => {
+    const w = {
+      ...world,
+      cascades: [{ ...cascade, directions: [...cascade.directions, { id: 'd3', tag: 3, countryCode: 'US', nodeIds: [], outboundId: 'o1' }] } as unknown as Cascade],
+    };
+    const [c] = squadCascades('me', state({ exitAcl: [{ cascadeId: 'c1', directionIds: ['d3'] }] }), w);
+    expect(c!.exits.map((e) => [e.aclIds, e.allowed])).toEqual([
+      [['d1'], false],
+      [['d2'], false],
+      [['d3'], true],
+    ]);
+  });
+
+  it('старый каскад без positions: вход и выходы по hops, ключ acl это ноды', () => {
     const shape = cascadeShape({
       positions: [],
       directions: [],
@@ -92,35 +113,60 @@ describe('squadCascades: каскад как одно целое, статус �
       ],
     });
     expect(shape).toEqual({
+      byDirection: false,
       entryNodeIds: ['entry'],
       directions: [{ key: 'x2', tag: 1, countryCode: null, nodeIds: ['de'] }],
     });
   });
 });
 
+describe('canonicalAcl: одна строка на запись, как экран её шлёт', () => {
+  it('направления: только directionIds; старый каскад: exitNodeIds; выключен: directionIds []', () => {
+    expect(
+      canonicalAcl([
+        { cascadeId: 'a', directionIds: ['d1'], exitNodeIds: ['de'] },
+        { cascadeId: 'b', directionIds: [], exitNodeIds: ['n1'] },
+        { cascadeId: 'c', directionIds: [], exitNodeIds: [] },
+      ]),
+    ).toEqual([
+      { cascadeId: 'a', directionIds: ['d1'] },
+      { cascadeId: 'b', exitNodeIds: ['n1'] },
+      { cascadeId: 'c', directionIds: [] },
+    ]);
+  });
+});
+
 describe('toggleCascadeExit: сузить и расширить выходы так, как их читает сервер', () => {
   const exits = [
-    { nodeIds: ['de'], allowed: true },
-    { nodeIds: ['nl'], allowed: true },
+    { aclIds: ['d1'], allowed: true },
+    { aclIds: ['d2'], allowed: true },
   ];
 
-  it('выключить выход у каскада без строк: пишутся остальные', () => {
-    expect(toggleCascadeExit([], 'c1', exits, exits[0]!)).toEqual([{ cascadeId: 'c1', exitNodeIds: ['nl'] }]);
+  it('выключить выход у каскада без строк: пишутся остальные направления', () => {
+    expect(toggleCascadeExit([], 'c1', 'directionIds', exits, exits[0]!)).toEqual([{ cascadeId: 'c1', directionIds: ['d2'] }]);
   });
 
   it('включить обратно все: строки уходят, а не лежат полным списком', () => {
-    const acl = [{ cascadeId: 'c1', exitNodeIds: ['nl'] }];
-    expect(toggleCascadeExit(acl, 'c1', exits, { nodeIds: ['de'], allowed: false })).toEqual([]);
+    const acl = [{ cascadeId: 'c1', directionIds: ['d2'] }];
+    expect(toggleCascadeExit(acl, 'c1', 'directionIds', exits, { aclIds: ['d1'], allowed: false })).toEqual([]);
   });
 
   it('последний выход не снимается: пустой список это выключенный каскад, для него переключатель', () => {
-    const acl = [{ cascadeId: 'c1', exitNodeIds: ['nl'] }];
-    expect(toggleCascadeExit(acl, 'c1', exits, { nodeIds: ['nl'], allowed: true })).toBeNull();
+    const acl = [{ cascadeId: 'c1', directionIds: ['d2'] }];
+    expect(toggleCascadeExit(acl, 'c1', 'directionIds', exits, { aclIds: ['d2'], allowed: true })).toBeNull();
   });
 
   it('у выключенного каскада выходы не двигаются', () => {
-    const acl = [{ cascadeId: 'c1', exitNodeIds: [] }];
-    expect(toggleCascadeExit(acl, 'c1', exits, { nodeIds: ['de'], allowed: false })).toBe(acl);
+    const acl = [{ cascadeId: 'c1', directionIds: [] }];
+    expect(toggleCascadeExit(acl, 'c1', 'directionIds', exits, { aclIds: ['d1'], allowed: false })).toBe(acl);
+  });
+
+  it('старый каскад по хопам: список нод', () => {
+    const hopExits = [
+      { aclIds: ['de'], allowed: true },
+      { aclIds: ['nl'], allowed: true },
+    ];
+    expect(toggleCascadeExit([], 'c1', 'exitNodeIds', hopExits, hopExits[0]!)).toEqual([{ cascadeId: 'c1', exitNodeIds: ['nl'] }]);
   });
 });
 
@@ -132,13 +178,27 @@ describe('три состояния каскада для сквада', () => {
   });
 
   it('список: включён, сужен', () => {
-    expect(row([{ cascadeId: 'c1', exitNodeIds: ['nl'] }])).toMatchObject({ off: false, exitsNarrowed: true });
+    expect(row([{ cascadeId: 'c1', directionIds: ['d2'] }])).toMatchObject({ off: false, exitsNarrowed: true });
   });
 
   it('пустой список: выключен, не сужен, ни один выход не выдаётся; страна входа для подписи', () => {
-    const c = row([{ cascadeId: 'c1', exitNodeIds: [] }]);
+    const c = row([{ cascadeId: 'c1', directionIds: [], exitNodeIds: [] }]);
     expect(c).toMatchObject({ off: true, exitsNarrowed: false, entryCountries: ['RU'] });
     expect(c.exits.map((e) => e.allowed)).toEqual([false, false]);
+  });
+
+  it('A-277: выключен или сужен, правила политики ноды в каскад на сквад не действуют; все выходы: строки нет', () => {
+    expect(row([]).nodePolicyNote).toBeNull();
+    expect(row([{ cascadeId: 'c1', directionIds: ['d2'] }]).nodePolicyNote).toBe('gated');
+    expect(row([{ cascadeId: 'c1', directionIds: [], exitNodeIds: [] }]).nodePolicyNote).toBe('gated');
+  });
+
+  it('A-277: вход hysteria или AmneziaWG: юзера не различить, оговорка «кроме входов»', () => {
+    for (const proto of ['hysteria', 'amneziawg']) {
+      const c = { ...cascade, positions: [{ ...cascade.positions[0]!, entryProtocol: proto }] } as unknown as Cascade;
+      const r = squadCascades('me', state({ exitAcl: [{ cascadeId: 'c1', directionIds: ['d1'] }] }), { ...world, cascades: [c] })[0]!;
+      expect(r.nodePolicyNote).toBe('gated-except-chain');
+    }
   });
 
   it('страна входа неизвестна хотя бы у одной ноды: страны нет вовсе', () => {
@@ -148,43 +208,43 @@ describe('три состояния каскада для сквада', () => {
 });
 
 describe('setCascadeOn: переходы переключателя, одна запись на каскад', () => {
-  const nodes = ['de', 'nl'];
-  const other = { cascadeId: 'c2', exitNodeIds: ['x'] };
+  const ids = ['d1', 'd2'];
+  const other = { cascadeId: 'c2', directionIds: ['x'] };
 
   it('выкл из «все выходы»: запись с пустым списком, парковать нечего', () => {
-    expect(setCascadeOn([other], 'c1', false, nodes)).toEqual({
-      acl: [other, { cascadeId: 'c1', exitNodeIds: [] }],
+    expect(setCascadeOn([other], 'c1', false, 'directionIds', ids)).toEqual({
+      acl: [other, { cascadeId: 'c1', directionIds: [] }],
       parked: undefined,
     });
   });
 
   it('выкл из суженного: запись заменяется, прежний список паркуется', () => {
-    const r = setCascadeOn([{ cascadeId: 'c1', exitNodeIds: ['nl'] }, other], 'c1', false, nodes);
-    expect(r).toEqual({ acl: [other, { cascadeId: 'c1', exitNodeIds: [] }], parked: ['nl'] });
+    const r = setCascadeOn([{ cascadeId: 'c1', directionIds: ['d2'] }, other], 'c1', false, 'directionIds', ids);
+    expect(r).toEqual({ acl: [other, { cascadeId: 'c1', directionIds: [] }], parked: ['d2'] });
     expect(r.acl.filter((e) => e.cascadeId === 'c1')).toHaveLength(1);
   });
 
   it('вкл без паркованного: запись снимается, все выходы', () => {
-    expect(setCascadeOn([{ cascadeId: 'c1', exitNodeIds: [] }, other], 'c1', true, nodes)).toEqual({ acl: [other] });
+    expect(setCascadeOn([{ cascadeId: 'c1', directionIds: [] }, other], 'c1', true, 'directionIds', ids)).toEqual({ acl: [other] });
   });
 
   it('вкл с паркованным: возвращается прежний суженный список', () => {
-    expect(setCascadeOn([{ cascadeId: 'c1', exitNodeIds: [] }], 'c1', true, nodes, ['nl'])).toEqual({
-      acl: [{ cascadeId: 'c1', exitNodeIds: ['nl'] }],
+    expect(setCascadeOn([{ cascadeId: 'c1', directionIds: [] }], 'c1', true, 'directionIds', ids, ['d2'])).toEqual({
+      acl: [{ cascadeId: 'c1', directionIds: ['d2'] }],
     });
   });
 
-  it('паркованный читается по сегодняшним выходам: ушедшая нода выпадает, полный список это не сужение', () => {
-    const acl = [{ cascadeId: 'c1', exitNodeIds: [] }];
-    expect(setCascadeOn(acl, 'c1', true, nodes, ['gone'])).toEqual({ acl: [] });
-    expect(setCascadeOn(acl, 'c1', true, nodes, ['de', 'nl'])).toEqual({ acl: [] });
+  it('паркованный читается по сегодняшним выходам: ушедшее направление выпадает, полный список это не сужение', () => {
+    const acl = [{ cascadeId: 'c1', directionIds: [] }];
+    expect(setCascadeOn(acl, 'c1', true, 'directionIds', ids, ['gone'])).toEqual({ acl: [] });
+    expect(setCascadeOn(acl, 'c1', true, 'directionIds', ids, ['d1', 'd2'])).toEqual({ acl: [] });
   });
 
   it('просьба о том же состоянии ничего не меняет', () => {
-    const offAcl = [{ cascadeId: 'c1', exitNodeIds: [] }];
-    expect(setCascadeOn(offAcl, 'c1', false, nodes, ['nl'])).toEqual({ acl: offAcl, parked: ['nl'] });
-    const onAcl = [{ cascadeId: 'c1', exitNodeIds: ['nl'] }];
-    expect(setCascadeOn(onAcl, 'c1', true, nodes)).toEqual({ acl: onAcl });
+    const offAcl = [{ cascadeId: 'c1', directionIds: [] }];
+    expect(setCascadeOn(offAcl, 'c1', false, 'directionIds', ids, ['d2'])).toEqual({ acl: offAcl, parked: ['d2'] });
+    const onAcl = [{ cascadeId: 'c1', directionIds: ['d2'] }];
+    expect(setCascadeOn(onAcl, 'c1', true, 'directionIds', ids)).toEqual({ acl: onAcl });
   });
 });
 
@@ -193,19 +253,28 @@ describe('squadExitsSummary: колонка списка сквадов', () => 
 
   it('записей нет или они про удалённые каскады: все', () => {
     expect(squadExitsSummary([], ids)).toBe('all');
-    expect(squadExitsSummary([{ cascadeId: 'gone', exitNodeIds: [] }], ids)).toBe('all');
+    expect(squadExitsSummary([{ cascadeId: 'gone', directionIds: [] }], ids)).toBe('all');
   });
 
-  it('выключенные и суженные считаются отдельно', () => {
+  it('выключенные и суженные считаются отдельно, по любому из двух списков', () => {
     expect(
       squadExitsSummary(
         [
-          { cascadeId: 'c1', exitNodeIds: [] },
-          { cascadeId: 'c2', exitNodeIds: ['nl'] },
+          { cascadeId: 'c1', directionIds: [], exitNodeIds: [] },
+          { cascadeId: 'c2', directionIds: ['d2'], exitNodeIds: ['nl'] },
         ],
         ids,
       ),
     ).toEqual({ off: 1, narrowed: 1 });
+  });
+});
+
+describe('exitAclInvalid: 400 EXIT_ACL_INVALID словами сервера', () => {
+  it('слова сервера; вход проверяется первым', () => {
+    const err = { response: { status: 400, data: { error: 'EXIT_ACL_INVALID', message: 'direction x is not a direction of cascade c1' } } };
+    expect(exitAclInvalid(err)).toBe('direction x is not a direction of cascade c1');
+    for (const v of [null, 'x', new Error('x'), { response: null }]) expect(exitAclInvalid(v)).toBeNull();
+    expect(exitAclInvalid({ response: { status: 409, data: { error: 'EXIT_ACL_INVALID' } } })).toBeNull();
   });
 });
 

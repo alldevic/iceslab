@@ -115,6 +115,16 @@ export const RecipeSchema = RecipeObject.superRefine((r, ctx) => {
         message: `apply.xraySubprotocol "${String(r.apply.xraySubprotocol)}" contradicts subprotocol "${r.subprotocol}"`,
       });
     }
+    // A-230: vmess has no REALITY. The profile schema refuses it too; a
+    // recipe that asks for it is dropped here, by name, instead of filling a
+    // form the save then refuses.
+    if (r.subprotocol === 'vmess' && r.apply.xraySecurity === 'reality') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['apply', 'xraySecurity'],
+        message: 'a vmess recipe cannot set xraySecurity "reality": vmess has no REALITY, use tls or none',
+      });
+    }
   } else if (r.subprotocol !== undefined) {
     ctx.addIssue({
       code: 'custom',

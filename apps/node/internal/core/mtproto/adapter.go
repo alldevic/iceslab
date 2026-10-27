@@ -265,7 +265,13 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	// attribute, so skip the HTTP scrape of the mtg metrics endpoint. On a node
 	// where mtproto is registered defensively but unused, this stops a pointless
 	// GET (and its warn-spam when the endpoint is down) every cron tick.
-	if len(users) == 0 || !serving {
+	// A-121: an mtg that is not serving has nobody on it, and its report says
+	// so: no users, rather than the cached roster with zero bytes, which read
+	// as every user present on an inbound that does not exist.
+	if !serving {
+		return &core.Stats{}, nil
+	}
+	if len(users) == 0 {
 		return &core.Stats{Users: users}, nil
 	}
 
@@ -273,9 +279,10 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	if err != nil {
 		// Stats poll must not fail just because metrics endpoint is
 		// momentarily unreachable (mtg restart, port not yet bound, ...).
-		// Log + return zero totals so the panel-side cron stays happy.
-		a.logger.Warn("mtproto: prometheus scrape failed, returning zero totals", "err", err)
-		return &core.Stats{Users: users}, nil
+		// Said as NoData, not as zero totals (A-163): a zero total read as a
+		// counter reset and the next scrape landed whole.
+		a.logger.Warn("mtproto: prometheus scrape failed, no data this poll", "err", err)
+		return &core.Stats{NoData: true}, nil
 	}
 	return &core.Stats{
 		Users:         users,

@@ -3,7 +3,9 @@ import { Box, Group, Text, UnstyledButton } from '@mantine/core';
 import { IconBolt, IconCheck, IconInfoCircle, IconPlus } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import type { EngineName } from '@iceslab/shared';
-import { listNodes } from '@/lib/domain/nodes';
+import { listAllNodes } from '@/lib/domain/nodes';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nativeEngineOfIntent } from '@/lib/domain/engines';
 import { CoreVersionStrip } from '@/contours/profiles/components/ProfileForm/CoreVersionStrip';
 import {
@@ -60,7 +62,7 @@ export function EnginePicker({
   onPickPreview: (key: PreviewKindKey) => void;
 }) {
   const { t } = useTranslation();
-  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listNodes() });
+  const nodesQuery = useQuery({ queryKey: ['nodes'], queryFn: () => listAllNodes() });
 
   const tabs: { value: EngineTab; label: string }[] = [
     { value: 'native', label: t('profiles.engine.native') },
@@ -251,7 +253,13 @@ export function EnginePicker({
       {/* The binary's version belongs to the node, not to this template: the
           strip names the manifest's pin for the selected tile's core and how
           the fleet stands against it, on every tab. */}
-      <CoreVersionStrip engine={selectedEngine} nodes={nodesQuery.data?.nodes ?? []} />
+      <CoreVersionStrip
+            engine={selectedEngine}
+            nodes={nodesQuery.data?.nodes ?? []}
+            // A-226: the fleet that did not arrive is said, not counted as empty.
+            view={loadView(nodesQuery)}
+            failure={loadFailure(nodesQuery, apiErrorMessage)}
+          />
 
       {/* Tiles, not a list: each one says what the protocol actually speaks,
           which is the thing an operator is choosing between. Every protocol

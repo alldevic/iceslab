@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { apiErrorMessage } from '@/lib/net/client';
 import {
   Alert,
   Badge,
@@ -106,7 +107,8 @@ export function TestConnectModal({ profile, onClose }: Props) {
 
         {mutation.isError && (
           <Alert color="red" variant="light">
-            {mutation.error instanceof Error ? mutation.error.message : t('testConnect.failed')}
+            {/* The server's words, not axios's (A-227). */}
+            {`${t('testConnect.failed')}: ${apiErrorMessage(mutation.error)}`}
           </Alert>
         )}
 

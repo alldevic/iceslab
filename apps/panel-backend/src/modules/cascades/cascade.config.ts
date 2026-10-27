@@ -3,7 +3,7 @@ import { generateRealityKeyPair } from '../../lib/auth/credentials.js';
 import {
   DEFAULT_LINK_CONGESTION,
   LINK_CELLS,
-  LINK_CELL_TRANSPORT,
+  LINK_CELL_TRANSPORTS,
   LINK_CONGESTIONS,
   type LinkCell,
   type LinkCongestion,
@@ -12,7 +12,9 @@ import {
 } from '@iceslab/shared';
 import { getLogger } from '../../lib/infra/logger.js';
 import { chainSocksPort, chainSocksUser } from './chain.ports.js';
+import { dialFamilyOf, withXrayDialFamily } from './dial-family.js';
 import { xrayGeoEntry } from '../geo-sets/geo-names.js';
+import { splitPolicyEntries } from './policy-entries.js';
 import { generateLinkTls, type LinkTls } from './link-tls.js';
 import type { LegParams } from './direction-merge.js';
 import type { TopologyTunnel } from './cascade-tunnel.js';
@@ -338,6 +340,36 @@ function newLinkReality(): NonNullable<VlessLinkCred['reality']> {
 }
 
 /**
+ * A-157: REALITY for the stored vless legs that have none, one keypair per
+ * RECEIVING node (the rule generateTopologyLinks keeps), each leg its own
+ * short id. A node that already receives a leg with a block keeps that pair,
+ * so the legs landing there agree with the one already serving. Answers the
+ * creds in the order given, or null when no leg is plain and nothing is to be
+ * written.
+ *
+ * Legs minted before phase 5b carry no block and ran as open VLESS between
+ * the nodes until the cascade was saved again; the push calls this instead of
+ * waiting for an operator who has no way to see it.
+ */
+export function giveRealityToPlainVless(legs: { to: string; cred: LinkCred }[]): LinkCred[] | null {
+  const plain = (c: LinkCred): boolean => c.protocol === 'vless' && !c.reality;
+  if (!legs.some((l) => plain(l.cred))) return null;
+  const keyByNode = new Map<string, NonNullable<VlessLinkCred['reality']>>();
+  for (const l of legs) {
+    if (l.cred.protocol === 'vless' && l.cred.reality && !keyByNode.has(l.to)) keyByNode.set(l.to, l.cred.reality);
+  }
+  return legs.map((l) => {
+    if (!plain(l.cred)) return l.cred;
+    let key = keyByNode.get(l.to);
+    if (!key) {
+      key = newLinkReality();
+      keyByNode.set(l.to, key);
+    }
+    return { ...(l.cred as VlessLinkCred), reality: { ...key, shortId: randomBytes(8).toString('hex') } };
+  });
+}
+
+/**
  * The site a REALITY leg pretends to be talking to.
  *
  * ⚠ Not any big site will do, and the rule is not visible from outside: the
@@ -638,11 +670,13 @@ export function topologyReceivingPorts(
     // 24000 shares nothing with a profile on 24000/TCP, and refusing that pair
     // would refuse a legal configuration, which is the same untruth the
     // binding-against-binding check was fixed of.
-    const transport = LINK_CELL_TRANSPORT[leg.cell];
-    const key = `${leg.nodeId}:${port}:${transport}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ nodeId: leg.nodeId, port, transport });
+    // A shadowsocks leg holds both (A-117).
+    for (const transport of LINK_CELL_TRANSPORTS[leg.cell]) {
+      const key = `${leg.nodeId}:${port}:${transport}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ nodeId: leg.nodeId, port, transport });
+    }
   }
   return out;
 }
@@ -1096,12 +1130,18 @@ function linkInbound(cred: LinkCred): Record<string, unknown> {
   }
 }
 
-function linkOutbound(host: string, cred: LinkCred): Record<string, unknown> {
+/** `selfHost`: this node's own address in the panel, which the next hop's
+ *  firewall names; the dial is pinned to its family (dial-family.ts).
+ *  ⚠ This leg carries xray mux, which a sing-box link-in refuses ("global
+ *  multiplex (v2ray legacy) not supported since sing-box v1.7.0", live test
+ *  23.10): a legacy leg goes into a legacy (xray) link-in, never into a chain. */
+function linkOutbound(host: string, cred: LinkCred, selfHost?: string): Record<string, unknown> {
+  const family = dialFamilyOf(selfHost, host);
   switch (cred.protocol) {
     case 'shadowsocks':
-      return ssLinkOutbound(host, cred);
+      return withXrayDialFamily(ssLinkOutbound(host, cred), family);
     case 'vless':
-      return vlessLinkOutbound(host, cred);
+      return withXrayDialFamily(vlessLinkOutbound(host, cred), family);
     default:
       return refuseQuicCell(cred);
   }
@@ -1181,6 +1221,12 @@ export interface TopologyInput {
   /** Phase 9.3: the ordinal of the cascade's entry policy, the route policy
    *  for the entry's users who cannot pick one. Absent = none (plain). */
   entryPolicyOrdinal?: number;
+  /**
+   * A-134: at an xray ENTRY, the tags each user may take (user id = the xray
+   * email -> allowed tags), as the subscription hands them out. Absent = no
+   * gate, the drawing as before. See applyEntryUserGate for what is drawn.
+   */
+  entryUserGate?: Map<string, Set<number>>;
 }
 
 /**
@@ -1276,6 +1322,53 @@ function dirOutTag(directionTag: number, idx: number): string {
   return `${LINK_OUT_TAG}-d${directionTag}-${idx}`;
 }
 
+/**
+ * Which drawing of the cascade a node's xray gets in a push (A-108):
+ *   - `legacy`: xray dials the legs itself, outbounds `dirOutTag`;
+ *   - `handover`: the chain process holds the legs and xray hands each
+ *     direction to it over loopback socks, outbounds `chainOutTag`;
+ *   - `none`: xray draws no way out of the cascade at all (a transit or an exit
+ *     under a chain, an entry whose users come in on hysteria or AmneziaWG).
+ */
+export type CascadeXrayDrawing = 'legacy' | 'handover' | 'none';
+
+/**
+ * Which drawing a push gives the node's xray (A-108, A-232): ONE function for
+ * the push (buildApplyInboundsRequest) and for the read that says which node
+ * policy rules are not drawn, so the two cannot disagree.
+ *   - a chain block whose user core is xray: the hand-over;
+ *   - a chain block for anything else (a transit, an exit, an entry whose users
+ *     come in on hysteria or AmneziaWG): xray draws no way out of the cascade;
+ *   - no chain, legacy fragments: xray dials the legs itself;
+ *   - neither: no cascade in xray at all.
+ * ⚠ The drawing the panel SENDS. An agent whose chain is refused with none
+ * accepted before draws the legacy one instead (fitCascadeExits renames or
+ * drops the rule there, and says so in its journal).
+ */
+export function cascadeXrayDrawingOf(
+  chain: { userCore?: { engine: string } } | null | undefined,
+  legacyFragments: unknown,
+): CascadeXrayDrawing {
+  if (chain) return chain.userCore?.engine === 'xray' ? 'handover' : 'none';
+  return legacyFragments ? 'legacy' : 'none';
+}
+
+/**
+ * The outbound a node-policy rule "into this direction" names in the node's
+ * xray, from the SAME drawing the push carries, or null when that drawing has
+ * none. One function beside both taggers: the policy used to mirror
+ * `dirOutTag` alone, and on every entry under a chain it named an outbound
+ * the config did not have.
+ *
+ * The plain profile's (ordinal 0): a node policy applies to all of the node's
+ * traffic, which is handed over as the plain profile.
+ */
+export function policyCascadeOutTag(directionTag: number, drawing: CascadeXrayDrawing): string | null {
+  if (drawing === 'legacy') return dirOutTag(directionTag, 0);
+  if (drawing === 'handover') return chainOutTag(directionTag, 0);
+  return null;
+}
+
 /** Email given to a link's inbound client. It is how a TRANSIT tells directions
  *  apart: the transit sees an internal link rather than a user, so the only
  *  thing that says "this traffic is headed for direction 7" is which credential
@@ -1304,6 +1397,81 @@ function linkClientEmail(directionTag: number, fromNodeId: string): string {
  * Returns null when the node carries no links at all (not part of this cascade,
  * or a direction with an empty pool).
  */
+/**
+ * A-134: the entry's rules gated by WHO may take each tag.
+ *
+ * The tag in a user's UUID is chosen by the client, and xray lets the client
+ * change it: authentication ignores those bytes, routing reads them. So a
+ * squad narrowed to NL, a policy granted to one squad, a cascade switched off
+ * for a squad, Auto kept from narrowed users: all of that held only in which
+ * UUID the subscription handed out. Rewrite four hex digits and any tag of the
+ * entry was yours.
+ *
+ * Now, for every tag some user of the entry may NOT take:
+ *   - each rule naming it carries `user` = the users who may (the email is the
+ *     panel's user id). A rule naming several tags is split by who may take
+ *     which, so a policy rule or the direction rule keeps its place in the
+ *     list (first match wins, and the policy domains stay ahead of the way out);
+ *   - one trap at the end sends those tags to `blocked`. Whoever is not listed
+ *     falls into it, including a user the push has not seen yet: the gate is
+ *     closed by default, never open. A tag nobody may take loses its rules and
+ *     lands in the trap whole.
+ * A tag every user of the entry may take is drawn as before, without a list.
+ *
+ * ⚠ Never an empty `user` list: xray drops an empty condition, and the rule
+ * would then match EVERYONE. A group with no users is dropped instead.
+ *
+ * Allow lists rather than deny lists, though a deny list can be shorter: a deny
+ * rule has to sit above the policy rules, and an allowed user then has nowhere
+ * to go but the same rules unlisted, which are open to the users the panel has
+ * not pushed yet. Measured for the cost: 30 000 users, five directions all
+ * gated with every user listed: 13.4 MB, xray -test 1.3 s (A-134 estimate).
+ */
+export function applyEntryUserGate(
+  rules: Record<string, unknown>[],
+  allowedTagsOf: Map<string, Set<number>>,
+): Record<string, unknown>[] {
+  const users = [...allowedTagsOf.keys()].sort();
+  const tagsOf = (r: Record<string, unknown>): number[] | null =>
+    typeof r.vlessRoute === 'string' ? r.vlessRoute.split(',').map(Number) : null;
+
+  // Who may take each tag drawn here; null = everybody (no gate).
+  const allowed = new Map<number, string[] | null>();
+  for (const r of rules) {
+    for (const t of tagsOf(r) ?? []) {
+      if (allowed.has(t)) continue;
+      const list = users.filter((u) => allowedTagsOf.get(u)!.has(t));
+      allowed.set(t, list.length === users.length && users.length > 0 ? null : list);
+    }
+  }
+
+  const out: Record<string, unknown>[] = [];
+  for (const r of rules) {
+    const tags = tagsOf(r);
+    if (!tags || tags.every((t) => allowed.get(t) === null)) {
+      out.push(r);
+      continue;
+    }
+    // Split by who may take which tag, keeping the rule's place.
+    const groups = new Map<string, { tags: number[]; users: string[] | null }>();
+    for (const t of tags) {
+      const list = allowed.get(t) ?? null;
+      const key = list === null ? '*' : list.join(',');
+      (groups.get(key) ?? groups.set(key, { tags: [], users: list }).get(key)!).tags.push(t);
+    }
+    for (const g of groups.values()) {
+      if (g.users !== null && g.users.length === 0) continue;
+      out.push({ ...r, vlessRoute: g.tags.join(','), ...(g.users !== null ? { user: g.users } : {}) });
+    }
+  }
+
+  const gatedTags = [...allowed.entries()].filter(([, list]) => list !== null).map(([t]) => t);
+  if (gatedTags.length > 0) {
+    out.push({ type: 'field', vlessRoute: gatedTags.sort((a, b) => a - b).join(','), outboundTag: 'blocked' });
+  }
+  return out;
+}
+
 export function buildTopologyFragmentsForNode(
   nodeId: string,
   input: TopologyInput,
@@ -1384,7 +1552,7 @@ export function buildTopologyFragmentsForNode(
     const idx = perDirCounter.get(l.directionTag) ?? 0;
     perDirCounter.set(l.directionTag, idx + 1);
     const tag = dirOutTag(l.directionTag, idx);
-    outbounds.push({ ...linkOutbound(host, l.cred), tag });
+    outbounds.push({ ...linkOutbound(host, l.cred, input.hosts.get(nodeId)), tag });
     const list = byDirection.get(l.directionTag) ?? [];
     list.push(tag);
     byDirection.set(l.directionTag, list);
@@ -1471,26 +1639,12 @@ export function buildTopologyFragmentsForNode(
       const vlessRoute = tags.join(',');
       // Spelled for xray on the node: an operator's geo set is the file it
       // was laid out as (phase 9.2).
-      if (p.blockDomains.length) {
-        routingRules.push({
-          type: 'field',
-          vlessRoute,
-          domain: p.blockDomains.map(xrayGeoEntry),
-          outboundTag: 'blocked',
-        });
-      }
-      if (p.directDomains.length) {
-        // DIRECT_TAG, not a link-out. The whole point of directDomains at an
-        // entry is to leave from here instead of entering the chain; pointing
-        // this at a link would mean the operator sold "these go direct" while
-        // they travel through every hop.
-        routingRules.push({
-          type: 'field',
-          vlessRoute,
-          domain: p.directDomains.map(xrayGeoEntry),
-          outboundTag: DIRECT_TAG,
-        });
-      }
+      routingRules.push(...xrayPolicyRules({ type: 'field', vlessRoute }, p.blockDomains, 'blocked', xrayGeoEntry));
+      // DIRECT_TAG, not a link-out. The whole point of directDomains at an
+      // entry is to leave from here instead of entering the chain; pointing
+      // this at a link would mean the operator sold "these go direct" while
+      // they travel through every hop.
+      routingRules.push(...xrayPolicyRules({ type: 'field', vlessRoute }, p.directDomains, DIRECT_TAG, xrayGeoEntry));
     }
   }
 
@@ -1589,6 +1743,11 @@ export function buildTopologyFragmentsForNode(
       needsObservatory = true;
       routingRules.push({ ...gate, balancerTag: AUTO_BALANCER_TAG });
     }
+  }
+
+  if (isEntry && input.entryUserGate) {
+    const gated = applyEntryUserGate(routingRules, input.entryUserGate);
+    routingRules.splice(0, routingRules.length, ...gated);
   }
 
   return {
@@ -1711,7 +1870,7 @@ export function buildCascadeConfigs(
 
     const inbounds = linkIn ? [linkInbound(linkIn)] : [];
     const outbounds: Record<string, unknown>[] = [];
-    if (linkOut) outbounds.push(linkOutbound(sorted[i + 1]!.nodeHost, linkOut));
+    if (linkOut) outbounds.push(linkOutbound(sorted[i + 1]!.nodeHost, linkOut, hop.nodeHost));
     outbounds.push(freedomOutbound);
 
     const routingRules: Record<string, unknown>[] = [];
@@ -1730,22 +1889,8 @@ export function buildCascadeConfigs(
       // its direct/block domains win before traffic enters the link.
       for (const p of policies) {
         const tag = String(routeTag(p.ordinal, 0));
-        if (p.blockDomains.length) {
-          routingRules.push({
-            type: 'field',
-            vlessRoute: tag,
-            domain: p.blockDomains,
-            outboundTag: 'blocked',
-          });
-        }
-        if (p.directDomains.length) {
-          routingRules.push({
-            type: 'field',
-            vlessRoute: tag,
-            domain: p.directDomains,
-            outboundTag: DIRECT_TAG,
-          });
-        }
+        routingRules.push(...xrayPolicyRules({ type: 'field', vlessRoute: tag }, p.blockDomains, 'blocked'));
+        routingRules.push(...xrayPolicyRules({ type: 'field', vlessRoute: tag }, p.directDomains, DIRECT_TAG));
       }
       // User traffic -> link-out. Also the fall-through for the plain profile
       // and for any client whose UUID carries no tag we recognise.
@@ -1810,8 +1955,8 @@ const OBSERVATORY_PROBE_INTERVAL = '1m';
 /** Like linkOutbound but with a caller-chosen tag, so N link-outs can share the
  *  LINK_OUT_TAG prefix (xray selectors are prefix matches) while staying
  *  distinct outbounds. */
-function linkOutboundTagged(host: string, cred: LinkCred, tag: string): Record<string, unknown> {
-  return { ...linkOutbound(host, cred), tag };
+function linkOutboundTagged(host: string, cred: LinkCred, tag: string, selfHost?: string): Record<string, unknown> {
+  return { ...linkOutbound(host, cred, selfHost), tag };
 }
 
 /** A4 ad-split: an extra route-policy applied at the balancer ENTRY. A client's
@@ -1821,6 +1966,26 @@ export interface CascadePolicy {
   ordinal: number;
   directDomains: string[];
   blockDomains: string[];
+}
+
+/**
+ * One policy list as xray rules, E55: the names in `domain`, the addresses
+ * (geoip:, ext-ip:, CIDRs) in `ip`, two rules with the same gate. They used to
+ * go into `domain` together, where `geoip:ru` is a substring no hostname has.
+ * xray on the node routes with IPIfNonMatch, so the ip rule also takes a name
+ * that no domain rule took.
+ */
+function xrayPolicyRules(
+  gate: Record<string, unknown>,
+  entries: string[],
+  outboundTag: string,
+  spell: (e: string) => string = (e) => e,
+): Record<string, unknown>[] {
+  const { domain, ip } = splitPolicyEntries(entries);
+  return [
+    ...(domain.length > 0 ? [{ ...gate, domain: domain.map(spell), outboundTag }] : []),
+    ...(ip.length > 0 ? [{ ...gate, ip: ip.map(spell), outboundTag }] : []),
+  ];
 }
 
 /** A4 ad-split: vlessRoute tag (uint16) for a (policyOrdinal, exitIndex) profile.
@@ -1866,6 +2031,13 @@ export function isAutoRouteTag(tag: number): boolean {
   return tag >= autoRouteTag(MAX_DIRECTION_ORDINAL);
 }
 
+/** The direction tag a route tag leads to, whatever policy band it sits in:
+ *  `routeTag(ordinal, N - 1)` -> N. Null for an Auto tag, which names no
+ *  direction. The inverse of routeTag, kept beside it (A-277). */
+export function directionOfRouteTag(tag: number): number | null {
+  return isAutoRouteTag(tag) ? null : tag % 256;
+}
+
 /** Balancer that spans every direction of one entry, as opposed to `bal-d<tag>`
  *  which spans the pool INSIDE one direction. */
 const AUTO_BALANCER_TAG = 'bal-auto';
@@ -1888,7 +2060,7 @@ export function buildBalancerCascadeConfigs(
   // Entry: one link-out per exit, all sharing the LINK_OUT_TAG prefix so the
   // observatory/balancer selector matches them; plus freedom for split-routing.
   const entryOutbounds: Record<string, unknown>[] = exits.map((ex, i) =>
-    linkOutboundTagged(ex.nodeHost, linkCreds[i]!, `${LINK_OUT_TAG}-${i}`),
+    linkOutboundTagged(ex.nodeHost, linkCreds[i]!, `${LINK_OUT_TAG}-${i}`, entry.nodeHost),
   );
   entryOutbounds.push(freedomOutbound);
 
@@ -1924,12 +2096,8 @@ export function buildBalancerCascadeConfigs(
         exits.flatMap((_, i) => {
           const tag = String(routeTag(p.ordinal, i));
           return [
-            ...(p.blockDomains.length
-              ? [{ type: 'field', vlessRoute: tag, domain: p.blockDomains, outboundTag: 'blocked' }]
-              : []),
-            ...(p.directDomains.length
-              ? [{ type: 'field', vlessRoute: tag, domain: p.directDomains, outboundTag: DIRECT_TAG }]
-              : []),
+            ...xrayPolicyRules({ type: 'field', vlessRoute: tag }, p.blockDomains, 'blocked'),
+            ...xrayPolicyRules({ type: 'field', vlessRoute: tag }, p.directDomains, DIRECT_TAG),
             { type: 'field', vlessRoute: tag, network: 'tcp,udp', outboundTag: `${LINK_OUT_TAG}-${i}` },
           ];
         }),
@@ -1944,12 +2112,8 @@ export function buildBalancerCascadeConfigs(
       ...policies.flatMap((p) => {
         const tag = String(autoRouteTag(p.ordinal));
         return [
-          ...(p.blockDomains.length
-            ? [{ type: 'field', vlessRoute: tag, domain: p.blockDomains, outboundTag: 'blocked' }]
-            : []),
-          ...(p.directDomains.length
-            ? [{ type: 'field', vlessRoute: tag, domain: p.directDomains, outboundTag: DIRECT_TAG }]
-            : []),
+          ...xrayPolicyRules({ type: 'field', vlessRoute: tag }, p.blockDomains, 'blocked'),
+          ...xrayPolicyRules({ type: 'field', vlessRoute: tag }, p.directDomains, DIRECT_TAG),
         ];
       }),
       { type: 'field', network: 'tcp,udp', balancerTag: BALANCER_TAG },

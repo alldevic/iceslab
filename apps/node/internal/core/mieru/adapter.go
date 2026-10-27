@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
@@ -23,7 +26,9 @@ type Config struct {
 	// `mita apply config <path>`.
 	ConfigPath string
 
-	// Inbound is the static settings (listen port, MTU, logging).
+	// Inbound is the install-time settings. Its MTU and logging level are
+	// the process defaults; its port is used only by a push without an
+	// inbound id (a panel older than multi-inbound).
 	Inbound InboundConfig
 
 	// RunCmd is the injectable command runner used by AddUser/RemoveUser/
@@ -48,6 +53,25 @@ type Adapter struct {
 	mu      sync.Mutex
 	users   map[string]User // userId → User
 	started bool
+	// inbounds holds every pushed inbound by its panel id ("" for a push
+	// without one). Empty means mita serves nothing: A-153, 22.10, mita
+	// used to listen on the install-time 2012 from the agent's start, for
+	// every user, with no mieru host in the panel, and kept listening after
+	// the last one was removed.
+	inbounds map[string]InboundConfig
+	// serving: the last apply put mita's proxy up (`mita start`), and no Idle
+	// has stopped it since.
+	serving bool
+	// waiting: mita holds this config with no user in it, and its proxy is
+	// down until the first user arrives (`mita start` refuses an empty user
+	// list, see regenerateAndReload). Configured, not serving, not a fault.
+	waiting bool
+	// unknown: this agent has not yet stopped or started mita, so what mita
+	// runs is whatever the previous agent left (A-198).
+	unknown bool
+	// scopeDropped: ScopePush took inbounds out that this push no longer
+	// carries, and RetainInbounds has to render without them (A-199).
+	scopeDropped bool
 	// N6 - sha256 of the last successfully-applied rendered config. A sync that
 	// produces an identical blob skips the two `mita apply/reload` CLI forks.
 	renderedHash [32]byte
@@ -61,9 +85,11 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.RunCmd = defaultRunCmd
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]User),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]User),
+		inbounds: make(map[string]InboundConfig),
+		unknown:  true,
 	}
 }
 
@@ -76,15 +102,23 @@ func (a *Adapter) Name() string { return Name }
 // Engine reports the native proxy core (mita; no alternate engine).
 func (a *Adapter) Engine() string { return "mieru" }
 
-// Start writes the initial config and brings mita up. We invoke
-// `mita apply config <path>` rather than spawning mita directly, mita's
-// own systemd unit owns the lifecycle. The adapter just rewrites config
-// + tells mita to reload.
-//
-// In config-only mode (BinaryPath empty) Start writes the YAML and stops
-// there, useful for tests and for dev hosts without mita installed.
+// Provisioned implements core.Provisionable: mita serves only what the panel
+// pushed. The same condition regenerateAndReload renders from.
+func (a *Adapter) Provisioned() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.inbounds) > 0
+}
+
+// Start marks the adapter ready and renders nothing (A-153): mita has nothing
+// to serve until a push names an inbound. A restarted agent gets its inbounds
+// back from the store's replay, which arrives through ApplyIdentifiedInbound
+// like any push. mita's own systemd unit owns the daemon either way.
 func (a *Adapter) Start(ctx context.Context) error {
-	return a.regenerateAndReload(ctx)
+	a.mu.Lock()
+	a.started = true
+	a.mu.Unlock()
+	return nil
 }
 
 func (a *Adapter) Stop(ctx context.Context) error {
@@ -102,6 +136,95 @@ func (a *Adapter) Stop(ctx context.Context) error {
 	return nil
 }
 
+// Idle implements core.Idler: no mieru inbound in the last push. `mita stop`
+// takes the proxy down and leaves the daemon (and its unix-socket RPC) up for
+// the next `mita start` (mieru 3.37.0 pkg/appctl: Stop closes the proxy and
+// sets IDLE, only Exit stops the RPC server). The inbounds are forgotten, so
+// the same inbound pushed again brings mita back.
+func (a *Adapter) Idle(ctx context.Context) error {
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
+	a.mu.Lock()
+	// A-198, 22.10: a new agent knows nothing of the mita an older one left
+	// RUNNING (on 2012, with its users of that moment), so "nothing held,
+	// nothing to stop" let it serve on after the update, a removed user
+	// included. Until this agent has stopped or started mita once, Idle stops
+	// it whatever memory says.
+	had := len(a.inbounds) > 0 || a.serving || a.unknown
+	a.unknown = false
+	a.inbounds = make(map[string]InboundConfig)
+	a.serving = false
+	a.waiting = false
+	a.renderedHash = [32]byte{}
+	bin, run := a.cfg.BinaryPath, a.cfg.RunCmd
+	a.mu.Unlock()
+	if !had || bin == "" {
+		return nil
+	}
+	if err := stopMita(ctx, run, bin); err != nil {
+		return fmt.Errorf("mieru idle: %w", err)
+	}
+	a.logger.Info("mieru: no inbound in the last push, mita stopped")
+	return nil
+}
+
+// ScopePush implements core.PushScoped: before this push's inbounds are
+// applied, the ones it no longer carries leave the map, so a binding
+// re-created on the same port is not refused against the one it replaces, and
+// the render does not carry both. A-199, 22.10: the clash check ran against
+// the inbound the same push was deleting, answered "port taken" (500), and
+// RetainInbounds then stopped mita with nothing left. The render without them
+// happens in the apply that follows or, when the push applies nothing here,
+// in RetainInbounds.
+var _ core.PushScoped = (*Adapter)(nil)
+
+func (a *Adapter) ScopePush(keep []string) {
+	kept := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		kept[id] = true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id := range a.inbounds {
+		if !kept[id] {
+			delete(a.inbounds, id)
+			a.scopeDropped = true
+		}
+	}
+}
+
+// RetainInbounds implements core.InboundReconciler: forget the inbounds the
+// push no longer carries. With none left mita stops, as Idle.
+var _ core.InboundReconciler = (*Adapter)(nil)
+
+func (a *Adapter) RetainInbounds(keep []string) error {
+	kept := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		kept[id] = true
+	}
+	a.mu.Lock()
+	dropped := 0
+	for id := range a.inbounds {
+		if !kept[id] {
+			delete(a.inbounds, id)
+			dropped++
+		}
+	}
+	if a.scopeDropped {
+		dropped++
+		a.scopeDropped = false
+	}
+	left := len(a.inbounds)
+	a.mu.Unlock()
+	if dropped == 0 {
+		return nil
+	}
+	if left == 0 {
+		return a.Idle(context.Background())
+	}
+	return a.regenerateAndReload(context.Background())
+}
+
 // AddUser registers a user in mita's user list. Idempotent.
 //
 // Reload is graceful, existing sessions survive; new connections use the
@@ -117,9 +240,9 @@ func (a *Adapter) AddUser(user core.User) error {
 		return nil
 	}
 	a.users[user.UserID] = desired
-	started := a.started
+	serves := len(a.inbounds) > 0
 	a.mu.Unlock()
-	if !started {
+	if !serves {
 		return nil
 	}
 	return a.regenerateAndReload(context.Background())
@@ -132,9 +255,9 @@ func (a *Adapter) RemoveUser(userID string) error {
 		return nil
 	}
 	delete(a.users, userID)
-	started := a.started
+	serves := len(a.inbounds) > 0
 	a.mu.Unlock()
-	if !started {
+	if !serves {
 		return nil
 	}
 	return a.regenerateAndReload(context.Background())
@@ -145,16 +268,23 @@ type inboundCfgWire struct {
 	MTU int `json:"mtu"`
 }
 
-// ApplyInbound updates the inbound settings (MTU + port). MTU change is
-// non-disruptive, existing sessions keep their negotiated MTU until
-// reconnect. Port change DOES restart the listener (new socket bind).
-//
-// Wave-14 C1: port now flows from the panel binding to mieru's portBindings.
-// Pre-wave port was install-time only and admin port changes from the UI
-// were silently dropped. Fallback chain:
-//
-//	panel-pushed port → install-time ListenPort → 2012 (mieru default).
+// ApplyInbound is the push without an inbound id (a panel older than
+// multi-inbound): one inbound, kept under "".
 func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
+	return a.ApplyIdentifiedInbound("", port, rawCfg)
+}
+
+// ApplyIdentifiedInbound implements core.IdentifiedApplier: one inbound of
+// several, by the push's id. MTU change is non-disruptive, existing sessions
+// keep their negotiated MTU until reconnect; a port change rebinds that
+// inbound's listeners (mita reload updates the endpoints of a running mux).
+//
+// Refused before it is stored: two inbounds on one port, or two MTUs. mita
+// keeps one MTU per process, so the second inbound with another one would
+// silently run on the first's (A-055, 22.10).
+//
+// Port fallback for a push without one: install-time ListenPort, then 2012.
+func (a *Adapter) ApplyIdentifiedInbound(id string, port int, rawCfg json.RawMessage) error {
 	var wire inboundCfgWire
 	if err := json.Unmarshal(rawCfg, &wire); err != nil {
 		return fmt.Errorf("mieru ApplyInbound: parse cfg: %w", err)
@@ -165,20 +295,58 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	if effectivePort == 0 {
 		effectivePort = a.cfg.Inbound.ListenPort
 	}
-	if a.cfg.Inbound.MTU == wire.MTU && a.cfg.Inbound.ListenPort == effectivePort {
+	next := InboundConfig{ListenPort: effectivePort, MTU: wire.MTU}
+	if next.MTU == 0 {
+		next.MTU = a.cfg.Inbound.MTU
+	}
+	prev, had := a.inbounds[id]
+	if had && prev == next && (a.serving || a.waiting) {
 		a.mu.Unlock()
 		a.logger.Info("mieru ApplyInbound: config unchanged, skipping")
 		return nil
 	}
-	a.cfg.Inbound.MTU = wire.MTU
-	if effectivePort != 0 {
-		a.cfg.Inbound.ListenPort = effectivePort
+	if err := a.conflictLocked(id, next); err != nil {
+		a.mu.Unlock()
+		return fmt.Errorf("mieru ApplyInbound: %w", err)
 	}
-	newPort := a.cfg.Inbound.ListenPort
+	a.inbounds[id] = next
 	a.mu.Unlock()
 	a.logger.Info("mieru ApplyInbound: config changed",
-		"mtu", wire.MTU, "port", newPort)
-	return a.regenerateAndReload(context.Background())
+		"inboundId", id, "mtu", next.MTU, "port", next.ListenPort)
+
+	err := a.regenerateAndReload(context.Background())
+	var refused *refusedError
+	if errors.As(err, &refused) {
+		// mita never took it (A-130 form): memory goes back to what it runs.
+		a.mu.Lock()
+		if cur, ok := a.inbounds[id]; ok && cur == next {
+			if had {
+				a.inbounds[id] = prev
+			} else {
+				delete(a.inbounds, id)
+			}
+		}
+		a.mu.Unlock()
+	}
+	return err
+}
+
+// conflictLocked refuses `next` beside the other inbounds. a.mu held.
+func (a *Adapter) conflictLocked(id string, next InboundConfig) error {
+	n := next.withDefaults()
+	for other, in := range a.inbounds {
+		if other == id {
+			continue
+		}
+		o := in.withDefaults()
+		if o.ListenPort == n.ListenPort {
+			return fmt.Errorf("port %d is already taken by another mieru inbound", n.ListenPort)
+		}
+		if o.MTU != n.MTU {
+			return fmt.Errorf("MTU %d differs from %d of another mieru inbound on this node: mita keeps one MTU per process", n.MTU, o.MTU)
+		}
+	}
+	return nil
 }
 
 // GetStats returns tracked users with zero counters. mita exposes
@@ -200,56 +368,72 @@ func (a *Adapter) Healthy() bool {
 	return a.started
 }
 
-// regenerateAndReload renders config + runs `mita apply/reload`. Bug #10:
-// must NOT be called with a.mu held. restartMu serializes reloads; a.mu is
-// taken only for the snapshot + the final started flag so Healthy()/GetStats
-// don't block behind the multi-second CLI calls.
+// refusedError: render, write or `mita apply config` failed, so mita still
+// holds the config it had.
+type refusedError struct{ err error }
+
+func (e *refusedError) Error() string { return e.err.Error() }
+func (e *refusedError) Unwrap() error { return e.err }
+
+// regenerateAndReload renders every inbound + runs `mita apply config`,
+// `mita reload` and `mita start`. Bug #10: must NOT be called with a.mu held.
+// restartMu serializes reloads; a.mu is taken only for the snapshot + the final
+// flags so Healthy()/GetStats don't block behind the multi-second CLI calls.
+// With no inbound there is nothing to render: Idle is what stops mita.
 func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()
 
 	a.mu.Lock()
 	users := sortedUsers(a.users)
-	inbound := a.cfg.Inbound
+	inbounds := sortedInbounds(a.inbounds)
+	base := a.cfg.Inbound
 	cfgPath := a.cfg.ConfigPath
 	binPath := a.cfg.BinaryPath
 	run := a.cfg.RunCmd
 	a.mu.Unlock()
+	if len(inbounds) == 0 {
+		return nil
+	}
 
-	blob, err := renderConfig(inbound, users)
+	blob, err := renderMulti(inbounds, base, users)
 	if err != nil {
-		return fmt.Errorf("render mieru config: %w", err)
+		return &refusedError{fmt.Errorf("render mieru config: %w", err)}
 	}
 	if cfgPath != "" {
 		if err := writeConfig(cfgPath, blob); err != nil {
-			return err
+			return &refusedError{err}
 		}
 	}
 	if binPath == "" {
 		a.mu.Lock()
-		a.started = true
+		a.serving = true
 		a.mu.Unlock()
 		a.logger.Info("mieru config written (config-only mode)", "users", len(users))
 		return nil
 	}
 
-	// N6 - skip the two CLI forks when the rendered config is byte-identical to
+	// N6 - skip the CLI forks when the rendered config is byte-identical to
 	// the last one we applied. add/remove of an unrelated protocol's users, or a
 	// no-op resync, otherwise paid `mita apply` + `mita reload` for nothing.
 	hash := sha256.Sum256(blob)
 	a.mu.Lock()
-	unchanged := a.started && a.renderedHash == hash
+	unchanged := (a.serving || a.waiting) && a.renderedHash == hash
 	a.mu.Unlock()
 	if unchanged {
 		a.logger.Debug("mieru config unchanged, skipping mita apply/reload", "users", len(users))
 		return nil
 	}
 
-	// `mita apply config <path>` parses + applies the new config without
-	// dropping existing sessions. Then `mita reload` (or just SIGHUP via
-	// `mita`) finalises.
+	// `mita apply config <path>` REPLACES the stored config (3.37.0: the CLI
+	// sends the file as is, and the server's SetConfig stores it whole; the
+	// help text's "merges" is not what the code does), so a user or binding
+	// missing from the file is gone. `mita reload` then hands a running proxy
+	// the new users and endpoints without dropping sessions, and `mita start`
+	// brings up a proxy that is not running (after Idle, or on a daemon that
+	// started with no valid config); on a running one it only says so.
 	if out, err := run(ctx, binPath, "apply", "config", cfgPath); err != nil {
-		return fmt.Errorf("mita apply config: %w (%s)", err, string(out))
+		return &refusedError{fmt.Errorf("mita apply config: %w (%s)", err, string(out))}
 	}
 	if out, err := run(ctx, binPath, "reload"); err != nil {
 		// Reload might be a no-op for some mita versions where `apply
@@ -257,22 +441,80 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 		a.logger.Warn("mita reload returned non-zero (often safe after apply)",
 			"err", err, "out", string(out))
 	}
+	// No user yet (a new mieru inbound, a node nobody is on): mita 3.37.0 takes
+	// the config and the reload (SetConfig and ValidateFullServerConfig do not
+	// ask for users), but `mita start` refuses, "no user found" (pkg/protocol
+	// mux.go:360), and a proxy already up keeps RUNNING on its port with an
+	// empty list. Checked live against 3.37.0, 26.10. So the config stays in
+	// mita, the proxy goes down (`mita stop`: IDLE, port closed) and the
+	// adapter waits; the first user's regenerate starts it. Before this the
+	// refused start failed the whole push, and the push failing kept the
+	// roster, and with it the first user, from ever reaching the node.
+	if len(users) == 0 {
+		a.mu.Lock()
+		up := a.serving || a.unknown
+		a.mu.Unlock()
+		if up {
+			if err := stopMita(ctx, run, binPath); err != nil {
+				return fmt.Errorf("no users: %w", err)
+			}
+		}
+		a.mu.Lock()
+		a.serving = false
+		a.waiting = true
+		a.unknown = false
+		a.renderedHash = hash
+		a.mu.Unlock()
+		a.logger.Info("mieru: config applied, no users yet, mita proxy waits for the first one", "inbounds", len(inbounds))
+		return nil
+	}
+	if out, err := run(ctx, binPath, "start"); err != nil {
+		return fmt.Errorf("mita start: %w (%s)", err, string(out))
+	}
 
 	a.mu.Lock()
-	a.started = true
+	a.serving = true
+	a.waiting = false
+	a.unknown = false
 	a.renderedHash = hash
 	a.mu.Unlock()
-	a.logger.Info("mieru (mita) reloaded", "users", len(users), "mtu", inbound.MTU)
+	a.logger.Info("mieru (mita) reloaded", "users", len(users), "inbounds", len(inbounds))
 	return nil
 }
 
-// Installed reports whether the mita binary is on this machine. mita holds no
-// port of its own beyond the inbound the panel already knows about, so this
-// adapter reserves nothing.
+// stopMita takes the proxy down. A proxy already down is what stop wants:
+// mita 3.37.0 refuses the stop of a proxy that is not RUNNING with exit 1,
+// "mita server proxy is not running" (pkg/cli/server.go:514-516), which is the
+// state of every fresh agent's first stop (A-275, live 26.10). A daemon that
+// is not running at all is still an error: nothing then holds the config.
+func stopMita(ctx context.Context, run RunCmdFunc, bin string) error {
+	out, err := run(ctx, bin, "stop")
+	if err == nil || strings.Contains(string(out), "server proxy is not running") {
+		return nil
+	}
+	return fmt.Errorf("mita stop: %w (%s)", err, string(out))
+}
+
+// sortedInbounds is the map in port order, so a render from the same state is
+// byte-identical.
+func sortedInbounds(in map[string]InboundConfig) []InboundConfig {
+	out := make([]InboundConfig, 0, len(in))
+	for _, c := range in {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ListenPort < out[j].ListenPort })
+	return out
+}
+
+// Installed reports whether the mita binary is on this machine.
 func (a *Adapter) Installed() bool { return core.BinaryPresent(a.cfg.BinaryPath) }
 
-// ReservedPorts: none. mita listens on the inbound the panel already knows
-// about and opens nothing of its own.
+// ReservedPorts: none, checked against mieru 3.37.0. mita's management RPC is
+// a unix socket (/var/run/mita/mita.sock, pkg/appctl ServerUDS; the daemon
+// listens with net.Listen("unix", ...) in pkg/cli/server.go) and mita opens no
+// TCP listener of its own; its ports are the inbounds the panel already knows.
+// And since A-153 it opens none of those before a push names one: the 2012
+// it used to hold from the agent's start was the one port nobody had pushed.
 //
 // An EMPTY list and not a missing method: implementing the interface is how
 // this adapter says "I hold nothing", which is an answer. Staying silent is

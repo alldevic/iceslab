@@ -19,6 +19,7 @@ import {
   type SubscriptionFormat,
 } from '@iceslab/shared';
 import { amneziaQrChunkFromKey } from '../../core-adapters/amneziawg/vpnlink.js';
+import { withProtocols, withQuery } from './subscription.protocols.js';
 import { PAGE_CSS } from './subscription.page-styles.js';
 import { pageScript } from './subscription.page-script.js';
 import { QR_SCRIPT, qrBox } from './subscription.page-qr.js';
@@ -56,6 +57,13 @@ export interface SubscriptionPageData {
   /** Distinct protocols present in this subscription. */
   protocols: ProtocolName[];
   /**
+   * `?protocols=`, as the page offers it. `available` is what this person has
+   * WITHOUT the narrowing (the chips), `selected` what the link narrows to
+   * now, empty for all. `subUrl` already carries `selected`, and `protocols`
+   * above is what is left after it.
+   */
+  protocolSwitch?: { available: ProtocolName[]; selected: ProtocolName[] };
+  /**
    * The formats whose file would carry something for this subscription,
    * computed by the route through the same gate the files go through
    * (endpointsForFormat, host switches included). Absent only for page data
@@ -90,6 +98,10 @@ export interface SubscriptionPageData {
    */
   awgNodes?: Array<{
     nodeName: string;
+    /** The endpoint's id (endpointId), what the per-node links carry in
+     *  `node=` (A-107): the label moves when a neighbour profile lands on the
+     *  node, the id does not. Absent: the label, as before. */
+    id?: string;
     /** The wg-quick config this node hands out. */
     conf?: string;
     /** Raw AmneziaVPN vpn:// key. Also what the copy button hands over, since
@@ -513,7 +525,7 @@ function renderSteps(
     const confs = (data.awgNodes ?? [])
       .map(
         (n) =>
-          `<a class="conf-row" href="${esc(data.subUrl)}?format=wgconf&amp;node=${encodeURIComponent(n.nodeName)}">` +
+          `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&node=${encodeURIComponent(n.id ?? n.nodeName)}`))}">` +
           `<span class="conf-row__name">${esc(n.nodeName)}</span>` +
           `<span class="conf-row__file">awg-${esc(n.nodeName)}.conf</span></a>`,
       )
@@ -537,7 +549,7 @@ function renderSteps(
         'ExternalLink',
         { cls: 'ic' },
       )}<span>${esc(t.stepGet)} <b data-app-label>${esc(first.name)}</b></span></a></div>`
-    : `<div class="step__buttons" hidden><a class="step-btn" data-app-get href="#">${icons.draw('ExternalLink', { cls: 'ic' })}<span>${esc(t.stepGet)} <b data-app-label></b></span></a></div>`;
+    : `<div class="step__buttons" hidden><a class="step-btn" data-app-get href="#" target="_blank" rel="noopener noreferrer">${icons.draw('ExternalLink', { cls: 'ic' })}<span>${esc(t.stepGet)} <b data-app-label></b></span></a></div>`;
   const addBtn =
     first && first.action.kind === 'deeplink'
       ? `<div class="step__buttons"><a class="step-btn" data-app-put href="${esc(deeplinkHref(first.action.scheme, data.subUrl))}">${icons.draw(
@@ -624,8 +636,6 @@ function renderDownloads(
   t: Labels,
   icons: GlyphSheet,
 ): string {
-  const sub = esc(data.subUrl);
-
   interface Row {
     /** ?format= value, and the key into the phrase dictionary. */
     fmt: string;
@@ -677,7 +687,7 @@ function renderDownloads(
   const perNode = (fmt: string): Row[] =>
     (data.awgNodes ?? []).map((n) => ({
       fmt,
-      q: `&amp;node=${encodeURIComponent(n.nodeName)}`,
+      q: `&amp;node=${encodeURIComponent(n.id ?? n.nodeName)}`,
       label: n.nodeName,
     }));
   const router: Row[] = [
@@ -791,7 +801,7 @@ function renderDownloads(
     .join('');
 
   const row = (r: Row) => {
-    const href = `${sub}?format=${r.fmt}${r.q ?? ''}`;
+    const href = `${esc(withQuery(data.subUrl, `format=${r.fmt}`))}${r.q ?? ''}`;
     // Имя это то, ЧЕМ строка является для читателя, а не ключ формата.
     // «clash» подписчику не значит ничего, «Clash-совместимые» значит, а сами
     // клиенты уходят в подпись под именем.
@@ -1099,7 +1109,26 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // Nothing on a page that cannot connect anybody: see dead above.
   const downloadsHtml = dead ? '' : renderDownloads(data, hasAwg, false, t, icons);
 
-  const protocolChips = data.protocols.map((p) => `<span class="proto">${esc(p)}</span>`).join('');
+  /**
+   * The protocols line, and since `?protocols=` a switcher when there is a
+   * choice to make: two protocols or more, or a narrowing already in the link
+   * (so the way back is on the page even when the narrowing left nothing).
+   *
+   * Links without script, each to this page narrowed to one protocol; with
+   * script, a click toggles the chip, several can stay on, and the page
+   * rewrites the subscription link, its code and every Add button in place
+   * (subscription.page-script.ts). The page itself is not rebuilt: what it
+   * lists below is what the link it was opened with hands out.
+   */
+  const ps = data.protocolSwitch;
+  const switchable = !dead && !!ps && (ps.available.length > 1 || ps.selected.length > 0);
+  const chip = (p: ProtocolName | '', label: string, on: boolean) =>
+    `<a class="proto proto--pick${on ? ' is-on' : ''}" href="${esc(withProtocols('?', p ? [p] : []) || '?')}" data-proto="${p}" aria-pressed="${on}">${esc(label)}</a>`;
+  const protocolChips = switchable
+    ? chip('', t.protocolsAll, ps!.selected.length === 0) +
+      ps!.available.map((p) => chip(p, p, ps!.selected.includes(p))).join('')
+    : data.protocols.map((p) => `<span class="proto">${esc(p)}</span>`).join('');
+  const narrowedToNothing = !!ps && ps.selected.length > 0 && data.protocols.length === 0;
 
   // Compact import widget: ONE QR shown at a time. A server selector picks the
   // AmneziaWG node (no more one-tower-of-QRs-per-node sprawl), an AmneziaVPN /
@@ -1216,7 +1245,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     : '';
 
   const supportRow = data.supportUrl
-    ? `<a class="support" href="${esc(data.supportUrl)}">${esc(t.support)} -&gt;</a>`
+    ? `<a class="support" href="${esc(data.supportUrl)}" rel="noopener noreferrer">${esc(t.support)} -&gt;</a>`
     : '';
 
   /**
@@ -1294,7 +1323,13 @@ ${SPRITE_SLOT}
         </div>
       </div>
     </div>
-    ${protocolChips ? `<div><div class="lbl" style="margin-bottom:8px">${esc(t.protocols)}</div><div class="protos">${protocolChips}</div></div>` : ''}
+    ${
+      protocolChips
+        ? `<div${switchable ? ' data-proto-switch' : ''}><div class="lbl" style="margin-bottom:8px">${esc(t.protocols)}</div><div class="protos">${protocolChips}</div>${
+            switchable ? `<div class="protos__hint">${esc(t.protocolsHint)}</div>` : ''
+          }</div>`
+        : ''
+    }
   </section>
 
   <section class="card" id="sublink">
@@ -1328,12 +1363,17 @@ ${SPRITE_SLOT}
       ${pickerHtml}
     </div>
     ${
-      noServers
-        ? `<div class="note-strip">
+      narrowedToNothing
+        ? `<div class="note-strip" data-proto-empty>
+      ${icons.draw('AlertCircle', { cls: 'ic' })}
+      <div class="note-strip__text"><b class="note-strip__title">${esc(t.protocolsEmptyTitle)}</b>${esc(t.protocolsEmpty(ps!.selected.join(', ')))}</div>
+    </div>`
+        : noServers
+          ? `<div class="note-strip">
       ${icons.draw('AlertCircle', { cls: 'ic' })}
       <div class="note-strip__text"><b class="note-strip__title">${esc(t.noServersTitle)}</b>${esc(t.noServers)}</div>
     </div>`
-        : ''
+          : ''
     }
     ${panelsHtml}
     ${downloadsHtml}
@@ -1347,9 +1387,9 @@ ${SPRITE_SLOT}
   </main>
   <footer class="foot">
     <nav class="lang" aria-label="Language">
-      <a class="lng${data.lang === 'ru' ? ' on' : ''}" href="?lang=ru" hreflang="ru"${data.lang === 'ru' ? ' aria-current="true"' : ''}>Русский</a>
+      <a class="lng${data.lang === 'ru' ? ' on' : ''}" href="${esc(withProtocols('?lang=ru', ps?.selected ?? []))}" hreflang="ru"${data.lang === 'ru' ? ' aria-current="true"' : ''}>Русский</a>
       <span class="lang__sep">·</span>
-      <a class="lng${data.lang === 'en' ? ' on' : ''}" href="?lang=en" hreflang="en"${data.lang === 'en' ? ' aria-current="true"' : ''}>English</a>
+      <a class="lng${data.lang === 'en' ? ' on' : ''}" href="${esc(withProtocols('?lang=en', ps?.selected ?? []))}" hreflang="en"${data.lang === 'en' ? ' aria-current="true"' : ''}>English</a>
     </nav>
   </footer>
 </div>
@@ -1357,7 +1397,7 @@ ${transferHtml}
 <!-- Two tags, not one: a throw in either script stops only that one, and the
      page has to survive losing its codes as readily as losing its tabs. -->
 <script>${QR_SCRIPT}</script>
-<script>${pageScript({ subUrl: data.subUrl, noTransfer: NO_TRANSFER, copied: t.copied, hideAll: t.hideAll, showAll: t.showAll })}</script>
+<script>${pageScript({ subUrl: data.subUrl, noTransfer: NO_TRANSFER, copied: t.copied, hideAll: t.hideAll, showAll: t.showAll, protocolOrder: PROTOCOL_NAMES })}</script>
 </body>
 </html>`;
 

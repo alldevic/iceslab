@@ -1,13 +1,25 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Stack } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listCascades, updateCascade, deleteCascade, type Cascade } from '@/lib/domain/cascades';
-import { listNodes } from '@/lib/domain/nodes';
+import {
+  cascadeDeleteRefusal,
+  cascadeToggleRefusal,
+  deleteCascade,
+  listCascades,
+  nodeInOtherCascadeRefusal,
+  nodeInOtherCascadeWords,
+  setCascadeEnabled,
+  type Cascade,
+} from '@/lib/domain/cascades';
+import { listAllNodes } from '@/lib/domain/nodes';
 import { apiErrorMessage } from '@/lib/net/client';
+import { confirmCascadeDelete } from '@/ui/confirmCascadeDelete';
+import { LoadFailedLine } from '@/ui/LoadFailed';
 import { FleetEmpty } from '@/contours/nodes/components/FleetEmpty';
-import { CascadesView, type CascadeLayout } from '@/contours/nodes/components/CascadesView';
+import { CascadesView, type CascadeCardRefusal, type CascadeLayout } from '@/contours/nodes/components/CascadesView';
 import { useCascadeRows } from '@/contours/nodes/lib/cascadeRows';
 
 /**
@@ -26,7 +38,7 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
   const navigate = useNavigate();
   const qc = useQueryClient();
   const cascadesQuery = useQuery({ queryKey: ['cascades'], queryFn: listCascades });
-  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listNodes({ limit: 100 }) });
+  const nodesQuery = useQuery({ queryKey: ['nodes', 'all'], queryFn: () => listAllNodes() });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['cascades'] });
   const onError = (err: unknown) => {
@@ -37,22 +49,55 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
     notifications.show({ color: 'red', title: t('common.saveError'), message: apiErrorMessage(err) });
   };
 
+  /**
+   * Refusals to switch on or to delete, by cascade id (A-126). The card is
+   * drawn from the server's `enabled` only, so it never shows «on» before the
+   * answer; a refusal the server explained stays under the card in its words
+   * instead of a toast that is gone in four seconds. The next try clears it.
+   */
+  const [refusals, setRefusals] = useState<Record<string, CascadeCardRefusal>>({});
+  const clearRefusal = (id: string) =>
+    setRefusals((r) => {
+      const next = { ...r };
+      delete next[id];
+      return next;
+    });
+
   const deleteMutation = useMutation({
     mutationFn: deleteCascade,
+    onMutate: clearRefusal,
     onSuccess: () => {
       invalidate();
       notifications.show({ color: 'green', message: t('cascades.deleted') });
     },
-    onError,
+    // Already gone is what the operator asked for, said as such; any other
+    // refusal the server explained goes under the card (cascadeDeleteRefusal).
+    onError: (err, id) => {
+      const refusal = cascadeDeleteRefusal(err);
+      if (!refusal) return onError(err);
+      invalidate();
+      if (refusal.kind === 'gone') notifications.show({ message: t('cascades.alreadyDeleted') });
+      else setRefusals((r) => ({ ...r, [id]: { action: 'delete', code: refusal.code, message: refusal.message } }));
+    },
   });
 
   const enableMutation = useMutation({
-    mutationFn: (c: Cascade) => updateCascade(c.id, { enabled: !c.enabled }),
+    mutationFn: (c: Cascade) => setCascadeEnabled(c.id, !c.enabled),
+    onMutate: (c) => clearRefusal(c.id),
     onSuccess: invalidate,
-    onError,
+    onError: (err, c) => {
+      const refusal = cascadeToggleRefusal(err);
+      if (!refusal) return onError(err);
+      invalidate();
+      // A-101: the node and the cascade that holds it, in the panel's words.
+      const taken = nodeInOtherCascadeRefusal(err);
+      const message = taken ? nodeInOtherCascadeWords(taken, t) : refusal.message;
+      setRefusals((r) => ({ ...r, [c.id]: { action: 'enable', code: refusal.code, message } }));
+    },
   });
+  const pendingId = enableMutation.isPending ? enableMutation.variables.id : null;
 
-  const rows = useCascadeRows(cascadesQuery.data?.cascades ?? [], nodesQuery.data?.nodes ?? []);
+  const { rows, failure: sideFailure } = useCascadeRows(cascadesQuery.data?.cascades ?? [], nodesQuery.data?.nodes ?? []);
 
   // Nothing to draw has three causes here and they are not interchangeable:
   // the request failed, the request has not answered yet, or there really are
@@ -84,12 +129,17 @@ export function CascadesPanel({ layout = 'cards' }: { layout?: CascadeLayout }) 
       {/* The list itself: one component, two densities. The explainer strip
           that used to sit here is gone: the cards say what a cascade is by
           drawing one, and the action lives in the page bar. */}
+      {/* A list that explains the cards (squads, policies, bindings, outbounds)
+          did not arrive: said once here, the cards show a dash for it. */}
+      {sideFailure && <LoadFailedLine message={sideFailure.message} onRetry={sideFailure.onRetry} />}
       <CascadesView
         rows={rows}
         layout={layout}
         onEdit={(c) => navigate(`/nodes/cascades/${c.id}`)}
-        onDelete={(c) => deleteMutation.mutate(c.id)}
+        onDelete={(c) => confirmCascadeDelete(c, t, () => deleteMutation.mutate(c.id))}
         onToggleEnabled={(c) => enableMutation.mutate(c)}
+        toggling={pendingId}
+        refusals={refusals}
       />
     </Stack>
   );

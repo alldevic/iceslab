@@ -3,9 +3,12 @@ package naive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +25,10 @@ const defaultReloadTimeout = 15 * time.Second
 // it's still running, long enough to catch an immediate config/port/ACME exit,
 // short enough not to stall the applyInbound RPC.
 const caddyLivenessGrace = 1500 * time.Millisecond
+
+// DefaultAdminSocket: /run is on the agent unit's ReadWritePaths, and the
+// directory is the agent's alone.
+const DefaultAdminSocket = "/run/iceslab/caddy.sock"
 
 // Config is the per-instance settings for a NaiveProxyAdapter.
 type Config struct {
@@ -43,6 +50,10 @@ type Config struct {
 
 	// ReloadTimeout caps how long `caddy reload` may run. Default 15s.
 	ReloadTimeout time.Duration
+
+	// AdminSocket is the unix socket of caddy's admin API, which `caddy
+	// reload` talks to (A-118). Default DefaultAdminSocket.
+	AdminSocket string
 
 	// runCmd is an injection point for tests. nil → real exec.CommandContext.
 	runCmd func(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -75,6 +86,9 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 	}
 	if cfg.ReloadTimeout == 0 {
 		cfg.ReloadTimeout = defaultReloadTimeout
+	}
+	if cfg.AdminSocket == "" {
+		cfg.AdminSocket = DefaultAdminSocket
 	}
 	if cfg.runCmd == nil {
 		cfg.runCmd = realRunCmd
@@ -114,6 +128,15 @@ func (a *Adapter) Provisioned() bool {
 	defer a.mu.Unlock()
 	return a.cfg.Inbound.Hostname != ""
 }
+
+var _ core.ACMEUser = (*Adapter)(nil)
+
+// UsesACME implements core.ACMEUser (A-280): naive has no other certificate.
+// A provisioned site is `:<port>, <hostname>` with `tls <email>`
+// (caddyfile.go:164-165), Caddy's automatic HTTPS from a public CA, whose
+// HTTP-01 challenge needs 80/tcp. Same condition as Provisioned; Idle clears
+// the hostname, so an idle naive needs nothing.
+func (a *Adapter) UsesACME() bool { return a.Provisioned() }
 
 func (a *Adapter) Start(ctx context.Context) error {
 	if !a.Provisioned() {
@@ -305,9 +328,10 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 	reloadTimeout := a.cfg.ReloadTimeout
 	run := a.cfg.runCmd
 	procExists := a.proc != nil
+	sock := a.cfg.AdminSocket
 	a.mu.Unlock()
 
-	blob, err := renderCaddyfile(inbound, users)
+	blob, err := renderCaddyfile(inbound, users, sock)
 	if err != nil {
 		return fmt.Errorf("render Caddyfile: %w", err)
 	}
@@ -324,7 +348,12 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 	}
 
 	if !procExists {
-		// Cold start: spawn caddy.
+		// Cold start: spawn caddy, its admin socket in a directory nobody
+		// else may enter, and no socket file left by a caddy that died
+		// without removing it.
+		if err := prepareAdminSocket(sock); err != nil {
+			return err
+		}
 		proc := subprocess.New(subprocess.Config{
 			Name:           Name,
 			Binary:         bin,
@@ -359,8 +388,7 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 
 	ctx, cancel := context.WithTimeout(parent, reloadTimeout)
 	defer cancel()
-	out, err := run(ctx, bin,
-		"reload", "--config", cfgPath, "--adapter", "caddyfile")
+	out, err := run(ctx, bin, reloadArgs(cfgPath, sock)...)
 	if err != nil {
 		return fmt.Errorf("caddy reload: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -368,6 +396,27 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 	a.started = true
 	a.mu.Unlock()
 	a.logger.Info("naive (caddy) reloaded", "users", len(users))
+	return nil
+}
+
+// reloadArgs: `caddy reload` to the admin socket the Caddyfile names (A-118).
+func reloadArgs(cfgPath, sock string) []string {
+	return []string{"reload", "--config", cfgPath, "--adapter", "caddyfile", "--address", "unix/" + sock}
+}
+
+// prepareAdminSocket makes the socket's directory 0700 (also when it already
+// existed with wider rights) and removes a stale socket file.
+func prepareAdminSocket(sock string) error {
+	dir := filepath.Dir(sock)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("caddy admin socket dir: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("caddy admin socket dir: %w", err)
+	}
+	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("caddy admin socket: %w", err)
+	}
 	return nil
 }
 
@@ -384,8 +433,8 @@ func usersSlice(in map[string]User) []User {
 // same thing; the path is the one the installer writes.
 func (a *Adapter) Installed() bool { return core.BinaryPresent(a.cfg.CaddyBin) }
 
-// ReservedPorts: none. caddy-naive serves its inbound and opens no side
-// channel; the admin API the upstream fork can expose is not enabled here.
+// ReservedPorts: none. caddy-naive serves its inbound, and its admin API is on
+// a unix socket (DefaultAdminSocket), not on TCP 2019 (A-118).
 //
 // Empty rather than absent, for the reason in the interface doc: saying "I hold
 // nothing" is an answer, and it is what lets the panel be certain about a node

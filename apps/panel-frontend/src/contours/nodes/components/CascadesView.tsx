@@ -1,11 +1,16 @@
-﻿import { useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { getCascadeStatus, type Cascade } from '@/lib/domain/cascades';
 import { cascadeNodeChips, type CascadeLegs } from '@/lib/domain/cascadeChips';
 import { CoreChips } from '@/ui/CoreChips';
+import { LoadFailedLine } from '@/ui/LoadFailed';
+import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { cascadeStatusView } from '@/lib/domain/cascadeStatus';
 import { countryFlag } from '@/lib/domain/countries';
-import type { CascadeRow, DirectionView, HopView } from '@/contours/nodes/lib/cascadeRows';
+import type { CascadeRow } from '@/contours/nodes/lib/cascadeRows';
+import { directionWhere, type DirectionView, type HopView } from '@/lib/domain/cascadePath';
 import { AMBER, CARD, CYAN, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, RED, SNOW, WELL } from '@/contours/nodes/lib/colors';
 
 /**
@@ -19,18 +24,27 @@ const MONO = "'Geist Mono Variable', 'Geist Mono', ui-monospace, monospace";
 
 export type CascadeLayout = 'cards' | 'rows';
 
+/** What the server refused on a card, and in which words. */
+export type CascadeCardRefusal = { action: 'enable' | 'delete'; code: string; message: string };
+
 export function CascadesView({
   rows,
   layout,
   onEdit,
   onDelete,
   onToggleEnabled,
+  toggling = null,
+  refusals = {},
 }: {
   rows: CascadeRow[];
   layout: CascadeLayout;
   onEdit: (c: Cascade) => void;
   onDelete: (c: Cascade) => void;
   onToggleEnabled: (c: Cascade) => void;
+  /** Cascade whose switch is waiting for the server. */
+  toggling?: string | null;
+  /** The server's refusal to switch or to delete, by cascade id (A-126). */
+  refusals?: Record<string, CascadeCardRefusal>;
 }) {
   const { t } = useTranslation();
 
@@ -70,6 +84,7 @@ export function CascadesView({
             row={row}
             onEdit={() => onEdit(row.cascade)}
             onDelete={() => onDelete(row.cascade)}
+            refusal={refusals[row.cascade.id] ?? null}
           />
         ))}
       </Box>
@@ -85,6 +100,8 @@ export function CascadesView({
           onEdit={() => onEdit(row.cascade)}
           onDelete={() => onDelete(row.cascade)}
           onToggleEnabled={() => onToggleEnabled(row.cascade)}
+          toggling={toggling === row.cascade.id}
+          refusal={refusals[row.cascade.id] ?? null}
         />
       ))}
     </Stack>
@@ -98,11 +115,15 @@ function CascadeCard({
   onEdit,
   onDelete,
   onToggleEnabled,
+  toggling,
+  refusal,
 }: {
   row: CascadeRow;
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: () => void;
+  toggling: boolean;
+  refusal: CascadeCardRefusal | null;
 }) {
   const { t } = useTranslation();
   const { cascade, entry, transits, directions } = row;
@@ -117,16 +138,13 @@ function CascadeCard({
     return (
       <Box
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '16px 20px',
           borderRadius: 10,
           backgroundColor: CARD,
           border: `1px solid ${HAIRLINE}`,
-          borderLeft: `3px solid ${DIM}`,
+          borderLeft: `3px solid ${refusal ? RED : DIM}`,
         }}
       >
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px' }}>
         <Text style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 600, lineHeight: '20px', color: MIST }}>
           {cascade.name}
         </Text>
@@ -158,11 +176,15 @@ function CascadeCard({
           {t('cascades.offHint')}
         </Text>
         <Box style={{ flex: 1, minWidth: 0 }} />
-        <SmallButton icon="power" onClick={onToggleEnabled}>
-          {t('cascades.enable')}
+        {/* Stays «off» until the server says otherwise: the card is drawn from
+            the stored `enabled`, and the button only says it is asking. */}
+        <SmallButton icon="power" onClick={onToggleEnabled} disabled={toggling}>
+          {toggling ? t('cascades.enabling') : t('cascades.enable')}
         </SmallButton>
         <IconButton onClick={onEdit} kind="edit" />
         <IconButton onClick={onDelete} kind="delete" />
+      </Box>
+      <RefusalLines refusal={refusal} />
       </Box>
     );
   }
@@ -198,7 +220,7 @@ function CascadeCard({
             panel has no per-squad member list to dedupe against, so a summed
             user count would overstate reach. The footer chips carry the real
             per-squad numbers. */}
-        <Fact value={String(row.squads.length)} label={t('cascades.bar.squads')} />
+        <Fact value={row.reach ? String(row.reach.squads.length) : '-'} label={t('cascades.bar.squads')} />
         <IconButton onClick={onEdit} kind="edit" />
         <IconButton onClick={onDelete} kind="delete" />
       </Box>
@@ -286,12 +308,16 @@ function CascadeCard({
         }}
       >
         <Caption>{t('cascades.reaches')}</Caption>
-        {row.squads.length === 0 ? (
+        {/* Unknown while a list it is read from is missing: a dash, not «nobody»;
+            the list above says which request failed. */}
+        {!row.reach ? (
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>-</Text>
+        ) : row.reach.squads.length === 0 ? (
           <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>
             {t('cascades.reachesNobody')}
           </Text>
         ) : (
-          row.squads.map((s) => (
+          row.reach.squads.map((s) => (
             <Box
               key={s.name}
               style={{
@@ -315,7 +341,9 @@ function CascadeCard({
         )}
         <Divider />
         <Caption>{t('cascades.policies')}</Caption>
-        {row.policies.length === 0 ? (
+        {!row.reach ? (
+          <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: FAINT }}>-</Text>
+        ) : row.reach.policies.length === 0 ? (
           <Box
             style={{
               display: 'flex',
@@ -332,7 +360,7 @@ function CascadeCard({
             </Text>
           </Box>
         ) : (
-          row.policies.map((p) => (
+          row.reach.policies.map((p) => (
             <Box
               key={p.name}
               style={{
@@ -356,6 +384,27 @@ function CascadeCard({
         <Box style={{ flex: 1, minWidth: 0 }} />
         <PushState cascadeId={cascade.id} />
       </Box>
+      <RefusalLines refusal={refusal} />
+    </Box>
+  );
+}
+
+/**
+ * The server's own words under a card (A-126): they name the node and the gate,
+ * and a retelling would lose exactly that. On every card, on or off: a refusal
+ * to delete or to switch off lands on a card that is on.
+ */
+function RefusalLines({ refusal }: { refusal: CascadeCardRefusal | null }) {
+  const { t } = useTranslation();
+  if (!refusal) return null;
+  return (
+    <Box style={{ padding: '0 20px 16px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <Text style={{ fontFamily: DISPLAY, fontSize: 12, lineHeight: '16px', color: RED }}>
+        {t(refusal.action === 'delete' ? 'cascades.deleteRefused' : 'cascades.enableRefused')} {refusal.message}
+      </Text>
+      {refusal.code && (
+        <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: FAINT }}>{refusal.code}</Text>
+      )}
     </Box>
   );
 }
@@ -495,6 +544,25 @@ function poolName(step: { nodeName: string | null; nodes: { name: string }[] }):
   return extra > 0 ? `${step.nodeName ?? ''} +${extra}` : (step.nodeName ?? '');
 }
 
+/**
+ * Что стоит под направлением, словами (E57): выход с адресом, пул, или «ноды
+ * пока нет» только когда нет ни нод, ни выхода.
+ */
+function whereWords(d: DirectionView, t: (k: string) => string): string {
+  const w = directionWhere(d);
+  if (w.kind === 'outbound') return w.address ? `${w.name} · ${w.address}` : w.name;
+  if (w.kind === 'outboundGone') return t('cascades.directionOutboundGone');
+  if (w.kind === 'outboundUnknown') return t('cascades.directionOutboundUnknown');
+  if (w.kind === 'pool') return poolName(d);
+  return t('cascades.directionNoNode');
+}
+
+/** Направление на пуле, у которого первая нода не online. У выхода статуса
+ *  ноды нет: он не «лежит», панель его не опрашивает. */
+function directionDead(d: DirectionView): boolean {
+  return !d.outbound && d.status !== 'online';
+}
+
 /** A leg in words: its cell, «in AWG» when it rides a tunnel. An unset cell is
  *  the entry's default leg, vless. */
 function legWords(cell: string | null, underlay: string | undefined, t: (k: string, o?: Record<string, unknown>) => string): string {
@@ -527,8 +595,8 @@ function ShapeChip({ row }: { row: CascadeRow }) {
  */
 function DirectionLine({ direction }: { direction: DirectionView }) {
   const { t } = useTranslation();
-  const tone = statusTone(direction.status);
-  const dead = direction.status !== 'online';
+  const tone = direction.outbound ? MIST : statusTone(direction.status);
+  const dead = directionDead(direction);
   return (
     <Box
       style={{
@@ -572,8 +640,9 @@ function DirectionLine({ direction }: { direction: DirectionView }) {
         {tagLabel(direction.tag)}
       </Text>
       {/* Нога ДО этого выхода: у веера она своя у каждого направления. */}
+      {/* У направления на выходе ноги нет: его набирает цепь последней позиции. */}
       <Text style={{ fontFamily: MONO, fontSize: 10, lineHeight: '12px', color: DIM, whiteSpace: 'nowrap' }}>
-        {legWords(direction.inCell, direction.inUnderlay, t)}
+        {direction.outbound ? '' : legWords(direction.inCell, direction.inUnderlay, t)}
       </Text>
       <Box style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tone, flexShrink: 0 }} />
       <Text
@@ -586,7 +655,7 @@ function DirectionLine({ direction }: { direction: DirectionView }) {
           whiteSpace: 'nowrap',
         }}
       >
-        {direction.nodeName ? poolName(direction) : t('cascades.directionNoNode')}
+        {whereWords(direction, t)}
         {dead && direction.nodeName ? ` · ${direction.status}` : ''}
       </Text>
       <Box style={{ flex: 1, minWidth: 0 }}>
@@ -609,7 +678,7 @@ function DirectionLine({ direction }: { direction: DirectionView }) {
 /** The same direction as a tile, for a cascade with a single way out. */
 function DirectionTile({ direction }: { direction: DirectionView }) {
   const { t } = useTranslation();
-  const tone = statusTone(direction.status);
+  const tone = direction.outbound ? MIST : statusTone(direction.status);
   return (
     <Stack
       gap={10}
@@ -642,13 +711,13 @@ function DirectionTile({ direction }: { direction: DirectionView }) {
               color: tone,
             }}
           >
-            {direction.status}
+            {direction.outbound ? t('cascades.directionViaOutbound') : direction.status}
           </Text>
         </Box>
       </Box>
       <Text style={{ fontFamily: MONO, fontSize: 11, lineHeight: '14px', color: FAINT }}>
-        {direction.nodeName ? poolName(direction) : t('cascades.directionNoNode')}
-        {direction.node?.address ? ` · ${direction.node.address}` : ''}
+        {whereWords(direction, t)}
+        {!direction.outbound && direction.node?.address ? ` · ${direction.node.address}` : ''}
       </Text>
       <Box style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
         <Chip tone={MOSS} small>
@@ -670,7 +739,17 @@ function DirectionTile({ direction }: { direction: DirectionView }) {
 
 /* ───── Rows ────────────────────────────────────────────────────────────── */
 
-function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () => void; onDelete: () => void }) {
+function CascadeLine({
+  row,
+  onEdit,
+  onDelete,
+  refusal,
+}: {
+  row: CascadeRow;
+  onEdit: () => void;
+  onDelete: () => void;
+  refusal: CascadeCardRefusal | null;
+}) {
   const { t } = useTranslation();
   const { cascade, entry, transits, directions } = row;
   const fan = directions.length > 1;
@@ -678,6 +757,7 @@ function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () =>
   const accent = off ? DIM : fan ? CYAN : MOSS;
 
   return (
+    <>
     <Box
       style={{
         display: 'flex',
@@ -753,13 +833,17 @@ function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () =>
             fontFamily: DISPLAY,
             fontSize: 12,
             lineHeight: '16px',
-            color: row.squads.length === 0 ? FAINT : SNOW,
+            color: !row.reach || row.reach.squads.length === 0 ? FAINT : SNOW,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}
         >
-          {row.squads.length === 0 ? t('cascades.reachesNobody') : row.squads.map((s) => s.name).join(', ')}
+          {!row.reach
+            ? '-'
+            : row.reach.squads.length === 0
+              ? t('cascades.reachesNobody')
+              : row.reach.squads.map((s) => s.name).join(', ')}
         </Text>
       </Box>
 
@@ -792,13 +876,15 @@ function CascadeLine({ row, onEdit, onDelete }: { row: CascadeRow; onEdit: () =>
         <IconButton onClick={onDelete} kind="delete" bare />
       </Box>
     </Box>
+    <RefusalLines refusal={refusal} />
+    </>
   );
 }
 
 /** A direction in a row: flag, country, tag, and the node currently under it. */
 function DirectionPill({ direction }: { direction: DirectionView }) {
   const { t } = useTranslation();
-  const dead = direction.status !== 'online';
+  const dead = directionDead(direction);
   return (
     <Box style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
       {direction.countryCode && (
@@ -839,7 +925,7 @@ function DirectionPill({ direction }: { direction: DirectionView }) {
           whiteSpace: 'nowrap',
         }}
       >
-        {direction.nodeName ?? t('cascades.directionNoNode')}
+        {whereWords(direction, t)}
         {dead && direction.nodeName ? ` · ${t('cascades.directionDown')}` : ''}
       </Text>
     </Box>
@@ -904,22 +990,36 @@ function PushState({ cascadeId, compact }: { cascadeId: string; compact?: boolea
     queryFn: () => getCascadeStatus(cascadeId),
     refetchInterval: (q) => (q.state.data?.done ? false : 10_000),
   });
+  // A status that did not arrive is said with its words, not left blank: a blank
+  // reads as «nothing pushed yet» (spec frontend-cascades).
+  if (loadView(query) === 'failed') {
+    return <LoadFailedLine message={apiErrorMessage(query.error)} onRetry={() => void query.refetch()} />;
+  }
   if (!query.data) return null;
+
+  // Broken beats applied, by the one rule the edit page reads too
+  // (cascadeStatusView, E46): every hop can have taken the config while the
+  // chain on one of them is down, and «applied» in green over that is the
+  // «all is well» the panel must not say (P1).
+  const view = cascadeStatusView(query.data);
 
   // The status endpoint can answer without a per-node list (nothing pushed
   // yet). A missing list is not a crash, and it is not "all 0 applied" either:
   // there is simply nothing to report.
   const nodes = query.data.hops ?? [];
-  if (nodes.length === 0) return null;
+  if (nodes.length === 0 && view.kind !== 'broken') return null;
 
   const pending = nodes.filter((h) => !h.applied);
-  const ok = pending.length === 0;
-  const tone = ok ? MOSS : AMBER;
-  const text = ok
-    ? compact
-      ? t('cascades.push.okShort')
-      : t('cascades.push.ok', { count: nodes.length })
-    : t('cascades.push.pending', { names: pending.map((h) => h.name).join(', ') });
+  const ok = view.kind !== 'broken' && pending.length === 0;
+  const tone = view.kind === 'broken' ? RED : ok ? MOSS : AMBER;
+  const text =
+    view.kind === 'broken'
+      ? t('cascades.provisionBroken', { broken: view.broken })
+      : ok
+        ? compact
+          ? t('cascades.push.okShort')
+          : t('cascades.push.ok', { count: nodes.length })
+        : t('cascades.push.pending', { names: pending.map((h) => h.name).join(', ') });
 
   return (
     <Box style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
@@ -1109,16 +1209,20 @@ function SmallButton({
   children,
   icon,
   onClick,
+  disabled = false,
 }: {
   children: React.ReactNode;
   icon?: 'power';
   onClick?: () => void;
+  disabled?: boolean;
 }) {
   return (
     <UnstyledButton
       type="button"
       onClick={onClick}
+      disabled={disabled}
       style={{
+        opacity: disabled ? 0.6 : 1,
         display: 'flex',
         alignItems: 'center',
         gap: 8,

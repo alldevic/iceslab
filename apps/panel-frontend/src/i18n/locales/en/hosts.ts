@@ -5,6 +5,7 @@ export const hosts = {
   // copies would drift. The cascade name in the line links to it.
   hostHidden: {
     before: 'Node {{node}} is not the entry of cascade ',
+    beforeUnknown: 'The node of this host (unknown which: the node list did not load) is not the entry of cascade ',
     after: ': no subscription will hand this host out while the cascade is on.',
   },
 
@@ -44,6 +45,7 @@ export const hosts = {
       'xray-api': 'the xray gRPC API',
       'shadowsocks-api': 'the gRPC API of the second xray behind Shadowsocks',
       'singbox-api': 'the sing-box v2ray API',
+      'singbox-ssm-api': 'the sing-box SSM API',
       'mtproto-stats': 'the mtg stats endpoint',
       // Phase 4, the chain as its own process. Added ahead of time: it draws
       // nothing until an agent reports it, and an unknown key would reach the
@@ -63,6 +65,8 @@ export const hosts = {
     deleteBody: 'The line disappears from every subscription on the next fetch.',
     deleteLast:
       'This is the last host on {{node}}, so the inbound comes off that node and the port is freed. The node config is rewritten and xray restarts there, which drops live sessions on every inbound of that machine, not only this one.',
+    deleteLastUnknownNode:
+      'This is the last host of its binding: the inbound comes off the node and the core restarts there, dropping live sessions on every inbound of that machine. Which node it is cannot be shown: the node list did not load.',
     deleted: 'Host deleted',
     empty: 'No hosts yet. A host is one entry in the user\'s client: a name, a port and the nodes behind it.',
     unbound: 'binding missing',
@@ -78,6 +82,9 @@ export const hosts = {
       profile: 'Profile',
       nodes: 'Nodes',
       noNodesAttached: 'no nodes attached, serves nobody',
+      nodesUnknown: 'unknown: the node list did not load',
+      profileUnknown: 'unknown: the list did not load',
+      reachUnknown: 'reach unknown',
       squads_one: '{{count}} squad',
       squads_other: '{{count}} squads',
       reach_one: '{{count}} user reaches it',
@@ -120,11 +127,34 @@ export const hosts = {
     country: 'Country',
     countryHint: 'Flag shown next to the name.',
     port: 'Port',
-    portHint: 'Every node of this host listens here.',
+    portHint: 'The node listens here. Another port for the same profile on the node is one more inbound.',
+    clientPort: 'Client port (NAT, CDN)',
+    clientPortHint: 'If clients dial a different port than the node listens on. Empty: the same one.',
+    portMoveHost: 'This host only',
+    portMoveHostWhy: 'One more inbound of the profile goes up on the node, on port {{port}}. The other hosts of the inbound stay on {{from}}: {{names}}.',
+    portMoveBinding: 'The whole inbound',
+    portMoveBindingWhy: 'The inbound moves from {{from}} to {{port}} together with {{names}}.',
+    portJoin: 'The profile already listens on port {{port}} on this node: the host joins that inbound next to {{names}}.',
+    portJoinAlone: 'The profile already listens on port {{port}} on this node: the host joins that inbound.',
+    portNewInbound: 'The profile already listens on {{ports}} on this node. Port {{port}} is one more inbound on the node.',
     state: 'State',
     enabled: 'Enabled',
     disabled: 'Off',
     stateHint: 'Off hides it from every subscription.',
+    // A-236 step 6: description and «hidden».
+    description: 'Server description',
+    descriptionPlaceholder: 'For example: fast, for video',
+    descriptionHint: 'One line under the server name, {{used}} of {{max}}. Only clients that understand it show it; the others are not sent it.',
+    descriptionClear: 'Clear the description',
+    descriptionProblem: {
+      empty: 'Spaces only: clear the field entirely to remove the description.',
+      multiline: 'One line: a line break or a control character is not accepted.',
+      'too-long': 'Longer than {{max}} characters (an emoji counts as one).',
+    },
+    hiddenLabel: 'Visibility',
+    hiddenOn: 'Hidden',
+    hiddenOff: 'Visible',
+    hiddenHint: 'A hidden host goes into no subscription, except a template with includeHiddenHosts.',
     profile: 'Profile',
     pickProfile: 'Pick a profile',
     openProfile: 'Open profile',
@@ -165,14 +195,30 @@ export const hosts = {
       'client-lacks-cipher': 'This client does not speak this cipher',
       'no-uri-standard': 'The protocol has no share link',
       'not-yet': 'The panel does not build it yet, the client can',
+      'client-lacks-transport': 'The client does not carry this transport',
     },
     formatWhyUnknown: 'Not carried by the client: {{code}}',
+    // A-231: which side keeps the format out.
+    formatReason: {
+      door: 'Door',
+      transport: 'Transport',
+    },
     optional: 'OPTIONAL',
     needName: 'Name it first',
     needProfile: 'Pick a profile',
     needPort: 'Set a port',
     needNode: 'Pick a node',
+    needDescription: 'Fix the description',
     portConflictFallback: 'That port is already taken on this node.',
+    adapterSlotTaken: 'This node already has a {{protocol}} inbound on the {{engine}} engine: "{{heldBy}}". The node holds one such inbound; a second would silently replace the first.',
+    adapterSlotSelf: 'This profile already stands on the node on another port, and the node holds one {{protocol}} inbound on the {{engine}} engine: it cannot get a second port. Keep the old port or move the whole inbound.',
+    mieruMtuMismatch: 'mieru on this node already runs with MTU {{mtu}} ("{{heldBy}}"). A second mieru inbound here must use the same MTU, not {{wanted}}.',
+    onNode: 'Node "{{name}}":',
+    // 409 PROFILE_DOES_NOT_RUN_ON_NODE (A-235).
+    notOnNode: 'Node "{{node}}" cannot serve this profile: it needs {{needed}}, and the node reports: {{reported}}.',
+    notOnNodeNothing: 'no core at all',
+    notOnNodeWait:
+      'The node agent declares {{needed}} but reports no such core. If its bootstrap has just run, the next poll will show it; otherwise run the {{needed}} bootstrap on the node again.',
     goneWhileEditing:
       'The profile or the node is gone. The lists were refreshed, pick again before saving.',
     sniMismatchToast: 'This SNI is not one the node serves.',

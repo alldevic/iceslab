@@ -106,6 +106,9 @@ export const squads = {
     routingOverride: 'Routing override',
     routingInherit: 'Inherit (panel default)',
     routingHint: 'Inherit keeps the panel-wide subscription routing.',
+    routingOwnUnnamed: 'own preset (name did not load)',
+    routingPresetsFailed: 'Own presets did not load: {{message}}. The built-ins are available.',
+    routingPresetGone: 'The picked preset is gone: the list was read again, pick another one.',
     hwidLimit: 'HWID device limit',
     devices: 'devices',
     hwidHint: 'Squad default. Across squads the most permissive wins.',
@@ -119,6 +122,13 @@ export const squads = {
     noProfiles: 'No profiles configured yet.',
     noProfilesGranted:
       'No profiles granted. Members of this squad get an empty subscription until you tick at least one.',
+    // A-204: a property of the cores, not fixable; said at the profile.
+    scopeGap: {
+      'shared-users':
+        'The squad limit by inbound does not hold on the node: mieru keeps one user list per process, so a user of any mieru inbound on that node gets through all of its mieru inbounds.',
+      'shared-secret':
+        'A limit by user does not hold on the node: MTProto has one secret per node, so a secret from any subscription lets anyone in, a disabled or expired user included.',
+    },
     profileNodes_one: '{{count}} node',
     profileNodes_other: '{{count}} nodes',
     hosts: 'Hosts',
@@ -157,6 +167,9 @@ export const squads = {
     cascadeHandedOut: 'HANDED OUT',
     cascadeNotHandedOut: 'NOT HANDED OUT',
     cascadeOff: 'OFF FOR THIS SQUAD',
+    cascadeNodePolicyGated: "Node policy rules leading into this cascade do not apply to this squad's users either.",
+    cascadeNodePolicyGatedExceptChain:
+      "Node policy rules leading into this cascade do not apply to this squad's users either, except on hysteria and AmneziaWG entries: users cannot be told apart there.",
     cascadeSwitch: 'Hand out cascade "{{name}}"',
     cascadeOffMeans:
       'The entry host {{nodes}}, if handed out, stays a plain server: the squad members come out in the entry country, {{countries}}.',
@@ -177,6 +190,7 @@ export const squads = {
     cascadeWorksOnlyWithEntry: 'A cascade works for the squad members only if the squad hands out an entry host.',
     exit: 'exit',
     routePolicies: 'Route policies',
+    routePoliciesEmpty: 'No route policies yet.',
     routePoliciesHint:
       'Grant ad-split policies to this squad. The plain variant is always available, each granted policy adds one more variant per exit.',
     blocksDomains: 'blocks {{count}} domains',

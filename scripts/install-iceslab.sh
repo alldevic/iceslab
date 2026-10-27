@@ -262,14 +262,15 @@ fi
 # Caught live 2026-05-12: with this empty, the panel's install-node emitter
 # fell back to `--hysteria-email admin@example.com`, which Let's Encrypt
 # rejects as a forbidden test domain. The operator only finds out 15 min later
-# when the fresh Hysteria node crashloops on cert obtain. Ask up front; this
-# also seeds Caddy's contact field for renewal warnings on the panel's cert.
+# when the fresh Hysteria node crashloops on cert obtain. Since A-276 the panel
+# leaves the flag out when this is empty and the agent asks without one, so the
+# address is optional; it is the ACME contact for Caddy and the Hysteria nodes.
 if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
-  printf 'Контактный email для Let'\''s Encrypt (получит уведомления о renewal'\''ах):\n'
-  printf '  Используется и для Caddy панели, и автоматом подставляется в команду\n'
+  printf 'Контактный email для Let'\''s Encrypt (необязательно):\n'
+  printf '  Контакт ACME-аккаунта для Caddy панели, и автоматом подставляется в команду\n'
   printf '  установки Hysteria-нод как --hysteria-email.\n'
   printf '\n'
-  printf 'Оставь пустым: придётся передавать email вручную при создании каждой ноды.\n'
+  printf 'Оставь пустым: сертификаты выпускаются и без него.\n'
   printf '\n'
   printf '\033[1;33mEmail:\033[0m '
   read -r ACME_DEFAULT_EMAIL </dev/tty || ACME_DEFAULT_EMAIL=""
@@ -289,13 +290,13 @@ if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
       printf 'как латинская, но панель такой адрес не примет.\033[0m\n' >&2
       exit 1
     fi
-    if [[ "$ACME_DEFAULT_EMAIL" =~ @(example\.com|example\.net|example\.org)$ ]]; then
+    if [[ "${ACME_DEFAULT_EMAIL,,}" =~ @(example\.com|example\.net|example\.org)$ ]]; then
       printf '\033[1;31m"%s": LE отвергает example.* как forbidden test domain. Введи реальный.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
       exit 1
     fi
     log "Email для ACME: ${ACME_DEFAULT_EMAIL}"
   else
-    log "Email не указан: install-команды для Hysteria/Naive-нод будут с placeholder, заполнишь вручную"
+    log "Email не указан: Hysteria-ноды получат сертификат без контакта (A-276)"
   fi
   printf '\n'
 fi
@@ -614,8 +615,12 @@ if ! docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" up -d; the
   fail "docker compose up failed, see the backend log above"
 fi
 for i in $(seq 1 60); do
-  if docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
-       wget -qO- http://127.0.0.1:3000/health 2>/dev/null | grep -q '"status":"ok"'; then
+  # The answer into a variable first, never `| grep -q` (E33): under pipefail
+  # grep leaving at the first match can kill the writer with SIGPIPE, and a
+  # healthy backend then reads as "not yet".
+  health=$(docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
+       wget -qO- http://127.0.0.1:3000/health 2>/dev/null || true)
+  if grep -q '"status":"ok"' <<<"$health"; then
     ok "backend healthy in ${i}s"
     break
   fi
@@ -626,6 +631,122 @@ for i in $(seq 1 60); do
     warn "Full log: docker compose -f $ICESLAB_DIR/docker-compose.prod.yml logs backend"
   fi
 done
+
+# write_caddyfile <path>: the host Caddy in front of the panel, for
+# PANEL_DOMAIN, proxying to FRONTEND_PORT.
+#
+# Two access logs (A-267). The default one, /var/log/caddy/access.log, is what
+# fail2ban reads (iceslab-auth-bf: /api/auth/login, iceslab-probe-bf: scanner
+# paths), so it keeps every field as it is. The paths that carry a secret in
+# the URL, the subscription (SUB_PREFIX, default /sub), the node bootstrap
+# (/api/internal/bootstrap/<token>) and the two admin routes that take a
+# subscription token in the path (/api/users/by-subscription-token/<token>,
+# /api/settings/subscription/preview/<token>), go to their own log (log_name),
+# where the token is replaced by <token> and the client's address is cut to
+# its /24 (IPv6: /48). Neither jail matches those paths, so fail2ban loses
+# nothing. Both loggers are named and every request is sent to one of them by
+# path: with an unnamed `log` beside a named one, Caddy 2.11's adapter makes
+# the LAST block the site's default logger, and the named one written last
+# took every request, the login and the probes too (seen 26.10 in a local
+# run: access.log stayed empty). The plain one is still last, so anything
+# that skips routing lands there, not in the masked file.
+# A prefix changed in .env.production later is followed by the next deploy.sh,
+# which re-renders this file (refresh_host_caddyfile in scripts/ops/_lib.sh).
+#
+# ⚠ The same function, byte for byte, is in scripts/ops/_lib.sh: this
+# installer runs curl-piped, without the rest of scripts/, so it cannot source
+# it. bootstrap_checks_test.go holds the two copies to each other.
+#
+# Rotation is Caddy's own for `output file`: 100MiB per file, 10 files, 90
+# days (https://caddyserver.com/docs/caddyfile/directives/log, roll_size /
+# roll_keep / roll_keep_for). The masked log is smaller and keeps 7 days.
+# The error logger is the global `log` option, include / exclude by namespace
+# (https://caddyserver.com/docs/caddyfile/options#log); it stays on stderr,
+# that is journald, where it was.
+write_caddyfile() {
+  local prefix="${SUB_PREFIX:-/sub}"
+  # The backend's own rule for the prefix (config.ts): anything else and the
+  # backend refuses to start, so falling back cannot hide a working setup.
+  [[ "$prefix" =~ ^/[A-Za-z0-9_-]+$ ]] || prefix=/sub
+  cat > "$1" <<EOF
+# Caddy's error log (http.log.error, a failed upstream and the like) carries
+# the request, uri and address included, into journald. Not silenced, the
+# upstream's diagnostics are needed: taken out of the default logger and
+# written by its own, with the same mask as the access log below.
+{
+  log default {
+    exclude http.log.error
+  }
+  log iceslab_errors {
+    include http.log.error
+    format filter {
+      wrap json
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/|/api/users/by-subscription-token/|/api/settings/subscription/preview/)[^/?]+" "\${1}<token>"
+      request>client_ip ip_mask 24 48
+      request>remote_ip ip_mask 24 48
+    }
+  }
+}
+
+${PANEL_DOMAIN} {
+  log iceslab_secret_paths {
+    output file /var/log/caddy/access-masked.log {
+      roll_size 10MiB
+      roll_keep 5
+      roll_keep_for 168h
+    }
+    format filter {
+      wrap json
+      request>uri regexp "^(${prefix}/|/api/internal/bootstrap/|/api/users/by-subscription-token/|/api/settings/subscription/preview/)[^/?]+" "\${1}<token>"
+      request>client_ip ip_mask 24 48
+      request>remote_ip ip_mask 24 48
+    }
+  }
+  log iceslab_access {
+    output file /var/log/caddy/access.log
+    format json
+  }
+  @secret_paths path ${prefix}/* /api/internal/bootstrap/* /api/users/by-subscription-token/* /api/settings/subscription/preview/*
+  @other_paths not path ${prefix}/* /api/internal/bootstrap/* /api/users/by-subscription-token/* /api/settings/subscription/preview/*
+  log_name @secret_paths iceslab_secret_paths
+  log_name @other_paths iceslab_access
+  reverse_proxy 127.0.0.1:${FRONTEND_PORT}
+}
+
+# Anti-probing: bare-IP / unknown hostname requests on :443 get a silent 204
+# so scanners can't fingerprint Iceslab.
+:443 {
+  tls internal
+  respond 204
+}
+EOF
+}
+
+# prepare_caddy_logs <Caddyfile>: every `output file` the Caddyfile names is
+# there and belongs to the user the caddy service runs as (User= of its unit,
+# caddy by default), before Caddy loads the file. A log Caddy cannot open fails
+# the whole reload. 26.10 on the stand: `caddy validate`, run as root, opened
+# the new access-masked.log and left it root:root 0600, and the reload, running
+# as caddy, got permission denied. The directory is made writable for that user
+# too, because rotation (roll_size) renames files in it. Same text in
+# scripts/ops/_lib.sh; apps/node/caddyfile_test.go holds the two together.
+prepare_caddy_logs() {
+  local u g f d
+  u="$(systemctl show -p User --value caddy 2>/dev/null || true)"
+  u="${u:-caddy}"
+  id -u "$u" >/dev/null 2>&1 || return 0
+  g="$(id -gn "$u")"
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    d="$(dirname "$f")"
+    [[ -d "$d" ]] || install -d -o "$u" -g "$g" -m 0750 "$d"
+    if ! command -v runuser >/dev/null 2>&1 || ! runuser -u "$u" -- test -w "$d" 2>/dev/null; then
+      chown "$u:$g" "$d"
+    fi
+    [[ -e "$f" ]] || install -o "$u" -g "$g" -m 0640 /dev/null "$f"
+    chown "$u:$g" "$f"
+  done < <(sed -nE 's/^[[:space:]]*output file ([^[:space:]{]+).*/\1/p' "$1")
+}
 
 if [[ -n "$PANEL_DOMAIN" ]]; then
   step "Caddy + TLS for ${PANEL_DOMAIN}"
@@ -638,26 +759,12 @@ if [[ -n "$PANEL_DOMAIN" ]]; then
     "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
     "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y caddy
   fi
-  # Access log emitted to /var/log/caddy/access.log so fail2ban can read it
-  # (next step). JSON format keeps client_ip / status / uri reliably parsable
-  # for the iceslab-auth-bf and iceslab-probe-bf jails. /var/log/caddy is
-  # created by the caddy deb package; mode 0755 is its default.
-  cat > /etc/caddy/Caddyfile <<EOF
-${PANEL_DOMAIN} {
-  log {
-    output file /var/log/caddy/access.log
-    format json
-  }
-  reverse_proxy 127.0.0.1:${FRONTEND_PORT}
-}
-
-# Anti-probing: bare-IP / unknown hostname requests on :443 get a silent 204
-# so scanners can't fingerprint Iceslab.
-:443 {
-  tls internal
-  respond 204
-}
-EOF
+  SUB_PREFIX="$(sed -n 's/^SUBSCRIPTION_PATH_PREFIX=//p' "$ENV_FILE" 2>/dev/null | tail -n 1 || true)"
+  write_caddyfile /etc/caddy/Caddyfile
+  # What we wrote, so deploy.sh can tell this file from one the operator has
+  # edited since, and rewrite only the former.
+  sha256sum /etc/caddy/Caddyfile | cut -d' ' -f1 > /etc/caddy/.iceslab-caddyfile.sha256
+  prepare_caddy_logs /etc/caddy/Caddyfile
   systemctl enable --now caddy >/dev/null 2>&1 || true
   systemctl reload caddy || systemctl restart caddy
   ok "TLS will be issued by Let's Encrypt on first request"

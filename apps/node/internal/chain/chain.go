@@ -23,6 +23,7 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -105,6 +106,13 @@ type Config struct {
 type Manager struct {
 	cfg Config
 
+	// applyMu: one Apply at a time, end to end (П-1). mu below is taken in
+	// pieces around the IO, and two Applies interleaved both read the same old
+	// process, both stopped it and both started one: the first kept the ports
+	// with nobody holding it, the second crash-looped on "address already in
+	// use". Never taken under mu.
+	applyMu sync.Mutex
+
 	mu sync.Mutex
 	// proc is the running engine, nil when no chain is in force.
 	proc *subprocess.Subprocess
@@ -115,6 +123,9 @@ type Manager struct {
 	// points at (userCore.tproxy / tproxy3), 0 when it has none. Read off the
 	// wire like the socks ports, not off a constant here.
 	tproxyPort int
+	// accepted is the last block put into force (its config written for the
+	// process), nil when none is. A refused block does not replace it.
+	accepted *dto.NodeChain
 	// held says whether a chain block has ever been accepted and not since
 	// withdrawn. It is what makes the healthcheck able to distinguish "no chain
 	// here" from "the chain is down", which the panel needs: reading absence as
@@ -168,6 +179,16 @@ func (m *Manager) Active() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.held
+}
+
+// Accepted is the block the chain runs on: the last one whose config was
+// written for the process, nil when none is in force. After a refused push it
+// is still the previous block, and the user's core has to be drawn to ITS
+// hand-off, not to the refused one's.
+func (m *Manager) Accepted() *dto.NodeChain {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.accepted
 }
 
 // NoteCascadeIgnored writes the one line the incident review starts from, and
@@ -278,6 +299,8 @@ a typo the panel could have refused in a sentence. So a refused config leaves
 the previous one exactly where it was and hands the engine's own words back.
 */
 func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	if block == nil {
 		return m.stop("no chain block in this push")
 	}
@@ -295,6 +318,14 @@ func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
 		if err := validateTunnel(t); err != nil {
 			return m.fail(err)
 		}
+	}
+	// The same block as the one running, and the process up: nothing to do.
+	// A-106, 22.10: every push restarted the chain, and pushes come for things
+	// that are not the chain (a profile edit, a policy, a geo roll-out, a node
+	// flapping degraded/online), so each cut every connection riding the
+	// cascade on this node. A process that died is started again.
+	if m.unchanged(block) {
+		return nil
 	}
 	if m.cfg.BinaryPath == "" {
 		// The sentence an operator reads on the node's card, so it says what to
@@ -327,6 +358,8 @@ func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
 	// exact minutes the node is trying to come back.
 	m.mu.Lock()
 	old := m.proc
+	accepted := *block
+	m.accepted = &accepted
 	m.socks = append([]dto.ChainSocks(nil), block.Socks...)
 	m.tproxyPort = tproxyPortOf(block)
 	m.held = true
@@ -371,6 +404,30 @@ func (m *Manager) Apply(ctx context.Context, block *dto.NodeChain) error {
 	return nil
 }
 
+// unchanged: the block is the one in force, byte for byte once compacted,
+// and its process is running.
+func (m *Manager) unchanged(block *dto.NodeChain) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.accepted == nil || m.proc == nil || !m.proc.Running() {
+		return false
+	}
+	a, errA := json.Marshal(compactBlock(m.accepted))
+	b, errB := json.Marshal(compactBlock(block))
+	return errA == nil && errB == nil && bytes.Equal(a, b)
+}
+
+// compactBlock is the block with its engine config compacted, so whitespace
+// the panel did not mean is not a change.
+func compactBlock(b *dto.NodeChain) dto.NodeChain {
+	c := *b
+	var buf bytes.Buffer
+	if json.Compact(&buf, b.Config) == nil {
+		c.Config = buf.Bytes()
+	}
+	return c
+}
+
 // stop takes the chain out of service: the process goes down and the ports it
 // held are released, so the panel stops refusing bindings on them.
 //
@@ -382,6 +439,7 @@ func (m *Manager) stop(why string) error {
 	proc := m.proc
 	was := m.held
 	m.proc = nil
+	m.accepted = nil
 	m.socks = nil
 	m.tproxyPort = 0
 	m.held = false

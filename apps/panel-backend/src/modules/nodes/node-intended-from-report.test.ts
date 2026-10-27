@@ -74,7 +74,7 @@ function baseRow() {
     lastInboundSyncError: null,
     chainStatus: null,
     chainSentAt: null,
-    consumptionMultiplier: 1n,
+    consumptionMultiplierTenths: 10,
     regionId: null,
     maxUsers: null,
     domain: null,

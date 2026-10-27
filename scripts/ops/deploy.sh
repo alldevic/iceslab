@@ -13,6 +13,8 @@
 #                                     the Dockerfile
 #   ./scripts/deploy.sh --cleanup   # also prune old images/build cache after
 #                                     the rebuild lands
+#   ./scripts/deploy.sh --caddy-only  # only the host Caddy step (5), nothing
+#                                     synced, built or restarted
 #
 # Run from the panel project root (where docker-compose.prod.yml lives).
 
@@ -23,16 +25,24 @@ LIB_PREFIX="deploy"
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 trap 'on_err $LINENO' ERR
 
+# This script and its library as they are now, before step 1 can replace
+# them on disk: see reexec_if_updated in _lib.sh. Absolute, because
+# require_compose_root may cd.
+DEPLOY_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+DEPLOY_SELF_SUM="$(deploy_self_sum "$DEPLOY_SELF")"
+
 # ───── Args ─────
 CLEANUP_AFTER=0
 NO_CACHE=1   # default on: ~30s cost buys "what I see is what shipped"
+CADDY_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --cleanup|--prune) CLEANUP_AFTER=1 ;;
         --cache)           NO_CACHE=0 ;;
         --no-cache)        NO_CACHE=1 ;;
+        --caddy-only)      CADDY_ONLY=1 ;;
         -h|--help)
-            sed -n '2,18p' "$0" | sed 's/^# \?//'
+            sed -n '2,20p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         *)
@@ -46,32 +56,56 @@ COMPOSE_FILE="docker-compose.prod.yml"
 ENV_FILE=".env.production"
 require_compose_root
 
+# --caddy-only: the host Caddy step and nothing else. For a panel updated by a
+# deploy.sh from before this step existed (v0.2.1 and older): that run swaps
+# the files but goes on with its own old copy, so step 5 never runs, and this
+# is the way to run it without a second full rebuild.
+if [[ $CADDY_ONLY -eq 1 ]]; then
+    STEP_TOTAL=1
+    step 1 "host Caddy"
+    refresh_host_caddyfile
+    step_done
+    exit 0
+fi
+
 # ───── Safety: snapshot the secrets file before touching anything ─────
 # .env.production is the only copy of JWT_SECRET, POSTGRES_PASSWORD and the
 # node mTLS CA on this host. A bad edit or git op could wipe it, taking every
 # node's trust and every admin session with it. Keep a ring of timestamped
-# copies (last 5) next to it. cp -p preserves the 600 perms.
-if [[ -f "$ENV_FILE" ]]; then
+# copies (last 5) next to it. cp -p preserves the 600 perms. Not again in the
+# run reexec_if_updated starts: the first one has just made the copy.
+if [[ -f "$ENV_FILE" && "${ICESLAB_DEPLOY_REEXEC:-0}" != 1 ]]; then
     cp -p "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
     ls -1t "${ENV_FILE}".bak.* 2>/dev/null | tail -n +6 | xargs -r rm -f
     log_info "backed up ${ENV_FILE} (keeping last 5)"
 fi
 
 DC=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
-STEP_TOTAL=5
+STEP_TOTAL=6
 
 # ───── Step 1: sync source to ICESLAB_REF ─────
 # Honors ICESLAB_REF (branch like `main`, or pinned tag like v0.1.4); defaults
 # to the current branch. See git_sync_to_ref in _lib.sh for why this replaced a
 # bare `git pull` (the tag-pinned detached-HEAD silent-no-op trap).
-step 1 "sync source (ICESLAB_REF=${ICESLAB_REF:-auto: branch or main})"
-git_sync_to_ref
-if [[ "$SHA_BEFORE" == "$SHA_AFTER" ]]; then
-    log_info "  ${SYNC_TARGET}: no new commits, re-deploying ${SHA_AFTER}"
+if [[ "${ICESLAB_DEPLOY_REEXEC:-0}" == 1 ]]; then
+    # The previous copy of this script synced and handed over to this one.
+    SHA_AFTER=$(git_short_sha)
+    step 1 "sync source (done before the hand-over: ${SHA_BEFORE:-?} -> ${SHA_AFTER})"
+    step_done
 else
-    log_info "  ${SYNC_TARGET}: ${SHA_BEFORE} -> ${SHA_AFTER}"
+    step 1 "sync source (ICESLAB_REF=${ICESLAB_REF:-auto: branch or main})"
+    git_sync_to_ref
+    if [[ "$SHA_BEFORE" == "$SHA_AFTER" ]]; then
+        log_info "  ${SYNC_TARGET}: no new commits, re-deploying ${SHA_AFTER}"
+    else
+        log_info "  ${SYNC_TARGET}: ${SHA_BEFORE} -> ${SHA_AFTER}"
+    fi
+    step_done
+    # The sync may have replaced this script or _lib.sh. bash goes on with
+    # the copy it already read, so the new steps would not run until the next
+    # deploy (26.10 on the stand: step 5 skipped after a v0.2.1-era update).
+    reexec_if_updated "$DEPLOY_SELF_SUM" "$DEPLOY_SELF" "$@"
 fi
-step_done
 
 # ───── Step 2: rebuild (BEFORE migrate) ─────
 # Build first. The migrate one-shot below runs the same iceslab-backend:latest
@@ -117,8 +151,18 @@ step 4 "restart all services"
 "${DC[@]}" up -d --build
 step_done
 
-# ───── Step 5: status + backend tail ─────
-step 5 "status + backend tail"
+# ───── Step 5: the host Caddy's file ─────
+# The installer writes /etc/caddy/Caddyfile once; without this step a fix to
+# it never reaches an installed panel (A-267: the masked logs, so Caddy stops
+# writing subscription tokens into access.log). Rewritten only while it is
+# still the file we wrote, then `systemctl reload caddy`; an edited one is
+# named and left alone. No host Caddy (bare-IP install): nothing to do.
+step 5 "host Caddy"
+refresh_host_caddyfile
+step_done
+
+# ───── Step 6: status + backend tail ─────
+step 6 "status + backend tail"
 "${DC[@]}" ps
 echo
 log_info "backend tail (last 30 lines):"

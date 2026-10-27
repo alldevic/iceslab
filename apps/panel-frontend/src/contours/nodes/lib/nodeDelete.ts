@@ -5,12 +5,12 @@ import { readCascadeNeeds } from '@/contours/nodes/lib/coreRemove';
  * Удаление ноды, которая стоит в каскаде (E28, стенд 24.09: se-01 выходом
  * каскада 123).
  *
- * Сервер отказывает 409 `NODE_IN_USE_BY_CASCADE`, только если каскад ВКЛЮЧЁН
- * (nodes.service.ts deleteNode): включённую цепь снимать побочным эффектом
- * удаления одной машины он не станет. Выключенный каскад удалению не мешает.
- * Экран говорит то же самое ДО кнопки, из `cascadeNeedsEngines` ноды, и тот же
- * отказ словами, если он всё же пришёл (поле старое или каскад включили между
- * открытием окна и щелчком).
+ * Сервер отказывает 409 `NODE_IN_USE_BY_CASCADE` под ЛЮБЫМ каскадом,
+ * включённым или выключенным (nodes.service.ts deleteNode, 1bf18ca, A-126):
+ * выключенный каскад включается одним щелчком, и позиции v4 указывали бы на
+ * удалённую ноду. Экран говорит то же самое ДО кнопки, из
+ * `cascadeNeedsEngines` ноды, и тот же отказ словами, если он всё же пришёл
+ * (поле старое или ноду поставили в каскад между открытием окна и щелчком).
  */
 
 /** Разбор 409 NODE_IN_USE_BY_CASCADE. Вход проверяется первым; `null` значит
@@ -35,21 +35,17 @@ export function nodeDeleteRefusal(err: unknown): { cascades: string[]; message: 
  *
  *   null     поля `cascadeNeedsEngines` нет (панель старше) или оно кривое:
  *            окно как раньше, отсутствие не факт;
- *   blocked  имена ВКЛЮЧЁННЫХ каскадов: сервер откажет, кнопка недоступна;
- *   disabled имена выключенных: удаление пройдёт, каскад придётся поправить.
+ *   blocked  имена всех каскадов ноды, включённых и выключенных: сервер
+ *            откажет, кнопка недоступна.
  *
  * Одна нода стоит в каскаде под несколькими движками: имена по id без повторов.
  */
-export type NodeDeleteFacts = { blocked: string[]; disabled: string[] } | null;
+export type NodeDeleteFacts = { blocked: string[] } | null;
 
 export function nodeDeleteFacts(node: Pick<Node, 'cascadeNeedsEngines'>): NodeDeleteFacts {
   const needs = readCascadeNeeds(node.cascadeNeedsEngines);
   if (needs === null) return null;
-  const byId = new Map<string, { name: string; enabled: boolean }>();
-  for (const list of needs.values()) for (const c of list) byId.set(c.id, { name: c.name, enabled: c.enabled });
-  const all = [...byId.values()];
-  return {
-    blocked: all.filter((c) => c.enabled).map((c) => c.name),
-    disabled: all.filter((c) => !c.enabled).map((c) => c.name),
-  };
+  const byId = new Map<string, string>();
+  for (const list of needs.values()) for (const c of list) byId.set(c.id, c.name);
+  return { blocked: [...byId.values()] };
 }

@@ -27,10 +27,19 @@
 #   ICESLAB_IMAGE_TAG=develop docker compose -f docker-compose.ghcr.yml \
 #     --env-file .env.production up -d
 
+# A-267: every container's log capped, 10 MB x 3. The reasons are written out
+# on the same block in docker-compose.prod.yml; keep the two the same.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: iceslab-prod-postgres
+    logging: *default-logging
     # See docker-compose.prod.yml for the 2 GB / 1 CPU sizing rationale.
     mem_limit: 512m
     environment:
@@ -49,6 +58,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: iceslab-prod-redis
+    logging: *default-logging
     mem_limit: 384m
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     volumes:
@@ -64,6 +74,7 @@ services:
   migrate:
     image: ghcr.io/icecompany-tech/iceslab-backend:${ICESLAB_IMAGE_TAG:-main}
     container_name: iceslab-prod-migrate
+    logging: *default-logging
     mem_limit: 384m
     # The backend image runs as `node`; the migrate one-shot shells out to
     # pnpm/corepack for `prisma migrate deploy`, which expects root.
@@ -79,6 +90,7 @@ services:
   backend:
     image: ghcr.io/icecompany-tech/iceslab-backend:${ICESLAB_IMAGE_TAG:-main}
     container_name: iceslab-prod-backend
+    logging: *default-logging
     mem_limit: 768m
     environment:
       NODE_ENV: production
@@ -108,6 +120,8 @@ services:
       HONEY_USER_TOKENS: ${HONEY_USER_TOKENS:-}
       RATE_LIMIT_SUB_IP_PER_MIN: ${RATE_LIMIT_SUB_IP_PER_MIN:-120}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Read by the frontend too, see there.
+      SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,7 +142,12 @@ services:
   frontend:
     image: ghcr.io/icecompany-tech/iceslab-frontend:${ICESLAB_IMAGE_TAG:-main}
     container_name: iceslab-prod-frontend
+    logging: *default-logging
     mem_limit: 96m
+    environment:
+      # The same value the backend gets: nginx proxies subscriptions at this
+      # prefix and serves the SPA everywhere else (A-137).
+      SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
     depends_on:
       backend:
         condition: service_healthy

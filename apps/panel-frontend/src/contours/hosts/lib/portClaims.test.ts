@@ -35,4 +35,12 @@ describe('nodePortClaims: порт занят парой (порт, трансп
     expect(nodePortClaims([vless], hosts, 8443, 'tcp', undefined).size).toBe(0);
     expect(nodePortClaims([vless], hosts, '', 'tcp', undefined).size).toBe(0);
   });
+
+  it('A-259: инбаунд того же профиля на этом порту не занят, хост встаёт к нему; чужой профиль занят', () => {
+    const own = { ...vless, profileId: 'p-vless' };
+    expect(nodePortClaims([own], hosts, 443, 'tcp', undefined, 'p-vless').size).toBe(0);
+    expect(nodePortClaims([own], hosts, 443, 'tcp', undefined, 'p-other').get('ru-01')?.host).toBe('vless-ru-01');
+    // Весь инбаунд (ownProfileId null): соседний инбаунд пары держит порт.
+    expect(nodePortClaims([own], hosts, 443, 'tcp', undefined, null).get('ru-01')?.host).toBe('vless-ru-01');
+  });
 });

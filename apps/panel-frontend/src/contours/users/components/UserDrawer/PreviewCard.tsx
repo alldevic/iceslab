@@ -1,5 +1,7 @@
 import { IconAlertTriangle, IconEye } from '@tabler/icons-react';
 import type { TrafficLimitStrategy } from '@/lib/domain/users';
+import type { EndpointsWhy } from '@/contours/users/lib/endpointsWhy';
+import type { RoutingRow } from '@/contours/users/lib/routingRow';
 import { Box, Stack, Text } from '@mantine/core';
 import { AMBER, CARD, CYAN, DIM, DISPLAY, HAIRLINE, MIST, MONO, MOSS, SNOW, WELL } from '@/contours/users/lib/colors';
 import { Count, PreviewRow } from '@/contours/users/components/UserDrawer/PreviewRow';
@@ -25,6 +27,8 @@ export interface PreviewData {
   online: number;
   /** Guessed from bindings because the user has no id yet. */
   estimate: boolean;
+  /** For a real account: why the list is empty, when it is (endpointsWhy). */
+  why?: EndpointsWhy | null;
 }
 
 /**
@@ -38,9 +42,8 @@ export function PreviewCard({
   strategy,
   expiresAt,
   expireDays,
-  routingPreset,
+  routing,
   routingClash,
-  routingSource,
   isEdit,
   onEditTraffic,
 }: {
@@ -49,13 +52,11 @@ export function PreviewCard({
   strategy: TrafficLimitStrategy;
   expiresAt: Date | null;
   expireDays: number | '';
-  routingPreset: string;
+  /** Which preset this person is served and from where (routingRow, A-229). */
+  routing: RoutingRow;
   /** "basic asks for ru-split, premium asks for proxy-all", or null when the
-   *  member squads agree. Read from the squads themselves, not from the
-   *  subscription: what the panel hands out instead is not exposed here. */
+   *  member squads agree. Read from the squads themselves. */
   routingClash: string | null;
-  /** Which squad decides the routing, when exactly one does. */
-  routingSource: { preset: string; squad: string } | null;
   /** Only an existing account has fields worth jumping back to. */
   isEdit: boolean;
   onEditTraffic: () => void;
@@ -96,6 +97,8 @@ export function PreviewCard({
 
       {/* Each label is pluralised on its own number: "1 конфиг" against
           "4 конфига" against "6 конфигов". */}
+      {/* No list, no counts: «0 configs» over a failed request is a claim (A-141). */}
+      {preview.why !== 'failed' && preview.why !== 'loading' && (
       <Box style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
         <Count
           value={preview.configs}
@@ -109,10 +112,19 @@ export function PreviewCard({
           label={t('userDrawer.protocols', { count: preview.protocols })}
         />
       </Box>
+      )}
 
       <Stack gap={6}>
         {shown.length === 0 && (
-          <Text style={{ fontSize: 12, color: MIST }}>{t('userDrawer.previewEmpty')}</Text>
+          <Text style={{ fontSize: 12, color: MIST }}>
+            {preview.why === 'loading'
+              ? t('common.loading')
+              : preview.why === 'refused'
+                ? t('userDrawer.dialRefused')
+                : preview.why === 'failed'
+                  ? t('userDrawer.dialError')
+                  : t('userDrawer.previewEmpty')}
+          </Text>
         )}
         {shown.map((r) => (
           <Box
@@ -206,14 +218,8 @@ export function PreviewCard({
         {/* Naming the squad turns "inherits" from a shrug into an address. */}
         <PreviewRow
           label={t('userDrawer.routing')}
-          value={routingPreset || routingSource?.preset || t('userDrawer.inheritsSquad')}
-          note={
-            routingClash
-              ? t('userDrawer.routingClashChip')
-              : routingSource
-                ? t('userDrawer.routingFromSquad', { squad: routingSource.squad })
-                : undefined
-          }
+          value={routing.value}
+          note={routing.note ? t(routing.note.key, routing.note.vars) : undefined}
         />
       </Stack>
 

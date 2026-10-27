@@ -5,6 +5,8 @@ import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { notifications } from '@mantine/notifications';
 import { apiErrorMessage } from '@/lib/net/client';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { relativeTime } from '@/lib/ui/relativeTime';
 import { PrimaryButton } from '@/ui/PrimaryButton';
@@ -66,6 +68,7 @@ export function TemplatesPage() {
   const facts = templatesScreenFacts({
     templates: query.data?.templates,
     notImplemented: isNotImplemented(query.error),
+    failed: loadView(query) === 'failed',
   });
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -74,7 +77,11 @@ export function TemplatesPage() {
     mutationFn: ({ body }: { body: string; name: string }) => importTemplate({ body }),
     onSuccess: (result, vars) => {
       const imported = importFacts(result);
-      if (!imported) return;
+      // An answer without a template is said, not a press that did nothing.
+      if (!imported) {
+        notifications.show({ color: 'red', title: t('templates.importFailed'), message: t('templates.importNoTemplate') });
+        return;
+      }
       // Черновик едет в редактор, а не сохраняется молча: импорт это начало
       // правки, а не готовый шаблон. Имя берём из файла, если сервер своего не
       // предложил: оно хотя бы напоминает, откуда шаблон взялся.
@@ -113,8 +120,9 @@ export function TemplatesPage() {
         {/* Кнопки живут и на заглушке, но выключены: прятать их значило бы
             скрыть, что экран вообще про это. */}
         {/* Файл читается ЗДЕСЬ, на клиенте, и уходит телом: сервер отвечает
-            разобранным шаблоном и числом переписанных чужих ключей, а экран
-            открывает его как черновик, который ещё надо прогнать и сохранить. */}
+            разобранным шаблоном, а экран открывает его как черновик, который
+            ещё надо прогнать и сохранить. Файл из другой панели сначала идёт
+            через iceslab-migrate templates (подсказка у кнопки и на черновике). */}
         <input
           ref={fileRef}
           type="file"
@@ -129,13 +137,14 @@ export function TemplatesPage() {
           }}
         />
         <GhostButton
-          disabled={facts.state === 'unavailable' || importing.isPending}
+          title={t('templates.migrateHint')}
+          disabled={facts.state === 'unavailable' || facts.state === 'failed' || importing.isPending}
           onClick={() => fileRef.current?.click()}
         >
           {importing.isPending ? t('templates.importing') : t('templates.import')}
         </GhostButton>
         <PrimaryButton
-          disabled={facts.state === 'unavailable'}
+          disabled={facts.state === 'unavailable' || facts.state === 'failed'}
           onClick={() => navigate('/subscription/templates/new')}
         >
           {t('templates.create')}
@@ -143,6 +152,13 @@ export function TemplatesPage() {
       </Box>
 
       {facts.state === 'unavailable' && <Unavailable />}
+      {/* A list that did not arrive is said, not «not released yet» (A-236). */}
+      {facts.state === 'failed' && (
+        <LoadFailed message={apiErrorMessage(query.error)} onRetry={() => void query.refetch()} />
+      )}
+      {facts.state === 'loading' && (
+        <Text style={{ fontFamily: DISPLAY, fontSize: 12, color: MIST }}>{t('common.loading')}</Text>
+      )}
       {facts.state === 'empty' && <Empty />}
       {facts.state === 'list' &&
         facts.groups.map((g) => <TypeGroup key={g.type} type={g.type} templates={g.templates} />)}
@@ -153,16 +169,19 @@ export function TemplatesPage() {
 /** Тихая кнопка рядом с основной. Своя, а не из чужого контура. */
 function GhostButton({
   children,
+  title,
   disabled,
   onClick,
 }: {
   children: string;
+  title?: string;
   disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <UnstyledButton
       type="button"
+      title={title}
       disabled={disabled}
       onClick={onClick}
       style={{

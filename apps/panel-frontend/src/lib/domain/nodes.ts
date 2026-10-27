@@ -85,7 +85,10 @@ export interface Node {
   // T7 - proxy-core version (e.g. xray "26.3.27"), null until a versioned agent
   // reports in. Shown on the node card; cascade form warns on an old balancer entry.
   coreVersion: string | null;
-  consumptionMultiplier: string;
+  /** A-143: a number from 0 to 100, one decimal; a server older than the
+   *  numeric DTO sends it as a string. Read through multiplierBadge and
+   *  multiplierInput (contours/nodes/lib/nodeLimits.ts), never compared raw. */
+  consumptionMultiplier: number | string;
   // Slice 27.5
   regionId: string | null;
   maxUsers: number | null;
@@ -135,6 +138,21 @@ export interface Node {
    * `cores[].tls` строки hysteria.
    */
   hysteriaTls?: NodeHysteriaTls | null;
+  /**
+   * End of the node's mTLS certificate as the agent reports it (A-124,
+   * 92572130). `null` = the agent never said (older than rotation), which is
+   * «unknown», not «expired»; `undefined` = a server older than the field.
+   * Read through `certTerm` (contours/nodes/lib/nodeCert.ts).
+   */
+  certNotAfter?: string | null;
+  /**
+   * Whether the agent can renew that certificate in place (A-221, 2b725c64).
+   * `false`: an agent older than rotation, the end read off a handshake; the
+   * panel cannot renew it, update the agent before the end. `null`: nothing
+   * known (no end yet); `undefined`: a server older than the field. Only
+   * `false` is a «no» (certPageView, certAlarm).
+   */
+  agentCanRotate?: boolean | null;
   /**
    * The cores this machine reported, with the panel's freshness stamp.
    *
@@ -292,6 +310,16 @@ export async function rotateHysteriaTls(id: string): Promise<{ hysteriaTls: Node
   return data;
 }
 
+/**
+ * Renew the node's mTLS certificate now (A-124): 200 { fingerprint, notAfter }.
+ * Refusals are read by `certRotateRefusal`; on any of them the node keeps or
+ * goes back to its old pair.
+ */
+export async function rotateNodeCert(id: string): Promise<{ fingerprint: string; notAfter: string }> {
+  const { data } = await api.post<{ fingerprint: string; notAfter: string }>(`/api/nodes/${id}/cert/rotate`);
+  return data;
+}
+
 export async function refreshNodeBootstrap(id: string): Promise<BootstrapInfo> {
   const { data } = await api.post<BootstrapInfo>(`/api/nodes/${id}/bootstrap`);
   return data;
@@ -383,6 +411,18 @@ export interface NodeSyncStatus {
    * apart.
    */
   online: boolean;
+  /**
+   * A-195 (BACK cbc08d4f): bindings that share a single-inbound adapter on
+   * this node, and the one the node serves. Raw: `nodeAdapterFacts` reads it
+   * with the input checked first. No key: a server older than the field.
+   */
+  slotConflicts?: unknown;
+  /**
+   * A-204 part 2 (BACK-2): bindings where a squad's limit on a user does not
+   * hold on this node (`NodeUserScopeGap`). Raw, read the same way; no key: a
+   * server older than the field.
+   */
+  userScopeGaps?: unknown;
 }
 
 export async function getNodeSyncStatus(id: string): Promise<NodeSyncStatus> {
@@ -401,7 +441,40 @@ export async function listNodes(params?: {
 }
 
 /** Largest page the list endpoint accepts; asking for more is a 400. */
-const NODES_PAGE_MAX = 100;
+export const NODES_PAGE_MAX = 100;
+
+/**
+ * Every page of the node list as one response (A-138).
+ *
+ * The endpoint answers 50 by default and 100 at most, and fifteen screens
+ * asked once: on a fleet past that, nodes dropped out of every picker and
+ * hosts on them read as orphans. The walk stops on the page that reaches
+ * `total` or on a page that brings nothing new, and a node seen twice (the
+ * list shifted under the walk) is kept once. `fields` is the first page's: it describes the
+ * server, not the page.
+ */
+export async function collectNodePages(
+  fetchPage: (page: number) => Promise<NodesListResponse>,
+): Promise<NodesListResponse> {
+  const seen = new Map<string, Node>();
+  let first: NodesListResponse | null = null;
+  for (let page = 1; ; page++) {
+    const res = await fetchPage(page);
+    first ??= res;
+    const before = seen.size;
+    for (const n of res.nodes) if (!seen.has(n.id)) seen.set(n.id, n);
+    // A page with nothing new ends the walk too: a server that ignored `page`
+    // would otherwise be asked forever.
+    if (seen.size === before || page * NODES_PAGE_MAX >= res.total) break;
+  }
+  const nodes = [...seen.values()];
+  return { ...first, nodes, total: nodes.length, page: 1, limit: nodes.length };
+}
+
+/** The whole fleet, for pickers and lookups. Same filters as listNodes. */
+export function listAllNodes(params?: { status?: string; regionId?: string }): Promise<NodesListResponse> {
+  return collectNodePages((page) => listNodes({ ...params, page, limit: NODES_PAGE_MAX }));
+}
 
 /**
  * One node by id. There is no single-node GET, so this walks the list a page

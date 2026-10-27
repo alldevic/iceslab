@@ -1,4 +1,5 @@
 export * from './transport.js';
+export * from './transport-support.js';
 export * from './routing.js';
 export * from './recipes.js';
 export * from './recipes-registry.js';
@@ -7,3 +8,6 @@ export * from './core-versions.js';
 export * from './clients.js';
 export * from './reality.js';
 export * from './geo.js';
+export * from './adapters.js';
+export * from './hosts.js';
+export * from './retention.js';

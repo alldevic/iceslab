@@ -26,7 +26,7 @@ describe('nodeDeleteRefusal: 409 NODE_IN_USE_BY_CASCADE', () => {
 });
 
 describe('nodeDeleteFacts: каскады ноды до кнопки', () => {
-  it('включённый каскад запрещает, выключенный только называется; одно имя на каскад', () => {
+  it('запрещает любой каскад, включённый и выключенный (1bf18ca); одно имя на каскад', () => {
     expect(
       nodeDeleteFacts({
         cascadeNeedsEngines: [
@@ -34,11 +34,11 @@ describe('nodeDeleteFacts: каскады ноды до кнопки', () => {
           { engine: 'singbox', cascades: [c('a', '123', true)] },
         ],
       }),
-    ).toEqual({ blocked: ['123'], disabled: ['old'] });
+    ).toEqual({ blocked: ['123', 'old'] });
   });
 
   it('нода ни в одном каскаде: ничего не мешает', () => {
-    expect(nodeDeleteFacts({ cascadeNeedsEngines: [] })).toEqual({ blocked: [], disabled: [] });
+    expect(nodeDeleteFacts({ cascadeNeedsEngines: [] })).toEqual({ blocked: [] });
   });
 
   it('поля нет: окно как раньше, отсутствие не факт', () => {

@@ -93,11 +93,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main
   --panel-url https://panel.example.com \
   --bootstrap bs_xxx \
   --protocol hysteria \
-  --hysteria-domain hy2-01.example.com \
-  --hysteria-email admin@example.com
+  --hysteria-domain hy2-01.example.com
 ```
 
-The script writes `/etc/hysteria/config.yaml`, drops a systemd unit, and the first run obtains the LE cert over HTTP-01.
+Optional: `--hysteria-email you@your-domain`, the contact of the ACME account. The certificate is issued without it; an `example.*` or `localhost` address is refused, as Let's Encrypt refuses it.
+
+The script installs Hysteria and its systemd unit; the agent writes `/etc/hysteria/config.yaml` and obtains the LE cert over HTTP-01 on the panel's first push.
 
 #### AmneziaWG
 
@@ -262,6 +263,15 @@ pnpm --filter @iceslab/panel-frontend exec tsc --noEmit
 - **Contributing**: see [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted under AGPL-3.0 inbound = outbound; commits squashed on merge.
 - **Security**: vulnerabilities to `security@icecompany.tech`. Details + disclosure timeline in [SECURITY.md](./SECURITY.md).
 - **Trademark**: the name "Iceslab" is restricted; full policy in [TRADEMARK.md](./TRADEMARK.md). AGPL rights to the code are unaffected: fork freely, just rename if you ship publicly.
+
+## Support the project
+
+Iceslab is built by one person and stays AGPL. If it saves you time, a
+donation keeps the test nodes running:
+
+- **USDT (TRC-20):** `TM432rBBe3Eo5REkWn81ajJ9JLjGuuTjEJ`
+
+Check the network before sending: TRC-20 only, other networks are lost.
 
 ## License
 

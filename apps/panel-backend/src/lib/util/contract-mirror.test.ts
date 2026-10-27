@@ -8,7 +8,9 @@ import {
   LINK_TUNNEL_IFACE_PREFIX,
   PROTOCOL_NAMES,
   XRAY_SUBPROTOCOLS,
+  type NodePolicyDrawn,
 } from '@iceslab/shared';
+import { AWG_PUSH_INJECTED_KEYS, AmneziawgConfigSchema } from '../../modules/inbounds/inbounds.schemas.js';
 
 /**
  * The hand-written mirror between `packages/shared/src/transport.ts` and the
@@ -168,7 +170,7 @@ function jsonKeysOf(struct: string): string[] {
 }
 
 describe('the chain block against the agent that will decode it', () => {
-  it('carries the same six keys on both sides', () => {
+  it('carries the same seven keys on both sides', () => {
     const keys = jsonKeysOf('NodeChain');
     // Fails rather than passes empty: if the struct is renamed or the file
     // moves, this test has to say so instead of checking nothing.
@@ -176,14 +178,35 @@ describe('the chain block against the agent that will decode it', () => {
       keys.length,
       'NodeChain was not found in dto.go, so this test is checking nothing. ' +
         'Fix the pattern or the struct name, do not delete the test.',
-    ).toBe(6);
+    ).toBe(7);
     // `userCore` joined in К6 and is the reason this guard earns its keep: it
     // carries the drawing the user's core renders while the chain process holds
     // the chain, and it ships before anything reads it, so a rename on either
     // side would sit silent until a push decoded into zeroes and an entry
     // quietly egressed from its own country. `tunnels` joined in Ф8.1 the same
-    // way, ahead of the agent that raises them.
-    expect(keys).toEqual(['engine', 'config', 'socks', 'socksPassword', 'userCore', 'tunnels']);
+    // way, ahead of the agent that raises them. `linkIngress` in A-111: a port
+    // decoded into 0 there is a leg the firewall never opens.
+    expect(keys).toEqual(['engine', 'config', 'socks', 'socksPassword', 'userCore', 'tunnels', 'linkIngress']);
+    expect(jsonKeysOf('ChainLinkIngress')).toEqual(['port', 'transports', 'allowFrom']);
+  });
+
+  it('carries the node policy report on both sides (A-232)', () => {
+    // A key renamed on one side decodes into nothing on the other, and the
+    // panel then reads "no report" from an agent that sent one.
+    expect(jsonKeysOf('HealthcheckResponse')).toContain('policy');
+    expect(jsonKeysOf('PolicyDrawn')).toEqual(['drawing', 'notDrawn', 'renderedAt']);
+    expect(jsonKeysOf('PolicyNotDrawn')).toEqual(['exit', 'direction']);
+    const drawn: NodePolicyDrawn = { drawing: 'none', notDrawn: [{ exit: 'x', direction: 1 }], renderedAt: '' };
+    expect(Object.keys(drawn)).toEqual(['drawing', 'notDrawn', 'renderedAt']);
+    expect(Object.keys(drawn.notDrawn[0]!)).toEqual(['exit', 'direction']);
+  });
+
+  it('carries the roster batch on both sides (A-112)', () => {
+    // A renamed key decodes into an empty batch on the agent, which answers
+    // 200 with no results: every user of the push counted failed, none sent.
+    expect(jsonKeysOf('AddUsersRequest')).toEqual(['users']);
+    expect(jsonKeysOf('AddUsersResponse')).toEqual(['results']);
+    expect(jsonKeysOf('AddUsersResult')).toEqual(['userId', 'ok', 'error']);
   });
 
   it('carries the three tunnel keys on both sides, and one interface prefix', () => {
@@ -326,5 +349,35 @@ describe('the xray subprotocols against the agent', () => {
       }
     }
     expect([...known].sort()).toEqual([...XRAY_SUBPROTOCOLS].sort());
+  });
+});
+
+/**
+ * The AmneziaWG inbound against the agent that decodes it (A-105).
+ *
+ * No dto.go struct carries it: inbound.go decodes it with its own. The wire
+ * type in transport.ts is held equal to AmneziawgConfigSchema plus the pushed
+ * keys at compile time (inbounds.schemas.ts); this holds the schema plus the
+ * same keys equal to the Go tags, so the three agree.
+ */
+describe('the amneziawg inbound against the agent', () => {
+  const INBOUND_GO = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../../../../apps/node/internal/core/amneziawg/inbound.go',
+  );
+  const goKeys = (struct: string): string[] => {
+    const body = new RegExp(`type ${struct} struct \\{([\\s\\S]*?)\\n\\}`).exec(readFileSync(INBOUND_GO, 'utf8'))?.[1];
+    return body === undefined ? [] : [...body.matchAll(/`json:"([^",]+)(?:,omitempty)?"`/g)].map((m) => m[1]!);
+  };
+
+  it('carries the same keys on both sides', () => {
+    const wire = goKeys('inboundCfgWire');
+    expect(wire.length, 'inboundCfgWire was not found in inbound.go, so this test is checking nothing').toBeGreaterThan(0);
+    expect([...wire].sort()).toEqual(
+      [...Object.keys(AmneziawgConfigSchema.shape), ...AWG_PUSH_INJECTED_KEYS].sort(),
+    );
+    expect([...goKeys('obfuscationCfg')].sort()).toEqual(
+      Object.keys(AmneziawgConfigSchema.shape.obfuscation.shape).sort(),
+    );
   });
 });

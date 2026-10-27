@@ -1,11 +1,13 @@
 import { prisma } from '../../prisma.js';
+import { getLogger } from '../../lib/infra/logger.js';
+import { notifyTelegramAsync, escapeMarkdown } from '../../lib/notify/telegram-notify.js';
+import { compileLinearRule, testLinearRule, type LinearRule } from './linear-regex.js';
 
 /**
- * User-Agent length cap before regex evaluation. This bounds the INPUT size but
- * NOT regex backtracking: V8's engine is backtracking, so a pathological admin
- * pattern like `(a+)+` can still blow up on a short crafted UA (30-40 chars is
- * enough). The real ReDoS guard is refusing catastrophic patterns at save time
- * (srr.schemas.ts); this cap just keeps well-formed linear patterns cheap.
+ * User-Agent length cap before regex evaluation. Since A-019 the rules run on
+ * the linear engine (linear-regex.ts), so this bounds the work per rule to a
+ * multiple of 256 characters; it is no longer the only thing between a
+ * pattern and the event loop.
  */
 const UA_MAX_LENGTH = 256;
 
@@ -18,9 +20,11 @@ const UA_MAX_LENGTH = 256;
  */
 const SRR_CACHE_TTL_MS = 60_000;
 interface CompiledRule {
-  re: RegExp;
+  re: LinearRule;
   format: string;
   name: string;
+  /** A-236: the template the rule's clients are framed by; null = Default. */
+  templateName: string | null;
 }
 let srrCache: { rules: CompiledRule[]; expiresAt: number } | null = null;
 
@@ -37,14 +41,15 @@ async function getCompiledRules(): Promise<CompiledRule[]> {
     // The name rides along for the admin side: "this user gets singbox" is an
     // assertion nobody can check, "rule Happ matched their User-Agent" is one
     // an operator can act on. The serving path ignores it.
-    select: { name: true, uaPattern: true, format: true },
+    select: { name: true, uaPattern: true, format: true, templateName: true },
   });
   const rules: CompiledRule[] = [];
   for (const r of raw) {
     try {
-      rules.push({ re: compileRule(r.uaPattern), format: r.format, name: r.name });
+      rules.push({ re: compileRule(r.uaPattern), format: r.format, name: r.name, templateName: r.templateName });
     } catch {
-      // Bad regex, skip. The /srr admin UI is the place to surface it.
+      // Bad regex, or one the linear engine cannot run (a rule stored before
+      // A-019): not served. checkStoredRules names it at start.
     }
   }
   srrCache = { rules, expiresAt: Date.now() + SRR_CACHE_TTL_MS };
@@ -75,31 +80,55 @@ export async function matchFormatForUserAgent(
  */
 export async function matchRuleForUserAgent(
   userAgent: string | null | undefined,
-): Promise<{ name: string; format: string } | null> {
+): Promise<{ name: string; format: string; templateName: string | null } | null> {
   if (!userAgent) return null;
   const ua = userAgent.slice(0, UA_MAX_LENGTH);
   for (const rule of await getCompiledRules()) {
-    if (rule.re.test(ua)) {
-      return { name: rule.name, format: rule.format };
+    if (testLinearRule(rule.re, ua)) {
+      return { name: rule.name, format: rule.format, templateName: rule.templateName };
     }
   }
   return null;
 }
 
 /**
- * ECMAScript regex doesn't accept inline flag syntax like `(?i)foo`.
- * Operators expect to paste patterns from grep/PCRE/Python so we strip the
- * inline flag prefix and pass the flags through to RegExp's second arg.
- * Unknown / unsupported flags (like `x`/`u` extras) are silently dropped.
+ * A rule as a request runs it: the inline-flag prefix operators paste from
+ * PCRE or Python (`(?i)foo`) turned into flags, on the linear engine. See
+ * compileLinearRule.
  *
  * Exported for the client-catalog test, which runs every User-Agent sample
  * through the seeded rules exactly as a request would.
  */
-export function compileRule(pattern: string): RegExp {
-  const m = pattern.match(/^\(\?([imsux]+)\)([\s\S]*)$/);
-  if (m) {
-    const flags = m[1]!.replace(/[^ims]/g, '');
-    return new RegExp(m[2]!, flags);
+export function compileRule(pattern: string): LinearRule {
+  return compileLinearRule(pattern);
+}
+
+/**
+ * A-019, at start: every stored rule is compiled as a request would compile
+ * it. One the linear engine cannot run (a backreference or a lookahead, saved
+ * before the engine moved) is not served from now on; it is named here, in the
+ * log and to the operator, so it does not just stop matching in silence.
+ */
+export async function checkStoredRules(): Promise<{ name: string; error: string }[]> {
+  const rows = await prisma.subscriptionResponseRule.findMany({
+    where: { enabled: true },
+    select: { name: true, uaPattern: true },
+  });
+  const refused: { name: string; error: string }[] = [];
+  for (const r of rows) {
+    try {
+      compileRule(r.uaPattern);
+    } catch (err) {
+      refused.push({ name: r.name, error: err instanceof Error ? err.message : String(err) });
+    }
   }
-  return new RegExp(pattern);
+  if (refused.length > 0) {
+    getLogger().warn({ refused }, '[srr] stored User-Agent rules that are not served');
+    notifyTelegramAsync(
+      `⚠️ *User-Agent rules not served*\n` +
+        refused.map((r) => `\`${escapeMarkdown(r.name)}\`: ${escapeMarkdown(r.error)}`).join('\n') +
+        `\nRewrite them without backreferences or lookaheads.`,
+    );
+  }
+  return refused;
 }

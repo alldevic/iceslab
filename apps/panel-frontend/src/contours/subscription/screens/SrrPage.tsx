@@ -11,6 +11,8 @@ import { deleteSrrRule, listSrrRules, updateSrrRule, type SrrRule } from '@/lib/
 import { SRR_FORMATS, formatTone } from '@/contours/subscription/lib/srrFormats';
 import { isCatchAll, matchingRules } from '@/contours/subscription/lib/srrMatch';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
+import { loadView } from '@/lib/ui/loadView';
+import { LoadFailed } from '@/ui/LoadFailed';
 import { AMBER, CARD, CYAN, DIM, EDGE, FAINT, HAIRLINE, MIST, MOSS, RED, ROW, SNOW, WELL } from '@/contours/subscription/lib/colors';
 
 /**
@@ -116,9 +118,10 @@ export function SrrPage() {
         <Box style={{ width: 1, height: 26, backgroundColor: HAIRLINE, flexShrink: 0 }} />
 
         <Box className="page-bar-facts">
-          <Fact value={rules.length} label={t('delivery.factRules')} />
+          {/* No list, no count: «0 rules» over a failed request is a claim (A-141). */}
+          <Fact value={rulesQuery.data ? rules.length : '-'} label={t('delivery.factRules')} />
           <Dot />
-          <Fact value={enabledCount} label={t('delivery.factEnabled')} accent={MOSS} />
+          <Fact value={rulesQuery.data ? enabledCount : '-'} label={t('delivery.factEnabled')} accent={MOSS} />
           <Dot soft />
           <Text
             className="page-bar-fact-soft"
@@ -171,13 +174,17 @@ export function SrrPage() {
               <ColHead width={66}>{t('common.actions')}</ColHead>
             </Box>
 
-            {rules.length === 0 && (
-              <Box style={{ padding: '28px 18px' }}>
-                <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>
-                  {rulesQuery.isLoading ? t('common.loading') : t('delivery.empty')}
-                </Text>
-              </Box>
-            )}
+            {/* A list that did not arrive is not an empty one (A-141). */}
+            {rules.length === 0 &&
+              (loadView(rulesQuery) === 'failed' ? (
+                <LoadFailed message={apiErrorMessage(rulesQuery.error)} onRetry={() => void rulesQuery.refetch()} />
+              ) : (
+                <Box style={{ padding: '28px 18px' }}>
+                  <Text style={{ fontFamily: DISPLAY, fontSize: 13, color: MIST, textAlign: 'center' }}>
+                    {loadView(rulesQuery) === 'loading' ? t('common.loading') : t('delivery.empty')}
+                  </Text>
+                </Box>
+              ))}
 
             {rules.map((rule, i) => {
               const off = !rule.enabled;
@@ -533,7 +540,7 @@ function ColHead({ children, width, flex }: { children: ReactNode; width?: numbe
   );
 }
 
-function Fact({ value, label, accent }: { value: number; label: string; accent?: string }) {
+function Fact({ value, label, accent }: { value: number | string; label: string; accent?: string }) {
   return (
     <Box style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexShrink: 0 }}>
       <Text

@@ -12,9 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
@@ -55,6 +58,13 @@ func buildPolicyRules(rules []dto.NodePolicyRule) ([]any, error) {
 		}
 		if r.Match.Network != "" {
 			rule["network"] = r.Match.Network
+		}
+		// A-277: into a cascade, only the users its door lets through (the
+		// panel's entry gate); the rest go on down the list. Above the doors
+		// with no user, the rule took a squad the cascade was switched off
+		// for into it. Empty never reaches here (fitCascadeExits).
+		if r.Action.Kind == dto.PolicyActionCascade && len(r.Action.Users) > 0 {
+			rule["user"] = r.Action.Users
 		}
 		out = append(out, rule)
 	}
@@ -155,6 +165,11 @@ func policyOutboundTag(a dto.NodePolicyAction) (string, error) {
 // admin settings (slice 23 will move these into the inbounds table) and kept
 // constant across user mutations.
 type InboundConfig struct {
+	// ID is the panel's binding id, the key the adapter holds it under; empty
+	// for the install-time inbound. A user scoped to inbounds (A-022) is
+	// rendered on the ones whose ID they name.
+	ID string
+
 	// Tag uniquely identifies the inbound inside Xray. Default: "vless-in".
 	Tag string
 
@@ -467,6 +482,34 @@ type xrayClient struct {
 	// into the user's id. Empty for a panel that does not send it: such a user
 	// gets no socks/http account rather than an account with an empty name.
 	Login string `json:"-"`
+	// Inbounds: the panel ids of the inbounds this user is on, sorted and
+	// comma-joined, so the struct stays comparable. Empty is every inbound,
+	// what a panel that names none means (A-022).
+	Inbounds string `json:"-"`
+}
+
+// servesOn: the user belongs on this inbound.
+func (c xrayClient) servesOn(in InboundConfig) bool {
+	if c.Inbounds == "" {
+		return true
+	}
+	for _, id := range strings.Split(c.Inbounds, ",") {
+		if id == in.ID {
+			return true
+		}
+	}
+	return false
+}
+
+// usersFor is the users of one inbound, in the order given.
+func usersFor(in InboundConfig, users []xrayClient) []xrayClient {
+	out := make([]xrayClient, 0, len(users))
+	for _, u := range users {
+		if u.servesOn(in) {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // plainAccounts are the users that can hold a socks/http account: the ones
@@ -514,6 +557,116 @@ type CascadeFragments struct {
 	// exposes; its user routing rule targets one via `balancerTag` (instead of a
 	// fixed `outboundTag`), so xray picks the lowest-ping exit per connection.
 	Balancers []json.RawMessage `json:"balancers,omitempty"`
+}
+
+// The two names one direction's way out has in xray (A-108): the legacy
+// drawing, where xray dials the leg itself, and the hand-over, where it passes
+// the direction to the chain process over loopback socks. Mirrors dirOutTag and
+// chainOutTag in the panel's cascade.config.ts.
+var (
+	legacyExitRe   = regexp.MustCompile(`^cascade-link-out-d(\d+)-0$`)
+	handoverExitRe = regexp.MustCompile(`^cascade-link-out-chain-d(\d+)$`)
+)
+
+// fitCascadeExits gives every cascade rule of the policy the name of the way
+// out THIS render draws, by what is in the cascade outbounds rather than by
+// what the push said (A-108). The panel names the hand-over when it sends a
+// chain; a chain the agent refused with none accepted before leaves xray on
+// the legacy drawing, and the rule would point at an outbound the config does
+// not have: `xray -test` then refuses the whole push, the users' inbounds with
+// it. So the name the panel sent is kept when it is drawn, swapped for the
+// same direction's other name when that one is, and the rule is dropped when
+// neither is, as the panel drops a rule into a direction the node does not
+// dial. The other actions pass untouched.
+//
+// It returns the rules it left out too (A-232): the render logs them and hands
+// them to the node's report from this one call, so the journal, the report and
+// the config cannot disagree.
+func fitCascadeExits(rules []dto.NodePolicyRule, cascade *CascadeFragments) ([]dto.NodePolicyRule, []dto.PolicyNotDrawn) {
+	drawn := drawnOutboundTags(cascade)
+	out := make([]dto.NodePolicyRule, 0, len(rules))
+	var dropped []dto.PolicyNotDrawn
+	for _, r := range rules {
+		// A-277: a list of who may take the way out that came empty would draw
+		// as no `user` condition at all, which xray reads as everyone: the
+		// leak the list exists to close. The panel never sends one; a rule
+		// nobody may take is left out here too.
+		if r.Action.Kind == dto.PolicyActionCascade && r.Action.Users != nil && len(r.Action.Users) == 0 {
+			n := 0
+			if m := legacyExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+				n, _ = strconv.Atoi(m[1])
+			} else if m := handoverExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+				n, _ = strconv.Atoi(m[1])
+			}
+			dropped = append(dropped, dto.PolicyNotDrawn{Exit: r.Action.Exit, Direction: n})
+			continue
+		}
+		if r.Action.Kind != dto.PolicyActionCascade || r.Action.Exit == "" || drawn[r.Action.Exit] {
+			out = append(out, r)
+			continue
+		}
+		other, direction := "", ""
+		if m := legacyExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+			other, direction = "cascade-link-out-chain-d"+m[1], m[1]
+		} else if m := handoverExitRe.FindStringSubmatch(r.Action.Exit); m != nil {
+			other, direction = "cascade-link-out-d"+m[1]+"-0", m[1]
+		}
+		if other == "" || !drawn[other] {
+			n, _ := strconv.Atoi(direction)
+			dropped = append(dropped, dto.PolicyNotDrawn{Exit: r.Action.Exit, Direction: n})
+			continue
+		}
+		r.Action.Exit = other
+		out = append(out, r)
+	}
+	return out, dropped
+}
+
+func logDroppedCascadeRules(dropped []dto.PolicyNotDrawn) {
+	for _, d := range dropped {
+		// Not silent (A-232): the panel counts what it SENT, and only this
+		// render knows the rule did not make it into the config. The render is
+		// pure and has no logger of its own; the default one lands in the
+		// agent's journal. The node's report carries the same list.
+		slog.Default().Warn("xray: node policy rule into a cascade way out this config does not draw is left out",
+			"exit", d.Exit, "direction", d.Direction)
+	}
+}
+
+func drawnOutboundTags(cascade *CascadeFragments) map[string]bool {
+	drawn := map[string]bool{}
+	if cascade == nil {
+		return drawn
+	}
+	for _, raw := range cascade.Outbounds {
+		var ob struct {
+			Tag string `json:"tag"`
+		}
+		if json.Unmarshal(raw, &ob) == nil && ob.Tag != "" {
+			drawn[ob.Tag] = true
+		}
+	}
+	return drawn
+}
+
+// cascadeDrawingOf names the drawing these fragments are, by their outbounds:
+// the chain hand-over, the legacy legs, or no way out of a cascade at all.
+// The panel's cascadeXrayDrawingOf answers the same question about what it
+// sends; this answers it about what this render took.
+func cascadeDrawingOf(cascade *CascadeFragments) string {
+	legacy := false
+	for tag := range drawnOutboundTags(cascade) {
+		if handoverExitRe.MatchString(tag) {
+			return dto.PolicyDrawingHandover
+		}
+		if legacyExitRe.MatchString(tag) {
+			legacy = true
+		}
+	}
+	if legacy {
+		return dto.PolicyDrawingLegacy
+	}
+	return dto.PolicyDrawingNone
 }
 
 // cutCascadeRulesAtTheFirstDoor splits the panel's cascade fragments where the
@@ -637,6 +790,22 @@ func renderMultiConfig(
 	policy []dto.NodePolicyRule,
 	dns *dto.DnsCfg,
 ) ([]byte, error) {
+	return renderMultiConfigInto(inboundCfgs, users, cascade, apiPort, policy, dns, nil)
+}
+
+// renderMultiConfigInto is renderMultiConfig that also hands back, through
+// `report`, what the render did with the node policy (A-232): the drawing and
+// the cascade rules it left out, from the very call that left them out. The
+// caller keeps it only once xray has accepted the config.
+func renderMultiConfigInto(
+	inboundCfgs []InboundConfig,
+	users []xrayClient,
+	cascade *CascadeFragments,
+	apiPort int,
+	policy []dto.NodePolicyRule,
+	dns *dto.DnsCfg,
+	report **dto.PolicyDrawn,
+) ([]byte, error) {
 	inbounds := make([]any, 0, len(inboundCfgs)+1)
 	seenTags := make(map[string]struct{}, len(inboundCfgs))
 	seenPorts := make(map[int]struct{}, len(inboundCfgs))
@@ -661,10 +830,11 @@ func renderMultiConfig(
 		// (proxy/http/server.go:125), so an empty one is an open proxy on the
 		// internet. socks with an empty list happens to refuse everyone, and is
 		// left out too, so the rule is one rule.
-		if cfg.isPlain() && len(plainAccounts(users)) == 0 {
+		ibUsers := usersFor(cfg, users)
+		if cfg.isPlain() && len(plainAccounts(ibUsers)) == 0 {
 			continue
 		}
-		inbounds = append(inbounds, userInboundEntry(cfg, users))
+		inbounds = append(inbounds, userInboundEntry(cfg, ibUsers))
 	}
 
 	// One management inbound for the whole process, not one per user inbound:
@@ -777,7 +947,15 @@ func renderMultiConfig(
 	//
 	// Nil or empty appends nothing, so a node without a policy renders
 	// byte-identically to before this existed.
-	policyRules, err := buildPolicyRules(policy)
+	kept, dropped := fitCascadeExits(policy, cascade)
+	logDroppedCascadeRules(dropped)
+	if report != nil {
+		if dropped == nil {
+			dropped = []dto.PolicyNotDrawn{}
+		}
+		*report = &dto.PolicyDrawn{Drawing: cascadeDrawingOf(cascade), NotDrawn: dropped}
+	}
+	policyRules, err := buildPolicyRules(kept)
 	if err != nil {
 		return nil, err
 	}
@@ -798,17 +976,40 @@ func renderMultiConfig(
 		}
 	}
 
-	// WARP egress (per-node v1): add the Cloudflare WARP wireguard outbound and
-	// route this inbound's user traffic through it. Appended last so the DNS,
+	// WARP egress: the Cloudflare WARP wireguard outbound, and each inbound
+	// that carries WARP routed through it. Appended last so the DNS,
 	// BitTorrent/SMTP block, and cascade rules still take precedence (warp +
 	// cascade is out of v1 scope: cascade routing matches first, so the warp
 	// rule simply never fires on a cascade node).
-	if cfg.Warp != nil {
-		outbounds = append(outbounds, buildWarpOutbound(cfg.Warp))
+	//
+	// A-033, 22.10: this read `cfg`, the LAST inbound of the loop above, so on
+	// a node with two xray inbounds the WARP of the first was not rendered at
+	// all and its users went out directly while the panel showed WARP on. Each
+	// inbound is now asked for its own. The first credentials keep the tag
+	// "warp" (the policy action routes there); an inbound with other
+	// credentials gets an outbound of its own.
+	warpTags := map[string]string{} // rendered outbound JSON -> its tag
+	for _, ib := range inboundCfgs {
+		c := ib.withDefaults()
+		if c.Warp == nil {
+			continue
+		}
+		ob := buildWarpOutbound(c.Warp)
+		key, _ := json.Marshal(ob)
+		tag, seen := warpTags[string(key)]
+		if !seen {
+			tag = "warp"
+			if len(warpTags) > 0 {
+				tag = "warp-" + c.Tag
+			}
+			warpTags[string(key)] = tag
+			ob["tag"] = tag
+			outbounds = append(outbounds, ob)
+		}
 		rules = append(rules, map[string]any{
 			"type":        "field",
-			"inboundTag":  []string{cfg.Tag},
-			"outboundTag": "warp",
+			"inboundTag":  []string{c.Tag},
+			"outboundTag": tag,
 		})
 	}
 
@@ -833,23 +1034,38 @@ func renderMultiConfig(
 	dnsSection := renderDnsSection(dns)
 
 	doc := map[string]any{
-		// ⚠ `warning`, not `info`, and this is a disk-space decision rather than
-		// a taste in verbosity. At info xray writes a line PER CONNECTION;
-		// journald mirrors it into syslog, and our journald limits in the
-		// installer do not cap syslog at all. Reported from an operator's own
-		// exit node (PR #43, 2026-08-17): 3 GB of logs, the disk full, and
-		// nothing in them anybody had ever read.
+		// ⚠ xray keeps TWO logs, and `loglevel` governs only one of them.
 		//
-		// What is lost is the per-connection trace, which is not how anything
-		// here is diagnosed: a refused config, a failed start and a dead leg all
-		// print at warning or above.
+		//   - The error log: `loglevel` `warning`, not `info`. A refused config,
+		//     a failed start and a dead leg all print at warning or above.
+		//   - The ACCESS log: a line per connection with the client's IP, the
+		//     destination and the user's email. `loglevel` does not touch it; an
+		//     empty `access` sends it to stdout, which is journald (xray-core
+		//     v26.3.27 infra/conf/log.go, LogConfig.Build: "none" disables, ""
+		//     keeps the console). So `access: none`, always.
+		//   - The DNS log: off unless `dnsLog` is true; said so here too.
+		//
+		// Two reasons, both found in the field. Disk: journald mirrors into
+		// syslog, which our installer does not cap (3 GB on an operator's exit
+		// node, PR #43, 2026-08-17). And privacy: who connected from where to
+		// what, kept on the box for anyone who reads the journal (aeza-de-01,
+		// 26.10, with loglevel already at warning). Until then this comment
+		// promised that warning alone kept the per-connection lines out; it did
+		// not.
 		"log": map[string]any{
 			"loglevel": "warning",
+			"access":   "none",
+			"dnsLog":   false,
 		},
 		"stats": map[string]any{},
 		"api": map[string]any{
-			"tag":      "api",
-			"services": []string{"StatsService", "HandlerService"},
+			"tag": "api",
+			// RoutingService for `xray api adrules`: a routing-only change is
+			// handed to the running core instead of restarting it (A-134).
+			// Without it the call answers "unknown service
+			// xray.app.router.command.RoutingService" (found on the live test,
+			// 22.10).
+			"services": []string{"StatsService", "HandlerService", "RoutingService"},
 		},
 		"policy": map[string]any{
 			"levels": map[string]any{

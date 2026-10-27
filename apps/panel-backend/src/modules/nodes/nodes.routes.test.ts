@@ -46,7 +46,7 @@ describe('POST /api/nodes', () => {
     expect(body.address).toBe('10.0.0.1:8443');
     expect(body.countryCode).toBe('DE');
     expect(body.status).toBe('unknown');
-    expect(body.consumptionMultiplier).toBe('1');
+    expect(body.consumptionMultiplier).toBe(1);
     expect(typeof body.payload).toBe('string');
 
     const decoded = decodeNodePayload(body.payload);

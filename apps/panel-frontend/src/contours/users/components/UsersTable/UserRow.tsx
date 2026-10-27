@@ -1,5 +1,5 @@
-import { isRoutingPresetId } from '@/lib/domain/routingPresets';
-import { ACTIONS_COL, SELECT_COL } from '@/contours/users/lib/usersTable';
+import { presetChoiceName, presetChoiceOf } from '@/lib/domain/routingPresets';
+import { ACTIONS_COL, ROW_SELECTION, SELECT_COL } from '@/contours/users/lib/usersTable';
 import { AMBER, CARD, HAIRLINE, MIST, MOSS, RED, SNOW, VIOLET } from '@/contours/users/lib/colors';
 import { DISPLAY, MONO } from '@/contours/users/lib/textStyles';
 import { ActionIcon, Box, Menu, Text, Tooltip } from '@mantine/core';
@@ -11,7 +11,9 @@ import { TrafficBar } from '@/contours/users/components/UsersTable/TrafficBar';
 import { copyToClipboard } from '@/lib/ui/clipboard';
 import { expireRelative, formatBytes, trafficPercent } from '@/contours/users/lib/userFormat';
 import { presetKey } from '@/lib/domain/routingPresets';
-import { subscriptionUrl } from '@/lib/domain/users';
+import { subscriptionLink } from '@/contours/users/lib/subscriptionLink';
+import { deviceLimitCell } from '@/contours/users/lib/deviceLimit';
+import { apiErrorMessage } from '@/lib/net/client';
 import { useTranslation } from 'react-i18next';
 import { SquadPill } from '@/contours/users/components/UsersTable/SquadPill';
 import { relativeTime } from '@/lib/ui/relativeTime';
@@ -43,6 +45,13 @@ export function UserRow({
 }: { u: User; cellStyles: CSSProperties[]; pad: number } & Pick<UsersPageState, 'authStatusQuery' | 'squadNameById' | 'visibleColumns' | 'handleRevoke' | 'handleRotate' | 'handleResetTraffic' | 'handleDelete' | 'setEditing' | 'selected' | 'toggleSelected'>) {
   const { t } = useTranslation();
 
+  // The override as one value, a built-in or an own preset (A-229). The row
+  // has no preset list, so an own one is named as such, never by its id.
+  const routingChoice = presetChoiceOf(u);
+  const routingLabel = routingChoice
+    ? (presetChoiceName(routingChoice, undefined, (id) => t(`metadata.preset${presetKey(id)}`)) ?? t('users.routingOwn'))
+    : null;
+
   const exp = expireRelative(u.expireAt, t);
   const trafficPct = trafficPercent(u.trafficUsedBytes, u.trafficLimitBytes);
   const trafficColor =
@@ -54,7 +63,10 @@ export function UserRow({
   const rowTint =
     compStatus === 'expired' ? `${RED}0A` : compStatus === 'limited' ? `${AMBER}0A` : undefined;
   const isPaused = compStatus === 'limited' || compStatus === 'expired';
-  const subUrl = subscriptionUrl(u.subscriptionToken, authStatusQuery.data?.panel);
+  // No link while the panel's address is unknown: a fallback host copied to a
+  // client is worse than none (subscriptionLink, spec frontend-users).
+  const link = subscriptionLink(u.subscriptionToken, authStatusQuery, apiErrorMessage);
+  const subUrl = link.kind === 'ready' ? link.url : null;
   const otherSquads = u.groupIds.filter((id) => id !== '00000000-0000-0000-0000-000000000001');
 
   /**
@@ -83,7 +95,7 @@ export function UserRow({
           {/* An override changes what this user gets without changing anything
               else in the row, so without a mark it is invisible until you open
               the form. */}
-          {u.routingPreset && (
+          {routingChoice && (
             <Box
               title={t('users.routingOverrideHint')}
               style={{
@@ -99,9 +111,7 @@ export function UserRow({
             >
               <IconRoute size={10} stroke={2} color={VIOLET} />
               <Text style={{ ...MONO, fontSize: 10, lineHeight: '13px', color: VIOLET }}>
-                {isRoutingPresetId(u.routingPreset)
-                  ? t(`metadata.preset${presetKey(u.routingPreset)}`)
-                  : u.routingPreset}
+                {routingLabel}
               </Text>
             </Box>
           )}
@@ -257,17 +267,19 @@ export function UserRow({
     description: () => <Plain title={u.description ?? undefined}>{u.description ?? '-'}</Plain>,
     telegramId: () => <Plain>{u.telegramId ?? '-'}</Plain>,
     email: () => <Plain title={u.email ?? undefined}>{u.email ?? '-'}</Plain>,
-    subLink: () => <Plain title={subUrl}>{subUrl}</Plain>,
+    subLink: () => <Plain title={subUrl ?? undefined}>{subUrl ?? t(link.kind === 'absent' ? 'users.linkNoAddress' : 'users.linkUnavailable')}</Plain>,
     routing: () => (
       <Plain>
-        {u.routingPreset
-          ? isRoutingPresetId(u.routingPreset)
-            ? t(`metadata.preset${presetKey(u.routingPreset)}`)
-            : u.routingPreset
-          : t('userDrawer.inheritsSquad')}
+        {routingLabel ?? t('userDrawer.inheritsSquad')}
       </Plain>
     ),
-    deviceLimit: () => <Plain>{u.hwidDeviceLimit ?? '∞'}</Plain>,
+    // A-148: null is «as the squad», not «no limit»; 0 is the explicit no-limit.
+    deviceLimit: () => {
+      const cell = deviceLimitCell(u.hwidDeviceLimit);
+      return (
+        <Plain>{cell.kind === 'limit' ? cell.limit : cell.kind === 'none' ? '∞' : t('usersTable.deviceLimitSquad')}</Plain>
+      );
+    },
     /**
      * Three answers again, and the middle one is the whole point.
      *
@@ -311,20 +323,24 @@ export function UserRow({
         borderBottom: `1px solid ${HAIRLINE}`,
       }}
     >
-      <Box
-        style={{
-          width: SELECT_COL,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          position: 'sticky',
-          left: 0,
-          zIndex: 3,
-          backgroundColor: rowTint ?? CARD,
-        }}
-      >
-        <SelectBox checked={selected.has(u.id)} onChange={() => toggleSelected(u.id)} />
-      </Box>
+      {/* Row selection waits for bulk actions (ROW_SELECTION): a tick that does
+          nothing reads as a promise the screen does not keep. */}
+      {ROW_SELECTION && (
+        <Box
+          style={{
+            width: SELECT_COL,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            position: 'sticky',
+            left: 0,
+            zIndex: 3,
+            backgroundColor: rowTint ?? CARD,
+          }}
+        >
+          <SelectBox checked={selected.has(u.id)} onChange={() => toggleSelected(u.id)} />
+        </Box>
+        )}
 
       {visibleColumns.map((column, i) => (
         <Box
@@ -360,13 +376,20 @@ export function UserRow({
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown style={{ backgroundColor: CARD, borderColor: HAIRLINE }}>
-            <Menu.Item leftSection={<IconCopy size={14} />} onClick={() => copyToClipboard(subUrl)}>
-              {t('usersTable.actionCopySubUrl')}
+            <Menu.Item
+              leftSection={<IconCopy size={14} />}
+              disabled={subUrl === null}
+              onClick={() => subUrl && copyToClipboard(subUrl)}
+            >
+              {subUrl !== null
+                ? t('usersTable.actionCopySubUrl')
+                : t(link.kind === 'absent' ? 'users.linkNoAddress' : 'users.linkUnavailable')}
             </Menu.Item>
             <Menu.Item
               leftSection={<IconExternalLink size={14} />}
               component="a"
-              href={subUrl}
+              disabled={subUrl === null}
+              href={subUrl ?? undefined}
               target="_blank"
               rel="noopener noreferrer"
             >

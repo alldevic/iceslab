@@ -36,45 +36,9 @@ export const PROTOCOL_NAMES = [
 
 export type ProtocolName = (typeof PROTOCOL_NAMES)[number];
 
-/**
- * The kinds of operator template, and the format each one frames.
- *
- * A template is a frame the operator writes and the panel fills: their
- * `proxy-groups`, their rules, our nodes. The TYPE is what the operator picked
- * in the editor; the FORMAT is what `/sub` answers with when that template is
- * in force, and the two are not the same list (docs/plan/subscription-templates
- * 4.1).
- *
- * ⚠ TWO ROWS MAP ONTO A FORMAT THAT IS NOT THEIR OWN, and it is deliberate.
- * The table in the plan names a new YAML dialect for `stash` (no xhttp) and a
- * legacy one for `clash` (no vless). Neither exists as a `?format=` today, and
- * naming one here would be a promise this build cannot serve: the guard beside
- * FORMAT_NAMES asks the route for a case per name and would refuse it. Both are
- * YAML the clash builder already produces, so both frame `clash` until the
- * dialects ship with the templates phase, and this comment is what moves them.
- *
- * `mihomo` is the same story in the opposite direction: the plan renames the
- * ANSWER, not the format, so it frames `clash` as well.
- */
-export const TEMPLATE_TYPES = [
-  'mihomo',
-  'stash',
-  'clash',
-  'singbox',
-  'xray-json-array',
-  'xray-json',
-] as const;
-
-export type TemplateType = (typeof TEMPLATE_TYPES)[number];
-
-export const TEMPLATE_FORMATS: Record<TemplateType, SubscriptionFormat> = {
-  mihomo: 'clash',
-  stash: 'clash',
-  clash: 'clash',
-  singbox: 'singbox',
-  'xray-json-array': 'xrayjson-array',
-  'xray-json': 'xrayjson',
-};
+// The template types and what each one carries (TEMPLATE_TYPES,
+// TEMPLATE_FORMATS, the door and transport matrix) moved to transport-support.ts
+// beside the transport table (A-236 step 1), so the two are one table.
 
 /**
  * The cells a LEG between two hops can be made of.
@@ -122,12 +86,18 @@ export const LINK_CELL_ENGINES: Record<LinkCell, readonly EngineName[]> = {
  * from a TCP one is which cell it is. The port check compares (port, transport)
  * pairs, and a leg that arrived without a transport would be compared against
  * the wrong half of every binding.
+ *
+ * A LIST, because one cell holds two (A-117): a shadowsocks leg's listener is
+ * rendered without `network` (chain.config.ts ssInbound), which sing-box reads
+ * as tcp AND udp, so the leg carries UDP too, and the agent opens both for it.
+ * As 'tcp' alone the port check let a UDP profile onto 24000+step, and one of
+ * the two then failed to bind on the node.
  */
-export const LINK_CELL_TRANSPORT: Record<LinkCell, Transport> = {
-  vless: 'tcp',
-  shadowsocks: 'tcp',
-  hy2: 'udp',
-  tuic: 'udp',
+export const LINK_CELL_TRANSPORTS: Record<LinkCell, readonly Transport[]> = {
+  vless: ['tcp'],
+  shadowsocks: ['tcp', 'udp'],
+  hy2: ['udp'],
+  tuic: ['udp'],
 };
 
 /**
@@ -180,8 +150,18 @@ export const CHAIN_ENTRY_PROTOCOLS = ['xray', 'hysteria', 'amneziawg'] as const;
  */
 export const FORMAT_NAMES = [
   'plain',
+  // A-236: the same share links as `plain`, one per line, without the base64
+  // wrapping (`plain` stays base64: that is what clients pulling the bare link
+  // read).
+  'raw',
   'json',
+  // `clash` is the alias of `mihomo` for good: the address is in clients'
+  // configs and answers byte for byte as it always did. The Clash family by
+  // core (A-236 step 4): mihomo, Stash, and the legacy Clash core.
   'clash',
+  'mihomo',
+  'stash',
+  'clash-legacy',
   'singbox',
   'wgconf',
   'amneziavpn',
@@ -276,6 +256,35 @@ function formatTable(cells: Partial<Record<Door, FormatDoor>>): Record<Door, For
 
 const XRAY_DOORS = { vless: YES, vmess: YES, trojan: YES, socks: YES, http: YES } as const;
 
+/** mihomo, the core of the `clash` answer and its own `mihomo` one. */
+const MIHOMO_DOORS = formatTable({
+  ...XRAY_DOORS,
+  hysteria: YES,
+  shadowsocks: YES,
+  tuic: YES,
+  anytls: YES,
+  shadowtls: YES,
+  mieru: YES,
+  // mihomo's wireguard proxy takes `amnezia-wg-option` (jc, jmin, jmax, s1,
+  // s2, h1-h4 for 1.x): wiki.metacubex.one/en/config/proxies/wg/. No naive.
+  amneziawg: NOT_YET,
+});
+
+/** The share links: what `plain` wraps in base64 and `raw` hands out as is.
+ *  One object for both, so the two cannot drift. */
+const LINK_DOORS = formatTable({
+  ...XRAY_DOORS,
+  hysteria: YES,
+  shadowsocks: YES,
+  tuic: YES,
+  anytls: YES,
+  mieru: YES,
+  naive: YES,
+  mtproto: YES,
+  shadowtls: NO_URI,
+  amneziawg: NO_URI,
+});
+
 /**
  * Which door each format carries, and why not where it does not.
  *
@@ -292,20 +301,18 @@ const XRAY_DOORS = { vless: YES, vmess: YES, trojan: YES, socks: YES, http: YES 
  * `json` is this panel's own dump and carries every door by construction.
  */
 export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> = {
-  plain: formatTable({
-    ...XRAY_DOORS,
-    hysteria: YES,
-    shadowsocks: YES,
-    tuic: YES,
-    anytls: YES,
-    mieru: YES,
-    naive: YES,
-    mtproto: YES,
-    shadowtls: NO_URI,
-    amneziawg: NO_URI,
-  }),
+  plain: LINK_DOORS,
+  // The same links as plain, unwrapped.
+  raw: LINK_DOORS,
   json: formatTable(Object.fromEntries(DOORS.map((d) => [d, YES]))),
-  clash: formatTable({
+  // `clash` is the alias of `mihomo` (A-236 step 4): one table for both.
+  clash: MIHOMO_DOORS,
+  mihomo: MIHOMO_DOORS,
+  // stash.wiki/en/proxy-protocols/proxy-types, read 2026-10-24: ss (with the
+  // shadow-tls plugin, versions 2 and 3), socks5, http, vmess, trojan, vless,
+  // hysteria2, tuic, anytls, mieru; no NaiveProxy, no MTProto; wireguard
+  // without the AmneziaWG obfuscation.
+  stash: formatTable({
     ...XRAY_DOORS,
     hysteria: YES,
     shadowsocks: YES,
@@ -313,9 +320,17 @@ export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> 
     anytls: YES,
     shadowtls: YES,
     mieru: YES,
-    // mihomo's wireguard proxy takes `amnezia-wg-option` (jc, jmin, jmax, s1,
-    // s2, h1-h4 for 1.x): wiki.metacubex.one/en/config/proxies/wg/. No naive.
-    amneziawg: NOT_YET,
+  }),
+  // clash.wiki/configuration/outbound.html, read 2026-10-24: ss, ssr, vmess,
+  // socks5, http, snell, trojan. No vless, no REALITY (the transport table
+  // holds trojan to TLS), nothing newer; no 2022-blake3 cipher in the open
+  // core.
+  'clash-legacy': formatTable({
+    vmess: YES_NO_REALITY,
+    trojan: YES_NO_REALITY,
+    socks: YES,
+    http: YES,
+    shadowsocks: { carried: true, exceptSs2022: true },
   }),
   singbox: formatTable({
     ...XRAY_DOORS,
@@ -351,8 +366,9 @@ export const FORMAT_DOORS: Record<SubscriptionFormat, Record<Door, FormatDoor>> 
     // Checked against manual.nssurge.com/policies/ on 2026-09-23: `socks5` and
     // `http` with a login, `tuic-v5`, `anytls` (iOS 5.17.0+, Mac 6.4.3+),
     // ShadowTLS v3 as `shadow-tls-*` parameters on a proxy line. No vless, so
-    // no REALITY. Left out of the builder (the Telegram doors by decision of
-    // 23.09).
+    // no REALITY, and no route of a balancer-cascade entry either: a route is
+    // VLESS by definition (A-262), Surge hands out none of them. Left out of
+    // the builder (the Telegram doors by decision of 23.09).
     socks: NOT_YET,
     http: NOT_YET,
     tuic: NOT_YET,
@@ -586,10 +602,43 @@ export interface AddUserRequest {
   shortId: string;
   username: string;
   credentials: ProtocolCredentials;
+  /**
+   * A-022: the inbounds of THIS node (InboundDto.id, the binding id) the user
+   * is served on, from the profiles of their squads.
+   *
+   * SET semantics: the agent puts the user on exactly these and takes them off
+   * every other inbound of the node, so narrowing a squad is one call. An
+   * empty list is removeUser on this node. Absent = every inbound, which is
+   * what every agent did before this field and what an older panel sends.
+   */
+  inboundIds?: string[];
 }
 
 export interface AddUserResponse {
   ok: true;
+}
+
+// ───── POST /addUsers ─────
+//
+// A-112: the roster after a push, many users per request. Each entry is one
+// /addUser, applied in order with the same semantics; one user's failure does
+// not stop the others. An agent older than the route answers 404, and the
+// panel then falls back to /addUser per user.
+
+export interface AddUsersRequest {
+  users: AddUserRequest[];
+}
+
+export interface AddUsersResponse {
+  /** One per request entry, in its order. */
+  results: AddUsersResult[];
+}
+
+export interface AddUsersResult {
+  userId: string;
+  ok: boolean;
+  /** Why not, when !ok: the cores that refused, as /addUser's 500 says it. */
+  error?: string;
 }
 
 // ───── POST /applyInbounds ─────
@@ -871,13 +920,12 @@ export interface HysteriaInboundCfg {
   tlsKeyPem?: string;
 }
 
-export interface AmneziawgInboundCfg {
-  /** Server WG private key (base64-standard, like `wg genkey`). */
-  privateKey: string;
-  /** Subnet in CIDR notation (e.g. "10.0.0.0/24"). Server takes .1, peers
-   *  .2..N. Panel-side `amneziawg.service` does the per-user allocation. */
-  subnet: string;
-  /** AmneziaWG obfuscation params, see reference_amneziawg.md for ranges. */
+/**
+ * The 1.x obfuscation of an AmneziaWG inbound, as the panel stores it
+ * (ObfuscationSchema in inbounds.schemas.ts) and the agent decodes it
+ * (obfuscationCfg in apps/node/internal/core/amneziawg/inbound.go).
+ */
+export interface AmneziawgObfuscation {
   jc: number;
   jmin: number;
   jmax: number;
@@ -889,8 +937,35 @@ export interface AmneziawgInboundCfg {
   h2: number;
   h3: number;
   h4: number;
-  postUp?: string;                // optional iptables / sysctl tweaks
-  postDown?: string;
+  /** Mimicry packets, '' disables the slot. */
+  i1: string;
+  i2: string;
+  i3: string;
+  i4: string;
+  i5: string;
+}
+
+/**
+ * The AmneziaWG inbound on the wire (A-105): the profile config as stored,
+ * plus the keys the push injects (listenPort, inboundId, awgProtocol,
+ * geometry3). Mirrors inboundCfgWire in apps/node/internal/core/amneziawg/
+ * inbound.go. The stored part is held equal to AmneziawgConfigSchema at
+ * compile time in inbounds.schemas.ts, the Go keys by contract-mirror.test.ts.
+ *
+ * No postUp/postDown: the agent takes those from its install-time config,
+ * never from the panel.
+ */
+export interface AmneziawgInboundCfg {
+  /** Subnet in CIDR notation (e.g. "10.66.66.0/24"). Server takes .1, peers
+   *  .2..N. Panel-side `amneziawg.service` does the per-user allocation. */
+  subnet: string;
+  /** Server WG private key (base64-standard, like `wg genkey`). */
+  serverPrivateKey: string;
+  /** Its public half. The agent ignores it; clients get it in their config. */
+  serverPublicKey: string;
+  obfuscation: AmneziawgObfuscation;
+  /** The binding's port, injected on every push. */
+  listenPort: number;
   /** Which binding this is (the binding id), so the agent can drop the
    *  interface of a binding the push no longer carries (RetainInbounds). */
   inboundId?: string;
@@ -1039,7 +1114,7 @@ export type LinkCongestion = (typeof LINK_CONGESTIONS)[number];
  *           the tunnel carries the leg, it does not replace it.
  *
  * ⚠ Named `underlay`, not `transport`. `Transport` in this file is already the
- * socket kind ('tcp' | 'udp', LINK_CELL_TRANSPORT, every port check), and a
+ * socket kind ('tcp' | 'udp', LINK_CELL_TRANSPORTS, every port check), and a
  * leg's transport of 'awg' beside its cell's transport of 'udp' is the one-name
  * two-meanings trap the cells were split from the protocols to escape.
  */
@@ -1178,8 +1253,17 @@ export type NodePolicyAction =
    * that owns cascade naming (the fragments are already panel-authored), and a
    * name that is not there fails config validation loudly instead of producing
    * a rule that quietly never fires.
+   *
+   * `users` (A-277): at an xray entry, the users the door of that direction
+   * lets through (the panel's own entry gate), drawn as the rule's `user`.
+   * Sent whenever the entry has a gate, even with every user on it: closed by
+   * default like the door, so a user added later by addUser is not let in.
+   * Absent: everybody, as before (the entry cannot tell its users apart, or
+   * the node is no entry). Never sent empty: an empty `user` in xray matches
+   * everyone; a rule nobody may take is left out by the panel, and the node
+   * does not draw an empty one either.
    */
-  | { kind: 'cascade'; exit: string };
+  | { kind: 'cascade'; exit: string; users?: string[] };
 
 export interface ApplyInboundsRequest {
   inbounds: InboundDto[];
@@ -1343,6 +1427,30 @@ export interface NodeChain {
    * mean the same thing, "no tunnels on this node".
    */
   tunnels?: ChainTunnel[];
+  /**
+   * A-111: the ports this node's chain RECEIVES legs on over the internet, for
+   * the agent's firewall. One per listener port, with every previous hop that
+   * dials it.
+   *
+   * The agent opened a leg's port only from the legacy xray fragments
+   * (`cascade.linkIngressPort`), which a node with a chain does not get: a
+   * hy2 or tuic leg, a node whose chain already runs, a node that dials a named
+   * outbound. On a node with ufw such a leg was closed from its first push.
+   * The agent opens these on every push and again at start from the stored
+   * push. A leg inside an AWG tunnel is not listed: it arrives on the tunnel's
+   * interface, which the tunnel opens. Absent or empty: nothing to open.
+   */
+  linkIngress?: ChainLinkIngress[];
+}
+
+/** One port a chain receives legs on, restricted to the hops that dial it. */
+export interface ChainLinkIngress {
+  port: number;
+  /** tcp for vless, udp for hy2 and tuic, both for shadowsocks. */
+  transports: Transport[];
+  /** Addresses of the previous hops (an FQDN is resolved by the agent).
+   *  Never empty: a leg whose peer the panel cannot name is not rendered. */
+  allowFrom: string[];
 }
 
 /**
@@ -1542,11 +1650,40 @@ export interface UserStats {
   cumulative?: boolean;
   /**
    * The protocol of the adapter that reported this entry: the inbound the user
-   * came through (25.09). Presence-only accounting (mtproto) is read off it
-   * per entry, not off the node's label. Absent on older agents, in which case
-   * the panel falls back to the label.
+   * came through (25.09), read per entry rather than off the node's label.
+   * Online is read from bytes alone (A-121): an mtproto entry carries none per
+   * user, so being listed does not make a user online. Absent on older agents;
+   * the panel reads no node label in its place (3cc05fb0).
    */
   protocol?: string;
+  /**
+   * A-163: the engine of the adapter that counted this entry. With `protocol`
+   * it names the ADAPTER: the sing-box adapter serving the xray family says
+   * protocol "xray", and six sing-box adapters are six processes with their
+   * own cumulative counters and their own restarts. The panel keys a user's
+   * snapshot by (node, user, protocol, engine). Absent on older agents.
+   */
+  engine?: EngineName;
+}
+
+/**
+ * A-152: one adapter's total for this poll, with its own counter semantics.
+ * The adapter is the (protocol, engine) pair, as in UserStats and in the
+ * agent's adapterFor.
+ */
+export interface CoreTrafficTotal {
+  protocol: ProtocolName;
+  engine: EngineName;
+  bytesIn: number;
+  bytesOut: number;
+  cumulative: boolean;
+  /**
+   * The adapter did not answer its stats query this poll: no numbers, which
+   * is NOT zero, and its users are absent from `users`. The panel leaves this
+   * adapter's snapshots where they are; zeros taken as a fact turned a missed
+   * poll into a burst on the next one (A-163).
+   */
+  noData?: boolean;
 }
 
 export interface GetStatsResponse {
@@ -1565,6 +1702,9 @@ export interface GetStatsResponse {
    * non-destructive read). Absent/false = legacy already-deltas semantics.
    */
   cumulative?: boolean;
+  /** A-152: the total per adapter. Absent from an older agent, which leaves
+   *  the panel on totalBytesIn/Out with `cumulative`. */
+  cores?: CoreTrafficTotal[];
 }
 
 // ───── GET /healthz ─────
@@ -1677,6 +1817,21 @@ export interface CoreStatus {
    *  tuic and vless can both be sing-box on one node. Absent on an agent older
    *  than the field. */
   engine?: EngineName;
+  /**
+   * Whether this core counts traffic per user. false: it reports who is
+   * connected but no bytes per user (sing-box built without with_v2ray_api,
+   * naive); true: it counts; absent: an agent older than the field, unknown.
+   * The panel stores it with the node's core report and the screen says
+   * "no traffic accounting" for false.
+   */
+  countsUsers?: boolean;
+  /**
+   * Why the core is not working right now, when it is a FAULT: the process
+   * exited, "ssm-api sync pending: ...". Not `reason`, which says a core does
+   * not run by design. Absent when it works, and from an older agent. The
+   * panel keeps it with the node's core report for the node screen.
+   */
+  error?: string;
   /**
    * Whether THIS core carries out the node-level policy / the node-level
    * resolver (ApplyInboundsRequest.policy and .dns).
@@ -1895,6 +2050,65 @@ export interface HealthcheckResponse {
    * the chain, which may still end vless and shadowsocks legs in its xray.
    */
   chainEngine?: EngineName;
+  /** A-124: notAfter of this node's mTLS server certificate, RFC3339. The
+   *  panel renews it ahead of time over rotateCert. Absent from an older
+   *  agent. */
+  certNotAfter?: string;
+  /** The agent's build: main.version, set with -X at release, "dev" for a
+   *  local build. Absent from an older agent. */
+  agentVersion?: string;
+  /**
+   * A-232: what the last config the node's xray ACCEPTED did with the node
+   * policy: the cascade drawing it took and the cascade rules it left out. The
+   * panel's /policy-drawing shows it beside the drawing the panel sent; they
+   * differ when the agent refused a chain and drew the legacy legs instead.
+   * ⚠ ABSENT is not "nothing left out": an agent older than the field, or an
+   * xray that has not rendered yet.
+   */
+  policy?: NodePolicyDrawn;
+}
+
+/** A-232. Mirrors dto.PolicyDrawn. */
+export interface NodePolicyDrawn {
+  drawing: 'legacy' | 'handover' | 'none';
+  /** The cascade rules the render left out, by the way out the panel named. */
+  notDrawn: { exit: string; direction: number }[];
+  /** RFC3339, by the node's clock: when xray accepted the render reported on.
+   *  The panel's own observedAt says when it last saw the report. */
+  renderedAt: string;
+}
+
+// ───── POST /rotateCert, POST /rotateCert/confirm (A-124) ─────
+//
+// The panel hands the agent a new server certificate over the live mTLS
+// channel, ahead of the old one's expiry. The agent checks it (key matches,
+// chains to its own CA, in date, SAN fits), serves it to new handshakes and
+// waits for the panel to confirm, from a NEW connection, that it sees the new
+// fingerprint. No confirm by `confirmBy`: the agent rolls back by itself.
+//
+// Errors: 400 CERT_INVALID, 409 CERT_ROTATION_PENDING (an earlier rotation
+// still waits for its confirm); 404 from an older agent = "update the agent".
+// ⚠ The panel neither logs nor keeps `keyPem` after the call.
+
+export interface RotateCertRequest {
+  certPem: string;
+  keyPem: string;
+}
+
+export interface RotateCertResponse {
+  ok: true;
+  /** sha256 hex of the new leaf's DER. */
+  fingerprint: string;
+  /** RFC3339: no confirm by then and the agent goes back to the old pair. */
+  confirmBy: string;
+}
+
+export interface ConfirmCertRequest {
+  fingerprint: string;
+}
+
+export interface ConfirmCertResponse {
+  ok: true;
 }
 
 /**
@@ -1953,6 +2167,11 @@ export interface NodeCoreInfo {
   installed?: boolean;
   rendersPolicy?: boolean;
   rendersDns?: boolean;
+  /** See CoreStatus.countsUsers. Inventory: it changes with the core build. */
+  countsUsers?: boolean;
+  /** See CoreStatus.error: the fault as of the last report, for the node
+   *  screen. Gone with the next report that has none. */
+  error?: string;
   /**
    * Stored, unlike `running`, because it is inventory and not liveness: which
    * ports a core holds changes when the node is reconfigured, not from tick to
@@ -2028,6 +2247,59 @@ export interface UfwPortsResponse {
   /** false = ufw not installed on the node; the panel skips the exposure check. */
   managed: boolean;
   ports: UfwPortDto[];
+}
+
+// ───── Connection log trace (GET /connLog, POST /connLog/clear) ─────
+//
+// A-265: lines a previous agent left behind, one per client connection with
+// its address (xray "accepted tcp:/udp:", hysteria "client connected /
+// disconnected"), in journald (the agent's and hysteria's units) and in
+// /var/log/syslog*. The answer says where and since when, never the lines.
+
+export type ConnLogSource = 'journal' | 'syslog';
+
+export interface ConnLogSourceCheck {
+  source: ConnLogSource;
+  /**
+   * found: such lines are there. clean: read through, none. absent: the
+   * source is not on this machine (no journalctl, no /var/log/syslog*).
+   * failed: it could not be read, `error` says why.
+   */
+  state: 'found' | 'clean' | 'absent' | 'failed';
+  /** ISO time of the oldest line found; only with found. */
+  since: string | null;
+  error?: string;
+}
+
+export interface ConnLogTraceResponse {
+  /** true: a source holds such lines. false: every source clean or absent.
+   *  null: none found, but a source could not be read (not a "no"). */
+  present: boolean | null;
+  /** The oldest line over all sources. */
+  since: string | null;
+  /** Where lines were found. */
+  sources: ConnLogSource[];
+  /** One per source, always both. */
+  checks: ConnLogSourceCheck[];
+}
+
+export interface ConnLogClearStep {
+  /** What was done, e.g. "journalctl --rotate", "truncate /var/log/syslog". */
+  command: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface ConnLogClearResult {
+  source: ConnLogSource;
+  state: 'cleared' | 'absent' | 'failed';
+  steps: ConnLogClearStep[];
+}
+
+export interface ConnLogClearResponse {
+  results: ConnLogClearResult[];
+  /** The check again, right after. */
+  after: ConnLogTraceResponse;
 }
 
 // ───── Common error shape ─────

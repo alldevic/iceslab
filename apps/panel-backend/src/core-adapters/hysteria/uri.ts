@@ -20,12 +20,9 @@ export interface HysteriaUriOpts {
    *  + `obfs-password=...` query params. Critical on RU/IR/CN ISPs where
    *  bare QUIC is throttled or dropped by DPI mid-session. */
   obfsPassword?: string;
-  /** Brutal CC bandwidth declaration in Mbps, required for the Hysteria
-   *  client to negotiate a non-zero send window. Without these, Brutal
-   *  picks 0 and the tunnel handshakes successfully but `tx=0` for every
-   *  request, exact "connected but no traffic" symptom. Cycle #5 ground
-   *  truth. Defaults are tuned for residential broadband; admins can
-   *  override per binding when the node is on a faster/slower link. */
+  /** The client's own bandwidth claim in Mbps, from the CLIENT's side: up is
+   *  what it sends. Built by {@link clientBandwidthClaim}; absent means no
+   *  claim, and the client runs BBR. */
   upMbps?: number;
   downMbps?: number;
   /** Port-hopping range (slice 31.5). When set, emits `mport=START-END` so
@@ -70,6 +67,31 @@ export function engineSpeaksHysteriaObfs(engine: string | undefined): boolean {
   return engine !== 'xray';
 }
 
+/**
+ * The bandwidth a client claims, from the profile's Brutal bandwidth (A-154).
+ *
+ * The profile's pair is the server's: the node writes it as hysteria's
+ * `bandwidth.up` / `bandwidth.down` and sing-box's `up_mbps` / `down_mbps`.
+ * The server's upload is the client's download and the other way round, and
+ * for each direction the lower of the two claims wins (v2.hysteria.network,
+ * Full Server Config, "Bandwidth", read 2026-10-22). So the client claims the
+ * profile's pair turned over: a profile at 500 up / 200 down gives the client
+ * 200 up / 500 down, and the client gets the profile's speed rather than a
+ * claim of its own capping it.
+ *
+ * A profile without a bandwidth runs `ignoreClientBandwidth` (BBR) on the
+ * node, where a claim plays no part, so none is sent. A side the profile
+ * leaves open is not claimed either: the client runs BBR that way.
+ */
+export function clientBandwidthClaim(
+  cfg: { brutalUpMbps?: number; brutalDownMbps?: number } | null | undefined,
+): { upMbps?: number; downMbps?: number } {
+  const claim: { upMbps?: number; downMbps?: number } = {};
+  if (cfg?.brutalDownMbps) claim.upMbps = cfg.brutalDownMbps;
+  if (cfg?.brutalUpMbps) claim.downMbps = cfg.brutalUpMbps;
+  return claim;
+}
+
 export function buildHysteriaUri(opts: HysteriaUriOpts): string {
   // Hiddify's outbound parser was failing on bare `hysteria2://...:443/#name`
   // ("Unknown parse outbound") on 2026-05-06. Adding an explicit `sni` query
@@ -81,10 +103,11 @@ export function buildHysteriaUri(opts: HysteriaUriOpts): string {
     params.set('obfs', 'salamander');
     params.set('obfs-password', opts.obfsPassword);
   }
-  // Brutal CC bandwidth, see HysteriaUriOpts.upMbps comment. Default
-  // 50/100 if caller didn't specify so we never emit a 0-window URI.
-  params.set('upmbps', String(opts.upMbps ?? 50));
-  params.set('downmbps', String(opts.downMbps ?? 100));
+  // The claim, only what clientBandwidthClaim gave. A fixed 50/100 was sent
+  // before, and with a profile bandwidth set it capped every client at those
+  // numbers whatever the profile said.
+  if (opts.upMbps) params.set('upmbps', String(opts.upMbps));
+  if (opts.downMbps) params.set('downmbps', String(opts.downMbps));
   // Slice 31.5: port-hopping. `mport` is the parameter Hiddify / sing-box /
   // NekoBox honour (mihomo accepts the same form via a `ports:` field
   // emitted separately by the Clash formatter). Wire form is `START-END`.

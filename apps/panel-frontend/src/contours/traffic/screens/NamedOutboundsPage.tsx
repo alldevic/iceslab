@@ -17,6 +17,8 @@ import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiErrorMessage } from '@/lib/net/client';
+import { LoadFailed } from '@/ui/LoadFailed';
+import { loadFailure } from '@/lib/ui/loadView';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
 import { COUNTRY_OPTIONS, countryFlag } from '@/lib/domain/countries';
 import {
@@ -56,6 +58,8 @@ export function NamedOutboundsPage() {
   usePageMeta([]);
 
   const listQuery = useQuery({ queryKey: ['named-outbounds'], queryFn: listNamedOutbounds });
+  // A-228: the shared failure path (loadFailure), as on every list screen.
+  const listFailure = loadFailure(listQuery, apiErrorMessage);
   const outbounds = listQuery.data?.outbounds ?? [];
   // null: формы нет; 'new': новый выход; иначе правка этого.
   const [editing, setEditing] = useState<NamedOutbound | 'new' | null>(null);
@@ -129,6 +133,8 @@ export function NamedOutboundsPage() {
         />
       )}
 
+      {/* A-228: a list that did not arrive is said, not left blank. */}
+      {listFailure && <LoadFailed message={listFailure.message} onRetry={listFailure.onRetry} />}
       {listQuery.isLoading && <Placeholder title={t('common.loading')} body="" />}
       {listQuery.data && outbounds.length === 0 && (
         <Placeholder title={t('namedOutbounds.emptyTitle')} body={t('namedOutbounds.emptyBody')} />

@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
-import { createCascade, CascadeEntryCoreTooOldError } from './cascade.service.js';
+import { createCascade, updateCascade, CascadeEntryCoreTooOldError } from './cascade.service.js';
 
 /**
  * The gate that decides whether a balancer entry may serve vlessRoute.
@@ -143,5 +143,61 @@ describe('the balancer entry core gate', () => {
     const seF = await makeNode('se-exit-6', null, null);
 
     await expect(create(entryId, [exitId, seF])).rejects.toBeInstanceOf(CascadeEntryCoreTooOldError);
+  });
+});
+
+/**
+ * A-145: a v4 cascade with a POOL at the entry, where the second node runs an
+ * xray too old for vlessRoute. A pool does not fold into hops, so the edit and
+ * the toggle used to read empty stored hops and never ask; create asked only
+ * nodeIds[0]. Every node of the pool is asked now, on all three paths.
+ */
+describe('the gate across an entry pool', () => {
+  async function pool() {
+    const fresh = await makeNode('ru-new', [{ name: 'xray', engine: 'xray', version: '26.3.27' }], null);
+    const old = await makeNode('ru-old', [{ name: 'xray', engine: 'xray', version: '25.8.0' }], null);
+    const spare = await makeNode('ru-spare', [{ name: 'xray', engine: 'xray', version: '26.3.27' }], null);
+    const nl = await makeNode('nl-exit', null, null);
+    const se = await makeNode('se-exit', null, null);
+    return { fresh, old, spare, nl, se };
+  }
+  const shape = (entry: string[], nl: string, se: string) => ({
+    positions: [{ position: 0, nodeIds: entry, entryProtocol: 'xray', linkProtocol: 'vless' }],
+    directions: [
+      { countryCode: 'NL', nodeIds: [nl] },
+      { countryCode: 'SE', nodeIds: [se] },
+    ],
+  });
+
+  it('create: the old node second in the pool is refused', async () => {
+    const n = await pool();
+    await expect(
+      createCascade({ name: 'pool-create', enabled: true, ...shape([n.fresh, n.old], n.nl, n.se) } as never),
+    ).rejects.toThrow('ru-old');
+  });
+
+  it('edit: putting the old node into the pool of an enabled cascade is refused', async () => {
+    const n = await pool();
+    const c = await createCascade({ name: 'pool-edit', enabled: true, ...shape([n.fresh, n.spare], n.nl, n.se) } as never);
+    const stored = await prisma.cascadeDirection.findMany({ where: { cascadeId: c.id }, orderBy: { tag: 'asc' } });
+    await expect(
+      updateCascade(c.id, {
+        positions: shape([n.fresh, n.old], n.nl, n.se).positions,
+        directions: stored.map((d, i) => ({ id: d.id, countryCode: i === 0 ? 'NL' : 'SE', nodeIds: [i === 0 ? n.nl : n.se] })),
+      } as never),
+    ).rejects.toBeInstanceOf(CascadeEntryCoreTooOldError);
+  });
+
+  it('toggle: switching on a stored cascade whose pool holds the old node is refused', async () => {
+    const n = await pool();
+    const c = await createCascade({ name: 'pool-toggle', enabled: false, ...shape([n.fresh, n.old], n.nl, n.se) } as never);
+    await expect(updateCascade(c.id, { enabled: true } as never)).rejects.toBeInstanceOf(CascadeEntryCoreTooOldError);
+    expect((await prisma.cascade.findUniqueOrThrow({ where: { id: c.id } })).enabled).toBe(false);
+  });
+
+  it('toggle: a sound pool switches on', async () => {
+    const n = await pool();
+    const c = await createCascade({ name: 'pool-ok', enabled: false, ...shape([n.fresh, n.spare], n.nl, n.se) } as never);
+    await expect(updateCascade(c.id, { enabled: true } as never)).resolves.toBeTruthy();
   });
 });

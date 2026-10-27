@@ -18,12 +18,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/certstore"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/chain"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/connlog"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/dto"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/firewall"
@@ -31,6 +34,31 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/hopguard"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/metrics"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/payload"
+)
+
+// transportsOf is what the firewall opens for one inbound: protoForInbound,
+// and xray on kcp is UDP (A-158, 22.10), the rule the panel's transportOf
+// (packages/shared/src/transport.ts) keeps. A kcp inbound got only a TCP
+// rule, and ufw dropped every packet of its clients.
+func transportsOf(ib dto.InboundDto) []string {
+	if ib.Protocol == dto.ProtocolXray && len(ib.Config) > 0 {
+		var cfg struct {
+			Network string `json:"network"`
+		}
+		if json.Unmarshal(ib.Config, &cfg) == nil && cfg.Network == "kcp" {
+			return []string{"udp"}
+		}
+	}
+	return protoForInbound(ib.Protocol)
+}
+
+// The firewall calls, swappable in tests (ufw is not there).
+var (
+	fwAllow       = firewall.Allow
+	fwClose       = firewall.Close
+	fwResolve     = firewall.ResolveSources
+	fwAllowSource = firewall.AllowSource
+	fwCloseSource = firewall.CloseSource
 )
 
 // protoForInbound returns the L4 protocols the given inbound listens on.
@@ -86,6 +114,14 @@ type Config struct {
 	// (E49), synced at the end of every applied push. Nil guards nothing,
 	// which is what tests get.
 	HopGuard *hopguard.Guard
+	// Certs holds the mTLS server pair and renews it (A-124). Nil builds one
+	// from the payload with nothing on disk, which is what tests get.
+	Certs *certstore.Store
+	// AgentVersion is main.version, reported on /healthz.
+	AgentVersion string
+	// ConnLog finds and clears the connection lines a previous agent left in
+	// the host's logs (A-265). Nil answers 404 on /connLog, as an older agent.
+	ConnLog *connlog.Checker
 }
 
 type Server struct {
@@ -105,6 +141,45 @@ type Server struct {
 	// one, for /healthz. Nil until then.
 	geoMu      sync.Mutex
 	geoVersion *string
+
+	// chainFwMu covers the chain's link-port rules (A-111): what was opened
+	// for the block in force, kept beside the stored push so a later push, or
+	// a restart, closes what the next block no longer names.
+	chainFwMu sync.Mutex
+
+	// storeMu covers the read of the stored push and the write of the next
+	// one (persistAccepted), so two pushes cannot interleave the two halves.
+	storeMu sync.Mutex
+
+	// pushMu: one push at a time, from the first core it reaches to the copy
+	// on disk (П-1). The panel sends one push per node at a time, but gives up
+	// on a request after 30 s and sends it again a second later, while the
+	// first is still going through the cores; two pushes interleaved could
+	// both stop the old chain process and both start one.
+	pushMu sync.Mutex
+
+	// certsMu guards building cfg.Certs from the payload once.
+	certsMu sync.Mutex
+
+	// owners: the adapter each inbound of the last applied push went to, by
+	// the panel's inbound id. Nil until a push (or the restore) lands.
+	ownersMu sync.Mutex
+	owners   map[string]core.CoreAdapter
+}
+
+// inboundsByAdapter groups the inbound ids an addUser names by the adapter
+// that holds each. An id this node does not hold (another node's, or one a
+// push has not brought yet) is skipped.
+func (s *Server) inboundsByAdapter(ids []string) map[core.CoreAdapter][]string {
+	s.ownersMu.Lock()
+	defer s.ownersMu.Unlock()
+	out := make(map[core.CoreAdapter][]string)
+	for _, id := range ids {
+		if a, ok := s.owners[id]; ok {
+			out[a] = append(out[a], id)
+		}
+	}
+	return out
 }
 
 func New(cfg Config) (*Server, error) {
@@ -136,12 +211,9 @@ func (s *Server) Run(ctx context.Context) error {
 	// and waited for a panel that could not always speak.
 	s.restoreFromStore(ctx)
 
-	cert, err := tls.X509KeyPair(
-		[]byte(s.cfg.Payload.NodeCertPem),
-		[]byte(s.cfg.Payload.NodeKeyPem),
-	)
+	certs, err := s.certs()
 	if err != nil {
-		return fmt.Errorf("load node keypair: %w", err)
+		return err
 	}
 
 	caPool := x509.NewCertPool()
@@ -189,7 +261,9 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:    s.cfg.Host + ":" + s.cfg.Port,
 		Handler: s.routes(),
 		TLSConfig: &tls.Config{
-			Certificates:          []tls.Certificate{cert},
+			// Asked on every handshake, so a rotated pair (A-124) is served to
+			// the next connection without a restart.
+			GetCertificate:        certs.GetCertificate,
 			ClientCAs:             caPool,
 			ClientAuth:            tls.RequireAndVerifyClientCert,
 			MinVersion:            tls.VersionTLS12,
@@ -217,6 +291,92 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// certs is the store the TLS server and /rotateCert share, built from the
+// payload when main gave none.
+func (s *Server) certs() (*certstore.Store, error) {
+	s.certsMu.Lock()
+	defer s.certsMu.Unlock()
+	if s.cfg.Certs != nil {
+		return s.cfg.Certs, nil
+	}
+	st, err := certstore.Open(certstore.Config{
+		CACertPEM:      s.cfg.Payload.CACertPem,
+		PayloadCertPEM: s.cfg.Payload.NodeCertPem,
+		PayloadKeyPEM:  s.cfg.Payload.NodeKeyPem,
+		Logger:         s.logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.cfg.Certs = st
+	return st, nil
+}
+
+// handleRotateCert answers POST /rotateCert (A-124): a new server pair over
+// the live channel. 400 CERT_INVALID for a pair the checks refuse, 409
+// CERT_ROTATION_PENDING while an earlier one waits for its confirm. The key
+// is not logged.
+func (s *Server) handleRotateCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.RotateCertRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	certs, err := s.certs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CERT_STORE", err.Error())
+		return
+	}
+	fp, confirmBy, err := certs.Rotate(req.CertPEM, req.KeyPEM)
+	switch {
+	case errors.Is(err, certstore.ErrPending):
+		writeError(w, http.StatusConflict, "CERT_ROTATION_PENDING", err.Error())
+		return
+	case errors.Is(err, certstore.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "CERT_INVALID", err.Error())
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "CERT_WRITE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, dto.RotateCertResponse{
+		OK:          true,
+		Fingerprint: fp,
+		ConfirmBy:   confirmBy.UTC().Format(time.RFC3339),
+	})
+}
+
+// handleConfirmCert answers POST /rotateCert/confirm: the panel reached the
+// node on the new pair. 409 CERT_NOT_PENDING when no rotation with that
+// fingerprint waits (already confirmed, rolled back, or never made).
+func (s *Server) handleConfirmCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.ConfirmCertRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	certs, err := s.certs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CERT_STORE", err.Error())
+		return
+	}
+	if err := certs.Confirm(req.Fingerprint); err != nil {
+		if errors.Is(err, certstore.ErrNotPending) {
+			writeError(w, http.StatusConflict, "CERT_NOT_PENDING", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "CERT_WRITE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, dto.ConfirmCertResponse{OK: true})
 }
 
 // maxRequestBodyBytes caps every panel→agent request body. Even though the
@@ -249,6 +409,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/addUser", s.handleAddUser)
+	mux.HandleFunc("/addUsers", s.handleAddUsers)
 	mux.HandleFunc("/removeUser", s.handleRemoveUser)
 	mux.HandleFunc("/applyInbounds", s.handleApplyInbounds)
 	mux.HandleFunc("/stats", s.handleStats)
@@ -256,7 +417,44 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/ufwPorts", s.handleUfwPorts)
 	mux.HandleFunc("/assets", s.handleAssetsList)
 	mux.HandleFunc("/assets/", s.handleAssetPut)
+	mux.HandleFunc("/rotateCert", s.handleRotateCert)
+	mux.HandleFunc("/rotateCert/confirm", s.handleConfirmCert)
+	mux.HandleFunc("/connLog", s.handleConnLog)
+	mux.HandleFunc("/connLog/clear", s.handleConnLogClear)
 	return mux
+}
+
+// handleConnLog answers GET /connLog: whether the host's logs hold lines a
+// previous agent wrote per client connection, where, and since when (A-265).
+func (s *Server) handleConnLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET only")
+		return
+	}
+	if s.cfg.ConnLog == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "this agent does not read the host's logs")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.cfg.ConnLog.Trace(r.Context()))
+}
+
+// handleConnLogClear answers POST /connLog/clear: the operator's choice to
+// empty the journal and syslog of those lines. 200 whatever each step did;
+// the answer says it per source.
+func (s *Server) handleConnLogClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	if s.cfg.ConnLog == nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "this agent does not read the host's logs")
+		return
+	}
+	res := s.cfg.ConnLog.Clear(r.Context())
+	for _, x := range res.Results {
+		s.logger.Info("connLog: cleared", "source", x.Source, "state", x.State)
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleAssetsList answers GET /assets: the geo files on disk with their
@@ -376,6 +574,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				Engine:  adapter.Engine(),
 			}
 			idle := s.isIdle(adapter)
+			// Whether its per-user numbers are bytes or presence.
+			if uc, ok := adapter.(core.UserCounter); ok {
+				counts := uc.CountsUsers()
+				cs.CountsUsers = &counts
+			}
 			// Which node-level settings this core actually carries out. Both are
 			// optional interfaces, and today only one adapter implements either,
 			// so on a node whose cores do not the operator's policy and resolver
@@ -406,6 +609,20 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 				cs.Running = false
 				cs.Provisioned = &f
 				cs.Reason = core.IdleReason
+			} else if w, ok := adapter.(core.Waiter); ok {
+				// A-275: configured and waiting for its first user, not a fault.
+				if r := w.Waiting(); r != "" {
+					cs.Running = false
+					cs.Reason = r
+				}
+			}
+			// Why it is down when that is a fault (P1: the operator sees the
+			// reason, not only the red). Idle or never configured is down by
+			// design and says nothing.
+			if fr, ok := adapter.(core.FaultReporter); ok && !cs.Running && (cs.Provisioned == nil || *cs.Provisioned) {
+				if f := fr.Fault(); f != "" {
+					cs.Error = &f
+				}
 			}
 			// And whether it is even on the machine, which is a different
 			// question: a core can be configured perfectly and absent from
@@ -508,6 +725,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		if c.Provisioned != nil && !*c.Provisioned {
 			continue
 		}
+		// Down by design, in words (idle, waiting for its first user).
+		if c.Reason != "" {
+			continue
+		}
 		if !c.Running {
 			allHealthy = false
 			break
@@ -555,7 +776,39 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		// since the agent started shows on the next healthcheck (E42).
 		DeclaredEngines: declaredEngines(s.cfg.EnvFile),
 		ChainEngine:     s.chainEngine(),
+		CertNotAfter:    s.certNotAfter(),
+		AgentVersion:    s.cfg.AgentVersion,
+		Policy:          s.policyDrawn(),
 	})
+}
+
+// policyDrawnReporter is the core that renders the node policy into its own
+// config and can say what the last render in force did with it (A-232).
+type policyDrawnReporter interface {
+	PolicyDrawn() *dto.PolicyDrawn
+}
+
+// policyDrawn is the router's report, nil when no core has one (an older
+// core, or xray not rendered yet): the panel keeps what it had then.
+func (s *Server) policyDrawn() *dto.PolicyDrawn {
+	for _, adapter := range s.cfg.Adapters {
+		if r, ok := adapter.(policyDrawnReporter); ok {
+			if p := r.PolicyDrawn(); p != nil {
+				return p
+			}
+		}
+	}
+	return nil
+}
+
+// certNotAfter of the pair in force, RFC3339, for the panel to renew ahead of
+// it (A-124). Empty when the store cannot be built, which Run refuses anyway.
+func (s *Server) certNotAfter() string {
+	certs, err := s.certs()
+	if err != nil {
+		return ""
+	}
+	return certs.NotAfter().UTC().Format(time.RFC3339)
 }
 
 // chainEngine: the engine the chain process runs when this agent has one,
@@ -645,7 +898,49 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		return
 	}
+	if healthyFailed := s.addUser(req); len(healthyFailed) > 0 {
+		writeError(w, http.StatusInternalServerError, "ADAPTER_FAILED",
+			fmt.Sprintf("active adapters failed: %s", strings.Join(healthyFailed, ", ")))
+		return
+	}
+	// Debug and without the username (A-265): a line per user per push in the
+	// journal at info told anyone reading it who is on this node.
+	s.logger.Debug("addUser ok", "userId", req.UserID)
+	writeJSON(w, http.StatusOK, dto.AddUserResponse{OK: true})
+}
 
+// handleAddUsers is /addUser for many users in one request (A-112): the
+// panel re-sends its whole roster after every push, and one request per user
+// was thirty thousand TLS round trips for an operator that size. Each entry
+// is applied exactly as /addUser applies it, in order; a refusal is that
+// entry's result, not the request's.
+func (s *Server) handleAddUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.AddUsersRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	results := make([]dto.AddUsersResult, 0, len(req.Users))
+	failed := 0
+	for _, u := range req.Users {
+		res := dto.AddUsersResult{UserID: u.UserID, OK: true}
+		if healthyFailed := s.addUser(u); len(healthyFailed) > 0 {
+			res.OK = false
+			res.Error = fmt.Sprintf("active adapters failed: %s", strings.Join(healthyFailed, ", "))
+			failed++
+		}
+		results = append(results, res)
+	}
+	s.logger.Info("addUsers done", "users", len(req.Users), "failed", failed)
+	writeJSON(w, http.StatusOK, dto.AddUsersResponse{Results: results})
+}
+
+// addUser puts one user onto the cores, and returns the names of the healthy
+// ones that refused (none: done).
+func (s *Server) addUser(req dto.AddUserRequest) []string {
 	coreUser := core.User{
 		UserID:              req.UserID,
 		ShortID:             req.ShortID,
@@ -671,10 +966,27 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	// pre-2026-05-21 ANY adapter error 500'd the request, which kept
 	// BullMQ retrying backfill against a fresh node where xray wasn't up yet
 	// but mtproto had already accepted the user.
+	// A-022: the panel names the inbounds of this node the user is on (their
+	// squad), and they come off every other. nil is every inbound, as before
+	// and from an older panel; an empty list is no inbound, a removal.
+	var named map[core.CoreAdapter][]string
+	if req.InboundIDs != nil {
+		named = s.inboundsByAdapter(*req.InboundIDs)
+	}
 	var healthyFailed []string
 	for _, adapter := range s.cfg.Adapters {
 		isHealthy := adapter.Healthy()
-		if err := adapter.AddUser(coreUser); err != nil {
+		apply := func() error { return adapter.AddUser(coreUser) }
+		if named != nil {
+			ids := named[adapter]
+			switch scoped, ok := adapter.(core.ScopedUserAdder); {
+			case len(ids) == 0:
+				apply = func() error { return adapter.RemoveUser(coreUser.UserID) }
+			case ok:
+				apply = func() error { return scoped.AddUserOn(coreUser, ids) }
+			}
+		}
+		if err := apply(); err != nil {
 			if isHealthy {
 				s.logger.Error("adapter addUser failed", "core", adapter.Name(), "err", err)
 				healthyFailed = append(healthyFailed, adapter.Name())
@@ -683,14 +995,7 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if len(healthyFailed) > 0 {
-		writeError(w, http.StatusInternalServerError, "ADAPTER_FAILED",
-			fmt.Sprintf("active adapters failed: %s", strings.Join(healthyFailed, ", ")))
-		return
-	}
-
-	s.logger.Info("addUser ok", "userId", req.UserID, "username", req.Username)
-	writeJSON(w, http.StatusOK, dto.AddUserResponse{OK: true})
+	return healthyFailed
 }
 
 func (s *Server) handleRemoveUser(w http.ResponseWriter, r *http.Request) {
@@ -732,6 +1037,11 @@ func (s *Server) handleRemoveUser(w http.ResponseWriter, r *http.Request) {
 // reconfiguration yet (that's per-adapter follow-up work). Idempotent: the
 // `applied` / `skipped` counters in the response always reflect "everything
 // was overwritten", so the panel can use it as a generic ack.
+// pushTimeout bounds one push carried past its request (П-1): longer than any
+// push takes (tunnels, a first geo load, the cores' checks), short enough that
+// a wedged one does not hold every later push forever.
+const pushTimeout = 5 * time.Minute
+
 func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
@@ -768,19 +1078,53 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Not the request's context (П-1): the panel drops the request after 30 s,
+	// and a push cut there stopped the old chain and failed to raise the
+	// tunnels of the new one with "context canceled", leaving the cascade down
+	// until the next push. A push once begun is carried through, bounded by
+	// pushTimeout, and the panel's repeat finds it done and changes nothing.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), pushTimeout)
+	defer cancel()
+	started := time.Now()
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	// One line per push, how long it took and what it was handed (A-265: the
+	// cores by protocol and engine, never a user, a key or an address). The
+	// stand reads it for the panel's applyInbounds timeout.
+	waited := time.Since(started)
+	defer func() {
+		s.logger.Info(fmt.Sprintf("applyInbounds done in %d ms", time.Since(started).Milliseconds()),
+			"waitedMs", waited.Milliseconds(), "cores", pushedCores(req), "chain", req.Chain != nil)
+	}()
+	o := s.applyPushOutcome(ctx, req)
+	applied, failed, reasons := o.applied, o.failed, o.reasons
+
 	if s.cfg.InboundsStorePath != "" {
 		// The WHOLE push, not only the inbounds: this file is what a restart
 		// restores from, and inbounds without the node-level policy and
 		// resolver would come back as a node quietly running other routing
 		// than the operator saved.
-		if err := writePushStore(s.cfg.InboundsStorePath, req); err != nil {
+		//
+		// Written AFTER the cores answered, and only what they took. A-113,
+		// 22.10: it was written before, so a push the cores refused (and kept
+		// running the previous config through) became what the next agent
+		// restart came up on, with nothing left to fall back to.
+		before, after, err := s.persistAccepted(req, o)
+		if err == nil {
+			s.closeDroppedPorts(ctx, before, after)
+		} else {
 			s.logger.Error("persist inbounds failed", "err", err, "path", s.cfg.InboundsStorePath)
-			writeError(w, http.StatusInternalServerError, "PERSIST_FAILED", err.Error())
-			return
+			if failed == 0 {
+				// Applied, but a restart would not bring it back: the panel has
+				// to hear that, or it records a node as in sync that is not.
+				writeError(w, http.StatusInternalServerError, "PERSIST_FAILED", err.Error())
+				return
+			}
+			failed++
+			reasons = append(reasons, "persist: "+err.Error())
 		}
 	}
 
-	applied, failed, reasons := s.applyPush(r.Context(), req)
 	if failed > 0 {
 		writeError(w, http.StatusInternalServerError, "ADAPTER_FAILED",
 			fmt.Sprintf("%d/%d inbounds failed to apply: %s",
@@ -792,6 +1136,26 @@ func (s *Server) handleApplyInbounds(w http.ResponseWriter, r *http.Request) {
 		Applied: applied,
 		Skipped: len(req.Inbounds) - applied,
 	})
+}
+
+// pushedCores names the cores a push hands inbounds to, "protocol/engine"
+// once each, sorted; an inbound without an engine goes to the protocol's own.
+func pushedCores(req dto.ApplyInboundsRequest) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, in := range req.Inbounds {
+		engine := string(in.Engine)
+		if engine == "" {
+			engine = string(in.Protocol)
+		}
+		key := string(in.Protocol) + "/" + engine
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 /*
@@ -807,6 +1171,60 @@ func (s *Server) applyPush(
 	ctx context.Context,
 	req dto.ApplyInboundsRequest,
 ) (applied int, failed int, reasons []string) {
+	o := s.applyPushOutcome(ctx, req)
+	return o.applied, o.failed, o.reasons
+}
+
+// pushOutcome is applyPush with the parts the cores refused named, which is
+// what persistAccepted needs to store only what they took.
+type pushOutcome struct {
+	applied, failed int
+	reasons         []string
+	// refused holds indexes into req.Inbounds whose adapter returned an error.
+	refused map[int]bool
+	// chainRefused: the chain block did not apply (or this agent runs no
+	// chain). chainInForce is then the block the chain runs on and the cores
+	// were drawn to: the previously accepted one, or the refused one when
+	// nothing was accepted before (it fails closed).
+	chainRefused bool
+	chainInForce *dto.NodeChain
+	// userCoreRefused: the chain's userCore was malformed and no core was told
+	// about a cascade, so every core kept what it had.
+	userCoreRefused bool
+	// policyRefusedBy / dnsRefusedBy: the cores (coreKey) that refused the
+	// node-level block and kept the one they had; policyTaken / dnsTaken: at
+	// least one core took it (A-185, the store keeps each core's version).
+	policyRefusedBy, dnsRefusedBy map[string]bool
+	policyTaken, dnsTaken         bool
+}
+
+// keptBlocks: on a restore, the policy and resolver of each core that kept an
+// older one (storeFile). Nil on a push from the panel.
+type keptBlocks struct {
+	policy, dns map[string]json.RawMessage
+}
+
+func (s *Server) applyPushOutcome(
+	ctx context.Context,
+	req dto.ApplyInboundsRequest,
+) pushOutcome {
+	return s.applyPushKept(ctx, req, nil)
+}
+
+func (s *Server) applyPushKept(
+	ctx context.Context,
+	req dto.ApplyInboundsRequest,
+	kept *keptBlocks,
+) (o pushOutcome) {
+	o.policyRefusedBy = make(map[string]bool)
+	o.dnsRefusedBy = make(map[string]bool)
+	if kept == nil {
+		kept = &keptBlocks{}
+	}
+	o.refused = make(map[int]bool)
+	var applied, failed int
+	var reasons []string
+
 	// The geo files this push stands on, noted before anything renders, so a
 	// restart the push causes anyway picks them up and FlushGeo below has
 	// nothing left to do. Absent geo leaves every adapter where it was.
@@ -823,16 +1241,27 @@ func (s *Server) applyPush(
 	// each inbound triggers already carries it. The other order would restart
 	// the core twice for one push: once without the policy, once with it.
 	//
-	// A failure here is not fatal to the request. The inbounds below are what
-	// keeps users connected; refusing the whole push over a policy the operator
-	// can fix in the panel would take the node dark for a routing preference.
+	// A failure here does not stop the push. The inbounds below are what keeps
+	// users connected; refusing the whole push over a policy the operator can
+	// fix in the panel would take the node dark for a routing preference.
+	//
+	// It is still a failure of the push, said in its reasons, and the store
+	// keeps the previous policy (acceptedPush). It was only logged: the core
+	// kept its old routing while the panel showed the node in sync with the new
+	// one (P1, 22.10).
 	for _, adapter := range s.cfg.Adapters {
 		pr, ok := adapter.(core.PolicyReceiver)
 		if !ok {
 			continue
 		}
-		if err := pr.ApplyPolicy(req.Policy); err != nil {
+		key := coreKey(adapter)
+		if err := pr.ApplyPolicy(blockFor(key, req.Policy, kept.policy)); err != nil {
 			s.logger.Error("adapter ApplyPolicy failed", "core", adapter.Name(), "err", err)
+			o.policyRefusedBy[key] = true
+			failed++
+			reasons = append(reasons, fmt.Sprintf("policy (%s): %v", adapter.Name(), err))
+		} else {
+			o.policyTaken = true
 		}
 	}
 
@@ -846,8 +1275,14 @@ func (s *Server) applyPush(
 		if !ok {
 			continue
 		}
-		if err := dr.ApplyDns(req.Dns); err != nil {
+		key := coreKey(adapter)
+		if err := dr.ApplyDns(blockFor(key, req.Dns, kept.dns)); err != nil {
 			s.logger.Error("adapter ApplyDns failed", "core", adapter.Name(), "err", err)
+			o.dnsRefusedBy[key] = true
+			failed++
+			reasons = append(reasons, fmt.Sprintf("dns (%s): %v", adapter.Name(), err))
+		} else {
+			o.dnsTaken = true
 		}
 	}
 
@@ -868,6 +1303,9 @@ func (s *Server) applyPush(
 	// that knows it must therefore IGNORE the fragments: two processes drawing
 	// one chain fight over the link port, and the loser's users go nowhere.
 	chainInForce := false
+	// The block whose hand-off the user's core is drawn to: the pushed one,
+	// unless the chain refused it while an earlier one still runs.
+	handoffBlock := req.Chain
 	if s.cfg.Chain != nil {
 		if err := s.cfg.Chain.Apply(ctx, req.Chain); err != nil {
 			// Not fatal to the push: the inbounds below are what keeps users
@@ -875,14 +1313,31 @@ func (s *Server) applyPush(
 			// not a reason to take the node dark. It travels back as a failure
 			// reason and stands in the healthcheck as chain.error.
 			s.logger.Error("chain block failed to apply", "err", err)
+			o.chainRefused = true
 			failed++
 			reasons = append(reasons, fmt.Sprintf("chain: %s", err.Error()))
+			// 22.10: the cores were drawn to the REFUSED block's socks
+			// ports while the chain process still ran the previous block on its
+			// own, so a cascade entry sent its users to a loopback port nobody
+			// listened on. The process that runs is the one the cores follow.
+			// With nothing accepted before, the refused block stays: its empty
+			// port fails closed, where no hand-off at all would send users out
+			// of the entry country.
+			if accepted := s.cfg.Chain.Accepted(); accepted != nil {
+				handoffBlock = accepted
+			}
+			o.chainInForce = handoffBlock
 		}
 		chainInForce = s.cfg.Chain.Active()
+		// A-111: the ports the chain receives legs on. The block in force, so a
+		// refused one opens nothing it does not run.
+		s.ensureChainFirewall(ctx, handoffBlock)
 	} else if req.Chain != nil {
 		// Loud, and counted: the panel believes this node draws a chain in its
 		// own process, and nothing here does.
 		s.logger.Error("applyInbounds: a chain block arrived but this agent runs no chain manager")
+		o.chainRefused = true
+		o.chainInForce = req.Chain
 		failed++
 		reasons = append(reasons, "chain: this agent cannot run a chain process")
 	}
@@ -904,21 +1359,22 @@ func (s *Server) applyPush(
 		if req.Cascade != nil {
 			s.cfg.Chain.NoteCascadeIgnored()
 		}
-		if req.Chain != nil && req.Chain.UserCore != nil {
+		if handoffBlock != nil && handoffBlock.UserCore != nil {
 			// One shape per engine since phase 6: xray gets its fragments, a
 			// hysteria entry gets the socks hand-off. A block whose halves do not
 			// match its engine is refused OUT LOUD and delivered to nobody: handed
 			// on as "nothing", a hysteria entry would render with no outbounds and
 			// send every user out of the entry country with a working connection.
-			payload, err := req.Chain.UserCore.Payload()
+			payload, err := handoffBlock.UserCore.Payload()
 			if err != nil {
 				s.logger.Error("applyInbounds: chain userCore refused, every core keeps what it had", "err", err)
 				failed++
 				reasons = append(reasons, err.Error())
 				userCoreRefused = true
+				o.userCoreRefused = true
 			} else {
 				cascadeFragments = payload
-				router = string(req.Chain.UserCore.Engine)
+				router = string(handoffBlock.UserCore.Engine)
 			}
 		}
 	} else if req.Cascade != nil {
@@ -971,12 +1427,18 @@ func (s *Server) applyPush(
 	// Which core each inbound goes to, settled before any of them is applied,
 	// so the cores this push does not name are known up front.
 	matchedBy := make([]core.CoreAdapter, len(req.Inbounds))
+	owners := make(map[string]core.CoreAdapter, len(req.Inbounds))
 	for i, ib := range req.Inbounds {
 		if m := s.adapterFor(ib); m != nil {
 			matchedBy[i] = m
 			named[m] = true
+			owners[ib.ID] = m
 		}
 	}
+	// Which adapter holds which inbound, for addUser's inboundIds (A-022).
+	s.ownersMu.Lock()
+	s.owners = owners
+	s.ownersMu.Unlock()
 
 	// And those stop serving BEFORE the named ones start, because they may hold
 	// the very port a named inbound is about to take. E34, 25.09 on nl-01: a
@@ -990,8 +1452,9 @@ func (s *Server) applyPush(
 	// on it would turn one bad block into an outage of another core. An inbound
 	// that fails below no longer holds the idle back: the push named what it
 	// named whether or not that inbound then applies, and the core it names is
-	// named, so a failure cannot idle it.
-	if failed == 0 {
+	// named, so a failure cannot idle it. Nor does a refused policy or
+	// resolver: they say nothing about which cores should run.
+	if !o.chainRefused && !o.userCoreRefused {
 		s.idleUnnamed(ctx, named)
 	}
 
@@ -1007,6 +1470,20 @@ func (s *Server) applyPush(
 	//
 	// Capped at the first three: a node with forty inbounds and a broken shared
 	// profile would otherwise answer with a wall of the same sentence.
+	//
+	// The set each adapter keeps, known before anything is applied: an adapter
+	// that checks one inbound against its others (mieru: port, MTU) must not
+	// check it against one this same push deletes (A-199).
+	keepByProtocol := make(map[string][]string, len(req.Inbounds))
+	for _, ib := range req.Inbounds {
+		key := string(ib.Protocol) + "|" + string(ib.ResolvedEngine())
+		keepByProtocol[key] = append(keepByProtocol[key], ib.ID)
+	}
+	for _, adapter := range s.cfg.Adapters {
+		if ps, ok := adapter.(core.PushScoped); ok {
+			ps.ScopePush(keepByProtocol[adapter.Name()+"|"+adapter.Engine()])
+		}
+	}
 	for i, ib := range req.Inbounds {
 		s.logger.Info("applyInbounds received",
 			"id", ib.ID, "name", ib.Name, "protocol", ib.Protocol, "port", ib.Port)
@@ -1017,9 +1494,16 @@ func (s *Server) applyPush(
 				"protocol", ib.Protocol, "engine", ib.ResolvedEngine())
 			continue
 		}
-		if err := matched.ApplyInbound(ib.Port, ib.Config); err != nil {
+		apply := matched.ApplyInbound
+		if ia, ok := matched.(core.IdentifiedApplier); ok {
+			apply = func(port int, cfg json.RawMessage) error {
+				return ia.ApplyIdentifiedInbound(ib.ID, port, cfg)
+			}
+		}
+		if err := apply(ib.Port, ib.Config); err != nil {
 			s.logger.Error("adapter ApplyInbound failed",
 				"core", matched.Name(), "inboundId", ib.ID, "err", err)
+			o.refused[i] = true
 			failed++
 			if len(reasons) < 3 {
 				// The name, not the id: the operator reads this in the panel,
@@ -1035,6 +1519,7 @@ func (s *Server) applyPush(
 		// And for the cascade inter-hop link port (buried in the xray cascade
 		// fragment, not a top-level inbound, so ensureInboundFirewall misses it).
 		s.ensureCascadeFirewall(ctx, ib)
+		s.ensureACMEFirewall(ctx, matched)
 		applied++
 	}
 
@@ -1043,11 +1528,6 @@ func (s *Server) applyPush(
 	// arrived for it, and let it drop the rest. Runs even when the list is
 	// empty for an adapter - that is exactly the "last inbound removed" case,
 	// and skipping it would leave a deleted inbound serving forever.
-	keepByProtocol := make(map[string][]string, len(req.Inbounds))
-	for _, ib := range req.Inbounds {
-		key := string(ib.Protocol) + "|" + string(ib.ResolvedEngine())
-		keepByProtocol[key] = append(keepByProtocol[key], ib.ID)
-	}
 	for _, adapter := range s.cfg.Adapters {
 		rec, ok := adapter.(core.InboundReconciler)
 		if !ok {
@@ -1073,7 +1553,8 @@ func (s *Server) applyPush(
 		s.cfg.HopGuard.Sync(ctx, udpPortsOf(req))
 	}
 
-	return applied, failed, reasons
+	o.applied, o.failed, o.reasons = applied, failed, reasons
+	return o
 }
 
 // settleGeo finishes a push that carried geo: a core still running on files
@@ -1170,8 +1651,65 @@ func (s *Server) ensureInboundFirewall(ctx context.Context, ib dto.InboundDto) {
 			"protocol", ib.Protocol, "inboundId", ib.ID)
 		return
 	}
-	for _, proto := range protoForInbound(ib.Protocol) {
-		firewall.Allow(ctx, s.logger, ib.Port, proto)
+	for _, proto := range transportsOf(ib) {
+		fwAllow(ctx, s.logger, ib.Port, proto)
+	}
+}
+
+// ensureACMEFirewall opens 80/tcp for a core whose config takes an ACME
+// certificate (core.ACMEUser). A-280, stand 26.10 on aeza-de-01: hysteria put
+// on a node later by its bootstrap had no 80/tcp (the installer's rule,
+// install-iceslab-node.sh:1418-1422, never ran for it), every HTTP-01
+// challenge timed out, and the unit restarted every 5 s into Let's Encrypt's
+// failed-validation limit while the push read as applied.
+//
+// Never closed by the agent, even with no ACME core left: the installer
+// opens the same rule and the agent cannot tell its own from that one, and a
+// certificate's renewal needs 80 for as long as the core keeps it.
+func (s *Server) ensureACMEFirewall(ctx context.Context, adapter core.CoreAdapter) {
+	if au, ok := adapter.(core.ACMEUser); ok && au.UsesACME() {
+		fwAllow(ctx, s.logger, 80, "tcp")
+	}
+}
+
+// closeDroppedPorts closes the ports the cores served on before a push and do
+// not after it (A-158): a removed host, or one moved to another port, left
+// its rule open. Both sides are what the cores RUN (the stored accepted push
+// before and after), not what the panel sent: a refused inbound keeps its
+// old port, and closing it would cut the users still on it. A (port, proto)
+// another inbound still uses stays open, and the SSH port, 80 (ACME) and the
+// agent's own are never touched.
+func (s *Server) closeDroppedPorts(ctx context.Context, before, after []dto.InboundDto) {
+	open := func(ibs []dto.InboundDto) map[string]bool {
+		out := map[string]bool{}
+		for _, ib := range ibs {
+			if ib.Port <= 0 {
+				continue
+			}
+			for _, proto := range transportsOf(ib) {
+				out[fmt.Sprintf("%d/%s", ib.Port, proto)] = true
+			}
+		}
+		return out
+	}
+	still := open(after)
+	// 80 with SSH: ACME's port is never closed by the agent (ensureACMEFirewall).
+	keep := map[int]bool{22: true, 80: true}
+	if p, err := strconv.Atoi(s.cfg.Port); err == nil {
+		keep[p] = true
+	}
+	for _, ib := range before {
+		if ib.Port <= 0 || keep[ib.Port] {
+			continue
+		}
+		for _, proto := range transportsOf(ib) {
+			spec := fmt.Sprintf("%d/%s", ib.Port, proto)
+			if still[spec] {
+				continue
+			}
+			still[spec] = true // once, even if two old inbounds shared it
+			fwClose(ctx, s.logger, ib.Port, proto)
+		}
 	}
 }
 
@@ -1229,6 +1767,7 @@ func (s *Server) ensureFirewallFromStore(ctx context.Context) {
 		s.ensureInboundFirewall(ctx, ib)
 		s.ensureCascadeFirewall(ctx, ib)
 	}
+	s.ensureChainFirewall(ctx, req.Chain)
 	if len(inbounds) > 0 {
 		s.logger.Info("ensureFirewallFromStore: re-ensured firewall for persisted inbounds", "count", len(inbounds))
 	}
@@ -1262,7 +1801,8 @@ func (s *Server) restoreFromStore(ctx context.Context) {
 	if s.cfg.InboundsStorePath == "" {
 		return
 	}
-	req, err := readPushStore(s.cfg.InboundsStorePath)
+	st, err := readStored(s.cfg.InboundsStorePath)
+	req := st.ApplyInboundsRequest
 	if err != nil {
 		if !os.IsNotExist(err) {
 			s.logger.Warn("restore from disk: cannot read the last push",
@@ -1282,7 +1822,12 @@ func (s *Server) restoreFromStore(ctx context.Context) {
 		}
 	}
 
-	applied, failed, reasons := s.applyPush(ctx, req)
+	// Each core back on the policy and resolver it ran, which for a core that
+	// refused the last push's is an older one (A-185).
+	s.pushMu.Lock()
+	o := s.applyPushKept(ctx, req, &keptBlocks{policy: st.PolicyByCore, dns: st.DnsByCore})
+	s.pushMu.Unlock()
+	applied, failed, reasons := o.applied, o.failed, o.reasons
 	if failed > 0 {
 		s.logger.Error("restored from disk with failures",
 			"applied", applied, "failed", failed,
@@ -1359,24 +1904,49 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	// statsquery, awg show dump); serial polling stacked the per-adapter
 	// timeouts into one long request. Per-index slots avoid a shared-write race.
 	type statResult struct {
-		users      []dto.UserStats
-		in         int64
-		out        int64
+		users []dto.UserStats
+		core  *dto.CoreTrafficTotal
+		// in/out: the adapter's own totals, which is what the legacy
+		// TotalBytesIn/Out always summed. Kept as they were for a panel that
+		// does not read Cores.
+		in, out    int64
 		cumulative bool
 	}
 	results := make([]statResult, len(s.cfg.Adapters))
 	var wg sync.WaitGroup
 	for i, adapter := range s.cfg.Adapters {
+		// A stand-in for a core that is not installed counts nothing and is
+		// not an adapter the panel keeps a snapshot for.
+		if core.IsAbsent(adapter) {
+			continue
+		}
 		wg.Add(1)
 		go func(i int, adapter core.CoreAdapter) {
 			defer wg.Done()
+			total := &dto.CoreTrafficTotal{
+				Protocol: dto.ProtocolName(adapter.Name()),
+				Engine:   dto.EngineName(adapter.Engine()),
+			}
 			stats, err := adapter.GetStats()
-			if err != nil {
+			if err != nil || stats == nil {
 				s.logger.Error("adapter getStats failed", "core", adapter.Name(), "err", err)
+				total.NoData = true
+				results[i] = statResult{core: total}
 				return
 			}
-			res := statResult{in: stats.TotalBytesIn, out: stats.TotalBytesOut, cumulative: stats.Cumulative}
+			total.Cumulative = stats.Cumulative
+			if stats.NoData {
+				// A-163: absent, not zero. The users of this adapter are left
+				// out too, so the panel moves none of their snapshots.
+				total.NoData = true
+				results[i] = statResult{core: total}
+				return
+			}
+			res := statResult{core: total, cumulative: stats.Cumulative, in: stats.TotalBytesIn, out: stats.TotalBytesOut}
+			var sumIn, sumOut int64
 			for _, u := range stats.Users {
+				sumIn += u.BytesIn
+				sumOut += u.BytesOut
 				res.users = append(res.users, dto.UserStats{
 					UserID:   u.UserID,
 					BytesIn:  u.BytesIn,
@@ -1388,7 +1958,19 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 					// And with its protocol, the inbound the user came through: the
 					// panel decides per entry whether bytes or presence count.
 					Protocol: adapter.Name(),
+					// And its engine (A-163): with the protocol it names the
+					// adapter, whose counters are its own. The sing-box adapter
+					// of the xray family is protocol "xray" too.
+					Engine: dto.EngineName(adapter.Engine()),
 				})
+			}
+			// The adapter's own total when it keeps one (xray's inbound
+			// counters see a cascade link-in its users do not), else the sum
+			// of its users, which is what a core without totals has (A-152:
+			// hysteria's traffic never reached the node's history).
+			total.BytesIn, total.BytesOut = stats.TotalBytesIn, stats.TotalBytesOut
+			if total.BytesIn == 0 && total.BytesOut == 0 {
+				total.BytesIn, total.BytesOut = sumIn, sumOut
 			}
 			results[i] = res
 		}(i, adapter)
@@ -1396,16 +1978,22 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	allUsers := []dto.UserStats{}
+	cores := []dto.CoreTrafficTotal{}
 	var totalIn, totalOut int64
 	var cumulative bool
 	for _, res := range results {
+		if res.core == nil {
+			continue
+		}
+		cores = append(cores, *res.core)
 		allUsers = append(allUsers, res.users...)
 		totalIn += res.in
 		totalOut += res.out
 		// #5 - response-level flag stays as the OR across cores so older panels
 		// still enter the snapshot-delta path. New panels read the per-user
 		// dto.UserStats.Cumulative set above, which is what makes a mixed
-		// cumulative+delta node bill each user correctly.
+		// cumulative+delta node bill each user correctly, and the per-adapter
+		// totals in Cores for the node's own history (A-152).
 		cumulative = cumulative || res.cumulative
 	}
 	uptime := int64(time.Since(s.startedAt).Seconds())
@@ -1415,6 +2003,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalBytesIn:  totalIn,
 		TotalBytesOut: totalOut,
 		Cumulative:    cumulative,
+		Cores:         cores,
 	})
 }
 

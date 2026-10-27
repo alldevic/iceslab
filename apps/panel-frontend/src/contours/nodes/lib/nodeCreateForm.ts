@@ -13,7 +13,8 @@ export interface FormValues {
   port: number | '';
   protocol: NodeProtocol;
   countryCode: string;
-  consumptionMultiplier: number | '';
+  /** Typed text, comma or dot (A-143, parseMultiplier). */
+  consumptionMultiplier: string;
   domain: string;
   singboxEngine: boolean;
   /** Ядра, на которые нода настроена (intendedEngines): множество, порядок
@@ -29,6 +30,40 @@ export interface FormValues {
 // Listen ports handed to new hosts, in preference order. Mirrors the backend's
 // CANDIDATE_PORTS so the ports promised here are the ports actually bound.
 export const CANDIDATE_PORTS = [443, 8443, 2053, 2083, 2087, 2096];
+
+/**
+ * The picked profiles that can still stand on the node (A-146).
+ *
+ * The choice lives across the wizard's steps, and taking a core off on step 1
+ * moves its profiles to «cannot» on step 2 unticked to the eye, yet they
+ * stayed in the selection: the counter, the summary, the ports and the button
+ * counted them, and registration skipped them in silence. Unknown while the
+ * profile list has not arrived (`canIds` null): the selection is kept as is.
+ */
+export function selectedThatCan(selected: string[], canIds: readonly string[] | null): string[] {
+  if (canIds === null) return selected;
+  const can = new Set(canIds);
+  return selected.filter((id) => can.has(id));
+}
+
+/**
+ * Why a profile cannot stand on the node the wizard is creating, or null when
+ * it can. The node has not reported yet, by construction: so a profile whose
+ * engine is carried still cannot be an AmneziaWG 3.1 one (A-146 p. 3.1,
+ * A-160). The server binds 3.1 only after a poll shows the agent brings up a
+ * 3.1 interface, and refuses it before that with AWG_AGENT_TOO_OLD
+ * { neverReported: true }; the wizard says so up front instead.
+ */
+export type FreshNodeReason = 'noSingbox' | 'noCore' | 'awg31NotReported';
+
+export function freshNodeReason(
+  profile: { effectiveEngine: string; protocol: string; awgProtocol?: number | null },
+  carried: ReadonlySet<string>,
+): FreshNodeReason | null {
+  if (!carried.has(profile.effectiveEngine)) return profile.effectiveEngine === 'singbox' ? 'noSingbox' : 'noCore';
+  if (profile.protocol === 'amneziawg' && profile.awgProtocol === 3) return 'awg31NotReported';
+  return null;
+}
 
 /** Next candidate port not already handed to another host on this node. */
 export function pickFreePort(used: number[]): number {

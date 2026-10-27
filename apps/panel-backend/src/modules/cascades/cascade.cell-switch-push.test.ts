@@ -5,6 +5,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { stubNodeRoster } from '../../../tests/helpers/node-roster.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { applyInboundsForNode, applyInboundsRequestForNode } from '../inbounds/inbounds.queue.js';
 
@@ -36,6 +37,8 @@ beforeEach(async () => {
   // are stand-ins with no address behind them: answer as an agent older than
   // geo, which gets its push exactly as before.
   vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+  // The roster after a stubbed push is answered here too (A-112).
+  stubNodeRoster();
 });
 
 afterEach(async () => {

@@ -12,6 +12,7 @@ import {
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { fetchGuarded, GuardedFetchError, readBoundedBytes } from '../../lib/util/guarded-fetch.js';
 import { GeoDatError, geoTagList, parseGeoDat } from './geo-dat.js';
 import { toGeoDat } from './geo-formats.js';
 
@@ -226,9 +227,13 @@ export async function fetchUrl(
   if (set.current?.etag) conditional['If-None-Match'] = set.current.etag;
   if (set.current?.lastModified) conditional['If-Modified-Since'] = set.current.lastModified;
 
+  // A-115: the address and every redirect are checked (no loopback, private
+  // or metadata host, at most a few hops), and the body is refused as soon as
+  // it passes the ceiling instead of being held whole first (lib/util/
+  // guarded-fetch.ts, the guards the recipe sources had).
   let res: Response;
   try {
-    res = await fetchImpl(url, { redirect: 'follow', headers: conditional, signal: AbortSignal.timeout(600_000) });
+    res = await fetchGuarded(url, { headers: conditional, signal: AbortSignal.timeout(600_000) }, fetchImpl);
   } catch (err) {
     return markBroken(setId, `download failed: ${err instanceof Error ? err.message : String(err)} (${url})`);
   }
@@ -242,8 +247,11 @@ export async function fetchUrl(
   if (!res.ok) return markBroken(setId, `download failed: HTTP ${res.status} from ${url}`);
   let bytes: Uint8Array;
   try {
-    bytes = new Uint8Array(await res.arrayBuffer());
+    bytes = await readBoundedBytes(res, GEO_FILE_MAX_BYTES);
   } catch (err) {
+    if (err instanceof GuardedFetchError && err.kind === 'too-large') {
+      return markBroken(setId, `the file is larger than ${GEO_FILE_MAX_BYTES / MB} MB, the ceiling; not read further (${url})`);
+    }
     return markBroken(setId, `download failed: ${err instanceof Error ? err.message : String(err)} (${url})`);
   }
 
@@ -254,9 +262,10 @@ export async function fetchUrl(
   } else {
     let side: Uint8Array;
     try {
-      const s = await fetchImpl(`${url}.sha256sum`, { redirect: 'follow', signal: AbortSignal.timeout(60_000) });
+      const s = await fetchGuarded(`${url}.sha256sum`, { signal: AbortSignal.timeout(60_000) }, fetchImpl);
       if (!s.ok) return markBroken(setId, `sidecar sha256 not read: HTTP ${s.status} from ${url}.sha256sum`);
-      side = new Uint8Array(await s.arrayBuffer());
+      // A sidecar is a line: 64 hex and a file name. 4 KiB is generous.
+      side = await readBoundedBytes(s, 4096);
     } catch (err) {
       return markBroken(setId, `sidecar sha256 not read: ${err instanceof Error ? err.message : String(err)} (${url}.sha256sum)`);
     }
@@ -324,9 +333,11 @@ export async function fetchBuiltin(
   try {
     // Ten minutes: geoip.dat is 23 MB, and on the dev machine 24.09 two
     // minutes were not enough for it. A background job can wait.
-    const res = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(600_000) });
+    // The same guards as an operator's URL (A-115): the release redirects to
+    // its asset host, and a body past the ceiling is refused while it streams.
+    const res = await fetchGuarded(url, { signal: AbortSignal.timeout(600_000) }, fetchImpl);
     if (!res.ok) return markBroken(set.id, `download failed: HTTP ${res.status} from ${url}`);
-    bytes = new Uint8Array(await res.arrayBuffer());
+    bytes = await readBoundedBytes(res, GEO_FILE_MAX_BYTES);
   } catch (err) {
     return markBroken(set.id, `download failed: ${err instanceof Error ? err.message : String(err)} (${url})`);
   }

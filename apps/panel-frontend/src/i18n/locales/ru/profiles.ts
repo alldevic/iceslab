@@ -59,10 +59,11 @@ export const profiles = {
       nodes_many: 'нод на пересборку',
       nodes_other: 'нод на пересборку',
       configs: 'конфигов протухнет',
-      configsPending: 'Панель пока не умеет их считать: для этого пришлось бы прогнать сборку подписки для каждого участника каждого сквада, который достаёт до этого профиля.',
       body: 'Ключ принадлежит профилю, поэтому одну и ту же пару отдают все ноды всех его хостов. Замена срабатывает везде разом, и старого ключа больше нет.',
       confirmTitle: 'Заменить пару ключей?',
-      confirmBody: 'Профиль раздают {{hosts}} хостов на {{nodes}} нодах. Новый ключ уедет на все, и каждый уже выданный конфиг перестанет работать.',
+      confirmBody: 'Профиль раздают {{hosts}} хостов на {{nodes}} нодах. Новый ключ уедет на все, и {{configs}} уже выданных конфигов перестанут работать.',
+      // A-225: счёт сервера не пришёл.
+      confirmUnknown: 'Цену узнать не удалось. Ключ сменится на всех нодах профиля, клиенты с текущим ключом отключатся.',
       confirmAction: 'Заменить',
     },    bar: {
       profiles: 'ПРОФИЛЕЙ',
@@ -87,6 +88,8 @@ export const profiles = {
       pin: 'пин',
       noPin: 'пина нет',
       noPinWhy: 'Пина нет: {{reason}}',
+      // Ноды, где движок не считает трафик по юзеру (countsUsers: false).
+      uncounted: 'Без учёта трафика, лимиты на этом движке не считаются:',
       component: {
         xray: 'xray',
         singbox: 'sing-box',
@@ -142,6 +145,8 @@ export const profiles = {
       descriptionPlaceholder: 'Для чего этот шаблон',
       submitCreate: 'Создать профиль',
       submitEdit: 'Сохранить',
+      recipeSkippedTitle: 'Рецепт применён не целиком',
+      recipeSkipped: 'Эти поля рецепт задавать не может, форма их не тронула: {{keys}}',
       plain: {
         onXray: 'на ядре xray: тот же процесс, что у остальных xray-профилей ноды, нового бинаря нет',
         fixed: 'Без TLS, REALITY и транспорта: клиенты Telegram говорят с таким прокси напрямую по TCP, выбирать здесь нечего.',
@@ -177,7 +182,11 @@ export const profiles = {
         realityModeDesc: 'Как REALITY заимствует TLS-личность',
         realityModeStealOthers: 'steal-from-others (внешний декой)',
         realityModeSelfSteal: 'self-steal (локальный fallback, РФ-2026)',
-        singboxXrayOnly: 'На sing-box только REALITY (steal-others) по raw; TLS, self-steal и другие транспорты на ядре xray.',
+        singboxXrayOnly: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера; TLS, self-steal, несколько имён и другие транспорты на ядре xray.',
+        // Кого подписка не накормит сохранённым профилем: ответ /formats сервера.
+        clientsLeftOut: 'Не получат (сохранённый профиль, по его защите):',
+        clientsUnknown: 'неизвестно: ответ сервера не пришёл.',
+        clientsHostCaveat: 'Хост с другой защитой может отличаться.',
         realityModeSelfStealHint:
           'Self-steal: нода поднимает локальный TLS-fallback, dest REALITY смотрит на него. В поле ниже укажите домен, резолвящийся в IP ЭТОЙ ноды, чтобы SNI и IP совпадали (переживает whitelist-shutdown в РФ). dest игнорируется.',
         realityFallbackUpstreamLabel: 'Реалистичный fallback (G1, опц.)',
@@ -251,6 +260,12 @@ export const profiles = {
         naiveTlsEmailLabel: 'Email для TLS-сертификата',
         naiveMasqueradeLabel: 'Корень маскировки',
         ssCipherLabel: 'Метод шифрования',
+        ssKey: {
+          set: 'Ключ сервера задан. Сохранение его не трогает.',
+          change: 'Метод сменён: сервер сохранит ключ, если он подходит к новому методу, иначе выпустит новый, и у клиентов сменятся ссылки.',
+          new: 'Ключа сервера нет: сохранение его выпустит, у клиентов сменятся ссылки.',
+          server: 'Ключ сервера выпустит панель при создании.',
+        },
         ssNote:
           'Пароль на пользователя = его xrayUuid. Включи у юзера протокол shadowsocks в списке протоколов.',
         mtprotoDomain: 'Domain для маскировки',
@@ -261,7 +276,13 @@ export const profiles = {
     },
     deploy: {
       title: 'Развернуть «{{name}}» на нодах',
-      hint: 'Отметь ноды, на которых нужен этот профиль. Снятые галки удаляют существующие bindings (cascade - пользователи теряют URL\'ы для этой ноды). Порт для новых bindings: {{port}}.',
+      hint: 'Отметь ноды, на которых нужен этот профиль. Снятая галка снимает с ноды все инбаунды профиля, на всех его портах (пользователи теряют URL\'ы для этой ноды). Порт для новых bindings: {{port}}. Второй порт на той же ноде ставится из хоста.',
+      // A-259: профиль на ноде стоит столько раз, сколько у него портов.
+      boundPorts: 'Стоит на портах: {{ports}}',
+      removesPorts_one: 'Снимет инбаунд на порту {{ports}}',
+      removesPorts_few: 'Снимет {{count}} инбаунда, порты {{ports}}',
+      removesPorts_many: 'Снимет {{count}} инбаундов, порты {{ports}}',
+      removesPorts_other: 'Снимет {{count}} инбаунда, порты {{ports}}',
       port: 'Порт для новых bindings',
       portAutoHint: 'Свободный порт подобран на выбранной ноде. Можно изменить.',
       portPlainHint: '{{port}}: порт, который ждут клиенты. Не подбирается, а проверяется: строка под каждой отмеченной нодой скажет, свободен ли он там.',
@@ -276,12 +297,13 @@ export const profiles = {
     newCrumb: 'НОВЫЙ',
     engineRefused: 'Сервер отказал: этот протокол не работает на выбранном движке. SOCKS5 и HTTP обслуживает только ядро xray.',
     // Отказ гейта BACK (0c7dcc7): xray-семейство на sing-box, поле не то.
-    singboxXrayRefused: 'На sing-box только REALITY (steal-others) по raw: поле «{{field}}».',
-    singboxXrayRefusedBinding: 'На sing-box только REALITY (steal-others) по raw: поле «{{field}}» в переопределениях привязки.',
+    singboxXrayRefused: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера: поле «{{field}}».',
+    singboxXrayRefusedBinding: 'На sing-box только REALITY (steal-others) по raw с одним именем сервера: поле «{{field}}» в переопределениях привязки.',
     singboxXrayField: {
       network: 'транспорт',
       security: 'защита',
       realityMode: 'режим REALITY',
+      realityServerNames: 'имена серверов REALITY',
     },
     newSubtitle: 'ВЫБЕРИТЕ ПРОТОКОЛ И ОПИШИТЕ ШАБЛОН',
     editSubtitle: 'ИЗМЕНЕНИЯ УЕДУТ НА КАЖДУЮ НОДУ С ЭТИМ ПРОФИЛЕМ',

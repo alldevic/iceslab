@@ -2,6 +2,9 @@ import type { EngineName, Transport } from '@iceslab/shared';
 import { Prisma } from '../../generated/prisma/client.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { prisma } from '../../prisma.js';
+import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
+import { anyChanged } from '../../lib/util/same-value.js';
+import { BINDING_LINK_FIELDS, PROFILE_LINK_FIELDS } from '../hosts/hosts.freshness.js';
 import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import {
@@ -10,7 +13,9 @@ import {
 import { ensureDefaultHost } from '../hosts/hosts.service.js';
 import {
   generateSsServerPsk,
+  pskFitsMethod,
 } from './ss-helpers.js';
+import { adapterSlot, assertAdapterSlotFree } from '../nodes/node-adapter-slot.js';
 import {
   AWG_PROTOCOL_NOT_AWG_MESSAGE,
   engineServesSubprotocol,
@@ -19,7 +24,11 @@ import {
   SINGBOX_XRAY_FAMILY_MESSAGE,
   singboxRefusesXrayField,
   type SingboxXrayField,
+  VMESS_REALITY_MESSAGE,
+  vmessOnReality,
+  withXraySecurityDefault,
 } from './profiles.schemas.js';
+import { ZodError } from 'zod';
 import {
   effectiveEngineOf,
   nodeRendersProfile,
@@ -272,12 +281,6 @@ export async function nextFreePortForNode(nodeId: string): Promise<number> {
   });
   return pickFreePort(bindings.map((b) => b.port));
 }
-export class NodeAlreadyBoundError extends Error {
-  constructor(public profileId: string, public nodeId: string) {
-    super(`Node ${nodeId} is already bound to profile ${profileId}`);
-    this.name = 'NodeAlreadyBoundError';
-  }
-}
 export class NodeNotFoundError extends Error {
   constructor(public id: string) {
     super(`Node ${id} not found`);
@@ -376,6 +379,11 @@ export async function createProfile(input: CreateProfileInput): Promise<PublicPr
       update: {},
     });
     return p;
+  }).catch((err: unknown) => {
+    // The check above is read-then-insert: a create racing it loses here
+    // (A-257), a 409 in words instead of a 500.
+    if (isUniqueViolationOn(err, 'profiles_name_key', ['name'])) throw new ProfileNameTakenError(input.name);
+    throw err;
   });
 
   eventBus.emit('profile.created', { profileId: created.id });
@@ -432,14 +440,14 @@ export async function updateProfile(
         effectiveEngineOf(existing)) {
       const deployed = await prisma.profileNodeBinding.findMany({
         where: { profileId: id, node: { deletedAt: null } },
-        select: {
-          node: {
-            select: { name: true, cores: true, protocol: true, singboxEngine: true, intendedEngines: true },
-          },
-        },
+        select: { node: true },
       });
+      const next = { ...existing, engine: input.engine ?? null };
       for (const b of deployed) {
-        assertNodeRendersProfile(b.node, { protocol: existing.protocol, engine: input.engine ?? null });
+        // The core's own report too (A-161): a node whose sing-box is a
+        // refused version took the move with the engine list alone.
+        assertCoreOnNode(b.node, next);
+        assertNodeRendersProfile(b.node, next);
       }
     }
   }
@@ -461,12 +469,45 @@ export async function updateProfile(
     }
   }
 
+  /**
+   * The adapter slot again (A-055), for a profile that MOVES to another
+   * adapter: a new engine, or another AmneziaWG generation. On every node it
+   * is bound to, the adapter it moves onto may already serve another binding,
+   * and the agent would silently replace one with the other. Asked of each
+   * node, before anything is written.
+   */
+  const nextSlotOf = {
+    id,
+    protocol: existing.protocol,
+    engine: input.engine !== undefined ? input.engine : existing.engine,
+    awgProtocol: input.awgProtocol !== undefined ? input.awgProtocol : existing.awgProtocol,
+    config: input.config !== undefined ? input.config : existing.config,
+  };
+  // mieru shares its adapter, but one MTU per process: an MTU edit on a
+  // node with another mieru inbound is the same question.
+  const mieruRetuned = existing.protocol === 'mieru' && input.config !== undefined;
+  if (adapterSlot(nextSlotOf) !== adapterSlot(existing) || mieruRetuned) {
+    const deployed = await prisma.profileNodeBinding.findMany({
+      where: { profileId: id, node: { deletedAt: null } },
+      select: { id: true, overrides: true, node: { select: { id: true, name: true } } },
+    });
+    // A-259: each binding against the rest of its node, the profile's own other
+    // bindings there included, all of them counted in the slot they move to.
+    for (const b of deployed) await assertAdapterSlotFree(b.node, nextSlotOf, b.overrides, b.id);
+  }
+
   if (input.config !== undefined) {
     const schema = PROTOCOL_CONFIG_SCHEMAS[
       existing.protocol as keyof typeof PROTOCOL_CONFIG_SCHEMAS
     ];
     if (!schema) throw new Error(`Unknown protocol ${existing.protocol}`);
-    const parsed = schema.parse(input.config);
+    // A-230: the same vmess rule as on create (profiles.schemas.ts): no
+    // security is none, an explicit reality is refused in words.
+    const isXray = existing.protocol === 'xray';
+    const parsed = schema.parse(isXray ? withXraySecurityDefault(input.config) : input.config);
+    if (isXray && vmessOnReality(parsed)) {
+      throw new ZodError([{ code: 'custom', message: VMESS_REALITY_MESSAGE, path: ['config', 'security'], input: input.config }]);
+    }
     /**
      * ShadowTLS keeps its inner key across an edit.
      *
@@ -482,6 +523,26 @@ export async function updateProfile(
       if (!incoming.ssPassword) {
         const stored = (existing.config ?? {}) as { ssPassword?: string };
         incoming.ssPassword = stored.ssPassword ?? generateSsServerPsk(incoming.ssMethod);
+      }
+    }
+    /**
+     * Shadowsocks keeps its server key the same way (A-028).
+     *
+     * The profile form has no serverPsk field, so every save sent a config
+     * without one and the stored key was overwritten by nothing: the node then
+     * got a new key on the next push, or none, and every 2022 client lost the
+     * server half of its password. Absent is not a value, it is no edit. Kept
+     * when it still fits the cipher; a method change to a different key length
+     * needs a new key anyway, and gets one rather than a key the node refuses.
+     */
+    if (existing.protocol === 'shadowsocks') {
+      const incoming = parsed as { method: string; serverPsk?: string };
+      if (!incoming.serverPsk) {
+        const stored = (existing.config ?? {}) as { serverPsk?: string };
+        incoming.serverPsk =
+          stored.serverPsk && pskFitsMethod(stored.serverPsk, incoming.method)
+            ? stored.serverPsk
+            : generateSsServerPsk(incoming.method);
       }
     }
     // After parse, so schema defaults are filled in first and only then the
@@ -590,11 +651,15 @@ export async function updateProfile(
     }
   }
 
+  // A-122: the profile's link stamp moves only when a value that reaches the
+  // client really changed (PROFILE_LINK_FIELDS); a rename or a description
+  // does not. A moved binding's transport is in its link too.
+  if (anyChanged(existing, data as Partial<typeof existing>, PROFILE_LINK_FIELDS)) data.linkChangedAt = new Date();
   const updated = await prisma.$transaction(async (tx) => {
     for (const m of moves) {
       await tx.profileNodeBinding.update({
         where: { id: m.id },
-        data: { transport: m.transport },
+        data: { transport: m.transport, linkChangedAt: new Date() },
       });
     }
     return tx.profile.update({
@@ -602,6 +667,12 @@ export async function updateProfile(
       data,
       include: { _count: { select: { bindings: true } } },
     });
+  }).catch((err: unknown) => {
+    // A rename racing the check above (A-257).
+    if (input.name !== undefined && isUniqueViolationOn(err, 'profiles_name_key', ['name'])) {
+      throw new ProfileNameTakenError(input.name);
+    }
+    throw err;
   });
   eventBus.emit('profile.updated', { profileId: id });
   return mapProfile(updated, await userReachForProfile(id));
@@ -662,9 +733,15 @@ export class ProfileDoesNotRunOnNodeError extends Error {
         `this node reports ${
           reportedEngines.length ? reportedEngines.join(', ') : 'no core at all'
         }.` +
+        // canWait is "the agent declares the engine and reports no core for
+        // it" (since E42 the declaration comes from the agent's env, not from
+        // an edit here). Waiting helps only right after the bootstrap; past
+        // that the bootstrap failed or the binary went (A-161, 22.10: the
+        // sentence promised the next poll would fix it, and it never did).
         (canWait
-          ? ` The node is set up to run ${neededEngine} but has not reported it yet. If you have` +
-            ` just enabled it, wait for the next status poll and try again.`
+          ? ` The node's agent declares ${neededEngine} but reports no such core. If its` +
+            ` bootstrap has just run, the next status poll will show it; otherwise run the` +
+            ` ${neededEngine} bootstrap on the node again.`
           : ''),
     );
     this.name = 'ProfileDoesNotRunOnNodeError';
@@ -766,6 +843,33 @@ export function assertSingboxServesBinding(
   throw new ProfileEngineNotForTransportError(f, own ? 'overrides' : 'config');
 }
 
+/**
+ * The node's facts for a new binding, one function for every way a binding is
+ * made (A-161, 22.10): the bindings route and the host form, which creates
+ * the binding under a new host. The host path asked the core and the subnet
+ * but not the engine list, so a sing-box profile went onto a node that had
+ * reported its engines without sing-box: the node answered the push with
+ * `skipped`, and the subscription handed out an endpoint nobody served.
+ *
+ * In this order: the core by the node's own report first (the specific answer,
+ * with the command), then the engine list, what sing-box can serve, the
+ * AmneziaWG subnet and the adapter slot (A-055).
+ */
+export async function assertBindingFitsNode(
+  node: Parameters<typeof assertCoreOnNode>[0] & Parameters<typeof assertNodeRendersProfile>[0] &
+    Parameters<typeof assertAwgSubnetFree>[0] & Parameters<typeof assertAdapterSlotFree>[0],
+  profile: Parameters<typeof assertCoreOnNode>[1] & Parameters<typeof assertNodeRendersProfile>[1] &
+    Parameters<typeof assertSingboxServesBinding>[0] & Parameters<typeof assertAwgSubnetFree>[1] &
+    Parameters<typeof assertAdapterSlotFree>[1],
+  overrides?: unknown,
+): Promise<void> {
+  assertCoreOnNode(node, profile);
+  assertNodeRendersProfile(node, profile);
+  assertSingboxServesBinding(profile, overrides);
+  await assertAwgSubnetFree(node, profile);
+  await assertAdapterSlotFree(node, profile, overrides);
+}
+
 export async function createBinding(input: CreateBindingInput): Promise<PublicBindingDto> {
   const profile = await prisma.profile.findUnique({ where: { id: input.profileId } });
   if (!profile) throw new ProfileNotFoundError(input.profileId);
@@ -790,19 +894,11 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
     throw new PortInUseError(input.port, node.name, portConflict.profile.name, transport);
   }
   await assertPortFreeOfOthers(input.nodeId, input.port, transport, node.name);
-  const dupBinding = await prisma.profileNodeBinding.findUnique({
-    where: {
-      profileId_nodeId: { profileId: input.profileId, nodeId: input.nodeId },
-    },
-  });
-  if (dupBinding) throw new NodeAlreadyBoundError(input.profileId, input.nodeId);
-  // The core, by the node's own report: explicitly not installed, or a
-  // version this panel refuses. First, because it is the specific answer and
-  // it carries the command; the engine-list gate below is the general one.
-  assertCoreOnNode(node, profile);
-  assertNodeRendersProfile(node, profile);
-  assertSingboxServesBinding(profile, input.overrides);
-  await assertAwgSubnetFree(node, profile);
+  // A-259: a second binding of the profile on this node is allowed, on its own
+  // port, as its own inbound. What still refuses it is the adapter (a
+  // single-inbound core holds one), inside the gate below.
+  // The node's facts, the same gate as the host form's (assertBindingFitsNode).
+  await assertBindingFitsNode(node, profile, input.overrides);
 
   const created = await prisma.profileNodeBinding.create({
     data: {
@@ -810,7 +906,7 @@ export async function createBinding(input: CreateBindingInput): Promise<PublicBi
       nodeId: input.nodeId,
       port: input.port,
       publicHost: input.publicHost ?? null,
-      publicPort: input.publicPort ?? null,
+      publicPort: storedPublicPort(input.publicPort, input.port),
       overrides: (input.overrides as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
       transport,
       enabled: input.enabled,
@@ -859,6 +955,11 @@ export async function getBindingById(id: string): Promise<PublicBindingDto> {
   return mapBinding(b, nodeRendersProfile(b.node, b.profile));
 }
 
+/** A-150 tail: a public port equal to the listen port is no public port. */
+export function storedPublicPort(publicPort: number | null | undefined, port: number): number | null {
+  return publicPort == null || publicPort === port ? null : publicPort;
+}
+
 export async function updateBinding(
   id: string,
   input: UpdateBindingInput,
@@ -874,6 +975,13 @@ export async function updateBinding(
   // after this edit rather than from what it was.
   const nextOverrides = input.overrides !== undefined ? input.overrides : existing.overrides;
   assertSingboxServesBinding(existing.profile, nextOverrides);
+  // A-199: an MTU set through the binding's overrides is the node's mieru MTU
+  // too, and one mita process holds one. Beside another mieru inbound a
+  // different MTU is refused here, or the agent answers 500 on every push.
+  if (existing.profile.protocol === 'mieru' && input.overrides !== undefined) {
+    const node = await prisma.node.findUniqueOrThrow({ where: { id: existing.nodeId }, select: { id: true, name: true } });
+    await assertAdapterSlotFree(node, { ...existing.profile, id: existing.profileId }, nextOverrides, existing.id);
+  }
   const transport = transportForBinding(existing.profile, nextOverrides);
   const nextPort = input.port ?? existing.port;
 
@@ -901,7 +1009,14 @@ export async function updateBinding(
   const data: Prisma.ProfileNodeBindingUpdateInput = {};
   if (input.port !== undefined) data.port = input.port;
   if (input.publicHost !== undefined) data.publicHost = input.publicHost;
-  if (input.publicPort !== undefined) data.publicPort = input.publicPort;
+  // A-150 tail: the public port is stored only when it differs from the listen
+  // port. The node wizard sent publicPort = port, and that copy stayed behind
+  // when the listen port moved, so clients kept the old port.
+  if (input.publicPort !== undefined) {
+    data.publicPort = storedPublicPort(input.publicPort, nextPort);
+  } else if (nextPort !== existing.port && existing.publicPort === existing.port) {
+    data.publicPort = null;
+  }
   if (input.enabled !== undefined) data.enabled = input.enabled;
   if (input.overrides !== undefined) {
     data.overrides =
@@ -913,6 +1028,17 @@ export async function updateBinding(
   // uniqueness key, and a row whose transport drifted from its config is a row
   // the key is protecting the wrong way round.
   data.transport = transport;
+
+  // A-122: every binding field reaches the client; the stamp moves when one
+  // really changed. Read from the input, not `data`, where a cleared override
+  // is Prisma.JsonNull rather than null.
+  const nextLink: Record<string, unknown> = { transport };
+  if (data.port !== undefined) nextLink.port = data.port;
+  if (data.publicHost !== undefined) nextLink.publicHost = data.publicHost;
+  if (data.publicPort !== undefined) nextLink.publicPort = data.publicPort;
+  if (data.enabled !== undefined) nextLink.enabled = data.enabled;
+  if (input.overrides !== undefined) nextLink.overrides = input.overrides;
+  if (anyChanged(existing, nextLink as Partial<typeof existing>, BINDING_LINK_FIELDS)) data.linkChangedAt = new Date();
 
   const updated = await prisma.profileNodeBinding.update({ where: { id }, data });
   eventBus.emit('binding.updated', {

@@ -73,6 +73,18 @@ describe('getCachedBindings (B6)', () => {
     expect(reloaded).toBe(true);
   });
 
+  it('A-165: a request after a bust does not join a load started before it', async () => {
+    let resolveOld: (v: number[]) => void = () => {};
+    const old = getCachedBindings('k', 1000, () => new Promise<number[]>((res) => (resolveOld = res)));
+    bustBindingsCache();
+    const fresh = getCachedBindings('k', 1000, () => Promise.resolve([2]));
+    resolveOld([1]);
+    expect(await old).toEqual([1]);
+    expect(await fresh).toEqual([2]);
+    // The newer value is the one kept, though the older load finished last.
+    expect(await getCachedBindings('k', 1000, () => Promise.resolve([3]))).toEqual([2]);
+  });
+
   it('single-flights concurrent misses on the same key', async () => {
     let calls = 0;
     const load = () =>
@@ -112,6 +124,8 @@ describe('registerBindingsCacheBust (M5)', () => {
     'profile.deleted': { profileId: 'p', affectedNodeIds: ['n'] },
     'node.created': { nodeId: 'n', nodeName: 'n1' },
     'node.changed': { nodeId: 'n' },
+    // A-165: domain, address, resolver, and the hysteria pin on a rotation.
+    'node.updated': { nodeId: 'n', nodeName: 'n1' },
     'node.deleted': { nodeId: 'n' },
     'host.changed': {},
     'cascade.changed': { nodeIds: ['n'] },

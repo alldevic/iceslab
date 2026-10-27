@@ -1,6 +1,16 @@
-import type { RoutingPresetId } from '@iceslab/shared';
+import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
+import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
+import { xrayDeviceRules } from '../subscription.device-rules.js';
+import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
+
+/** An xray endpoint this format writes. The socks/http doors always; the rest
+ *  as the shared table says (A-224), the same question the other formats ask,
+ *  so a cell narrowed there is obeyed here too. */
+function carriedXray(e: SubscriptionEndpoint): boolean {
+  return e.protocol === 'xray' && (isPlainXray(e) || transportServed('xrayjson', e));
+}
 
 /**
  * Xray-core client JSON subscription formatter.
@@ -62,6 +72,14 @@ export interface XrayJsonBuildOpts {
   probeIntervalSec?: number;
   routingPreset?: RoutingPresetId;
   /**
+   * A-229: an own preset's rules. When set they replace the built-in
+   * preset's, and no split DNS is written (see splitDnsFor).
+   */
+  ownPresetRules?: readonly DeviceRouteRule[];
+  /** A-236: the operator template to fill (an xray-json frame for the single
+   *  config, an xray-json-array one for the array); absent = the Default. */
+  frame?: Frame;
+  /**
    * XKeen / router target (`?format=xkeen`). XKeen runs xray-core on a Keenetic
    * router via a confdir split (01_log / 02_dns / 03_inbounds / 04_outbounds /
    * 05_routing ...). The router supplies its own log + transparent inbound, so
@@ -103,16 +121,6 @@ const TLS_FRAGMENT_SETTINGS: Record<string, string> = {
   interval: '10-20',
 };
 
-const RU_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'block' },
-  {
-    type: 'field',
-    domain: ['geosite:category-ru', 'geosite:category-gov-ru'],
-    outboundTag: 'direct',
-  },
-  { type: 'field', ip: ['geoip:private', 'geoip:ru'], outboundTag: 'direct' },
-];
-
 /**
  * Split DNS (R2). RU domains resolve via Yandex DNS (77.88.8.8) so RU CDNs
  * return geo-correct answers; `skipFallback` keeps those queries off the
@@ -132,18 +140,6 @@ const RU_SPLIT_DNS: Record<string, unknown> = {
     '8.8.8.8',
   ],
 };
-
-/**
- * Routing Templates (H2) - `cn-split` is the China-direct mirror of `ru-split`.
- * China is comprehensively covered by the single `geosite:cn` / `geoip:cn`
- * category (no second gov category like RU), so one domain rule, not two.
- * Ads-block, private-range-direct and the catch-all stay identical in shape.
- */
-const CN_SPLIT_RULES: ReadonlyArray<Record<string, unknown>> = [
-  { type: 'field', domain: ['geosite:category-ads-all'], outboundTag: 'block' },
-  { type: 'field', domain: ['geosite:cn'], outboundTag: 'direct' },
-  { type: 'field', ip: ['geoip:private', 'geoip:cn'], outboundTag: 'direct' },
-];
 
 /**
  * Split DNS (H2). China domains resolve via AliDNS (223.5.5.5) so CN CDNs
@@ -166,13 +162,20 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
 };
 
 // Preset selectors, shared by the single-config builder and the array (T2) so
-// both pick the same split rules / DNS from one place.
-function splitRulesFor(
-  preset: RoutingPresetId,
-): ReadonlyArray<Record<string, unknown>> | null {
-  return preset === 'ru-split' ? RU_SPLIT_RULES : preset === 'cn-split' ? CN_SPLIT_RULES : null;
+// both pick the same rules / DNS from one place.
+//
+// A-229: the rules are the preset's DeviceRouteRule list, the built-ins'
+// (BUILTIN_PRESET_RULES) or an own preset's, rendered by subscription.device-rules.ts; the
+// built-in rule arrays that lived here rendered byte for byte the same and are
+// gone. The split DNS stays per built-in: it names the resolver of the country
+// whose domains go direct, and an own preset says nothing about a country, so
+// it gets none (the client's resolver, as under proxy-all).
+function presetRules(opts: XrayJsonBuildOpts): readonly DeviceRouteRule[] {
+  return opts.ownPresetRules ?? BUILTIN_PRESET_RULES[opts.routingPreset ?? 'proxy-all'];
 }
-function splitDnsFor(preset: RoutingPresetId): Record<string, unknown> | null {
+function splitDnsFor(opts: XrayJsonBuildOpts): Record<string, unknown> | null {
+  if (opts.ownPresetRules) return null;
+  const preset = opts.routingPreset ?? 'proxy-all';
   return preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
 }
 
@@ -264,7 +267,9 @@ function buildProxyOutbound(
     streamSettings.xhttpSettings = {
       ...(e.path ? { path: e.path } : {}),
       ...(e.hostHeader ? { host: e.hostHeader } : {}),
-      mode: 'auto',
+      // The node's mode (A-133): it was 'auto' whatever the profile said, and
+      // a client on auto against a server in another mode does not connect.
+      mode: e.xhttpMode ?? 'auto',
     };
   } else if (network === 'grpc') {
     streamSettings.grpcSettings = { serviceName: e.serviceName ?? '' };
@@ -297,9 +302,10 @@ function buildProxyOutbound(
  *   1. xray-core's hy2 outbound has NO Salamander obfs field. Our RU nodes set
  *      obfsPassword (bare QUIC is DPI-throttled in RU), so on an obfs node this
  *      outbound will NOT connect via xray-core. It only works on non-obfs hy2
- *      nodes. The Remnawave эталон likely routes protocol:"hysteria" through
- *      Happ's NATIVE hy2 core (not xray-core), which does support obfs, so the
- *      real working shape must be confirmed against that эталон + a live hy2
+ *      nodes. The reference panel operators migrate from likely routes
+ *      protocol:"hysteria" through Happ's NATIVE hy2 core (not xray-core), which
+ *      does support obfs, so the real working shape must be confirmed against
+ *      that reference + a live hy2
  *      node before tester sign-off.
  *   2. xray-core has open bugs on the hy2 outbound (XTLS/Xray-core#5619).
  * Isolated here so the exact shape is one edit once the эталон lands.
@@ -339,15 +345,13 @@ export function buildXrayJson(
   endpoints: SubscriptionEndpoint[],
   opts: XrayJsonBuildOpts = {},
 ): string {
-  const xrayEps = endpoints.filter((e) => e.protocol === 'xray');
+  const xrayEps = endpoints.filter(carriedXray);
   const proxyTags: string[] = [];
   const bundle = opts.bundle ?? 'flat';
-  // Routing preset (R1a + H2). Each split preset selects its own rule array +
-  // split-DNS block; proxy-all leaves both null so the output stays
-  // byte-identical to pre-R1 builds.
-  const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules = splitRulesFor(preset);
-  const splitDns = splitDnsFor(preset);
+  // Routing preset (R1a + H2 + A-229). The preset's rules and split DNS;
+  // proxy-all has neither, so the output stays byte-identical to pre-R1 builds.
+  const deviceRules = presetRules(opts);
+  const splitDns = splitDnsFor(opts);
 
   // TLS-fragment - the fragment outbound's tag must not collide with any proxy,
   // `direct`, or `block` tag, and must exactly equal the dialerProxy value we
@@ -405,75 +409,91 @@ export function buildXrayJson(
       ]
     : [];
 
-  // forRouter (XKeen): drop log + the client SOCKS inbound; the router owns
-  // those. Keep dns (split presets), outbounds and routing.
-  const config: Record<string, unknown> = {
-    ...(opts.forRouter ? {} : { log: { loglevel: 'warning' } }),
-    ...(splitDns ? { dns: splitDns } : {}),
-    ...(opts.forRouter
-      ? {}
-      : {
-          inbounds: [
-            {
-              tag: 'socks-in',
-              port: 10808,
-              listen: '127.0.0.1',
-              protocol: 'socks',
-              settings: { auth: 'noauth', udp: true },
-            },
-          ],
-        }),
-    outbounds: [
-      ...proxyOutbounds,
-      { tag: 'direct', protocol: 'freedom' },
-      { tag: 'block', protocol: 'blackhole' },
-      // TLS-fragment - the freedom dialer the proxy outbounds tunnel through.
-      // Only appended when on, so the off path stays byte-identical.
-      ...(tlsFragment
-        ? [
-            {
-              tag: fragmentTag,
-              protocol: 'freedom',
-              settings: { fragment: { ...TLS_FRAGMENT_SETTINGS } },
-            },
-          ]
-        : []),
-    ],
-    routing: {
-      // Split presets need IPIfNonMatch so a domain-typed destination that
-      // missed every domain rule gets a second, IP-based pass (otherwise
-      // geoip:ru / geoip:cn never matches). proxy-all keeps AsIs.
-      domainStrategy: splitRules ? 'IPIfNonMatch' : 'AsIs',
-      ...(balancers ? { balancers } : {}),
-      rules: [
-        // R3-b custom rules win over presets + catch-all.
-        ...(opts.customRules ?? []),
-        // R3 custom domain lists sit below raw rules, above the preset rules.
-        ...customDomainRules,
-        ...(splitRules ?? []),
-        balancerActive
-          ? { type: 'field', network: 'tcp,udp', balancerTag: 'balancer-auto' }
-          : proxyTags.length > 0
-          ? { type: 'field', network: 'tcp,udp', outboundTag: proxyTags[0] }
-          : { type: 'field', network: 'tcp,udp', outboundTag: 'direct' },
-      ],
-    },
-  };
+  // A `proxy` rule goes where the catch-all goes: the balancer, else the first
+  // proxy; with no proxy at all it is left out (the catch-all is direct).
+  const splitRules = xrayDeviceRules(
+    deviceRules,
+    balancerActive
+      ? { balancerTag: 'balancer-auto' }
+      : proxyTags.length > 0
+        ? { outboundTag: proxyTags[0]! }
+        : null,
+  );
+
+  // A-236 step 3: all of it goes into the frame, the operator's xray-json
+  // template or the Default (templates.defaults.ts: log, the client SOCKS
+  // inbound, direct and block). forRouter (XKeen) drops log and the inbound;
+  // the router owns those.
+  const { cfg, routing } = openFrame(opts.frame ?? defaultFrame('xray-json'));
+  if (opts.forRouter) {
+    delete cfg.log;
+    delete cfg.inbounds;
+  }
+  const config = fillXrayFrame(cfg, {
+    // The panel's routing (split DNS, custom rules and lists, the preset)
+    // only where the frame asks for it.
+    dns: routing ? splitDns : null,
+    head: proxyOutbounds,
+    // TLS-fragment - the freedom dialer the proxy outbounds tunnel through.
+    // Only appended when on, so the off path stays byte-identical.
+    tail: tlsFragment
+      ? [{ tag: fragmentTag, protocol: 'freedom', settings: { fragment: { ...TLS_FRAGMENT_SETTINGS } } }]
+      : [],
+    // R3-b custom rules first, then R3 custom domain lists, then the preset.
+    rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],
+    split: routing && splitRules.length > 0,
+    balancers,
+    catchAll: balancerActive
+      ? { type: 'field', network: 'tcp,udp', balancerTag: 'balancer-auto' }
+      : proxyTags.length > 0
+        ? { type: 'field', network: 'tcp,udp', outboundTag: proxyTags[0] }
+        : { type: 'field', network: 'tcp,udp', outboundTag: 'direct' },
+  });
   if (observatory) config.observatory = observatory;
   return JSON.stringify(config, null, 2) + '\n';
 }
 
-/** A4: overwrite UUID bytes 7-8 (the 3rd hyphen-group) with a big-endian uint16
- *  route tag, e.g. tag 1 -> "...-0001-...". Xray reads those two bytes as
- *  `vlessRoute` and ignores them for authentication (documented + verified in
- *  field 2026-07-25), so the result authenticates as the SAME user but is
- *  pinned to a specific cascade exit. A malformed UUID is returned untouched. */
-export function withVlessRouteTag(uuid: string, tag: number): string {
-  const parts = uuid.split('-');
-  if (parts.length !== 5 || parts[2]!.length !== 4) return uuid;
-  parts[2] = (tag & 0xffff).toString(16).padStart(4, '0');
-  return parts.join('-');
+/**
+ * The panel's pieces into an xray frame (A-236), the same for the single
+ * config and for each element of the array:
+ *   - split DNS right after `log` (first when there is no log), unless the
+ *     frame has its own `dns`;
+ *   - the proxy outbounds before the frame's, the fragment dialer after;
+ *   - routing: `domainStrategy` (the frame's, else IPIfNonMatch under a split
+ *     preset, else AsIs), the balancers, the frame's other keys, then the rules:
+ *     the panel's, the frame's own, the catch-all last.
+ */
+function fillXrayFrame(
+  frame: Frame,
+  p: {
+    dns: Record<string, unknown> | null;
+    head: Record<string, unknown>[];
+    tail: Record<string, unknown>[];
+    rules: Record<string, unknown>[];
+    split: boolean;
+    balancers: Record<string, unknown>[] | undefined;
+    catchAll: Record<string, unknown>;
+  },
+): Frame {
+  const cfg = p.dns && frame.dns === undefined ? insertAfter(frame, 'log', 'dns', p.dns) : frame;
+  cfg.outbounds = [...p.head, ...asArray(cfg.outbounds), ...p.tail];
+  const r = asObject(cfg.routing);
+  const rest = Object.fromEntries(
+    Object.entries(r).filter(([k]) => k !== 'domainStrategy' && k !== 'balancers' && k !== 'rules'),
+  );
+  const balancers = [...(p.balancers ?? []), ...asArray(r.balancers)];
+  cfg.routing = {
+    domainStrategy: r.domainStrategy ?? (p.split ? 'IPIfNonMatch' : 'AsIs'),
+    ...(balancers.length > 0 ? { balancers } : {}),
+    ...rest,
+    rules: [...p.rules, ...asArray(r.rules), p.catchAll],
+  };
+  return cfg;
 }
+
+/** A4: the route tag in UUID bytes 7-8; lives with the one expansion rule
+ *  (cascade-entries.ts), kept importable from here. */
+export { withVlessRouteTag } from '../cascade-entries.js';
 
 // `cascadeExitLabel` lived here until 2026-08-15. It suffixed a label with the
 // host remark whenever the host was named, which it did per endpoint, blind to
@@ -512,13 +532,13 @@ export function buildXrayJsonArray(
   // matches the эталон. hy2 is FIELD-PENDING (see buildHysteriaOutbound). Other
   // protocols are skipped, this is an xray/hy2 surface.
   const supported = endpoints.filter(
-    (e) => e.protocol === 'xray' || e.protocol === 'hysteria',
+    (e) => carriedXray(e) || e.protocol === 'hysteria',
   );
-  const preset = opts.routingPreset ?? 'proxy-all';
-  const splitRules = splitRulesFor(preset);
-  const splitDns = splitDnsFor(preset);
+  const deviceRules = presetRules(opts);
+  const splitDns = splitDnsFor(opts);
   const tlsFragment = opts.tlsFragment === true;
   const cdl = opts.customDomainLists;
+  const frame = opts.frame ?? defaultFrame('xray-json-array');
 
   // Builds one standalone config. `remark` is the client-facing server label:
   // the node name normally, the exit name for an A4 route-profile expansion.
@@ -535,18 +555,9 @@ export function buildXrayJsonArray(
       ? buildProxyOutbound(e, applyFragment, fragmentTag, tag)
       : buildHysteriaOutbound(e, tag);
 
-    const outbounds: Record<string, unknown>[] = [
-      primary,
-      { tag: 'direct', protocol: 'freedom' },
-      { tag: 'block', protocol: 'blackhole' },
-    ];
-    if (applyFragment) {
-      outbounds.push({
-        tag: fragmentTag,
-        protocol: 'freedom',
-        settings: { fragment: { ...TLS_FRAGMENT_SETTINGS } },
-      });
-    }
+    const fragment: Record<string, unknown>[] = applyFragment
+      ? [{ tag: fragmentTag, protocol: 'freedom', settings: { fragment: { ...TLS_FRAGMENT_SETTINGS } } }]
+      : [];
 
     // R3 custom domain lists, this config's own outbound is the only proxy target.
     const customDomainRules: Record<string, unknown>[] = cdl
@@ -557,51 +568,46 @@ export function buildXrayJsonArray(
         ]
       : [];
 
-    const rules: Record<string, unknown>[] = [
-      // Precedence mirrors buildXrayJson: raw custom rules, then domain lists,
-      // then the split preset. Then the per-config contract (эталон Remnawave):
-      // torrent off the tunnel, everything else through this proxy.
-      ...(opts.customRules ?? []),
-      ...customDomainRules,
-      ...(splitRules ?? []),
-      { type: 'field', protocol: ['bittorrent'], outboundTag: 'direct' },
-      { type: 'field', network: 'tcp,udp', outboundTag: tag },
-    ];
+    // A `proxy` rule goes to this config's own proxy.
+    const splitRules = xrayDeviceRules(deviceRules, { outboundTag: tag });
 
-    return {
-      remarks: remark,
-      log: { loglevel: 'warning' },
-      ...(splitDns ? { dns: splitDns } : {}),
-      inbounds: [
-        {
-          tag: 'socks-in',
-          port: 10808,
-          listen: '127.0.0.1',
-          protocol: 'socks',
-          settings: { auth: 'noauth', udp: true },
-        },
-      ],
-      outbounds,
-      routing: {
-        domainStrategy: splitRules ? 'IPIfNonMatch' : 'AsIs',
-        rules,
+    // A-236 step 3: each element is the frame (the operator's xray-json-array
+    // template or the Default: log, SOCKS inbound, direct and block, the
+    // torrent-off rule), with the remark on top, this endpoint's outbound
+    // first, and the catch-all through it last. Precedence of the rules
+    // mirrors buildXrayJson: custom rules, domain lists, the preset, then the
+    // frame's own (the Default's torrent rule).
+    const { cfg, routing } = openFrame(frame);
+    delete cfg.remarks;
+    // A-236 step 6: the host's line under the server name, `meta` beside
+    // `remarks` as Happ reads it (happ.su dev-docs/app-management, read 24.10),
+    // as text; only on the endpoints the route left it on (the apps that show
+    // one). A frame's own `meta` keeps its other keys.
+    let meta: Record<string, unknown> | undefined;
+    if (e.serverDescription) {
+      const own = cfg.meta && typeof cfg.meta === 'object' && !Array.isArray(cfg.meta) ? (cfg.meta as Record<string, unknown>) : {};
+      meta = { ...own, serverDescription: e.serverDescription };
+      delete cfg.meta;
+    }
+    return fillXrayFrame(
+      { remarks: remark, ...(meta ? { meta } : {}), ...cfg },
+      {
+        dns: routing ? splitDns : null,
+        head: [primary],
+        tail: fragment,
+        rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],
+        split: routing && splitRules.length > 0,
+        balancers: undefined,
+        catchAll: { type: 'field', network: 'tcp,udp', outboundTag: tag },
       },
-    };
+    );
   };
 
   // A4: an xray endpoint fronting a balancer cascade expands into one config per
   // exit (tag in UUID bytes 7-8), each labelled by its exit. Everything else
   // (hy2, or an xray endpoint with no exits) stays a single config as before.
-  const configs = supported.flatMap((e) => {
-    if (e.protocol === 'xray' && !isPlainXray(e) && e.cascadeExits && e.cascadeExits.length > 0) {
-      return e.cascadeExits.map((profile) =>
-        // The label is already unique across the subscription, made so once for
-        // every format rather than guessed per format (see
-        // disambiguateCascadeLabels in subscription.service).
-        makeConfig({ ...e, uuid: withVlessRouteTag(e.uuid, profile.tag) }, profile.label),
-      );
-    }
-    return [makeConfig(e, e.nodeName)];
-  });
+  // A-262: the routes of a cascade entry come in expanded, one endpoint each,
+  // before any format (expandCascadeEntry in generateSubscription).
+  const configs = supported.map((e) => makeConfig(e, e.routeLabel ?? e.nodeName));
   return JSON.stringify(configs, null, 2) + '\n';
 }

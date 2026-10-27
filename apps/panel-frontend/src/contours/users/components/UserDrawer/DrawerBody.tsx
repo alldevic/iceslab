@@ -104,8 +104,10 @@ export function DrawerBody({
               already in someone's client. */}
           {ui.isEdit && user && (
             <>
-              <DeviceList userId={user.id} limit={ui.form.values.hwidDeviceLimit} />
-              {onRevoke && <SubscriptionCard user={user} onRevoke={onRevoke} />}
+              <DeviceList userId={user.id} cap={ui.deviceCap} />
+              {onRevoke && (
+                <SubscriptionCard user={user} onRevoke={onRevoke} endpoints={ui.endpointsQuery.data?.endpoints} />
+              )}
             </>
           )}
         </Box>
@@ -116,9 +118,8 @@ export function DrawerBody({
             strategy={ui.form.values.trafficLimitStrategy}
             expiresAt={ui.expiresAt}
             expireDays={ui.form.values.expireDays}
-            routingPreset={ui.form.values.routingPreset}
+            routing={ui.routing}
             routingClash={routingClash}
-            routingSource={ui.squadRoutingSource}
             isEdit={ui.isEdit}
             onEditTraffic={() => trafficRef.current?.focus()}
           />

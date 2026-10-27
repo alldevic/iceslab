@@ -73,11 +73,12 @@ func TestRenderCaddyfileShape(t *testing.T) {
 		{Username: "alice", Password: "secret-a"},
 		{Username: "bob", Password: "secret-b"},
 	}
-	out, err := renderCaddyfile(validInbound(), users)
+	out, err := renderCaddyfile(validInbound(), users, DefaultAdminSocket)
 	if err != nil {
 		t.Fatalf("renderCaddyfile: %v", err)
 	}
 	for _, want := range []string{
+		"admin unix//run/iceslab/caddy.sock",
 		":443, n1.example.com {",
 		"tls ops@example.com",
 		"forward_proxy {",
@@ -95,20 +96,41 @@ func TestRenderCaddyfileShape(t *testing.T) {
 	}
 }
 
+// A-265: Caddy writes handler errors of 500 and up (a forward_proxy dial that
+// failed) to http.log.error with the client's remote_ip and the destination
+// host. The global block leaves that logger out of the default one, and the
+// site writes no access log.
+func TestRenderCaddyfileKeepsClientsOutOfTheLog(t *testing.T) {
+	out, err := renderCaddyfile(validInbound(), []User{{Username: "alice", Password: "secret-a"}}, DefaultAdminSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := out[:strings.Index(out, "\n}\n")+3]
+	if !strings.Contains(global, "\tlog default {\n\t\texclude http.log.error\n\t}\n") {
+		t.Errorf("the global block does not leave http.log.error out:\n%s", global)
+	}
+	site := out[len(global):]
+	for _, line := range strings.Split(site, "\n") {
+		if strings.TrimSpace(line) == "log" || strings.HasPrefix(strings.TrimSpace(line), "log ") {
+			t.Errorf("the site block turns an access log on: %q\n%s", line, out)
+		}
+	}
+}
+
 func TestRenderCaddyfileSortsUsers(t *testing.T) {
 	// Same users in different order should produce byte-identical output,
 	// otherwise `caddy reload` flaps even on no-op user-set changes.
 	users1 := []User{{Username: "bob", Password: "b"}, {Username: "alice", Password: "a"}}
 	users2 := []User{{Username: "alice", Password: "a"}, {Username: "bob", Password: "b"}}
-	out1, _ := renderCaddyfile(validInbound(), users1)
-	out2, _ := renderCaddyfile(validInbound(), users2)
+	out1, _ := renderCaddyfile(validInbound(), users1, DefaultAdminSocket)
+	out2, _ := renderCaddyfile(validInbound(), users2, DefaultAdminSocket)
 	if out1 != out2 {
 		t.Errorf("expected deterministic order; got:\n--- a:\n%s\n--- b:\n%s", out1, out2)
 	}
 }
 
 func TestRenderCaddyfileNoUsers(t *testing.T) {
-	out, err := renderCaddyfile(validInbound(), nil)
+	out, err := renderCaddyfile(validInbound(), nil, DefaultAdminSocket)
 	if err != nil {
 		t.Fatalf("renderCaddyfile: %v", err)
 	}
@@ -131,7 +153,7 @@ func TestRenderCaddyfileNoUsers(t *testing.T) {
 
 func TestRenderCaddyfilePropagatesUserError(t *testing.T) {
 	bad := []User{{Username: "ok", Password: "ok"}, {Username: "x x", Password: "p"}}
-	if _, err := renderCaddyfile(validInbound(), bad); err == nil {
+	if _, err := renderCaddyfile(validInbound(), bad, DefaultAdminSocket); err == nil {
 		t.Errorf("expected user-validation error to propagate")
 	}
 }
@@ -139,8 +161,18 @@ func TestRenderCaddyfilePropagatesUserError(t *testing.T) {
 func TestRenderCaddyfilePropagatesInboundError(t *testing.T) {
 	bad := validInbound()
 	bad.TLSEmail = ""
-	if _, err := renderCaddyfile(bad, nil); err == nil {
+	if _, err := renderCaddyfile(bad, nil, DefaultAdminSocket); err == nil {
 		t.Errorf("expected inbound-validation error to propagate")
+	}
+}
+
+// A-118: the admin API never falls back to TCP. A socket path the Caddyfile
+// cannot carry is refused, not rendered into a broken global block.
+func TestRenderCaddyfileRefusesABadAdminSocket(t *testing.T) {
+	for _, sock := range []string{"", "caddy.sock", "/run/x y.sock", "/run/x}\n\tadmin localhost:2019"} {
+		if _, err := renderCaddyfile(validInbound(), nil, sock); err == nil {
+			t.Errorf("admin socket %q accepted", sock)
+		}
 	}
 }
 
