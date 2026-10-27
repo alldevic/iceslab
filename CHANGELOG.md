@@ -69,6 +69,29 @@ All notable changes to Iceslab are documented here. Format loosely follows
   HWID ones, so a shop's device count covers both; deleting one there revokes
   it.
 
+- **A node that answers but carries nothing is reported.** The stats poll
+  compares each node's traffic with its last 24 hours: a deep byte drop together
+  with most of its users gone, sustained for three polls (about 90 seconds),
+  raises `node.anomaly` once per incident, and the first healthy poll after it
+  `node.anomaly-cleared`. Both reach the admin Telegram chat and the webhooks.
+  The node's status alert never saw this: a node blocked on its user port
+  while its agent still answers stays online. A node whose agent does not
+  report per-core totals, or a poll in which a core could not read its
+  counters, is not judged at all, rather than read as healthy or as dark.
+- **Cold-pool hotswap.** With `NODE_POOL_HOTSWAP_ENABLED=true`, a node whose
+  traffic incident is still open after 5 minutes is replaced by a spare: a
+  node switched out of service and never installed, chosen away from the
+  replaced node's AS and provider (`hardening.pool`). The spare is installed
+  with the node playbook (`NODE_POOL_ANSIBLE_PLAYBOOK`) with every core of
+  the node it replaces, takes its bindings, node policy, resolver and WARP
+  egress (registered anew), and the replaced node is switched out of service
+  and never offered as a spare again. Every outcome reaches Telegram, and a
+  swap goes out as `node.replaced`. Off by default.
+- A node can be switched out of service on its page ("In service", or
+  `status: "disabled"` in `PUT /api/nodes/:id`): it leaves every subscription
+  and the panel stops polling it, while its agent stays up. Switching it back
+  returns it as `unknown` until the next poll.
+
 ### Fixed
 
 - A user whose term ends while they are `limited` (quota used up) now

@@ -61,6 +61,22 @@ export interface DomainEventMap {
   // job is to drop read caches, because once liveness filters the subscription
   // a stale cache keeps handing out a node that is already down.
   'node.status-changed':  { nodeId: string; from: string; to: string };
+  // node.anomaly → the traffic sensor (stats.anomaly.ts) saw a node that still
+  // answers stop carrying traffic: a deep, sustained drop in bytes AND in the
+  // users moving them. Once per incident. node.anomaly-cleared → the first
+  // healthy poll after one. Neither touches config or caches.
+  'node.anomaly':         {
+    nodeId: string;
+    severity: 'warning' | 'critical';
+    bytesThisPoll: number;
+    expectedBaseline: number;
+    activeUsers: number;
+    droppedUsers: number;
+  };
+  'node.anomaly-cleared': { nodeId: string };
+  // node.replaced → the cold-pool hotswap (modules/node-pool) promoted a spare
+  // for a node confirmed dark and retired it. `notes`: what did not carry.
+  'node.replaced':        { nodeId: string; spareId: string; carried: number; total: number; notes: string[] };
   // host.changed → a Host row (the per-binding public endpoint override:
   // address, port, priority, enabled, disableForFormats) was created, edited,
   // deleted or reordered. Affects subscription OUTPUT only, never the config

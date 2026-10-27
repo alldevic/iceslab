@@ -146,6 +146,21 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => (v === '' ? undefined : v)),
 
+  // Cold-pool hotswap (modules/node-pool): a node the traffic sensor confirms
+  // dark is replaced by a diverse spare from the cold pool (promote, carry its
+  // bindings, retire). Off by default; off, nothing subscribes.
+  NODE_POOL_HOTSWAP_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // The node playbook the promote runs (deploy/ansible/site.yml). Empty: the
+  // promote logs a dry run instead of installing.
+  NODE_POOL_ANSIBLE_PLAYBOOK: z.string().default(''),
+  // The inventory it runs against; the spare's node name must be a host in it
+  // (--limit <name>). Empty: ansible's default inventory.
+  NODE_POOL_ANSIBLE_INVENTORY: z.string().default(''),
+  NODE_POOL_ANSIBLE_BIN: z.string().default('ansible-playbook'),
+
   // Remnawave-compat facade (docs/remnawave-compat.md): a Remnawave 3.x-shaped
   // API at /<prefix>/api/* for shops and bots written against Remnawave. Off by
   // default; off, none of its routes are registered.

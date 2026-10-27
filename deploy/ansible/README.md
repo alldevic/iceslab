@@ -49,3 +49,20 @@ The play ends by checking that the agent listens on its port and its unit is
 active. It does not call the agent: that needs the panel's client certificate.
 
 Requires `ansible-core` 2.16 or later, builtins only.
+
+## Run by the panel: cold-pool hotswap
+
+With `NODE_POOL_HOTSWAP_ENABLED=true` and `NODE_POOL_ANSIBLE_PLAYBOOK` pointing
+at `site.yml`, the panel runs this play itself to install a spare from the cold
+pool, limited to that one host (`--limit <node name>`). The spare's node name
+in the panel must therefore be its host name in the inventory
+(`NODE_POOL_ANSIBLE_INVENTORY`), and the panel's host needs `ansible-playbook`
+and SSH to it; the panel image ships neither. Per host, keep the repo and ref
+in the inventory: the panel passes only `iceslab_panel_url`,
+`iceslab_bootstrap_token`, `iceslab_engines` (the cores of the node being
+replaced) and, when set on the spare, `iceslab_panel_ip` and the hardening
+toggles, as an extra-vars file.
+
+A spare is a node created in the panel, switched out of service (status
+`disabled`) and never installed. Its `hardening.pool` labels (`asn`,
+`provider`) steer the choice away from the replaced node's network.

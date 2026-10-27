@@ -210,6 +210,9 @@ export const nodes = {
     multiplierRequired: 'Enter a multiplier, 1: as is',
     maxUsers: 'User ceiling',
     maxUsersDesc: 'Empty: no ceiling. Otherwise a whole number from 1',
+    inService: 'In service',
+    inServiceDesc:
+      'Off: the node is in no subscription and the panel stops polling it; its agent stays up. Spares of the cold pool sit like this, and a node replaced by a spare is left like this.',
     policy: 'Node policy',
     policyDesc:
       'The ordered rules this node uses to decide which door traffic leaves by. One policy can sit on several nodes.',

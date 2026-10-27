@@ -34,7 +34,7 @@ import { listNodePolicies, policyFitRefusal as readPolicyRefusal } from '@/lib/d
 import { listSquads } from '@/lib/domain/squads';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { defaults, egressOf, nodeEnginesPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { defaults, egressOf, nodeEnginesPut, statusPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nodeEnginesRefusal, type NodeEnginesRefusal } from '@/contours/nodes/lib/nodeCreateForm';
 import { AMBER, DIM, MOSS } from '@/contours/nodes/lib/colors';
@@ -216,6 +216,7 @@ export function useNodeEditForm() {
         // Метка: у сервера старше поля прежний `protocol` из селекта; у
         // сервера с полем ни ядер, ни метки (nodeEnginesPut, E42).
         ...enginesBody,
+        ...statusPut(node ?? null, form.values.inService),
       });
     },
     onSuccess: () => {

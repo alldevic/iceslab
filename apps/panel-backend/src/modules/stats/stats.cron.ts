@@ -3,6 +3,8 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { creditDeviceTraffic } from '../wg-devices/wg-devices.stats.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
+import { NodeAnomalySensor, type SensorObservation } from './stats.anomaly.js';
 import {
   computeNodeStatsWrites,
   computeNodeTotalsFromCores,
@@ -26,6 +28,31 @@ const totalSnapshot = new Map<string, { in: bigint; out: bigint }>();
  * backend restart baselines each cumulative adapter at a zero delta.
  */
 const adapterTotalSnapshot = new Map<string, Map<string, { in: bigint; out: bigint }>>();
+
+/** The traffic-anomaly sensor (stats.anomaly.ts), fed once per node per poll. */
+const anomalySensor = new NodeAnomalySensor();
+// node-stats-poll runs every 30s (scheduler.queue.ts) → polls per 24h.
+const POLLS_PER_24H = (24 * 60 * 60) / 30;
+
+/**
+ * What one poll tells the sensor. Judged only when the agent says, core by
+ * core, that every core answered: a core that did not has its users missing
+ * from the list, and an agent too old to say cannot tell a missed read from a
+ * blackout either. Active users are the ones that MOVED bytes, not the length
+ * of the list: a cumulative core (xray) keeps listing every user it has seen,
+ * with counters that stop growing when the node goes dark.
+ */
+export function sensorObservationOf(
+  res: { cores?: { noData?: boolean }[] },
+  users: readonly { bytesIn?: number; bytesOut?: number }[],
+  thisPollBytes: number,
+  baselinePerPoll: number,
+): SensorObservation {
+  if (!res.cores || res.cores.length === 0) return { kind: 'unjudged', reason: 'agent' };
+  if (res.cores.some((c) => c.noData)) return { kind: 'unjudged', reason: 'no-data' };
+  const activeUsers = users.filter((u) => (u.bytesIn || 0) + (u.bytesOut || 0) > 0).length;
+  return { kind: 'judged', thisPollBytes, activeUsers, baselinePerPoll };
+}
 
 /**
  * Per-user per-poll sanity ceiling for ingested traffic deltas. node-stats-poll
@@ -96,6 +123,20 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
   // dashboard "Top users today" groups node_user_usage_history by userId WHERE
   // date = today, so this must match startOfToday()'s UTC-midnight shape.
   const dateStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
+
+  // The sensor's baseline: the last 24h of each node's traffic, as bytes per
+  // poll. One grouped read; a node with no recent history has no baseline and
+  // is never flagged.
+  const baselineRows = await prisma.nodeUsageHistory.groupBy({
+    by: ['nodeId'],
+    where: { hour: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } },
+    _sum: { downloadBytes: true, uploadBytes: true },
+  });
+  const baselinePerPoll = new Map<string, number>();
+  for (const r of baselineRows) {
+    const sum = Number(r._sum.downloadBytes ?? 0n) + Number(r._sum.uploadBytes ?? 0n);
+    baselinePerPoll.set(r.nodeId, sum / POLLS_PER_24H);
+  }
 
   let ok = 0;
   let failed = 0;
@@ -325,6 +366,26 @@ export async function pollNodeStats(): Promise<{ ok: number; failed: number }> {
         await creditDeviceTraffic(res.users ?? [], now).catch((err) => {
           getLogger().warn(`[cron] node-stats-poll ${node.id}: device traffic not credited: ${err instanceof Error ? err.message : String(err)}`);
         });
+        // After the commit: a poll whose writes rolled back is read again on
+        // the next tick, and the sensor should not see its bytes twice.
+        const outcome = anomalySensor.observe(
+          node.id,
+          sensorObservationOf(res, userList, Number(w.nodeDownload + w.nodeUpload), baselinePerPoll.get(node.id) ?? 0),
+        );
+        if (outcome?.kind === 'fired') {
+          getLogger().warn(
+            `[cron] node-anomaly ${node.id}: ${outcome.incident.bytesThisPoll}B this poll against ${outcome.incident.expectedBaseline}B, ${outcome.incident.droppedUsers} users gone`,
+          );
+          eventBus.emit('node.anomaly', { nodeId: node.id, ...outcome.incident });
+        } else if (outcome?.kind === 'cleared') {
+          eventBus.emit('node.anomaly-cleared', { nodeId: node.id });
+        } else if (outcome?.kind === 'unjudged') {
+          getLogger().info(
+            outcome.reason === 'agent'
+              ? `[cron] node-anomaly ${node.id}: not judged, the agent does not report its cores' totals`
+              : `[cron] node-anomaly ${node.id}: not judged while a core cannot read its counters`,
+          );
+        }
         ok++;
       } catch (err) {
         failed++;

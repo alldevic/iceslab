@@ -514,9 +514,26 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   if (input.domain !== undefined) data.domain = input.domain;
   // G - Zashchita hardening. Prisma.JsonNull (not raw null) so clearing the
   // jsonb column maps to SQL NULL unambiguously (avoids DbNull/JsonNull mixup).
+  // The cold-pool labels ride in the same blob and no form edits them: a body
+  // whose hardening does not name `pool` keeps the stored labels (a cleared
+  // blob too), or saving the node page would put a burned IP back in the pool.
   if (input.hardening !== undefined) {
-    data.hardening =
-      (input.hardening as Prisma.InputJsonValue | null) ?? Prisma.JsonNull;
+    const storedPool = (existing.hardening as { pool?: unknown } | null)?.pool;
+    const hardening =
+      storedPool !== undefined && !(input.hardening && 'pool' in input.hardening)
+        ? { ...(input.hardening ?? {}), pool: storedPool }
+        : input.hardening;
+    data.hardening = (hardening as Prisma.InputJsonValue | null) ?? Prisma.JsonNull;
+  }
+  // The operator's half of the status. Only a real change is written, and
+  // `active` only moves a disabled node: an online one stays what the poller
+  // said.
+  if (input.status === 'disabled' && existing.status !== 'disabled') {
+    data.status = 'disabled';
+    data.lastStatusChange = new Date();
+  } else if (input.status === 'active' && existing.status === 'disabled') {
+    data.status = 'unknown';
+    data.lastStatusChange = new Date();
   }
   // Э3 F: the node's resolver. Prisma.JsonNull for the same reason as hardening
   // above: clearing a jsonb column needs JsonNull, not raw null.
@@ -595,6 +612,9 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   // config and restart the protocol server (see the event's declaration).
   if (Object.keys(data).length > 0) {
     eventBus.emit('node.changed', { nodeId: id });
+  }
+  if (data.status !== undefined) {
+    eventBus.emit('node.status-changed', { nodeId: id, from: existing.status, to: updated.status });
   }
 
   return mapNodeToPublic(updated);

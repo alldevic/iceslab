@@ -22,6 +22,8 @@ export interface FormValues {
    *  правят (E42, 2359c7e), состав сообщает нода по командам «Ядер». Пусто,
    *  если сервер поля не знает: тогда на экране прежний селект протокола. */
   engines: EngineName[];
+  /** В работе: false = статус `disabled` (вне подписок и опроса). */
+  inService: boolean;
 }
 
 /**
@@ -36,6 +38,16 @@ export interface FormValues {
  */
 export function nodeEnginesPut(known: boolean, protocol: NodeProtocol): { protocol?: NodeProtocol } {
   return known ? {} : { protocol };
+}
+
+/**
+ * Статус в PUT ноды: только когда переключатель «В работе» сдвинут против
+ * сохранённого. Иначе ничего: `active` у ноды в работе ничего не меняет, но и
+ * слать его незачем.
+ */
+export function statusPut(node: Pick<Node, 'status'> | null, inService: boolean): { status?: 'active' | 'disabled' } {
+  if (!node || inService === (node.status !== 'disabled')) return {};
+  return { status: inService ? 'active' : 'disabled' };
 }
 
 /**
@@ -75,6 +87,7 @@ export function defaults(node: Node | null, decimalComma = false): FormValues {
     policyId: node?.policyId ?? '',
     coreVersions: { ...(node?.coreVersions ?? {}) },
     engines: [...(node?.intendedEngines ?? [])],
+    inService: node?.status !== 'disabled',
   };
 }
 

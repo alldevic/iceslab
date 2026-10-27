@@ -8,6 +8,7 @@ import { registerUserEventHandlers } from './modules/users/users.events.js';
 import { registerNodeEventHandlers } from './modules/nodes/nodes.events.js';
 import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events.js';
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
+import { registerNodePoolHandlers } from './modules/node-pool/pool.service.js';
 import { registerRemnawaveWebhookEmitter } from './modules/remnawave-compat/remnawave.webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
@@ -55,6 +56,7 @@ async function start() {
     registerNodeEventHandlers();
     registerInboundEventHandlers();
     registerWebhookEventHandlers();
+    registerNodePoolHandlers();
     // Remnawave-compat: no-op unless the facade and its webhook are configured.
     registerRemnawaveWebhookEmitter();
     // B6 - invalidate the /sub binding cache on profile/binding/node changes.

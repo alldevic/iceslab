@@ -1,5 +1,5 @@
 import { Caption } from '@/contours/nodes/components/NodeEdit/Caption';
-import { Box, NumberInput, Select, Stack, Text, TextInput } from '@mantine/core';
+import { Box, NumberInput, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { CARD, CYAN, HAIRLINE } from '@/contours/nodes/lib/colors';
 import { COUNTRY_OPTIONS } from '@/lib/domain/countries';
 import { FIELD } from '@/contours/nodes/lib/fieldStyles';
@@ -156,6 +156,12 @@ export function NodeParamsForm({
                     {...form.getInputProps('maxUsers')}
                   />
                 </Box>
+                <Switch
+                  label={t('nodeEdit.inService')}
+                  description={t('nodeEdit.inServiceDesc')}
+                  checked={form.values.inService}
+                  onChange={(e) => form.setFieldValue('inService', e.currentTarget.checked)}
+                />
                 {/* The region list did not arrive: said, not an empty picker. */}
                 {regionsFailure && <LoadFailedLine message={regionsFailure.message} onRetry={regionsFailure.onRetry} />}
 

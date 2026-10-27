@@ -7,6 +7,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { NodeTransport } from '../nodes/nodes.transport.js';
+import { eventBus } from '../../lib/infra/event-bus.js';
 import { pollNodeStats } from './stats.cron.js';
 
 // B3 integration: exercises the bulk `unnest` upsert SQL against a real
@@ -309,5 +310,133 @@ describe('pollNodeStats bulk upsert (B3, integration)', () => {
       await pollNodeStats();
       expect((await prisma.userTraffic.findUnique({ where: { userId: tg } }))?.onlineAt ?? null).toBeNull();
     });
+  });
+});
+
+describe('pollNodeStats anomaly sensor (integration)', () => {
+  /** A 24h baseline well above the sensor's floor: 4 GB in a past hour. */
+  async function seedBaseline(nodeId: string) {
+    const pastHour = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    pastHour.setUTCMinutes(0, 0, 0);
+    await prisma.nodeUsageHistory.create({
+      data: { nodeId, hour: pastHour, downloadBytes: 3_000_000_000n, uploadBytes: 1_000_000_000n },
+    });
+  }
+
+  /** A delta core (awg) that reports its total, as an agent with `cores` does. */
+  function deltaPoll(users: { userId: string; bytes: number }[], over: Partial<GetStatsResponse> = {}): GetStatsResponse {
+    const total = users.reduce((a, u) => a + u.bytes, 0);
+    return {
+      users: users.map((u) => ({ userId: u.userId, bytesIn: u.bytes, bytesOut: 0, cumulative: false })),
+      uptime: 1,
+      totalBytesIn: total,
+      totalBytesOut: 0,
+      cores: [{ protocol: 'amneziawg', engine: 'amneziawg', bytesIn: total, bytesOut: 0, cumulative: false }],
+      ...over,
+    };
+  }
+
+  async function tenUsers(prefix: string) {
+    const users: string[] = [];
+    for (let i = 0; i < 10; i++) users.push(await createUser(`${prefix}${i}`));
+    return users;
+  }
+
+  it('fires node.anomaly once after a sustained correlated drop, and clears when users return', async () => {
+    const nodeId = await createNode('ru-1', '10.0.0.9:8443');
+    const users = await tenUsers('anon');
+    await seedBaseline(nodeId);
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const events = (name: string) => emitSpy.mock.calls.filter((c) => c[0] === name);
+
+    const healthy = () => mockStats(deltaPoll(users.map((userId) => ({ userId, bytes: 300_000 }))));
+    const drop = () => mockStats(deltaPoll([{ userId: users[0]!, bytes: 150 }]));
+
+    healthy(); await pollNodeStats();
+    drop(); await pollNodeStats();
+    drop(); await pollNodeStats();
+    expect(events('node.anomaly')).toHaveLength(0);
+    drop(); await pollNodeStats();
+    expect(events('node.anomaly')).toHaveLength(1);
+    expect(events('node.anomaly')[0]![1]).toMatchObject({ nodeId, severity: 'critical', activeUsers: 1 });
+    expect((events('node.anomaly')[0]![1] as { droppedUsers: number }).droppedUsers).toBeGreaterThanOrEqual(5);
+
+    drop(); await pollNodeStats();
+    expect(events('node.anomaly')).toHaveLength(1);
+    healthy(); await pollNodeStats();
+    expect(events('node.anomaly-cleared')).toEqual([['node.anomaly-cleared', { nodeId }]]);
+  });
+
+  // A cumulative core (xray) keeps listing every user it has seen, with
+  // counters that stop growing when the node goes dark. Counting the list
+  // instead of the users who moved bytes would leave the breadth signal flat.
+  it('fires on a cumulative core, where the node keeps listing users that stopped moving', async () => {
+    const nodeId = await createNode('ru-cum', '10.0.0.11:8443');
+    const users = await tenUsers('cumanon');
+    await seedBaseline(nodeId);
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+
+    const cumPoll = (perUser: number): GetStatsResponse => ({
+      users: users.map((id) => ({ userId: id, bytesIn: perUser, bytesOut: 0, cumulative: true, protocol: 'xray', engine: 'xray' })),
+      uptime: 1,
+      totalBytesIn: 0,
+      totalBytesOut: 0,
+      cumulative: true,
+      cores: [{ protocol: 'xray', engine: 'xray', bytesIn: perUser * users.length, bytesOut: 0, cumulative: true }],
+    });
+
+    // The first poll only baselines the cumulative counters.
+    mockStats(cumPoll(1_000_000)); await pollNodeStats();
+    mockStats(cumPoll(2_000_000)); await pollNodeStats();
+    mockStats(cumPoll(3_000_000)); await pollNodeStats();
+    expect(anomalies()).toHaveLength(0);
+
+    for (let i = 0; i < 3; i++) {
+      mockStats(cumPoll(3_000_000));
+      await pollNodeStats();
+    }
+    expect(anomalies()).toHaveLength(1);
+    expect(anomalies()[0]![1]).toMatchObject({ nodeId, activeUsers: 0 });
+  });
+
+  // An agent too old to report per-core totals cannot tell a core that missed
+  // its read from a blackout. It is "not reporting", never "all is well", and
+  // never a false alarm either.
+  it('does not judge an agent that sends no per-core totals', async () => {
+    const nodeId = await createNode('ru-old', '10.0.0.12:8443');
+    const users = await tenUsers('oldanon');
+    await seedBaseline(nodeId);
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+
+    mockStats(deltaPoll(users.map((userId) => ({ userId, bytes: 300_000 })), { cores: undefined }));
+    await pollNodeStats();
+    for (let i = 0; i < 5; i++) {
+      mockStats(deltaPoll([], { cores: undefined }));
+      await pollNodeStats();
+    }
+    expect(emitSpy.mock.calls.filter((c) => String(c[0]).startsWith('node.anomaly'))).toHaveLength(0);
+  });
+
+  it('does not count a poll in which a core could not read its counters', async () => {
+    const nodeId = await createNode('ru-nodata', '10.0.0.13:8443');
+    const users = await tenUsers('ndanon');
+    await seedBaseline(nodeId);
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const anomalies = () => emitSpy.mock.calls.filter((c) => c[0] === 'node.anomaly');
+    const noData: GetStatsResponse = {
+      users: [],
+      uptime: 1,
+      totalBytesIn: 0,
+      totalBytesOut: 0,
+      cores: [{ protocol: 'amneziawg', engine: 'amneziawg', bytesIn: 0, bytesOut: 0, cumulative: false, noData: true }],
+    };
+
+    mockStats(deltaPoll(users.map((userId) => ({ userId, bytes: 300_000 })))); await pollNodeStats();
+    for (let i = 0; i < 5; i++) {
+      mockStats(noData);
+      await pollNodeStats();
+    }
+    expect(anomalies()).toHaveLength(0);
   });
 });

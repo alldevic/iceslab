@@ -388,6 +388,12 @@ export interface UpdateNodeInput {
    * CORE_VERSION_NOT_LISTED с `problems`, см. `coreVersionRefusal`.
    */
   coreVersions?: Partial<Record<CoreComponent, string | null>> | null;
+  /**
+   * The operator's half of the status. `disabled` takes the node out of every
+   * subscription and out of the poller; `active` brings a disabled node back
+   * as `unknown`. The other statuses are the poller's and are refused.
+   */
+  status?: 'active' | 'disabled';
 }
 
 /**

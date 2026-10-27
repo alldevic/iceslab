@@ -45,6 +45,18 @@ export const HardeningSchema = z
     fail2ban: z.boolean().optional(),
     realisticFallback: z.boolean().optional(),
     sshAllowlist: z.array(SshAllowEntrySchema).max(16).optional(),
+    // Cold-pool labels (modules/node-pool), read by no installer flag.
+    // asn/provider steer the spare choice away from the burned node's network;
+    // burned marks an IP retired by a swap, never promoted again. Kept by an
+    // edit whose hardening does not mention them (updateNode).
+    pool: z
+      .object({
+        asn: z.string().max(32).optional(),
+        provider: z.string().max(64).optional(),
+        burned: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .nullish();
@@ -209,6 +221,13 @@ export const UpdateNodeSchema = z.object({
   // pin, left out is untouched; null for the whole map = every pin. No
   // .default(): an absent key must reach the service as absent.
   coreVersions: CoreVersionsPatchSchema.optional(),
+  // The half of `status` an operator owns. online / degraded / unreachable /
+  // unknown are the poller's answer about the machine and are not settable.
+  // `disabled` takes the node out of every subscription and out of the poller
+  // (its agent hears `disabled` on its heartbeat and stays up); it is also how
+  // a node sits in the cold pool, and what a hotswap leaves a burned node in.
+  // `active` brings a disabled node back as `unknown`, and the poller decides.
+  status: z.enum(['active', 'disabled']).optional(),
 });
 export type UpdateNodeInput = z.infer<typeof UpdateNodeSchema>;
 
