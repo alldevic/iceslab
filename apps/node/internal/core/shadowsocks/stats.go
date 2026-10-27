@@ -93,15 +93,3 @@ func parseStatName(name string) (userID, direction string, ok bool) {
 	}
 	return parts[1], parts[3], true
 }
-
-func parseInt64String(s string) (int64, error) {
-	var n int64
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("invalid stat value %q", s)
-		}
-		n = n*10 + int64(c-'0')
-	}
-	return n, nil
-}

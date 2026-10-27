@@ -102,7 +102,14 @@ export const SINGBOX_XRAY_FAMILY_CODE = 'SINGBOX_XRAY_FAMILY';
 export const SINGBOX_XRAY_FAMILY_MESSAGE =
   'sing-box serves the xray family only as REALITY over raw with one server name; use the xray engine for TLS, none, self-steal, several server names and other transports';
 
-export type SingboxXrayField = 'security' | 'realityMode' | 'network' | 'realityServerNames';
+export type SingboxXrayField =
+  | 'security'
+  | 'realityMode'
+  | 'network'
+  | 'realityServerNames'
+  | 'realityXver'
+  | 'realityLimitFallbackUploadBytesPerSec'
+  | 'realityLimitFallbackDownloadBytesPerSec';
 
 /**
  * The field that keeps an xray-family profile (vless, vmess, trojan) off the
@@ -137,6 +144,9 @@ export function singboxRefusesXrayField(
     realityMode?: unknown;
     network?: unknown;
     realityServerNames?: unknown;
+    realityXver?: unknown;
+    realityLimitFallbackUploadBytesPerSec?: unknown;
+    realityLimitFallbackDownloadBytesPerSec?: unknown;
   };
   if ((XRAY_PLAIN_SUBPROTOCOLS as readonly unknown[]).includes(c.subprotocol)) return null;
   const set = (v: unknown) => v !== undefined && v !== null && v !== '';
@@ -144,6 +154,12 @@ export function singboxRefusesXrayField(
   if (c.realityMode === 'self-steal') return 'realityMode';
   if (set(c.network) && c.network !== 'raw') return 'network';
   if (Array.isArray(c.realityServerNames) && c.realityServerNames.length > 1) return 'realityServerNames';
+  // REALITY knobs sing-box has no equivalent for; 0 is off and passes. A
+  // fallback throttle not applied forwards a failed prober at full speed.
+  const on = (v: unknown) => typeof v === 'number' && v !== 0;
+  if (on(c.realityXver)) return 'realityXver';
+  if (on(c.realityLimitFallbackUploadBytesPerSec)) return 'realityLimitFallbackUploadBytesPerSec';
+  if (on(c.realityLimitFallbackDownloadBytesPerSec)) return 'realityLimitFallbackDownloadBytesPerSec';
   return null;
 }
 

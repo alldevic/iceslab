@@ -79,7 +79,7 @@ func TestRenderCaddyfileShape(t *testing.T) {
 	}
 	for _, want := range []string{
 		"admin unix//run/iceslab/caddy.sock",
-		":443, n1.example.com {",
+		":443, n1.example.com:443 {",
 		"tls ops@example.com",
 		"forward_proxy {",
 		"basic_auth alice secret-a",

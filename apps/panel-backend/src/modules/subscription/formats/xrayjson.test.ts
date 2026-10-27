@@ -739,11 +739,9 @@ describe('buildXrayJsonArray hysteria (hy2)', () => {
     expect(out.streamSettings.hysteriaSettings.down).toBe('300mbps');
   });
 
-  it('does NOT emit obfs (xray-core hy2 outbound has no field for it)', () => {
-    // Documented limitation: an obfs node needs Happ native hy2 core, not this.
-    const out = JSON.stringify(buildXrayJsonArray([hy2Ep]));
-    expect(out).not.toContain('salt');
-    expect(out.toLowerCase()).not.toContain('obfs');
+  it('emits obfs as Salamander in finalmask.udp, where xray-core reads it', () => {
+    const out = JSON.stringify(JSON.parse(buildXrayJsonArray([hy2Ep])));
+    expect(out).toContain('{"udp":[{"type":"salamander","settings":{"password":"salt"}}]');
   });
 
   it('catch-all routes to the hy2 tag', () => {
@@ -835,5 +833,41 @@ describe('buildXrayJsonArray routing (T2)', () => {
     expect(v.streamSettings.network).toBe('xhttp');
     expect(v.streamSettings.xhttpSettings.path).toBe('/dl');
     expect(v.streamSettings.xhttpSettings.mode).toBe('auto');
+  });
+});
+
+/**
+ * hysteria2 in xray-core: Salamander in finalmask.udp, the bandwidth in
+ * finalmask.quicParams beside the deprecated up/down, and an endpoint xray
+ * cannot trust left out (allowInsecure no longer exists in this core).
+ */
+describe('buildXrayJsonArray: hysteria2 an xray client can reach', () => {
+  type Out = { protocol?: string; streamSettings?: { finalmask?: Record<string, unknown>; hysteriaSettings?: Record<string, unknown> } };
+  const hyOut = (eps: SubscriptionEndpoint[]): Out | undefined => {
+    const configs = JSON.parse(buildXrayJsonArray(eps)) as { outbounds: Out[] }[];
+    return configs.flatMap((c) => c.outbounds).find((o) => o.protocol === 'hysteria');
+  };
+
+  it('obfs and Brutal reach the places the core reads them', () => {
+    const out = hyOut([{ ...hysteriaEp, obfsPassword: 'salt', upMbps: 100, downMbps: 200 } as SubscriptionEndpoint]);
+    expect(out?.streamSettings?.finalmask).toEqual({
+      udp: [{ type: 'salamander', settings: { password: 'salt' } }],
+      quicParams: { congestion: 'brutal', brutalUp: '100mbps', brutalDown: '200mbps' },
+    });
+    expect(out?.streamSettings?.hysteriaSettings).toMatchObject({ up: '100mbps', down: '200mbps' });
+  });
+
+  it('no obfs and no bandwidth: no finalmask at all', () => {
+    expect(hyOut([hysteriaEp])?.streamSettings?.finalmask).toBeUndefined();
+  });
+
+  it('a sing-box hysteria2 with no pin is left out, a pinned one stays', () => {
+    expect(hyOut([{ ...hysteriaEp, engine: 'singbox' } as SubscriptionEndpoint])).toBeUndefined();
+    const pinned = {
+      ...hysteriaEp,
+      engine: 'singbox',
+      tlsPin: { serverName: 'n1.example.com', certSha256: 'ab'.repeat(32), certPem: '' },
+    } as SubscriptionEndpoint;
+    expect(hyOut([pinned])).toBeDefined();
   });
 });

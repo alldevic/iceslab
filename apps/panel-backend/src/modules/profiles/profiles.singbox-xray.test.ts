@@ -239,3 +239,22 @@ describe('singboxRefusesXrayField', () => {
     expect(singboxRefusesXrayField('xray', 'singbox', { network: 'tcp' })).toBe('network');
   });
 });
+
+describe('REALITY knobs sing-box has no equivalent for', () => {
+  const base = { security: 'reality', realityMode: 'steal-others', network: 'raw' };
+  it('a set xver or fallback limit is refused on sing-box, named by its field', () => {
+    expect(singboxRefusesXrayField('xray', 'singbox', { ...base, realityXver: 1 })).toBe('realityXver');
+    expect(singboxRefusesXrayField('xray', 'singbox', { ...base, realityLimitFallbackUploadBytesPerSec: 1000 })).toBe(
+      'realityLimitFallbackUploadBytesPerSec',
+    );
+    expect(singboxRefusesXrayField('xray', 'singbox', { ...base, realityLimitFallbackDownloadBytesPerSec: 1000 })).toBe(
+      'realityLimitFallbackDownloadBytesPerSec',
+    );
+  });
+
+  it('0 is off and passes; on the xray engine all of them are fine', () => {
+    const off = { ...base, realityXver: 0, realityLimitFallbackUploadBytesPerSec: 0, realityLimitFallbackDownloadBytesPerSec: 0 };
+    expect(singboxRefusesXrayField('xray', 'singbox', off)).toBeNull();
+    expect(singboxRefusesXrayField('xray', null, { ...base, realityXver: 2 })).toBeNull();
+  });
+});

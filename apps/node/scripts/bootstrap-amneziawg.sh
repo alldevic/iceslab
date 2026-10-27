@@ -119,8 +119,8 @@ log "Detected $PRETTY_NAME"
 
 # ───── 2. Prereqs ─────
 log "Installing apt prereqs"
-DEBIAN_FRONTEND=noninteractive apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
+DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -y
+DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y \
   software-properties-common gnupg ca-certificates curl \
   build-essential dkms git libmnl-dev pkg-config wireguard-tools
 
@@ -145,7 +145,7 @@ PPA_PKGS="$(ppa_packages)"
 if [[ -n "$PPA_PKGS" ]]; then
   log "Removing AmneziaWG packages of the Amnezia PPA: ${PPA_PKGS//$'\n'/ }"
   # shellcheck disable=SC2086 # one package name per word, from dpkg itself
-  DEBIAN_FRONTEND=noninteractive apt-get purge -y $PPA_PKGS \
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 purge -y $PPA_PKGS \
     || fail "could not remove the PPA's AmneziaWG packages (${PPA_PKGS//$'\n'/ }): remove them by hand (apt-get purge) and run this again; they would overwrite the tools and the module this script installs"
   rm -f /etc/apt/sources.list.d/amnezia-ubuntu-amneziawg-*.list \
     /etc/apt/sources.list.d/amnezia-ubuntu-amneziawg-*.sources
@@ -154,7 +154,7 @@ fi
 
 KERNEL_VER=$(uname -r)
 log "Running kernel: $KERNEL_VER"
-DEBIAN_FRONTEND=noninteractive apt-get install -y "linux-headers-${KERNEL_VER}" || \
+DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y "linux-headers-${KERNEL_VER}" || \
   warn "linux-headers-${KERNEL_VER} not found, DKMS build may fail"
 
 # ───── Pinned upstream refs ─────

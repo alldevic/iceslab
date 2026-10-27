@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
 )
@@ -78,7 +79,16 @@ type Adapter struct {
 
 	// restartMu serializes regenerateAndReload; never held with mu across IO.
 	restartMu sync.Mutex
+
+	// The last answer of `mita status` and when it was asked (proxyRunning).
+	statusMu      sync.Mutex
+	statusAt      time.Time
+	statusRunning bool
 }
+
+// statusCacheFor: /healthz asks on every poll and the answer costs a fork; it
+// expires, or a proxy that stopped would read healthy forever.
+const statusCacheFor = 5 * time.Second
 
 func New(cfg Config, logger *slog.Logger) *Adapter {
 	if cfg.RunCmd == nil {
@@ -161,6 +171,7 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	if !had || bin == "" {
 		return nil
 	}
+	defer a.invalidateStatus()
 	if err := stopMita(ctx, run, bin); err != nil {
 		return fmt.Errorf("mieru idle: %w", err)
 	}
@@ -301,9 +312,17 @@ func (a *Adapter) ApplyIdentifiedInbound(id string, port int, rawCfg json.RawMes
 	}
 	prev, had := a.inbounds[id]
 	if had && prev == next && (a.serving || a.waiting) {
+		serving, bin := a.serving, a.cfg.BinaryPath
 		a.mu.Unlock()
-		a.logger.Info("mieru ApplyInbound: config unchanged, skipping")
-		return nil
+		// Unchanged is a reason to skip only while the proxy still serves it
+		// (see proxyRunning): otherwise fall through and start it again.
+		if !serving || bin == "" || a.proxyRunning(context.Background()) {
+			a.logger.Info("mieru ApplyInbound: config unchanged, skipping")
+			return nil
+		}
+		a.logger.Info("mieru ApplyInbound: config unchanged but mita is not serving; starting it again")
+		a.mu.Lock()
+		a.renderedHash = [32]byte{}
 	}
 	if err := a.conflictLocked(id, next); err != nil {
 		a.mu.Unlock()
@@ -362,10 +381,49 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	return &core.Stats{Users: users}, nil
 }
 
+// Healthy asks mita whether its proxy runs, not the adapter's own bookkeeping.
+// mita's unit runs an RPC server that takes `apply config` and `reload` with
+// rc=0 against an IDLE proxy listening on nothing, so "the last commands
+// succeeded" said nothing about the core. Config-only mode (no binary) and a
+// proxy waiting for its first user (A-275, down on purpose) keep the old
+// answer.
 func (a *Adapter) Healthy() bool {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.started
+	started, waiting, bin := a.started, a.waiting, a.cfg.BinaryPath
+	a.mu.Unlock()
+	if !started || bin == "" || waiting {
+		return started
+	}
+	return a.proxyRunning(context.Background())
+}
+
+// proxyRunning: `mita status` says RUNNING, cached for statusCacheFor.
+func (a *Adapter) proxyRunning(ctx context.Context) bool {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	if !a.statusAt.IsZero() && time.Since(a.statusAt) < statusCacheFor {
+		return a.statusRunning
+	}
+	a.mu.Lock()
+	bin, run := a.cfg.BinaryPath, a.cfg.RunCmd
+	a.mu.Unlock()
+	out, err := run(ctx, bin, "status")
+	if err != nil {
+		a.logger.Warn("mita status failed; reporting the proxy as not serving", "err", err, "out", string(out))
+		a.statusRunning = false
+	} else {
+		// mita 3.x: `mita server status is "RUNNING"`, "IDLE" when stopped.
+		a.statusRunning = strings.Contains(string(out), `"RUNNING"`)
+	}
+	a.statusAt = time.Now()
+	return a.statusRunning
+}
+
+// invalidateStatus: after a start or a stop the cached answer is stale.
+func (a *Adapter) invalidateStatus() {
+	a.statusMu.Lock()
+	a.statusAt = time.Time{}
+	a.statusMu.Unlock()
 }
 
 // refusedError: render, write or `mita apply config` failed, so mita still
@@ -419,7 +477,15 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	hash := sha256.Sum256(blob)
 	a.mu.Lock()
 	unchanged := (a.serving || a.waiting) && a.renderedHash == hash
+	serving := a.serving
 	a.mu.Unlock()
+	// Same bytes skip the CLI only while the proxy still serves them: after an
+	// out-of-band `mita stop` or a crash inside the daemon the config is the
+	// same and the proxy is IDLE, and a resync meant to repair it did nothing.
+	if unchanged && serving && !a.proxyRunning(ctx) {
+		unchanged = false
+		a.logger.Info("mieru config unchanged but mita is not serving; starting it again")
+	}
 	if unchanged {
 		a.logger.Debug("mieru config unchanged, skipping mita apply/reload", "users", len(users))
 		return nil
@@ -455,6 +521,7 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 		up := a.serving || a.unknown
 		a.mu.Unlock()
 		if up {
+			a.invalidateStatus()
 			if err := stopMita(ctx, run, binPath); err != nil {
 				return fmt.Errorf("no users: %w", err)
 			}
@@ -468,7 +535,9 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 		a.logger.Info("mieru: config applied, no users yet, mita proxy waits for the first one", "inbounds", len(inbounds))
 		return nil
 	}
-	if out, err := run(ctx, binPath, "start"); err != nil {
+	out, err := run(ctx, binPath, "start")
+	a.invalidateStatus()
+	if err != nil {
 		return fmt.Errorf("mita start: %w (%s)", err, string(out))
 	}
 

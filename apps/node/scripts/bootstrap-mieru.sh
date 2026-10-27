@@ -200,7 +200,7 @@ log "Checksum OK ($GOT_SHA)"
 log "Installing $DEB via dpkg..."
 dpkg -i "$TMPDIR/$DEB" || {
   warn "dpkg returned non-zero, running apt-get install -f to fix deps"
-  apt-get install -f -y
+  apt-get -o DPkg::Lock::Timeout=300 install -f -y
 }
 
 # ───── 5. Smoke-test ─────

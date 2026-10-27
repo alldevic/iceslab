@@ -55,6 +55,29 @@ All notable changes to Iceslab are documented here. Format loosely follows
   `active` a user the expiry check moved meanwhile.
 - Two edits setting the same squads on one user at the same moment no longer
   answer 500 to one of them.
+- A NaiveProxy binding on a port other than 443 no longer has Caddy listen on
+  443 as well: the named site address carries the bound port.
+- The node and panel installers, the sing-box bootstrap and the backup create
+  their secret files 0600 before writing the secret, not after.
+- An xray-protocol profile on the sing-box engine is refused at save when it
+  sets REALITY `xver` or a fallback rate limit, which sing-box cannot apply
+  (a throttle not applied lets a failed prober through at full speed). WARP
+  and the cascade are drawn into an inbound on the xray engine only; on a node
+  without one the push says so instead of dropping WARP while the node shows it
+  on.
+- Every core that runs a process reports its restarts (hysteria, sing-box,
+  naive, shadowsocks, mtg, mtprotoproxy), not only xray; the node card shows the
+  core that restarted most.
+- An empty traffic counter from xray is no reading rather than a zero, which
+  could be banked as a counter reset.
+- mieru reports itself healthy only when `mita status` says its proxy runs, and
+  an unchanged push starts a proxy that stopped instead of skipping it.
+- The core bootstraps wait for the apt lock instead of failing while
+  unattended-upgrades holds it.
+- The xray-json (array) document for Hysteria 2 carries Salamander obfuscation
+  and the Brutal bandwidth where xray-core reads them (`finalmask`), so clients
+  on that format connect to obfuscated nodes; a sing-box Hysteria 2 endpoint
+  xray cannot trust (self-signed, no pin) is left out of it.
 
 ## v0.2.1 (2026-09-26)
 

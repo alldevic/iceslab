@@ -232,3 +232,22 @@ describe('the node DTO', () => {
     expect(body.cores.observedAt).toBe(AT);
   });
 });
+
+describe('whose restarts the node card shows', () => {
+  const r = (crash: number, memory = 0) => ({ crash, memory });
+  it('the core that restarted most, now that every core reports', async () => {
+    const { pickRestartCore } = await import('./nodes.cron.js');
+    const got = pickRestartCore([
+      { name: 'xray', restarts: r(0) },
+      { name: 'hysteria', restarts: r(3) },
+      { name: 'naive' },
+    ]);
+    expect(got?.name).toBe('hysteria');
+  });
+
+  it('xray on a tie, nothing when no core reports', async () => {
+    const { pickRestartCore } = await import('./nodes.cron.js');
+    expect(pickRestartCore([{ name: 'hysteria', restarts: r(1) }, { name: 'xray', restarts: r(0, 1) }])?.name).toBe('xray');
+    expect(pickRestartCore([{ name: 'xray' }, { name: 'naive' }])).toBeUndefined();
+  });
+});

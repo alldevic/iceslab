@@ -78,6 +78,8 @@ type Adapter struct {
 	legacySecret string
 
 	proc *subprocess.Subprocess
+	// restarts: the core's restart tally (RestartReporter).
+	restarts *core.RestartTally
 
 	restartMu sync.Mutex
 }
@@ -94,9 +96,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.metricsClient = &http.Client{Timeout: 2 * time.Second}
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]User),
+		restarts: core.NewRestartTally(),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]User),
 	}
 }
 
@@ -490,6 +493,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		Args:           []string{script, cfgPath},
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
+		OnRestart:      a.restarts.Record,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
 	})
 	if err := proc.Start(ctx); err != nil {
@@ -604,4 +608,16 @@ func (a *Adapter) Fault() string {
 		return ""
 	}
 	return p.ExitReason()
+}
+
+// RestartStats implements core.RestartReporter.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

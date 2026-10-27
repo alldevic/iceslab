@@ -28,3 +28,15 @@ describe('singboxXrayPatch: xray на sing-box только REALITY steal-others
     expect(singboxXrayPatch(v({ protocol: 'hysteria', xrayNetwork: 'xhttp' }))).toEqual({});
   });
 });
+
+describe('singboxXrayPatch: ручки REALITY, которых у sing-box нет', () => {
+  it('xver и лимиты fallback выключаются при переходе на sing-box, на xray остаются', () => {
+    const knobs = { xrayRealityXver: 1 as const, xrayRealityLimitFallbackUpload: 1000, xrayRealityLimitFallbackDownload: 2000 };
+    expect(singboxXrayPatch(v({ engine: 'singbox', ...knobs }))).toMatchObject({
+      xrayRealityXver: 0,
+      xrayRealityLimitFallbackUpload: 0,
+      xrayRealityLimitFallbackDownload: 0,
+    });
+    expect(singboxXrayPatch(v({ engine: 'native', ...knobs }))).toEqual({});
+  });
+});

@@ -91,6 +91,8 @@ type Adapter struct {
 	// without them (core.PushScoped).
 	scopeDropped bool
 	proc         *subprocess.Subprocess
+	// restarts: the core's restart tally (RestartReporter).
+	restarts *core.RestartTally
 
 	// restartMu serializes regenerateAndRestart so concurrent user/inbound
 	// changes can't race the subprocess swap. Never held together with mu
@@ -129,6 +131,7 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.MaxWait = defaultMaxWait
 	}
 	return &Adapter{
+		restarts: core.NewRestartTally(),
 		cfg:      cfg,
 		protocol: cfg.Protocol,
 		logger:   logger,
@@ -782,6 +785,7 @@ func (a *Adapter) regenerateAndRestart() error {
 		Args:           []string{"run", "-c", cfgPath},
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
+		OnRestart:      a.restarts.Record,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
 	})
 	if err := proc.Start(ctx); err != nil {
@@ -863,6 +867,12 @@ type xrayFamilyWire struct {
 	RealityMode        string          `json:"realityMode"`
 	Flow               string          `json:"flow"`
 	Cascade            json.RawMessage `json:"cascade"`
+	Warp               json.RawMessage `json:"warp"`
+	// REALITY knobs xray renders and sing-box has no equivalent for. Zero is
+	// off for all three, so only a set value is refused.
+	RealityXver                             int `json:"realityXver"`
+	RealityLimitFallbackUploadBytesPerSec   int `json:"realityLimitFallbackUploadBytesPerSec"`
+	RealityLimitFallbackDownloadBytesPerSec int `json:"realityLimitFallbackDownloadBytesPerSec"`
 }
 
 // toInboundConfig validates the pushed xray config against what the sing-box
@@ -894,6 +904,21 @@ func (w xrayFamilyWire) toInboundConfig(port int) (InboundConfig, error) {
 	}
 	if len(w.Cascade) > 0 && string(w.Cascade) != "null" {
 		return InboundConfig{}, fmt.Errorf("cascade not supported via sing-box engine (use the xray engine)")
+	}
+	// The panel hands WARP to an inbound on the xray engine only; an older
+	// panel put it on the first xray inbound of any engine, and here it was
+	// dropped without a word while the node showed WARP on.
+	if len(w.Warp) > 0 && string(w.Warp) != "null" {
+		return InboundConfig{}, fmt.Errorf("WARP egress not supported via sing-box engine (use the xray engine)")
+	}
+	// A fallback throttle not applied forwards a prober that failed REALITY at
+	// full speed, the opposite of what it is set for. The panel refuses the
+	// three at save (singboxRefusesXrayField).
+	if w.RealityXver != 0 {
+		return InboundConfig{}, fmt.Errorf("realityXver not supported via sing-box engine (use the xray engine)")
+	}
+	if w.RealityLimitFallbackUploadBytesPerSec != 0 || w.RealityLimitFallbackDownloadBytesPerSec != 0 {
+		return InboundConfig{}, fmt.Errorf("REALITY fallback rate limits not supported via sing-box engine (use the xray engine)")
 	}
 	if w.RealityPrivateKey == "" {
 		return InboundConfig{}, fmt.Errorf("realityPrivateKey is required")
@@ -1026,4 +1051,16 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort {
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.BinaryPath, []string{"version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

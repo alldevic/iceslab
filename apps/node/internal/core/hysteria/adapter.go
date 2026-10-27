@@ -143,6 +143,8 @@ type Adapter struct {
 
 	callbackSrv *http.Server
 	proc        *subprocess.Subprocess // hysteria subprocess; nil when BinaryPath is empty
+	// restarts: the core's restart tally (RestartReporter).
+	restarts *core.RestartTally
 
 	// Cached `systemctl is-active` probe for systemd mode (guarded by mu).
 	// Healthy() serves unitHealthy and refreshes it in the background once
@@ -187,9 +189,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.RuntimeUnitDir = RuntimeUnitDir
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]userEntry),
+		restarts: core.NewRestartTally(),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]userEntry),
 	}
 }
 
@@ -316,6 +319,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		Env:            []string{LogLevelEnv},
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
+		OnRestart:      a.restarts.Record,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
 	})
 	if err := proc.Start(ctx); err != nil {
@@ -897,4 +901,16 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort {
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.BinaryPath, []string{"version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

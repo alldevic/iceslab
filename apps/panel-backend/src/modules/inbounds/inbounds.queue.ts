@@ -173,20 +173,40 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
  * node the push sends nothing to. `inbounds`: the push's own list; without it
  * the enabled bindings are asked, by the same filter fetchEnabledInbounds uses.
  */
+/**
+ * The xray inbound that carries a node's per-node routing (cascade, WARP): the
+ * first one the XRAY engine serves. A node runs one xray config.json, so one
+ * carries it; an xray-protocol inbound on sing-box cannot, its adapter has no
+ * cascade and no WARP outbound. It used to take the first xray inbound of any
+ * engine: on sing-box the agent refused the cascade (and the whole push with
+ * it), and WARP was dropped without a word, the node showing WARP on while
+ * every flow left from its own address.
+ */
+export function xrayEngineInbound<T extends { protocol: string; engine?: string | null }>(
+  inbounds: T[],
+): T | undefined {
+  return inbounds.find((i) => i.protocol === 'xray' && (i.engine ?? 'xray') === 'xray');
+}
+
 export async function legacyCascadeAsPushed(
   nodeId: string,
-  inbounds?: { protocol: string }[],
+  inbounds?: { protocol: string; engine?: string | null }[],
 ): Promise<XrayCascadeFragments | null> {
   const fragments = await getCascadeFragmentsForNode(nodeId);
   if (!fragments) return null;
   const hasXray = inbounds
-    ? inbounds.some((i) => i.protocol === 'xray')
+    ? xrayEngineInbound(inbounds) !== undefined
     : (await prisma.profileNodeBinding.count({
-        where: { AND: [pushedBindingsWhere(nodeId), { profile: { protocol: 'xray' } }] },
+        where: {
+          AND: [
+            pushedBindingsWhere(nodeId),
+            { profile: { protocol: 'xray', OR: [{ engine: null }, { engine: 'xray' }] } },
+          ],
+        },
       })) > 0;
   if (!hasXray) {
     getLogger().info(
-      `[inbound-sync] node ${nodeId} is in an enabled cascade but has no xray inbound; cascade not applied`,
+      `[inbound-sync] node ${nodeId} is in an enabled cascade but has no inbound on the xray engine; cascade not applied`,
     );
     return null;
   }
@@ -375,9 +395,9 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // this is a no-op, so the wire stays byte-identical to before.
   const cascade = await legacyCascadeAsPushed(nodeId, inbounds);
   if (cascade) {
-    // A node runs a single xray config.json, so the first xray inbound is the
-    // one (and only one) that carries the cascade.
-    const xrayInbound = inbounds.find((i) => i.protocol === 'xray')!;
+    // A node runs a single xray config.json: one inbound on the xray engine
+    // carries the cascade (xrayEngineInbound).
+    const xrayInbound = xrayEngineInbound(inbounds)!;
     xrayInbound.config = {
       ...(xrayInbound.config as Record<string, unknown>),
       cascade,
@@ -390,7 +410,7 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
   // cascade, a node runs one xray config so the first xray inbound carries it.
   // Only the node-relevant subset is sent (NOT the panel-only token/clientId/
   // deviceId/license). Non-WARP nodes: no-op, wire stays byte-identical.
-  const warpXrayInbound = inbounds.find((i) => i.protocol === 'xray');
+  const warpXrayInbound = xrayEngineInbound(inbounds);
   if (warpXrayInbound) {
     const nodeWarp = await prisma.node.findUnique({
       where: { id: nodeId },
@@ -420,6 +440,14 @@ export async function fetchEnabledInbounds(nodeId: string): Promise<InboundDto[]
           `[inbound-sync] node ${nodeId} has warpEnabled but warpAccount is incomplete; WARP egress not applied`,
         );
       }
+    }
+  } else {
+    // Said, not dropped: the node page shows WARP on either way.
+    const nodeWarp = await prisma.node.findUnique({ where: { id: nodeId }, select: { warpEnabled: true } });
+    if (nodeWarp?.warpEnabled) {
+      getLogger().info(
+        `[inbound-sync] node ${nodeId} has WARP enabled but no inbound on the xray engine; WARP egress not applied`,
+      );
     }
   }
 

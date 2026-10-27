@@ -1354,7 +1354,8 @@ apply_core_versions_from_payload /usr/local/bin/iceslab-node
 
 step "Environment file (/etc/iceslab-node/env)"
 ENV_DIR=/etc/iceslab-node
-mkdir -p "$ENV_DIR"
+# 0700 from the start: it holds the payload and the agent's mTLS key.
+install -d -m 0700 "$ENV_DIR"
 
 # ProtectSystem=strict in our systemd unit makes /etc read-only except for
 # explicit ReadWritePaths. ReadWritePaths can't create directories, only
@@ -1386,6 +1387,9 @@ if [[ -n "$PAYLOAD" || ! -f "$ENV_FILE" ]]; then
   # file and no binary but an old tls/ beside them.
   rm -rf "$ENV_DIR/tls"
   log "Writing $ENV_FILE"
+  # Created 0600 BEFORE the payload goes in: a cat into a new file makes it
+  # 0644 under the default umask, readable by anyone until the chmod below.
+  install -m 0600 /dev/null "$ENV_FILE"
   cat > "$ENV_FILE" <<EOF
 NODE_PAYLOAD=${PAYLOAD}
 NODE_HOST=${NODE_HOST}

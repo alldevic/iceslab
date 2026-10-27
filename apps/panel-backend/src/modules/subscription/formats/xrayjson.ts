@@ -294,31 +294,43 @@ function buildProxyOutbound(
 }
 
 /**
- * Build a hysteria2 outbound for the array format, in xray-core's documented
- * client shape (protocol "hysteria", settings.version 2 + address/port,
+ * Build a hysteria2 outbound for the array format, in xray-core's client shape
+ * (protocol "hysteria", settings.version 2 + address/port,
  * streamSettings.network "hysteria" + hysteriaSettings).
  *
- * FIELD-PENDING, do not treat as verified. Two open risks:
- *   1. xray-core's hy2 outbound has NO Salamander obfs field. Our RU nodes set
- *      obfsPassword (bare QUIC is DPI-throttled in RU), so on an obfs node this
- *      outbound will NOT connect via xray-core. It only works on non-obfs hy2
- *      nodes. The reference panel operators migrate from likely routes
- *      protocol:"hysteria" through Happ's NATIVE hy2 core (not xray-core), which
- *      does support obfs, so the real working shape must be confirmed against
- *      that reference + a live hy2
- *      node before tester sign-off.
- *   2. xray-core has open bugs on the hy2 outbound (XTLS/Xray-core#5619).
- * Isolated here so the exact shape is one edit once the эталон lands.
+ * Measured against a live sing-box hysteria2 inbound (self-signed, Salamander,
+ * Brutal) with xray 26.3.27, one fault removed at a time, a sing-box client on
+ * the same machine as the control. Three things each kept it from connecting,
+ * each looking like a different outage:
+ *   1. No obfuscation: the server drops every packet unread, the client sees a
+ *      QUIC idle timeout. Salamander lives in `finalmask.udp` in this core.
+ *   2. A certificate nothing says to trust: `allowInsecure` is removed from
+ *      this core (a config carrying it does not load), so a self-signed leaf is
+ *      pinned (tlsPin, E30a) or the endpoint is left out (hysteriaUsableInXray).
+ *   3. `up`/`down` in hysteriaSettings are the deprecated slot: the core warns
+ *      and advertises `Hysteria-CC-RX: 0`, which a server with its own
+ *      bandwidth answers with its masquerade page, read by the client as
+ *      `auth failed`. Both are sent: `finalmask.quicParams` for cores that
+ *      moved, the old pair for cores that have not.
  */
 function buildHysteriaOutbound(e: SubscriptionEndpoint, tag: string): Record<string, unknown> {
   if (e.protocol !== 'hysteria') throw new Error('unreachable'); // narrowing
   const hysteriaSettings: Record<string, unknown> = { version: 2, auth: e.password };
-  // Brutal CC bandwidth. Xray wants a unit-suffixed string ("100mbps").
+  // Brutal CC bandwidth, unit-suffixed ("100mbps"), in the deprecated slot for
+  // cores that still read it; quicParams below for the ones that moved.
   if (typeof e.upMbps === 'number') hysteriaSettings.up = `${e.upMbps}mbps`;
   if (typeof e.downMbps === 'number') hysteriaSettings.down = `${e.downMbps}mbps`;
-  // NB: obfsPassword is intentionally NOT emitted, xray-core hy2 outbound has no
-  // field for it. See the FIELD-PENDING note above: an obfs node needs Happ's
-  // native hy2 core, and the эталон is the source of truth for that shape.
+  const finalmask: Record<string, unknown> = {};
+  if (e.obfsPassword) {
+    finalmask.udp = [{ type: 'salamander', settings: { password: e.obfsPassword } }];
+  }
+  if (typeof e.upMbps === 'number' || typeof e.downMbps === 'number') {
+    finalmask.quicParams = {
+      congestion: 'brutal',
+      ...(typeof e.upMbps === 'number' ? { brutalUp: `${e.upMbps}mbps` } : {}),
+      ...(typeof e.downMbps === 'number' ? { brutalDown: `${e.downMbps}mbps` } : {}),
+    };
+  }
   // E30a: the panel's self-signed certificate on a node addressed by IP,
   // pinned by xray's `pinnedPeerCertSha256` (sha256 of the DER, hex). xray
   // treats the pinned certificate as the anchor AND checks serverName against
@@ -337,8 +349,21 @@ function buildHysteriaOutbound(e: SubscriptionEndpoint, tag: string): Record<str
       security: 'tls',
       tlsSettings,
       hysteriaSettings,
+      ...(Object.keys(finalmask).length > 0 ? { finalmask } : {}),
     },
   };
+}
+
+/**
+ * Whether xray-core can connect to this hysteria endpoint at all. A sing-box
+ * hysteria2 inbound serves the node's self-signed certificate, and with no pin
+ * for it (tlsPin is the native daemon's) xray cannot trust it: `allowInsecure`
+ * no longer exists in this core. Such an endpoint is left out of the format,
+ * not handed out as a server that never connects.
+ */
+export function hysteriaUsableInXray(e: SubscriptionEndpoint): boolean {
+  if (e.protocol !== 'hysteria') return false;
+  return !(e.engine === 'singbox' && !e.tlsPin);
 }
 
 export function buildXrayJson(
@@ -529,11 +554,10 @@ export function buildXrayJsonArray(
   opts: XrayJsonBuildOpts = {},
 ): string {
   // xray endpoints AND hysteria endpoints, in endpoint order so the array order
-  // matches the эталон. hy2 is FIELD-PENDING (see buildHysteriaOutbound). Other
-  // protocols are skipped, this is an xray/hy2 surface.
-  const supported = endpoints.filter(
-    (e) => carriedXray(e) || e.protocol === 'hysteria',
-  );
+  // matches the reference. A hysteria endpoint xray cannot trust is left out
+  // (hysteriaUsableInXray). Other protocols are skipped, this is an xray/hy2
+  // surface.
+  const supported = endpoints.filter((e) => carriedXray(e) || hysteriaUsableInXray(e));
   const deviceRules = presetRules(opts);
   const splitDns = splitDnsFor(opts);
   const tlsFragment = opts.tlsFragment === true;

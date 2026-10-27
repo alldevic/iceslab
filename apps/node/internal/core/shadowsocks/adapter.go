@@ -57,6 +57,8 @@ type Adapter struct {
 	started bool
 
 	proc *subprocess.Subprocess
+	// restarts: the core's restart tally (RestartReporter).
+	restarts *core.RestartTally
 
 	// restartMu serializes regenerateAndRestart; never held with mu across IO.
 	restartMu sync.Mutex
@@ -67,9 +69,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.RunCmd = defaultRunCmd
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]ssClient),
+		restarts: core.NewRestartTally(),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]ssClient),
 	}
 }
 
@@ -524,6 +527,7 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		Args:           []string{"run", "-c", cfgPath},
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
+		OnRestart:      a.restarts.Record,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
 	})
 	if err := proc.Start(ctx); err != nil {
@@ -577,4 +581,16 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort {
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.BinaryPath, []string{"version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

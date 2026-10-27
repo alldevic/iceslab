@@ -158,6 +158,8 @@ ARCHIVE="${OUT_DIR}/iceslab-backup-${TS}.tar.gz"
 if [[ -n "$PASSWORD" ]]; then
     step 4 "tar + AES-256-CBC encrypt → ${ARCHIVE}.enc"
     ENCRYPTED="${ARCHIVE}.enc"
+    # 0600 before anything is written to it (the archive holds .env).
+    install -m 0600 /dev/null "$ENCRYPTED"
     tar -C "$STAGE" -czf - postgres.sql redis.rdb env manifest.json \
         | openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
                        -pass "pass:${PASSWORD}" \
@@ -169,6 +171,7 @@ if [[ -n "$PASSWORD" ]]; then
     log_ok "backup complete in $(elapsed_total): ${ENCRYPTED} (${SIZE}, AES-256-CBC)"
 else
     step 4 "tar → ${ARCHIVE}"
+    install -m 0600 /dev/null "$ARCHIVE"
     tar -C "$STAGE" -czf "$ARCHIVE" postgres.sql redis.rdb env manifest.json
     chmod 600 "$ARCHIVE"
     SIZE="$(du -h "$ARCHIVE" | cut -f1)"

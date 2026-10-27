@@ -40,12 +40,30 @@ export function singboxXrayPatch(values: {
   xrayNetwork: string;
   xraySecurity: string;
   xrayRealityMode: string;
-}): Partial<Pick<FormValues, 'xrayNetwork' | 'xraySecurity' | 'xrayRealityMode'>> {
+  xrayRealityXver?: FormValues['xrayRealityXver'];
+  xrayRealityLimitFallbackUpload?: FormValues['xrayRealityLimitFallbackUpload'];
+  xrayRealityLimitFallbackDownload?: FormValues['xrayRealityLimitFallbackDownload'];
+}): Partial<
+  Pick<
+    FormValues,
+    | 'xrayNetwork'
+    | 'xraySecurity'
+    | 'xrayRealityMode'
+    | 'xrayRealityXver'
+    | 'xrayRealityLimitFallbackUpload'
+    | 'xrayRealityLimitFallbackDownload'
+  >
+> {
   if (values.protocol !== 'xray' || values.engine !== 'singbox') return {};
+  const set = (v: unknown) => v !== undefined && v !== '' && v !== 0;
   return {
     ...(values.xrayNetwork !== SINGBOX_XRAY.network ? { xrayNetwork: SINGBOX_XRAY.network } : {}),
     ...(values.xraySecurity !== SINGBOX_XRAY.security ? { xraySecurity: SINGBOX_XRAY.security } : {}),
     ...(values.xrayRealityMode !== SINGBOX_XRAY.realityMode ? { xrayRealityMode: SINGBOX_XRAY.realityMode } : {}),
+    // REALITY knobs sing-box has no equivalent for: off.
+    ...(set(values.xrayRealityXver) ? { xrayRealityXver: 0 as const } : {}),
+    ...(set(values.xrayRealityLimitFallbackUpload) ? { xrayRealityLimitFallbackUpload: 0 } : {}),
+    ...(set(values.xrayRealityLimitFallbackDownload) ? { xrayRealityLimitFallbackDownload: 0 } : {}),
   };
 }
 
@@ -53,12 +71,21 @@ export function singboxXrayPatch(values: {
  *  lands as an error on the control the operator has to change. */
 export const SINGBOX_XRAY_FORM_FIELD: Record<
   SingboxXrayField,
-  'xrayNetwork' | 'xraySecurity' | 'xrayRealityMode' | 'xrayServerNames'
+  | 'xrayNetwork'
+  | 'xraySecurity'
+  | 'xrayRealityMode'
+  | 'xrayServerNames'
+  | 'xrayRealityXver'
+  | 'xrayRealityLimitFallbackUpload'
+  | 'xrayRealityLimitFallbackDownload'
 > = {
   network: 'xrayNetwork',
   security: 'xraySecurity',
   realityMode: 'xrayRealityMode',
   realityServerNames: 'xrayServerNames',
+  realityXver: 'xrayRealityXver',
+  realityLimitFallbackUploadBytesPerSec: 'xrayRealityLimitFallbackUpload',
+  realityLimitFallbackDownloadBytesPerSec: 'xrayRealityLimitFallbackDownload',
 };
 
 // Vision flow is only valid on raw/xhttp; other transports reject it.

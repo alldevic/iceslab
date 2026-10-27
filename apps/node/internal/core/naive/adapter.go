@@ -75,6 +75,8 @@ type Adapter struct {
 	started bool
 
 	proc *subprocess.Subprocess
+	// restarts: the core's restart tally (RestartReporter).
+	restarts *core.RestartTally
 
 	// restartMu serializes regenerateAndReload; never held with mu across IO.
 	restartMu sync.Mutex
@@ -94,9 +96,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.runCmd = realRunCmd
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]User),
+		restarts: core.NewRestartTally(),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]User),
 	}
 }
 
@@ -360,6 +363,7 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 			Args:           []string{"run", "--config", cfgPath, "--adapter", "caddyfile"},
 			Logger:         a.logger,
 			MaxRestarts:    subprocess.DefaultMaxRestarts,
+			OnRestart:      a.restarts.Record,
 			RestartBackoff: subprocess.DefaultRestartBackoff,
 		})
 		if err := proc.Start(parent); err != nil {
@@ -446,4 +450,16 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort { return nil }
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.CaddyBin, []string{"version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

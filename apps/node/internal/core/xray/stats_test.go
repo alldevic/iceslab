@@ -42,7 +42,7 @@ func TestParseInt64String(t *testing.T) {
 		{"9223372036854775807", 9223372036854775807, false}, // max int64
 		{"abc", 0, true},
 		{"-5", 0, true}, // negative not expected for byte counters
-		{"", 0, false},  // 0, empty string parses as zero (no digits → no iterations)
+		{"", 0, true},   // no reading, not a zero (the sing-box reader agrees)
 	}
 	for _, c := range cases {
 		got, err := parseInt64String(c.in)
