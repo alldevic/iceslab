@@ -12,6 +12,7 @@ import { findDeviceForUser, listDevicesWithPeers, revokeDevice } from '../wg-dev
 import { describeWgTunnel, servedProfileIds, WG_HWID_PREFIX } from '../wg-devices/wg-devices.presentation.js';
 import { getOverview } from '../dashboard/dashboard.service.js';
 import { formatBytes, getSubscriptionSettings } from '../settings/settings.service.js';
+import { SHARED_SUBPAGE_CONFIG_UUID, sharedSubpageConfig, subpageConfigForToken } from './subpage/subpage.service.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
 import { ALL_SQUAD_ID, NO_ACCESS_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureNoAccessSquad } from '../squads/squads.system.js';
@@ -844,16 +845,24 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     },
   );
 
-  // Subscription page config. An empty object makes the shop render its own
-  // bundled install page from the subscription URL; a document built from this
-  // panel's client catalog is not served yet.
-  app.get('/api/subscriptions/subpage-config/:shortUuid', opts, async (_request, reply) =>
-    sendResponse(reply, {}),
-  );
-  app.get('/api/subscription-page-configs', opts, async (_request, reply) => sendResponse(reply, {}));
-  app.get('/api/subscription-page-configs/:uuid', opts, async (_request, reply) =>
-    sendResponse(reply, {}),
-  );
+  // Subscription page config (subpage/subpage-config.ts). The shop asks the
+  // per-subscription route first, by the short uuid, which here is the
+  // subscription token; then the shared list and one entry of it. `{}` where
+  // there is nothing to say: the shop draws its own guide, as it always did.
+  app.get('/api/subscriptions/subpage-config/:shortUuid', opts, async (request, reply) => {
+    const { shortUuid } = request.params as { shortUuid: string };
+    return sendResponse(reply, (await subpageConfigForToken(shortUuid)) ?? {});
+  });
+  app.get('/api/subscription-page-configs', opts, async (_request, reply) => {
+    const doc = await sharedSubpageConfig();
+    const configs = doc ? [{ uuid: SHARED_SUBPAGE_CONFIG_UUID, viewPosition: 0, name: doc.brandingSettings.title }] : [];
+    return sendResponse(reply, { total: configs.length, configs });
+  });
+  app.get('/api/subscription-page-configs/:uuid', opts, async (request, reply) => {
+    const { uuid } = request.params as { uuid: string };
+    const doc = uuid === SHARED_SUBPAGE_CONFIG_UUID ? await sharedSubpageConfig() : null;
+    return sendResponse(reply, doc ?? {});
+  });
 
   // ─────────────── System / metadata ───────────────
 

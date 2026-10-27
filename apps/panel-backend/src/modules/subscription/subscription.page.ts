@@ -237,7 +237,7 @@ function platformLabel(p: PlatformId, t: Labels): string {
 /** Every app this platform can offer THIS subscription, registry order.
  *  An app whose way in is a per-node handout shows only when there is one:
  *  the AmneziaWG files, the Outline keys. */
-function appsFor(
+export function appsFor(
   platform: PlatformId,
   userProtocols: ProtocolName[],
   hasAwg: boolean,
@@ -369,7 +369,7 @@ function renderAppCard(a: AppDef, subUrl: string, icons: GlyphSheet, on = false)
 const NO_TRANSFER: PlatformId[] = ['androidtv', 'appletv', 'router'];
 
 /** Platforms whose Telegram app has proxy settings at all. */
-const TELEGRAM_PLATFORMS: PlatformId[] = ['ios', 'android', 'windows', 'macos', 'linux'];
+export const TELEGRAM_PLATFORMS: PlatformId[] = ['ios', 'android', 'windows', 'macos', 'linux'];
 
 /**
  * The Telegram row, which is not an app card and must not look like one.
@@ -1419,12 +1419,12 @@ ${transferHtml}
 type AwgNode = NonNullable<SubscriptionPageData['awgNodes']>[number];
 
 /** A tunnel's name on the page: the node, and `#N` for device 2 and on. */
-function awgLabel(n: AwgNode): string {
+export function awgLabel(n: AwgNode): string {
   return (n.device ?? 1) > 1 ? `${n.nodeName} #${n.device}` : n.nodeName;
 }
 
 /** The query a tunnel's links carry: its node, and its device from 2 on. */
-function awgQuery(n: AwgNode): string {
+export function awgQuery(n: AwgNode): string {
   const device = (n.device ?? 1) > 1 ? `&device=${n.device}` : '';
   return `node=${encodeURIComponent(n.id ?? n.nodeName)}${device}`;
 }

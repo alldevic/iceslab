@@ -87,6 +87,15 @@ All notable changes to Iceslab are documented here. Format loosely follows
   egress (registered anew), and the replaced node is switched out of service
   and never offered as a spare again. Every outcome reaches Telegram, and a
   swap goes out as `node.replaced`. Off by default.
+- **The shop's install screen shows what the subscription page shows.** The
+  Remnawave-compatible API answers the install-page config the shop asks for
+  (`/subscriptions/subpage-config/:shortUuid`, and the shared
+  `/subscription-page-configs`), instead of `{}`: the same apps per platform as
+  the panel's subscription page for that person's protocols, with download
+  pages and deep links, an AmneziaVPN key and a `.conf` per WireGuard device,
+  an Outline key per node, and a Telegram link per MTProto node. A shop with no
+  install-guide file of its own showed no guide at all before; a shop with one
+  offered AmneziaWG buyers clients that cannot read their config.
 - A node can be switched out of service on its page ("In service", or
   `status: "disabled"` in `PUT /api/nodes/:id`): it leaves every subscription
   and the panel stops polling it, while its agent stays up. Switching it back

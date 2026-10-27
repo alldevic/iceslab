@@ -118,6 +118,30 @@ shop reads as "this panel does not have it".
 | Statistics | `GET /system/stats`, `GET /system/stats/bandwidth`, `GET /system/stats/nodes`, `GET /bandwidth-stats/nodes`, `GET /bandwidth-stats/users/:id`, `GET /bandwidth-stats/nodes/:uuid/users`, `POST /bandwidth-stats/nodes/users`, `POST /bandwidth-stats/nodes/usage` |
 | Subscription | `GET /sub/:token` (redirects to the subscription link), `GET /subscriptions/subpage-config/:shortUuid`, `GET /subscription-page-configs[/:uuid]` |
 
+## Install page
+
+The shop's install screen asks the panel first for a document for ONE
+subscription (`/subscriptions/subpage-config/:shortUuid`, the short uuid being
+the subscription token), then for the shared list and its entry. Both are
+Subscription Page v1 documents built from what the panel's own subscription
+page shows:
+
+- the per-subscription one lists, per platform, the apps the page offers for
+  that person's protocols, each with where to get it and how to hand it the
+  subscription (a deep link, or the link to copy); AmneziaWG clients get a key
+  or a `.conf` link per tunnel (node and device) and the subscription page for
+  the QR codes; Outline a key per node; Telegram a link per MTProto node and
+  SOCKS endpoint. It is not recorded as a subscription fetch.
+- the shared one (uuid `00000000-0000-0000-0000-000000000000`) lists the apps
+  for every protocol the panel hands out, with the shop's
+  `{{SUBSCRIPTION_LINK}}` in place of a link, and no per-tunnel handouts.
+
+The shop has no router platform, so Keenetic, OpenWrt and XKeen are only on the
+panel's page. Where there is nothing to say (an unknown, revoked or expired
+subscription, no app for its protocols) the answer is `{}` and the shop draws
+its own guide. `deploy/minishop-stand/stand.sh subpage <token>` runs the shop's
+own validator against what the panel serves.
+
 ## Webhooks
 
 Signed with `X-Remnawave-Signature` (HMAC-SHA256 of the raw body). The body is
@@ -133,6 +157,4 @@ change the signed bytes.
 
 ## Not there yet
 
-- The subscription page config answers `{}`, and the shop shows its own
-  install page built from the subscription link.
 - Remnawave 2.x (UUID users) is not served.
