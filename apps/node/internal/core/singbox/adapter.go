@@ -91,11 +91,19 @@ type Adapter struct {
 	// without them (core.PushScoped).
 	scopeDropped bool
 	proc         *subprocess.Subprocess
+	// restarts: the core's restart tally (RestartReporter), fed by OnRestart.
+	restarts *core.RestartTally
 
 	// restartMu serializes regenerateAndRestart so concurrent user/inbound
 	// changes can't race the subprocess swap. Never held together with mu
 	// across IO.
 	restartMu sync.Mutex
+
+	// lastStartFailed: the last spawn did not take (proc.Start failed, or the
+	// core died inside subprocess.StartupGrace). While set, an identical push
+	// is not skipped as "unchanged": the core is down under this very config.
+	// Cleared by a start that survives the window. Under mu.
+	lastStartFailed bool
 
 	// The ssm-api hand-over of a managed shadowsocks (ssm_retry.go), under mu:
 	// done for the current process, and the process generation a retry
@@ -129,6 +137,7 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.MaxWait = defaultMaxWait
 	}
 	return &Adapter{
+		restarts: core.NewRestartTally(),
 		cfg:      cfg,
 		protocol: cfg.Protocol,
 		logger:   logger,
@@ -153,10 +162,19 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.ctx = ctx
 	hasInbound := len(a.inbounds) > 0
 	a.mu.Unlock()
-	if hasInbound {
-		return a.regenerateAndRestart()
+	if !hasInbound {
+		return nil
 	}
-	return nil
+	// A core that forked and died inside the startup window is not fatal at
+	// boot: the agent must stay up to report the fault (the supervisor keeps
+	// retrying, /healthz says why), as before the window existed. Pushes still
+	// get the error. A core that could not be spawned at all stays an error.
+	err := a.regenerateAndRestart()
+	if errors.Is(err, subprocess.ErrDiedInStartup) {
+		a.logger.Warn("singbox: core died at boot, agent stays up to report it", "err", err)
+		return nil
+	}
+	return err
 }
 
 // Provisioned implements core.Provisionable: an inbound was pushed.
@@ -533,7 +551,9 @@ func (a *Adapter) ApplyIdentifiedInbound(id string, port int, rawCfg json.RawMes
 		return err
 	}
 	a.mu.Lock()
-	if cur, ok := a.inbounds[id]; ok && cur == newInbound {
+	// A core whose last start failed is down under this very config; "unchanged"
+	// would ack a push the node is not serving.
+	if cur, ok := a.inbounds[id]; ok && cur == newInbound && !a.lastStartFailed {
 		a.mu.Unlock()
 		a.logger.Info("singbox ApplyInbound: config unchanged, skipping")
 		return nil
@@ -783,14 +803,30 @@ func (a *Adapter) regenerateAndRestart() error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
+		OnRestart:      a.restarts.Record,
 	})
 	if err := proc.Start(ctx); err != nil {
+		a.mu.Lock()
+		a.lastStartFailed = true
+		a.mu.Unlock()
 		return fmt.Errorf("singbox: start subprocess: %w", err)
 	}
-
+	// Start only confirms the fork. `sing-box check` binds nothing, so a config
+	// it approved can still kill the process on the real run (a listen port
+	// already taken). On failure a.proc keeps pointing at the new process:
+	// Fault() then says why it died and the supervisor keeps retrying on its
+	// backoff (the grace is well under it). Not a refusedError: the config is
+	// already on disk, so the inbound stays in memory to match it.
+	alive := proc.AliveAfter(ctx, subprocess.StartupGrace)
 	a.mu.Lock()
 	a.proc = proc
+	a.lastStartFailed = !alive
 	a.mu.Unlock()
+	if !alive {
+		a.logger.Error("sing-box exited right after starting; what it printed is in the lines above",
+			"protocol", a.protocol, "grace", subprocess.StartupGrace, "inbounds", len(held))
+		return subprocess.DiedInStartup("singbox: "+a.protocol, subprocess.StartupGrace)
+	}
 	// A managed shadowsocks inbound starts with nobody: its users are handed
 	// over the API, every one of them, after each start, inbound by inbound.
 	if a.ssmOn() {
@@ -1026,4 +1062,19 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort {
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.BinaryPath, []string{"version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter. MemoryLimitBytes stays 0: this
+// adapter arms no memory watchdog, so Memory can only ever be 0.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock, and the tally
+	// has its own, so neither is taken under a.mu.
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

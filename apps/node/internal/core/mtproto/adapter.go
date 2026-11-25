@@ -3,6 +3,7 @@ package mtproto
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -68,6 +69,13 @@ type Adapter struct {
 	started bool
 
 	proc *subprocess.Subprocess
+	// lastStartFailed: the last spawn did not take (proc.Start failed, or the
+	// core died inside subprocess.StartupGrace). While set, an identical push
+	// is not skipped as "unchanged": the core is down under this very config.
+	// Cleared by a start that survives the window. Under mu.
+	lastStartFailed bool
+	// restarts: the core's restart tally (RestartReporter), fed by OnRestart.
+	restarts *core.RestartTally
 
 	// restartMu serializes regenerateAndRestart; never held with mu across IO.
 	restartMu sync.Mutex
@@ -84,9 +92,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.metricsClient = &http.Client{Timeout: 2 * time.Second}
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]struct{}),
+		restarts: core.NewRestartTally(),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]struct{}),
 	}
 }
 
@@ -114,7 +123,16 @@ func (a *Adapter) Start(ctx context.Context) error {
 		a.logger.Info("mtproto adapter: domain or secret not set, waiting for ApplyInbound from panel")
 		return nil
 	}
-	return a.regenerateAndRestart(ctx)
+	// A core that forked and died inside the startup window is not fatal at
+	// boot: the agent must stay up to report the fault (the supervisor keeps
+	// retrying, /healthz says why), as before the window existed. Pushes still
+	// get the error. A core that could not be spawned at all stays an error.
+	err := a.regenerateAndRestart(ctx)
+	if errors.Is(err, subprocess.ErrDiedInStartup) {
+		a.logger.Warn("mtproto: core died at boot, agent stays up to report it", "err", err)
+		return nil
+	}
+	return err
 }
 
 // Idle implements core.Idler: no MTProto inbound in the last push. Stops mtg
@@ -213,7 +231,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	}
 	if a.cfg.Inbound.Domain == wire.Domain &&
 		a.cfg.Inbound.Secret == wire.Secret &&
-		a.cfg.Inbound.ListenPort == effectivePort {
+		a.cfg.Inbound.ListenPort == effectivePort && !a.lastStartFailed {
 		a.mu.Unlock()
 		a.logger.Info("mtproto ApplyInbound: config unchanged, skipping")
 		return nil
@@ -408,17 +426,30 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
+		OnRestart:      a.restarts.Record,
 	})
 	if err := proc.Start(ctx); err != nil {
 		a.mu.Lock()
 		a.proc = nil
+		a.lastStartFailed = true
 		a.mu.Unlock()
 		return fmt.Errorf("start mtg: %w", err)
 	}
+	// Start only confirms the fork; mtg that dies on its config or a taken port
+	// exits moments later. On failure a.proc keeps pointing at the new process:
+	// Fault() then says why it died and the supervisor keeps retrying on its
+	// backoff (the grace is well under it).
+	alive := proc.AliveAfter(ctx, subprocess.StartupGrace)
 	a.mu.Lock()
 	a.proc = proc
 	a.started = true
+	a.lastStartFailed = !alive
 	a.mu.Unlock()
+	if !alive {
+		a.logger.Error("mtg exited right after starting; what it printed is in the lines above",
+			"grace", subprocess.StartupGrace, "domain", inbound.Domain)
+		return subprocess.DiedInStartup("mtg", subprocess.StartupGrace)
+	}
 	a.logger.Info("mtproto (mtg) (re)started", "domain", inbound.Domain)
 	return nil
 }
@@ -442,4 +473,19 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort {
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.BinaryPath, []string{"--version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter. MemoryLimitBytes stays 0: this
+// adapter arms no memory watchdog, so Memory can only ever be 0.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock, and the tally
+	// has its own, so neither is taken under a.mu.
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

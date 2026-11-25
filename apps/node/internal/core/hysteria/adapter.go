@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -151,6 +152,17 @@ type Adapter struct {
 
 	callbackSrv *http.Server
 	proc        *subprocess.Subprocess // hysteria subprocess; nil when BinaryPath is empty
+	// lifeCtx: the ctx Start was given (the agent's lifetime), which a respawn
+	// from an apply reuses; a request ctx must not own the process.
+	lifeCtx context.Context
+	// lastStartFailed: the last spawn did not take (proc.Start failed, or the
+	// core died inside subprocess.StartupGrace). Spawn mode only: under systemd
+	// nothing here spawns. While set, an identical push is not skipped as
+	// "unchanged" and the apply spawns again. Cleared by a start that survives
+	// the window. Under mu.
+	lastStartFailed bool
+	// restarts: the core's restart tally (RestartReporter), fed by OnRestart.
+	restarts *core.RestartTally
 
 	// Cached `systemctl is-active` probe for systemd mode (guarded by mu).
 	// Healthy() serves unitHealthy and refreshes it in the background once
@@ -202,9 +214,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.ProcRoot = "/proc"
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]userEntry),
+		restarts: core.NewRestartTally(),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]userEntry),
 	}
 }
 
@@ -324,6 +337,39 @@ func (a *Adapter) Start(ctx context.Context) error {
 		return nil
 	}
 
+	a.mu.Lock()
+	a.lifeCtx = ctx
+	err := a.spawnLocked(ctx)
+	a.mu.Unlock()
+	if errors.Is(err, subprocess.ErrDiedInStartup) {
+		// Not fatal at boot: the agent must stay up to report the fault (the
+		// supervisor keeps retrying, /healthz says why). The auth callback
+		// stays up too, it is what the retried core will need.
+		a.logger.Warn("hysteria: core died at boot, agent stays up to report it", "err", err)
+		return nil
+	}
+	if err != nil {
+		// Best-effort: tear down the auth callback we just started.
+		_ = a.stopAuthCallback(context.Background())
+	}
+	return err
+}
+
+// spawnLocked starts the hysteria subprocess and waits out the startup window.
+// Caller holds mu (the window is held under it: Start runs before anything
+// serves, and a respawn already sits under mu with the systemctl call it
+// replaces). Spawn mode only; systemd mode never comes here.
+//
+// Start only confirms the fork. hysteria that dies on its config or on a taken
+// UDP port exits moments later; without the window the caller claims a core
+// that is not there. Its ACME is not on this path: the certificate is obtained
+// lazily on the first handshake, and a failure there is logged by a running
+// process (see LogLevelEnv), so the window need not cover it.
+//
+// On failure a.proc keeps pointing at the new process: Fault() then says why
+// it died and the supervisor keeps retrying on its backoff (the grace is well
+// under it).
+func (a *Adapter) spawnLocked(ctx context.Context) error {
 	proc := subprocess.New(subprocess.Config{
 		Name:           Name,
 		Binary:         a.cfg.BinaryPath,
@@ -332,15 +378,22 @@ func (a *Adapter) Start(ctx context.Context) error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
+		OnRestart:      a.restarts.Record,
 	})
 	if err := proc.Start(ctx); err != nil {
-		// Best-effort: tear down the auth callback we just started.
-		_ = a.stopAuthCallback(context.Background())
+		a.proc = nil
+		a.lastStartFailed = true
 		return err
 	}
-	a.mu.Lock()
+	alive := proc.AliveAfter(ctx, subprocess.StartupGrace)
 	a.proc = proc
-	a.mu.Unlock()
+	a.lastStartFailed = !alive
+	if !alive {
+		a.logger.Error("hysteria exited right after starting; what it printed is in the lines above",
+			"grace", subprocess.StartupGrace)
+		return subprocess.DiedInStartup("hysteria", subprocess.StartupGrace)
+	}
+	a.logger.Info("hysteria started", "config", a.cfg.ConfigPath)
 	return nil
 }
 
@@ -351,7 +404,8 @@ func (a *Adapter) Start(ctx context.Context) error {
 // forgotten, so the same inbound pushed again rewrites the config and
 // `systemctl restart`s the unit back up. The auth callback stays: the agent
 // holds it, not hysteria. In spawn mode nothing is done, because ApplyInbound
-// there never spawns again, and a stopped hysteria would stay stopped.
+// there spawns again only after a failed start, and a stopped hysteria would
+// stay stopped.
 func (a *Adapter) Idle(ctx context.Context) error {
 	if a.cfg.ServiceUnit == "" || a.cfg.BinaryPath == "" {
 		return nil
@@ -718,7 +772,9 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if inboundEqual(a.inbound, newInbound) {
+	// A core whose last start failed is down under this very config; "unchanged"
+	// would ack a push the node is not serving.
+	if inboundEqual(a.inbound, newInbound) && !a.lastStartFailed {
 		a.logger.Info("hysteria ApplyInbound: config unchanged, skipping rewrite")
 		return nil
 	}
@@ -790,7 +846,7 @@ func (a *Adapter) ApplyCascade(raw json.RawMessage) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if handoffEqual(a.chain, handoff) {
+	if handoffEqual(a.chain, handoff) && !a.lastStartFailed {
 		return nil
 	}
 	// No inbound yet, or nothing to write to: remember it for the render that
@@ -863,6 +919,20 @@ func (a *Adapter) TLSFact() *core.TLSFact {
 // restartLocked asks systemd to pick up the rewritten config. Caller holds mu.
 func (a *Adapter) restartLocked(who string) error {
 	if a.cfg.ServiceUnit == "" {
+		// Spawn mode: a rewritten config is not picked up by a live process
+		// (as before), but a core that failed its start is spawned again here,
+		// so a repeated push after the death is not answered with a success.
+		if a.cfg.BinaryPath != "" && a.lastStartFailed {
+			if a.proc != nil {
+				_ = a.proc.Stop(context.Background())
+				a.proc = nil
+			}
+			ctx := a.lifeCtx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return a.spawnLocked(ctx)
+		}
 		a.logger.Info("hysteria "+who+": ServiceUnit not set, skipping restart",
 			"hint", "set HYSTERIA_SERVICE_UNIT to enable auto-restart")
 		return nil
@@ -924,4 +994,19 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort {
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.BinaryPath, []string{"version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter. MemoryLimitBytes stays 0: this
+// adapter arms no memory watchdog, so Memory can only ever be 0.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.RLock()
+	proc := a.proc
+	a.mu.RUnlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock, and the tally
+	// has its own, so neither is taken under a.mu.
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

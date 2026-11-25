@@ -209,7 +209,15 @@ func parseInboundStatName(name string) (tag, direction string, ok bool) {
 // parseInt64String parses xray's stringified int64 stat values. xray emits
 // them as JSON strings deliberately to dodge the 53-bit float precision
 // limit at the protocol boundary.
+//
+// An empty value is no reading, not a zero: these counters are cumulative and
+// the panel derives deltas from its own snapshot, so a skipped entry leaves the
+// snapshot where it was, while a zero looks like a restarted core. The sing-box
+// copy has always rejected it.
 func parseInt64String(s string) (int64, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty stat value")
+	}
 	var n int64
 	for i := 0; i < len(s); i++ {
 		c := s[i]

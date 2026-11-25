@@ -75,6 +75,8 @@ type Adapter struct {
 	started bool
 
 	proc *subprocess.Subprocess
+	// restarts: the core's restart tally (RestartReporter), fed by OnRestart.
+	restarts *core.RestartTally
 
 	// restartMu serializes regenerateAndReload; never held with mu across IO.
 	restartMu sync.Mutex
@@ -94,9 +96,10 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg.runCmd = realRunCmd
 	}
 	return &Adapter{
-		cfg:    cfg,
-		logger: logger,
-		users:  make(map[string]User),
+		restarts: core.NewRestartTally(),
+		cfg:      cfg,
+		logger:   logger,
+		users:    make(map[string]User),
 	}
 }
 
@@ -361,6 +364,7 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 			Logger:         a.logger,
 			MaxRestarts:    subprocess.DefaultMaxRestarts,
 			RestartBackoff: subprocess.DefaultRestartBackoff,
+			OnRestart:      a.restarts.Record,
 		})
 		if err := proc.Start(parent); err != nil {
 			return fmt.Errorf("start caddy: %w", err)
@@ -370,11 +374,7 @@ func (a *Adapter) regenerateAndReload(parent context.Context) error {
 		// ACME failure. Without this gate we'd flip started=true and the panel
 		// would mark the node healthy while nothing is listening. Give it a
 		// brief grace, then confirm it's still alive.
-		select {
-		case <-parent.Done():
-		case <-time.After(caddyLivenessGrace):
-		}
-		if !proc.Running() {
+		if !proc.AliveAfter(parent, caddyLivenessGrace) {
 			_ = proc.Stop(parent)
 			return fmt.Errorf("caddy exited within %s of start (check Caddyfile / port / ACME)", caddyLivenessGrace)
 		}
@@ -446,4 +446,19 @@ func (a *Adapter) ReservedPorts() []core.ReservedPort { return nil }
 // Empty when the binary is absent or does not answer.
 func (a *Adapter) CoreVersion() string {
 	return a.versions.Version(a.cfg.CaddyBin, []string{"version"}, nil)
+}
+
+// RestartStats implements core.RestartReporter. MemoryLimitBytes stays 0: this
+// adapter arms no memory watchdog, so Memory can only ever be 0.
+func (a *Adapter) RestartStats() core.RestartStats {
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	// Sampled outside a.mu: RSSBytes takes the subprocess lock, and the tally
+	// has its own, so neither is taken under a.mu.
+	var rss uint64
+	if proc != nil {
+		rss = proc.RSSBytes()
+	}
+	return a.restarts.Stats(0, rss)
 }

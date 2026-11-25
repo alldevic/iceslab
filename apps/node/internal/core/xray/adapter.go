@@ -74,6 +74,11 @@ type Adapter struct {
 	mu      sync.Mutex
 	users   map[string]xrayClient // key: userId
 	started bool                  // set true after first successful regenerateAndRestart
+	// lastStartFailed: the last spawn did not take (proc.Start failed, or the
+	// core died inside startupGrace). While set, an identical push is not
+	// "unchanged": ApplyInbound starts the core again instead of acking a push
+	// whose process is down. Cleared by the next start that survives the window.
+	lastStartFailed bool
 
 	// versions remembers `xray version` until the binary on disk changes: the
 	// installer replaces xray under a running agent, and a once-per-process
@@ -195,7 +200,9 @@ func (a *Adapter) ApplyPolicy(raw json.RawMessage) error {
 
 	a.mu.Lock()
 	unchanged := policyEqual(a.policy, parsed.Rules)
-	if unchanged {
+	// A core whose last start failed is down under this very policy; "unchanged"
+	// would ack a push the node is not serving.
+	if unchanged && !a.lastStartFailed {
 		a.mu.Unlock()
 		return nil
 	}
@@ -250,7 +257,8 @@ func (a *Adapter) ApplyDns(raw json.RawMessage) error {
 	}
 
 	a.mu.Lock()
-	if dnsEqual(a.dns, parsed) {
+	// Same as ApplyPolicy: a dead core after a failed start is not "unchanged".
+	if dnsEqual(a.dns, parsed) && !a.lastStartFailed {
 		a.mu.Unlock()
 		return nil
 	}
@@ -312,7 +320,8 @@ func (a *Adapter) ApplyCascade(fragments json.RawMessage) error {
 		a.logger.Info("xray ApplyCascade: the chain process holds the cascade, dropping the legs from xray")
 		return a.revertRefusedCascade(a.regenerateAndRestart(context.Background()), nil, prev)
 	}
-	if parsed == nil || cascadeEqual(a.cascade, parsed) {
+	// Same as ApplyPolicy: a dead core after a failed start is not "unchanged".
+	if parsed == nil || (cascadeEqual(a.cascade, parsed) && !a.lastStartFailed) {
 		a.mu.Unlock()
 		return nil
 	}
@@ -541,7 +550,16 @@ func (a *Adapter) Start(ctx context.Context) error {
 		a.logger.Info("xray adapter: no REALITY key yet, waiting for ApplyInbound from panel")
 		return nil
 	}
-	return a.regenerateAndRestart(ctx)
+	// A core that forked and died inside the startup window is not fatal at
+	// boot: the agent must stay up to report the fault (the supervisor keeps
+	// retrying, /healthz says why), as before the window existed. Pushes still
+	// get the error. A core that could not be spawned at all stays an error.
+	err := a.regenerateAndRestart(ctx)
+	if errors.Is(err, subprocess.ErrDiedInStartup) {
+		a.logger.Warn("xray: core died at boot, agent stays up to report it", "err", err)
+		return nil
+	}
+	return err
 }
 
 // Idle implements core.Idler. By the time the server calls it, RetainInbounds
@@ -1463,7 +1481,9 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	} else {
 		unchanged = unchanged && had && inboundEqual(prev, newInbound)
 	}
-	if unchanged {
+	// A core whose last start failed is down under this very config; answering
+	// "unchanged" would ack a push the node is not serving.
+	if unchanged && !a.lastStartFailed {
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyInbound: config unchanged, skipping restart")
 		return nil
@@ -1772,17 +1792,47 @@ func (a *Adapter) regenerateAndRestart(ctx context.Context) (retErr error) {
 	if err := proc.Start(ctx); err != nil {
 		a.mu.Lock()
 		a.proc = nil
+		a.lastStartFailed = true
 		a.mu.Unlock()
 		return fmt.Errorf("start xray: %w", err)
 	}
+	// Start only confirms the fork. `xray run -test` binds nothing, so a config
+	// it approved can still kill the process on the real run (a listen port
+	// already taken is the everyday case). Watched live: xray exited 23 seventeen
+	// times in a minute while every cycle logged "xray (re)started".
+	//
+	// On failure a.proc keeps pointing at the new process: Fault() then reports
+	// why it died and the supervisor keeps retrying on its backoff (startupGrace
+	// is well under it, so the dead core is not yet replaced). The error is not
+	// a refusedError: the config is already on disk, so the inbound stays in
+	// memory to match it, same as any failure after the write.
+	//
+	// geoRunning is set either way: it records which geo files the process we
+	// spawned (and the supervisor will respawn) started with. The policy report
+	// of this render is NOT saved (retErr != nil in the deferred func): the
+	// render is not in force until a core serves it.
+	alive := proc.AliveAfter(ctx, startupGrace)
 	a.mu.Lock()
 	a.proc = proc
 	a.started = true
 	a.geoRunning = geo
+	a.lastStartFailed = !alive
 	a.mu.Unlock()
+	if !alive {
+		a.logger.Error(
+			"xray exited right after starting; what it printed is in the lines above",
+			"grace", startupGrace, "users", len(clients))
+		return subprocess.DiedInStartup("xray", startupGrace)
+	}
 	a.logger.Info("xray (re)started", "users", len(clients))
 	return nil
 }
+
+// startupGrace is how long a freshly spawned core gets to prove it stayed up.
+// Longer than an xray that rejects its config takes to exit, well under the
+// supervisor's DefaultRestartBackoff (2s) so a crashed core has not been
+// replaced by a second doomed one, short enough not to slow an ordinary apply.
+const startupGrace = 400 * time.Millisecond
 
 // reconcileSelfSteal (K9-B) starts/stops/restarts the local TLS fallback so it
 // matches the inbound's REALITY mode. Called from regenerateAndRestart under

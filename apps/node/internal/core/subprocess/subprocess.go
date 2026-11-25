@@ -537,6 +537,58 @@ func (s *Subprocess) Running() bool {
 	}
 }
 
+// StartupGrace is the startup window the adapters give a freshly spawned core
+// before they call it started (see AliveAfter). Longer than a core that rejects
+// its config or finds its port taken takes to exit (tens of ms; the cores that
+// have a `check`/`-test` preflight have already had the config vetted), well
+// under DefaultRestartBackoff (2s) so a crashed core has not yet been replaced
+// by a second doomed process, and short enough not to slow an ordinary apply.
+// Equal to xray's own startupGrace on purpose.
+const StartupGrace = 400 * time.Millisecond
+
+// ErrDiedInStartup is what errors.Is finds in the error an adapter returns when
+// its core forked but died inside the startup window (see DiedInStartup). Boot
+// tolerates it (the agent must stay up to report the fault); a push does not.
+var ErrDiedInStartup = errors.New("died inside the startup window")
+
+type startupDeath struct {
+	name  string
+	grace time.Duration
+}
+
+func (e *startupDeath) Error() string {
+	return fmt.Sprintf("%s exited within %s of starting", e.name, e.grace)
+}
+
+func (e *startupDeath) Unwrap() error { return ErrDiedInStartup }
+
+// DiedInStartup is the error for a core that did not survive grace.
+func DiedInStartup(name string, grace time.Duration) error {
+	return &startupDeath{name: name, grace: grace}
+}
+
+// AliveAfter waits out a startup window and reports whether the process is
+// still running at its end. Start only confirms the fork; a binary that dies
+// on its own config or on a taken port exits moments later, and without this
+// look the caller claims a start that never happened.
+//
+// Running is false while the supervisor sits out its restart backoff, so a
+// core that crashed inside the window is reported dead even though a respawn
+// is already scheduled. Keep grace well under RestartBackoff for that reason:
+// past it a second doomed process may already be up and the answer is a lie.
+//
+// A cancelled ctx ends the wait early and asks the same question: the caller
+// is shutting down, and claiming a start on the way out is the same lie.
+func (s *Subprocess) AliveAfter(ctx context.Context, grace time.Duration) bool {
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	return s.Running()
+}
+
 // ExitReason says how the most recent process ended, in words an operator
 // can act on: the exit status ("signal: killed", "exit status 1") and the
 // last line it wrote to stderr, which is usually the engine's own reason.
