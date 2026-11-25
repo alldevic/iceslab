@@ -86,12 +86,13 @@ async function checkLocked(clientIp: string, username: string): Promise<void> {
 /** Counts a failure; true when this one locked the (IP, username) out. */
 async function recordFailure(clientIp: string, username: string): Promise<boolean> {
   const key = FAIL_KEY(clientIp, username);
+  // The TTL is created BEFORE the key can be non-zero, in the same command
+  // (NX: a later failure inside the window does not restart it). INCR then
+  // EXPIRE in two round-trips left a counter with no expiry whenever
+  // something came between them (a Redis blip, a restart), and nothing set
+  // one afterwards, so honest typos accumulated forever into a lockout.
+  await redis.set(key, '0', 'EX', config.LOGIN_LOCKOUT_WINDOW_MIN * 60, 'NX');
   const newCount = await redis.incr(key);
-  if (newCount === 1) {
-    // First failure inside the window, set short TTL so honest typos
-    // don't accumulate forever.
-    await redis.expire(key, config.LOGIN_LOCKOUT_WINDOW_MIN * 60);
-  }
   if (newCount >= config.LOGIN_LOCKOUT_FAILURES) {
     // Threshold tripped, switch to the long lockout TTL.
     await redis.expire(key, config.LOGIN_LOCKOUT_DURATION_MIN * 60);

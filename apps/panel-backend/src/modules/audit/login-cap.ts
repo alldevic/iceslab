@@ -52,13 +52,13 @@ export async function resetLoginCapCountersForTest(): Promise<void> {
   if (keys.length > 0) await redis.del(...keys);
 }
 
-/** The counter: INCR with the window's TTL on first use. Replaced by a test
+/** The counter: INCR on a key created with the window's TTL. Replaced by a test
  *  that takes Redis away from this path alone (the sign-in's own lock counts
  *  in the same Redis and has to keep working). */
 let count = async (key: string, ttl: number): Promise<number> => {
-  const n = await redis.incr(key);
-  if (n === 1) await redis.expire(key, ttl);
-  return n;
+  // TTL first, in the same command as the key (see auth.service.ts recordFailure).
+  await redis.set(key, '0', 'EX', ttl, 'NX');
+  return redis.incr(key);
 };
 const redisCount = count;
 

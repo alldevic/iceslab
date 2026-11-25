@@ -9,6 +9,7 @@ import { registerNodeEventHandlers } from './modules/nodes/nodes.events.js';
 import { registerInboundEventHandlers } from './modules/inbounds/inbounds.events.js';
 import { registerWebhookEventHandlers } from './modules/webhooks/webhook.events.js';
 import { registerBindingsCacheBust } from './modules/subscription/subscription.bindings-cache.js';
+import { observeWorker } from './lib/infra/queue-observability.js';
 import { startNodeUsersWorker } from './modules/users/users.queue.js';
 import { checkNodeDrawings, startInboundSyncWorker } from './modules/inbounds/inbounds.queue.js';
 import { scheduleBuiltinFetch, startGeoSetsWorker } from './modules/geo-sets/geo-sets.queue.js';
@@ -60,10 +61,14 @@ async function start() {
     registerWebhookEventHandlers();
     // B6 - invalidate the /sub binding cache on profile/binding/node changes.
     registerBindingsCacheBust();
-    nodeUsersWorker = startNodeUsersWorker();
-    inboundSyncWorker = startInboundSyncWorker();
-    cronTasksWorker = startCronTasksWorker();
-    geoSetsWorker = startGeoSetsWorker();
+    // Every worker is wrapped (lib/infra/queue-observability.ts): cron-tasks
+    // said nothing when a job threw. inbound-sync and geo-sets already log
+    // each failure themselves, so for them the wrapper only counts it and
+    // listens for the worker's own `error`.
+    nodeUsersWorker = observeWorker(startNodeUsersWorker(), 'node-users');
+    inboundSyncWorker = observeWorker(startInboundSyncWorker(), 'inbound-sync', { logFailures: false });
+    cronTasksWorker = observeWorker(startCronTasksWorker(), 'cron-tasks');
+    geoSetsWorker = observeWorker(startGeoSetsWorker(), 'geo-sets', { logFailures: false });
 
     app = await buildApp();
     // Route background-job logs (crons, queue workers, event-bus) through the

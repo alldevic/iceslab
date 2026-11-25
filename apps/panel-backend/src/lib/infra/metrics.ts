@@ -64,6 +64,19 @@ export const inboundSyncJobs = new Counter({
   registers: [registry],
 });
 
+// Background-job failures, by queue and job name. Counted on EVERY failed
+// attempt (BullMQ's `failed` fires per attempt), so a job with retries adds
+// one per try. Exists because a `review-find-expired` that throws every night
+// otherwise looks like one that succeeds with nothing to do: the only trace
+// was a Bull-board page nobody opens. Job names are a fixed list written in
+// this repo and queues number four, so the label space is bounded.
+export const queueJobFailures = new Counter({
+  name: 'iceslab_queue_job_failures_total',
+  help: 'Background job attempts that failed (every failed attempt, not only the last)',
+  labelNames: ['queue', 'job'] as const,
+  registers: [registry],
+});
+
 // Honey-route hits: separately tracks the security-gate trap firings
 // to graph scanner activity over time. Doesn't replace the Telegram
 // first-hit alert; gives a long-window view.

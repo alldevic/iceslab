@@ -79,8 +79,9 @@ async function checkLocked(adminId: string): Promise<void> {
 
 async function recordFailure(adminId: string): Promise<void> {
   const key = FAIL_KEY(adminId);
+  // TTL first, in the same command as the key (see auth.service.ts recordFailure).
+  await redis.set(key, '0', 'EX', config.LOGIN_LOCKOUT_WINDOW_MIN * 60, 'NX');
   const n = await redis.incr(key);
-  if (n === 1) await redis.expire(key, config.LOGIN_LOCKOUT_WINDOW_MIN * 60);
   if (n >= config.LOGIN_LOCKOUT_FAILURES) await redis.expire(key, config.LOGIN_LOCKOUT_DURATION_MIN * 60);
 }
 

@@ -30,20 +30,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
 
 /**
- * Keys the panel declares but does NOT consume: they are read by the node agent
- * (`apps/node/main.go`) and its installer, and only linger in the panel schema
- * for historical reasons. Passing them to the panel container would be noise.
+ * Keys the panel declares but does NOT consume, and which therefore have no
+ * business reaching the panel container.
  *
- * Anything else missing from compose is a bug, not an entry for this list.
+ * It is EMPTY on purpose: it used to hold six pre-profile `XRAY_*` keys excused
+ * as "read by the node agent, not by us", which kept dead schema entries alive.
+ * They were removed from the schema outright. An entry here is a claim about
+ * the CURRENT split, not a place to park a key that turned out to do nothing.
  */
-const NOT_PANEL_SETTINGS = new Set([
-  'XRAY_PUBLIC_PORT',
-  'XRAY_REALITY_SNI',
-  'XRAY_REALITY_PUBLIC_KEY',
-  'XRAY_REALITY_SHORT_ID',
-  'XRAY_FINGERPRINT',
-  'XRAY_FLOW',
-]);
+const NOT_PANEL_SETTINGS = new Set<string>([]);
 
 function schemaKeys(): string[] {
   const src = readFileSync(resolve(repoRoot, 'apps/panel-backend/src/config.ts'), 'utf8');

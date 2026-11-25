@@ -33,10 +33,6 @@ LOG_LEVEL=info
 JWT_SECRET=dev-only-jwt-secret-not-for-production-0123456789
 
 CORS_ORIGIN=http://localhost:5173
-HYSTERIA_PUBLIC_PORT=443
-XRAY_PUBLIC_PORT=443
-XRAY_FLOW=xtls-rprx-vision
-XRAY_FINGERPRINT=chrome
 EOF
 else
   echo "==> .env already exists, leaving it untouched."
