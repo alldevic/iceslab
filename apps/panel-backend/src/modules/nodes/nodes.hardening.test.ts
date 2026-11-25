@@ -113,7 +113,7 @@ describe('enginesFlag (the cores of Node.intendedEngines)', () => {
     const cmd = buildInstallCommand({ panelUrl: 'https://p', token: 't', engines: [], panelIp: '198.51.100.7', acmeEmail: '' });
     expect(cmd).toBe(
       [
-        'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\',
+        'bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/omega/scripts/install-iceslab-node.sh) \\',
         '  --panel-url https://p \\',
         '  --bootstrap t \\',
         '  --panel-ip 198.51.100.7',
@@ -262,18 +262,18 @@ describe('buildInstallCommand: the release a node is installed from', () => {
 
   it('a candidate and a final pin the installer and the agent to their own tag', () => {
     expect(first('0.3.0-rc.1')).toBe(
-      'ICESLAB_NODE_REF=v0.3.0-rc.1 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0-rc.1/scripts/install-iceslab-node.sh) \\',
+      'ICESLAB_NODE_REF=v0.3.0-rc.1 bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/v0.3.0-rc.1/scripts/install-iceslab-node.sh) \\',
     );
     expect(first('0.3.0')).toBe(
-      'ICESLAB_NODE_REF=v0.3.0 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0/scripts/install-iceslab-node.sh) \\',
+      'ICESLAB_NODE_REF=v0.3.0 bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/v0.3.0/scripts/install-iceslab-node.sh) \\',
     );
     expect(first('v0.3.0')).toContain('ICESLAB_NODE_REF=v0.3.0 ');
   });
 
-  it('a version that names no tag keeps main and no ref', () => {
-    const main = 'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\';
-    // 0.3.0-rc.1+dev: develop after the tag (RELEASING 4b) builds from main.
-    for (const v of [undefined, '', 'unknown', 'dev', '0.3.0+build.7', '0.3.0-rc.1+dev', '0.3', 'main']) {
+  it('a version that names no tag keeps the fallback branch (omega) and no ref', () => {
+    const main = 'bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/omega/scripts/install-iceslab-node.sh) \\';
+    // 0.3.0-rc.1+dev: develop after the tag (RELEASING 4b) builds from the fallback branch.
+    for (const v of [undefined, '', 'unknown', 'dev', '0.3.0+build.7', '0.3.0-rc.1+dev', '0.3.1+omega', '0.3', 'main']) {
       expect(first(v), String(v)).toBe(main);
     }
   });

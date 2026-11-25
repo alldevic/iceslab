@@ -21,19 +21,19 @@ const firstLine = (v: string) => {
 describe('the install command by the panel version (A-270)', () => {
   it('a candidate installs its own tag', () => {
     expect(firstLine('0.3.0-rc.1')).toBe(
-      'ICESLAB_NODE_REF=v0.3.0-rc.1 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0-rc.1/scripts/install-iceslab-node.sh) \\',
+      'ICESLAB_NODE_REF=v0.3.0-rc.1 bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/v0.3.0-rc.1/scripts/install-iceslab-node.sh) \\',
     );
   });
 
-  it('develop after the tag, X.Y.Z-rc.N+dev, installs from main', () => {
+  it('develop after the tag, X.Y.Z-rc.N+dev, installs from the fallback branch (omega)', () => {
     expect(firstLine('0.3.0-rc.1+dev')).toBe(
-      'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) \\',
+      'bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/omega/scripts/install-iceslab-node.sh) \\',
     );
   });
 
   it('a final installs its own tag', () => {
     expect(firstLine('0.3.0')).toBe(
-      'ICESLAB_NODE_REF=v0.3.0 bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/v0.3.0/scripts/install-iceslab-node.sh) \\',
+      'ICESLAB_NODE_REF=v0.3.0 bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/v0.3.0/scripts/install-iceslab-node.sh) \\',
     );
   });
 });

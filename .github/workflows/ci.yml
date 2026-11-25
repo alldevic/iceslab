@@ -889,10 +889,10 @@ jobs:
   # Slice 36 follow-up: build + publish container images to GHCR on every
   # push to main or develop and on every tag. Pull requests build but don't
   # publish (no creds reach forked-PR jobs). Tag naming follows GHCR convention:
-  #   ghcr.io/icecompany-tech/iceslab-backend:main         (rolling)
-  #   ghcr.io/icecompany-tech/iceslab-backend:develop      (rolling, test server)
-  #   ghcr.io/icecompany-tech/iceslab-backend:sha-<7c>     (every push)
-  #   ghcr.io/icecompany-tech/iceslab-backend:1.2.3        (only on `v*` tags, no `v`)
+  #   ghcr.io/alldevic/iceslab-backend:main      (rolling)
+  #   ghcr.io/alldevic/iceslab-backend:develop   (rolling, test server)
+  #   ghcr.io/alldevic/iceslab-backend:sha-<7c>  (every push)
+  #   ghcr.io/alldevic/iceslab-backend:1.2.3     (only on `v*` tags, no `v`)
   # develop publishes because the operator's test server pulls from it; the
   # `develop` tag is what makes "merged into develop" and "deployable to test"
   # the same event instead of a manual rebuild on the box.

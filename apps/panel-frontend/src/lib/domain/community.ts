@@ -15,7 +15,7 @@ function link(value: string | undefined, fallback = ''): string {
 
 export const GITHUB_URL = link(
   import.meta.env.VITE_GITHUB_URL,
-  'https://github.com/icecompany-tech/iceslab',
+  'https://github.com/alldevic/iceslab',
 );
 export const TELEGRAM_URL = link(import.meta.env.VITE_TELEGRAM_URL);
 export const DISCORD_URL = link(import.meta.env.VITE_DISCORD_URL);

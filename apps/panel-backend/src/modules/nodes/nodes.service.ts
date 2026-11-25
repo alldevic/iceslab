@@ -264,12 +264,14 @@ export interface InstallCommandInput {
  * installer from the tag v<version> and ICESLAB_NODE_REF=v<version>, which the
  * installer clones (install-iceslab-node.sh: ICESLAB_NODE_REF, its own default
  * pinned to an older release). Before, the command took the installer from
- * main with no ref, and a node made on a 0.3.0-rc.1 panel came up on v0.2.1.
+ * the branch with no ref, and a node made on a 0.3.0-rc.1 panel came up on v0.2.1.
  *
  * Only a release version names a tag: major.minor.patch with an optional
  * pre-release ("0.3.0", "0.3.0-rc.1"). Anything else (unknown, a dev build,
  * empty, build metadata "+...") has no tag to point at and keeps the old
- * command: the installer from main, its own default ref.
+ * command: the installer from the fallback branch (omega, this fork's own
+ * branch; there are no tags here), its own default ref. The fork's version is
+ * the base's plus build metadata (0.3.1+omega), which is why it lands here.
  */
 export function installRefOf(panelVersion: string | undefined): string | null {
   const v = (panelVersion ?? '').trim().replace(/^v/i, '');
@@ -334,7 +336,7 @@ export function buildInstallCommand(input: InstallCommandInput): string {
   flags.push(...hardeningFlags(input.hardening));
 
   const ref = installRefOf(input.panelVersion);
-  const installer = `https://raw.githubusercontent.com/icecompany-tech/iceslab/${ref ?? 'main'}/scripts/install-iceslab-node.sh`;
+  const installer = `https://raw.githubusercontent.com/alldevic/iceslab/${ref ?? 'omega'}/scripts/install-iceslab-node.sh`;
   return [
     ...notes,
     `${ref ? `ICESLAB_NODE_REF=${ref} ` : ''}bash <(curl -fsSL ${installer}) \\`,

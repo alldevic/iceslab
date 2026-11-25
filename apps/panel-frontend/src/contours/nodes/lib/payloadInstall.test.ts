@@ -18,7 +18,7 @@ describe('A-295: установка ноды из payload на панели бе
 
   it('путь файла берётся из команды сервера, без копии константы', () => {
     const cmd =
-      'curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh | bash -s -- --payload-file /root/iceslab-node.payload --engines xray';
+      'curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/omega/scripts/install-iceslab-node.sh | bash -s -- --payload-file /root/iceslab-node.payload --engines xray';
     expect(payloadFileOf(cmd)).toBe('/root/iceslab-node.payload');
     expect(payloadFileOf('bash -s -- --panel-url https://p.example --bootstrap bs_x')).toBeNull();
   });

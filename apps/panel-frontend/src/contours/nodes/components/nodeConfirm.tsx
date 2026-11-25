@@ -7,7 +7,7 @@ import { nodeDeleteFacts } from '@/contours/nodes/lib/nodeDelete';
 
 /** The command that wipes the agent off the VPS once the node is deleted. */
 const UNINSTALL_CMD =
-  'bash <(curl -fsSL https://raw.githubusercontent.com/icecompany-tech/iceslab/main/scripts/install-iceslab-node.sh) --uninstall';
+  'bash <(curl -fsSL https://raw.githubusercontent.com/alldevic/iceslab/omega/scripts/install-iceslab-node.sh) --uninstall';
 
 /**
  * The one window before a node delete, on the list and on the node page

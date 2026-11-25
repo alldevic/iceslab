@@ -9,9 +9,10 @@ import { join } from 'node:path';
  */
 
 // Repo to check. Override via env for forks / self-hosted mirrors.
-const GITHUB_REPO = process.env.GITHUB_REPO ?? 'icecompany-tech/iceslab';
-// The repo is private, so the releases API needs a token to return a tag.
-// Without it the check simply degrades to "unknown latest" (no nag, no error).
+const GITHUB_REPO = process.env.GITHUB_REPO ?? 'alldevic/iceslab';
+// The fork is public, so the releases API answers without a token (a token only
+// lifts the rate limit). Without one the check can still degrade to "unknown
+// latest" (no nag, no error), e.g. when rate-limited or the fork has no releases.
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
 const CHECK_TTL_MS = 6 * 60 * 60 * 1000; // re-check GitHub at most every 6h
 const FETCH_TIMEOUT_MS = 4000;

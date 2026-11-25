@@ -8,14 +8,14 @@
 # the default; this file is opt-in.
 #
 # Pick the version with ICESLAB_IMAGE_TAG (a published tag: `main`, `develop`,
-# `v0.1.5`, or `sha-<7c>`); defaults to `main`. CI publishes on every push to
-# main or develop and on every v* tag (see .github/workflows/ci.yml).
+# `omega`, or `sha-<7c>`); defaults to `main`. CI of this fork (alldevic/iceslab)
+# tags an image with the branch name (type=ref,event=branch in ci.yml), so a
+# push to omega gives `omega` and `sha-<7c>`. NOTE: the `docker` job's `if` in
+# ci.yml still lists only main, develop and v* tags, so omega is not published
+# until it is added there. GitHub Actions are disabled in the fork for now:
+# until they are enabled no image is published and the pull fails.
 #
-#   main     - released, what the public gets
-#   develop  - integration branch, what the test server runs
-#   v*       - a frozen release
-#
-# The packages are PRIVATE, so the host needs credentials before the first
+# The packages may be PRIVATE, so the host may need credentials before the first
 # pull, even though the repository itself is public:
 #   echo <PAT-with-read:packages> | docker login ghcr.io -u <github-user> --password-stdin
 #
@@ -72,7 +72,7 @@ services:
 
   # One-shot: applies pending Prisma migrations from the pulled image, exits.
   migrate:
-    image: ghcr.io/icecompany-tech/iceslab-backend:${ICESLAB_IMAGE_TAG:-main}
+    image: ghcr.io/alldevic/iceslab-backend:${ICESLAB_IMAGE_TAG:-main}
     container_name: iceslab-prod-migrate
     logging: *default-logging
     mem_limit: 384m
@@ -88,7 +88,7 @@ services:
     restart: "no"
 
   backend:
-    image: ghcr.io/icecompany-tech/iceslab-backend:${ICESLAB_IMAGE_TAG:-main}
+    image: ghcr.io/alldevic/iceslab-backend:${ICESLAB_IMAGE_TAG:-main}
     container_name: iceslab-prod-backend
     logging: *default-logging
     mem_limit: 768m
@@ -140,7 +140,7 @@ services:
       start_period: 30s
 
   frontend:
-    image: ghcr.io/icecompany-tech/iceslab-frontend:${ICESLAB_IMAGE_TAG:-main}
+    image: ghcr.io/alldevic/iceslab-frontend:${ICESLAB_IMAGE_TAG:-main}
     container_name: iceslab-prod-frontend
     logging: *default-logging
     mem_limit: 96m
