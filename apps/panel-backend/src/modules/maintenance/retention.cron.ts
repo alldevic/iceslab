@@ -28,6 +28,8 @@ const RETENTION_DAYS = {
   // subscription_events is append-only (one row per admin action / status flip).
   // Growth is slow but unbounded (review M7). 180d matches nodeUserUsage audit
   // headroom while keeping the table from filling a 2 GB VPS disk over years.
+  // users.events.ts appends a row per user.* domain event, so this window
+  // governs real growth (before that nothing wrote the table).
   subscriptionEvents: 180,
   // A-268, A-269 (owner, 26.10): a deleted user is erased, an unseen device
   // forgotten. The numbers live in @iceslab/shared (retention.ts): the delete

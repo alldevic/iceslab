@@ -12,7 +12,7 @@ import { nodesGauge, usersGauge } from './metrics.js';
  */
 const REFRESH_INTERVAL_MS = 30_000;
 
-async function refreshOnce(): Promise<void> {
+export async function refreshOnce(): Promise<void> {
   // Reset before set: a previously-seen status that no longer has any
   // rows would otherwise stay at its last value forever.
   nodesGauge.reset();
@@ -29,6 +29,9 @@ async function refreshOnce(): Promise<void> {
 
   const userStatuses = await prisma.user.groupBy({
     by: ['status'],
+    // Deletion is soft and leaves `status` as it was, so without the filter
+    // the gauge counts every user ever deleted under their last status.
+    where: { deletedAt: null },
     _count: { _all: true },
   });
   for (const row of userStatuses) {

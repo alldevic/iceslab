@@ -10,7 +10,17 @@ import { nodeUsersQueue } from '../users/users.queue.js';
  * live during the 2026-05-06 VPS test (Hysteria auth rejected pre-existing
  * user because adapter map was empty on the new node).
  */
+/**
+ * One subscription per process. The bus has `on` and no `off`, so a second call
+ * adds a SECOND handler for every event here and both keep firing forever.
+ * Today there is one call, from `index.ts`; the guard is for the day that call
+ * moves somewhere that runs per case (buildApp() in tests).
+ */
+let registered = false;
+
 export function registerNodeEventHandlers(): void {
+  if (registered) return;
+  registered = true;
   eventBus.on('node.created', async ({ nodeId, nodeName }) => {
     console.log(`[event] node.created: ${nodeName} (${nodeId})`);
     await nodeUsersQueue.add('backfillNode', { nodeId });

@@ -93,7 +93,7 @@ export const nodesGauge = new Gauge({
 
 export const usersGauge = new Gauge({
   name: 'iceslab_users',
-  help: 'Number of users by status',
+  help: 'Number of users by status (soft-deleted users excluded)',
   labelNames: ['status'] as const,
   registers: [registry],
 });

@@ -68,7 +68,7 @@ export async function resetTrafficRolling(): Promise<number> {
 }
 
 /**
- * Find active users whose expire_at has passed and flip them to 'expired'.
+ * Find active and limited users whose expire_at has passed and flip them to 'expired'.
  * Emits user.status-changed → handler chain enqueues removeUser job.
  */
 export async function findExpiredUsers(): Promise<number> {
@@ -79,17 +79,33 @@ export async function findExpiredUsers(): Promise<number> {
   // stayed cut off (the cron no longer picks a non-active row), a disabled one
   // became expired and lost why it was off. `updated_at` by hand: a raw write
   // gets no @updatedAt, and the orphan reconcile below windows by it.
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
-    UPDATE users SET status = 'expired', updated_at = now()
-    WHERE status = 'active'
-      AND deleted_at IS NULL
-      AND expire_at < now()
-    RETURNING id::text AS id
+  //
+  // 'limited' is due as well as 'active': a subscriber who burned the quota
+  // before the term ran out sits in 'limited' with expire_at ahead, and an
+  // active-only predicate never sees them when the date arrives. 'disabled'
+  // stays out, that is an operator decision, not a lapse. The previous status
+  // comes back from the same statement (a CTE takes the row locks, SKIP LOCKED
+  // so a row someone is mid-write on, likely a renewal, is left to the next
+  // tick), so the event's `from` is what the row really moved from.
+  const rows = await prisma.$queryRaw<{ id: string; previous_status: string }[]>`
+    WITH due AS (
+      SELECT id, status
+      FROM users
+      WHERE expire_at < now()
+        AND status IN ('active', 'limited')
+        AND deleted_at IS NULL
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE users u
+       SET status = 'expired', updated_at = now()
+      FROM due
+     WHERE u.id = due.id
+    RETURNING u.id::text AS id, due.status AS previous_status
   `;
 
   if (rows.length === 0) return 0;
 
-  const ids = rows.map((u) => u.id);
+  const ids = rows.map((r) => r.id);
 
   // #4 - flip the DB status BEFORE enqueuing. syncRemoveUser now status-gates
   // (it skips removal for a still-active row), so a removeUser job that runs
@@ -112,8 +128,12 @@ export async function findExpiredUsers(): Promise<number> {
   // Event handlers still fire (Telegram alerts, audit log) but they no
   // longer carry the sync invariant, that's covered by the direct
   // enqueue above.
-  for (const id of ids) {
-    eventBus.emit('user.status-changed', { userId: id, from: 'active', to: 'expired' });
+  for (const row of rows) {
+    eventBus.emit('user.status-changed', {
+      userId: row.id,
+      from: row.previous_status,
+      to: 'expired',
+    });
   }
   return ids.length;
 }
@@ -252,7 +272,11 @@ export async function alertNearLimits(): Promise<number> {
   const soon = new Date(now.getTime() + NEAR_EXPIRY_DAYS * 86_400_000);
 
   const expiring = await prisma.user.findMany({
-    where: { status: 'active', deletedAt: null, expireAt: { gte: now, lte: soon } },
+    where: {
+      status: { in: ['active', 'limited'] },
+      deletedAt: null,
+      expireAt: { gte: now, lte: soon },
+    },
     select: { username: true, expireAt: true },
     orderBy: { expireAt: 'asc' },
     take: 50,

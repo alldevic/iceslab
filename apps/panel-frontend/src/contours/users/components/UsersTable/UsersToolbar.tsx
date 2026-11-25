@@ -1,3 +1,4 @@
+import { refreshUsers } from '@/contours/users/lib/refreshUsers';
 import { ROUTING_PRESET_IDS } from '@/lib/domain/routingPresets';
 import { Popover } from '@mantine/core';
 import { Box, Select, Stack, UnstyledButton } from '@mantine/core';
@@ -107,7 +108,7 @@ export function UsersToolbar({
           icon={<IconRefresh size={16} />}
           title={t('common.refresh')}
           loading={usersQuery.isFetching}
-          onClick={() => qc.invalidateQueries({ queryKey: ['users'] })}
+          onClick={() => refreshUsers(qc)}
         />
         <ToolbarButton
           icon={<IconPlus size={14} stroke={2.4} />}

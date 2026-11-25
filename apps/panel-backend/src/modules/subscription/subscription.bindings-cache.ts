@@ -106,7 +106,17 @@ export async function getCachedBindings<T>(
 }
 
 /** Subscribe cache-busting to config-change domain events. Call once at boot. */
+/**
+ * One subscription per process. The bus has `on` and no `off`, so a second call
+ * adds a SECOND handler for every event here and both keep firing forever.
+ * Today there is one call, from `index.ts`; the guard is for the day that call
+ * moves somewhere that runs per case (buildApp() in tests).
+ */
+let registered = false;
+
 export function registerBindingsCacheBust(): void {
+  if (registered) return;
+  registered = true;
   const bust = (): void => bustBindingsCache();
   eventBus.on('binding.created', bust);
   eventBus.on('binding.updated', bust);

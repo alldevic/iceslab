@@ -13,7 +13,17 @@ import { enqueueNodePush } from './inbounds.queue.js';
  * The job ID is per-node so multiple back-to-back inbound mutations on the
  * same node coalesce into one push instead of triggering N restarts.
  */
+/**
+ * One subscription per process. The bus has `on` and no `off`, so a second call
+ * adds a SECOND handler for every event here and both keep firing forever.
+ * Today there is one call, from `index.ts`; the guard is for the day that call
+ * moves somewhere that runs per case (buildApp() in tests).
+ */
+let registered = false;
+
 export function registerInboundEventHandlers(): void {
+  if (registered) return;
+  registered = true;
   const enqueue = (nodeId: string, reason: string): void => {
     console.log(`[event] ${reason}: enqueue applyInbounds for node ${nodeId}`);
     // A-162: the node's revision grows here, and the jobId coalesces a push

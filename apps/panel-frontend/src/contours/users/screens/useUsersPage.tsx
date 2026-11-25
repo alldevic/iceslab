@@ -9,6 +9,7 @@ import type { ColumnPin, ColumnView, UserColumnId } from '@/contours/users/lib/u
 import type { RowDensity } from '@/contours/users/lib/usersTable';
 import { DENSITY_ORDER, DENSITY_STORAGE_KEY, USER_COLUMN_BY_ID, loadColumnView, loadDensity, saveColumnView } from '@/contours/users/lib/usersTable';
 import { bulkUsers, createUser, deleteUser, listUserTags, listUsers, resetUserTraffic, revokeUserSubscription, rotateUserSubscription, updateUser } from '@/lib/domain/users';
+import { refreshUsers } from '@/contours/users/lib/refreshUsers';
 import { bulkReport, type BulkAccessAction } from '@/contours/users/lib/userAccess';
 import { fetchAuthStatus } from '@/lib/auth/api';
 import { listSquads } from '@/lib/domain/squads';
@@ -311,7 +312,7 @@ export function useUsersPage() {
   const createMutation = useMutation({
     mutationFn: createUser,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      refreshUsers(qc);
       notifications.show({ color: 'green', message: t('users.notify.created') });
     },
     // A refusal the drawer puts at a field is said there only (saveToastNeeded).
@@ -324,7 +325,7 @@ export function useUsersPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateUserInput }) => updateUser(id, input),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      refreshUsers(qc);
       notifications.show({ color: 'green', message: t('users.notify.updated') });
     },
     onError: (err) => {
@@ -336,7 +337,7 @@ export function useUsersPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteUser,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      refreshUsers(qc);
       notifications.show({ color: 'green', message: t('users.notify.deleted') });
     },
     onError: (err) =>
@@ -350,7 +351,7 @@ export function useUsersPage() {
   const revokeMutation = useMutation({
     mutationFn: revokeUserSubscription,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      refreshUsers(qc);
       notifications.show({ color: 'green', message: t('users.notify.revoked') });
     },
     onError: (err) =>
@@ -363,7 +364,7 @@ export function useUsersPage() {
   const rotateMutation = useMutation({
     mutationFn: rotateUserSubscription,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      refreshUsers(qc);
       notifications.show({ color: 'green', message: t('users.notify.rotated') });
     },
     onError: (err) =>
@@ -376,7 +377,7 @@ export function useUsersPage() {
   const resetTrafficMutation = useMutation({
     mutationFn: resetUserTraffic,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      refreshUsers(qc);
       notifications.show({ color: 'green', message: t('users.notify.trafficReset') });
     },
     onError: (err) =>
@@ -423,7 +424,7 @@ export function useUsersPage() {
   const bulkMutation = useMutation({
     mutationFn: ({ ids, action }: { ids: string[]; action: BulkAccessAction }) => bulkUsers(ids, action),
     onSuccess: (data, { action }) => {
-      qc.invalidateQueries({ queryKey: ['users'] });
+      refreshUsers(qc);
       qc.invalidateQueries({ queryKey: ['dashboard', 'overview'] });
       const report = bulkReport(data);
       if (!report) {

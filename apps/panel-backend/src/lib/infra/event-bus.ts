@@ -115,6 +115,15 @@ class DomainEventBus {
     this.emitter.emit(event, payload);
   }
 
+  /**
+   * How many handlers are subscribed to one event. There is no `off`, so
+   * "subscribed twice" has no way out and no symptom; this is the way to ask
+   * without emitting the event and watching its side effects.
+   */
+  listenerCount<K extends keyof DomainEventMap>(event: K): number {
+    return this.emitter.listenerCount(String(event));
+  }
+
   on<K extends keyof DomainEventMap>(event: K, handler: EventHandler<K>): void {
     this.emitter.on(event, (payload: DomainEventMap[K]) => {
       void Promise.resolve()

@@ -19,7 +19,17 @@ function forward<K extends keyof DomainEventMap>(event: K): void {
   eventBus.on(event, (payload) => emitWebhook(event, payload));
 }
 
+/**
+ * One subscription per process. The bus has `on` and no `off`, so a second call
+ * adds a SECOND handler for every event here and both keep firing forever.
+ * Today there is one call, from `index.ts`; the guard is for the day that call
+ * moves somewhere that runs per case (buildApp() in tests).
+ */
+let registered = false;
+
 export function registerWebhookEventHandlers(): void {
+  if (registered) return;
+  registered = true;
   forward('user.created');
   forward('user.updated');
   forward('user.status-changed');
