@@ -1,6 +1,6 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import { GEO_BUILTIN, GEO_SET_KINDS, type GeoSetKind } from '@iceslab/shared';
-import { redis } from '../../lib/infra/redis.js';
+import { queueRedis } from '../../lib/infra/redis.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { prisma } from '../../prisma.js';
 import { builtinNeedsFetch, ensureBuiltinSets, fetchBuiltin, fetchUrl, urlSetDue } from './geo-sets.store.js';
@@ -16,7 +16,7 @@ export type GeoSetsJobData = { kind: GeoSetKind } | { setId: string };
 const QUEUE_NAME = 'geo-sets';
 
 export const geoSetsQueue = new Queue<GeoSetsJobData>(QUEUE_NAME, {
-  connection: redis,
+  connection: queueRedis,
   defaultJobOptions: {
     // One attempt: a failure is written on the set as `broken` in words, and
     // a retry would flip it back to `checking` behind the operator's back.
@@ -84,7 +84,7 @@ export function startGeoSetsWorker(): Worker<GeoSetsJobData> {
       }
     },
     // One at a time: each job holds a whole file in memory.
-    { connection: redis, concurrency: 1 },
+    { connection: queueRedis, concurrency: 1 },
   ).on('failed', (job, err) => {
     getLogger().info(`[worker:geo-sets] ${job?.name} ${JSON.stringify(job?.data)} FAILED: ${err.message}`);
   });

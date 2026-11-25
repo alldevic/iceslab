@@ -696,8 +696,10 @@ for i in $(seq 1 60); do
   # The answer into a variable first, never `| grep -q` (E33): under pipefail
   # grep leaving at the first match can kill the writer with SIGPIPE, and a
   # healthy backend then reads as "not yet".
-  health=$(docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
-       wget -qO- http://127.0.0.1:3000/health 2>/dev/null || true)
+  # One probe gets a clock of its own (`timeout 10`, `wget -T 5`): a probe that
+  # hangs must not eat the whole waiting budget.
+  health=$(timeout 10 docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" exec -T backend \
+       wget -T 5 -qO- http://127.0.0.1:3000/health 2>/dev/null || true)
   if grep -q '"status":"ok"' <<<"$health"; then
     ok "backend healthy in ${i}s"
     break

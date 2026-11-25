@@ -165,7 +165,8 @@ export async function lookupClientCountry(
   void config; // referenced for future MaxMind toggle
 
   const cacheKey = `${GEOIP_CACHE_PREFIX}${ip}`;
-  const cached = await redis.get(cacheKey);
+  // A cache: an unreachable Redis costs a lookup, not a subscription.
+  const cached = await redis.get(cacheKey).catch(() => null);
   if (cached !== null) {
     return cached === '_' ? null : cached;
   }
@@ -173,6 +174,6 @@ export async function lookupClientCountry(
   const raw = signals.cfCountry?.trim().toUpperCase();
   const country = raw && raw !== 'XX' && /^[A-Z]{2}$/.test(raw) ? raw : null;
 
-  await redis.set(cacheKey, country ?? '_', 'EX', GEOIP_CACHE_TTL_SEC);
+  await redis.set(cacheKey, country ?? '_', 'EX', GEOIP_CACHE_TTL_SEC).catch(() => null);
   return country;
 }

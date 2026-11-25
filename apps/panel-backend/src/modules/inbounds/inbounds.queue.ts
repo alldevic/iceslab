@@ -7,7 +7,7 @@ import type {
   ProtocolName,
   XrayCascadeFragments,
 } from '@iceslab/shared';
-import { redis } from '../../lib/infra/redis.js';
+import { queueRedis, redis } from '../../lib/infra/redis.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
@@ -77,7 +77,7 @@ export async function readDesiredRevision(nodeId: string): Promise<bigint | null
 }
 
 export const inboundSyncQueue = new Queue<ApplyNodeInboundsJobData>(QUEUE_NAME, {
-  connection: redis,
+  connection: queueRedis,
   defaultJobOptions: {
     // Two retries (exponential 1 s / 2 s). Inbound config push is idempotent
     // by design so retrying is always safe; we stop sooner than addUser
@@ -933,7 +933,7 @@ export function startInboundSyncWorker(): Worker<ApplyNodeInboundsJobData> {
       }
     },
     {
-      connection: redis,
+      connection: queueRedis,
       // One node at a time per worker, applyInbounds restarts the protocol
       // server, parallel restarts on the same node would race. Different
       // nodes can still go in parallel because they're distinct job IDs.

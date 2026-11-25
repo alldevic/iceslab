@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { rankNodesForUser, type NodeForRanking } from './node-selection.js';
 
 const nodes: NodeForRanking[] = [
@@ -52,5 +52,22 @@ describe('rankNodesForUser', () => {
     ];
     const top = rankNodesForUser(minimal, 'EU', 1);
     expect(top[0].id).toBe('x');
+  });
+});
+
+describe('lookupClientCountry with the cache unavailable', () => {
+  it('answers from the request headers, as it does on a miss', async () => {
+    vi.resetModules();
+    vi.doMock('../../lib/infra/redis.js', () => ({
+      redis: {
+        get: vi.fn().mockRejectedValue(new Error('Command timed out')),
+        set: vi.fn().mockRejectedValue(new Error('Command timed out')),
+      },
+    }));
+    const { lookupClientCountry } = await import('./node-selection.js');
+    await expect(lookupClientCountry('198.51.100.7', { cfCountry: 'de' } as never)).resolves.toBe('DE');
+    await expect(lookupClientCountry('198.51.100.7', { cfCountry: 'XX' } as never)).resolves.toBeNull();
+    vi.doUnmock('../../lib/infra/redis.js');
+    vi.resetModules();
   });
 });

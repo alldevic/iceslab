@@ -2,7 +2,7 @@ import type { Worker } from 'bullmq';
 import type { FastifyInstance } from 'fastify';
 import { config } from './config.js';
 import { prisma, pingDatabase } from './prisma.js';
-import { pingRedis, closeRedis } from './lib/infra/redis.js';
+import { waitForRedis, closeRedis } from './lib/infra/redis.js';
 import { closeNodeTransport } from './modules/nodes/nodes.transport.js';
 import { registerUserEventHandlers } from './modules/users/users.events.js';
 import { registerNodeEventHandlers } from './modules/nodes/nodes.events.js';
@@ -44,7 +44,11 @@ async function start() {
       process.exit(1);
     }
 
-    const redisOk = await pingRedis();
+    // Wait, rather than sample: the application client has no offline queue
+    // once it has connected (lib/infra/redis.ts), so a ping in the first moments
+    // of boot would answer "not ready" and turn a Redis that is a second behind
+    // the panel into a panel that refuses to start.
+    const redisOk = await waitForRedis();
     if (!redisOk) {
       console.error('Cannot connect to redis at startup');
       process.exit(1);

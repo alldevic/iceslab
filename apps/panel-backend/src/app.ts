@@ -285,6 +285,11 @@ export async function buildApp(opts: { log?: { level: string; stream: { write(li
     // global limit (429 RATE_LIMITED in registerAdmin). Keep tests on the
     // per-instance in-memory store.
     ...(config.NODE_ENV === 'test' ? {} : { redis }),
+    // A store error must not decide whether the panel answers. Without this the
+    // plugin rethrows whatever the store threw, from an onRequest hook, for
+    // EVERY route. Availability first (customer decision): while Redis is down
+    // the limits are not enforced, and the client's own 'error' log says so.
+    skipOnError: true,
   });
 
   await app.register(fastifyCookie);
