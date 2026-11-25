@@ -45,8 +45,11 @@ COPY packages/shared/package.json packages/shared/
 
 # Install dev+prod deps for the backend filter (incl. workspace transitives).
 # --prefer-offline uses cached packages when available (faster reruns).
+# --store-dir: pnpm 10 keeps its store in ~/.local/share/pnpm/store, so
+# without it the cache mount at /root/.pnpm-store stays empty and every
+# build downloads every package.
 RUN --mount=type=cache,id=pnpm,target=/root/.pnpm-store \
-    pnpm install --frozen-lockfile --prefer-offline --filter "@iceslab/panel-backend..."
+    pnpm install --frozen-lockfile --store-dir /root/.pnpm-store --prefer-offline --filter "@iceslab/panel-backend..."
 
 # Now bring in source.
 COPY apps/panel-backend apps/panel-backend
@@ -81,9 +84,10 @@ RUN pnpm exec tsc -p /repo/packages/shared/tsconfig.json \
       --outDir /repo/packages/shared/src --declaration false
 
 # Strip dev deps so only production node_modules remain.
+# --store-dir points pnpm at the cache mount (see the first install above).
 WORKDIR /repo
 RUN --mount=type=cache,id=pnpm,target=/root/.pnpm-store \
-    pnpm install --frozen-lockfile --prod --prefer-offline --filter "@iceslab/panel-backend..."
+    pnpm install --frozen-lockfile --store-dir /root/.pnpm-store --prod --prefer-offline --filter "@iceslab/panel-backend..."
 
 # ───── Runtime stage ─────
 FROM node:${NODE_VERSION} AS runtime

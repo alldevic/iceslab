@@ -40,8 +40,11 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/panel-frontend/package.json apps/panel-frontend/
 COPY packages/shared/package.json packages/shared/
 
+# --store-dir: pnpm 10 keeps its store in ~/.local/share/pnpm/store, so
+# without it the cache mount at /root/.pnpm-store stays empty and every
+# build downloads every package.
 RUN --mount=type=cache,id=pnpm,target=/root/.pnpm-store \
-    pnpm install --frozen-lockfile --prefer-offline --filter "@iceslab/panel-frontend..."
+    pnpm install --frozen-lockfile --store-dir /root/.pnpm-store --prefer-offline --filter "@iceslab/panel-frontend..."
 
 COPY apps/panel-frontend apps/panel-frontend
 COPY packages/shared packages/shared
