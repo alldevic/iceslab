@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
 # Multi-stage Dockerfile for the Iceslab Go node-agent.
-# Build context can be the apps/node/ directory or the monorepo root:
-# we copy go.mod first then the source.
+# The build context must be the apps/node/ directory and nothing else:
+# `COPY go.mod` resolves against the context and the monorepo root has no
+# go.mod, so building from the root fails. CI builds with `context: apps/node`.
+# We copy go.mod first, then the source, to keep the module layer cached.
 #
 #   docker build -f apps/node/Dockerfile -t iceslab-node apps/node
 #

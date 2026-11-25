@@ -6,8 +6,9 @@ on:
     # `develop` is the integration branch the operator work merges into and the
     # one their test server deploys from, so it has to be gated exactly like
     # main. Without it a merge into develop reached that server having passed
-    # nothing but whatever the PR happened to run.
-    branches: [main, develop]
+    # nothing but whatever the PR happened to run. `omega` is this fork's
+    # integration branch and is gated the same way.
+    branches: [main, develop, omega]
     # ⚠ Release tags too. With `branches` alone a tag push starts nothing:
     # GitHub runs a push workflow only for the ref kinds it lists, so from
     # 2026-07-30 until this line no tag ran CI, the `docker` job's semver tags
@@ -77,6 +78,12 @@ jobs:
               - *common
               - 'apps/panel-backend/**'
               - 'packages/shared/**'
+              # core-pins.test.ts reads scripts/install-iceslab-node.sh.
+              - 'scripts/**'
+              # compose.published-ports, config.blank-optionals and
+              # config.compose-passthrough tests read docker-compose.prod.yml
+              # and docker-compose.ghcr.yml.
+              - 'docker-compose*.yml'
             frontend:
               - *common
               - 'apps/panel-frontend/**'
@@ -85,6 +92,8 @@ jobs:
               - *common
               - 'apps/node/**'
               - 'packages/shared/**'
+              # the Go tests read scripts/install-iceslab*.sh and scripts/ops/*.
+              - 'scripts/**'
 
       - name: Summary
         if: always()
