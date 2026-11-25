@@ -90,8 +90,8 @@ export async function redeemBootstrapToken(token: string): Promise<string> {
 }
 
 /**
- * Background-cleanup helper. Not wired to a cron yet, periodically delete
- * tokens past their TTL. Slice 24+ may schedule this every hour.
+ * Background-cleanup helper: deletes tokens past their TTL or already
+ * consumed. Run from the retention cron (maintenance/retention.cron.ts).
  */
 export async function purgeExpiredBootstrapTokens(): Promise<number> {
   const result = await prisma.nodeBootstrapToken.deleteMany({

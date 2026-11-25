@@ -81,14 +81,45 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
   let ok = 0;
   let down = 0;
 
+  // Per-node, like pollNodeMetrics below. checkOne swallows its own errors, but
+  // the row write, the queue add and the alerts that follow it do not, and one
+  // node's failed write used to reject the whole Promise.all: the other nodes
+  // were abandoned and reconcileNodeRevisions never ran. A node whose row could
+  // not be written is counted in `errored`, not in ok or down: it was reached,
+  // so "down" would be false, and its stored status is stale, so "ok" would be
+  // a claim about a row that did not move.
+  let errored = 0;
   await Promise.all(
     nodes.map(async (node) => {
+      try {
+        const status = await pollOne(node);
+        // `degraded` counts with down on purpose: the agent answers, but a core
+        // the operator configured is not serving anybody, and a summary that
+        // called that "ok" is what let a dead cascade entry look healthy.
+        if (status === 'online') ok++;
+        else down++;
+      } catch (err) {
+        errored++;
+        getLogger().error({ err }, `[cron] node-healthcheck-poll ${node.name} failed`);
+      }
+    }),
+  );
+  if (errored > 0) {
+    getLogger().warn(`[cron] node-healthcheck-poll - ${errored} node(s) errored`);
+  }
+
+  // A-162, P1: a node that is online and behind its desired revision (its
+  // last push failed and nobody has edited since) is pushed again, without
+  // waiting for an event. After the statuses above are written, so a node
+  // that just came back counts as online.
+  await reconcileNodeRevisions().catch((err) =>
+    getLogger().warn({ err }, '[cron] revision reconciliation failed'),
+  );
+
+  return { ok, down };
+
+  async function pollOne(node: (typeof nodes)[number]): Promise<PollResult['status']> {
       const result = await checkOne(node);
-      // `degraded` counts with down on purpose: the agent answers, but a core
-      // the operator configured is not serving anybody, and a summary that
-      // called that "ok" is what let a dead cascade entry look healthy.
-      if (result.status === 'online') ok++;
-      else down++;
       // Write to DB when status OR message changed since last tick. We also
       // compare lastStatusMessage so that a "degraded → ok" transition
       // actually clears the old degraded blurb from the UI. Pre-wave-13 the
@@ -220,7 +251,14 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
       // (the node stays online, so the status alert below never fires).
       // Only on growth - a smaller total means the AGENT restarted and lost its
       // in-memory tally, which is not a core restart.
-      if (result.coreRestarts && storedRestarts && result.coreRestarts.total > storedRestarts.total) {
+      // Same core on both sides: when the busiest core changes, the two totals
+      // are of different cores and their difference is no restart.
+      if (
+        result.coreRestarts &&
+        storedRestarts &&
+        result.coreRestarts.core === storedRestarts.core &&
+        result.coreRestarts.total > storedRestarts.total
+      ) {
         const delta = result.coreRestarts.total - storedRestarts.total;
         const reason = result.coreRestarts.lastReason === 'memory' ? 'memory ceiling' : 'crash';
         notifyTelegramAsync(
@@ -273,18 +311,8 @@ export async function pollNodeStatuses(): Promise<{ ok: number; down: number }> 
             (result.message ? `\nlast: ${escapeMarkdown(result.message)}` : ''),
         );
       }
-    }),
-  );
-
-  // A-162, P1: a node that is online and behind its desired revision (its
-  // last push failed and nobody has edited since) is pushed again, without
-  // waiting for an event. After the statuses above are written, so a node
-  // that just came back counts as online.
-  await reconcileNodeRevisions().catch((err) =>
-    getLogger().warn({ err }, '[cron] revision reconciliation failed'),
-  );
-
-  return { ok, down };
+      return result.status;
+  }
 }
 
 interface PollResult {
@@ -388,6 +416,21 @@ function restartsWorthWriting(
   const nextRss = fresh.rssBytes ?? 0;
   if (prevRss === 0) return nextRss !== 0;
   return Math.abs(nextRss - prevRss) / prevRss > 0.1;
+}
+
+/** The core whose restart tally the node card shows: most restarts, xray on
+ *  a tie, undefined when no core reports one. */
+export function pickRestartCore<C extends { name: string; restarts?: { crash: number; memory: number } | null }>(
+  cores: C[],
+): C | undefined {
+  let best: C | undefined;
+  for (const c of cores) {
+    if (!c.restarts) continue;
+    const total = c.restarts.crash + c.restarts.memory;
+    const bestTotal = best?.restarts ? best.restarts.crash + best.restarts.memory : -1;
+    if (total > bestTotal || (total === bestTotal && c.name === 'xray')) best = c;
+  }
+  return best;
 }
 
 /**
@@ -532,13 +575,14 @@ async function checkOne(node: {
     // agents and non-xray nodes omit it, leaving coreVersion undefined).
     const xrayCore = res.cores.find((c) => c.name === 'xray');
     const coreVersion = xrayCore?.version || undefined;
-    // Restart tally: prefer xray (the only core that arms the watchdog today),
-    // but fall back to whichever core reported one. The agent contract allows
-    // any subprocess-backed core to report, so hard-coding xray would leave the
-    // field empty on a node whose other core started reporting.
-    // ⚠ Single tally by design: when a second core actually arms a watchdog,
-    // this becomes a list and `core` inside the object is what disambiguates.
-    const restartCore = xrayCore?.restarts ? xrayCore : res.cores.find((c) => c.restarts);
+    // Restart tally: every subprocess core reports one now, so the card shows
+    // the core that restarted most, xray on a tie. "xray, else the first that
+    // reports" would hide a core that keeps crashing behind a quiet xray, and
+    // on a node without xray would pick by adapter order.
+    // ⚠ Single tally by design: the column holds one object and `core` inside
+    // it says whose numbers these are; a node with two bouncing cores shows the
+    // worse one. A list would be a schema change.
+    const restartCore = pickRestartCore(res.cores);
     // 2026-08-04: restart tally, stamped with the observation time so the card
     // can show how fresh it is. `total` is recomputed rather than trusted, so a
     // malformed agent response can't produce a tally that contradicts itself.

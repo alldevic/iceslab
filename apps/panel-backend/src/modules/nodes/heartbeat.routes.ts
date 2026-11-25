@@ -42,7 +42,6 @@ async function trackAgentStart(nodeId: string, startTime: string): Promise<void>
   if (!/^[A-Za-z0-9_-]+$/.test(startTime)) return;
   const key = `${AGENT_START_KEY_PREFIX}${nodeId}${AGENT_START_KEY_SUFFIX}`;
   const previous = await redis.get(key);
-  await redis.set(key, startTime, 'EX', AGENT_START_TTL_SECONDS);
   if (previous && previous !== startTime) {
     // Agent restarted (in-memory user map wiped). Re-push inbounds + users.
     // Bug #3 fix (was `apply-${nodeId}-restart-${startTime}`): use the SAME
@@ -59,6 +58,14 @@ async function trackAgentStart(nodeId: string, startTime: string): Promise<void>
       '[heartbeat] agent restart detected, enqueued applyInbounds',
     );
   }
+  // The marker is written LAST, on purpose. Written first, it says "this
+  // start-time has been seen" while the resync it stands for may never have
+  // been queued, and the next heartbeat then reads previous === startTime and
+  // stays quiet: the agent restarted, its in-memory users are gone, and nothing
+  // re-pushes. Written last, a failed enqueue leaves the old value and the next
+  // heartbeat tries again; the push is one `apply-<nodeId>` job, so a retry is
+  // cheap.
+  await redis.set(key, startTime, 'EX', AGENT_START_TTL_SECONDS);
 }
 
 /**
