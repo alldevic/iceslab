@@ -353,15 +353,19 @@ export function HostEditPage() {
    * `dirty`, из-за чего правка, сделанная между отрисовкой и эффектом,
    * считалась несделанной.
    *
-   * Ключ собран из того, ОТ ЧЕГО зависит содержимое: сам хост, его версия и
-   * факт, что списки привязок и нод уже пришли. Их длины в ключе не потому, что
-   * важна длина, а потому, что до их прихода имя ноды и порт прочитать неоткуда.
+   * Ключ собран из того, ОТ ЧЕГО зависит содержимое: сам хост и его версия.
+   * Списки привязок и нод нужны, чтобы прочитать имя ноды и порт, поэтому до
+   * их ответа форма не заполняется (`seedInputsSettled`). Раньше в ключе стояли
+   * их длины, но длина говорит «данные изменились», а не «данные пришли»:
+   * любое фоновое обновление списка заново заполняло открытую форму и стирало
+   * `dirty`. `isFetched` выставляется один раз, по завершении запроса, и
+   * остаётся и после ошибки, так что упавший список не оставляет форму пустой.
+   * SquadEditPage заполняется так же, по записи.
    */
-  const seedKey = host
-    ? `${host.id}:${host.updatedAt}:${bindings.length}:${nodes.length}`
-    : null;
+  const seedInputsSettled = bindingsQuery.isFetched && nodesQuery.isFetched;
+  const seedKey = host && seedInputsSettled ? `${host.id}:${host.updatedAt}` : null;
   const [seededFor, setSeededFor] = useState<string | null>(null);
-  if (host && seedKey !== seededFor) {
+  if (host && seedKey !== null && seedKey !== seededFor) {
     setSeededFor(seedKey);
     const binding = bindings.find((b) => b.id === host.bindingId);
     const node = binding ? nodes.find((n) => n.id === binding.nodeId) : undefined;

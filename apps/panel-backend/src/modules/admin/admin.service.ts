@@ -36,31 +36,6 @@ export async function countAdmins(): Promise<number> {
   return prisma.adminUser.count({ where: { deletedAt: null } });
 }
 
-export async function createAdmin(input: CreateAdminInput): Promise<PublicAdminDto> {
-  const existing = await prisma.adminUser.findFirst({
-    where: { username: input.username, deletedAt: null },
-  });
-  if (existing) {
-    throw new AdminAlreadyExistsError(input.username);
-  }
-
-  const passwordHash = await bcrypt.hash(input.password, BCRYPT_COST);
-
-  const admin = await prisma.adminUser.create({
-    data: {
-      username: input.username,
-      passwordHash,
-      role: 'admin',
-    },
-  });
-
-  notifyTelegramAsync(
-    `👤 *Admin created*\nusername: \`${escapeMarkdown(admin.username)}\`\nrole: \`${admin.role}\``,
-  );
-
-  return mapAdminToPublic(admin);
-}
-
 // bootstrapFirstAdmin is the only path that creates the very first admin
 // (no auth required). Two concurrent POSTs to /api/auth/register would
 // otherwise both see count===0 and both succeed, bypassing the "only one

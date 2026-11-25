@@ -5,9 +5,9 @@ import { enqueueNodePush } from './inbounds.queue.js';
 /**
  * Register inbound-related event handlers.
  *
- * `inbound.{created,updated,deleted}` and `node.created` all collapse to a
- * single job: "recompute the full inbound set for this node and push it
- * through mTLS." Idempotent, re-firing for an unchanged set is a node-side
+ * `node.*`, `binding.*`, `profile.*`, `host.changed` and the other events below
+ * all collapse to a single job: "recompute the full inbound set for this node and
+ * push it through mTLS." Idempotent, re-firing for an unchanged set is a node-side
  * no-op, so we don't try to dedupe at the producer level.
  *
  * The job ID is per-node so multiple back-to-back inbound mutations on the
@@ -34,20 +34,6 @@ export function registerInboundEventHandlers(): void {
       console.error(`[event] ${reason}: enqueue for node ${nodeId} failed`, err),
     );
   };
-
-  eventBus.on('inbound.created', ({ inboundId, nodeId }) => {
-    enqueue(nodeId, `inbound.created ${inboundId}`);
-    // Note: attaching the inbound to the "All" squad now happens
-    // synchronously inside `createInbound` (same transaction as the row
-    // insert) so subscriptions can see it immediately. No async upsert
-    // here anymore.
-  });
-  eventBus.on('inbound.updated', ({ inboundId, nodeId }) => {
-    enqueue(nodeId, `inbound.updated ${inboundId}`);
-  });
-  eventBus.on('inbound.deleted', ({ inboundId, nodeId }) => {
-    enqueue(nodeId, `inbound.deleted ${inboundId}`);
-  });
 
   // When a node is registered, also push its (currently empty) inbound set,
   // sets the node-agent into a known good state (no leftover from a previous

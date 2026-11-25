@@ -64,13 +64,6 @@ export interface DomainEventMap {
   // wrong without changing its key. Caught 2026-07-31 by the first test that
   // narrowed a squad and got a stale, empty result.
   'squad.changed':        { squadId: string };
-  // inbound.* → push the full inbound set of the affected node to its
-  // node-agent over mTLS, so the protocol server (xray/hysteria/awg/naive)
-  // gets the live config without admin SSH editing /etc/iceslab-node/env.
-  // Slice 24: replaces the manual env-editing dance from VPS test 2026-05-06.
-  'inbound.created':      { inboundId: string; nodeId: string };
-  'inbound.updated':      { inboundId: string; nodeId: string };
-  'inbound.deleted':      { inboundId: string; nodeId: string };
   // Slice 27: Profiles + ProfileNodeBinding model. profile.* events fire
   // on profile-template mutations (no immediate node restart, config of
   // shared profile changed, all bound nodes need re-push). binding.* events

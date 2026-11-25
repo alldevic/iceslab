@@ -5,9 +5,9 @@ import { emitWebhook } from '../../lib/notify/webhook.js';
  * K2: forward externally-meaningful domain events to the webhook bus.
  *
  * One subscriber; the events are already emitted onto the typed event bus by
- * the services, so there are no call-site changes. `inbound.*` and `binding.*`
- * are node-push plumbing (interesting to the node-agent, not to a billing bot),
- * so only the user / profile / node lifecycle is forwarded.
+ * the services, so there are no call-site changes. `binding.*` is
+ * node-push plumbing (interesting to the node-agent, not to a billing bot), so
+ * only the user / profile / node lifecycle is forwarded.
  *
  * The four an operator's bot actually waits for are now all here: a node going
  * down or coming back (`node.status-changed`), a user expiring or hitting their
