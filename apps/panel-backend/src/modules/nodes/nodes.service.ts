@@ -544,6 +544,16 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
     if (input.policyId) await assertPolicyFitsNode(input.policyId, id);
     data.policyId = input.policyId;
   }
+  // The operator's half of the status. Only a real change is written, and
+  // `active` only moves a disabled node: an online one stays what the poller
+  // said. A returned node waits as `unknown` until the poller's next tick.
+  if (input.status === 'disabled' && existing.status !== 'disabled') {
+    data.status = 'disabled';
+    data.lastStatusChange = new Date();
+  } else if (input.status === 'active' && existing.status === 'disabled') {
+    data.status = 'unknown';
+    data.lastStatusChange = new Date();
+  }
   // Which core versions the operator wants. `'coreVersions' in input`, not
   // `??`: an absent key is no edit, null is "every pin", and a map patches per
   // component. Checked against the manifest on the merged result.
@@ -608,6 +618,9 @@ export async function updateNode(id: string, input: UpdateNodeInput): Promise<Pu
   // config and restart the protocol server (see the event's declaration).
   if (Object.keys(data).length > 0) {
     eventBus.emit('node.changed', { nodeId: id });
+  }
+  if (data.status !== undefined) {
+    eventBus.emit('node.status-changed', { nodeId: id, from: existing.status, to: updated.status });
   }
 
   return mapNodeToPublic(updated);

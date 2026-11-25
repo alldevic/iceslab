@@ -233,6 +233,9 @@ export const nodes = {
     multiplierRequired: 'Enter a multiplier, 1: as is',
     maxUsers: 'User ceiling',
     maxUsersDesc: 'Empty: no ceiling. Otherwise a whole number from 1',
+    inService: 'In service',
+    inServiceDesc:
+      'Off: the node is in no subscription and the panel stops polling it. Its agent and cores keep running. Back on, the node waits as unknown until the next poll.',
     domainBad: 'A host name only: letters, digits, dots and hyphens, no scheme or port',
     policy: 'Node policy',
     policyDesc:

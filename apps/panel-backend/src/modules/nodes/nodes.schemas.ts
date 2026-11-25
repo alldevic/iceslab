@@ -209,6 +209,12 @@ export const UpdateNodeSchema = z.object({
   // pin, left out is untouched; null for the whole map = every pin. No
   // .default(): an absent key must reach the service as absent.
   coreVersions: CoreVersionsPatchSchema.optional(),
+  // The half of `status` an operator owns. online / degraded / unreachable /
+  // unknown are the poller's answer about the machine and are not settable.
+  // `disabled` takes the node out of every subscription and out of the poller
+  // (its agent hears `disabled` on its heartbeat and stays up). `active`
+  // brings a disabled node back as `unknown`, and the poller decides.
+  status: z.enum(['active', 'disabled']).optional(),
 });
 export type UpdateNodeInput = z.infer<typeof UpdateNodeSchema>;
 

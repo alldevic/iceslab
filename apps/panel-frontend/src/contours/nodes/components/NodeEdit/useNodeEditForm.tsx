@@ -34,7 +34,7 @@ import { listNodePolicies, policyFitRefusal as readPolicyRefusal } from '@/lib/d
 import { listSquads } from '@/lib/domain/squads';
 import { useOverview } from '@/lib/domain/dashboard';
 import { usePageMeta } from '@/lib/ui/usePageMeta';
-import { defaults, domainOk, domainPatch, egressOf, nodeEnginesPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
+import { defaults, domainOk, domainPatch, egressOf, nodeEnginesPut, statusPut, type FormValues } from '@/contours/nodes/lib/nodeEditForm';
 import { loadFailure, loadView } from '@/lib/ui/loadView';
 import { nodeEnginesRefusal, type NodeEnginesRefusal } from '@/contours/nodes/lib/nodeCreateForm';
 import { AMBER, DIM, MOSS } from '@/contours/nodes/lib/colors';
@@ -130,12 +130,14 @@ export function useNodeEditForm() {
     },
   });
 
-  // Seed the form once the node lands, without clobbering edits in flight.
-  const [seeded, setSeeded] = useState(false);
-  if (node && !seeded) {
+  // Seed the form once per node, without clobbering edits in flight. The id of
+  // the seeded node, not a flag: walking from one node to another without a
+  // remount has to take the new node's values.
+  const [seededId, setSeededId] = useState<string | null>(null);
+  if (node && seededId !== node.id) {
     form.setValues(defaults(node, comma));
     form.resetDirty(defaults(node, comma));
-    setSeeded(true);
+    setSeededId(node.id);
   }
 
   usePageMeta([node?.name ?? '']);
@@ -219,6 +221,7 @@ export function useNodeEditForm() {
         // Метка: у сервера старше поля прежний `protocol` из селекта; у
         // сервера с полем ни ядер, ни метки (nodeEnginesPut, E42).
         ...enginesBody,
+        ...statusPut(node, form.values.inService),
       });
     },
     onSuccess: () => {
@@ -265,7 +268,10 @@ export function useNodeEditForm() {
 
   const warpMutation = useMutation({
     mutationFn: (on: boolean) => (on ? registerNodeWarp(id!) : disableNodeWarp(id!)),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['nodes'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['nodes'] });
+      qc.invalidateQueries({ queryKey: ['node', id] });
+    },
     onError: (err) =>
       notifications.show({
         color: 'red',
