@@ -1,3 +1,4 @@
+import { MIERU_MTU } from '@/contours/profiles/lib/mieruMtu';
 import { csvList, numOr, type FormValues } from '@/contours/profiles/lib/profileFormValues';
 import { isPlainSubprotocol, plainXrayConfig } from '@/contours/profiles/lib/plainSubprotocol';
 import { portHopConfig } from '@/contours/profiles/lib/portHopRange';
@@ -107,7 +108,7 @@ export function profileConfigOf(values: FormValues): Record<string, unknown> {
     case 'mtproto':
       return { domain: values.mtgDomain };
     case 'mieru':
-      return { mtu: values.mieruMtu === '' ? 1400 : Number(values.mieruMtu) };
+      return { mtu: values.mieruMtu === '' ? MIERU_MTU.default : Number(values.mieruMtu) };
     case 'tuic':
       return {
         serverName: values.tuicServerName,

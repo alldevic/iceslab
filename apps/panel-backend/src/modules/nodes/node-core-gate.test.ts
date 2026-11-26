@@ -7,6 +7,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { observedCores } from './nodes.cron.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * A host does not go onto a node whose core for it is missing or known to be
@@ -205,8 +206,8 @@ describe('the core gate on putting a host on a node', () => {
 });
 
 const AWG = {
-  serverPrivateKey: 'a'.repeat(44),
-  serverPublicKey: 'b'.repeat(44),
+  serverPrivateKey: WG_TEST_PRIVATE_KEY,
+  serverPublicKey: WG_TEST_PUBLIC_KEY,
   subnet: '10.66.66.0/24',
   obfuscation: {},
 };

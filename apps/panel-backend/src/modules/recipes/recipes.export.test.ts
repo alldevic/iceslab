@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PROTOCOL_NAMES } from '@iceslab/shared';
 import { EXPORTABLE_FIELDS, profileToRecipe, recipeAllowlist, recipeIdOf } from './recipes.export.js';
 import { RecipeSchema } from './recipes.schemas.js';
+import { WG_TEST_PRIVATE_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * The export reads form fields off a profile by a table of its own. The table
@@ -50,11 +51,11 @@ describe('profileToRecipe', () => {
       ...base,
       name: 'AWG',
       protocol: 'amneziawg',
-      config: { subnet: '10.66.66.0/24', serverPrivateKey: 'PRIV', obfuscation: { jc: 4, jmin: 64, jmax: 128, s1: 32, h1: 1234567 } },
+      config: { subnet: '10.66.66.0/24', serverPrivateKey: WG_TEST_PRIVATE_KEY, obfuscation: { jc: 4, jmin: 64, jmax: 128, s1: 32, h1: 1234567 } },
     });
     expect(r.apply).toMatchObject({ awgPreset: 'custom', awgSubnet: '10.66.66.0/24', awgJc: 4, awgS1: 32 });
     expect(r.randomize).toEqual([{ field: 'awgH1', kind: 'awgHeader' }]);
-    expect(JSON.stringify(r)).not.toContain('PRIV');
+    expect(JSON.stringify(r)).not.toContain(WG_TEST_PRIVATE_KEY);
   });
 
   it('an id the registry takes, whatever the name', () => {

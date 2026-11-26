@@ -5,6 +5,7 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * GET /api/users/:id/endpoints, the list behind the user card's Copy buttons.
@@ -51,8 +52,8 @@ describe('the endpoints a user card copies', () => {
       protocol: 'amneziawg',
       config: {
         subnet: '10.66.66.0/24',
-        serverPrivateKey: 'a'.repeat(44),
-        serverPublicKey: 'b'.repeat(44),
+        serverPrivateKey: WG_TEST_PRIVATE_KEY,
+        serverPublicKey: WG_TEST_PUBLIC_KEY,
         obfuscation: {},
       },
     });

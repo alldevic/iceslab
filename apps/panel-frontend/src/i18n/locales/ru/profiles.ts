@@ -252,6 +252,9 @@ export const profiles = {
         awgPresetLabel: 'Пресет обфускации',
         awgKeepZero: 'держать 0',
         awgHDesc: '> 4 и уникальны',
+        awgJunkOrder: 'Jmin не может быть больше Jmax',
+        awgPaddingGap: 'S1 + 56 не должно равняться S2 (это длина рукопожатия обычного WireGuard)',
+        awgKeyShape: 'Ключ WireGuard: 44 символа base64, последний «=»',
         awgHWarning:
           'H1-H4 должны быть попарно уникальны, сейчас есть дубликаты. Жми «Re-roll» чтобы сгенерировать заново.',
         naiveHostnameLabel: 'Публичный хост',

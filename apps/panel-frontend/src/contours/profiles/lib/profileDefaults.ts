@@ -2,6 +2,7 @@ import { DEFAULT_LINK_CONGESTION, type XraySubprotocol } from '@iceslab/shared';
 import type { Profile } from '@/lib/domain/profiles';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 import { randomAwgHeaders, TSPU_PRESET } from '@/contours/profiles/lib/awgPresets';
+import { MIERU_MTU } from '@/contours/profiles/lib/mieruMtu';
 import { profileAwgGeneration } from '@/lib/domain/awg';
 
 export function defaults(profile: Profile | null): FormValues {
@@ -80,7 +81,7 @@ export function defaults(profile: Profile | null): FormValues {
     ssMethod: '2022-blake3-aes-256-gcm',
 
     mtgDomain: 'www.cloudflare.com',
-    mieruMtu: 1400,
+    mieruMtu: MIERU_MTU.default,
 
     tuicServerName: 'www.bing.com',
     // Дефолт контракта, не свой: он же стоит у ноги каскада, и менять его надо

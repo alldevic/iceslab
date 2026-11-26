@@ -13,6 +13,7 @@ import { syncAddUser } from './users.queue.js';
 import { applyInboundsForNode } from '../inbounds/inbounds.queue.js';
 import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
 import { generateSubscription } from '../subscription/subscription.service.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * A-022: a user is rolled out only onto the nodes and inbounds their squads
@@ -57,7 +58,7 @@ const VLESS = {
   realityShortIds: ['0123abcd'],
   network: 'raw',
 };
-const awg = (subnet: string) => ({ serverPrivateKey: 'a'.repeat(44), serverPublicKey: 'b'.repeat(44), subnet, obfuscation: {} });
+const awg = (subnet: string) => ({ serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY, subnet, obfuscation: {} });
 
 async function node(pushed = true): Promise<string> {
   seq += 1;

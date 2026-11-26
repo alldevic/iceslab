@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { XRAY_PLAIN_SUBPROTOCOLS, XRAY_SUBPROTOCOLS, type AmneziawgInboundCfg } from '@iceslab/shared';
+import {
+  REALITY_TRANSPORTS,
+  XRAY_PLAIN_SUBPROTOCOLS,
+  XRAY_SUBPROTOCOLS,
+  type AmneziawgInboundCfg,
+} from '@iceslab/shared';
 
 const NameSchema = z
   .string()
@@ -70,12 +75,7 @@ const RealityKeySchema = z
   )
   .default('');
 
-/**
- * The transports REALITY can carry, per xray itself:
- * `infra/conf: REALITY only supports RAW, XHTTP and gRPC for now.`
- * Exported for the frontend mirror test (milestone 6.5).
- */
-export const REALITY_TRANSPORTS = ['raw', 'xhttp', 'grpc'] as const;
+export { REALITY_TRANSPORTS };
 
 export const XrayConfigSchema = z.object({
   /**
@@ -338,13 +338,24 @@ const ObfuscationSchema = z.object({
   i5: z.string().regex(/^[0-9a-fA-FxX<> rt]*$/).max(256).default(''),
 });
 
+/**
+ * A WireGuard key as the node wants it (amneziawg/config.go, validateWGKey): 44
+ * base64 characters that decode to 32 bytes, so 43 from the standard alphabet
+ * and one `=`. Anything else saved here is refused on the node at the push, with
+ * nothing on the field. Exported: the plain WireGuard schema reuses it.
+ */
+export const WG_KEY_PATTERN = /^[A-Za-z0-9+/]{43}=$/;
+export const WgKeySchema = z
+  .string()
+  .regex(WG_KEY_PATTERN, 'must be a WireGuard key: 44 base64 characters ending in "="');
+
 export const AmneziawgConfigSchema = z
   .object({
     /** Subnet handed to peers, e.g. "10.0.0.0/24". */
     subnet: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/),
-    serverPrivateKey: z.string().min(1).max(128),
+    serverPrivateKey: WgKeySchema,
     /** Public key paired with privateKey, emitted in client config. */
-    serverPublicKey: z.string().min(1).max(128),
+    serverPublicKey: WgKeySchema,
     obfuscation: ObfuscationSchema,
   })
   // Mirror the constraints the node's config.go validate() enforces at deploy
@@ -373,6 +384,16 @@ export const AmneziawgConfigSchema = z
           });
         }
       }
+    }
+    // Jmin <= Jmax, as the node's validate() has it for 1.x/2.0 (the 3.1
+    // geometry is minted by the panel and checked by the node on its own
+    // table, strictly below; the stored obfuscation is not what it renders).
+    if (obfuscation.jmin > obfuscation.jmax) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `jmin (${obfuscation.jmin}) must be <= jmax (${obfuscation.jmax})`,
+        path: ['obfuscation', 'jmax'],
+      });
     }
     // s1 + 56 must NOT equal s2: that recreates the vanilla WireGuard handshake
     // packet length and makes the flow DPI-detectable.

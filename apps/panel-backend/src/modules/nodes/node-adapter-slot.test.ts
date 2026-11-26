@@ -6,6 +6,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { observedCores } from './nodes.cron.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * A-055: a node does not get a second inbound on an adapter that holds one.
@@ -67,8 +68,8 @@ async function profile(protocol: string, config: unknown, extra: Record<string, 
 }
 
 const awg = (subnet: string) => ({
-  serverPrivateKey: 'a'.repeat(44),
-  serverPublicKey: 'b'.repeat(44),
+  serverPrivateKey: WG_TEST_PRIVATE_KEY,
+  serverPublicKey: WG_TEST_PUBLIC_KEY,
   subnet,
   obfuscation: {},
 });

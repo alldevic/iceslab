@@ -1,3 +1,5 @@
+import { NETWORKS_CARRYING_VISION } from '@iceslab/shared';
+
 /**
  * Xray stream transports each carry their own settings, but a profile stores one
  * flat config, so switching transport leaves the previous one's fields behind.
@@ -38,7 +40,8 @@ const FIELDS_BY_NETWORK: Record<string, readonly string[]> = {
  * xray 26.3.27. xray refuses REALITY on ws/kcp outright, so gRPC is the case
  * this is really for; TLS on ws/httpupgrade/kcp is covered too.
  */
-export const NETWORKS_CARRYING_VISION = ['raw', 'xhttp'] as const;
+// The list is in @iceslab/shared, where the profile form reads it too.
+export { NETWORKS_CARRYING_VISION };
 
 /** Every field owned by some transport, i.e. the set we are allowed to drop. */
 const ALL_TRANSPORT_FIELDS = [...new Set(Object.values(FIELDS_BY_NETWORK).flat())];

@@ -1,10 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { AmneziawgConfigSchema, REALITY_TRANSPORTS, XrayConfigSchema } from './inbounds.schemas.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 const base = {
   subnet: '10.66.66.0/24',
-  serverPrivateKey: 'priv',
-  serverPublicKey: 'pub',
+  serverPrivateKey: WG_TEST_PRIVATE_KEY,
+  serverPublicKey: WG_TEST_PUBLIC_KEY,
 };
 
 describe('AmneziawgConfigSchema S3/S4', () => {
@@ -18,6 +21,74 @@ describe('AmneziawgConfigSchema S3/S4', () => {
     const parsed = AmneziawgConfigSchema.parse({ ...base, obfuscation: { s3: 32, s4: 16 } });
     expect(parsed.obfuscation.s3).toBe(32);
     expect(parsed.obfuscation.s4).toBe(16);
+  });
+});
+
+describe('AmneziawgConfigSchema server keys: the shape the node enforces', () => {
+  const parse = (priv: string, pub: string = WG_TEST_PUBLIC_KEY) =>
+    AmneziawgConfigSchema.safeParse({ ...base, serverPrivateKey: priv, serverPublicKey: pub, obfuscation: {} });
+
+  it('takes 44 characters of standard base64 ending in =', () => {
+    expect(parse(WG_TEST_PRIVATE_KEY).success).toBe(true);
+    expect(parse('a'.repeat(43) + '=').success).toBe(true);
+    expect(parse(`${'+/'.repeat(21)}A=`).success).toBe(true);
+  });
+
+  // validateWGKey (apps/node/internal/core/amneziawg/config.go): 44 chars that
+  // decode to 32 bytes. Each of these it refuses, so the schema must.
+  it.each([
+    ['without the padding', 'a'.repeat(44)],
+    ['too short', 'a'.repeat(42) + '='],
+    ['too long', 'a'.repeat(44) + '='],
+    ['empty', ''],
+    ['a placeholder', 'PRIV'],
+    ['base64url, not the standard alphabet', '-_'.repeat(21) + 'A='],
+    ['padded twice', 'a'.repeat(42) + '=='],
+    ['with a space inside', 'a'.repeat(21) + ' ' + 'a'.repeat(21) + '='],
+  ])('refuses a key %s, on the field', (_name, key) => {
+    const r = parse(key);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.path).toEqual(['serverPrivateKey']);
+    const pub = parse(WG_TEST_PRIVATE_KEY, key);
+    expect(pub.success).toBe(false);
+    if (!pub.success) expect(pub.error.issues[0]?.path).toEqual(['serverPublicKey']);
+  });
+
+  it('keeps the node rule it mirrors: 44 characters, 32 bytes', () => {
+    const go = readFileSync(
+      fileURLToPath(new URL('../../../../node/internal/core/amneziawg/config.go', import.meta.url)),
+      'utf8',
+    );
+    expect(go).toMatch(/len\(s\) != 44/);
+    expect(go).toMatch(/len\(raw\) != 32/);
+  });
+});
+
+describe('AmneziawgConfigSchema Jmin <= Jmax', () => {
+  const parse = (jmin: number, jmax: number) =>
+    AmneziawgConfigSchema.safeParse({ ...base, obfuscation: { jmin, jmax } });
+
+  it('refuses Jmin above Jmax, with the path to jmax', () => {
+    const r = parse(129, 128);
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.map((i) => i.path)).toEqual([['obfuscation', 'jmax']]);
+  });
+
+  it('takes Jmin equal to Jmax and below it', () => {
+    expect(parse(128, 128).success).toBe(true);
+    expect(parse(64, 128).success).toBe(true);
+  });
+
+  it('keeps the node rule it mirrors', () => {
+    const go = readFileSync(
+      fileURLToPath(new URL('../../../../node/internal/core/amneziawg/config.go', import.meta.url)),
+      'utf8',
+    );
+    expect(go).toMatch(/c\.Jmin > c\.Jmax/);
+  });
+
+  it('the defaults of a profile that names neither pass (3.1 keeps its own geometry)', () => {
+    expect(AmneziawgConfigSchema.safeParse({ ...base, obfuscation: {} }).success).toBe(true);
   });
 });
 

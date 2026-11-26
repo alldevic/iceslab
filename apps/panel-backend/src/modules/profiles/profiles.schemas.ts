@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AWG_PROTOCOLS, XRAY_PLAIN_SUBPROTOCOLS } from '@iceslab/shared';
+import { AWG_PROTOCOLS, ENGINE_OPTIONS, XRAY_PLAIN_SUBPROTOCOLS } from '@iceslab/shared';
 import {
   PROTOCOL_CONFIG_SCHEMAS,
   type CreateInboundInput,
@@ -49,22 +49,8 @@ export const ProtocolEnum = z.enum([
 // Engine-choice (EC5): which proxy core serves a profile. null = native.
 export const EngineEnum = z.enum(['xray', 'hysteria', 'singbox']);
 
-// Which engines each protocol may be served by. The shared protocols can run on
-// their native core OR sing-box; everything else has a single native core, so
-// its engine must stay null (native).
-const ENGINE_OPTIONS: Record<string, readonly string[]> = {
-  xray: ['xray', 'singbox'],
-  shadowsocks: ['xray', 'singbox'],
-  hysteria: ['hysteria', 'singbox'],
-  // sing-box is not one option among several for these three, it is the only
-  // core that speaks them. Listing it anyway is what lets an operator SAY so:
-  // without an entry here the protocol saves only with a null engine, and a
-  // form that sends `engine: 'singbox'` is refused with a message about an
-  // invalid engine, which reads as "this protocol is broken".
-  tuic: ['singbox'],
-  anytls: ['singbox'],
-  shadowtls: ['singbox'],
-};
+// Which engines each protocol may be served by: ENGINE_OPTIONS in
+// @iceslab/shared, which the profile form is held to by a test.
 
 /** A null/undefined engine (native) is always valid; a set engine must be one
  *  of the protocol's allowed cores. */

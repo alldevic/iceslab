@@ -116,3 +116,78 @@ describe('xrayFieldReactions', () => {
     expect(xrayFieldReactions({ ...base, xrayNetwork: grpc }, null)).toEqual({ xrayServiceName: 'GunService', xrayFlow: '' });
   });
 });
+
+/*
+ * Правила AmneziaWG (6.5): профиль, который схема откажет, форма не отправляет
+ * и называет поле. Ключи правильной формы подставлены: у нового профиля их
+ * оператор получает кнопкой «Generate».
+ */
+describe('useProfileForm: правила AmneziaWG', () => {
+  const KEY = 'YAT+bEESM0kh2iD3ujUlW1SQ/HeGjigNdYRs8B5ZSEE=';
+
+  async function submitAwg(over: Record<string, unknown>) {
+    const sent: unknown[] = [];
+    const { result } = renderHook(
+      () =>
+        useProfileForm({
+          profile: null,
+          opened: true,
+          mode: 'create',
+          onSubmit: async (input) => {
+            sent.push(input);
+          },
+          onClose: () => {},
+        }),
+      { wrapper },
+    );
+    act(() =>
+      result.current.form.setValues({
+        protocol: 'amneziawg',
+        name: 'awg',
+        awgServerPriv: KEY,
+        awgServerPub: KEY,
+        ...over,
+      }),
+    );
+    await act(async () => {
+      await result.current.form.onSubmit(result.current.handleSubmit)();
+    });
+    return { sent, errors: result.current.form.errors };
+  }
+
+  it('новый профиль с ключами правильной формы уходит', async () => {
+    const { sent, errors } = await submitAwg({});
+    expect(errors).toEqual({});
+    expect(sent).toHaveLength(1);
+  });
+
+  it('профиль 3.1 этими правилами не ломается', async () => {
+    const { sent, errors } = await submitAwg({ awgGeneration: 3 });
+    expect(errors).toEqual({});
+    expect(sent).toHaveLength(1);
+  });
+
+  it('Jmin больше Jmax: не отправляется, ошибка у Jmax', async () => {
+    const { sent, errors } = await submitAwg({ awgJmin: 200, awgJmax: 100 });
+    expect(sent).toEqual([]);
+    expect(Object.keys(errors)).toEqual(['awgJmax']);
+  });
+
+  it('S1 + 56 = S2: не отправляется, ошибка у S2', async () => {
+    const { sent, errors } = await submitAwg({ awgS1: 10, awgS2: 66 });
+    expect(sent).toEqual([]);
+    expect(Object.keys(errors)).toEqual(['awgS2']);
+  });
+
+  it('ключ без «=» на конце: не отправляется, ошибка у ключа', async () => {
+    const { sent, errors } = await submitAwg({ awgServerPriv: 'a'.repeat(44) });
+    expect(sent).toEqual([]);
+    expect(Object.keys(errors)).toEqual(['awgServerPriv']);
+  });
+
+  it('правила AmneziaWG не трогают другие протоколы', async () => {
+    const { sent, errors } = await submitAwg({ protocol: 'naive', awgServerPriv: '', awgJmin: 500 });
+    expect(errors).toEqual({});
+    expect(sent).toHaveLength(1);
+  });
+});

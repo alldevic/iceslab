@@ -1,5 +1,6 @@
 import { NumberInput, Stack } from '@mantine/core';
 import type { UseFormReturnType } from '@mantine/form';
+import { MIERU_MTU } from '@/contours/profiles/lib/mieruMtu';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 
 export function MieruSection({
@@ -11,9 +12,9 @@ export function MieruSection({
             <Stack>
               <NumberInput
                 label="MTU"
-                placeholder="1400"
-                min={1280}
-                max={1500}
+                placeholder={String(MIERU_MTU.default)}
+                min={MIERU_MTU.min}
+                max={MIERU_MTU.max}
                 {...form.getInputProps('mieruMtu')}
               />
             </Stack>

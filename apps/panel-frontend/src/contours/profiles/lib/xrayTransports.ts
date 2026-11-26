@@ -1,3 +1,4 @@
+import { NETWORKS_CARRYING_VISION, REALITY_TRANSPORTS } from '@iceslab/shared';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 import type { SingboxXrayField } from '@/lib/domain/singboxXray';
 
@@ -88,9 +89,10 @@ export const SINGBOX_XRAY_FORM_FIELD: Record<
 };
 
 // Vision flow is only valid on raw/xhttp; the panel blanks it on the rest.
-export const FLOW_COMPATIBLE_TRANSPORTS = ['raw', 'xhttp'];
+// The list is the API's own, from @iceslab/shared.
+export const FLOW_COMPATIBLE_TRANSPORTS: readonly string[] = NETWORKS_CARRYING_VISION;
 // REALITY is carried by these only; xray refuses ws/httpupgrade/kcp under it.
-export const REALITY_COMPATIBLE_TRANSPORTS = ['raw', 'xhttp', 'grpc'];
+export const REALITY_COMPATIBLE_TRANSPORTS: readonly string[] = REALITY_TRANSPORTS;
 
 /** Whether `network` may be chosen under `security` (only REALITY restricts). */
 export function transportAllowedUnder(security: string, network: string): boolean {

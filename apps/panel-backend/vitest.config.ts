@@ -22,6 +22,12 @@ for (const k of Object.keys(envFromFile)) {
 }
 
 export default defineConfig({
+  // The frontend's own alias, so the one test that reads the profile form's
+  // defaults (profiles.form-defaults.test.ts, milestone 6.5) imports its pure
+  // functions as the form does. Nothing in the backend uses `@/`.
+  resolve: {
+    alias: [{ find: /^@\//, replacement: resolve(__dirname, '../panel-frontend/src') + '/' }],
+  },
   test: {
     globals: false,
     environment: 'node',

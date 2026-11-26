@@ -21,6 +21,7 @@ import { profileAwgCreate, profileAwgPatch } from '@/lib/domain/awg';
 import { ssConfigPatch } from '@/contours/profiles/lib/ssServerKey';
 import { portHopProblem, portHopWords, type PortHopField } from '@/contours/profiles/lib/portHopRange';
 import { awgHeaderProblems, type AwgHField } from '@/contours/profiles/lib/awgHeaders';
+import { AWG_RULE_WORDS, awgRuleProblems, type AwgRuleField } from '@/contours/profiles/lib/awgRules';
 
 /**
  * Everything the profile form owns that is not markup: the Mantine form, the
@@ -73,12 +74,23 @@ export function useProfileForm({
       awgH2: (_v, values) => awgHError(values, 'awgH2'),
       awgH3: (_v, values) => awgHError(values, 'awgH3'),
       awgH4: (_v, values) => awgHError(values, 'awgH4'),
+      // Jmin <= Jmax, S1 + 56 != S2 and the shape of both server keys
+      // (milestone 6.5): the schema refuses them, so the form says it first.
+      awgJmax: (_v, values) => awgRuleError(values, 'awgJmax'),
+      awgS2: (_v, values) => awgRuleError(values, 'awgS2'),
+      awgServerPriv: (_v, values) => awgRuleError(values, 'awgServerPriv'),
+      awgServerPub: (_v, values) => awgRuleError(values, 'awgServerPub'),
     },
   });
 
   function awgHError(values: FormValues, field: AwgHField): string | null {
     if (values.protocol !== 'amneziawg') return null;
     return awgHeaderProblems(values).has(field) ? t('profiles.form.cfg.awgHDesc') : null;
+  }
+
+  function awgRuleError(values: FormValues, field: AwgRuleField): string | null {
+    if (values.protocol !== 'amneziawg') return null;
+    return awgRuleProblems(values).has(field) ? t(AWG_RULE_WORDS[field]) : null;
   }
 
   function portHopError(values: FormValues, field: PortHopField): string | null {

@@ -244,6 +244,9 @@ export const profiles = {
         awgPresetLabel: 'Obfuscation preset',
         awgKeepZero: 'keep 0',
         awgHDesc: '> 4 and unique',
+        awgJunkOrder: 'Jmin must not be above Jmax',
+        awgPaddingGap: 'S1 + 56 must not equal S2 (the handshake length of plain WireGuard)',
+        awgKeyShape: 'A WireGuard key: 44 base64 characters ending in =',
         awgHWarning:
           'H1-H4 must be pairwise-unique, there are duplicates. Click Re-roll to regenerate.',
         naiveHostnameLabel: 'Public hostname',

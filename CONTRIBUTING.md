@@ -46,6 +46,12 @@ The goal is code that rarely needs touching: a change lands where the requiremen
 - **Errors are values.** Handle an error or return it with context. No empty `catch`, no `_ = err`. A refusal tells the user what happened and carries a code.
 - **No new global state.** Pass dependencies in through constructors.
 - **Test through the public surface.** Output formats are covered by golden files; anything an engine accepts silently (`check` passes) is proven by a live test.
+- **Mirror tests: how a frontend test gets a backend rule.** The profile form must agree with the API's schemas, and a test, not an operator, finds where it does not. The frontend has no `zod` and imports no backend module, so there are three ways in, by the kind of rule:
+  - *A list* (`ENGINE_OPTIONS`, `REALITY_TRANSPORTS`, `NETWORKS_CARRYING_VISION`) lives in `packages/shared/src/profile-rules.ts`; the backend validates with it and the frontend imports it, and a mirror test compares the form's own list to it (`profileKinds.test.ts`: `ENGINE_CHOICE_PROTOCOLS`).
+  - *A number bound or a pattern* stays in the backend schema file; the frontend test reads that file as text through `backendSource()` / `exportedConst()` in `apps/panel-frontend/src/test-support/backendSource.ts` and compares it to the form's constant (`profileRules.mirror.test.ts`). It is read by a regular expression, so a reformatted or renamed bound fails the test loudly, and is fixed in the test.
+  - *Anything that needs the schema to run* (the form's defaults accepted by `CreateProfileSchema`, form to API and back) is a backend test that imports the form's pure functions through the `@/` alias in `apps/panel-backend/vitest.config.ts` (`profiles.form-defaults.test.ts`). The frontend never imports the backend; the backend test may import the frontend.
+
+  To add a mirror, pick the kind above: move the list to shared and import it on both sides, or add a `match()` on the schema text beside the others, or add a kind to the defaults test. A new profile kind or protocol fails the completeness checks until the mirrors cover it. A change to a backend schema file does not run the frontend CI job until that job's path filter includes `apps/panel-backend/src/modules/{inbounds,profiles}`.
 - **Abstract on the third repetition**, not the first. A little copying is cheaper than the wrong abstraction.
 - **Make code easy to delete.** Temporary flags and compatibility branches carry a removal date.
 

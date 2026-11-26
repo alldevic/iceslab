@@ -8,6 +8,7 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { invalidateSrrCache } from '../srr/srr.service.js';
 import { deriveSsPassword } from '../../lib/auth/credentials.js';
 import { REALITY_TEST_PRIVATE_KEY, REALITY_TEST_PUBLIC_KEY } from '../../../tests/helpers/reality-keys.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 let app: FastifyInstance;
 let token: string;
@@ -805,8 +806,8 @@ describe('a stored config that is missing fields', () => {
       'amneziawg',
       {
         subnet: '10.66.66.0/24',
-        serverPrivateKey: 'a'.repeat(44),
-        serverPublicKey: 'b'.repeat(44),
+        serverPrivateKey: WG_TEST_PRIVATE_KEY,
+        serverPublicKey: WG_TEST_PUBLIC_KEY,
         obfuscation: {},
       },
       'jsonb-awg',
@@ -814,7 +815,7 @@ describe('a stored config that is missing fields', () => {
     await createBinding(profileId, nodeId, 51820);
     await prisma.profile.update({
       where: { id: profileId },
-      data: { config: { subnet: '10.66.66.0/24', serverPublicKey: 'b'.repeat(44) } },
+      data: { config: { subnet: '10.66.66.0/24', serverPublicKey: WG_TEST_PUBLIC_KEY } },
     });
 
     const res = await app.inject({

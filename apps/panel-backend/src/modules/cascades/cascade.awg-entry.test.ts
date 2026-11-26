@@ -13,6 +13,7 @@ import { getChainForNode, getHysteriaEntryLabels } from './cascade.service.js';
 import { renderChainConfig, TPROXY_IN_TAG } from './chain.config.js';
 import { CHAIN_TPROXY_PORT, chainTProxyMark } from './chain.ports.js';
 import { observedCores } from '../nodes/nodes.cron.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * What the panel tells an AMNEZIAWG entry, t07-wire.
@@ -73,8 +74,8 @@ async function bindAwg(nodeId: string, port: number, generation: 1 | 3 = 1, lega
       protocol: 'amneziawg',
       ...(generation === 3 ? { awgProtocol: 3 } : {}),
       config: {
-        serverPrivateKey: 'a'.repeat(44),
-        serverPublicKey: 'b'.repeat(44),
+        serverPrivateKey: WG_TEST_PRIVATE_KEY,
+        serverPublicKey: WG_TEST_PUBLIC_KEY,
         subnet: generation === 3 ? '10.67.67.0/24' : '10.66.66.0/24',
         obfuscation: {},
       },

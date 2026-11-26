@@ -7,6 +7,7 @@ import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { observedCores } from '../nodes/nodes.cron.js';
 import { applyInboundsRequestForNode } from '../inbounds/inbounds.queue.js';
+import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
  * Deploying a profile to a node whose cores cannot serve it.
@@ -197,8 +198,8 @@ describe('the gate on deploying a profile', () => {
     const node = await makeNode({ protocol: 'amneziawg' });
     await reportCores(node.id, [{ name: 'amneziawg', engine: 'amneziawg' }]);
     const profile = await makeProfile('amneziawg', {
-      serverPrivateKey: 'a'.repeat(44),
-      serverPublicKey: 'b'.repeat(44),
+      serverPrivateKey: WG_TEST_PRIVATE_KEY,
+      serverPublicKey: WG_TEST_PUBLIC_KEY,
       subnet: '10.66.66.0/24',
       obfuscation: {},
     });
