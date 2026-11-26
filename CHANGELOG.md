@@ -41,7 +41,22 @@ All notable changes to Iceslab are documented here. Format loosely follows
   keeps working; devices 2 and 3 are issued at the next push or subscription
   fetch. The agent's `*.state.json` gains `peerSets` and keeps `peers`
   (device 1), so an update keeps the peers and a rollback keeps device 1.
-  Revoking a device, per-device traffic and preshared keys are not here yet.
+  Revoking a device and per-device traffic are not here yet.
+
+- **A preshared key per device**, off by default, set per profile: the
+  `presharedKey` switch in the form of an AmneziaWG (either generation) or a
+  `wireguard` profile. Each device holds its own key (issued with it, and
+  given to the devices from before on the first read), and only where the
+  profile has the switch on does it go into the client's `.conf`, the
+  AmneziaVPN key (`psk_key`) and the node's peer (a field of the peer in the
+  list the push sends; the agent applies a changed key with `syncconf`, the
+  interface is not restarted, and keeps it in its state file). With the switch
+  off nothing changes for anyone: no config, push or node file differs from
+  before. Turning the switch on or off invalidates every config already
+  issued from that profile, and the form says so before the save. Reissuing
+  a user's credentials changes the keys of their devices too. An agent
+  older than this takes the push and ignores the keys, so update the agents
+  before turning a switch on.
 
 ### Fixed
 

@@ -32,3 +32,22 @@ func TestAmneziawgPeers_EmptyIsNotAbsent(t *testing.T) {
 		t.Fatalf("a device: %#v", got)
 	}
 }
+
+// Milestone 9.5: a device's preshared keys ride on its peer, one per interface
+// kind, and an older panel's peer (no key) is no key at all.
+func TestAmneziawgPeers_PresharedKeysCrossTheWire(t *testing.T) {
+	var req dto.AddUserRequest
+	body := `{"userId":"u1","credentials":{"amneziawgPeers":[` +
+		`{"publicKey":"k","allowedIp":"10.0.0.2","presharedKey":"p1","presharedKey3":"p3","wireguardPresharedKey":"pw"},` +
+		`{"publicKey":"j","allowedIp":"10.0.0.3"}]}}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	got := amneziawgPeers(req.Credentials.AmneziaWGPeers)
+	if got[0].PresharedKey != "p1" || got[0].PresharedKey3 != "p3" || got[0].WireguardPresharedKey != "pw" {
+		t.Fatalf("the keyed device: %#v", got[0])
+	}
+	if got[1].PresharedKey != "" || got[1].PresharedKey3 != "" || got[1].WireguardPresharedKey != "" {
+		t.Fatalf("the device without keys: %#v", got[1])
+	}
+}

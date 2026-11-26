@@ -110,3 +110,28 @@ describe('devices: the label rule sees one server, not a collision', () => {
     expect(b2.nodeName).toBe(b.nodeName);
   });
 });
+
+describe('devices: the preshared key of the endpoint (9.5)', () => {
+  const decode = (link: string) => {
+    const raw = Buffer.from(link.replace(/^vpn:\/\//, ''), 'base64url');
+    const envelope = JSON.parse(inflateSync(raw.subarray(4)).toString('utf8'));
+    return JSON.parse(envelope.containers[0].awg.last_config) as Record<string, unknown>;
+  };
+  const keyed = (base: SubscriptionEndpoint, n: number) => ({ ...dev(base, n), presharedKey: `psk-${n}` }) as SubscriptionEndpoint;
+
+  it('is the picked device’s own, in the conf of AmneziaWG and of plain WireGuard and in psk_key of the AmneziaVPN key', () => {
+    const awg = [keyed(awgEp, 1), keyed(awgEp, 2)];
+    const wg = [keyed(wgEp, 1), keyed(wgEp, 2)];
+    expect(buildWgQuickConf(awg, undefined, '2')).toContain('PublicKey = srvPub64\nPresharedKey = psk-2\n');
+    expect(buildWgQuickConf(wg, undefined, '1')).toContain('PublicKey = wgSrvPub64\nPresharedKey = psk-1\n');
+    expect(decode(buildAwgVpnLink(awg, undefined, '2')).psk_key).toBe('psk-2');
+    expect(decode(buildAwgVpnLink(awg)).psk_key).toBe('psk-1');
+  });
+
+  it('an endpoint without one (flag off) gives the output it gave before: no line, no psk_key', () => {
+    const awg = [dev(awgEp, 1)];
+    expect(buildWgQuickConf(awg)).not.toContain('PresharedKey');
+    expect(buildWgQuickConf([dev(wgEp, 1)])).not.toContain('PresharedKey');
+    expect('psk_key' in decode(buildAwgVpnLink(awg))).toBe(false);
+  });
+});

@@ -21,6 +21,9 @@ export interface WireguardClientConfigOpts {
   allowedIp: string;
   /** Server's WireGuard public key (base64, 32 bytes). */
   serverPublicKey: string;
+  /** The device's preshared key when its profile asks for one; absent or empty
+   *  renders no line (an empty `PresharedKey = ` is refused by wg-quick). */
+  presharedKey?: string;
   /** Public host the client connects to (no port). */
   host: string;
   /** Public UDP port the WireGuard inbound listens on. */
@@ -51,6 +54,7 @@ export function buildWireguardClientConfig(opts: WireguardClientConfigOpts): str
   lines.push('');
   lines.push('[Peer]');
   lines.push(`PublicKey = ${opts.serverPublicKey}`);
+  if (opts.presharedKey) lines.push(`PresharedKey = ${opts.presharedKey}`);
   lines.push(`AllowedIPs = ${allowed}`);
   lines.push(`Endpoint = ${opts.host}:${opts.port}`);
   lines.push(`PersistentKeepalive = ${opts.persistentKeepalive ?? 25}`);

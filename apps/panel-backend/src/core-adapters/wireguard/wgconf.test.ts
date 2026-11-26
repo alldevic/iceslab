@@ -56,4 +56,15 @@ describe('buildWireguardClientConfig', () => {
     expect(withDns).toContain('DNS = 1.1.1.1, 8.8.8.8');
     expect(withDns).toContain('PersistentKeepalive = 15');
   });
+
+  it('puts a device preshared key into [Peer] after the server key, and no line without one (9.5)', () => {
+    const withKey = buildWireguardClientConfig({ ...base, presharedKey: 'pskBase64' });
+    expect(withKey).toContain('[Peer]\nPublicKey = srvPub64\nPresharedKey = pskBase64\nAllowedIPs');
+    // Absent or empty is no line at all: `PresharedKey = ` alone is refused by wg-quick.
+    for (const none of [undefined, '']) {
+      const out = buildWireguardClientConfig({ ...base, presharedKey: none });
+      expect(out).toBe(buildWireguardClientConfig(base));
+      expect(out).not.toContain('PresharedKey');
+    }
+  });
 });

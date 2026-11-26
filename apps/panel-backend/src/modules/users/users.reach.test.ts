@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { inflateSync } from 'node:zlib';
 import type { AddUserRequest } from '@iceslab/shared';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -13,6 +14,7 @@ import { syncAddUser } from './users.queue.js';
 import { applyInboundsForNode } from '../inbounds/inbounds.queue.js';
 import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
 import { generateSubscription } from '../subscription/subscription.service.js';
+import { getLogger } from '../../lib/infra/logger.js';
 import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
 
 /**
@@ -475,5 +477,197 @@ describe('WireGuard devices in the roster (9.4)', () => {
     const own = await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { amneziawgPublicKey: true } });
     expect(after[0]!.publicKey).toBe(own.amneziawgPublicKey);
     expect(await prisma.wgDevice.count({ where: { userId: a } })).toBe(3);
+  });
+});
+
+describe('a preshared key per device (9.5)', () => {
+  const wgCfg = (subnet: string, extra: object = {}) => ({
+    serverPrivateKey: WG_TEST_PRIVATE_KEY,
+    serverPublicKey: WG_TEST_PUBLIC_KEY,
+    subnet,
+    ...extra,
+  });
+  const awgCfg = (subnet: string, extra: object = {}) => ({ ...awg(subnet), ...extra });
+
+  /** One node with an AmneziaWG 1.x, a 3.1 and a plain WireGuard binding; each profile's flag as given. */
+  async function pskNode(flags: { one?: boolean; three?: boolean; plain?: boolean }) {
+    const n = await node();
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockResolvedValue({ ok: true, applied: 3, skipped: 0 } as never);
+    await prisma.node.update({
+      where: { id: n },
+      data: {
+        cores: observedCores(
+          [
+            { name: 'amneziawg', engine: 'amneziawg', running: true, installed: true, awgProtocol: 3, awgGenerations: [1, 3] },
+            { name: 'wireguard', engine: 'wireguard', running: true, installed: true },
+          ],
+          new Date().toISOString(),
+        ) as unknown as object,
+      },
+    });
+    const flag = (v?: boolean) => (v === undefined ? {} : { presharedKey: v });
+    const one = await profile('amneziawg', awgCfg('10.66.66.0/24', flag(flags.one)));
+    const three = await profile('amneziawg', awgCfg('10.67.67.0/24', flag(flags.three)), { awgProtocol: 3 });
+    const plain = await profile('wireguard', wgCfg('10.77.77.0/24', flag(flags.plain)));
+    await host(one, n, 51820);
+    await host(three, n, 51830);
+    await host(plain, n, 51840);
+    const sq = await post('/api/squads', { name: 'psk-wg', profileIds: [one, three, plain] });
+    return { n, sq, one, three, plain };
+  }
+
+  const confOf = async (userId: string, query: string): Promise<string> => {
+    const t = (await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { subscriptionToken: true } })).subscriptionToken;
+    const res = await app.inject({ method: 'GET', url: `/sub/${t}?format=wgconf&${query}`, remoteAddress: `10.79.0.${++seq}` });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.body;
+  };
+  const line = (conf: string, name: string) => new RegExp(`^${name} = (.+)$`, 'm').exec(conf)?.[1];
+
+  it('flag off (the default): no key in any peer, no key field on the wire, and the profile stores none', async () => {
+    const { n, sq, one } = await pskNode({});
+    const a = await user('psk_off', [sq.id]);
+    const { added } = capture();
+    await applyInboundsForNode(n);
+    const c = added.find((r) => r.req.userId === a)!.req.credentials;
+    expect(c.amneziawgPeers).toHaveLength(3);
+    expect(JSON.stringify(c)).not.toMatch(/resharedKey/);
+    // The devices hold their keys all the same: turning the flag on later needs no pass over the table.
+    expect((await prisma.wgDevice.findMany({ where: { userId: a } })).every((d) => !!d.presharedKey)).toBe(true);
+    expect(JSON.stringify((await prisma.profile.findUniqueOrThrow({ where: { id: one } })).config)).not.toContain('presharedKey');
+    for (const q of ['', 'protocols=wireguard']) expect(await confOf(a, q)).not.toContain('PresharedKey');
+  });
+
+  it('flag on: the device key is in the peer, in the client conf and in the AmneziaVPN key, and it is one value; two devices differ', async () => {
+    const { n, sq } = await pskNode({ one: true, three: true, plain: true });
+    const a = await user('psk_on', [sq.id]);
+    const { added } = capture();
+    await applyInboundsForNode(n);
+    const peers = added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers!;
+    expect(peers).toHaveLength(3);
+    const devices = await prisma.wgDevice.findMany({ where: { userId: a }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+    for (const [i, p] of peers.entries()) {
+      expect(p.publicKey).toBe(devices[i]!.publicKey);
+      expect(p.presharedKey).toBe(devices[i]!.presharedKey);
+      expect(p.presharedKey3).toBe(devices[i]!.presharedKey);
+      expect(p.wireguardPresharedKey).toBe(devices[i]!.presharedKey);
+    }
+    expect(new Set(peers.map((p) => p.presharedKey)).size).toBe(3);
+
+    // The client's side: the same value, for the AmneziaWG conf, the plain conf and the AmneziaVPN key.
+    for (const [i, p] of peers.entries()) {
+      expect(line(await confOf(a, `device=${i + 1}`), 'PresharedKey')).toBe(p.presharedKey);
+      expect(line(await confOf(a, `protocols=wireguard&device=${i + 1}`), 'PresharedKey')).toBe(p.wireguardPresharedKey);
+    }
+    const t = (await prisma.user.findUniqueOrThrow({ where: { id: a }, select: { subscriptionToken: true } })).subscriptionToken;
+    const link = await app.inject({ method: 'GET', url: `/sub/${t}?format=amneziavpn&device=2`, remoteAddress: '10.79.9.9' });
+    expect(link.statusCode, link.body).toBe(200);
+    const key = link.body.trim().replace(/^vpn:\/\//, '');
+    const envelope = JSON.parse(inflateSync(Buffer.from(key, 'base64url').subarray(4)).toString('utf8'));
+    expect(JSON.parse(envelope.containers[0].awg.last_config).psk_key).toBe(peers[1]!.presharedKey);
+  });
+
+  it('is per profile: only the interfaces whose profile has the flag carry it, in the peer and in the conf alike', async () => {
+    const { n, sq } = await pskNode({ one: false, three: true, plain: true });
+    const a = await user('psk_mixed', [sq.id]);
+    const { added } = capture();
+    await applyInboundsForNode(n);
+    const peers = added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers!;
+    for (const p of peers) {
+      expect(p.presharedKey).toBeUndefined();
+      expect(p.presharedKey3).toBeTruthy();
+      expect(p.wireguardPresharedKey).toBeTruthy();
+    }
+    expect(await confOf(a, '')).not.toContain('PresharedKey'); // the 1.x tunnel is the first AmneziaWG one
+    expect(line(await confOf(a, 'protocols=wireguard'), 'PresharedKey')).toBe(peers[0]!.wireguardPresharedKey);
+  });
+
+  it('only the profile with the flag gives a key', async () => {
+    const { n, sq } = await pskNode({ plain: true });
+    const a = await user('psk_wg_only', [sq.id]);
+    const { added } = capture();
+    await applyInboundsForNode(n);
+    for (const p of added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers!) {
+      expect(p.presharedKey).toBeUndefined();
+      expect(p.presharedKey3).toBeUndefined();
+      expect(p.wireguardPresharedKey).toBeTruthy();
+    }
+  });
+
+  it('turning the flag on or off reaches the node with the next push, as a changed peer list (no new device, no extra step)', async () => {
+    const { n, sq, plain } = await pskNode({});
+    const a = await user('psk_toggle', [sq.id]);
+    const off = capture();
+    await applyInboundsForNode(n);
+    const before = off.added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers!;
+
+    const res = await app.inject({ method: 'GET', url: `/api/profiles/${plain}`, headers: auth() });
+    const prof = JSON.parse(res.body);
+    const put = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${plain}`,
+      headers: auth(),
+      payload: { name: prof.name, protocol: 'wireguard', config: wgCfg('10.77.77.0/24', { presharedKey: true }) },
+    });
+    expect(put.statusCode, put.body).toBeLessThan(300);
+
+    vi.restoreAllMocks();
+    vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+    vi.spyOn(NodeTransport.prototype, 'applyInbounds').mockResolvedValue({ ok: true, applied: 3, skipped: 0 } as never);
+    const on = capture();
+    await applyInboundsForNode(n);
+    const after = on.added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers!;
+    expect(after.map((p) => p.publicKey)).toEqual(before.map((p) => p.publicKey));
+    expect(after.map((p) => p.allowedIp)).toEqual(before.map((p) => p.allowedIp));
+    expect(before.every((p) => p.wireguardPresharedKey === undefined)).toBe(true);
+    expect(after.every((p) => !!p.wireguardPresharedKey)).toBe(true);
+    // Rolling the one user out sends the same list as the push.
+    vi.restoreAllMocks();
+    vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+    const rolled = capture();
+    await syncAddUser(a);
+    expect(rolled.added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers).toEqual(after);
+  });
+
+  it('reissuing the credentials changes the keys of every device along with their pairs', async () => {
+    const { n, sq } = await pskNode({ plain: true });
+    const a = await user('psk_reissue', [sq.id]);
+    const first = capture();
+    await applyInboundsForNode(n);
+    const before = first.added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers!;
+    const res = await app.inject({ method: 'POST', url: `/api/users/${a}/reissue-credentials`, headers: auth() });
+    expect(res.statusCode, res.body).toBeLessThan(300);
+    vi.restoreAllMocks();
+    vi.spyOn(NodeTransport.prototype, 'listAssets').mockRejectedValue(new NodeRequestError('404', 404, null));
+    const second = capture();
+    await syncAddUser(a);
+    const after = second.added.find((r) => r.req.userId === a)!.req.credentials.amneziawgPeers!;
+    for (const [i, p] of after.entries()) {
+      expect(p.wireguardPresharedKey).toBeTruthy();
+      expect(p.wireguardPresharedKey).not.toBe(before[i]!.wireguardPresharedKey);
+    }
+  });
+
+  it('no key reaches a log of the panel, on the push or on the subscription', async () => {
+    const { n, sq } = await pskNode({ one: true, three: true, plain: true });
+    const a = await user('psk_log', [sq.id]);
+    const log = getLogger();
+    const seen: string[] = [];
+    for (const level of ['info', 'warn', 'error', 'debug', 'fatal', 'trace'] as const) {
+      vi.spyOn(log, level).mockImplementation(((...args: unknown[]) => {
+        seen.push(args.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' '));
+      }) as never);
+    }
+    for (const m of ['log', 'warn', 'error', 'info', 'debug'] as const) {
+      vi.spyOn(console, m).mockImplementation((...args: unknown[]) => void seen.push(args.map(String).join(' ')));
+    }
+    capture();
+    await applyInboundsForNode(n);
+    await syncAddUser(a);
+    await confOf(a, '');
+    const keys = (await prisma.wgDevice.findMany({ where: { userId: a } })).map((d) => d.presharedKey!);
+    expect(keys).toHaveLength(3);
+    const all = seen.join('\n');
+    for (const k of keys) expect(all).not.toContain(k);
   });
 });

@@ -56,6 +56,12 @@ type AmneziaWGPeer struct {
 	AllowedIP          string
 	AllowedIP3         string
 	WireguardAllowedIP string
+	// The device's preshared key on each interface kind (milestone 9.5), empty
+	// where that interface's profile does not ask for one. The panel sends the
+	// one secret of the device to every interface whose profile has the flag on.
+	PresharedKey          string
+	PresharedKey3         string
+	WireguardPresharedKey string
 }
 
 // UserStats are per-user traffic counters reported by a single core.

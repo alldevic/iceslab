@@ -1,7 +1,7 @@
 import { prisma } from '../../prisma.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import type { WgDevice } from '../../generated/prisma/client.js';
-import { generateWireguardKeyPair } from '../../lib/auth/credentials.js';
+import { generatePresharedKey, generateWireguardKeyPair } from '../../lib/auth/credentials.js';
 import { effectiveHwidLimit } from '../hwid/hwid.service.js';
 
 /**
@@ -18,6 +18,11 @@ import { effectiveHwidLimit } from '../hwid/hwid.service.js';
  * (createdAt, id): device 1 is the oldest live one, and for a user from before
  * devices it is their old keypair. Revoking, listing and traffic per device are
  * milestone 9.6; a revoked row is already left out of everything here.
+ *
+ * Every device also holds a preshared key (milestone 9.5), always: issued with
+ * the device, and given to the ones from before it on the first read that
+ * finds them without. Whether it is USED is the profile's flag; the key is not
+ * shown or reissued apart from the keypair.
  */
 
 /** No user gets more than this many, whatever their device limit says. */
@@ -45,6 +50,28 @@ const ORDER = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
 /** Users per query: a roster of tens of thousands would run past Postgres's
  *  bind-parameter cap in one `in` list. */
 const CHUNK = 2000;
+
+type Db = Pick<typeof prisma, 'wgDevice'>;
+
+/**
+ * The devices with a preshared key each (milestone 9.5): the ones from before
+ * the column are given theirs here, on the first read that finds them without.
+ * Not in the migration: a plain UPDATE could not make a key per row. Each is
+ * set only while still empty, so two readers at once cannot give one device
+ * two keys; whoever lost the race reads the winner's. Rows of other users are
+ * passed through as they are.
+ */
+async function fillPresharedKeys(db: Db, devices: WgDeviceRow[]): Promise<WgDeviceRow[]> {
+  const empty = devices.filter((d) => d.presharedKey === null);
+  if (empty.length === 0) return devices;
+  for (const d of empty) {
+    await db.wgDevice.updateMany({ where: { id: d.id, presharedKey: null }, data: { presharedKey: generatePresharedKey() } });
+  }
+  const fresh = new Map(
+    (await db.wgDevice.findMany({ where: { id: { in: empty.map((d) => d.id) } } })).map((d) => [d.id, d] as const),
+  );
+  return devices.map((d) => fresh.get(d.id) ?? d);
+}
 
 /** A user's live devices, device 1 first. The id breaks ties. */
 export async function listActiveDevices(userId: string): Promise<WgDeviceRow[]> {
@@ -75,11 +102,11 @@ export async function ensureDevices(
   const want = Math.min(Math.max(Math.trunc(count), 1), MAX_WG_DEVICES);
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${'wg-devices:' + userId}))`);
-    const live = await tx.wgDevice.findMany({ where: { userId, revokedAt: null }, orderBy: ORDER });
+    const live = await fillPresharedKeys(tx, await tx.wgDevice.findMany({ where: { userId, revokedAt: null }, orderBy: ORDER }));
     const missing = Math.max(0, want - live.length);
     if (missing === 0) return { devices: live, issued: 0 };
 
-    const rows: { userId: string; privateKey: string; publicKey: string; createdAt: Date }[] = [];
+    const rows: { userId: string; privateKey: string; publicKey: string; presharedKey: string; createdAt: Date }[] = [];
     // Distinct, increasing stamps: one createMany is one transaction time, and
     // the order of devices issued together must be the order they were issued.
     const t0 = Date.now();
@@ -95,7 +122,7 @@ export async function ensureDevices(
         }
       }
       keys ??= generateWireguardKeyPair();
-      rows.push({ userId, ...keys, createdAt: new Date(t0 + i) });
+      rows.push({ userId, ...keys, presharedKey: generatePresharedKey(), createdAt: new Date(t0 + i) });
     }
     await tx.wgDevice.createMany({ data: rows });
     const devices = await tx.wgDevice.findMany({ where: { userId, revokedAt: null }, orderBy: ORDER });
@@ -125,7 +152,7 @@ export async function ensureDevicesForUsers(
       prisma.wgDevice.findMany({ where: { userId: { in: ids }, revokedAt: null }, orderBy: ORDER }),
     ]);
     for (const id of ids) devices.set(id, []);
-    for (const d of live) devices.get(d.userId)?.push(d);
+    for (const d of await fillPresharedKeys(prisma, live)) devices.get(d.userId)?.push(d);
     for (const u of users) {
       const want = wgDeviceCount(u.hwidDeviceLimit, u.groupMembers.map((m) => m.group.hwidDeviceLimit));
       if ((devices.get(u.id)?.length ?? 0) >= want) continue;
@@ -154,7 +181,12 @@ export async function reissueDevices(
     const live = await tx.wgDevice.findMany({ where: { userId, revokedAt: null }, orderBy: ORDER });
     for (const [i, d] of live.entries()) {
       const keys = i === 0 ? first : generateWireguardKeyPair();
-      await tx.wgDevice.update({ where: { id: d.id }, data: { privateKey: keys.privateKey, publicKey: keys.publicKey } });
+      // The preshared key is rotated with the pair (milestone 9.5): a config
+      // that held the old key is worthless whole.
+      await tx.wgDevice.update({
+        where: { id: d.id },
+        data: { privateKey: keys.privateKey, publicKey: keys.publicKey, presharedKey: generatePresharedKey() },
+      });
     }
     return live.length;
   });

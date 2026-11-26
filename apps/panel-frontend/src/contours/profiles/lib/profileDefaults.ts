@@ -73,9 +73,11 @@ export function defaults(profile: Profile | null): FormValues {
     awgI3: '',
     awgI4: '',
     awgI5: '',
+    awgPresharedKey: false,
 
     // Not AmneziaWG's 10.66.66.0/24: a node serves both and the panel refuses
     // overlapping subnets (assertAwgSubnetFree).
+    wgPresharedKey: false,
     wgSubnet: '10.77.77.0/24',
     wgServerPriv: '',
     wgServerPub: '',
@@ -170,6 +172,7 @@ export function defaults(profile: Profile | null): FormValues {
         awgI3: ((obf.i3 as string) ?? '') as string,
         awgI4: ((obf.i4 as string) ?? '') as string,
         awgI5: ((obf.i5 as string) ?? '') as string,
+        awgPresharedKey: cfg.presharedKey === true,
       };
     }
     case 'wireguard':
@@ -178,6 +181,7 @@ export function defaults(profile: Profile | null): FormValues {
         wgSubnet: (cfg.subnet as string) ?? base.wgSubnet,
         wgServerPriv: (cfg.serverPrivateKey as string) ?? '',
         wgServerPub: (cfg.serverPublicKey as string) ?? '',
+        wgPresharedKey: cfg.presharedKey === true,
       };
     case 'naive':
       return {

@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, Button, Group, PasswordInput, Stack, Text, TextInput } from '@mantine/core';
 import { IconKey } from '@tabler/icons-react';
 import type { UseFormReturnType } from '@mantine/form';
+import { PresharedKeySwitch } from '@/contours/profiles/components/ProfileForm/PresharedKeySwitch';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
 import { showGenerateWarning, useGenerateGate } from '@/contours/profiles/lib/generateImpact';
@@ -81,6 +82,7 @@ export function WireguardSection({
         />
       </Group>
       {isEdit && showGenerateWarning(impact) && <GenerateWarning impact={impact} />}
+      <PresharedKeySwitch form={form} field="wgPresharedKey" />
     </Stack>
   );
 }

@@ -71,6 +71,7 @@ export function buildWgQuickConf(
       privateKey: picked.privateKey,
       allowedIp: picked.allowedIp,
       serverPublicKey: picked.serverPublicKey,
+      ...(picked.presharedKey ? { presharedKey: picked.presharedKey } : {}),
       host: picked.host,
       port: picked.port,
     });
@@ -80,6 +81,7 @@ export function buildWgQuickConf(
     privateKey: awg.privateKey,
     allowedIp: awg.allowedIp,
     serverPublicKey: awg.serverPublicKey,
+    ...(awg.presharedKey ? { presharedKey: awg.presharedKey } : {}),
     host: awg.host,
     port: awg.port,
     jc: awg.jc,

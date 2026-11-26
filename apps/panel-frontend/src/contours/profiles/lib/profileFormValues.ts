@@ -78,6 +78,8 @@ export interface FormValues {
   awgI3: string;
   awgI4: string;
   awgI5: string;
+  /** Milestone 9.5: a preshared key per device. Off unless the profile has it. */
+  awgPresharedKey: boolean;
 
   // Plain WireGuard (milestone 9.3): the subnet and the server keypair, no
   // obfuscation; its own fields so a draft of one flavour never leaks into the
@@ -85,6 +87,7 @@ export interface FormValues {
   wgSubnet: string;
   wgServerPriv: string;
   wgServerPub: string;
+  wgPresharedKey: boolean;
 
   // Naive
   naiveHostname: string;

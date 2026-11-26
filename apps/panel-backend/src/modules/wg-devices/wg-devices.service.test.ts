@@ -193,3 +193,68 @@ describe('reissueDevices', () => {
     expect((await prisma.amneziawgPeer.findFirst({ where: { deviceId: before[1]!.id } }))!.ip).toBe('10.66.66.5');
   });
 });
+
+describe('a preshared key per device (9.5)', () => {
+  const isKey = (k: string | null) => !!k && /^[A-Za-z0-9+/]{43}=$/.test(k);
+
+  it('is issued with every device, device 1 included, and differs from device to device', async () => {
+    const u = await createUser('psk_a');
+    const { devices } = await ensureDevices(u.id, 3);
+    expect(devices.every((d) => isKey(d.presharedKey))).toBe(true);
+    expect(new Set(devices.map((d) => d.presharedKey)).size).toBe(3);
+    // Not the keypair's halves.
+    for (const d of devices) expect([d.privateKey, d.publicKey]).not.toContain(d.presharedKey);
+  });
+
+  it('is kept by later reads and by topping the user up', async () => {
+    const u = await createUser('psk_b');
+    const first = (await ensureDevices(u.id, 2)).devices;
+    const again = (await ensureDevices(u.id, 3)).devices;
+    expect(again.slice(0, 2).map((d) => d.presharedKey)).toEqual(first.map((d) => d.presharedKey));
+    expect(isKey(again[2]!.presharedKey)).toBe(true);
+    const viaPush = await ensureDevicesForUsers([u.id]);
+    expect(viaPush.devices.get(u.id)!.map((d) => d.presharedKey)).toEqual(again.map((d) => d.presharedKey));
+  });
+
+  it('is given to a device from before the column on the first read, once, by both entrances', async () => {
+    const a = await createUser('psk_old_a', 1);
+    const b = await createUser('psk_old_b', 1);
+    for (const u of [a, b]) {
+      await prisma.wgDevice.create({ data: { userId: u.id, privateKey: u.privateKey, publicKey: u.publicKey } });
+    }
+    expect((await prisma.wgDevice.findMany()).every((d) => d.presharedKey === null)).toBe(true);
+
+    const viaPush = await ensureDevicesForUsers([a.id, b.id]);
+    const keyA = viaPush.devices.get(a.id)![0]!.presharedKey;
+    expect(isKey(keyA)).toBe(true);
+    expect(keyA).not.toBe(viaPush.devices.get(b.id)![0]!.presharedKey);
+    expect(viaPush.issuedTo).not.toContain(a.id); // a key is not an issued device: no rollout for it
+
+    const viaSub = await ensureDevices(a.id, 1);
+    expect(viaSub.devices[0]!.presharedKey).toBe(keyA);
+    expect((await prisma.wgDevice.findFirstOrThrow({ where: { userId: a.id } })).presharedKey).toBe(keyA);
+  });
+
+  it('two readers at once leave one key', async () => {
+    const u = await createUser('psk_race', 1);
+    await prisma.wgDevice.create({ data: { userId: u.id, privateKey: u.privateKey, publicKey: u.publicKey } });
+    const [x, y] = await Promise.all([ensureDevicesForUsers([u.id]), ensureDevicesForUsers([u.id])]);
+    const stored = (await prisma.wgDevice.findFirstOrThrow({ where: { userId: u.id } })).presharedKey;
+    expect(isKey(stored)).toBe(true);
+    // Whatever each saw, what is stored is what every later read sees.
+    expect((await ensureDevices(u.id, 1)).devices[0]!.presharedKey).toBe(stored);
+    void x; void y;
+  });
+
+  it('is rotated with the pair when the credentials are reissued', async () => {
+    const u = await createUser('psk_reissue');
+    const before = (await ensureDevices(u.id, 2)).devices.map((d) => d.presharedKey);
+    await reissueDevices(u.id, { privateKey: 'newpriv', publicKey: 'newpub' });
+    const after = (await listActiveDevices(u.id)).map((d) => d.presharedKey);
+    expect(after).toHaveLength(2);
+    for (const [i, k] of after.entries()) {
+      expect(isKey(k)).toBe(true);
+      expect(k).not.toBe(before[i]);
+    }
+  });
+});

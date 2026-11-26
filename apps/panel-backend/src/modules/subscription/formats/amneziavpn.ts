@@ -31,6 +31,7 @@ export function buildAwgVpnLink(
     privateKey: awg.privateKey,
     allowedIp: awg.allowedIp,
     serverPublicKey: awg.serverPublicKey,
+    ...(awg.presharedKey ? { pskKey: awg.presharedKey } : {}),
     host: awg.host,
     port: awg.port,
     jc: awg.jc,

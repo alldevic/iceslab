@@ -59,6 +59,12 @@ type AmneziaWGPeerDto struct {
 	AllowedIP          string `json:"allowedIp,omitempty"`
 	AllowedIP3         string `json:"allowedIp3,omitempty"`
 	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
+	// The device's preshared key on each interface kind (milestone 9.5); absent
+	// where that interface's profile does not ask for one, and from an older
+	// panel. A secret: never logged.
+	PresharedKey          string `json:"presharedKey,omitempty"`
+	PresharedKey3         string `json:"presharedKey3,omitempty"`
+	WireguardPresharedKey string `json:"wireguardPresharedKey,omitempty"`
 }
 
 type ProtocolCredentials struct {

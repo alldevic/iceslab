@@ -155,6 +155,14 @@ describe('useProfileForm: правила AmneziaWG', () => {
     return { sent, errors: result.current.form.errors };
   }
 
+  it('preshared key (9.5): выключен по умолчанию и тогда не в конфиге; включён - уходит true', async () => {
+    const off = await submitAwg({});
+    expect(off.sent[0]).not.toHaveProperty('config.presharedKey');
+    const on = await submitAwg({ awgPresharedKey: true });
+    expect(on.errors).toEqual({});
+    expect(on.sent[0]).toHaveProperty('config.presharedKey', true);
+  });
+
   it('новый профиль с ключами правильной формы уходит', async () => {
     const { sent, errors } = await submitAwg({});
     expect(errors).toEqual({});
@@ -241,6 +249,14 @@ describe('useProfileForm: профиль wireguard', () => {
     });
     expect(Object.keys(sent[0]!.config as object).sort()).toEqual(['serverPrivateKey', 'serverPublicKey', 'subnet']);
     expect(sent[0]).not.toHaveProperty('awgProtocol');
+  });
+
+  it('preshared key (9.5): выключен по умолчанию и тогда не в конфиге; включён - уходит true', async () => {
+    const off = await submitWg({});
+    expect(off.sent[0]!.config).not.toHaveProperty('presharedKey');
+    const on = await submitWg({ wgPresharedKey: true });
+    expect(on.errors).toEqual({});
+    expect(on.sent[0]!.config).toMatchObject({ presharedKey: true });
   });
 
   it('подсеть не вида a.b.c.d/n: не отправляется, ошибка у подсети', async () => {

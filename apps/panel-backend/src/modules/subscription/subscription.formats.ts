@@ -324,6 +324,12 @@ export function endpointsForFormat(
  * hand: device 1.
  */
 interface WgDeviceFields {
+  /**
+   * The device's preshared key (milestone 9.5), present only when the profile
+   * behind the endpoint asks for one: the client config and the node's peer
+   * carry the same value, or neither does.
+   */
+  presharedKey?: string;
   /** The device's id. */
   deviceId?: string;
   /** Its number among the user's live devices, oldest first (`?device=`). */

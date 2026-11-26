@@ -985,6 +985,8 @@ func amneziawgPeers(in []dto.AmneziaWGPeerDto) []core.AmneziaWGPeer {
 		out = append(out, core.AmneziaWGPeer{
 			PublicKey: p.PublicKey, AllowedIP: p.AllowedIP, AllowedIP3: p.AllowedIP3,
 			WireguardAllowedIP: p.WireguardAllowedIP,
+			PresharedKey:       p.PresharedKey, PresharedKey3: p.PresharedKey3,
+			WireguardPresharedKey: p.WireguardPresharedKey,
 		})
 	}
 	return out

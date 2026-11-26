@@ -467,6 +467,7 @@ func (a *Adapter) AddUser(user core.User) error {
 			onPlain.AmneziaWGPeers = make([]core.AmneziaWGPeer, 0, len(user.AmneziaWGPeers))
 			for _, p := range user.AmneziaWGPeers {
 				p.AllowedIP, p.AllowedIP3 = p.WireguardAllowedIP, ""
+				p.PresharedKey, p.PresharedKey3 = p.WireguardPresharedKey, ""
 				onPlain.AmneziaWGPeers = append(onPlain.AmneziaWGPeers, p)
 			}
 			return a.addPeer(onPlain)
@@ -489,6 +490,7 @@ func (a *Adapter) AddUser(user core.User) error {
 		for _, p := range user.AmneziaWGPeers {
 			if p.AllowedIP3 != "" {
 				p.AllowedIP, p.AllowedIP3 = p.AllowedIP3, ""
+				p.PresharedKey, p.PresharedKey3 = p.PresharedKey3, ""
 				on3.AmneziaWGPeers = append(on3.AmneziaWGPeers, p)
 			}
 		}
@@ -514,7 +516,7 @@ func peersOf(user core.User) (peers []Peer, explicit bool) {
 			if p.PublicKey == "" || p.AllowedIP == "" {
 				continue
 			}
-			peers = append(peers, Peer{PublicKey: p.PublicKey, AllowedIP: ensureCIDR(p.AllowedIP)})
+			peers = append(peers, Peer{PublicKey: p.PublicKey, AllowedIP: ensureCIDR(p.AllowedIP), PresharedKey: p.PresharedKey})
 		}
 		return peers, true
 	}

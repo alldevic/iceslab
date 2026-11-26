@@ -96,6 +96,9 @@ export function profileConfigOf(values: FormValues): Record<string, unknown> {
           i4: (values.awgI4 ?? '').trim(),
           i5: (values.awgI5 ?? '').trim(),
         },
+        // Sent only when on: a profile without the flag keeps the config it
+        // had, and turning it off drops the key rather than storing a false.
+        ...(values.awgPresharedKey ? { presharedKey: true } : {}),
       };
     case 'wireguard':
       // No obfuscation member, not even an empty one: the schema strips what it
@@ -104,6 +107,7 @@ export function profileConfigOf(values: FormValues): Record<string, unknown> {
         subnet: values.wgSubnet,
         serverPrivateKey: values.wgServerPriv,
         serverPublicKey: values.wgServerPub,
+        ...(values.wgPresharedKey ? { presharedKey: true } : {}),
       };
     case 'naive':
       return {

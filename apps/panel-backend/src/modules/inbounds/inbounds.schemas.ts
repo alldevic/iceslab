@@ -358,6 +358,13 @@ export const AmneziawgConfigSchema = z
     /** Public key paired with privateKey, emitted in client config. */
     serverPublicKey: WgKeySchema,
     obfuscation: ObfuscationSchema,
+    /**
+     * Give every device's peer a preshared key (one per device, issued with
+     * it). Off by default. Turning it on or off changes every config of the
+     * profile: one downloaded before no longer handshakes until it is fetched
+     * again.
+     */
+    presharedKey: z.boolean().optional(),
   })
   // Mirror the constraints the node's config.go validate() enforces at deploy
   // time, so the operator gets a clear form error instead of a confusing
@@ -436,6 +443,8 @@ export const WireguardConfigSchema = z.object({
   serverPrivateKey: WgKeySchema,
   /** Public key paired with privateKey, emitted in the client config. */
   serverPublicKey: WgKeySchema,
+  /** As for AmneziaWG: a preshared key per device, off by default. */
+  presharedKey: z.boolean().optional(),
 });
 
 /** The keys the push adds to a stored plain WireGuard config. */

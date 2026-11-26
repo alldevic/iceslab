@@ -583,6 +583,15 @@ export interface AmneziawgPeerCred {
   allowedIp?: string;
   allowedIp3?: string;
   wireguardAllowedIp?: string;
+  /**
+   * The device's preshared key (milestone 9.5) on each interface kind: only
+   * where that interface's profile has `presharedKey` on, absent otherwise and
+   * from an older panel. One secret per device, sent to every interface whose
+   * profile asks. A secret: never logged.
+   */
+  presharedKey?: string;
+  presharedKey3?: string;
+  wireguardPresharedKey?: string;
 }
 
 export interface ProtocolCredentials {
@@ -1022,6 +1031,9 @@ export interface AmneziawgInboundCfg {
   /** Its public half. The agent ignores it; clients get it in their config. */
   serverPublicKey: string;
   obfuscation: AmneziawgObfuscation;
+  /** Milestone 9.5: the profile asks for a preshared key per device. Read by the
+   *  panel when it builds the peers; the agent takes the keys from the peers. */
+  presharedKey?: boolean;
   /** The binding's port, injected on every push. */
   listenPort: number;
   /** Which binding this is (the binding id), so the agent can drop the
@@ -1048,6 +1060,8 @@ export interface WireguardInboundCfg {
   serverPrivateKey: string;
   /** Its public half; clients get it in their config. */
   serverPublicKey: string;
+  /** Milestone 9.5, as for AmneziaWG. */
+  presharedKey?: boolean;
   /** The binding's port, injected on every push. */
   listenPort: number;
   /** Which binding this is (the binding id), as for AmneziaWG. */

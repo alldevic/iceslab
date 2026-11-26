@@ -13,6 +13,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import { IconKey } from '@tabler/icons-react';
+import { PresharedKeySwitch } from '@/contours/profiles/components/ProfileForm/PresharedKeySwitch';
 import { GenerateWarning } from '@/contours/profiles/components/ProfileForm/GenerateWarning';
 import { confirmGenerate } from '@/contours/profiles/lib/confirmGenerate';
 import { randomAwgHeaders } from '@/contours/profiles/lib/awgPresets';
@@ -290,6 +291,7 @@ export function AmneziawgSection({
                 }
                 return null;
               })()}
+              <PresharedKeySwitch form={form} field="awgPresharedKey" />
             </Stack>
   );
 }

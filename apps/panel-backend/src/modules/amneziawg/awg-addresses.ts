@@ -43,16 +43,26 @@ export async function wireguardBindingOfNode(nodeId: string): Promise<string | u
   return rows.at(-1)?.id;
 }
 
-/** One profile behind a binding: where its addresses come from. */
-async function profileOf(bindingId: string | undefined): Promise<{ profileId: string; subnet: string } | null> {
+/**
+ * One profile behind a binding: where its addresses come from, and whether its
+ * devices' peers carry a preshared key (milestone 9.5). The flag is read from
+ * the binding's merged config, the one the subscription reads, so the key is in
+ * the node's peer exactly when it is in the client's config.
+ */
+async function profileOf(
+  bindingId: string | undefined,
+): Promise<{ profileId: string; subnet: string; presharedKey: boolean } | null> {
   if (!bindingId) return null;
   const row = await prisma.profileNodeBinding.findUnique({
     where: { id: bindingId },
-    select: { profileId: true, profile: { select: { config: true } } },
+    select: { profileId: true, overrides: true, profile: { select: { config: true } } },
   });
   if (!row) return null;
-  const subnet = ((row.profile.config ?? {}) as { subnet?: string }).subnet ?? DEFAULT_SUBNET;
-  return { profileId: row.profileId, subnet };
+  const config = { ...((row.profile.config ?? {}) as object), ...((row.overrides ?? {}) as object) } as {
+    subnet?: string;
+    presharedKey?: boolean;
+  };
+  return { profileId: row.profileId, subnet: config.subnet ?? DEFAULT_SUBNET, presharedKey: config.presharedKey === true };
 }
 
 /**
@@ -138,11 +148,18 @@ export async function wgCredentialsOf(
       const a3 = three && u.reachesThree ? ip3.get(d.id) : undefined;
       const aw = wg && u.reachesWg ? ipWg.get(d.id) : undefined;
       if (!a1 && !a3 && !aw) continue;
+      // The device's one preshared key, on each interface whose profile asks
+      // for it and the device has an address on. Never an empty string: the
+      // agent renders no line for an absent key, and `PresharedKey = ` for ''.
+      const psk = d.presharedKey || undefined;
       peers.push({
         publicKey: d.publicKey,
         ...(a1 ? { allowedIp: a1 } : {}),
         ...(a3 ? { allowedIp3: a3 } : {}),
         ...(aw ? { wireguardAllowedIp: aw } : {}),
+        ...(a1 && psk && one?.presharedKey ? { presharedKey: psk } : {}),
+        ...(a3 && psk && three?.presharedKey ? { presharedKey3: psk } : {}),
+        ...(aw && psk && wg?.presharedKey ? { wireguardPresharedKey: psk } : {}),
       });
     }
     // The single fields are device 1's: what an agent older than the list reads.

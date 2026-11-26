@@ -243,6 +243,10 @@ export const profiles = {
         awgServerPrivLabel: 'Server private key',
         awgServerPubLabel: 'Server public key',
         awgServerPubPlaceholder: 'derived after generate',
+        presharedKeyLabel: 'Preshared key per device',
+        presharedKeyHint: 'Each device gets its own extra shared secret, mixed into the handshake. Off by default.',
+        presharedKeyWarning:
+          'Turning this on or off invalidates every config already issued from this profile: a client without the key (or with one the server no longer has) cannot connect, and neither side logs a reason. Users have to fetch their config again.',
         awgPresetLabel: 'Obfuscation preset',
         awgKeepZero: 'keep 0',
         awgHDesc: '> 4 and unique',

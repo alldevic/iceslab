@@ -19,6 +19,10 @@ type inboundCfgWire struct {
 	ServerPrivateKey string         `json:"serverPrivateKey"`
 	ServerPublicKey  string         `json:"serverPublicKey"` // unused on agent
 	Obfuscation      obfuscationCfg `json:"obfuscation"`
+	// PresharedKey is the profile's flag (milestone 9.5). Unused on the agent:
+	// the keys themselves arrive on the peers, and a profile without the flag
+	// has none. Accepted so the shape stays the panel's.
+	PresharedKey bool `json:"presharedKey,omitempty"`
 	// ListenPort is the UDP port the awg-quick interface should bind to.
 	// Injected by panel-backend from inbound.port (binding-level field
 	// above the protocol config), see apps/panel-backend/src/modules/

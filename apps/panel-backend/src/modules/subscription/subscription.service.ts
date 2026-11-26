@@ -226,6 +226,8 @@ interface AmneziawgInboundConfig {
   serverPrivateKey: string;
   serverPublicKey: string;
   obfuscation: AmneziawgObfuscation;
+  /** Milestone 9.5: the profile gives each device's peer a preshared key. */
+  presharedKey?: boolean;
 }
 
 interface NaiveInboundConfig {
@@ -1395,6 +1397,7 @@ export async function generateSubscription(
           allowedIp: `${peer.ip}/32`,
           deviceId: device.id,
           deviceIndex: idx + 1,
+          ...(cfg.presharedKey === true && device.presharedKey ? { presharedKey: device.presharedKey } : {}),
           serverPublicKey: cfg.serverPublicKey ?? '',
           jc: obf.jc,
           jmin: obf.jmin,
@@ -1442,6 +1445,7 @@ export async function generateSubscription(
           allowedIp: `${peer.ip}/32`,
           deviceId: device.id,
           deviceIndex: idx + 1,
+          ...(cfg.presharedKey === true && device.presharedKey ? { presharedKey: device.presharedKey } : {}),
           serverPublicKey: cfg.serverPublicKey,
           // No share-link standard for WireGuard; clients fetch ?format=wgconf.
           uri: '',

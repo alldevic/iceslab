@@ -202,3 +202,25 @@ describe('WireguardConfigSchema (plain WireGuard, 9.2)', () => {
     expect(WireguardConfigSchema.safeParse({ ...wg, subnet: '10.77.77.0' }).success).toBe(false);
   });
 });
+
+describe('presharedKey flag (9.5)', () => {
+  const wg = { subnet: '10.77.77.0/24', serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY };
+
+  it('is optional and absent by default on both schemas: a stored config is not given one', () => {
+    expect('presharedKey' in AmneziawgConfigSchema.parse({ ...base, obfuscation: {} })).toBe(false);
+    expect('presharedKey' in WireguardConfigSchema.parse(wg)).toBe(false);
+  });
+
+  it('is kept when set, either way, on AmneziaWG and on plain WireGuard', () => {
+    for (const v of [true, false]) {
+      expect(AmneziawgConfigSchema.parse({ ...base, obfuscation: {}, presharedKey: v }).presharedKey).toBe(v);
+      expect(WireguardConfigSchema.parse({ ...wg, presharedKey: v }).presharedKey).toBe(v);
+      expect(InboundConfigByProtocol.safeParse({ protocol: 'wireguard', config: { ...wg, presharedKey: v } }).success).toBe(true);
+    }
+  });
+
+  it('is a boolean only', () => {
+    expect(AmneziawgConfigSchema.safeParse({ ...base, obfuscation: {}, presharedKey: 'yes' }).success).toBe(false);
+    expect(WireguardConfigSchema.safeParse({ ...wg, presharedKey: 1 }).success).toBe(false);
+  });
+});

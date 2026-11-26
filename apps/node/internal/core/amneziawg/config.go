@@ -134,6 +134,15 @@ type Peer struct {
 	PublicKey string
 	// AllowedIP is the peer's IP in CIDR /32 form, e.g. "10.0.0.2/32".
 	AllowedIP string
+	// PresharedKey is mixed into this peer's handshake (milestone 9.5); empty
+	// renders no line at all: `PresharedKey = ` with nothing after it is not
+	// "no key", wg-quick refuses it. A secret: String keeps it out of any log.
+	PresharedKey string `json:",omitempty"`
+}
+
+// String is the peer without its secret, for %v in an error or a log line.
+func (p Peer) String() string {
+	return fmt.Sprintf("{PublicKey:%s AllowedIP:%s}", p.PublicKey, p.AllowedIP)
 }
 
 func (c *InboundConfig) withDefaults() InboundConfig {
@@ -463,7 +472,7 @@ func renderHooksAndPeers(b *strings.Builder, cfg InboundConfig, peers []Peer) (s
 
 	for _, p := range peers {
 		if p.PublicKey == "" || p.AllowedIP == "" {
-			return "", fmt.Errorf("peer with empty PublicKey or AllowedIP: %+v", p)
+			return "", fmt.Errorf("peer with empty PublicKey or AllowedIP: %v", p)
 		}
 		if err := validateWGKey(p.PublicKey); err != nil {
 			return "", fmt.Errorf("peer PublicKey: %w", err)
@@ -474,6 +483,14 @@ func renderHooksAndPeers(b *strings.Builder, cfg InboundConfig, peers []Peer) (s
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "[Peer]")
 		fmt.Fprintf(b, "PublicKey = %s\n", p.PublicKey)
+		if p.PresharedKey != "" {
+			// The same rule as a public key: 32 base64 bytes. It keeps a pushed
+			// value from closing [Peer] and opening a section of its own.
+			if err := validateWGKey(p.PresharedKey); err != nil {
+				return "", fmt.Errorf("peer PresharedKey: %w", err)
+			}
+			fmt.Fprintf(b, "PresharedKey = %s\n", p.PresharedKey)
+		}
 		fmt.Fprintf(b, "AllowedIPs = %s\n", p.AllowedIP)
 	}
 

@@ -82,4 +82,14 @@ describe('buildAmneziawgClientConfig', () => {
     const out = buildAmneziawgClientConfig(baseOpts);
     expect(out.endsWith('\n')).toBe(true);
   });
+
+  it('puts a device preshared key into [Peer] after the server key, and no line without one (9.5)', () => {
+    const withKey = buildAmneziawgClientConfig({ ...baseOpts, presharedKey: 'pskBase64' });
+    expect(withKey).toContain('[Peer]\nPublicKey = srvPub64\nPresharedKey = pskBase64\nAllowedIPs');
+    for (const none of [undefined, '']) {
+      const out = buildAmneziawgClientConfig({ ...baseOpts, presharedKey: none });
+      expect(out).toBe(buildAmneziawgClientConfig(baseOpts));
+      expect(out).not.toContain('PresharedKey');
+    }
+  });
 });
