@@ -322,4 +322,31 @@ describe('HWID devices carry what /sub saw (f01-05)', () => {
     expect(byPlatform.find((p) => p.platform === 'Android')?.count).toBeGreaterThanOrEqual(1);
     expect(byPlatform.find((p) => p.platform === 'unknown')?.count).toBeGreaterThanOrEqual(1);
   });
+
+  it('GET /api/hwid/devices pages every device with the owner numeric userId (the shop audience walk)', async () => {
+    const create = await createUser({ username: `rwt_devall_${Date.now()}` });
+    const ref = create.json().response.id as number;
+    createdUserRefs.push(ref);
+    const row = await prisma.user.findFirst({ where: { numericId: BigInt(ref) }, select: { id: true } });
+    await prisma.hwidUserDevice.create({ data: { userId: row.id, hwid: `rwt-all-${ref}`, platform: 'iOS' } });
+    const get = (query: string) =>
+      app.inject({ method: 'GET', url: `/${PREFIX}/api/hwid/devices${query}`, headers: bearer(adminToken) });
+
+    const first = await get('?start=0&size=1');
+    expect(first.statusCode).toBe(200);
+    const { total, devices } = first.json().response as { total: number; devices: unknown[] };
+    expect(total).toBeGreaterThanOrEqual(1);
+    expect(devices).toHaveLength(1);
+
+    // Walk the way the shop does: advance by the page length until start >= total.
+    const seen: Record<string, unknown>[] = [];
+    for (let start = 0; start < total; ) {
+      const page = (await get(`?start=${start}&size=2`)).json().response as { devices: Record<string, unknown>[] };
+      expect(page.devices.length).toBeGreaterThan(0);
+      seen.push(...page.devices);
+      start += page.devices.length;
+    }
+    expect(seen).toHaveLength(total);
+    expect(seen.find((d) => d.hwid === `rwt-all-${ref}`)).toMatchObject({ userId: ref, platform: 'iOS' });
+  });
 });

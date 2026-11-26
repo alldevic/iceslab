@@ -59,10 +59,9 @@ export const REMNAWAVE_EMITTED_EVENTS: readonly RemnaWebhookEvent[] = [
 /**
  * Events we send that the PINNED shop release does not act on.
  *
- * Empty on the assumption that the pinned shop (v3.8.6) handles
- * `user_hwid_devices.added` as v3.8.3 does; milestone 14.10 checks it against
- * the shop's captured set. An entry belongs here only while the shop drops the
- * event silently: the contract test asserts each entry is absent from the
+ * Empty: the pinned shop (v3.8.6) handles `user_hwid_devices.added` before its
+ * ACTIONABLE_EVENTS gate (the capture's `preGateEvents`). An entry belongs here
+ * only while the shop drops the event silently: the contract test asserts each entry is absent from the
  * capture, so a stale one fails and says to delete it.
  */
 export const EVENTS_AHEAD_OF_PINNED_SHOP: readonly RemnaWebhookEvent[] = [];

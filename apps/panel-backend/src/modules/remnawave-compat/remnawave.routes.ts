@@ -1160,6 +1160,31 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
 
   // ─────────────── HWID devices ───────────────
 
+  // GET /api/hwid/devices?start&size — every device of every user, paged. The shop
+  // (v3.8.x) walks it with size=500 to build its platform audiences, and each
+  // row carries the owner's numeric `userId` (the 3.x selector) to match its
+  // users by; it stops on `start >= total` or an empty page. HWID rows only:
+  // WireGuard tunnels are listed per user, beside them, by the route below.
+  app.get('/api/hwid/devices', opts, async (request, reply) => {
+    const q = request.query as { start?: string; size?: string };
+    const size = Math.min(Math.max(parseInt(q.size ?? '100', 10) || 100, 1), 500);
+    const start = Math.max(parseInt(q.start ?? '0', 10) || 0, 0);
+    const [total, rows] = await Promise.all([
+      prisma.hwidUserDevice.count(),
+      prisma.hwidUserDevice.findMany({
+        // `id` last so equal timestamps cannot reshuffle rows between pages.
+        orderBy: [{ firstSeenAt: 'asc' }, { id: 'asc' }],
+        skip: start,
+        take: size,
+        include: { user: { select: { numericId: true } } },
+      }),
+    ]);
+    return sendResponse(reply, {
+      total,
+      devices: rows.map((d) => ({ ...mapDevice(d), userId: Number(d.user.numericId) })),
+    });
+  });
+
   // GET /api/hwid/devices/:userUuid — list a user's devices (metadata nullable).
   app.get('/api/hwid/devices/:ref', opts, async (request, reply) => {
     const { ref } = request.params as { ref: string };

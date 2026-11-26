@@ -176,6 +176,42 @@ describe('/users/stream pages by keyset, so churn cannot hide a subscriber', () 
     expect(cursor).toBeNull();
   });
 
+  it('reports expireAt as the stored instant, in full, which is what the charge trigger compares', async () => {
+    // Live risk (6). The shop decides whether an auto-renew charge belongs to
+    // the current cycle by comparing the expireAt it received against the
+    // end_date it stored, with a five-minute tolerance
+    // (_is_stale_autorenew_cycle). Host clocks never enter that comparison -
+    // both sides are stored values - so the only way we can break it is by
+    // echoing something other than what we hold. Two ways that could happen and
+    // must not: rounding, and a date-only string, which flips the shop to
+    // comparing calendar days instead (_payload_expire_is_date_only fires on a
+    // value exactly ten characters long).
+    // An instant with milliseconds on it, because rounding is one of the two
+    // ways this can break.
+    const wanted = '2027-03-04T05:06:07.008Z';
+    seq += 1;
+    const created = await post('users', {
+      username: `cursor_exp_${Date.now()}_${seq}`,
+      telegramId: Number(COHORT),
+      expireAt: wanted,
+    });
+    expect(created.statusCode).toBe(200);
+    const ref = created.json().response.id as number;
+
+    const res = await get(`users/${ref}`);
+    expect(res.statusCode).toBe(200);
+    const onTheWire = res.json().response.expireAt as string;
+
+    const row = await prisma.user.findFirstOrThrow({
+      where: { numericId: BigInt(ref) },
+      select: { expireAt: true },
+    });
+    expect(onTheWire).toBe(row.expireAt.toISOString());
+    expect(onTheWire).toBe(wanted); // and it is what the shop asked us to store
+    expect(onTheWire.length).toBeGreaterThan(10);
+    expect(onTheWire).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
   it('still honours a bare numeric cursor, so a walk in flight across a deploy survives', async () => {
     const N = 5;
     for (let i = 0; i < N; i += 1) await mkUser();
