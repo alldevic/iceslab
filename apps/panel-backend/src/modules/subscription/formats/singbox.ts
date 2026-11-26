@@ -1,9 +1,10 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
+import { exitsHaveIpv6, singboxDnsStrategy } from '../subscription.address-family.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { singboxDeviceRoute } from '../subscription.device-rules.js';
-import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
+import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
 
 /**
  * Sing-box JSON subscription formatter (sing-box 1.10+).
@@ -28,9 +29,9 @@ import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subsc
  *     selector. `auto_detect_interface: true` lets sing-box hop networks
  *     without restart.
  *
- * A single minimal `tun` inbound (see buildSingboxJson); no `dns`, no
- * `experimental`, the client app fills those in. That keeps the body short and
- * avoids drift across sing-box versions.
+ * A single minimal `tun` inbound (see buildSingboxJson); no `experimental`, the
+ * client app fills that in. `dns` only under a built-in split preset (splitDns
+ * in fillSingboxFrame).
  */
 /**
  * Slice 29: when `bundle === 'url-test'`, the formatter wraps proxy tags in
@@ -70,12 +71,9 @@ export interface SingboxBuildOpts {
  * 'proxy-all' preset the output stays byte-identical to pre-R1 builds and
  * keeps working on 1.10.
  *
- * Split DNS (R2) is deliberately NOT emitted for sing-box: the DNS server
- * format was reworked in 1.12 (typed servers replace address strings) and
- * the DNS-rule address filters again in 1.14 - any single shape we pick
- * breaks a real slice of installed clients. The route rules above already
- * split by destination; resolution stays with the client app's own DNS
- * config (clash/xrayjson formats do carry split DNS, see R2 in ROADMAP).
+ * Split DNS is emitted only under a built-in split preset, in the one shape
+ * sing-box 1.12+ accepts (see fillSingboxFrame); proxy-all and an own preset
+ * have no regional half to resolve differently and get none.
  */
 // The route rules and rule-sets of a preset are rendered from its
 // DeviceRouteRule list (subscription.device-rules.ts, A-229): the built-ins' and an own
@@ -351,14 +349,51 @@ export function buildSingboxJson(
 
   // A-236 step 3: the nodes go into the frame, the operator's template or the
   // Default (templates.defaults.ts, the shape this builder always wrote: a
-  // single tun inbound, a selector, direct, route.final; no `dns`, no
-  // `experimental`, no mixed/socks/http inbound, which would open a localhost
+  // single tun inbound, a selector, direct, route.final; no `dns` (a split
+  // preset adds one in fillSingboxFrame), no `experimental`, no mixed/socks/http inbound, which would open a localhost
   // proxy port). Slice 29's `?bundle=url-test` swaps the Default's selector
   // for a url-test group; a template of the operator's has its own groups and
   // the bundle does not touch them.
   const frame =
     opts.frame ?? (opts.bundle === 'url-test' ? urltestDefault(opts) : defaultFrame('singbox'));
-  return fillSingboxFrame(frame, outbounds, proxyTags, deviceRules) + '\n';
+  const splitPreset = opts.ownPresetRules ? null : (opts.routingPreset ?? 'proxy-all');
+  return (
+    fillSingboxFrame(frame, outbounds, proxyTags, deviceRules, {
+      preset: splitPreset,
+      strategy: singboxDnsStrategy(exitsHaveIpv6(endpoints)),
+    }) + '\n'
+  );
+}
+
+const REGIONAL_DNS_TAG = 'dns-regional';
+const REGIONAL_DNS_SERVER: Partial<Record<RoutingPresetId, string>> = { 'ru-split': '77.88.8.8', 'cn-split': '223.5.5.5' };
+
+/**
+ * The split DNS block of a built-in split preset, null for anything else.
+ * `routeRules` are the preset's rendered route rules: the rule sets of the
+ * domains that go direct (`geosite-*`) are the regional half.
+ */
+function splitDns(
+  preset: RoutingPresetId | null,
+  routeRules: readonly Record<string, unknown>[],
+  proxyTag: string,
+  strategy: string | undefined,
+): Record<string, unknown> | null {
+  const server = preset ? REGIONAL_DNS_SERVER[preset] : undefined;
+  if (!server) return null;
+  const regionalSets = routeRules.flatMap((r) =>
+    r.outbound === 'direct' ? asArray(r.rule_set).filter((t): t is string => typeof t === 'string' && t.startsWith('geosite-')) : [],
+  );
+  if (regionalSets.length === 0) return null;
+  return {
+    servers: [
+      { type: 'udp', tag: REGIONAL_DNS_TAG, server, detour: 'direct' },
+      { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: proxyTag },
+    ],
+    rules: [{ rule_set: regionalSets, server: REGIONAL_DNS_TAG }],
+    final: 'dns-proxy',
+    ...(strategy ? { strategy } : {}),
+  };
 }
 
 const GROUP_TYPES = new Set(['selector', 'urltest']);
@@ -390,7 +425,23 @@ function urltestDefault(opts: SingboxBuildOpts): Frame {
  *   - with no node at all, the groups that would hold them go, and every
  *     reference to one (route.final, a rule's outbound) becomes `direct`;
  *   - `iceslab.routing: preset` puts the preset's rules and rule-sets ahead of
- *     the frame's own; a `proxy` rule goes where route.final goes.
+ *     the frame's own; a `proxy` rule goes where route.final goes;
+ *   - the same switch with a built-in split preset, a node and no `dns` of the
+ *     frame's own adds the split DNS block (below) and
+ *     `route.default_domain_resolver`.
+ *
+ * Split DNS, in the one shape every release that can read this config accepts.
+ * Measured by the fork with `sing-box check`: 1.11.15 rejects the subscription
+ * regardless (`unknown outbound type: anytls`); 1.12.9 warns on the legacy
+ * `address:` form, 1.13.19 errors on it, 1.14.0 removed it; the typed form plus
+ * `default_domain_resolver` is accepted by all of them. So there is one form to
+ * write. The regional server is reached directly and by address (a name would
+ * need resolving first); everything else goes over DoH through the proxy, so
+ * the query is neither readable nor answerable on the local wire. The rule sets
+ * the DNS rule names are the ones `route` already declares, taken from
+ * singboxDeviceRoute's own output. `default_domain_resolver` points at the
+ * regional server: it resolves the proxy's own hostname, which must not depend
+ * on the proxy. `check` proves the config loads, not that resolution behaves.
  * JSON.stringify with two spaces, as this builder always wrote.
  */
 function fillSingboxFrame(
@@ -398,6 +449,7 @@ function fillSingboxFrame(
   proxyOutbounds: Record<string, unknown>[],
   proxyTags: string[],
   deviceRules: readonly DeviceRouteRule[],
+  dnsOpts: { preset: RoutingPresetId | null; strategy: string | undefined },
 ): string {
   const { cfg, routing } = openFrame(frame);
   const own = asArray(cfg.outbounds).map(asObject);
@@ -423,13 +475,17 @@ function fillSingboxFrame(
   const target = proxyTags.length > 0 && typeof route.final === 'string' ? route.final : null;
   const preset = routing ? singboxDeviceRoute(deviceRules, target) : { rules: [], ruleSets: [] };
   const rules = [...preset.rules, ...ownRules];
+  const dns =
+    routing && target && cfg.dns === undefined ? splitDns(dnsOpts.preset, preset.rules, target, dnsOpts.strategy) : null;
   const ruleSets = [...preset.ruleSets, ...asArray(route.rule_set)];
   const rest = Object.fromEntries(Object.entries(route).filter(([k]) => k !== 'rules' && k !== 'rule_set'));
   if (cfg.route !== undefined || rules.length > 0) {
     cfg.route = {
       ...(rules.length > 0 ? { rules, ...(ruleSets.length > 0 ? { rule_set: ruleSets } : {}) } : {}),
+      ...(dns && rest.default_domain_resolver === undefined ? { default_domain_resolver: REGIONAL_DNS_TAG } : {}),
       ...rest,
     };
   }
-  return JSON.stringify(cfg, null, 2);
+  // Right after `log`, where a hand-written config keeps it.
+  return JSON.stringify(dns ? insertAfter(cfg, 'log', 'dns', dns) : cfg, null, 2);
 }

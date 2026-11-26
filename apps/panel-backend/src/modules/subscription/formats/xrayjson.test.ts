@@ -7,6 +7,7 @@ import type { SubscriptionEndpoint } from '../subscription.formats.js';
 // silently became a display string.
 import { endpointTag } from '../endpoint-identity.js';
 import { expandCascadeEntry } from '../cascade-entries.js';
+import { readFrame } from '../subscription.frames.js';
 
 const xrayEp: SubscriptionEndpoint = {
   protocol: 'xray',
@@ -135,6 +136,51 @@ function parseArray(out: string): XrayConfigEntry[] {
   return JSON.parse(out) as XrayConfigEntry[];
 }
 
+describe('split DNS names no Google resolver, asks the far one over DoH (f12-18, f12-19)', () => {
+  it.each(['ru-split', 'cn-split'] as const)('%s', (preset) => {
+    const out = buildXrayJson([xrayEp], { routingPreset: preset });
+    const dns = JSON.parse(out).dns;
+    const text = JSON.stringify(dns);
+    expect(text).not.toContain('8.8.8.8');
+    expect(text).not.toContain('8.8.4.4');
+    expect(text).not.toContain('dns.google');
+    // Controls: an absence passes on an empty block, so the regional resolver
+    // must still be there, plain by address and reached direct; the far one is
+    // DoH so the tunnel-side resolver does not rely on the client relaying UDP.
+    expect(dns.servers[0]).toMatchObject({ address: preset === 'ru-split' ? '77.88.8.8' : '223.5.5.5' });
+    expect(dns.servers[dns.servers.length - 1]).toBe('https://1.1.1.1/dns-query');
+  });
+});
+
+// A-236: the operator's frame with a `dns` of its own, and its own domainStrategy,
+// are handed out as written.
+describe('an operator frame keeps its own dns and domainStrategy (f12-17, f12-19)', () => {
+  const own = {
+    iceslab: { routing: 'preset' },
+    dns: { servers: ['9.9.9.9'] },
+    outbounds: [{ tag: 'direct', protocol: 'freedom' }],
+    routing: { domainStrategy: 'IPIfNonMatch', rules: [] },
+  };
+  it('flat: the frame dns is untouched, no queryStrategy is added, its domainStrategy stands', () => {
+    const frame = readFrame('xray-json', JSON.stringify(own));
+    const cfg = parse(buildXrayJson([xrayEp], { frame, routingPreset: 'ru-split' }));
+    expect(cfg.dns).toEqual({ servers: ['9.9.9.9'] });
+    expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+  });
+  it('array: the same per element', () => {
+    const frame = readFrame('xray-json-array', JSON.stringify(own));
+    for (const cfg of JSON.parse(buildXrayJsonArray([xrayEp, xrayEp2], { frame, routingPreset: 'ru-split' }))) {
+      expect(cfg.dns).toEqual({ servers: ['9.9.9.9'] });
+      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+    }
+  });
+  it('a frame without its own domainStrategy gets IPOnDemand under a split preset, AsIs under proxy-all', () => {
+    const frame = readFrame('xray-json', JSON.stringify({ ...own, dns: undefined, routing: { rules: [] } }));
+    expect(parse(buildXrayJson([xrayEp], { frame, routingPreset: 'ru-split' })).routing.domainStrategy).toBe('IPOnDemand');
+    expect(parse(buildXrayJson([xrayEp], { frame, routingPreset: 'proxy-all' })).routing.domainStrategy).toBe('AsIs');
+  });
+});
+
 describe('buildXrayJson', () => {
   it('produces valid JSON with trailing newline', () => {
     const out = buildXrayJson([xrayEp]);
@@ -144,11 +190,27 @@ describe('buildXrayJson', () => {
 
   it('emits a SOCKS5 inbound on 127.0.0.1:10808 with udp enabled', () => {
     const cfg = parse(buildXrayJson([xrayEp]));
-    expect(cfg.inbounds).toHaveLength(1);
-    expect(cfg.inbounds[0].protocol).toBe('socks');
-    expect(cfg.inbounds[0].port).toBe(10808);
-    expect(cfg.inbounds[0].listen).toBe('127.0.0.1');
-    expect(cfg.inbounds[0].settings.udp).toBe(true);
+    const socks = cfg.inbounds.find((i) => i.protocol === 'socks');
+    expect(socks.port).toBe(10808);
+    expect(socks.listen).toBe('127.0.0.1');
+    expect(socks.settings.udp).toBe(true);
+  });
+
+  // Happ in system-proxy mode takes its port from an `http` inbound; with SOCKS
+  // alone it binds nothing and the browser answers ERR_PROXY_CONNECTION_FAILED.
+  it('emits an HTTP inbound on 127.0.0.1:10809 beside the SOCKS one (f12-22)', () => {
+    const wants = (cfg: { inbounds: { protocol: string }[] }) => {
+      expect(cfg.inbounds.map((i) => i.protocol)).toEqual(['socks', 'http']);
+      const http = cfg.inbounds.find((i) => i.protocol === 'http');
+      expect(http).toMatchObject({ tag: 'http-in', port: 10809, listen: '127.0.0.1' });
+    };
+    wants(parse(buildXrayJson([xrayEp])));
+    for (const cfg of JSON.parse(buildXrayJsonArray([xrayEp, xrayEp2]))) wants(cfg);
+  });
+
+  it('the router variant still binds no inbound at all (f12-22)', () => {
+    expect(parse(buildXrayJson([xrayEp], { forRouter: true })).inbounds).toBeUndefined();
+    expect(parse(buildXrayJson([xrayEp], { forRouter: true, routingPreset: 'ru-split' })).inbounds).toBeUndefined();
   });
 
   it('emits a vless+REALITY outbound with v24.9.30 raw network', () => {
@@ -260,9 +322,9 @@ describe('buildXrayJson', () => {
       expect(rules[3].outboundTag).toBe(endpointTag(xrayEp));
     });
 
-    it('ru-split switches domainStrategy to IPIfNonMatch', () => {
+    it('ru-split switches domainStrategy to IPOnDemand', () => {
       const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'ru-split' }));
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
     });
 
     it('proxy-all emits no dns block; ru-split adds split DNS (R2)', () => {
@@ -277,8 +339,8 @@ describe('buildXrayJson', () => {
         domains: ['geosite:category-ru', 'geosite:category-gov-ru'],
         skipFallback: true,
       });
-      // General resolver second: plain IP (no DoH bootstrap problem).
-      expect(cfg.dns.servers[1]).toBe('8.8.8.8');
+      // General resolver second: Cloudflare over DoH by IP literal (no bootstrap).
+      expect(cfg.dns.servers[1]).toBe('https://1.1.1.1/dns-query');
     });
 
     it('ru-split composes with bundle=balancer (preset rules first, balancer catch-all last)', () => {
@@ -314,9 +376,9 @@ describe('buildXrayJson', () => {
       expect(rules[3].outboundTag).toBe(endpointTag(xrayEp));
     });
 
-    it('switches domainStrategy to IPIfNonMatch', () => {
+    it('switches domainStrategy to IPOnDemand', () => {
       const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'cn-split' }));
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
     });
 
     it('adds AliDNS split DNS (223.5.5.5 scoped to geosite:cn, no fallback)', () => {
@@ -327,7 +389,7 @@ describe('buildXrayJson', () => {
         domains: ['geosite:cn'],
         skipFallback: true,
       });
-      expect(cfg.dns.servers[1]).toBe('8.8.8.8');
+      expect(cfg.dns.servers[1]).toBe('https://1.1.1.1/dns-query');
     });
 
     it('does not leak RU categories or the Yandex resolver', () => {
@@ -429,7 +491,7 @@ describe('buildXrayJson', () => {
       const v = cfg.outbounds.find((o) => o.protocol === 'vless');
       expect(v.streamSettings.sockopt.dialerProxy).toBe('fragment');
       // ru-split rules + split DNS still present.
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
       expect(cfg.routing.rules[0].outboundTag).toBe('block');
       expect(cfg.dns.servers).toHaveLength(2);
       // Every outbound tag is unique.
@@ -461,7 +523,7 @@ describe('buildXrayJson', () => {
     it('desktop (client) form is unchanged: keeps log + inbound', () => {
       const cfg = parse(buildXrayJson([xrayEp]));
       expect(cfg.log).toBeDefined();
-      expect(cfg.inbounds).toHaveLength(1);
+      expect(cfg.inbounds).toHaveLength(2);
     });
   });
 
@@ -593,8 +655,7 @@ describe('buildXrayJsonArray (T1)', () => {
   it('each element is a full config: own socks inbound + proxy/direct/block outbounds', () => {
     const arr = parseArray(buildXrayJsonArray([xrayEp]));
     const cfg = arr[0];
-    expect(cfg.inbounds).toHaveLength(1);
-    expect(cfg.inbounds[0].protocol).toBe('socks');
+    expect(cfg.inbounds.map((i) => i.protocol)).toEqual(['socks', 'http']);
     expect(cfg.inbounds[0].port).toBe(10808);
     const tags = cfg.outbounds.map((o) => o.tag);
     expect(tags).toEqual([endpointTag(xrayEp), 'direct', 'block']);
@@ -764,11 +825,11 @@ describe('buildXrayJsonArray hysteria (hy2)', () => {
 // T2 - the array carries the same routing surface as the single-config builder,
 // but every proxy target is THIS config's own proxy.
 describe('buildXrayJsonArray routing (T2)', () => {
-  it('applies the ru-split preset per config: split rules, split DNS, IPIfNonMatch', () => {
+  it('applies the ru-split preset per config: split rules, split DNS, IPOnDemand', () => {
     const arr = parseArray(buildXrayJsonArray([xrayEp, xrayEp2], { routingPreset: 'ru-split' }));
     for (const [i, cfg] of arr.entries()) {
       const ownTag = i === 0 ? endpointTag(xrayEp) : endpointTag(xrayEp2);
-      expect(cfg.routing.domainStrategy).toBe('IPIfNonMatch');
+      expect(cfg.routing.domainStrategy).toBe('IPOnDemand');
       expect(cfg.dns.servers[0].address).toBe('77.88.8.8');
       const rules = cfg.routing.rules;
       // block/direct split rules present, then bittorrent, then catch-all to OWN proxy.

@@ -77,12 +77,19 @@ describe('an own preset with a built-in\'s rules', () => {
       ]) {
         const builtin = build({ routingPreset: id });
         const own = build({ ownPresetRules: rules });
-        expect(routingOf(own)).toEqual(routingOf(builtin));
+        // The built-in's geoip rule needs IPOnDemand (f12-17); an own preset keeps
+        // IPIfNonMatch, so everything but that one key is the same.
+        const { domainStrategy: ownStrategy, ...ownRest } = routingOf(own) as Record<string, unknown>;
+        const { domainStrategy: builtinStrategy, ...builtinRest } = routingOf(builtin) as Record<string, unknown>;
+        expect(ownRest).toEqual(builtinRest);
+        expect(ownStrategy).toBe('IPIfNonMatch');
+        expect(builtinStrategy).toBe('IPOnDemand');
         expect(JSON.parse(own).dns).toBeUndefined();
       }
       const arrBuiltin = JSON.parse(buildXrayJsonArray(eps, { routingPreset: id })) as { routing: unknown }[];
       const arrOwn = JSON.parse(buildXrayJsonArray(eps, { ownPresetRules: rules })) as { routing: unknown; dns?: unknown }[];
-      expect(arrOwn.map((c) => c.routing)).toEqual(arrBuiltin.map((c) => c.routing));
+      const sansStrategy = (c: { routing: unknown }) => ({ ...(c.routing as object), domainStrategy: undefined });
+      expect(arrOwn.map(sansStrategy)).toEqual(arrBuiltin.map(sansStrategy));
       expect(arrOwn.every((c) => c.dns === undefined)).toBe(true);
 
       // Clash: the same rules and geo block; the proxy-all DNS, not the country's.
@@ -93,8 +100,15 @@ describe('an own preset with a built-in\'s rules', () => {
       expect(dnsOf(clashOwn)).not.toContain('nameserver-policy');
       expect(dnsOf(clashOwn)).toContain(dnsOf(buildClashYaml(eps, { routingPreset: 'proxy-all' })).trimStart());
 
-      // sing-box carries no DNS for any preset: the whole file is the same.
-      expect(buildSingboxJson(eps, { ownPresetRules: rules })).toBe(buildSingboxJson(eps, { routingPreset: id }));
+      // sing-box: the same file but for the split DNS, which an own preset does not get.
+      const sbOwn = JSON.parse(buildSingboxJson(eps, { ownPresetRules: rules })) as Record<string, unknown>;
+      const sbBuiltin = JSON.parse(buildSingboxJson(eps, { routingPreset: id })) as Record<string, unknown>;
+      expect(sbBuiltin.dns).toBeDefined();
+      expect(sbOwn.dns).toBeUndefined();
+      expect((sbOwn.route as Record<string, unknown>).default_domain_resolver).toBeUndefined();
+      delete sbBuiltin.dns;
+      delete (sbBuiltin.route as Record<string, unknown>).default_domain_resolver;
+      expect(sbOwn).toEqual(sbBuiltin);
     });
   }
 });
@@ -232,6 +246,16 @@ describe.skipIf(!XRAY_BIN)('xray -test accepts an own preset of every kind', () 
       ...(JSON.parse(buildXrayJsonArray(eps, { ownPresetRules: EVERY_KIND })) as unknown[]).map((c) => JSON.stringify(c)),
     ]) {
       expect(run(XRAY_BIN, (f) => ['-test', '-c', f], config, { XRAY_LOCATION_ASSET: assets })).toBe('');
+    }
+  });
+});
+
+describe.skipIf(!SINGBOX_BIN)('sing-box check accepts the split DNS of the built-in presets (f12-20)', () => {
+  it.each(['ru-split', 'cn-split'] as const)('%s, selector and url-test', (routingPreset) => {
+    for (const bundle of ['selector', 'url-test'] as const) {
+      const config = buildSingboxJson(LOADABLE, { routingPreset, bundle });
+      expect(JSON.parse(config).dns, 'the block is there to be checked').toBeDefined();
+      expect(run(SINGBOX_BIN, (f) => ['check', '-c', f], config)).toBe('');
     }
   });
 });

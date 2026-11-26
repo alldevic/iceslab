@@ -3,6 +3,7 @@ import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { xrayDeviceRules } from '../subscription.device-rules.js';
+import { exitsHaveIpv6, xrayQueryStrategy } from '../subscription.address-family.js';
 import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
 
 /** An xray endpoint this format writes. The socks/http doors always; the rest
@@ -61,9 +62,8 @@ function carriedXray(e: SubscriptionEndpoint): boolean {
  *     category, so one domain rule not two), clean DNS via AliDNS 223.5.5.5.
  * Uses the geosite:/geoip: databases that ship inside every xray client
  * install, so no extra files are needed. `domainStrategy` switches to
- * IPIfNonMatch so domains that miss every domain rule get a second, IP-based
- * pass (otherwise geoip:ru / geoip:cn never matches a domain-typed
- * destination). Default 'proxy-all' keeps the output byte-identical to pre-R1
+ * IPOnDemand so the preset's geoip:ru / geoip:cn rule can fire at all (see
+ * fillXrayFrame for why IPIfNonMatch is dead here). Default 'proxy-all' keeps the output byte-identical to pre-R1
  * builds.
  */
 export interface XrayJsonBuildOpts {
@@ -124,11 +124,17 @@ const TLS_FRAGMENT_SETTINGS: Record<string, string> = {
 /**
  * Split DNS (R2). RU domains resolve via Yandex DNS (77.88.8.8) so RU CDNs
  * return geo-correct answers; `skipFallback` keeps those queries off the
- * general resolver. Everything else asks 8.8.8.8. Xray's built-in DNS obeys
+ * general resolver. Everything else asks 1.1.1.1 over DoH. Xray's built-in DNS obeys
  * the routing table above, so the 77.88.8.8 query itself rides direct
- * (matches geoip:ru) while 8.8.8.8 rides the tunnel - no plaintext foreign
- * DNS on the RU wire. Plain-IP servers dodge the DoH bootstrap problem
- * (resolving the resolver's own hostname).
+ * (matches geoip:ru) while 1.1.1.1 rides the tunnel - no plaintext foreign
+ * DNS on the RU wire. The regional server is a plain IP (reached direct; a DoH
+ * hostname would need resolving first). The fallback is DoH by IP literal, so
+ * there is no bootstrap to dodge and the tunnel-side resolver does not depend
+ * on the client relaying plain UDP over its outbound (a core that does not
+ * answers every name `record not found` while TCP keeps working).
+ *
+ * `queryStrategy` is not here: splitDnsFor adds it from the one calculation of
+ * whether the exits have IPv6 (subscription.address-family.ts).
  */
 const RU_SPLIT_DNS: Record<string, unknown> = {
   servers: [
@@ -137,18 +143,18 @@ const RU_SPLIT_DNS: Record<string, unknown> = {
       domains: ['geosite:category-ru', 'geosite:category-gov-ru'],
       skipFallback: true,
     },
-    '8.8.8.8',
+    'https://1.1.1.1/dns-query',
   ],
 };
 
 /**
  * Split DNS (H2). China domains resolve via AliDNS (223.5.5.5) so CN CDNs
  * return geo-correct answers; `skipFallback` keeps those queries off the
- * general resolver. Everything else asks 8.8.8.8. Xray's built-in DNS obeys
+ * general resolver. Everything else asks 1.1.1.1 over DoH. Xray's built-in DNS obeys
  * the routing table above, so the 223.5.5.5 query itself rides direct
- * (matches geoip:cn) while 8.8.8.8 rides the tunnel - no plaintext foreign
- * DNS on the CN wire. Plain-IP server dodges the DoH bootstrap problem (the
- * same rationale as the Yandex IP in RU_SPLIT_DNS).
+ * (matches geoip:cn) while 1.1.1.1 rides the tunnel - no plaintext foreign
+ * DNS on the CN wire. Same shape and rationale as RU_SPLIT_DNS: a plain-IP
+ * regional server, a DoH-by-IP fallback, `queryStrategy` added by splitDnsFor.
  */
 const CN_SPLIT_DNS: Record<string, unknown> = {
   servers: [
@@ -157,7 +163,7 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
       domains: ['geosite:cn'],
       skipFallback: true,
     },
-    '8.8.8.8',
+    'https://1.1.1.1/dns-query',
   ],
 };
 
@@ -173,10 +179,14 @@ const CN_SPLIT_DNS: Record<string, unknown> = {
 function presetRules(opts: XrayJsonBuildOpts): readonly DeviceRouteRule[] {
   return opts.ownPresetRules ?? BUILTIN_PRESET_RULES[opts.routingPreset ?? 'proxy-all'];
 }
-function splitDnsFor(opts: XrayJsonBuildOpts): Record<string, unknown> | null {
+function splitDnsFor(
+  opts: XrayJsonBuildOpts,
+  endpoints: readonly SubscriptionEndpoint[],
+): Record<string, unknown> | null {
   if (opts.ownPresetRules) return null;
   const preset = opts.routingPreset ?? 'proxy-all';
-  return preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
+  const dns = preset === 'ru-split' ? RU_SPLIT_DNS : preset === 'cn-split' ? CN_SPLIT_DNS : null;
+  return dns ? { queryStrategy: xrayQueryStrategy(exitsHaveIpv6(endpoints)), ...dns } : null;
 }
 
 /**
@@ -376,7 +386,7 @@ export function buildXrayJson(
   // Routing preset (R1a + H2 + A-229). The preset's rules and split DNS;
   // proxy-all has neither, so the output stays byte-identical to pre-R1 builds.
   const deviceRules = presetRules(opts);
-  const splitDns = splitDnsFor(opts);
+  const splitDns = splitDnsFor(opts, endpoints);
 
   // TLS-fragment - the fragment outbound's tag must not collide with any proxy,
   // `direct`, or `block` tag, and must exactly equal the dialerProxy value we
@@ -467,6 +477,7 @@ export function buildXrayJson(
     // R3-b custom rules first, then R3 custom domain lists, then the preset.
     rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],
     split: routing && splitRules.length > 0,
+    onDemand: routing && splitDns !== null,
     balancers,
     catchAll: balancerActive
       ? { type: 'field', network: 'tcp,udp', balancerTag: 'balancer-auto' }
@@ -484,8 +495,8 @@ export function buildXrayJson(
  *   - split DNS right after `log` (first when there is no log), unless the
  *     frame has its own `dns`;
  *   - the proxy outbounds before the frame's, the fragment dialer after;
- *   - routing: `domainStrategy` (the frame's, else IPIfNonMatch under a split
- *     preset, else AsIs), the balancers, the frame's other keys, then the rules:
+ *   - routing: `domainStrategy` (the frame's, else IPOnDemand under a built-in
+ *     split preset, IPIfNonMatch under an own one, else AsIs), the balancers, the frame's other keys, then the rules:
  *     the panel's, the frame's own, the catch-all last.
  */
 function fillXrayFrame(
@@ -496,6 +507,8 @@ function fillXrayFrame(
     tail: Record<string, unknown>[];
     rules: Record<string, unknown>[];
     split: boolean;
+    /** A built-in split preset (the one with split DNS): its geoip rule needs IPOnDemand. */
+    onDemand: boolean;
     balancers: Record<string, unknown>[] | undefined;
     catchAll: Record<string, unknown>;
   },
@@ -508,7 +521,14 @@ function fillXrayFrame(
   );
   const balancers = [...(p.balancers ?? []), ...asArray(r.balancers)];
   cfg.routing = {
-    domainStrategy: r.domainStrategy ?? (p.split ? 'IPIfNonMatch' : 'AsIs'),
+    // IPOnDemand, not IPIfNonMatch, for the built-in splits: IPIfNonMatch takes
+    // its second, IP-based pass only when NO rule matched the first, and the
+    // catch-all below is last and always matches, so the pass never comes and
+    // the preset's `geoip:ru -> direct` is dead (a foreign domain on a Russian
+    // address goes into the tunnel; nothing fails, the split quietly does not
+    // split). Cost: every name is resolved before a rule is picked. An own
+    // preset keeps IPIfNonMatch, as before.
+    domainStrategy: r.domainStrategy ?? (p.onDemand ? 'IPOnDemand' : p.split ? 'IPIfNonMatch' : 'AsIs'),
     ...(balancers.length > 0 ? { balancers } : {}),
     ...rest,
     rules: [...p.rules, ...asArray(r.rules), p.catchAll],
@@ -559,7 +579,7 @@ export function buildXrayJsonArray(
   // surface.
   const supported = endpoints.filter((e) => carriedXray(e) || hysteriaUsableInXray(e));
   const deviceRules = presetRules(opts);
-  const splitDns = splitDnsFor(opts);
+  const splitDns = splitDnsFor(opts, endpoints);
   const tlsFragment = opts.tlsFragment === true;
   const cdl = opts.customDomainLists;
   const frame = opts.frame ?? defaultFrame('xray-json-array');
@@ -621,6 +641,7 @@ export function buildXrayJsonArray(
         tail: fragment,
         rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],
         split: routing && splitRules.length > 0,
+        onDemand: routing && splitDns !== null,
         balancers: undefined,
         catchAll: { type: 'field', network: 'tcp,udp', outboundTag: tag },
       },

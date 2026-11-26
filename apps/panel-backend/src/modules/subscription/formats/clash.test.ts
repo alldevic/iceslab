@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFrame } from '../subscription.frames.js';
 import { buildClashYaml } from './clash.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
 
@@ -313,6 +314,35 @@ describe('buildClashYaml', () => {
   // ───── Routing Templates (R1c) ─────
 
   describe('routingPreset', () => {
+    // Every resolver we hand out sees which names this person looks up; the
+    // third-party one is Cloudflare, in all three presets (f12-19). The test
+    // asserts an absence, so it carries its control: a preset with no DNS at
+    // all would pass it, so the split presets must still carry a block, and
+    // each its regional resolver.
+    it.each(['proxy-all', 'ru-split', 'cn-split'] as const)(
+      'names no Google resolver in the %s preset',
+      (preset) => {
+        const out = buildClashYaml([xrayEp], { routingPreset: preset });
+        expect(out).not.toContain('8.8.8.8');
+        expect(out).not.toContain('8.8.4.4');
+        expect(out).not.toContain('dns.google');
+        expect(out).toContain('    - https://1.0.0.1/dns-query');
+        if (preset !== 'proxy-all') expect(out).toContain('nameserver:');
+        if (preset === 'ru-split') expect(out).toContain('77.88.8.8');
+        if (preset === 'cn-split') expect(out).toContain('223.5.5.5');
+      },
+    );
+
+    it('a frame with its own dns is handed out without ours', () => {
+      const frame = readFrame('mihomo', ['iceslab:', '  routing: preset', 'dns:', '  enable: true', '  nameserver:', '    - 9.9.9.9', 'proxies: []', 'rules:', '  - MATCH,DIRECT', ''].join('\n'));
+      for (const preset of ['proxy-all', 'ru-split', 'cn-split'] as const) {
+        const out = buildClashYaml([xrayEp], { frame, routingPreset: preset });
+        expect(out).toContain('    - 9.9.9.9');
+        expect(out).not.toContain('1.0.0.1');
+        expect(out).not.toContain('1.1.1.1');
+      }
+    });
+
     it('proxy-all carries no routing rules and no geo databases', () => {
       expect(buildClashYaml([xrayEp], { routingPreset: 'proxy-all' })).toBe(
         buildClashYaml([xrayEp]),

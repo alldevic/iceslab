@@ -61,8 +61,8 @@ describe('the Default frames', () => {
       { sha256: h.digest('hex'), revision: DEFAULT_TEMPLATES_REVISION },
       'a Default body changed: change DEFAULT_TEMPLATES_REVISION, then this sha256 and revision',
     ).toEqual({
-      sha256: '8f6230c9bca59f6407d724f7ba952fe83a12d8e3355064abbe338aca68f123b9',
-      revision: '2026-10-23T00:00:00.000Z',
+      sha256: '451bcae67794e4a6057568a4ab0fa6a561aa345589d9815e6731a9f237f73b03',
+      revision: '2026-11-26T00:00:00.000Z',
     });
   });
 });

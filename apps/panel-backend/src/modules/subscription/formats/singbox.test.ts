@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildSingboxJson } from './singbox.js';
 import type { SubscriptionEndpoint } from '../subscription.formats.js';
+import { readFrame } from '../subscription.frames.js';
 
 const hysteriaEp: SubscriptionEndpoint = {
   protocol: 'hysteria',
@@ -103,7 +104,14 @@ interface SbConfig {
   log?: Record<string, unknown>;
   inbounds: { type: string; tag?: string }[];
   outbounds: SbOutbound[];
+  dns?: {
+    servers: Record<string, unknown>[];
+    rules: { rule_set: string[]; server: string }[];
+    final: string;
+    strategy?: string;
+  };
   route: {
+    default_domain_resolver?: string;
     final?: string;
     auto_detect_interface?: boolean;
     rules?: Record<string, unknown>[];
@@ -442,14 +450,90 @@ describe('buildSingboxJson', () => {
       expect(cfg.route.final).toBe('Auto');
     });
 
-    it('emits NO dns block (parity with ru-split) and no RU rule-sets', () => {
+    it('resolves CN domains regionally and leaks no RU rule-sets', () => {
       const out = buildSingboxJson([xrayEp], { routingPreset: 'cn-split' });
       const cfg = parse(out);
-      // Asked of the object rather than of the type: `dns` is precisely the key
-      // the config must NOT carry, so the shape above does not name it.
-      expect(Object.keys(cfg)).not.toContain('dns');
+      expect(cfg.dns!.servers[0]).toEqual({ type: 'udp', tag: 'dns-regional', server: '223.5.5.5', detour: 'direct' });
+      expect(cfg.dns!.rules).toEqual([{ rule_set: ['geosite-cn'], server: 'dns-regional' }]);
+      expect(cfg.route.default_domain_resolver).toBe('dns-regional');
       expect(out).not.toContain('geosite-category-ru');
       expect(out).not.toContain('geoip-ru');
+      expect(out).not.toContain('77.88.8.8');
+    });
+  });
+
+  // ───── Split DNS (f12-20) ─────
+
+  describe('split DNS', () => {
+    const rulesOf = (cfg: SbConfig) => cfg.dns!.rules.flatMap((r) => r.rule_set);
+    const declared = (cfg: SbConfig) => cfg.route.rule_set!.map((r) => r.tag);
+
+    it('ru-split: regional UDP direct, DoH through the proxy, default resolver is the regional one', () => {
+      const cfg = parse(buildSingboxJson([xrayEp], { routingPreset: 'ru-split' }));
+      expect(cfg.dns!.servers).toEqual([
+        { type: 'udp', tag: 'dns-regional', server: '77.88.8.8', detour: 'direct' },
+        { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: 'Auto' },
+      ]);
+      expect(cfg.dns!.rules).toEqual([
+        { rule_set: ['geosite-category-ru', 'geosite-category-gov-ru'], server: 'dns-regional' },
+      ]);
+      expect(cfg.dns!.final).toBe('dns-proxy');
+      expect(cfg.route.default_domain_resolver).toBe('dns-regional');
+    });
+
+    it('follows the url-test group the traffic rides', () => {
+      const cfg = parse(buildSingboxJson([xrayEp], { routingPreset: 'ru-split', bundle: 'url-test' }));
+      expect(cfg.dns!.servers[1]).toMatchObject({ tag: 'dns-proxy', detour: 'Auto-URLTest' });
+    });
+
+    it.each(['ru-split', 'cn-split'] as const)('%s: the DNS rules name rule-sets that route declares and sends direct', (preset) => {
+      const cfg = parse(buildSingboxJson([xrayEp], { routingPreset: preset }));
+      const direct = cfg.route.rules!.filter((r) => r.outbound === 'direct').flatMap((r) => (r.rule_set as string[] | undefined) ?? []);
+      for (const tag of rulesOf(cfg)) {
+        expect(declared(cfg)).toContain(tag);
+        expect(direct).toContain(tag);
+      }
+      // Domain sets only: an address set has no place in a DNS rule.
+      expect(rulesOf(cfg).every((t) => t.startsWith('geosite-'))).toBe(true);
+    });
+
+    it('proxy-all: no dns block, no default_domain_resolver', () => {
+      const cfg = parse(buildSingboxJson([xrayEp], { routingPreset: 'proxy-all' }));
+      expect(Object.keys(cfg)).not.toContain('dns');
+      expect(cfg.route.default_domain_resolver).toBeUndefined();
+    });
+
+    it('an own preset gets none', () => {
+      const cfg = parse(
+        buildSingboxJson([xrayEp], {
+          ownPresetRules: [{ match: ['geosite:category-ru'], action: 'direct', note: '' }],
+        }),
+      );
+      expect(Object.keys(cfg)).not.toContain('dns');
+      expect(cfg.route.default_domain_resolver).toBeUndefined();
+    });
+
+    it('no node, no dns block', () => {
+      const cfg = parse(buildSingboxJson([], { routingPreset: 'ru-split' }));
+      expect(Object.keys(cfg)).not.toContain('dns');
+      expect(cfg.route.default_domain_resolver).toBeUndefined();
+    });
+
+    it('the frame with its own dns is handed out as written', () => {
+      const frame = readFrame('singbox', JSON.stringify({
+        iceslab: { routing: 'preset' },
+        dns: { servers: [{ type: 'udp', tag: 'mine', server: '9.9.9.9' }] },
+        outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }],
+        route: { final: 'Pick' },
+      }));
+      const cfg = parse(buildSingboxJson([xrayEp], { frame, routingPreset: 'ru-split' }));
+      expect(cfg.dns).toEqual({ servers: [{ type: 'udp', tag: 'mine', server: '9.9.9.9' }] });
+      expect(cfg.route.default_domain_resolver).toBeUndefined();
+    });
+
+    it('a frame without iceslab routing gets none', () => {
+      const frame = readFrame('singbox', JSON.stringify({ outbounds: [{ type: 'selector', tag: 'Pick', outbounds: [] }], route: { final: 'Pick' } }));
+      expect(Object.keys(parse(buildSingboxJson([xrayEp], { frame, routingPreset: 'ru-split' })))).not.toContain('dns');
     });
   });
 

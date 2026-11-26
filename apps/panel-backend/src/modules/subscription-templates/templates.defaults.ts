@@ -28,7 +28,7 @@ export const DEFAULT_TEMPLATE_NAME = 'Default';
 
 /** When the bodies below last changed: what a code Default answers as its
  *  updatedAt, since it has no row. */
-export const DEFAULT_TEMPLATES_REVISION = '2026-10-23T00:00:00.000Z';
+export const DEFAULT_TEMPLATES_REVISION = '2026-11-26T00:00:00.000Z';
 
 export const DEFAULT_TEMPLATE_IDS: Record<TemplateType, string> = {
   mihomo: '5a3c0236-0000-4000-8000-000000000001',
@@ -86,6 +86,18 @@ const SOCKS_IN = `{
       "settings": { "auth": "noauth", "udp": true }
     }`;
 
+// Happ in system-proxy mode takes its proxy port from an `http` inbound in the
+// config; with SOCKS alone it logs "No HTTP inbound found", binds nothing and
+// the browser answers ERR_PROXY_CONNECTION_FAILED. 10808/10809 is the pair
+// clients look for. The router variant drops `inbounds` altogether.
+const HTTP_IN = `{
+      "tag": "http-in",
+      "port": 10809,
+      "listen": "127.0.0.1",
+      "protocol": "http",
+      "settings": {}
+    }`;
+
 // xray-json-array: the body is ONE config, the frame of each element. The
 // panel writes one copy per node, the node's outbound first and its remarks on
 // top; `iceslab` sits on that one object and is removed from every copy.
@@ -93,7 +105,8 @@ const XRAY_JSON_ARRAY = `{
   "iceslab": { "routing": "preset" },
   "log": { "loglevel": "warning" },
   "inbounds": [
-    ${SOCKS_IN}
+    ${SOCKS_IN},
+    ${HTTP_IN}
   ],
   "outbounds": [
     { "tag": "direct", "protocol": "freedom" },
@@ -113,7 +126,8 @@ const XRAY_JSON = `{
   "iceslab": { "routing": "preset" },
   "log": { "loglevel": "warning" },
   "inbounds": [
-    ${SOCKS_IN}
+    ${SOCKS_IN},
+    ${HTTP_IN}
   ],
   "outbounds": [
     { "tag": "direct", "protocol": "freedom" },
