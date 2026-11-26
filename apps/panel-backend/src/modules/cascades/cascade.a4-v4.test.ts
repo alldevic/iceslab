@@ -232,6 +232,6 @@ describe('A4 ad-split reaches a v4 entry', () => {
       ]),
     });
     expect(hop!.routingRules.some((r) => r['domain'] !== undefined)).toBe(false);
-    expect(hop!.routingRules).toHaveLength(3); // QUIC block + one per direction
+    expect(hop!.routingRules).toHaveLength(4); // QUIC block + one per direction + the terminal refusal
   });
 });

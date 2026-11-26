@@ -101,6 +101,11 @@
       "type": "field",
       "vlessRoute": "2,258",
       "outboundTag": "cascade-link-out-d2-0"
+    },
+    {
+      "type": "field",
+      "network": "tcp,udp",
+      "outboundTag": "blocked"
     }
   ]
 }

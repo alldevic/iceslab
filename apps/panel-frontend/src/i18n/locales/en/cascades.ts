@@ -133,10 +133,14 @@ export const cascades = {
     entryPolicyHint: 'for every user of this entry',
     entryPolicyXray: 'xray users pick their policy themselves.',
     entryPolicyGone: 'The chosen policy is gone: it was deleted while the form was open. Pick another or "none".',
-    // A fact of the one-entry-per-cascade model, not a fault: a quiet line.
-    // It belongs next to the entry picker, not in a user's call about a foreign IP.
+    // A warning: the last rule of an xray entry refuses whatever no route took.
+    // It belongs next to the entry picker.
+    entryRefused:
+      'The xray {{protocols}} profiles on {{name}} have no direction: their users are refused, not sent out of the entry country.',
     entryBystanders:
-      'The {{protocols}} profiles on {{name}} are outside the cascade; their users leave straight from {{country}}.',
+      'The {{protocols}} profiles on {{name}} run as separate cores and are outside the cascade: their users still leave straight from {{country}}, the refusal does not cover them.',
+    entryRefusesAll:
+      'An xray entry refuses all xray traffic that has no direction: trojan, vmess, socks and http profiles, vless without a direction tag, and the entry host handed out as a plain server. The WARP inbound of this node stops working.',
     entryCountryUnknown: "this node's country",
     legPort: 'port {{port}}',
     legUnknown: 'no link cell picked',
@@ -192,7 +196,7 @@ export const cascades = {
     // form would caption the wrong change if the form moved again meanwhile.
     entryDropTitle: 'Change the cascade entry from {{from}} to {{to}}?',
     entryDropTitleBare: 'Change the cascade entry?',
-    entryDropBody: 'These profiles leave the cascade and go direct, out of the entry country:',
+    entryDropBody: 'The xray traffic of these profiles is left without a direction at the entry and is refused (profiles of other cores leave direct, out of the entry country):',
     entryDropRow: '{{profile}} on {{node}}',
     entryDropConfirm: 'Change anyway',
     // The second question of the same chain: nodes leave the entry, the

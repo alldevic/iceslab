@@ -174,9 +174,9 @@ export const squads = {
     cascadeNodePolicyUnknown: "The entry node's policy is unknown: it cannot be told whether its rules lead into this cascade.",
     cascadeSwitch: 'Hand out cascade "{{name}}"',
     cascadeOffMeans:
-      'The entry host {{nodes}}, if handed out, stays a plain server: the squad members come out in the entry country, {{countries}}.',
+      'The entry host {{nodes}}, if handed out to this squad as a plain server, will refuse their xray traffic: a cascade entry is closed to everything without a direction. Entry country: {{countries}}.',
     cascadeOffMeansNoCountry:
-      'The entry host {{nodes}}, if handed out, stays a plain server: the squad members come out where the entry node is, which has no country set.',
+      'The entry host {{nodes}}, if handed out to this squad as a plain server, will refuse their xray traffic: a cascade entry is closed to everything without a direction.',
     cascadeOffOtherSquads:
       'A cascade switched off is not built for the squad members. A member who is also in a squad that hands out the same entry and did not switch the cascade off keeps it.',
     exitAclDuplicate: 'The server got two exit entries for one cascade and refused. The squad was read again, repeat the change.',

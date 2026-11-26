@@ -1239,10 +1239,9 @@ export interface TopologyInput {
  *     a fixed `outboundTag`. The pool stops being a pool and the config says
  *     nothing about it;
  *   - a direction loses its only node, and then it gets NO routing rule at all.
- *     A v4 entry has no catch-all, so a client whose UUID carries that
- *     direction falls through to `freedom` and egresses from the ENTRY country
- *     while their client shows the exit. That is the one outcome worth any
- *     amount of loudness to prevent;
+ *     The entry's last rule refuses what no route took, so that direction's
+ *     clients get nothing and the config says nothing about it: a direction
+ *     that works for nobody, quietly;
  *   - the firewall allow-list for the link port loses an entry, and an empty
  *     allow-list means the agent opens the port to anyone.
  *
@@ -1655,7 +1654,15 @@ export function buildTopologyFragmentsForNode(
     let target: Record<string, unknown>;
     if (tags.length > 1) {
       const balancerTag = `bal-d${directionTag}`;
-      balancers.push({ tag: balancerTag, selector: tags, strategy: { type: 'leastPing' } });
+      // fallbackTag: a pool with nothing alive refuses. A `balancerTag` rule
+      // that resolves to nothing does not fall through to the next rule, it
+      // lands on the default outbound - `direct`, the entry's own country.
+      balancers.push({
+        tag: balancerTag,
+        selector: tags,
+        strategy: { type: 'leastPing' },
+        fallbackTag: 'blocked',
+      });
       target = { balancerTag };
       // leastPing needs somebody to measure the pings. Without an observatory
       // xray refuses the whole config with "not all dependencies are resolved"
@@ -1700,11 +1707,10 @@ export function buildTopologyFragmentsForNode(
    * the balancer pick the fastest way out.
    *
    * It must be an explicit rule, which is why this could not simply be drawn in
-   * the client's list. There is no catch-all at a v4 entry: a tag with no rule
-   * falls through to `freedom` and the user egresses from the ENTRY country
-   * while their client says they chose otherwise. Wrong quietly is worse than
-   * broken loudly, so a phantom Auto row was removed on 2026-08-15 and comes
-   * back only now that the entry knows the tag.
+   * the client's list. A tag with no rule of its own reaches only the entry's
+   * terminal refusal (below), so a phantom Auto row would be a line that never
+   * works. It was removed on 2026-08-15 and comes back only now that the entry
+   * knows the tag.
    *
    * The selector is the link-out PREFIX, so it spans directions and any pools
    * inside them: the choice is "fastest hop out of here", not "fastest inside
@@ -1739,6 +1745,13 @@ export function buildTopologyFragmentsForNode(
         tag: AUTO_BALANCER_TAG,
         selector: [LINK_OUT_TAG],
         strategy: { type: 'leastPing' },
+        // Where the Auto line goes when the balancer has NOTHING alive. Without
+        // it that connection lands on the default outbound - `direct` - and the
+        // subscriber who picked "fastest exit" silently leaves from the ENTRY's
+        // country. It has to be `fallbackTag` and not a rule behind this one:
+        // a `balancerTag` rule that resolves to nothing does NOT fall through
+        // to the next rule (measured in the fork, 2026-08-28).
+        fallbackTag: 'blocked',
       });
       needsObservatory = true;
       routingRules.push({ ...gate, balancerTag: AUTO_BALANCER_TAG });
@@ -1748,6 +1761,25 @@ export function buildTopologyFragmentsForNode(
   if (isEntry && input.entryUserGate) {
     const gated = applyEntryUserGate(routingRules, input.entryUserGate);
     routingRules.splice(0, routingRules.length, ...gated);
+  }
+
+  /**
+   * TERMINAL: at an entry, xray traffic that matched no route is REFUSED.
+   *
+   * Last rule, below every direction, Auto and the user gate, so it only
+   * catches a client the entry has no route for: a UUID without a tag, a
+   * subscription downloaded before the exits existed, a trojan/vmess/socks
+   * profile of the same node, a WARP inbound. Without it they fall through to
+   * `freedom` and leave from the ENTRY country while every party reports
+   * success. Decided: refuse everything ("deny all").
+   *
+   * It is a "door" for the agent (no domain/ip/port/protocol), so it sits
+   * after the node's policy rules and BEFORE the WARP rules by inboundTag:
+   * an entry's WARP inbound stops working. Other cores on the node are other
+   * processes and are not touched.
+   */
+  if (isEntry) {
+    routingRules.push({ type: 'field', network: 'tcp,udp', outboundTag: 'blocked' });
   }
 
   return {
@@ -2125,7 +2157,11 @@ export function buildBalancerCascadeConfigs(
       probeURL: OBSERVATORY_PROBE_URL,
       probeInterval: OBSERVATORY_PROBE_INTERVAL,
     },
-    balancers: [{ tag: BALANCER_TAG, selector: [LINK_OUT_TAG], strategy: { type: 'leastPing' } }],
+    // fallbackTag: with every exit dead the catch-all above refuses rather than
+    // landing on `direct` at the entry.
+    balancers: [
+      { tag: BALANCER_TAG, selector: [LINK_OUT_TAG], strategy: { type: 'leastPing' }, fallbackTag: 'blocked' },
+    ],
   });
 
   // Exits: each terminates its own link-in and egresses via freedom, firewalled

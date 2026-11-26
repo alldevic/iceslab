@@ -134,6 +134,7 @@ func TestARuleThatSaysNothingAboutTheDestinationIsADoor(t *testing.T) {
 		{"entry catch-all", `{"type":"field","network":"tcp,udp","outboundTag":"cascade-link-out"}`, true},
 		{"direction selector", `{"type":"field","vlessRoute":"1,257","outboundTag":"cascade-link-out-d1-0"}`, true},
 		{"balancer", `{"type":"field","vlessRoute":"65281","network":"tcp,udp","balancerTag":"auto"}`, true},
+		{"entry terminal refusal", `{"type":"field","network":"tcp,udp","outboundTag":"blocked"}`, true},
 		{"transit by credential", `{"type":"field","user":["lnk-d1-abcd1234"],"outboundTag":"cascade-link-out-d1-0"}`, true},
 		{"a direction's node", `{"type":"field","inboundTag":["cascade-link-in"],"outboundTag":"direct"}`, true},
 		{"A4 grant", `{"type":"field","vlessRoute":"257","domain":["geosite:category-ru"],"outboundTag":"direct"}`, false},
@@ -148,5 +149,34 @@ func TestARuleThatSaysNothingAboutTheDestinationIsADoor(t *testing.T) {
 		if got := isDoorRule(json.RawMessage(c.rule)); got != c.door {
 			t.Errorf("%s: door=%v, want %v", c.name, got, c.door)
 		}
+	}
+}
+
+// The entry's terminal refusal ("tcp/udp -> blocked") is a door, so it lands
+// after the node's policy and the narrow rules, and the cascade rules above it
+// are not cut off: the policy still fires first, the grants and the selector
+// still match before the refusal does.
+func TestTheEntryTerminalRefusalStaysBelowThePolicyAndTheSelector(t *testing.T) {
+	frag := entryFragments()
+	frag.RoutingRules = append(frag.RoutingRules,
+		json.RawMessage(`{"type":"field","network":"tcp,udp","outboundTag":"blocked"}`))
+	policy := []dto.NodePolicyRule{{
+		Match:  dto.NodePolicyMatch{Domain: []string{"geosite:category-ru"}},
+		Action: dto.NodePolicyAction{Kind: dto.PolicyActionCascade, Exit: "cascade-link-out-d1-0"},
+	}}
+	rules := renderedRules(t, policy, frag)
+
+	policyRule := indexOfRule(rules, func(r map[string]any) bool {
+		return r["domain"] != nil && r["vlessRoute"] == nil
+	})
+	selector := indexOfRule(rules, func(r map[string]any) bool { return r["vlessRoute"] == "1,257" })
+	refusal := indexOfRule(rules, func(r map[string]any) bool {
+		return r["network"] == "tcp,udp" && r["outboundTag"] == "blocked" && r["domain"] == nil
+	})
+	if policyRule < 0 || selector < 0 || refusal < 0 {
+		t.Fatalf("missing a rule: policy=%d selector=%d refusal=%d\n%v", policyRule, selector, refusal, rules)
+	}
+	if !(policyRule < selector && selector < refusal) {
+		t.Errorf("order must be policy < selector < refusal, got %d %d %d", policyRule, selector, refusal)
 	}
 }

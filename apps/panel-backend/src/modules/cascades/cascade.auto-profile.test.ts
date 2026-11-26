@@ -94,6 +94,22 @@ describe('the Auto tag reaches a balancer at the entry', () => {
     expect(routeTag(MAX_DIRECTION_ORDINAL, 255)).toBeLessThan(autoRouteTag(MAX_DIRECTION_ORDINAL));
   });
 
+  /**
+   * With nothing alive behind it, the Auto line must refuse, not leave from the
+   * entry's own country. `fallbackTag` and not a rule behind the balancer: a
+   * `balancerTag` rule that resolves to nothing does NOT fall through to the
+   * next rule (measured in the fork), so a rule there would be dead weight.
+   */
+  it('refuses the Auto tag when the balancer has nothing alive, instead of egressing at the entry', () => {
+    const cfg = buildTopologyFragmentsForNode(ENTRY, { ...twoDirections, auto: true })!;
+    const bal = cfg.balancers?.find((b) => b.tag === 'bal-auto');
+    expect(bal, 'no Auto balancer').toBeDefined();
+    expect(
+      bal!.fallbackTag,
+      'without a fallback the Auto line egresses at the entry when every exit is down',
+    ).toBe('blocked');
+  });
+
   it('gives each policy its own Auto tag', () => {
     const cfg = buildTopologyFragmentsForNode(ENTRY, { ...twoDirections, auto: true })!;
     const tags = String(autoRule(cfg)!.vlessRoute).split(',');

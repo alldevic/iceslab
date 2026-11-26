@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, SegmentedControl, Select, Stack, Switch, Text, UnstyledButton } from '@mantine/core';
@@ -2187,30 +2187,49 @@ export function EntryChainNote({
 }
 
 /**
- * Профили входных нод, которые в каскад не входят. Спокойная строка: это
- * свойство модели «один вход на каскад», а не ошибка оператора.
+ * Что вход xray делает с тем, что не пошло в каскад. Это предупреждение, а не
+ * справка: последнее правило входа отклоняет весь xray-трафик без направления
+ * (в том числе WARP-инбаунд ноды), и пользователи таких профилей остаются без
+ * связи. Профили других ядер, отдельных процессов, правило не видит: они
+ * работают как раньше, и строка говорит это прямо.
  */
 export function EntryBystandersNote({
   items,
   failure = null,
+  xrayEntry = false,
 }: {
   items: EntryBystander[] | undefined;
+  /** Вход каскада на xray: тогда действует отказ без направления. */
+  xrayEntry?: boolean;
   /** Привязки или профили входа не пришли: сказать это, а не промолчать (A-172 п.4). */
   failure?: LoadFailure | null;
 }) {
   const { t } = useTranslation();
   if (failure) return <LoadFailedLine message={failure.message} onRetry={failure.onRetry} />;
-  if (!items || items.length === 0) return null;
   return (
     <>
-      {items.map((b) => (
-        <Note key={`bystander-${b.nodeId}`} tone={MIST} icon={<InfoIcon size={13} color={MIST} />}>
-          {t('cascadeCreate.entryBystanders', {
-            protocols: b.protocols.map((p) => protocolLabelCompact(p)).join(', '),
-            name: b.nodeName,
-            country: b.countryCode ? countryName(b.countryCode) : t('cascadeCreate.entryCountryUnknown'),
-          })}
+      {xrayEntry && (
+        <Note tone={AMBER} icon={<WarnIcon size={13} color={AMBER} />}>
+          {t('cascadeCreate.entryRefusesAll')}
         </Note>
+      )}
+      {(items ?? []).map((b) => (
+        <Fragment key={`bystander-${b.nodeId}`}>
+          {b.refused.length > 0 && (
+            <Note tone={AMBER} icon={<WarnIcon size={13} color={AMBER} />}>
+              {t('cascadeCreate.entryRefused', { protocols: b.refused.join(', '), name: b.nodeName })}
+            </Note>
+          )}
+          {b.protocols.length > 0 && (
+            <Note tone={MIST} icon={<InfoIcon size={13} color={MIST} />}>
+              {t('cascadeCreate.entryBystanders', {
+                protocols: b.protocols.map((p) => protocolLabelCompact(p)).join(', '),
+                name: b.nodeName,
+                country: b.countryCode ? countryName(b.countryCode) : t('cascadeCreate.entryCountryUnknown'),
+              })}
+            </Note>
+          )}
+        </Fragment>
       ))}
     </>
   );

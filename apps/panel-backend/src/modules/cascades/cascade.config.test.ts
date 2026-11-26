@@ -182,6 +182,8 @@ describe('buildBalancerCascadeConfigs (auto node)', () => {
     expect(bal.tag).toBe('auto');
     expect(bal.selector).toEqual(['cascade-link-out']);
     expect((bal.strategy as Record<string, unknown>).type).toBe('leastPing');
+    // With every exit dead the catch-all refuses, it does not land on `direct`.
+    expect(bal.fallbackTag).toBe('blocked');
     // QUIC (udp/443) is dropped first so clients fall back to TCP; then the A4
     // explicit-exit vlessRoute rules (one per exit); the untagged catch-all
     // targets the balancer LAST so a normal UUID auto-balances.

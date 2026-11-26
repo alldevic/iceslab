@@ -1,4 +1,4 @@
-import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS, type XraySubprotocol } from '@iceslab/shared';
+import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS, MAX_CASCADE_LINKS, type XraySubprotocol } from '@iceslab/shared';
 import type { CascadeDirectionInput, CascadeProtocol } from '@/lib/domain/cascades';
 import { linkCellPair, nativeEngineOfIntent, type EnginePair, type EngineName } from '@/lib/domain/engines';
 import { DEFAULT_LINK_CONGESTION, DEFAULT_LINK_UNDERLAY, LINK_CONGESTIONS } from '@/lib/domain/cascades';
@@ -20,9 +20,9 @@ import { AMBER, CYAN, DIM, MIST, MOSS, RED } from '@/contours/cascades/lib/color
 // one more inter-hop link port to open.
 export const MAX_POSITIONS = MAX_CASCADE_HOPS;
 
-/** Entries multiplied by directions, each pair being one link with its own
- *  credentials. Mirrors the backend ceiling. */
-export const MAX_LINKS = 64;
+/** The server's ceiling on links, the very symbol it checks against; the count
+ *  itself is `countCascadeLinks` from the same package. */
+export const MAX_LINKS = MAX_CASCADE_LINKS;
 
 // The seven cores a hop link can speak. Narrower than the node protocol enum on
 // purpose: tuic / anytls / shadowtls exist as node protocols but not as cascade
@@ -217,7 +217,8 @@ export function entryNoteKind(facts: EntryChainFacts | null): EntryNoteKind | nu
 /**
  * Подпротоколы xray, которые вход каскада не раскладывает (A-264): у них нет
  * UUID vless, по которому vlessRoute выбирает выход. socks и http входят по
- * логину и тоже идут мимо.
+ * логину и тоже идут мимо. Конец правил входа отклоняет всё, чему маршрут не
+ * нашёл, так что их пользователи получают отказ, а не выход из страны входа.
  */
 const OFF_ROUTE_SUBPROTOCOLS: readonly XraySubprotocol[] = ['trojan', 'vmess', 'socks', 'http'];
 
@@ -232,7 +233,11 @@ export interface EntryBystander {
   nodeId: string;
   nodeName: string;
   countryCode: string | null;
+  /** Другие ядра ноды: отдельные процессы, правило входа их не видит, они
+   *  работают как в базе (выходят напрямую из страны входа). */
   protocols: string[];
+  /** Профили xray без направления на входе xray: их трафик отклоняется. */
+  refused: string[];
 }
 
 export function entryBystanders(
@@ -246,6 +251,7 @@ export function entryBystanders(
   const out: EntryBystander[] = [];
   for (const node of entryNodes) {
     const foreign = new Set<string>();
+    const refused = new Set<string>();
     for (const b of bindings) {
       if (b.nodeId !== node.id || !b.enabled) continue;
       const profile = byId.get(b.profileId);
@@ -257,10 +263,16 @@ export function entryBystanders(
         continue;
       }
       const sub = xrayOffRouteSubprotocol(profile);
-      if (sub) foreign.add(sub);
+      if (sub) refused.add(sub);
     }
-    if (foreign.size > 0) {
-      out.push({ nodeId: node.id, nodeName: node.name, countryCode: node.countryCode, protocols: [...foreign].sort() });
+    if (foreign.size > 0 || refused.size > 0) {
+      out.push({
+        nodeId: node.id,
+        nodeName: node.name,
+        countryCode: node.countryCode,
+        protocols: [...foreign].sort(),
+        refused: [...refused].sort(),
+      });
     }
   }
   return out;

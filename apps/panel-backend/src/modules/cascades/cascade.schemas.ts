@@ -30,7 +30,10 @@ export const MAX_DIRECTION_TAG = 255;
 // Total node-to-node links a cascade may carry. With a pool of M nodes on one
 // step and N on the next, that step alone costs M*N listeners, each with its
 // own port and secret. The cap is on the sum across every step.
-export const MAX_CASCADE_LINKS = 64;
+//
+// Declared in `@iceslab/shared`, which the cascade editor reads too (with the
+// counting function), and re-exported for the importers that take it from here.
+export { MAX_CASCADE_LINKS } from '@iceslab/shared';
 
 // The full 7-core protocol set. Stored as free strings on the hop; the
 // node-agent realises each entry/link cell native-first (xray entry ->

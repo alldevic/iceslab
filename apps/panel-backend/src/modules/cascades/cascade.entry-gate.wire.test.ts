@@ -114,9 +114,10 @@ describe('the entry gate as the node gets it', () => {
     // NL is open to both: drawn without a list.
     const onNl = rules!.filter((r) => String(r.vlessRoute).split(',').includes(nlTag) && r.outboundTag !== 'blocked');
     expect(onNl.some((r) => r.user === undefined)).toBe(true);
-    // And the trap behind them.
-    expect(rules!.at(-1)).toMatchObject({ outboundTag: 'blocked' });
-    expect(String(rules!.at(-1)!.vlessRoute).split(',')).toContain(seTag);
+    // And the trap behind them, then the entry's terminal refusal.
+    expect(rules!.at(-1)).toMatchObject({ network: 'tcp,udp', outboundTag: 'blocked' });
+    expect(rules!.at(-2)).toMatchObject({ outboundTag: 'blocked' });
+    expect(String(rules!.at(-2)!.vlessRoute).split(',')).toContain(seTag);
   });
 });
 

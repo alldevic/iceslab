@@ -4,6 +4,7 @@ import {
   LINK_PORT_BASE,
 } from './cascade.config.js';
 import { describe, expect, it } from 'vitest';
+import { countCascadeLinks } from '@iceslab/shared';
 import {
   CascadeValidationError,
   countLinks,
@@ -255,5 +256,23 @@ describe('countLinks', () => {
     expect(
       countLinks([entry([N(1), N(2)]), transit(1, [N(3)])], [dir([N(4)]), dir([N(5), N(6)])]),
     ).toBe(2 * 1 + 1 * 1 + 1 * 2);
+  });
+
+  it('counts pairs of adjacent steps and the last step against each direction', () => {
+    // 8 entries -> 8 transits -> two directions of 8: the editor's old
+    // `entries x directions` said 16, the server has always said 192.
+    const ids = (from: number) => Array.from({ length: 8 }, (_, i) => N(from + i));
+    expect(countLinks([entry(ids(10)), transit(1, ids(30))], [dir(ids(50)), dir(ids(70))])).toBe(
+      8 * 8 + 8 * 8 + 8 * 8,
+    );
+  });
+
+  it('ignores empty ids: a form draft holds a blank row for the picker', () => {
+    expect(
+      countCascadeLinks(
+        [{ nodeIds: ['a', ''] }, { nodeIds: ['b', null, undefined] }],
+        [{ nodeIds: ['c', ''] }],
+      ),
+    ).toBe(1 * 1 + 1 * 1);
   });
 });

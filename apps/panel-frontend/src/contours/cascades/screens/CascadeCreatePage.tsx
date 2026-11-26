@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useRef, useState } from 'react';
+import { countCascadeLinks } from '@iceslab/shared';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -289,7 +290,9 @@ export function CascadeCreatePage() {
   // tag exists and waits for a node, and clients are simply not offered it.
   const directionsFilled = directions.every((d) => Boolean(d.countryCode));
   const duplicate = new Set(allIds).size !== allIds.length;
-  const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
+  // The server's own count (every adjacent pair of steps, then the last step
+  // against each direction), not a second formula of the form's.
+  const links = countCascadeLinks(pools, directions);
   const overLinks = links > MAX_LINKS;
 
   // Та же первая стена, что на правке: цепь несёт только трафик xray, и
@@ -613,7 +616,13 @@ export function CascadeCreatePage() {
                     }}
                   />
                 )}
-                {i === 0 && <EntryBystandersNote items={bystanders.items} failure={bystanders.failure} />}
+                {i === 0 && (
+                  <EntryBystandersNote
+                    items={bystanders.items}
+                    failure={bystanders.failure}
+                    xrayEntry={pools[0]?.entryProtocol === 'xray'}
+                  />
+                )}
                 {i === 0 &&
                   entryChainNotes(
                     entryChainGaps(entryIds.map((id) => nodeById.get(id))),

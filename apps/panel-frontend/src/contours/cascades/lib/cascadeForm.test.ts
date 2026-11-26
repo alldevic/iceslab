@@ -1006,13 +1006,13 @@ describe('entryBystanders', () => {
 
   it('2. один чужой протокол: одна строка у своей ноды', () => {
     expect(entryBystanders('xray', nodes, [bind('p-vless', 'n1'), bind('p-hy2', 'n1')], profiles)).toEqual([
-      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['hysteria'] },
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['hysteria'], refused: [] },
     ]);
   });
 
   it('3. два чужих протокола: перечислены оба', () => {
     const out = entryBystanders('xray', nodes, [bind('p-hy2', 'n2'), bind('p-awg', 'n2')], profiles);
-    expect(out).toEqual([{ nodeId: 'n2', nodeName: 'ru-02', countryCode: null, protocols: ['amneziawg', 'hysteria'] }]);
+    expect(out).toEqual([{ nodeId: 'n2', nodeName: 'ru-02', countryCode: null, protocols: ['amneziawg', 'hysteria'], refused: [] }]);
   });
 
   it('4. выключенная привязка в счёт не идёт: пользователей через неё нет', () => {
@@ -1029,7 +1029,7 @@ describe('entryBystanders', () => {
     expect(entryBystanders('xray', nodes, [bind('p-gone', 'n1')], profiles)).toEqual([]);
   });
 
-  it('7. A-264: xray trojan и vmess на входе xray мимо vlessRoute названы, vless нет, без известного subprotocol не назван', () => {
+  it('7. A-264: xray trojan и vmess на входе xray мимо vlessRoute названы (их трафик отклоняется), vless нет, без известного subprotocol не назван', () => {
     const xray = [
       { id: 'x-vless', protocol: 'xray', config: { subprotocol: 'vless' } },
       { id: 'x-trojan', protocol: 'xray', config: { subprotocol: 'trojan' } },
@@ -1039,7 +1039,7 @@ describe('entryBystanders', () => {
     ];
     const all = xray.map((p) => bind(p.id, 'n1'));
     expect(entryBystanders('xray', nodes, all, xray)).toEqual([
-      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['trojan', 'vmess'] },
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: [], refused: ['trojan', 'vmess'] },
     ]);
     expect(entryBystanders('xray', nodes, [bind('x-vless', 'n1'), bind('x-unknown', 'n1')], xray)).toEqual([]);
   });
@@ -1051,7 +1051,7 @@ describe('entryBystanders', () => {
       { id: 'x-http', protocol: 'xray', config: { subprotocol: 'http' } },
     ];
     expect(entryBystanders('xray', nodes, xray.map((p) => bind(p.id, 'n1')), xray)).toEqual([
-      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['http', 'socks'] },
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: [], refused: ['http', 'socks'] },
     ]);
   });
 });

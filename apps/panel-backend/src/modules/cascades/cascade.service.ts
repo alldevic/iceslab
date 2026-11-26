@@ -2513,6 +2513,13 @@ export async function updateCascade(id: string, input: UpdateCascadeInput): Prom
           ...('entryPolicyId' in input && input.entryPolicyId !== undefined
             ? { entryPolicyId: input.entryPolicyId }
             : {}),
+          // Stamped by hand: every field above is optional and a save that
+          // changes only the topology carries none of them (it lives in child
+          // rows), so `data` came out EMPTY and `@updatedAt` never fired.
+          // `getCascadeStatus` asks whether a hop's `lastInboundSyncAt` is later
+          // than this, so a stale value reports a cascade that was JUST saved
+          // as applied before the push carrying it has been sent.
+          updatedAt: new Date(),
         },
       });
       if (!hops && positions && directions) {

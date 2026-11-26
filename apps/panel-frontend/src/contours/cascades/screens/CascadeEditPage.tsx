@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useRef, useState } from 'react';
+import { countCascadeLinks } from '@iceslab/shared';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Box, Stack, Text, TextInput } from '@mantine/core';
@@ -596,7 +597,9 @@ export function CascadeEditPage() {
   // rather than the save button going dead for the whole form.
   const directionsFilled = directions.every((d) => Boolean(d.countryCode));
   const duplicate = new Set(allIds).size !== allIds.length;
-  const links = Math.max(entryIds.length, 1) * directions.filter((d) => d.nodeIds.some(Boolean)).length;
+  // The server's own count (every adjacent pair of steps, then the last step
+  // against each direction), not a second formula of the form's.
+  const links = countCascadeLinks(pools, directions);
 
   // A protocol column is a free string in the database and older rows can hold
   // a value the API no longer accepts (the demo seed writes `vless`). Such a
@@ -892,7 +895,13 @@ export function CascadeEditPage() {
                     }}
                   />
                 )}
-                {i === 0 && <EntryBystandersNote items={bystanders.items} failure={bystanders.failure} />}
+                {i === 0 && (
+                  <EntryBystandersNote
+                    items={bystanders.items}
+                    failure={bystanders.failure}
+                    xrayEntry={draft?.pools[0]?.entryProtocol === 'xray'}
+                  />
+                )}
                 {i === 0 &&
                   entryChainNotes(
                     entryChainGaps(entryIds.map((id) => nodeById.get(id))),

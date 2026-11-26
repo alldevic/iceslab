@@ -1,6 +1,6 @@
+import { countCascadeLinks, MAX_CASCADE_LINKS } from '@iceslab/shared';
 import {
   MAX_CASCADE_HOPS,
-  MAX_CASCADE_LINKS,
   MAX_CASCADE_PATH,
   MAX_CASCADE_POSITIONS,
 } from './cascade.schemas.js';
@@ -357,22 +357,14 @@ export function blindTransitSteps(
 
 /**
  * Links implied by a topology: every node on a step pairs with every node on
- * the next. Exported so the UI can show the count before saving, which is where
- * the multiplication becomes visible ("1 entry x 3 directions = 3").
+ * the next. The arithmetic is `countCascadeLinks` in `@iceslab/shared`, which
+ * the editor calls too, so the number it shows before saving is this one.
  */
 export function countLinks(
   positions: CascadePositionInput[],
   directions: ResolvedDirection[],
 ): number {
-  let total = 0;
-  for (let i = 0; i < positions.length - 1; i++) {
-    total += positions[i]!.nodeIds.length * positions[i + 1]!.nodeIds.length;
-  }
-  const last = positions[positions.length - 1];
-  if (last) {
-    for (const d of directions) total += last.nodeIds.length * d.nodeIds.length;
-  }
-  return total;
+  return countCascadeLinks(positions, directions);
 }
 
 /**
