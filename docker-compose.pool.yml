@@ -1,0 +1,29 @@
+# Opt-in addition to docker-compose.prod.yml for the cold pool of spares
+# (EXT_VPTECH_POOL_ENABLED=true): a backend image that carries ansible and the
+# playbook, and the SSH key and inventory mounted into it. Without this file
+# the panel runs as before; with the pool on and no playbook configured, a swap
+# only logs what it would have installed.
+#
+#   docker compose -f docker-compose.prod.yml build migrate
+#   docker compose -f docker-compose.prod.yml -f docker-compose.pool.yml \
+#     --env-file .env.production up -d --build backend
+#
+# What the operator provides, next to this file (paths overridable in .env.production):
+#   pool/ssh_key         the private key the spares accept for root (or a sudo user), owned by
+#                        uid 1000 (the backend's `node` user), mode 0400/0600
+#   pool/inventory.ini   one host per spare, host name = the node's name in the panel
+# See deploy/ansible/README.md, "Installing a spare from the panel".
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: apps/panel-backend/Dockerfile.ansible
+      args:
+        BASE_IMAGE: iceslab-backend:latest
+    image: iceslab-backend-pool:latest
+    volumes:
+      - ${POOL_SSH_KEY_FILE:-./pool/ssh_key}:/run/pool/ssh_key:ro
+      - ${POOL_INVENTORY_FILE:-./pool/inventory.ini}:/run/pool/inventory.ini:ro
+    environment:
+      EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK: ${EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK:-/opt/iceslab/deploy/ansible/site.yml}
+      EXT_VPTECH_POOL_ANSIBLE_INVENTORY: ${EXT_VPTECH_POOL_ANSIBLE_INVENTORY:-/run/pool/inventory.ini}

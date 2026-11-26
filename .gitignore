@@ -368,3 +368,6 @@ CLAUDE.local.md
 # ansible: real inventories hold node addresses, keep out of git
 deploy/ansible/inventory.ini
 deploy/ansible/*.retry
+
+# Cold pool: the SSH key and inventory mounted by docker-compose.pool.yml
+/pool/

@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import type { EngineName } from '@iceslab/shared';
 import { config } from '../../config.js';
 import { prisma } from '../../prisma.js';
@@ -85,24 +90,122 @@ export interface ProvisionVars {
 }
 
 /**
- * Installs a promoted spare. Injectable: tests pass a mock, and the run of the
- * ansible role from the panel replaces the default later.
+ * Installs a promoted spare. Injectable: tests pass a mock; the default runs
+ * the ansible role from the panel (`defaultAnsibleRunner`).
  */
 export interface AnsibleRunner {
   provision(spare: { id: string; name: string }, vars: ProvisionVars): Promise<void>;
 }
 
+export interface AnsibleRunnerSettings {
+  playbook: string;
+  inventory: string;
+  bin: string;
+}
+
+type ExecFileFn = (
+  file: string,
+  args: string[],
+  opts: { timeout: number; maxBuffer: number; cwd: string; env: NodeJS.ProcessEnv },
+) => Promise<{ stdout: string; stderr?: string }>;
+
+const execFileAsync = promisify(execFile) as unknown as ExecFileFn;
+
 /**
- * The runner until the panel can run the role itself: it only says what it
- * would have installed. The token stays out of the log.
+ * Longer than that and the token is near its end (15 minutes, TOKEN_TTL_MS in
+ * bootstrap.service.ts): a slower install would fail on the token anyway.
  */
-export const logOnlyAnsibleRunner: AnsibleRunner = {
-  async provision(spare, vars) {
-    getLogger().warn(
-      `[ext-vptech-pool] promote ${spare.name}: no installer wired, nothing installed (engines ${vars.iceslab_engines.join(',') || 'none'}); run deploy/ansible against this node by hand`,
-    );
-  },
-};
+export const PROVISION_TIMEOUT_MS = 10 * 60 * 1000;
+
+// `--limit` takes a host PATTERN, not a name: `all`, `a:b`, `web*` or a group
+// would reach hosts other than the spare, with the spare's token. Only a plain
+// host name goes through.
+const LIMIT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const LIMIT_RESERVED = new Set(['all', 'ungrouped']);
+
+/**
+ * The runner that runs the role `iceslab_node` (deploy/ansible) on the spare.
+ *
+ * No playbook configured: one log line, nothing runs, the swap goes on.
+ *
+ * Otherwise `ansible-playbook <playbook> [-i <inventory>] --limit <name> -e
+ * @<vars file>`. The token and the panel address go in a 0600 file in a 0700
+ * directory of their own, removed whatever happens: on argv the token would sit
+ * in the process list of the panel host for the whole install. Only values that
+ * are set go in: extra vars outrank the inventory, and an empty list here would
+ * wipe the operator's `iceslab_engines`.
+ *
+ * Neither the file's content nor the token is logged. What the process says on
+ * failure (stderr, the command line) goes through `redact` first.
+ */
+export function createAnsibleRunner(
+  exec: ExecFileFn = execFileAsync,
+  settings: () => AnsibleRunnerSettings = () => ({
+    playbook: config.EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK,
+    inventory: config.EXT_VPTECH_POOL_ANSIBLE_INVENTORY,
+    bin: config.EXT_VPTECH_POOL_ANSIBLE_BIN,
+  }),
+): AnsibleRunner {
+  return {
+    async provision(spare, vars) {
+      const { playbook, inventory, bin } = settings();
+      const log = getLogger();
+      if (!playbook) {
+        log.warn(
+          `[ext-vptech-pool] promote ${spare.name}: EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK is not set, nothing installed (engines ${vars.iceslab_engines.join(',') || 'none'}); run deploy/ansible against this node by hand`,
+        );
+        return;
+      }
+      if (!LIMIT_NAME.test(spare.name) || LIMIT_RESERVED.has(spare.name)) {
+        throw new Error(
+          `node name "${spare.name}" cannot be an ansible host name (letters, digits, dot, dash and underscore only); rename the node and the inventory host`,
+        );
+      }
+
+      const redact = (text: string): string => text.split(vars.iceslab_bootstrap_token).join('<token>');
+      const dir = await mkdtemp(join(tmpdir(), 'ext-vptech-pool-'));
+      try {
+        const varsFile = join(dir, 'vars.json');
+        const body: Record<string, unknown> = {
+          iceslab_panel_url: vars.iceslab_panel_url,
+          iceslab_bootstrap_token: vars.iceslab_bootstrap_token,
+        };
+        if (vars.iceslab_engines.length > 0) body.iceslab_engines = vars.iceslab_engines;
+        await writeFile(varsFile, JSON.stringify(body), { mode: 0o600 });
+
+        const args = [playbook];
+        if (inventory) args.push('-i', inventory);
+        args.push('--limit', spare.name, '-e', `@${varsFile}`);
+        log.info(`[ext-vptech-pool] promote ${spare.name}: ${bin} ${args.join(' ')}`);
+        let stdout: string;
+        try {
+          ({ stdout } = await exec(bin, args, {
+            timeout: PROVISION_TIMEOUT_MS,
+            maxBuffer: 16 * 1024 * 1024,
+            // ansible.cfg of the role sits next to the playbook and is read from the cwd only.
+            cwd: dirname(resolve(playbook)),
+            env: { ...process.env, ANSIBLE_HOST_KEY_CHECKING: 'False' },
+          }));
+        } catch (err) {
+          const e = err as { killed?: boolean; signal?: string; stderr?: string };
+          const why = e.killed ? `timed out after ${PROVISION_TIMEOUT_MS / 1000}s` : 'failed';
+          const tail = redact(String(e.stderr ?? '').trim().split('\n').slice(-3).join(' | '));
+          const first = redact(errText(err)).split('\n')[0];
+          // No `cause`: the original error carries the process's stderr, which may hold the token.
+          // eslint-disable-next-line preserve-caught-error
+          throw new Error(`${bin} ${why} on ${spare.name}: ${first}${tail ? ` (${tail})` : ''}`);
+        }
+        log.info(
+          `[ext-vptech-pool] promote ${spare.name}: ansible done, ${redact(stdout.trim().split('\n').slice(-1)[0] ?? '')}`,
+        );
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
+export const defaultAnsibleRunner: AnsibleRunner = createAnsibleRunner();
 
 export interface PoolDepsOptions {
   runner?: AnsibleRunner;
@@ -227,7 +330,7 @@ export async function carryToSpare(burnedId: string, spareId: string): Promise<C
  * `disabled` on its heartbeat and stays up, soft-paused.
  */
 export function makeHotswapDeps(opts: PoolDepsOptions = {}): HotswapDeps {
-  const runner = opts.runner ?? logOnlyAnsibleRunner;
+  const runner = opts.runner ?? defaultAnsibleRunner;
   return {
     now: () => Date.now(),
     log: (m) => getLogger().info(`[ext-vptech-pool] ${m}`),

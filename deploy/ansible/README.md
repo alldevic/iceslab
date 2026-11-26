@@ -101,14 +101,78 @@ the panel does today:
 - picks a spare: a node with status `disabled` and the label `spare`, not `burned`,
   preferring another autonomous system, then another provider, then the same
   country;
-- issues a bootstrap token for it, takes the spare out of `disabled` and removes
-  its `spare` label; **does not install it** and does not move the burned node's
-  bindings: do both by hand as in "Bringing in a spare node by hand" (the token it
-  issued lives 15 minutes, mint another);
+- issues a bootstrap token for it and **installs the spare with this role** when
+  `EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK` is set (next section); without it the step is
+  one log line and nothing is installed, and the spare then shows as `unreachable`
+  after the next status poll until you install it by hand (the token lives 15
+  minutes, mint another);
+- takes the spare out of `disabled` and removes its `spare` label; carries the
+  burned node's bindings and node policy to it;
 - sets the burned node `disabled` with `burned`, so it is never picked again.
 
-Until the panel runs this role itself, turning the pool on makes a swap leave a
-node without an agent: it shows as `unreachable` after the next status poll.
+A failed or timed-out install aborts the swap before anything else: the spare
+stays `disabled` and keeps its label, the burned node stays in service, and the
+operator gets the notice. Nothing retries it by itself, and a failed swap sets no
+cooldown: the next `node.anomaly` for that node opens a new incident, confirmed
+after 5 minutes as usual, and the new attempt (the spare is picked again, it still has
+its label) mints a new token.
+
+### Installing a spare from the panel
+
+The panel runs `ansible-playbook` on its own host, so it needs ansible, the
+playbook, an inventory and an SSH key that is root on every spare. The ordinary
+backend image has none of these and is unchanged. In docker, use the opt-in
+`docker-compose.pool.yml` (image `apps/panel-backend/Dockerfile.ansible`: the
+backend image plus `ansible-core` 2.17.7, an SSH client and this directory; the key
+and the inventory are read-only mounts):
+
+1. Next to `docker-compose.prod.yml` create `pool/inventory.ini` (the format above:
+   one host per spare, the host name = the node's name in the panel, `ansible_host`,
+   `ansible_user`, `ansible_ssh_private_key_file=/run/pool/ssh_key`,
+   `iceslab_panel_url`, `iceslab_node_repo`, `iceslab_node_ref`, and `iceslab_engines`
+   when the spare must carry cores) and `pool/ssh_key` (the private key, `chown 1000:1000`,
+   `chmod 600`: the backend runs as uid 1000). **Whoever can read this key is root on
+   every spare**: keep it out of backups and repositories. `POOL_SSH_KEY_FILE` and
+   `POOL_INVENTORY_FILE` in `.env.production` move them.
+2. In `.env.production` set `EXT_VPTECH_POOL_ENABLED=true`. The paths of the playbook
+   and the inventory are set by the compose file; set `EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK`
+   yourself only for another layout (a panel outside docker: its own paths and
+   `EXT_VPTECH_POOL_ANSIBLE_BIN`).
+3. Build and start (every later `up` and update needs both `-f`; `scripts/ops/deploy.sh`
+   knows only the first file):
+   ```sh
+   docker compose -f docker-compose.prod.yml build migrate
+   docker compose -f docker-compose.prod.yml -f docker-compose.pool.yml --env-file .env.production up -d --build backend
+   ```
+4. Create each spare in the panel as in "Bringing in a spare node by hand" (status
+   `disabled`, the labels below), with its cores in `intendedEngines`.
+
+What the panel hands the run: `--limit <node name>`, `-i <inventory>` and `-e @<file>`,
+a 0600 file in a 0700 temporary directory that holds `iceslab_panel_url` (from
+`PUBLIC_URL`), the one-time `iceslab_bootstrap_token` and, when the spare's
+`intendedEngines` is not empty, `iceslab_engines`. The file is deleted whatever the
+outcome. The token is not in the arguments (so not in the process list of the panel
+host), not in the panel's log, and not in the text of an error: the file's
+content and the token are cut out of what the run says before it is logged. On
+the spare the role hands it to the installer the same way (see above).
+The run stops after 10 minutes (the token lives 15).
+
+- **The cores of the spare come from the inventory or from `intendedEngines`.**
+  The panel does not work them out from the burned node. The bindings the swap
+  carries are put through the same checks as on the node page, so a binding of a
+  core the spare does not have is skipped and named in the notice: give the spare
+  the cores of the profiles of the working nodes.
+- **The node name must be a plain host name** (letters, digits, `.`, `-`, `_`): it
+  is an `--limit` pattern, and a name such as `all`, `web*` or `a:b` would reach other
+  hosts. Such a name makes the swap fail before ansible starts. A name with no host of
+  that name in the inventory makes `ansible-playbook` exit 1 ("leaves us with no hosts
+  to target"), which is a failed install, not a successful one. A host must not have
+  the name of a group of the inventory either.
+- The play runs inside the handler of the controller: while an install lasts
+  (minutes), the replacement of another node waits.
+- The carried bindings are put on the spare right after the install, before the
+  agent's first report of its cores; if a binding is refused for that reason, the
+  notice says so and it is added by hand.
 
 The labels live in `hardening.pool` of the node and have no screen; set them with
 the API (bearer of an admin):
@@ -127,6 +191,9 @@ that has it is out of the pool until you send `pool` again without it.
 
 ## Host keys
 
-`ansible.cfg` sets `host_key_checking = False`: a spare is a fresh VPS whose host
-key is not known in advance. The price is that a changed or forged key is not
-noticed. Put the keys in `known_hosts` and remove the line if you know them.
+`ansible.cfg` sets `host_key_checking = False`, and the panel starts its run with
+`ANSIBLE_HOST_KEY_CHECKING=False`: a spare is a fresh VPS whose host key is not known
+in advance. The price is that a changed or forged key is not noticed, and that a
+man in the middle on the way to a spare receives the one-time token. Put the keys in
+`known_hosts` and remove the line if you know them (for the panel's run the
+environment variable is set in `pool.service.ts`).

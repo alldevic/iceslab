@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+
+# The backend image plus what the cold pool needs to install a spare from the
+# panel: ansible-core, an SSH client, the playbook of deploy/ansible and the node
+# installer the role ships. Opt-in (docker-compose.pool.yml); the ordinary
+# image, built from Dockerfile, is not touched and carries none of this.
+# Build context MUST be the monorepo root, BASE_IMAGE the ordinary backend image:
+#
+#   docker compose -f docker-compose.prod.yml build migrate
+#   docker compose -f docker-compose.prod.yml -f docker-compose.pool.yml build backend
+ARG BASE_IMAGE=iceslab-backend:latest
+FROM ${BASE_IMAGE}
+
+USER root
+# The same ansible-core the role is checked with (deploy/ansible/README.md); in
+# a venv, since alpine's python refuses a system-wide pip install.
+# LANG: ansible-playbook stops at a locale that is not UTF-8.
+RUN apk add --no-cache python3 py3-pip openssh-client \
+ && python3 -m venv /opt/ansible \
+ && /opt/ansible/bin/pip install --no-cache-dir ansible-core==2.17.7 \
+ && ln -s /opt/ansible/bin/ansible-playbook /usr/local/bin/ansible-playbook
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+# The role finds the installer at ../../../../scripts from its own directory.
+COPY deploy/ansible /opt/iceslab/deploy/ansible
+COPY scripts/install-iceslab-node.sh /opt/iceslab/scripts/install-iceslab-node.sh
+USER node

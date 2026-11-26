@@ -319,6 +319,16 @@ export const ConfigSchema = z.object({
     .string()
     .default('false')
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // The installer of a promoted spare: the playbook of deploy/ansible, run by
+  // the panel itself. Playbook empty: the swap only logs what it would have
+  // installed and goes on (the operator installs by hand). Inventory empty:
+  // ansible's own default. See deploy/ansible/README.md for the docker setup.
+  EXT_VPTECH_POOL_ANSIBLE_PLAYBOOK: z.string().default(''),
+  EXT_VPTECH_POOL_ANSIBLE_INVENTORY: z.string().default(''),
+  EXT_VPTECH_POOL_ANSIBLE_BIN: z
+    .string()
+    .default('ansible-playbook')
+    .transform((s) => s.trim() || 'ansible-playbook'),
 
   // ACME contact email used by node-installers that need a Let's Encrypt
   // cert (Hysteria 2 / NaiveProxy / Caddy). Optional, install command
