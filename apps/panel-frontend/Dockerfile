@@ -62,10 +62,12 @@ COPY --from=builder /repo/apps/panel-frontend/dist /usr/share/nginx/html
 # off every other `$`: the rest of the file is nginx variables. The default
 # is the backend's default, so an unset variable behaves as before.
 ENV SUBSCRIPTION_PATH_PREFIX=/sub \
-    NGINX_ENVSUBST_FILTER=^SUBSCRIPTION_PATH_PREFIX$
+    REMNAWAVE_COMPAT_PREFIX=rw \
+    NGINX_ENVSUBST_FILTER=^(SUBSCRIPTION_PATH_PREFIX|REMNAWAVE_COMPAT_PREFIX)$
 COPY apps/panel-frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
-# Checks the prefix with the backend's rule before it reaches a location line.
+# Check the prefixes with the backend's rule before it reaches a location line.
 COPY --chmod=0755 apps/panel-frontend/docker-entrypoint.d/15-subscription-prefix.sh /docker-entrypoint.d/
+COPY --chmod=0755 apps/panel-frontend/docker-entrypoint.d/16-compat-prefix.sh /docker-entrypoint.d/
 EXPOSE 80
 
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 \

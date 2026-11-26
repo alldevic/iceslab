@@ -2,13 +2,13 @@
 #
 # Two responsibilities:
 #   1. Serve the Vite-built SPA with client-side-routing fallback.
-#   2. Reverse-proxy `/api`, the subscription prefix, `/health` to the backend
-#      service so the browser sees a single origin (no CORS).
+#   2. Reverse-proxy `/api`, the subscription prefix, the Remnawave facade
+#      prefix, `/health` to the backend service so the browser sees a single origin (no CORS).
 #
 # ⚠ A TEMPLATE, not a config. The image's entrypoint renders it with envsubst
 # into /etc/nginx/conf.d/default.conf at start, and the only variable it
-# substitutes is ${SUBSCRIPTION_PATH_PREFIX} (NGINX_ENVSUBST_FILTER in the
-# Dockerfile): every other `$name` here is an nginx variable and stays as it
+# substitutes are ${SUBSCRIPTION_PATH_PREFIX} and the facade prefix
+# (NGINX_ENVSUBST_FILTER in the Dockerfile): every other `$name` here is an nginx variable and stays as it
 # is. The prefix is the backend's own setting, so the two cannot disagree:
 # until 2026-10-22 (A-137) this file proxied a hard-coded /sub/, and a panel
 # with its own prefix answered every subscription with the SPA's index.html
@@ -267,6 +267,25 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 300s;
+    }
+
+    # ───── Remnawave facade (REMNAWAVE_COMPAT_ENABLED, milestone 14.8) ─────
+    # Everything under the facade prefix (default rw: /rw/api/...) goes to the
+    # backend, whether or not the facade is switched on: with it off the backend
+    # answers 404 in its own format, where the SPA fallback below would answer
+    # index.html with 200 on an address a storefront's integration reads as JSON.
+    # The prefix is the backend's own setting (docker-entrypoint.d/16-compat-prefix.sh
+    # checks it with the backend's rule before rendering). ^~ keeps the regex
+    # locations (static assets, honeypot) off it. The replies are JSON: no page
+    # policy, the server-level headers apply as for /api/.
+    location ^~ /${REMNAWAVE_COMPAT_PREFIX}/ {
+        proxy_pass http://$backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
     }
 
     location = /health {

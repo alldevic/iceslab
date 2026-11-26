@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -136,5 +137,83 @@ describe('the geo files path (/geo/) and its settings', () => {
     expect(d).toMatch(/^ENV SINGBOX_BIN=\/usr\/local\/bin\/sing-box$/m);
     // From the archive the cores stage has checked, of the pinned release.
     expect(d).toContain('CORE_VERSIONS.singbox.pinned');
+  });
+});
+
+// Milestone 14.8: the facade prefix (REMNAWAVE_COMPAT_PREFIX, default rw). Written
+// in the backend schema, both compose files (to the backend and to the frontend),
+// the image's default and filter, the nginx location and the entrypoint check.
+describe('the facade prefix (REMNAWAVE_COMPAT_PREFIX) reaches the frontend container', () => {
+  const FKEY = 'REMNAWAVE_COMPAT_PREFIX';
+  const tpl = () => read('apps/panel-frontend/nginx.conf.template');
+
+  it.each(COMPOSE_FILES)('%s feeds it to the backend and to the frontend, at the schema default', (file) => {
+    const svc = services(read(file));
+    for (const name of ['backend', 'frontend']) {
+      const line = new RegExp(`^\\s+${FKEY}:\\s*\\$\\{${FKEY}:-(.*)\\}\\s*$`, 'm').exec(svc[name]!);
+      expect(line, `${file}: ${name} must get ${FKEY} from \${${FKEY}:-...}`).not.toBeNull();
+      expect(line![1], `${file}: ${name} defaults to a different value than the panel does`).toBe(schemaDefault(FKEY));
+    }
+  });
+
+  it('the image ships the same default and a filter that passes both prefixes and no nginx variable', () => {
+    const dockerfile = read('apps/panel-frontend/Dockerfile');
+    expect(new RegExp(`${FKEY}=(\\S+)`).exec(dockerfile)?.[1]).toBe(schemaDefault(FKEY));
+    const re = new RegExp(/NGINX_ENVSUBST_FILTER=(\S+)/.exec(dockerfile)![1]!);
+    expect(re.test(FKEY)).toBe(true);
+    expect(re.test(KEY)).toBe(true);
+    for (const nginxVar of ['host', 'uri', 'remote_addr', 'backend', 'request_id']) expect(re.test(nginxVar)).toBe(false);
+    expect(dockerfile).toContain('docker-entrypoint.d/16-compat-prefix.sh');
+  });
+
+  it('the template forwards everything under the prefix to the backend, ^~ and before the SPA fallback', () => {
+    const t = tpl();
+    const at = t.indexOf(`location ^~ /\${${FKEY}}/ {`);
+    expect(at, 'no facade location: /rw/api/... would answer index.html with 200').toBeGreaterThan(-1);
+    const block = t.slice(at, t.indexOf('\n    }\n', at));
+    expect(block).toContain('proxy_pass http://$backend;');
+    expect(block).toContain('proxy_set_header Host $host;');
+    expect(block).toContain('proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;');
+    expect(block).toContain('proxy_read_timeout 60s;');
+    // No add_header of its own: the server-level security headers stay (an
+    // add_header in a location drops them).
+    expect(block).not.toContain('add_header');
+    expect(at).toBeLessThan(t.indexOf('location / {'));
+    // The facade is mounted at /<prefix> by the backend: the location covers it.
+    expect(read('apps/panel-backend/src/app.ts')).toContain('prefix: `/${config.REMNAWAVE_COMPAT_PREFIX}`');
+  });
+
+  const run = (env: Record<string, string>) =>
+    spawnSync('sh', [resolve(repoRoot, 'apps/panel-frontend/docker-entrypoint.d/16-compat-prefix.sh')], {
+      env: { PATH: process.env['PATH'] ?? '', ...env },
+      encoding: 'utf8',
+    });
+
+  it.each([['rw'], ['shop_1'], ['Facade-2']])('the entrypoint check accepts %s', (v) => {
+    const r = run({ REMNAWAVE_COMPAT_PREFIX: v });
+    expect(r.status, r.stderr).toBe(0);
+  });
+
+  it.each([
+    ['', 'empty'],
+    ['api', 'taken'],
+    ['API', 'taken'],
+    ['health', 'taken'],
+    ['a/b', 'one path segment'],
+    ['/rw', 'one path segment'],
+    ['wp-admin', 'honeypot'],
+    ['phpmyadmin', 'honeypot'],
+    ['sub', 'SUBSCRIPTION_PATH_PREFIX'],
+    ['SUB', 'SUBSCRIPTION_PATH_PREFIX'],
+  ])('the entrypoint check refuses "%s"', (v, why) => {
+    const r = run({ REMNAWAVE_COMPAT_PREFIX: v });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('REMNAWAVE_COMPAT_PREFIX');
+    expect(r.stderr).toContain(why);
+  });
+
+  it('the entrypoint check follows a custom subscription prefix', () => {
+    expect(run({ REMNAWAVE_COMPAT_PREFIX: 'sub', SUBSCRIPTION_PATH_PREFIX: '/v' }).status).toBe(0);
+    expect(run({ REMNAWAVE_COMPAT_PREFIX: 'v', SUBSCRIPTION_PATH_PREFIX: '/v' }).status).toBe(1);
   });
 });
