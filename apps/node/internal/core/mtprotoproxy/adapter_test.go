@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -984,5 +986,455 @@ func TestCoreVersionIsWhatTheBootstrapWrote(t *testing.T) {
 	// Config-only mode (no script configured) has nothing to read.
 	if v := New(Config{}, quiet()).CoreVersion(); v != "" {
 		t.Errorf("no script path: version %q, want empty", v)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The backstops: a term and a traffic quota that the node itself enforces, for
+// the time the panel cannot reach it. The panel's accounting stays the primary
+// one; on mtg an expired or exhausted buyer simply kept working.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func quota(n int64) *int64 { return &n }
+
+func configPy(t *testing.T, a *Adapter) map[string]any {
+	t.Helper()
+	return runPy(t, configOf(t, a))
+}
+
+func quotaOf(t *testing.T, a *Adapter, user string) (float64, bool) {
+	t.Helper()
+	m, ok := configPy(t, a)["USER_DATA_QUOTA"].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	v, ok := m[user].(float64)
+	return v, ok
+}
+
+func TestExpiryAndQuotaReachTheConfig(t *testing.T) {
+	a := newTestAdapter(t)
+	a.cfg.Now = func() time.Time { return time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC) }
+	a.cfg.Inbound.zone = time.UTC
+	err := a.AddUser(core.User{
+		UserID:            "u1",
+		MtprotoSecret:     secretA,
+		MtprotoExpiresAt:  time.Date(2026, 10, 4, 15, 35, 0, 0, time.UTC),
+		MtprotoQuotaBytes: quota(500 * 1024 * 1024 * 1024),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := configPy(t, a)
+	// The day AFTER: mtprotoproxy cuts at 00:00 of the named date, so writing
+	// 04/10 would end a term that runs to 15:35 about sixteen hours early. The
+	// exact cut is the adapter's; this date is the net under it.
+	if exp := got["USER_EXPIRATIONS"].(map[string]any); exp["u1"] != "05/10/2026" {
+		t.Errorf("USER_EXPIRATIONS[u1] = %v, want 05/10/2026", exp["u1"])
+	}
+	// No process, so no counter: the ceiling is the remainder as pushed.
+	if q, _ := quotaOf(t, a, "u1"); int64(q) != 500*1024*1024*1024 {
+		t.Errorf("USER_DATA_QUOTA[u1] = %v", q)
+	}
+}
+
+func TestTheDateInTheConfigIsNotBeforeTheTermInTheNodesZone(t *testing.T) {
+	// mtprotoproxy compares naive LOCAL times: the date names 00:00 of that day
+	// on the node. Formatted in UTC (as the fork did) a node west of UTC cut the
+	// user off hours early.
+	for _, tz := range []*time.Location{
+		time.FixedZone("west", -8*3600), time.UTC, time.FixedZone("east", 13*3600),
+	} {
+		for _, term := range []time.Time{
+			time.Date(2026, 10, 4, 15, 35, 0, 0, time.UTC),
+			time.Date(2026, 10, 4, 23, 59, 59, 0, time.UTC),
+			time.Date(2026, 12, 31, 20, 0, 0, 0, time.UTC),
+		} {
+			in := baseInbound()
+			in.zone = tz
+			blob, err := renderConfig(in, []User{{Name: "u1", Secret: secretA, ExpiresAt: term}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := runPy(t, blob)["USER_EXPIRATIONS"].(map[string]any)["u1"].(string)
+			cut, err := time.ParseInLocation("02/01/2006", d, tz)
+			if err != nil {
+				t.Fatalf("%s: unparseable date %q", tz, d)
+			}
+			if cut.Before(term) {
+				t.Errorf("zone %s, term %s: the engine would cut at %s, before the term", tz, term, cut)
+			}
+			if cut.Sub(term) > 48*time.Hour {
+				t.Errorf("zone %s, term %s: the net %s is more than two days late", tz, term, cut)
+			}
+		}
+	}
+}
+
+func TestNoLimitsMeansNoKeysAtAll(t *testing.T) {
+	// A user on an unlimited plan must not acquire a quota or an expiry from a
+	// zero value: mtprotoproxy treats a present key as a limit, so a zero would
+	// read as "expired in year one" / "quota of nothing". The migration user is
+	// no plan either.
+	a := legacyAdapter(t, true)
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+liveMtgSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	got := configPy(t, a)
+	if got["USERS"].(map[string]any)[LegacyUserName] == nil {
+		t.Fatal("the legacy user is missing, the test proves nothing")
+	}
+	for _, k := range []string{"USER_EXPIRATIONS", "USER_DATA_QUOTA", "USER_MAX_TCP_CONNS"} {
+		if _, present := got[k]; present {
+			t.Errorf("%s emitted for users with no limits: %v", k, got[k])
+		}
+	}
+}
+
+func TestAQuotaSpentIsAQuotaOfNothingNotNoQuota(t *testing.T) {
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if q, ok := quotaOf(t, a, "u1"); !ok || q != 0 {
+		t.Errorf("a spent limit must be written as 0, got %v present=%v", q, ok)
+	}
+}
+
+func TestANegativeQuotaIsRefused(t *testing.T) {
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(-1)}); err == nil {
+		t.Fatal("accepted a negative quota")
+	}
+	if _, err := renderConfig(baseInbound(), []User{{Name: "u1", Secret: secretA, Limited: true, QuotaBytes: -5}}); err == nil {
+		t.Fatal("rendered a negative quota")
+	}
+}
+
+func TestConnectionCapIsNeverSetByThePush(t *testing.T) {
+	// USER_MAX_TCP_CONNS reads like a device limit and is not one: it caps
+	// CONCURRENT connections, and one Telegram client holds several. A cap that
+	// disconnects paying users is worse than no cap, so nothing on the wire
+	// carries it.
+	a := newTestAdapter(t)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(1 << 20)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := configPy(t, a)["USER_MAX_TCP_CONNS"]; present {
+		t.Error("the push set a connection cap; nothing on the wire should be able to")
+	}
+}
+
+func TestChangingALimitReloadsAndDoesNotRestart(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond) // let the trap be installed
+	u := core.User{
+		UserID: "u1", MtprotoSecret: secretA,
+		MtprotoExpiresAt:  time.Now().Add(48 * time.Hour),
+		MtprotoQuotaBytes: quota(1000),
+	}
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 1)
+	// A renewed term and a topped-up remainder are changes the node must hear.
+	u.MtprotoExpiresAt = u.MtprotoExpiresAt.Add(30 * 24 * time.Hour)
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 2)
+	u.MtprotoQuotaBytes = quota(5000)
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 3)
+	if q, _ := quotaOf(t, a, "u1"); q != 5000 {
+		t.Errorf("the new remainder is not in the config: %v", q)
+	}
+	if n := f.count(t, f.starts, "run"); n != 1 {
+		t.Errorf("a limit change restarted the process: %d runs", n)
+	}
+}
+
+func TestAUserLeavesTheConfigAtTheirTermWithoutAPush(t *testing.T) {
+	a := newTestAdapter(t)
+	clock := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	a.cfg.Now = func() time.Time { return clock }
+	term := clock.Add(time.Hour)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoExpiresAt: term}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u2", MtprotoSecret: secretB}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := configPy(t, a)["USERS"].(map[string]any)["u1"]; !ok {
+		t.Fatal("the user is missing before the term")
+	}
+	// One second before: still there. At the term: gone, with no push.
+	clock = term.Add(-time.Second)
+	if _, err := a.renderAndWrite(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := configPy(t, a)["USERS"].(map[string]any)["u1"]; !ok {
+		t.Error("the user was cut a second early")
+	}
+	clock = term
+	if _, err := a.renderAndWrite(); err != nil {
+		t.Fatal(err)
+	}
+	users := configPy(t, a)["USERS"].(map[string]any)
+	if _, ok := users["u1"]; ok {
+		t.Error("the user is still served at their term")
+	}
+	if users["u2"] != secretB {
+		t.Error("a user without a term was disturbed")
+	}
+}
+
+func TestExtendingTheTermBringsTheUserBack(t *testing.T) {
+	a := newTestAdapter(t)
+	clock := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	a.cfg.Now = func() time.Time { return clock }
+	u := core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoExpiresAt: clock.Add(-time.Minute)}
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := configPy(t, a)["USERS"].(map[string]any)["u1"]; ok {
+		t.Fatal("a user already past the term was written")
+	}
+	u.MtprotoExpiresAt = clock.Add(30 * 24 * time.Hour)
+	if err := a.AddUser(u); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := configPy(t, a)["USERS"].(map[string]any)["u1"]; !ok {
+		t.Error("the renewed user did not come back")
+	}
+}
+
+func TestTheTimerCutsAUserAtTheirTermAndReloadsTheEngine(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	term := time.Now().Add(700 * time.Millisecond)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoExpiresAt: term}); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 1)
+	// Nobody pushes anything; the second signal is the timer's.
+	f.waitSignals(t, 2)
+	if time.Now().Before(term) {
+		t.Error("the engine was told before the term")
+	}
+	if _, ok := configPy(t, a)["USERS"].(map[string]any)["u1"]; ok {
+		t.Error("the user is still in the config after the term")
+	}
+	if n := f.count(t, f.starts, "run"); n != 1 {
+		t.Errorf("the cut restarted the process: %d runs", n)
+	}
+}
+
+func TestAStoppedAdapterIsNotWokenByATerm(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA,
+		MtprotoExpiresAt: time.Now().Add(400 * time.Millisecond)}); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSignals(t, 1)
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := configOf(t, a)
+	time.Sleep(900 * time.Millisecond)
+	if string(configOf(t, a)) != string(before) {
+		t.Error("the timer fired on a stopped adapter and rewrote the config")
+	}
+	a.mu.Lock()
+	armed := a.expiryTimer != nil
+	a.mu.Unlock()
+	if armed {
+		t.Error("the term timer is still armed after Stop")
+	}
+}
+
+// counters serves a movable scrape body.
+type counters struct {
+	srv  *httptest.Server
+	body atomic.Value
+}
+
+func newCounters(t *testing.T) *counters {
+	t.Helper()
+	c := &counters{}
+	c.body.Store("")
+	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, c.body.Load().(string))
+	}))
+	t.Cleanup(c.srv.Close)
+	return c
+}
+
+// set: the user's counter, as the engine would export it.
+func (c *counters) set(user string, total int64) {
+	c.body.Store(`mtprotoproxy_user_octets_from{user="` + user + `"} ` + strconv.FormatInt(total/2, 10) + "\n" +
+		`mtprotoproxy_user_octets_to{user="` + user + `"} ` + strconv.FormatInt(total-total/2, 10) + "\n")
+}
+
+func TestTheQuotaIsTheCounterPlusTheRemainder(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	c := newCounters(t)
+	a.cfg.MetricsURL = c.srv.URL
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	// The user has already carried 400 bytes in this process when the push comes.
+	c.set("u1", 400)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(1000)}); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 1400 {
+		t.Fatalf("quota = %v, want counter 400 + remainder 1000", q)
+	}
+
+	// Traffic moves on and an unrelated push re-renders: the ceiling must not
+	// move with it, or the allowance would be handed out again at every render.
+	c.set("u1", 700)
+	if err := a.AddUser(core.User{UserID: "u2", MtprotoSecret: secretB}); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 1400 {
+		t.Errorf("a re-render moved the ceiling to %v", q)
+	}
+
+	// The panel catches up and pushes the real remainder: counter 700 + 150.
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(150)}); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 850 {
+		t.Errorf("quota = %v, want counter 700 + remainder 150", q)
+	}
+}
+
+func TestAFailedReadDoesNotCutAUserEarly(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	c := newCounters(t)
+	a.cfg.MetricsURL = c.srv.URL
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	c.set("u1", 400)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(1000)}); err != nil {
+		t.Fatal(err)
+	}
+	c.srv.Close() // the scrape now fails
+	if err := a.AddUser(core.User{UserID: "u2", MtprotoSecret: secretB}); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q < 1400 {
+		t.Errorf("an unreadable counter lowered the ceiling to %v: the user would be cut before the allowance", q)
+	}
+}
+
+func TestAfterARestartTheQuotaIsTheRemainderNotTheLimit(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	c := newCounters(t)
+	a.cfg.MetricsURL = c.srv.URL
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(1000)}); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 1000 {
+		t.Fatalf("quota = %v, want 1000", q)
+	}
+	// 400 bytes pass, the poll sees them.
+	c.set("u1", 400)
+	if _, err := a.GetStats(); err != nil {
+		t.Fatal(err)
+	}
+	// The listener's port changes: a real restart, and the counters start over.
+	if err := a.ApplyInbound(2085, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, f.starts, "run"); n != 2 {
+		t.Fatalf("expected a restart, runs = %d", n)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 600 {
+		t.Errorf("after the restart the quota is %v; the user has 600 left, not the full 1000", q)
+	}
+	// And the new process counts from zero: its first counters are settled
+	// against that, not against the old 400.
+	c.set("u1", 100)
+	if _, err := a.GetStats(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u2", MtprotoSecret: secretB}); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 600 {
+		t.Errorf("quota = %v after 100 more bytes in the new process, want the same 600 ceiling (100 + 500)", q)
+	}
+}
+
+func TestACrashRestartDoesNotHandTheAllowanceBackEither(t *testing.T) {
+	// The supervisor respawns a dead process on the config already on disk. That
+	// file holds counter + remainder for the OLD counter; the new process starts
+	// at zero, so without a rewrite the user would get the allowance a second time.
+	f := processFixture(t, true)
+	a := f.a
+	c := newCounters(t)
+	a.cfg.MetricsURL = c.srv.URL
+	if err := a.ApplyInbound(2083, domainPush); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(1000)}); err != nil {
+		t.Fatal(err)
+	}
+	c.set("u1", 700)
+	if _, err := a.GetStats(); err != nil { // the poll that sees the 700
+		t.Fatal(err)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 1000 {
+		t.Fatalf("quota = %v before the crash, want 1000", q)
+	}
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if err := proc.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for f.count(t, f.starts, "run") < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the supervisor did not respawn the process")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 300 {
+		t.Errorf("quota = %v after the crash-restart, want the remaining 300", q)
 	}
 }

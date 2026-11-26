@@ -614,6 +614,22 @@ export interface ProtocolCredentials {
    * per inbound and ignores this. Absent for users on every other core.
    */
   mtprotoSecret?: string;
+  /**
+   * MTProto, `mtprotoproxy` engine only: the user's term (RFC 3339), a
+   * backstop for the time the panel cannot reach the node. The panel's own
+   * accounting and its removeUser stay the primary cut-off; the agent drops the
+   * user from the engine at this instant on its own. Absent: no term. An
+   * unreadable value is read as absent, never as a reason to refuse the user.
+   */
+  mtprotoExpiresAt?: string;
+  /**
+   * MTProto, `mtprotoproxy` engine only: what is LEFT of the user's traffic
+   * limit (limit minus used, never below 0), a backstop like the term. The
+   * engine counts only its own traffic, from zero at each process start; the
+   * agent turns this remainder into a ceiling over that counter. 0 means
+   * "exhausted", not "unlimited": absent means no limit.
+   */
+  mtprotoQuotaBytes?: number;
 }
 
 // ───── POST /addUser ─────

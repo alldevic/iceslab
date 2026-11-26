@@ -87,6 +87,15 @@ type ProtocolCredentials struct {
 	// mtg is single-secret and takes its secret from the inbound, not from here;
 	// empty for users of every other core.
 	MtprotoSecret string `json:"mtprotoSecret,omitempty"`
+	// MtprotoExpiresAt is the user's term (RFC 3339), a backstop for the time
+	// the panel cannot reach the node: the agent drops the user from the engine
+	// at that instant on its own. Empty: no term. Unreadable: read as no term.
+	MtprotoExpiresAt string `json:"mtprotoExpiresAt,omitempty"`
+	// MtprotoQuotaBytes is what is LEFT of the user's traffic limit (never below
+	// 0), a backstop too; the panel's accounting stays the primary one. A
+	// pointer so that 0 (exhausted) is told from nil (no limit): omitempty on a
+	// plain int would drop the very value that matters.
+	MtprotoQuotaBytes *int64 `json:"mtprotoQuotaBytes,omitempty"`
 }
 
 // ───── POST /addUser ─────

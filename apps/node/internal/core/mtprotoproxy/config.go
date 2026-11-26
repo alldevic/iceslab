@@ -46,6 +46,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/atomicfile"
 )
@@ -64,6 +65,41 @@ type User struct {
 	// byte-identical to what mtg is handed, so the panel's URI builder needs no
 	// second spelling.
 	Secret string
+
+	// ExpiresAt zero means no term. In the roster it is the user's exact term,
+	// which the adapter enforces itself (a user past it is left out of the
+	// config); in the file it becomes USER_EXPIRATIONS, the coarse backstop.
+	// See expirationDate.
+	ExpiresAt time.Time
+
+	// Limited says whether the user has a traffic limit at all; QuotaBytes is
+	// meaningful only then, and 0 is a limit spent, not "no limit". In the
+	// adapter's roster QuotaBytes is the REMAINDER the panel pushed; renderConfig
+	// receives the number the engine compares against its own counter (the
+	// adapter has added the counter to the remainder by then). Counted as
+	// octets_to_client + octets_from_client, both directions
+	// (mtprotoproxy.py:1710).
+	Limited    bool
+	QuotaBytes int64
+}
+
+// sameAs: the pushed facts of two users are the same. time.Time is compared by
+// instant, not by == (zone pointer and monotonic reading are not facts).
+func (u User) sameAs(o User) bool {
+	return u.Name == o.Name && u.Secret == o.Secret && u.ExpiresAt.Equal(o.ExpiresAt) &&
+		u.Limited == o.Limited && u.QuotaBytes == o.QuotaBytes
+}
+
+// expirationDate is the value of USER_EXPIRATIONS for a term. mtprotoproxy
+// parses it with "%d/%m/%Y" and cuts the user off when its local time is past
+// 00:00 of that date (`now > expiration`, naive local datetimes), so the date
+// must be the local day AFTER the term in the node's own zone: 00:00 of it is
+// never before the term. The fork formatted in UTC, which on a node west of
+// UTC cut the user off hours before the term. The exact cut-off is the
+// adapter's (it drops the user at the instant); this date is only the net
+// under it.
+func expirationDate(t time.Time, loc *time.Location) string {
+	return t.In(loc).AddDate(0, 0, 1).Format("02/01/2006")
 }
 
 // LegacyUserName is the name the mtg-era shared secret is carried under while
@@ -118,6 +154,18 @@ type InboundConfig struct {
 	// 3129, and both engines may stand on one node. The endpoint is always on,
 	// since per-user accounting is the reason this engine exists.
 	MetricsPort int
+
+	// zone is the node's time zone, the one mtprotoproxy reads USER_EXPIRATIONS
+	// in; nil → time.Local (what the engine's own process sees). Tests set it
+	// rather than the process-wide time.Local.
+	zone *time.Location
+}
+
+func (c InboundConfig) zoneOrLocal() *time.Location {
+	if c.zone != nil {
+		return c.zone
+	}
+	return time.Local
 }
 
 func (c InboundConfig) withDefaults() InboundConfig {
@@ -192,6 +240,14 @@ func (u User) validate() error {
 			return fmt.Errorf("user %q: Secret must be hex, got %q", u.Name, ch)
 		}
 	}
+	if u.QuotaBytes < 0 {
+		return fmt.Errorf("user %q: quota must not be negative, got %d", u.Name, u.QuotaBytes)
+	}
+	if !u.ExpiresAt.IsZero() {
+		if y := u.ExpiresAt.Year(); y < 1970 || y > 9999 {
+			return fmt.Errorf("user %q: expiry year out of range: %d", u.Name, y)
+		}
+	}
 	return nil
 }
 
@@ -252,6 +308,27 @@ func renderConfig(inbound InboundConfig, users []User) ([]byte, error) {
 
 	fmt.Fprintf(&b, "TLS_DOMAIN = %q\n\n", cfg.Domain)
 
+	writeSection(&b, "USER_EXPIRATIONS", sorted, func(u User) (string, bool) {
+		if u.ExpiresAt.IsZero() {
+			return "", false
+		}
+		d := expirationDate(u.ExpiresAt, cfg.zoneOrLocal())
+		// The same alphabet discipline as everything else in this file: only
+		// digits and slashes may come out of a date.
+		for _, ch := range d {
+			if !(ch >= '0' && ch <= '9') && ch != '/' {
+				return "", false
+			}
+		}
+		return fmt.Sprintf("%q", d), true
+	})
+	writeSection(&b, "USER_DATA_QUOTA", sorted, func(u User) (string, bool) {
+		if !u.Limited {
+			return "", false
+		}
+		return fmt.Sprintf("%d", u.QuotaBytes), true
+	})
+
 	// Loopback only, and the whitelist is spelled out rather than left to the
 	// default: this endpoint names every user and their traffic.
 	fmt.Fprintf(&b, "METRICS_PORT = %d\n", cfg.MetricsPort)
@@ -270,6 +347,28 @@ func renderConfig(inbound InboundConfig, users []User) ([]byte, error) {
 	b.WriteString("METRICS_EXPORT_LINKS = False\n")
 
 	return []byte(b.String()), nil
+}
+
+// writeSection renders `NAME = {...}` for the users that have a value, and
+// nothing at all when none does: an absent key is the engine's own default, and
+// an empty dict would say the same thing with more to go wrong. Values come back
+// already formatted from %q or %d.
+func writeSection(b *strings.Builder, name string, users []User, value func(User) (string, bool)) {
+	wrote := false
+	for _, u := range users {
+		v, ok := value(u)
+		if !ok {
+			continue
+		}
+		if !wrote {
+			fmt.Fprintf(b, "%s = {\n", name)
+			wrote = true
+		}
+		fmt.Fprintf(b, "    %q: %s,\n", u.Name, v)
+	}
+	if wrote {
+		b.WriteString("}\n\n")
+	}
 }
 
 // metricsWhitelist is 127.0.0.1 plus every IPv4 address this node carries.

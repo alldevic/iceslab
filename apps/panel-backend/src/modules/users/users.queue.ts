@@ -5,6 +5,7 @@ import { prisma } from '../../prisma.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { deriveTuicPassword, deriveAnytlsPassword, deriveShadowtlsPassword, deriveMtprotoSecret } from '../../lib/auth/credentials.js';
 import { getLogger } from '../../lib/infra/logger.js';
+import { mtprotoBackstop } from './mtproto-backstop.js';
 import { reachOfUsers } from './user-reach.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
 import { allocateAwgAddresses, awgBindingsOfNode, wireguardBindingOfNode } from '../amneziawg/awg-addresses.js';
@@ -106,6 +107,9 @@ export async function syncAddUser(userId: string): Promise<void> {
       naivePassword: true,
       xrayUuid: true,
       amneziawgPublicKey: true,
+      expireAt: true,
+      trafficLimitBytes: true,
+      traffic: { select: { usedTrafficBytes: true } },
     },
   });
   if (!user) {
@@ -138,6 +142,7 @@ export async function syncAddUser(userId: string): Promise<void> {
       anytlsPassword: deriveAnytlsPassword(user.xrayUuid),
       shadowtlsPassword: deriveShadowtlsPassword(user.xrayUuid),
       mtprotoSecret: deriveMtprotoSecret(user.xrayUuid),
+      ...mtprotoBackstop(user),
     },
   };
 

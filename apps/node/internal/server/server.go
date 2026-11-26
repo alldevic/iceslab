@@ -953,6 +953,25 @@ func (s *Server) handleAddUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.AddUsersResponse{Results: results})
 }
 
+// parseRFC3339OrZero turns the wire's expiry into a time, or zero when it is
+// absent or unparseable.
+//
+// Unparseable is treated as ABSENT rather than as an error that refuses the
+// user. This field is a backstop for the window where the panel cannot reach
+// the node; refusing to add a user because their expiry string was malformed
+// would take away the access the backstop exists to bound, which is the wrong
+// way round. The panel is what cuts an expired user off.
+func parseRFC3339OrZero(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // addUser puts one user onto the cores, and returns the names of the healthy
 // ones that refused (none: done).
 func (s *Server) addUser(req dto.AddUserRequest) []string {
@@ -973,6 +992,8 @@ func (s *Server) addUser(req dto.AddUserRequest) []string {
 		AnytlsPassword:      req.Credentials.AnytlsPassword,
 		ShadowtlsPassword:   req.Credentials.ShadowtlsPassword,
 		MtprotoSecret:       req.Credentials.MtprotoSecret,
+		MtprotoExpiresAt:    parseRFC3339OrZero(req.Credentials.MtprotoExpiresAt),
+		MtprotoQuotaBytes:   req.Credentials.MtprotoQuotaBytes,
 	}
 
 	// Best-effort fanout. A failure on a dormant adapter (no ApplyInbound

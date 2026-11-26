@@ -75,7 +75,15 @@ export function registerUserEventHandlers(): void {
     // nodes they no longer reach). Pure metadata needs no node sync; status
     // changes have their own event below. A-053: so do reissued credentials,
     // the nodes replace the identity they hold for this user id.
-    if (changes.includes('groupIds') || changes.includes('credentials')) {
+    // The term and the limit travel with the credentials (the mtprotoproxy
+    // backstop, mtproto-backstop.ts): an edit of either is rolled out, or the
+    // node keeps enforcing the old ones.
+    if (
+      changes.includes('groupIds') ||
+      changes.includes('credentials') ||
+      changes.includes('expireAt') ||
+      changes.includes('trafficLimitBytes')
+    ) {
       await nodeUsersQueue.add('addUser', { userId });
     }
   });
@@ -149,7 +157,18 @@ export function registerUserEventHandlers(): void {
       },
       data: { status: 'active' },
     });
-    if (lifted.count === 0) return;
+    if (lifted.count === 0) {
+      // Not lifted, but the remainder the nodes hold for an active user (the
+      // mtprotoproxy backstop) is the old one: a reset gives the whole limit
+      // back. Only a user with a limit has a remainder to refresh; one who
+      // stays limited or expired is not on the nodes.
+      const held = await prisma.user.findFirst({
+        where: { id: userId, deletedAt: null, status: 'active', trafficLimitBytes: { not: null } },
+        select: { id: true },
+      });
+      if (held) await nodeUsersQueue.add('addUser', { userId });
+      return;
+    }
     eventBus.emit('user.status-changed', {
       userId,
       from: 'limited',

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -57,6 +58,10 @@ type Config struct {
 	MetricsURL    string
 	metricsClient *http.Client
 
+	// Now is the clock the term of a user is judged by. nil → time.Now; tests
+	// pin it to step across a term without waiting for it.
+	Now func() time.Time
+
 	// RunCmd is the injectable command runner for the crypto probe. Defaults to
 	// os/exec; tests inject a fake.
 	RunCmd RunCmdFunc
@@ -86,6 +91,16 @@ type Adapter struct {
 	// legacySecret is the raw half of the mtg shared secret, when the node is
 	// migrating and the panel pushed one. Empty otherwise.
 	legacySecret string
+
+	// track holds, per user with a traffic limit, what the adapter knows of the
+	// quota against the process counter (see quotaTrack). Under mu.
+	track map[string]*quotaTrack
+	// epoch counts process (re)starts: a counter read that began under an
+	// earlier one describes a process that is gone and must not be applied.
+	// Under mu.
+	epoch uint64
+	// expiryTimer wakes the adapter at the nearest term. Under mu.
+	expiryTimer *time.Timer
 
 	proc *subprocess.Subprocess
 	// procStarted is when proc was spawned. Under mu.
@@ -119,7 +134,35 @@ func New(cfg Config, logger *slog.Logger) *Adapter {
 		cfg:      cfg,
 		logger:   logger,
 		users:    make(map[string]User),
+		track:    make(map[string]*quotaTrack),
 	}
+}
+
+func (a *Adapter) now() time.Time {
+	if a.cfg.Now != nil {
+		return a.cfg.Now()
+	}
+	return time.Now()
+}
+
+// quotaTrack is the adapter's memory of one user's quota against the engine's
+// counter.
+//
+// The engine compares USER_DATA_QUOTA with a counter that starts at zero with
+// each PROCESS and survives a SIGUSR2 reload. The panel pushes what is LEFT of
+// the limit. The ceiling written to the file is last + remaining: the counter
+// when the remainder was last known to be right, plus that remainder. While the
+// process lives, usage moves last and remaining by the same amount, so the
+// ceiling does not move and a re-render does not hand the allowance out again.
+// A new process starts at zero, and what the old one used has been taken off
+// remaining by then, so the ceiling restarts at the remainder, not at the limit.
+type quotaTrack struct {
+	remaining int64
+	last      int64
+	// needsBase: remaining just came from the panel and has not been paired
+	// with a counter reading yet; the next reading becomes `last` without
+	// being counted as usage.
+	needsBase bool
 }
 
 func defaultRunCmd(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -165,6 +208,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	a.started = false
+	a.stopExpiryTimerLocked()
 	proc := a.proc
 	a.proc = nil
 	a.mu.Unlock()
@@ -190,6 +234,7 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	a.lastStartFailed = false
 	a.refusal = ""
 	a.started = false
+	a.stopExpiryTimerLocked()
 	proc := a.proc
 	a.proc = nil
 	a.mu.Unlock()
@@ -220,16 +265,31 @@ func (a *Adapter) AddUser(user core.User) error {
 		a.logger.Debug("mtprotoproxy AddUser: no MtprotoSecret, not a user of this engine", "user", user.UserID)
 		return nil
 	}
-	u := User{Name: user.UserID, Secret: user.MtprotoSecret}
+	u := User{Name: user.UserID, Secret: user.MtprotoSecret, ExpiresAt: user.MtprotoExpiresAt}
+	if user.MtprotoQuotaBytes != nil {
+		u.Limited, u.QuotaBytes = true, *user.MtprotoQuotaBytes
+	}
 	if err := u.validate(); err != nil {
 		return fmt.Errorf("mtprotoproxy AddUser: %w", err)
 	}
 	a.mu.Lock()
-	if prev, existed := a.users[u.Name]; existed && prev == u {
+	if prev, existed := a.users[u.Name]; existed && prev.sameAs(u) {
 		a.mu.Unlock()
 		return nil // idempotent, and no reload for a repeat push
 	}
 	a.users[u.Name] = u
+	if u.Limited {
+		// The panel's word replaces what was tracked; `last` stays, it is the
+		// counter and not a fact of the panel's.
+		tr := a.track[u.Name]
+		if tr == nil {
+			tr = &quotaTrack{}
+			a.track[u.Name] = tr
+		}
+		tr.remaining, tr.needsBase = u.QuotaBytes, true
+	} else {
+		delete(a.track, u.Name)
+	}
 	a.mu.Unlock()
 	return a.regenerateAndReload(context.Background())
 }
@@ -241,6 +301,7 @@ func (a *Adapter) RemoveUser(userID string) error {
 		return nil // idempotent
 	}
 	delete(a.users, userID)
+	delete(a.track, userID)
 	a.mu.Unlock()
 	return a.regenerateAndReload(context.Background())
 }
@@ -346,6 +407,7 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		url = fmt.Sprintf("http://127.0.0.1:%d/", a.cfg.Inbound.withDefaults().MetricsPort)
 	}
 	client := a.cfg.metricsClient
+	epoch := a.epoch
 	a.mu.Unlock()
 	if !serving {
 		return &core.Stats{}, nil
@@ -372,6 +434,9 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 		a.logger.Warn("mtprotoproxy: metrics parse failed", "err", err)
 		return &core.Stats{Cumulative: true, NoData: true}, nil
 	}
+
+	// The poll is a free reading of the counters the quota is tracked against.
+	a.settle(counterTotals(traffic), epoch)
 
 	stats := &core.Stats{Cumulative: true, Users: make([]core.UserStats, 0, len(names))}
 
@@ -475,6 +540,8 @@ func (a *Adapter) regenerateAndReload(ctx context.Context) error {
 	if !a.Provisioned() {
 		return nil
 	}
+	// Whatever this render left out or kept, the next term is rearmed.
+	defer a.scheduleExpiry()
 	changed, err := a.renderAndWrite()
 	if err != nil {
 		return err
@@ -534,11 +601,111 @@ func (a *Adapter) waitReady(ctx context.Context) {
 // renderAndWrite renders the current state and writes it. Returns whether it
 // differs from what was written last. Caller holds restartMu.
 func (a *Adapter) renderAndWrite() (bool, error) {
+	counters, epoch := a.pollCounters()
+	a.settle(counters, epoch)
+	return a.renderSettled()
+}
+
+// pollCounters reads the engine's per-user counters now: nil when there is
+// nothing to read (no running process) or the read failed.
+func (a *Adapter) pollCounters() (map[string]int64, uint64) {
+	a.mu.Lock()
+	epoch := a.epoch
+	running := a.cfg.Inbound.Domain != "" && ((a.proc != nil && a.proc.Running()) ||
+		(a.configOnly() && a.cfg.MetricsURL != ""))
+	url := a.cfg.MetricsURL
+	if url == "" {
+		url = fmt.Sprintf("http://127.0.0.1:%d/", a.cfg.Inbound.withDefaults().MetricsPort)
+	}
+	client := a.cfg.metricsClient
+	a.mu.Unlock()
+	if !running {
+		return nil, epoch
+	}
+	body, err := scrape(client, url)
+	if err != nil {
+		a.logger.Debug("mtprotoproxy: counters not read for the quota", "err", err)
+		return nil, epoch
+	}
+	traffic, err := parseUserMetrics(body)
+	if err != nil {
+		return nil, epoch
+	}
+	return counterTotals(traffic), epoch
+}
+
+// counterTotals is what the engine compares a quota with: both directions.
+func counterTotals(traffic map[string]*userTraffic) map[string]int64 {
+	out := make(map[string]int64, len(traffic))
+	for n, t := range traffic {
+		out[n] = t.BytesIn + t.BytesOut
+	}
+	return out
+}
+
+// settle folds a counter reading into the quota tracking. nil counters (no
+// reading) change nothing: the ceiling is then rendered from the last counter
+// seen, which can only be at or under the real one, so the user is cut later
+// than the allowance, never sooner. A user absent from a successful reading has
+// used nothing since the process started. A reading taken under an earlier
+// process (epoch) is dropped.
+func (a *Adapter) settle(counters map[string]int64, epoch uint64) {
+	if counters == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if epoch != a.epoch {
+		return
+	}
+	for name, tr := range a.track {
+		c := counters[name]
+		switch {
+		case tr.needsBase:
+			tr.last, tr.needsBase = c, false
+		case c >= tr.last:
+			tr.remaining -= c - tr.last
+			tr.last = c
+		default:
+			// The counter fell: the engine restarted behind our back, and
+			// everything it counted since is new usage.
+			tr.remaining -= c
+			tr.last = c
+		}
+		if tr.remaining < 0 {
+			tr.remaining = 0
+		}
+	}
+}
+
+// newProcessLocked: the counters of the old process are no longer the engine's.
+// The caller has settled them first.
+func (a *Adapter) newProcessLocked() {
+	a.epoch++
+	for _, tr := range a.track {
+		tr.last = 0
+	}
+}
+
+// renderSettled renders from the current state and writes it. Users past their
+// term are left out: the engine is told at the instant, by the next reload, and
+// not at the day boundary of USER_EXPIRATIONS.
+func (a *Adapter) renderSettled() (bool, error) {
 	a.mu.Lock()
 	inbound := a.cfg.Inbound
 	cfgPath := a.cfg.ConfigPath
 	users := make([]User, 0, len(a.users)+1)
+	now := a.now()
 	for _, u := range a.users {
+		if !u.ExpiresAt.IsZero() && !now.Before(u.ExpiresAt) {
+			continue
+		}
+		if tr := a.track[u.Name]; u.Limited && tr != nil {
+			u.QuotaBytes = tr.last + tr.remaining
+			if u.QuotaBytes < 0 { // overflowed: far beyond any real limit
+				u.QuotaBytes = math.MaxInt64
+			}
+		}
 		users = append(users, u)
 	}
 	// The migration cover, if this node is carrying it. No expiry and no quota:
@@ -603,17 +770,29 @@ func (a *Adapter) restartLocked(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := a.renderAndWrite(); err != nil {
-		return err
-	}
-
 	if a.configOnly() {
+		// The engine is not ours to restart here: its counters go on.
+		if _, err := a.renderAndWrite(); err != nil {
+			return err
+		}
 		a.mu.Lock()
 		a.started = true
 		a.refusal = ""
 		a.mu.Unlock()
+		a.scheduleExpiry()
 		a.logger.Info("mtprotoproxy config written (config-only mode)")
 		return nil
+	}
+	// The process about to be replaced is read one last time, so what it served
+	// comes off the remainders; the new one counts from zero, and the ceiling is
+	// rendered from the remainder alone, not from the limit.
+	counters, epoch := a.pollCounters()
+	a.settle(counters, epoch)
+	a.mu.Lock()
+	a.newProcessLocked()
+	a.mu.Unlock()
+	if _, err := a.renderSettled(); err != nil {
+		return err
 	}
 
 	a.mu.Lock()
@@ -632,7 +811,7 @@ func (a *Adapter) restartLocked(ctx context.Context) error {
 		Logger:         a.logger,
 		MaxRestarts:    subprocess.DefaultMaxRestarts,
 		RestartBackoff: subprocess.DefaultRestartBackoff,
-		OnRestart:      a.restarts.Record,
+		OnRestart:      a.onProcessRestart,
 	})
 	if err := proc.Start(ctx); err != nil {
 		a.mu.Lock()
@@ -658,8 +837,98 @@ func (a *Adapter) restartLocked(ctx context.Context) error {
 			"grace", subprocess.StartupGrace, "domain", domain)
 		return subprocess.DiedInStartup("mtprotoproxy", subprocess.StartupGrace)
 	}
+	a.scheduleExpiry()
 	a.logger.Info("mtprotoproxy (re)started", "domain", domain)
 	return nil
+}
+
+// onProcessRestart: the supervisor is about to respawn a process that died (a
+// crash, the memory watchdog). The new one reads the config on disk and counts
+// from zero, so the file must not keep the ceiling of the old counter, or the
+// user would be handed the allowance again (counter + remainder over a counter
+// that starts at 0). The old counters can no longer be read: the remainders are
+// as of the last poll, and what the process carried since is lost to the
+// accounting, the usual slack of a backstop. Done off the watcher's goroutine
+// (restartMu may be held by a caller that waits on it), well inside the
+// supervisor's backoff.
+func (a *Adapter) onProcessRestart(ev subprocess.RestartEvent) {
+	a.restarts.Record(ev)
+	go func() {
+		a.restartMu.Lock()
+		defer a.restartMu.Unlock()
+		a.mu.Lock()
+		a.newProcessLocked()
+		a.mu.Unlock()
+		if _, err := a.renderSettled(); err != nil {
+			a.logger.Error("mtprotoproxy: config not rewritten for the restarted process", "err", err)
+		}
+	}()
+}
+
+// stopExpiryTimerLocked disarms the term timer. Caller holds mu.
+func (a *Adapter) stopExpiryTimerLocked() {
+	if a.expiryTimer != nil {
+		a.expiryTimer.Stop()
+		a.expiryTimer = nil
+	}
+}
+
+// maxExpirySleep bounds one sleep so a stepped wall clock is noticed within the
+// hour; the timer is rearmed after every wake.
+const maxExpirySleep = time.Hour
+
+// scheduleExpiry arms a wake-up at the nearest term still ahead. The exact
+// cut-off of a user is the adapter's: at the term the user is left out of
+// USERS and the engine is told, with no word from the panel (which is what the
+// term is a backstop for). Armed only while the adapter is started, and
+// disarmed by Stop and Idle, so a stopped process is never woken.
+func (a *Adapter) scheduleExpiry() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopExpiryTimerLocked()
+	if !a.started {
+		return
+	}
+	now := a.now()
+	var next time.Time
+	for _, u := range a.users {
+		if u.ExpiresAt.After(now) && (next.IsZero() || u.ExpiresAt.Before(next)) {
+			next = u.ExpiresAt
+		}
+	}
+	if next.IsZero() {
+		return
+	}
+	d := next.Sub(now)
+	if d > maxExpirySleep {
+		d = maxExpirySleep
+	}
+	a.expiryTimer = time.AfterFunc(d, a.expiryDue)
+}
+
+// expiryDue is the timer's wake-up: render again (users past their term drop
+// out) and reload the engine, or only write the file when no process is up for
+// a signal; the supervisor's restart reads it.
+func (a *Adapter) expiryDue() {
+	a.mu.Lock()
+	started, proc := a.started, a.proc
+	a.mu.Unlock()
+	if !started {
+		return
+	}
+	if !a.configOnly() && (proc == nil || !proc.Running()) {
+		a.restartMu.Lock()
+		_, err := a.renderAndWrite()
+		a.restartMu.Unlock()
+		if err != nil {
+			a.logger.Error("mtprotoproxy: expiry render failed", "err", err)
+		}
+		a.scheduleExpiry()
+		return
+	}
+	if err := a.regenerateAndReload(context.Background()); err != nil {
+		a.logger.Error("mtprotoproxy: reload at a user's term failed", "err", err)
+	}
 }
 
 // stderrLevel: python's logging writes everything to stderr, the routine

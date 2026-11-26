@@ -2,6 +2,8 @@
 // adapter (Hysteria, Xray, AmneziaWG, NaiveProxy) implements.
 package core
 
+import "time"
+
 // User is the normalized form of dto.AddUserRequest. The dispatcher copies
 // only the protocol-specific credentials each adapter cares about, the rest
 // are zero-valued and ignored.
@@ -24,6 +26,13 @@ type User struct {
 	// MtprotoSecret is the user's own MTProto secret (32 hex chars), for the
 	// mtprotoproxy engine only; mtg has one secret per inbound and ignores it.
 	MtprotoSecret string
+	// MtprotoExpiresAt is the user's term, the zero time for none. A backstop:
+	// the adapter cuts the user off at this instant when the panel cannot.
+	MtprotoExpiresAt time.Time
+	// MtprotoQuotaBytes is what is left of the user's traffic limit, nil for no
+	// limit (0 is exhausted). A backstop as well: the panel's accounting is the
+	// primary one, and the engine counts only its own traffic.
+	MtprotoQuotaBytes *int64
 
 	// Plain WireGuard (milestone 9.1): the same keypair as AmneziaWG, and an
 	// address of its own from the plain profile's subnet.

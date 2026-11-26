@@ -15,6 +15,7 @@ import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
 import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
+import { mtprotoBackstop } from '../users/mtproto-backstop.js';
 import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
@@ -127,6 +128,9 @@ interface ActiveUser {
   hysteriaPassword: string;
   amneziawgPublicKey: string;
   naivePassword: string;
+  expireAt: Date | null;
+  trafficLimitBytes: bigint | null;
+  traffic: { usedTrafficBytes: bigint } | null;
 }
 
 /**
@@ -161,6 +165,9 @@ export async function fetchActiveUsers(): Promise<ActiveUser[]> {
       hysteriaPassword: true,
       amneziawgPublicKey: true,
       naivePassword: true,
+      expireAt: true,
+      trafficLimitBytes: true,
+      traffic: { select: { usedTrafficBytes: true } },
     },
   });
 }
@@ -829,6 +836,7 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
       anytlsPassword: deriveAnytlsPassword(u.xrayUuid),
       shadowtlsPassword: deriveShadowtlsPassword(u.xrayUuid),
       mtprotoSecret: deriveMtprotoSecret(u.xrayUuid),
+      ...mtprotoBackstop(u),
     },
   }));
   const failed = await sendRoster(transport, node.name, requests);
