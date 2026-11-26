@@ -12,6 +12,8 @@ import {
 } from './pool.service.js';
 import { HotswapController } from './pool.hotswap.js';
 import { DEFAULT_HOTSWAP_CONFIG, type SwapNotice } from './pool.types.js';
+import { observedCores } from '../nodes/nodes.cron.js';
+import type { CoreStatus } from '@iceslab/shared';
 
 let seq = 0;
 async function makeNode(opts: {
@@ -66,6 +68,7 @@ const anomaly = (nodeId: string) => ({
 });
 
 beforeEach(async () => {
+  vi.restoreAllMocks();
   await cleanDatabase();
 });
 
@@ -158,8 +161,8 @@ describe('a swap, against the database', () => {
 
     expect(emit).toHaveBeenCalledWith('node.status-changed', { nodeId: diverse.id, from: 'disabled', to: 'unknown' });
     expect(emit).toHaveBeenCalledWith('node.status-changed', { nodeId: burned.id, from: 'online', to: 'disabled' });
-    // Nothing is carried yet, and the notice says so rather than reporting 0/0 as done.
-    expect((notices[0] as Extract<SwapNotice, { kind: 'swapped' }>).report.notes).toHaveLength(1);
+    // Nothing to carry: an honest 0/0, no notes.
+    expect((notices[0] as Extract<SwapNotice, { kind: 'swapped' }>).report).toEqual({ carried: 0, total: 0, notes: [] });
   });
 
   it('an empty pool replaces nothing and changes no status', async () => {
@@ -186,7 +189,7 @@ describe('a swap, against the database', () => {
     expect((await prisma.node.findUniqueOrThrow({ where: { id: burned.id } })).status).toBe('online');
   });
 
-  it('the repoint step is the one a later milestone replaces', async () => {
+  it('the repoint step is injectable', async () => {
     const burned = await makeNode({ name: 'burned', status: 'online', pool: { asn: 'AS100' } });
     const spare = await makeNode({ name: 'spare', status: 'disabled', pool: { spare: true, asn: 'AS999' } });
     const repoint = vi.fn(async () => ({ carried: 3, total: 3, notes: [] }));
@@ -217,5 +220,154 @@ describe('a swap, against the database', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect((await prisma.node.findUniqueOrThrow({ where: { id: burned.id } })).status).toBe('online');
     expect(await prisma.nodeBootstrapToken.count()).toBe(0);
+  });
+});
+
+describe('a swap carries the bindings and the node policy', () => {
+  async function profile(name: string, extra: Record<string, unknown> = {}) {
+    seq += 1;
+    return prisma.profile.create({ data: { name: `${name}-${seq}`, protocol: 'xray', config: {} as never, ...extra } });
+  }
+  async function policy(rules: { actionKind: string }[] = [{ actionKind: 'direct' }]) {
+    seq += 1;
+    return prisma.nodePolicy.create({
+      data: {
+        name: `pol-${seq}`,
+        rules: { create: rules.map((r, i) => ({ position: i, matchDomain: ['domain:example.com'], ...r })) },
+      },
+    });
+  }
+  async function swapped(burnedId: string) {
+    let scheduled: (() => void) | undefined;
+    const notices: SwapNotice[] = [];
+    const c = new HotswapController(
+      { ...DEFAULT_HOTSWAP_CONFIG, enabled: true },
+      makeHotswapDeps({ runner: runnerMock().runner, notify: (n) => notices.push(n), schedule: (fn) => void (scheduled = fn) }),
+    );
+    c.onAnomaly(anomaly(burnedId));
+    scheduled!();
+    await vi.waitFor(() => expect(notices).toHaveLength(1), { timeout: 10_000 });
+    return notices[0] as Extract<SwapNotice, { kind: 'swapped' }>;
+  }
+  const pair = async () => ({
+    burned: await makeNode({ name: 'burned', status: 'online', pool: { asn: 'AS1' } }),
+    spare: await makeNode({ name: 'spare', status: 'disabled', pool: { spare: true, asn: 'AS2' } }),
+  });
+
+  it('gives the spare the burned node\'s enabled bindings, without the public address, with a Default host, and tells the push and the cache', async () => {
+    const { burned, spare } = await pair();
+    const p = await profile('prof');
+    const off = await profile('off');
+    await prisma.profileNodeBinding.create({
+      data: { transport: 'tcp', profileId: p.id, nodeId: burned.id, port: 443, publicHost: 'burned.example.com', publicPort: 8443, overrides: { realityShortIds: ['abc123'] } as never },
+    });
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: off.id, nodeId: burned.id, port: 444, enabled: false } });
+    const emit = vi.spyOn(eventBus, 'emit');
+
+    const notice = await swapped(burned.id);
+
+    const onSpare = await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id } });
+    expect(onSpare).toHaveLength(1);
+    expect(onSpare[0]).toMatchObject({ profileId: p.id, port: 443, overrides: { realityShortIds: ['abc123'] }, publicHost: null, publicPort: null, enabled: true });
+    expect(await prisma.host.count({ where: { bindingId: onSpare[0]!.id } })).toBe(1);
+    expect(emit).toHaveBeenCalledWith('binding.created', { bindingId: onSpare[0]!.id, profileId: p.id, nodeId: spare.id });
+    expect(notice.report).toEqual({ carried: 1, total: 1, notes: [] });
+  });
+
+  it('does not give a profile the spare already serves a second binding', async () => {
+    const { burned, spare } = await pair();
+    const p = await profile('shared');
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: p.id, nodeId: burned.id, port: 443 } });
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: p.id, nodeId: spare.id, port: 8443 } });
+    await swapped(burned.id);
+    const onSpare = await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id } });
+    expect(onSpare.map((b) => b.port)).toEqual([8443]);
+  });
+
+  it('skips a binding whose port the spare already uses and carries the others', async () => {
+    const { burned, spare } = await pair();
+    const [a, b, other] = [await profile('a'), await profile('b'), await profile('other')];
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: a.id, nodeId: burned.id, port: 443 } });
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: b.id, nodeId: burned.id, port: 8443 } });
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: other.id, nodeId: spare.id, port: 443 } });
+    const notice = await swapped(burned.id);
+    const onSpare = await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id }, orderBy: { port: 'asc' } });
+    expect(onSpare.map((x) => [x.profileId, x.port])).toEqual([[other.id, 443], [b.id, 8443]]);
+    expect(notice.report).toMatchObject({ carried: 1, total: 2 });
+    expect(notice.report.notes).toHaveLength(1);
+  });
+
+  it('a binding the spare cannot take is noted and the swap still completes', async () => {
+    const { burned, spare } = await pair();
+    // The spare has reported its cores, and sing-box is not among them.
+    await prisma.node.update({
+      where: { id: spare.id },
+      data: { cores: observedCores([{ name: 'xray', engine: 'xray', installed: true, running: true } as CoreStatus], new Date().toISOString(), 'amd64') as unknown as object },
+    });
+    const bad = await profile('needs-singbox', { engine: 'singbox' });
+    const good = await profile('plain');
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: bad.id, nodeId: burned.id, port: 443 } });
+    await prisma.profileNodeBinding.create({ data: { transport: 'tcp', profileId: good.id, nodeId: burned.id, port: 8443 } });
+
+    const notice = await swapped(burned.id);
+
+    expect(notice.report).toMatchObject({ carried: 1, total: 2 });
+    expect(notice.report.notes[0]).toContain('needs-singbox');
+    expect((await prisma.profileNodeBinding.findMany({ where: { nodeId: spare.id } })).map((b) => b.profileId)).toEqual([good.id]);
+    const burnedAfter = await prisma.node.findUniqueOrThrow({ where: { id: burned.id } });
+    expect(burnedAfter.status).toBe('disabled');
+    expect(burnedAfter.hardening).toMatchObject({ pool: { burned: true } });
+  });
+
+  it('the burned node\'s policy replaces the spare\'s, policy.changed names the spare, the pool labels stay', async () => {
+    const { burned, spare } = await pair();
+    const mine = await policy();
+    const theirs = await policy();
+    await prisma.node.update({ where: { id: burned.id }, data: { policyId: mine.id } });
+    await prisma.node.update({ where: { id: spare.id }, data: { policyId: theirs.id } });
+    const emit = vi.spyOn(eventBus, 'emit');
+
+    await swapped(burned.id);
+
+    const after = await prisma.node.findUniqueOrThrow({ where: { id: spare.id } });
+    expect(after.policyId).toBe(mine.id);
+    expect(emit).toHaveBeenCalledWith('policy.changed', { policyId: mine.id, nodeIds: [spare.id] });
+    expect(after.hardening).toEqual({ pool: { asn: 'AS2' } });
+  });
+
+  it('leaves the spare\'s policy alone when the burned node has none', async () => {
+    const { burned, spare } = await pair();
+    const theirs = await policy();
+    await prisma.node.update({ where: { id: spare.id }, data: { policyId: theirs.id } });
+    const emit = vi.spyOn(eventBus, 'emit');
+    await swapped(burned.id);
+    expect((await prisma.node.findUniqueOrThrow({ where: { id: spare.id } })).policyId).toBe(theirs.id);
+    expect(emit).not.toHaveBeenCalledWith('policy.changed', expect.anything());
+  });
+
+  it('a policy the spare cannot carry out is noted, not assigned, and the swap completes', async () => {
+    const { burned, spare } = await pair();
+    const warp = await policy([{ actionKind: 'warp' }]);
+    await prisma.node.update({ where: { id: burned.id }, data: { policyId: warp.id, warpEnabled: true } });
+    const notice = await swapped(burned.id);
+    expect((await prisma.node.findUniqueOrThrow({ where: { id: spare.id } })).policyId).toBeNull();
+    expect(notice.report.notes.join('\n')).toContain('node policy not carried');
+    expect((await prisma.node.findUniqueOrThrow({ where: { id: burned.id } })).status).toBe('disabled');
+    // WARP is not carried either.
+    expect((await prisma.node.findUniqueOrThrow({ where: { id: spare.id } })).warpEnabled).toBe(false);
+  });
+
+  it('carries dns only to a spare that has none', async () => {
+    const dns = { servers: ['1.1.1.1'] };
+    const mineless = await pair();
+    await prisma.node.update({ where: { id: mineless.burned.id }, data: { dns: dns as never } });
+    await swapped(mineless.burned.id);
+    expect((await prisma.node.findUniqueOrThrow({ where: { id: mineless.spare.id } })).dns).toEqual(dns);
+
+    const own = await pair();
+    await prisma.node.update({ where: { id: own.burned.id }, data: { dns: dns as never } });
+    await prisma.node.update({ where: { id: own.spare.id }, data: { dns: { servers: ['9.9.9.9'] } as never } });
+    await swapped(own.burned.id);
+    expect((await prisma.node.findUniqueOrThrow({ where: { id: own.spare.id } })).dns).toEqual({ servers: ['9.9.9.9'] });
   });
 });

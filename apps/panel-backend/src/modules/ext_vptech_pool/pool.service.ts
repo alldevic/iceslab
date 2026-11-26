@@ -5,6 +5,9 @@ import { eventBus } from '../../lib/infra/event-bus.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { escapeMarkdown, notifyTelegramAsync } from '../../lib/notify/telegram-notify.js';
 import { issueBootstrapToken } from '../nodes/bootstrap.service.js';
+import { updateNode } from '../nodes/nodes.service.js';
+import type { UpdateNodeInput } from '../nodes/nodes.schemas.js';
+import { createBinding } from '../profiles/profiles.service.js';
 import { readIntendedEngines } from '../nodes/node-intended-engines.js';
 import { HotswapController } from './pool.hotswap.js';
 import {
@@ -105,14 +108,111 @@ export interface PoolDepsOptions {
   runner?: AnsibleRunner;
   schedule?: (fn: () => void, ms: number) => void;
   notify?: (n: SwapNotice) => void;
-  /** What carries the burned node's settings onto the spare. Log only until the carry step exists. */
+  /** What carries the burned node's settings onto the spare. Default: carryToSpare. */
   repoint?: HotswapDeps['repoint'];
 }
 
-/** The seam for the carry step: nothing moves, and the alert says so. */
-export async function logOnlyRepoint(burnedId: string, spareId: string): Promise<CarryReport> {
-  getLogger().info(`[ext-vptech-pool] repoint ${burnedId} -> ${spareId}: bindings are not carried yet`);
-  return { carried: 0, total: 0, notes: ['bindings were not carried: move them by hand'] };
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Put the burned node's enabled bindings on the spare: same profile, port and
+ * overrides. NOT the `publicHost` / `publicPort`: those name the machine that
+ * is being retired, and left empty the subscription falls back to the spare's
+ * own address, which is the point of swapping to it. Extra hosts stay behind;
+ * the carried binding gets its Default host from createBinding.
+ *
+ * Through createBinding, not a raw insert: it runs the operator's gate (port
+ * and transport, the node's cores and engines) and publishes `binding.created`,
+ * which busts the /sub cache and queues the spare for a config push.
+ *
+ * Per binding and best-effort: a profile the spare already serves is left as it
+ * is (so a second swap makes no duplicates), and one createBinding refuses is
+ * noted and skipped, not allowed to abort a swap that has already promoted a node.
+ */
+export async function carryBindings(burnedId: string, spareId: string): Promise<CarryReport> {
+  const [burnedBindings, spareBindings] = await Promise.all([
+    prisma.profileNodeBinding.findMany({
+      where: { nodeId: burnedId, enabled: true },
+      orderBy: [{ port: 'asc' }, { createdAt: 'asc' }],
+      select: { profileId: true, port: true, overrides: true, profile: { select: { name: true } } },
+    }),
+    prisma.profileNodeBinding.findMany({ where: { nodeId: spareId }, select: { profileId: true } }),
+  ]);
+  const served = new Set(spareBindings.map((b) => b.profileId));
+  const notes: string[] = [];
+  let carried = 0;
+  for (const b of burnedBindings) {
+    if (served.has(b.profileId)) {
+      notes.push(`profile "${b.profile.name}" already served by the spare, kept as is`);
+      continue;
+    }
+    try {
+      await createBinding({
+        profileId: b.profileId,
+        nodeId: spareId,
+        port: b.port,
+        overrides: (b.overrides ?? undefined) as Record<string, unknown> | undefined,
+        enabled: true,
+      });
+      carried++;
+    } catch (err) {
+      notes.push(`profile "${b.profile.name}" (port ${b.port}) not carried: ${errText(err)}`);
+    }
+  }
+  getLogger().info(
+    `[ext-vptech-pool] repoint ${burnedId} -> ${spareId}: carried ${carried}/${burnedBindings.length} binding(s)`,
+  );
+  return { carried, total: burnedBindings.length, notes };
+}
+
+/**
+ * The node policy and the resolver. The burned node's policy REPLACES the
+ * spare's (the spare must behave as the burned node did); what it replaced goes
+ * to the log. `dns` only fills a gap: a spare with its own resolver keeps it.
+ * Both go through updateNode, so a policy the spare cannot carry out is refused
+ * as on the node page, and the push and `policy.changed` / `node.updated` follow.
+ * WARP, the pool labels, the multiplier and the public address stay the spare's.
+ */
+export async function carryNodeSettings(burnedId: string, spareId: string): Promise<string[]> {
+  const notes: string[] = [];
+  const [burned, spare] = await Promise.all([
+    prisma.node.findUniqueOrThrow({ where: { id: burnedId }, select: { policyId: true, dns: true } }),
+    prisma.node.findUniqueOrThrow({ where: { id: spareId }, select: { policyId: true, dns: true } }),
+  ]);
+  const log = getLogger();
+
+  if (burned.policyId && burned.policyId !== spare.policyId) {
+    try {
+      await updateNode(spareId, { policyId: burned.policyId });
+      log.info(
+        `[ext-vptech-pool] repoint ${burnedId} -> ${spareId}: node policy ${burned.policyId} carried (the spare's previous: ${spare.policyId ?? 'none'})`,
+      );
+    } catch (err) {
+      notes.push(`node policy not carried: ${errText(err)}`);
+    }
+  }
+
+  if (burned.dns != null && spare.dns == null) {
+    try {
+      await updateNode(spareId, { dns: burned.dns } as UpdateNodeInput);
+      log.info(`[ext-vptech-pool] repoint ${burnedId} -> ${spareId}: resolver carried`);
+    } catch (err) {
+      notes.push(`node resolver not carried: ${errText(err)}`);
+    }
+  }
+  return notes;
+}
+
+/** The repoint step: bindings first, then the node's own settings. */
+export async function carryToSpare(burnedId: string, spareId: string): Promise<CarryReport> {
+  const report = await carryBindings(burnedId, spareId);
+  let settingsNotes: string[];
+  try {
+    settingsNotes = await carryNodeSettings(burnedId, spareId);
+  } catch (err) {
+    settingsNotes = [`node settings not carried: ${errText(err)}`];
+  }
+  return { ...report, notes: [...report.notes, ...settingsNotes] };
 }
 
 /**
@@ -167,7 +267,7 @@ export function makeHotswapDeps(opts: PoolDepsOptions = {}): HotswapDeps {
       eventBus.emit('node.status-changed', { nodeId: spare.id, from: row.status, to: 'unknown' });
     },
 
-    repoint: opts.repoint ?? logOnlyRepoint,
+    repoint: opts.repoint ?? carryToSpare,
 
     retire: async (burnedId) => {
       const row = await prisma.node.findUniqueOrThrow({ where: { id: burnedId }, select: { status: true, hardening: true } });
