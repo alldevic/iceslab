@@ -15,6 +15,7 @@ export function MieruSection({
                 placeholder={String(MIERU_MTU.default)}
                 min={MIERU_MTU.min}
                 max={MIERU_MTU.max}
+                allowDecimal={false}
                 {...form.getInputProps('mieruMtu')}
               />
             </Stack>

@@ -166,13 +166,13 @@ export function AmneziawgSection({
                 />
               </Group>
               <Group grow>
-                <NumberInput label="Jc" min={0} {...form.getInputProps('awgJc')} />
-                <NumberInput label="Jmin" min={0} {...form.getInputProps('awgJmin')} />
-                <NumberInput label="Jmax" min={0} {...form.getInputProps('awgJmax')} />
+                <NumberInput label="Jc" min={0} max={10} allowDecimal={false} {...form.getInputProps('awgJc')} />
+                <NumberInput label="Jmin" min={64} max={1024} allowDecimal={false} {...form.getInputProps('awgJmin')} />
+                <NumberInput label="Jmax" min={64} max={1024} allowDecimal={false} {...form.getInputProps('awgJmax')} />
               </Group>
               <Group grow>
-                <NumberInput label="S1" min={0} {...form.getInputProps('awgS1')} />
-                <NumberInput label="S2" min={0} {...form.getInputProps('awgS2')} />
+                <NumberInput label="S1" min={0} max={64} allowDecimal={false} {...form.getInputProps('awgS1')} />
+                <NumberInput label="S2" min={0} max={64} allowDecimal={false} {...form.getInputProps('awgS2')} />
                 {/* S3/S4 stay 0 until AmneziaVPN ships the fix for #2582: a
                     non-zero value there drops traffic on 4.8.15.x clients. */}
                 <NumberInput
@@ -180,6 +180,8 @@ export function AmneziawgSection({
                   description={t('profiles.form.cfg.awgKeepZero')}
                   inputWrapperOrder={['label', 'input', 'description', 'error']}
                   min={0}
+                  max={64}
+                  allowDecimal={false}
                   {...form.getInputProps('awgS3')}
                 />
                 <NumberInput
@@ -187,6 +189,8 @@ export function AmneziawgSection({
                   description={t('profiles.form.cfg.awgKeepZero')}
                   inputWrapperOrder={['label', 'input', 'description', 'error']}
                   min={0}
+                  max={32}
+                  allowDecimal={false}
                   {...form.getInputProps('awgS4')}
                 />
               </Group>
@@ -197,6 +201,7 @@ export function AmneziawgSection({
                   description={t('profiles.form.cfg.awgHDesc')}
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH1')}
                 />
                 <NumberInput
@@ -205,6 +210,7 @@ export function AmneziawgSection({
                   description={t('profiles.form.cfg.awgHDesc')}
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH2')}
                 />
                 <NumberInput
@@ -213,6 +219,7 @@ export function AmneziawgSection({
                   description={t('profiles.form.cfg.awgHDesc')}
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH3')}
                 />
                 <NumberInput
@@ -221,6 +228,7 @@ export function AmneziawgSection({
                   description={t('profiles.form.cfg.awgHDesc')}
                   min={5}
                   max={2147483647}
+                  allowDecimal={false}
                   {...form.getInputProps('awgH4')}
                 />
                 <Button

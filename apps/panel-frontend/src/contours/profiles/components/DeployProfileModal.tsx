@@ -419,6 +419,7 @@ export function DeployProfileModal({ profile, onClose }: Props) {
           }
           min={1}
           max={65535}
+          allowDecimal={false}
           value={port}
           onChange={(v) => {
             setPortTouched(true);

@@ -89,6 +89,23 @@ jobs:
               - *common
               - 'apps/panel-frontend/**'
               - 'packages/shared/**'
+              # The mirror tests (api.mirror, settings.mirror, numericFields.mirror,
+              # profileRules.mirror) read these backend sources as text: the
+              # mappers and schemas, and by name the files that hold a *Dto or
+              # the settings schema outside those two masks. A file a mirror
+              # reads that is not listed here is one whose edit nobody checks
+              # against the panel; the mirrors assert the list is complete.
+              - 'apps/panel-backend/src/modules/**/*.mapper.ts'
+              - 'apps/panel-backend/src/modules/**/*.schemas.ts'
+              - 'apps/panel-backend/src/modules/nodes/nodes.sync-status.ts'
+              - 'apps/panel-backend/src/modules/route-policies/route-policies.routes.ts'
+              - 'apps/panel-backend/src/modules/api-tokens/api-tokens.service.ts'
+              - 'apps/panel-backend/src/modules/cascades/cascade.service.ts'
+              - 'apps/panel-backend/src/modules/settings/settings.routes.ts'
+              - 'apps/panel-backend/src/modules/geo-sets/geo-sets.routes.ts'
+              - 'apps/panel-backend/src/modules/users/users.delivery.ts'
+              - 'apps/panel-backend/src/modules/profiles/profiles.key-impact.ts'
+              - 'apps/panel-backend/src/modules/hosts/hosts.freshness.ts'
             node:
               - *common
               - 'apps/node/**'

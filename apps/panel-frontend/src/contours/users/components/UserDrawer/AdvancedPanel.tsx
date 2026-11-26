@@ -152,6 +152,7 @@ export function AdvancedPanel({
                 style={{ width: 150 }}
                 label={t('userDrawer.hwidLimit')}
                 min={0}
+                allowDecimal={false}
                 placeholder="3"
                 {...form.getInputProps('hwidDeviceLimit')}
               />

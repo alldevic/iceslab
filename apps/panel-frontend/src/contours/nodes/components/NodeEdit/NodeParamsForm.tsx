@@ -151,6 +151,7 @@ export function NodeParamsForm({
                     label={t('nodeEdit.maxUsers')}
                     description={t('nodeEdit.maxUsersDesc')}
                     min={1}
+                    max={100000}
                     allowDecimal={false}
                     allowNegative={false}
                     {...form.getInputProps('maxUsers')}

@@ -111,6 +111,8 @@ export function XrayAdvanced({
                           description={t('profiles.form.cfg.realityMaxTimeDiffDesc')}
                           placeholder="0"
                           min={0}
+                          max={600000}
+                          allowDecimal={false}
                           {...form.getInputProps('xrayRealityMaxTimeDiff')}
                         />
                       </Group>
@@ -125,6 +127,7 @@ export function XrayAdvanced({
                           description={t('profiles.form.cfg.realityLimitFallbackUploadDesc')}
                           placeholder="0"
                           min={0}
+                          allowDecimal={false}
                           {...form.getInputProps('xrayRealityLimitFallbackUpload')}
                         />
                         <NumberInput
@@ -132,6 +135,7 @@ export function XrayAdvanced({
                           description={t('profiles.form.cfg.realityLimitFallbackDownloadDesc')}
                           placeholder="0"
                           min={0}
+                          allowDecimal={false}
                           {...form.getInputProps('xrayRealityLimitFallbackDownload')}
                         />
                       </Group>

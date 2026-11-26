@@ -25,11 +25,15 @@ export function HysteriaSection({
                 <NumberInput
                   label={t('profiles.form.cfg.brutalUpLabel')}
                   min={1}
+                  max={10000}
+                  allowDecimal={false}
                   {...form.getInputProps('hyBrutalUp')}
                 />
                 <NumberInput
                   label={t('profiles.form.cfg.brutalDownLabel')}
                   min={1}
+                  max={10000}
+                  allowDecimal={false}
                   {...form.getInputProps('hyBrutalDown')}
                 />
               </Group>
@@ -40,6 +44,7 @@ export function HysteriaSection({
                   placeholder="20000"
                   min={1024}
                   max={65535}
+                  allowDecimal={false}
                   {...form.getInputProps('hyPortHopStart')}
                 />
                 <NumberInput
@@ -48,6 +53,7 @@ export function HysteriaSection({
                   placeholder="50000"
                   min={1024}
                   max={65535}
+                  allowDecimal={false}
                   {...form.getInputProps('hyPortHopEnd')}
                 />
               </Group>

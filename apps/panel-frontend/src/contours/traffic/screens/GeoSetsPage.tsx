@@ -507,7 +507,7 @@ function AddUrlPanel({
         </Stack>
         <Stack gap={4} style={{ width: 110 }}>
           <Label>{t('geoSets.refreshHours')}</Label>
-          <NumberInput value={hours} min={1} onChange={(v) => setHours(typeof v === 'number' ? v : '')} />
+          <NumberInput value={hours} min={1} max={720} allowDecimal={false} onChange={(v) => setHours(typeof v === 'number' ? v : '')} />
         </Stack>
       </Box>
       <Box style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>

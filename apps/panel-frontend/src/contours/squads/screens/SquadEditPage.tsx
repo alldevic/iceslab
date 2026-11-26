@@ -874,6 +874,7 @@ export function SquadEditPage() {
                   // A-148: a squad's limit is 1 or more (the server refuses 0);
                   // the explicit no-limit, 0, is the user's own value only.
                   min={1}
+                  allowDecimal={false}
                   clampBehavior="strict"
                   onChange={(v) => {
                     setHwidLimit(typeof v === 'number' ? v : '');
