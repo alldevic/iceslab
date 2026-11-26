@@ -84,6 +84,14 @@ describe('geoSetActions', () => {
     });
   });
 
+  it('«изменить» только у составного набора и не во время сборки', () => {
+    const composite = { type: 'composite' as const, categories: [] };
+    expect(geoSetActions(set({ source: composite })).edit).toBe(true);
+    expect(geoSetActions(set({ source: composite, status: 'checking' })).edit).toBe(false);
+    expect(geoSetActions(set()).edit).toBe(false);
+    expect(geoSetActions(set({ source: { type: 'upload', filename: 'x.dat' } })).edit).toBe(false);
+  });
+
   it('разослать только при проверенной версии, даже если последнее обновление битое', () => {
     expect(geoSetActions(set({ current: null, status: 'broken' })).rollout).toBe(false);
     expect(geoSetActions(set({ status: 'broken' })).rollout).toBe(true);

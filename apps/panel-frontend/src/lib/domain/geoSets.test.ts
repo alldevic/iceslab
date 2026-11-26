@@ -57,6 +57,35 @@ describe('geoSetRefusal: вход проверяется первым', () => {
     ).toMatchObject({ breaks: [{ entry: 'ext:x:y', uses: [] }] });
   });
 
+  it('GEO_SET_INVALID composite: категория и запись из `at`; без `at` или с мусором в нём null', () => {
+    expect(
+      geoSetRefusal(
+        res({ error: 'GEO_SET_INVALID', reason: 'composite', at: { category: 'video', entry: 'bad entry' } }, 400),
+      ),
+    ).toMatchObject({ reason: 'composite', at: { category: 'video', entry: 'bad entry' } });
+    // Ссылка на отсутствующую категорию источника: запись это «набор:тег».
+    expect(
+      geoSetRefusal(res({ error: 'GEO_SET_INVALID', reason: 'composite', at: { category: 'video', entry: 'geosite:nope' } }, 400)),
+    ).toMatchObject({ at: { category: 'video', entry: 'geosite:nope' } });
+    // Ошибка всего определения (больше 200 категорий): категории нет, но `at` может быть пуст.
+    expect(geoSetRefusal(res({ error: 'GEO_SET_INVALID', reason: 'composite' }, 400))).toMatchObject({ at: null });
+    expect(geoSetRefusal(res({ error: 'GEO_SET_INVALID', reason: 'composite', at: { category: 5 } }, 400))).toMatchObject({
+      at: null,
+    });
+    expect(geoSetRefusal(res({ error: 'GEO_SET_INVALID', reason: 'composite', at: { category: 'v' } }, 400))).toMatchObject({
+      at: { category: 'v', entry: null },
+    });
+  });
+
+  it('GEO_SET_REFERENCED называет составные наборы, собранные из этого; не-строки пропускаются', () => {
+    expect(geoSetRefusal(res({ error: 'GEO_SET_REFERENCED', by: ['mine', 7, 'other'], message: 'm' }))).toEqual({
+      code: 'GEO_SET_REFERENCED',
+      by: ['mine', 'other'],
+      message: 'm',
+    });
+    expect(geoSetRefusal(res({ error: 'GEO_SET_REFERENCED' }))).toMatchObject({ by: [] });
+  });
+
   it('чужой код не выдаётся за свой', () => {
     expect(geoSetRefusal(res({ error: 'PORT_TAKEN_PROFILE' }))).toBeNull();
   });

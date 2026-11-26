@@ -1,4 +1,5 @@
 import type {
+  GeoCompositeCategory,
   GeoRolloutPlan,
   GeoSetDto,
   GeoSetKind,
@@ -88,6 +89,26 @@ export async function refreshGeoSet(id: string): Promise<GeoSet> {
   return data;
 }
 
+/** Составной набор (веха 10.2): собирается на сервере в самом запросе, ответ уже с итогом сборки. */
+export async function createCompositeGeoSet(input: {
+  name: string;
+  kind: GeoSetKind;
+  categories: GeoCompositeCategory[];
+}): Promise<GeoSet> {
+  const { data } = await api.post<GeoSet>('/api/geo-sets', {
+    name: input.name,
+    kind: input.kind,
+    source: { type: 'composite', categories: input.categories },
+  });
+  return data;
+}
+
+/** Новое определение составного набора: сервер проверяет его и пересобирает файл. */
+export async function updateCompositeGeoSet(id: string, categories: GeoCompositeCategory[]): Promise<GeoSet> {
+  const { data } = await api.patch<GeoSet>(`/api/geo-sets/${id}`, { categories });
+  return data;
+}
+
 export async function deleteGeoSet(id: string): Promise<void> {
   await api.delete(`/api/geo-sets/${id}`);
 }
@@ -114,7 +135,14 @@ export async function rolloutGeoSet(id: string, version: string): Promise<{ node
  * него поле нельзя (так экран шаблонов падал белой страницей 2026-09-22).
  */
 export type GeoSetRefusal =
-  | { code: 'GEO_SET_INVALID'; reason: string | null; message: string | null }
+  | {
+      code: 'GEO_SET_INVALID';
+      reason: string | null;
+      message: string | null;
+      /** reason `composite`: какая категория (по имени) и какая запись неверны. */
+      at: { category: string | null; entry: string | null } | null;
+    }
+  | { code: 'GEO_SET_REFERENCED'; by: string[]; message: string | null }
   | { code: 'GEO_SET_NAME_TAKEN' | 'GEO_SET_BUILTIN' | 'GEO_SET_NOT_VERIFIED'; message: string | null }
   | { code: 'GEO_SET_IN_USE'; uses: GeoUse[]; message: string | null }
   | { code: 'GEO_ROLLOUT_STALE'; current: string | null; message: string | null }
@@ -129,6 +157,13 @@ function readUses(raw: unknown): GeoUse[] {
   });
 }
 
+function readAt(raw: unknown): { category: string | null; entry: string | null } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { category, entry } = raw as { category?: unknown; entry?: unknown };
+  const at = { category: typeof category === 'string' ? category : null, entry: typeof entry === 'string' ? entry : null };
+  return at.category === null && at.entry === null ? null : at;
+}
+
 export function geoSetRefusal(err: unknown): GeoSetRefusal | null {
   if (!err || typeof err !== 'object') return null;
   const res = (err as { response?: unknown }).response;
@@ -139,7 +174,18 @@ export function geoSetRefusal(err: unknown): GeoSetRefusal | null {
   const message = typeof d.message === 'string' ? d.message : null;
   switch (d.error) {
     case 'GEO_SET_INVALID':
-      return { code: 'GEO_SET_INVALID', reason: typeof d.reason === 'string' ? d.reason : null, message };
+      return {
+        code: 'GEO_SET_INVALID',
+        reason: typeof d.reason === 'string' ? d.reason : null,
+        message,
+        at: readAt(d.at),
+      };
+    case 'GEO_SET_REFERENCED':
+      return {
+        code: 'GEO_SET_REFERENCED',
+        by: Array.isArray(d.by) ? d.by.filter((n): n is string => typeof n === 'string') : [],
+        message,
+      };
     case 'GEO_SET_NAME_TAKEN':
     case 'GEO_SET_BUILTIN':
     case 'GEO_SET_NOT_VERIFIED':

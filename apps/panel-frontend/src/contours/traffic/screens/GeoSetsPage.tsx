@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { GEO_SET_KINDS } from '@iceslab/shared';
 import { useTranslation } from 'react-i18next';
-import { Box, NumberInput, SegmentedControl, Select, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { Box, NumberInput, SegmentedControl, Select, Stack, Text, TextInput } from '@mantine/core';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -35,6 +35,9 @@ import {
   usesWords,
 } from '@/contours/traffic/lib/geoFacts';
 import { GeoRolloutModal } from '@/contours/traffic/components/GeoRolloutModal';
+import { AddCompositePanel, EditCompositePanel } from '@/contours/traffic/components/CompositeEditor';
+import { GhostButton, Label } from '@/contours/traffic/components/GeoFields';
+import { compositeStats } from '@/contours/traffic/lib/geoComposite';
 import {
   AMBER,
   CARD,
@@ -95,7 +98,8 @@ export function GeoSetsPage() {
   const nodesFailure = loadFailure(nodesQuery, apiErrorMessage);
   const attention = facts.state === 'list' ? geoAttention(facts.sets, nodesBehind) : null;
 
-  const [adding, setAdding] = useState<'url' | 'upload' | null>(null);
+  const [adding, setAdding] = useState<'url' | 'upload' | 'composite' | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [rolloutFor, setRolloutFor] = useState<GeoSet | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ['geo-sets'] });
 
@@ -112,6 +116,8 @@ export function GeoSetsPage() {
           ? t(`geoSets.invalid.${r.reason}`, { defaultValue: r.message ?? r.reason })
           : r?.code === 'GEO_SET_NAME_TAKEN'
             ? t('geoSets.nameTaken')
+            : r?.code === 'GEO_SET_REFERENCED'
+              ? t('geoSets.composite.referenced', { by: r.by.join(', ') })
             : r?.code === 'GEO_SET_BUILTIN'
               ? t('geoSets.builtinNoDelete')
               : (r?.message ?? apiErrorMessage(err));
@@ -178,6 +184,12 @@ export function GeoSetsPage() {
         >
           {t('geoSets.upload')}
         </GhostButton>
+        <GhostButton
+          disabled={facts.state === 'unavailable'}
+          onClick={() => setAdding(adding === 'composite' ? null : 'composite')}
+        >
+          {t('geoSets.composite.add')}
+        </GhostButton>
       </Box>
 
       {attention && (
@@ -229,18 +241,44 @@ export function GeoSetsPage() {
         />
       )}
 
+      {adding === 'composite' && (
+        <AddCompositePanel
+          onDone={() => {
+            setAdding(null);
+            invalidate();
+          }}
+          onCancel={() => setAdding(null)}
+          onRefusal={(err) => showRefusal(err, t('geoSets.addFailed'))}
+        />
+      )}
+
       {facts.state === 'list' &&
-        facts.sets.map((s) => (
+        facts.sets.flatMap((s) => [
           <GeoSetRow
             key={s.id}
             set={s}
+            onEdit={() => setEditingId(editingId === s.id ? null : s.id)}
             refreshing={refresh.isPending && refresh.variables === s.id}
             onRefresh={() => refresh.mutate(s.id)}
             onReplace={(file) => replace.mutate({ id: s.id, file })}
             onRollout={() => setRolloutFor(s)}
             onDelete={() => confirmDelete(s)}
-          />
-        ))}
+          />,
+          ...(editingId === s.id
+            ? [
+                <EditCompositePanel
+                  key={`${s.id}-edit`}
+                  set={s}
+                  onDone={() => {
+                    setEditingId(null);
+                    invalidate();
+                  }}
+                  onCancel={() => setEditingId(null)}
+                  onRefusal={(err) => showRefusal(err, t('geoSets.composite.saveFailed'))}
+                />,
+              ]
+            : []),
+        ])}
 
       <GeoRolloutModal set={rolloutFor} onClose={() => setRolloutFor(null)} />
     </Stack>
@@ -265,10 +303,12 @@ function GeoSetRow({
   refreshing,
   onRefresh,
   onReplace,
+  onEdit,
   onRollout,
   onDelete,
 }: {
   set: GeoSet;
+  onEdit: () => void;
   refreshing: boolean;
   onRefresh: () => void;
   onReplace: (file: File) => void;
@@ -348,6 +388,7 @@ function GeoSetRow({
             {refreshing ? t('geoSets.refreshing') : t('geoSets.refresh')}
           </GhostButton>
         )}
+        {actions.edit && <GhostButton onClick={onEdit}>{t('geoSets.composite.edit')}</GhostButton>}
         {actions.replaceFile && (
           <>
             <GhostButton onClick={() => fileInput.current?.click()}>{t('geoSets.replaceFile')}</GhostButton>
@@ -615,52 +656,6 @@ function UploadPanel({
   );
 }
 
-function Label({ children }: { children: string }) {
-  return (
-    <Text style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: MIST }}>
-      {children}
-    </Text>
-  );
-}
-
-/** Тихая кнопка. Своя, а не из чужого контура: линт это стережёт. */
-function GhostButton({
-  children,
-  disabled,
-  title,
-  onClick,
-}: {
-  children: string;
-  disabled?: boolean;
-  title?: string;
-  onClick: () => void;
-}) {
-  return (
-    <UnstyledButton
-      type="button"
-      disabled={disabled}
-      title={title}
-      onClick={onClick}
-      style={{
-        height: 32,
-        paddingInline: 12,
-        borderRadius: 8,
-        border: `1px solid ${HAIRLINE}`,
-        backgroundColor: CARD,
-        color: disabled ? DIM : SNOW,
-        fontFamily: MONO,
-        fontSize: 10,
-        letterSpacing: '0.06em',
-        textTransform: 'uppercase',
-        cursor: disabled ? 'default' : 'pointer',
-        flexShrink: 0,
-      }}
-    >
-      {children}
-    </UnstyledButton>
-  );
-}
-
 function sourceWords(set: GeoSet, t: (k: string, o?: Record<string, unknown>) => string): string {
   if (set.source.type === 'builtin') return t('geoSets.sourceBuiltin', { tag: set.source.tag });
   if (set.source.type === 'url')
@@ -668,6 +663,9 @@ function sourceWords(set: GeoSet, t: (k: string, o?: Record<string, unknown>) =>
       url: set.source.url,
       hours: set.source.refreshHours,
     });
-  if (set.source.type === 'composite') return t('geoSets.sourceComposite', { count: set.source.categories.length });
+  if (set.source.type === 'composite') {
+    const { categories, sets } = compositeStats(set.source.categories);
+    return t('geoSets.sourceComposite', { count: categories, sets });
+  }
   return t('geoSets.sourceUpload', { filename: set.source.filename });
 }

@@ -82,6 +82,8 @@ export function geoSetState(set: Pick<GeoSet, 'status' | 'current'>): GeoSetStat
 export interface GeoSetActions {
   refresh: boolean;
   replaceFile: boolean;
+  /** Определение составного набора правится, пока он не собирается. */
+  edit: boolean;
   rollout: boolean;
   delete: boolean;
   /** Почему удалить нельзя, когда нельзя по факту. */
@@ -95,6 +97,7 @@ export function geoSetActions(set: Pick<GeoSet, 'source' | 'status' | 'current' 
   return {
     refresh: set.source.type !== 'upload' && !busy,
     replaceFile: set.source.type === 'upload' && !busy,
+    edit: set.source.type === 'composite' && !busy,
     rollout: set.current !== null,
     delete: deleteBlocked === null,
     deleteBlocked,
