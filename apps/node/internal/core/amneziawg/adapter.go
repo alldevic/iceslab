@@ -380,8 +380,10 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 }
 
 // RetainUsers implements core.UserReconciler: peers of users outside `keep`
-// leave the interface, memory and the state file, on both generations. The
-// count is of users removed, a user on both interfaces counting once.
+// leave the interface, memory and the state file, on both generations. Then
+// every peer the interface itself carries that the panel's set does not
+// (made by hand with `awg set`) is taken off in place. The count is of users
+// removed, a user on both interfaces counting once, plus the foreign peers.
 var _ core.UserReconciler = (*Adapter)(nil)
 
 func (a *Adapter) RetainUsers(keep []string) (int, error) {
@@ -400,7 +402,67 @@ func (a *Adapter) RetainUsers(keep []string) (int, error) {
 			firstErr = err
 		}
 	}
-	return len(removed), firstErr
+	foreign := 0
+	for _, x := range a.both() {
+		foreign += x.dropForeignPeers(context.Background())
+	}
+	return len(removed) + foreign, firstErr
+}
+
+// dropForeignPeers lists the peers the running interface really has and
+// removes, with `set <iface> peer <key> remove` (no interface recreation),
+// each one outside the adapter's own set, which after retainOne is the
+// panel's. A failed listing or removal is logged and the rest goes on.
+// Config-only mode and an interface this adapter does not run are skipped.
+func (a *Adapter) dropForeignPeers(ctx context.Context) int {
+	if a.cfg.AwgBin == "" || !a.inUse() {
+		return 0
+	}
+	a.restartMu.Lock()
+	defer a.restartMu.Unlock()
+	a.mu.Lock()
+	iface := a.cfg.Inbound.Interface
+	a.mu.Unlock()
+	if iface == "" {
+		iface = defaultInterface(a.plain())
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := a.cfg.runCmd(cctx, a.cfg.AwgBin, "show", iface, "peers")
+	if err != nil {
+		a.logger.Warn(a.Name()+": cannot list peers of the interface", "interface", iface, "err", err)
+		return 0
+	}
+	// Read after the listing: a peer added meanwhile is in memory by now.
+	a.mu.Lock()
+	known := make(map[string]bool, len(a.peers))
+	for _, ps := range a.peers {
+		for _, p := range ps {
+			known[p.PublicKey] = true
+		}
+	}
+	a.mu.Unlock()
+	removed := 0
+	for _, key := range strings.Fields(string(out)) {
+		if known[key] {
+			continue
+		}
+		if _, err := a.cfg.runCmd(cctx, a.cfg.AwgBin, "set", iface, "peer", key, "remove"); err != nil {
+			a.logger.Warn(a.Name()+": cannot remove a foreign peer", "interface", iface, "peer", shortKey(key), "err", err)
+			continue
+		}
+		removed++
+		a.logger.Info(a.Name()+": foreign peer removed (not in the panel's set)", "interface", iface, "peer", shortKey(key))
+	}
+	return removed
+}
+
+// shortKey is a public key cut for a log line.
+func shortKey(k string) string {
+	if len(k) > 8 {
+		return k[:8] + "..."
+	}
+	return k
 }
 
 // retainOne drops every user outside kept from this interface alone, with one
