@@ -102,6 +102,12 @@ export interface CoreKnownBad {
 }
 
 export interface CoreVersionEntry {
+  /**
+   * The GitHub repository a release of this component comes from, "owner/name",
+   * unless the release names its own `repo`. The bootstraps spell the same
+   * address in a URL; core-pins.test.ts holds the two equal.
+   */
+  upstream: string;
   /** Which engine row on a node reports this component, and in which field. */
   reportedBy: { engine: EngineName; field: 'version' | 'toolsVersion' };
   /**
@@ -130,6 +136,7 @@ const AWG_GENERATION =
 
 export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
   xray: {
+    upstream: 'XTLS/Xray-core',
     reportedBy: { engine: 'xray', field: 'version' },
     pinned: '26.3.27',
     releases: [
@@ -159,6 +166,7 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
   },
 
   singbox: {
+    upstream: 'SagerNet/sing-box',
     reportedBy: { engine: 'singbox', field: 'version' },
     pinned: '1.13.14',
     releases: [
@@ -196,6 +204,7 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
   },
 
   hysteria: {
+    upstream: 'apernet/hysteria',
     reportedBy: { engine: 'hysteria', field: 'version' },
     pinned: '2.12.3',
     releases: [
@@ -241,6 +250,7 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
    * with its srcversion, bootstrap-amneziawg.sh).
    */
   'amneziawg-module': {
+    upstream: 'amnezia-vpn/amneziawg-linux-kernel-module',
     reportedBy: { engine: 'amneziawg', field: 'version' },
     pinned: '3.1.20260906',
     releases: [
@@ -265,6 +275,7 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
   },
 
   'amneziawg-tools': {
+    upstream: 'amnezia-vpn/amneziawg-tools',
     reportedBy: { engine: 'amneziawg', field: 'toolsVersion' },
     pinned: '3.1.20260812',
     releases: [
@@ -291,6 +302,7 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
   },
 
   mtg: {
+    upstream: '9seconds/mtg',
     reportedBy: { engine: 'mtproto', field: 'version' },
     pinned: '2.2.8',
     releases: [
@@ -319,6 +331,7 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
   },
 
   mita: {
+    upstream: 'enfein/mieru',
     reportedBy: { engine: 'mieru', field: 'version' },
     pinned: '3.37.0',
     releases: [
@@ -344,6 +357,7 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
   },
 
   'caddy-naive': {
+    upstream: 'klzgrad/forwardproxy',
     reportedBy: { engine: 'naive', field: 'version' },
     pinned: null,
     unpinnedReason:
@@ -646,4 +660,116 @@ export function coreRemoveCommand(engine: EngineName): { command: string } {
 function isAtLeast(v: string, bound: string): boolean {
   const c = compareCoreVersions(v, bound);
   return c === 0 || c === 1;
+}
+
+/**
+ * Where a release's file is downloaded from: the release's own repository when
+ * it names one (sing-box, ours), else the component's upstream. The tag goes
+ * into the path encoded, because hysteria's is "app/v2.12.3" and its slash is
+ * part of the name, not a directory. null when the release has no file for the
+ * arch (a commit-built release has none at all).
+ */
+export function coreAssetUrl(
+  component: CoreComponent,
+  release: CoreRelease,
+  arch: CoreArch,
+): string | null {
+  const asset = release.assets?.[arch];
+  if (!asset) return null;
+  const repo = release.repo ?? CORE_VERSIONS[component].upstream;
+  return `https://github.com/${repo}/releases/download/${encodeURIComponent(release.tag)}/${asset.file}`;
+}
+
+/**
+ * The name a downloaded artifact is kept under, in the panel image's cores
+ * directory and nowhere else: component, version and arch first, so two
+ * releases of one component never overwrite each other, then the upstream file
+ * name for a human reading `ls`. One function for the image build, the routes
+ * and everything that reads the directory after them. The parts come from the
+ * manifest, never from a request: nothing in them is a separator.
+ */
+export function coreArtifactName(
+  component: CoreComponent,
+  version: string,
+  arch: CoreArch,
+  file: string,
+): string {
+  return `${component}--${version}--${arch}--${file}`;
+}
+
+/** One file the panel image carries for the nodes. */
+export interface CoreArtifact {
+  component: CoreComponent;
+  version: string;
+  arch: CoreArch;
+  /** The upstream file name. */
+  file: string;
+  sha256: string;
+  url: string;
+  /** The name it is kept under, coreArtifactName. */
+  stored: string;
+}
+
+/**
+ * Every downloadable artifact of every release in the manifest, for the given
+ * arches (all of them by default). Components built from a commit have none.
+ */
+export function coreArtifacts(arches: readonly CoreArch[] = CORE_ARCHES): CoreArtifact[] {
+  const out: CoreArtifact[] = [];
+  for (const component of CORE_COMPONENTS) {
+    for (const release of CORE_VERSIONS[component].releases) {
+      for (const arch of arches) {
+        const asset = release.assets?.[arch];
+        if (!asset) continue;
+        out.push({
+          component,
+          version: release.version,
+          arch,
+          file: asset.file,
+          sha256: asset.sha256,
+          url: coreAssetUrl(component, release, arch)!,
+          stored: coreArtifactName(component, release.version, arch, asset.file),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * A script a node runs that is not a core release: pinned to a commit of a
+ * repository that publishes no tags, and checked by the sha256 of the file at
+ * that commit. The names are the ones apps/node/scripts/bootstrap-*.sh give
+ * their pins; core-pins.test.ts holds the two equal.
+ */
+export interface CoreScript {
+  /** "owner/name". */
+  repo: string;
+  /** The commit. */
+  ref: string;
+  /** The path of the file in the repository, which is also its file name. */
+  file: string;
+  sha256: string;
+}
+
+export const CORE_SCRIPT_NAMES = ['xray-install'] as const;
+export type CoreScriptName = (typeof CORE_SCRIPT_NAMES)[number];
+
+export const CORE_SCRIPTS: Record<CoreScriptName, CoreScript> = {
+  // XTLS/Xray-install publishes no tags, only `main` (bootstrap-xray.sh).
+  'xray-install': {
+    repo: 'XTLS/Xray-install',
+    ref: 'e741a4f56d368afbb9e5be3361b40c4552d3710d',
+    file: 'install-release.sh',
+    sha256: '7f70c95f6b418da8b4f4883343d602964915e28748993870fd554383afdbe555',
+  },
+};
+
+export function coreScriptUrl(script: CoreScript): string {
+  return `https://raw.githubusercontent.com/${script.repo}/${script.ref}/${script.file}`;
+}
+
+/** The name a script is kept under in the cores directory, like coreArtifactName. */
+export function coreScriptName(name: CoreScriptName, script: CoreScript): string {
+  return `script--${name}--${script.ref}--${script.file}`;
 }

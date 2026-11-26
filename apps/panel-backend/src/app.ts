@@ -12,6 +12,7 @@ import { pingRedis, redis } from './lib/infra/redis.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { usersRoutes } from './modules/users/users.routes.js';
 import { nodesRoutes } from './modules/nodes/nodes.routes.js';
+import { coresRoutes } from './modules/cores/cores.routes.js';
 import { subscriptionRoutes } from './modules/subscription/subscription.routes.js';
 import { srrRoutes } from './modules/srr/srr.routes.js';
 // Slice 27 retired /api/inbounds for /api/profiles + /api/bindings; A-281
@@ -317,6 +318,7 @@ export async function buildApp(opts: { log?: { level: string; stream: { write(li
   await app.register(authRoutes);
   await app.register(usersRoutes);
   await app.register(nodesRoutes);
+  await app.register(coresRoutes);
   await app.register(subscriptionRoutes);
   await app.register(srrRoutes);
   await app.register(squadsRoutes);

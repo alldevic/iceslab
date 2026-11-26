@@ -77,6 +77,9 @@ const PAGED = new Set(['/api/users', '/api/nodes', '/api/audit']);
  * is a sentence about WHO creates the rows, because that is what decides it.
  */
 const BOUNDED: Record<string, string> = {
+  // Not here: GET /api/internal/cores (milestone 7.1) lists the version manifest
+  // (code, one row per artifact), is behind the agent's bearer, and is deeper
+  // than /api/<name>, which collectionRoutes does not count.
   '/api/hosts':
     'admin-created, plus one auto "Default" host per binding an admin deploys. The largest of these in a real fleet (one per profile x node binding) and the first to page if it ever stops being comfortable.',
   '/api/profiles': 'admin-authored inbound templates (profiles.service createProfile); a fleet has a handful.',

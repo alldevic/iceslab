@@ -109,6 +109,12 @@ export const ConfigSchema = z.object({
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
   RATE_LIMIT_BOOTSTRAP_PER_MIN: z.coerce.number().int().min(1).default(10),
   RATE_LIMIT_HEARTBEAT_PER_MIN: z.coerce.number().int().min(1).default(120),
+  // Where the image keeps the core artifacts it hands to nodes (the Dockerfile's
+  // `cores` stage writes it), and how often one address may ask for them: a
+  // download is tens of MB, so it gets a ceiling of its own, far below the
+  // heartbeat's.
+  CORES_DIR: z.string().min(1).default('/app/cores'),
+  RATE_LIMIT_CORE_PER_MIN: z.coerce.number().int().min(1).default(20),
 
   // Absolute ceiling on distinct HWID device rows recorded per user, applied
   // even to users with no per-user/squad device limit (the common case, where

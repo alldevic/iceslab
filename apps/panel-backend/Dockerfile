@@ -18,6 +18,25 @@
 # and the image came to run different runtimes once already.
 ARG NODE_VERSION=22.22-alpine
 
+# ───── Cores stage ─────
+# The core artifacts the panel hands its nodes (modules/cores): every file of
+# every release in the version manifest, downloaded and checked against the
+# manifest's sha256, a mismatch stopping the build. Its own stage, with only the
+# manifest and the fetch script copied in, so the layer is rebuilt when the
+# manifest moves and not on every edit of the panel (the downloads are ~hundreds
+# of MB). The manifest is read as TypeScript by plain node (type stripping).
+#
+# CORE_ARCHES: which architectures the image carries. armv7 is left out on
+# purpose, the node installer only supports amd64 and arm64; add it with
+#   --build-arg CORE_ARCHES="amd64 arm64 armv7"
+# A node of an architecture the image lacks gets a 404 naming this argument.
+FROM node:${NODE_VERSION} AS cores
+ARG CORE_ARCHES="amd64 arm64"
+WORKDIR /fetch
+COPY packages/shared/src/core-versions.ts ./core-versions.ts
+COPY apps/panel-backend/scripts/fetch-cores.mjs ./fetch-cores.mjs
+RUN node fetch-cores.mjs ./core-versions.ts /cores "$CORE_ARCHES"
+
 # ───── Build stage ─────
 FROM node:${NODE_VERSION} AS builder
 # NODE_OPTIONS caps the V8 heap during build, without it pnpm + tsc can climb
@@ -147,6 +166,10 @@ WORKDIR /app
 
 # Copy the trimmed workspace from the builder.
 COPY --from=builder /repo /app
+# The core artifacts, read-only for the `node` user (root-owned, 0644/0755) and
+# served as they are. Placed after the workspace copy so a manifest change does
+# not invalidate the (larger) layer above.
+COPY --from=cores /cores /app/cores
 
 WORKDIR /app/apps/panel-backend
 

@@ -1315,6 +1315,9 @@ jobs:
       - name: Image content (no sources, tests, scripts, env, git)
         run: .github/scripts/image-checks.sh content
 
+      - name: Image cores (every artifact of the manifest is there, sha256 equal)
+        run: .github/scripts/image-checks.sh cores
+
       - name: Image metadata (non-root user, CMD file exists)
         run: .github/scripts/image-checks.sh meta
 

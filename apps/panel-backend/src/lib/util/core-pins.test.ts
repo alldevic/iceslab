@@ -5,8 +5,12 @@ import { fileURLToPath } from 'node:url';
 import {
   CORE_COMPONENTS,
   CORE_ENV_PREFIX as PIN_PREFIX,
+  CORE_SCRIPTS,
   CORE_VERSIONS,
+  ENGINE_BOOTSTRAP,
+  coreAssetUrl,
   coreEnvPair,
+  coreScriptUrl,
   type CoreComponent,
 } from '@iceslab/shared';
 import {
@@ -149,5 +153,54 @@ describe('CI asks the engine the fleet runs, checked by the same sha256', () => 
     const tag = release.tag.replace('/', '%2F');
     expect(ci).toContain(`releases/download/${tag}/${asset.file}`);
     expect(ci).toContain(`${asset.sha256}  `);
+  });
+});
+
+describe('the download address the manifest derives is the one the scripts fetch from', () => {
+  // The panel image downloads from coreAssetUrl(); a node's bootstrap used to
+  // download from its own spelling of the same address. When the two differ, the
+  // image carries a file nobody installs, or a repository that is not the one
+  // the node would have used.
+  const UPSTREAM_URL = /"(https:\/\/github\.com\/[^"]+\/releases\/download\/[^"]+)"/;
+
+  it.each(['xray', 'singbox', 'hysteria', 'mtg', 'mita'] as const)('%s', (c) => {
+    const entry = CORE_VERSIONS[c];
+    const release = entry.releases.find((r) => r.version === entry.pinned)!;
+    const script = read(`apps/node/scripts/${ENGINE_BOOTSTRAP[entry.reportedBy.engine]}`);
+    const line = UPSTREAM_URL.exec(script);
+    expect(line, `${c}: no release URL in the script`).not.toBeNull();
+    // The script's spelling with its variables put back: the repository (a
+    // literal, or the pin block's own repo variable), the tag (hysteria's slash
+    // is written %2F) and the file.
+    const repo = release.repo ? `\${${PIN_PREFIX[c]}_PINNED_REPO}` : entry.upstream;
+    expect(line![1]!.startsWith(`https://github.com/${repo}/releases/download/`), line![1]).toBe(true);
+    if (release.repo) {
+      expect(readPinBlock(script, c)).toContain(`${PIN_PREFIX[c]}_PINNED_REPO="${release.repo}"`);
+    }
+    const tagEncoded = release.tag.includes('/');
+    expect(line![1]!.includes('%2F'), `${c}: the script encodes the tag's slash`).toBe(tagEncoded);
+    const url = coreAssetUrl(c, release, 'amd64')!;
+    expect(url).toBe(
+      `https://github.com/${release.repo ?? entry.upstream}/releases/download/${encodeURIComponent(release.tag)}/${release.assets!.amd64!.file}`,
+    );
+  });
+
+  it('every component with an upstream repo names it in its own bootstrap', () => {
+    // Not sing-box: its releases are ours, the script reads the repo from its block.
+    for (const c of CORE_COMPONENTS) {
+      if (c === 'singbox') continue;
+      const entry = CORE_VERSIONS[c];
+      const script = read(`apps/node/scripts/${ENGINE_BOOTSTRAP[entry.reportedBy.engine]}`);
+      expect(script, `${c}: ${entry.upstream}`).toContain(`github.com/${entry.upstream}`);
+    }
+  });
+
+  it('xray-install: repo, commit and sha256 are the bootstrap\'s', () => {
+    const script = read('apps/node/scripts/bootstrap-xray.sh');
+    const s = CORE_SCRIPTS['xray-install'];
+    expect(script).toContain(`XRAY_INSTALLER_PINNED_REF="${s.ref}"`);
+    expect(script).toContain(`XRAY_INSTALLER_PINNED_SHA="${s.sha256}"`);
+    expect(script).toContain(`https://raw.githubusercontent.com/${s.repo}/\${XRAY_INSTALLER_REF}/${s.file}`);
+    expect(coreScriptUrl(s)).toBe(`https://raw.githubusercontent.com/${s.repo}/${s.ref}/${s.file}`);
   });
 });

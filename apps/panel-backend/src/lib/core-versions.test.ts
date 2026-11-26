@@ -2,8 +2,15 @@ import { describe, it, expect } from 'vitest';
 import {
   CORE_COMPONENTS,
   CORE_ENV_PREFIX,
+  CORE_ARCHES,
+  CORE_SCRIPTS,
   CORE_VERSIONS,
   ENGINE_NAMES,
+  coreArtifactName,
+  coreArtifacts,
+  coreAssetUrl,
+  coreScriptName,
+  coreScriptUrl,
   coreEnvPair,
   checkCoreVersionIntent,
   compareCoreVersions,
@@ -221,5 +228,69 @@ describe('intent and the bootstrap payload', () => {
 
   it('fails loudly on an intent that stopped being valid, rather than handing out the pin', () => {
     expect(() => resolveCoreVersions({ xray: '26.7.28' })).toThrow(/xray: 26\.7\.28/);
+  });
+});
+
+describe('where the artifacts come from and what they are kept as', () => {
+  it('derives the address of every artifact of every release', () => {
+    expect(coreAssetUrl('xray', CORE_VERSIONS.xray.releases[0]!, 'arm64')).toBe(
+      'https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-arm64-v8a.zip',
+    );
+    // A release kept in our own repository names it.
+    expect(coreAssetUrl('singbox', CORE_VERSIONS.singbox.releases[0]!, 'amd64')).toBe(
+      'https://github.com/icecompany-tech/core-builds/releases/download/core-singbox-v1.13.14/sing-box-1.13.14-iceslab-linux-amd64.tar.gz',
+    );
+    // The slash of hysteria's tag is part of the name.
+    expect(coreAssetUrl('hysteria', CORE_VERSIONS.hysteria.releases[0]!, 'amd64')).toBe(
+      'https://github.com/apernet/hysteria/releases/download/app%2Fv2.12.3/hysteria-linux-amd64',
+    );
+    expect(coreAssetUrl('mtg', CORE_VERSIONS.mtg.releases[0]!, 'armv7')).toBe(
+      'https://github.com/9seconds/mtg/releases/download/v2.2.8/mtg-2.2.8-linux-armv7.tar.gz',
+    );
+    expect(coreAssetUrl('mita', CORE_VERSIONS.mita.releases[0]!, 'amd64')).toBe(
+      'https://github.com/enfein/mieru/releases/download/v3.37.0/mita_3.37.0_amd64.deb',
+    );
+    // No file for the arch (upstream ships no mita armv7), and none for a commit.
+    expect(coreAssetUrl('mita', CORE_VERSIONS.mita.releases[0]!, 'armv7')).toBeNull();
+    expect(coreAssetUrl('amneziawg-module', CORE_VERSIONS['amneziawg-module'].releases[0]!, 'amd64')).toBeNull();
+  });
+
+  it('lists exactly the manifest\'s assets, under names that cannot collide', () => {
+    const all = coreArtifacts();
+    let expected = 0;
+    for (const c of CORE_COMPONENTS) {
+      for (const r of CORE_VERSIONS[c].releases) expected += Object.keys(r.assets ?? {}).length;
+    }
+    expect(all.length).toBe(expected);
+    expect(new Set(all.map((a) => a.stored)).size).toBe(all.length);
+    for (const a of all) {
+      expect(a.stored).toBe(coreArtifactName(a.component, a.version, a.arch, a.file));
+      expect(a.stored).not.toMatch(/[/\\]/);
+      expect(a.url.startsWith('https://github.com/')).toBe(true);
+    }
+    expect(coreArtifacts(['amd64']).every((a) => a.arch === 'amd64')).toBe(true);
+    expect(coreArtifacts([])).toEqual([]);
+    expect(CORE_ARCHES).toContain('armv7');
+  });
+
+  it('two releases of one component are two files', () => {
+    const r = CORE_VERSIONS.xray.releases[0]!;
+    expect(coreArtifactName('xray', r.version, 'amd64', 'f.zip')).not.toBe(
+      coreArtifactName('xray', '99.0.0', 'amd64', 'f.zip'),
+    );
+  });
+
+  it('the pinned script has an address and a stored name', () => {
+    const s = CORE_SCRIPTS['xray-install'];
+    expect(s.sha256).toMatch(HEX64);
+    expect(s.ref).toMatch(HEX40);
+    expect(coreScriptUrl(s)).toBe(
+      `https://raw.githubusercontent.com/XTLS/Xray-install/${s.ref}/install-release.sh`,
+    );
+    expect(coreScriptName('xray-install', s)).toBe(`script--xray-install--${s.ref}--install-release.sh`);
+  });
+
+  it.each(CORE_COMPONENTS)('%s: names its upstream repository', (c) => {
+    expect(CORE_VERSIONS[c].upstream).toMatch(/^[\w.-]+\/[\w.-]+$/);
   });
 });

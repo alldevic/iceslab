@@ -83,6 +83,10 @@ const PUBLIC: Record<string, string> = {
     'the operator\'s preview iframe cannot send a bearer; a 15-minute uuid token minted by the authed preview-url route is the credential, and the page is built from invented data',
   'GET /api/internal/bootstrap/:token':
     'a node collecting its enrolment payload; the single-use token in the path IS the credential',
+  // Not here, on purpose: /api/internal/cores, /cores/:component/:version/:arch and
+  // /cores/scripts/:name/:ref (milestone 7.1) are node-facing but answer 401
+  // without the agent's bearer, like /api/internal/nodes/me/status, so the
+  // sweep already holds them to that; a line here would fail it.
   'GET /sub/:token':
     "the subscription a buyer's client polls; the token in the path is the credential (path follows SUBSCRIPTION_PATH_PREFIX, default /sub)",
   'GET /sub/:token/:client':

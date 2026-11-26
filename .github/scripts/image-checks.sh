@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks on the BUILT backend image (what ships), not on the source tree.
 #
-#   image-checks.sh content|meta|migrate|boot|wait|health|no-redis|all
+#   image-checks.sh content|cores|meta|migrate|boot|wait|health|no-redis|all
 #   image-checks.sh local        # throwaway Postgres + Redis, then `all`
 #
 # CI (the `smoke` job) calls the subcommands one step each; the same script runs
@@ -11,6 +11,7 @@
 #
 # Environment (defaults are the CI values):
 #   IMAGE            image under test                    iceslab-backend:smoke
+#   CORE_ARCHES      arches the image was built to carry     amd64 arm64
 #   DATABASE_URL     Postgres the image migrates/boots on
 #   REDIS_URL        Redis the image boots on
 #   DOCKER_NETWORK   --network of the containers started here        host
@@ -28,6 +29,7 @@ PUBLISH="${PUBLISH:-}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/health}"
 SMOKE_NAME="${SMOKE_NAME:-smoke}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-}"
+CORE_ARCHES="${CORE_ARCHES:-amd64 arm64}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP=/app/apps/panel-backend
 
@@ -56,7 +58,7 @@ check_content() {
     for p in "$shared/src/index.ts" "$shared/src/index.js" "$shared/src/recipes.snapshot.json" \
              "$shared/recipe.schema.json" "$shared/package.json" \
              "$app/prisma" "$app/prisma.config.ts" "$app/package.json" "$app/dist/index.js" \
-             /app/package.json /app/pnpm-workspace.yaml; do
+             /app/package.json /app/pnpm-workspace.yaml /app/cores; do
       [ -e "$p" ] || echo "missing, must be there: $p"
     done
   ')
@@ -65,6 +67,39 @@ check_content() {
     fail "image content is wrong (see the list above)"
   fi
   ok "image content: no sources, tests, scripts, .env*, .git; runtime files present"
+}
+
+# ── cores: the artifacts the panel hands to nodes are all there, and are what the manifest says
+check_cores() {
+  local report
+  # Runs the image's own node on its own compiled manifest (the same function
+  # the build and the routes use), as the image's default user: the files have
+  # to be readable by it. One line per violation.
+  report=$(docker run --rm --entrypoint node -e CORE_ARCHES="$CORE_ARCHES" "$IMAGE" --input-type=module -e '
+    import { createHash } from "node:crypto";
+    import { readFileSync, readdirSync } from "node:fs";
+    const m = await import("/app/packages/shared/src/core-versions.js");
+    const dir = process.env.CORES_DIR ?? "/app/cores";
+    const arches = process.env.CORE_ARCHES.split(/\s+/).filter(Boolean);
+    const want = [
+      ...m.coreArtifacts(arches).map((a) => [a.stored, a.sha256]),
+      ...m.CORE_SCRIPT_NAMES.map((n) => [m.coreScriptName(n, m.CORE_SCRIPTS[n]), m.CORE_SCRIPTS[n].sha256]),
+    ];
+    if (want.length < 5) console.log("manifest lists suspiciously few artifacts: " + want.length);
+    for (const [name, sha] of want) {
+      let got;
+      try { got = createHash("sha256").update(readFileSync(`${dir}/${name}`)).digest("hex"); }
+      catch (e) { console.log(`missing or unreadable: ${name} (${e.code})`); continue; }
+      if (got !== sha) console.log(`sha256 differs: ${name}: ${got} != ${sha}`);
+    }
+    const known = new Set(want.map(([n]) => n));
+    for (const f of readdirSync(dir)) if (!known.has(f)) console.log(`not in the manifest for these arches: ${f}`);
+  ')
+  if [[ -n "$report" ]]; then
+    echo "$report" >&2
+    fail "image cores are wrong (see the list above)"
+  fi
+  ok "image cores: every artifact of CORE_ARCHES ($CORE_ARCHES) is in /app/cores with the manifest's sha256, nothing else"
 }
 
 # ── meta: user and start command ────────────────────────────────────────────
@@ -217,6 +252,7 @@ run_local() {
 
 all() {
   check_content
+  check_cores
   check_meta
   check_migrate
   do_boot
@@ -228,6 +264,7 @@ all() {
 
 case "${1:-all}" in
   content) check_content ;;
+  cores) check_cores ;;
   meta) check_meta ;;
   migrate) check_migrate ;;
   boot) do_boot ;;
@@ -236,5 +273,5 @@ case "${1:-all}" in
   no-redis) check_no_redis ;;
   all) all ;;
   local) run_local ;;
-  *) echo "usage: $0 content|meta|migrate|boot|wait|health|no-redis|all|local" >&2; exit 2 ;;
+  *) echo "usage: $0 content|cores|meta|migrate|boot|wait|health|no-redis|all|local" >&2; exit 2 ;;
 esac
