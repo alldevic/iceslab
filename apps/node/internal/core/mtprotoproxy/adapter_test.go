@@ -1438,3 +1438,139 @@ func TestACrashRestartDoesNotHandTheAllowanceBackEither(t *testing.T) {
 		t.Errorf("quota = %v after the crash-restart, want the remaining 300", q)
 	}
 }
+
+// The quota backstop must not depend on the panel's polls: it exists for the
+// panel being out of reach.
+// startAdapter brings the adapter up: a fixture adapter has no inbound yet, the
+// config-only one is born with it.
+func startAdapter(t *testing.T, a *Adapter) {
+	t.Helper()
+	var err error
+	if a.Provisioned() {
+		err = a.Start(context.Background())
+	} else {
+		err = a.ApplyInbound(2083, domainPush)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func quotaAdapter(t *testing.T, a *Adapter, c *counters, limit int64) {
+	t.Helper()
+	a.cfg.MetricsURL = c.srv.URL
+	a.cfg.QuotaPollEvery = 50 * time.Millisecond
+	startAdapter(t, a)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(limit)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func lastSeen(a *Adapter) (last, remaining int64, running bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if tr := a.track["u1"]; tr != nil {
+		last, remaining = tr.last, tr.remaining
+	}
+	return last, remaining, a.quotaStop != nil
+}
+
+func waitLast(t *testing.T, a *Adapter, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if l, _, _ := lastSeen(a); l == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	l, _, _ := lastSeen(a)
+	t.Fatalf("settled counter = %d, want %d without any GetStats", l, want)
+}
+
+func TestTheCountersAreReadWithoutThePanelPolling(t *testing.T) {
+	a := newTestAdapter(t)
+	c := newCounters(t)
+	c.set("u1", 150) // already there when the quota is pushed: the base
+	quotaAdapter(t, a, c, 1000)
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
+	waitLast(t, a, 150) // first reading is the base
+	c.set("u1", 400)
+	waitLast(t, a, 400)
+	if _, rem, _ := lastSeen(a); rem != 750 {
+		t.Errorf("remaining = %d, want 750", rem)
+	}
+}
+
+func TestNoCounterReaderWithoutAQuotaAndStopEndsIt(t *testing.T) {
+	a := newTestAdapter(t)
+	c := newCounters(t)
+	a.cfg.MetricsURL = c.srv.URL
+	a.cfg.QuotaPollEvery = 50 * time.Millisecond
+	startAdapter(t, a)
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, running := lastSeen(a); running {
+		t.Error("a counter reader runs with no quota held")
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(500)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, running := lastSeen(a); !running {
+		t.Error("no counter reader although a user has a quota")
+	}
+	if err := a.RemoveUser("u1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, running := lastSeen(a); running {
+		t.Error("the counter reader outlived the last quota")
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA, MtprotoQuotaBytes: quota(500)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, running := lastSeen(a); running {
+		t.Error("Stop left the counter reader running")
+	}
+	startAdapter(t, a)
+	if _, _, running := lastSeen(a); !running {
+		t.Fatal("no counter reader after the restart")
+	}
+	if err := a.Idle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, running := lastSeen(a); running {
+		t.Error("Idle left the counter reader running")
+	}
+}
+
+func TestACrashRestartAfterSpendWithNoPanelWritesTheTrueRemainder(t *testing.T) {
+	f := processFixture(t, true)
+	a := f.a
+	c := newCounters(t)
+	quotaAdapter(t, a, c, 1000)
+	time.Sleep(150 * time.Millisecond)
+	c.set("u1", 100)
+	waitLast(t, a, 100)
+	c.set("u1", 700) // the panel never polls
+	waitLast(t, a, 700)
+	a.mu.Lock()
+	proc := a.proc
+	a.mu.Unlock()
+	if err := proc.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for f.count(t, f.starts, "run") < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the supervisor did not respawn the process")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if q, _ := quotaOf(t, a, "u1"); q != 300 {
+		t.Errorf("quota = %v after the crash-restart, want the true remainder 300 (not 900)", q)
+	}
+}

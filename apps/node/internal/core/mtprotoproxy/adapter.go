@@ -62,6 +62,10 @@ type Config struct {
 	// pin it to step across a term without waiting for it.
 	Now func() time.Time
 
+	// QuotaPollEvery is how often the adapter reads the engine's counters for
+	// the quota backstop on its own. 0 → defaultQuotaPollEvery; tests shorten it.
+	QuotaPollEvery time.Duration
+
 	// RunCmd is the injectable command runner for the crypto probe. Defaults to
 	// os/exec; tests inject a fake.
 	RunCmd RunCmdFunc
@@ -101,6 +105,9 @@ type Adapter struct {
 	epoch uint64
 	// expiryTimer wakes the adapter at the nearest term. Under mu.
 	expiryTimer *time.Timer
+	// quotaStop ends the goroutine that reads the counters while a held user
+	// has a quota; nil when none runs. Under mu.
+	quotaStop chan struct{}
 
 	proc *subprocess.Subprocess
 	// procStarted is when proc was spawned. Under mu.
@@ -209,6 +216,7 @@ func (a *Adapter) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	a.started = false
 	a.stopExpiryTimerLocked()
+	a.stopQuotaPollLocked()
 	proc := a.proc
 	a.proc = nil
 	a.mu.Unlock()
@@ -235,6 +243,7 @@ func (a *Adapter) Idle(ctx context.Context) error {
 	a.refusal = ""
 	a.started = false
 	a.stopExpiryTimerLocked()
+	a.stopQuotaPollLocked()
 	proc := a.proc
 	a.proc = nil
 	a.mu.Unlock()
@@ -873,6 +882,53 @@ func (a *Adapter) stopExpiryTimerLocked() {
 	}
 }
 
+// defaultQuotaPollEvery bounds how much usage a crash can take out of the
+// accounting: the counters die with the process, so what was spent since the
+// last reading is what a restart hands back.
+const defaultQuotaPollEvery = 10 * time.Second
+
+// syncQuotaPollLocked starts or stops the counter reader to match the state:
+// it runs while the adapter is started and some held user has a quota. The
+// panel's polls cannot be relied on for this: the quota backstop exists for the
+// panel being out of reach, and then the counter it settles against would never
+// move. Caller holds mu.
+func (a *Adapter) syncQuotaPollLocked() {
+	want := a.started && len(a.track) > 0
+	switch {
+	case want && a.quotaStop == nil:
+		stop := make(chan struct{})
+		a.quotaStop = stop
+		every := a.cfg.QuotaPollEvery
+		if every <= 0 {
+			every = defaultQuotaPollEvery
+		}
+		go func() {
+			t := time.NewTicker(every)
+			defer t.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-t.C:
+					// Outside mu, like GetStats: the scrape is network IO.
+					counters, epoch := a.pollCounters()
+					a.settle(counters, epoch)
+				}
+			}
+		}()
+	case !want && a.quotaStop != nil:
+		a.stopQuotaPollLocked()
+	}
+}
+
+// stopQuotaPollLocked ends the counter reader. Caller holds mu.
+func (a *Adapter) stopQuotaPollLocked() {
+	if a.quotaStop != nil {
+		close(a.quotaStop)
+		a.quotaStop = nil
+	}
+}
+
 // maxExpirySleep bounds one sleep so a stepped wall clock is noticed within the
 // hour; the timer is rearmed after every wake.
 const maxExpirySleep = time.Hour
@@ -885,6 +941,7 @@ const maxExpirySleep = time.Hour
 func (a *Adapter) scheduleExpiry() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.syncQuotaPollLocked()
 	a.stopExpiryTimerLocked()
 	if !a.started {
 		return
