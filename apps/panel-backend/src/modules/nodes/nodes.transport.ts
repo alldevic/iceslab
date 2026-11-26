@@ -8,6 +8,8 @@ import type {
   AddUsersRequest,
   AddUsersResponse,
   RemoveUserRequest,
+  RetainUsersRequest,
+  RetainUsersResponse,
   GetStatsResponse,
   HealthcheckResponse,
   HostMetricsResponse,
@@ -326,6 +328,14 @@ export class NodeTransport {
 
   async removeUser(req: RemoveUserRequest): Promise<void> {
     await this.request<void>('POST', '/removeUser', req);
+  }
+
+  /**
+   * 9.7: the user ids that should be on the node; the agent drops the others.
+   * An agent older than the route answers 404 (NodeRequestError).
+   */
+  async retainUsers(req: RetainUsersRequest): Promise<RetainUsersResponse> {
+    return this.request<RetainUsersResponse>('POST', '/retainUsers', req, { timeoutMs: ADD_USERS_TIMEOUT_MS });
   }
 
   async getStats(): Promise<GetStatsResponse> {

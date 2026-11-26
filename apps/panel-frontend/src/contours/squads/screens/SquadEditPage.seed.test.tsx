@@ -125,7 +125,10 @@ function renderAt(route: string) {
   return { client, ...view };
 }
 
-const nameField = async () => (await screen.findByLabelText(new RegExp(`^${at('squadEdit.name')}`))) as HTMLInputElement;
+// The first render (Mantine, i18n, the router) can take over a second on a loaded machine.
+const FIRST_RENDER = { timeout: 5000 };
+const nameField = async () =>
+  (await screen.findByLabelText(new RegExp(`^${at('squadEdit.name')}`), {}, FIRST_RENDER)) as HTMLInputElement;
 const saveButton = async () => screen.findByRole('button', { name: at('common.save') });
 const unsaved = () => screen.queryByText(at('squadEdit.unsaved'));
 
@@ -135,7 +138,7 @@ describe('SquadEditPage: заполнение формы', () => {
     // «не показывала бы чужой сквад».
     listSquads.mockResolvedValue({ squads: [ALPHA, BETA] });
     renderAt('/squads/squad-alpha');
-    await waitFor(async () => expect((await nameField()).value).toBe('Alpha tier'));
+    await waitFor(async () => expect((await nameField()).value).toBe('Alpha tier'), FIRST_RENDER);
     await waitFor(async () => expect((await saveButton() as HTMLButtonElement).disabled).toBe(false));
   });
 

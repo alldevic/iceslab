@@ -74,6 +74,8 @@ func wirePairs() []wirePair {
 		{"ApplyInboundsResponse", ApplyInboundsResponse{}},
 		{"RemoveUserRequest", RemoveUserRequest{}},
 		{"RemoveUserResponse", RemoveUserResponse{}},
+		{"RetainUsersRequest", RetainUsersRequest{}},
+		{"RetainUsersResponse", RetainUsersResponse{}},
 		{"UserStats", UserStats{}},
 		{"CoreTrafficTotal", CoreTrafficTotal{}},
 		{"GetStatsResponse", GetStatsResponse{}},

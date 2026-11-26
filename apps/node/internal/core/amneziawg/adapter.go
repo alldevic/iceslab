@@ -379,6 +379,56 @@ func (a *Adapter) RetainInbounds(keep []string) error {
 	return nil
 }
 
+// RetainUsers implements core.UserReconciler: peers of users outside `keep`
+// leave the interface, memory and the state file, on both generations. The
+// count is of users removed, a user on both interfaces counting once.
+var _ core.UserReconciler = (*Adapter)(nil)
+
+func (a *Adapter) RetainUsers(keep []string) (int, error) {
+	kept := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		kept[id] = true
+	}
+	removed := map[string]bool{}
+	var firstErr error
+	for _, x := range a.both() {
+		ids, err := x.retainOne(kept)
+		for _, id := range ids {
+			removed[id] = true
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return len(removed), firstErr
+}
+
+// retainOne drops every user outside kept from this interface alone, with one
+// config sync for all of them.
+func (a *Adapter) retainOne(kept map[string]bool) ([]string, error) {
+	a.mu.Lock()
+	var ids []string
+	for id := range a.peers {
+		if !kept[id] {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		a.mu.Unlock()
+		return nil, nil
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		delete(a.peers, id)
+	}
+	if a.v3 == nil && a.cfg.Inbound.Interface == V3Interface && a.cfg.Inbound.PrivateKey == "" {
+		a.mu.Unlock()
+		return ids, nil
+	}
+	a.mu.Unlock()
+	return ids, a.syncConfigState(context.Background())
+}
+
 func (a *Adapter) idleOne(ctx context.Context) error {
 	a.restartMu.Lock()
 	defer a.restartMu.Unlock()

@@ -136,6 +136,17 @@ type InboundReconciler interface {
 	RetainInbounds(keep []string) error
 }
 
+// UserReconciler is an OPTIONAL interface for adapters that keep users in
+// state of their own (peers) which outlives the panel's knowledge of them: a
+// user deleted while the node was unreachable never got its removeUser. The
+// panel ends a complete push with the ids that should be on the node.
+type UserReconciler interface {
+	// RetainUsers removes every user whose id is not in `keep`, all their
+	// devices together, and returns how many it removed. An EMPTY set means no
+	// user should remain and is executed as such.
+	RetainUsers(keep []string) (int, error)
+}
+
 // UserCounter is an OPTIONAL interface: whether this core counts traffic per
 // user, or only reports who is on it (CoreStatus.countsUsers). Not
 // implemented = unknown.

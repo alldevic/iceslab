@@ -1724,6 +1724,23 @@ export interface RemoveUserResponse {
   ok: true;
 }
 
+// ───── POST /retainUsers ─────
+
+/**
+ * The complete set of user ids that should be on the node, sent at the end of a
+ * full push. The agent removes the rest (all their devices). An empty list is
+ * executed. An agent without the route answers 404: no reconcile.
+ */
+export interface RetainUsersRequest {
+  userIds: string[];
+}
+
+export interface RetainUsersResponse {
+  ok: true;
+  /** Users removed. */
+  reconciled: number;
+}
+
 // ───── GET /stats ─────
 
 export interface UserStats {

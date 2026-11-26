@@ -111,12 +111,14 @@ interface NodeRow {
   address: string;
   /** Э3 F: the resolver this node's users get; null = the host's own. */
   dns: unknown;
+  /** Null until a push landed on this node once: nothing of ours is on it. */
+  lastInboundSyncAt: Date | null;
 }
 
 async function fetchNode(nodeId: string): Promise<NodeRow | null> {
   return prisma.node.findFirst({
     where: { id: nodeId, deletedAt: null, status: { not: 'disabled' } },
-    select: { id: true, name: true, address: true, dns: true },
+    select: { id: true, name: true, address: true, dns: true, lastInboundSyncAt: true },
   });
 }
 
@@ -840,6 +842,47 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
       (partial ? ', after a push some cores refused' : ''),
   );
   if (partial) throw partial;
+  // 9.7: the roster went out whole and every user landed. Anything else (a
+  // failed batch, a refused core, the node's first push) leaves the node as it
+  // is: removing users on a push that is not known to be complete would take
+  // live ones off.
+  if (failed === 0 && node.lastInboundSyncAt !== null) {
+    await reconcileNodeUsers(transport, node.name, nodeId);
+  }
+}
+
+/**
+ * 9.7: the ids of the users who should be on `nodeId`: active, and reaching at
+ * least one of its inbounds, by the rule the roster uses (reachOfUsers). Read
+ * from the database anew, AFTER the roster went out and not from the snapshot it
+ * was built from, so a user created while the push ran is in the set.
+ */
+export async function usersKeptOnNode(nodeId: string): Promise<string[]> {
+  const [users, reach] = await Promise.all([fetchActiveUsers(), reachOfUsers(null, { nodeId })]);
+  return users.filter((u) => (reach.get(u.id)?.get(nodeId)?.length ?? 0) > 0).map((u) => u.id);
+}
+
+/**
+ * The end of a full push: tell the agent who stays, it drops the rest (a user
+ * deleted while the node was unreachable never got its removeUser). An agent
+ * older than the route answers 404, which is "no reconcile", and any other
+ * failure is only logged: the push itself has landed.
+ */
+async function reconcileNodeUsers(transport: Pick<NodeTransport, 'retainUsers'>, nodeName: string, nodeId: string) {
+  try {
+    const userIds = await usersKeptOnNode(nodeId);
+    const res = await transport.retainUsers({ userIds });
+    getLogger().info(
+      `[worker:inbound-sync] retainUsers ${nodeName}: kept ${userIds.length}, removed ${res.reconciled}`,
+    );
+  } catch (err) {
+    if (err instanceof NodeRequestError && err.status === 404) {
+      getLogger().info(`[worker:inbound-sync] ${nodeName} has no /retainUsers (older agent), no user reconcile`);
+      return;
+    }
+    const detail = err instanceof Error ? err.message : String(err);
+    getLogger().warn(`[worker:inbound-sync] retainUsers ${nodeName} FAILED: ${detail}`);
+  }
 }
 
 /**

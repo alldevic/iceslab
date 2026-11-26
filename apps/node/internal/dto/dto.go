@@ -581,6 +581,19 @@ type RemoveUserResponse struct {
 	OK bool `json:"ok"`
 }
 
+// ───── POST /retainUsers ─────
+
+// RetainUsersRequest carries the complete set of user ids that should be on the
+// node; an adapter drops the rest. An empty set is a real answer.
+type RetainUsersRequest struct {
+	UserIDs []string `json:"userIds"`
+}
+
+type RetainUsersResponse struct {
+	OK         bool `json:"ok"`
+	Reconciled int  `json:"reconciled"`
+}
+
 // ───── GET /stats ─────
 
 type UserStats struct {

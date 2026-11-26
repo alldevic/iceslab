@@ -412,6 +412,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/addUsers", s.handleAddUsers)
 	mux.HandleFunc("/removeUser", s.handleRemoveUser)
 	mux.HandleFunc("/applyInbounds", s.handleApplyInbounds)
+	mux.HandleFunc("/retainUsers", s.handleRetainUsers)
 	mux.HandleFunc("/stats", s.handleStats)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/ufwPorts", s.handleUfwPorts)
@@ -1102,6 +1103,37 @@ func (s *Server) handleRemoveUser(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("removeUser ok", "userId", req.UserID)
 	writeJSON(w, http.StatusOK, dto.RemoveUserResponse{OK: true})
+}
+
+// handleRetainUsers receives the user ids that should be on this node and has
+// every adapter that can drop the others do so. A failing adapter is logged and
+// does not fail the request or stop the rest, as in applyInbounds.
+func (s *Server) handleRetainUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST only")
+		return
+	}
+	var req dto.RetainUsersRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		return
+	}
+	if len(req.UserIDs) == 0 {
+		s.logger.Warn("retainUsers: empty set, every user is removed from the node")
+	}
+	reconciled := 0
+	for _, adapter := range s.cfg.Adapters {
+		rec, ok := adapter.(core.UserReconciler)
+		if !ok {
+			continue
+		}
+		n, err := rec.RetainUsers(req.UserIDs)
+		reconciled += n
+		if err != nil {
+			s.logger.Error("adapter RetainUsers failed", "core", adapter.Name(), "err", err)
+		}
+	}
+	s.logger.Info("retainUsers ok", "keep", len(req.UserIDs), "reconciled", reconciled)
+	writeJSON(w, http.StatusOK, dto.RetainUsersResponse{OK: true, Reconciled: reconciled})
 }
 
 // handleApplyInbounds receives the panel's full inbound set for this node
