@@ -298,15 +298,6 @@ export interface CreateCascadeV4Input {
   entryPolicyId?: string | null;
 }
 
-/**
- * Storage moved to positions and directions on 2026-08-04, so the two shapes
- * the screens used to block, a pool of several nodes on one step and transits
- * combined with several directions, are now ordinary saves. What remains is a
- * cap on the total number of node-to-node links, which the forms still count
- * themselves because pools multiply it.
- */
-export const CASCADE_V4_WRITES_LIVE = true;
-
 export type UpdateCascadeV4Input = Partial<CreateCascadeV4Input> & {
   /**
    * Согласие на смену входа, которая снимает каскад с профилей входных нод

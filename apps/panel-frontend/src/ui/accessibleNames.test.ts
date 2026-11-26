@@ -36,7 +36,7 @@ const CONTROL =
  */
 const KNOWN_UNNAMED: Record<string, number> = {
   'contours/cascades/components/CascadeEditor.tsx <SegmentedControl>': 2,
-  'contours/cascades/components/CascadeEditor.tsx <Select>': 11,
+  'contours/cascades/components/CascadeEditor.tsx <Select>': 9,
   'contours/cascades/components/CascadeEditor.tsx <Switch>': 2,
   'contours/cascades/screens/CascadeCreatePage.tsx <TextInput>': 1,
   'contours/cascades/screens/CascadeEditPage.tsx <TextInput>': 1,

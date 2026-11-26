@@ -5,8 +5,14 @@ import type { SrrRule, SubscriptionFormat } from '@/lib/domain/srr';
  *
  * This is a deliberate mirror of `srr.service.ts` on the backend: same order
  * (priority ascending), same skip of disabled rules and of patterns that do not
- * compile, same inline-flag handling, same User-Agent truncation. Both run on
- * V8, so the two agree.
+ * compile, same inline-flag handling, same User-Agent truncation.
+ *
+ * It does NOT agree with the server on the regex engine. Since A-019 the server
+ * runs rules on V8's linear engine (`linear-regex.ts`, flag `l`, case-blindness
+ * by folding): a pattern with a backreference or a lookahead is refused on save
+ * and never served. This module still builds a plain `RegExp`, so it compiles
+ * and matches such a pattern, and `patternCompiles` answers yes for it. The
+ * known cases are pinned in `srrMatch.test.ts`.
  *
  * The panel needs it because `POST /api/srr/test` answers with the FORMAT only,
  * and the question an operator is actually asking is "which rule caught this",

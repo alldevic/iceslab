@@ -166,7 +166,7 @@ import {
  *
  * The page is in the v4 shape (pools and directions). The API still answers in
  * the older hop shape, so the draft is READ through a translation below and
- * written back in the new shape behind CASCADE_V4_WRITES_LIVE: an existing
+ * written back in the new shape: an existing
  * cascade renders correctly today and needs no migration on this side.
  */
 export function CascadeEditPage() {

@@ -111,7 +111,9 @@ export async function srrRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // POST /api/srr/test: evaluate a UA against the current rule set
+  // POST /api/srr/test: evaluate a UA against the current rule set. The panel has
+  // no caller on purpose: its screens match locally (srrMatch.ts) so they can name
+  // the rule; the route stays to check a User-Agent against the server's own rules.
   app.post('/api/srr/test', auth, async (request, reply) => {
     const input = TestSrrSchema.parse(request.body);
     const matched = await matchRuleForUserAgent(input.userAgent);

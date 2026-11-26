@@ -32,7 +32,6 @@ export const cascades = {
     hops: 'Хопы (вход, транзит, выход)',
     hopsBalancer: 'Хопы (вход, выходы)',
     hopsLeft: 'ещё {{n}}',
-    node: 'Нода',
     nodePlaceholder: 'выберите ноду',
     entryProtocol: 'Протокол входа',
     linkProtocol: 'Линк дальше',
@@ -40,7 +39,6 @@ export const cascades = {
     notApplicable: 'не применяется',
     // Короткое: поле всего 170px, полная фраза «напрямую в интернет» упирается
     // в рамку, а подпись поля и так говорит, что это линк.
-    egressDirect: 'напрямую',
     addHop: 'Добавить хоп',
     addExit: 'Добавить выход',
     moveUp: 'Выше',
@@ -230,7 +228,6 @@ export const cascades = {
     factToday: '{{size}} сегодня',
     noTraffic: 'сегодня без трафика',
     nameHint: 'Переименование меняет подпись Auto-записи в каждой подписке.',
-    subLabel: 'Подпись в подписке',
     hideHopsHintNamed:
       'Вкл: {{names}} доступны только через этот каскад. Выкл: они также видны как отдельные ноды.',
     chainBalancedLong: 'балансируется по {{protocol}}, выход выбирается на каждое соединение',
