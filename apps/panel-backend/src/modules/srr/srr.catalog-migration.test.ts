@@ -49,10 +49,13 @@ const seed = () => run(SEEDS.flatMap((d) => statements(d, /^INSERT INTO/)));
 const FAMILIES = '20261024183834_srr_core_families';
 // 12.4: the wg flavour (its column exists already: only the data statements).
 const WG_FLAVOUR = '20261126140000_srr_wg_flavour';
+// 13.4: the v2rayNG rule split off the v2rayN one (data only, no column).
+const V2RAYNG = '20261126150000_srr_v2rayng_plain';
 const migrate = async () => {
   await run(statements(CATALOG));
   await run(statements(FAMILIES, /^UPDATE/));
   await run(statements(WG_FLAVOUR, /^(UPDATE|INSERT)/));
+  await run(statements(V2RAYNG, /^INSERT/));
 };
 
 async function rules() {
@@ -145,6 +148,23 @@ describe('the seed migrations and the catalog', () => {
     const byName = Object.fromEntries((await rules()).map((r) => [r.name, r]));
     expect(byName['AmneziaWG-app']).toMatchObject({ uaPattern: '(?i)amneziavpn|amneziawg|wireguard|mywg', proto: null });
     expect(byName.WireGuard).toBeUndefined();
+  });
+
+  it('splits v2rayNG off v2rayN when the v2rayN rule is as seeded', async () => {
+    await seed();
+    await migrate();
+    const byName = Object.fromEntries((await rules()).map((r) => [r.name, r]));
+    expect(byName.v2rayNG).toMatchObject({ uaPattern: 'v2rayNG', format: 'plain', priority: 49 });
+    expect(byName.v2rayN).toMatchObject({ uaPattern: 'v2rayN|v2rayNG', format: 'xrayjson', priority: 50 });
+  });
+
+  it('leaves an edited v2rayN rule alone and adds no v2rayNG rule beside it', async () => {
+    await seed();
+    await prisma.subscriptionResponseRule.update({ where: { name: 'v2rayN' }, data: { format: 'plain' } });
+    await migrate();
+    const byName = Object.fromEntries((await rules()).map((r) => [r.name, r]));
+    expect(byName.v2rayN).toMatchObject({ uaPattern: 'v2rayN|v2rayNG', format: 'plain', priority: 50 });
+    expect(byName.v2rayNG).toBeUndefined();
   });
 
   it('can run twice', async () => {

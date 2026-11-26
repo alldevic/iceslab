@@ -213,7 +213,8 @@ export const CLIENTS = {
     name: 'v2rayNG',
     site: 'https://github.com/2dust/v2rayNG/releases',
     platforms: ['android'],
-    format: 'xrayjson',
+    // Plain links, not xray-json (13.4): see the v2rayNG rule in CLIENT_RULES.
+    format: 'plain',
     uaSamples: [
       { ua: 'v2rayNG/1.10.24', source: 'v2rayNG@bd21bbc app/src/main/java/com/v2ray/ang/util/HttpUtil.kt:154-158' },
     ],
@@ -493,7 +494,18 @@ export const CLIENT_RULES: ClientRule[] = [
   // Its own rule: the old `stash` sat inside the Clash rule in lower case, and
   // the app sends `Stash`.
   { name: 'Stash', pattern: '(?i)stash', format: 'stash', priority: 45, clients: ['stash'] },
-  { name: 'v2rayN', pattern: 'v2rayN|v2rayNG', format: 'xrayjson', priority: 50, clients: ['v2rayn', 'v2rayng'] },
+  // v2rayNG before v2rayN: its UA contains `v2rayN`, and the two get different
+  // formats (13.4). Plain links for v2rayNG: on 2.2.6 (the fork, 2026-09-07) a
+  // whole xray config from a subscription came in as ONE nameless "custom
+  // config" entry (2dust/v2rayNG#3863, #2008). The price: the client-side
+  // routing (direct rules) does not reach the client; the RU split and ad
+  // blocking stay, the node does them. Not re-measured on a current client:
+  // see MANUAL-CHECKS.md, 13.4.
+  { name: 'v2rayNG', pattern: 'v2rayNG', format: 'plain', priority: 49, clients: ['v2rayng'] },
+  // v2rayN (Windows) keeps xray-json as in the base: the fork's finding was
+  // about v2rayNG only. The pattern stays the seeded `v2rayN|v2rayNG`; the
+  // v2rayNG rule above it takes that client first.
+  { name: 'v2rayN', pattern: 'v2rayN|v2rayNG', format: 'xrayjson', priority: 50, clients: ['v2rayn'] },
   // No AmneziaWG client fetches by link (see CLIENTS.amneziavpn); the rule stays
   // because operators have had it since the first seed. Narrowed to its own
   // names (12.4): `wireguard` went to the rule below, which hands out the file

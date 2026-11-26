@@ -39,6 +39,15 @@ describe('every User-Agent sample lands on its client format', () => {
   });
 });
 
+describe('v2rayNG and v2rayN are told apart (13.4)', () => {
+  it('v2rayNG/... does not land on the v2rayN rule', () => {
+    expect(firstMatch('v2rayNG/1.10.24')).toMatchObject({ name: 'v2rayNG', format: 'plain' });
+  });
+  it('v2rayN/... still gets xray-json', () => {
+    expect(firstMatch('v2rayN/7.16.3')).toMatchObject({ name: 'v2rayN', format: 'xrayjson' });
+  });
+});
+
 describe('the catalog keeps its own rules', () => {
   it('every sample names its source, and a client without one says why', () => {
     for (const [id, c] of entries) {
