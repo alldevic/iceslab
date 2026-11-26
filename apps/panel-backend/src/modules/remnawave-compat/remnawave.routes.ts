@@ -27,6 +27,7 @@ import { nodeUsersQueue, syncAddUser } from '../users/users.queue.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { RemnaError, sendResponse, remnawaveErrorHandler } from './remnawave.http.js';
 import { resolveUserId, resolveUserRef } from './remnawave.identity.js';
+import { subpageConfigForToken } from './subpage/subpage.service.js';
 
 // Same include the users repository uses, so mapUserToPublic sees traffic +
 // group membership for the facade's direct lookups (by-telegram-id/email/username).
@@ -819,11 +820,14 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
 
   // ─────────────── Subscription ───────────────
 
-  // Subscription page config — display-only; the minishop MiniApp renders from
-  // `subscriptionUrl`, so these are cosmetic.
-  app.get('/api/subscriptions/subpage-config/:shortUuid', opts, async (_request, reply) =>
-    sendResponse(reply, {}),
-  );
+  // The install document the shop draws for ONE buyer (subpage/). Empty when
+  // there is nothing specific to say (no such, revoked, expired subscription or
+  // no client for it): the shop then renders its own. The shared page configs
+  // below stay empty.
+  app.get('/api/subscriptions/subpage-config/:shortUuid', opts, async (request, reply) => {
+    const { shortUuid } = request.params as { shortUuid: string };
+    return sendResponse(reply, (await subpageConfigForToken(shortUuid)) ?? {});
+  });
   app.get('/api/subscription-page-configs', opts, async (_request, reply) => sendResponse(reply, {}));
   app.get('/api/subscription-page-configs/:uuid', opts, async (_request, reply) =>
     sendResponse(reply, {}),
