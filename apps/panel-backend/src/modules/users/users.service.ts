@@ -280,9 +280,18 @@ export interface InternalUserFilters {
   telegramId?: bigint;
   /** Named apart from the query's own `email` ('set' | 'none'). */
   emailEquals?: string;
+  /** Keyset cursor; see `ListParams.after` in the repository. */
+  after?: { numericId: bigint };
 }
 
-export async function listUsers(query: ListUsersQuery & InternalUserFilters): Promise<{
+/**
+ * `sort` is widened past the public schema's enum on purpose: the Remnawave
+ * stream pages by `numericId`, an internal handle the native list does not offer
+ * but the only column a keyset cursor can name exactly.
+ */
+export async function listUsers(
+  query: Omit<ListUsersQuery, 'sort'> & { sort?: repo.UserSort } & InternalUserFilters,
+): Promise<{
   users: PublicUserDto[];
   total: number;
   page: number;
@@ -316,6 +325,7 @@ export async function getUserById(id: string): Promise<PublicUserDto> {
 // No unique column is written here (UpdateUserSchema takes none of username,
 // subscriptionToken, shortId, sourceId), so no P2002 to read; a rename or a
 // token edit added later gets userUniqueField on its write, with a test (A-257).
+// The one P2002 that can occur is the squad-membership race, retried below.
 export async function updateUser(
   id: string,
   input: UpdateUserInput,
@@ -408,9 +418,20 @@ export async function updateUser(
   // The same repair as on create: falling back to "All" on a database that
   // lost the row would fail on the foreign key.
   const intoAll = input.groupIds !== undefined && input.groupIds.length === 0;
-  const updated = await repo
-    .updateById(id, data, intoAll ? ensureAllSquad : undefined)
-    .catch((err: unknown) => rethrowPresetGone(err, preset.customRoutingPresetId));
+  const write = () =>
+    repo
+      .updateById(id, data, intoAll ? ensureAllSquad : undefined)
+      .catch((err: unknown) => rethrowPresetGone(err, preset.customRoutingPresetId));
+  // A groupIds rewrite is `deleteMany + create`. Two concurrent rewrites for the
+  // same user interleave as delete/delete/create/create and the second hits the
+  // group_members composite key (P2002): a 500 for a write whose end state is
+  // already reached. Setting the membership is idempotent, so retry once; the
+  // retry's deleteMany sees the committed rows. Only on a groupIds rewrite: any
+  // other P2002 is not this race.
+  const updated = await write().catch((err: unknown) => {
+    if (data.groupMembers === undefined || !isUniqueViolation(err)) throw err;
+    return write();
+  });
 
   if (changedFields.length > 0) {
     eventBus.emit('user.updated', {

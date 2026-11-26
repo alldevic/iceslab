@@ -147,6 +147,11 @@ export function mapUserToRemna(
     description: dto.description,
     tag: dto.tag,
     subscriptionUrl: subscriptionUrlFor(dto.subscriptionToken),
+    // Always emit the key, null included. The shop derives a user's connection
+    // state from PRESENCE, not value: no connection marker at all reads as
+    // `unknown`, `onlineAt: null` as `never`, a timestamp as `connected`.
+    // Omitting it collapses "never connected" into "cannot tell".
+    onlineAt: dto.lastOnlineAt,
     activeInternalSquads: dto.groupIds
       .filter((id) => !ctx.hiddenGroupIds?.has(id))
       .map((id) => ({ uuid: id, name: ctx.squadNames?.get(id) ?? id })),

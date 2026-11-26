@@ -287,3 +287,39 @@ describe('remnawave-compat facade (facade-on)', () => {
     expect(res.json().response).toHaveProperty('topNodes');
   });
 });
+
+describe('HWID devices carry what /sub saw (f01-05)', () => {
+  it('lists the stored metadata, and a device that sent none as nulls; stats bucket by platform', async () => {
+    const create = await createUser({ username: `rwt_devmeta_${Date.now()}` });
+    const ref = create.json().response.id as number;
+    createdUserRefs.push(ref);
+    const row = await prisma.user.findFirst({ where: { numericId: BigInt(ref) }, select: { id: true } });
+    await prisma.hwidUserDevice.createMany({
+      data: [
+        { userId: row.id, hwid: `rwt-dev-a-${ref}`, platform: 'Android', osVersion: '14', deviceModel: 'Pixel 8', userAgent: 'Happ/1.0' },
+        { userId: row.id, hwid: `rwt-dev-b-${ref}` },
+      ],
+    });
+    const list = await app.inject({
+      method: 'GET',
+      url: `/${PREFIX}/api/hwid/devices/${ref}`,
+      headers: bearer(adminToken),
+    });
+    expect(list.statusCode).toBe(200);
+    const devices = list.json().response.devices as Record<string, unknown>[];
+    const a = devices.find((d) => d.hwid === `rwt-dev-a-${ref}`)!;
+    expect(a).toMatchObject({ platform: 'Android', osVersion: '14', deviceModel: 'Pixel 8', userAgent: 'Happ/1.0' });
+    const b = devices.find((d) => d.hwid === `rwt-dev-b-${ref}`)!;
+    expect(b).toMatchObject({ platform: null, osVersion: null, deviceModel: null, userAgent: null });
+
+    const stats = await app.inject({
+      method: 'GET',
+      url: `/${PREFIX}/api/hwid/devices/stats`,
+      headers: bearer(adminToken),
+    });
+    expect(stats.statusCode).toBe(200);
+    const byPlatform = stats.json().response.byPlatform as { platform: string; count: number }[];
+    expect(byPlatform.find((p) => p.platform === 'Android')?.count).toBeGreaterThanOrEqual(1);
+    expect(byPlatform.find((p) => p.platform === 'unknown')?.count).toBeGreaterThanOrEqual(1);
+  });
+});

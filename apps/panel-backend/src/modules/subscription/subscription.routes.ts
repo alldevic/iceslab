@@ -638,7 +638,18 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           userMin.hwidDeviceLimit,
           userMin.groupMembers.map((m) => m.group.hwidDeviceLimit),
         );
-        const hwidResult = await enforceHwid(userMin.id, hwid, hwidLimit);
+        // What the client says about its device, stored with the row the first
+        // time (the service trims and cuts each to its column).
+        const deviceHeader = (name: string): string | null => {
+          const v = request.headers[name];
+          return typeof v === 'string' ? v : null;
+        };
+        const hwidResult = await enforceHwid(userMin.id, hwid, hwidLimit, {
+          platform: deviceHeader('x-device-os'),
+          osVersion: deviceHeader('x-ver-os'),
+          deviceModel: deviceHeader('x-device-model'),
+          userAgent,
+        });
         // Always emit the gauge header so the client can render "2/3" in
         // its profile detail UI, even on success, even when no limit set.
         // HTTP headers are ISO-8859-1; use ASCII-only "unlimited" instead

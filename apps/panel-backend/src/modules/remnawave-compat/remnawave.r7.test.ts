@@ -168,10 +168,9 @@ describe('R7: squad ids are normalised (dedupe + case) and system squads are rej
 });
 
 describe('R7: concurrent writes must not 500', () => {
-  // Milestone 14.3 (f01-06): updateUser rewrites squad membership as delete +
-  // create and the base does not retry the loser's P2002 on group_members_pkey.
-  // The retry lands there; take the skip off with it.
-  it.skip('two identical simultaneous squad PATCHes both resolve without a 500', async () => {
+  // updateUser rewrites squad membership as delete + create; the loser of two
+  // simultaneous rewrites hits group_members_pkey and is retried once (f01-06).
+  it('two identical simultaneous squad PATCHes both resolve without a 500', async () => {
     const squad = await mkSquad();
     const ref = (await mkUser()).json().response.id;
     const body = { id: ref, activeInternalSquads: [squad] };

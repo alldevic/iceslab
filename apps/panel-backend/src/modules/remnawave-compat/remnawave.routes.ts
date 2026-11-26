@@ -54,22 +54,40 @@ function parseTelegramId(raw: string): bigint | null {
  *  fall away. */
 const NO_SUCH_ID = -1n;
 
+/**
+ * Read a `/users/stream` cursor this panel issued: `k1.<numericId>`. Null for
+ * anything else, including the bare numeric offsets older builds handed out;
+ * the caller then pages by offset so a walk already in progress finishes.
+ */
+function parseStreamCursor(raw: string | undefined): { numericId: bigint } | null {
+  const m = raw ? /^k1\.(\d+)$/.exec(raw) : null;
+  return m ? { numericId: BigInt(m[1]!) } : null;
+}
+
 // "Online now" window — the same 3 min the dashboard uses, so the facade's
 // per-node counts agree with the panel's global "online now".
 const ONLINE_NOW_WINDOW_MS = 3 * 60 * 1000;
 
 // HWID device row → Remnawave device shape. `createdAt` maps from `firstSeenAt`
-// (there is no native `createdAt` column on hwid_user_devices). The panel does
-// not keep the device's platform / OS / model / user-agent yet, so they go out
-// as null: the shop shows such a device without a caption.
-function mapDevice(d: { id: string; hwid: string; firstSeenAt: Date }) {
+// (there is no native `createdAt` column on hwid_user_devices). Platform / OS /
+// model / user-agent are what /sub saw when it first met the device; NULL for a
+// device that sent none, and the shop shows such a device without a caption.
+function mapDevice(d: {
+  id: string;
+  hwid: string;
+  platform: string | null;
+  osVersion: string | null;
+  deviceModel: string | null;
+  userAgent: string | null;
+  firstSeenAt: Date;
+}) {
   return {
     id: d.id,
     hwid: d.hwid,
-    platform: null,
-    osVersion: null,
-    deviceModel: null,
-    userAgent: null,
+    platform: d.platform,
+    osVersion: d.osVersion,
+    deviceModel: d.deviceModel,
+    userAgent: d.userAgent,
     createdAt: d.firstSeenAt.toISOString(),
   };
 }
@@ -389,7 +407,15 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // Static children (stream / by-*) are registered as their own paths; find-my-way
   // prefers them over the `:uuid` param at the same depth.
 
-  // GET /api/users/stream — cursor pagination (cursor = numeric offset).
+  // GET /api/users/stream — cursor pagination, and the cursor is a KEYSET cursor
+  // (`k1.<numericId>`), not an offset in disguise.
+  //
+  // The shop walks this to decide who still exists, and a user missing from the
+  // walk is read as deleted. With an offset, one row deleted ahead of the cursor
+  // between two pages shifts the tail by one and exactly one user is never
+  // returned. The cursor names the last row seen (the sort key, unique and
+  // monotonic), and the next page is "strictly after it", which nothing before
+  // it can move. The shop treats the value as opaque.
   //
   // FILTERS ARE NOT OPTIONAL HERE. In 3.x the stream replaces the by-telegram-id
   // and by-email lookup routes, and the client has no fallback for it: once it
@@ -405,7 +431,11 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       email?: string;
     };
     const size = Math.min(Math.max(parseInt(q.size ?? '100', 10) || 100, 1), 500);
-    const offset = Math.max(parseInt(q.cursor ?? '0', 10) || 0, 0);
+    // A cursor this panel issued is `k1.<numericId>`. Anything else is read as
+    // the old numeric offset: a walk that began before a deploy holds one, and
+    // failing it would abandon that walk.
+    const keyset = parseStreamCursor(q.cursor);
+    const offset = keyset ? 0 : Math.max(parseInt(q.cursor ?? '0', 10) || 0, 0);
     const page = Math.floor(offset / size) + 1;
     // An unparseable telegramId is pinned to a value no row can hold rather than
     // dropped: dropping it would widen the query to EVERY user and the client
@@ -417,16 +447,17 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       limit: size,
       ...(telegramId !== undefined ? { telegramId } : {}),
       ...(q.email !== undefined ? { emailEquals: q.email } : {}),
-      // Pin the order explicitly: the shop walks these pages to build a
-      // full picture of the panel, so the sort must be stable and identical
-      // across both pagination routes. (Upstream made sort/order required
-      // when it added server-side sorting; this keeps the previous
-      // newest-first ordering the facade has always emitted.)
-      sort: 'createdAt',
+      // Newest first by the numeric handle: the sequence is monotonic, so this
+      // is creation order, and a single unique column is a key the cursor can
+      // name without rounding (createdAt is microseconds, a JS Date is not).
+      // The offset route below still sorts by createdAt; no walk mixes the two.
+      sort: 'numericId',
       order: 'desc',
+      ...(keyset ? { after: keyset } : {}),
     });
     const ctx = await mapCtx();
-    const nextCursor = users.length < size ? null : String(offset + size);
+    const last = users[users.length - 1];
+    const nextCursor = users.length < size || !last ? null : `k1.${last.numericId}`;
     return sendResponse(reply, {
       users: users.map((u) => mapUserToRemna(u, ctx)),
       total,
@@ -746,24 +777,29 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     const limit = Math.min(Math.max(parseInt(q.topUsersLimit ?? '10000', 10) || 10000, 1), 100_000);
     const startDate = parseUtcDay(q.start, new Date(0));
     const endDate = parseUtcDay(q.end, new Date());
+    // Ranked and cut on the number reported (in + out). Ordering and `take` in
+    // SQL on one direction dropped a user heavy outbound in favour of a lighter
+    // total, and the shop's premium billing then read that user as zero.
     const rows = await prisma.nodeUserUsageHistory.groupBy({
       by: ['userId'],
       where: { nodeId: uuid, date: { gte: startDate, lte: endDate } },
       _sum: { bytesIn: true, bytesOut: true },
-      orderBy: { _sum: { bytesIn: 'desc' } },
-      take: limit,
     });
+    const ranked = rows
+      .map((r) => ({ userId: r.userId, total: (r._sum.bytesIn ?? 0n) + (r._sum.bytesOut ?? 0n) }))
+      .sort((a, b) => (a.total === b.total ? 0 : a.total > b.total ? -1 : 1))
+      .slice(0, limit);
     const names = new Map(
       (
         await prisma.user.findMany({
-          where: { id: { in: rows.map((r) => r.userId) } },
+          where: { id: { in: ranked.map((r) => r.userId) } },
           select: { id: true, username: true },
         })
       ).map((u) => [u.id, u.username]),
     );
-    const topUsers = rows.map((r) => ({
+    const topUsers = ranked.map((r) => ({
       user: { uuid: r.userId, username: names.get(r.userId) ?? null },
-      total: Number(r._sum.bytesIn ?? 0n) + Number(r._sum.bytesOut ?? 0n),
+      total: Number(r.total),
     }));
     return sendResponse(reply, { topUsers });
   });
@@ -807,10 +843,11 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
 
   // GET /api/hwid/devices/stats — aggregate device counts (no per-app data → byApp:[]).
   app.get('/api/hwid/devices/stats', opts, async (_request, reply) => {
-    const [totalHwidDevices, uniqueDevices, usersWith] = await Promise.all([
+    const [totalHwidDevices, uniqueDevices, usersWith, byPlatformRaw] = await Promise.all([
       prisma.hwidUserDevice.count(),
       prisma.hwidUserDevice.groupBy({ by: ['hwid'] }),
       prisma.hwidUserDevice.groupBy({ by: ['userId'] }),
+      prisma.hwidUserDevice.groupBy({ by: ['platform'], _count: { _all: true } }),
     ]);
     const usersWithDevices = usersWith.length;
     return sendResponse(reply, {
@@ -819,10 +856,12 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
         totalHwidDevices,
         averageHwidDevicesPerUser: usersWithDevices ? totalHwidDevices / usersWithDevices : 0,
       },
-      // No platform is kept per device yet: one bucket for all of them.
-      byPlatform: totalHwidDevices
-        ? [{ platform: 'unknown', count: totalHwidDevices, byApp: [] }]
-        : [],
+      // Devices that reported no platform share one `unknown` bucket.
+      byPlatform: byPlatformRaw.map((g) => ({
+        platform: g.platform ?? 'unknown',
+        count: g._count._all,
+        byApp: [],
+      })),
     });
   });
 

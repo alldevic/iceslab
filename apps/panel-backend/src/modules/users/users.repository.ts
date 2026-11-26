@@ -29,11 +29,22 @@ export type UserSort =
   | 'traffic'
   | 'lastOnline'
   | 'firstConnected'
-  | 'lifetimeTraffic';
+  | 'lifetimeTraffic'
+  | 'numericId';
 
 export interface ListParams {
   page: number;
   limit: number;
+  /**
+   * KEYSET cursor: only rows strictly after this `numericId` in the sort's
+   * direction, and no offset. Honoured for `sort: 'numericId'` only. A caller
+   * walking every page to learn who still exists cannot use OFFSET: a row
+   * deleted ahead of the cursor shifts the tail by one and one user is never
+   * returned. `numericId` rather than `createdAt` because it is unique and
+   * exact (a JS Date cuts the column's microseconds, so rows made in one
+   * millisecond could straddle the cursor).
+   */
+  after?: { numericId: bigint };
   status?: string;
   groupId?: string;
   search?: string;
@@ -102,6 +113,8 @@ function orderClause(
       return { expireAt: { sort: order, nulls: 'last' } };
     case 'createdAt':
       return { createdAt: order };
+    case 'numericId':
+      return { numericId: order };
     case 'username':
     default:
       return { username: order };
@@ -315,9 +328,16 @@ export async function list(params: ListParams): Promise<{
     ...(and.length ? { AND: and } : {}),
   };
 
+  // "Strictly after" mirrors the direction the ORDER BY imposes. Other sorts
+  // keep OFFSET: their callers are UI pages, where a shifted row is cosmetic.
+  const keyset =
+    params.after && params.sort === 'numericId'
+      ? { numericId: params.order === 'desc' ? { lt: params.after.numericId } : { gt: params.after.numericId } }
+      : null;
+
   const [users, total] = await Promise.all([
     prisma.user.findMany({
-      where,
+      where: keyset ? { AND: [where, keyset] } : where,
       include: USER_INCLUDE,
       // A-166: `id` as the second key. Every sort but the name leaves ties
       // (30 000 imported users, half on 0 traffic and no expiry), Postgres
@@ -325,9 +345,12 @@ export async function list(params: ListParams): Promise<{
       // skip/take repeated one user on two pages and showed another on none,
       // and "select the page and extend" acted on that.
       orderBy: [orderClause(params.sort ?? 'username', params.order ?? 'asc'), { id: 'asc' }],
-      skip: (params.page - 1) * params.limit,
+      // With a cursor the window is the predicate; skipping on top would drop
+      // a page of rows on every page but the first.
+      ...(keyset ? {} : { skip: (params.page - 1) * params.limit }),
       take: params.limit,
     }),
+    // `total` counts the whole filtered set, not what is left after the cursor.
     prisma.user.count({ where }),
   ]);
 

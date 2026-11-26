@@ -56,11 +56,16 @@ export interface HwidCheckResult {
  *
  * The hwid string is bounded to 255 chars upstream by the route handler;
  * here we trust it. UTF-8 collation is fine for the equality check.
+ *
+ * `meta` is what the client says about the device (platform, OS version, model,
+ * User-Agent). It is stored when the row is created, on both create paths
+ * (limited and audit-only), and is not touched on a repeat visit.
  */
 export async function enforceHwid(
   userId: string,
   hwid: string | null,
   limit: number | null,
+  meta?: HwidDeviceMeta,
 ): Promise<HwidCheckResult> {
   if (!hwid) {
     // No header → no enforcement, no row. Return `active=0` for the
@@ -115,7 +120,9 @@ export async function enforceHwid(
       return { status: 'denied' as const, active: current, limit };
     }
 
-    await tx.hwidUserDevice.create({ data: { userId, hwid } });
+    // Metadata is written with the row and never after: a known device is only
+    // a lastSeenAt touch above, so a later client cannot rewrite what the first said.
+    await tx.hwidUserDevice.create({ data: { userId, hwid, ...presentMeta(meta) } });
     return {
       status: 'allowed' as const,
       active: limit === null ? 0 : current + 1,
@@ -148,6 +155,31 @@ export function effectiveHwidLimit(userLimit: number | null, squadDefaults: (num
   if (userLimit === 0) return null;
   if (userLimit !== null) return userLimit;
   return resolveSquadHwidLimit(squadDefaults);
+}
+
+/**
+ * What a client reports about its device. Every field optional: a client that
+ * sends none gets a row with NULLs, as before. Lengths are the columns'.
+ */
+export interface HwidDeviceMeta {
+  platform?: string | null;
+  osVersion?: string | null;
+  deviceModel?: string | null;
+  userAgent?: string | null;
+}
+
+const META_MAX = { platform: 64, osVersion: 64, deviceModel: 128, userAgent: 512 } as const;
+
+/** The metadata worth writing: trimmed, cut to the column, empty ones left out
+ *  (so the column stays NULL rather than holding an empty string). */
+function presentMeta(meta?: HwidDeviceMeta): HwidDeviceMeta {
+  const out: HwidDeviceMeta = {};
+  if (!meta) return out;
+  for (const key of Object.keys(META_MAX) as (keyof typeof META_MAX)[]) {
+    const v = meta[key]?.trim();
+    if (v) out[key] = v.slice(0, META_MAX[key]);
+  }
+  return out;
 }
 
 /**
