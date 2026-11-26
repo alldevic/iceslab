@@ -158,11 +158,11 @@ describe('rw3: routes we deliberately do not serve must read as ABSENT, not as e
   // "not found"/"cannot post" message means the route is missing (stop asking
   // and use the fallback); a 404 WITH an errorCode means the route exists and
   // the entity did not, which teaches it nothing and makes it retry forever.
+  //
+  // The four capability routes that used to be here are served (see
+  // remnawave.admin-routes.test.ts); what is left is dead in the facade: the shop
+  // encrypts happ links locally, and the 2.x `add-users` meant ALL users.
   const absent: [('POST' | 'DELETE'), string][] = [
-    ['POST', 'users/bulk/update-squads'],
-    ['POST', 'connections/drop'],
-    ['POST', 'bandwidth-stats/nodes/users'],
-    ['POST', 'bandwidth-stats/nodes/usage'],
     ['POST', 'system/tools/happ/encrypt'],
     ['POST', 'internal-squads/11111111-1111-4111-8111-111111111111/bulk-actions/add-users'],
   ];
@@ -186,12 +186,32 @@ describe('rw3: routes we deliberately do not serve must read as ABSENT, not as e
     // every squad change.
     const res = await app.inject({
       method: 'POST',
-      url: `/${PREFIX}/api/users/bulk/update-squads`,
+      url: `/${PREFIX}/api/system/tools/happ/encrypt`,
       headers: bearer(scopedToken),
       payload: {},
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().errorCode).toBeUndefined();
+  });
+
+  it('and a route we now SERVE is reachable with that same token', async () => {
+    // The other half of the hazard: a route mapped to no scope is default-denied
+    // with a 403, which the client reads as a permissions problem and retries
+    // forever. The token holds users and squads scopes only.
+    for (const url of [
+      'users/bulk/update-squads',
+      'connections/drop',
+      'bandwidth-stats/nodes/users',
+      'bandwidth-stats/nodes/usage',
+    ]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/${PREFIX}/api/${url}`,
+        headers: bearer(scopedToken),
+        payload: {},
+      });
+      expect(res.statusCode, `${url} must not be scope-denied`).not.toBe(403);
+    }
   });
 
   it('a route we DO serve reports a missing user with an errorCode instead', async () => {

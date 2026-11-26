@@ -43,6 +43,8 @@ export function requiredScopeFor(method: string, url: string | undefined): strin
  */
 export const COMPAT_SCOPE_RESOURCE: Readonly<Record<string, string>> = {
   users: 'users',
+  // Dropping a user's live sessions is an operation on that user's access.
+  connections: 'users',
   'internal-squads': 'squads',
   'external-squads': 'squads',
   hwid: 'hwid-devices',
@@ -68,7 +70,8 @@ export function requiredCompatScope(method: string, url: string | undefined, pre
   if (native === 'squads' && rest.includes('/bulk-actions/')) return 'users:write';
   if (resource === 'bandwidth-stats') {
     // Per-user figures name users and their traffic: users:read data.
-    if (rest.includes('/users/') || rest.endsWith('/users')) return 'users:read';
+    // `nodes/usage` names users and their totals too.
+    if (rest.includes('/users/') || rest.endsWith('/users') || rest.endsWith('/usage')) return 'users:read';
     return 'dashboard:read';
   }
   // Aggregates are the native dashboard overview; what is left of `system` is

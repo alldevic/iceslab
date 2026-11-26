@@ -34,6 +34,11 @@ describe('requiredCompatScope', () => {
     expect(need('GET', 'system/metadata')).toBe('system:read');
   });
 
+  it('dropping connections and the bulk squad update change users, so they need users:write', () => {
+    expect(need('POST', 'connections/drop')).toBe('users:write');
+    expect(need('POST', 'users/bulk/update-squads')).toBe('users:write');
+  });
+
   it('squad bulk actions change users, so they need users:write', () => {
     expect(need('POST', 'internal-squads/:uuid/bulk-actions/add-many-users')).toBe('users:write');
     expect(need('DELETE', 'internal-squads/:uuid/bulk-actions/remove-many-users')).toBe('users:write');
@@ -42,6 +47,8 @@ describe('requiredCompatScope', () => {
   it('a user traffic figure is users:read, system statistics dashboard:read', () => {
     expect(need('GET', 'bandwidth-stats/users/:ref')).toBe('users:read');
     expect(need('GET', 'bandwidth-stats/nodes/:uuid/users')).toBe('users:read');
+    expect(need('POST', 'bandwidth-stats/nodes/users')).toBe('users:read');
+    expect(need('POST', 'bandwidth-stats/nodes/usage')).toBe('users:read');
     expect(need('GET', 'bandwidth-stats/nodes')).toBe('dashboard:read');
     expect(need('GET', 'system/stats')).toBe('dashboard:read');
     expect(need('GET', 'system/stats/bandwidth')).toBe('dashboard:read');

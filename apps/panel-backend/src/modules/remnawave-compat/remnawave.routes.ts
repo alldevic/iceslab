@@ -20,6 +20,9 @@ import {
   statusToNative,
   type RemnaMapCtx,
 } from './remnawave.mappers.js';
+import { NodeTransport } from '../nodes/nodes.transport.js';
+import { nodeUsersQueue, syncAddUser } from '../users/users.queue.js';
+import { getLogger } from '../../lib/infra/logger.js';
 import { RemnaError, sendResponse, remnawaveErrorHandler } from './remnawave.http.js';
 import { resolveUserId, resolveUserRef } from './remnawave.identity.js';
 
@@ -159,6 +162,48 @@ const BulkUsersSchema = z
   .object({
     userIds: z.array(z.union([z.number().int(), z.string()])).max(1000).optional(),
   })
+  .loose();
+
+/** Body of POST /connections/drop. `dropBy.by` names the selector the client
+ *  used; we read whichever array is present rather than branching on it, because
+ *  the client already guarantees one selector per chunk. */
+const DropConnectionsSchema = z
+  .object({
+    dropBy: z
+      .object({
+        by: z.string().optional(),
+        userIds: z.array(z.union([z.number().int(), z.string()])).max(1000).optional(),
+        userUuids: z.array(z.string()).max(1000).optional(),
+      })
+      .loose()
+      .optional(),
+    targetNodes: z
+      .object({
+        target: z.string().optional(),
+        nodeUuids: z.array(z.string()).max(1000).optional(),
+      })
+      .loose()
+      .optional(),
+  })
+  .loose();
+
+/** Body of POST /users/bulk/update-squads. The client picks ONE selector for the
+ *  whole chunk - numeric `userIds` under rw3, `uuids` under rw2 - and refuses to
+ *  send a mixed batch itself, so accepting either and preferring userIds matches
+ *  what it actually does. */
+const BulkUpdateSquadsSchema = z
+  .object({
+    userIds: z.array(z.union([z.number().int(), z.string()])).max(1000).optional(),
+    uuids: z.array(z.string()).max(1000).optional(),
+    activeInternalSquads: z.array(z.string()).default([]),
+  })
+  .loose();
+
+/** Body of the multi-node bandwidth routes. `.loose()` for the same reason
+ *  BulkUsersSchema is: the shop may add fields and a strict parse would 400 a
+ *  call that is otherwise fine. */
+const NodesUuidsSchema = z
+  .object({ nodesUuids: z.array(z.string()).max(1000).optional() })
   .loose();
 
 export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void> {
@@ -561,6 +606,134 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
     sendResponse(reply, await accessibleNodesForSquad((request.params as { uuid: string }).uuid)),
   );
 
+  // POST /api/connections/drop — tear down a user's live sessions so a tariff
+  // change takes effect now instead of at their next reconnect. Capability
+  // `connections-drop`.
+  //
+  // The primitive is per-user and live: every CoreAdapter has RemoveUser, and
+  // xray's runs `xray api` (liveUpdateUser) rather than rewriting the config, so
+  // it drops THAT user's sessions and leaves everyone else on the node alone.
+  // Restarting the core would drop the whole node - never what an admin asked
+  // for here.
+  //
+  // The hazard is the gap. Removing an ACTIVE user and failing to add them back
+  // leaves a paying subscriber off that node until something else repairs it -
+  // strictly worse than not serving this route at all, where the shop's own
+  // fallback is benign ("live sessions stay until nodes drop them"). Note we
+  // cannot reuse syncRemoveUser: it status-gates and refuses to touch an active
+  // user, which is exactly the user this route is about. So the add-back is
+  // unconditional, and any failure hands the user to the proven idempotent
+  // `addUser` job instead of being reported as a success.
+  app.post('/api/connections/drop', opts, async (request, reply) => {
+    const body = DropConnectionsSchema.parse(request.body ?? {});
+    const refs: (string | number)[] = body.dropBy?.userIds ?? body.dropBy?.userUuids ?? [];
+    const wanted = body.targetNodes?.nodeUuids ?? [];
+    const nodes = await prisma.node.findMany({
+      where: {
+        deletedAt: null,
+        status: { not: 'disabled' },
+        ...(body.targetNodes?.target === 'specificNodes' && wanted.length > 0
+          ? { id: { in: wanted } }
+          : {}),
+      },
+      select: { id: true, name: true, address: true },
+    });
+    // A219 is the client's own code for "no connected node matched"; it logs
+    // "nothing to tear down" and moves on. Saying that is honest, where a 200
+    // would claim we dropped sessions on nodes that do not exist.
+    if (nodes.length === 0) {
+      throw new RemnaError(400, 'A219', 'no active node matched the requested target');
+    }
+
+    let dropped = 0;
+    const repaired: string[] = [];
+    for (const ref of refs) {
+      const dto = await resolveUserRef(String(ref)).catch(() => null);
+      // A user who is not active has nothing to add back; taking them off the
+      // nodes is what the lifecycle jobs are for, not this route.
+      if (!dto || dto.status !== 'active') continue;
+      // Off the target nodes concurrently. Serial over nodes would make a
+      // 500-user chunk take nodes x users round trips, long enough for the
+      // shop's own HTTP timeout to fire and read the whole call as failed.
+      const removed = await Promise.allSettled(
+        nodes.map((node) => new NodeTransport(node).removeUser({ userId: dto.id })),
+      );
+      for (const [i, r] of removed.entries()) {
+        if (r.status === 'rejected') {
+          getLogger().warn(
+            { err: r.reason, userId: dto.id, node: nodes[i]?.name },
+            '[remnawave-compat] connections/drop: removeUser failed',
+          );
+        }
+      }
+      // And back on, the same way the users queue adds them: per node, on the
+      // inbounds their squads reach, AmneziaWG addresses included. Awaited
+      // here, not queued, so the gap is one round trip.
+      try {
+        await syncAddUser(dto.id);
+      } catch (err) {
+        getLogger().warn(
+          { err, userId: dto.id },
+          '[remnawave-compat] connections/drop: add-back failed; queueing addUser repair',
+        );
+        // Idempotent, retried, and status-gated the right way round: it only
+        // re-adds a user who is still active.
+        await nodeUsersQueue.add('addUser', { userId: dto.id });
+        repaired.push(dto.id);
+        continue;
+      }
+      if (removed.every((r) => r.status === 'fulfilled')) dropped += 1;
+    }
+    return sendResponse(reply, {
+      affectedRows: dropped,
+      ...(repaired.length > 0 ? { repairQueued: repaired.length } : {}),
+    });
+  });
+
+  // POST /api/users/bulk/update-squads — set the EXACT squad set on many users at
+  // once. Capability `bulk-squad-update`; the shop's efficient path for a tariff
+  // change that moves a batch of subscribers between squads.
+  //
+  // Two details of the client contract, both easy to get wrong in a way that
+  // still looks like success (panel_api_squads.py:169-198):
+  //
+  //  1. The count comes back as `affectedRows`, not `affected` like our other
+  //     bulk routes. The client reads it with `.get("affectedRows")` and only
+  //     compares when it is an int - so a wrong key yields None, no complaint,
+  //     and a bulk it believes worked. There is a test for the key alone.
+  //  2. `affectedRows < len(chunk)` means FAILURE to the client, and it falls
+  //     back to per-user PATCH for the whole chunk. So a user already in the
+  //     desired state must still be counted: "affected" here means "matched and
+  //     now in the requested state", not "rows we wrote". Counting writes would
+  //     make the efficient path report failure precisely when it had least to do.
+  //
+  // An empty `activeInternalSquads` never arrives: the client refuses to send it
+  // (Remnawave 3.0.0 answers A088/500) and uses per-user PATCH for that state.
+  // We still backstop through resolveGroupIds, which lands an empty set in
+  // no-access rather than native's "All" = full access.
+  app.post('/api/users/bulk/update-squads', opts, async (request, reply) => {
+    const body = BulkUpdateSquadsSchema.parse(request.body ?? {});
+    const refs: (string | number)[] = body.userIds ?? body.uuids ?? [];
+    const groupIds = await resolveGroupIds(body.activeInternalSquads ?? []);
+    let affectedRows = 0;
+    for (const ref of refs) {
+      // A reference this panel never issued is skipped, not fatal - same as the
+      // other bulk routes: erroring would abandon the rest of the chunk.
+      const dto = await resolveUserRef(String(ref)).catch(() => null);
+      if (!dto) continue;
+      const current = [...dto.groupIds].sort();
+      const desired = [...groupIds].sort();
+      const already =
+        current.length === desired.length && current.every((g, i) => g === desired[i]);
+      // Counted either way - see (2) above. Only the write is conditional.
+      if (!already) {
+        await usersService.updateUser(dto.id, UpdateUserSchema.parse({ groupIds }));
+      }
+      affectedRows += 1;
+    }
+    return sendResponse(reply, { affectedRows });
+  });
+
   // POST /api/internal-squads/:uuid/bulk-actions/add-many-users — membership is
   // a full-set replacement of groupIds on the user; add = read-modify-write.
   // Adding a real squad drops the no-access group (they're mutually exclusive).
@@ -664,7 +837,15 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // overview. statusCounts keys must be UPPERCASE (native byStatus is lowercase).
   app.get('/api/system/stats', opts, async (_request, reply) => {
     const o = await getOverview();
-    const statusCounts: Record<string, number> = {};
+    // All four statuses, zeros included. Native `byStatus` only carries the
+    // statuses that occur, and the shop's admin dashboard has a tile per status:
+    // "we sent nothing" is not the same claim as "there are none".
+    const statusCounts: Record<string, number> = {
+      ACTIVE: 0,
+      DISABLED: 0,
+      EXPIRED: 0,
+      LIMITED: 0,
+    };
     for (const [k, v] of Object.entries(o.users.byStatus)) statusCounts[k.toUpperCase()] = v;
     return sendResponse(reply, {
       users: { totalUsers: o.users.total, statusCounts },
@@ -675,6 +856,15 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
         neverOnline: o.users.neverOnline,
       },
       memory: { total: o.host.memory.totalBytes, used: o.host.memory.usedBytes },
+      // The shop's admin CPU tile reads `cpu.usage` (then usedPercent/percent,
+      // then cpuUsage/cpuLoad) and draws nothing when none arrives. `usage` is
+      // the sampled percentage across cores; `loadPercent` is the load-average
+      // view the native dashboard headlines.
+      cpu: {
+        usage: o.host.cpu.samplePercent,
+        cores: o.host.cpu.cores,
+        loadPercent: o.host.cpu.loadPercent,
+      },
       nodes: { totalOnline: o.system.onlineNodeCount, total: o.system.totalNodeCount },
       usersOnline: o.users.onlineNow,
     });
@@ -703,10 +893,30 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
   // makes it render "Nodes: 0/0" instead of the real count (the totalOnline
   // fallback only fires when the key is absent). Node names are already fetched.
   app.get('/api/system/stats/nodes', opts, async (_request, reply) => {
-    const [nodes, onlineByNode] = await Promise.all([
-      prisma.node.findMany({ where: { deletedAt: null }, select: { id: true, name: true, countryCode: true } }),
+    // Seven-day totals are REAL, from the node usage history that
+    // /bandwidth-stats/nodes reads: the shop's node-traffic table renders a zero
+    // row as an em dash.
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000);
+    const [nodes, onlineByNode, usage] = await Promise.all([
+      // Ordered, or the shop renders the fleet shuffled between two loads.
+      prisma.node.findMany({
+        where: { deletedAt: null },
+        select: { id: true, name: true, countryCode: true },
+        orderBy: { name: 'asc' },
+      }),
       onlineByNodeMap(),
+      prisma.nodeUsageHistory.groupBy({
+        by: ['nodeId'],
+        where: { hour: { gte: sevenDaysAgo } },
+        _sum: { downloadBytes: true, uploadBytes: true },
+      }),
     ]);
+    const bytesByNode = new Map(
+      usage.map((u) => [
+        u.nodeId,
+        Number(u._sum.downloadBytes ?? 0n) + Number(u._sum.uploadBytes ?? 0n),
+      ]),
+    );
     return sendResponse(reply, {
       nodes: nodes.map((n) => ({
         uuid: n.id,
@@ -714,7 +924,13 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
         countryCode: n.countryCode,
         usersOnline: onlineByNode.get(n.id) ?? 0,
       })),
-      lastSevenDays: nodes.map((n) => ({ nodeName: n.name, totalBytes: 0 })),
+      // One row per node, including the silent ones: the count branches on the
+      // key being present and counts distinct nodeName.
+      lastSevenDays: nodes.map((n) => ({
+        nodeName: n.name,
+        nodeUuid: n.id,
+        totalBytes: bytesByNode.get(n.id) ?? 0,
+      })),
     });
   });
 
@@ -802,6 +1018,120 @@ export async function remnawaveCompatRoutes(app: FastifyInstance): Promise<void>
       total: Number(r.total),
     }));
     return sendResponse(reply, { topUsers });
+  });
+
+  // POST /api/bandwidth-stats/nodes/users — the aggregate top-users list across a
+  // SET of nodes, which is what the shop asks for when it bills a premium tariff
+  // over several nodes at once. The per-node GET above answers one node; this
+  // answers many and merges, so a user who moved between nodes in the window is
+  // one row, not several.
+  //
+  // Capability `multi-node-top-users`. It was deliberately unserved while the
+  // shop could not certify our declared version - it never called it then. The
+  // shop's `dev` (1c20764a) certifies 3.3.2, at which point it does call it, so
+  // serving it is no longer optional decoration.
+  app.post('/api/bandwidth-stats/nodes/users', opts, async (request, reply) => {
+    const q = request.query as { start?: string; end?: string; topUsersLimit?: string };
+    const body = NodesUuidsSchema.parse(request.body ?? {});
+    const nodes = body.nodesUuids ?? [];
+    // An empty node set is a real question with a real answer, and the shop
+    // short-circuits it on its side anyway; answering [] beats a 400.
+    if (nodes.length === 0) return sendResponse(reply, { topUsers: [] });
+    const limit = Math.min(Math.max(parseInt(q.topUsersLimit ?? '10000', 10) || 10000, 1), 100_000);
+    const startDate = parseUtcDay(q.start, new Date(0));
+    const endDate = parseUtcDay(q.end, new Date());
+    const rows = await prisma.nodeUserUsageHistory.groupBy({
+      by: ['userId'],
+      where: { nodeId: { in: nodes }, date: { gte: startDate, lte: endDate } },
+      _sum: { bytesIn: true, bytesOut: true },
+    });
+    const users = new Map(
+      (
+        await prisma.user.findMany({
+          where: { id: { in: rows.map((r) => r.userId) } },
+          select: { id: true, username: true, numericId: true },
+        })
+      ).map((u) => [u.id, u]),
+    );
+    // Sorted on the MERGED total, not on one column: grouping by user across
+    // nodes changes the ranking, so ordering by the query's bytesIn (as the
+    // single-node route can) would truncate the wrong users at the limit.
+    const topUsers = rows
+      .map((r) => {
+        const u = users.get(r.userId);
+        return {
+          user: {
+            uuid: r.userId,
+            id: u ? Number(u.numericId) : null,
+            username: u?.username ?? null,
+          },
+          total: Number(r._sum.bytesIn ?? 0n) + Number(r._sum.bytesOut ?? 0n),
+        };
+      })
+      .sort((a, b) => b.total - a.total)
+      .slice(0, limit);
+    return sendResponse(reply, { topUsers });
+  });
+
+  // POST /api/bandwidth-stats/nodes/usage — per-node per-user totals for a set of
+  // nodes, the 3.x shape. Capability `multi-node-usage`.
+  //
+  // Two things about the shop's parser decide the shape of this handler
+  // (tariff_worker_premium_usage.py `_snapshot_from_v3_usage`):
+  //
+  //  1. A node entry that is not an object, or lacks a uuid, or whose `users` is
+  //     not an array, makes it discard the WHOLE snapshot and fall back. So every
+  //     entry is complete or the response is worthless.
+  //  2. It pre-seeds a zero lookup for every node it ASKED about, then overwrites
+  //     from the response. A node we omit therefore reads as "no traffic" rather
+  //     than "unknown" - silently, in the path that bills premium tariffs. So we
+  //     answer for every requested node, including the ones with nothing.
+  app.post('/api/bandwidth-stats/nodes/usage', opts, async (request, reply) => {
+    const q = request.query as { start?: string; end?: string; minTotalBytes?: string };
+    const body = NodesUuidsSchema.parse(request.body ?? {});
+    const nodes = body.nodesUuids ?? [];
+    if (nodes.length === 0) return sendResponse(reply, { nodes: [] });
+    const minTotal = Math.max(parseInt(q.minTotalBytes ?? '0', 10) || 0, 0);
+    const startDate = parseUtcDay(q.start, new Date(0));
+    const endDate = parseUtcDay(q.end, new Date());
+    const rows = await prisma.nodeUserUsageHistory.groupBy({
+      by: ['nodeId', 'userId'],
+      where: { nodeId: { in: nodes }, date: { gte: startDate, lte: endDate } },
+      _sum: { bytesIn: true, bytesOut: true },
+    });
+    const users = new Map(
+      (
+        await prisma.user.findMany({
+          where: { id: { in: [...new Set(rows.map((r) => r.userId))] } },
+          select: { id: true, username: true, numericId: true },
+        })
+      ).map((u) => [u.id, u]),
+    );
+    const perNode = new Map<string, { id: number | null; uuid: string; username: string | null; totalBytes: number }[]>(
+      nodes.map((n) => [n, []]),
+    );
+    for (const r of rows) {
+      const total = Number(r._sum.bytesIn ?? 0n) + Number(r._sum.bytesOut ?? 0n);
+      if (total < minTotal) continue;
+      const u = users.get(r.userId);
+      // A user row whose numericId we cannot resolve is dropped rather than sent
+      // with a null id: the shop keys usage by `String(id)`, so "null" would
+      // become a bucket that no user ever matches and the bytes would vanish
+      // into it instead of being attributed.
+      if (!u) continue;
+      perNode.get(r.nodeId)?.push({
+        id: Number(u.numericId),
+        uuid: r.userId,
+        username: u.username,
+        totalBytes: total,
+      });
+    }
+    return sendResponse(reply, {
+      nodes: nodes.map((uuid) => ({
+        uuid,
+        users: (perNode.get(uuid) ?? []).sort((a, b) => b.totalBytes - a.totalBytes),
+      })),
+    });
   });
 
   // ─────────────── HWID devices ───────────────
