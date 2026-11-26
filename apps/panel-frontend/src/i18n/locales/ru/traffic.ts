@@ -258,6 +258,7 @@ export const traffic = {
     sourceUrl: 'по ссылке · {{url}} · sha256 из соседнего файла · раз в {{hours}} ч',
     sourceUrlManual: 'по ссылке · {{url}} · sha256 задан руками · раз в {{hours}} ч',
     sourceUpload: 'файлом · {{filename}}',
+    sourceComposite: 'собран из других наборов · категорий: {{count}}',
     // status описывает последнюю попытку, current последнюю проверенную версию.
     status: {
       checking: 'проверяется',

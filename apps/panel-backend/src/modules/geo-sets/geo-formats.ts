@@ -137,14 +137,17 @@ function parseIpv6(s: string): Uint8Array {
 
 /** "1.2.3.0/24", "2001:db8::/32", or a bare address (a host route). */
 export function parseCidr(text: string): GeoCidr | null {
-  const [addr, len] = text.trim().split('/');
-  if (!addr) return null;
+  const parts = text.trim().split('/');
+  const [addr, len] = parts;
+  if (!addr || parts.length > 2) return null;
   const family = isIP(addr);
   if (family === 0) return null;
   const ip = family === 4 ? Uint8Array.from(addr.split('.').map(Number)) : parseIpv6(addr);
   const max = ip.length * 8;
+  // Digits only: Number('') is 0, so "1.2.3.4/" would read as /0, every address.
+  if (len !== undefined && !/^\d{1,3}$/.test(len)) return null;
   const prefix = len === undefined ? max : Number(len);
-  if (!Number.isInteger(prefix) || prefix < 0 || prefix > max) return null;
+  if (prefix > max) return null;
   return { ip, prefix };
 }
 

@@ -20,10 +20,46 @@ export type GeoSetStatus = (typeof GEO_SET_STATUSES)[number];
 export const GEO_SET_FORMATS = ['dat', 'rule-set-json', 'mmdb'] as const;
 export type GeoSetFormat = (typeof GEO_SET_FORMATS)[number];
 
+/**
+ * A composite set (milestone 10.2): the operator's own categories, built from
+ * categories of other sets and from entries typed by hand. One set is one
+ * kind, so domains and addresses are two composite sets whose categories may
+ * share names. The built file is an ordinary version of the set.
+ */
+export interface GeoCompositeRef {
+  /** The name of a builtin, url or upload set of the SAME kind. A composite
+   *  never names a composite. */
+  set: string;
+  /** A tag of that set's current version. */
+  tag: string;
+}
+
+export interface GeoCompositeCategory {
+  /** The `<tag>` of `ext:<set>:<tag>`; unique within the set. */
+  name: string;
+  refs: GeoCompositeRef[];
+  /** geosite: `example.com`, `domain:`, `full:`, `keyword:` or `regexp:`
+   *  prefixed. geoip: `1.2.3.0/24`, `2001:db8::/32` or a bare address. */
+  manual: string[];
+  /** geosite: domain values to drop, any type. geoip: CIDRs to drop. */
+  exclude: string[];
+  enabled: boolean;
+}
+
+export const GEO_COMPOSITE_CATEGORY_NAME = /^[a-z0-9_-]{1,64}$/;
+export const GEO_COMPOSITE_LIMITS = {
+  categories: 200,
+  refs: 50,
+  /** Manual entries, and exclusions, per category. */
+  entries: 10_000,
+  entryLength: 512,
+} as const;
+
 export type GeoSetSource =
   | { type: 'builtin'; tag: string }
   | { type: 'url'; url: string; sha256Source: 'sidecar' | 'manual'; refreshHours: number }
-  | { type: 'upload'; filename: string };
+  | { type: 'upload'; filename: string }
+  | { type: 'composite'; categories: GeoCompositeCategory[] };
 
 /**
  * A set's name, the `<name>` of `ext:<name>:<tag>`. No dots, colons or

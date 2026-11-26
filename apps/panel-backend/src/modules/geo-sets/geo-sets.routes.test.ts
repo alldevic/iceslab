@@ -9,7 +9,8 @@ import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { ROOT, datFile, domain, site } from '../../../tests/helpers/geo-dat.js';
 import { GEO_BUILTIN } from '@iceslab/shared';
 import { ingestGeoFile } from './geo-sets.store.js';
-import { geoSetsQueue } from './geo-sets.queue.js';
+import { geoSetsQueue, enqueueDependentBuilds } from './geo-sets.queue.js';
+import { replaceUploadFile } from './geo-sets.service.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
 import { inboundSyncQueue } from '../inbounds/inbounds.queue.js';
 import { registerInboundEventHandlers } from '../inbounds/inbounds.events.js';
@@ -417,3 +418,101 @@ function registerInboundEventHandlersOnce(): void {
   handlersOn = true;
   registerInboundEventHandlers();
 }
+
+describe('composite sets (milestone 10.2)', () => {
+  const comp = (categories: unknown, name = 'mine', kind = 'geosite') => ({ name, kind, source: { type: 'composite', categories } });
+  const video = { name: 'video', refs: [{ set: 'mylist', tag: 'ads' }, { set: 'mylist', tag: 'ru' }], manual: ['full:vimeo.com', 'ads.example'], exclude: ['d.ru'], enabled: true };
+
+  it('is created through /api/geo-sets: the definition comes back, the file is built as an ordinary version', async () => {
+    await verifiedSet();
+    const { status, body } = await call('POST', '/api/geo-sets', comp([video]));
+    expect(status).toBe(202);
+    expect(body).toMatchObject({
+      name: 'mine',
+      kind: 'geosite',
+      source: { type: 'composite', categories: [video] },
+      status: 'verified',
+      current: { tagCount: 1 },
+    });
+    expect((await call('GET', `/api/geo-sets/${body.id}/tags`)).body.tags).toEqual([{ name: 'video', entries: 3, attrs: [] }]);
+    // Listed beside the others, rolled out by the same plan.
+    expect((await call('GET', `/api/geo-sets/${body.id}/rollout-plan`)).status).toBe(200);
+    expect((await call('GET', '/api/geo-sets')).body.geoSets.map((x: { name: string }) => x.name)).toContain('mine');
+  });
+
+  it('refuses a reference to a missing set, a missing category, itself, a composite, the other kind', async () => {
+    await verifiedSet();
+    const refused = async (categories: unknown, name = 'mine') => {
+      const r = await call('POST', '/api/geo-sets', comp(categories, name));
+      expect(r.status).toBe(400);
+      expect(r.body).toMatchObject({ error: 'GEO_SET_INVALID', reason: 'composite' });
+      return r.body;
+    };
+    const one = (set: string, tag: string) => [{ name: 'x', refs: [{ set, tag }], manual: [], exclude: [], enabled: true }];
+    expect(await refused(one('nope', 'ads'))).toMatchObject({ at: { category: 'x', entry: 'nope:ads' }, message: expect.stringContaining('does not exist') });
+    expect(await refused(one('mylist', 'zzz'))).toMatchObject({ at: { category: 'x', entry: 'mylist:zzz' }, message: expect.stringContaining('does not have') });
+    expect(await refused(one('mine', 'x'))).toMatchObject({ message: expect.stringContaining('the set itself') });
+    await prisma.geoSet.create({ data: { name: 'ipset', kind: 'geoip', sourceType: 'upload', filename: 'x' } });
+    expect(await refused(one('ipset', 'ru'), 'mine2')).toMatchObject({ message: expect.stringContaining('this one is geosite') });
+    // A composite is never a source.
+    expect((await call('POST', '/api/geo-sets', comp([video]))).status).toBe(202);
+    expect(await refused(one('mine', 'video'), 'second')).toMatchObject({ message: expect.stringContaining('composite set, which cannot be a source') });
+    // A bad manual entry names the category and the entry.
+    expect(await refused([{ ...video, manual: ['ok.com', 'a b'] }], 'third')).toMatchObject({ at: { category: 'video', entry: 'a b' } });
+    expect((await call('POST', '/api/geo-sets', comp([video, video], 'dup'))).body).toMatchObject({ message: expect.stringContaining('named twice') });
+  });
+
+  it('refuses a name taken or reserved, like any set', async () => {
+    expect((await call('POST', '/api/geo-sets', comp([], 'geosite'))).body).toMatchObject({ reason: 'name-reserved' });
+    await verifiedSet();
+    expect((await call('POST', '/api/geo-sets', comp([], 'mylist'))).status).toBe(409);
+  });
+
+  it('a set a composite is built from cannot be deleted or renamed', async () => {
+    const src = await verifiedSet();
+    const { body: made } = await call('POST', '/api/geo-sets', comp([video]));
+    const del = await call('DELETE', `/api/geo-sets/${src}`);
+    expect(del.status).toBe(409);
+    expect(del.body).toMatchObject({ error: 'GEO_SET_REFERENCED', by: ['mine'] });
+    expect((await call('PATCH', `/api/geo-sets/${src}`, { name: 'renamed' })).body).toMatchObject({ error: 'GEO_SET_REFERENCED' });
+    // The composite itself goes, and then its source can.
+    expect((await call('DELETE', `/api/geo-sets/${made.id}`)).status).toBe(204);
+    expect((await call('DELETE', `/api/geo-sets/${src}`)).status).toBe(204);
+  });
+
+  it('PATCH changes the definition and builds again; refresh builds again and sends nothing', async () => {
+    await verifiedSet();
+    const { body: made } = await call('POST', '/api/geo-sets', comp([video]));
+    const patched = await call('PATCH', `/api/geo-sets/${made.id}`, {
+      categories: [video, { name: 'more', refs: [], manual: ['example.org'], exclude: [], enabled: true }],
+    });
+    expect(patched.status).toBe(200);
+    expect(patched.body.current.tagCount).toBe(2);
+    expect(patched.body.current.sha256).not.toBe(made.current.sha256);
+    // A definition that does not hold leaves the set as it was.
+    const bad = await call('PATCH', `/api/geo-sets/${made.id}`, { categories: [{ ...video, refs: [{ set: 'mylist', tag: 'gone' }] }] });
+    expect(bad.status).toBe(400);
+    expect((await call('GET', `/api/geo-sets/${made.id}`)).body.source.categories).toHaveLength(2);
+    const again = await call('POST', `/api/geo-sets/${made.id}/refresh`);
+    expect(again.status).toBe(202);
+    expect(again.body.current.sha256).toBe(patched.body.current.sha256);
+    expect(await prisma.geoSetVersion.count({ where: { geoSetId: made.id } })).toBe(2);
+    // Only a composite takes categories.
+    const other = await verifiedSet('other');
+    expect((await call('PATCH', `/api/geo-sets/${other}`, { categories: [] })).body).toMatchObject({ reason: 'source-not-editable' });
+  });
+
+  it('a new version of a source queues the build of the composites made from it, and nothing else', async () => {
+    const src = await verifiedSet();
+    const { body: made } = await call('POST', '/api/geo-sets', comp([video]));
+    await verifiedSet('unrelated');
+    queued.mockClear();
+    await replaceUploadFile(src, { filename: 'new.dat', bytes: datFile(site('ADS', domain(ROOT, 'a.com')), site('RU', domain(ROOT, 'd.ru'))) });
+    expect(queued.mock.calls).toEqual([['buildComposite', { setId: made.id }, { jobId: `composite-${made.id}` }]]);
+
+    queued.mockClear();
+    expect(await enqueueDependentBuilds('unrelated')).toBe(0);
+    expect(await enqueueDependentBuilds('mylist')).toBe(1);
+    expect(queued).toHaveBeenCalledTimes(1);
+  });
+});

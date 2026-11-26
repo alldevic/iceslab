@@ -1,4 +1,5 @@
 import type { GeoSetKind, GeoSetTag } from '@iceslab/shared';
+import type { GeoCidr, GeoSiteDomain } from './geo-formats.js';
 
 /**
  * v2fly geo files (`geosite.dat`, `geoip.dat`) read by the panel itself: the
@@ -458,6 +459,47 @@ export function geositeRuleSet(buf: Uint8Array, index: GeoDatIndex, tag: string)
   if (c) rule.domain_keyword = c;
   if (e) rule.domain_regex = e;
   return ruleSet(rule);
+}
+
+const DOMAIN_TYPES = ['plain', 'regex', 'domain', 'full'] as const;
+
+/** The domains of one tag of a geosite file, as the file holds them (the
+ *  attributes are dropped: a composite set does not carry them). */
+export function geositeEntries(buf: Uint8Array, index: GeoDatIndex, tag: string): GeoSiteDomain[] {
+  if (index.kind !== 'geosite') throw new Error('geositeEntries on a geoip file');
+  const t = findTag(index, tag);
+  const out: GeoSiteDomain[] = [];
+  const r = new Reader(buf, t.start, t.end);
+  while (!r.done()) {
+    const { field, wire, at } = r.key();
+    if (field !== 2) {
+      r.skip(wire, at);
+      continue;
+    }
+    const { start, end } = r.bytes();
+    const d = readDomain(new Reader(buf, start, end));
+    out.push({ type: DOMAIN_TYPES[d.type]!, value: d.value });
+  }
+  return out;
+}
+
+/** The CIDRs of one tag of a geoip file, in file order. */
+export function geoipEntries(buf: Uint8Array, index: GeoDatIndex, tag: string): GeoCidr[] {
+  if (index.kind !== 'geoip') throw new Error('geoipEntries on a geosite file');
+  const t = findTag(index, tag);
+  const out: GeoCidr[] = [];
+  const r = new Reader(buf, t.start, t.end);
+  while (!r.done()) {
+    const { field, wire, at } = r.key();
+    if (field !== 2) {
+      r.skip(wire, at);
+      continue;
+    }
+    const { start, end } = r.bytes();
+    const c = readCidr(new Reader(buf, start, end));
+    out.push({ ip: c.ip, prefix: c.prefix });
+  }
+  return out;
 }
 
 /**

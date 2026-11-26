@@ -6,6 +6,7 @@ import {
   GEO_SET_KINDS,
   geoBuiltinUrl,
   type GeoBuiltinRelease,
+  type GeoCompositeCategory,
   type GeoSetFormat,
   type GeoSetKind,
 } from '@iceslab/shared';
@@ -15,6 +16,7 @@ import { getLogger } from '../../lib/infra/logger.js';
 import { fetchGuarded, GuardedFetchError, readBoundedBytes } from '../../lib/util/guarded-fetch.js';
 import { GeoDatError, geoTagList, parseGeoDat } from './geo-dat.js';
 import { toGeoDat } from './geo-formats.js';
+import { buildCompositeDat, GeoCompositeError, type CompositeSource } from './geo-composite.js';
 
 /**
  * Where a geo set's files come in and become versions. Everything that ends in
@@ -347,4 +349,70 @@ export async function fetchBuiltin(
   }
   getLogger().info(`[geo] built-in ${kind} ${release.tag}: ${out.status}${out.status === 'broken' ? `, ${out.error}` : ''}`);
   return out;
+}
+
+/**
+ * Builds a composite set from its definition and the CURRENT versions of the
+ * sets it names, and hands the file to ingestGeoFile like any other source: the
+ * same check, a version only when the content is new (the same bytes are the
+ * same sha256 and the same row). A source that cannot be read, or a category
+ * it no longer has, breaks the set in words and leaves `current` where it was:
+ * a list quietly smaller than the operator wrote is worse than the old one.
+ * Nothing is sent to a node; that stays a rollout.
+ */
+export async function buildCompositeSet(setId: string): Promise<IngestOutcome> {
+  const set = await prisma.geoSet.findUniqueOrThrow({
+    where: { id: setId },
+    select: { kind: true, sourceType: true, compositeDef: true },
+  });
+  if (set.sourceType !== 'composite') throw new Error(`geo set ${setId} is not a composite set`);
+  const kind = set.kind as GeoSetKind;
+  const categories = (set.compositeDef ?? []) as unknown as GeoCompositeCategory[];
+
+  const sources = new Map<string, CompositeSource>();
+  const names = new Set(categories.filter((c) => c.enabled).flatMap((c) => c.refs.map((r) => r.set)));
+  for (const name of names) {
+    const src = await prisma.geoSet.findUnique({
+      where: { name },
+      select: { kind: true, sourceType: true, current: { select: { sha256: true } } },
+    });
+    if (!src) return markBroken(setId, `the set "${name}" it is built from is gone`);
+    if (src.sourceType === 'composite' || src.kind !== kind) {
+      return markBroken(setId, `the set "${name}" is ${src.sourceType === 'composite' ? 'a composite set' : `a ${src.kind} set`}, it cannot be a source here`);
+    }
+    if (!src.current) return markBroken(setId, `the set "${name}" it is built from has no verified version yet`);
+    const blob = await prisma.geoBlob.findUnique({ where: { sha256: src.current.sha256 }, select: { data: true } });
+    if (!blob) return markBroken(setId, `the file of the set "${name}" is missing`);
+    const buf = new Uint8Array(blob.data);
+    try {
+      // The index reads only the entries of the categories asked for below.
+      sources.set(name, { buf, index: parseGeoDat(buf, kind) });
+    } catch (err) {
+      if (err instanceof GeoDatError) return markBroken(setId, `the set "${name}" could not be read: ${err.message}`);
+      throw err;
+    }
+  }
+
+  let dat: Uint8Array | null;
+  try {
+    dat = buildCompositeDat(kind, categories, sources);
+  } catch (err) {
+    if (err instanceof GeoCompositeError) return markBroken(setId, err.message);
+    throw err;
+  }
+  if (!dat) return markBroken(setId, 'nothing to build: no enabled category has an entry');
+  return ingestGeoFile(setId, { bytes: dat });
+}
+
+/** The composite sets whose definition names the set `name` (a disabled
+ *  category still names it). */
+export async function compositesUsing(name: string): Promise<{ id: string; name: string }[]> {
+  const rows = await prisma.geoSet.findMany({
+    where: { sourceType: 'composite' },
+    select: { id: true, name: true, compositeDef: true },
+    orderBy: { name: 'asc' },
+  });
+  return rows
+    .filter((r) => ((r.compositeDef ?? []) as unknown as GeoCompositeCategory[]).some((c) => c.refs.some((x) => x.set === name)))
+    .map((r) => ({ id: r.id, name: r.name }));
 }

@@ -1,9 +1,18 @@
 import { Queue, Worker, type Job } from 'bullmq';
-import { GEO_BUILTIN, GEO_SET_KINDS, type GeoSetKind } from '@iceslab/shared';
+import { GEO_BUILTIN, GEO_BUILTIN_NAMES, GEO_SET_KINDS, type GeoSetKind } from '@iceslab/shared';
 import { queueRedis } from '../../lib/infra/redis.js';
 import { getLogger } from '../../lib/infra/logger.js';
 import { prisma } from '../../prisma.js';
-import { builtinNeedsFetch, ensureBuiltinSets, fetchBuiltin, fetchUrl, urlSetDue } from './geo-sets.store.js';
+import {
+  buildCompositeSet,
+  builtinNeedsFetch,
+  compositesUsing,
+  ensureBuiltinSets,
+  fetchBuiltin,
+  fetchUrl,
+  urlSetDue,
+  type IngestOutcome,
+} from './geo-sets.store.js';
 
 /**
  * Geo files are fetched and checked in the background: a list of tens of
@@ -40,6 +49,27 @@ export async function enqueueUrlFetch(setId: string): Promise<void> {
   await geoSetsQueue.add('fetchUrl', { setId }, { jobId: `url-${setId}` });
 }
 
+/** One build per composite set at a time; a build that is already waiting
+ *  reads the sources when it runs, so a second request joins it. */
+export async function enqueueCompositeBuild(setId: string): Promise<void> {
+  await geoSetsQueue.add('buildComposite', { setId }, { jobId: `composite-${setId}` });
+}
+
+/**
+ * A set got a new verified file: the composite sets built from it are built
+ * again. Their nodes stay where they are until an operator rolls out.
+ */
+export async function enqueueDependentBuilds(setName: string): Promise<number> {
+  const deps = await compositesUsing(setName);
+  for (const d of deps) await enqueueCompositeBuild(d.id);
+  return deps.length;
+}
+
+/** After a fetch: a new verified file means the composites built from it are built again. */
+export async function afterSourceIngest(setName: string, out: IngestOutcome | { status: 'unchanged' }): Promise<void> {
+  if (out.status === 'verified') await enqueueDependentBuilds(setName);
+}
+
 /**
  * Phase 9.4, on the scheduler's tick: every URL set that is due by its
  * `refreshHours` (urlSetDue) gets a fetch. The fetch is conditional, so a list
@@ -73,11 +103,20 @@ export function startGeoSetsWorker(): Worker<GeoSetsJobData> {
     QUEUE_NAME,
     async (job: Job<GeoSetsJobData>) => {
       switch (job.name) {
-        case 'fetchBuiltin':
-          await fetchBuiltin((job.data as { kind: GeoSetKind }).kind);
+        case 'fetchBuiltin': {
+          const kind = (job.data as { kind: GeoSetKind }).kind;
+          await afterSourceIngest(GEO_BUILTIN_NAMES[kind], await fetchBuiltin(kind));
           break;
-        case 'fetchUrl':
-          await fetchUrl((job.data as { setId: string }).setId);
+        }
+        case 'fetchUrl': {
+          const setId = (job.data as { setId: string }).setId;
+          const out = await fetchUrl(setId);
+          const set = await prisma.geoSet.findUnique({ where: { id: setId }, select: { name: true } });
+          if (set) await afterSourceIngest(set.name, out);
+          break;
+        }
+        case 'buildComposite':
+          await buildCompositeSet((job.data as { setId: string }).setId);
           break;
         default:
           throw new Error(`Unknown job name: ${job.name}`);

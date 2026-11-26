@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fastifyMultipart from '@fastify/multipart';
 import { z } from 'zod';
-import { GEO_FILE_MAX_BYTES, GEO_SET_KINDS } from '@iceslab/shared';
+import { GEO_COMPOSITE_LIMITS, GEO_FILE_MAX_BYTES, GEO_SET_KINDS } from '@iceslab/shared';
 import { requireAuth } from '../auth/auth.hook.js';
 import * as svc from './geo-sets.service.js';
 
@@ -21,11 +21,27 @@ const UrlSource = z.object({
   refreshHours: z.number().int().min(1).max(720).optional(),
 });
 
+// Shape and sizes only; the names, the entries and the references are
+// checked in the service, which says which category and which entry.
+const CompositeCategories = z
+  .array(
+    z.object({
+      name: z.string().max(64),
+      refs: z.array(z.object({ set: z.string().max(64), tag: z.string().max(64) })).max(GEO_COMPOSITE_LIMITS.refs),
+      manual: z.array(z.string().max(GEO_COMPOSITE_LIMITS.entryLength)).max(GEO_COMPOSITE_LIMITS.entries),
+      exclude: z.array(z.string().max(GEO_COMPOSITE_LIMITS.entryLength)).max(GEO_COMPOSITE_LIMITS.entries),
+      enabled: z.boolean(),
+    }),
+  )
+  .max(GEO_COMPOSITE_LIMITS.categories);
+
+const CompositeSource = z.object({ type: z.literal('composite'), categories: CompositeCategories });
+
 const CreateSchema = z.object({
   // Checked against GEO_SET_NAME in the service, which says why in words.
   name: z.string().max(64),
   kind: z.enum(GEO_SET_KINDS),
-  source: UrlSource,
+  source: z.discriminatedUnion('type', [UrlSource, CompositeSource]),
 });
 
 const PatchSchema = z.object({
@@ -34,6 +50,7 @@ const PatchSchema = z.object({
   sha256Source: z.enum(['sidecar', 'manual']).optional(),
   sha256: z.string().max(64).optional(),
   refreshHours: z.number().int().min(1).max(720).optional(),
+  categories: CompositeCategories.optional(),
 });
 
 const TagsQuery = z.object({
@@ -50,13 +67,18 @@ function fail(err: unknown, reply: FastifyReply): unknown {
     return reply.code(404).send({ error: 'NOT_FOUND', message: err.message });
   }
   if (err instanceof svc.GeoSetInvalidError) {
-    return reply.code(400).send({ error: 'GEO_SET_INVALID', reason: err.reason, message: err.message });
+    return reply
+      .code(400)
+      .send({ error: 'GEO_SET_INVALID', reason: err.reason, message: err.message, ...(err.at ? { at: err.at } : {}) });
   }
   if (err instanceof svc.GeoSetNameTakenError) {
     return reply.code(409).send({ error: 'GEO_SET_NAME_TAKEN', message: err.message });
   }
   if (err instanceof svc.GeoSetInUseError) {
     return reply.code(409).send({ error: 'GEO_SET_IN_USE', uses: err.uses, message: err.message });
+  }
+  if (err instanceof svc.GeoSetReferencedError) {
+    return reply.code(409).send({ error: 'GEO_SET_REFERENCED', by: err.by, message: err.message });
   }
   if (err instanceof svc.GeoSetBuiltinError) {
     return reply.code(409).send({ error: 'GEO_SET_BUILTIN', message: err.message });
@@ -171,7 +193,13 @@ export async function geoSetsRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/geo-sets', auth, async (req, reply) => {
     const input = CreateSchema.parse(req.body);
     try {
-      return reply.code(202).send(await svc.createUrlSet(input));
+      return reply
+        .code(202)
+        .send(
+          input.source.type === 'composite'
+            ? await svc.createCompositeSet({ name: input.name, kind: input.kind, source: input.source })
+            : await svc.createUrlSet({ name: input.name, kind: input.kind, source: input.source }),
+        );
     } catch (err) {
       return fail(err, reply);
     }

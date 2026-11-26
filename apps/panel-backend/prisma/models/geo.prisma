@@ -17,7 +17,7 @@ model GeoSet {
   kind String @db.VarChar(16)
 
   // The source, flat here and an object on the DTO (GeoSetSource in shared).
-  /// builtin | url | upload
+  /// builtin | url | upload | composite
   sourceType   String  @map("source_type") @db.VarChar(16)
   /// builtin: the release tag of the pin it was last fetched against.
   sourceTag    String? @map("source_tag") @db.VarChar(64)
@@ -29,6 +29,8 @@ model GeoSet {
   refreshHours Int?    @map("refresh_hours")
   /// upload: the name the file had on the operator's machine, for the screen.
   filename     String? @db.VarChar(255)
+  /// composite: GeoCompositeCategory[] (shared), what the file is built from.
+  compositeDef Json?   @map("composite_def")
 
   /// dat | rule-set-json | mmdb
   format    String    @default("dat") @db.VarChar(16)

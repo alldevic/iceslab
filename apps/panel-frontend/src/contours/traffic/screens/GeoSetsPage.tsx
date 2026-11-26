@@ -668,5 +668,6 @@ function sourceWords(set: GeoSet, t: (k: string, o?: Record<string, unknown>) =>
       url: set.source.url,
       hours: set.source.refreshHours,
     });
+  if (set.source.type === 'composite') return t('geoSets.sourceComposite', { count: set.source.categories.length });
   return t('geoSets.sourceUpload', { filename: set.source.filename });
 }

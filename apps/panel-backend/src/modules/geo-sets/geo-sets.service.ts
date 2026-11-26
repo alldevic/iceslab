@@ -1,6 +1,7 @@
 import {
   GEO_BUILTIN_NAMES,
   GEO_SET_NAME,
+  type GeoCompositeCategory,
   type GeoRolloutPlan,
   type GeoSetDto,
   type GeoSetKind,
@@ -9,6 +10,7 @@ import {
   type GeoSetUse,
   type NodeGeoFact,
 } from '@iceslab/shared';
+import { Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../prisma.js';
 import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { eventBus } from '../../lib/infra/event-bus.js';
@@ -16,8 +18,9 @@ import { assertPublicHttpUrl } from '../../lib/util/guarded-fetch.js';
 import { reportedEngines } from '../nodes/node-engines.js';
 import { collectGeoUses, usesOf, type GeoUseSite } from './geo-refs.js';
 import { chainTagsFor, filesOfSet, isCascadeExit } from './geo-push.js';
-import { enqueueBuiltinFetch, enqueueUrlFetch } from './geo-sets.queue.js';
-import { builtinNeedsFetch, ensureBuiltinSets, ingestGeoFile } from './geo-sets.store.js';
+import { enqueueBuiltinFetch, enqueueDependentBuilds, enqueueUrlFetch } from './geo-sets.queue.js';
+import { buildCompositeSet, builtinNeedsFetch, compositesUsing, ensureBuiltinSets, ingestGeoFile } from './geo-sets.store.js';
+import { checkCompositeShape, GeoCompositeError } from './geo-composite.js';
 
 /**
  * /api/geo-sets behind the routes. Contract: docs/plan/geo-contract.md
@@ -35,12 +38,15 @@ export type GeoInvalidReason =
   | 'kind'
   | 'too-large'
   | 'file'
+  | 'composite'
   | 'source-not-editable';
 
 export class GeoSetInvalidError extends Error {
   constructor(
     public readonly reason: GeoInvalidReason,
     message: string,
+    /** reason 'composite': the category and the entry that are wrong. */
+    public readonly at?: { category?: string; entry?: string },
   ) {
     super(message);
   }
@@ -61,6 +67,14 @@ export class GeoSetInUseError extends Error {
     what: string,
   ) {
     super(`${what}: rules still name this set (${uses.map((u) => `${u.kind} "${u.name}"`).join(', ')})`);
+  }
+}
+export class GeoSetReferencedError extends Error {
+  constructor(
+    public readonly by: string[],
+    what: string,
+  ) {
+    super(`${what}: composite sets are built from it (${by.map((n) => `"${n}"`).join(', ')})`);
   }
 }
 export class GeoSetBuiltinError extends Error {
@@ -99,6 +113,7 @@ const SET_SELECT = {
   sha256Source: true,
   refreshHours: true,
   filename: true,
+  compositeDef: true,
   format: true,
   status: true,
   checkedAt: true,
@@ -134,6 +149,8 @@ function sourceOf(s: SetRow): GeoSetSource {
         sha256Source: s.sha256Source === 'manual' ? 'manual' : 'sidecar',
         refreshHours: s.refreshHours ?? 24,
       };
+    case 'composite':
+      return { type: 'composite', categories: (s.compositeDef ?? []) as unknown as GeoCompositeCategory[] };
     default:
       return { type: 'upload', filename: s.filename ?? '' };
   }
@@ -326,6 +343,83 @@ export async function createUrlSet(input: CreateUrlSetInput): Promise<GeoSetDto>
   return getGeoSet(row.id);
 }
 
+export interface CreateCompositeSetInput {
+  name: string;
+  kind: GeoSetKind;
+  source: { type: 'composite'; categories: GeoCompositeCategory[] };
+}
+
+/**
+ * The definition as it will be stored, or a refusal that says which category
+ * and which entry. Every reference is checked against the CURRENT version of
+ * the set it names, enabled or not: a reference to a set that is gone, that
+ * is this set or another composite, of the other kind, or to a category it
+ * has not, is refused here and not discovered at the first build.
+ */
+async function checkComposite(
+  selfName: string,
+  kind: GeoSetKind,
+  categories: GeoCompositeCategory[],
+): Promise<GeoCompositeCategory[]> {
+  try {
+    checkCompositeShape(kind, categories);
+  } catch (err) {
+    if (err instanceof GeoCompositeError) throw new GeoSetInvalidError('composite', err.message, err.at);
+    throw err;
+  }
+  const refused = (category: string, ref: { set: string; tag: string }, why: string) =>
+    new GeoSetInvalidError('composite', `category "${category}": "${ref.set}:${ref.tag}" ${why}`, {
+      category,
+      entry: `${ref.set}:${ref.tag}`,
+    });
+  const names = [...new Set(categories.flatMap((c) => c.refs.map((r) => r.set)))];
+  const rows = await prisma.geoSet.findMany({
+    where: { name: { in: names } },
+    select: { name: true, kind: true, sourceType: true, current: { select: { tags: true } } },
+  });
+  const byName = new Map(rows.map((r) => [r.name, r]));
+  return categories.map((c) => ({
+    name: c.name,
+    enabled: c.enabled,
+    manual: c.manual.map((e) => e.trim()),
+    exclude: c.exclude.map((e) => e.trim()),
+    refs: c.refs.map((ref) => {
+      if (ref.set === selfName) throw refused(c.name, ref, 'names the set itself');
+      const src = byName.get(ref.set);
+      if (!src) throw refused(c.name, ref, 'names a set that does not exist');
+      if (src.sourceType === 'composite') throw refused(c.name, ref, 'names a composite set, which cannot be a source');
+      if (src.kind !== kind) throw refused(c.name, ref, `names a ${src.kind} set, this one is ${kind}`);
+      if (!src.current) throw refused(c.name, ref, 'names a set with no verified version yet');
+      const tag = ref.tag.toLowerCase();
+      if (!(src.current.tags as unknown as GeoSetTag[]).some((t) => t.name === tag)) {
+        throw refused(c.name, ref, `names a category the set "${ref.set}" does not have`);
+      }
+      return { set: ref.set, tag };
+    }),
+  }));
+}
+
+/** A composite set: its categories from other sets and from entries typed by
+ *  hand. Built at once, in the request (the sources are already in the
+ *  database), and answered as the build left it. */
+export async function createCompositeSet(input: CreateCompositeSetInput): Promise<GeoSetDto> {
+  checkName(input.name);
+  await nameFree(input.name);
+  const categories = await checkComposite(input.name, input.kind, input.source.categories);
+  const row = await prisma.geoSet.create({
+    data: {
+      name: input.name,
+      kind: input.kind,
+      sourceType: 'composite',
+      compositeDef: categories as unknown as Prisma.InputJsonValue,
+      status: 'checking',
+    },
+    select: { id: true },
+  }).catch(nameTakenOnWrite(input.name));
+  await buildCompositeSet(row.id);
+  return getGeoSet(row.id);
+}
+
 export interface UploadInput {
   filename: string;
   bytes: Uint8Array;
@@ -374,7 +468,8 @@ export async function replaceUploadFile(id: string, input: UploadInput): Promise
     where: { id },
     data: { filename: input.filename.slice(0, 255), status: 'checking' },
   });
-  await ingestGeoFile(id, { bytes: input.bytes, expectedSha256: expected });
+  const out = await ingestGeoFile(id, { bytes: input.bytes, expectedSha256: expected });
+  if (out.status === 'verified') await enqueueDependentBuilds(s.name);
   return getGeoSet(id);
 }
 
@@ -384,6 +479,8 @@ export interface PatchSetInput {
   sha256Source?: 'sidecar' | 'manual';
   sha256?: string;
   refreshHours?: number;
+  /** A composite set's new definition. */
+  categories?: GeoCompositeCategory[];
 }
 
 /**
@@ -397,6 +494,9 @@ export async function patchSet(id: string, input: PatchSetInput): Promise<GeoSet
   if (s.sourceType === 'builtin') {
     throw new GeoSetInvalidError('source-not-editable', 'a built-in set follows the panel\'s pin and has nothing to edit');
   }
+  if (input.categories !== undefined && s.sourceType !== 'composite') {
+    throw new GeoSetInvalidError('source-not-editable', 'only a composite set has categories');
+  }
   if (touchesSource && s.sourceType !== 'url') {
     throw new GeoSetInvalidError('source-not-editable', 'only a set fetched from a URL has a URL and a sha256 source');
   }
@@ -406,12 +506,15 @@ export async function patchSet(id: string, input: PatchSetInput): Promise<GeoSet
     sha256Source?: string;
     sha256Manual?: string | null;
     refreshHours?: number;
+    compositeDef?: Prisma.InputJsonValue;
   } = {};
   if (input.name !== undefined && input.name !== s.name) {
     checkName(input.name);
     await nameFree(input.name, id);
     const uses = usesOf(await collectGeoUses(), s.name);
     if (uses.length > 0) throw new GeoSetInUseError(uses, `"${s.name}" cannot be renamed`);
+    const builtFrom = await compositesUsing(s.name);
+    if (builtFrom.length > 0) throw new GeoSetReferencedError(builtFrom.map((c) => c.name), `"${s.name}" cannot be renamed`);
     data.name = input.name;
   }
   if (input.url !== undefined) {
@@ -424,7 +527,14 @@ export async function patchSet(id: string, input: PatchSetInput): Promise<GeoSet
     data.sha256Manual = checkSha(source, input.sha256);
   }
   if (input.refreshHours !== undefined) data.refreshHours = input.refreshHours;
+  if (input.categories !== undefined) {
+    data.compositeDef = (await checkComposite(data.name ?? s.name, s.kind as GeoSetKind, input.categories)) as unknown as Prisma.InputJsonValue;
+  }
   await prisma.geoSet.update({ where: { id }, data }).catch(nameTakenOnWrite(data.name ?? s.name));
+  if (data.compositeDef !== undefined) {
+    await prisma.geoSet.update({ where: { id }, data: { status: 'checking' } });
+    await buildCompositeSet(id);
+  }
   if (data.url !== undefined || data.sha256Source !== undefined) {
     await prisma.geoSet.update({ where: { id }, data: { status: 'checking' } });
     await enqueueUrlFetch(id);
@@ -444,6 +554,9 @@ export async function refreshSet(id: string): Promise<GeoSetDto> {
   } else if (s.sourceType === 'url') {
     await prisma.geoSet.update({ where: { id }, data: { status: 'checking' } });
     await enqueueUrlFetch(id);
+  } else if (s.sourceType === 'composite') {
+    await prisma.geoSet.update({ where: { id }, data: { status: 'checking' } });
+    await buildCompositeSet(id);
   } else {
     throw new GeoSetInvalidError('source-not-editable', 'an uploaded set is refreshed by uploading a new file');
   }
@@ -455,6 +568,8 @@ export async function deleteSet(id: string): Promise<void> {
   if (s.sourceType === 'builtin') throw new GeoSetBuiltinError(s.name);
   const uses = usesOf(await collectGeoUses(), s.name);
   if (uses.length > 0) throw new GeoSetInUseError(uses, `"${s.name}" cannot be deleted`);
+  const builtFrom = await compositesUsing(s.name);
+  if (builtFrom.length > 0) throw new GeoSetReferencedError(builtFrom.map((c) => c.name), `"${s.name}" cannot be deleted`);
   await prisma.$transaction(async (tx) => {
     const shas = (await tx.geoSetVersion.findMany({ where: { geoSetId: id }, select: { sha256: true } })).map((v) => v.sha256);
     await tx.geoSet.delete({ where: { id } });

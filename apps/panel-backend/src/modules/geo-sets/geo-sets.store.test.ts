@@ -5,7 +5,16 @@ import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { ROOT, cidr, datFile, domain, geoip, site } from '../../../tests/helpers/geo-dat.js';
-import { ensureBuiltinSets, fetchBuiltin, fetchUrl, ingestGeoFile, sha256Hex, urlSetDue } from './geo-sets.store.js';
+import {
+  buildCompositeSet,
+  compositesUsing,
+  ensureBuiltinSets,
+  fetchBuiltin,
+  fetchUrl,
+  ingestGeoFile,
+  sha256Hex,
+  urlSetDue,
+} from './geo-sets.store.js';
 import { buildMmdb, country } from '../../../tests/helpers/mmdb.js';
 
 /**
@@ -329,5 +338,112 @@ describe('built-in sets', () => {
     expect(await fetchBuiltin('geoip', release, failing)).toMatchObject({
       error: expect.stringMatching(/^download failed: getaddrinfo ENOTFOUND github.com/),
     });
+  });
+});
+
+describe('composite sets (milestone 10.2)', () => {
+  const sources = datFile(
+    site('YOUTUBE', domain(ROOT, 'youtube.com'), domain(ROOT, 'ytimg.com')),
+    site('ADS', domain(ROOT, 'ads.example')),
+  );
+
+  async function source(name = 'src', bytes = sources) {
+    const { id } = await userSet(name);
+    await ingestGeoFile(id, { bytes });
+    return id;
+  }
+  async function composite(categories: unknown, name = 'mine', kind = 'geosite') {
+    return prisma.geoSet.create({
+      data: { name, kind, sourceType: 'composite', compositeDef: categories as object, status: 'checking' },
+      select: { id: true },
+    });
+  }
+  const def = [
+    { name: 'video', refs: [{ set: 'src', tag: 'youtube' }], manual: ['full:vimeo.com', 'youtube.com'], exclude: [], enabled: true },
+    { name: 'noise', refs: [{ set: 'src', tag: 'ads' }], manual: [], exclude: [], enabled: true },
+  ];
+
+  it('the built file is checked by ingestGeoFile and becomes a version with the categories', async () => {
+    await source();
+    const { id } = await composite(def);
+    const out = await buildCompositeSet(id);
+    expect(out.status).toBe('verified');
+    const s = await read(id);
+    expect(s.status).toBe('verified');
+    expect(s.current!.tags).toEqual([
+      { name: 'video', entries: 3, attrs: [] },
+      { name: 'noise', entries: 1, attrs: [] },
+    ]);
+    const blob = await prisma.geoBlob.findUniqueOrThrow({ where: { sha256: s.current!.sha256 } });
+    expect(blob.sizeBytes).toBeGreaterThan(0);
+  });
+
+  it('building again with nothing changed makes no new version', async () => {
+    await source();
+    const { id } = await composite(def);
+    await buildCompositeSet(id);
+    const first = (await read(id)).current!.sha256;
+    await buildCompositeSet(id);
+    expect((await read(id)).current!.sha256).toBe(first);
+    expect(await prisma.geoSetVersion.count({ where: { geoSetId: id } })).toBe(1);
+  });
+
+  it('a new version of a source gives a new version of the composite, the old one stays', async () => {
+    const srcId = await source();
+    const { id } = await composite(def);
+    await buildCompositeSet(id);
+    const first = (await read(id)).current!.sha256;
+    await ingestGeoFile(
+      srcId,
+      { bytes: datFile(site('YOUTUBE', domain(ROOT, 'youtube.com')), site('ADS', domain(ROOT, 'ads.example'))) },
+    );
+    await buildCompositeSet(id);
+    expect((await read(id)).current!.sha256).not.toBe(first);
+    expect(await prisma.geoSetVersion.count({ where: { geoSetId: id } })).toBe(2);
+  });
+
+  it('a category the source lost breaks the composite in words and leaves current', async () => {
+    const srcId = await source();
+    const { id } = await composite(def);
+    await buildCompositeSet(id);
+    const first = (await read(id)).current!.sha256;
+    await ingestGeoFile(srcId, { bytes: datFile(site('YOUTUBE', domain(ROOT, 'youtube.com'))) });
+    const out = await buildCompositeSet(id);
+    expect(out).toEqual({ status: 'broken', error: 'category "noise": set "src" has no category "ads"' });
+    const s = await read(id);
+    expect(s.status).toBe('broken');
+    expect(s.current!.sha256).toBe(first);
+  });
+
+  it('no version when a source cannot be read, or when there is nothing to write', async () => {
+    const { id } = await composite(def);
+    expect(await buildCompositeSet(id)).toEqual({ status: 'broken', error: 'the set "src" it is built from is gone' });
+    await prisma.geoSet.create({ data: { name: 'src', kind: 'geosite', sourceType: 'upload', filename: 'x' } });
+    expect(await buildCompositeSet(id)).toEqual({ status: 'broken', error: 'the set "src" it is built from has no verified version yet' });
+    expect((await read(id)).current).toBeNull();
+
+    const { id: empty } = await composite([{ name: 'off', refs: [], manual: ['a.com'], exclude: [], enabled: false }], 'empty');
+    expect(await buildCompositeSet(empty)).toEqual({ status: 'broken', error: 'nothing to build: no enabled category has an entry' });
+  });
+
+  it('a geoip composite from a geoip source', async () => {
+    const { id: ipSrc } = await userSet('ips', 'geoip');
+    await ingestGeoFile(ipSrc, { bytes: datFile(geoip('RU', cidr([77, 88, 0, 0], 16))) });
+    const { id } = await composite(
+      [{ name: 'ru-plus', refs: [{ set: 'ips', tag: 'ru' }], manual: ['10.0.0.0/8'], exclude: [], enabled: true }],
+      'ipmine',
+      'geoip',
+    );
+    expect((await buildCompositeSet(id)).status).toBe('verified');
+    expect((await read(id)).current!.tags).toEqual([{ name: 'ru-plus', entries: 2 }]);
+  });
+
+  it('compositesUsing finds the sets whose definition names a set, enabled or not', async () => {
+    await source();
+    await composite(def);
+    await composite([{ name: 'x', refs: [{ set: 'src', tag: 'ads' }], manual: [], exclude: [], enabled: false }], 'other');
+    await composite([{ name: 'x', refs: [], manual: ['a.com'], exclude: [], enabled: true }], 'plain');
+    expect((await compositesUsing('src')).map((c) => c.name)).toEqual(['mine', 'other']);
+    expect(await compositesUsing('mine')).toEqual([]);
   });
 });

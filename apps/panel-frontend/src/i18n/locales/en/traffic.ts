@@ -233,6 +233,7 @@ export const traffic = {
     sourceUrl: 'from a URL · {{url}} · sha256 from the sidecar file · every {{hours}} h',
     sourceUrlManual: 'from a URL · {{url}} · sha256 set by hand · every {{hours}} h',
     sourceUpload: 'uploaded · {{filename}}',
+    sourceComposite: 'built from other sets · {{count}} categories',
     status: {
       checking: 'checking',
       verified: 'verified',
