@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
-import { DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS } from '@iceslab/shared';
+import { ADMIN_AUDIT_RETENTION_DAYS, DELETED_USER_RETENTION_DAYS, HWID_DEVICE_RETENTION_DAYS } from '@iceslab/shared';
 import { pruneHistory } from './retention.cron.js';
 import { sourceIdSha256 } from '../users/erased-sources.js';
 import { createUser, SourceIdErasedError } from '../users/users.service.js';
@@ -141,5 +141,151 @@ describe('the device window (A-269)', () => {
     expect(r.hwidDevices).toBe(1);
     const left = await prisma.hwidUserDevice.findMany({ where: { userId: u }, select: { hwid: true } });
     expect(left.map((d) => d.hwid)).toEqual(['recent']);
+  });
+});
+
+// f16-23 part 2: the history tables on their own windows, the report, the sweep
+// of single-use install tokens. A retention bug does not announce itself: the
+// job reports a count, the count looks plausible, and what is gone is gone, so
+// these stand on both sides of each boundary instead of checking "something was
+// deleted".
+async function node(): Promise<string> {
+  seq += 1;
+  const n = await prisma.node.create({
+    data: { name: `rt-n-${seq}`, address: `rt-n-${seq}.test:1337`, heartbeatSecret: Buffer.alloc(32) },
+  });
+  return n.id;
+}
+
+/** One row in each of the four history tables, all aged the same. */
+async function seedHistory(userId: string, nodeId: string, age: number): Promise<void> {
+  await prisma.subscriptionRequestHistory.create({ data: { userId, requestedAt: daysAgo(age) } });
+  await prisma.nodeUserUsageHistory.create({ data: { nodeId, userId, date: daysAgo(age), bytesIn: 1n, bytesOut: 1n } });
+  await prisma.nodeUsageHistory.create({ data: { nodeId, hour: daysAgo(age), downloadBytes: 1n, uploadBytes: 1n } });
+  await prisma.subscriptionEvent.create({ data: { userId, eventType: 'created', createdAt: daysAgo(age) } });
+}
+
+const historyCounts = async () => ({
+  subscriptionRequests: await prisma.subscriptionRequestHistory.count(),
+  nodeUserUsage: await prisma.nodeUserUsageHistory.count(),
+  nodeUsage: await prisma.nodeUsageHistory.count(),
+  subscriptionEvents: await prisma.subscriptionEvent.count(),
+});
+
+describe('each history table is pruned on its own window', () => {
+  // 200 days is past the 90-day poll window and the 180-day usage/event
+  // windows, well inside the 800-day node-usage one (the dashboard reads up to
+  // ~24 months back). Pruning on a neighbour's window loses data on one side or
+  // leaves a table unbounded on the other.
+  it('drops the 200-day-old rows of three tables and keeps node_usage_history', async () => {
+    const u = await user(null);
+    const n = await node();
+    await seedHistory(u, n, 200);
+
+    await pruneHistory();
+
+    expect(await historyCounts()).toEqual({ subscriptionRequests: 0, nodeUserUsage: 0, nodeUsage: 1, subscriptionEvents: 0 });
+  });
+
+  it('leaves everything alone when nothing is old enough', async () => {
+    const u = await user(null);
+    const n = await node();
+    await seedHistory(u, n, 30);
+
+    const r = await pruneHistory();
+
+    expect(await historyCounts()).toEqual({ subscriptionRequests: 1, nodeUserUsage: 1, nodeUsage: 1, subscriptionEvents: 1 });
+    expect(r).toMatchObject({ subscriptionRequests: 0, nodeUserUsage: 0, nodeUsage: 0, subscriptionEvents: 0 });
+  });
+
+  // One day either side of the boundary, not the exact instant:
+  // node_user_usage_history.date is a DATE column, so an exact-cutoff comparison
+  // would measure Postgres's truncation, not the rule.
+  it('keeps the day inside each window and drops the day outside it', async () => {
+    const u = await user(null);
+    const n = await node();
+    await prisma.subscriptionRequestHistory.create({ data: { userId: u, requestedAt: daysAgo(89) } });
+    await prisma.subscriptionRequestHistory.create({ data: { userId: u, requestedAt: daysAgo(91) } });
+    await prisma.subscriptionEvent.create({ data: { userId: u, eventType: 'inside', createdAt: daysAgo(179) } });
+    await prisma.subscriptionEvent.create({ data: { userId: u, eventType: 'outside', createdAt: daysAgo(181) } });
+    await prisma.nodeUsageHistory.create({ data: { nodeId: n, hour: daysAgo(799) } });
+    await prisma.nodeUsageHistory.create({ data: { nodeId: n, hour: daysAgo(801) } });
+    await prisma.nodeUserUsageHistory.create({ data: { nodeId: n, userId: u, date: daysAgo(179) } });
+    await prisma.nodeUserUsageHistory.create({ data: { nodeId: n, userId: u, date: daysAgo(181) } });
+
+    await pruneHistory();
+
+    const polls = await prisma.subscriptionRequestHistory.findMany();
+    expect(polls, 'the 89-day-old poll is inside the 90-day window').toHaveLength(1);
+    expect(polls[0]!.requestedAt.getTime()).toBeGreaterThan(Date.now() - 90 * DAY);
+    expect((await prisma.subscriptionEvent.findMany()).map((e) => e.eventType)).toEqual(['inside']);
+    const usage = await prisma.nodeUsageHistory.findMany();
+    expect(usage).toHaveLength(1);
+    expect(usage[0]!.hour.getTime()).toBeGreaterThan(Date.now() - 800 * DAY);
+    const perUser = await prisma.nodeUserUsageHistory.findMany();
+    expect(perUser).toHaveLength(1);
+    expect(perUser[0]!.date.getTime()).toBeGreaterThan(Date.now() - 180 * DAY);
+  });
+});
+
+describe('the admin audit window', () => {
+  it('drops an audit row past the shared constant and keeps one inside it', async () => {
+    const row = (at: Date, label: string) => ({
+      at,
+      actorKind: 'admin',
+      actorLabel: 'a',
+      action: 'x',
+      targetKind: 'user',
+      targetLabel: label,
+      outcome: 'ok',
+    });
+    await prisma.adminAuditEvent.create({ data: row(daysAgo(ADMIN_AUDIT_RETENTION_DAYS + 1), 'old') });
+    await prisma.adminAuditEvent.create({ data: row(daysAgo(ADMIN_AUDIT_RETENTION_DAYS - 1), 'recent') });
+
+    const r = await pruneHistory();
+
+    expect(r.adminAudit).toBe(1);
+    expect((await prisma.adminAuditEvent.findMany()).map((e) => e.targetLabel)).toEqual(['recent']);
+  });
+});
+
+describe('the counts it reports are the rows it removed', () => {
+  it('reports each table separately', async () => {
+    const u = await user(null);
+    const n = await node();
+    for (const age of [100, 120, 140]) {
+      await prisma.subscriptionRequestHistory.create({ data: { userId: u, requestedAt: daysAgo(age) } });
+    }
+    await prisma.subscriptionEvent.create({ data: { userId: u, eventType: 'old', createdAt: daysAgo(400) } });
+    await prisma.nodeUsageHistory.create({ data: { nodeId: n, hour: daysAgo(900) } });
+
+    const r = await pruneHistory();
+
+    // Named per table: a summed result would hide whether "1400 deleted" was
+    // polls or a year of dashboard history.
+    expect(r.subscriptionRequests).toBe(3);
+    expect(r.subscriptionEvents).toBe(1);
+    expect(r.nodeUsage).toBe(1);
+    expect(r.nodeUserUsage).toBe(0);
+    expect(r.bootstrapTokens).toBe(0);
+    expect(r.deletedUsers).toBe(0);
+    expect(r.hwidDevices).toBe(0);
+    expect(r.adminAudit).toBe(0);
+  });
+});
+
+describe('single-use bootstrap tokens are swept with the history', () => {
+  it('removes expired and consumed tokens and keeps a live one', async () => {
+    const nodeId = await node();
+    await prisma.nodeBootstrapToken.create({ data: { nodeId, token: 'expired-token', expiresAt: daysAgo(1) } });
+    await prisma.nodeBootstrapToken.create({
+      data: { nodeId, token: 'consumed-token', expiresAt: new Date(Date.now() + DAY), consumedAt: new Date() },
+    });
+    await prisma.nodeBootstrapToken.create({ data: { nodeId, token: 'live-token', expiresAt: new Date(Date.now() + DAY) } });
+
+    const r = await pruneHistory();
+
+    expect(r.bootstrapTokens).toBe(2);
+    expect((await prisma.nodeBootstrapToken.findMany()).map((t) => t.token)).toEqual(['live-token']);
   });
 });
