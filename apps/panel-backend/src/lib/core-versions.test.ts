@@ -247,6 +247,12 @@ describe('where the artifacts come from and what they are kept as', () => {
     expect(coreAssetUrl('mtg', CORE_VERSIONS.mtg.releases[0]!, 'armv7')).toBe(
       'https://github.com/9seconds/mtg/releases/download/v2.2.8/mtg-2.2.8-linux-armv7.tar.gz',
     );
+    // A Python program: GitHub's archive of the tag, the same file for every arch.
+    for (const arch of ['amd64', 'arm64', 'armv7'] as const) {
+      expect(coreAssetUrl('mtprotoproxy', CORE_VERSIONS.mtprotoproxy.releases[0]!, arch)).toBe(
+        'https://github.com/alexbers/mtprotoproxy/archive/refs/tags/v1.1.2.tar.gz',
+      );
+    }
     expect(coreAssetUrl('mita', CORE_VERSIONS.mita.releases[0]!, 'amd64')).toBe(
       'https://github.com/enfein/mieru/releases/download/v3.37.0/mita_3.37.0_amd64.deb',
     );

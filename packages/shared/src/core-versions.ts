@@ -43,6 +43,7 @@ export const CORE_COMPONENTS = [
   'amneziawg-module',
   'amneziawg-tools',
   'mtg',
+  'mtprotoproxy',
   'mita',
   'caddy-naive',
 ] as const;
@@ -76,6 +77,13 @@ export interface CoreRelease {
   /** Per arch. An arch that is missing is one upstream does not ship. */
   assets?: Partial<Record<CoreArch, CoreAsset>>;
   commit?: string;
+  /**
+   * The assets are GitHub's archive of the tag's sources (`archive/refs/tags/
+   * <tag>.tar.gz`), not a file attached to a release: the component is a
+   * program in a scripting language (mtprotoproxy), so one file serves every
+   * arch, listed once per arch with the same name and sha256.
+   */
+  sourceArchive?: true;
 }
 
 /** A release as the manifest keeps it: plus why it is here and when it was read. */
@@ -330,6 +338,37 @@ export const CORE_VERSIONS: Record<CoreComponent, CoreVersionEntry> = {
     knownBad: [],
   },
 
+  mtprotoproxy: {
+    upstream: 'alexbers/mtprotoproxy',
+    reportedBy: { engine: 'mtprotoproxy', field: 'version' },
+    pinned: '1.1.2',
+    releases: [
+      {
+        version: '1.1.2',
+        tag: 'v1.1.2',
+        // Python source: the same archive for every arch.
+        sourceArchive: true,
+        assets: {
+          amd64: {
+            file: 'v1.1.2.tar.gz',
+            sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702',
+          },
+          arm64: {
+            file: 'v1.1.2.tar.gz',
+            sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702',
+          },
+          armv7: {
+            file: 'v1.1.2.tar.gz',
+            sha256: '4082ea3875fa524b6c8f3d08208938cdf867a79c2bf99ceda85d57dece868702',
+          },
+        },
+        why: 'The tag the second MTProto engine is built and tested on (milestone 8.1); GitHub\'s source archive of it.',
+        checkedAt: '2026-11-26',
+      },
+    ],
+    knownBad: [],
+  },
+
   mita: {
     upstream: 'enfein/mieru',
     reportedBy: { engine: 'mieru', field: 'version' },
@@ -384,6 +423,7 @@ export const CORE_ENV_PREFIX: Record<CoreComponent, string> = {
   'amneziawg-module': 'AWG_MODULE',
   'amneziawg-tools': 'AWG_TOOLS',
   mtg: 'MTG',
+  mtprotoproxy: 'MTPROTOPROXY',
   mita: 'MIERU',
   'caddy-naive': 'CADDY_NAIVE',
 };
@@ -573,6 +613,7 @@ export const ENGINE_BOOTSTRAP: Record<EngineName, string> = {
   hysteria: 'bootstrap-hysteria.sh',
   amneziawg: 'bootstrap-amneziawg.sh',
   mtproto: 'bootstrap-mtg.sh',
+  mtprotoproxy: 'bootstrap-mtprotoproxy.sh',
   mieru: 'bootstrap-mieru.sh',
   naive: 'bootstrap-naive.sh',
 };
@@ -677,6 +718,9 @@ export function coreAssetUrl(
   const asset = release.assets?.[arch];
   if (!asset) return null;
   const repo = release.repo ?? CORE_VERSIONS[component].upstream;
+  if (release.sourceArchive) {
+    return `https://github.com/${repo}/archive/refs/tags/${encodeURIComponent(release.tag)}.tar.gz`;
+  }
   return `https://github.com/${repo}/releases/download/${encodeURIComponent(release.tag)}/${asset.file}`;
 }
 

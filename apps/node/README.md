@@ -77,7 +77,7 @@ Installs the upstream PPA (Ubuntu/Debian only), pulls `amneziawg`, `amneziawg-to
 
 ### Where a core's files come from
 
-`bootstrap-xray.sh`, `-singbox.sh`, `-hysteria.sh`, `-mtg.sh` and `-mieru.sh` take the pinned release from the
+`bootstrap-xray.sh`, `-singbox.sh`, `-hysteria.sh`, `-mtg.sh`, `-mtprotoproxy.sh` and `-mieru.sh` take the pinned release from the
 panel first: the panel image carries every release of the manifest, and a bootstrap asks it at the `panelUrl` and
 with the `heartbeatToken` of this node's payload (`NODE_PAYLOAD` in `/etc/iceslab-node/env`). xray's
 `install-release.sh` comes the same way. The sha256 check against the pin is the same whichever source delivered

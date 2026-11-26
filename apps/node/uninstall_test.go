@@ -155,8 +155,9 @@ func runUninstallWith(t *testing.T, o uninstallOpts) uninstallRun {
 	}
 	prog := "set -euo pipefail\n" +
 		"log() { echo \"log: $*\"; echo \"log: $*\" >>'" + calls + "'; }\nwarn() { echo \"warn: $*\"; }\nfail() { echo \"fail: $*\"; exit 1; }\n" +
-		"KNOWN_ENGINES=\"xray singbox hysteria amneziawg mtproto mieru naive\"\n" +
+		"KNOWN_ENGINES=\"xray singbox hysteria amneziawg mtproto mtprotoproxy mieru naive\"\n" +
 		"CORE_PROCESSES=\"xray sing-box hysteria mtg caddy-naive mita\"\n" +
+		"MTPROTOPROXY_SCRIPT_PATH=/nonexistent/mtprotoproxy.py\n" +
 		installerFunc(t, "bootstrap_of") + installerFunc(t, "stop_cores") + installerFunc(t, "remove_cores") +
 		isolated(installerFunc(t, "do_uninstall"), machine) + installerFunc(t, "uninstall_all") +
 		// After the installer's own: what is on this fake machine.

@@ -29,13 +29,14 @@ import (
 // so it runs in WSL and CI and skips on a bare Windows shell.
 
 var bootstraps = map[string]string{
-	"xray":      "bootstrap-xray.sh",
-	"singbox":   "bootstrap-singbox.sh",
-	"hysteria":  "bootstrap-hysteria.sh",
-	"amneziawg": "bootstrap-amneziawg.sh",
-	"mtproto":   "bootstrap-mtg.sh",
-	"mieru":     "bootstrap-mieru.sh",
-	"naive":     "bootstrap-naive.sh",
+	"xray":         "bootstrap-xray.sh",
+	"singbox":      "bootstrap-singbox.sh",
+	"hysteria":     "bootstrap-hysteria.sh",
+	"amneziawg":    "bootstrap-amneziawg.sh",
+	"mtproto":      "bootstrap-mtg.sh",
+	"mtprotoproxy": "bootstrap-mtprotoproxy.sh",
+	"mieru":        "bootstrap-mieru.sh",
+	"naive":        "bootstrap-naive.sh",
 }
 
 const baseEnv = "NODE_PAYLOAD=cGF5bG9hZA\nNODE_HOST=0.0.0.0\nNODE_PORT=1337\n" +

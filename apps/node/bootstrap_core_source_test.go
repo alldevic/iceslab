@@ -287,6 +287,7 @@ var coreScripts = []coreScript{
 	{"bootstrap-singbox.sh", "singbox", "amd64", "github.com/"},
 	{"bootstrap-hysteria.sh", "hysteria", "amd64", "github.com/apernet/hysteria/releases/download/"},
 	{"bootstrap-mtg.sh", "mtg", "amd64", "github.com/9seconds/mtg/releases/download/"},
+	{"bootstrap-mtprotoproxy.sh", "mtprotoproxy", "amd64", "github.com/alexbers/mtprotoproxy/archive/refs/tags/"},
 	{"bootstrap-mieru.sh", "mita", "amd64", "github.com/enfein/mieru/releases/download/"},
 }
 

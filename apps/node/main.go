@@ -486,6 +486,7 @@ var knownEngines = []struct{ protocol, engine string }{
 	{"amneziawg", "amneziawg"},
 	{"naive", "naive"},
 	{"mtproto", "mtproto"},
+	{"mtproto", "mtprotoproxy"},
 	{"mieru", "mieru"},
 }
 

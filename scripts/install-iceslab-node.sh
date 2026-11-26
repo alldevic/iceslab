@@ -17,6 +17,9 @@
 #        amneziawg                    -> bootstrap-amneziawg.sh (DKMS module + tools)
 #        naive                        -> bootstrap-naive.sh (xcaddy + plugin)
 #        mtproto                      -> bootstrap-mtg.sh (9seconds/mtg)
+#        mtprotoproxy                 -> bootstrap-mtprotoproxy.sh (alexbers/mtprotoproxy; only
+#                                        by this name: mtproto stays mtg. It opens NO firewall
+#                                        port, open the port of the profile's inbound yourself)
 #        mieru                        -> bootstrap-mieru.sh (enfein/mieru, mita.service)
 #   6. Drops a systemd unit at /etc/systemd/system/iceslab-node.service
 #   7. Enables + starts the service, waits for it to be active
@@ -470,14 +473,14 @@ apply_core_versions_from_payload() {
     [[ -n "$key" ]] || continue
     case "$key" in
       XRAY_VERSION|XRAY_SHA256|SINGBOX_VERSION|SINGBOX_SHA256|HYSTERIA_VERSION|HYSTERIA_SHA256|\
-      MTG_VERSION|MTG_SHA256|MIERU_VERSION|MIERU_SHA256|\
+      MTG_VERSION|MTG_SHA256|MTPROTOPROXY_VERSION|MTPROTOPROXY_SHA256|MIERU_VERSION|MIERU_SHA256|\
       AWG_MODULE_TAG|AWG_MODULE_SHA|AWG_TOOLS_TAG|AWG_TOOLS_SHA)
         from_payload[$key]="$value" ;;
       *) warn "the panel names $key, which this installer does not know; that core keeps its script's own pin" ;;
     esac
   done <<<"$out"
 
-  for prefix in XRAY SINGBOX HYSTERIA MTG MIERU AWG_MODULE AWG_TOOLS; do
+  for prefix in XRAY SINGBOX HYSTERIA MTG MTPROTOPROXY MIERU AWG_MODULE AWG_TOOLS; do
     case "$prefix" in
       AWG_*) a="${prefix}_TAG"; b="${prefix}_SHA" ;;
       *)     a="${prefix}_VERSION"; b="${prefix}_SHA256" ;;
@@ -726,6 +729,8 @@ find_ssh_connection() {
 
 # The processes of the cores our bootstraps install, by name.
 CORE_PROCESSES="xray sing-box hysteria mtg caddy-naive mita"
+# mtprotoproxy runs as python3: not found by name, but by its script's path.
+MTPROTOPROXY_SCRIPT_PATH=/opt/mtprotoproxy/mtprotoproxy.py
 
 # stop_cores: every core down, whoever started it: the agent (its children),
 # systemd (units of older installs, mita, awg-quick@), or by hand.
@@ -745,16 +750,22 @@ stop_cores() {
   for p in $CORE_PROCESSES; do
     pkill -TERM -x "$p" >/dev/null 2>&1 || true
   done
+  pkill -TERM -f "$MTPROTOPROXY_SCRIPT_PATH" >/dev/null 2>&1 || true
   for _ in 1 2 3 4 5; do
     left=""
     for p in $CORE_PROCESSES; do
       if pgrep -x "$p" >/dev/null 2>&1; then left+="$p "; fi
     done
+    if pgrep -f "$MTPROTOPROXY_SCRIPT_PATH" >/dev/null 2>&1; then left+="mtprotoproxy "; fi
     [[ -z "$left" ]] && return 0
     sleep 1
   done
   for p in $left; do
-    pkill -KILL -x "$p" >/dev/null 2>&1 || true
+    if [[ "$p" == mtprotoproxy ]]; then
+      pkill -KILL -f "$MTPROTOPROXY_SCRIPT_PATH" >/dev/null 2>&1 || true
+    else
+      pkill -KILL -x "$p" >/dev/null 2>&1 || true
+    fi
   done
 }
 
@@ -766,6 +777,7 @@ core_present() {
     singbox)   [[ -e /usr/local/bin/sing-box ]] ;;
     hysteria)  [[ -e /usr/local/bin/hysteria ]] ;;
     mtproto)   [[ -e /usr/local/bin/mtg ]] ;;
+    mtprotoproxy) [[ -e /opt/mtprotoproxy/mtprotoproxy.py ]] ;;
     naive)     [[ -e /usr/local/bin/caddy-naive ]] ;;
     mieru)     [[ -e /usr/local/bin/mita ]] || dpkg -s mita >/dev/null 2>&1 ;;
     amneziawg) command -v awg >/dev/null 2>&1 || [[ -n "$(dkms status amneziawg 2>/dev/null || true)" ]] ;;
@@ -899,7 +911,7 @@ resolve_bootstrap() {
 
 # ───── Cores: which, and how each goes on ─────
 
-KNOWN_ENGINES="xray singbox hysteria amneziawg mtproto mieru naive"
+KNOWN_ENGINES="xray singbox hysteria amneziawg mtproto mtprotoproxy mieru naive"
 
 # native_engine_of <protocol>: the core a --protocol runs on. The protocol is
 # a label of the install, not a core: shadowsocks runs inside xray, and tuic,
@@ -923,6 +935,7 @@ bootstrap_of() {
     hysteria)  echo bootstrap-hysteria.sh ;;
     amneziawg) echo bootstrap-amneziawg.sh ;;
     mtproto)   echo bootstrap-mtg.sh ;;
+    mtprotoproxy) echo bootstrap-mtprotoproxy.sh ;;
     mieru)     echo bootstrap-mieru.sh ;;
     naive)     echo bootstrap-naive.sh ;;
     *) return 1 ;;
@@ -1071,6 +1084,9 @@ core_ok() { [[ " ${INSTALLED_ENGINES[*]} " == *" $1 "* ]]; }
 cores_summary() {
   local i
   printf '  Cores        %s\n' "${INSTALLED_ENGINES[*]:-no cores installed, add them from the node page}"
+  if core_ok mtprotoproxy; then
+    printf '  mtprotoproxy this installer opens NO port for it: open the tcp port of the profile'"'"'s inbound yourself (2084 until one is pushed)\n'
+  fi
   for i in "${!FAILED_ENGINES[@]}"; do
     printf '  FAILED       %s: %s\n' "${FAILED_ENGINES[$i]}" "${FAILED_REASONS[$i]}"
     printf '               install later: sudo bash %s/apps/node/scripts/%s --restart-agent\n' \
@@ -1216,7 +1232,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-port)           SSH_PORT="$2"; shift 2 ;;
     --core-source)        ICESLAB_CORE_SOURCE="$2"; shift 2 ;;
     # The cores this node gets, comma-separated, in any order:
-    # xray,singbox,hysteria,amneziawg,mtproto,mieru,naive. See resolve_engines.
+    # xray,singbox,hysteria,amneziawg,mtproto,mtprotoproxy,mieru,naive. See resolve_engines.
     --engines)            ENGINES_ARG="$2"; ENGINES_GIVEN=1; shift 2 ;;
     # The old spelling of adding singbox, still accepted.
     --with-singbox)       WITH_SINGBOX=1; shift ;;
@@ -1604,7 +1620,7 @@ mkdir -p "$ENV_DIR"
 # explicit ReadWritePaths. ReadWritePaths can't create directories, only
 # permit writes inside existing ones, so we pre-create every per-protocol
 # config dir here, even if the protocol isn't installed on this node.
-mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/caddy /etc/mtg /etc/mita /etc/sing-box
+mkdir -p /etc/xray /etc/hysteria /etc/amnezia/amneziawg /etc/caddy /etc/mtg /etc/mtprotoproxy /etc/mita /etc/sing-box
 ENV_FILE="$ENV_DIR/env"
 
 # The file is written BEFORE the cores go on: every bootstrap writes its own
@@ -1852,6 +1868,10 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
       # mtg Fake-TLS handshake mimics HTTPS; TCP/443 is the canonical port.
       ufw allow 443/tcp                  >/dev/null 2>&1 || true
       ;;
+    mtprotoproxy)
+      # No rule, on purpose: its port is the one the profile's inbound names,
+      # which this script cannot know. The operator opens it (see the help).
+      ;;
     mieru)
       # mita supports either TCP or UDP transport per port-binding entry.
       # Allow both; firewall extras can be tightened post-install.
@@ -1963,7 +1983,7 @@ ProtectHome=true
 # /etc/sing-box: the sing-box adapters write their configs there (tuic,
 # anytls, shadowtls, and the xray-family, hy2 and ss engines); it was missing
 # from this list while every other core's directory was on it.
-ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/caddy -/etc/mtg -/etc/mita -/var/lib/mita -/etc/sing-box -/run -/etc/iptables -/etc/ufw
+ReadWritePaths=-/var/log -/etc/iceslab-node -/etc/hysteria -/etc/xray -/usr/local/etc/xray -/etc/amnezia/amneziawg -/etc/caddy -/etc/mtg -/etc/mtprotoproxy -/etc/mita -/var/lib/mita -/etc/sing-box -/run -/etc/iptables -/etc/ufw
 PrivateTmp=true
 
 # Journald log limits; without these a node running for months can balloon

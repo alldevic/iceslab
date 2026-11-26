@@ -177,12 +177,17 @@ func (a *Adapter) Idle(ctx context.Context) error {
 // possible at all. Which users reach this inbound is the push's business
 // (inboundIds, A-022): a user outside it gets RemoveUser.
 //
-// A user with no MtprotoSecret is refused, not given a generated one: the
-// secret has to be the one in the link the buyer holds, and inventing one makes
-// a user who exists here and cannot connect.
+// A user with no MtprotoSecret is not ours, and is not an error: the panel fans
+// ONE credential blob out to every adapter, so a WireGuard device push or a
+// user of another core carries none, and an error here would fail that user's
+// result on a node running this engine beside the others (server.addUser). The
+// panel derives a secret for every user, so an MTProto user does not arrive
+// without one; nothing is invented here, because a secret that is not the one in
+// the link the buyer holds makes a user who exists here and cannot connect.
 func (a *Adapter) AddUser(user core.User) error {
 	if user.MtprotoSecret == "" {
-		return fmt.Errorf("mtprotoproxy AddUser: user %q has no MtprotoSecret", user.UserID)
+		a.logger.Debug("mtprotoproxy AddUser: no MtprotoSecret, not a user of this engine", "user", user.UserID)
+		return nil
 	}
 	u := User{Name: user.UserID, Secret: user.MtprotoSecret}
 	if err := u.validate(); err != nil {

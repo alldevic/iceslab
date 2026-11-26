@@ -15,8 +15,8 @@ import (
 // as not installed. Before core.Absent, such a node reported only hysteria (the
 // one adapter registered unconditionally), and "not installed" read the same as
 // "never mentioned" on the node card.
-func TestAnAgentWithNothingConfiguredReportsSevenEnginesAllAbsent(t *testing.T) {
-	for _, k := range []string{"XRAY_BINARY", "SINGBOX_BINARY", "HYSTERIA_BINARY", "MTG_BINARY", "MITA_BINARY"} {
+func TestAnAgentWithNothingConfiguredReportsEightEnginesAllAbsent(t *testing.T) {
+	for _, k := range []string{"XRAY_BINARY", "SINGBOX_BINARY", "HYSTERIA_BINARY", "MTG_BINARY", "MTPROTOPROXY_SCRIPT", "MITA_BINARY"} {
 		t.Setenv(k, "")
 	}
 	// These two are probed by path with a default, so point them at nothing.
@@ -44,7 +44,7 @@ func TestAnAgentWithNothingConfiguredReportsSevenEnginesAllAbsent(t *testing.T) 
 		}
 	}
 	sort.Strings(engines)
-	want := "amneziawg hysteria mieru mtproto naive singbox xray"
+	want := "amneziawg hysteria mieru mtproto mtprotoproxy naive singbox xray"
 	if got := strings.Join(engines, " "); got != want {
 		t.Fatalf("engines = %q, want exactly one row per known engine: %q", got, want)
 	}
@@ -99,7 +99,7 @@ func TestARegisteredEngineGetsNoStandIn(t *testing.T) {
 // operator asked for the engine. Without the variable the adapter list is the
 // base's, one row per known engine.
 func TestWireguardIsRegisteredOnlyByAnExplicitBin(t *testing.T) {
-	for _, k := range []string{"XRAY_BINARY", "SINGBOX_BINARY", "HYSTERIA_BINARY", "MTG_BINARY", "MITA_BINARY"} {
+	for _, k := range []string{"XRAY_BINARY", "SINGBOX_BINARY", "HYSTERIA_BINARY", "MTG_BINARY", "MTPROTOPROXY_SCRIPT", "MITA_BINARY"} {
 		t.Setenv(k, "")
 	}
 	nowhere := t.TempDir()

@@ -28,19 +28,23 @@ func newTestAdapter(t *testing.T) *Adapter {
 	}, quiet())
 }
 
-func TestAddUserRefusesAUserWithNoSecret(t *testing.T) {
-	// Generating one here would produce a user who exists on the node and cannot
-	// connect, because the link the buyer holds carries the panel's secret.
+// A push without an MTProto secret is not for this engine. The panel hands one
+// credential blob to every adapter (a WireGuard device, a user of another core),
+// and an error here would turn that user's result into a failure on a node that
+// runs this engine. (Until f07-10 this was TestAddUserRefusesAUserWithNoSecret:
+// it asserted the opposite, a guard against a real MTProto user arriving
+// secretless, which the panel's unconditional derivation rules out.)
+func TestAPushWithNoMtprotoSecretIsNotOurs(t *testing.T) {
 	a := newTestAdapter(t)
-	err := a.AddUser(core.User{UserID: "u1"})
-	if err == nil {
-		t.Fatal("accepted a user with no MtprotoSecret")
-	}
-	if !strings.Contains(err.Error(), "MtprotoSecret") {
-		t.Errorf("error should name the missing field, got %v", err)
+	if err := a.AddUser(core.User{UserID: "u1"}); err != nil {
+		t.Fatalf("a secretless push is not ours, and not an error: %v", err)
 	}
 	if len(a.users) != 0 {
-		t.Error("the rejected user was still recorded")
+		t.Error("a secretless push changed the user set")
+	}
+	cfg, _ := os.ReadFile(a.cfg.ConfigPath)
+	if len(cfg) != 0 {
+		t.Errorf("a secretless push wrote the config:\n%s", cfg)
 	}
 }
 

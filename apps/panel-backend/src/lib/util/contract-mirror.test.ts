@@ -40,19 +40,18 @@ const AGENT_CORES = join(
 );
 
 /**
- * TEMPORARY, NAMED EXCEPTION (milestone 8.1; milestone 8.2 DELETES this list).
+ * TEMPORARY, NAMED EXCEPTION (milestone 9.3 DELETES this list).
  *
  * Engines whose agent adapter exists but whose wiring does not yet: the
  * engine name is not in ENGINE_NAMES, because the same file ties that list to
  * the `node_env_block` of every bootstrap-*.sh, to `envBlockEngines` in
  * apps/node/internal/server/declared.go, to ENGINE_BOOTSTRAP and to a manifest
- * component each. `mtprotoproxy` (apps/node/internal/core/mtprotoproxy) has
- * none of those until 8.2 adds its bootstrap script, manifest entry and
- * installer step together with the name. This is the ONLY place the mirror is
- * weakened; the engine check below skips exactly these names and nothing else.
+ * component each. `wireguard` (the amneziawg package in plain mode) has none
+ * of those until 9.3 adds its bootstrap and installer step together with the
+ * name. This is the ONLY place the mirror is weakened; the engine check below
+ * skips exactly these names and nothing else.
  */
 const ENGINES_AWAITING_WIRING: readonly string[] = [
-  'mtprotoproxy', // 8.1 adapter; wired (ENGINE_NAMES, bootstrap, manifest, installer) and removed here by 8.2
   'wireguard', // 9.1 plain mode of the amneziawg package; wired and removed here by 9.3
 ];
 
@@ -95,7 +94,7 @@ describe('the wire enumerations against the agent that fills them', () => {
         'this test is checking nothing. Fix the pattern, do not delete the test.',
     ).toBeGreaterThanOrEqual(7);
 
-    // ENGINES_AWAITING_WIRING (top of the file) holds the engines whose wiring milestone (8.2, 9.3) is pending.
+    // ENGINES_AWAITING_WIRING (top of the file) holds the engines whose wiring milestone (9.3) is pending.
     const missing = [...found].filter(
       ([engine]) =>
         !(ENGINE_NAMES as readonly string[]).includes(engine) && !ENGINES_AWAITING_WIRING.includes(engine),

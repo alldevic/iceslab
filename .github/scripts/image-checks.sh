@@ -134,6 +134,7 @@ check_core_arches() {
     [[ -n "$stored" ]] || continue
     case "$component" in
       xray) bin=xray ;; singbox) bin=sing-box ;; mtg) bin=mtg ;; mita) bin=mita ;; hysteria) bin="" ;;
+      mtprotoproxy) continue ;;   # Python source, one archive for every arch: no ELF inside
       *) continue ;;   # not an executable the node runs from an archive
     esac
     case "$arch" in amd64) want=3e00 ;; arm64) want=b700 ;; armv7) want=2800 ;; *) report+="$stored: no ELF machine known for arch $arch"$'\n'; continue ;; esac

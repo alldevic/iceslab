@@ -562,6 +562,7 @@ export const ENGINE_NAMES = [
   'naive',
   'mieru',
   'mtproto',
+  'mtprotoproxy',
 ] as const;
 
 export type EngineName = (typeof ENGINE_NAMES)[number];

@@ -37,6 +37,7 @@ var componentEnv = map[string]string{
 	"amneziawg-module": "AWG_MODULE",
 	"amneziawg-tools":  "AWG_TOOLS",
 	"mtg":              "MTG",
+	"mtprotoproxy":     "MTPROTOPROXY",
 	"mita":             "MIERU",
 }
 

@@ -13,6 +13,7 @@ const ENGINE_LABEL: Record<EngineName, string> = {
   naive: 'NaiveProxy',
   mieru: 'Mieru',
   mtproto: 'MTProto',
+  mtprotoproxy: 'MTProto (mtprotoproxy)',
 };
 
 /**

@@ -185,6 +185,16 @@ describe('the download address the manifest derives is the one the scripts fetch
     );
   });
 
+  it('mtprotoproxy: the source archive of the pinned tag, the same address as the manifest\'s', () => {
+    const entry = CORE_VERSIONS.mtprotoproxy;
+    const release = entry.releases.find((r) => r.version === entry.pinned)!;
+    const script = read(`apps/node/scripts/${ENGINE_BOOTSTRAP.mtprotoproxy}`);
+    expect(script).toContain(`https://github.com/${entry.upstream}/archive/refs/tags/\${TAG}.tar.gz`);
+    expect(coreAssetUrl('mtprotoproxy', release, 'amd64')).toBe(
+      `https://github.com/${entry.upstream}/archive/refs/tags/${release.tag}.tar.gz`,
+    );
+  });
+
   it('every component with an upstream repo names it in its own bootstrap', () => {
     // Not sing-box: its releases are ours, the script reads the repo from its block.
     for (const c of CORE_COMPONENTS) {
