@@ -13,8 +13,11 @@ import { servedSet } from './geo-self-host.js';
  * names is then not there. Taken from the current verified versions of the
  * built-in geosite and geoip sets, in xray's own spelling.
  *
+ * ru-split only: cn-split is not embedded (about 4 MB of list; customer
+ * decision on 12.5) and is issued as the base writes it, with `geosite:`/`geoip:`.
+ *
  * null (the document names the categories, as the base writes it) while
- * SUBSCRIPTION_XRAY_GEO_INLINE is off, for a preset with no categories, and
+ * SUBSCRIPTION_XRAY_GEO_INLINE is off, for any preset but ru-split, and
  * whenever the answer would be partial: a set that is not served (no verified
  * version, or broken), a category the set does not have, or one that is empty.
  * A narrower split is worse than a document that names the categories.
@@ -40,7 +43,7 @@ const KEEP = 8;
 const memo = new Map<string, PresetGeoInline | null>();
 
 export async function presetGeoInline(preset: RoutingPresetId): Promise<PresetGeoInline | null> {
-  if (!config.SUBSCRIPTION_XRAY_GEO_INLINE) return null;
+  if (!config.SUBSCRIPTION_XRAY_GEO_INLINE || preset !== 'ru-split') return null;
   const want = splitGeoTags(preset);
   if (want.geosite.length === 0 || want.geoip.length === 0) return null;
   const [site, ip] = await Promise.all([servedSet('geosite'), servedSet('geoip')]);

@@ -229,12 +229,13 @@ const PRIVATE_CIDRS: readonly string[] = [
   '255.255.255.255/32',
 ];
 
-/** The embedded data when this document is to carry it: a built-in split preset, not the router form, every category of the preset covered. */
+/** The embedded data when this document is to carry it: ru-split, not the router form, every category of the preset covered. */
 function inlineFor(opts: XrayJsonBuildOpts): PresetGeoInline | null {
   const inline = opts.presetGeoInline;
   if (!inline || opts.ownPresetRules || opts.forRouter) return null;
   const preset = opts.routingPreset ?? 'proxy-all';
-  if (preset === 'proxy-all') return null;
+  // ru-split only: cn-split stays as the base (12.5).
+  if (preset !== 'ru-split') return null;
   const want = splitGeoTags(preset);
   if (want.geosite.length === 0) return null;
   if (!want.geosite.every((t) => inline.domains[t]?.length) || !want.geoip.every((t) => inline.cidrs[t]?.length)) return null;
@@ -577,7 +578,7 @@ export function buildXrayJson(
     // R3-b custom rules first, then R3 custom domain lists, then the preset.
     rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],
     split: routing && splitRules.length > 0,
-    onDemand: routing && splitDns !== null,
+    onDemand: routing && (splitDns !== null || ownIpRule(opts, splitRules)),
     balancers,
     catchAll: balancerActive
       ? { type: 'field', network: 'tcp,udp', balancerTag: 'balancer-auto' }
@@ -590,13 +591,23 @@ export function buildXrayJson(
 }
 
 /**
+ * An operator's own preset with a rule on addresses (geoip: or a network): the
+ * same dead route as a built-in split's under IPIfNonMatch, so it gets the same
+ * IPOnDemand (milestone 17.6). An own preset with domain rules only keeps
+ * IPIfNonMatch, as before.
+ */
+function ownIpRule(opts: XrayJsonBuildOpts, splitRules: readonly Record<string, unknown>[]): boolean {
+  return opts.ownPresetRules !== undefined && splitRules.some((r) => r.ip !== undefined);
+}
+
+/**
  * The panel's pieces into an xray frame (A-236), the same for the single
  * config and for each element of the array:
  *   - split DNS right after `log` (first when there is no log), unless the
  *     frame has its own `dns`;
  *   - the proxy outbounds before the frame's, the fragment dialer after;
  *   - routing: `domainStrategy` (the frame's, else IPOnDemand under a built-in
- *     split preset, IPIfNonMatch under an own one, else AsIs), the balancers, the frame's other keys, then the rules:
+ *     split preset or an own one with an address rule, IPIfNonMatch under an own one without, else AsIs), the balancers, the frame's other keys, then the rules:
  *     the panel's, the frame's own, the catch-all last.
  */
 function fillXrayFrame(
@@ -607,7 +618,7 @@ function fillXrayFrame(
     tail: Record<string, unknown>[];
     rules: Record<string, unknown>[];
     split: boolean;
-    /** A built-in split preset (the one with split DNS): its geoip rule needs IPOnDemand. */
+    /** A built-in split preset (the one with split DNS) or an own one with an address rule: the rule needs IPOnDemand. */
     onDemand: boolean;
     balancers: Record<string, unknown>[] | undefined;
     catchAll: Record<string, unknown>;
@@ -741,7 +752,7 @@ export function buildXrayJsonArray(
         tail: fragment,
         rules: routing ? [...(opts.customRules ?? []), ...customDomainRules, ...splitRules] : [],
         split: routing && splitRules.length > 0,
-        onDemand: routing && splitDns !== null,
+        onDemand: routing && (splitDns !== null || ownIpRule(opts, splitRules)),
         balancers: undefined,
         catchAll: { type: 'field', network: 'tcp,udp', outboundTag: tag },
       },

@@ -146,6 +146,30 @@ describe('the list', () => {
   });
 });
 
+describe('behind agrees with the rollout plan (17.6)', () => {
+  it('a node pinned to the old version after a new current is behind, and the plan has files to send', async () => {
+    const id = await verifiedSet();
+    const p = await policy('no-ads', ['ext:mylist:ads']);
+    const ru1 = await node('ru-01', { policyId: p });
+    const v1 = (await call('GET', `/api/geo-sets/${id}`)).body.current;
+    await prisma.nodeGeoPin.create({
+      data: { nodeId: ru1, geoSetId: id, versionId: (await prisma.geoSet.findUniqueOrThrow({ where: { id } })).currentVersionId! },
+    });
+    await prisma.node.update({
+      where: { id: ru1 },
+      data: { geo: { version: 'x', files: [{ name: 'iceslab-mylist.dat', sha256: v1.sha256, size: v1.sizeBytes }], observedAt: new Date().toISOString() } },
+    });
+    expect((await call('GET', `/api/geo-sets/${id}`)).body.nodes).toEqual({ total: 1, behind: 0 });
+
+    // A second version becomes current; the pin stays where it was.
+    const out = await ingestGeoFile(id, { bytes: datFile(site('ADS', domain(ROOT, 'other.com'))) });
+    expect(out.status).toBe('verified');
+    const plan = (await call('GET', `/api/geo-sets/${id}/rollout-plan`)).body;
+    expect(plan.nodes[0].filesToSend).toEqual(['iceslab-mylist.dat']);
+    expect((await call('GET', `/api/geo-sets/${id}`)).body.nodes).toEqual({ total: 1, behind: 1 });
+  });
+});
+
 describe('creating from a URL', () => {
   const create = (over: Record<string, unknown> = {}, source: Record<string, unknown> = {}) =>
     call('POST', '/api/geo-sets', {

@@ -93,10 +93,11 @@ export function buildVlessRealityUri(opts: VlessRealityUriOpts): string {
     params.set('allowInsecure', '1');
   }
 
-  // Vision is only meaningful with raw/xhttp. ws/grpc/httpupgrade/kcp don't
-  // accept it, most clients ignore it, but a few (Xray itself when strict)
-  // reject the URI.
-  if (flow && (network === 'raw' || network === 'xhttp')) {
+  // Vision is only meaningful with raw/xhttp behind a TLS-like layer (reality
+  // or tls), the rule of emitsVisionFlow for the subscription formats.
+  // ws/grpc/httpupgrade/kcp, or security=none, don't accept it, most clients
+  // ignore it, but a few (Xray itself when strict) reject the URI.
+  if (flow && security !== 'none' && (network === 'raw' || network === 'xhttp')) {
     params.set('flow', flow);
   }
 

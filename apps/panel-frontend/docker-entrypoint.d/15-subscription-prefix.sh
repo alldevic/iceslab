@@ -32,7 +32,7 @@ case "${prefix#/}" in
   '' | *[!a-zA-Z0-9_-]*) fail "use only [a-zA-Z0-9_-] after the /, the rule the backend applies" ;;
 esac
 case "$prefix" in
-  /api|/admin|/health|/assets) fail "taken by the panel itself" ;;
+  /api|/admin|/health|/assets|/geo) fail "taken by the panel itself" ;;
 esac
 # The backend's honeypot (HONEYPOT_PREFIXES in lib/auth/honeypot-paths.ts) traps
 # every path that starts with one of these, case-insensitively, and blacklists the

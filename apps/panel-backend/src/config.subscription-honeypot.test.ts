@@ -38,7 +38,7 @@ describe('SUBSCRIPTION_PATH_PREFIX against the honeypot', () => {
   });
 
   it('keeps the panel-route reservation', () => {
-    expect(RESERVED_PATH_PREFIXES).toEqual(['/api', '/admin', '/health', '/assets']);
+    expect(RESERVED_PATH_PREFIXES).toEqual(['/api', '/admin', '/health', '/assets', '/geo']);
   });
 });
 
@@ -70,6 +70,12 @@ describe('the frontend entrypoint', () => {
       expect(r.ok, v).toBe(false);
       expect(r.err, v).toContain('honeypot');
     }
+  });
+
+  it.each(['/geo', '/api', '/assets'])('refuses the panel-owned %s', (v) => {
+    const r = run(v);
+    expect(r.ok, v).toBe(false);
+    expect(r.err, v).toContain('taken by the panel itself');
   });
 
   it('accepts a non-colliding prefix', () => {

@@ -43,7 +43,7 @@ describe('REMNAWAVE_COMPAT_PREFIX', () => {
   });
 
   it('refuses the names the panel owns, in any case', () => {
-    for (const v of ['api', 'admin', 'health', 'assets', 'API', 'Admin']) {
+    for (const v of ['api', 'admin', 'health', 'assets', 'geo', 'GEO', 'API', 'Admin']) {
       const r = prefix(v);
       expect(r.success, v).toBe(false);
       expect(message(r), v).toContain('Taken by the panel itself');

@@ -34,6 +34,58 @@ export interface CompositeSource {
 const PREFIXES = { domain: 'domain', full: 'full', keyword: 'plain', regexp: 'regex' } as const;
 
 /**
+ * A structural check of a `regexp:` pattern, which xray reads as Go RE2 (not
+ * as JavaScript: `new RegExp` refuses `(?P<n>x)`, `[[:alpha:]]`, `\\pL`, `(?i)`
+ * that RE2 takes, and takes lookahead that RE2 refuses, so it is no judge).
+ * Deliberately conservative: only what RE2 refuses on any reading is refused
+ * here, an unbalanced or unclosed group, an unclosed `[`, a trailing `\\`, and a
+ * repetition operator with nothing before it. Null when no such fault; else
+ * the words for it.
+ */
+export function regexpProblem(pattern: string): string | null {
+  let depth = 0;
+  let canRepeat = false; // something in front of `*`, `+`, `?`
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (c === '\\') {
+      if (i === pattern.length - 1) return 'ends with a lone backslash';
+      i++;
+      canRepeat = true;
+    } else if (c === '[') {
+      let j = i + 1;
+      if (pattern[j] === '^') j++;
+      if (pattern[j] === ']') j++; // a `]` first is a member
+      for (; j < pattern.length && pattern[j] !== ']'; j++) {
+        if (pattern[j] === '\\') j++;
+        else if (pattern[j] === '[' && pattern[j + 1] === ':') {
+          const end = pattern.indexOf(':]', j + 2);
+          if (end !== -1) j = end + 1;
+        }
+      }
+      if (j >= pattern.length) return 'has a "[" that is never closed';
+      i = j;
+      canRepeat = true;
+    } else if (c === '(') {
+      depth++;
+      canRepeat = false;
+      if (pattern[i + 1] === '?') i++; // `(?:`, `(?i)`, `(?P<n>`: the flag letters are no operators
+      // `(?i)` and `(?P<n>` carry on as plain characters below.
+    } else if (c === ')') {
+      if (--depth < 0) return 'has a ")" with no "("';
+      canRepeat = true;
+    } else if (c === '|') {
+      canRepeat = false;
+    } else if (c === '*' || c === '+' || c === '?') {
+      if (!canRepeat) return `has "${c}" with nothing to repeat`;
+      // `a*?` is lazy, `a**` is refused by RE2 too; leave that to the node's own check.
+    } else {
+      canRepeat = true;
+    }
+  }
+  return depth > 0 ? 'has a "(" that is never closed' : null;
+}
+
+/**
  * One typed domain entry: `example.com` and `domain:example.com` match the
  * domain and its subdomains, `full:` the name alone, `keyword:` a substring,
  * `regexp:` a pattern. Null when it is none of these.
@@ -44,7 +96,7 @@ export function parseManualDomain(text: string): GeoSiteDomain | null {
   const kind = m ? (m[1] as keyof typeof PREFIXES) : 'domain';
   const value = (m ? m[2]! : t).trim();
   if (value === '') return null;
-  if (kind === 'regexp') return { type: 'regex', value };
+  if (kind === 'regexp') return regexpProblem(value) === null ? { type: 'regex', value } : null;
   // A name, not a URL, an address with a port or an `@attr` of a v2fly list.
   if (/[\s/:@]/.test(value)) return null;
   return { type: PREFIXES[kind], value: value.toLowerCase() };
@@ -74,6 +126,10 @@ export function checkCompositeShape(kind: GeoSetKind, categories: GeoCompositeCa
     }
     for (const e of c.manual) {
       if (e.length > L.entryLength) throw bad(c.name, e.slice(0, 40) + '...', `is longer than ${L.entryLength} characters`);
+      if (kind === 'geosite' && /^regexp:/.test(e.trim())) {
+        const why = regexpProblem(e.trim().slice(7).trim());
+        if (why || e.trim().slice(7).trim() === '') throw bad(c.name, e, `is not a valid regular expression: ${why ?? 'empty'}`);
+      }
       if (kind === 'geosite' ? !parseManualDomain(e) : !parseCidr(e)) {
         throw bad(c.name, e, kind === 'geosite' ? 'is not a domain entry (example.com, domain:, full:, keyword: or regexp:)' : 'is not an address or a CIDR');
       }

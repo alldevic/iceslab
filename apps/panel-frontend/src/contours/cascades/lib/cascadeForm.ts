@@ -544,6 +544,28 @@ export function directionLineName(
   return normaliseLineLabel(d.label) ?? derivedDirectionLineLabel(cascadeName, d.countryCode, exitName);
 }
 
+/**
+ * Закреплённые имена, которые у каскада встречаются больше одного раза (11.3,
+ * вопрос 4: не запрещать, а предупреждать): две линии с одним именем клиент
+ * подписчика не различает. Смотрятся только закреплённые имена направлений и
+ * Auto (если он включён); вычисляемые различаются сами. Сравнение точное, по
+ * тому же `normaliseLineLabel`, что на сервере.
+ */
+export function duplicatePinnedLabels(
+  directions: readonly { label?: string }[],
+  autoLabel?: string,
+): Set<string> {
+  const seen = new Set<string>();
+  const dup = new Set<string>();
+  for (const raw of [...directions.map((d) => d.label), autoLabel]) {
+    const name = normaliseLineLabel(raw);
+    if (!name) continue;
+    if (seen.has(name)) dup.add(name);
+    seen.add(name);
+  }
+  return dup;
+}
+
 /** Имя линии Auto: закреплённое или вычисленное. */
 export function autoLineName(cascadeName: string, autoLabel: string | undefined): string {
   return normaliseLineLabel(autoLabel) ?? derivedAutoLineLabel(cascadeName);

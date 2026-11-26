@@ -201,7 +201,7 @@ export const APPS: AppDef[] = [
     // remote cannot reach part of the screen (hiddify-app #1246, #969). The apk
     // installs on a TV, which is not the same as being usable with a remote.
     ...fromCatalog('hiddify'),
-    protocols: ['amneziawg', 'xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
+    protocols: ['xray', 'shadowsocks', 'hysteria', 'tuic', 'anytls', 'shadowtls'],
     action: { kind: 'deeplink', scheme: 'hiddify' },
     recommended: true,
   },

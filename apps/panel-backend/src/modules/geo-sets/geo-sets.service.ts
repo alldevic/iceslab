@@ -193,16 +193,17 @@ async function toDto(s: SetRow, sites: GeoUseSite[]): Promise<GeoSetDto> {
   const nodes = await nodesOf(s, sites);
   /**
    * Behind by FACT, the same rule as the node card (ARCH 24.09): what the
-   * node should hold of this set (its pin, or current where it has none yet,
-   * which is what nodeGeoFor lays out) against what it reported, by sha. A
-   * node that has not reported is not counted: the card calls it "did not
-   * report", not "behind", and the two lists must say the same thing.
+   * node should hold of this set against what it reported, by sha. "Should
+   * hold" is CURRENT, as in the rollout plan (17.6): a pin older than current
+   * (a new version after a PATCH, not yet rolled out) is behind, and the plan
+   * names the files to send for it. A node that has not reported is not
+   * counted: the card calls it "did not report", not "behind", and the two
+   * lists must say the same thing.
    */
   let behind = 0;
   for (const n of nodes) {
-    const v = n.pin?.version ?? s.current;
-    if (!v || n.fact === null) continue;
-    if (missingOnDisk(await wantedOn(s, v, n.id, sites), n.fact).length > 0) behind++;
+    if (!s.current || n.fact === null) continue;
+    if (missingOnDisk(await wantedOn(s, s.current, n.id, sites), n.fact).length > 0) behind++;
   }
   return {
     id: s.id,

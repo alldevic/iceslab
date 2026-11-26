@@ -128,6 +128,7 @@ import {
   autoLabelInput,
   autoLineName,
   directionLineName,
+  duplicatePinnedLabels,
   labelDraft,
   movePosition,
   removePosition,
@@ -708,6 +709,7 @@ export function CascadeEditPage() {
   // Directions that actually carry a node. An empty one is a tag with nothing
   // behind it yet, and it is not something the balancer can pick.
   const filledDirections = directions.filter((d) => !directionEmpty(d)).length;
+  const duplicateLabels = duplicatePinnedLabels(directions, autoProfile ? draft.autoLabel : undefined);
 
   return (
     <Stack gap={20}>
@@ -858,6 +860,7 @@ export function CascadeEditPage() {
                 derived={autoLineName(name.trim(), undefined)}
                 onChange={(v) => patch({ autoLabel: v })}
                 warnOnDivergence
+                duplicate={duplicateLabels.has((draft.autoLabel ?? '').trim())}
               />
             )}
           </SectionCard>
@@ -1125,6 +1128,7 @@ export function CascadeEditPage() {
                       nodeById.get(dir.nodeIds.find(Boolean) ?? '')?.name ?? '',
                     )}
                     onChange={(v) => setDirection(i, { label: v })}
+                    duplicate={duplicateLabels.has((dir.label ?? '').trim())}
                   />
                 )}
                 {/* Нога ДО ЭТОГО выхода. До фазы 5 сервер полей не отдаёт, и

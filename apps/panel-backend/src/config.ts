@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { collidingHoneypotPrefix } from './lib/auth/honeypot-paths.js';
 
 /** The panel's own routes on the frontend's nginx; see SUBSCRIPTION_PATH_PREFIX. */
-export const RESERVED_PATH_PREFIXES: readonly string[] = ['/api', '/admin', '/health', '/assets'];
+export const RESERVED_PATH_PREFIXES: readonly string[] = ['/api', '/admin', '/health', '/assets', '/geo'];
 
 // Exported for the guard test that feeds it a compose-shaped environment: every
 // optional setting must survive being handed an EMPTY STRING, because that is
@@ -81,7 +81,7 @@ export const ConfigSchema = z.object({
   // ⚠ One rule in two places (A-137, 22.10): the pattern and the reserved list
   // are the same as apps/panel-frontend/docker-entrypoint.d/15-subscription-
   // prefix.sh, which puts the prefix into an nginx `location`, and they change
-  // as a pair. /api, /admin, /health and /assets are the panel's own routes on
+  // as a pair. /api, /admin, /health, /assets and /geo (10.4, the geo-file location) are the panel's own routes on
   // that server: a subscription mounted there takes them away or fails nginx.
   // The honeypot trap prefixes (HONEYPOT_PREFIXES) are refused too, in both places.
   SUBSCRIPTION_PATH_PREFIX: z
@@ -128,7 +128,8 @@ export const ConfigSchema = z.object({
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
   // The split presets of the xray-json documents carry the region's domain and
   // IPv4 lists themselves instead of naming geosite:/geoip: categories
-  // (milestone 12.5): Happ and INCY on mobile trim their geo files to the tags
+  // (milestone 12.5), for ru-split only (cn-split is ~4 MB and stays as the
+  // base, with geosite:/geoip:): Happ and INCY on mobile trim their geo files to the tags
   // their routing profile names, and a named category is then missing. The lists
   // come from the panel's verified built-in sets and cost about 300 KB a
   // document; with a set unverified or a category missing the document names the

@@ -379,6 +379,9 @@ export const CLIENTS = {
     name: 'INCY',
     site: 'https://incy.app',
     platforms: ['ios', 'macos', 'windows', 'linux', 'android', 'androidtv', 'appletv'],
+    // No rule of CLIENT_RULES names it, so a request from it (UA `INCY/...`,
+    // hosts.ts DESCRIPTION_CLIENTS) falls to the Default rule: plain links.
+    format: 'plain',
     uaSamples: [],
     uaUnknown: 'not researched yet',
   },

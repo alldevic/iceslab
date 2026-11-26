@@ -106,6 +106,15 @@ describe('GET /sub/:token with the switch on', () => {
     expect(before[0]).toContain('geosite:category-ru');
   });
 
+  it('cn-split is the same as without the sets, geosite:cn named (12.5 decision)', async () => {
+    const t = await user();
+    const before = await sub(t, 'xrayjson', 'cn-split');
+    await builtin('geosite', sites);
+    await builtin('geoip', ips);
+    expect(await sub(t, 'xrayjson', 'cn-split')).toBe(before);
+    expect(before).toContain('geosite:cn');
+  });
+
   it('proxy-all is the same as without the sets', async () => {
     const t = await user();
     const before = await sub(t, 'xrayjson', 'proxy-all');

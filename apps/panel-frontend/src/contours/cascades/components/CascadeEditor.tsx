@@ -1593,11 +1593,14 @@ export function LineLabelField({
   derived,
   onChange,
   warnOnDivergence = false,
+  duplicate = false,
 }: {
   value: string;
   derived: string;
   onChange: (v: string) => void;
   warnOnDivergence?: boolean;
+  /** The pinned name is also pinned on another line of the cascade (11.3): a warning, not a refusal. */
+  duplicate?: boolean;
 }) {
   const { t } = useTranslation();
   const pinned = value.trim();
@@ -1620,6 +1623,11 @@ export function LineLabelField({
       {warnOnDivergence && pinned && pinned !== derived && (
         <Note tone={AMBER} icon={<WarnIcon size={13} color={AMBER} />}>
           {t('cascadeEdit.autoLabelDiverges', { pinned, derived })}
+        </Note>
+      )}
+      {duplicate && pinned && (
+        <Note tone={AMBER} icon={<WarnIcon size={13} color={AMBER} />}>
+          {t('cascadeEdit.lineLabelDuplicate', { name: pinned })}
         </Note>
       )}
     </Stack>

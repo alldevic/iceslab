@@ -26,14 +26,9 @@ function carries(a: AppDef, p: ProtocolName): boolean {
 }
 
 describe('the app registry against what each format carries', () => {
-  // Hiddify claims amneziawg although its `singbox` answer does not carry it. It
-  // predates the table and may be deliberate (the app has its own AWG support),
-  // so it is left as the base has it and named here until somebody decides.
-  const KNOWN = new Set(['Hiddify: amneziawg']);
-
   it('claims no protocol that the entry\'s format does not carry', () => {
     const wrong = APPS.flatMap((a) => a.protocols.filter((p) => !carries(a, p)).map((p) => `${a.name}: ${p}`));
-    expect(wrong.filter((w) => !KNOWN.has(w))).toEqual([]);
+    expect(wrong).toEqual([]);
   });
 
   // mieru and naive have a share link, but no client of the `plain` kind was
@@ -137,20 +132,13 @@ describe('the registry invariants (what an entry may promise, held to the entry 
     }
   });
 
-  // INCY is offered with a paste-the-link action while the catalog gives it no
-  // format ("not researched yet"): the page cannot say what it will be handed.
-  // Left as the base has it; needs a decision (give it a researched format, or
-  // drop it from the link actions).
-  const NO_FORMAT = new Set(['INCY']);
-
   it('gives a deeplink or manual entry at least one protocol its format carries', () => {
     for (const a of APPS) {
       if (a.action.kind !== 'deeplink' && a.action.kind !== 'manual') continue;
       if (!appFormat(a)) {
         // A router recipe is a person pasting the link by hand: no format by design.
         if (a.platforms.every((pl) => pl === 'router')) continue;
-        expect(NO_FORMAT.has(a.name), `${a.name} takes a subscription link but has no format`).toBe(true);
-        continue;
+        expect.fail(`${a.name} takes a subscription link but has no format`);
       }
       expect(a.protocols.some((p) => carries(a, p)), a.name).toBe(true);
     }

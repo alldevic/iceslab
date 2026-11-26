@@ -27,7 +27,7 @@ case "$prefix" in
 esac
 lower=$(printf '%s' "$prefix" | tr 'A-Z' 'a-z')
 case "$lower" in
-  api | admin | health | assets) fail "taken by the panel itself" ;;
+  api | admin | health | assets | geo) fail "taken by the panel itself" ;;
 esac
 # HONEYPOT_PREFIXES in the backend's lib/auth/honeypot-paths.ts: a shop there
 # would be answered with a fake 404 and blacklisted.

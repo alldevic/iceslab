@@ -9,6 +9,7 @@ import { endpointTag } from '../endpoint-identity.js';
 import { expandCascadeEntry } from '../cascade-entries.js';
 import { readFrame } from '../subscription.frames.js';
 import type { PresetGeoInline } from '../../geo-sets/geo-preset-inline.js';
+import type { DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 
 const xrayEp: SubscriptionEndpoint = {
   protocol: 'xray',
@@ -1034,11 +1035,18 @@ describe('the split presets embed the region\'s lists (f12-21)', () => {
     noRegionRef(text(dns));
   });
 
-  it('cn-split', () => {
-    const cfg = parse(buildXrayJson([xrayEp], { routingPreset: 'cn-split', presetGeoInline: CN }));
-    expect(cfg.routing.rules[0]).toEqual({ type: 'field', domain: ['domain:baidu.com'], outboundTag: 'direct' });
-    expect(cfg.routing.rules[1]!.ip).toContain('1.0.1.0/24');
-    noRegionRef(text(cfg.routing.rules) + text((cfg as unknown as { dns: unknown }).dns));
+  it('an own preset: IPOnDemand with an address rule, IPIfNonMatch with domain rules only (17.6)', () => {
+    const strategy = (rules: DeviceRouteRule[]) =>
+      parse(buildXrayJson([xrayEp], { ownPresetRules: rules })).routing.domainStrategy;
+    expect(strategy([{ match: ['geoip:ru'], action: 'direct', note: '' }])).toBe('IPOnDemand');
+    expect(strategy([{ match: ['10.0.0.0/8'], action: 'direct', note: '' }])).toBe('IPOnDemand');
+    expect(strategy([{ match: ['geosite:category-ru'], action: 'direct', note: '' }])).toBe('IPIfNonMatch');
+  });
+
+  it('cn-split is issued as the base, with the data handed in or without (12.5 decision)', () => {
+    const base = buildXrayJson([xrayEp], { routingPreset: 'cn-split' });
+    expect(buildXrayJson([xrayEp], { routingPreset: 'cn-split', presetGeoInline: CN })).toBe(base);
+    expect(text(JSON.parse(base).routing.rules)).toContain('geosite:cn');
   });
 
   it('the array form: every element carries the lists', () => {

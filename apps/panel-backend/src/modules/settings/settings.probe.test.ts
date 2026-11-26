@@ -67,7 +67,7 @@ describe('SUBSCRIPTION_PATH_PREFIX', () => {
   const parse = (v: string) => ConfigSchema.shape.SUBSCRIPTION_PATH_PREFIX.safeParse(v);
 
   it('refuses the panel routes on the frontend nginx, the entrypoint script list', () => {
-    expect(RESERVED_PATH_PREFIXES).toEqual(['/api', '/admin', '/health', '/assets']);
+    expect(RESERVED_PATH_PREFIXES).toEqual(['/api', '/admin', '/health', '/assets', '/geo']);
     for (const p of RESERVED_PATH_PREFIXES) {
       const r = parse(p);
       expect(r.success, p).toBe(false);

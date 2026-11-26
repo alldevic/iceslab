@@ -237,6 +237,7 @@ export const cascades = {
     lineLabel: 'Line name',
     lineLabelPinned: 'Pinned: this name stays in subscribers\' clients when the cascade is renamed or its exit changes.',
     lineLabelDerived: 'Empty: derived, \u201c{{name}}\u201d. It changes with the cascade\'s name and the exit country, and a client that tells servers apart by name keeps the old line beside the new one.',
+    lineLabelDuplicate: 'The name \u201c{{name}}\u201d is pinned on another line of this cascade too: a subscriber\'s client cannot tell them apart. Not refused, but give them different names.',
     autoLabelDiverges: 'The pinned name \u201c{{pinned}}\u201d differs from the derived one \u201c{{derived}}\u201d. Fine if you pinned it on purpose; clear the field to go back to the derived name.',
     lineRenamesTitle: 'Line names changed for subscribers',
     lineRenamesBody: 'A client that tells servers apart by name adds the new line and keeps the old one, which no longer routes. Subscribers have to delete it by hand.',

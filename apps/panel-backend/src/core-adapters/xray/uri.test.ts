@@ -89,6 +89,14 @@ describe('buildVlessRealityUri', () => {
     expect(uri).toContain('flow=xtls-rprx-vision');
   });
 
+  it('writes flow with a TLS-like layer only, as the subscription formats do (17.6)', () => {
+    expect(buildVlessRealityUri({ ...baseOpts, securityLayer: 'tls' })).toContain('flow=xtls-rprx-vision');
+    expect(buildVlessRealityUri({ ...baseOpts, securityLayer: 'default' })).toContain('flow=xtls-rprx-vision');
+    for (const network of ['raw', 'xhttp'] as const) {
+      expect(buildVlessRealityUri({ ...baseOpts, network, securityLayer: 'none' })).not.toContain('flow=');
+    }
+  });
+
   // ───── slice 24c part 2: httpupgrade + kcp transports ─────
 
   it('emits path/host on network=httpupgrade and drops Vision flow', () => {

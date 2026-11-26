@@ -618,7 +618,7 @@ describe('the apps the page offers against what the formats give', () => {
   it('does not break on no usable format: only the apps without a format are left', () => {
     const html = buildSubscriptionPage(base({ protocols: ['xray', 'amneziawg'], awgNodes: [{ nodeName: 'awg' }], usableFormats: [] }));
     expect(html).toContain('<!DOCTYPE html>');
-    expect([...names(html, 'ios')].sort()).toEqual(['AmneziaVPN', 'AmneziaWG', 'DefaultVPN', 'INCY']);
+    expect([...names(html, 'ios')].sort()).toEqual(['AmneziaVPN', 'AmneziaWG', 'DefaultVPN']);
   });
 
   it('takes the first client of the steps from the filtered list', () => {

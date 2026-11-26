@@ -46,6 +46,20 @@ describe('parseManualDomain', () => {
   });
 });
 
+describe('regexp: entries (17.6)', () => {
+  it('refuses a pattern RE2 cannot read, and says so', () => {
+    for (const bad of ['((', 'a)', '(a', '[a-z', 'ab\\', '*a', 'a|+b', '(?:']) {
+      expect(parseManualDomain(`regexp:${bad}`), bad).toBeNull();
+      expect(() => checkCompositeShape('geosite', [cat('x', { manual: [`regexp:${bad}`] })]), bad).toThrowError(/is not a valid regular expression/);
+    }
+  });
+  it('takes valid RE2, including what JavaScript refuses', () => {
+    for (const ok of ['.*\\.ru$', '^(?:a|b)\\.example\\.com$', '(?i)yandex', '(?P<n>x)y', '[[:alpha:]]+\\.ru', '\\pL+\\.ru', '[]a]+', '[^]a]', 'a*?b', 'a{2,3}', '{x', '(a|)b', '\\Qa.b\\E']) {
+      expect(parseManualDomain(`regexp:${ok}`), ok).toEqual({ type: 'regex', value: ok });
+    }
+  });
+});
+
 describe('parseCidr, as the manual entries need it', () => {
   it('refuses a trailing slash and other prefix leniency (it would read as /0)', () => {
     expect(parseCidr('1.2.3.0/24')).toEqual({ ip: Uint8Array.from([1, 2, 3, 0]), prefix: 24 });

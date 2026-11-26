@@ -77,19 +77,15 @@ describe('an own preset with a built-in\'s rules', () => {
       ]) {
         const builtin = build({ routingPreset: id });
         const own = build({ ownPresetRules: rules });
-        // The built-in's geoip rule needs IPOnDemand (f12-17); an own preset keeps
-        // IPIfNonMatch, so everything but that one key is the same.
-        const { domainStrategy: ownStrategy, ...ownRest } = routingOf(own) as Record<string, unknown>;
-        const { domainStrategy: builtinStrategy, ...builtinRest } = routingOf(builtin) as Record<string, unknown>;
-        expect(ownRest).toEqual(builtinRest);
-        expect(ownStrategy).toBe('IPIfNonMatch');
-        expect(builtinStrategy).toBe('IPOnDemand');
+        // The geoip rule needs IPOnDemand (f12-17, 17.6): an own preset with an
+        // address rule gets it too, so the routing block is the same.
+        expect(routingOf(own)).toEqual(routingOf(builtin));
+        expect((routingOf(own) as { domainStrategy: string }).domainStrategy).toBe('IPOnDemand');
         expect(JSON.parse(own).dns).toBeUndefined();
       }
       const arrBuiltin = JSON.parse(buildXrayJsonArray(eps, { routingPreset: id })) as { routing: unknown }[];
       const arrOwn = JSON.parse(buildXrayJsonArray(eps, { ownPresetRules: rules })) as { routing: unknown; dns?: unknown }[];
-      const sansStrategy = (c: { routing: unknown }) => ({ ...(c.routing as object), domainStrategy: undefined });
-      expect(arrOwn.map(sansStrategy)).toEqual(arrBuiltin.map(sansStrategy));
+      expect(arrOwn.map((c) => c.routing)).toEqual(arrBuiltin.map((c) => c.routing));
       expect(arrOwn.every((c) => c.dns === undefined)).toBe(true);
 
       // Clash: the same rules and geo block; the proxy-all DNS, not the country's.
@@ -258,9 +254,8 @@ describe.skipIf(!XRAY_BIN)('xray -test accepts the split presets with the lists 
       domains: { 'category-ru': ['domain:yandex.ru', 'full:www.example.ru', 'keyword:ruword', 'regexp:^a\\.ru$'], 'category-gov-ru': ['domain:gosuslugi.ru'] },
       cidrs: { ru: ['5.3.0.0/16', '77.88.0.0/16'] },
     },
-    'cn-split': { domains: { cn: ['domain:baidu.com'] }, cidrs: { cn: ['1.0.1.0/24'] } },
   };
-  it.each(['ru-split', 'cn-split'] as const)('%s: flat, balancer and array', (routingPreset) => {
+  it.each(['ru-split'] as const)('%s: flat, balancer and array', (routingPreset) => {
     const opts = { routingPreset, presetGeoInline: INLINE[routingPreset] };
     for (const config of [
       buildXrayJson(LOADABLE, opts),

@@ -53,10 +53,10 @@ describe('presetGeoInline', () => {
     expect(JSON.stringify(d)).not.toContain('ads.example.com');
   });
 
-  it('cn-split reads its own categories', async () => {
+  it('cn-split is not embedded (12.5 decision), even with both sets served', async () => {
     await builtin('geosite', sites);
     await builtin('geoip', ips);
-    expect(await presetGeoInline('cn-split')).toEqual({ domains: { cn: ['domain:baidu.com'] }, cidrs: { cn: ['1.0.1.0/24'] } });
+    expect(await presetGeoInline('cn-split')).toBeNull();
   });
 
   it('proxy-all has nothing to embed', async () => {
@@ -77,18 +77,17 @@ describe('presetGeoInline', () => {
     expect(await presetGeoInline('ru-split')).toBeNull();
   });
 
-  it('no answer when one category of the preset is absent, the other preset is still served', async () => {
+  it('no answer when one category of the preset is absent', async () => {
     await builtin('geosite', datFile(site('CATEGORY-RU', domain(ROOT, 'yandex.ru')), site('CN', domain(ROOT, 'baidu.com'))));
     await builtin('geoip', ips);
     expect(await presetGeoInline('ru-split')).toBeNull();
-    expect(await presetGeoInline('cn-split')).not.toBeNull();
   });
 
   it('no answer when a category holds no IPv4 network, or no domain', async () => {
     await builtin('geosite', sites);
     await builtin('geoip', datFile(geoip('RU', cidr(v6, 32)), geoip('CN', cidr([1, 0, 1, 0], 24))));
     expect(await presetGeoInline('ru-split')).toBeNull();
-    expect(await presetGeoInline('cn-split')).not.toBeNull();
+    expect(await presetGeoInline('cn-split')).toBeNull();
   });
 
   it('a new current version of a set changes the answer without a restart', async () => {

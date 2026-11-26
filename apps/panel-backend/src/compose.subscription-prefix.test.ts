@@ -204,6 +204,8 @@ describe('the facade prefix (REMNAWAVE_COMPAT_PREFIX) reaches the frontend conta
     ['api', 'taken'],
     ['API', 'taken'],
     ['health', 'taken'],
+    ['geo', 'taken'],
+    ['GEO', 'taken'],
     ['a/b', 'one path segment'],
     ['/rw', 'one path segment'],
     ['wp-admin', 'honeypot'],

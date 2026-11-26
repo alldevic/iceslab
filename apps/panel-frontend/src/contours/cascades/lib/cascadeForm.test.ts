@@ -17,6 +17,7 @@ import {
   entryNoteKind,
   toDirectionInputs,
   autoLabelInput,
+  duplicatePinnedLabels,
   autoLineName,
   directionLineName,
   labelDraft,
@@ -1390,6 +1391,13 @@ describe('11.3: закреплённые имена линий, ответ се�
   it('направление без закрепления читается пустым полем и уходит пустой строкой', () => {
     expect(labelDraft(null)).toBe('');
     expect(toDirectionInputs([draftOf({ ...stored, label: null })])[0]!.label).toBe('');
+  });
+
+  it('повторяющееся закреплённое имя находится среди направлений и Auto, пустые и вычисляемые не в счёт', () => {
+    expect([...duplicatePinnedLabels([{ label: 'NL' }, { label: ' NL ' }, { label: 'DE' }])]).toEqual(['NL']);
+    expect([...duplicatePinnedLabels([{ label: 'NL' }, { label: 'DE' }], 'NL')]).toEqual(['NL']);
+    expect(duplicatePinnedLabels([{ label: '' }, { label: '  ' }, {}, { label: 'NL' }], '').size).toBe(0);
+    expect(duplicatePinnedLabels([{ label: 'NL' }, { label: 'DE' }], 'Auto').size).toBe(0);
   });
 
   it('сервер, не знающий поля, ключа в запрос не пускает: чужое закрепление не трогается', () => {
