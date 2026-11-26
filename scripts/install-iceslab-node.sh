@@ -400,6 +400,37 @@ wait_for_apt() {
   dpkg --configure -a >/dev/null 2>&1 || true
 }
 
+# apt_update: `apt-get update`, waiting out the lock DPkg::Lock::Timeout does
+# not cover. That option is for dpkg's locks; /var/lib/apt/lists/lock, the one
+# `apt-get update` takes first, fails at once (rc 100, "Could not get lock") when
+# unattended-upgrades holds it on a fresh cloud image. Only a lock message is
+# retried, for APT_LOCK_WAIT_SECS (300) at most, one log line per retry; any
+# other failure comes back at once, unchanged. Copied in
+# apps/node/scripts/lib/node-env.sh for the bootstraps: this script runs from
+# `curl | bash`, before a checkout exists.
+apt_update() {
+  # The budget and the pause are defaulted HERE, not beside the function: an
+  # unset value would make the comparison true on the first pass and the retry
+  # a no-op. `|| rc=$?` keeps a failing apt from ending a `set -e` script here.
+  local out rc started=$SECONDS budget=${APT_LOCK_WAIT_SECS:-300} pause=${APT_LOCK_RETRY_SECS:-5}
+  while :; do
+    rc=0
+    out=$("${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y 2>&1) || rc=$?
+    if (( rc == 0 )); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    if [[ "$out" != *"Could not get lock"* && "$out" != *"Unable to lock"* ]] ||
+       (( SECONDS - started >= budget )); then
+      printf '%s\n' "$out" >&2
+      return "$rc"
+    fi
+    printf 'apt is locked by another process, waiting: %s\n' \
+      "$(printf '%s' "$out" | grep -m1 -i 'lock' || true)" >&2
+    sleep "$pause"
+  done
+}
+
 ICESLAB_NODE_DIR=${ICESLAB_NODE_DIR:-/opt/iceslab-node}
 # ICESLAB_NODE_REPO and ICESLAB_NODE_REF are set above, before the handover.
 
@@ -616,6 +647,23 @@ do_uninstall() {
       log "Removing UFW allow rule for ${NODE_PORT}/tcp"
       ufw --force delete allow "${NODE_PORT}/tcp" >/dev/null || true
     fi
+    # --panel-ip made the agent's rule one per panel IP, `allow from <ip> to any
+    # port N proto tcp`, which the delete above does not take. The IPs are read
+    # off `ufw status`, not an env file (the install never kept them): every
+    # ALLOW row for the agent's port with a source. Only this port, so rules on
+    # other ports keep their sources; an operator's own source rule on the agent
+    # port goes too, the agent it was for is gone. The v6 twin of a world-open
+    # rule reads "Anywhere (v6)" and is gone with the delete above.
+    local line to action from rest
+    while read -r line; do
+      line=${line//(v6)/}
+      line=${line//ALLOW IN/ALLOW}
+      read -r to action from rest <<<"$line"
+      [[ "$to" == "${NODE_PORT}/tcp" && "$action" == ALLOW ]] || continue
+      [[ -n "$from" && "$from" != Anywhere ]] || continue
+      log "Removing UFW allow rule for ${NODE_PORT}/tcp from ${from}"
+      ufw --force delete allow from "$from" to any port "$NODE_PORT" proto tcp >/dev/null || true
+    done <<<"$ufw_rules"
     # The open rules the firewall step wrote for the protocols (PROTOCOL_PORTS):
     # `delete allow <port>/<proto>` takes only that rule, never one that names a
     # source address, so an operator's own rule for these ports stays.
@@ -1413,7 +1461,7 @@ ok "network tuning applied (rmem/wmem 16 MiB, fq + BBR)"
 # Pass DO_OS_UPGRADE=1 if you actually want it; default is now off.
 if [[ "${DO_OS_UPGRADE:-0}" == "1" ]]; then
   log "Upgrading OS packages (apt-get update + dist-upgrade)"
-  "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
+  apt_update
   "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" dist-upgrade -y
   "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" autoremove -y
 fi
@@ -1431,7 +1479,7 @@ fi
 # until the list is refreshed. Refresh is cheap (~3-5 sec on a fresh
 # VPS) so always-on is the right default.
 log "Refreshing apt package list"
-"${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" update -y
+apt_update
 log "Installing apt prereqs"
 "${APT_ENV[@]}" apt-get "${APT_OPTS[@]}" install -y git curl ca-certificates ufw unzip
 

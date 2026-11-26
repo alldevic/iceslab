@@ -365,6 +365,48 @@ func TestUninstallTakesOffTheProtocolRulesButNotTheOnesWithASource(t *testing.T)
 	}
 }
 
+// --panel-ip makes the agent's rule one per panel IP ("allow from <ip> to any
+// port N proto tcp"), and `ufw delete allow N/tcp` does not take those: on the
+// stand 1337/tcp ALLOW <panel> outlived --uninstall. The sources are read off
+// `ufw status`; every agent-port rule with a source goes (full, --keep-cores,
+// --reset alike), rules on other ports keep theirs.
+func TestUninstallTakesOffTheAgentPortRulesOfThePanelIPs(t *testing.T) {
+	status := "Status: active\n\nTo                         Action      From\n--                         ------      ----\n" +
+		"22/tcp                     ALLOW       Anywhere\n" +
+		"9443/tcp                   ALLOW       192.168.122.1\n" +
+		"9443/tcp                   ALLOW       10.0.0.0/8\n" +
+		"9443/tcp (v6)              ALLOW       2001:db8::1\n" +
+		"9443/tcp                   ALLOW IN    198.51.100.7\n" +
+		"94430/tcp                  ALLOW       192.0.2.1\n" +
+		"9443/udp                   ALLOW       192.0.2.2\n" +
+		"9444/tcp                   ALLOW       192.168.122.1\n" +
+		"443/tcp                    ALLOW       203.0.113.4\n" +
+		"22/tcp                     ALLOW       192.168.122.1\n"
+	panel := "9443/tcp from 192.168.122.1 to any port 9443 proto tcp from 10.0.0.0/8 to any port 9443 proto tcp " +
+		"from 2001:db8::1 to any port 9443 proto tcp from 198.51.100.7 to any port 9443 proto tcp"
+	for _, c := range []struct {
+		name string
+		o    uninstallOpts
+	}{
+		{"full uninstall", uninstallOpts{ufw: status}},
+		{"--keep-cores", uninstallOpts{ufw: status, keepCores: true}},
+		{"--reset", uninstallOpts{ufw: status, reset: true}},
+	} {
+		r := runUninstallWith(t, c.o)
+		if r.err != nil {
+			t.Fatalf("%s: %v\n%s", c.name, r.err, r.out)
+		}
+		if got := strings.Join(ufwDeletes(r.calls), " "); got != panel {
+			t.Errorf("%s: ufw deleted %q, want %q:\n%s", c.name, got, panel, r.calls)
+		}
+		for _, kept := range []string{"9444", "94430", "9443/udp", "203.0.113.4", "192.0.2"} {
+			if strings.Contains(r.calls, kept) {
+				t.Errorf("%s: %s is not the agent's rule, but was touched:\n%s", c.name, kept, r.calls)
+			}
+		}
+	}
+}
+
 // The forward policy an AmneziaWG install set is not put back (the customer's
 // decision for 5.4: the uninstall cannot know what it was); the last message
 // says so, and only when it was set.

@@ -333,3 +333,33 @@ core_panel_artifact() {
 core_panel_script() {
   core_panel_get "$1 @ ${2:0:12}" "/api/internal/cores/scripts/$1/$2" "$3" "$4"
 }
+
+# apt_update: `apt-get update`, waiting out the lock DPkg::Lock::Timeout does
+# not cover. That option is for dpkg's locks; /var/lib/apt/lists/lock, the one
+# `apt-get update` takes first, fails at once (rc 100, "Could not get lock") when
+# unattended-upgrades holds it on a fresh cloud image. Only a lock message is
+# retried, for APT_LOCK_WAIT_SECS (300) at most, one log line per retry; any
+# other failure comes back at once, unchanged. Same function in
+# scripts/install-iceslab-node.sh, which runs before a checkout exists.
+apt_update() {
+  # The budget and the pause are defaulted HERE, not beside the function: an
+  # unset value would make the comparison true on the first pass and the retry
+  # a no-op. `|| rc=$?` keeps a failing apt from ending a `set -e` script here.
+  local out rc started=$SECONDS budget=${APT_LOCK_WAIT_SECS:-300} pause=${APT_LOCK_RETRY_SECS:-5}
+  while :; do
+    rc=0
+    out=$(DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -y 2>&1) || rc=$?
+    if (( rc == 0 )); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    if [[ "$out" != *"Could not get lock"* && "$out" != *"Unable to lock"* ]] ||
+       (( SECONDS - started >= budget )); then
+      printf '%s\n' "$out" >&2
+      return "$rc"
+    fi
+    printf 'apt is locked by another process, waiting: %s\n' \
+      "$(printf '%s' "$out" | grep -m1 -i 'lock' || true)" >&2
+    sleep "$pause"
+  done
+}

@@ -119,7 +119,7 @@ log "Detected $PRETTY_NAME"
 
 # ───── 2. Prereqs ─────
 log "Installing apt prereqs"
-DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -y
+apt_update
 # No software-properties-common: Debian 13 does not ship it and no PPA is added here.
 DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y \
   gnupg ca-certificates curl \
