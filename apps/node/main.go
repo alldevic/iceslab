@@ -354,33 +354,28 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 	// tuic inbound via ApplyInbound.
 	if os.Getenv("SINGBOX_BINARY") != "" {
 		singboxBin := os.Getenv("SINGBOX_BINARY")
-		// Stats client: a dedicated SINGBOX_STATS_BIN wins, else reuse XRAY_BINARY
-		// when the node also runs xray. Empty -> zero counters (graceful).
-		singboxStatsBin := getenv("SINGBOX_STATS_BIN", os.Getenv("XRAY_BINARY"))
 
 		// One sing-box engine, one adapter per protocol. On a node only the
 		// protocol whose inbound the panel pushes actually spawns sing-box;
 		// the other stays inert. Distinct config path + stats port so they
 		// never collide if both ever run on one host.
 		adapters = append(adapters, singbox.New(singbox.Config{
-			Protocol:     "tuic",
-			BinaryPath:   singboxBin,
-			ConfigPath:   getenv("SINGBOX_CONFIG", "/etc/sing-box/config.json"),
-			CertPath:     getenv("SINGBOX_CERT", "/etc/sing-box/cert.pem"),
-			KeyPath:      getenv("SINGBOX_KEY", "/etc/sing-box/key.pem"),
-			StatsListen:  getenv("SINGBOX_API_LISTEN", "127.0.0.1:8082"),
-			XrayStatsBin: singboxStatsBin,
+			Protocol:    "tuic",
+			BinaryPath:  singboxBin,
+			ConfigPath:  getenv("SINGBOX_CONFIG", "/etc/sing-box/config.json"),
+			CertPath:    getenv("SINGBOX_CERT", "/etc/sing-box/cert.pem"),
+			KeyPath:     getenv("SINGBOX_KEY", "/etc/sing-box/key.pem"),
+			StatsListen: getenv("SINGBOX_API_LISTEN", "127.0.0.1:8082"),
 		}, logger))
 		logger.Info("singbox (tuic) adapter registered")
 
 		adapters = append(adapters, singbox.New(singbox.Config{
-			Protocol:     "anytls",
-			BinaryPath:   singboxBin,
-			ConfigPath:   getenv("SINGBOX_ANYTLS_CONFIG", "/etc/sing-box/anytls.json"),
-			CertPath:     getenv("SINGBOX_CERT", "/etc/sing-box/cert.pem"),
-			KeyPath:      getenv("SINGBOX_KEY", "/etc/sing-box/key.pem"),
-			StatsListen:  getenv("SINGBOX_ANYTLS_API_LISTEN", "127.0.0.1:8083"),
-			XrayStatsBin: singboxStatsBin,
+			Protocol:    "anytls",
+			BinaryPath:  singboxBin,
+			ConfigPath:  getenv("SINGBOX_ANYTLS_CONFIG", "/etc/sing-box/anytls.json"),
+			CertPath:    getenv("SINGBOX_CERT", "/etc/sing-box/cert.pem"),
+			KeyPath:     getenv("SINGBOX_KEY", "/etc/sing-box/key.pem"),
+			StatsListen: getenv("SINGBOX_ANYTLS_API_LISTEN", "127.0.0.1:8083"),
 		}, logger))
 		logger.Info("singbox (anytls) adapter registered")
 
@@ -388,11 +383,10 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		// until the panel pushes an xray inbound pinned to engine=singbox. No
 		// cert/key (REALITY carries its own key); distinct config + stats port.
 		adapters = append(adapters, singbox.New(singbox.Config{
-			Protocol:     "xray",
-			BinaryPath:   singboxBin,
-			ConfigPath:   getenv("SINGBOX_XRAY_CONFIG", "/etc/sing-box/xray.json"),
-			StatsListen:  getenv("SINGBOX_XRAY_API_LISTEN", "127.0.0.1:8084"),
-			XrayStatsBin: singboxStatsBin,
+			Protocol:    "xray",
+			BinaryPath:  singboxBin,
+			ConfigPath:  getenv("SINGBOX_XRAY_CONFIG", "/etc/sing-box/xray.json"),
+			StatsListen: getenv("SINGBOX_XRAY_API_LISTEN", "127.0.0.1:8084"),
 		}, logger))
 		logger.Info("singbox (xray-family) adapter registered")
 
@@ -400,13 +394,12 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		// mandatory; reuses the self-signed cert from bootstrap-singbox.sh (like
 		// tuic). Per-user password = HysteriaPassword. Distinct config + stats port.
 		adapters = append(adapters, singbox.New(singbox.Config{
-			Protocol:     "hysteria",
-			BinaryPath:   singboxBin,
-			ConfigPath:   getenv("SINGBOX_HY2_CONFIG", "/etc/sing-box/hy2.json"),
-			CertPath:     getenv("SINGBOX_CERT", "/etc/sing-box/cert.pem"),
-			KeyPath:      getenv("SINGBOX_KEY", "/etc/sing-box/key.pem"),
-			StatsListen:  getenv("SINGBOX_HY2_API_LISTEN", "127.0.0.1:8085"),
-			XrayStatsBin: singboxStatsBin,
+			Protocol:    "hysteria",
+			BinaryPath:  singboxBin,
+			ConfigPath:  getenv("SINGBOX_HY2_CONFIG", "/etc/sing-box/hy2.json"),
+			CertPath:    getenv("SINGBOX_CERT", "/etc/sing-box/cert.pem"),
+			KeyPath:     getenv("SINGBOX_KEY", "/etc/sing-box/key.pem"),
+			StatsListen: getenv("SINGBOX_HY2_API_LISTEN", "127.0.0.1:8085"),
 		}, logger))
 		logger.Info("singbox (hysteria2) adapter registered")
 
@@ -421,8 +414,7 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 			StatsListen: getenv("SINGBOX_SS_API_LISTEN", "127.0.0.1:8086"),
 			// Users handed over the ssm-api instead of a restart, and counted
 			// there with any build of sing-box (A-119).
-			SSMListen:    getenv("SINGBOX_SS_SSM_LISTEN", "127.0.0.1:8088"),
-			XrayStatsBin: singboxStatsBin,
+			SSMListen: getenv("SINGBOX_SS_SSM_LISTEN", "127.0.0.1:8088"),
 		}, logger))
 		logger.Info("singbox (shadowsocks) adapter registered")
 
@@ -430,11 +422,10 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		// single-key shadowsocks. No cert/key (it fronts a real handshake to the
 		// camouflage site). Distinct config + stats port.
 		adapters = append(adapters, singbox.New(singbox.Config{
-			Protocol:     "shadowtls",
-			BinaryPath:   singboxBin,
-			ConfigPath:   getenv("SINGBOX_SHADOWTLS_CONFIG", "/etc/sing-box/shadowtls.json"),
-			StatsListen:  getenv("SINGBOX_SHADOWTLS_API_LISTEN", "127.0.0.1:8087"),
-			XrayStatsBin: singboxStatsBin,
+			Protocol:    "shadowtls",
+			BinaryPath:  singboxBin,
+			ConfigPath:  getenv("SINGBOX_SHADOWTLS_CONFIG", "/etc/sing-box/shadowtls.json"),
+			StatsListen: getenv("SINGBOX_SHADOWTLS_API_LISTEN", "127.0.0.1:8087"),
 		}, logger))
 		logger.Info("singbox (shadowtls) adapter registered")
 	}

@@ -18,11 +18,10 @@ import (
 func TestAFailedStatsqueryIsNoDataNotZeros(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a := New(Config{
-		Protocol:     "tuic",
-		BinaryPath:   taggedBinary(t, "with_quic,with_v2ray_api"),
-		StatsListen:  "127.0.0.1:8082",
-		XrayStatsBin: "/usr/bin/xray",
-		RunCmd: func(context.Context, string, ...string) ([]byte, error) {
+		Protocol:    "tuic",
+		BinaryPath:  taggedBinary(t, "with_quic,with_v2ray_api"),
+		StatsListen: "127.0.0.1:8082",
+		StatsQuery: func(context.Context, string) (map[string]userByteCounters, error) {
 			return nil, errors.New("connection refused")
 		},
 	}, logger)

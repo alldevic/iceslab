@@ -75,17 +75,13 @@ func TestHealthyConfigOnly(t *testing.T) {
 	}
 }
 
-func TestGetStatsViaFakeRunCmd(t *testing.T) {
+func TestGetStatsViaFakeStatsQuery(t *testing.T) {
 	a := New(Config{
 		// A binary that carries v2ray_api: without it there are no counters.
-		BinaryPath:   taggedBinary(t, "with_quic,with_v2ray_api"),
-		StatsListen:  "127.0.0.1:8082",
-		XrayStatsBin: "/usr/local/bin/xray",
-		RunCmd: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
-			return []byte(`{"stat":[
-				{"name":"user>>>u1>>>traffic>>>uplink","value":"100"},
-				{"name":"user>>>u1>>>traffic>>>downlink","value":"200"}
-			]}`), nil
+		BinaryPath:  taggedBinary(t, "with_quic,with_v2ray_api"),
+		StatsListen: "127.0.0.1:8082",
+		StatsQuery: func(context.Context, string) (map[string]userByteCounters, error) {
+			return map[string]userByteCounters{"u1": {UplinkBytes: 100, DownlinkBytes: 200}}, nil
 		},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := a.AddUser(core.User{UserID: "u1", TuicUUID: "uuid1", TuicPassword: "pw1"}); err != nil {
@@ -114,9 +110,8 @@ func TestGetStatsViaFakeRunCmd(t *testing.T) {
 // WARN every poll: six lines every 30 s per node on the stand (24.09).
 func TestGetStatsDoesNotAskAnEngineThatIsNotRunning(t *testing.T) {
 	a := New(Config{
-		StatsListen:  "127.0.0.1:8082",
-		XrayStatsBin: "/usr/local/bin/xray",
-		RunCmd: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		StatsListen: "127.0.0.1:8082",
+		StatsQuery: func(context.Context, string) (map[string]userByteCounters, error) {
 			t.Error("statsquery was run against an engine that is not running")
 			return nil, nil
 		},

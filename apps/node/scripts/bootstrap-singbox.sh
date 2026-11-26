@@ -78,7 +78,7 @@ wire_env() {
 }
 
 unwire_env() {
-  node_env_unblock singbox SINGBOX_BINARY SINGBOX_CERT SINGBOX_KEY SINGBOX_STATS_BIN
+  node_env_unblock singbox SINGBOX_BINARY SINGBOX_CERT SINGBOX_KEY
 }
 
 # The agent's unit runs under ProtectSystem=strict and writes only where

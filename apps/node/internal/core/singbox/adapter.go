@@ -53,12 +53,9 @@ type Config struct {
 	// StatsListen is the loopback host:port for sing-box's experimental
 	// v2ray_api (e.g. "127.0.0.1:8082"). Empty disables stats collection.
 	StatsListen string
-	// XrayStatsBin is the xray binary used as a generic v2ray-stats gRPC
-	// client to read StatsListen (sing-box ships no stats CLI). Empty means
-	// GetStats degrades to zero counters.
-	XrayStatsBin string
-	// RunCmd runs the stats query; nil defaults to os/exec. Tests inject a fake.
-	RunCmd RunCmdFunc
+	// StatsQuery reads the counters at StatsListen; nil defaults to the
+	// built-in gRPC client (stats.go). Tests inject a fake.
+	StatsQuery StatsQueryFunc
 	// SSMListen is the loopback host:port of the ssm-api service, shadowsocks
 	// only: users are handed to the running process instead of restarting it,
 	// and counted there. Empty keeps the users in the config file.
@@ -124,8 +121,8 @@ type Adapter struct {
 }
 
 func New(cfg Config, logger *slog.Logger) *Adapter {
-	if cfg.RunCmd == nil {
-		cfg.RunCmd = defaultRunCmd
+	if cfg.StatsQuery == nil {
+		cfg.StatsQuery = queryUserStats
 	}
 	if cfg.Protocol == "" {
 		cfg.Protocol = Name
@@ -433,7 +430,7 @@ func (a *Adapter) RemoveUser(userID string) error {
 }
 
 // GetStats reports per-user cumulative byte counters, read from sing-box's
-// v2ray_api via the xray-binary stats client (see stats.go), or from ssm-api
+// v2ray_api via the built-in gRPC client (see stats.go), or from ssm-api
 // for a managed shadowsocks. Non-destructive read -> Cumulative=true, so the
 // panel computes deltas against its snapshot (mirrors xray, #5). Zero counters
 // when stats aren't configured or nothing runs; a query that fails is NoData,
@@ -441,8 +438,7 @@ func (a *Adapter) RemoveUser(userID string) error {
 func (a *Adapter) GetStats() (*core.Stats, error) {
 	a.mu.Lock()
 	statsListen := a.cfg.StatsListen
-	bin := a.cfg.XrayStatsBin
-	run := a.cfg.RunCmd
+	query := a.cfg.StatsQuery
 	held := sortedHeld(a.inbounds)
 	// Asked only of a process that is running. Every adapter is registered on
 	// every node, so an idle one (no inbound pushed, no process) was asked
@@ -496,11 +492,11 @@ func (a *Adapter) GetStats() (*core.Stats, error) {
 	if !a.countsUsers() {
 		statsListen = ""
 	}
-	if statsListen == "" || bin == "" || run == nil || !running {
+	if statsListen == "" || query == nil || !running {
 		return zero(), nil
 	}
 
-	counters, err := queryUserStats(context.Background(), run, bin, statsListen)
+	counters, err := query(context.Background(), statsListen)
 	if err != nil {
 		// No data, not zeros (A-152/A-163): these counters are cumulative, and
 		// a zero read as one dropped to 0 re-baselined every user's snapshot.
