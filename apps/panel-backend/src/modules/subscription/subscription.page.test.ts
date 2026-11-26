@@ -698,3 +698,50 @@ describe('the store marks on the cards', () => {
     expect(card(ru, 'ios', 'Shadowrocket')).toContain('Платное · 249 ₽');
   });
 });
+
+describe('the scan block opens on the tunnel a link named', () => {
+  const nodes = [
+    { nodeName: 'awg-one', id: 'aaaaaaa1', vpnKey: 'vpn://one', conf: '[Interface] one' },
+    { nodeName: 'awg-two', id: 'bbbbbbb2', vpnKey: 'vpn://two', conf: '[Interface] two' },
+    { nodeName: 'awg-two', id: 'bbbbbbb2', device: 2, vpnKey: 'vpn://two2', conf: '[Interface] two2' },
+  ];
+  const wgNodes = [{ nodeName: 'wg-one', id: 'ccccccc3', conf: '[Interface] wg' }];
+  const active = (html: string) =>
+    [...html.matchAll(/<figure class="qrf on" data-target="([^"]+)"(?: data-app="(\w+)")?/g)].map((m) => `${m[1]}/${m[2] ?? ''}`);
+
+  it('without a preselection the first node opens on its AmneziaVPN code, as before', () => {
+    const html = buildSubscriptionPage(base({ protocols: ['amneziawg', 'wireguard'], awgNodes: nodes, wgNodes }));
+    expect(active(html)).toEqual(['awg:awg-one/vpn']);
+    expect(html).toContain('data-node-name>AmneziaWG · awg-one<');
+    expect(html).toMatch(/seg-btn is-on" type="button" role="tab" aria-selected="true" data-app="vpn"/);
+  });
+
+  it('an AmneziaWG tunnel opens on its .conf code, server and app switch to match', () => {
+    const html = buildSubscriptionPage(
+      base({ protocols: ['amneziawg', 'wireguard'], awgNodes: nodes, wgNodes, preselect: { id: 'bbbbbbb2' } }),
+    );
+    expect(active(html)).toEqual(['awg:awg-two/conf']);
+    expect(html).toContain('data-node-name>AmneziaWG · awg-two<');
+    expect(html).toMatch(/seg-btn is-on" type="button" role="tab" aria-selected="true" data-app="conf"/);
+  });
+
+  it('the device is part of the name', () => {
+    const html = buildSubscriptionPage(
+      base({ protocols: ['amneziawg'], awgNodes: nodes, preselect: { id: 'bbbbbbb2', device: 2 } }),
+    );
+    expect(active(html)).toEqual(['awg:awg-two #2/conf']);
+  });
+
+  it('a plain WireGuard tunnel opens on its own code', () => {
+    const html = buildSubscriptionPage(
+      base({ protocols: ['amneziawg', 'wireguard'], awgNodes: nodes, wgNodes, preselect: { id: 'ccccccc3' } }),
+    );
+    expect(active(html)).toEqual(['wg:wg-one/']);
+  });
+
+  it('a name the page does not hold is the page without it', () => {
+    const plain = buildSubscriptionPage(base({ protocols: ['amneziawg'], awgNodes: nodes }));
+    const html = buildSubscriptionPage(base({ protocols: ['amneziawg'], awgNodes: nodes, preselect: { id: 'zzzzzzz9' } }));
+    expect(html).toBe(plain);
+  });
+});

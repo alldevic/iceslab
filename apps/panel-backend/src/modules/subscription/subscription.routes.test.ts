@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../app.js';
 import { prisma } from '../../prisma.js';
@@ -6,6 +6,7 @@ import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import { invalidateSrrCache } from '../srr/srr.service.js';
+import { registerBindingsCacheBust } from './subscription.bindings-cache.js';
 import { deriveSsPassword } from '../../lib/auth/credentials.js';
 import { REALITY_TEST_PRIVATE_KEY, REALITY_TEST_PUBLIC_KEY } from '../../../tests/helpers/reality-keys.js';
 import { WG_TEST_PRIVATE_KEY, WG_TEST_PUBLIC_KEY } from '../../../tests/helpers/wg-keys.js';
@@ -950,5 +951,144 @@ describe('the page offers only the clients whose format gives them a server', ()
     expect(raw.statusCode, raw.body).toBe(200);
     expect(raw.body).toContain('sing-box://import-remote-profile');
     expect(raw.body).toContain('hiddify://import/');
+  });
+});
+
+describe('tunnels: the page and `configUrls` follow the files the route serves', () => {
+  interface Ep { protocol: string; nodeName: string; configUrls?: { wgconf?: string; amneziavpn?: string } }
+  const withoutUrls = (eps: Ep[]) => eps.map((e) => ({ ...e, configUrls: undefined }));
+  const browser = {
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+  };
+  // A host edit reaches /sub through the bindings cache's bus subscription.
+  beforeAll(() => registerBindingsCacheBust());
+  const AWG = { subnet: '10.66.66.0/24', serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY, obfuscation: {} };
+  const WG = { subnet: '10.77.77.0/24', serverPrivateKey: WG_TEST_PRIVATE_KEY, serverPublicKey: WG_TEST_PUBLIC_KEY };
+
+  async function bareNode(name: string, address: string): Promise<string> {
+    const res = await app.inject({
+      method: 'POST', url: '/api/nodes', headers: { authorization: `Bearer ${token}` }, payload: { name, address },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    return JSON.parse(res.body).id as string;
+  }
+
+  /** AmneziaWG on two nodes, plain WireGuard on the first, xray on the first. */
+  async function tunnelFleet(): Promise<{ sub: string; one: string; two: string }> {
+    const one = await bareNode('awg-one', '10.0.0.41:8443');
+    const two = await bareNode('awg-two', '10.0.0.42:8443');
+    await createBinding(await createProfile('amneziawg', AWG, 'one'), one, 51820);
+    await createBinding(await createProfile('amneziawg', { ...AWG, subnet: '10.66.67.0/24' }, 'two'), two, 51820);
+    await createBinding(await createProfile('wireguard', WG, 'wg'), one, 51830);
+    await createXrayInbound(one, 8443);
+    const user = await createUser('tunneler');
+    return { sub: user.subscriptionToken, one, two };
+  }
+
+  /** Through the API, so the bindings cache learns of it (a direct write would not). */
+  async function disableHosts(nodeId: string, formats: string[]): Promise<void> {
+    const hosts = await prisma.host.findMany({ where: { binding: { nodeId } }, select: { id: true } });
+    expect(hosts.length).toBeGreaterThan(0);
+    for (const h of hosts) {
+      const res = await app.inject({
+        method: 'PUT', url: `/api/hosts/${h.id}`, headers: { authorization: `Bearer ${token}` }, payload: { disableForFormats: formats },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+    }
+  }
+
+  const qrTargets = (html: string) => [...html.matchAll(/<figure class="qrf[^"]*" data-target="([^"]+)"/g)].map((m) => m[1]!.replace(/ · .*$/, ''));
+  const fileRows = (html: string, fmt: string) => [...html.matchAll(new RegExp(`format=${fmt}&amp;node=([0-9a-f]{8})`, 'g'))].map((m) => m[1]);
+
+  it('f13-04: a host switched off for wgconf has no file card and no QR on the page; one switched off only for plain keeps both', async () => {
+    const { sub, two } = await tunnelFleet();
+    const before = await app.inject({ method: 'GET', url: `/sub/${sub}`, headers: browser });
+    expect(qrTargets(before.body)).toEqual(expect.arrayContaining(['awg:awg-one', 'awg:awg-two', 'wg:awg-one']));
+
+    // Off for plain only: the browser's own format must not decide the cards.
+    await disableHosts(two, ['plain']);
+    const plainOff = await app.inject({ method: 'GET', url: `/sub/${sub}`, headers: browser });
+    expect(qrTargets(plainOff.body)).toContain('awg:awg-two');
+    expect(fileRows(plainOff.body, 'wgconf').length).toBe(fileRows(before.body, 'wgconf').length);
+
+    await disableHosts(two, ['wgconf']);
+    const off = await app.inject({ method: 'GET', url: `/sub/${sub}`, headers: browser });
+    expect(off.statusCode).toBe(200);
+    expect(qrTargets(off.body)).not.toContain('awg:awg-two');
+    expect(qrTargets(off.body)).toEqual(expect.arrayContaining(['awg:awg-one', 'wg:awg-one']));
+    expect(fileRows(off.body, 'wgconf').length).toBeLessThan(fileRows(before.body, 'wgconf').length);
+    expect(off.body).not.toContain('awg-two');
+  });
+
+  it('f13-03: `configUrls` on the tunnel endpoints only, each address serves a file, the rest of the answer is as before', async () => {
+    const { sub } = await tunnelFleet();
+    const res = await app.inject({ method: 'GET', url: `/sub/${sub}?format=json` });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { endpoints: Ep[] };
+    const awg = body.endpoints.filter((e) => e.protocol === 'amneziawg');
+    const wg = body.endpoints.filter((e) => e.protocol === 'wireguard');
+    expect(awg).toHaveLength(2);
+    expect(wg).toHaveLength(1);
+    for (const e of awg) {
+      expect(Object.keys(e.configUrls!).sort()).toEqual(['amneziavpn', 'wgconf']);
+      expect(e.configUrls!.wgconf!).toMatch(/\?format=wgconf&node=[0-9a-f]{8}$/);
+    }
+    // Plain WireGuard: the .conf only, named as the plain tunnel it is.
+    expect(Object.keys(wg[0]!.configUrls!)).toEqual(['wgconf']);
+    expect(wg[0]!.configUrls!.wgconf!).toContain('protocols=wireguard');
+    // Not on anything else.
+    for (const e of body.endpoints.filter((x) => x.protocol !== 'amneziawg' && x.protocol !== 'wireguard')) {
+      expect(e).not.toHaveProperty('configUrls');
+    }
+    // Every address answers with a non-empty file, a node apiece.
+    const confs = new Set<string>();
+    for (const e of [...awg, ...wg]) {
+      const url = new URL(e.configUrls!.wgconf!);
+      const file = await app.inject({ method: 'GET', url: url.pathname + url.search });
+      expect(file.statusCode, url.toString()).toBe(200);
+      expect(file.body.length).toBeGreaterThan(0);
+      confs.add(file.body);
+    }
+    expect(confs.size).toBe(3);
+    const vpnUrl = new URL(awg[0]!.configUrls!.amneziavpn!);
+    const vpn = await app.inject({ method: 'GET', url: vpnUrl.pathname + vpnUrl.search });
+    expect(vpn.body.startsWith('vpn://')).toBe(true);
+    // The rest of the answer is what it was without the addresses.
+    const again = JSON.parse((await app.inject({ method: 'GET', url: `/sub/${sub}?format=json` })).body) as { endpoints: Ep[] };
+    expect(withoutUrls(again.endpoints)).toEqual(withoutUrls(body.endpoints));
+  });
+
+  it('f13-03: a host switched off for wgconf does not name a file the route would not give', async () => {
+    const { sub, two } = await tunnelFleet();
+    await disableHosts(two, ['wgconf']);
+    const body = JSON.parse((await app.inject({ method: 'GET', url: `/sub/${sub}?format=json` })).body) as {
+      endpoints: Ep[];
+    };
+    const two2 = body.endpoints.filter((e) => e.protocol === 'amneziawg' && e.nodeName.includes('awg-two'));
+    expect(two2[0]?.configUrls?.wgconf).toBeUndefined();
+    expect(two2[0]?.configUrls?.amneziavpn).toBeDefined();
+  });
+
+  it('f13-13: a link with `node=` opens the page on that tunnel\'s .conf code; a name that is not held is the page without it', async () => {
+    const { sub } = await tunnelFleet();
+    const json = JSON.parse((await app.inject({ method: 'GET', url: `/sub/${sub}?format=json` })).body) as {
+      endpoints: Ep[];
+    };
+    const second = json.endpoints.filter((e) => e.protocol === 'amneziawg')[1]!;
+    const id = new URL(second.configUrls!.wgconf!).searchParams.get('node')!;
+    const on = (html: string) => [...html.matchAll(/<figure class="qrf on" data-target="([^"]+)"( data-app="(\w+)")?/g)].map((m) => `${m[1]!.replace(/ · .*$/, '')}/${m[3]}`);
+
+    const base = await app.inject({ method: 'GET', url: `/sub/${sub}`, headers: browser });
+    expect(on(base.body)).toEqual(['awg:awg-one/vpn']);
+
+    const pre = await app.inject({ method: 'GET', url: `/sub/${sub}?node=${id}`, headers: browser });
+    expect(pre.statusCode).toBe(200);
+    expect(on(pre.body)).toEqual([`awg:${second.nodeName.replace(/ · .*$/, '')}/conf`]);
+
+    const unknown = await app.inject({ method: 'GET', url: `/sub/${sub}?node=nope`, headers: browser });
+    expect(on(unknown.body)).toEqual(on(base.body));
+    const noDevice = await app.inject({ method: 'GET', url: `/sub/${sub}?node=${id}&device=9`, headers: browser });
+    expect(on(noDevice.body)).toEqual(on(base.body));
   });
 });

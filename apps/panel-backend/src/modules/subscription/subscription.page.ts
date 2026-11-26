@@ -20,6 +20,7 @@ import {
 } from '@iceslab/shared';
 import { amneziaQrChunkFromKey } from '../../core-adapters/amneziawg/vpnlink.js';
 import { withProtocols, withQuery } from './subscription.protocols.js';
+import { tunnelQuery } from './subscription.tunnel-links.js';
 import { PAGE_CSS } from './subscription.page-styles.js';
 import { pageScript } from './subscription.page-script.js';
 import { QR_SCRIPT, qrBox } from './subscription.page-qr.js';
@@ -142,6 +143,13 @@ export interface SubscriptionPageData {
     /** The file name the `.conf` is served under, as on awgNodes. */
     file?: string;
   }>;
+  /**
+   * The tunnel a link named (`?node=`, `device=`): the "scan" block opens on
+   * its code, the .conf one for AmneziaWG. `id` and `device` are those of a
+   * tunnel in awgNodes / wgNodes (the label when that has no id). Absent, or
+   * naming none of them: the block opens as it always did, on the first node.
+   */
+  preselect?: { id: string; device?: number };
   /**
    * One entry per MTProto node, with its proxy link already built.
    *
@@ -1230,10 +1238,19 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   for (const n of wgNodes)
     targets.push({ id: `wg:${tunnelLabel(n)}`, label: multiWg ? `WireGuard · ${tunnelLabel(n)}` : 'WireGuard' });
 
+  // What the widget opens on: the tunnel a link named, else the first node's
+  // vpn:// code (the first plain WireGuard one when that is all there is).
+  const named = (n: TunnelNode) =>
+    !!data.preselect &&
+    (n.id ?? n.nodeName) === data.preselect.id &&
+    (n.device ?? 1) === (data.preselect.device ?? 1);
+  const preAwg = awgNodes.find(named);
+  const preWg = preAwg ? undefined : wgNodes.find(named);
+  const preSelected = !!(preAwg?.conf || preAwg?.vpnKey || preWg?.conf);
+  const openApp = preSelected && preAwg?.conf ? 'conf' : 'vpn';
   const figures: string[] = [];
   awgNodes.forEach((n, ni) => {
-    // The first node's vpn:// QR is what the widget opens on.
-    const vpnOn = ni === 0 ? ' on' : '';
+    const vpnOn = (preSelected ? n === preAwg && !n.conf : ni === 0) ? ' on' : '';
     if (n.vpnKey) {
       const copyBtn = `<button class="copyk" type="button" data-key="${esc(n.vpnKey)}">${esc(t.copyKey)}</button>`;
       // The code carries the app's own chunk format, not the vpn:// string:
@@ -1247,7 +1264,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
     }
     if (n.conf) {
       figures.push(
-        `<figure class="qrf" data-target="awg:${esc(tunnelLabel(n))}" data-app="conf">` +
+        `<figure class="qrf${preSelected && n === preAwg ? ' on' : ''}" data-target="awg:${esc(tunnelLabel(n))}" data-app="conf">` +
           qrBox({ text: n.conf, fallback: n.conf, note: t.qrNeedsJs, esc }) +
           `<figcaption>AmneziaWG</figcaption></figure>`,
       );
@@ -1259,7 +1276,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   wgNodes.forEach((n, ni) => {
     if (!n.conf) return;
     figures.push(
-      `<figure class="qrf${awgNodes.length === 0 && ni === 0 ? ' on' : ''}" data-target="wg:${esc(tunnelLabel(n))}">` +
+      `<figure class="qrf${(preSelected ? n === preWg : awgNodes.length === 0 && ni === 0) ? ' on' : ''}" data-target="wg:${esc(tunnelLabel(n))}">` +
         qrBox({ text: n.conf, fallback: n.conf, note: t.qrNeedsJs, esc }) +
         `<figcaption>WireGuard</figcaption></figure>`,
     );
@@ -1268,18 +1285,22 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // Server chooser. Same control as the platform one in "Set up", down to the
   // classes: two selectors that behave differently on one page is a cost the
   // reader pays, not us. Only when there is more than one server to choose.
+  const openTarget = Math.max(
+    0,
+    targets.findIndex((tg) => preSelected && tg.id === `${preAwg ? 'awg' : 'wg'}:${tunnelLabel((preAwg ?? preWg)!)}`),
+  );
   const targetSel =
     targets.length > 1
       ? `<div class="platform" data-node-picker>
         <button class="platform__btn" type="button" data-node-btn aria-haspopup="listbox" aria-expanded="false">
           ${icons.draw('AmneziaWG', { cls: 'ic' })}
-          <span data-node-name>${esc(targets[0]!.label)}</span>
+          <span data-node-name>${esc(targets[openTarget]!.label)}</span>
           ${icons.draw('selector', { cls: 'ic ic--sel' })}
         </button>
         <div class="platform__menu" role="listbox">${targets
           .map(
             (tg, i) =>
-              `<button class="platform__item${i === 0 ? ' is-on' : ''}" type="button" role="option" data-target="${esc(tg.id)}" aria-selected="${i === 0}">${icons.draw('AmneziaWG', { cls: 'ic' })}<span>${esc(tg.label)}</span></button>`,
+              `<button class="platform__item${i === openTarget ? ' is-on' : ''}" type="button" role="option" data-target="${esc(tg.id)}" aria-selected="${i === openTarget}">${icons.draw('AmneziaWG', { cls: 'ic' })}<span>${esc(tg.label)}</span></button>`,
           )
           .join('')}</div>
       </div>`
@@ -1289,8 +1310,8 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // standing apart.
   const appSel = awgNodes.length > 0
     ? `<div class="seg-group" role="tablist">
-      <button class="seg-btn is-on" type="button" role="tab" aria-selected="true" data-app="vpn">AmneziaVPN</button>
-      <button class="seg-btn" type="button" role="tab" aria-selected="false" data-app="conf">AmneziaWG</button>
+      <button class="seg-btn${openApp === 'vpn' ? ' is-on' : ''}" type="button" role="tab" aria-selected="${openApp === 'vpn'}" data-app="vpn">AmneziaVPN</button>
+      <button class="seg-btn${openApp === 'conf' ? ' is-on' : ''}" type="button" role="tab" aria-selected="${openApp === 'conf'}" data-app="conf">AmneziaWG</button>
     </div>`
     : '';
   const scanSection =
@@ -1507,10 +1528,4 @@ type TunnelNode = { nodeName: string; id?: string; device?: number };
 /** A tunnel's name on the page: the node, and `#N` for device 2 and on. */
 function tunnelLabel(n: TunnelNode): string {
   return (n.device ?? 1) > 1 ? `${n.nodeName} #${n.device}` : n.nodeName;
-}
-
-/** The query a tunnel's links carry: its node, and its device from 2 on. */
-function tunnelQuery(n: TunnelNode): string {
-  const device = (n.device ?? 1) > 1 ? `&device=${n.device}` : '';
-  return `node=${encodeURIComponent(n.id ?? n.nodeName)}${device}`;
 }

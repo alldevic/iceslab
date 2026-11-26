@@ -16,6 +16,7 @@ import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
 import { buildWgQuickConf, wgconfTunnelName, type WgClientOpts } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
+import { wantsTunnelPreselect, withConfigUrls } from './subscription.tunnel-links.js';
 import { buildXrayJson, buildXrayJsonArray } from './formats/xrayjson.js';
 import { buildOutlineJson, outlineAccessKey } from './formats/outline.js';
 import { buildSurgeConf } from './formats/surge.js';
@@ -310,6 +311,11 @@ function wantsHtmlPage(
 ): boolean {
   if (query.format) return false;
   return acceptHeader.toLowerCase().includes('text/html');
+}
+
+/** A browser the portal takes: one that asks for the page and names no tunnel. */
+function wantsPortal(query: z.infer<typeof QuerySchema>, acceptHeader: string): boolean {
+  return wantsHtmlPage(query, acceptHeader) && !wantsTunnelPreselect(query);
 }
 
 function pickLang(acceptLanguage: string | undefined): 'ru' | 'en' {
@@ -749,10 +755,23 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // Wave-14 #6: browser navigation → human-readable landing page instead
       // of the base64 `plain` dump. Uses the same generated data; emits no
       // config, just links + copy + per-format download buttons.
+      // A person, not a client: with a portal named they belong there. Not for
+      // a link that names a tunnel (the shop's own "scan" link, 14.7), nor for
+      // `?format=` (wantsHtmlPage). 302, and no token on another origin.
+      if (config.CLIENT_PORTAL_URL && wantsPortal(query, (request.headers.accept ?? '').toString())) {
+        return reply.redirect(config.CLIENT_PORTAL_URL, 302);
+      }
       if (wantsHtmlPage(query, (request.headers.accept ?? '').toString())) {
         // The page is public whatever template the format has: no hidden host
         // on it, even when a frame above asked for them (A-236 step 6).
         const filtered = result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, format));
+        // The tunnel cards and codes follow the files they carry, not the
+        // format this request happens to be (a browser's is `plain`): a host
+        // switched off for wgconf has no .conf card and no QR here, and one
+        // switched off only for plain keeps both. The vpn:// key is its own
+        // format.
+        const wgconfEps = result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, 'wgconf'));
+        const vpnEps = result.endpoints.filter((e) => !formatDisabledForHost(e.disableForFormats, 'amneziavpn'));
         const settings = await getSubscriptionSettings();
         // The narrowing travels in every link the page prints, so what a
         // person copies, scans or adds is what this page lists.
@@ -766,7 +785,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // payloads scannable.
         const wgOpts = await wgClientOpts();
         const awgSeen = new Set<string>();
-        const awgNodes = filtered
+        const awgNodes = wgconfEps
           .filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg')
           .filter((e) => {
             const k = `${e.nodeName}\u0000${e.deviceIndex ?? 1}`;
@@ -776,13 +795,13 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             // By the endpoint's id, the key the per-node links carry (A-107).
             const id = endpointId(e);
             const device = e.deviceIndex ?? 1;
-            const conf = buildWgQuickConf(filtered, id, String(device), wgOpts);
-            const vpn = buildAwgVpnLink(filtered, id, String(device), wgOpts);
+            const conf = buildWgQuickConf(wgconfEps, id, String(device), wgOpts);
+            const vpn = buildAwgVpnLink(vpnEps, id, String(device), wgOpts);
             return {
               nodeName: e.nodeName,
               id,
               device,
-              file: `${wgconfTunnelName(filtered, wgOpts.brand, id, String(device))}.conf`,
+              file: `${wgconfTunnelName(wgconfEps, wgOpts.brand, id, String(device))}.conf`,
               // The PAYLOADS, not pictures of them. The codes are drawn in the
               // browser now: three server-rendered SVGs cost about 49 KB gzip
               // on this page, the encoder costs 4.3 KB once, and the code on
@@ -799,7 +818,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // Plain WireGuard (9.2): one conf per node, from the same builder as
         // the file (so the QR is what the download gives).
         const wgSeen = new Set<string>();
-        const wgNodes = filtered
+        const wgNodes = wgconfEps
           .filter((e): e is WireguardSubscriptionEndpoint => e.protocol === 'wireguard')
           .filter((e) => {
             const k = `${e.nodeName}\u0000${e.deviceIndex ?? 1}`;
@@ -812,10 +831,29 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               nodeName: e.nodeName,
               id,
               device,
-              file: `${wgconfTunnelName(filtered, wgOpts.brand, id, String(device))}.conf`,
-              conf: buildWgQuickConf(filtered, id, String(device), wgOpts) || undefined,
+              file: `${wgconfTunnelName(wgconfEps, wgOpts.brand, id, String(device))}.conf`,
+              conf: buildWgQuickConf(wgconfEps, id, String(device), wgOpts) || undefined,
             };
           });
+        // A link that names a tunnel (`?node=`, `device=`): the page opens on
+        // that tunnel's code. A name this subscription does not hold, or a
+        // tunnel the host's switches took off the page, is the page without
+        // the parameters.
+        const preselected = wantsTunnelPreselect(query)
+          ? pickServer(
+              ofDevice(
+                wgconfEps.filter(
+                  (e): e is AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint =>
+                    e.protocol === 'amneziawg' || e.protocol === 'wireguard',
+                ),
+                query.device,
+              ),
+              query.node,
+            )
+          : undefined;
+        const preselect = preselected
+          ? { id: endpointId(preselected), device: preselected.deviceIndex ?? 1 }
+          : undefined;
         /**
          * One row per MTProto node, with the link already built.
          *
@@ -891,6 +929,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             usableFormats: usableFormats(result.endpoints),
             awgNodes,
             wgNodes,
+            preselect,
             mtprotoNodes,
             telegramProxies,
             outlineNodes,
@@ -1072,7 +1111,10 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
             .type('application/json')
             // Servers, as before devices: a device after the first is a key on
             // the same server, which a client of this format has no use for.
-            .send({ ...result.json, endpoints: served.filter((e) => !isLaterDevice(e)) });
+            .send({
+              ...result.json,
+              endpoints: served.filter((e) => !isLaterDevice(e)).map(withConfigUrls(await subscriptionUrl(params.token))),
+            });
         // A-236 step 4: three Clash-family answers by core. `clash` is the
         // alias of mihomo for good (the address is in clients' configs), byte
         // for byte what it always answered.
@@ -1212,6 +1254,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // was already recognised as a browser asking for a page: same
         // condition as the success path, so nothing that reads the 403 sees
         // any difference.
+        // With a portal named, the browser of a lapsed subscription goes there
+        // too: the portal is where it is renewed (decision 26.11.2026). A link
+        // that names a tunnel keeps the page, as above.
+        if (config.CLIENT_PORTAL_URL && wantsPortal(query, (request.headers.accept ?? '').toString())) {
+          return reply.redirect(config.CLIENT_PORTAL_URL, 302);
+        }
         if (wantsHtmlPage(query, (request.headers.accept ?? '').toString())) {
           const page = await refusalPage(params.token, err.reason, query, request);
           if (page) return reply.code(403).type('text/html; charset=utf-8').header('referrer-policy', 'no-referrer').send(page);

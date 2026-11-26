@@ -67,6 +67,12 @@ describe('a blank optional setting does not stop the panel booting', () => {
     expect(parsed.SUBSCRIPTION_PUBLIC_URL).toBeUndefined();
   });
 
+  it('reads a blank CLIENT_PORTAL_URL as "no portal", and still rejects a malformed one', () => {
+    expect(ConfigSchema.parse({ ...REQUIRED, CLIENT_PORTAL_URL: '' }).CLIENT_PORTAL_URL).toBeUndefined();
+    expect(ConfigSchema.parse({ ...REQUIRED }).CLIENT_PORTAL_URL).toBeUndefined();
+    expect(ConfigSchema.safeParse({ ...REQUIRED, CLIENT_PORTAL_URL: 'not-a-url' }).success).toBe(false);
+  });
+
   it('still rejects a SUBSCRIPTION_PUBLIC_URL that is set but malformed', () => {
     const bad = ConfigSchema.safeParse({ ...REQUIRED, SUBSCRIPTION_PUBLIC_URL: 'not-a-url' });
     expect(bad.success).toBe(false);

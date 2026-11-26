@@ -101,3 +101,37 @@ describe('the AmneziaWG key selector and the platform selector keep their own st
     }
   });
 });
+
+describe('a link that names a tunnel', () => {
+  const fig = (doc: Document) => {
+    const f = doc.querySelector('.qrf.on');
+    return `${f?.getAttribute('data-target')}/${f?.getAttribute('data-app')}`;
+  };
+  const app = (doc: Document) => doc.querySelector('.seg-group .seg-btn.is-on')?.getAttribute('data-app');
+
+  it('starts the script on the named server and its .conf app, and switching still works from there', () => {
+    const doc = page({
+      awgNodes: [
+        { nodeName: 'awg-ru-01', id: 'aaaaaaa1', vpnKey: 'vpn://one', conf: '[Interface] one' },
+        { nodeName: 'awg-ru-02', id: 'bbbbbbb2', vpnKey: 'vpn://two', conf: '[Interface] two' },
+        { nodeName: 'awg-nl-01', id: 'ccccccc3', vpnKey: 'vpn://three', conf: '[Interface] three' },
+      ],
+      preselect: { id: 'bbbbbbb2' },
+    });
+    expect(keys(doc)).toMatchObject({ server: 'awg:awg-ru-02', figure: 'awg:awg-ru-02' });
+    expect(fig(doc)).toBe('awg:awg-ru-02/conf');
+    expect(app(doc)).toBe('conf');
+
+    // Another server keeps the app that was open; the other app swaps the code.
+    click(doc.querySelector('[data-node-picker] .platform__item[data-target="awg:awg-nl-01"]'));
+    expect(fig(doc)).toBe('awg:awg-nl-01/conf');
+    click(doc.querySelector('.seg-group .seg-btn[data-app="vpn"]'));
+    expect(fig(doc)).toBe('awg:awg-nl-01/vpn');
+  });
+
+  it('without one the script starts as it always did: first node, AmneziaVPN', () => {
+    const doc = page();
+    expect(fig(doc)).toBe('awg:awg-ru-01/vpn');
+    expect(app(doc)).toBe('vpn');
+  });
+});

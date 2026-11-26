@@ -167,6 +167,11 @@ services:
       # incoming panel's links live at the root of a separate host.
       SUBSCRIPTION_PUBLIC_URL: ${SUBSCRIPTION_PUBLIC_URL:-}
       SUBSCRIPTION_PATH_PREFIX: ${SUBSCRIPTION_PATH_PREFIX:-/sub}
+      # Where a PERSON goes when they open a subscription link in a browser
+      # (302; clients keep getting the subscription). Unset keeps the panel's
+      # own page. Set it only once the portal shows the connection for the
+      # whole fleet, AmneziaWG included.
+      CLIENT_PORTAL_URL: ${CLIENT_PORTAL_URL:-}
       # Safety ceiling on device rows per user, and the login-alert toggle.
       HWID_MAX_DEVICES_PER_USER: ${HWID_MAX_DEVICES_PER_USER:-1000}
       TELEGRAM_NOTIFY_LOGIN_EVENTS: ${TELEGRAM_NOTIFY_LOGIN_EVENTS:-false}

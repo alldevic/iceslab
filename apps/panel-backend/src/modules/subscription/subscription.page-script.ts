@@ -163,7 +163,8 @@ export function pageScript(o: PageScriptOpts): string {
       var appBtns = [].slice.call(document.querySelectorAll('.seg-group .seg-btn'));
       var onFig = figs.filter(function (f) { return f.classList.contains('on'); })[0] || figs[0];
       var curTarget = onFig.getAttribute('data-target');
-      var curApp = 'vpn';
+      // The app of the code the page opened on (a link may name the .conf one).
+      var curApp = onFig.getAttribute('data-app') || 'vpn';
       function render() {
         figs.forEach(function (f) {
           f.classList.toggle(

@@ -52,6 +52,24 @@ export const ConfigSchema = z.object({
     .transform((v) => (v && v.trim() !== '' ? v : undefined))
     .pipe(z.url().optional()),
 
+  // Where a PERSON belongs when they open a subscription link in a browser.
+  // The link is fetched by two different things: the VPN client, which needs
+  // the config, and the buyer, who taps it and gets this panel's install page.
+  // When set, a browser gets a 302 to this address instead, and only clients
+  // keep talking to /sub. Unset (the default) keeps the page exactly as it is.
+  // Precondition for setting it: the portal itself shows the connection for the
+  // whole fleet, AmneziaWG included; the page is the only place a buyer gets
+  // an AmneziaWG QR until it does. A link that carries a tunnel preselection
+  // (`?node=`) still gets the page, and so does a link with `?format=`.
+  // The token is NOT appended: it is the subscription credential and the
+  // destination is another origin. Blank is read as unset, as for
+  // SUBSCRIPTION_PUBLIC_URL above (compose passes `${VAR:-}`).
+  CLIENT_PORTAL_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? v : undefined))
+    .pipe(z.url().optional()),
+
   // Path prefix where the subscription endpoint is mounted. Default
   // `/sub` matches the historical default. Operators with concerns
   // about Iceslab fingerprinting can change it (e.g. `/v` or `/get`)
