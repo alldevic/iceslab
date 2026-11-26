@@ -14,6 +14,7 @@ const (
 	ProtocolHysteria    ProtocolName = "hysteria"
 	ProtocolXray        ProtocolName = "xray"
 	ProtocolAmneziaWG   ProtocolName = "amneziawg"
+	ProtocolWireguard   ProtocolName = "wireguard"
 	ProtocolNaive       ProtocolName = "naive"
 	ProtocolShadowsocks ProtocolName = "shadowsocks"
 	ProtocolTuic        ProtocolName = "tuic"
@@ -33,6 +34,9 @@ const (
 	// AmneziaWG as a chain entry, phase 7. Its adapter answers Engine() with
 	// the same word.
 	EngineAmneziawg EngineName = "amneziawg"
+	// Plain WireGuard (milestone 9.1): the amneziawg adapter in plain mode
+	// answers Engine() with the same word. Not a chain entry.
+	EngineWireguard EngineName = "wireguard"
 )
 
 // NativeEngine returns the default core for a protocol when an inbound does not
@@ -63,6 +67,12 @@ type ProtocolCredentials struct {
 	// (t07-6), from the 3.1 profile's own subnet: the two interfaces cannot
 	// share one. Same public key.
 	AmneziaWGAllowedIP3 string `json:"amneziawgAllowedIp3,omitempty"`
+	// WireguardPublicKey and WireguardAllowedIP are plain WireGuard's: the same
+	// key as AmneziaWGPublicKey (one WG keypair per user) under a name of its
+	// own, and an address from the plain profile's subnet, which differs from
+	// AmneziaWGAllowedIP.
+	WireguardPublicKey string `json:"wireguardPublicKey,omitempty"`
+	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
 	// TUIC (sing-box engine): per-user UUID + password. Both required for a
 	// TUIC v5 client to authenticate. Only present when the user has access
 	// to a tuic inbound.

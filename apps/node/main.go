@@ -346,6 +346,29 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		logger.Info("amneziawg adapter registered", "bin", awgBinPath)
 	}
 
+	// Upstream WireGuard (milestone 9.1): the amneziawg adapter in plain mode,
+	// on wg / wg-quick, its own interface, config and state file beside the
+	// AWG ones. Registered only when WIREGUARD_BIN is SET, never on the
+	// presence of /usr/bin/wg: bootstrap-amneziawg.sh installs wireguard-tools
+	// too, and the engine would turn up "installed" on every AWG node nobody
+	// asked for it on. Nothing writes the variable until milestone 9.3 (the
+	// bootstrap that does), so until then a node differs from the base by
+	// nothing. The node's engine list does not name wireguard either
+	// (knownEngines, envBlockEngines: 9.3).
+	if wgBinPath := os.Getenv("WIREGUARD_BIN"); wgBinPath != "" {
+		wgCfg := amneziawg.Config{
+			Protocol:     amneziawg.NameWireguard,
+			AwgBin:       wgBinPath,
+			AwgQuickBin:  getenv("WIREGUARD_QUICK_BIN", "/usr/bin/wg-quick"),
+			SystemctlBin: getenv("SYSTEMCTL_BIN", "/usr/bin/systemctl"),
+			Inbound: amneziawg.InboundConfig{
+				Interface: getenv("WIREGUARD_INTERFACE", "wg0"),
+			},
+		}
+		adapters = append(adapters, amneziawg.New(wgCfg, logger))
+		logger.Info("wireguard adapter registered", "bin", wgBinPath)
+	}
+
 	// Slice 20: NaiveProxy via Caddy + klzgrad/forwardproxy@naive plugin.
 	// bootstrap-naive.sh builds a custom Caddy at /usr/local/bin/caddy-naive
 	// (the upstream `caddy` package would lack the forward_proxy module).

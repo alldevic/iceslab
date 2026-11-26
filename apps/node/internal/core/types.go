@@ -24,6 +24,11 @@ type User struct {
 	// MtprotoSecret is the user's own MTProto secret (32 hex chars), for the
 	// mtprotoproxy engine only; mtg has one secret per inbound and ignores it.
 	MtprotoSecret string
+
+	// Plain WireGuard (milestone 9.1): the same keypair as AmneziaWG, and an
+	// address of its own from the plain profile's subnet.
+	WireguardPublicKey string
+	WireguardAllowedIP string
 }
 
 // UserStats are per-user traffic counters reported by a single core.

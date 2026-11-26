@@ -222,6 +222,27 @@ func cases() []adapterCase {
 			},
 		},
 		{
+			// 9.1: the same package in plain mode, "<package>/<mode>" for the
+			// package scan below. A node may run it beside the AmneziaWG one,
+			// so it is held to the same lifecycle.
+			name:          "amneziawg/wireguard",
+			provisionable: true,
+			provisionedBy: "Inbound.PrivateKey",
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "wg0.conf")
+				in := amneziawg.InboundConfig{Interface: "wg0", ListenPort: 51821, Address: "10.77.77.1/24"}
+				if ready {
+					in.PrivateKey = awgKey
+				}
+				return amneziawg.New(amneziawg.Config{
+					Protocol: amneziawg.NameWireguard, ConfigPath: cfgPath, Inbound: in,
+				}, quiet()), cfgPath
+			},
+			reapply: func(t *testing.T, a core.CoreAdapter) {
+				mustApply(t, a, 51821, `{"subnet":"10.77.77.0/24","serverPrivateKey":"`+awgKey+`"}`)
+			},
+		},
+		{
 			name:          "naive",
 			provisionable: true,
 			provisionedBy: "Inbound.Hostname",
@@ -595,7 +616,9 @@ func TestEveryAdapterIsInTheContract(t *testing.T) {
 
 	covered := map[string]bool{}
 	for _, c := range cases() {
-		covered[c.name] = true
+		// "pkg/mode": a second instance of the same package (9.1 plain mode).
+		pkg, _, _ := strings.Cut(c.name, "/")
+		covered[pkg] = true
 	}
 	var missing []string
 	for _, name := range onDisk {

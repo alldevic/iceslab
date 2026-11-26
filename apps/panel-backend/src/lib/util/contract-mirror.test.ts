@@ -51,7 +51,10 @@ const AGENT_CORES = join(
  * installer step together with the name. This is the ONLY place the mirror is
  * weakened; the engine check below skips exactly these names and nothing else.
  */
-const ENGINES_AWAITING_WIRING: readonly string[] = ['mtprotoproxy'];
+const ENGINES_AWAITING_WIRING: readonly string[] = [
+  'mtprotoproxy', // 8.1 adapter; wired (ENGINE_NAMES, bootstrap, manifest, installer) and removed here by 8.2
+  'wireguard', // 9.1 plain mode of the amneziawg package; wired and removed here by 9.3
+];
 
 /** Every `adapter.go` under internal/core, read once. */
 function adapterSources(): { pkg: string; src: string }[] {
@@ -70,13 +73,17 @@ function adapterSources(): { pkg: string; src: string }[] {
     .map((e) => ({ pkg: e.pkg, src: readFileSync(e.path, 'utf8') }));
 }
 
+
 describe('the wire enumerations against the agent that fills them', () => {
   it('names every engine an adapter can answer with', () => {
     // `func (a *Adapter) Engine() string { return "xray" }`, one per adapter.
+    // The amneziawg package answers two (its plain mode is `wireguard`, 9.1),
+    // so every `return "..."` of the method body is read, not only the first.
     const found = new Map<string, string>();
     for (const { pkg, src } of adapterSources()) {
-      const m = /func \(a \*Adapter\) Engine\(\) string \{\s*return "([a-z0-9-]+)"/.exec(src);
-      if (m) found.set(m[1]!, pkg);
+      // A one-line body, or a block that closes at the start of a line.
+      const body = /func \(a \*Adapter\) Engine\(\) string \{([^\n}]*\}|[\s\S]*?\n\})/.exec(src)?.[1];
+      for (const m of body?.matchAll(/return "([a-z0-9-]+)"/g) ?? []) found.set(m[1]!, pkg);
     }
 
     // If the regex stops matching, this test must FAIL rather than pass on an
@@ -88,12 +95,21 @@ describe('the wire enumerations against the agent that fills them', () => {
         'this test is checking nothing. Fix the pattern, do not delete the test.',
     ).toBeGreaterThanOrEqual(7);
 
-    // ENGINES_AWAITING_WIRING (top of the file) is the one exception, until 8.2.
+    // ENGINES_AWAITING_WIRING (top of the file) holds the engines whose wiring milestone (8.2, 9.3) is pending.
     const missing = [...found].filter(
       ([engine]) =>
-        !(ENGINE_NAMES as readonly string[]).includes(engine) &&
-        !ENGINES_AWAITING_WIRING.includes(engine),
+        !(ENGINE_NAMES as readonly string[]).includes(engine) && !ENGINES_AWAITING_WIRING.includes(engine),
     );
+    // The exception holds only while it is true: an excepted engine the agent no
+    // longer answers with, or one already in ENGINE_NAMES, is a stale entry that
+    // the wiring milestone had to delete.
+    for (const engine of ENGINES_AWAITING_WIRING) {
+      expect(found.has(engine), `${engine} is excepted here and no adapter answers it any more`).toBe(true);
+      expect(
+        (ENGINE_NAMES as readonly string[]).includes(engine),
+        `${engine} is in ENGINE_NAMES now: remove it from ENGINES_AWAITING_WIRING`,
+      ).toBe(false);
+    }
     expect(
       missing.map(([engine, pkg]) => `${engine} (${pkg})`),
       'these engines are answered by the agent and missing from EngineName in ' +
@@ -102,23 +118,6 @@ describe('the wire enumerations against the agent that fills them', () => {
     ).toEqual([]);
   });
 
-  it('keeps the temporary exception honest (ENGINES_AWAITING_WIRING, removed by 8.2)', () => {
-    // An exception that outlives its reason is a hole in the mirror: each name
-    // must still be answered by an adapter and still be missing from
-    // ENGINE_NAMES. The day 8.2 adds the name, this fails until the list is gone.
-    const answered = new Set<string>();
-    for (const { src } of adapterSources()) {
-      const m = /func \(a \*Adapter\) Engine\(\) string \{\s*return "([a-z0-9-]+)"/.exec(src);
-      if (m) answered.add(m[1]!);
-    }
-    for (const engine of ENGINES_AWAITING_WIRING) {
-      expect(answered.has(engine), `${engine}: no adapter answers it any more, drop it from the list`).toBe(true);
-      expect(
-        (ENGINE_NAMES as readonly string[]).includes(engine),
-        `${engine} is in ENGINE_NAMES now: delete ENGINES_AWAITING_WIRING and its skip`,
-      ).toBe(false);
-    }
-  });
 
   it('names every protocol an adapter declares', () => {
     // `const Name = "hysteria"` at package level, one per adapter.

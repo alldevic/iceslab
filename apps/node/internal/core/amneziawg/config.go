@@ -79,6 +79,14 @@ type InboundConfig struct {
 	// (panel-backend amneziawg.service) is handing out from.
 	Address string
 
+	// Plain renders an upstream-WireGuard interface (milestone 9.1) instead of
+	// an AmneziaWG one: none of the obfuscation lines below is written, since
+	// wg-quick refuses a config on the first key it does not know, and
+	// validate() takes the H1-H4 rules away, whose whole purpose is keeping an
+	// AWG interface apart from WireGuard. Stamped from Config.Protocol by New,
+	// never from the panel wire.
+	Plain bool
+
 	// Junk parameters: currently interface-fixed in MVP.
 	Jc   int // junk packet count
 	Jmin int // junk packet size min
@@ -131,7 +139,7 @@ type Peer struct {
 func (c *InboundConfig) withDefaults() InboundConfig {
 	out := *c
 	if out.Interface == "" {
-		out.Interface = "awg0"
+		out.Interface = defaultInterface(out.Plain)
 	}
 	if out.ListenPort == 0 {
 		out.ListenPort = 51820
@@ -280,6 +288,9 @@ func (c *InboundConfig) validate() error {
 	if err := validateWGKey(c.PrivateKey); err != nil {
 		return fmt.Errorf("PrivateKey: %w", err)
 	}
+	if c.Plain {
+		return c.validatePlain()
+	}
 	// A 3.1 interface is judged by the geometry's own table, which covers
 	// everything below and more; its H are ranges, not the 1.x values.
 	if c.Geometry != nil {
@@ -316,6 +327,47 @@ func (c *InboundConfig) validate() error {
 	return nil
 }
 
+// validatePlain is validate for an upstream-WireGuard interface. Every
+// obfuscation knob must be unset: a value here means a caller mapped an AWG
+// config onto a plain interface, and rendering it without the obfuscation would
+// leave an operator believing a tunnel is hidden when it is not, so it fails
+// instead. The same for a 3.1 geometry and a cascade hand-off, neither of which
+// a plain interface carries.
+func (c *InboundConfig) validatePlain() error {
+	for _, f := range []struct {
+		name string
+		val  int
+	}{{"Jc", c.Jc}, {"Jmin", c.Jmin}, {"Jmax", c.Jmax},
+		{"S1", c.S1}, {"S2", c.S2}, {"S3", c.S3}, {"S4", c.S4}} {
+		if f.val != 0 {
+			return fmt.Errorf("%s=%d set on a plain WireGuard interface (obfuscation is AmneziaWG-only)", f.name, f.val)
+		}
+	}
+	for _, f := range []struct {
+		name string
+		val  uint32
+	}{{"H1", c.H1}, {"H2", c.H2}, {"H3", c.H3}, {"H4", c.H4}} {
+		if f.val != 0 {
+			return fmt.Errorf("%s=%d set on a plain WireGuard interface (magic headers are AmneziaWG-only)", f.name, f.val)
+		}
+	}
+	for _, f := range []struct {
+		name string
+		val  string
+	}{{"I1", c.I1}, {"I2", c.I2}, {"I3", c.I3}, {"I4", c.I4}, {"I5", c.I5}} {
+		if f.val != "" {
+			return fmt.Errorf("%s set on a plain WireGuard interface (mimicry packets are AmneziaWG-only)", f.name)
+		}
+	}
+	if c.Geometry != nil {
+		return errors.New("a 3.1 geometry set on a plain WireGuard interface")
+	}
+	if c.Chain != nil {
+		return errors.New("a cascade hand-off set on a plain WireGuard interface (it is not a chain entry)")
+	}
+	return nil
+}
+
 // renderConfig produces a complete awg-quick config string for the given peers.
 // Output is plain text (not JSON) because that's what `awg syncconf` and
 // `awg-quick` consume. Peers are written in the order received, caller is
@@ -331,7 +383,12 @@ func renderConfig(inbound InboundConfig, peers []Peer) (string, error) {
 	fmt.Fprintf(&b, "PrivateKey = %s\n", cfg.PrivateKey)
 	fmt.Fprintf(&b, "ListenPort = %d\n", cfg.ListenPort)
 	fmt.Fprintf(&b, "Address = %s\n", cfg.Address)
-	if cfg.Geometry != nil {
+	switch {
+	case cfg.Plain:
+		// Plain WireGuard stops at the address: wg-quick rejects the whole file
+		// on Jc, S1 or H1, so an AWG-shaped [Interface] block is not redundant
+		// here, it keeps the interface from coming up.
+	case cfg.Geometry != nil:
 		// t07-6: the node's 3.1 block. MTU is awg-quick's key and the one the
 		// geometry was minted for: S4 is paid out of it.
 		lines, err := cfg.Geometry.interfaceLines()
@@ -342,7 +399,7 @@ func renderConfig(inbound InboundConfig, peers []Peer) (string, error) {
 		for _, l := range lines {
 			fmt.Fprintln(&b, l)
 		}
-	} else {
+	default:
 		renderObfuscation1(&b, cfg)
 	}
 	return renderHooksAndPeers(&b, cfg, peers)

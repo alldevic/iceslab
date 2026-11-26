@@ -585,6 +585,14 @@ export interface ProtocolCredentials {
    * two addresses. Same public key on both.
    */
   amneziawgAllowedIp3?: string;
+  /**
+   * Plain WireGuard (milestone 9.1): the same public key as amneziawgPublicKey
+   * (one WG keypair per user) under a name of its own, and the user's address
+   * from the plain profile's subnet, which is not the AmneziaWG one. Not sent
+   * by the panel until 9.2; the agent already reads them.
+   */
+  wireguardPublicKey?: string;
+  wireguardAllowedIp?: string;
   /** TUIC v5 (sing-box engine): per-user UUID + password. */
   tuicUuid?: string;
   tuicPassword?: string;

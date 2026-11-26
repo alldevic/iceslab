@@ -92,3 +92,57 @@ func TestARegisteredEngineGetsNoStandIn(t *testing.T) {
 		t.Fatalf("got %d rows, want %d", len(out), len(knownEngines))
 	}
 }
+
+// Plain WireGuard (milestone 9.1) is registered by an explicit WIREGUARD_BIN
+// and by nothing else: wireguard-tools is on every AWG node (its bootstrap
+// installs it), so the presence of /usr/bin/wg says nothing about whether an
+// operator asked for the engine. Without the variable the adapter list is the
+// base's, one row per known engine.
+func TestWireguardIsRegisteredOnlyByAnExplicitBin(t *testing.T) {
+	for _, k := range []string{"XRAY_BINARY", "SINGBOX_BINARY", "HYSTERIA_BINARY", "MTG_BINARY", "MITA_BINARY"} {
+		t.Setenv(k, "")
+	}
+	nowhere := t.TempDir()
+	t.Setenv("AMNEZIAWG_BIN", filepath.Join(nowhere, "awg"))
+	t.Setenv("CADDY_NAIVE_BIN", filepath.Join(nowhere, "caddy-naive"))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Setenv("WIREGUARD_BIN", "")
+	for _, a := range buildAdapters(logger) {
+		if a.Name() == "wireguard" || a.Engine() == "wireguard" {
+			t.Fatalf("a wireguard adapter without WIREGUARD_BIN: %s/%s", a.Name(), a.Engine())
+		}
+	}
+
+	// With the variable: one more adapter, on wg0, and no stand-in or row for
+	// the engine in knownEngines (the node reports it only when asked to run
+	// it; the name joins the shared lists in 9.3).
+	t.Setenv("WIREGUARD_BIN", filepath.Join(nowhere, "wg"))
+	t.Setenv("WIREGUARD_INTERFACE", "wg7")
+	var found core.CoreAdapter
+	n := 0
+	for _, a := range buildAdapters(logger) {
+		n++
+		if a.Name() == "wireguard" {
+			found = a
+		}
+	}
+	if found == nil {
+		t.Fatal("WIREGUARD_BIN is set and no wireguard adapter is registered")
+	}
+	if found.Engine() != "wireguard" {
+		t.Errorf("engine = %q", found.Engine())
+	}
+	if n != len(knownEngines)+1 {
+		t.Errorf("%d adapters, want the %d known engines and the wireguard one", n, len(knownEngines))
+	}
+	for _, k := range knownEngines {
+		if k.engine == "wireguard" || k.protocol == "wireguard" {
+			t.Errorf("knownEngines names wireguard: %+v (milestone 9.3 adds it)", k)
+		}
+	}
+	// Not installed: the file is not there, and Installed says so.
+	if inst, ok := found.(core.Installable); !ok || inst.Installed() {
+		t.Errorf("a wg binary that is not on the machine reads as installed")
+	}
+}

@@ -61,7 +61,7 @@ func (a *Adapter) saveState() {
 		err = atomicfile.Write(a.statePath(), body, 0o600)
 	}
 	if err != nil {
-		a.logger.Error("amneziawg: state not saved, an agent restart will come up without these peers",
+		a.logger.Error(a.Name()+": state not saved, an agent restart will come up without these peers",
 			"path", a.statePath(), "err", err)
 	}
 }
@@ -75,29 +75,30 @@ func (a *Adapter) loadState() {
 	body, err := os.ReadFile(a.statePath())
 	if err != nil {
 		if !os.IsNotExist(err) {
-			a.logger.Warn("amneziawg: saved state unreadable, starting without it", "path", a.statePath(), "err", err)
+			a.logger.Warn(a.Name()+": saved state unreadable, starting without it", "path", a.statePath(), "err", err)
 		}
 		return
 	}
 	var st savedState
 	if err := json.Unmarshal(body, &st); err != nil {
-		a.logger.Warn("amneziawg: saved state unparsable, starting without it", "path", a.statePath(), "err", err)
+		a.logger.Warn(a.Name()+": saved state unparsable, starting without it", "path", a.statePath(), "err", err)
 		return
 	}
 	if st.Inbound.Interface != a.cfg.Inbound.Interface {
-		a.logger.Warn("amneziawg: saved state is for another interface, not taken",
+		a.logger.Warn(a.Name()+": saved state is for another interface, not taken",
 			"saved", st.Inbound.Interface, "interface", a.cfg.Inbound.Interface)
 		return
 	}
 	inbound := st.Inbound
 	inbound.PostUp, inbound.PostDown = a.cfg.Inbound.PostUp, a.cfg.Inbound.PostDown
+	inbound.Plain = a.cfg.Inbound.Plain // the instance's identity, not the file's
 	if inbound.ListenPort == 0 {
 		inbound.ListenPort = a.cfg.Inbound.ListenPort
 	}
 	peers := make(map[string]Peer, len(st.Peers))
 	for id, p := range st.Peers {
 		if err := validatePeer(p); err != nil {
-			a.logger.Warn("amneziawg: saved peer refused", "user", id, "err", err)
+			a.logger.Warn(a.Name()+": saved peer refused", "user", id, "err", err)
 			continue
 		}
 		peers[id] = p
@@ -105,7 +106,7 @@ func (a *Adapter) loadState() {
 	a.cfg.Inbound = inbound
 	a.inboundID = st.InboundID
 	a.peers = peers
-	a.logger.Info("amneziawg: state of the previous agent restored",
+	a.logger.Info(a.Name()+": state of the previous agent restored",
 		"interface", inbound.Interface, "peers", len(peers), "configured", inbound.PrivateKey != "")
 }
 

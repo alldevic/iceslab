@@ -135,3 +135,29 @@ func TestToolsVersionIsEmptyForTheWrongProgram(t *testing.T) {
 		t.Fatalf("ToolsVersion = %q for a failed run, want empty", got)
 	}
 }
+
+// Installed for plain asks for the tools only. The kernel module AmneziaWG
+// needs is not WireGuard's: wireguard is in-tree, wg-quick loads it.
+func TestPlainInstalledNeedsTheToolsNotTheAmneziawgModule(t *testing.T) {
+	a := New(Config{
+		Protocol:    NameWireguard,
+		AwgBin:      fakeBinary(t, "wg"),
+		AwgQuickBin: fakeBinary(t, "wg-quick"),
+		ConfigPath:  t.TempDir() + "/wg0.conf",
+	}, quietLogger())
+	if kernelModuleLoaded() {
+		t.Skip("this machine has the amneziawg module loaded: the case needs one without it")
+	}
+	if !a.Installed() {
+		t.Error("wg and wg-quick are on the machine and Installed says no, for want of an amneziawg module")
+	}
+	a.cfg.AwgBin = "/nonexistent/wg"
+	if a.Installed() {
+		t.Error("no wg binary and Installed says yes")
+	}
+	a.cfg.AwgBin = fakeBinary(t, "wg")
+	a.cfg.AwgQuickBin = "/nonexistent/wg-quick"
+	if a.Installed() {
+		t.Error("no wg-quick binary and Installed says yes")
+	}
+}

@@ -57,3 +57,34 @@ func TestProvisionedAgreesWithStartDeferral(t *testing.T) {
 		})
 	}
 }
+
+// Provisioned is Start's own condition (6.1): false exactly when Start defers.
+func TestPlainProvisionedAgreesWithStartDeferral(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
+		want bool
+	}{{"no key", "", false}, {"a key", testWGPrivKey, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs strings.Builder
+			a := New(Config{
+				Protocol:    NameWireguard,
+				ConfigPath:  filepath.Join(t.TempDir(), "wg0.conf"),
+				AwgQuickBin: "/nonexistent/wg-quick",
+				runCmd:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+			}, slog.New(slog.NewTextHandler(&logs, nil)))
+			a.cfg.Inbound.PrivateKey = tc.key
+			if got := a.Provisioned(); got != tc.want {
+				t.Errorf("Provisioned() = %v, want %v", got, tc.want)
+			}
+			_ = a.startOne(context.Background())
+			if deferred := strings.Contains(logs.String(), "deferred"); deferred == tc.want {
+				t.Errorf("deferred=%v with Provisioned=%v", deferred, tc.want)
+			}
+			// One interface: nothing of a 3.1 one is consulted.
+			if len(a.both()) != 1 {
+				t.Errorf("a plain instance has %d interfaces", len(a.both()))
+			}
+		})
+	}
+}
