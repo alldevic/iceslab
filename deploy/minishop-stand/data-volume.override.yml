@@ -1,0 +1,33 @@
+# A writable /app/data, for BOTH halves of the differential.
+#
+# The shop's compose bind-mounts its checkout's ./data over /app/data. On the
+# host that directory belongs to the host user; inside, the app runs as uid
+# 10001, so the mount SHADOWS a directory the image ships writable with one the
+# app cannot write (admin Backups page 500, themes warnings, a tariff catalogue
+# that cannot be stored). It also makes the shop write into its own checkout,
+# which the stand promises never to do.
+#
+# A named volume is seeded from the image's own /app/data on first use, so the
+# shipped example files are still there and the directory belongs to the app.
+# plugin-store-init chowns its plugin-store subdirectory inside the same volume.
+#
+# Its OWN file, and not part of stand.override.yml, because that one is the
+# iceslab half's only: a fix applied to one half of a differential is a
+# divergence the next run reports as a finding. Both halves include this.
+services:
+  plugin-store-init:
+    volumes:
+      - remnawave-minishop-data:/app/data:rw
+  migrate:
+    volumes:
+      - remnawave-minishop-data:/app/data:rw
+  backend:
+    volumes:
+      - remnawave-minishop-data:/app/data:rw
+  worker:
+    volumes:
+      - remnawave-minishop-data:/app/data:rw
+
+volumes:
+  remnawave-minishop-data:
+    name: ${STAND_DATA_VOLUME:-remnawave-minishop-stand-data}

@@ -222,3 +222,24 @@ describe('the facade prefix (REMNAWAVE_COMPAT_PREFIX) reaches the frontend conta
     expect(run({ REMNAWAVE_COMPAT_PREFIX: 'v', SUBSCRIPTION_PATH_PREFIX: '/v' }).status).toBe(1);
   });
 });
+
+// Milestone 15.1: where the backend is, as an address the frontend image takes.
+// The compose files do not set it (the default is the service they ship next
+// to); the minishop stand does, to put the image in front of a host process.
+describe('the backend address of the frontend image (PANEL_BACKEND_ADDR)', () => {
+  const AKEY = 'PANEL_BACKEND_ADDR';
+
+  it('the image defaults to the compose service and its filter passes the variable and no nginx one', () => {
+    const dockerfile = read('apps/panel-frontend/Dockerfile');
+    expect(new RegExp(`${AKEY}=(\\S+)`).exec(dockerfile)?.[1]).toBe('backend:3000');
+    const re = new RegExp(/NGINX_ENVSUBST_FILTER=(\S+)/.exec(dockerfile)![1]!);
+    expect(re.test(AKEY)).toBe(true);
+    for (const nginxVar of ['host', 'uri', 'backend', 'csp', 'csp_page', 'request_id']) expect(re.test(nginxVar)).toBe(false);
+  });
+
+  it('the template takes the upstream from the variable, in one place and nowhere as a literal', () => {
+    const t = read('apps/panel-frontend/nginx.conf.template');
+    expect(t.match(/^\s*set \$backend "[^"]*";$/gm)).toEqual([`    set $backend "\${${AKEY}}";`]);
+    expect(t.replace(/^\s*#.*$/gm, '')).not.toContain('backend:3000');
+  });
+});

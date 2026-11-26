@@ -1473,6 +1473,46 @@ jobs:
           expect_backend http://127.0.0.1:8082/sub/tok-123 /sub/tok-123
           expect_spa http://127.0.0.1:8082/s2/tok-123
 
+      # Where the backend is is an address the image takes (PANEL_BACKEND_ADDR,
+      # milestone 15.1; the minishop stand puts the image in front of a host
+      # process with it). A second stand-in under a second alias, with a body of
+      # its own: pointing at the first would pass on an image that ignores the
+      # variable and keeps proxying to `backend`, which is still running.
+      - name: PANEL_BACKEND_ADDR moves the upstream
+        run: |
+          set -euo pipefail
+          docker run -d --name elsewhere --network proxy-net --network-alias elsewhere \
+            node:22-alpine node -e \
+            "require('http').createServer((q,s)=>s.end('ELSEWHERE '+q.url)).listen(3000)"
+          docker run -d --name fe-addr --network proxy-net -p "127.0.0.1:8083:80" \
+            -e PANEL_BACKEND_ADDR=elsewhere:3000 iceslab-frontend:proxy
+          up=""
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:8083/" >/dev/null 2>&1; then up=1; break; fi
+            sleep 1
+          done
+          if [[ -z "$up" ]]; then
+            docker logs fe-addr
+            echo "::error::fe-addr did not answer on :8083"
+            exit 1
+          fi
+          # `[[ == ]]` on a variable, not `| grep -q` (E33).
+          for path in /api/auth/status /sub/tok-123 /rw/api/system/metadata /health; do
+            body=$(curl -fsS "http://127.0.0.1:8083$path")
+            if [[ "$body" != "ELSEWHERE $path" ]]; then
+              echo "::error::$path should reach the address in PANEL_BACKEND_ADDR, got: ${body:0:120}"
+              exit 1
+            fi
+            echo "ok: $path -> elsewhere:3000"
+          done
+          # The default container (no variable) still reaches `backend`.
+          body=$(curl -fsS "http://127.0.0.1:8082/api/auth/status")
+          if [[ "$body" != "BACKEND /api/auth/status" ]]; then
+            echo "::error::the default image no longer reaches backend:3000, got: ${body:0:120}"
+            exit 1
+          fi
+          echo "ok: no variable -> backend:3000"
+
       # A value the backend would refuse stops the container with a reason,
       # instead of reaching a location line.
       - name: A prefix the backend would refuse is refused here too
@@ -1497,7 +1537,7 @@ jobs:
       - name: Container logs on failure
         if: failure()
         run: |
-          for c in fe-s2 fe-default backend; do echo "== $c"; docker logs "$c" 2>&1 | tail -40 || true; done
+          for c in fe-s2 fe-default fe-addr backend elsewhere; do echo "== $c"; docker logs "$c" 2>&1 | tail -40 || true; done
 
       - name: Summary
         if: always()
@@ -1513,6 +1553,7 @@ jobs:
             echo "- SUBSCRIPTION_PATH_PREFIX=/s2: /s2/<token> reaches the backend, /sub/<token> is the SPA"
             echo "- unset: /sub/<token> reaches the backend, as before"
             echo "- /s2;x, sub and /api: the container refuses to start"
+            echo "- PANEL_BACKEND_ADDR=elsewhere:3000: /api, the subscription prefix, the facade prefix and /health reach that address; unset: backend:3000"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────────

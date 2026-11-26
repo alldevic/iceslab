@@ -63,7 +63,8 @@ COPY --from=builder /repo/apps/panel-frontend/dist /usr/share/nginx/html
 # is the backend's default, so an unset variable behaves as before.
 ENV SUBSCRIPTION_PATH_PREFIX=/sub \
     REMNAWAVE_COMPAT_PREFIX=rw \
-    NGINX_ENVSUBST_FILTER=^(SUBSCRIPTION_PATH_PREFIX|REMNAWAVE_COMPAT_PREFIX)$
+    PANEL_BACKEND_ADDR=backend:3000 \
+    NGINX_ENVSUBST_FILTER=^(SUBSCRIPTION_PATH_PREFIX|REMNAWAVE_COMPAT_PREFIX|PANEL_BACKEND_ADDR)$
 COPY apps/panel-frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
 # Check the prefixes with the backend's rule before it reaches a location line.
 COPY --chmod=0755 apps/panel-frontend/docker-entrypoint.d/15-subscription-prefix.sh /docker-entrypoint.d/

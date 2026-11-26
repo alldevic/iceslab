@@ -1,0 +1,103 @@
+# Three things the stand needs that the shop's own compose cannot know about,
+# kept here rather than as edits to its files: the shop stays unmodified by
+# design. Used by the iceslab half only; the reference half runs the shop's own
+# two compose files (see stand.sh).
+#
+# 1. The version stamp as build args instead of a git call. The shop's
+#    Dockerfile derives the image version by running `git describe` inside the
+#    build context, and it needs a real `.git` directory there (a git WORKTREE
+#    has a `.git` file pointing outside the context, and the build fails). The
+#    Dockerfile already skips git when the tag and commit are supplied, so
+#    supply them. Provenance is `custom` because we built it: the source is the
+#    unmodified v3.8.6 tag, but the image is not an official one.
+#    Every service that builds the backend or worker image gets it, so one
+#    image name never comes from two different builds.
+x-shop-build: &shop-build
+  context: .
+  dockerfile: deploy/docker/Dockerfile
+  args:
+    REMNAWAVE_MINISHOP_BUILD_TAG: ${MINISHOP_BUILD_TAG:?set in the env file}
+    REMNAWAVE_MINISHOP_BUILD_COMMIT: ${MINISHOP_BUILD_COMMIT:-unknown}
+    REMNAWAVE_MINISHOP_BUILD_PROVENANCE: custom
+    REMNAWAVE_MINISHOP_BRANCH: ''
+
+services:
+  plugin-store-init:
+    build:
+      <<: *shop-build
+      target: backend
+  migrate:
+    build:
+      <<: *shop-build
+      target: backend
+  backend:
+    build:
+      <<: *shop-build
+      target: backend
+  worker:
+    build:
+      <<: *shop-build
+      target: worker
+  frontend:
+    build:
+      <<: *shop-build
+      target: frontend
+
+  # 2. The shop's own demo fixtures, for the iceslab half of the differential.
+  #    They live in the shop's REFERENCE compose (docker-compose.remnawave-dev.yml),
+  #    which this half does not include, so without a copy here only the
+  #    reference half gets an admin user and the two halves are not comparable.
+  #    Same image (the shop's own postgres version), same command, same file: a
+  #    different seeding mechanism would itself be a difference between the
+  #    halves. stand.sh checks that the admin row landed rather than trusting
+  #    the exit code.
+  dev-seed:
+    image: postgres:17.12
+    container_name: remnawave-minishop-dev-seed
+    profiles:
+      - seed
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ./deploy/dev/seed-minishop.sql:/seed/seed-minishop.sql:ro
+    networks:
+      - remnawave-minishop
+    command: ['sh', '-ec', 'psql -v ON_ERROR_STOP=1 -f /seed/seed-minishop.sql']
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # 3. THE PANEL'S OWN FRONTEND IMAGE, in front of the facade.
+  #
+  #    Pointing the shop straight at the backend dev process on the host skips
+  #    the one thing a real deploy puts in the path: this nginx. An nginx
+  #    without a location for the facade answers `/rw/api/*` from the SPA
+  #    fallback, index.html with a 200, on the very prefix the shop is documented
+  #    to use, and a stand whose requests never go through nginx cannot notice.
+  #
+  #    PANEL_BACKEND_ADDR is an ADDRESS, not a name: a variable `proxy_pass`
+  #    resolves through docker's embedded DNS and never reads /etc/hosts, so a
+  #    `host.docker.internal` alias would not resolve. stand.sh puts the docker
+  #    bridge gateway's IP here.
+  panel-front:
+    image: iceslab-frontend:stand
+    container_name: remnawave-minishop-panel-front
+    build:
+      context: ${PANEL_REPO:?stand.sh exports this}
+      dockerfile: apps/panel-frontend/Dockerfile
+    environment:
+      PANEL_BACKEND_ADDR: ${PANEL_BACKEND_ADDR:?stand.sh exports this}
+      REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}
+    networks:
+      - remnawave-minishop
+    # Published so the stand can check from the host what the shop will get from
+    # inside the network: "did nginx forward it" is a question to ask nginx, not
+    # to infer from the shop's behaviour.
+    ports:
+      - '127.0.0.1:${PANEL_FRONT_PORT:-8087}:80'

@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Run the install document the panel emits through the SHOP'S OWN validator.
+
+The panel builds a Subscription Page v1 document for each subscription
+(`remnawave-compat/subpage`). Whether that document is any good is not our
+opinion to hold: the shop validates it all-or-nothing, and a document that
+fails ANY rule is discarded whole, with the buyer silently getting the shop's
+generic guide (or, when the shop's own default file is not on disk, no guide at
+all). Nothing about that failure is visible
+from the panel side. A green panel test suite proves only that we agree with
+ourselves.
+
+So this check imports `config.subscription_guides_config` out of the shop's
+checkout and runs the real thing. It also mutates the document seven ways and
+requires each mutation to be REJECTED — otherwise "the validator accepted it"
+would mean nothing more than "the validator ran".
+
+    ./subpage_validate.py <subscription-token> [<subscription-token> ...]
+
+Env:
+    PANEL_URL     panel base, default http://127.0.0.1:3000
+    REMNAWAVE_COMPAT_PREFIX  the facade's prefix, default rw
+    PANEL_TOKEN       icp_ API token; else read from PANEL_TOKEN_FILE
+    PANEL_TOKEN_FILE  default .runtime/panel-token next to this file
+    MINISHOP_DIR      shop checkout, required
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import sys
+import urllib.request
+
+PANEL_URL = os.environ.get("PANEL_URL", "http://127.0.0.1:3000").rstrip("/")
+MINISHOP_DIR = os.environ.get("MINISHOP_DIR", "")
+TOKEN_FILE = os.environ.get(
+    "PANEL_TOKEN_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".runtime", "panel-token")
+)
+PREFIX = os.environ.get("REMNAWAVE_COMPAT_PREFIX", "rw")
+if not MINISHOP_DIR:
+    sys.exit("subpage: MINISHOP_DIR is not set: point it at a remnawave-minishop checkout")
+
+sys.path.insert(0, os.path.join(MINISHOP_DIR, "backend"))
+try:
+    from config.subscription_guides_config import (  # noqa: E402
+        SubscriptionGuidesConfigError,
+        validate_panel_subscription_guides_config,
+    )
+except ImportError as exc:  # pragma: no cover - operator-facing
+    sys.exit(f"subpage: cannot import the shop's validator from {MINISHOP_DIR}: {exc}")
+
+
+def panel_token() -> str:
+    token = os.environ.get("PANEL_TOKEN", "")
+    if token:
+        return token
+    try:
+        with open(TOKEN_FILE, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError as exc:
+        sys.exit(f"subpage: no PANEL_TOKEN and cannot read {TOKEN_FILE}: {exc}")
+
+
+def fetch(token: str, sub_token: str) -> dict:
+    req = urllib.request.Request(
+        f"{PANEL_URL}/{PREFIX}/api/subscriptions/subpage-config/{sub_token}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+# Each mutation breaks one rule the shop enforces. If a mutation is ACCEPTED the
+# validator is not looking at what we think it is looking at, and every "OK"
+# printed by this script is worth nothing.
+MUTATIONS = [
+    ("svgLibrary removed", lambda d: d.pop("svgLibrary", None)),
+    (
+        "svgIconKey not in the library",
+        lambda d: d["platforms"][next(iter(d["platforms"]))]["apps"][0]["blocks"][0].__setitem__(
+            "svgIconKey", "NoSuchIcon"
+        ),
+    ),
+    (
+        "platform with no apps",
+        lambda d: d["platforms"][next(iter(d["platforms"]))].__setitem__("apps", []),
+    ),
+    (
+        "a locale missing from a block title",
+        lambda d: d["platforms"][next(iter(d["platforms"]))]["apps"][0]["blocks"][0]["title"].pop(
+            d["locales"][-1]
+        ),
+    ),
+    ("version is not '1'", lambda d: d.__setitem__("version", "2")),
+    (
+        # v3.8.6 takes any platform key that is an identifier (older tags kept a
+        # list); what it refuses is a key that is not one.
+        "a platform key that is not an identifier",
+        lambda d: d["platforms"].__setitem__("bad key!", d["platforms"][next(iter(d["platforms"]))]),
+    ),
+    (
+        "javascript: in a button link",
+        # The first block of the first app is often a text-only step, so take the
+        # first button anywhere in the document.
+        lambda d: next(
+            b
+            for p in d["platforms"].values()
+            for a in p["apps"]
+            for blk in a["blocks"]
+            for b in blk["buttons"]
+        ).__setitem__("link", "javascript:alert(1)"),
+    ),
+]
+
+
+def check(sub_token: str, api_token: str) -> bool:
+    payload = fetch(api_token, sub_token)
+    body = payload.get("response", payload)
+    if not body:
+        print(f"  --   {sub_token[:12]}…: panel has nothing to say (shop keeps its own guide)")
+        return True
+
+    try:
+        cfg = validate_panel_subscription_guides_config(payload)
+    except SubscriptionGuidesConfigError as exc:
+        print(f"  FAIL {sub_token[:12]}…: the shop would DISCARD this document: {exc}")
+        return False
+
+    plats = {k: [a["name"] for a in v["apps"]] for k, v in cfg["platforms"].items()}
+    print(f"  OK   {sub_token[:12]}…: v1 accepted, locales={cfg['locales']}")
+    for k, apps in plats.items():
+        print(f"         {k:10s} {apps}")
+
+    ok = True
+    rejected = skipped = 0
+    for name, mutate in MUTATIONS:
+        broken = copy.deepcopy(payload)
+        try:
+            mutate(broken.get("response", broken))
+        except (KeyError, IndexError, ValueError):
+            # Not applicable to this document's shape (no buttons, one locale).
+            skipped += 1
+            continue
+        try:
+            validate_panel_subscription_guides_config(broken)
+        except SubscriptionGuidesConfigError:
+            rejected += 1
+            continue
+        print(f"  FAIL {sub_token[:12]}…: validator ACCEPTED a document with {name}")
+        ok = False
+    if ok:
+        print(f"         {rejected} of {len(MUTATIONS)} deliberate breakages rejected, {skipped} not applicable to this document")
+    return ok
+
+
+def main() -> int:
+    tokens = sys.argv[1:]
+    if not tokens:
+        sys.exit(__doc__)
+    api_token = panel_token()
+    print(f"subpage: validating against {MINISHOP_DIR}")
+    failed = [t for t in tokens if not check(t, api_token)]
+    if failed:
+        print(f"subpage: {len(failed)} of {len(tokens)} would be discarded by the shop")
+        return 1
+    print(f"subpage: {len(tokens)} document(s) the shop accepts")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

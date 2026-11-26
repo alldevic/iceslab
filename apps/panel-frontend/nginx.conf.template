@@ -7,17 +7,18 @@
 #
 # ⚠ A TEMPLATE, not a config. The image's entrypoint renders it with envsubst
 # into /etc/nginx/conf.d/default.conf at start, and the only variable it
-# substitutes are ${SUBSCRIPTION_PATH_PREFIX} and the facade prefix
-# (NGINX_ENVSUBST_FILTER in the Dockerfile): every other `$name` here is an nginx variable and stays as it
-# is. The prefix is the backend's own setting, so the two cannot disagree:
+# substitutes are SUBSCRIPTION_PATH_PREFIX, the facade prefix and
+# PANEL_BACKEND_ADDR (NGINX_ENVSUBST_FILTER in the Dockerfile): every other
+# `$name` here is an nginx variable and stays as it is. The prefix is the
+# backend's own setting, so the two cannot disagree:
 # until 2026-10-22 (A-137) this file proxied a hard-coded /sub/, and a panel
 # with its own prefix answered every subscription with the SPA's index.html
 # and a 200.
 #
 # The upstream `backend` resolves via Docker Compose's service DNS, that
-# means this image is opinionated for our compose topology. If you front
-# the panel with Traefik/Caddy/your-own-nginx, mount your own conf over
-# this file or override via a volume.
+# means this image is opinionated for our compose topology; another address
+# is PANEL_BACKEND_ADDR. If you front the panel with Traefik/Caddy/your-own-nginx,
+# mount your own conf over this file or override via a volume.
 
 # Docker's embedded DNS resolver. Without an explicit `resolver` directive,
 # nginx resolves upstreams via gethostbyname() ONCE at startup and caches
@@ -128,7 +129,15 @@ server {
     # The variable in proxy_pass is what activates the runtime resolver
     # path. With a static upstream{} block (the previous setup), nginx
     # short-circuits the resolver entirely, leading to the stale-IP bug.
-    set $backend "backend:3000";
+    #
+    # The address is PANEL_BACKEND_ADDR, default `backend:3000`: the compose
+    # service this image ships next to, so the bundled deploy renders the same
+    # file as before. Anything fronting the panel differently (the minishop
+    # stand, a single-host install) sets the variable instead of mounting a
+    # whole conf over this one. An IP:port needs no resolving; a name goes
+    # through the resolver, i.e. docker's embedded DNS, so it must be one that
+    # DNS answers: a variable proxy_pass never reads /etc/hosts.
+    set $backend "${PANEL_BACKEND_ADDR}";
 
     # ───── API proxy ─────
     location /api/ {
