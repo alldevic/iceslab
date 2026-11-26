@@ -61,6 +61,10 @@ describe('parseExtListEntry', () => {
     expect(parseExtListEntry(e)).toBeNull();
   });
 
+  it.each(['ext-domain:mine:my-list', ' ext-ip:geoip:ru', 'ext-domain:'])('hasExtEntries sees %s', (e) => {
+    expect(hasExtEntries(lists({ block: [e] }))).toBe(true);
+  });
+
   it('hasExtEntries sees anything that starts like a link', () => {
     expect(hasExtEntries(lists({ proxy: ['example.com', 'ext:x:y'] }))).toBe(true);
     expect(hasExtEntries(lists({ proxy: ['example.com', 'geosite:ads'] }))).toBe(false);
@@ -82,6 +86,8 @@ describe('expandExtLists', () => {
   it('is the same object while the panel does not serve, or with no link', async () => {
     const l = lists({ direct: ['ext:mine:ru-list'] });
     expect(await expandExtLists(l, null)).toBe(l);
+    const xr = lists({ direct: ['ext-domain:mine:ru-list'] });
+    expect(await expandExtLists(xr, null)).toBe(xr);
     const plain = lists({ direct: ['a.example'] });
     expect(await expandExtLists(plain, GEO)).toBe(plain);
   });
@@ -92,6 +98,10 @@ describe('expandExtLists', () => {
     ['a geoip set', 'ext:ips:ru-list'],
     ['a set with no verified version', 'ext:empty:ru-list'],
     ['a spelling that is not a link', 'ext:mine:ru-list@cn'],
+    ['xray ext-domain: spelling', 'ext-domain:mine:ru-list'],
+    ['xray ext-ip: spelling', 'ext-ip:ips:ru-list'],
+    ['a .dat file in the link', 'ext:geosite.dat:ru-list'],
+    ['a negated category', 'ext:mine:!ru-list'],
   ])('%s: left out of every bucket, logged', async (_n, entry) => {
     await set('mine', 'geosite', 'upload', sites);
     await set('ips', 'geoip', 'upload', datFile(geoip('RU-LIST', cidr([10, 0, 0, 0], 8))));
@@ -148,5 +158,6 @@ describe('singboxExtRefs', () => {
     expect(await singboxExtRefs(lists({ direct: ['ext:nope:a', 'ext:mine:nope', 'ext:ips:ru-list'] }), GEO, l)).toEqual([]);
     expect(l.warn).toHaveBeenCalledTimes(4);
     expect(await singboxExtRefs(lists({ direct: ['ext:mine:ru-list'] }), null, l)).toEqual([]);
+    expect(await singboxExtRefs(lists({ direct: ['ext-domain:mine:ru-list'] }), GEO, l)).toEqual([]);
   });
 });

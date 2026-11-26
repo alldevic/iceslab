@@ -40,8 +40,8 @@ export function parseExtListEntry(entry: string): ExtListRef | null {
   return GEO_SET_NAME.test(set) && TAG.test(t) ? { set, tag: t } : null;
 }
 
-/** An entry that starts like a link: whether or not it parses, it is not a domain. */
-const looksLikeExt = (entry: string): boolean => entry.trim().startsWith('ext:');
+/** An entry that starts like a link (`ext:`, or xray's `ext-domain:` / `ext-ip:`): whether or not it parses, it is not a domain. */
+const looksLikeExt = (entry: string): boolean => /^ext(-[a-z]+)?:/.test(entry.trim());
 
 export function hasExtEntries(lists: CustomDomainLists): boolean {
   return BUCKETS.some((b) => lists[b].some(looksLikeExt));
