@@ -454,7 +454,7 @@ describe('buildSingboxJson', () => {
     it('resolves CN domains regionally and leaks no RU rule-sets', () => {
       const out = buildSingboxJson([xrayEp], { routingPreset: 'cn-split' });
       const cfg = parse(out);
-      expect(cfg.dns!.servers[0]).toEqual({ type: 'udp', tag: 'dns-regional', server: '223.5.5.5', detour: 'direct' });
+      expect(cfg.dns!.servers[0]).toEqual({ type: 'udp', tag: 'dns-regional', server: '223.5.5.5' });
       expect(cfg.dns!.rules).toEqual([{ rule_set: ['geosite-cn'], server: 'dns-regional' }]);
       expect(cfg.route.default_domain_resolver).toBe('dns-regional');
       expect(out).not.toContain('geosite-category-ru');
@@ -472,7 +472,7 @@ describe('buildSingboxJson', () => {
     it('ru-split: regional UDP direct, DoH through the proxy, default resolver is the regional one', () => {
       const cfg = parse(buildSingboxJson([xrayEp], { routingPreset: 'ru-split' }));
       expect(cfg.dns!.servers).toEqual([
-        { type: 'udp', tag: 'dns-regional', server: '77.88.8.8', detour: 'direct' },
+        { type: 'udp', tag: 'dns-regional', server: '77.88.8.8' },
         { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: 'Auto' },
       ]);
       expect(cfg.dns!.rules).toEqual([
@@ -480,6 +480,19 @@ describe('buildSingboxJson', () => {
       ]);
       expect(cfg.dns!.final).toBe('dns-proxy');
       expect(cfg.route.default_domain_resolver).toBe('dns-regional');
+    });
+
+    // sing-box 1.13.14 refuses to START (`sing-box check` passes) with
+    // "detour to an empty direct outbound makes no sense" on a DNS server whose
+    // detour is the plain direct outbound: direct is the default, so leave it out.
+    it.each(['ru-split', 'cn-split'] as const)('%s: no DNS server detours to a direct outbound', (preset) => {
+      const cfg = parse(buildSingboxJson([xrayEp], { routingPreset: preset }));
+      const direct = new Set(cfg.outbounds.filter((o) => o.type === 'direct').map((o) => o.tag));
+      expect(cfg.dns!.servers.length).toBeGreaterThan(0);
+      for (const srv of cfg.dns!.servers as { detour?: string }[]) {
+        expect(srv.detour === undefined || !direct.has(srv.detour)).toBe(true);
+        expect(srv.detour).not.toBe('direct');
+      }
     });
 
     it('follows the url-test group the traffic rides', () => {

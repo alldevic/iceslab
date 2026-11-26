@@ -395,7 +395,7 @@ function splitDns(
   if (regionalSets.length === 0) return null;
   return {
     servers: [
-      { type: 'udp', tag: REGIONAL_DNS_TAG, server, detour: 'direct' },
+      { type: 'udp', tag: REGIONAL_DNS_TAG, server },
       { type: 'https', tag: 'dns-proxy', server: '1.1.1.1', detour: proxyTag },
     ],
     rules: [{ rule_set: regionalSets, server: REGIONAL_DNS_TAG }],
