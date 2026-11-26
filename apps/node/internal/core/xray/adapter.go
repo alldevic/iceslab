@@ -202,7 +202,7 @@ func (a *Adapter) ApplyPolicy(raw json.RawMessage) error {
 	unchanged := policyEqual(a.policy, parsed.Rules)
 	// A core whose last start failed is down under this very policy; "unchanged"
 	// would ack a push the node is not serving.
-	if unchanged && !a.lastStartFailed {
+	if unchanged && !a.coreDownLocked() {
 		a.mu.Unlock()
 		return nil
 	}
@@ -258,7 +258,7 @@ func (a *Adapter) ApplyDns(raw json.RawMessage) error {
 
 	a.mu.Lock()
 	// Same as ApplyPolicy: a dead core after a failed start is not "unchanged".
-	if dnsEqual(a.dns, parsed) && !a.lastStartFailed {
+	if dnsEqual(a.dns, parsed) && !a.coreDownLocked() {
 		a.mu.Unlock()
 		return nil
 	}
@@ -321,7 +321,7 @@ func (a *Adapter) ApplyCascade(fragments json.RawMessage) error {
 		return a.revertRefusedCascade(a.regenerateAndRestart(context.Background()), nil, prev)
 	}
 	// Same as ApplyPolicy: a dead core after a failed start is not "unchanged".
-	if parsed == nil || (cascadeEqual(a.cascade, parsed) && !a.lastStartFailed) {
+	if parsed == nil || (cascadeEqual(a.cascade, parsed) && !a.coreDownLocked()) {
 		a.mu.Unlock()
 		return nil
 	}
@@ -356,6 +356,14 @@ func (a *Adapter) SetChainHolds(held bool) {
 	a.mu.Unlock()
 }
 
+// coreDownLocked: an identical push is not "unchanged" while the core is down,
+// whether its last start failed or it started, passed the window and died later
+// (killed, crashed past the supervisor's budget). Caller holds a.mu. A nil proc
+// is a core that has nothing to serve, not a dead one.
+func (a *Adapter) coreDownLocked() bool {
+	return a.lastStartFailed || (a.proc != nil && !a.proc.Running())
+}
+
 // NoteGeo implements core.GeoReceiver: remember what the files are now. No
 // restart here; see FlushGeo.
 func (a *Adapter) NoteGeo(fingerprint string) {
@@ -368,7 +376,13 @@ func (a *Adapter) NoteGeo(fingerprint string) {
 // started before the files it reads were replaced. A push that restarted it
 // anyway already closed the gap, and an xray that runs nothing has nothing to
 // reload; its next start reads what is there.
-func (a *Adapter) FlushGeo(ctx context.Context) error {
+//
+// The respawn does not take the push's ctx: exec.CommandContext kills the child
+// when its ctx ends, and a push's ctx ends with the request. The new xray used
+// to live exactly as long as the HTTP handler ("signal: killed" right after
+// "xray (re)started"), with the supervisor's respawn cancelled by the same ctx.
+// Every other apply path passes context.Background() for the same reason.
+func (a *Adapter) FlushGeo(_ context.Context) error {
 	a.mu.Lock()
 	stale := a.proc != nil && a.geo != a.geoRunning
 	a.mu.Unlock()
@@ -376,7 +390,7 @@ func (a *Adapter) FlushGeo(ctx context.Context) error {
 		return nil
 	}
 	a.logger.Info("xray: geo files changed under a running config, restarting")
-	return a.regenerateAndRestart(ctx)
+	return a.regenerateAndRestart(context.Background())
 }
 
 func policyEqual(a, b []dto.NodePolicyRule) bool {
@@ -566,14 +580,15 @@ func (a *Adapter) Start(ctx context.Context) error {
 // of the same push has already dropped every inbound this core held, so the
 // render finds nothing to serve and stops the process (regenerateAndRestart).
 // A no-op when nothing runs.
-func (a *Adapter) Idle(ctx context.Context) error {
+func (a *Adapter) Idle(_ context.Context) error {
 	a.mu.Lock()
 	running := a.proc != nil
 	a.mu.Unlock()
 	if !running {
 		return nil
 	}
-	return a.regenerateAndRestart(ctx)
+	// Not the push's ctx: see FlushGeo.
+	return a.regenerateAndRestart(context.Background())
 }
 
 // Stop terminates the subprocess and the K9-B self-steal fallback. The on-disk
@@ -1483,7 +1498,7 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	}
 	// A core whose last start failed is down under this very config; answering
 	// "unchanged" would ack a push the node is not serving.
-	if unchanged && !a.lastStartFailed {
+	if unchanged && !a.coreDownLocked() {
 		a.mu.Unlock()
 		a.logger.Info("xray ApplyInbound: config unchanged, skipping restart")
 		return nil
