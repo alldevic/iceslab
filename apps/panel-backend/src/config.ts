@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { collidingHoneypotPrefix } from './lib/auth/honeypot-paths.js';
 
 /** The panel's own routes on the frontend's nginx; see SUBSCRIPTION_PATH_PREFIX. */
 export const RESERVED_PATH_PREFIXES: readonly string[] = ['/api', '/admin', '/health', '/assets'];
@@ -64,11 +65,19 @@ export const ConfigSchema = z.object({
   // prefix.sh, which puts the prefix into an nginx `location`, and they change
   // as a pair. /api, /admin, /health and /assets are the panel's own routes on
   // that server: a subscription mounted there takes them away or fails nginx.
+  // The honeypot trap prefixes (HONEYPOT_PREFIXES) are refused too, in both places.
   SUBSCRIPTION_PATH_PREFIX: z
     .string()
     .regex(/^\/[a-zA-Z0-9_-]+$/, 'Must start with / and use only [a-zA-Z0-9_-]')
     .refine((v) => !RESERVED_PATH_PREFIXES.includes(v), {
       message: `Taken by the panel itself: ${RESERVED_PATH_PREFIXES.join(', ')}`,
+    })
+    // The honeypot (lib/auth/security-gate.ts) traps these for every path, so a
+    // subscription there would 404 and blacklist each subscriber.
+    .refine((v) => collidingHoneypotPrefix(v) === null, {
+      error: (iss) =>
+        `Collides with the honeypot trap prefix ${collidingHoneypotPrefix(String(iss.input))}; ` +
+        'every subscriber would be served a fake 404 and blacklisted',
     })
     .default('/sub'),
 

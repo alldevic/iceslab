@@ -4,6 +4,7 @@ import { redis } from '../infra/redis.js';
 import { notifyTelegramAsync, escapeMarkdown } from '../notify/telegram-notify.js';
 import { honeypotHits, geoBlockDenials } from '../infra/metrics.js';
 import { isPublicRoutableIp } from '../util/ip.js';
+import { HONEYPOT_EXACT, HONEYPOT_PREFIXES } from './honeypot-paths.js';
 
 /**
  * Tier-1 security gate. Two layers, both registered as a single
@@ -36,17 +37,6 @@ import { isPublicRoutableIp } from '../util/ip.js';
  * directory-style PHP/WP paths. Tight matching keeps false positives
  * near zero (the panel doesn't serve any of these legitimately).
  */
-const HONEYPOT_EXACT = new Set<string>([
-  '/.env',
-  '/.git/config',
-  '/.aws/credentials',
-  '/wp-config.php',
-  '/xmlrpc.php',
-  '/phpinfo.php',
-  '/server-status',
-]);
-const HONEYPOT_PREFIXES = ['/wp-admin', '/wp-login', '/wordpress', '/phpmyadmin', '/.git/'];
-
 const PUBLIC_PATH_PREFIXES = ['/sub/', '/api/internal/', '/health', '/healthz'];
 const PUBLIC_PATH_EXACT = new Set<string>(['/api/auth/status']);
 

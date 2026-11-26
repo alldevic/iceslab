@@ -9,7 +9,8 @@
 # "duplicate location" or quietly take the panel's own routes away.
 #
 # ⚠ One rule in two places: the pattern and the reserved list below are the
-# same as SUBSCRIPTION_PATH_PREFIX in apps/panel-backend/src/config.ts, and
+# same as SUBSCRIPTION_PATH_PREFIX in apps/panel-backend/src/config.ts (plus the
+# honeypot prefixes, bound by compose.subscription-prefix.test.ts), and
 # they change as a pair. A prefix one side accepts and the other refuses is a
 # panel that starts with subscriptions answered by the wrong container.
 set -eu
@@ -32,6 +33,14 @@ case "${prefix#/}" in
 esac
 case "$prefix" in
   /api|/admin|/health|/assets) fail "taken by the panel itself" ;;
+esac
+# The backend's honeypot (HONEYPOT_PREFIXES in lib/auth/honeypot-paths.ts) traps
+# every path that starts with one of these, case-insensitively, and blacklists the
+# caller: a subscription there would be answered with a fake 404.
+lower=$(printf '%s' "$prefix" | tr 'A-Z' 'a-z')
+case "$lower" in
+  /wp-admin* | /wp-login* | /wordpress* | /phpmyadmin* | /.git/*)
+    fail "collides with a honeypot trap prefix; every subscriber would be trapped and blacklisted" ;;
 esac
 
 echo "iceslab-frontend: subscriptions proxied at ${prefix}/"

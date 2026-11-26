@@ -189,14 +189,14 @@ describe('a non-default SUBSCRIPTION_PATH_PREFIX', () => {
     }
   });
 
-  // The one place the literal-prefix blind spot is real: honeypot prefixes are
-  // matched against every path, and the config only reserves /api, /admin,
-  // /health, /assets. A subscription mounted at one of them is trapped.
-  // KNOWN DEFECT (omega 06-execution/LOG.md, «Отложено», веха 4.7): RESERVED_PATH_PREFIXES does
-  // not reserve the honeypot prefixes, so this pins today's behaviour until it is decided.
-  it('KNOWN DEFECT: is trapped by the honeypot when the prefix collides with a trap path', async () => {
-    const res = await get('/wordpress/sometoken');
-    expect(res.statusCode).toBe(404);
-    expect(res.body).toContain('Not Found');
+  // Honeypot prefixes are matched against every path, so the config refuses a
+  // subscription prefix that falls under one (config.subscription-honeypot.test.ts).
+  // The gate itself still traps those paths.
+  it('still traps every honeypot prefix path', async () => {
+    for (const path of ['/wordpress/sometoken', '/wp-admin/x', '/wp-login.php', '/phpmyadmin/x', '/WordPress/x']) {
+      const res = await get(path);
+      expect(res.statusCode, path).toBe(404);
+      expect(res.body, path).toContain('Not Found');
+    }
   });
 });
