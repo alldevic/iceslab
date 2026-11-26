@@ -47,6 +47,7 @@ export const hosts = {
       'singbox-api': 'the sing-box v2ray API',
       'singbox-ssm-api': 'the sing-box SSM API',
       'mtproto-stats': 'the mtg stats endpoint',
+      'mtprotoproxy-metrics': 'the mtprotoproxy metrics endpoint',
       // Phase 4, the chain as its own process. Added ahead of time: it draws
       // nothing until an agent reports it, and an unknown key would reach the
       // operator as bare "chain-socks" instead of words.

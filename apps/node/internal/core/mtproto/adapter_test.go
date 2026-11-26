@@ -19,7 +19,7 @@ func newConfigOnlyAdapter(t *testing.T) *Adapter {
 	return New(Config{
 		Inbound: InboundConfig{
 			Domain:     domain,
-			Secret:     DeriveSecret("inbound-1", domain),
+			Secret:     validSecret(domain),
 			ListenPort: 443,
 			StatsPort:  3129,
 		},
@@ -82,7 +82,7 @@ func TestApplyInbound_RejectsMalformedJSON(t *testing.T) {
 func TestApplyInbound_DomainAndSecretChangeUpdatesAdapter(t *testing.T) {
 	a := newConfigOnlyAdapter(t)
 	newDomain := "www.google.com"
-	newSecret := DeriveSecret("inbound-1", newDomain)
+	newSecret := validSecret(newDomain)
 	body, _ := json.Marshal(map[string]any{
 		"domain": newDomain,
 		"secret": newSecret,

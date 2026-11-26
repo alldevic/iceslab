@@ -18,13 +18,14 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mieru"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtproto"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtprotoproxy"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/naive"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/shadowsocks"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/xray"
 )
 
-// The lifecycle every adapter promises, asked of all eight at once.
+// The lifecycle every adapter promises, asked of all nine at once.
 //
 // Provisioned, Start, Stop, Healthy and Idle are separate answers to one
 // question, is this core able to serve, and each adapter writes them out again.
@@ -36,12 +37,12 @@ import (
 // the contract runs on the real code with no xray, mtg or mita on the machine,
 // and binds no fixed port (see freePort).
 //
-// Where the eight legitimately differ, the difference is a field of the row,
+// Where the nine legitimately differ, the difference is a field of the row,
 // with its reason, and the zero value is the strict contract: a new adapter
 // that sets nothing is held to every question.
 //
-//   - Healthy: mtproto, shadowsocks, naive, xray, sing-box and hysteria own a
-//     subprocess and ask whether it runs; amneziawg asks the kernel about its
+//   - Healthy: mtproto, mtprotoproxy, shadowsocks, naive, xray, sing-box and
+//     hysteria own a subprocess and ask whether it runs; amneziawg asks the kernel about its
 //     interface; mieru asks `mita status` (cached) when it has a binary and
 //     is not waiting for its first user. In config-only mode the first group,
 //     amneziawg and mieru answer from their own started flag.
@@ -158,6 +159,25 @@ func cases() []adapterCase {
 			},
 			reapply: func(t *testing.T, a core.CoreAdapter) {
 				mustApply(t, a, 443, `{"domain":"example.com","secret":"`+mtSecret+`"}`)
+			},
+		},
+		{
+			// The second MTProto engine. Provisioned needs only the domain: an
+			// inbound with no users yet must still listen and refuse everyone,
+			// or the first AddUser races the process coming up.
+			name:          "mtprotoproxy",
+			provisionable: true,
+			provisionedBy: "Inbound.Domain",
+			build: func(t *testing.T, ready bool) (core.CoreAdapter, string) {
+				cfgPath := filepath.Join(t.TempDir(), "config.py")
+				in := mtprotoproxy.InboundConfig{ListenPort: 2084, MetricsPort: 3130}
+				if ready {
+					in.Domain = "example.com"
+				}
+				return mtprotoproxy.New(mtprotoproxy.Config{ConfigPath: cfgPath, Inbound: in}, quiet()), cfgPath
+			},
+			reapply: func(t *testing.T, a core.CoreAdapter) {
+				mustApply(t, a, 2084, `{"domain":"example.com"}`)
 			},
 		},
 		{

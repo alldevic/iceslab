@@ -52,7 +52,7 @@ func startupFixture(t *testing.T) (a *Adapter, logged *lockedBuf, marker, starts
 	a = New(Config{BinaryPath: bin, ConfigPath: filepath.Join(dir, "mtg.toml")},
 		slog.New(slog.NewTextHandler(io.MultiWriter(logged, io.Discard), nil)))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
-	wire = []byte(`{"domain":"www.cloudflare.com","secret":"` + DeriveSecret("inbound-1", "www.cloudflare.com") + `"}`)
+	wire = []byte(`{"domain":"www.cloudflare.com","secret":"` + validSecret("www.cloudflare.com") + `"}`)
 	return a, logged, marker, starts, wire
 }
 
@@ -163,7 +163,7 @@ func TestApplyInbound_RepeatPushAfterAStartupDeathStartsTheCoreAgain(t *testing.
 func TestStart_CoreThatDiesAtBootKeepsTheAgentUp(t *testing.T) {
 	a, logged, _, starts, wire := startupFixture(t)
 	a.cfg.Inbound.Domain = "www.cloudflare.com"
-	a.cfg.Inbound.Secret = DeriveSecret("inbound-1", "www.cloudflare.com")
+	a.cfg.Inbound.Secret = validSecret("www.cloudflare.com")
 
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatalf("Start must tolerate a death inside the window, got %v", err)

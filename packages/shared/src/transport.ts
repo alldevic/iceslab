@@ -593,6 +593,12 @@ export interface ProtocolCredentials {
   /** ShadowTLS v3 (sing-box engine): per-user password for the shadowtls
    *  users[] (the inner shadowsocks key is server-wide, in the inbound config). */
   shadowtlsPassword?: string;
+  /**
+   * MTProto, `mtprotoproxy` engine only: the user's own 32-hex-char secret.
+   * The agent writes it into USERS. The `mtproto` (mtg) engine has one secret
+   * per inbound and ignores this. Absent for users on every other core.
+   */
+  mtprotoSecret?: string;
 }
 
 // ───── POST /addUser ─────

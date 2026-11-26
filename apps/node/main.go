@@ -18,6 +18,7 @@ import (
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/hysteria"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mieru"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtproto"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/mtprotoproxy"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/naive"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/shadowsocks"
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core/singbox"
@@ -275,6 +276,26 @@ func buildAdapters(logger *slog.Logger) []core.CoreAdapter {
 		}
 		adapters = append(adapters, mtproto.New(mtgCfg, logger))
 		logger.Info("mtproto adapter registered")
+	}
+
+	// MTProto via alexbers/mtprotoproxy: a secret per user, and the user set
+	// reloaded with SIGUSR2 instead of a restart. Registered under the SAME
+	// protocol as mtg with another Engine(), so a profile picks it with engine
+	// "mtprotoproxy"; independent of MTG_BINARY, and on its own ports (the
+	// inbound's, 2084 until one is pushed; metrics 3130 against mtg's 3129).
+	if os.Getenv("MTPROTOPROXY_SCRIPT") != "" {
+		mppCfg := mtprotoproxy.Config{
+			PythonPath: getenv("MTPROTOPROXY_PYTHON", "/usr/bin/python3"),
+			ScriptPath: os.Getenv("MTPROTOPROXY_SCRIPT"),
+			ConfigPath: getenv("MTPROTOPROXY_CONFIG", "/etc/mtprotoproxy/config.py"),
+			Inbound: mtprotoproxy.InboundConfig{
+				ListenPort:  getenvInt("MTPROTOPROXY_PORT", 2084),
+				MetricsPort: getenvInt("MTPROTOPROXY_METRICS_PORT", 3130),
+				Domain:      os.Getenv("MTPROTOPROXY_DOMAIN"), // empty → deferred until ApplyInbound
+			},
+		}
+		adapters = append(adapters, mtprotoproxy.New(mppCfg, logger))
+		logger.Info("mtprotoproxy adapter registered")
 	}
 
 	// Slice 40: Mieru via enfein/mieru's `mita` server.

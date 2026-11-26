@@ -73,6 +73,10 @@ type ProtocolCredentials struct {
 	// ShadowTLS (sing-box engine): per-user password for the shadowtls v3
 	// users[] (the inner shadowsocks key is server-wide, in the inbound config).
 	ShadowtlsPassword string `json:"shadowtlsPassword,omitempty"`
+	// MTProto (mtprotoproxy engine only): the user's OWN 32-hex-char secret.
+	// mtg is single-secret and takes its secret from the inbound, not from here;
+	// empty for users of every other core.
+	MtprotoSecret string `json:"mtprotoSecret,omitempty"`
 }
 
 // ───── POST /addUser ─────

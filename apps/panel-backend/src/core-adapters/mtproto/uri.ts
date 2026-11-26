@@ -82,9 +82,13 @@ export function buildMtprotoTmeUri(
  *   - `inboundId` (UUID, stable across the inbound's lifetime)
  *   - `domain` (admin-changeable; change rotates the secret)
  *
- * Both panel and agent compute the identical value when given the same
- * (inboundId, domain) pair, so the panel can push a secret over the wire
- * and the agent can independently re-derive for verification.
+ * This is the ONLY implementation. The agent carried a copy — exported,
+ * called by nothing — and this comment used to claim the agent "can
+ * independently re-derive for verification". It could not: neither the wire
+ * struct nor ApplyInbound carries the binding id, so there was nothing to
+ * re-derive from. The copy was removed 2026-08-27. The agent checks the SHAPE
+ * of what it is pushed (the `ee` prefix and a strict hex alphabet, because the
+ * value is printed straight into TOML) and trusts the value.
  */
 export function mtprotoSecret(inboundId: string, domain: string): string {
   // FakeTLS (`ee` prefix) wire format: 1-byte prefix + 16-byte random + hex

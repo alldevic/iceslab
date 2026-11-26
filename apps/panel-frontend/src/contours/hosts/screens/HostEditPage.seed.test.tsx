@@ -112,7 +112,10 @@ function renderPage() {
   return client;
 }
 
-const nameField = async () => (await screen.findByLabelText(at('hostEdit.name'))) as HTMLInputElement;
+// The first render (Mantine, i18n, the router) can take over a second on a loaded machine.
+const FIRST_RENDER = { timeout: 5000 };
+const nameField = async () =>
+  (await screen.findByLabelText(at('hostEdit.name'), {}, FIRST_RENDER)) as HTMLInputElement;
 
 describe('HostEditPage: заполнение формы', () => {
   it('заполняется записью хоста после ответа хоста и списков', async () => {
@@ -120,7 +123,7 @@ describe('HostEditPage: заполнение формы', () => {
     renderPage();
     // Контроль для остальных случаев: страница, которая не заполнилась, тоже
     // «не теряла» бы набранное.
-    await waitFor(async () => expect((await nameField()).value).toBe('Amsterdam'));
+    await waitFor(async () => expect((await nameField()).value).toBe('Amsterdam'), FIRST_RENDER);
   });
 
   it('повторная выдача списка нод другой длины не меняет введённое и не сбрасывает «не сохранено»', async () => {

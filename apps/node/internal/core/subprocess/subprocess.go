@@ -518,6 +518,30 @@ func (s *Subprocess) Stop(_ context.Context) error {
 	}
 }
 
+// Signal delivers sig to the running process, and to it alone, not to its
+// group (Stop is what takes the group down): a core that re-reads its config on
+// a signal is told to without a restart, which would drop every connection it
+// carries. An error when nothing is running, so the caller can fall back to a
+// restart: a process that died between two pushes must not keep the old set.
+func (s *Subprocess) Signal(sig os.Signal) error {
+	s.mu.Lock()
+	exited := s.exited
+	cmd := s.cmd
+	s.mu.Unlock()
+	if cmd == nil || cmd.Process == nil || exited == nil {
+		return fmt.Errorf("%s is not running", s.cfg.Name)
+	}
+	select {
+	case <-exited:
+		return fmt.Errorf("%s is not running", s.cfg.Name)
+	default:
+	}
+	if err := cmd.Process.Signal(sig); err != nil {
+		return fmt.Errorf("%s: signal %v: %w", s.cfg.Name, sig, err)
+	}
+	return nil
+}
+
 // Running reports whether the process has been started and has not exited.
 // Safe to call concurrently with Stop / crash, the watcher goroutine is
 // the single source of truth for "exited."
