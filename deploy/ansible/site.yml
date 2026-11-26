@@ -1,0 +1,7 @@
+---
+- name: Install iceslab nodes
+  hosts: iceslab_nodes
+  become: true
+  gather_facts: false
+  roles:
+    - iceslab_node
