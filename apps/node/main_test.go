@@ -58,6 +58,7 @@ func TestEveryRealCoreAnswersItsVersion(t *testing.T) {
 	t.Setenv("XRAY_BINARY", "/nonexistent/xray")
 	t.Setenv("SINGBOX_BINARY", "/nonexistent/sing-box")
 	t.Setenv("MTG_BINARY", "/nonexistent/mtg")
+	t.Setenv("MTPROTOPROXY_SCRIPT", "/nonexistent/mtprotoproxy.py")
 	t.Setenv("MITA_BINARY", "/nonexistent/mita")
 	for _, a := range buildAdapters(logger) {
 		_, versioned := a.(core.Versioner)

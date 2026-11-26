@@ -41,6 +41,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -256,13 +257,70 @@ func renderConfig(inbound InboundConfig, users []User) ([]byte, error) {
 	fmt.Fprintf(&b, "METRICS_PORT = %d\n", cfg.MetricsPort)
 	b.WriteString("METRICS_LISTEN_ADDR_IPV4 = \"127.0.0.1\"\n")
 	b.WriteString("METRICS_LISTEN_ADDR_IPV6 = None\n")
-	b.WriteString("METRICS_WHITELIST = [\"127.0.0.1\"]\n")
+	// The whitelist is loopback PLUS this machine's own IPv4 addresses: a
+	// connection to a loopback-bound socket arrives with a non-loopback source
+	// when the host masquerades its own traffic (the WireGuard/AmneziaWG
+	// `! -o awg0 -j MASQUERADE` matches `lo` too), and mtprotoproxy answers a
+	// scrape from a source off the list by closing the connection. The socket
+	// itself stays bound to 127.0.0.1: nothing off the host can reach it.
+	fmt.Fprintf(&b, "METRICS_WHITELIST = [%s]\n", pyStringList(metricsWhitelist()))
 	// The links carry every user's secret. The scraper is ours and does not
 	// need them, and a metrics endpoint that hands out working proxy links is
 	// a credential store with no authentication in front of it.
 	b.WriteString("METRICS_EXPORT_LINKS = False\n")
 
 	return []byte(b.String()), nil
+}
+
+// metricsWhitelist is 127.0.0.1 plus every IPv4 address this node carries.
+// Failure to enumerate falls back to loopback alone, the shape that works on a
+// host which does not rewrite loopback sources. IPv6 is left out:
+// METRICS_LISTEN_ADDR_IPV6 is None, so an IPv6 source cannot occur. Each entry
+// passes the same character allow-list as the other values of this file.
+func metricsWhitelist() []string {
+	out := []string{"127.0.0.1"}
+	seen := map[string]bool{"127.0.0.1": true}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return out
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP == nil {
+			continue
+		}
+		v4 := ipnet.IP.To4()
+		if v4 == nil {
+			continue
+		}
+		ip := v4.String()
+		if seen[ip] || !validHostString(ip) {
+			continue
+		}
+		seen[ip] = true
+		out = append(out, ip)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func validHostString(s string) bool {
+	for _, ch := range s {
+		if !validHostChar(ch) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// pyStringList renders a Go slice as a Python list literal, each element
+// through %q so nothing in it can leave its string.
+func pyStringList(items []string) string {
+	parts := make([]string, 0, len(items))
+	for _, s := range items {
+		parts = append(parts, fmt.Sprintf("%q", s))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // writeConfig atomically writes config.py. Mode 0600: the file lists every

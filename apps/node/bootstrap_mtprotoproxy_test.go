@@ -44,6 +44,35 @@ func mppTarball(t *testing.T, py string) []byte {
 	return raw.Bytes()
 }
 
+// A stand-in for the real patch, which is written against upstream's tag and
+// would not apply to the one-line tree built here: the same two additions, on
+// the line mppTarball callers use. mppHalfPatch adds only the first.
+const mppFixturePatch = `--- a/mtprotoproxy.py
++++ b/mtprotoproxy.py
+@@ -1 +1,3 @@
+ print('ok')
++TG_EXTRA_DATACENTERS_V4 = {203: "x"}
++def update_dropped(): pass
+`
+
+const mppHalfPatch = `--- a/mtprotoproxy.py
++++ b/mtprotoproxy.py
+@@ -1 +1,2 @@
+ print('ok')
++TG_EXTRA_DATACENTERS_V4 = {203: "x"}
+`
+
+// Written against lines the tree does not have: a pin that moved them.
+const mppStalePatch = `--- a/mtprotoproxy.py
++++ b/mtprotoproxy.py
+@@ -1,3 +1,4 @@
+ import asyncio
+-DCS = 5
++DCS = 6
+ print('x')
++TG_EXTRA_DATACENTERS_V4 = {}
+`
+
 type mppRun struct {
 	dir, env, script string
 }
@@ -104,7 +133,16 @@ exec `+realPy+` "$@"
 	if err := os.MkdirAll(s.dir+"/opt", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return mppRun{dir: s.dir, env: filepath.Join(s.dir, "env"), script: path}
+	r := mppRun{dir: s.dir, env: filepath.Join(s.dir, "env"), script: path}
+	r.setPatch(t, mppFixturePatch)
+	return r
+}
+
+func (r mppRun) setPatch(t *testing.T, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(filepath.Dir(r.script), "mtprotoproxy-cdn-datacenters.patch"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (r mppRun) run(t *testing.T, sha string, args ...string) (string, error) {
@@ -199,5 +237,91 @@ func TestMtprotoproxyRemoveTakesTheBlockAndTheTreeOut(t *testing.T) {
 	}
 	if _, err := os.Stat(r.dir + "/etc/mtprotoproxy"); err != nil {
 		t.Error("the config dir (which the agent's unit lists as writable) went with it")
+	}
+}
+
+func TestMtprotoproxyPatchesTheTreeAndWritesTheVersionLast(t *testing.T) {
+	tb := mppTarball(t, "print('ok')\n")
+	r := newMppRun(t, tb, true)
+	out, err := r.run(t, shaOf(string(tb)))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	py, _ := os.ReadFile(r.dir + "/opt/mtprotoproxy/mtprotoproxy.py")
+	if !strings.Contains(string(py), "TG_EXTRA_DATACENTERS_V4") || !strings.Contains(string(py), "def update_dropped") {
+		t.Errorf("the installed script is not patched:\n%s", py)
+	}
+	v, err := os.ReadFile(r.dir + "/opt/mtprotoproxy/.iceslab-version")
+	if err != nil || strings.TrimSpace(string(v)) != "9.9.9" {
+		t.Errorf("the version file: %q, %v", v, err)
+	}
+	// A rerun over the installed tree is a plain reinstall.
+	if out, err := r.run(t, shaOf(string(tb))); err != nil {
+		t.Fatalf("rerun: %v\n%s", err, out)
+	}
+	// --remove takes the version file with the directory.
+	if out, err := r.run(t, shaOf(string(tb)), "--remove"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Stat(r.dir + "/opt/mtprotoproxy/.iceslab-version"); err == nil {
+		t.Error("the version file outlived --remove")
+	}
+}
+
+func TestMtprotoproxyStopsWhenThePatchDoesNotApplyOrAppliesByHalf(t *testing.T) {
+	cases := map[string]struct{ tarPy, patch, want string }{
+		"does not apply": {"print('ok')\n", mppStalePatch, "did not apply"},
+		"half applied":   {"print('ok')\n", mppHalfPatch, "dropped-connection counter"},
+		"missing":        {"print('ok')\n", "", "missing"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			tb := mppTarball(t, c.tarPy)
+			r := newMppRun(t, tb, true)
+			if c.patch == "" {
+				if err := os.Remove(filepath.Join(filepath.Dir(r.script), "mtprotoproxy-cdn-datacenters.patch")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				r.setPatch(t, c.patch)
+			}
+			out, err := r.run(t, shaOf(string(tb)))
+			if err == nil || !strings.Contains(out, c.want) {
+				t.Fatalf("want a stop mentioning %q: %v\n%s", c.want, err, out)
+			}
+			if _, err := os.Stat(r.dir + "/opt/mtprotoproxy"); err == nil {
+				t.Error("a tree is installed although the patch did not land (so is a version file)")
+			}
+			if strings.Contains(r.envText(t), "iceslab-node env:mtprotoproxy") {
+				t.Error("the engine is wired in after a failed patch")
+			}
+		})
+	}
+}
+
+// The script as shipped: it names the patch next to it, the patch is there and
+// is the real diff (both halves), and the patch step sits after the checksum
+// and before the compile check and the version file.
+func TestMtprotoproxyScriptShipsItsPatch(t *testing.T) {
+	body := readScript(t, "bootstrap-mtprotoproxy.sh")
+	if !strings.Contains(body, "mtprotoproxy-cdn-datacenters.patch") {
+		t.Error("the script does not name its patch")
+	}
+	patch, err := os.ReadFile(filepath.Join("scripts", "mtprotoproxy-cdn-datacenters.patch"))
+	if err != nil {
+		t.Fatalf("the patch file: %v", err)
+	}
+	for _, want := range []string{"TG_EXTRA_DATACENTERS_V4", "def update_dropped"} {
+		if !strings.Contains(string(patch), want) {
+			t.Errorf("the patch does not add %s", want)
+		}
+		if !strings.Contains(body, "grep -q "+strings.TrimPrefix(want, "def ")) && !strings.Contains(body, `grep -q "`+want+`"`) {
+			t.Errorf("the script does not check for %s in the result", want)
+		}
+	}
+	at := func(s string) int { return strings.Index(body, s) }
+	sum, patchAt, compile, version := at("Checksum OK"), at("patch -p1"), at("compile(open("), at(".iceslab-version")
+	if !(sum >= 0 && sum < patchAt && patchAt < compile && compile < version) {
+		t.Errorf("order wrong: checksum %d, patch %d, compile %d, version file %d", sum, patchAt, compile, version)
 	}
 }

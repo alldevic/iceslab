@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +51,11 @@ type Config struct {
 	// product setting, and leaving it on past the migration keeps a secret
 	// alive that everybody has and nobody owns.
 	AcceptLegacySecret bool
+
+	// MetricsURL is the scrape target. Empty → the loopback metrics port of the
+	// inbound; tests point it at an httptest server.
+	MetricsURL    string
+	metricsClient *http.Client
 
 	// RunCmd is the injectable command runner for the crypto probe. Defaults to
 	// os/exec; tests inject a fake.
@@ -100,6 +110,9 @@ type Adapter struct {
 func New(cfg Config, logger *slog.Logger) *Adapter {
 	if cfg.RunCmd == nil {
 		cfg.RunCmd = defaultRunCmd
+	}
+	if cfg.metricsClient == nil {
+		cfg.metricsClient = &http.Client{Timeout: 2 * time.Second}
 	}
 	return &Adapter{
 		restarts: core.NewRestartTally(),
@@ -306,25 +319,128 @@ func (a *Adapter) ApplyInbound(port int, rawCfg json.RawMessage) error {
 	return err
 }
 
-// GetStats: until the metrics scrape lands (milestone 8.4) this answers as the
-// mtg adapter does: the users it holds with zero counters and no totals, so a
-// missing endpoint is not read by the panel as a core fault.
+// GetStats reports per-user counters, which is the reason this engine exists.
+//
+// Counters are cumulative since the process started, so Cumulative is set and
+// the panel diffs against its own snapshot. A SIGUSR2 reload does NOT reset
+// them (it re-reads config, it does not restart); a crash-restart does, and the
+// panel sees that as counters going backwards, which is what the restart tally
+// is for.
 //
 // A core that is not serving has nobody on it and says so: no users, rather than
 // the cached roster with zero bytes, which reads as every user present on an
 // inbound that does not exist (A-121).
+//
+// A failed scrape answers NoData rather than zeros: zeros read as a cumulative
+// counter dropping to 0, and the next good poll would bill the whole counter at
+// once.
 func (a *Adapter) GetStats() (*core.Stats, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	serving := a.cfg.Inbound.Domain != "" && (a.configOnly() || (a.proc != nil && a.proc.Running()))
+	names := make([]string, 0, len(a.users))
+	for n := range a.users {
+		names = append(names, n)
+	}
+	url := a.cfg.MetricsURL
+	if url == "" {
+		url = fmt.Sprintf("http://127.0.0.1:%d/", a.cfg.Inbound.withDefaults().MetricsPort)
+	}
+	client := a.cfg.metricsClient
+	a.mu.Unlock()
 	if !serving {
 		return &core.Stats{}, nil
 	}
-	users := make([]core.UserStats, 0, len(a.users))
-	for name := range a.users {
-		users = append(users, core.UserStats{UserID: name})
+	sort.Strings(names)
+
+	if len(names) == 0 {
+		return &core.Stats{Cumulative: true}, nil
 	}
-	return &core.Stats{Users: users}, nil
+	// LegacyUserName is deliberately absent from `names`: it is not a panel
+	// user, and handing the panel a userId it has never heard of would put the
+	// whole poll at risk for a row nobody can be billed for. Its traffic is
+	// still visible where an operator running a migration actually looks, the
+	// node's own metrics endpoint, and watching it fall to zero is the signal
+	// that the legacy secret can be dropped.
+
+	body, err := scrape(client, url)
+	if err != nil {
+		a.logger.Warn("mtprotoproxy: metrics scrape failed", "err", err)
+		return &core.Stats{Cumulative: true, NoData: true}, nil
+	}
+	traffic, err := parseUserMetrics(body)
+	if err != nil {
+		a.logger.Warn("mtprotoproxy: metrics parse failed", "err", err)
+		return &core.Stats{Cumulative: true, NoData: true}, nil
+	}
+
+	stats := &core.Stats{Cumulative: true, Users: make([]core.UserStats, 0, len(names))}
+
+	// Node totals sum EVERY row in the scrape, not just the users we currently
+	// serve. Three kinds of row end up here and all three are real traffic on
+	// this node:
+	//
+	//   - the users below, who also get attributed;
+	//   - the legacy cohort, which has no owner so nobody can be billed for it;
+	//   - users already removed. mtprotoproxy keeps their entry in `user_stats`
+	//     after they leave USERS (metrics iterate the stats, not the config), so
+	//     their final counters keep being reported, frozen.
+	//
+	// That last one is why this sums the scrape rather than the current user
+	// set. The panel reads this as a cumulative counter and deltas it, treating
+	// any DROP as a core restart worth re-baselining. Summing only current users
+	// would make every revocation look like a restart.
+	for _, t := range traffic {
+		stats.TotalBytesIn += t.BytesIn
+		stats.TotalBytesOut += t.BytesOut
+	}
+
+	for _, n := range names {
+		us := core.UserStats{UserID: n}
+		// A user we know about with no row in the scrape has simply not used
+		// the proxy since it started. Reporting zero is correct here, unlike
+		// the failed-scrape case above: the endpoint answered and did not
+		// mention them.
+		if t := traffic[n]; t != nil {
+			us.BytesIn, us.BytesOut = t.BytesIn, t.BytesOut
+		}
+		stats.Users = append(stats.Users, us)
+	}
+	return stats, nil
+}
+
+func scrape(client *http.Client, url string) (string, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", fmt.Errorf("read body: %w", err)
+	}
+	return string(body), nil
+}
+
+// VersionFile is what bootstrap-mtprotoproxy.sh writes beside the script once
+// the archive passed its sha256 and the patch applied: upstream ships no
+// version string at all (no --version, no constant), and the python version
+// would look like the proxy's and is not.
+const VersionFile = ".iceslab-version"
+
+// CoreVersion reports the version the bootstrap installed, "" when it did not
+// say (a tree put there by hand), which the panel shows as unknown.
+func (a *Adapter) CoreVersion() string {
+	if a.cfg.ScriptPath == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(a.cfg.ScriptPath), VersionFile))
+	if err != nil {
+		return ""
+	}
+	return core.ParseVersion(b)
 }
 
 func (a *Adapter) Healthy() bool {

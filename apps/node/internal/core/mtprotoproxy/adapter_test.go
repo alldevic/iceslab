@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -591,10 +593,15 @@ func TestIdleStopsTheProcessAndTheSameInboundBringsItBack(t *testing.T) {
 }
 
 func TestStatsListHeldUsersOnlyWhileServing(t *testing.T) {
-	// Until the metrics scrape (8.4) this answers as mtg does: the roster with
-	// zero counters while the core serves, nothing at all while it does not (A-121).
+	// The roster is reported while the core serves, nothing at all while it does
+	// not (A-121).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "mtprotoproxy_connects 3\n")
+	}))
+	defer srv.Close()
 	f := processFixture(t, true)
 	a := f.a
+	a.cfg.MetricsURL = srv.URL
 	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
 		t.Fatal(err)
 	}
@@ -609,8 +616,8 @@ func TestStatsListHeldUsersOnlyWhileServing(t *testing.T) {
 		st.Users[0].BytesIn != 0 || st.TotalBytesIn != 0 {
 		t.Fatalf("serving: %v %+v", err, st)
 	}
-	if a.CountsUsers() {
-		t.Error("CountsUsers is true before there is a scrape to count with")
+	if !a.CountsUsers() {
+		t.Error("CountsUsers is false: this engine attributes bytes to a user")
 	}
 }
 
@@ -796,5 +803,186 @@ func TestLegacySecretForAnotherDomainIsRefused(t *testing.T) {
 	}
 	if strings.Contains(string(configOf(t, a)), liveMtgRaw) {
 		t.Error("a secret for another domain was carried as cover")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stats (metrics scrape) and the version file
+// ─────────────────────────────────────────────────────────────────────────────
+
+func metricsServer(t *testing.T, body string, status int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if status != 0 {
+			w.WriteHeader(status)
+		}
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestGetStatsAttributesTrafficPerUser(t *testing.T) {
+	srv := metricsServer(t, `mtprotoproxy_user_octets_from{user="u1"} 100
+mtprotoproxy_user_octets_to{user="u1"} 200
+mtprotoproxy_user_octets_from{user="u2"} 5
+mtprotoproxy_user_octets_to{user="u2"} 7
+`, 0)
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA})
+	a.AddUser(core.User{UserID: "u2", MtprotoSecret: secretB})
+
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Cumulative {
+		t.Error("counters are cumulative since process start; the panel must diff them")
+	}
+	if len(st.Users) != 2 {
+		t.Fatalf("users = %d", len(st.Users))
+	}
+	byID := map[string]int64{}
+	for _, u := range st.Users {
+		byID[u.UserID+"/in"] = u.BytesIn
+		byID[u.UserID+"/out"] = u.BytesOut
+	}
+	if byID["u1/in"] != 100 || byID["u1/out"] != 200 || byID["u2/in"] != 5 || byID["u2/out"] != 7 {
+		t.Errorf("per-user attribution wrong: %v", byID)
+	}
+	if st.TotalBytesIn != 105 || st.TotalBytesOut != 207 {
+		t.Errorf("totals = %d/%d, want 105/207", st.TotalBytesIn, st.TotalBytesOut)
+	}
+}
+
+func TestGetStatsMarksNoDataRatherThanReportingZeros(t *testing.T) {
+	// A zero is indistinguishable from "nobody used it": the counter would read
+	// as dropping to 0 and the next good poll would bill all of it at once.
+	srv := metricsServer(t, "", http.StatusInternalServerError)
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA})
+
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.NoData {
+		t.Error("a failed scrape must set NoData")
+	}
+	if len(st.Users) != 0 {
+		t.Error("a failed scrape must not report user rows at all")
+	}
+}
+
+func TestKnownUserWithNoRowReportsZero(t *testing.T) {
+	// The endpoint answered and did not mention them: they have not used the
+	// proxy since it started. That is a real zero, unlike a failed scrape.
+	srv := metricsServer(t, "mtprotoproxy_connects 3\n", 0)
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA})
+
+	st, _ := a.GetStats()
+	if st.NoData {
+		t.Error("a successful scrape with no rows is not NoData")
+	}
+	if len(st.Users) != 1 || st.Users[0].BytesIn != 0 {
+		t.Errorf("users = %+v", st.Users)
+	}
+}
+
+func TestLegacyUserIsNotReportedToThePanel(t *testing.T) {
+	// It is not a panel user. Handing the panel a userId it has never heard of
+	// would risk the whole stats poll for a row nobody can be billed for; the
+	// operator watches this cohort on the node's metrics endpoint instead.
+	srv := metricsServer(t, `mtprotoproxy_user_octets_from{user="`+LegacyUserName+`"} 900
+mtprotoproxy_user_octets_from{user="u1"} 5
+mtprotoproxy_user_octets_to{user="u1"} 7
+`, 0)
+	a := legacyAdapter(t, true)
+	a.cfg.MetricsURL = srv.URL
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+liveMtgSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range st.Users {
+		if u.UserID == LegacyUserName {
+			t.Fatal("the legacy cohort was reported to the panel as a user")
+		}
+	}
+	if len(st.Users) != 1 || st.Users[0].UserID != "u1" {
+		t.Errorf("users = %+v", st.Users)
+	}
+	// It still lands in the NODE totals: nobody can be billed for it, but it is
+	// real traffic, and a node mid-migration must not look quieter than it is.
+	if st.TotalBytesIn != 900+5 {
+		t.Errorf("TotalBytesIn = %d, want 905 (the legacy cohort plus u1)", st.TotalBytesIn)
+	}
+}
+
+func TestRevokingAUserDoesNotDentTheNodeTotal(t *testing.T) {
+	// The panel reads the node total as a cumulative counter and treats a DROP
+	// as a core restart worth re-baselining. mtprotoproxy keeps a departed
+	// user's counters in its stats after they leave USERS, so the scrape still
+	// carries them; summing only the CURRENT users would make every revocation
+	// look like a restart.
+	srv := metricsServer(t, `mtprotoproxy_user_octets_from{user="stays"} 100
+mtprotoproxy_user_octets_to{user="stays"} 200
+mtprotoproxy_user_octets_from{user="revoked"} 1000
+mtprotoproxy_user_octets_to{user="revoked"} 2000
+`, 0)
+	a := newTestAdapter(t)
+	a.cfg.MetricsURL = srv.URL
+	if err := a.AddUser(core.User{UserID: "stays", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	// "revoked" is gone from USERS but still in the scrape.
+	st, err := a.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Users) != 1 || st.Users[0].UserID != "stays" {
+		t.Errorf("a revoked user must not be attributed: %+v", st.Users)
+	}
+	if st.TotalBytesIn != 1100 || st.TotalBytesOut != 2200 {
+		t.Errorf("node totals = %d/%d, want 1100/2200: the departed user's bytes still happened",
+			st.TotalBytesIn, st.TotalBytesOut)
+	}
+}
+
+func TestCoreVersionIsWhatTheBootstrapWrote(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mtprotoproxy.py")
+	a := New(Config{ScriptPath: script, ConfigPath: filepath.Join(dir, "config.py")}, quiet())
+
+	// Not installed: no script, no file.
+	if v := a.CoreVersion(); v != "" {
+		t.Errorf("not installed: version %q, want empty", v)
+	}
+	// A tree put there by hand: no version file.
+	if err := os.WriteFile(script, []byte("#"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if v := a.CoreVersion(); v != "" {
+		t.Errorf("no version file: version %q, want empty", v)
+	}
+	if err := os.WriteFile(filepath.Join(dir, VersionFile), []byte("1.1.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if v := a.CoreVersion(); v != "1.1.2" {
+		t.Errorf("version = %q, want 1.1.2", v)
+	}
+	// Config-only mode (no script configured) has nothing to read.
+	if v := New(Config{}, quiet()).CoreVersion(); v != "" {
+		t.Errorf("no script path: version %q, want empty", v)
 	}
 }

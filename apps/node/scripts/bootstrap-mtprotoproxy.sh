@@ -14,8 +14,9 @@
 # profile's inbound names, which nothing knows at install time. Open that port
 # (tcp) yourself once the profile is on the node.
 #
-# Idempotent, safe to rerun: the pinned source is unpacked again each time, the
-# env block is written either way.
+# Idempotent, safe to rerun: the pinned source is unpacked and patched again
+# each time, the env block is written either way. A node installed before the
+# patch and the version file existed is brought up to date by running this again.
 #
 # Flags:
 #   --restart-agent  restart iceslab-node at the end
@@ -170,7 +171,38 @@ mkdir -p "$TMPDIR/tree"
 tar -xzf "$TMPDIR/$ARCHIVE" -C "$TMPDIR/tree" --strip-components=1
 [[ -f "$TMPDIR/tree/mtprotoproxy.py" ]] || fail "mtprotoproxy.py not found in $ARCHIVE"
 
-# ───── 4. Smoke-test ─────
+# ───── 4a. The patch: the datacenter table, and the counters that name a drop ─────
+# Upstream's direct mode knows five datacenters and indexes them with
+# `abs(dc) - 1`. Telegram also hands clients dc 203, a CDN datacenter and the
+# one large public channels' media comes from, so that expression runs off the
+# end of the list and the connection is dropped having sent no byte and logged
+# no line: text works, media does not, and nothing says why. The patch adds the
+# datacenter, a counter and a log line for an unknown one, and `connects_dropped`
+# (with `connects_dropped_reason`) for a connection that named a user and then
+# relayed nothing, which no upstream counter shows.
+#
+# Applied here rather than carried as a fork of the file: what the panel pins and
+# serves stays byte-identical to upstream's archive, and the diff next to this
+# script is the whole of what is added. It is written for the pinned tag: when
+# the pin moves and the patch no longer applies, this stops (a node without the
+# patch is the silence the patch removes) and the patch is re-issued with the pin.
+if ! command -v patch >/dev/null 2>&1; then
+  log "patch(1) not present; installing"
+  apt_install patch
+fi
+PATCH_FILE="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/mtprotoproxy-cdn-datacenters.patch"
+[[ -f "$PATCH_FILE" ]] || fail "missing $PATCH_FILE, which is not optional: without it dc 203 is dropped silently"
+patch -p1 -d "$TMPDIR/tree" --forward < "$PATCH_FILE" \
+  || fail "the datacenter patch did not apply to mtprotoproxy $MPP_VERSION; re-issue it against that version before shipping"
+# Both halves are checked: `patch --forward` exits 0 on a hunk it judged already
+# applied, and half a patch is the failure this step exists to prevent.
+grep -q TG_EXTRA_DATACENTERS_V4 "$TMPDIR/tree/mtprotoproxy.py" \
+  || fail "the patch reported success but the datacenter table is not in mtprotoproxy.py"
+grep -q "def update_dropped" "$TMPDIR/tree/mtprotoproxy.py" \
+  || fail "the patch reported success but the dropped-connection counter is not in mtprotoproxy.py"
+log "Patched (dc 203, and counters for a connection that named a user and relayed nothing)"
+
+# ───── 4b. Smoke-test ─────
 # Compiled, not run: running would bind a port and dial Telegram. Compiled in
 # memory, so nothing but the tree itself is written.
 python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' "$TMPDIR/tree/mtprotoproxy.py" \
@@ -178,6 +210,10 @@ python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.
 log "Smoke-test passed: mtprotoproxy.py compiles under python3 $PYVER"
 
 # ───── 5. Install ─────
+# The version is written last before the tree moves, so it exists only for a tree
+# whose checksum and patch both passed; the agent reads it as the engine's version
+# (upstream has no version string of its own).
+printf '%s\n' "$MPP_VERSION" > "$TMPDIR/tree/.iceslab-version"
 # The running proxy keeps its open file; the agent restarts it on the next
 # push or restart.
 chown -R root:root "$TMPDIR/tree"

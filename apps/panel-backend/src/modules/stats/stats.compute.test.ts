@@ -416,3 +416,42 @@ describe('computeNodeTotalsFromCores (A-152)', () => {
     expect(w.newSnapshot).toBeNull();
   });
 });
+
+/**
+ * mtprotoproxy (milestone 8.4) reports per-user cumulative counters under the
+ * protocol `mtproto` and its own engine, so it is billed like xray: against its
+ * own (user, engine) snapshot, beside an mtg that counts no users.
+ */
+describe('mtprotoproxy counters', () => {
+  const MB = 1024 ** 2;
+  const mpp = (userId: string, cum: number): StatsUserEntry => ({
+    userId, bytesIn: cum, bytesOut: cum * 2, cumulative: true, protocol: 'mtproto', engine: 'mtprotoproxy',
+  });
+  const key = (userId: string) => snapshotKey(userId, { protocol: 'mtproto', engine: 'mtprotoproxy' });
+  const keep = (m: Map<string, UserSnapshot>, r: ReturnType<typeof computeUserDeltas>) => {
+    for (const x of r.snapshots) m.set(snapshotKey(x.userId, x), { cumIn: x.cumIn, cumOut: x.cumOut });
+  };
+
+  it('bills two users separately by their own deltas, and nothing for a restart', () => {
+    const snaps = new Map<string, UserSnapshot>();
+    keep(snaps, computeUserDeltas([mpp('a', 10 * MB), mpp('b', 1 * MB)], snaps)); // baseline
+    expect([...snaps.keys()].sort()).toEqual([key('a'), key('b')]);
+    const r = computeUserDeltas([mpp('a', 15 * MB), mpp('b', 1 * MB)], snaps);
+    const by = Object.fromEntries(r.deltas.map((d) => [d.userId, d]));
+    expect(by['a']).toMatchObject({ bytesIn: 5 * MB, bytesOut: 10 * MB });
+    expect(by['b']).toMatchObject({ bytesIn: 0, bytesOut: 0 });
+    keep(snaps, r);
+    // process restarted: counters start again below the snapshot
+    const after = computeUserDeltas([mpp('a', 1 * MB), mpp('b', 0)], snaps);
+    expect(after.deltas.every((d) => d.bytesIn === 0 && d.bytesOut === 0)).toBe(true);
+  });
+
+  it('the node total (summed over every row of the scrape) does not fall when a user is revoked', () => {
+    // The agent sums the scrape, departed users included, so the cumulative
+    // total only grows; a fall would read as a restart and baseline to 0.
+    const core = (bytesIn: number) => ({ protocol: 'mtproto', engine: 'mtprotoproxy', bytesIn, bytesOut: 0, cumulative: true });
+    const p1 = computeNodeTotalsFromCores([core(1100 * MB)], new Map());
+    const p2 = computeNodeTotalsFromCores([core(1105 * MB)], p1.snapshots); // 'revoked' (1000) still counted
+    expect(p2.upload).toBe(BigInt(5 * MB));
+  });
+});

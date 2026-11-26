@@ -9,13 +9,14 @@ var (
 	_ core.Installable     = (*Adapter)(nil)
 	_ core.PortReserver    = (*Adapter)(nil)
 	_ core.UserCounter     = (*Adapter)(nil)
+	_ core.Versioner       = (*Adapter)(nil)
 	_ core.FaultReporter   = (*Adapter)(nil)
 	_ core.RestartReporter = (*Adapter)(nil)
 )
 
-// CountsUsers implements core.UserCounter. False until the metrics scrape lands
-// (milestone 8.4): like mtg's until then, no bytes are attributed to a user.
-func (a *Adapter) CountsUsers() bool { return false }
+// CountsUsers implements core.UserCounter: every user has their own secret, so
+// the metrics endpoint attributes bytes to a user (unlike mtg).
+func (a *Adapter) CountsUsers() bool { return true }
 
 // Fault implements core.FaultReporter: why the core is not working, in its own
 // words, or the agent's when it was never spawned (the crypto guard).

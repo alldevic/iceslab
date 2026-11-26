@@ -2,6 +2,7 @@ package mtprotoproxy
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,7 +93,11 @@ func TestPythonReadsWhatWeMeant(t *testing.T) {
 	if got["METRICS_EXPORT_LINKS"] != false {
 		t.Error("METRICS_EXPORT_LINKS must be False: those links carry every user's secret")
 	}
-	// Loopback only, spelled out rather than left to upstream's default.
+	// Loopback PLUS this machine's own IPv4 addresses: a connection to a
+	// loopback-bound socket can arrive with a non-loopback source when the host
+	// masquerades its own traffic (the WireGuard bootstrap's `! -o awg0 -j
+	// MASQUERADE` matched `lo` as well), and mtprotoproxy answers such a scrape
+	// by closing the connection without a byte.
 	wl := got["METRICS_WHITELIST"].([]any)
 	found := false
 	for _, e := range wl {
@@ -110,6 +115,19 @@ func TestPythonReadsWhatWeMeant(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("METRICS_WHITELIST = %v, loopback itself is missing", wl)
+	}
+	listed := map[string]bool{}
+	for _, e := range wl {
+		listed[e.(string)] = true
+	}
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil && !listed[ipnet.IP.To4().String()] {
+			t.Errorf("METRICS_WHITELIST = %v lacks this node's address %s", wl, ipnet.IP)
+		}
+	}
+	if !strings.Contains(string(blob), `METRICS_LISTEN_ADDR_IPV4 = "127.0.0.1"`) {
+		t.Error("the metrics socket must stay bound to 127.0.0.1")
 	}
 }
 

@@ -141,6 +141,31 @@ describe('what it hands over', () => {
     expect(res.headers['content-length']).toBe(String(BODY.length));
   });
 
+  // One Python archive for every architecture (the manifest's `sourceArchive`):
+  // not an exception to the per-arch rule, a fact the three entries must agree
+  // on, so a node on any arch gets the same bytes and the same sha256.
+  it('mtprotoproxy: one archive for every arch, served under each with the manifest sha256', async () => {
+    const release = CORE_VERSIONS.mtprotoproxy.releases.find((r) => r.version === CORE_VERSIONS.mtprotoproxy.pinned)!;
+    expect(release.sourceArchive).toBe(true);
+    const arches = Object.keys(release.assets!) as Array<keyof typeof release.assets>;
+    expect(arches.length).toBeGreaterThan(1);
+    expect(new Set(arches.map((a) => release.assets![a]!.sha256)).size).toBe(1);
+    const body = Buffer.from('mtprotoproxy source archive stand-in\n');
+    const stored = arches.map((a) => coreArtifactName('mtprotoproxy', release.version, a, release.assets![a]!.file));
+    try {
+      for (const name of stored) await writeFile(join(dir, name), body);
+      for (const arch of arches) {
+        const res = await get(`/api/internal/cores/mtprotoproxy/${release.version}/${arch}`, bearer());
+        expect(res.statusCode).toBe(200);
+        expect(res.rawPayload.equals(body)).toBe(true);
+        expect(res.headers['x-iceslab-sha256']).toBe(release.assets![arch]!.sha256);
+        expect(res.headers['x-iceslab-core-version']).toBe(release.version);
+      }
+    } finally {
+      for (const name of stored) await rm(join(dir, name), { force: true });
+    }
+  });
+
   it('the pinned script, with its sha256 and ref', async () => {
     const res = await get(`/api/internal/cores/scripts/xray-install/${SCRIPT.ref}`, bearer());
     expect(res.statusCode).toBe(200);

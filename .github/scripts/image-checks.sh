@@ -129,12 +129,27 @@ check_core_arches() {
   ')
   image_arch=$(docker image inspect --format '{{.Architecture}}' "$IMAGE")
   case "$(uname -m)" in x86_64) host_arch=amd64 ;; aarch64) host_arch=arm64 ;; *) host_arch="" ;; esac
-  local n=0
+  local n=0 mpp_sha="" list_in
   while IFS=$'\t' read -r stored component arch file; do
     [[ -n "$stored" ]] || continue
     case "$component" in
       xray) bin=xray ;; singbox) bin=sing-box ;; mtg) bin=mtg ;; mita) bin=mita ;; hysteria) bin="" ;;
-      mtprotoproxy) continue ;;   # Python source, one archive for every arch: no ELF inside
+      mtprotoproxy)
+        # Python source, one archive for every arch: no ELF inside, and no
+        # arch to check. What is checked instead is the thing the arch check
+        # cannot say: it is a tarball with the script the agent runs, and it
+        # is the same file under every arch (the manifest says so with
+        # `sourceArchive`; a different one under one arch is a wrong entry).
+        list_in=$(tar -tzf "$work/cores/$stored" 2>&1) || { report+="$stored: not a readable tar.gz"$'\n'; continue; }
+        case $'\n'"$list_in"$'\n' in
+          *"/mtprotoproxy.py"$'\n'*) ;;
+          *) report+="$stored: no mtprotoproxy.py inside"$'\n' ;;
+        esac
+        got=$(sha256sum "$work/cores/$stored"); got="${got%% *}"
+        if [[ -z "$mpp_sha" ]]; then mpp_sha="$got"; else
+          [[ "$got" == "$mpp_sha" ]] || report+="$stored: not the same archive as the other arches of mtprotoproxy"$'\n'
+        fi
+        continue ;;
       *) continue ;;   # not an executable the node runs from an archive
     esac
     case "$arch" in amd64) want=3e00 ;; arm64) want=b700 ;; armv7) want=2800 ;; *) report+="$stored: no ELF machine known for arch $arch"$'\n'; continue ;; esac
