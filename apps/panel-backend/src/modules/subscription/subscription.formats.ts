@@ -318,11 +318,23 @@ export function endpointsForFormat(
   });
 }
 
-export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase {
+/**
+ * Which WireGuard device an endpoint is for (9.4): a user holds several on every
+ * WireGuard-family binding, one endpoint each. Absent on an endpoint written by
+ * hand: device 1.
+ */
+interface WgDeviceFields {
+  /** The device's id. */
+  deviceId?: string;
+  /** Its number among the user's live devices, oldest first (`?device=`). */
+  deviceIndex?: number;
+}
+
+export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase, WgDeviceFields {
   protocol: 'amneziawg';
-  /** User's WireGuard private key. */
+  /** The device's WireGuard private key (wg_devices). */
   privateKey: string;
-  /** IP allocated to this user inside the inbound's subnet, CIDR /32 form. */
+  /** IP allocated to this device inside the inbound's subnet, CIDR /32 form. */
   allowedIp: string;
   /** Server's WireGuard public key (the inbound's interface PublicKey). */
   serverPublicKey: string;
@@ -357,11 +369,11 @@ export interface AmneziawgSubscriptionEndpoint extends SubscriptionEndpointBase 
  * wgconf format carries it (the proxy formats emit no entry for it); there is
  * no obfuscation block, which is the point of the protocol.
  */
-export interface WireguardSubscriptionEndpoint extends SubscriptionEndpointBase {
+export interface WireguardSubscriptionEndpoint extends SubscriptionEndpointBase, WgDeviceFields {
   protocol: 'wireguard';
-  /** User's WireGuard private key (the one keypair every tunnel uses). */
+  /** The device's WireGuard private key (the one keypair every tunnel of it uses). */
   privateKey: string;
-  /** IP allocated to this user inside the plain profile's subnet, CIDR /32. */
+  /** IP allocated to this device inside the plain profile's subnet, CIDR /32. */
   allowedIp: string;
   /** Server's WireGuard public key (the inbound's interface PublicKey). */
   serverPublicKey: string;

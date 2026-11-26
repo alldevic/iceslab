@@ -5,7 +5,7 @@ import type {
   AmneziawgSubscriptionEndpoint,
   WireguardSubscriptionEndpoint,
 } from '../subscription.formats.js';
-import { pickServer } from '../endpoint-identity.js';
+import { ofDevice, pickServer } from '../endpoint-identity.js';
 
 export type WgconfEndpoint = AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint;
 
@@ -13,9 +13,17 @@ export type WgconfEndpoint = AmneziawgSubscriptionEndpoint | WireguardSubscripti
 export function pickWgconfEndpoint(
   endpoints: SubscriptionEndpoint[],
   node?: string,
+  device?: string,
 ): WgconfEndpoint | undefined {
-  const awg = endpoints.filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg');
-  const wg = endpoints.filter((e): e is WireguardSubscriptionEndpoint => e.protocol === 'wireguard');
+  // `device` selects whose key (absent = device 1), then `node` which tunnel.
+  const awg = ofDevice(
+    endpoints.filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg'),
+    device,
+  );
+  const wg = ofDevice(
+    endpoints.filter((e): e is WireguardSubscriptionEndpoint => e.protocol === 'wireguard'),
+    device,
+  );
   // `node` selects which tunnel, by its id or its label; absent = first
   // (legacy whole-sub link), the AmneziaWG one while there is one. See pickServer.
   if (!node) return pickServer(awg) ?? pickServer(wg);
@@ -54,8 +62,9 @@ export function pickWgconfEndpoint(
 export function buildWgQuickConf(
   endpoints: SubscriptionEndpoint[],
   node?: string,
+  device?: string,
 ): string {
-  const picked = pickWgconfEndpoint(endpoints, node);
+  const picked = pickWgconfEndpoint(endpoints, node, device);
   if (!picked) return '';
   if (picked.protocol === 'wireguard') {
     return buildWireguardClientConfig({

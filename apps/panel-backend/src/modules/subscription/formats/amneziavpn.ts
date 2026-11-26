@@ -3,7 +3,7 @@ import type {
   SubscriptionEndpoint,
   AmneziawgSubscriptionEndpoint,
 } from '../subscription.formats.js';
-import { pickServer } from '../endpoint-identity.js';
+import { ofDevice, pickServer } from '../endpoint-identity.js';
 
 /**
  * AmneziaVPN-app "vpn://" connection key for an AmneziaWG endpoint.
@@ -19,11 +19,12 @@ import { pickServer } from '../endpoint-identity.js';
 export function buildAwgVpnLink(
   endpoints: SubscriptionEndpoint[],
   node?: string,
+  device?: string,
 ): string {
   const awgEndpoints = endpoints.filter(
     (e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg',
   );
-  const awg = pickServer(awgEndpoints, node);
+  const awg = pickServer(ofDevice(awgEndpoints, device), node);
   if (!awg) return '';
 
   return buildAmneziaVpnLink({
@@ -49,6 +50,6 @@ export function buildAwgVpnLink(
     i4: awg.i4,
     i5: awg.i5,
     ...(awg.geometry3 ? { geometry3: awg.geometry3 } : {}),
-    description: `AmneziaWG ${awg.nodeName}`,
+    description: `AmneziaWG ${awg.nodeName}${(awg.deviceIndex ?? 1) > 1 ? ` #${awg.deviceIndex}` : ''}`,
   });
 }

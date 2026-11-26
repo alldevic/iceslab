@@ -42,6 +42,7 @@ type wirePair struct {
 func wirePairs() []wirePair {
 	return []wirePair{
 		{"ProtocolCredentials", ProtocolCredentials{}},
+		{"AmneziawgPeerCred", AmneziaWGPeerDto{}},
 		{"AddUserRequest", AddUserRequest{}},
 		{"AddUserResponse", AddUserResponse{}},
 		{"AddUsersRequest", AddUsersRequest{}},

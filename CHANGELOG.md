@@ -23,6 +23,26 @@ All notable changes to Iceslab are documented here. Format loosely follows
   The wireguard-tools version is the distribution's (the manifest lists the
   component without a pin).
 
+- **A WireGuard key and an address per device**, for AmneziaWG (1.x and 3.1)
+  and plain WireGuard. Until now every client of a user held the user's one
+  key, so a second client took the endpoint over from the first. A user now
+  holds devices issued up front, each with its own key and its own address
+  on every profile: 3 by default, never more than 10, and the user's or the
+  squad's device limit (`hwidDeviceLimit`) sets the number (`0`, "no limit",
+  gives 3). `?format=wgconf` and `?format=amneziavpn` take `&device=` (the
+  device's number, or its id; none is device 1, whose answer is byte for byte
+  what it was), and the subscription page lists a tunnel per device. Reissuing
+  a user's credentials reissues the keys of all their devices and keeps their
+  number and addresses. The panel sends a node one peer list inside the user's
+  record; the agent keeps all the peers under the user's id, `removeUser`
+  takes them all, and a record without the list (an older panel) is one peer
+  as before. Upgrade: the migration makes device 1 of every user their
+  current key at their current address, so every config already handed out
+  keeps working; devices 2 and 3 are issued at the next push or subscription
+  fetch. The agent's `*.state.json` gains `peerSets` and keeps `peers`
+  (device 1), so an update keeps the peers and a rollback keeps device 1.
+  Revoking a device, per-device traffic and preshared keys are not here yet.
+
 ### Fixed
 
 - The agent's unit written by the installer lists `/etc/wireguard` among its

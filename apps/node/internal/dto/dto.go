@@ -53,6 +53,14 @@ func NativeEngine(p ProtocolName) EngineName {
 	}
 }
 
+// AmneziaWGPeerDto mirrors AmneziawgPeerCred in shared/transport.ts.
+type AmneziaWGPeerDto struct {
+	PublicKey          string `json:"publicKey"`
+	AllowedIP          string `json:"allowedIp,omitempty"`
+	AllowedIP3         string `json:"allowedIp3,omitempty"`
+	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
+}
+
 type ProtocolCredentials struct {
 	HysteriaPassword   string `json:"hysteriaPassword,omitempty"`
 	XrayUUID           string `json:"xrayUuid,omitempty"`
@@ -73,6 +81,12 @@ type ProtocolCredentials struct {
 	// AmneziaWGAllowedIP.
 	WireguardPublicKey string `json:"wireguardPublicKey,omitempty"`
 	WireguardAllowedIP string `json:"wireguardAllowedIp,omitempty"`
+	// AmneziaWGPeers: one peer per device of the user (milestone 9.4), each with
+	// its own key and its addresses on the 1.x, 3.1 and plain WireGuard
+	// interfaces. When present the agent takes it for both flavours and ignores
+	// the single fields above, which the panel still fills with device 1 for
+	// older agents. `[]` means no device on this node, which takes the peers off.
+	AmneziaWGPeers []AmneziaWGPeerDto `json:"amneziawgPeers,omitempty"`
 	// TUIC (sing-box engine): per-user UUID + password. Both required for a
 	// TUIC v5 client to authenticate. Only present when the user has access
 	// to a tuic inbound.

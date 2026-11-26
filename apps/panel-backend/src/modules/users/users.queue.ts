@@ -8,7 +8,7 @@ import { getLogger } from '../../lib/infra/logger.js';
 import { mtprotoBackstop } from './mtproto-backstop.js';
 import { reachOfUsers } from './user-reach.js';
 import { enqueueNodePush } from '../inbounds/inbounds.queue.js';
-import { allocateAwgAddresses, awgBindingsOfNode, wireguardBindingOfNode } from '../amneziawg/awg-addresses.js';
+import { awgBindingsOfNode, wgCredentialsOf, wireguardBindingOfNode } from '../amneziawg/awg-addresses.js';
 
 // ───── Job data shapes ─────
 
@@ -173,19 +173,24 @@ export async function syncAddUser(userId: string): Promise<void> {
       }
       if (node.lastInboundSyncAt === null) return;
       const awg = await awgBindingsOfNode(node.id);
-      const one = awg.one && inboundIds.includes(awg.one) ? (await allocateAwgAddresses(awg.one, [user])).get(user.id) : undefined;
-      const three = awg.three && inboundIds.includes(awg.three) ? (await allocateAwgAddresses(awg.three, [user])).get(user.id) : undefined;
       const wgBinding = await wireguardBindingOfNode(node.id);
-      const wg = wgBinding && inboundIds.includes(wgBinding) ? (await allocateAwgAddresses(wgBinding, [user])).get(user.id) : undefined;
+      // 9.4: a peer per device, the same set the push builds.
+      const { creds } = await wgCredentialsOf(
+        { one: awg.one, three: awg.three, wg: wgBinding },
+        [
+          {
+            id: user.id,
+            username: user.username,
+            reachesOne: !!awg.one && inboundIds.includes(awg.one),
+            reachesThree: !!awg.three && inboundIds.includes(awg.three),
+            reachesWg: !!wgBinding && inboundIds.includes(wgBinding),
+          },
+        ],
+      );
       await transport.addUser({
         ...base,
         inboundIds,
-        credentials: {
-          ...base.credentials,
-          ...(one ? { amneziawgAllowedIp: one } : {}),
-          ...(three ? { amneziawgAllowedIp3: three } : {}),
-          ...(wg ? { wireguardPublicKey: user.amneziawgPublicKey, wireguardAllowedIp: wg } : {}),
-        },
+        credentials: { ...base.credentials, ...creds.get(user.id) },
       });
     },
     `addUser ${userId}`,

@@ -972,6 +972,24 @@ func parseRFC3339OrZero(s string) time.Time {
 	return t
 }
 
+// amneziawgPeers: the wire's device peers as the adapters take them. nil when
+// the field is absent (an older panel: the single fields stand), and EMPTY,
+// not nil, when the panel sent `[]`: the user has no device left on this
+// node, which takes their peers off.
+func amneziawgPeers(in []dto.AmneziaWGPeerDto) []core.AmneziaWGPeer {
+	if in == nil {
+		return nil
+	}
+	out := make([]core.AmneziaWGPeer, 0, len(in))
+	for _, p := range in {
+		out = append(out, core.AmneziaWGPeer{
+			PublicKey: p.PublicKey, AllowedIP: p.AllowedIP, AllowedIP3: p.AllowedIP3,
+			WireguardAllowedIP: p.WireguardAllowedIP,
+		})
+	}
+	return out
+}
+
 // addUser puts one user onto the cores, and returns the names of the healthy
 // ones that refused (none: done).
 func (s *Server) addUser(req dto.AddUserRequest) []string {
@@ -987,6 +1005,7 @@ func (s *Server) addUser(req dto.AddUserRequest) []string {
 		AmneziaWGAllowedIP3: req.Credentials.AmneziaWGAllowedIP3,
 		WireguardPublicKey:  req.Credentials.WireguardPublicKey,
 		WireguardAllowedIP:  req.Credentials.WireguardAllowedIP,
+		AmneziaWGPeers:      amneziawgPeers(req.Credentials.AmneziaWGPeers),
 		TuicUUID:            req.Credentials.TuicUUID,
 		TuicPassword:        req.Credentials.TuicPassword,
 		AnytlsPassword:      req.Credentials.AnytlsPassword,

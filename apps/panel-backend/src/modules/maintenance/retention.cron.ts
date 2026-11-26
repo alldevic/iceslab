@@ -50,8 +50,8 @@ const USER_PURGE_BATCH = 500;
  * A-268: erase users deleted more than DELETED_USER_RETENTION_DAYS ago.
  *
  * Every table that holds a user's rows, read from prisma/models 26.10:
- *   user_traffic, amneziawg_peers, hwid_user_devices (users.prisma:95, :119,
- *   :150), group_members (squads.prisma:100), subscription_events,
+ *   user_traffic, amneziawg_peers, wg_devices (9.4), hwid_user_devices
+ *   (users.prisma:95, :119, :150), group_members (squads.prisma:100), subscription_events,
  *   subscription_request_history (subscription.prisma:20, :84),
  *   node_user_usage_history (nodes.prisma:324): FK ON DELETE CASCADE, they go
  *   with the user row.

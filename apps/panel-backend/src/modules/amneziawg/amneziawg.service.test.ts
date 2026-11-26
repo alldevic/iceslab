@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../../prisma.js';
 import { closeRedis } from '../../lib/infra/redis.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
-import { generateUserCredentials } from '../../lib/auth/credentials.js';
+import { generateUserCredentials, generateWireguardKeyPair } from '../../lib/auth/credentials.js';
 import {
   DEFAULT_SUBNET,
   IpExhaustedError,
@@ -11,6 +11,7 @@ import {
   listPeers,
   preallocatePeers,
   releasePeer,
+  type PeerDevice,
 } from './amneziawg.service.js';
 
 // Slice 27: peer allocation is keyed on profileId (the logical AmneziaWG
@@ -27,7 +28,8 @@ async function createProfile(name = 'awg0'): Promise<string> {
   return profile.id;
 }
 
-async function createUser(username: string): Promise<string> {
+// A user with their device 1: what the allocator places.
+async function createUser(username: string): Promise<PeerDevice> {
   const creds = generateUserCredentials();
   const user = await prisma.user.create({
     data: {
@@ -41,7 +43,16 @@ async function createUser(username: string): Promise<string> {
       amneziawgPublicKey: creds.amneziawgPublicKey,
     },
   });
-  return user.id;
+  const device = await prisma.wgDevice.create({
+    data: { userId: user.id, privateKey: creds.amneziawgPrivateKey, publicKey: creds.amneziawgPublicKey },
+  });
+  return { id: device.id, userId: user.id };
+}
+
+async function addDevice(userId: string): Promise<PeerDevice> {
+  const keys = generateWireguardKeyPair();
+  const d = await prisma.wgDevice.create({ data: { userId, privateKey: keys.privateKey, publicKey: keys.publicKey } });
+  return { id: d.id, userId };
 }
 
 beforeEach(async () => {
@@ -66,7 +77,7 @@ describe('allocatePeer', () => {
     expect(b.ip).toBe('10.66.66.3');
   });
 
-  it('is idempotent for the same (profile, user)', async () => {
+  it('is idempotent for the same (profile, device)', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
 
@@ -87,7 +98,7 @@ describe('allocatePeer', () => {
     const peer2 = await allocatePeer(profileId, u2); // .3
     expect(peer2.ip).toBe('10.66.66.3');
 
-    await releasePeer(profileId, u2);
+    await releasePeer(profileId, u2.userId);
     const peer3 = await allocatePeer(profileId, u3);
     expect(peer3.ip).toBe('10.66.66.3');
   });
@@ -102,6 +113,24 @@ describe('allocatePeer', () => {
 
     expect(a1.ip).toBe('10.66.66.2');
     expect(a2.ip).toBe('10.66.66.2');
+  });
+
+  it("gives each device of one user an address of its own, and device 1 keeps the one it had", async () => {
+    const profileId = await createProfile();
+    const d1 = await createUser('alice');
+    const first = await allocatePeer(profileId, d1); // .2
+    const d2 = await addDevice(d1.userId);
+    const d3 = await addDevice(d1.userId);
+
+    const second = await allocatePeer(profileId, d2);
+    const third = await allocatePeer(profileId, d3);
+    expect([first.ip, second.ip, third.ip]).toEqual(['10.66.66.2', '10.66.66.3', '10.66.66.4']);
+    expect(second.userId).toBe(d1.userId);
+    expect((await allocatePeer(profileId, d1)).ip).toBe('10.66.66.2');
+    // The one address per (profile, device) is a database rule, not a habit.
+    await expect(
+      prisma.amneziawgPeer.create({ data: { profileId, userId: d2.userId, deviceId: d2.id, ip: '10.66.66.99' } }),
+    ).rejects.toThrow();
   });
 
   it('respects a custom subnet', async () => {
@@ -129,7 +158,7 @@ describe('getPeer / listPeers / releasePeer', () => {
   it('returns null when no allocation exists', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
-    expect(await getPeer(profileId, u)).toBeNull();
+    expect(await getPeer(profileId, u.id)).toBeNull();
   });
 
   it('lists peers in IP order', async () => {
@@ -149,7 +178,7 @@ describe('getPeer / listPeers / releasePeer', () => {
   it('release is a no-op when nothing is allocated', async () => {
     const profileId = await createProfile();
     const u = await createUser('alice');
-    await expect(releasePeer(profileId, u)).resolves.toBeUndefined();
+    await expect(releasePeer(profileId, u.userId)).resolves.toBeUndefined();
   });
 });
 
@@ -176,8 +205,8 @@ describe('preallocatePeers (B7 bulk)', () => {
     const existing = await allocatePeer(profileId, u1); // takes .2
 
     const map = await preallocatePeers(profileId, [u1, u2]);
-    expect(map.get(u1)).toBe(existing.ip); // unchanged
-    expect(map.get(u2)).toBe('10.66.66.3'); // next free
+    expect(map.get(u1.id)).toBe(existing.ip); // unchanged
+    expect(map.get(u2.id)).toBe('10.66.66.3'); // next free
   });
 
   it('reuses a gap left by a release', async () => {
@@ -187,10 +216,10 @@ describe('preallocatePeers (B7 bulk)', () => {
     const u3 = await createUser('carol');
     await allocatePeer(profileId, u1); // .2
     await allocatePeer(profileId, u2); // .3
-    await releasePeer(profileId, u1); // frees .2
+    await releasePeer(profileId, u1.userId); // frees .2
 
     const map = await preallocatePeers(profileId, [u3]);
-    expect(map.get(u3)).toBe('10.66.66.2'); // lowest free reused
+    expect(map.get(u3.id)).toBe('10.66.66.2'); // lowest free reused
   });
 
   it('is a no-op second call (idempotent), returning the same IPs', async () => {
@@ -201,6 +230,15 @@ describe('preallocatePeers (B7 bulk)', () => {
     expect([...second.entries()].sort()).toEqual([...first.entries()].sort());
     const all = await listPeers(profileId);
     expect(all).toHaveLength(2); // no duplicate rows
+  });
+
+  it('places every device of a user, each at its own address', async () => {
+    const profileId = await createProfile();
+    const d1 = await createUser('alice');
+    const d2 = await addDevice(d1.userId);
+    const map = await preallocatePeers(profileId, [d1, d2]);
+    expect(new Set([map.get(d1.id), map.get(d2.id)])).toEqual(new Set(['10.66.66.2', '10.66.66.3']));
+    expect(await listPeers(profileId)).toHaveLength(2);
   });
 
   it('returns an empty map for no users', async () => {

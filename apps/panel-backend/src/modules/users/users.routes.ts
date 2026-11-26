@@ -20,7 +20,7 @@ import {
   SubscriptionNotFoundError,
 } from '../subscription/subscription.service.js';
 import { awgConfUrl, subscriptionUrl } from '../subscription/subscription.link.js';
-import { endpointId } from '../subscription/endpoint-identity.js';
+import { endpointId, isLaterDevice } from '../subscription/endpoint-identity.js';
 import { RoutingPresetNotFoundError } from '../routing-presets/routing-presets.assign.js';
 import { audit } from '../audit/audit.hook.js';
 import { userErasedAfter, userTarget } from '../audit/audit.targets.js';
@@ -404,7 +404,9 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       });
       const subUrl = await subscriptionUrl(user.subscriptionToken);
       return reply.send({
-        endpoints: result.endpoints.map((e) => ({
+        // A device after the first is a key on the same server (9.4): the card
+        // lists servers, and a row per device would repeat each one's link.
+        endpoints: result.endpoints.filter((e) => !isLaterDevice(e)).map((e) => ({
           protocol: e.protocol,
           /**
            * The core serving it. A protocol name alone does not say what the

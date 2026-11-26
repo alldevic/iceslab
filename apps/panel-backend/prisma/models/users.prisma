@@ -72,6 +72,7 @@ model User {
   nodeUsageHistory     NodeUserUsageHistory[]
   amneziawgPeers       AmneziawgPeer[]
   hwidDevices          HwidUserDevice[]
+  wgDevices            WgDevice[]
 
   @@index([username])
   @@index([status])
@@ -111,28 +112,75 @@ model UserTraffic {
   @@map("user_traffic")
 }
 
-// Per-user IP allocation for AmneziaWG inbounds. One row per (inboundId, userId);
-// allocator picks the first free IP from the inbound's subnet (default 10.0.0.0/24).
-// Persisted so the same user keeps a stable IP across restarts and so we can detect
-// IP exhaustion before mutating the awg config.
+// Per-device IP allocation for the WireGuard family (AmneziaWG and plain WireGuard
+// profiles share it). One row per (profile, device); the allocator picks the first
+// free IP from the profile's subnet. Persisted so a device keeps a stable IP across
+// restarts and so we can detect IP exhaustion before mutating the config.
 model AmneziawgPeer {
   id        String   @id @default(uuid()) @db.Uuid
   // Slice 27: was `inboundId` pointing at `inbounds`. After profiles
-  // refactor, peer allocations are scoped to the logical profile. Same user
+  // refactor, peer allocations are scoped to the logical profile. Same device
   // gets the same WG IP across every node a given profile is bound to
   // (separate WG processes per node never see each other, so no collision).
   profileId String   @map("profile_id") @db.Uuid
+  // The device's owner, kept beside deviceId so a user's peers are read
+  // without a join.
   userId    String   @map("user_id") @db.Uuid
+  deviceId  String   @map("device_id") @db.Uuid
   ip        String   @db.VarChar(45)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device  WgDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
 
   @@unique([profileId, ip])
-  @@unique([profileId, userId])
+  @@unique([profileId, deviceId])
   @@index([userId])
+  @@index([deviceId])
   @@map("amneziawg_peers")
+}
+
+// A WireGuard device (milestone 9.4): a keypair the panel issued to one client
+// of a user. One keypair per user was one peer however many clients held it, so
+// a second client took the endpoint over from the first. Not an HwidUserDevice:
+// those are what a client says about itself, these are credentials handed out.
+//
+// How many a user has follows their device limit (wg-devices.service.ts,
+// wgDeviceCount); the oldest live one by (createdAt, id) is device 1, and for a
+// user from before devices it IS their old keypair (users.amneziawg_*_key).
+// The AmneziaWG generation is not the device's: the key is the same x25519 on
+// 1.x, 3.1 and plain WireGuard, and each profile gives it its own address.
+model WgDevice {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String  @map("user_id") @db.Uuid
+  // A name for the device ("Phone"); NULL until someone names it.
+  label  String? @db.VarChar(64)
+
+  privateKey String @map("private_key") @db.VarChar(64)
+  publicKey  String @unique @map("public_key") @db.VarChar(64)
+  // Milestone 9.5: mixed into the peer's handshake when its profile asks for
+  // preshared keys. Added with the table, filled by 9.5; NULL until then.
+  presharedKey String? @map("preshared_key") @db.VarChar(64)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Milestone 9.6: a revoked device keeps its row and its traffic; its
+  // addresses and its peer on every node are gone. Read from now on (a revoked
+  // device is not issued, listed or pushed), written by 9.6.
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  // Milestone 9.6: lifetime totals from the nodes' per-peer counters, never
+  // reset. lastSeenAt: the last poll in which the device moved bytes. Added
+  // with the table, filled by 9.6.
+  bytesIn    BigInt    @default(0) @map("bytes_in")
+  bytesOut   BigInt    @default(0) @map("bytes_out")
+  lastSeenAt DateTime? @map("last_seen_at") @db.Timestamptz(6)
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  peers AmneziawgPeer[]
+
+  @@index([userId])
+  @@map("wg_devices")
 }
 
 // ───── Slice S2: HWID enforcement ────────────────────────────────────────

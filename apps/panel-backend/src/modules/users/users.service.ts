@@ -6,6 +6,7 @@ import { ALL_SQUAD_ID } from '../squads/squads.constants.js';
 import { ensureAllSquad } from '../squads/squads.system.js';
 import * as repo from './users.repository.js';
 import { isSourceIdErased } from './erased-sources.js';
+import { reissueDevices } from '../wg-devices/wg-devices.service.js';
 import type {
   CreateUserInput,
   UpdateUserInput,
@@ -575,8 +576,10 @@ export async function rotateSubscription(id: string): Promise<PublicUserDto> {
  *
  * New: the xray uuid (TUIC, AnyTLS, ShadowTLS and Shadowsocks keys are derived
  * from it, so they change with it), the hysteria and naive passwords, the
- * AmneziaWG key pair and the subscription token. Kept: the AmneziaWG address
- * (allocated per user and profile, not per key), the REALITY shortId, which
+ * AmneziaWG key pair and the subscription token. The WireGuard devices (9.4)
+ * are reissued with it: each live device gets a new key pair, device 1 the one
+ * the user row got, and their number stays. Kept: the WireGuard addresses
+ * (allocated per device and profile, not per key), the REALITY shortId, which
  * is no credential, and everything else about the user. Any prior revoke is
  * cleared, as by rotate: the new link is the working one.
  *
@@ -602,6 +605,11 @@ export async function reissueCredentials(id: string): Promise<PublicUserDto> {
         amneziawgPublicKey: creds.amneziawgPublicKey,
         subscriptionToken: creds.subscriptionToken,
         subRevokedAt: null,
+      });
+      // Before the event: the nodes are pushed the devices' new keys.
+      await reissueDevices(id, {
+        privateKey: creds.amneziawgPrivateKey,
+        publicKey: creds.amneziawgPublicKey,
       });
       eventBus.emit('user.updated', {
         userId: id,

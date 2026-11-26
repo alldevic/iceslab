@@ -24,8 +24,15 @@ import { buildLoonConf } from './formats/loon.js';
 import { buildSubscriptionPage } from './subscription.page.js';
 import { subscriptionUrl } from './subscription.link.js';
 import { linkWithDescription } from './subscription.description.js';
-import { endpointsForFormat, isPlainXray, withoutDescription, type SubscriptionEndpoint } from './subscription.formats.js';
-import { endpointId, pickServer } from './endpoint-identity.js';
+import {
+  endpointsForFormat,
+  isPlainXray,
+  withoutDescription,
+  type AmneziawgSubscriptionEndpoint,
+  type SubscriptionEndpoint,
+  type WireguardSubscriptionEndpoint,
+} from './subscription.formats.js';
+import { endpointId, isLaterDevice, ofDevice, pickServer } from './endpoint-identity.js';
 import { matchRuleForUserAgent } from '../srr/srr.service.js';
 import type { ResolvedPreset } from '../routing-presets/routing-presets.resolve.js';
 import { frameFor, templateTypeForFormat } from '../subscription-templates/templates.service.js';
@@ -104,6 +111,10 @@ const QuerySchema = z.object({
   // and checked by parseProtocolsParam before this schema runs, so an unknown
   // name is answered by name; here it only has to be a string.
   protocols: z.string().max(256).optional(),
+  // WireGuard device for wgconf / amneziavpn (9.4): a user holds several on every
+  // WireGuard-family node, each a tunnel of its own (ofDevice). Its number among
+  // the live ones, oldest first, or its id. Omitted = device 1.
+  device: z.string().min(1).max(64).optional(),
 });
 
 /**
@@ -731,23 +742,29 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // person copies, scans or adds is what this page lists.
         const subUrl = withProtocols(await subscriptionUrl(params.token), onlyProtocols ?? []);
         const protocols = [...new Set(result.endpoints.map((e) => e.protocol))];
-        // One QR pair per AmneziaWG node (deduped by node name). wg-quick / vpn://
-        // are single-tunnel-per-key, so a user with several AWG servers gets each
-        // server's own labelled QR (.conf for the AmneziaWG app, vpn:// for the
-        // AmneziaVPN app) instead of only the first node's. ecl 'L' keeps the long
+        // One QR pair per AmneziaWG node and device (deduped by node name and
+        // device). wg-quick / vpn:// are single-tunnel-per-key, so a user with
+        // several AWG servers gets each server's own labelled QR (.conf for the
+        // AmneziaWG app, vpn:// for the AmneziaVPN app) instead of only the first
+        // node's, and each of their devices its own key. ecl 'L' keeps the long
         // payloads scannable.
         const awgSeen = new Set<string>();
         const awgNodes = filtered
-          .filter((e) => e.protocol === 'amneziawg')
-          .filter((e) => !awgSeen.has(e.nodeName) && !!awgSeen.add(e.nodeName))
+          .filter((e): e is AmneziawgSubscriptionEndpoint => e.protocol === 'amneziawg')
+          .filter((e) => {
+            const k = `${e.nodeName}\u0000${e.deviceIndex ?? 1}`;
+            return !awgSeen.has(k) && !!awgSeen.add(k);
+          })
           .map((e) => {
             // By the endpoint's id, the key the per-node links carry (A-107).
             const id = endpointId(e);
-            const conf = buildWgQuickConf(filtered, id);
-            const vpn = buildAwgVpnLink(filtered, id);
+            const device = e.deviceIndex ?? 1;
+            const conf = buildWgQuickConf(filtered, id, String(device));
+            const vpn = buildAwgVpnLink(filtered, id, String(device));
             return {
               nodeName: e.nodeName,
               id,
+              device,
               // The PAYLOADS, not pictures of them. The codes are drawn in the
               // browser now: three server-rendered SVGs cost about 49 KB gzip
               // on this page, the encoder costs 4.3 KB once, and the code on
@@ -765,11 +782,15 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         // the file (so the QR is what the download gives).
         const wgSeen = new Set<string>();
         const wgNodes = filtered
-          .filter((e) => e.protocol === 'wireguard')
-          .filter((e) => !wgSeen.has(e.nodeName) && !!wgSeen.add(e.nodeName))
+          .filter((e): e is WireguardSubscriptionEndpoint => e.protocol === 'wireguard')
+          .filter((e) => {
+            const k = `${e.nodeName}\u0000${e.deviceIndex ?? 1}`;
+            return !wgSeen.has(k) && !!wgSeen.add(k);
+          })
           .map((e) => {
             const id = endpointId(e);
-            return { nodeName: e.nodeName, id, conf: buildWgQuickConf(filtered, id) || undefined };
+            const device = e.deviceIndex ?? 1;
+            return { nodeName: e.nodeName, id, device, conf: buildWgQuickConf(filtered, id, String(device)) || undefined };
           });
         /**
          * One row per MTProto node, with the link already built.
@@ -913,7 +934,16 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // and the label it is saved under: an id in a file name reads as noise.
       const singleServerProtocols = SINGLE_SERVER_FORMATS[format];
       const singleServers = singleServerProtocols ? served.filter((e) => singleServerProtocols.includes(e.protocol)) : [];
-      const nodeLabel = query.node ? (pickServer(singleServers, query.node)?.nodeName ?? query.node) : undefined;
+      // The file's device: device 2 and on are told apart in the name; device 1
+      // is the name it always had.
+      const deviceOf = (e: SubscriptionEndpoint | undefined): number =>
+        e && (e.protocol === 'amneziawg' || e.protocol === 'wireguard') ? (e.deviceIndex ?? 1) : 1;
+      const deviceNo = deviceOf(pickServer(ofDevice(singleServers as (AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint)[], query.device), query.node));
+      const nodeLabel = query.node
+        ? `${pickServer(singleServers, query.node)?.nodeName ?? query.node}${deviceNo > 1 ? `-${deviceNo}` : ''}`
+        : deviceNo > 1
+          ? String(deviceNo)
+          : undefined;
       if (query.dl === '1' && format !== 'plain') {
         reply.header(
           'Content-Disposition',
@@ -972,6 +1002,26 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
        * A-107: `node=` is the endpoint's id in the links the panel hands out;
        * a label is still taken, and the refusal names the labels.
        */
+      /**
+       * `device=` names a device this subscription does not hold: not an empty
+       * file, a refusal in words. Only when the user does hold a tunnel of the
+       * format (an empty answer for none stays as it was), and only for the
+       * formats that take a device.
+       */
+      if (query.device && (format === 'wgconf' || format === 'amneziavpn')) {
+        const tunnels = singleServers as (AmneziawgSubscriptionEndpoint | WireguardSubscriptionEndpoint)[];
+        if (tunnels.length > 0 && ofDevice(tunnels, query.device).length === 0) {
+          reply.removeHeader('Content-Disposition');
+          const numbers = [...new Set(tunnels.map((e) => e.deviceIndex ?? 1))].sort((a, b) => a - b);
+          return reply.code(400).send({
+            error: 'SUBSCRIPTION_DEVICE_UNKNOWN',
+            message: `this subscription has no WireGuard device ${JSON.stringify(query.device)}; its devices are ${numbers.join(', ')}`,
+            device: query.device,
+            devices: numbers,
+          });
+        }
+      }
+
       if (query.node && singleServerProtocols) {
         const names = [...new Set(singleServers.map((e) => e.nodeName))];
         if (!pickServer(singleServers, query.node)) {
@@ -999,7 +1049,9 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         case 'json':
           return reply
             .type('application/json')
-            .send({ ...result.json, endpoints: served });
+            // Servers, as before devices: a device after the first is a key on
+            // the same server, which a client of this format has no use for.
+            .send({ ...result.json, endpoints: served.filter((e) => !isLaterDevice(e)) });
         // A-236 step 4: three Clash-family answers by core. `clash` is the
         // alias of mihomo for good (the address is in clients' configs), byte
         // for byte what it always answered.
@@ -1042,12 +1094,12 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // 9.2: a plain WireGuard file says so, `<username>[-<node>]-wireguard.conf`;
           // the AmneziaWG one keeps the name it always had.
           const nodePart = nodeLabel ? `-${sanitizeFilename(nodeLabel)}` : '';
-          const kindPart = pickWgconfEndpoint(served, query.node)?.protocol === 'wireguard' ? '-wireguard' : '';
+          const kindPart = pickWgconfEndpoint(served, query.node, query.device)?.protocol === 'wireguard' ? '-wireguard' : '';
           const fname = `${sanitizeFilename(result.json.user.username)}${nodePart}${kindPart}.conf`;
           return reply
             .type('text/plain; charset=utf-8')
             .header('Content-Disposition', `attachment; filename="${fname}"`)
-            .send(buildWgQuickConf(served, query.node));
+            .send(buildWgQuickConf(served, query.node, query.device));
         }
         case 'amneziavpn': {
           // AmneziaVPN-app "vpn://" connection key (base64 blob the flagship
@@ -1057,7 +1109,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
           // for this user (same 204-style contract as wgconf).
           return reply
             .type('text/plain; charset=utf-8')
-            .send(buildAwgVpnLink(served, query.node));
+            .send(buildAwgVpnLink(served, query.node, query.device));
         }
         case 'xrayjson': {
           const xjBundle: 'flat' | 'balancer' | undefined =

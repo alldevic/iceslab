@@ -1,9 +1,11 @@
 import { prisma } from '../../prisma.js';
 import { getLogger } from '../../lib/infra/logger.js';
-import { allocatePeer, preallocatePeers } from './amneziawg.service.js';
+import type { AmneziawgPeerCred } from '@iceslab/shared';
+import { allocatePeer, DEFAULT_SUBNET, preallocatePeers, type PeerDevice } from './amneziawg.service.js';
+import { ensureDevicesForUsers, type WgDeviceRow } from '../wg-devices/wg-devices.service.js';
 
 /**
- * A-164 (P9, one owner of the rule): the AmneziaWG address a user is pushed
+ * A-164 (P9, one owner of the rule): the AmneziaWG peers a user is pushed
  * with, for the inbound push and for rolling a single user out alike.
  *
  * Before, only the inbound push allocated addresses; adding a user (created,
@@ -41,52 +43,120 @@ export async function wireguardBindingOfNode(nodeId: string): Promise<string | u
   return rows.at(-1)?.id;
 }
 
-/**
- * Each user's address in the subnet of the profile behind `bindingId` (an
- * AmneziaWG or a plain WireGuard one: both keep their peers in one table), or an
- * empty map when there is no such binding.
- *
- * Allocated serially (allocatePeer is racy under concurrency, IP slots aren't
- * unique-indexed): one bulk allocation for the set, stragglers falling back to
- * the per-user allocator. A user whose allocation fails is left out; their
- * other protocols still work.
- */
-export async function allocateAwgAddresses(
-  bindingId: string | undefined,
-  users: { id: string; username: string; amneziawgPublicKey: string | null }[],
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  if (!bindingId) return out;
+/** One profile behind a binding: where its addresses come from. */
+async function profileOf(bindingId: string | undefined): Promise<{ profileId: string; subnet: string } | null> {
+  if (!bindingId) return null;
   const row = await prisma.profileNodeBinding.findUnique({
     where: { id: bindingId },
     select: { profileId: true, profile: { select: { config: true } } },
   });
-  if (!row) return out;
-  const profileId = row.profileId;
-  const subnet = ((row.profile.config ?? {}) as { subnet?: string }).subnet ?? '10.66.66.0/24';
-  const awgUsers = users.filter((u) => u.amneziawgPublicKey);
-  if (awgUsers.length === 0) return out;
-  const bulk = await preallocatePeers(
-    profileId,
-    awgUsers.map((u) => u.id),
-    subnet,
-  ).catch((err) => {
+  if (!row) return null;
+  const subnet = ((row.profile.config ?? {}) as { subnet?: string }).subnet ?? DEFAULT_SUBNET;
+  return { profileId: row.profileId, subnet };
+}
+
+/**
+ * Each device's address in a profile's subnet (an AmneziaWG or a plain WireGuard
+ * one: both keep their peers in one table). Allocated serially (allocatePeer is
+ * racy under concurrency, IP slots aren't unique-indexed): one bulk allocation
+ * for the set, stragglers falling back to the per-device allocator. A device
+ * whose allocation fails is left out; the user's other devices and protocols
+ * still work.
+ */
+async function addressesOf(
+  profile: { profileId: string; subnet: string },
+  devices: (PeerDevice & { username: string })[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (devices.length === 0) return out;
+  const bulk = await preallocatePeers(profile.profileId, devices, profile.subnet).catch((err) => {
     const detail = err instanceof Error ? err.message : String(err);
-    getLogger().info(`[awg] bulk preallocatePeers on profile ${profileId} FAILED, per-user fallback: ${detail}`);
+    getLogger().info(`[awg] bulk preallocatePeers on profile ${profile.profileId} FAILED, per-device fallback: ${detail}`);
     return new Map<string, string>();
   });
-  for (const u of awgUsers) {
-    let ip = bulk.get(u.id);
+  for (const d of devices) {
+    let ip = bulk.get(d.id);
     if (!ip) {
       try {
-        ip = (await allocatePeer(profileId, u.id, subnet)).ip;
+        ip = (await allocatePeer(profile.profileId, d, profile.subnet)).ip;
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        getLogger().info(`[awg] allocatePeer ${u.username} on profile ${profileId} FAILED: ${detail}`);
+        getLogger().info(`[awg] allocatePeer ${d.username} (device ${d.id}) on profile ${profile.profileId} FAILED: ${detail}`);
         continue;
       }
     }
-    out.set(u.id, ip);
+    out.set(d.id, ip);
   }
   return out;
+}
+
+/** The WireGuard-family part of a user's credentials on one node. */
+export interface WgCredentials {
+  /** Device 1, for agents older than devices, which read these alone. */
+  amneziawgPublicKey?: string;
+  amneziawgAllowedIp?: string;
+  amneziawgAllowedIp3?: string;
+  wireguardPublicKey?: string;
+  wireguardAllowedIp?: string;
+  /** Every live device with an address there; `[]` takes the user's peers off. */
+  amneziawgPeers: AmneziawgPeerCred[];
+}
+
+/**
+ * The WireGuard-family credentials of each user who reaches a binding of the
+ * node (`one` the AmneziaWG 1.x binding, `three` the 3.1 one, `wg` the plain
+ * WireGuard one): a peer per live device, with its address on each interface
+ * the user reaches. The devices are issued here to the user's count, the number
+ * the subscription reads. Users who reach none are not in the map, and their
+ * record carries no peer list (an agent reads that as no change).
+ *
+ * The push and the rollout of one user both read this, so the peer set a node
+ * holds for a user is the same whichever of them wrote it last. `issuedTo` are
+ * the users who were just given devices.
+ */
+export async function wgCredentialsOf(
+  bindings: { one?: string; three?: string; wg?: string },
+  users: { id: string; username: string; reachesOne: boolean; reachesThree: boolean; reachesWg: boolean }[],
+): Promise<{ creds: Map<string, WgCredentials>; issuedTo: string[] }> {
+  const creds = new Map<string, WgCredentials>();
+  const [one, three, wg] = await Promise.all([profileOf(bindings.one), profileOf(bindings.three), profileOf(bindings.wg)]);
+  const reaching = users.filter((u) => (one && u.reachesOne) || (three && u.reachesThree) || (wg && u.reachesWg));
+  if (reaching.length === 0) return { creds, issuedTo: [] };
+  const { devices: devicesByUser, issuedTo } = await ensureDevicesForUsers(reaching.map((u) => u.id));
+  const devicesReaching = (flag: 'reachesOne' | 'reachesThree' | 'reachesWg') =>
+    reaching
+      .filter((u) => u[flag])
+      .flatMap((u) => (devicesByUser.get(u.id) ?? []).map((d) => ({ id: d.id, userId: u.id, username: u.username })));
+  const ip1 = one ? await addressesOf(one, devicesReaching('reachesOne')) : new Map<string, string>();
+  const ip3 = three ? await addressesOf(three, devicesReaching('reachesThree')) : new Map<string, string>();
+  const ipWg = wg ? await addressesOf(wg, devicesReaching('reachesWg')) : new Map<string, string>();
+  for (const u of reaching) {
+    const peers: AmneziawgPeerCred[] = [];
+    const devices: WgDeviceRow[] = devicesByUser.get(u.id) ?? [];
+    for (const d of devices) {
+      const a1 = one && u.reachesOne ? ip1.get(d.id) : undefined;
+      const a3 = three && u.reachesThree ? ip3.get(d.id) : undefined;
+      const aw = wg && u.reachesWg ? ipWg.get(d.id) : undefined;
+      if (!a1 && !a3 && !aw) continue;
+      peers.push({
+        publicKey: d.publicKey,
+        ...(a1 ? { allowedIp: a1 } : {}),
+        ...(a3 ? { allowedIp3: a3 } : {}),
+        ...(aw ? { wireguardAllowedIp: aw } : {}),
+      });
+    }
+    // The single fields are device 1's: what an agent older than the list reads.
+    const first = devices[0];
+    const firstPeer = first ? peers.find((p) => p.publicKey === first.publicKey) : undefined;
+    creds.set(u.id, {
+      amneziawgPeers: peers,
+      ...(first ? { amneziawgPublicKey: first.publicKey } : {}),
+      ...(firstPeer?.allowedIp ? { amneziawgAllowedIp: firstPeer.allowedIp } : {}),
+      ...(firstPeer?.allowedIp3 ? { amneziawgAllowedIp3: firstPeer.allowedIp3 } : {}),
+      ...(first && firstPeer?.wireguardAllowedIp
+        ? { wireguardPublicKey: first.publicKey, wireguardAllowedIp: firstPeer.wireguardAllowedIp }
+        : {}),
+    });
+  }
+  return { creds, issuedTo };
 }

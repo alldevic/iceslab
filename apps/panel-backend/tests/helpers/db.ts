@@ -37,6 +37,8 @@ export const TABLES = [
   // name is unique, so a row left behind would refuse the next test's create.
   'named_outbounds',
   'amneziawg_peers',
+  // 9.4. After the peers that point at it; users cascades into it anyway.
+  'wg_devices',
   'subscription_events',
   'subscription_request_history',
   'subscription_response_rules',

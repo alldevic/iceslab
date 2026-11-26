@@ -102,6 +102,9 @@ export interface SubscriptionPageData {
      *  `node=` (A-107): the label moves when a neighbour profile lands on the
      *  node, the id does not. Absent: the label, as before. */
     id?: string;
+    /** Which of the user's WireGuard devices this tunnel is for, 1 = the
+     *  oldest live one (9.4). Links carry `device=` from 2 on. */
+    device?: number;
     /** The wg-quick config this node hands out. */
     conf?: string;
     /** Raw AmneziaVPN vpn:// key. Also what the copy button hands over, since
@@ -120,6 +123,8 @@ export interface SubscriptionPageData {
     nodeName: string;
     /** The endpoint's id, what the per-node links carry in `node=`. */
     id?: string;
+    /** The device this tunnel is for, as on awgNodes. */
+    device?: number;
     /** The wg-quick config this node hands out (no obfuscation directives). */
     conf?: string;
   }>;
@@ -534,10 +539,10 @@ function renderSteps(
 
   if (platform === 'router') {
     const s = t.stepsRouter;
-    const confRow = (n: { id?: string; nodeName: string }, prefix: string) =>
-      `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&node=${encodeURIComponent(n.id ?? n.nodeName)}`))}">` +
-      `<span class="conf-row__name">${esc(n.nodeName)}</span>` +
-      `<span class="conf-row__file">${prefix}-${esc(n.nodeName)}.conf</span></a>`;
+    const confRow = (n: TunnelNode, prefix: string) =>
+      `<a class="conf-row" href="${esc(withQuery(data.subUrl, `format=wgconf&${tunnelQuery(n)}`))}">` +
+      `<span class="conf-row__name">${esc(tunnelLabel(n))}</span>` +
+      `<span class="conf-row__file">${prefix}-${esc(tunnelLabel(n).replace(' #', '-'))}.conf</span></a>`;
     const confs =
       (data.awgNodes ?? []).map((n) => confRow(n, 'awg')).join('') +
       (data.wgNodes ?? []).map((n) => confRow(n, 'wireguard')).join('');
@@ -701,15 +706,15 @@ function renderDownloads(
   const perNode = (fmt: string): Row[] =>
     (data.awgNodes ?? []).map((n) => ({
       fmt,
-      q: `&amp;node=${encodeURIComponent(n.id ?? n.nodeName)}`,
-      label: n.nodeName,
+      q: `&amp;${tunnelQuery(n).replace('&', '&amp;')}`,
+      label: tunnelLabel(n),
     }));
   // Plain WireGuard has the .conf only: no vpn:// key, so no amneziavpn row.
   const perWgNode = (fmt: string): Row[] =>
     (data.wgNodes ?? []).map((n) => ({
       fmt,
-      q: `&amp;node=${encodeURIComponent(n.id ?? n.nodeName)}`,
-      label: `${n.nodeName} · WireGuard`,
+      q: `&amp;${tunnelQuery(n).replace('&', '&amp;')}`,
+      label: `${tunnelLabel(n)} · WireGuard`,
     }));
   const router: Row[] = [
     ...(carries('xkeen') ? [{ fmt: 'xkeen' }] : []),
@@ -1179,10 +1184,10 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   // reads "AmneziaWG", not "London". Only disambiguate by node when there's more
   // than one AmneziaWG server.
   for (const n of awgNodes)
-    targets.push({ id: `awg:${n.nodeName}`, label: multiAwg ? `AmneziaWG · ${n.nodeName}` : 'AmneziaWG' });
+    targets.push({ id: `awg:${tunnelLabel(n)}`, label: multiAwg ? `AmneziaWG · ${tunnelLabel(n)}` : 'AmneziaWG' });
 
   for (const n of wgNodes)
-    targets.push({ id: `wg:${n.nodeName}`, label: multiWg ? `WireGuard · ${n.nodeName}` : 'WireGuard' });
+    targets.push({ id: `wg:${tunnelLabel(n)}`, label: multiWg ? `WireGuard · ${tunnelLabel(n)}` : 'WireGuard' });
 
   const figures: string[] = [];
   awgNodes.forEach((n, ni) => {
@@ -1194,14 +1199,14 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
       // AmneziaVPN's scanner never took the key (E39, amneziaQrChunkFromKey).
       // What a person copies or reads without JS stays the key.
       figures.push(
-        `<figure class="qrf${vpnOn}" data-target="awg:${esc(n.nodeName)}" data-app="vpn">` +
+        `<figure class="qrf${vpnOn}" data-target="awg:${esc(tunnelLabel(n))}" data-app="vpn">` +
           qrBox({ text: amneziaQrChunkFromKey(n.vpnKey), fallback: n.vpnKey, note: t.qrNeedsJs, ecc: 'low', esc }) +
           `<figcaption>AmneziaVPN${n.awg3 ? `<br><small>${esc(t.awg3Client)}</small>` : ''}</figcaption>${copyBtn}</figure>`,
       );
     }
     if (n.conf) {
       figures.push(
-        `<figure class="qrf" data-target="awg:${esc(n.nodeName)}" data-app="conf">` +
+        `<figure class="qrf" data-target="awg:${esc(tunnelLabel(n))}" data-app="conf">` +
           qrBox({ text: n.conf, fallback: n.conf, note: t.qrNeedsJs, esc }) +
           `<figcaption>AmneziaWG</figcaption></figure>`,
       );
@@ -1213,7 +1218,7 @@ export function buildSubscriptionPage(data: SubscriptionPageData): string {
   wgNodes.forEach((n, ni) => {
     if (!n.conf) return;
     figures.push(
-      `<figure class="qrf${awgNodes.length === 0 && ni === 0 ? ' on' : ''}" data-target="wg:${esc(n.nodeName)}">` +
+      `<figure class="qrf${awgNodes.length === 0 && ni === 0 ? ' on' : ''}" data-target="wg:${esc(tunnelLabel(n))}">` +
         qrBox({ text: n.conf, fallback: n.conf, note: t.qrNeedsJs, esc }) +
         `<figcaption>WireGuard</figcaption></figure>`,
     );
@@ -1454,4 +1459,17 @@ ${transferHtml}
   // пустоту: кружок статуса без галки, плитки без значков. Метка разрывает этот
   // порядок, не двигая лист в конец документа, где `use` на первом кадре мигают.
   return doc.replace(SPRITE_SLOT, icons.sprite());
+}
+
+type TunnelNode = { nodeName: string; id?: string; device?: number };
+
+/** A tunnel's name on the page: the node, and `#N` for device 2 and on. */
+function tunnelLabel(n: TunnelNode): string {
+  return (n.device ?? 1) > 1 ? `${n.nodeName} #${n.device}` : n.nodeName;
+}
+
+/** The query a tunnel's links carry: its node, and its device from 2 on. */
+function tunnelQuery(n: TunnelNode): string {
+  const device = (n.device ?? 1) > 1 ? `&device=${n.device}` : '';
+  return `node=${encodeURIComponent(n.id ?? n.nodeName)}${device}`;
 }

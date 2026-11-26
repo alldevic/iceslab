@@ -573,6 +573,18 @@ export const ENGINE_NAMES = [
 
 export type EngineName = (typeof ENGINE_NAMES)[number];
 
+/**
+ * One device of a user on the WireGuard family (milestone 9.4): its own public
+ * key and an address on each interface kind, empty where the profile of that
+ * kind does not reach the user. Mirrors AmneziaWGPeerDto in dto.go.
+ */
+export interface AmneziawgPeerCred {
+  publicKey: string;
+  allowedIp?: string;
+  allowedIp3?: string;
+  wireguardAllowedIp?: string;
+}
+
 export interface ProtocolCredentials {
   hysteriaPassword?: string;
   xrayUuid?: string;
@@ -600,6 +612,14 @@ export interface ProtocolCredentials {
    */
   wireguardPublicKey?: string;
   wireguardAllowedIp?: string;
+  /**
+   * One peer per device of the user (milestone 9.4), for the AmneziaWG and
+   * plain WireGuard interfaces alike. The agent takes the list and ignores the
+   * single keys and addresses above, which stay filled with device 1 for an
+   * older agent. `[]`: no device on this node, the peers come off; absent: an
+   * older panel, the single fields stand.
+   */
+  amneziawgPeers?: AmneziawgPeerCred[];
   /** TUIC v5 (sing-box engine): per-user UUID + password. */
   tuicUuid?: string;
   tuicPassword?: string;

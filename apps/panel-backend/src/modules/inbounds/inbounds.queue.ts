@@ -14,8 +14,8 @@ import { resolveBindingConfig } from '../profiles/profiles.service.js';
 import { mtprotoSecret } from '../../core-adapters/mtproto/index.js';
 import { NodeTransport, NodeRequestError } from '../nodes/nodes.transport.js';
 import { inboundSyncJobs } from '../../lib/infra/metrics.js';
-import { allocateAwgAddresses } from '../amneziawg/awg-addresses.js';
 import { mtprotoBackstop } from '../users/mtproto-backstop.js';
+import { wgCredentialsOf } from '../amneziawg/awg-addresses.js';
 import { reachOfUsers } from '../users/user-reach.js';
 import { getCascadeFragmentsForNode, getChainForNode, giveCascadeLegsReality } from '../cascades/cascade.service.js';
 import { resolvePolicyForNode } from '../node-policies/node-policies.service.js';
@@ -800,18 +800,17 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
   // would run past Postgres's bind-parameter cap on a large roster).
   const reach = await reachOfUsers(null, { nodeId });
   const inboundIdsOf = (userId: string): string[] => reach.get(userId)?.get(nodeId) ?? [];
-  // A-164: an address only for the users who reach that AmneziaWG inbound.
-  const awgIpByUser = await allocateAwgAddresses(
-    awgBinding?.id,
-    users.filter((u) => awgBinding && inboundIdsOf(u.id).includes(awgBinding.id)),
-  );
-  const awg3IpByUser = await allocateAwgAddresses(
-    awg3Binding?.id,
-    users.filter((u) => awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id)),
-  );
-  const wgIpByUser = await allocateAwgAddresses(
-    wgBinding?.id,
-    users.filter((u) => wgBinding && inboundIdsOf(u.id).includes(wgBinding.id)),
+  // A-164: WireGuard peers only for the users who reach that inbound, one per
+  // device (9.4), each with an address on the interfaces the user reaches.
+  const { creds: wgCreds } = await wgCredentialsOf(
+    { one: awgBinding?.id, three: awg3Binding?.id, wg: wgBinding?.id },
+    users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      reachesOne: !!awgBinding && inboundIdsOf(u.id).includes(awgBinding.id),
+      reachesThree: !!awg3Binding && inboundIdsOf(u.id).includes(awg3Binding.id),
+      reachesWg: !!wgBinding && inboundIdsOf(u.id).includes(wgBinding.id),
+    })),
   );
 
   const requests: AddUserRequest[] = users.map((u) => ({
@@ -822,14 +821,10 @@ export async function applyInboundsForNode(nodeId: string, revision?: bigint | n
     credentials: {
       xrayUuid: u.xrayUuid,
       hysteriaPassword: u.hysteriaPassword,
+      // Device 1's key and addresses for an agent older than the peer list,
+      // then the list itself (the user's key stands for a user with none).
       amneziawgPublicKey: u.amneziawgPublicKey,
-      amneziawgAllowedIp: awgIpByUser.get(u.id),
-      amneziawgAllowedIp3: awg3IpByUser.get(u.id),
-      // Only for a user with an address on the plain binding: the one WG
-      // keypair under the plain name, and the address of its own subnet.
-      ...(wgIpByUser.has(u.id)
-        ? { wireguardPublicKey: u.amneziawgPublicKey, wireguardAllowedIp: wgIpByUser.get(u.id) }
-        : {}),
+      ...wgCreds.get(u.id),
       naivePassword: u.naivePassword,
       tuicUuid: u.xrayUuid,
       tuicPassword: deriveTuicPassword(u.xrayUuid),

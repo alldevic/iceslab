@@ -60,6 +60,31 @@ export function pickServer<T extends SubscriptionEndpoint>(eps: readonly T[], no
 }
 
 /**
+ * The endpoints of one WireGuard device (`?device=`), for the single-tunnel
+ * formats: its number among the user's live devices, oldest first, or its id;
+ * absent = device 1. A user holds several devices on every WireGuard-family
+ * node, and a file is one tunnel of one of them. Numbers move when a device is
+ * revoked (the next one moves up); ids do not. An endpoint without a device
+ * (written by hand) is device 1.
+ */
+export function ofDevice<T extends { deviceIndex?: number; deviceId?: string }>(eps: readonly T[], device?: string): T[] {
+  if (device && !/^\d+$/.test(device)) return eps.filter((e) => e.deviceId === device);
+  const n = device ? Number(device) : 1;
+  return eps.filter((e) => (e.deviceIndex ?? 1) === n);
+}
+
+/**
+ * An endpoint of a WireGuard device after the first (9.4): the same server as
+ * device 1's, one more key and address on it. Lists that name SERVERS (the
+ * label rule, the json format, the admin endpoints card) leave these out, so
+ * they read as they did before devices; the single-tunnel formats and the page
+ * are the ones that read them.
+ */
+export function isLaterDevice(e: SubscriptionEndpoint): boolean {
+  return (e.protocol === 'amneziawg' || e.protocol === 'wireguard') && (e.deviceIndex ?? 1) > 1;
+}
+
+/**
  * The config-internal tag for an endpoint, in the formats where a tag is NOT
  * shown to anyone: xray-json outbounds and the rules pointing at them.
  *

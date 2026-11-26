@@ -38,6 +38,24 @@ type User struct {
 	// address of its own from the plain profile's subnet.
 	WireguardPublicKey string
 	WireguardAllowedIP string
+
+	// AmneziaWGPeers: one peer per device of the user (milestone 9.4), each
+	// with its own key and an address per interface. Non-nil replaces the
+	// single fields above, which an older panel sends instead; non-nil and
+	// empty means no device, no peer. Both flavours take their peer from it.
+	AmneziaWGPeers []AmneziaWGPeer
+}
+
+// AmneziaWGPeer is one device of a user: its key and its address on each
+// interface kind. An address may be empty: the profile of that kind does not
+// reach the user.
+type AmneziaWGPeer struct {
+	PublicKey string
+	// AllowedIP on the 1.x interface, AllowedIP3 on the 3.1 one, WireguardAllowedIP
+	// on the plain WireGuard one.
+	AllowedIP          string
+	AllowedIP3         string
+	WireguardAllowedIP string
 }
 
 // UserStats are per-user traffic counters reported by a single core.
