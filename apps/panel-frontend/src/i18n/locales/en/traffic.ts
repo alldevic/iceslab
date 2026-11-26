@@ -202,7 +202,8 @@ export const traffic = {
     presetReadOnly:
       'Read-only: the three built-in presets are compiled into the subscription builder. Your own preset is made with "New preset"; your own layer below runs ahead of any preset.',
     ownTitle: 'Your own rules',
-    ownHint: 'Applied before the preset, so these win over it.',
+    ownHint:
+      'Applied before the preset, so these win over it. A line ext:<set>:<category> is replaced by that category of a geo set of the panel (a domain set; for sing-box, by a link to its .srs); it works only while GEO_SELF_HOST is on, and a link the panel cannot resolve is left out.',
     unsaved: 'unsaved',
     saved: 'saved',
     ownSaved: 'Your rules updated',

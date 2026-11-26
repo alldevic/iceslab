@@ -5,6 +5,7 @@ import { exitsHaveIpv6, singboxDnsStrategy } from '../subscription.address-famil
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { singboxDeviceRoute } from '../subscription.device-rules.js';
 import type { SelfHostedGeo } from '../../geo-sets/geo-self-host.js';
+import type { SingboxExtRef } from '../../geo-sets/geo-ext-lists.js';
 import { asArray, asObject, defaultFrame, insertAfter, openFrame, type Frame } from '../subscription.frames.js';
 
 /**
@@ -53,6 +54,8 @@ export interface SingboxBuildOpts {
   frame?: Frame;
   /** What the panel serves to clients itself (GEO_SELF_HOST); null/undefined = the base's addresses. */
   geo?: SelfHostedGeo | null;
+  /** Milestone 10.6: `ext:` links of the operator's domain lists, as the panel's `.srs`; the route resolves them. */
+  extRefs?: readonly SingboxExtRef[];
 }
 
 /**
@@ -365,6 +368,7 @@ export function buildSingboxJson(
       preset: splitPreset,
       strategy: singboxDnsStrategy(exitsHaveIpv6(endpoints)),
       geo: opts.geo,
+      extRefs: opts.extRefs,
     }) + '\n'
   );
 }
@@ -398,6 +402,30 @@ function splitDns(
     final: 'dns-proxy',
     ...(strategy ? { strategy } : {}),
   };
+}
+
+/** One route rule and one remote rule-set per `ext:` link; `proxy` goes where route.final goes, and is left out with no proxy. */
+function extRuleSets(
+  refs: readonly SingboxExtRef[],
+  proxyOutbound: string | null,
+): { rules: Record<string, unknown>[]; ruleSets: Record<string, unknown>[] } {
+  const rules: Record<string, unknown>[] = [];
+  const sets = new Map<string, Record<string, unknown>>();
+  for (const bucket of ['block', 'direct', 'proxy'] as const) {
+    const action =
+      bucket === 'block'
+        ? { action: 'reject' }
+        : bucket === 'direct'
+          ? { action: 'route', outbound: 'direct' }
+          : proxyOutbound
+            ? { action: 'route', outbound: proxyOutbound }
+            : null;
+    const mine = refs.filter((r) => r.bucket === bucket);
+    if (!action || mine.length === 0) continue;
+    for (const r of mine) sets.set(r.tag, { type: 'remote', tag: r.tag, format: 'binary', url: r.url });
+    rules.push({ rule_set: mine.map((r) => r.tag), ...action });
+  }
+  return { rules, ruleSets: [...sets.values()] };
 }
 
 const GROUP_TYPES = new Set(['selector', 'urltest']);
@@ -453,7 +481,7 @@ function fillSingboxFrame(
   proxyOutbounds: Record<string, unknown>[],
   proxyTags: string[],
   deviceRules: readonly DeviceRouteRule[],
-  dnsOpts: { preset: RoutingPresetId | null; strategy: string | undefined; geo?: SelfHostedGeo | null },
+  dnsOpts: { preset: RoutingPresetId | null; strategy: string | undefined; geo?: SelfHostedGeo | null; extRefs?: readonly SingboxExtRef[] },
 ): string {
   const { cfg, routing } = openFrame(frame);
   const own = asArray(cfg.outbounds).map(asObject);
@@ -478,10 +506,12 @@ function fillSingboxFrame(
   });
   const target = proxyTags.length > 0 && typeof route.final === 'string' ? route.final : null;
   const preset = routing ? singboxDeviceRoute(deviceRules, target, dnsOpts.geo) : { rules: [], ruleSets: [] };
-  const rules = [...preset.rules, ...ownRules];
+  // The operator's `ext:` lists come before the preset's rules, block first, as the clash rules do.
+  const ext = routing ? extRuleSets(dnsOpts.extRefs ?? [], target) : { rules: [], ruleSets: [] };
+  const rules = [...ext.rules, ...preset.rules, ...ownRules];
   const dns =
     routing && target && cfg.dns === undefined ? splitDns(dnsOpts.preset, preset.rules, target, dnsOpts.strategy) : null;
-  const ruleSets = [...preset.ruleSets, ...asArray(route.rule_set)];
+  const ruleSets = [...ext.ruleSets, ...preset.ruleSets.filter((s) => !ext.ruleSets.some((e) => e.tag === s.tag)), ...asArray(route.rule_set)];
   const rest = Object.fromEntries(Object.entries(route).filter(([k]) => k !== 'rules' && k !== 'rule_set'));
   if (cfg.route !== undefined || rules.length > 0) {
     cfg.route = {

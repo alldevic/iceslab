@@ -15,6 +15,7 @@ import * as service from './subscription.service.js';
 import { buildClashYaml } from './formats/clash.js';
 import { buildSingboxJson } from './formats/singbox.js';
 import { selfHostedGeo } from '../geo-sets/geo-self-host.js';
+import { expandExtLists, hasExtEntries, singboxExtRefs, type SingboxExtRef } from '../geo-sets/geo-ext-lists.js';
 import { buildWgQuickConf, wgconfTunnelName } from './formats/wgconf.js';
 import { buildAwgVpnLink } from './formats/amneziavpn.js';
 import { wantsTunnelPreselect, withConfigUrls } from './subscription.tunnel-links.js';
@@ -870,6 +871,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // TLS-fragment - `?fragment=` query wins, else the panel-wide setting.
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
+      let singboxExt: SingboxExtRef[] = [];
       let tlsFragment = false;
       // The single xray-json document's name as ONE entry: clients that import
       // a whole config (v2rayNG, FoXray) take the row label from `remarks`. Taken
@@ -897,6 +899,14 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         customRoutingRules = settings.customRoutingRules ?? undefined;
         // R3 custom domain lists apply to xray/xkeen + clash.
         customDomainLists = settings.customDomainLists ?? undefined;
+        // Milestone 10.6: `ext:<set>:<category>` in the lists, while the panel serves
+        // its geo files: domains for xray/clash, a `.srs` link for sing-box (which
+        // takes no list entries); otherwise as the base sent it.
+        if (customDomainLists && hasExtEntries(customDomainLists)) {
+          const geo = await selfHostedGeo();
+          if (format === 'singbox') singboxExt = await singboxExtRefs(customDomainLists, geo, request.log);
+          else customDomainLists = await expandExtLists(customDomainLists, geo, request.log);
+        }
         tlsFragment =
           query.fragment !== undefined ? query.fragment === '1' : settings.tlsFragment;
         docRemarks = settings.profileTitle ?? settings.brandName ?? result.json.user.username;
@@ -1065,7 +1075,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame, geo: await selfHostedGeo() }));
+            .send(buildSingboxJson(served, { bundle: sbBundle, routingPreset, ownPresetRules, frame, geo: await selfHostedGeo(), extRefs: singboxExt }));
         }
         case 'wgconf': {
           // The file name IS the tunnel name the client shows (wg-quick has no
