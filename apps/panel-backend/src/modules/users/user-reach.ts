@@ -1,5 +1,6 @@
 import { prisma } from '../../prisma.js';
 import { deadCascadeIds } from '../cascades/cascade-exclusive.js';
+import { ENTRIES_ONLY_THROUGH_CHAIN } from '../cascades/cascade.validation.js';
 
 /**
  * A-022: which inbounds of which nodes a user is served on, from their squads.
@@ -50,7 +51,7 @@ export async function entriesSwitchedOff(groupIds: string[]): Promise<Map<string
         // A-223: a dead cascade does not chain its entry, so switching it off
         // takes nothing away: its inbound is a plain one.
         id: { notIn: [...(await deadCascadeIds())] },
-        positions: { some: { position: 0, entryProtocol: { in: ['hysteria', 'amneziawg'] } } },
+        positions: { some: { position: 0, entryProtocol: { in: [...ENTRIES_ONLY_THROUGH_CHAIN] } } },
       },
     },
     select: {

@@ -23,6 +23,7 @@ import {
 // the single source of truth for which protocols a user sees. The column is
 // kept on the User row for backwards-compat but never filters subscription
 // output.
+import { SINGBOX_ENTRY_PROTOCOLS } from '@iceslab/shared';
 import { subscriptionServerName } from '../../lib/util/country-flag.js';
 import { allocatePeer } from '../amneziawg/amneziawg.service.js';
 import { ensureDevices, wgDeviceCount } from '../wg-devices/wg-devices.service.js';
@@ -977,6 +978,14 @@ export async function generateSubscription(
     entryReach,
     'amneziawg',
   );
+  // 11.4: and through sing-box (tuic, anytls, shadowtls, shadowsocks), one
+  // lookup per protocol a binding actually has.
+  const singboxEntryLabels = new Map<string, Map<string, string>>();
+  for (const protocol of SINGBOX_ENTRY_PROTOCOLS) {
+    const nodeIds = [...new Set(bindings.filter((b) => b.profile.protocol === protocol).map((b) => b.node.id))];
+    if (nodeIds.length === 0) continue;
+    singboxEntryLabels.set(protocol, await getHysteriaEntryLabels(nodeIds, groupIds, entryReach, protocol));
+  }
 
   // The user's WireGuard devices, issued up to their count when they hold a
   // binding of the family at all: every AmneziaWG and plain WireGuard endpoint
@@ -1049,7 +1058,7 @@ export async function generateSubscription(
           ? hysteriaEntryLabels.get(b.node.id)
           : b.profile.protocol === 'amneziawg'
             ? awgEntryLabels.get(b.node.id)
-            : undefined;
+            : singboxEntryLabels.get(b.profile.protocol)?.get(b.node.id);
       const nodeName =
         cascadeLabel ??
         subscriptionServerName({

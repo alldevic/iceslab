@@ -1,3 +1,4 @@
+import { SINGBOX_ENTRY_PROTOCOLS } from '@iceslab/shared';
 import type { Cascade } from '@/lib/domain/cascades';
 import type { Host } from '@/lib/domain/hosts';
 import type { Binding } from '@/lib/domain/profiles';
@@ -120,7 +121,7 @@ export interface SquadCascade {
  * entry's xray cannot tell one user from another: the server's list
  * (cascade.validation.ts:64, ENTRIES_ONLY_THROUGH_CHAIN).
  */
-const CHAIN_ONLY_ENTRIES: readonly string[] = ['hysteria', 'amneziawg'];
+const CHAIN_ONLY_ENTRIES: readonly string[] = ['hysteria', 'amneziawg', ...SINGBOX_ENTRY_PROTOCOLS];
 
 export interface SquadState {
   profileIds: string[];

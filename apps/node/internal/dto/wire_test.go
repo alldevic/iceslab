@@ -66,7 +66,7 @@ func wirePairs() []wirePair {
 		{"ChainLinkIngress", ChainLinkIngress{}},
 		{"ChainTunnel", ChainTunnel{}},
 		// Optional halves in Go, a union of three interfaces in TypeScript.
-		{"ChainUserCoreXray|ChainUserCoreHysteria|ChainUserCoreAmneziawg", ChainUserCore{}},
+		{"ChainUserCoreXray|ChainUserCoreHysteria|ChainUserCoreAmneziawg|ChainUserCoreSingbox", ChainUserCore{}},
 		{"ChainUserCoreTProxy", ChainUserCoreTProxy{}},
 		{"ChainUserCoreSocks", ChainUserCoreSocks{}},
 		{"ChainSocks", ChainSocks{}},

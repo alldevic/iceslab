@@ -9,7 +9,8 @@ import {
 import { api } from '@/lib/net/client';
 
 export type CascadeProtocol =
-  | 'xray' | 'hysteria' | 'amneziawg' | 'naive' | 'shadowsocks' | 'mtproto' | 'mieru';
+  | 'xray' | 'hysteria' | 'amneziawg' | 'naive' | 'shadowsocks' | 'mtproto' | 'mieru'
+  | 'tuic' | 'anytls' | 'shadowtls';
 
 /** 'chain' (sequential) or 'balancer' (one entry, N latency-balanced exits). */
 export type CascadeMode = 'chain' | 'balancer';

@@ -118,7 +118,10 @@ export const LINK_CELL_TRANSPORTS: Record<LinkCell, readonly Transport[]> = {
  * option the server rejects.
  *
  * It grows with the phases: hysteria2 in 6, amneziawg in 7 (t07-wire, the
- * agent draws the TPROXY rules and the chain listens).
+ * agent draws the TPROXY rules and the chain listens), and the four sing-box
+ * entries in 11.4: tuic, anytls, shadowtls, shadowsocks. Those are entered on
+ * the sing-box core of the entry node and, like hysteria, hand the whole entry
+ * to the chain's Auto line (ChainUserCoreSingbox).
  *
  * ⚠ The entries are not spellings of one thing. An xray entry lets a user pick
  * the way out (the choice rides in the UUID as vlessRoute); a hysteria entry
@@ -129,7 +132,23 @@ export const LINK_CELL_TRANSPORTS: Record<LinkCell, readonly Transport[]> = {
  * users to the other: the save asks for confirmation (ENTRY_CHANGE_DROPS_USERS)
  * rather than letting it happen quietly.
  */
-export const CHAIN_ENTRY_PROTOCOLS = ['xray', 'hysteria', 'amneziawg'] as const;
+export const CHAIN_ENTRY_PROTOCOLS = [
+  'xray',
+  'hysteria',
+  'amneziawg',
+  'tuic',
+  'anytls',
+  'shadowtls',
+  'shadowsocks',
+] as const;
+
+/**
+ * The entries that run on the sing-box core and hand their users to the chain
+ * (ChainUserCoreSingbox). A sub-list of CHAIN_ENTRY_PROTOCOLS, kept here so the
+ * server's "only through the chain" rule and the screen's "Auto only" note
+ * read the same words.
+ */
+export const SINGBOX_ENTRY_PROTOCOLS = ['tuic', 'anytls', 'shadowtls', 'shadowsocks'] as const;
 
 /**
  * The formats a subscription can be served in.
@@ -1570,7 +1589,11 @@ export interface ChainTunnel {
  * refused by the agent there: the agent hands this to the ONE adapter whose
  * engine it names, and that adapter must never be left to guess.
  */
-export type ChainUserCore = ChainUserCoreXray | ChainUserCoreHysteria | ChainUserCoreAmneziawg;
+export type ChainUserCore =
+  | ChainUserCoreXray
+  | ChainUserCoreHysteria
+  | ChainUserCoreAmneziawg
+  | ChainUserCoreSingbox;
 
 export interface ChainUserCoreXray {
   /** Named for the same reason `NodeCascade.engine` is: the agent must be able
@@ -1589,6 +1612,24 @@ export interface ChainUserCoreXray {
  */
 export interface ChainUserCoreHysteria {
   engine: 'hysteria';
+  socks: ChainUserCoreSocks;
+}
+
+/**
+ * A sing-box entry (11.4): tuic, anytls, shadowtls or shadowsocks served by the
+ * sing-box core of the entry node. Like hysteria, every user goes to the chain
+ * through ONE socks5 outbound, the Auto listener's: these users are passwords,
+ * no vlessRoute rides in them.
+ *
+ * `protocol` names WHICH sing-box instance takes the hand-off. Every instance
+ * of the sing-box adapter answers to engine `singbox` and is told apart by its
+ * protocol, so without it the block would reach every sing-box profile on the
+ * node, not only the entry's.
+ */
+export interface ChainUserCoreSingbox {
+  engine: 'singbox';
+  /** One of SINGBOX_ENTRY_PROTOCOLS. */
+  protocol: (typeof SINGBOX_ENTRY_PROTOCOLS)[number];
   socks: ChainUserCoreSocks;
 }
 

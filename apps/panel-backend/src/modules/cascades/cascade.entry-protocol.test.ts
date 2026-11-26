@@ -90,6 +90,14 @@ describe('the protocol a cascade entry serves users with', () => {
     expect(res.statusCode, res.body).toBe(201);
   });
 
+  // 11.4: the four sing-box entries, handed to the chain like hysteria.
+  for (const protocol of ['tuic', 'anytls', 'shadowtls', 'shadowsocks']) {
+    it(`takes ${protocol} since 11.4, entered on the sing-box core`, async () => {
+      const res = await save(protocol, await makeNode(`ru-${protocol}`), await makeNode('nl'));
+      expect(res.statusCode, res.body).toBe(201);
+    });
+  }
+
   // These three are here for good, and none of them is promised a phase.
   for (const protocol of ['mtproto', 'naive', 'mieru']) {
     it(`refuses ${protocol} and names what the chain takes, not a phase`, async () => {
@@ -112,7 +120,9 @@ describe('the protocol a cascade entry serves users with', () => {
     // hysteria and amneziawg users cannot carry a choice of way out, so the
     // chain on the entry node is their whole hand-off and the save asks
     // whether it can run there.
-    for (const p of ['hysteria', 'amneziawg']) expect(entryReachesCascadeOnlyThroughChain(p)).toBe(true);
+    for (const p of ['hysteria', 'amneziawg', 'tuic', 'anytls', 'shadowtls', 'shadowsocks']) {
+      expect(entryReachesCascadeOnlyThroughChain(p)).toBe(true);
+    }
     for (const p of ['xray', 'mtproto', 'naive', 'mieru', null, undefined]) {
       expect(entryReachesCascadeOnlyThroughChain(p)).toBe(false);
     }
@@ -122,6 +132,14 @@ describe('the protocol a cascade entry serves users with', () => {
     // One list, shared. A second copy on the frontend is how a form comes to
     // offer an option the server rejects, and the operator learns the rule from
     // an error instead of from the control.
-    expect([...CHAIN_ENTRY_PROTOCOLS]).toEqual(['xray', 'hysteria', 'amneziawg']);
+    expect([...CHAIN_ENTRY_PROTOCOLS]).toEqual([
+      'xray',
+      'hysteria',
+      'amneziawg',
+      'tuic',
+      'anytls',
+      'shadowtls',
+      'shadowsocks',
+    ]);
   });
 });

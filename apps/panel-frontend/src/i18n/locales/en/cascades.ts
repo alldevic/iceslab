@@ -109,6 +109,11 @@ export const cascades = {
     // from a user who "cannot choose a country" is worse.
     entryAutoOnly:
       'A {{protocol}} entry leaves through Auto or by policy rules; picking the exit per user is available only to an xray entry.',
+    // The four sing-box entries (11.4): the entry node's agent must take their
+    // hand-off, an older one refuses the block loudly and the cascade stays
+    // down; the delivery reason says so. Update the entry nodes' agents first.
+    entrySingboxAgent:
+      'A {{protocol}} entry runs on the sing-box core of the entry node and needs an up-to-date agent there: an older agent refuses the hand-off and the cascade does not work. Update the entry nodes first. Every {{protocol}} profile of the node goes through the cascade, not only this one; client UDP over the cascade is not verified yet.',
     // The server's refusal: the entry nodes cannot run the chain, sing-box is
     // missing. A server FACT from the node's report, so the button is not
     // disabled ahead of it.

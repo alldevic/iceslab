@@ -1,4 +1,4 @@
-import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS, MAX_CASCADE_LINKS, type XraySubprotocol } from '@iceslab/shared';
+import { CHAIN_ENTRY_PROTOCOLS as SHARED_CHAIN_ENTRY_PROTOCOLS, MAX_CASCADE_HOPS, MAX_CASCADE_LINKS, SINGBOX_ENTRY_PROTOCOLS, type XraySubprotocol } from '@iceslab/shared';
 import type { CascadeDirectionInput, CascadeProtocol } from '@/lib/domain/cascades';
 import { linkCellPair, nativeEngineOfIntent, type EnginePair, type EngineName } from '@/lib/domain/engines';
 import { DEFAULT_LINK_CONGESTION, DEFAULT_LINK_UNDERLAY, LINK_CONGESTIONS } from '@/lib/domain/cascades';
@@ -26,7 +26,7 @@ export const MAX_LINKS = MAX_CASCADE_LINKS;
 
 // The seven cores a hop link can speak. Narrower than the node protocol enum on
 // purpose: tuic / anytls / shadowtls exist as node protocols but not as cascade
-// links.
+// links. They are offered as ENTRIES only (11.4, ENTRY_PROTOCOLS below).
 export const LINK_PROTOCOLS: { value: CascadeProtocol; label: string }[] = [
   { value: 'xray', label: 'xray' },
   { value: 'hysteria', label: 'hysteria2' },
@@ -38,18 +38,34 @@ export const LINK_PROTOCOLS: { value: CascadeProtocol; label: string }[] = [
 ];
 export const LINK_PROTOCOL_VALUES = LINK_PROTOCOLS.map((p) => p.value) as string[];
 
+/** What the entry selector offers: the seven above plus the entries served by
+ *  sing-box (11.4), which the server takes as entryProtocol and no leg can be. */
+export const ENTRY_PROTOCOLS: { value: CascadeProtocol; label: string }[] = [
+  ...LINK_PROTOCOLS,
+  ...SINGBOX_ENTRY_PROTOCOLS.filter((p) => !LINK_PROTOCOL_VALUES.includes(p)).map((p) => ({
+    value: p as CascadeProtocol,
+    label: p,
+  })),
+];
+const ENTRY_PROTOCOL_VALUES = ENTRY_PROTOCOLS.map((p) => p.value) as string[];
+
 /** The hop columns are free strings in the database, and the demo seed writes
  *  `vless` there, so a stored protocol is not guaranteed to be one the API will
  *  accept back. */
 export function isKnownProtocol(v: string | null | undefined): boolean {
-  return Boolean(v) && LINK_PROTOCOL_VALUES.includes(v as string);
+  return Boolean(v) && ENTRY_PROTOCOL_VALUES.includes(v as string);
 }
 
 /** Options for a protocol field, keeping an unknown stored value visible rather
  *  than rendering an empty select over data the operator cannot see. */
 export function protocolOptions(current: string | null): { value: string; label: string }[] {
-  if (!current || isKnownProtocol(current)) return LINK_PROTOCOLS;
-  return [...LINK_PROTOCOLS, { value: current, label: current }];
+  if (!current || isKnownProtocol(current)) return ENTRY_PROTOCOLS;
+  return [...ENTRY_PROTOCOLS, { value: current, label: current }];
+}
+
+/** Вход на sing-box (11.4): tuic, anytls, shadowtls, shadowsocks. */
+export function isSingboxEntry(protocol: string | null | undefined): boolean {
+  return protocol != null && (SINGBOX_ENTRY_PROTOCOLS as readonly string[]).includes(protocol);
 }
 
 /**
@@ -60,10 +76,10 @@ export function protocolOptions(current: string | null): { value: string; label:
  * Своей копии здесь нет и быть не должно: вторая копия это ровно тот способ,
  * которым форма начинает предлагать вариант, отвергаемый сервером.
  *
- * Сегодня в нём один xray: вход на hy2 приедет с фазой 6, на AmneziaWG с
- * фазой 7. До этой правки экран обещал их обе: оператор выбирал hysteria2,
- * видел рядом «VLESS · ядро xray» и сохранял каскад, который не повезёт ни
- * одного клиента.
+ * Список растёт с фазами: hy2 в фазе 6, AmneziaWG в фазе 7, четыре входа на
+ * sing-box (tuic, anytls, shadowtls, shadowsocks) в 11.4. До появления списка
+ * экран обещал их все: оператор выбирал hysteria2, видел рядом «VLESS · ядро
+ * xray» и сохранял каскад, который не повезёт ни одного клиента.
  */
 export const CHAIN_ENTRY_PROTOCOLS: string[] = [...SHARED_CHAIN_ENTRY_PROTOCOLS];
 
@@ -93,6 +109,11 @@ export type EntryDefault =
   | { kind: 'none' }
   | { kind: 'unknown' };
 
+/** Входы, которые экран подставляет сам: без четырёх входов на sing-box (11.4).
+ *  Их оператор выбирает явно, иначе нода только с sing-box получила бы tuic
+ *  без его ведома. */
+const DEFAULT_ENTRY_PROTOCOLS: string[] = CHAIN_ENTRY_PROTOCOLS.filter((x) => !isSingboxEntry(x));
+
 export function entryProtocolDefault(
   node: Pick<Node, 'intendedEngines' | 'protocol' | 'cores'>,
 ): EntryDefault {
@@ -104,8 +125,10 @@ export function entryProtocolDefault(
     if (rows.some((r) => !r.engine)) return { kind: 'unknown' };
     // installed отсутствует у агента старше поля и читается как «стоит».
     const onMachine = new Set(rows.filter((r) => r.installed !== false).map((r) => r.engine));
-    const candidates = CHAIN_ENTRY_PROTOCOLS.filter((x) => onMachine.has(nativeEngineOfIntent(x)));
-    if (candidates.length === 0) return { kind: 'none' };
+    const candidates = DEFAULT_ENTRY_PROTOCOLS.filter((x) => onMachine.has(nativeEngineOfIntent(x)));
+    // Вход на sing-box по умолчанию не подставляется (его выбирают сами), но
+    // нода с sing-box им быть может: это «сказать нечего», а не «нет».
+    if (candidates.length === 0) return onMachine.has('singbox') ? { kind: 'unknown' } : { kind: 'none' };
     const p = candidates.find((x) => intent?.includes(nativeEngineOfIntent(x))) ?? candidates[0];
     return { kind: 'protocol', protocol: p as CascadeProtocol };
   }
@@ -114,7 +137,7 @@ export function entryProtocolDefault(
       ? { kind: 'protocol', protocol: node.protocol as CascadeProtocol }
       : { kind: 'unknown' };
   }
-  const p = CHAIN_ENTRY_PROTOCOLS.find((x) => intent.includes(nativeEngineOfIntent(x)));
+  const p = DEFAULT_ENTRY_PROTOCOLS.find((x) => intent.includes(nativeEngineOfIntent(x)));
   return p ? { kind: 'protocol', protocol: p as CascadeProtocol } : { kind: 'unknown' };
 }
 
@@ -1029,7 +1052,7 @@ export type EntryPolicyPlace = 'select' | 'xray-self' | 'hidden';
 
 export function entryPolicyPlace(entryProtocol: string | undefined, serverKnows: boolean): EntryPolicyPlace {
   if (!serverKnows) return 'hidden';
-  if (entryProtocol === 'hysteria' || entryProtocol === 'amneziawg') return 'select';
+  if (entryProtocol === 'hysteria' || entryProtocol === 'amneziawg' || isSingboxEntry(entryProtocol)) return 'select';
   if (entryProtocol === 'xray') return 'xray-self';
   return 'hidden';
 }

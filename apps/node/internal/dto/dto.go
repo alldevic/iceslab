@@ -453,6 +453,11 @@ type ChainUserCore struct {
 	TProxy    *ChainUserCoreTProxy `json:"tproxy,omitempty"`
 	// TProxy3 is the 3.1 interface's hand-off (t07-6b), its own mark.
 	TProxy3 *ChainUserCoreTProxy `json:"tproxy3,omitempty"`
+	// Protocol names the sing-box instance that takes the hand-off (engine
+	// "singbox"): every instance answers to that engine, and only the protocol
+	// tells them apart. Carried by the panel since 11.4; the agent starts
+	// reading it in 11.5, until then Payload refuses the engine.
+	Protocol ProtocolName `json:"protocol,omitempty"`
 }
 
 // AwgHandoff is what the amneziawg adapter is handed: the 1.x interface's

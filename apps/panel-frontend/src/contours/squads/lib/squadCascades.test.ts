@@ -205,8 +205,8 @@ describe('три состояния каскада для сквада', () => {
     expect(row([{ cascadeId: 'c1', directionIds: [], exitNodeIds: [] }]).nodePolicyNote).toBe('gated');
   });
 
-  it('A-277: вход hysteria или AmneziaWG: юзера не различить, оговорка «кроме входов»', () => {
-    for (const proto of ['hysteria', 'amneziawg']) {
+  it('A-277: вход hysteria, AmneziaWG или sing-box (11.4): юзера не различить, оговорка «кроме входов»', () => {
+    for (const proto of ['hysteria', 'amneziawg', 'tuic', 'anytls', 'shadowtls', 'shadowsocks']) {
       const c = { ...cascade, positions: [{ ...cascade.positions[0]!, entryProtocol: proto }] } as unknown as Cascade;
       const r = squadCascades('me', state({ exitAcl: [{ cascadeId: 'c1', directionIds: ['d1'] }] }), { ...world, cascades: [c] })[0]!;
       expect(r.nodePolicyNote).toBe('gated-except-chain');

@@ -35,6 +35,7 @@ import {
   CascadeValidationError,
   entryReachesCascadeOnlyThroughChain,
   foldPositionsIntoHops,
+  isSingboxEntry,
   validateCascadeHops,
   validateCascadeTopology,
 } from './cascade.validation.js';
@@ -1030,13 +1031,15 @@ export interface CascadeRouteProfile {
  * it stays as the same rule seen from the label's side.
  *
  * `protocol` since t07-wire: an AmneziaWG entry's awg host is the cascade in
- * the same way, its users are keys and pick no way out either.
+ * the same way, its users are keys and pick no way out either. And since 11.4
+ * the same for the four sing-box entries (tuic, anytls, shadowtls,
+ * shadowsocks): any protocol of ENTRIES_ONLY_THROUGH_CHAIN.
  */
 export async function getHysteriaEntryLabels(
   nodeIds: string[],
   groupIds: string[] = [],
   entryReach?: Map<string, Set<string>>,
-  protocol: 'hysteria' | 'amneziawg' = 'hysteria',
+  protocol: string = 'hysteria',
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (nodeIds.length === 0) return out;
@@ -2885,6 +2888,24 @@ function userCoreFor(
       },
     };
   }
+  if (isSingboxEntry(topology.entryProtocol)) {
+    // 11.4: tuic, anytls, shadowtls and shadowsocks entries on sing-box, handed
+    // over exactly like hysteria (Auto's listener, the entry policy's user),
+    // and addressed to the one sing-box instance of that protocol: every
+    // instance answers to engine "singbox", so the protocol is what keeps the
+    // block from reaching the node's other sing-box profiles.
+    return {
+      userCore: {
+        engine: 'singbox',
+        protocol: topology.entryProtocol,
+        socks: {
+          port: chainSocksPort(0),
+          username: chainSocksUser(topology.entryPolicyOrdinal ?? 0),
+          password: secret,
+        },
+      },
+    };
+  }
   if (topology.entryProtocol === 'hysteria') {
     // One listener for the whole entry: Auto's, which chainInputFor always
     // renders for a hysteria entry. A port and not an address; the agent
@@ -3017,7 +3038,8 @@ function chainInputFor(
      */
     // And an amneziawg entry the same way, t07-wire: its user is a key, the
     // whole entry lands on the tproxy listener, and that routes to Auto.
-    const handsWholeEntry = t.entryProtocol === 'hysteria' || t.entryProtocol === 'amneziawg';
+    // And the four sing-box entries (11.4), handed over like hysteria.
+    const handsWholeEntry = entryReachesCascadeOnlyThroughChain(t.entryProtocol);
     const directionTags = handsWholeEntry
       ? [0, ...tags]
       : t.auto && tags.length > 1

@@ -29,6 +29,7 @@ import {
   chainEntryList,
   CHAIN_ENTRY_PROTOCOLS,
   entryNoteKind,
+  isSingboxEntry,
   isKnownProtocol,
   legParamFacts,
   poolRowFacts,
@@ -2180,9 +2181,18 @@ export function EntryChainNote({
     );
   }
   return (
-    <Note tone={MIST} icon={<InfoIcon size={13} color={MIST} />}>
-      {t('cascadeCreate.entryAutoOnly', { protocol: facts.protocol === 'amneziawg' ? 'AmneziaWG' : facts.protocol })}
-    </Note>
+    <>
+      <Note tone={MIST} icon={<InfoIcon size={13} color={MIST} />}>
+        {t('cascadeCreate.entryAutoOnly', { protocol: facts.protocol === 'amneziawg' ? 'AmneziaWG' : facts.protocol })}
+      </Note>
+      {/* 11.4: the sing-box entries need an agent that takes their hand-off; an
+          older one refuses the block and the cascade does not work. */}
+      {isSingboxEntry(facts.protocol) && (
+        <Note tone={AMBER} icon={<WarnIcon size={13} color={AMBER} />}>
+          {t('cascadeCreate.entrySingboxAgent', { protocol: facts.protocol })}
+        </Note>
+      )}
+    </>
   );
 }
 

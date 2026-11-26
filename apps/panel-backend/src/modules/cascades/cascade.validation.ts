@@ -11,7 +11,7 @@ import type { CascadeHopInput, CascadePositionInput } from './cascade.schemas.js
 // payload instead is how a check and a write come to disagree.
 import type { ResolvedDirection } from './direction-merge.js';
 import { linkCellFor } from './cascade.config.js';
-import { CHAIN_ENTRY_PROTOCOLS, LINK_CELLS, LINK_CELL_ENGINES } from '@iceslab/shared';
+import { CHAIN_ENTRY_PROTOCOLS, LINK_CELLS, LINK_CELL_ENGINES, SINGBOX_ENTRY_PROTOCOLS } from '@iceslab/shared';
 
 /**
  * A link protocol nothing can carry is refused here, at the save.
@@ -55,16 +55,22 @@ function assertLinkCellExists(protocol: string | null | undefined, where: string
  * Entries whose users reach the cascade ONLY through the chain process on the
  * entry node: a hysteria user is a password and an AmneziaWG user a key, so
  * neither can carry a choice of way out, and neither core has an xray drawing
- * to fall back on. For these the chain on the entry nodes is not an
+ * to fall back on. The same holds for the four sing-box entries (11.4: tuic,
+ * anytls, shadowtls, shadowsocks): their users are passwords too. For these the chain on the entry nodes is not an
  * optimisation but the whole hand-off, which is what the save gate asks about.
  *
  * About the protocol's nature, not about what is allowed: what may be saved is
  * CHAIN_ENTRY_PROTOCOLS (both since t07-wire).
  */
-const ENTRIES_ONLY_THROUGH_CHAIN: readonly string[] = ['hysteria', 'amneziawg'];
+export const ENTRIES_ONLY_THROUGH_CHAIN: readonly string[] = ['hysteria', 'amneziawg', ...SINGBOX_ENTRY_PROTOCOLS];
 
 export function entryReachesCascadeOnlyThroughChain(protocol: string | null | undefined): boolean {
   return protocol != null && ENTRIES_ONLY_THROUGH_CHAIN.includes(protocol);
+}
+
+/** A sing-box entry (11.4): the hand-off names the instance by this protocol. */
+export function isSingboxEntry(protocol: string | null | undefined): protocol is (typeof SINGBOX_ENTRY_PROTOCOLS)[number] {
+  return protocol != null && (SINGBOX_ENTRY_PROTOCOLS as readonly string[]).includes(protocol);
 }
 
 function assertEntryIsChainable(protocol: string): void {

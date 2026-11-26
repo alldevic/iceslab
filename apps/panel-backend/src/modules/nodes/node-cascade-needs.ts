@@ -1,6 +1,7 @@
 import { ENGINE_NAMES, type EngineName } from '@iceslab/shared';
 import { prisma } from '../../prisma.js';
 import { nativeEngineFor } from './node-engines.js';
+import { isSingboxEntry } from '../cascades/cascade.validation.js';
 
 /** One core a node must keep because a cascade runs on it, and which ones. */
 export interface CascadeEngineNeed {
@@ -68,7 +69,11 @@ export async function cascadeNeedsByNode(nodeIds: string[]): Promise<Map<string,
       for (const p of c.positions) {
         for (const n of p.nodes) {
           need(n.nodeId, 'singbox', c);
-          if (p.position === 0) need(n.nodeId, nativeEngineFor(p.entryProtocol ?? 'xray'), c);
+          // A sing-box entry (11.4) needs sing-box, which every position already
+          // does; nativeEngineFor would add xray for shadowsocks.
+          if (p.position === 0 && !isSingboxEntry(p.entryProtocol)) {
+            need(n.nodeId, nativeEngineFor(p.entryProtocol ?? 'xray'), c);
+          }
         }
       }
       for (const d of c.directions) for (const n of d.nodes) need(n.nodeId, 'singbox', c);

@@ -4,6 +4,7 @@ import { isUniqueViolationOn } from '../../lib/util/unique-violation.js';
 import { config } from '../../config.js';
 import { ALL_SQUAD_ID, NO_ACCESS_SQUAD_ID } from './squads.constants.js';
 import { ensureNoAccessSquad } from './squads.system.js';
+import { ENTRIES_ONLY_THROUGH_CHAIN } from '../cascades/cascade.validation.js';
 import type { CreateSquadInput, UpdateSquadInput } from './squads.schemas.js';
 import { mapSquadToPublic, type PublicSquadDto } from './squads.mapper.js';
 import {
@@ -96,9 +97,9 @@ async function exitAclRows(groupId: string, exitAcl: ExitAclInput): Promise<Exit
   const live = exitAcl.filter((e) => givenList(e).length > 0);
   if (live.length === 0) return [];
   /**
-   * A-134: narrowing the ways out of a cascade entered through hysteria or
-   * AmneziaWG is refused. Such an entry hands every user to the chain as one
-   * socks user (hysteria) or by its interface (AWG), the chain picks the way
+   * A-134: narrowing the ways out of a cascade entered through hysteria,
+   * AmneziaWG or sing-box is refused. Such an entry hands every user to the
+   * chain as one socks user (hysteria, sing-box) or by its interface (AWG), the chain picks the way
    * out, and nothing on the node can tell one squad's users from another's:
    * the narrowing would be words on the squad screen and nothing on the node.
    * Switching such a cascade off for a squad (an empty list) stays allowed.
@@ -107,7 +108,7 @@ async function exitAclRows(groupId: string, exitAcl: ExitAclInput): Promise<Exit
     where: {
       position: 0,
       cascadeId: { in: live.map((e) => e.cascadeId) },
-      entryProtocol: { in: ['hysteria', 'amneziawg'] },
+      entryProtocol: { in: [...ENTRIES_ONLY_THROUGH_CHAIN] },
     },
     select: { entryProtocol: true, cascade: { select: { name: true } } },
   });

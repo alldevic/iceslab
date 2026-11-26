@@ -46,6 +46,10 @@ export const CascadeProtocol = z.enum([
   'shadowsocks',
   'mtproto',
   'mieru',
+  // 11.4: entries only, served by sing-box (CHAIN_ENTRY_PROTOCOLS).
+  'tuic',
+  'anytls',
+  'shadowtls',
 ]);
 
 /**

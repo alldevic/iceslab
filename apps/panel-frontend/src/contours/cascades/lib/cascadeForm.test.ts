@@ -7,6 +7,9 @@ import {
 import type { EngineName, NodeCoreInfo } from '@iceslab/shared';
 import {
   CHAIN_ENTRY_PROTOCOLS,
+  ENTRY_PROTOCOLS,
+  entryPolicyPlace,
+  protocolOptions,
   LINK_PROTOCOL_VALUES,
   cellGaps,
   entryBystanders,
@@ -189,6 +192,69 @@ describe('вход amneziawg (t07-wire): как hysteria', () => {
     expect(
       entryProtocolDefault({ intendedEngines: [], protocol: 'none', cores: report(['amneziawg', 'xray']) }),
     ).toEqual({ kind: 'protocol', protocol: 'xray' });
+  });
+});
+
+describe('входы на sing-box (11.4): tuic, anytls, shadowtls, shadowsocks', () => {
+  const SINGBOX = ['tuic', 'anytls', 'shadowtls', 'shadowsocks'];
+  const report = (engines: EngineName[]) => ({
+    observedAt: '2026-11-26T00:00:00Z',
+    cores: engines.map((e) => ({ name: e, engine: e }) as NodeCoreInfo),
+  });
+
+  it('входят в общий список контракта и копия редактора ему равна', () => {
+    for (const p of SINGBOX) expect(SHARED_CHAIN_ENTRY_PROTOCOLS).toContain(p);
+    expect(CHAIN_ENTRY_PROTOCOLS).toEqual([...SHARED_CHAIN_ENTRY_PROTOCOLS]);
+  });
+
+  it('предлагаются селектором входа, и каждое из них селектор показывает известным', () => {
+    const offered = protocolOptions('xray').map((o) => o.value);
+    for (const p of SINGBOX) expect(offered).toContain(p);
+    for (const p of CHAIN_ENTRY_PROTOCOLS) expect(ENTRY_PROTOCOLS.map((o) => o.value)).toContain(p);
+    // Ноги по-прежнему из семи: tuic/anytls/shadowtls не ячейки.
+    expect(LINK_PROTOCOL_VALUES).not.toContain('tuic');
+    expect(protocolOptions('tuic')).toHaveLength(ENTRY_PROTOCOLS.length);
+  });
+
+  it('несутся и говорят «только Auto»: выбор выхода по пользователю недоступен', () => {
+    for (const p of SINGBOX) {
+      expect(entryChainFacts(p)).toEqual({ protocol: p, carried: true, perUserExit: false });
+      expect(entryNoteKind(entryChainFacts(p))).toBe('autoOnly');
+    }
+  });
+
+  it('политику входа ставит каскад, как у hysteria', () => {
+    for (const p of SINGBOX) expect(entryPolicyPlace(p, true)).toBe('select');
+    expect(entryPolicyPlace('xray', true)).toBe('xray-self');
+  });
+
+  it('умолчание не подставляет их: нода только с sing-box не «не может», но и не получает tuic сама', () => {
+    expect(entryProtocolDefault({ intendedEngines: [], protocol: 'none', cores: report(['singbox']) })).toEqual({
+      kind: 'unknown',
+    });
+    expect(entryProtocolDefault({ intendedEngines: ['singbox'], protocol: 'none' })).toEqual({ kind: 'unknown' });
+    // Ядра, поднимающего хоть какой-то вход, нет вовсе: по-прежнему «нет».
+    expect(entryProtocolDefault({ intendedEngines: [], protocol: 'none', cores: report(['naive']) })).toEqual({
+      kind: 'none',
+    });
+    // xray по-прежнему первее.
+    expect(
+      entryProtocolDefault({ intendedEngines: [], protocol: 'none', cores: report(['singbox', 'xray']) }),
+    ).toEqual({ kind: 'protocol', protocol: 'xray' });
+  });
+
+  it('профиль того же протокола на ноде входа больше не «вне каскада» (подсказка 11.1)', () => {
+    const nodes = [{ id: 'n1', name: 'ru-01', countryCode: 'RU' }];
+    const profiles = [
+      { id: 'p-tuic', protocol: 'tuic' },
+      { id: 'p-anytls', protocol: 'anytls' },
+    ];
+    const bind = (profileId: string) => ({ profileId, nodeId: 'n1', enabled: true });
+    expect(entryBystanders('tuic', nodes, [bind('p-tuic')], profiles)).toEqual([]);
+    // Другой профиль sing-box остаётся вне каскада: выбран один протокол входа.
+    expect(entryBystanders('tuic', nodes, [bind('p-tuic'), bind('p-anytls')], profiles)).toEqual([
+      { nodeId: 'n1', nodeName: 'ru-01', countryCode: 'RU', protocols: ['anytls'], refused: [] },
+    ]);
   });
 });
 
@@ -1180,14 +1246,14 @@ describe('entryProtocolDefault: вход по ядрам ноды, а не по 
 
   const report = (cores: NodeCoreInfo[]) => ({ observedAt: '2026-09-26T00:00:00Z', cores });
 
-  it('только sing-box по отчёту: умолчания нет, нода входом быть не может', () => {
+  it('только sing-box по отчёту: умолчания нет (11.4: вход на sing-box выбирают явно), но «не может» не говорится', () => {
     expect(
       entryProtocolDefault({
         intendedEngines: ['singbox'],
         protocol: 'singbox',
         cores: report([{ name: 'tuic', engine: 'singbox' }]),
       }),
-    ).toEqual({ kind: 'none' });
+    ).toEqual({ kind: 'unknown' });
   });
 
   it('отчёт полный и пустой, намерение пустое: none', () => {
