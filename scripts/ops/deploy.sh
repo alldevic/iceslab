@@ -149,7 +149,17 @@ step_done
 
 # ───── Step 4: restart all services ─────
 step 4 "restart all services"
-"${DC[@]}" up -d --build
+# A failure here ("dependency failed to start: ... unhealthy") is the same
+# half-finished state as the health gate below: say so, then let the ERR trap
+# report the line as before.
+"${DC[@]}" up -d --build || {
+    _up_rc=$?
+    log_err "services did not start; this deploy is NOT complete"
+    log_err "  the output above is where the reason usually is. Nothing was rolled"
+    log_err "  back: the previous image was replaced, so the way out is a fix"
+    log_err "  forward, or ICESLAB_REF=<previous tag> ./scripts/ops/deploy.sh"
+    (exit "$_up_rc")
+}
 step_done
 
 # ───── Step 5: the host Caddy's file ─────

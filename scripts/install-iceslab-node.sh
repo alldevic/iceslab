@@ -1384,6 +1384,15 @@ EOF
 # ───── 0. Existing-install handling ─────
 # The wipe itself, after the payload is in hand and before anything is written.
 # The decision to wipe was taken above, before the token.
+# The SSH port (and allowlist) the previous install put into ufw, read before the
+# wipe takes the env file: the firewall step removes those rules when the port moved.
+PREV_SSH_PORT=""
+PREV_SSH_ALLOWLIST=""
+if [[ -f /etc/iceslab-node/env ]]; then
+  PREV_SSH_PORT="$(sed -n 's/^SSH_PORT=//p' /etc/iceslab-node/env | tail -n 1)"
+  PREV_SSH_ALLOWLIST="$(sed -n 's/^SSH_ALLOWLIST=//p' /etc/iceslab-node/env | tail -n 1)"
+  [[ "$PREV_SSH_PORT" =~ ^[0-9]+$ ]] || PREV_SSH_PORT=""
+fi
 if [[ $EXISTING_INSTALL -eq 1 ]]; then
   do_uninstall
 fi
@@ -1641,6 +1650,11 @@ EOF
 else
   log "$ENV_FILE exists; keeping current payload (pass --payload to overwrite)"
 fi
+# The ssh rules this install puts into ufw, for the next reinstall to take off if
+# the port moves.
+sed -i '/^SSH_PORT=/d;/^SSH_ALLOWLIST=/d' "$ENV_FILE"
+echo "SSH_PORT=${SSH_PORT}" >> "$ENV_FILE"
+if [[ -n "$SSH_ALLOWLIST" ]]; then echo "SSH_ALLOWLIST=${SSH_ALLOWLIST// /}" >> "$ENV_FILE"; fi
 
 step "Cores (${ENGINES[*]:-none})"
 # bootstrap-hysteria.sh sets up the port-hopping redirect from this.
@@ -1747,6 +1761,28 @@ if [[ "${SKIP_FIREWALL:-0}" != "1" ]]; then
       warn "allowing it too so enabling ufw cannot end this session."
       ufw allow "${_CUR_SSH_PORT}/tcp"     >/dev/null 2>&1 || true
     fi
+  fi
+  # The SSH port the previous install configured, when it was another one: its
+  # rules (the forms this block adds, nothing of the operator's) go, unless this
+  # very session is on that port.
+  if [[ -n "${PREV_SSH_PORT:-}" && "$PREV_SSH_PORT" != "$SSH_PORT" ]]; then
+    if [[ "$PREV_SSH_PORT" == "${_CUR_SSH_PORT:-}" ]]; then
+      warn "this session is on the previous ssh port ${PREV_SSH_PORT}; its ufw rules stay. Remove them yourself from another session."
+    else
+      log "SSH port moved ${PREV_SSH_PORT} -> ${SSH_PORT}: removing the ufw rules this installer made for ${PREV_SSH_PORT}/tcp"
+      ufw --force delete allow "${PREV_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+      ufw --force delete limit "${PREV_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+      IFS=',' read -ra _PREV_IPS <<< "${PREV_SSH_ALLOWLIST:-}"
+      for ip in "${_PREV_IPS[@]}"; do
+        [[ -z "${ip// /}" ]] && continue
+        ufw --force delete allow from "${ip// /}" to any port "$PREV_SSH_PORT" proto tcp >/dev/null 2>&1 || true
+        ufw --force delete limit from "${ip// /}" to any port "$PREV_SSH_PORT" proto tcp >/dev/null 2>&1 || true
+      done
+      unset _PREV_IPS
+    fi
+  elif [[ -z "${PREV_SSH_PORT:-}" && "${EXISTING_INSTALL:-0}" == "1" ]]; then
+    warn "the previous install did not record its ssh port. If sshd was on another port than ${SSH_PORT}, its ufw rules stay:"
+    warn "  ufw status numbered   # then: ufw delete allow <old-port>/tcp (or limit)"
   fi
   # Restrict mTLS port to the panel's IP if --panel-ip given, otherwise
   # (--panel-ip not set) fall back to world-open with a loud warn.

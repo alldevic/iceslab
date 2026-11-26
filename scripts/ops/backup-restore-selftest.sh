@@ -198,7 +198,13 @@ fi
 
 # ───── 3. Restore ─────
 note "restore"
-"${SCRIPT_DIR}/iceslab-restore.sh" "$ARCHIVE" --compose-file compose.yml --env-file env --yes >/dev/null
+ICESLAB_RESTORE_ENV_DIR="${WORK}/restore-env" \
+    "${SCRIPT_DIR}/iceslab-restore.sh" "$ARCHIVE" --compose-file compose.yml --env-file env --yes >/dev/null
+if compgen -G "${WORK}/restore-env/env.from-backup-*" >/dev/null && ! compgen -G "env.from-backup-*" >/dev/null; then
+    ok "the archive's env copy is outside the checkout"
+else
+    bad "the archive's env copy is missing from the restore dir or lies in the checkout"
+fi
 
 RESTORED_COUNT="$(psql -tAc "SELECT count(*) FROM subscribers;" 2>/dev/null || echo "MISSING")"
 RESTORED_SUM="$(psql -tAc "SELECT sum(bytes) FROM subscribers;" 2>/dev/null || echo "MISSING")"

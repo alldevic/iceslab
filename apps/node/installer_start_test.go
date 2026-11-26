@@ -610,3 +610,58 @@ func TestTheSessionIsFoundInAnAncestorsEnvironment(t *testing.T) {
 		t.Errorf("none:\n%s", out)
 	}
 }
+
+// m7.4: --reset --ssh-port 2222 took 22/tcp off ufw no more than it did before;
+// the install now writes SSH_PORT into the env file and the next one removes the
+// rules of the port it left, in the forms the installer itself adds.
+func TestAMovedSshPortTakesTheOldRulesOff(t *testing.T) {
+	session := "198.51.100.9 51000 192.0.2.1 2222"
+	calls, out := runFirewall(t, "SSH_PORT=2222\nPREV_SSH_PORT=22\nPREV_SSH_ALLOWLIST='203.0.113.4, 10.0.0.0/8'", session)
+	sameCalls(t, "moved", calls,
+		"allow 2222/tcp",
+		"--force delete allow 22/tcp", "--force delete limit 22/tcp",
+		"--force delete allow from 203.0.113.4 to any port 22 proto tcp",
+		"--force delete limit from 203.0.113.4 to any port 22 proto tcp",
+		"--force delete allow from 10.0.0.0/8 to any port 22 proto tcp",
+		"--force delete limit from 10.0.0.0/8 to any port 22 proto tcp",
+		"allow 1337/tcp", "default deny incoming", "default allow outgoing", "--force enable", "status")
+	if !strings.Contains(out, "22 -> 2222") {
+		t.Errorf("the move is not said:\n%s", out)
+	}
+
+	// The same port, or no record of one: no delete, and the hint only for the latter.
+	calls, out = runFirewall(t, "PREV_SSH_PORT=22", "")
+	sameCalls(t, "same port", calls, "allow 22/tcp", "allow 1337/tcp", "default deny incoming", "default allow outgoing", "--force enable", "status")
+	calls, out = runFirewall(t, "SSH_PORT=2222\nEXISTING_INSTALL=1", "")
+	sameCalls(t, "no record", calls, "allow 2222/tcp", "allow 1337/tcp", "default deny incoming", "default allow outgoing", "--force enable", "status")
+	if !strings.Contains(out, "did not record its ssh port") || !strings.Contains(out, "ufw delete allow <old-port>/tcp") {
+		t.Errorf("no hint:\n%s", out)
+	}
+	_, out = runFirewall(t, "SSH_PORT=2222", "")
+	if strings.Contains(out, "did not record") {
+		t.Errorf("a hint on a first install:\n%s", out)
+	}
+
+	// A session still on the old port keeps its rules.
+	calls, out = runFirewall(t, "SSH_PORT=2222\nPREV_SSH_PORT=22", "198.51.100.9 51000 192.0.2.1 22")
+	for _, c := range calls {
+		if strings.Contains(c, "delete") {
+			t.Errorf("deleted under a session on the old port: %v", calls)
+		}
+	}
+	if !strings.Contains(out, "previous ssh port 22") {
+		t.Errorf("not said:\n%s", out)
+	}
+}
+
+func TestTheInstallerRecordsItsSshPortInTheEnvFile(t *testing.T) {
+	s := readInstaller(t)
+	for _, want := range []string{`echo "SSH_PORT=${SSH_PORT}" >> "$ENV_FILE"`, `PREV_SSH_PORT="$(sed -n 's/^SSH_PORT=//p' /etc/iceslab-node/env`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the installer lacks %q", want)
+		}
+	}
+	if strings.Index(s, "PREV_SSH_PORT=\"$(sed") > strings.Index(s, "\n  do_uninstall\nfi\n\nLEGACY_CHECKOUT") {
+		t.Error("the previous port is read after the wipe")
+	}
+}

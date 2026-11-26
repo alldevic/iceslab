@@ -319,6 +319,17 @@ for script in deploy.sh deploy-backend.sh deploy-frontend.sh; do
     fi
 done
 
+note "a failed service start says the deploy is not complete"
+rc="$(FAIL_GLOB='compose*up -d --build*' run_deploy deploy.sh)"
+if saw_calls deploy.sh; then
+    out="$(cat "${LOG}.out")"
+    if [[ "$rc" != "0" && "$out" == *'NOT complete'* && "$out" == *'ICESLAB_REF=<previous tag>'* ]]; then
+        ok "deploy.sh exits $rc and names the way out when 'up -d --build' fails"
+    else
+        bad "a failed 'up -d --build' gave exit $rc without the NOT complete message"
+    fi
+fi
+
 note "a failed migration stops the deploy"
 for script in deploy.sh deploy-backend.sh; do
     # Only the one-shot migrate fails; postgres and the builds are fine.

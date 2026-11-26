@@ -86,6 +86,6 @@ export function startGeoSetsWorker(): Worker<GeoSetsJobData> {
     // One at a time: each job holds a whole file in memory.
     { connection: queueRedis, concurrency: 1 },
   ).on('failed', (job, err) => {
-    getLogger().info(`[worker:geo-sets] ${job?.name} ${JSON.stringify(job?.data)} FAILED: ${err.message}`);
+    getLogger().error(`[worker:geo-sets] ${job?.name} ${JSON.stringify(job?.data)} FAILED: ${err.message}`);
   });
 }

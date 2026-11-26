@@ -151,4 +151,11 @@ describe('and every worker the panel starts is wrapped', () => {
       expect(src).toMatch(new RegExp(`observeWorker\\(${fn}\\(\\), '${q}', \\{ logFailures: false \\}\\)`));
     }
   });
+
+  // A failed geo-sets job is an error, not an info line (m7.4).
+  it('geo-sets logs a failed job at error level', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(resolve(here, '../../modules/geo-sets/geo-sets.queue.ts'), 'utf8');
+    expect(src).toMatch(/\.on\('failed', \(job, err\) => \{\s*getLogger\(\)\.error\(`\[worker:geo-sets\]/);
+  });
 });

@@ -236,14 +236,22 @@ step 5 "start panel services (backend, frontend)"
 "${DC[@]}" start backend frontend
 step_done
 
-# The archive's env is kept beside ${ENV_FILE}, mode 600: the stage is removed
-# on exit, and the path printed before A-014 pointed into it. Not beside the
-# archive: that copy holds the panel's secrets in the clear, the backup is
-# encrypted for them, and backup directories get synced off the host. Beside
-# the live env file the same secrets already lie open, so no new place gets
-# them.
-ARCHIVE_ENV="$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE").from-backup-$(basename "${ARCHIVE%.enc}" .tar.gz)"
+# The archive's env is kept outside the checkout, mode 600: the stage is removed
+# on exit, and the path printed before A-014 pointed into it. Not in the checkout
+# (a `.env.production.from-backup-*` beside the live file left the tree dirty and
+# the next deploy*.sh refused to run) and not beside the archive: that copy holds
+# the panel's secrets in the clear, the backup is encrypted for them, and backup
+# directories get synced off the host. ICESLAB_RESTORE_ENV_DIR overrides the
+# default /var/lib/iceslab/restore, $HOME/.iceslab-restore when that cannot be made.
+ARCHIVE_ENV=""
 if [[ -f "${STAGE}/env" ]]; then
+    RESTORE_ENV_DIR="${ICESLAB_RESTORE_ENV_DIR:-/var/lib/iceslab/restore}"
+    if ! (umask 077; mkdir -p "$RESTORE_ENV_DIR") 2>/dev/null; then
+        RESTORE_ENV_DIR="${HOME:-/root}/.iceslab-restore"
+        (umask 077; mkdir -p "$RESTORE_ENV_DIR")
+    fi
+    chmod 700 "$RESTORE_ENV_DIR" 2>/dev/null || true
+    ARCHIVE_ENV="${RESTORE_ENV_DIR}/$(basename "$ENV_FILE").from-backup-$(basename "${ARCHIVE%.enc}" .tar.gz)"
     install -m 0600 "${STAGE}/env" "$ARCHIVE_ENV"
 fi
 
