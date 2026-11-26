@@ -181,15 +181,23 @@ trap cleanup EXIT
 # Release assets are handed out from another host, so redirects are followed,
 # over https only; the sha256 is what makes the file trustworthy.
 URL="https://github.com/XTLS/Xray-core/releases/download/${TAG}/${ZIP_NAME}"
-log "Downloading $URL"
-curl --proto '=https' --proto-redir '=https' -fsSL "$URL" -o "$TMP/xray.zip" || fail "download failed: $URL"
+# The panel first (lib/node-env.sh, ICESLAB_CORE_SOURCE); the check below is
+# the same whichever way the file came.
+if ! core_panel_artifact xray "$XRAY_VERSION" "$XR_ARCH" "$TMP/xray.zip" "$WANT_SHA"; then
+  log "Downloading $URL"
+  curl --proto '=https' --proto-redir '=https' -fsSL "$URL" -o "$TMP/xray.zip" || fail "download failed: $URL"
+fi
 GOT_SHA=$(sha256sum "$TMP/xray.zip" | awk '{print $1}')
 [[ "$GOT_SHA" == "$WANT_SHA" ]] || fail "checksum mismatch for $ZIP_NAME: got $GOT_SHA, expected $WANT_SHA"
 log "Checksum OK ($GOT_SHA)"
 
 INSTALLER_URL="https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALLER_REF}/install-release.sh"
-curl --proto '=https' --max-redirs 0 -fsSL "$INSTALLER_URL" -o "$TMP/install-release.sh" \
-  || fail "download failed: $INSTALLER_URL"
+# The panel carries this file too (the manifest's CORE_SCRIPTS), so a node
+# without raw.githubusercontent.com installs xray whole.
+if ! core_panel_script xray-install "$XRAY_INSTALLER_REF" "$TMP/install-release.sh" "$XRAY_INSTALLER_SHA"; then
+  curl --proto '=https' --max-redirs 0 -fsSL "$INSTALLER_URL" -o "$TMP/install-release.sh" \
+    || fail "download failed: $INSTALLER_URL"
+fi
 GOT_SHA=$(sha256sum "$TMP/install-release.sh" | awk '{print $1}')
 [[ "$GOT_SHA" == "$XRAY_INSTALLER_SHA" ]] \
   || fail "checksum mismatch for install-release.sh at $XRAY_INSTALLER_REF: got $GOT_SHA, expected $XRAY_INSTALLER_SHA"

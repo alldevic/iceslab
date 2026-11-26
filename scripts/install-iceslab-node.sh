@@ -118,6 +118,18 @@
 #
 # Other flags:
 #   --port <n>              the port the agent listens on (default 1337).
+#   --core-source <s>       where the cores' files come from (env ICESLAB_CORE_SOURCE):
+#                             panel       the panel first, GitHub when it cannot serve
+#                                         the file (default);
+#                             panel-only  the panel or nothing: a core it cannot serve
+#                                         fails, GitHub is not tried;
+#                             github      GitHub only, the panel is not asked.
+#                           The panel is asked at the address and with the token of
+#                           the payload (https only; ICESLAB_CORE_ALLOW_HTTP=1 allows
+#                           an http panel); the sha256 check is the same either way.
+#                           Only the cores' files and xray's install-release.sh come
+#                           from the panel: this script, Go, the agent's sources,
+#                           AmneziaWG and naive still come from outside.
 #   -h, --help              print this header and exit (no root, nothing touched).
 #
 # Alternative flows (file-based, for air-gapped or self-hosted gist setups):
@@ -497,6 +509,8 @@ SSH_ALLOWLIST=""   # comma-list of IP/CIDR; empty = keep the SSH port world-open
 #                          they cannot disagree. The port this session arrived
 #                          on (SSH_CONNECTION) is allowed as well.
 SSH_PORT="${SSH_PORT:-22}"
+# --core-source: see the header. Read by lib/node-env.sh in every bootstrap.
+ICESLAB_CORE_SOURCE="${ICESLAB_CORE_SOURCE:-panel}"
 
 # Hysteria 2 (only used when hysteria is a core): the domain and e-mail its
 # ACME certificate is asked for, written to the agent's env (core_flags_env);
@@ -1152,6 +1166,7 @@ while [[ $# -gt 0 ]]; do
     --realistic-fallback) REALISTIC_FALLBACK=1; shift ;;
     --ssh-allowlist)      SSH_ALLOWLIST="$2"; shift 2 ;;
     --ssh-port)           SSH_PORT="$2"; shift 2 ;;
+    --core-source)        ICESLAB_CORE_SOURCE="$2"; shift 2 ;;
     # The cores this node gets, comma-separated, in any order:
     # xray,singbox,hysteria,amneziawg,mtproto,mieru,naive. See resolve_engines.
     --engines)            ENGINES_ARG="$2"; ENGINES_GIVEN=1; shift 2 ;;
@@ -1183,6 +1198,11 @@ if [[ $UNINSTALL -eq 0 ]]; then
   if [[ "$SSH_PORT" -lt 1 || "$SSH_PORT" -gt 65535 ]]; then
     fail "--ssh-port out of range 1..65535 (got: $SSH_PORT)"
   fi
+
+  case "$ICESLAB_CORE_SOURCE" in
+    panel|panel-only|github) export ICESLAB_CORE_SOURCE ;;
+    *) fail "--core-source: '$ICESLAB_CORE_SOURCE' is not one of panel, panel-only, github" ;;
+  esac
 
   # The cores come from --engines; --protocol (the older spelling) is optional
   # and adds its core. Nothing named at all: the agent alone (25.09), no menu.

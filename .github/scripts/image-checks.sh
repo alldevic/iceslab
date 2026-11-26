@@ -102,6 +102,69 @@ check_cores() {
   ok "image cores: every artifact of CORE_ARCHES ($CORE_ARCHES) is in /app/cores with the manifest's sha256, nothing else"
 }
 
+# ── cores, second half: each artifact is the architecture its name says ──────
+# The sha256 above proves a file is the one the manifest names; it cannot prove
+# the manifest filed it under the right architecture, and an arm64 binary under
+# an amd64 name sits there until a node runs it. So the binary is taken out of
+# its archive (.zip, .tar.gz, .deb; hysteria's is bare) and its ELF header read:
+# e_machine (2 bytes at offset 18) is 62 for x86-64, 183 for aarch64, 40 for
+# ARM. Done on the runner, with the files copied out of the image: the alpine
+# image has no dpkg-deb. sing-box of the IMAGE's own architecture is also run
+# (when this machine can), because the manifest's sing-box is our build and
+# `version` must list with_v2ray_api, the tag the per-user counters need.
+check_core_arches() {
+  local work ctr list image_arch host_arch report="" stored component arch file want got bin x ex
+  for ex in tar dpkg-deb od; do command -v "$ex" >/dev/null || fail "cores arch check: $ex is not on this machine"; done
+  command -v unzip >/dev/null || command -v python3 >/dev/null || fail "cores arch check: neither unzip nor python3 is on this machine"
+  work=$(mktemp -d)
+  ctr=$(docker create "$IMAGE")
+  # shellcheck disable=SC2064
+  trap "docker rm -f '$ctr' >/dev/null 2>&1 || true; rm -rf '$work'; trap - RETURN" RETURN
+  docker cp "$ctr:/app/cores" "$work/cores" >/dev/null
+  # One line per artifact the image should carry: stored name, component, arch, upstream file.
+  list=$(docker run --rm --entrypoint node -e CORE_ARCHES="$CORE_ARCHES" "$IMAGE" --input-type=module -e '
+    const m = await import("/app/packages/shared/src/core-versions.js");
+    for (const a of m.coreArtifacts(process.env.CORE_ARCHES.split(/\s+/).filter(Boolean)))
+      console.log([a.stored, a.component, a.arch, a.file].join("\t"));
+  ')
+  image_arch=$(docker image inspect --format '{{.Architecture}}' "$IMAGE")
+  case "$(uname -m)" in x86_64) host_arch=amd64 ;; aarch64) host_arch=arm64 ;; *) host_arch="" ;; esac
+  local n=0
+  while IFS=$'\t' read -r stored component arch file; do
+    [[ -n "$stored" ]] || continue
+    case "$component" in
+      xray) bin=xray ;; singbox) bin=sing-box ;; mtg) bin=mtg ;; mita) bin=mita ;; hysteria) bin="" ;;
+      *) continue ;;   # not an executable the node runs from an archive
+    esac
+    case "$arch" in amd64) want=3e00 ;; arm64) want=b700 ;; armv7) want=2800 ;; *) report+="$stored: no ELF machine known for arch $arch"$'\n'; continue ;; esac
+    x="$work/x/$stored"; mkdir -p "$x"
+    case "$file" in
+      *.zip) if command -v unzip >/dev/null; then unzip -q -o "$work/cores/$stored" -d "$x"; else python3 -I -m zipfile -e "$work/cores/$stored" "$x"; fi ;;
+      *.tar.gz|*.tgz) tar -xzf "$work/cores/$stored" -C "$x" ;;
+      *.deb) dpkg-deb -x "$work/cores/$stored" "$x" ;;
+      *) cp "$work/cores/$stored" "$x/$file"; bin="$file" ;;
+    esac || { report+="$stored: cannot be unpacked"$'\n'; continue; }
+    bin=$(find "$x" -type f -name "${bin:-$file}" | sed -n 1p)
+    if [[ -z "$bin" ]]; then report+="$stored: no ${component} binary inside"$'\n'; continue; fi
+    got=$(od -An -tx1 -j18 -N2 "$bin" | tr -d ' \n')
+    if [[ "$(od -An -tx1 -N4 "$bin" | tr -d ' \n')" != 7f454c46 ]]; then report+="$stored: the binary is not an ELF file"$'\n'; continue; fi
+    [[ "$got" == "$want" ]] || report+="$stored: filed under $arch, but its e_machine is 0x${got:2:2}${got:0:2} (want 0x${want:2:2}${want:0:2})"$'\n'
+    n=$((n + 1))
+    if [[ "$component" == singbox && "$arch" == "$image_arch" && "$arch" == "$host_arch" ]]; then
+      chmod +x "$bin"
+      # Into a variable, not `| grep -q`: grep leaving early SIGPIPEs the writer under pipefail.
+      ex=$("$bin" version 2>&1 || true)
+      [[ "$ex" == *with_v2ray_api* ]] || report+="$stored: sing-box version does not list with_v2ray_api"$'\n'
+    fi
+  done <<<"$list"
+  [[ "$n" -ge 5 ]] || report+="only $n executables were checked, the manifest should give more"$'\n'
+  if [[ -n "$report" ]]; then
+    printf '%s' "$report" >&2
+    fail "image cores have the wrong architecture inside (see the list above)"
+  fi
+  ok "image cores: $n executables, each the ELF machine its architecture says; sing-box has with_v2ray_api (run only when the image's arch is this machine's: image $image_arch, here ${host_arch:-?})"
+}
+
 # ── meta: user and start command ────────────────────────────────────────────
 check_meta() {
   local user uid cmd last
@@ -253,6 +316,7 @@ run_local() {
 all() {
   check_content
   check_cores
+  check_core_arches
   check_meta
   check_migrate
   do_boot
@@ -264,7 +328,7 @@ all() {
 
 case "${1:-all}" in
   content) check_content ;;
-  cores) check_cores ;;
+  cores) check_cores; check_core_arches ;;
   meta) check_meta ;;
   migrate) check_migrate ;;
   boot) do_boot ;;

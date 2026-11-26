@@ -63,6 +63,7 @@ func TestHelpAndATypoCostNothing(t *testing.T) {
 	}{
 		{[]string{"--help"}, nil, true, "--ssh-port"},
 		{[]string{"-h"}, nil, true, "--engines"},
+		{[]string{"--help"}, nil, true, "--core-source <s>"},
 		// Looked at, not taken: wherever it stands among the flags.
 		{[]string{"--engines", "xray", "--help"}, nil, true, "Usage"},
 		// Before the handover: not asked for the installer of another ref (no
@@ -109,6 +110,7 @@ func TestARefusedFlagNeverReachesTheToken(t *testing.T) {
 		{[]string{"--ssh-port", "22x"}, "must be a number"},
 		{[]string{"--ssh-port", ""}, "must be a number"},
 		{[]string{"--ssh-port", "-1"}, "must be a number"},
+		{[]string{"--core-source", "mirror"}, "--core-source: 'mirror' is not one of panel, panel-only, github"},
 	} {
 		r := runInstallerArgs(t, nil, append(append([]string{}, panel...), c.args...)...)
 		if r.err == nil || !strings.Contains(r.out, c.says) {

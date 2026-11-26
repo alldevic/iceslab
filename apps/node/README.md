@@ -75,6 +75,25 @@ sudo bash apps/node/scripts/bootstrap-amneziawg.sh
 
 Installs the upstream PPA (Ubuntu/Debian only), pulls `amneziawg`, `amneziawg-tools`, `amneziawg-dkms`, then verifies the kernel module loads. On DKMS failure (ARM containers, custom kernels) the script prints the userspace `amneziawg-go` fallback path; throughput drops from kernel-native (~92 Mbps) to userspace (~33 Mbps) but the inbound still works.
 
+### Where a core's files come from
+
+`bootstrap-xray.sh`, `-singbox.sh`, `-hysteria.sh`, `-mtg.sh` and `-mieru.sh` take the pinned release from the
+panel first: the panel image carries every release of the manifest, and a bootstrap asks it at the `panelUrl` and
+with the `heartbeatToken` of this node's payload (`NODE_PAYLOAD` in `/etc/iceslab-node/env`). xray's
+`install-release.sh` comes the same way. The sha256 check against the pin is the same whichever source delivered
+the file, and a mismatch is final (GitHub is not tried next).
+
+| `ICESLAB_CORE_SOURCE` (installer: `--core-source`) | |
+|---|---|
+| `panel` (default) | the panel first; GitHub, with a warning, when the panel is unreachable, older than the channel, or does not carry the file |
+| `panel-only` | the panel or nothing: the bootstrap fails with the reason |
+| `github` | GitHub only, the panel is not asked |
+
+The panel address must be `https://`; `ICESLAB_CORE_ALLOW_HTTP=1` accepts an `http://` panel (a bare-IP install).
+This covers the cores' files only: the installer script, Go, the agent's sources, AmneziaWG and naive still come
+from outside. The update command on the node page honours the same variable
+(`sudo env ICESLAB_CORE_SOURCE=panel-only ... bash .../bootstrap-<core>.sh --restart-agent`).
+
 ## Build
 
 ```bash

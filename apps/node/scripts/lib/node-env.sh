@@ -193,3 +193,143 @@ node_env_done() {
     printf '[node-env] %s is %s; the agent sees it after: systemctl restart iceslab-node\n' "$name" "$what"
   fi
 }
+
+# ───── Where the core's bytes come from ─────
+#
+# A node whose route to GitHub is closed (a hosting firewall, a country) can
+# still reach its panel, and the panel image carries every core the manifest
+# lists (modules/cores, the Dockerfile `cores` stage). So a bootstrap asks the
+# panel FIRST, at the address and with the token the node's own payload
+# carries (the heartbeat's), and only then GitHub. Either way the file lands
+# where curl would have put it and the bootstrap's own sha256 check is the one
+# decision to install or not: nothing here trusts the panel, and the header the
+# panel sends is only compared for an early, readable message.
+#
+#   ICESLAB_CORE_SOURCE   panel       the panel first, GitHub when the panel cannot serve it (default)
+#                         panel-only  the panel or nothing: a failure stops the bootstrap, GitHub is not tried
+#                         github      GitHub only, the panel is not asked (the behaviour before this existed)
+#   ICESLAB_CORE_ALLOW_HTTP=1         accept an http:// panel address. Off by default, the token is a
+#                                     bearer; a panel on a bare IP without TLS needs it, and the sha256
+#                                     check is what keeps the file honest either way
+#   ICESLAB_CORE_RETRY_PAUSE          seconds to wait after a 429 (default 20; the route allows
+#                                     RATE_LIMIT_CORE_PER_MIN per address, 20 a minute by default)
+#
+# The address and the token come from NODE_PAYLOAD in the env file (the
+# installer has written it before the first bootstrap runs; on a live node it is
+# there already), read here in bash: base64url JSON, and the two fields are
+# plain strings. Nothing needs the agent binary, so the update command of an
+# old node works too. The token is handed to curl on stdin, never on its command
+# line, and is not printed.
+
+ICESLAB_CORE_SOURCE="${ICESLAB_CORE_SOURCE:-panel}"
+case "$ICESLAB_CORE_SOURCE" in
+  panel|panel-only|github) ;;
+  *) printf '[core-source] ICESLAB_CORE_SOURCE=%s: use panel, panel-only or github\n' "$ICESLAB_CORE_SOURCE" >&2; exit 2 ;;
+esac
+
+# core_payload_field <name>: a string field of the node's payload, empty when
+# the file, the payload or the field is missing.
+core_payload_field() {
+  local p
+  p="$(node_env_value NODE_PAYLOAD)"
+  [[ -n "$p" ]] || return 0
+  p="${p//-/+}"
+  p="${p//_//}"
+  while ((${#p} % 4)); do p+='='; done
+  printf '%s' "$p" | { base64 -d 2>/dev/null || true; } \
+    | { grep -o "\"$1\":\"[^\"]*\"" || true; } | sed -n 1p | sed 's/^"[^"]*":"//; s/"$//'
+}
+
+# core_panel_unavailable <what> <why>: the panel could not serve it. In
+# panel-only the bootstrap ends here, otherwise it says so and goes to GitHub.
+core_panel_unavailable() {
+  if [[ "$ICESLAB_CORE_SOURCE" == panel-only ]]; then
+    printf '\033[1;31m[fail]\033[0m %s: %s (ICESLAB_CORE_SOURCE=panel-only, GitHub is not tried)\n' "$1" "$2" >&2
+    exit 1
+  fi
+  printf '\033[1;33m[warn]\033[0m %s: %s; trying GitHub\n' "$1" "$2" >&2
+  return 1
+}
+
+# core_panel_get <what> <route path> <dest> <want sha256>: the file at <route
+# path> of the panel into <dest>. Returns 0 with the file there, 1 when GitHub
+# is to be tried (and says why); never returns for panel-only. A file that
+# arrived is NOT judged here beyond the panel's own header: the caller checks
+# its sha256 and a mismatch there is final, GitHub is not asked next.
+core_panel_get() {
+  local what="$1" path="$2" dest="$3" want="$4"
+  local base token url hdrs errf code got msg pause attempt ra
+  [[ "$ICESLAB_CORE_SOURCE" != github ]] || return 1
+
+  base="$(core_payload_field panelUrl)"
+  token="$(core_payload_field heartbeatToken)"
+  if [[ -z "$base" || -z "$token" ]]; then
+    core_panel_unavailable "$what" "this node's payload names no panel address or token (issued by an older panel, or no env file yet)"
+    return 1
+  fi
+  base="${base%/}"
+  case "$base" in
+    https://*) ;;
+    http://*)
+      if [[ "${ICESLAB_CORE_ALLOW_HTTP:-0}" != 1 ]]; then
+        core_panel_unavailable "$what" "the panel address $base is not https, and the token is not sent in the clear (ICESLAB_CORE_ALLOW_HTTP=1 allows it)"
+        return 1
+      fi ;;
+    *) core_panel_unavailable "$what" "the panel address '$base' is not an http(s) URL"; return 1 ;;
+  esac
+
+  url="$base$path"
+  hdrs="$(mktemp)"
+  errf="$(mktemp)"
+  printf '[core-source] %s: asking the panel, %s\n' "$what" "$url"
+  pause="${ICESLAB_CORE_RETRY_PAUSE:-20}"
+  for attempt in 1 2 3 4; do
+    # No redirects: the panel answers itself. The token goes in as a curl
+    # config on stdin, out of `ps`.
+    code="$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+      | curl -K - --proto '=http,https' --max-redirs 0 -sS --connect-timeout 15 --max-time 900 \
+          -o "$dest" -D "$hdrs" -w '%{http_code}' "$url" 2>"$errf")" || code=000
+    [[ "$code" == 429 && "$attempt" -lt 4 ]] || break
+    ra="$(awk -F': *' 'tolower($1) == "retry-after" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+    [[ "$ra" =~ ^[0-9]+$ && "$ra" -le 90 ]] && pause="$ra"
+    printf '[core-source] %s: the panel says too many requests, waiting %ss (%s of 4)\n' "$what" "$pause" "$attempt"
+    sleep "$pause"
+  done
+
+  # What the panel said, for the 4xx/5xx: its own `message` when it has one.
+  msg=""
+  [[ "$code" == 200 ]] || msg="$(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$dest" 2>/dev/null | sed -n 1p)"
+  case "$code" in
+    200)
+      got="$(awk -F': *' 'tolower($1) == "x-iceslab-sha256" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+      rm -f "$hdrs" "$errf"
+      if [[ -n "$got" && "$got" != "$want" ]]; then
+        rm -f "$dest"
+        core_panel_unavailable "$what" "the panel carries another file than the pinned one (its sha256 $got, pinned $want)"
+        return 1
+      fi
+      printf '[core-source] %s: from the panel\n' "$what"
+      return 0 ;;
+    401) msg="the panel refused this node's token (the node was deleted, or its token replaced?)" ;;
+    410) msg="the panel says this node was deleted" ;;
+    404) msg="${msg:-the panel has no such file}" ;;
+    429) msg="the panel kept answering too many requests" ;;
+    000) msg="the panel is not reachable: $(tr '\n' ' ' <"$errf" | sed 's/ *$//')" ;;
+    *)   msg="the panel answered HTTP $code${msg:+: $msg}" ;;
+  esac
+  rm -f "$hdrs" "$errf" "$dest"
+  core_panel_unavailable "$what" "$msg"
+}
+
+# core_panel_artifact <component> <version> <arch> <dest> <want sha256>: one
+# core release file (component as the manifest names it: xray, singbox,
+# hysteria, mtg, mita).
+core_panel_artifact() {
+  core_panel_get "$1 $2 ($3)" "/api/internal/cores/$1/$2/$3" "$4" "$5"
+}
+
+# core_panel_script <name> <ref> <dest> <want sha256>: a pinned script the
+# panel carries (xray's install-release.sh, name xray-install).
+core_panel_script() {
+  core_panel_get "$1 @ ${2:0:12}" "/api/internal/cores/scripts/$1/$2" "$3" "$4"
+}

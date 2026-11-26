@@ -381,10 +381,14 @@ ASSET="${HYSTERIA_PINNED_FILE[$HY_ARCH]:-}"
 # Releases are tagged `app/vX.Y.Z` upstream, hence the escaped slash.
 TAG="${HYSTERIA_PINNED_TAG//"$HYSTERIA_PINNED_VERSION"/$HYSTERIA_VERSION}"
 DOWNLOAD_URL="https://github.com/apernet/hysteria/releases/download/${TAG//\//%2F}/${ASSET}"
-log "Downloading hysteria $HYSTERIA_VERSION from $DOWNLOAD_URL"
 
 TMP=$(mktemp)
-curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" || { rm -f "$TMP"; fail "download failed: $DOWNLOAD_URL"; }
+# The panel first (lib/node-env.sh, ICESLAB_CORE_SOURCE); the check below is
+# the same whichever way the file came.
+if ! core_panel_artifact hysteria "$HYSTERIA_VERSION" "$HY_ARCH" "$TMP" "$WANT_SHA"; then
+  log "Downloading hysteria $HYSTERIA_VERSION from $DOWNLOAD_URL"
+  curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMP" || { rm -f "$TMP"; fail "download failed: $DOWNLOAD_URL"; }
+fi
 GOT_SHA=$(sha256sum "$TMP" | awk '{print $1}')
 [[ "$GOT_SHA" == "$WANT_SHA" ]] \
   || { rm -f "$TMP"; fail "checksum mismatch for $ASSET: got $GOT_SHA, expected $WANT_SHA"; }

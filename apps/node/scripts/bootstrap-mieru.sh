@@ -190,8 +190,12 @@ DOWNLOAD_URL="https://github.com/enfein/mieru/releases/download/${MIERU_PINNED_T
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-log "Downloading $DOWNLOAD_URL"
-curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMPDIR/$DEB" || fail "download failed: $DOWNLOAD_URL"
+# The panel first (lib/node-env.sh, ICESLAB_CORE_SOURCE); the check below is
+# the same whichever way the file came.
+if ! core_panel_artifact mita "$MIERU_VERSION" "$M_ARCH" "$TMPDIR/$DEB" "$WANT_SHA"; then
+  log "Downloading $DOWNLOAD_URL"
+  curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMPDIR/$DEB" || fail "download failed: $DOWNLOAD_URL"
+fi
 GOT_SHA=$(sha256sum "$TMPDIR/$DEB" | awk '{print $1}')
 [[ "$GOT_SHA" == "$WANT_SHA" ]] || fail "checksum mismatch for $DEB: got $GOT_SHA, expected $WANT_SHA"
 log "Checksum OK ($GOT_SHA)"

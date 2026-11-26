@@ -130,12 +130,16 @@ TARBALL="${TARBALL//"$MTG_PINNED_VERSION"/$MTG_VERSION}"
 
 # ───── 3. Download and check ─────
 DOWNLOAD_URL="https://github.com/9seconds/mtg/releases/download/${MTG_PINNED_TAG//"$MTG_PINNED_VERSION"/$MTG_VERSION}/${TARBALL}"
-log "Downloading $DOWNLOAD_URL"
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMPDIR/$TARBALL" || fail "download failed: $DOWNLOAD_URL"
+# The panel first (lib/node-env.sh, ICESLAB_CORE_SOURCE); the check below is
+# the same whichever way the file came.
+if ! core_panel_artifact mtg "$MTG_VERSION" "$MTG_ARCH" "$TMPDIR/$TARBALL" "$WANT_SHA"; then
+  log "Downloading $DOWNLOAD_URL"
+  curl -fsSL --progress-bar "$DOWNLOAD_URL" -o "$TMPDIR/$TARBALL" || fail "download failed: $DOWNLOAD_URL"
+fi
 GOT_SHA=$(sha256sum "$TMPDIR/$TARBALL" | awk '{print $1}')
 [[ "$GOT_SHA" == "$WANT_SHA" ]] || fail "checksum mismatch for $TARBALL: got $GOT_SHA, expected $WANT_SHA"
 log "Checksum OK ($GOT_SHA)"

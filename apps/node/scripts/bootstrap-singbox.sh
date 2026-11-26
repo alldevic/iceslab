@@ -156,8 +156,12 @@ trap 'rm -rf "$TMP"' EXIT
 # Our build since A-212, from the repository the pin names; the tag and the
 # file carry the version, so an override fetches our build of that version.
 URL="https://github.com/${SINGBOX_PINNED_REPO}/releases/download/${TAG}/${TARBALL}"
-log "downloading ${URL}"
-curl -fsSL "$URL" -o "$TMP/sb.tar.gz" || fail "download failed: $URL"
+# The panel first (lib/node-env.sh, ICESLAB_CORE_SOURCE); the check below is
+# the same whichever way the file came.
+if ! core_panel_artifact singbox "$SINGBOX_VERSION" "$ARCH" "$TMP/sb.tar.gz" "$WANT_SHA"; then
+  log "downloading ${URL}"
+  curl -fsSL "$URL" -o "$TMP/sb.tar.gz" || fail "download failed: $URL"
+fi
 GOT_SHA=$(sha256sum "$TMP/sb.tar.gz" | awk '{print $1}')
 [[ "$GOT_SHA" == "$WANT_SHA" ]] || fail "checksum mismatch for $TARBALL: got $GOT_SHA, expected $WANT_SHA"
 log "checksum OK ($GOT_SHA)"
