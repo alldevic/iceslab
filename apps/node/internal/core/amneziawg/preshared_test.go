@@ -205,3 +205,58 @@ func TestPreshared_StateKeepsTheKeyAndNothingLogsIt(t *testing.T) {
 		t.Fatalf("restored: %v", got)
 	}
 }
+
+func TestZeroAbsentPSK(t *testing.T) {
+	in := "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = A\nAllowedIPs = 10.0.0.2/32\n\n[Peer]\nPublicKey = B\nPresharedKey = " + pskA + "\nAllowedIPs = 10.0.0.3/32\n\n[Peer]\nPublicKey = C\nAllowedIPs = 10.0.0.4/32\n"
+	got := string(zeroAbsentPSK([]byte(in)))
+	if n := strings.Count(got, "PresharedKey = "+zeroPSK); n != 2 {
+		t.Errorf("want 2 zero keys, got %d:\n%s", n, got)
+	}
+	if !strings.Contains(got, "PresharedKey = "+pskA) || strings.Count(got, "PresharedKey") != 3 {
+		t.Errorf("a set key was touched:\n%s", got)
+	}
+	if strings.Contains(strings.SplitN(got, "[Peer]", 2)[0], "PresharedKey") {
+		t.Errorf("the interface section got a key:\n%s", got)
+	}
+}
+
+// The flag going off must reach the running peer: syncconf keeps a key the
+// file does not mention, so the file carries an explicit zero one (check 7 of
+// the 9.5 stand). Plain wireguard and the 3.1 interface share the path.
+func TestPreshared_FlagOffClearsTheKeyOnTheRunningPeer(t *testing.T) {
+	var synced string
+	fake := &fakeCLI{}
+	fake.handler = func(name string, args []string) ([]byte, error) {
+		switch {
+		case len(args) > 0 && args[0] == "strip":
+			b, _ := os.ReadFile(args[1])
+			return b, nil
+		case len(args) > 0 && args[0] == "syncconf":
+			b, _ := os.ReadFile(args[2])
+			synced = string(b)
+		}
+		return nil, nil
+	}
+	a, _ := newManagedAdapter(t, fake)
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	dev := func(psk string) core.User {
+		return core.User{UserID: "u1", AmneziaWGPeers: []core.AmneziaWGPeer{{PublicKey: testWGPubKeyA, AllowedIP: "10.66.66.2", PresharedKey: psk}}}
+	}
+	if err := a.AddUser(dev(pskA)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(synced, "PresharedKey = "+pskA) {
+		t.Fatalf("key not synced:\n%s", synced)
+	}
+	if err := a.AddUser(dev("")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(synced, "PresharedKey = "+zeroPSK) || strings.Contains(synced, pskA) {
+		t.Errorf("flag off did not clear the key:\n%s", synced)
+	}
+	if seq := strings.Join(fake.sequence(), "\n"); strings.Contains(seq, "systemctl") {
+		t.Errorf("interface bounced:\n%s", seq)
+	}
+}

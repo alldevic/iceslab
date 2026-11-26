@@ -1571,7 +1571,7 @@ func (a *Adapter) syncconf(parent context.Context, iface string) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(stripped); err != nil {
+	if _, err := tmp.Write(zeroAbsentPSK(stripped)); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temp: %w", err)
 	}
@@ -1584,6 +1584,37 @@ func (a *Adapter) syncconf(parent context.Context, iface string) error {
 		return fmt.Errorf("awg syncconf: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// zeroPSK is the all-zero preshared key, which the kernel takes as "no key".
+const zeroPSK = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+// zeroAbsentPSK gives every [Peer] of a stripped config that has no
+// PresharedKey line an explicit all-zero one. `awg syncconf` leaves a running
+// peer's key alone when the file says nothing about it, so a key switched off
+// (9.5, the profile flag turned off) stayed on the peer and the keyless client
+// configs stopped handshaking. An explicit zero key clears it in place; for a
+// peer that never had one it changes nothing.
+func zeroAbsentPSK(conf []byte) []byte {
+	var out []string
+	inPeer, has := false, false
+	flush := func() {
+		if inPeer && !has {
+			out = append(out, "PresharedKey = "+zeroPSK)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimRight(string(conf), "\r\n\t "), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") {
+			flush()
+			inPeer, has = strings.EqualFold(t, "[Peer]"), false
+		} else if strings.HasPrefix(strings.ToLower(t), "presharedkey") {
+			has = true
+		}
+		out = append(out, line)
+	}
+	flush()
+	return []byte(strings.Join(out, "\n") + "\n")
 }
 
 func (a *Adapter) restartViaSystemctl(parent context.Context, iface string) error {
