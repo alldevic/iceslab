@@ -350,6 +350,8 @@ export const common = {
     profileTitleHint: 'Subscription name inside the client. Empty falls back to the brand name.',
     interval: 'Update interval (hours)',
     intervalHint: 'How often the client re-pulls on its own.',
+    entryPool: 'Entries per subscription',
+    entryPoolHint: 'How many entries of each profile one subscription carries. 0: all of them. A smaller number makes a leaked subscription reveal only part of the fleet.',
     supportUrl: 'Support URL',
     supportUrlHint: 'Clickable link on the profile detail page in the client.',
     announce: 'Announce template',

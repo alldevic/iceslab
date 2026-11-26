@@ -180,6 +180,10 @@ services:
       GEO_SELF_HOST: ${GEO_SELF_HOST:-false}
       GEO_ARTIFACT_TOKEN: ${GEO_ARTIFACT_TOKEN:-}
       RATE_LIMIT_GEO_PER_MIN: ${RATE_LIMIT_GEO_PER_MIN:-60}
+      # Keyed/rotating entry ordering. Off: entry order is unchanged. Only
+      # meaningful with the entry-pool cap on; see .env.production.example.
+      EXT_DIVERSITY_ENABLED: ${EXT_DIVERSITY_ENABLED:-false}
+      EXT_DIVERSITY_WINDOW_SEC: ${EXT_DIVERSITY_WINDOW_SEC:-86400}
       # Remnawave facade switch; see .env.production.example.
       REMNAWAVE_COMPAT_ENABLED: ${REMNAWAVE_COMPAT_ENABLED:-false}
       REMNAWAVE_COMPAT_PREFIX: ${REMNAWAVE_COMPAT_PREFIX:-rw}

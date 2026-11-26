@@ -1,5 +1,5 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
-import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 import { exitsHaveIpv6, singboxDnsStrategy } from '../subscription.address-family.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
@@ -248,8 +248,8 @@ export function buildSingboxJson(
             : {
                 type: 'vless',
                 uuid: e.uuid,
-                // Vision flow needs a TLS-like layer (reality or tls), not none.
-                ...(useTls && e.flow ? { flow: e.flow } : {}),
+                // Vision flow: one rule for every format, see emitsVisionFlow.
+                ...(emitsVisionFlow(e) ? { flow: e.flow } : {}),
               };
 
       outbounds.push({

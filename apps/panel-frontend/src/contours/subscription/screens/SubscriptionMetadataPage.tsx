@@ -68,6 +68,8 @@ const SAMPLE_NOW_SECONDS = Math.floor(Date.now() / 1000);
 interface Draft {
   profileTitle: string;
   intervalHours: number | '';
+  /** 0 = every entry. */
+  entryPoolSize: number | '';
   supportUrl: string;
   announce: string;
   preset: RoutingPresetId;
@@ -105,6 +107,8 @@ export function SubscriptionMetadataPage() {
         subscriptionProfileTitle: draft.profileTitle.trim() || null,
         subscriptionUpdateIntervalHours:
           typeof draft.intervalHours === 'number' ? draft.intervalHours : 24,
+        subscriptionEntryPoolSize:
+          typeof draft.entryPoolSize === 'number' ? draft.entryPoolSize : 0,
         subscriptionSupportUrl: draft.supportUrl.trim() || null,
         subscriptionAnnounceTemplate: draft.announce.trim() || null,
         subscriptionRoutingPreset: draft.preset,
@@ -278,6 +282,19 @@ export function SubscriptionMetadataPage() {
                 />
                 <Hint>{t('metadata.intervalHint')}</Hint>
               </Stack>
+              <Stack gap={6} style={{ width: 220, flexShrink: 0 }}>
+                <FieldLabel>{t('metadata.entryPool')}</FieldLabel>
+                <NumberInput
+                  min={0}
+                  max={64}
+                  allowDecimal={false}
+                  allowNegative={false}
+                  aria-label={t('metadata.entryPool')}
+                  value={draft.entryPoolSize}
+                  onChange={(v) => patch({ entryPoolSize: typeof v === 'number' ? v : '' })}
+                />
+                <Hint>{t('metadata.entryPoolHint')}</Hint>
+              </Stack>
               <Stack gap={6} style={{ flex: 1, minWidth: 0 }}>
                 <FieldLabel>{t('metadata.supportUrl')}</FieldLabel>
                 <TextInput
@@ -443,6 +460,7 @@ function toDraft(s: AdminSettings): Draft {
   return {
     profileTitle: s.subscriptionProfileTitle ?? '',
     intervalHours: s.subscriptionUpdateIntervalHours ?? 24,
+    entryPoolSize: s.subscriptionEntryPoolSize ?? 0,
     supportUrl: s.subscriptionSupportUrl ?? '',
     announce: s.subscriptionAnnounceTemplate ?? '',
     preset: s.subscriptionRoutingPreset ?? 'proxy-all',

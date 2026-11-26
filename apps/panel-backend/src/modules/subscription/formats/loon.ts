@@ -1,5 +1,5 @@
 import { transportServed } from '@iceslab/shared';
-import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
  * Loon proxy-line list (`?format=loon`): `Name = Type,host,port,<positional>,key=value,...`.
@@ -51,7 +51,7 @@ export function buildLoonConf(endpoints: SubscriptionEndpoint[]): string {
       const wsParts = ws ? [`path=${e.path ?? '/'}`, `host=${e.hostHeader ?? (tls ? e.sni : e.host)}`] : [];
       if (sub === 'vless') {
         const p = [`${name} = VLESS,${e.host},${e.port},"${e.uuid}"`, `transport=${net}`, ...wsParts];
-        if (e.flow && !ws) p.push(`flow=${e.flow}`);
+        if (emitsVisionFlow(e)) p.push(`flow=${e.flow}`);
         if (reality) p.push(`public-key="${e.publicKey}"`, `short-id=${e.shortId}`);
         if (tls) p.push('over-tls=true', `sni=${e.sni}`);
         lines.push(p.join(','));

@@ -2,6 +2,7 @@ import type { User, UserTraffic } from '../../generated/prisma/client.js';
 import type { HysteriaTlsPin } from '../nodes/hysteria-tls-shape.js';
 import type { AwgGeometry3 } from '@iceslab/shared';
 import {
+  NETWORKS_CARRYING_VISION,
   XRAY_PLAIN_SUBPROTOCOLS,
   doorOf,
   formatCarries,
@@ -292,6 +293,31 @@ export function isPlainSubprotocol(sub: unknown): sub is 'socks' | 'http' {
 /** Narrowing for the one question every xray branch now has to ask first. */
 export function isPlainXray(e: SubscriptionEndpoint): e is XrayPlainSubscriptionEndpoint {
   return e.protocol === 'xray' && (e.subprotocol === 'socks' || e.subprotocol === 'http');
+}
+
+/**
+ * Should this endpoint's Vision flow be written?
+ *
+ * `xtls-rprx-vision` splices the TLS record layer, so it works only when the
+ * stream IS the TLS stream: RAW and XHTTP, behind a TLS-like layer (REALITY or
+ * the host's own TLS). Over ws/grpc/httpupgrade/kcp, or with the layer set to
+ * `none`, it is not a weaker configuration but an invalid one, and the core
+ * refuses it. `flow` defaults to `xtls-rprx-vision` and the inbound schema does
+ * not align it with the network, so moving an inbound to ws without touching
+ * `flow` produces exactly that pair.
+ *
+ * Every format asks this one function, because written out per format the rule
+ * drifted: clash, sing-box and xray-json checked only TLS, Loon only the
+ * transport, QuantumultX both. A bare `flow` is a VLESS xray endpoint's; the
+ * plain socks/http doors have none.
+ */
+export function emitsVisionFlow(
+  e: SubscriptionEndpoint,
+): e is SubscriptionEndpoint & { flow: string } {
+  if (e.protocol !== 'xray' || isPlainXray(e) || !e.flow) return false;
+  if ((e.securityLayer ?? 'default') === 'none') return false;
+  const network = e.network ?? 'raw';
+  return (NETWORKS_CARRYING_VISION as readonly string[]).includes(network);
 }
 
 /** The door a client dials for this endpoint (see DOORS in shared). */

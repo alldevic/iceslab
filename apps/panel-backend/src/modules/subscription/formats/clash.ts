@@ -1,5 +1,5 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
-import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo } from '../subscription.device-rules.js';
@@ -333,8 +333,8 @@ export function buildClashYaml(
         const sniKey = (stash && sub !== 'vmess') || (legacy && sub === 'trojan') ? 'sni' : 'servername';
         block.push(`    ${sniKey}: ${yamlString(e.sni)}`);
       }
-      // Vision flow needs a TLS-like layer (reality or tls), not plain none.
-      if (sub === 'vless' && useTls && e.flow) {
+      // Vision flow: one rule for every format, see emitsVisionFlow.
+      if (sub === 'vless' && emitsVisionFlow(e)) {
         block.push(`    flow: ${yamlString(e.flow)}`);
       }
       if (e.alpn && e.alpn.length > 0) {

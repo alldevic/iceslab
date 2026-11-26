@@ -1,5 +1,5 @@
 import { transportServed, type RoutingPresetId } from '@iceslab/shared';
-import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { endpointTag, makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
 import { xrayDeviceRules } from '../subscription.device-rules.js';
@@ -111,6 +111,18 @@ export interface XrayJsonBuildOpts {
    * output byte-identical. Xray JSON only (the technique is Xray-native).
    */
   tlsFragment?: boolean;
+  /**
+   * Name for the single-config document as ONE entry. Clients that import a
+   * whole xray config (v2rayNG, FoXray) take the row label from here; without
+   * it the buyer sees a nameless row showing an IP and a port.
+   *
+   * Written as the first key, unless the operator's frame already carries its
+   * own `remarks` (the operator's template wins). Undefined = omit the key =
+   * byte-identical output. The router form (`forRouter`) never gets it: XKeen
+   * consumes the document as confdir fragments, where a stray top-level key is
+   * noise rather than a name. The array form names each element itself.
+   */
+  remarks?: string;
 }
 
 // TLS-fragment defaults (upstream-verified). `tlshello` fragments the TLS
@@ -219,7 +231,6 @@ function buildProxyOutbound(
   // securityLayer: 'default' = REALITY, else 'tls' (own cert) / 'none' (plain).
   const sec = e.securityLayer ?? 'default';
   const security = sec === 'default' ? 'reality' : sec;
-  const useTls = sec !== 'none';
 
   // settings block by subprotocol.
   let settings: Record<string, unknown>;
@@ -237,8 +248,8 @@ function buildProxyOutbound(
         {
           address: e.host,
           port: e.port,
-          // Vision flow needs a TLS-like layer (reality or tls), not none.
-          users: [{ id: e.uuid, encryption: 'none', ...(useTls && e.flow ? { flow: e.flow } : {}) }],
+          // Vision flow: one rule for every format, see emitsVisionFlow.
+          users: [{ id: e.uuid, encryption: 'none', ...(emitsVisionFlow(e) ? { flow: e.flow } : {}) }],
         },
       ],
     };
@@ -464,7 +475,11 @@ export function buildXrayJson(
     delete cfg.log;
     delete cfg.inbounds;
   }
-  const config = fillXrayFrame(cfg, {
+  const named =
+    opts.remarks && !opts.forRouter && cfg.remarks === undefined
+      ? { remarks: opts.remarks, ...cfg }
+      : cfg;
+  const config = fillXrayFrame(named, {
     // The panel's routing (split DNS, custom rules and lists, the preset)
     // only where the frame asks for it.
     dns: routing ? splitDns : null,

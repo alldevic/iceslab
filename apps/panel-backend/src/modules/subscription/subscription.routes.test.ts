@@ -362,6 +362,47 @@ describe('GET /sub/:token - multi-format (slice 21)', () => {
     expect(v.streamSettings.network).toBe('raw');
   });
 
+  describe('the single xray-json document names itself', () => {
+    const putSettings = async (payload: object) => {
+      const r = await app.inject({
+        method: 'PUT', url: '/api/settings', headers: { authorization: `Bearer ${token}` }, payload,
+      });
+      expect(r.statusCode, r.body).toBe(200);
+    };
+    const first = async (query: string) => {
+      const res = await app.inject({ method: 'GET', url: `${subUrl}${query}` });
+      expect(res.statusCode, res.body).toBe(200);
+      return JSON.parse(res.body) as Record<string, unknown>;
+    };
+    let subUrl = '';
+    beforeEach(async () => {
+      const user = await createUser('alice', ['xray']);
+      const nodeId = await createNode('eu-1', '10.0.0.1:8443');
+      await createXrayInbound(nodeId);
+      subUrl = `/sub/${user.subscriptionToken}`;
+    });
+
+    it('is the username when there is no brand or title, and the first key', async () => {
+      const cfg = await first('?format=xrayjson');
+      expect(cfg.remarks).toBe('alice');
+      expect(Object.keys(cfg)[0]).toBe('remarks');
+    });
+
+    it('is the brand name, and the profile title over it', async () => {
+      await putSettings({ brandName: 'Onegin' });
+      expect((await first('?format=xrayjson')).remarks).toBe('Onegin');
+      await putSettings({ subscriptionProfileTitle: 'Onegin Pro' });
+      expect((await first('?format=xrayjson')).remarks).toBe('Onegin Pro');
+    });
+
+    it('the router form and the array carry no document name', async () => {
+      await putSettings({ brandName: 'Onegin' });
+      expect((await first('?format=xkeen')).remarks).toBeUndefined();
+      const arr = JSON.parse((await app.inject({ method: 'GET', url: `${subUrl}?format=xrayjson-array` })).body) as Array<{ remarks?: string }>;
+      expect(arr.every((c) => c.remarks !== 'Onegin')).toBe(true);
+    });
+  });
+
   it('returns empty wgconf body when user has no AmneziaWG endpoint', async () => {
     const user = await createUser('alice');
     await createNode('eu-1', '10.0.0.1:8443');

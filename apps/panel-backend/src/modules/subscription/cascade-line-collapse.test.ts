@@ -158,3 +158,89 @@ describe('a pooled cascade in a list of share links', () => {
     expect(endpoints.every((e) => e.cascadeExits === undefined)).toBe(true);
   });
 });
+
+/**
+ * Two entries on DIFFERENT transports are not duplicates, and dealing a line to
+ * one of them takes the cascade away from every client that cannot speak it.
+ *
+ * sing-box has no XHTTP, so the panel skips such a server rather than emit an
+ * outbound whose every handshake fails. With the whole direction dealt to the
+ * xhttp entry, that skip left a sing-box subscriber with no cascade at all.
+ */
+describe('collapseCascadeLines across transports', () => {
+  // ONE direction and two entries is the shape that breaks: with several
+  // directions the tag-modulo spread already lands something on each entry, so a
+  // test with three lines passes against the old grouping too.
+  const oneLine = () => [{ label: '🇳🇱 ru → NL', tag: NL, cascadeId: CASCADE }];
+  const xhttp = () => entry({ host: 'ru-01.example', network: 'xhttp', cascadeExits: oneLine() });
+  const raw = () =>
+    entry({ host: 'ru-01.example', port: 8443, network: 'raw', cascadeExits: oneLine() });
+
+  it('keeps a line on each transport instead of dealing one out of existence', () => {
+    const endpoints = [xhttp(), raw()];
+    collapseCascadeLines(endpoints, 'user-1');
+
+    const byTransport = new Map<string, number>();
+    for (const e of endpoints) byTransport.set(e.network as string, (e.cascadeExits ?? []).length);
+    expect(byTransport.get('xhttp')).toBe(1);
+    expect(byTransport.get('raw')).toBe(1);
+  });
+
+  it('gives each transport its own independent set of lines', () => {
+    const endpoints = [
+      entry({ nodeName: 'ru-01', host: 'ru-01.example', network: 'xhttp', cascadeExits: lines() }),
+      entry({ nodeName: 'ru-02', host: 'ru-02.example', network: 'xhttp', cascadeExits: lines() }),
+      entry({ nodeName: 'ru-01', host: 'ru-01.example', port: 8443, network: 'raw', cascadeExits: lines() }),
+      entry({ nodeName: 'ru-02', host: 'ru-02.example', port: 8443, network: 'raw', cascadeExits: lines() }),
+    ];
+    collapseCascadeLines(endpoints, 'user-1');
+
+    for (const network of ['xhttp', 'raw']) {
+      const group = endpoints.filter((e) => e.network === network);
+      const tags = group.flatMap((e) => (e.cascadeExits ?? []).map((x) => x.tag));
+      // Lines are shared inside one transport: each exactly once...
+      expect([...tags].sort()).toEqual([AUTO, NL, SE].sort());
+    }
+  });
+
+  it('still collapses within one transport', () => {
+    // Both entries speak xhttp: these ARE duplicates a subscriber cannot judge,
+    // and the collapse must still deal each direction to exactly one of them.
+    const endpoints = [
+      entry({ host: 'ru-01.example', network: 'xhttp', cascadeExits: lines() }),
+      entry({ nodeName: 'ru-02', host: 'ru-02.example', network: 'xhttp', cascadeExits: lines() }),
+    ];
+    collapseCascadeLines(endpoints, 'user-1');
+
+    const total = endpoints.reduce((n, e) => n + (e.cascadeExits ?? []).length, 0);
+    expect(total).toBe(lines().length);
+    expect(endpoints.length).toBe(2);
+  });
+
+  it('tells plain xray entries apart by sub-protocol, not by a missing network', () => {
+    const plain = (subprotocol: 'socks' | 'http', node: string) =>
+      entry({
+        nodeName: node,
+        host: `${node}.example`,
+        subprotocol,
+        network: undefined,
+        cascadeExits: oneLine(),
+      } as never);
+    const endpoints = [plain('socks', 'ru-01'), plain('http', 'ru-02')];
+    collapseCascadeLines(endpoints, 'user-1');
+    expect(endpoints.map((e) => (e.cascadeExits ?? []).length)).toEqual([1, 1]);
+  });
+
+  it('does not depend on EXT_DIVERSITY: the call takes no keying', () => {
+    // The rotation is for the entry slice only; line dealing must give the same
+    // answer whatever window it is called in.
+    const a = pool();
+    const b = pool();
+    collapseCascadeLines(a, 'user-1');
+    collapseCascadeLines(b, 'user-1');
+    expect(a.map((e) => e.cascadeExits?.map((x) => x.tag))).toEqual(
+      b.map((e) => e.cascadeExits?.map((x) => x.tag)),
+    );
+    expect(collapseCascadeLines.length).toBe(2);
+  });
+});

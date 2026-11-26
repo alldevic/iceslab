@@ -1,5 +1,5 @@
 import { transportServed } from '@iceslab/shared';
-import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
+import { emitsVisionFlow, isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 
 /**
  * Quantumult X server_local proxy-line list (`?format=quantumultx`). One
@@ -52,7 +52,7 @@ export function buildQuantumultXConf(endpoints: SubscriptionEndpoint[]): string 
         : [];
       if (sub === 'vless') {
         const p = [`vless=${e.host}:${e.port}`, 'method=none', `password=${e.uuid}`, ...tlsParts, ...realityParts];
-        if (e.flow && tls && !ws) p.push(`vless-flow=${e.flow}`);
+        if (emitsVisionFlow(e)) p.push(`vless-flow=${e.flow}`);
         p.push('udp-relay=true', `tag=${tag}`);
         lines.push(p.join(', '));
       } else if (sub === 'vmess') {

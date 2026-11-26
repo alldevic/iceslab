@@ -215,6 +215,22 @@ export const ConfigSchema = z.object({
   // at a time until the disk fills. 1000 is far above any real device count.
   HWID_MAX_DEVICES_PER_USER: z.coerce.number().int().min(1).default(1000),
 
+  // Keyed, rotating entry ordering. Off by default: the subscription's entry
+  // order is byte-identical to the unkeyed one until this is set. It pairs
+  // with the `subscriptionEntryPoolSize` setting: the cap is what turns the
+  // ordering into a per-user SLICE of the fleet, and keying is what stops that
+  // slice from being recomputable by anyone who learns the node set. The salt
+  // is JWT_SECRET, so rotating that secret reshuffles every subscriber's
+  // entries. See RendezvousKeying in subscription/node-selection.ts.
+  EXT_DIVERSITY_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // Rotation window in seconds: a user's slice is stable within a window and
+  // moves between windows, so a leaked subscription decays instead of being a
+  // permanent view. Default 86400 = daily.
+  EXT_DIVERSITY_WINDOW_SEC: z.coerce.number().int().min(60).default(86400),
+
   // K2: outbound webhook bus. Domain events (user / profile / binding / node
   // lifecycle) are POSTed as signed JSON to these URLs so third parties
   // (billing bots, dashboards, CRMs) can react without polling. This is how an

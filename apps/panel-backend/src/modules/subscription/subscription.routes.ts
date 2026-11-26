@@ -969,6 +969,10 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
       // Only the xrayjson format reads this (the fragment outbound + dialerProxy
       // is Xray-native); clash/singbox ignore it.
       let tlsFragment = false;
+      // The single xray-json document's name as ONE entry: clients that import
+      // a whole config (v2rayNG, FoXray) take the row label from `remarks`. Taken
+      // where the other formats take theirs, so the two cannot drift.
+      let docRemarks: string | undefined;
       if (
         format === 'clash' ||
         format === 'mihomo' ||
@@ -993,6 +997,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
         customDomainLists = settings.customDomainLists ?? undefined;
         tlsFragment =
           query.fragment !== undefined ? query.fragment === '1' : settings.tlsFragment;
+        docRemarks = settings.profileTitle ?? settings.brandName ?? result.json.user.username;
       }
 
       // "Save it" rather than "show it", asked for by the page's download
@@ -1194,7 +1199,7 @@ export async function subscriptionRoutes(app: FastifyInstance): Promise<void> {
               : undefined;
           return reply
             .type('application/json')
-            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame }));
+            .send(buildXrayJson(served, { bundle: xjBundle, routingPreset, ownPresetRules, customRules: customRoutingRules, customDomainLists, tlsFragment, frame, remarks: docRemarks }));
         }
         case 'xrayjson-array': {
           // A1: top-level JSON array of standalone xray configs (one per

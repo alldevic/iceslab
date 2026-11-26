@@ -105,6 +105,7 @@ interface XrayOutbound {
 }
 
 interface XrayConfig {
+  remarks?: string;
   log?: Record<string, unknown>;
   inbounds: {
     protocol: string;
@@ -178,6 +179,44 @@ describe('an operator frame keeps its own dns and domainStrategy (f12-17, f12-19
     const frame = readFrame('xray-json', JSON.stringify({ ...own, dns: undefined, routing: { rules: [] } }));
     expect(parse(buildXrayJson([xrayEp], { frame, routingPreset: 'ru-split' })).routing.domainStrategy).toBe('IPOnDemand');
     expect(parse(buildXrayJson([xrayEp], { frame, routingPreset: 'proxy-all' })).routing.domainStrategy).toBe('AsIs');
+  });
+});
+
+// The single-config document had no `remarks`, so every client that imports it
+// as one entry showed it nameless (v2rayNG takes the entry name from this field).
+// The router form stays without it: XKeen consumes this as confdir fragments,
+// where a stray top-level key is noise, not a name.
+describe('the single-config document names itself', () => {
+  it('carries remarks as its first key when the caller supplies one', () => {
+    const cfg = JSON.parse(buildXrayJson([xrayEp], { remarks: 'OneginVPN' }));
+    expect(cfg.remarks).toBe('OneginVPN');
+    expect(Object.keys(cfg)[0]).toBe('remarks');
+  });
+
+  it('CONTROL: without one the document is byte-identical', () => {
+    expect(buildXrayJson([xrayEp], { remarks: undefined })).toBe(buildXrayJson([xrayEp]));
+    expect(JSON.parse(buildXrayJson([xrayEp])).remarks).toBeUndefined();
+  });
+
+  it('CONTROL: the router form stays nameless', () => {
+    const cfg = JSON.parse(buildXrayJson([xrayEp], { forRouter: true, remarks: 'OneginVPN' }));
+    expect(cfg.remarks).toBeUndefined();
+    expect(cfg.inbounds).toBeUndefined();
+  });
+
+  it('the operator frame\'s own remarks wins over the computed name', () => {
+    const frame = readFrame('xray-json', JSON.stringify({
+      iceslab: { routing: 'preset' },
+      remarks: 'Mine',
+      outbounds: [{ tag: 'direct', protocol: 'freedom' }],
+      routing: { rules: [] },
+    }));
+    expect(parse(buildXrayJson([xrayEp], { frame, remarks: 'OneginVPN' })).remarks).toBe('Mine');
+  });
+
+  it('the array is unchanged: each element keeps its own server name', () => {
+    const a = buildXrayJsonArray([xrayEp, xrayEp2], {});
+    expect(buildXrayJsonArray([xrayEp, xrayEp2], { remarks: 'OneginVPN' } as never)).toBe(a);
   });
 });
 

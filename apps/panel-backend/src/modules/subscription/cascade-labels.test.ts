@@ -116,3 +116,46 @@ describe('the direction a cascade label reads in', () => {
     expect(cascadeProfileLabel('ru', null, 'nl-01')).toBe('ru → nl-01');
   });
 });
+
+/**
+ * Two entries share the SAME exit objects: the panel builds the lines once per
+ * cascade and hands them to every entry that offers them. Renaming in place
+ * renamed both, and the second endpoint's line, already suffixed, failed the
+ * "is this label ambiguous" test and kept the first one's transport. The
+ * subscription came out with two servers under one name.
+ */
+describe('disambiguateCascadeLabels with shared line objects', () => {
+  const shared = () => [{ label: '🇳🇱 ru → NL', tag: 1, cascadeId: 'c-1' }];
+  const xhttp = () =>
+    xrayEndpoint({ network: 'xhttp', host: 'ru-01', port: 443, cascadeExits: shared() });
+  const raw = () => xrayEndpoint({ network: 'raw', host: 'ru-01', port: 8443, cascadeExits: shared() });
+
+  it('names each endpoint after ITS OWN transport', () => {
+    const exits = shared();
+    const a = xrayEndpoint({ network: 'xhttp', port: 443, cascadeExits: [...exits] });
+    const b = xrayEndpoint({ network: 'raw', port: 8443, cascadeExits: [...exits] });
+    disambiguateCascadeLabels([a, b]);
+
+    const first = a.cascadeExits![0]!.label;
+    const second = b.cascadeExits![0]!.label;
+    expect(first).toContain('XHTTP');
+    expect(second).toContain('TCP');
+    expect(first).not.toBe(second);
+  });
+
+  it('does not rename the objects the endpoints share', () => {
+    const exits = shared();
+    const a = xrayEndpoint({ network: 'xhttp', cascadeExits: [...exits] });
+    const b = xrayEndpoint({ network: 'raw', port: 8443, cascadeExits: [...exits] });
+    disambiguateCascadeLabels([a, b]);
+    expect(exits[0]!.label).toBe('🇳🇱 ru → NL');
+  });
+
+  it('leaves one endpoint\'s label alone when its neighbour is laid out', () => {
+    const lone = xhttp();
+    disambiguateCascadeLabels([lone]);
+    expect(lone.cascadeExits![0]!.label).toBe('🇳🇱 ru → NL');
+    disambiguateCascadeLabels([xhttp(), raw()]);
+    expect(lone.cascadeExits![0]!.label).toBe('🇳🇱 ru → NL');
+  });
+});

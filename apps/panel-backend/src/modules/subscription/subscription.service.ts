@@ -12,10 +12,12 @@ import {
   resolveSquadPreset,
   type ResolvedPreset,
 } from '../routing-presets/routing-presets.resolve.js';
+import { config } from '../../config.js';
 import { prisma } from '../../prisma.js';
 import {
   lookupClientCountry,
   rankNodesForUser,
+  rendezvousEpoch,
   rendezvousOrder,
   type NodeForRanking,
 } from './node-selection.js';
@@ -533,23 +535,41 @@ export function collapseCascadeLines(
   // endpoint identity instead, which no rename can reach, is tracked separately
   // (cascade-entry-key-label-af26): that reshuffles EVERYONE, so it waits for a
   // window where a reshuffle is acceptable.
+  //
+  // Entries are interchangeable only when they share a TRANSPORT, so the dealing
+  // below happens within one, not across all of them. Two entries on different
+  // transports are not two ways of saying the same thing: a client that cannot
+  // express one of them gets nothing from the line dealt to it. sing-box has no
+  // XHTTP at all, so a sing-box subscriber dealt the xhttp entry of a cascade
+  // received a subscription with the cascade simply absent. Within a transport
+  // the lines are still dealt to one entry, still by rendezvous hash (stable per
+  // person), still spread by tag; a transport just cannot be dealt out of
+  // existence. Lines that now share a label are separated downstream by
+  // disambiguateCascadeLabels, which suffixes with the transport name.
+  //
+  // A plain xray entry (socks / http) has no network; its sub-protocol is what
+  // tells two of them apart.
+  const transportOf = (e: SubscriptionEndpoint): string =>
+    e.protocol !== 'xray' ? '' : isPlainXray(e) ? (e.subprotocol ?? '') : (e.network ?? '');
   const keyOf = (e: SubscriptionEndpoint): string =>
-    `${e.nodeName}|${e.host}|${e.port}|${
-      e.protocol !== 'xray' ? '' : isPlainXray(e) ? e.subprotocol : (e.network ?? '')
-    }`;
+    `${e.nodeName}|${e.host}|${e.port}|${transportOf(e)}`;
 
-  // cascadeId -> entry key -> endpoint
+  // "cascadeId\u0000transport" -> entry key -> endpoint
   const entriesByCascade = new Map<string, Map<string, SubscriptionEndpoint>>();
+  const cascadeIdOfGroup = new Map<string, string>();
   for (const e of endpoints) {
     for (const x of e.cascadeExits ?? []) {
       if (!x.cascadeId) continue;
-      const perCascade = entriesByCascade.get(x.cascadeId) ?? new Map<string, SubscriptionEndpoint>();
+      const group = `${x.cascadeId}\u0000${transportOf(e)}`;
+      cascadeIdOfGroup.set(group, x.cascadeId);
+      const perCascade = entriesByCascade.get(group) ?? new Map<string, SubscriptionEndpoint>();
       perCascade.set(keyOf(e), e);
-      entriesByCascade.set(x.cascadeId, perCascade);
+      entriesByCascade.set(group, perCascade);
     }
   }
 
-  for (const [cascadeId, perCascade] of entriesByCascade) {
+  for (const [group, perCascade] of entriesByCascade) {
+    const cascadeId = cascadeIdOfGroup.get(group)!;
     if (perCascade.size < 2) continue;
     const order = rendezvousOrder(
       [...perCascade.keys()].map((id) => ({ id, name: id, regionCode: null, maxUsers: null })),
@@ -614,15 +634,23 @@ export function disambiguateCascadeLabels(endpoints: SubscriptionEndpoint[]): vo
       seen.set(x.label, (seen.get(x.label) ?? 0) + 1);
     }
   }
+  // COPY the line rather than rename it in place. The exits are built once per
+  // cascade and handed to every entry that offers them, so two endpoints hold
+  // the SAME objects: renaming through one endpoint renamed the other's line
+  // too, and the second pass then saw an already-suffixed label, failed the
+  // `< 2` test and left it alone. Both rows came out named after the first
+  // endpoint's transport, two servers under one name. Invisible while the
+  // collapse left exactly one endpoint per direction; entries of different
+  // transports can now each keep a line.
   for (const e of endpoints) {
-    for (const x of e.cascadeExits ?? []) {
-      if ((seen.get(x.label) ?? 0) < 2) continue;
-      const network = e.protocol === 'xray' && !isPlainXray(e) ? e.network : undefined;
-      const suffix =
-        (network ? TRANSPORT_LABEL[network] : undefined) ??
-        (e.hostRemark && e.hostRemark !== 'Default' ? e.hostRemark : e.nodeName);
-      x.label = `${x.label} · ${suffix}`;
-    }
+    if (!e.cascadeExits) continue;
+    const network = e.protocol === 'xray' && !isPlainXray(e) ? e.network : undefined;
+    const suffix =
+      (network ? TRANSPORT_LABEL[network] : undefined) ??
+      (e.hostRemark && e.hostRemark !== 'Default' ? e.hostRemark : e.nodeName);
+    e.cascadeExits = e.cascadeExits.map((x) =>
+      (seen.get(x.label) ?? 0) < 2 ? x : { ...x, label: `${x.label} · ${suffix}` },
+    );
   }
 }
 
@@ -905,6 +933,18 @@ export async function generateSubscription(
   // Liveness is already applied by the query above, so this only ever orders
   // nodes that are actually being served.
   const entryPoolSize = (await getSubscriptionSettings()).entryPoolSize ?? ENTRY_POOL_SIZE_DEFAULT;
+  // Keyed + rotating variant of the ordering below. Off by default: the
+  // ordering also decides which entry most clients dial, so switching it on
+  // moves people once. It earns that only when the pool cap is on too, because
+  // that is when the order stops being cosmetic and starts deciding WHICH nodes
+  // a subscription reveals. See RendezvousKeying. The cascade-line call in
+  // collapseCascadeLines stays unkeyed: it balances, it does not contain.
+  const entryKeying = config.EXT_DIVERSITY_ENABLED
+    ? {
+        salt: config.JWT_SECRET,
+        epoch: rendezvousEpoch(Date.now(), config.EXT_DIVERSITY_WINDOW_SEC),
+      }
+    : undefined;
   if (bindings.length > 0) {
     const byProfile = new Map<string, typeof bindings>();
     for (const b of bindings) {
@@ -920,7 +960,7 @@ export async function generateSubscription(
         regionCode: null,
         maxUsers: n.maxUsers ?? null,
       }));
-      let ranked = rendezvousOrder(nodes, user.id);
+      let ranked = rendezvousOrder(nodes, user.id, entryKeying);
       if (entryPoolSize > 0) ranked = ranked.slice(0, entryPoolSize);
       const rank = new Map(ranked.map((n, i) => [n.id, i]));
       const kept = list.filter((b) => rank.has(b.node.id));

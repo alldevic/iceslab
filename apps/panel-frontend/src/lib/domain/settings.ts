@@ -42,6 +42,8 @@ export interface PublicSettings {
 export interface AdminSettings extends PublicSettings {
   subscriptionProfileTitle?: string | null;
   subscriptionUpdateIntervalHours?: number;
+  /** How many entries of each profile one subscription carries; 0 = all. */
+  subscriptionEntryPoolSize?: number;
   subscriptionSupportUrl?: string | null;
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
@@ -148,6 +150,8 @@ export interface UpdateSettingsInput {
   brandName?: string;
   subscriptionProfileTitle?: string | null;
   subscriptionUpdateIntervalHours?: number;
+  /** How many entries of each profile one subscription carries; 0 = all. */
+  subscriptionEntryPoolSize?: number;
   subscriptionSupportUrl?: string | null;
   subscriptionAnnounceTemplate?: string | null;
   subscriptionRoutingPreset?: RoutingPresetId;
