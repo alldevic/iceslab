@@ -339,7 +339,10 @@ if [[ -z "$ACME_DEFAULT_EMAIL" && -r /dev/tty ]]; then
     # refused to boot on it eleven minutes later, at step 9 of 9, reported as
     # "container is unhealthy". Reject it here, where the operator can just
     # retype it.
-    if [[ ! "$ACME_DEFAULT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    # The expression is a variable so config.installer.test.ts can read it out of
+    # this file and run it against the panel's z.email().
+    ACME_EMAIL_RE='^[A-Za-z0-9_%+-]+(\.[A-Za-z0-9_%+-]+)*@([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$'
+    if [[ ! "$ACME_DEFAULT_EMAIL" =~ $ACME_EMAIL_RE ]]; then
       printf '\033[1;31m"%s" не похож на email. Установка прервана.\033[0m\n' "$ACME_DEFAULT_EMAIL" >&2
       printf '\033[1;33mПроверь раскладку: одна русская буква в адресе выглядит\n' >&2
       printf 'как латинская, но панель такой адрес не примет.\033[0m\n' >&2
