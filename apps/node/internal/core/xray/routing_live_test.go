@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/icecompany-tech/iceslab/apps/node/internal/core"
+	"github.com/icecompany-tech/iceslab/apps/node/internal/core/subprocess"
 )
 
 /*
@@ -85,6 +86,73 @@ func TestAPolicyChangeOnARunningCoreIsNotARestart(t *testing.T) {
 	blob, _ := os.ReadFile(path)
 	if !strings.Contains(string(blob), `"port": "25"`) {
 		t.Fatal("the new rule did not reach the file on disk")
+	}
+}
+
+// 10.1: the first rule by address in the policy raises routing.domainStrategy
+// to IPOnDemand, and adrules does not reload the strategy, so the change is a
+// restart of the core, not a live reload of the rules. So is the removal of the
+// last one. A change among domain rules stays live.
+func TestTheFirstIPRuleAndTheLastOneGoOutAsARestart(t *testing.T) {
+	c := &fakeCore{}
+	a, path := validatingAdapter(t, c)
+	if err := a.ApplyInbound(443, inboundWire(t, "aaaaaaaa-1111-4000-8000-000000000001", 443)); err != nil {
+		t.Fatal(err)
+	}
+	proc := func() *subprocess.Subprocess {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.proc
+	}
+	adrules := func() int {
+		n := 0
+		for _, call := range c.calls {
+			if len(call) > 1 && call[0] == "api" && call[1] == "adrules" {
+				n++
+			}
+		}
+		return n
+	}
+	strategy := func() string {
+		blob, _ := os.ReadFile(path)
+		var cfg struct {
+			Routing struct {
+				DomainStrategy string `json:"domainStrategy"`
+			} `json:"routing"`
+		}
+		_ = json.Unmarshal(blob, &cfg)
+		return cfg.Routing.DomainStrategy
+	}
+	apply := func(rules string) {
+		t.Helper()
+		if err := a.ApplyPolicy(json.RawMessage(`{"rules":[` + rules + `]}`)); err != nil {
+			t.Fatalf("ApplyPolicy: %v", err)
+		}
+	}
+	const byDomain = `{"match":{"domain":["geosite:ru"]},"action":{"kind":"direct"}}`
+	const byIP = `{"match":{"ip":["geoip:ru"]},"action":{"kind":"block"}}`
+
+	apply(byDomain)
+	if adrules() != 1 || strategy() != "IPIfNonMatch" {
+		t.Fatalf("a domain rule: adrules=%d strategy=%s, want a live reload under IPIfNonMatch", adrules(), strategy())
+	}
+
+	before := proc()
+	apply(byDomain + "," + byIP)
+	if proc() == before {
+		t.Fatal("the first ip rule went out as a live reload: adrules does not carry the strategy")
+	}
+	if adrules() != 1 || strategy() != "IPOnDemand" {
+		t.Fatalf("first ip rule: adrules=%d strategy=%s", adrules(), strategy())
+	}
+
+	before = proc()
+	apply(byDomain)
+	if proc() == before {
+		t.Fatal("removing the last ip rule went out as a live reload")
+	}
+	if adrules() != 1 || strategy() != "IPIfNonMatch" {
+		t.Fatalf("last ip rule removed: adrules=%d strategy=%s", adrules(), strategy())
 	}
 }
 

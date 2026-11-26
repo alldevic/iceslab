@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -167,5 +168,28 @@ func TestConfigOnlyModeSkipsValidation(t *testing.T) {
 	}
 	if len(core.calls) != 0 {
 		t.Fatalf("expected no core invocation without a binary, got %v", core.calls)
+	}
+}
+
+// 10.1, with the real core: the config a policy with an ip rule renders (the
+// golden, IPOnDemand in it) is one xray loads. Skipped without XRAY_BIN.
+func TestTheCoreAcceptsTheIPPolicyRender(t *testing.T) {
+	bin := os.Getenv("XRAY_BIN")
+	if bin == "" {
+		t.Skip("XRAY_BIN not set: the core is not asked here")
+	}
+	blob, err := os.ReadFile(ipPolicyGoldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"domainStrategy": "IPOnDemand"`) {
+		t.Fatal("the golden does not carry IPOnDemand")
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(bin, "-test", "-c", path).CombinedOutput(); err != nil {
+		t.Fatalf("xray refused the render: %v\n%s", err, out)
 	}
 }

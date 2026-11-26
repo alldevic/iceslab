@@ -582,6 +582,18 @@ describe('buildXrayJson', () => {
       expect(rules[rules.length - 1].network).toBe('tcp,udp');
     });
 
+    it('hands every matcher prefix to xray as written, in both renderings', () => {
+      const lists = {
+        block: [],
+        direct: ['full:exact.ru', 'keyword:shop', 'regexp:.*\\.ru', 'domain:gosuslugi.ru'],
+        proxy: [],
+      };
+      const single = parse(buildXrayJson([xrayEp], { customDomainLists: lists }));
+      expect(single.routing.rules[0]).toEqual({ type: 'field', domain: lists.direct, outboundTag: 'direct' });
+      const array = parseArray(buildXrayJsonArray([xrayEp], { customDomainLists: lists }))[0];
+      expect(array.routing.rules.find((r) => r.outboundTag === 'direct')?.domain).toEqual(lists.direct);
+    });
+
     it('only emits buckets that have entries (proxy-only)', () => {
       const cfg = parse(
         buildXrayJson([xrayEp], {

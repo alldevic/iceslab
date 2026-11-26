@@ -115,6 +115,20 @@ function clashMatcher(m: string): { body: string; noResolve: boolean }[] {
   return [{ body: `DOMAIN-SUFFIX,${m}`, noResolve: false }];
 }
 
+/**
+ * One entry of an operator's custom domain list as a mihomo rule body, the same
+ * type for a prefix as `clashMatcher` gives a device rule: `full:` DOMAIN,
+ * `keyword:` DOMAIN-KEYWORD, `regexp:` DOMAIN-REGEX, `domain:` and no prefix
+ * DOMAIN-SUFFIX. Only these four prefixes are read; anything else stays a
+ * suffix as it always was. null for a value that would break the line or the
+ * YAML under it: whitespace (a line break included) or a comma.
+ */
+export function clashDomainRuleBody(d: string): string | null {
+  if (d === '' || /[\s,]/.test(d)) return null;
+  if (/^(domain|full|regexp|keyword):/.test(d)) return clashMatcher(d)[0]!.body;
+  return `DOMAIN-SUFFIX,${d}`;
+}
+
 /** mihomo `rules:` lines. `proxyGroup` null = no proxy in the config, so a
  *  `proxy` rule is left out (the MATCH line is DIRECT then). */
 export function clashDeviceRuleLines(rules: readonly DeviceRouteRule[], proxyGroup: string | null): string[] {

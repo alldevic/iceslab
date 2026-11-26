@@ -71,6 +71,50 @@ func buildPolicyRules(rules []dto.NodePolicyRule) ([]any, error) {
 	return out, nil
 }
 
+// The routing strategies the render picks between. IPIfNonMatch is the floor
+// and what a node with no IP rule has always had; nothing ever picks lower.
+const (
+	domainStrategyDefault  = "IPIfNonMatch"
+	domainStrategyOnDemand = "IPOnDemand"
+)
+
+// routingDomainStrategy picks routing.domainStrategy from the rules the config
+// is going to carry: the policy rules left after fitCascadeExits, and the
+// cascade's narrow rules (the ones above the doors).
+//
+// Under IPIfNonMatch xray matches a domain connection against the domain rules
+// first and resolves the name only if NO rule matched. A policy nearly always
+// ends in a catch-all with no address condition, so a rule by `ip` ("geoip:ru",
+// a CIDR) sitting above it is passed over for a connection that came by name:
+// the catch-all matches before the resolve ever happens. IPOnDemand resolves
+// the name when it reaches the first rule that asks for an address, so the IP
+// rule sees the connection. The price is a lookup by the node's own resolver
+// for such connections, which is why it is asked for only when a rule needs it
+// and a node without IP rules renders byte-identically to before.
+//
+// The panel does not send the strategy: it is a fact about the rendered list,
+// and this is the one place that has the list.
+func routingDomainStrategy(policy []dto.NodePolicyRule, narrowCascade []json.RawMessage) string {
+	for _, r := range policy {
+		if len(r.Match.IP) > 0 {
+			return domainStrategyOnDemand
+		}
+	}
+	for _, raw := range narrowCascade {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil {
+			continue
+		}
+		// `"ip": []` and `"ip": null` name no address, as in xray.
+		if ip, named := fields["ip"]; named {
+			if t := strings.TrimSpace(string(ip)); t != "null" && t != "[]" {
+				return domainStrategyOnDemand
+			}
+		}
+	}
+	return domainStrategyDefault
+}
+
 // renderDnsSection turns the node's resolver setting into xray's top-level
 // `dns` block.
 //
@@ -1018,7 +1062,7 @@ func renderMultiConfigInto(
 	// link-out outbounds. Both are raw JSON the panel owns; nil/empty = no
 	// balancer, so the output stays byte-identical to a plain / non-cascade node.
 	routing := map[string]any{
-		"domainStrategy": "IPIfNonMatch",
+		"domainStrategy": routingDomainStrategy(kept, narrowCascadeRules),
 		"rules":          rules,
 	}
 	if cascade != nil && len(cascade.Balancers) > 0 {

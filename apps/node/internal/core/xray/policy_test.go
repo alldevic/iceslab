@@ -255,3 +255,98 @@ func TestMalformedPolicyJsonIsAnError(t *testing.T) {
 		t.Errorf("truncated policy JSON was accepted")
 	}
 }
+
+// 10.1. routing.domainStrategy is IPIfNonMatch unless a rule of the rendered
+// list asks for an address, and then IPOnDemand: see routingDomainStrategy for
+// why. The node works it out from the list; the panel sends no strategy.
+func TestRoutingDomainStrategyFollowsTheRulesByAddress(t *testing.T) {
+	direct := dto.NodePolicyAction{Kind: dto.PolicyActionDirect}
+	block := dto.NodePolicyAction{Kind: dto.PolicyActionBlock}
+	exitTo := func(exit string) dto.NodePolicyAction {
+		return dto.NodePolicyAction{Kind: dto.PolicyActionCascade, Exit: exit}
+	}
+	// A cascade whose drawn outbounds do not include the exit the rule names:
+	// fitCascadeExits drops that rule, and a dropped rule is not in the config.
+	noExits := &CascadeFragments{Outbounds: []json.RawMessage{json.RawMessage(`{"tag":"other","protocol":"freedom"}`)}}
+
+	cases := []struct {
+		name    string
+		policy  []dto.NodePolicyRule
+		cascade *CascadeFragments
+		want    string
+	}{
+		{"no rules", nil, nil, "IPIfNonMatch"},
+		{"domain rules only", []dto.NodePolicyRule{
+			{Match: dto.NodePolicyMatch{Domain: []string{"geosite:category-ru"}}, Action: direct},
+			{Match: dto.NodePolicyMatch{Port: "25"}, Action: block},
+		}, nil, "IPIfNonMatch"},
+		{"a geoip rule", []dto.NodePolicyRule{
+			{Match: dto.NodePolicyMatch{IP: []string{"geoip:ru"}}, Action: direct},
+		}, nil, "IPOnDemand"},
+		{"a CIDR rule among domain rules", []dto.NodePolicyRule{
+			{Match: dto.NodePolicyMatch{Domain: []string{"geosite:category-ru"}}, Action: direct},
+			{Match: dto.NodePolicyMatch{IP: []string{"10.0.0.0/8"}}, Action: block},
+		}, nil, "IPOnDemand"},
+		{"an ip rule fitCascadeExits drops", []dto.NodePolicyRule{
+			{Match: dto.NodePolicyMatch{IP: []string{"geoip:ru"}}, Action: exitTo("cascade-link-out-gone")},
+		}, noExits, "IPIfNonMatch"},
+		{"a narrow cascade rule by ip", nil, &CascadeFragments{RoutingRules: []json.RawMessage{
+			json.RawMessage(`{"type":"field","ip":["geoip:cn"],"outboundTag":"blocked"}`),
+		}}, "IPOnDemand"},
+		{"a narrow cascade rule by domain", nil, &CascadeFragments{RoutingRules: []json.RawMessage{
+			json.RawMessage(`{"type":"field","domain":["geosite:ads"],"outboundTag":"blocked"}`),
+		}}, "IPIfNonMatch"},
+		{"a cascade rule with an empty ip list", nil, &CascadeFragments{RoutingRules: []json.RawMessage{
+			json.RawMessage(`{"type":"field","ip":[],"domain":["a.example"],"outboundTag":"blocked"}`),
+		}}, "IPIfNonMatch"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			blob, err := renderMultiConfig([]InboundConfig{validInbound()}, policyUsers(), c.cascade, 8080, c.policy, nil)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			var cfg struct {
+				Routing struct {
+					DomainStrategy string `json:"domainStrategy"`
+				} `json:"routing"`
+			}
+			if err := json.Unmarshal(blob, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Routing.DomainStrategy != c.want {
+				t.Errorf("domainStrategy = %q, want %q", cfg.Routing.DomainStrategy, c.want)
+			}
+		})
+	}
+}
+
+const ipPolicyGoldenPath = "testdata/render-ip-policy.json"
+
+// The render of a node whose policy has a rule by address, pinned like the
+// three goldens beside it (a plain socks door, so that the real core can load
+// it: validInbound carries a placeholder Reality key). They are what proves a node without such a rule did
+// not change by a byte; this one is what a node with one now draws.
+func TestRenderWithAnIPRuleMatchesGolden(t *testing.T) {
+	policy := []dto.NodePolicyRule{
+		{Match: dto.NodePolicyMatch{IP: []string{"10.0.0.0/8"}}, Action: dto.NodePolicyAction{Kind: dto.PolicyActionBlock}},
+		{Match: dto.NodePolicyMatch{Network: "tcp,udp"}, Action: dto.NodePolicyAction{Kind: dto.PolicyActionDirect}},
+	}
+	blob, err := renderMultiConfig([]InboundConfig{plainIn("socks", 1080)}, []xrayClient{alice}, nil, 8080, policy, nil)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(ipPolicyGoldenPath, blob, 0o644); err != nil {
+			t.Fatalf("write golden: %v", err)
+		}
+		t.Skip("golden regenerated")
+	}
+	want, err := os.ReadFile(ipPolicyGoldenPath)
+	if err != nil {
+		t.Fatalf("read golden (regenerate with UPDATE_GOLDEN=1): %v", err)
+	}
+	if string(blob) != string(want) {
+		t.Errorf("a policy with an ip rule renders differently\n--- want\n%s\n--- got\n%s", want, blob)
+	}
+}

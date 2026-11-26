@@ -2004,8 +2004,10 @@ export interface CascadePolicy {
  * One policy list as xray rules, E55: the names in `domain`, the addresses
  * (geoip:, ext-ip:, CIDRs) in `ip`, two rules with the same gate. They used to
  * go into `domain` together, where `geoip:ru` is a substring no hostname has.
- * xray on the node routes with IPIfNonMatch, so the ip rule also takes a name
- * that no domain rule took.
+ * The node agent raises routing.domainStrategy to IPOnDemand when a narrow
+ * rule here carries `ip` (10.1), so the ip rule also takes a name that came in
+ * by domain, even with a catch-all further down the list; under IPIfNonMatch
+ * the catch-all matched first and the ip rule never saw such a name.
  */
 function xrayPolicyRules(
   gate: Record<string, unknown>,

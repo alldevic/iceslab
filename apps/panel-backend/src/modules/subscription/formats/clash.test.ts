@@ -543,19 +543,35 @@ describe('buildClashYaml', () => {
       expect(rules[rules.length - 1]).toBe('- MATCH,Auto');
     });
 
-    it('strips xray geosite-style prefixes Clash cannot parse', () => {
+    it('maps xray matcher prefixes to the rule type each one means', () => {
       const out = buildClashYaml([xrayEp], {
         customDomainLists: {
-          direct: ['domain:gosuslugi.ru', 'full:exact.ru', 'regexp:.*\\.ru'],
+          direct: ['domain:gosuslugi.ru', 'full:exact.ru', 'keyword:shop', 'regexp:.*\\.ru', 'plain.ru'],
           proxy: [],
           block: [],
         },
       });
       const rules = ruleLines(out);
       expect(rules).toContain('- DOMAIN-SUFFIX,gosuslugi.ru,DIRECT');
-      expect(rules).toContain('- DOMAIN-SUFFIX,exact.ru,DIRECT');
-      expect(rules).toContain('- DOMAIN-SUFFIX,.*\\.ru,DIRECT');
+      expect(rules).toContain('- DOMAIN,exact.ru,DIRECT');
+      expect(rules).toContain('- DOMAIN-KEYWORD,shop,DIRECT');
+      expect(rules).toContain('- DOMAIN-REGEX,.*\\.ru,DIRECT');
+      expect(rules).toContain('- DOMAIN-SUFFIX,plain.ru,DIRECT');
       expect(out).not.toContain('domain:gosuslugi.ru');
+    });
+
+    it('drops values with a comma, whitespace or a line break', () => {
+      const out = buildClashYaml([xrayEp], {
+        customDomainLists: {
+          direct: ['good.ru', 'a.ru,b.ru', 'bad domain.ru', 'line\nbreak.ru', 'tab\t.ru', 'keyword:a b'],
+          proxy: [],
+          block: ['x.ru,REJECT'],
+        },
+      });
+      const rules = ruleLines(out);
+      expect(rules).toContain('- DOMAIN-SUFFIX,good.ru,DIRECT');
+      expect(out).not.toMatch(/b\.ru|bad domain|break|tab|a b|x\.ru/);
+      expect(rules.filter((r) => r.startsWith('- DOMAIN'))).toHaveLength(1);
     });
 
     it('drops the proxy bucket when no proxy exists (catch-all stays MATCH,DIRECT)', () => {

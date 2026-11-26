@@ -2,7 +2,7 @@ import { transportServed, type RoutingPresetId } from '@iceslab/shared';
 import { isPlainXray, type SubscriptionEndpoint } from '../subscription.formats.js';
 import { makeTagger } from '../endpoint-identity.js';
 import { BUILTIN_PRESET_RULES, type DeviceRouteRule } from '../../routing-presets/routing-presets.builtins.js';
-import { clashDeviceRuleLines, clashNeedsGeo } from '../subscription.device-rules.js';
+import { clashDeviceRuleLines, clashDomainRuleBody, clashNeedsGeo } from '../subscription.device-rules.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { asArray, asObject, defaultFrame, openFrame, type Frame } from '../subscription.frames.js';
 
@@ -623,20 +623,26 @@ export function renderClashFrame(
       }
       lines.push(...keyLines(key, providers, ''));
     } else if (key === 'rules') {
-      // R3 - operator custom domain lists -> DOMAIN-SUFFIX rules. Order
-      // block -> direct -> proxy so a block listing wins over a direct/proxy
-      // listing of an overlapping domain. Strip xray geosite-style prefixes
-      // Clash cannot parse. The proxy bucket goes where the panel's proxy
-      // rules go, and only when there is such a group.
+      // R3 - operator custom domain lists -> domain rules. Order block ->
+      // direct -> proxy so a block listing wins over a direct/proxy listing of
+      // an overlapping domain. An xray matcher prefix gives its own rule type
+      // (full: DOMAIN, keyword: DOMAIN-KEYWORD, regexp: DOMAIN-REGEX, the rest
+      // DOMAIN-SUFFIX); a value that would break the YAML is left out. The
+      // proxy bucket goes where the panel's proxy rules go, and only when
+      // there is such a group.
       const cdl = routing ? p.customDomainLists : undefined;
-      const stripPfx = (d: string): string => d.replace(/^(domain|full|regexp|keyword):/, '');
+      const listRules = (list: readonly string[], to: string): string[] =>
+        list.flatMap((d) => {
+          const body = clashDomainRuleBody(d);
+          return body === null ? [] : [`  - ${body},${to}`];
+        });
       const panel = routing
         ? [
             ...(cdl
               ? [
-                  ...cdl.block.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},REJECT`),
-                  ...cdl.direct.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},DIRECT`),
-                  ...(target ? cdl.proxy.map((d) => `  - DOMAIN-SUFFIX,${stripPfx(d)},${target}`) : []),
+                  ...listRules(cdl.block, 'REJECT'),
+                  ...listRules(cdl.direct, 'DIRECT'),
+                  ...(target ? listRules(cdl.proxy, target) : []),
                 ]
               : []),
             ...clashDeviceRuleLines(p.deviceRules, target ?? null),
