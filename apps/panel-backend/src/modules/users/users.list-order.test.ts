@@ -33,7 +33,8 @@ beforeAll(async () => {
   for (let i = 1; i < N; i++) {
     const n = String(i).padStart(3, '0');
     await prisma.user.create({
-      data: { ...row, username: `tie-${n}`, shortId: `tie${n}xx`, subscriptionToken: `tie-token-${n}-0000000000000000`, traffic: { create: {} } } as never,
+      // numericId is the sequence's to give, a copied one collides.
+      data: { ...row, numericId: undefined, username: `tie-${n}`, shortId: `tie${n}xx`, subscriptionToken: `tie-token-${n}-0000000000000000`, traffic: { create: {} } } as never,
     });
   }
 }, 120_000);

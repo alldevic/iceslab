@@ -58,6 +58,10 @@ export interface ListParams {
   deviceLimit?: 'set' | 'unlimited' | 'unset';
   telegram?: 'linked' | 'none';
   email?: 'set' | 'none';
+  /** Exact-match filters for internal callers (not in the public query):
+   *  equality, never `contains`. The email compares without case. */
+  telegramId?: bigint;
+  emailEquals?: string;
   revoked?: 'yes' | 'no';
   hasTag?: 'yes' | 'no';
   createdBefore?: Date;
@@ -124,6 +128,13 @@ export async function findBySubscriptionToken(
 export async function findActiveById(id: string): Promise<UserWithTraffic | null> {
   return prisma.user.findFirst({
     where: { id, deletedAt: null },
+    include: USER_INCLUDE,
+  });
+}
+
+export async function findActiveByNumericId(numericId: bigint): Promise<UserWithTraffic | null> {
+  return prisma.user.findFirst({
+    where: { numericId, deletedAt: null },
     include: USER_INCLUDE,
   });
 }
@@ -288,6 +299,10 @@ export async function list(params: ListParams): Promise<{
   }
   if (params.email) {
     and.push(params.email === 'set' ? { email: { not: null } } : { email: null });
+  }
+  if (params.telegramId !== undefined) and.push({ telegramId: params.telegramId });
+  if (params.emailEquals !== undefined) {
+    and.push({ email: { equals: params.emailEquals, mode: 'insensitive' } });
   }
   if (params.revoked) {
     and.push(params.revoked === 'yes' ? { subRevokedAt: { not: null } } : { subRevokedAt: null });

@@ -107,6 +107,12 @@ export const ConfigSchema = z.object({
     .string()
     .default('false')
     .transform((s) => s.toLowerCase() === 'true' || s === '1'),
+  // Remnawave facade switch, off by default. Until the facade itself lands it
+  // only picks the squad that takes the users of a deleted squad (squads.service).
+  REMNAWAVE_COMPAT_ENABLED: z
+    .string()
+    .default('false')
+    .transform((s) => s.toLowerCase() === 'true' || s === '1'),
   RATE_LIMIT_BOOTSTRAP_PER_MIN: z.coerce.number().int().min(1).default(10),
   RATE_LIMIT_HEARTBEAT_PER_MIN: z.coerce.number().int().min(1).default(120),
   // Where the image keeps the core artifacts it hands to nodes (the Dockerfile's

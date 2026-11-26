@@ -12,6 +12,7 @@ import {
   UserAlreadyExistsError,
   UserNotFoundError,
   SubscriptionTokenTakenError,
+  statusAfterEdit,
 } from './users.service.js';
 
 vi.mock('./users.repository.js');
@@ -36,6 +37,8 @@ const FAKE_ID = '22222222-2222-2222-2222-222222222222';
 function makeFakeUser(overrides: Partial<repo.UserWithTraffic> = {}): repo.UserWithTraffic {
   return {
     id: FAKE_ID,
+    numericId: 1n,
+    externalSquadUuid: null,
     shortId: 'shortabc',
     username: 'testuser',
     status: 'active',
@@ -233,6 +236,82 @@ describe('createUser', () => {
     const upper = after  + 30 * 24 * 60 * 60 * 1000 + 1000;
     expect(expireMs).toBeGreaterThanOrEqual(lower);
     expect(expireMs).toBeLessThanOrEqual(upper);
+  });
+});
+
+describe('a traffic limit in bytes', () => {
+  const create = { username: 'testuser', groupIds: [], trafficLimitStrategy: 'no_reset' as const };
+
+  it('is stored exactly, not rounded to whole GiB', async () => {
+    vi.mocked(repo.findActiveByUsername).mockResolvedValue(null);
+    vi.mocked(repo.create).mockResolvedValue(makeFakeUser());
+    await createUser({ ...create, trafficLimitBytes: 1_234_567_891 });
+    expect(vi.mocked(repo.create).mock.calls[0]![0]!.trafficLimitBytes).toBe(1_234_567_891n);
+
+    vi.mocked(repo.findActiveById).mockResolvedValue(makeFakeUser());
+    vi.mocked(repo.updateById).mockResolvedValue(makeFakeUser());
+    await updateUser(FAKE_ID, { trafficLimitBytes: 7_654_321 });
+    expect(vi.mocked(repo.updateById).mock.calls[0]![1].trafficLimitBytes).toBe(7_654_321n);
+  });
+
+  it('wins over trafficLimitGb when both are given', async () => {
+    vi.mocked(repo.findActiveByUsername).mockResolvedValue(null);
+    vi.mocked(repo.create).mockResolvedValue(makeFakeUser());
+    await createUser({ ...create, trafficLimitGb: 5, trafficLimitBytes: 1000 });
+    expect(vi.mocked(repo.create).mock.calls[0]![0]!.trafficLimitBytes).toBe(1000n);
+
+    vi.mocked(repo.findActiveById).mockResolvedValue(makeFakeUser());
+    vi.mocked(repo.updateById).mockResolvedValue(makeFakeUser());
+    await updateUser(FAKE_ID, { trafficLimitGb: 5, trafficLimitBytes: 2000 });
+    expect(vi.mocked(repo.updateById).mock.calls[0]![1].trafficLimitBytes).toBe(2000n);
+  });
+
+  it('null in bytes means unlimited even next to trafficLimitGb', async () => {
+    vi.mocked(repo.findActiveById).mockResolvedValue(makeFakeUser({ trafficLimitBytes: 100n }));
+    vi.mocked(repo.updateById).mockResolvedValue(makeFakeUser());
+    await updateUser(FAKE_ID, { trafficLimitGb: 5, trafficLimitBytes: null });
+    expect(vi.mocked(repo.updateById).mock.calls[0]![1].trafficLimitBytes).toBeNull();
+  });
+
+  it('brings a limited user back to active when the edit raises the limit', async () => {
+    const limited = makeFakeUser({
+      status: 'limited',
+      trafficLimitBytes: 1000n,
+      traffic: { usedTrafficBytes: 1000n } as repo.UserWithTraffic['traffic'],
+    });
+    vi.mocked(repo.findActiveById).mockResolvedValue(limited);
+    vi.mocked(repo.updateById).mockResolvedValue(makeFakeUser());
+
+    await updateUser(FAKE_ID, { trafficLimitBytes: 1001 });
+    expect(vi.mocked(repo.updateById).mock.calls[0]![1].status).toBe('active');
+
+    // And the byte limit counts as a limit edit: the same bytes, still spent, stay limited.
+    expect(statusAfterEdit(limited, { trafficLimitBytes: 1000 })).toBeUndefined();
+  });
+});
+
+describe('externalSquadUuid', () => {
+  it('is stored as given on create and edit, and returned as written', async () => {
+    const value = 'Ab-12_not-a-uuid';
+    vi.mocked(repo.findActiveByUsername).mockResolvedValue(null);
+    vi.mocked(repo.create).mockResolvedValue(makeFakeUser({ externalSquadUuid: value }));
+    const dto = await createUser({
+      username: 'testuser',
+      groupIds: [],
+      trafficLimitStrategy: 'no_reset',
+      externalSquadUuid: value,
+    });
+    expect(vi.mocked(repo.create).mock.calls[0]![0]!.externalSquadUuid).toBe(value);
+    expect(dto.externalSquadUuid).toBe(value);
+
+    vi.mocked(repo.findActiveById).mockResolvedValue(makeFakeUser());
+    vi.mocked(repo.updateById).mockResolvedValue(makeFakeUser({ externalSquadUuid: null }));
+    await updateUser(FAKE_ID, { externalSquadUuid: null });
+    expect(vi.mocked(repo.updateById).mock.calls[0]![1].externalSquadUuid).toBeNull();
+    expect(eventBus.emit).toHaveBeenCalledWith('user.updated', {
+      userId: FAKE_ID,
+      changes: ['externalSquadUuid'],
+    });
   });
 });
 

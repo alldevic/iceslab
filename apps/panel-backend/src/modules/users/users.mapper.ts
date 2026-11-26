@@ -64,6 +64,10 @@ export interface PublicUserDto {
   tag: string | null;
   telegramId: string | null;        // BigInt → string
   email: string | null;
+  /** The user's stable number (BigInt as a string, like telegramId). */
+  numericId: string;
+  /** A storefront's external-squad id, returned as written. */
+  externalSquadUuid: string | null;
 
   // Per-user enabled protocols (subset of {hysteria,xray,amneziawg,naive})
   enabledProtocols: string[];
@@ -126,6 +130,8 @@ export function mapUserToPublic(
     tag: user.tag,
     telegramId: user.telegramId !== null ? user.telegramId.toString() : null,
     email: user.email,
+    numericId: user.numericId.toString(),
+    externalSquadUuid: user.externalSquadUuid,
 
     enabledProtocols: parseEnabledProtocols(user.enabledProtocols),
 

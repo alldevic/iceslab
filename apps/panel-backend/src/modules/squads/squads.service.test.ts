@@ -15,7 +15,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../../prisma.js';
 import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { generateUserCredentials } from '../../lib/auth/credentials.js';
-import { ALL_SQUAD_ID } from './squads.constants.js';
+import { ALL_SQUAD_ID, NO_ACCESS_SQUAD_ID } from './squads.constants.js';
 import { CreateSquadSchema, UpdateSquadSchema } from './squads.schemas.js';
 import * as squads from './squads.service.js';
 
@@ -123,6 +123,8 @@ describe('deleting an ordinary squad', () => {
       ALL_SQUAD_ID,
     ]);
     expect(await prisma.group.findUnique({ where: { id: squad.id } })).toBeNull();
+    // With the facade off the "no access" squad is not even created.
+    expect(await prisma.group.findUnique({ where: { id: NO_ACCESS_SQUAD_ID } })).toBeNull();
   });
 
   it('leaves a member who still has another squad where they were', async () => {

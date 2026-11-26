@@ -96,6 +96,20 @@ function gbToBytes(gb: number | null | undefined): bigint | null {
   return gb != null ? BigInt(gb) * BYTES_PER_GB : null;
 }
 
+/**
+ * The limit an input asks for: bytes win over whole GiB, so a byte-exact limit
+ * is stored unquantized. `undefined` = the input says nothing about the limit,
+ * `null` = unlimited.
+ */
+function limitFromInput(input: {
+  trafficLimitBytes?: number | null;
+  trafficLimitGb?: number | null;
+}): bigint | null | undefined {
+  if (input.trafficLimitBytes !== undefined) return toBigIntOrNull(input.trafficLimitBytes);
+  if (input.trafficLimitGb !== undefined) return gbToBytes(input.trafficLimitGb);
+  return undefined;
+}
+
 function daysFromNow(days: number | null | undefined): Date | null {
   return days != null ? new Date(Date.now() + days * 24 * 60 * 60 * 1000) : null;
 }
@@ -185,7 +199,7 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       amneziawgPrivateKey: creds.amneziawgPrivateKey,
       amneziawgPublicKey:  creds.amneziawgPublicKey,
 
-      trafficLimitBytes:    gbToBytes(input.trafficLimitGb),
+      trafficLimitBytes:    limitFromInput(input) ?? null,
       trafficLimitStrategy: input.trafficLimitStrategy,
       // An absolute instant wins over a relative span: expireAt is a fact being
       // transferred from another panel, expireDays is a convenience for humans
@@ -210,6 +224,7 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
       tag:             input.tag ?? null,
       telegramId:      toBigIntOrNull(input.telegramId),
       email:           input.email ?? null,
+      externalSquadUuid: input.externalSquadUuid ?? null,
 
       enabledProtocols: input.enabledProtocols,
 
@@ -258,7 +273,16 @@ export async function createUser(input: CreateUserInput): Promise<PublicUserDto>
   return mapUserToPublic(user, user.traffic);
 }
 
-export async function listUsers(query: ListUsersQuery): Promise<{
+/** Filters the public list query has no field for, for internal callers only:
+ *  exact telegramId/email lookups. `search` already covers the human case, so
+ *  the admin API does not grow two near-identical knobs. */
+export interface InternalUserFilters {
+  telegramId?: bigint;
+  /** Named apart from the query's own `email` ('set' | 'none'). */
+  emailEquals?: string;
+}
+
+export async function listUsers(query: ListUsersQuery & InternalUserFilters): Promise<{
   users: PublicUserDto[];
   total: number;
   page: number;
@@ -271,6 +295,14 @@ export async function listUsers(query: ListUsersQuery): Promise<{
     page: query.page,
     limit: query.limit,
   };
+}
+
+export async function findUserByNumericId(numericId: bigint): Promise<PublicUserDto> {
+  const user = await repo.findActiveByNumericId(numericId);
+  if (!user) {
+    throw new UserNotFoundError(numericId.toString());
+  }
+  return mapUserToPublic(user, user.traffic);
 }
 
 export async function getUserById(id: string): Promise<PublicUserDto> {
@@ -304,8 +336,9 @@ export async function updateUser(
     data.status = nextStatus;
     changedFields.push('status');
   }
-  if (input.trafficLimitGb !== undefined) {
-    data.trafficLimitBytes = gbToBytes(input.trafficLimitGb);
+  const limit = limitFromInput(input);
+  if (limit !== undefined) {
+    data.trafficLimitBytes = limit;
     changedFields.push('trafficLimitBytes');
   }
   if (input.trafficLimitStrategy !== undefined) {
@@ -350,6 +383,10 @@ export async function updateUser(
   if (input.email !== undefined) {
     data.email = input.email;
     changedFields.push('email');
+  }
+  if (input.externalSquadUuid !== undefined) {
+    data.externalSquadUuid = input.externalSquadUuid;
+    changedFields.push('externalSquadUuid');
   }
   if (input.groupIds !== undefined) {
     // Mirror createUser's fallback: an empty groupIds means "no squads picked",
@@ -420,12 +457,13 @@ export function statusAfterEdit(
     trafficLimitBytes: bigint | null;
     traffic?: { usedTrafficBytes: bigint } | null;
   },
-  input: Pick<UpdateUserInput, 'status' | 'expireAt' | 'trafficLimitGb'>,
+  input: Pick<UpdateUserInput, 'status' | 'expireAt' | 'trafficLimitGb' | 'trafficLimitBytes'>,
   now: Date = new Date(),
 ): UserStatus | undefined {
   const expireAt =
     input.expireAt !== undefined ? (input.expireAt ? new Date(input.expireAt) : null) : existing.expireAt;
-  const limit = input.trafficLimitGb !== undefined ? gbToBytes(input.trafficLimitGb) : existing.trafficLimitBytes;
+  const edited = limitFromInput(input);
+  const limit = edited !== undefined ? edited : existing.trafficLimitBytes;
   const used = existing.traffic?.usedTrafficBytes ?? 0n;
   const byFacts = (): UserStatus =>
     expireAt && expireAt < now ? 'expired' : limit !== null && used >= limit ? 'limited' : 'active';
@@ -437,7 +475,7 @@ export function statusAfterEdit(
   // only when this edit touched what holds them.
   const touched =
     (existing.status === 'expired' && input.expireAt !== undefined) ||
-    (existing.status === 'limited' && input.trafficLimitGb !== undefined);
+    (existing.status === 'limited' && edited !== undefined);
   if (!touched) return undefined;
   const next = byFacts();
   return next === existing.status ? undefined : next;

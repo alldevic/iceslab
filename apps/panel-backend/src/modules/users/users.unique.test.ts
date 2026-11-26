@@ -47,7 +47,8 @@ async function realViolation(field: UserUniqueField): Promise<unknown> {
   const fresh = { username: 'second', shortId: 'second01', subscriptionToken: 'second-token-0000000000000000', sourceId: 'src-2' };
   const repeat = { username: a.username, shortId: a.shortId, subscriptionToken: a.subscriptionToken, sourceId: a.sourceId };
   try {
-    await prisma.user.create({ data: { ...row, ...fresh, [field]: repeat[field] } as never });
+    // numericId is the sequence's to give, a copied one collides.
+    await prisma.user.create({ data: { ...row, numericId: undefined, ...fresh, [field]: repeat[field] } as never });
   } catch (err) {
     return err;
   }

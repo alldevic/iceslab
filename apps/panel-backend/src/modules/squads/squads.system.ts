@@ -1,5 +1,5 @@
 import type { Prisma } from '../../generated/prisma/client.js';
-import { ALL_SQUAD_ID, ALL_SQUAD_NAME } from './squads.constants.js';
+import { ALL_SQUAD_ID, ALL_SQUAD_NAME, NO_ACCESS_SQUAD_ID, NO_ACCESS_SQUAD_NAME } from './squads.constants.js';
 
 /** The seed migration's wording, so a repaired row reads like a seeded one. */
 const ALL_SQUAD_DESCRIPTION = 'Default group containing every inbound. Auto-membership for new users.';
@@ -30,4 +30,30 @@ export async function ensureAllSquad(tx: Prisma.TransactionClient): Promise<void
       description: ALL_SQUAD_DESCRIPTION,
     },
   });
+}
+
+const NO_ACCESS_SQUAD_DESCRIPTION =
+  'Users with no squad of their own. System-managed, has no profiles; do not edit or assign by hand.';
+
+/**
+ * Make sure the system "no access" squad exists, inside the caller's
+ * transaction. Created on demand rather than by a migration, so a panel that
+ * never uses it never gets the row.
+ *
+ * Two first-time callers at once must not fail each other: the insert skips a
+ * duplicate id (ON CONFLICT DO NOTHING) instead of raising on it. If the name
+ * is held by a squad of the operator's own, the row is made under a name that
+ * says what it is, as for "All".
+ */
+export async function ensureNoAccessSquad(tx: Prisma.TransactionClient): Promise<void> {
+  const create = (name: string) =>
+    tx.group.createMany({
+      data: [{ id: NO_ACCESS_SQUAD_ID, name, description: NO_ACCESS_SQUAD_DESCRIPTION }],
+      skipDuplicates: true,
+    });
+  await create(NO_ACCESS_SQUAD_NAME);
+  const present = await tx.group.findUnique({ where: { id: NO_ACCESS_SQUAD_ID }, select: { id: true } });
+  if (present) return;
+  // Skipped on the name: another squad holds it.
+  await create(`${NO_ACCESS_SQUAD_NAME} (system)`);
 }
