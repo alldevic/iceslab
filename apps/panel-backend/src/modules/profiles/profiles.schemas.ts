@@ -48,7 +48,7 @@ export const ProtocolEnum = z.enum([
 ]);
 
 // Engine-choice (EC5): which proxy core serves a profile. null = native.
-export const EngineEnum = z.enum(['xray', 'hysteria', 'singbox']);
+export const EngineEnum = z.enum(['xray', 'hysteria', 'singbox', 'mtprotoproxy']);
 
 // Which engines each protocol may be served by: ENGINE_OPTIONS in
 // @iceslab/shared, which the profile form is held to by a test.

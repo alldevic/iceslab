@@ -99,6 +99,15 @@ export function mtprotoSecret(inboundId: string, domain: string): string {
   const seed = `${inboundId}:${domain}`;
   const seedBytes = createHash('sha256').update(seed, 'utf8').digest().subarray(0, 16);
   const seedHex = seedBytes.toString('hex'); // 32 hex chars (16 bytes)
-  const domainHex = Buffer.from(domain, 'utf8').toString('hex');
-  return `ee${seedHex}${domainHex}`;
+  return mtprotoFakeTlsSecret(seedHex, domain);
+}
+
+/**
+ * The Fake-TLS form of a 32-hex raw secret: `ee` + secret + hex of the
+ * masquerade domain. mtg's one inbound secret and the per-user secret of the
+ * mtprotoproxy engine (deriveMtprotoSecret) are wrapped the same way and differ
+ * only in who the secret belongs to.
+ */
+export function mtprotoFakeTlsSecret(rawSecret: string, domain: string): string {
+  return `ee${rawSecret}${Buffer.from(domain, 'utf8').toString('hex')}`;
 }

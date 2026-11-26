@@ -15,7 +15,7 @@ import { profileConfigOf } from '@/contours/profiles/lib/profileConfig';
 import { defaults } from '@/contours/profiles/lib/profileDefaults';
 import { MOBILE_PRESET, randomAwgHeaders, TSPU_PRESET } from '@/contours/profiles/lib/awgPresets';
 import { settleXrayFields, xrayFieldReactions } from '@/contours/profiles/lib/xrayFieldReactions';
-import { ENGINE_CHOICE_PROTOCOLS } from '@/contours/profiles/lib/profileKinds';
+import { engineOfRequest } from '@/contours/profiles/lib/profileKinds';
 import { saveThen } from '@/contours/profiles/lib/saveThen';
 import { profileAwgCreate, profileAwgPatch } from '@/lib/domain/awg';
 import { ssConfigPatch } from '@/contours/profiles/lib/ssServerKey';
@@ -181,12 +181,10 @@ export function useProfileForm({
     // create shape.
     const config = profileConfigOf(values);
 
-    // Engine-choice: only the shared protocols carry a non-native engine;
-    // everything else stays null (native). A 'native' selection -> null.
-    const engine: 'singbox' | null =
-      ENGINE_CHOICE_PROTOCOLS.includes(values.protocol) && values.engine === 'singbox'
-        ? 'singbox'
-        : null;
+    // Engine-choice: only the shared protocols carry sing-box and only MTProto
+    // carries mtprotoproxy; everything else stays null (native, and mtg for
+    // MTProto). A 'native' selection -> null.
+    const engine = engineOfRequest(values.protocol, values.engine);
 
     // Поколение AWG (227054e): в PUT только при смене, в POST только 3.
     const isAwg = values.protocol === 'amneziawg';

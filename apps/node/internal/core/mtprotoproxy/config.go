@@ -38,6 +38,7 @@
 package mtprotoproxy
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -62,6 +63,45 @@ type User struct {
 	// byte-identical to what mtg is handed, so the panel's URI builder needs no
 	// second spelling.
 	Secret string
+}
+
+// LegacyUserName is the name the mtg-era shared secret is carried under while
+// a node is being migrated.
+//
+// It is deliberately not a panel user id: nobody owns this secret, everybody
+// who ever got an mtg link has it. Traffic under this name is what has NOT
+// migrated yet, and watching it fall to zero on the metrics endpoint is how an
+// operator knows the legacy secret can be dropped.
+const LegacyUserName = "legacy-mtg"
+
+// legacyRawSecret pulls the 16 raw bytes out of an mtg FakeTLS secret
+// (`ee` + 32 hex + hex(domain)) so mtprotoproxy can accept it as a user.
+//
+// A `tg://` link is not a subscription: the client stored a server, a port and
+// a secret, and there is nothing for it to re-fetch. Every buyer who ever added
+// the MTProto proxy has mtg's ONE shared secret saved in their Telegram. Handed
+// back to mtprotoproxy as a user, the FakeTLS string it rebuilds is
+// byte-identical, so those saved links keep working while personal ones are
+// handed out beside them.
+//
+// Returns "" when the secret is not the expected shape, or when its embedded
+// domain is not the one this inbound serves: such a secret could not have been
+// accepted anyway, and carrying it would create a user nobody can use while
+// looking like migration cover.
+func legacyRawSecret(mtgSecret, domain string) string {
+	if len(mtgSecret) < 34 || mtgSecret[:2] != "ee" {
+		return ""
+	}
+	raw := mtgSecret[2:34]
+	for _, ch := range raw {
+		if !isHex(ch) {
+			return ""
+		}
+	}
+	if mtgSecret[34:] != hex.EncodeToString([]byte(domain)) {
+		return ""
+	}
+	return raw
 }
 
 // InboundConfig holds the per-inbound settings.

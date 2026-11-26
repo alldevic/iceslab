@@ -124,6 +124,17 @@ export function deriveShadowtlsPassword(xrayUuid: string): string {
 }
 
 /**
+ * Deterministic per-user MTProto secret for the mtprotoproxy engine: 32 hex =
+ * the 16 raw bytes Telegram takes (a longer one is "Invalid proxy link"). The
+ * raw form: the node puts it in mtprotoproxy's USERS, and the link wraps it in
+ * the Fake-TLS `ee<secret><domain hex>` (mtprotoFakeTlsSecret). mtg has one
+ * secret per inbound instead (mtprotoSecret in core-adapters/mtproto).
+ */
+export function deriveMtprotoSecret(xrayUuid: string): string {
+  return createHash('sha256').update(`${xrayUuid}:mtproto`).digest('hex').slice(0, 32);
+}
+
+/**
  * Deterministic per-user Shadowsocks-2022 PSK (uPSK) derived from the user's
  * UUID. Unlike TUIC/AnyTLS, SS2022 keys MUST be **standard base64** of an exact
  * length: 16 bytes for `2022-blake3-aes-128-gcm`, 32 for the other 2022-blake3

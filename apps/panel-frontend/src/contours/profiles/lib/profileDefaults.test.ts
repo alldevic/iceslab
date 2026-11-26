@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LINK_CONGESTION, LINK_CONGESTIONS } from '@iceslab/shared';
 import { defaults } from '@/contours/profiles/lib/profileDefaults';
+import { engineOfRequest } from '@/contours/profiles/lib/profileKinds';
 import { profileConfigOf } from '@/contours/profiles/lib/profileConfig';
 
 /**
@@ -25,5 +26,14 @@ describe('дефолты формы профиля', () => {
     // Поля очищены: запасное значение тоже 0, не 32/16.
     const cleared = profileConfigOf({ ...form, awgS3: '', awgS4: '' }).obfuscation as Record<string, number>;
     expect([cleared.s3, cleared.s4]).toEqual([0, 0]);
+  });
+
+  it('3. профиль на mtprotoproxy, открытый и собранный обратно, остаётся на нём; на mtg без движка', () => {
+    const open = (engine: string | null) =>
+      defaults({ protocol: 'mtproto', engine, config: { domain: 'www.example.com' } } as never);
+    expect(engineOfRequest('mtproto', open('mtprotoproxy').engine)).toBe('mtprotoproxy');
+    expect(engineOfRequest('mtproto', open(null).engine)).toBeNull();
+    expect(engineOfRequest('hysteria', 'mtprotoproxy')).toBeNull();
+    expect(engineOfRequest('xray', 'singbox')).toBe('singbox');
   });
 });

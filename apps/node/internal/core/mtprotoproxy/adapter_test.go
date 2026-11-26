@@ -713,3 +713,88 @@ func TestReloadNoticeOnStderrIsNotAnError(t *testing.T) {
 		t.Error("stderr line classification")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seamless switch off mtg.
+//
+// A tg:// link is not a subscription: the client stored a server, a port and a
+// secret, and there is nothing for it to re-fetch. On the day mtg stops, every
+// buyer's saved entry either still works or does not. Carrying mtg's one shared
+// secret as an extra user is what makes it still work.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The mtg secret of a deployment, shape and all:
+// "ee" + 16 raw bytes + hex("www.cloudflare.com").
+const liveMtgSecret = "eed06ba72cc5f27206cb632a62a7b3865c7777772e636c6f7564666c6172652e636f6d"
+const liveMtgRaw = "d06ba72cc5f27206cb632a62a7b3865c"
+const liveDomain = "www.cloudflare.com"
+
+func legacyAdapter(t *testing.T, accept bool) *Adapter {
+	t.Helper()
+	return New(Config{
+		ConfigPath: filepath.Join(t.TempDir(), "config.py"),
+		// No Domain: it arrives from the panel, which makes the ApplyInbound
+		// below a real change rather than a no-op the adapter correctly skips.
+		Inbound:            InboundConfig{ListenPort: 2083},
+		AcceptLegacySecret: accept,
+	}, quiet())
+}
+
+func configOf(t *testing.T, a *Adapter) []byte {
+	t.Helper()
+	b, err := os.ReadFile(a.cfg.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestOldMtgLinksKeepWorkingDuringMigration(t *testing.T) {
+	a := legacyAdapter(t, true)
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+liveMtgSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddUser(core.User{UserID: "u1", MtprotoSecret: secretA}); err != nil {
+		t.Fatal(err)
+	}
+	users := runPy(t, configOf(t, a))["USERS"].(map[string]any)
+
+	// The raw half of mtg's secret, under the migration name. mtprotoproxy
+	// rebuilds "ee" + this + hex(TLS_DOMAIN), byte for byte the secret already
+	// saved in every buyer's Telegram.
+	if users[LegacyUserName] != liveMtgRaw {
+		t.Errorf("legacy secret missing or wrong: %v", users)
+	}
+	if users["u1"] != secretA {
+		t.Errorf("the personal secret was disturbed: %v", users)
+	}
+}
+
+func TestLegacySecretIsOffUnlessAskedFor(t *testing.T) {
+	// It keeps alive a secret everybody has and nobody owns, so it is a
+	// deliberate migration state, not something a node drifts into.
+	a := legacyAdapter(t, false)
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+liveMtgSecret+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(configOf(t, a)), liveMtgRaw) || strings.Contains(string(configOf(t, a)), LegacyUserName) {
+		t.Error("the legacy secret was carried without the flag being set")
+	}
+}
+
+func TestLegacySecretForAnotherDomainIsRefused(t *testing.T) {
+	// The domain is baked into the FakeTLS secret, so a secret minted for
+	// another one could not be accepted anyway. Carrying it would look like
+	// migration cover while providing none.
+	a := legacyAdapter(t, true)
+	other := "ee" + liveMtgRaw + "6578616d706c652e636f6d" // example.com
+	if err := a.ApplyInbound(2083, json.RawMessage(
+		`{"domain":"`+liveDomain+`","secret":"`+other+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(configOf(t, a)), liveMtgRaw) {
+		t.Error("a secret for another domain was carried as cover")
+	}
+}

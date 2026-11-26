@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ENGINE_OPTIONS, XRAY_PLAIN_SUBPROTOCOLS } from '@iceslab/shared';
 import { ENGINE_CHOICE_PROTOCOLS, PREVIEW_KINDS, PROFILE_KINDS, profileKindKey } from '@/contours/profiles/lib/profileKinds';
 import { engineTabOf } from '@/contours/profiles/lib/protocolTiles';
+import { defaults } from '@/contours/profiles/lib/profileDefaults';
 
 describe('SOCKS5 и HTTP как виды профиля', () => {
   it('у каждого подпротокола из контракта ровно один вид, на xray и только native', () => {
@@ -53,7 +54,25 @@ describe('выбор ядра в форме и ENGINE_OPTIONS', () => {
   it('видов у протокола столько, сколько у API ядер: один у протокола с одним ядром', () => {
     for (const [protocol, engines] of Object.entries(ENGINE_OPTIONS)) {
       const kinds = PROFILE_KINDS.filter((k) => k.protocol === protocol && !k.subprotocol);
-      expect(kinds.length, protocol).toBe(engines.length);
+      // mtg is MTProto's absence of an engine: a tile of its own that the API
+      // lists nowhere, beside the one tile of mtprotoproxy.
+      expect(kinds.length, protocol).toBe(protocol === 'mtproto' ? engines.length + 1 : engines.length);
     }
+  });
+});
+
+describe('MTProto на mtprotoproxy', () => {
+  it('своя плитка рядом с mtg, в той же вкладке Telegram', () => {
+    expect(profileKindKey('mtproto', 'mtprotoproxy')).toBe('mtproto#mtprotoproxy');
+    expect(profileKindKey('mtproto', 'native')).toBe('mtproto');
+    const kind = PROFILE_KINDS.find((k) => k.key === 'mtproto#mtprotoproxy');
+    expect(kind).toMatchObject({ protocol: 'mtproto', engine: 'mtprotoproxy' });
+    expect(engineTabOf('mtproto', 'mtprotoproxy')).toBe('telegram');
+  });
+
+  it('профиль на mtprotoproxy открывается на своей плитке, на mtg остаётся без движка', () => {
+    const values = defaults({ protocol: 'mtproto', engine: 'mtprotoproxy', config: {} } as never);
+    expect(values.engine).toBe('mtprotoproxy');
+    expect(defaults({ protocol: 'mtproto', engine: null, config: {} } as never).engine).toBe('native');
   });
 });

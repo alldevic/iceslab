@@ -1,4 +1,5 @@
 import { NETWORKS_CARRYING_VISION, REALITY_TRANSPORTS } from '@iceslab/shared';
+import type { FormEngine } from '@/contours/profiles/lib/profileKinds';
 import type { FormValues } from '@/contours/profiles/lib/profileFormValues';
 import type { SingboxXrayField } from '@/lib/domain/singboxXray';
 
@@ -36,7 +37,7 @@ export const SINGBOX_XRAY = { network: 'raw', security: 'reality', realityMode: 
  */
 export function singboxXrayPatch(values: {
   protocol: string;
-  engine: 'native' | 'singbox';
+  engine: FormEngine;
   xrayNetwork: string;
   xraySecurity: string;
   xrayRealityMode: string;

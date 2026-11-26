@@ -76,10 +76,11 @@ export const MULTI_INBOUND_ADAPTERS: readonly string[] = [
 export const SCOPED_USER_ENGINES: readonly string[] = ['amneziawg', 'singbox', 'xray'];
 
 /**
- *   shared-secret  mtproto: mtg serves one secret for every user (its
- *                  adapter: "single-secret upstream"; AddUser and RemoveUser
- *                  only count for stats), so a secret from any subscription
- *                  lets anyone in, a disabled or expired user included;
+ *   shared-secret  mtproto on mtg: one secret for every user (its adapter:
+ *                  "single-secret upstream"; AddUser and RemoveUser only count
+ *                  for stats), so a secret from any subscription lets anyone
+ *                  in, a disabled or expired user included. Not on
+ *                  mtprotoproxy, which gives each user their own;
  *   shared-users   an adapter that holds several inbounds on one node
  *                  (MULTI_INBOUND_ADAPTERS) without AddUserOn: one user list
  *                  per process (mieru), so a user the squad lets onto one of
@@ -93,7 +94,7 @@ export function userScopeGap(profile: {
   effectiveEngine: string;
   awgProtocol?: number | null;
 }): UserScopeGap | null {
-  if (profile.protocol === 'mtproto') return 'shared-secret';
+  if (profile.protocol === 'mtproto' && profile.effectiveEngine === 'mtproto') return 'shared-secret';
   const slot = adapterSlot({ protocol: profile.protocol, engine: profile.effectiveEngine, awgProtocol: profile.awgProtocol });
   if (MULTI_INBOUND_ADAPTERS.includes(slot) && !SCOPED_USER_ENGINES.includes(profile.effectiveEngine)) return 'shared-users';
   return null;

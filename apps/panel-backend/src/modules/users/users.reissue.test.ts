@@ -9,6 +9,7 @@ import { cleanDatabase } from '../../../tests/helpers/db.js';
 import { registerAndLogin } from '../../../tests/helpers/auth.js';
 import {
   deriveAnytlsPassword,
+  deriveMtprotoSecret,
   deriveShadowtlsPassword,
   deriveSsPassword,
   deriveTuicPassword,
@@ -140,6 +141,7 @@ async function secretsOf(userId: string): Promise<string[]> {
     deriveTuicPassword(u.xrayUuid),
     deriveAnytlsPassword(u.xrayUuid),
     deriveShadowtlsPassword(u.xrayUuid),
+    deriveMtprotoSecret(u.xrayUuid),
     deriveSsPassword(u.xrayUuid, '2022-blake3-aes-256-gcm'),
   ];
 }

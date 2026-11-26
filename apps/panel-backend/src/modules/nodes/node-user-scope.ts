@@ -6,7 +6,8 @@ import { pushedBindingsWhere } from './pushed-bindings.js';
 /**
  * A-204: the bindings on this node where a squad's limit on a user does not
  * hold, with why (userScopeGap, shared, the rule the squad screen reads too).
- *   - shared-secret (mtproto): always, one secret lets anyone in;
+ *   - shared-secret (mtproto on mtg): always, one secret lets anyone in; not on
+ *     mtprotoproxy, a secret per user;
  *   - shared-users (mieru): only where the node carries TWO or more inbounds
  *     on that adapter. With one there is nothing to cross into: a user the
  *     squad does not grant it is not put on the adapter at all.

@@ -1,10 +1,11 @@
+import type { FormEngine } from '@/contours/profiles/lib/profileKinds';
 import { isPlainSubprotocol } from '@/contours/profiles/lib/plainSubprotocol';
 
 export type EngineTab = 'native' | 'xray' | 'singbox' | 'telegram';
 
 export function engineTabOf(
   protocol: string,
-  engine: 'native' | 'singbox',
+  engine: FormEngine,
   subprotocol?: unknown,
 ): EngineTab {
   // MTProto answers a different question from its neighbours. The other three
@@ -28,6 +29,7 @@ export const PROTOCOL_TILE_HINT: Record<string, string> = {
   amneziawg: 'WireGuard with obfuscation',
   naive: 'Chromium TLS, Caddy fork',
   mtproto: "Telegram's own, fake-TLS",
+  'mtproto#mtprotoproxy': 'Fake-TLS, a secret per user',
   socks5: 'tg://socks link, all three Telegram apps',
   http: 'Telegram Desktop only, no link',
   telegramweb: 'MTProxy through a WebView over HTTPS',
@@ -48,6 +50,7 @@ export const PROTOCOL_TILE_LABEL: Record<string, string> = {
   amneziawg: 'AmneziaWG',
   naive: 'NaiveProxy',
   mtproto: 'MTProto',
+  'mtproto#mtprotoproxy': 'MTProto, per user',
   socks5: 'SOCKS5',
   http: 'HTTP',
   telegramweb: 'WEB',
@@ -74,6 +77,7 @@ export const PROTOCOL_TILE_NOTE: Record<string, string> = {
   // only the xray core reports a version, so the line names the binary and
   // stops there rather than showing a number nobody measured.
   mtproto: 'mtg daemon, no per-user stats',
+  'mtproto#mtprotoproxy': 'mtprotoproxy, per-user stats and revocation',
   socks5: 'xray core, no obfuscation',
   http: 'xray core, no obfuscation',
   telegramweb: 'proof-of-concept',

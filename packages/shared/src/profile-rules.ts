@@ -21,6 +21,10 @@ export const ENGINE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   tuic: ['singbox'],
   anytls: ['singbox'],
   shadowtls: ['singbox'],
+  // MTProto: no engine is mtg, one secret for the inbound; mtprotoproxy gives
+  // every user their own, revocable. mtg has no entry of its own: one state, one
+  // record (decision 8.3).
+  mtproto: ['mtprotoproxy'],
 };
 
 /**

@@ -51,7 +51,7 @@ wire_env() {
 
 unwire_env() {
   node_env_unblock mtprotoproxy MTPROTOPROXY_SCRIPT MTPROTOPROXY_CONFIG MTPROTOPROXY_PYTHON \
-    MTPROTOPROXY_PORT MTPROTOPROXY_METRICS_PORT MTPROTOPROXY_DOMAIN
+    MTPROTOPROXY_PORT MTPROTOPROXY_METRICS_PORT MTPROTOPROXY_DOMAIN MTPROTOPROXY_ACCEPT_LEGACY
 }
 
 # The proxy runs as python3, so it is found by its script, not by name.
@@ -198,3 +198,5 @@ wire_env
 node_env_done mtprotoproxy
 log "mtprotoproxy $MPP_VERSION is ready at $SCRIPT_PATH"
 log "The proxy's port is the one the profile's inbound names (2084 until then); this script opens no firewall port: open it (tcp) yourself"
+log "Migrating off mtg? A tg:// link is not a subscription, so saved mtg links stop working the moment mtg does. To keep them working set MTPROTOPROXY_ACCEPT_LEGACY=1 in the node env and give this engine mtg's port once mtg is stopped (the links name it); restart iceslab-node."
+log "The old shared secret is then carried as the user legacy-mtg. Drop the flag and restart once its counter on the metrics port stops growing: that secret is held by everybody and owned by nobody."
